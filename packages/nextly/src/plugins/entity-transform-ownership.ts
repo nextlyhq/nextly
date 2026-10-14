@@ -129,13 +129,39 @@ function fieldsByPath(definition: Record<string, unknown>) {
 /** The keys of an entity or field whose values are behaviour, not storage. */
 const RULE_BLOCKS = ["access", "admin"] as const;
 
+/** Keys read on their own terms rather than searched for functions. */
+const READ_APART: ReadonlySet<string> = new Set([
+  ...RULE_BLOCKS,
+  "hooks",
+  // Each field is a node of its own, with its own key.
+  "fields",
+]);
+
+/**
+ * Every function in `value`, at any depth of plain objects and arrays, keyed
+ * by its path: a nested setting such as `preview.url` runs as surely as a
+ * top-level validator does.
+ */
+function functionsIn(value: unknown, key: string): Behaviour[] {
+  if (typeof value === "function") return [{ key, value }];
+  if (Array.isArray(value)) {
+    return value.flatMap((item, index) =>
+      functionsIn(item, `${key}.${String(index)}`)
+    );
+  }
+  if (!isRecord(value)) return [];
+  return Object.entries(value).flatMap(([name, item]) =>
+    functionsIn(item, `${key}.${name}`)
+  );
+}
+
 /**
  * Each access rule, hook, admin setting and function on `node`, keyed by
  * where it sits: one entry per access operation and per admin setting, one
  * per hook in each hook list, so adding a hook beside another's removes
- * nothing, and one per function-valued key — a validator, a function
- * default, a filter — since a function is behaviour wherever it sits, as a
- * disabled plugin's transform also treats it.
+ * nothing, and one per function anywhere else on it — a validator, a
+ * function default, a preview URL — since a function is behaviour wherever
+ * it sits, as a disabled plugin's transform also treats it.
  */
 function behaviourOn(node: Record<string, unknown>, at: string): Behaviour[] {
   const found: Behaviour[] = [];
@@ -154,7 +180,7 @@ function behaviourOn(node: Record<string, unknown>, at: string): Behaviour[] {
     }
   }
   for (const [key, value] of Object.entries(node)) {
-    if (typeof value === "function") found.push({ key: `${at}${key}`, value });
+    if (!READ_APART.has(key)) found.push(...functionsIn(value, `${at}${key}`));
   }
   return found;
 }
@@ -250,7 +276,10 @@ function originOf(kind: EntityKind): ColumnOrigin {
  * repeater's array and a chips list alike, so the column cannot tell them
  * apart; the type decides the shape of every value already stored. Types
  * that share a string column (`text` and `email`, `select` and `radio`)
- * store the same value and stay interchangeable.
+ * store the same value and stay interchangeable. `password` is the
+ * exception: its column is a string like `text`'s, but only a `password`
+ * field's value is hashed on write and withheld from every read, so a
+ * `text` field would serve its stored hashes and store new values in plain.
  *
  * A top-level field's uniqueness is part of it: the owner's rows, and its
  * code, rely on no two holding one value. Its plain `index` is not, since an
@@ -285,7 +314,9 @@ function storageOf(
   return {
     columns,
     typeByName:
-      storedAsJson || !builtIn.includes(field.type) ? field.type : undefined,
+      storedAsJson || field.type === "password" || !builtIn.includes(field.type)
+        ? field.type
+        : undefined,
     unique: !placed.nested && field.unique === true,
     junction: usesJunctionTable(field),
     translated:
@@ -327,6 +358,40 @@ function assertTableKept(
     plugin,
     "TRANSFORM_TABLE_CHANGED",
     `Plugin "${plugin.name}" changes "${changed}" of "${slug}", which plugin "${owner}" declares. A transform may change another plugin's entity, but not the tables it is stored in.`
+  );
+}
+
+/** The unique compound indexes an entity declares. */
+function uniqueIndexes(definition: Record<string, unknown>): unknown[] {
+  const indexes = definition.indexes;
+  if (!Array.isArray(indexes)) return [];
+  return indexes.filter(index => isRecord(index) && index.unique === true);
+}
+
+/**
+ * Refuse removing or changing a unique compound index on a plugin's entity:
+ * its owner's rows rely on no two sharing the indexed values, as they do on a
+ * unique field. A plain index changes no value, and a plugin may change
+ * another's indexes.
+ */
+function assertUniqueIndexesKept(
+  slug: string,
+  ledger: OwnershipLedger,
+  before: Record<string, unknown>,
+  after: Record<string, unknown>,
+  plugin: TransformingPlugin
+): void {
+  const owner = ledger.owner;
+  if (owner === undefined || owner === plugin.name) return;
+  const kept = uniqueIndexes(after);
+  const lost = uniqueIndexes(before).find(
+    index => !kept.some(next => isDeepStrictEqual(next, index))
+  );
+  if (lost === undefined) return;
+  throw refusal(
+    plugin,
+    "TRANSFORM_TABLE_CHANGED",
+    `Plugin "${plugin.name}" removes or changes a unique index of "${slug}", which plugin "${owner}" declares. A transform may change another plugin's plain indexes, but not one that keeps its owner's rows unique.`
   );
 }
 
@@ -547,6 +612,7 @@ export function settleTransform(
 ): OwnershipLedger {
   const { slug, kind } = entity;
   assertTableKept(slug, ledger, before, after, plugin);
+  assertUniqueIndexesKept(slug, ledger, before, after, plugin);
   assertFieldsKept(slug, kind, ledger, before, after, plugin);
   const behaviour = settleBehaviour(slug, ledger, after, plugin);
   assertStillValid(slug, kind, before, after, plugin);

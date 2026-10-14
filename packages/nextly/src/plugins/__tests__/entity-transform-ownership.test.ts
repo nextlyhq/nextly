@@ -895,3 +895,115 @@ describe("a function default a third plugin contributed", () => {
     expect(refused?.message).toContain("fields.reviewedOn.defaultValue");
   });
 });
+
+describe("a field of a plugin type a transform adds", () => {
+  it("is not refused while plugin types are not yet registered", () => {
+    // Plugin field types register after the fold; the definition's own
+    // validator defers a type it does not know, and boot asks again once
+    // they are registered.
+    const orders = ordersOf([
+      shop(),
+      changing("reviews", entity => ({
+        ...entity,
+        fields: [...fieldsOf(entity), { name: "stars", type: "rating-stars" }],
+      })),
+    ]);
+
+    expect(fieldsOf(orders).map(f => f.name)).toContain("stars");
+  });
+});
+
+describe("the compound indexes of another plugin's collection", () => {
+  const indexed = () =>
+    plugin("shop", {
+      collections: [
+        ordersCollection({
+          indexes: [
+            { fields: ["title", "total"], unique: true },
+            { fields: ["total", "title"] },
+          ],
+        }),
+      ],
+    });
+
+  it("keep a unique one", () => {
+    const refused = refusalOf(() =>
+      fold([
+        indexed(),
+        changing("reviews", entity => ({
+          ...entity,
+          indexes: [{ fields: ["total", "title"] }],
+        })),
+      ])
+    );
+
+    expect(refused?.code).toBe("TRANSFORM_TABLE_CHANGED");
+    expect(refused?.message).toContain("unique index");
+  });
+
+  it("may lose a plain one", () => {
+    // The control: a plain index changes no value.
+    const orders = ordersOf([
+      indexed(),
+      changing("reviews", entity => ({
+        ...entity,
+        indexes: [{ fields: ["title", "total"], unique: true }],
+      })),
+    ]);
+
+    expect(orders.indexes).toEqual([
+      { fields: ["title", "total"], unique: true },
+    ]);
+  });
+});
+
+describe("a function nested in a setting a third plugin contributed", () => {
+  it("may not be replaced without a dependency on its contributor", () => {
+    const previewUrl = (): string => "/preview";
+    const refused = refusalOf(() =>
+      fold([
+        shop(),
+        changing("reviews", entity => ({
+          ...entity,
+          preview: { url: previewUrl },
+        })),
+        changing("badges", entity => ({
+          ...entity,
+          preview: { url: (): string => "/elsewhere" },
+        })),
+      ])
+    );
+
+    expect(refused?.code).toBe("TRANSFORM_BEHAVIOUR_PROTECTED");
+    expect(refused?.message).toContain('"preview.url"');
+  });
+});
+
+describe("an owner's password field", () => {
+  it("may not become a text field, which would serve its stored hashes", () => {
+    const refused = refusalOf(() =>
+      fold([
+        plugin("shop", {
+          collections: [
+            ordersCollection({
+              fields: [
+                { name: "title", type: "text" },
+                { name: "pin", type: "password" },
+              ],
+            }),
+          ],
+        }),
+        changing("reviews", entity => ({
+          ...entity,
+          fields: replacing(fieldsOf(entity), "pin", f => ({
+            ...f,
+            type: "text",
+          })),
+        })),
+      ])
+    );
+
+    expect(refused?.code).toBe("TRANSFORM_FIELD_PROTECTED");
+    expect(refused?.message).toContain('"pin"');
+  });
+});
