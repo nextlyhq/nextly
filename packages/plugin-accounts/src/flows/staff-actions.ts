@@ -10,6 +10,7 @@ import { endAccountSessions } from "../storage/sessions";
 
 import { accountDeleted } from "./account-deleted";
 import type { FlowDeps } from "./deps";
+import { queueNotice } from "./mail";
 import { sendResetLink } from "./reset-request";
 import { endEverything } from "./sessions";
 import { mintVerification, queueVerification } from "./verification-email";
@@ -182,7 +183,7 @@ async function deleteAccountByStaff(
   );
   if (result.status !== "done") return result;
   accountDeleted(deps, accountId);
-  await deps.mail.queue({
+  await queueNotice(deps, {
     kind: "account-deleted",
     accountId,
     to: result.account.address,

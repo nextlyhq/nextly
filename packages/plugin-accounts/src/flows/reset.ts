@@ -7,6 +7,7 @@ import { endAccountSessions } from "../storage/sessions";
 import type { FlowDeps } from "./deps";
 import { validTokens } from "./known-tokens";
 import { linkedAccount } from "./linked-account";
+import { queueNotice } from "./mail";
 import {
   accountPasswordRefusal,
   type AccountPasswordRefusal,
@@ -109,7 +110,7 @@ export async function completePasswordReset(
     rule: LIMIT_RULES.signInAddress,
     key: account.addressNormalised,
   });
-  await deps.mail.queue({
+  await queueNotice(deps, {
     kind: "password-changed",
     accountId: account.id,
     to: account.address,

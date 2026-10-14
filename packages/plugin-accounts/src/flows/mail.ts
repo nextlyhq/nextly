@@ -1,3 +1,5 @@
+import type { FlowDeps } from "./deps";
+
 /**
  * The emails the accounts plugin sends, as the flows ask for them. A flow
  * queues an email rather than sending it, so the time an answer takes never
@@ -85,4 +87,29 @@ export type AccountsEmail =
 
 export interface AccountsMail {
   queue(email: AccountsEmail): Promise<void>;
+}
+
+/**
+ * Queues the email that tells an account's holder of a change that has
+ * already committed: a deleted account, a changed password or address. The
+ * change stands whether or not the email goes, so a queue that does not
+ * answer is logged for operators and never turned into a failure of what
+ * was done: a holder whose account is gone could not even retry.
+ */
+export async function queueNotice(
+  deps: Pick<FlowDeps, "mail" | "logger">,
+  email: AccountsEmail
+): Promise<void> {
+  try {
+    await deps.mail.queue(email);
+  } catch (error) {
+    deps.logger.warn(
+      "[accounts] the notice of a committed change was not queued",
+      {
+        kind: email.kind,
+        accountId: email.accountId,
+        cause: error instanceof Error ? error.message : String(error),
+      }
+    );
+  }
 }

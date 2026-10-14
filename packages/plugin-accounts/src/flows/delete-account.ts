@@ -3,6 +3,7 @@ import { deleteAccount, writeAtVersion } from "../storage/accounts";
 import { accountDeleted } from "./account-deleted";
 import type { FlowDeps } from "./deps";
 import { provenHolder } from "./holder";
+import { queueNotice } from "./mail";
 import { attemptSucceeded, type AttemptRefusal } from "./password-attempt";
 
 export type DeleteAccountResult =
@@ -54,7 +55,7 @@ export async function deleteOwnAccount(
 
   await attemptSucceeded(deps, attempt);
   accountDeleted(deps, account.id);
-  await deps.mail.queue({
+  await queueNotice(deps, {
     kind: "account-deleted",
     accountId: account.id,
     to: account.address,

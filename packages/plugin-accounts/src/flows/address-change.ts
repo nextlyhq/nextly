@@ -20,6 +20,7 @@ import { HOUR, MINUTE, type FlowDeps } from "./deps";
 import { provenHolder, sessionHolder } from "./holder";
 import { ADDRESS } from "./input";
 import { pageLink } from "./links";
+import { queueNotice } from "./mail";
 import { attemptSucceeded, type AttemptRefusal } from "./password-attempt";
 import { PURPOSES } from "./purposes";
 import { spendCode } from "./spend-code";
@@ -353,7 +354,7 @@ async function applyChange(
       return { status: "refused", reason: error.reason };
     throw error;
   }
-  await deps.mail.queue({
+  await queueNotice(deps, {
     kind: "address-changed",
     accountId: account.id,
     to: account.address,

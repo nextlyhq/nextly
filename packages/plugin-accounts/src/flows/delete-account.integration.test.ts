@@ -50,6 +50,29 @@ describe.each(getConfiguredTestDialects())(
       };
     }
 
+    it("answers deleted, and logs the email it could not queue, once the deletion has committed", async () => {
+      const { db, deps, emitted, warnings, id, session } = await boot();
+      const queueDown = {
+        ...deps,
+        mail: {
+          queue: () => Promise.reject(new Error("the job queue is down")),
+        },
+      };
+
+      expect(
+        await deleteOwnAccount(queueDown, {
+          sessionToken: session,
+          currentPassword: TEST_PASSWORD,
+          client: null,
+        })
+      ).toEqual({ status: "deleted" });
+      expect(await accountById(db, id)).toBeNull();
+      expect(emitted).toHaveLength(1);
+      expect(warnings).toEqual([
+        "[accounts] the notice of a committed change was not queued",
+      ]);
+    });
+
     it("deletes the account and everything of it, voids its links, tells other plugins and emails the address", async () => {
       const { db, deps, core, mail, emitted, id, session } = await boot();
       await requestPasswordReset(deps, {

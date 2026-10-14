@@ -5,6 +5,7 @@ import { endAccountSessions } from "../storage/sessions";
 
 import type { FlowDeps } from "./deps";
 import { provenHolder } from "./holder";
+import { queueNotice } from "./mail";
 import {
   accountPasswordRefusal,
   type AccountPasswordRefusal,
@@ -83,7 +84,7 @@ export async function changePassword(
     throw error;
   }
 
-  await deps.mail.queue({
+  await queueNotice(deps, {
     kind: "password-changed",
     accountId: account.id,
     to: account.address,
