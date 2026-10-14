@@ -372,7 +372,8 @@ export function requirePaymentAmount(
  * the contract (a zero amount, a malformed operation key) or a payment the
  * provider cannot take (a currency it does not charge in, more than it
  * accepts, a hold it cannot capture) creates nothing at the provider; its
- * answer is then held to the contract before anything reads it.
+ * answer is then held to the contract before anything reads it, including
+ * being the payment asked for: commerce's reference and the amount requested.
  *
  * @experimental
  */
@@ -383,14 +384,25 @@ export async function startProviderPayment(
   const input = parseStartPaymentInput(request);
   if (input.capture === "later") requirePaymentOperation(provider, "capture");
   requirePaymentAmount(provider, input.amount);
-  return parseProviderAnswer(
+  const context = { provider: provider.id, operation: "start" as const };
+  const started = parseProviderAnswer(
     providerPaymentSchema,
     await provider.start(input),
-    {
-      provider: provider.id,
-      operation: "start",
-    }
+    context
   );
+  // A well-formed answer for another payment would have commerce record the
+  // wrong reference or amount against this order.
+  if (
+    started.reference !== input.reference ||
+    started.amount.amount !== input.amount.amount ||
+    started.amount.currency !== input.amount.currency
+  ) {
+    throw commerceError("COMMERCE_PROVIDER_CONTRACT", {
+      ...context,
+      reason: "the answer is for another payment",
+    });
+  }
+  return started;
 }
 
 /** @experimental */

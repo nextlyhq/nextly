@@ -337,4 +337,42 @@ describe("starting a payment through commerce", () => {
       "COMMERCE_PROVIDER_CONTRACT"
     );
   });
+
+  it("refuses a provider's answer for another payment: another reference, amount or currency", async () => {
+    // Each answer is well formed, so only comparing it with the request can
+    // refuse it; the unchanged answer is the control that the comparison, not
+    // the shape, is what refuses the others.
+    const answering =
+      (changes: Record<string, unknown>) =>
+      async (input: StartPaymentInput) => ({
+        providerReference: "pay_1",
+        reference: input.reference,
+        status: "pending",
+        amount: input.amount,
+        amountCaptured: money(0, input.amount.currency),
+        amountRefunded: money(0, input.amount.currency),
+        ...changes,
+      });
+    const exact = counted({}, answering({}));
+    await expect(
+      startProviderPayment(exact.spy, start(100))
+    ).resolves.toMatchObject({
+      reference: "p-1",
+    });
+    for (const changes of [
+      { reference: "p-elsewhere" },
+      { amount: money(101, "USD") },
+      {
+        amount: money(100, "EUR"),
+        amountCaptured: money(0, "EUR"),
+        amountRefunded: money(0, "EUR"),
+      },
+    ]) {
+      const { spy } = counted({}, answering(changes));
+      expect(
+        await asyncCodeOf(() => startProviderPayment(spy, start(100))),
+        JSON.stringify(changes)
+      ).toBe("COMMERCE_PROVIDER_CONTRACT");
+    }
+  });
 });
