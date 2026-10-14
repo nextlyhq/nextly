@@ -123,12 +123,15 @@ export async function catalogueSourceContract(
   add(
     "prices lines for checkout, one answer per line in the order asked",
     async source => {
+      // The listed item is asked for twice, with different quantities: two
+      // lines of one cart, each answered in its own place.
       const lines = [
         { reference: fixtures.unknown, quantity: 1 },
         { reference: fixtures.listed, quantity: 2 },
         ...(fixtures.onRequest
           ? [{ reference: fixtures.onRequest, quantity: 1 }]
           : []),
+        { reference: fixtures.listed, quantity: 3 },
       ];
       const priced = (
         await source.price({ currency: options.currency, lines })
@@ -145,16 +148,17 @@ export async function catalogueSourceContract(
         priced[0].found === false,
         "an unknown reference is answered as not found"
       );
-      const listed = priced[1];
-      expectContract(
-        listed.found && listed.price.kind === "listed",
-        "a listed item has its price"
-      );
-      if (listed.found && listed.price.kind === "listed") {
+      for (const listed of [priced[1], priced[priced.length - 1]]) {
         expectContract(
-          listed.price.unitPrice.currency === options.currency,
-          "a price is in the store's currency"
+          listed.found && listed.price.kind === "listed",
+          "a listed item has its price, on each line that asks for it"
         );
+        if (listed.found && listed.price.kind === "listed") {
+          expectContract(
+            listed.price.unitPrice.currency === options.currency,
+            "a price is in the store's currency"
+          );
+        }
       }
       if (fixtures.onRequest) {
         const onRequest = priced[2];

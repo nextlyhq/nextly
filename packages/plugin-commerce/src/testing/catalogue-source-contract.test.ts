@@ -150,6 +150,28 @@ describe("the catalogue contract suite catches a broken source", () => {
     );
   });
 
+  it("fails a source that answers one line per reference", async () => {
+    // Two lines for one reference are two lines to checkout, each with its
+    // own quantity, and each must be answered in its place.
+    const failed = await failingCases(s => ({
+      ...s,
+      price: input => {
+        const seen = new Set<string>();
+        return s.price({
+          ...input,
+          lines: input.lines.filter(line => {
+            const first = !seen.has(line.reference);
+            seen.add(line.reference);
+            return first;
+          }),
+        });
+      },
+    }));
+    expect(failed).toContain(
+      "prices lines for checkout, one answer per line in the order asked"
+    );
+  });
+
   it("fails a source that records a repeated stock report twice", async () => {
     const failed = await failingCases(s => {
       const stock = s.stock;
