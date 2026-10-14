@@ -197,7 +197,14 @@ export function serialiseLimitWrite(
         { expiresAt: String(entry.expiresAt) }
       );
     }
-    const json = JSON.stringify(entry.value);
+    // A cycle or a bigint makes `stringify` throw: the caller's mistake, as
+    // much as a value with no JSON form, never a store that cannot answer.
+    let json: string | undefined;
+    try {
+      json = JSON.stringify(entry.value);
+    } catch {
+      json = undefined;
+    }
     if (json === undefined) {
       throw misuse("A limit store entry's value must be JSON.", {});
     }

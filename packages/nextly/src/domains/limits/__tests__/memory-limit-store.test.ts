@@ -126,6 +126,25 @@ describe("the memory store's bound", () => {
     expect(lines.filter(line => line.level === "warn")).toHaveLength(2);
   });
 
+  it("refuses a value that has no JSON form, such as a cycle, as the caller's mistake", async () => {
+    const store = createMemoryLimitStore();
+    const cycle: Record<string, unknown> = {};
+    cycle.self = cycle;
+
+    const refusal = await store
+      .update(["cyclic"], (_current, now) => ({
+        write: new Map([["cyclic", { value: cycle, expiresAt: now + 1000 }]]),
+        result: undefined,
+      }))
+      .then(
+        () => undefined,
+        (error: unknown) => error
+      );
+
+    expect(refusal).toMatchObject({ code: "INTERNAL_ERROR" });
+    expect(store.size()).toBe(0);
+  });
+
   it("refuses a value larger than 4 KB, and writes nothing", async () => {
     const store = createMemoryLimitStore();
     const refusal = await store

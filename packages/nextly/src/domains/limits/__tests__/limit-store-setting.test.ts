@@ -88,13 +88,13 @@ describe("rateLimit.store", () => {
     ).toThrow(expect.objectContaining({ code: "VALIDATION_ERROR" }));
   });
 
-  it("builds the store each selection names: memory unshared, the database and an app's own shared", () => {
+  it("builds the store each selection names: memory unshared, the database and an app's own shared", async () => {
     const memory = selectLimitStore("memory", { adapter, secret: "s" });
     expect(memory.store.shared).toBe(false);
 
     const database = selectLimitStore("database", { adapter, secret: "s" });
     expect(database.store.shared).toBe(true);
-    database.close();
+    await database.close();
 
     const own = { ...createMemoryLimitStore(), shared: true };
     expect(selectLimitStore(own, { adapter, secret: "s" }).store.shared).toBe(

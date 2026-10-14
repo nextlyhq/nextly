@@ -25,8 +25,8 @@ export interface LimitStoreDeps {
 export interface SelectedLimitStore {
   /** The store, every call answered within its time. */
   store: LimitStore;
-  /** Stop the store's own sweeping. Calls still work afterwards. */
-  readonly close: () => void;
+  /** Stop the store's own sweeping, once a sweep under way has finished. Calls still work afterwards. */
+  readonly close: () => Promise<void>;
 }
 
 /** Build the store `selection` names. */
@@ -39,7 +39,7 @@ export function selectLimitStore(
       store: withCallDeadline(
         createMemoryLimitStore({ maxEntries: deps.maxEntries })
       ),
-      close: () => undefined,
+      close: () => Promise.resolve(),
     };
   }
   if (selection === "database") {
@@ -51,5 +51,8 @@ export function selectLimitStore(
     return { store: withCallDeadline(store), close: () => store.close() };
   }
   // An app's own store: its bound and its sweeping are its own.
-  return { store: withCallDeadline(selection), close: () => undefined };
+  return {
+    store: withCallDeadline(selection),
+    close: () => Promise.resolve(),
+  };
 }

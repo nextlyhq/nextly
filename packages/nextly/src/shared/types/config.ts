@@ -323,10 +323,13 @@ export interface SanitizedRateLimitingConfig {
    * limits keep counting in. Absent for any other `rateLimit.store`.
    */
   store?: RateLimitStore;
-  /** The store limits on the newer contract count in. */
-  limitStore: LimitStoreSelection;
-  /** Whether the site says it runs one instance. */
-  singleInstance: boolean;
+  /**
+   * The store limits on the newer contract count in. Optional, so a block
+   * built by hand without it still holds: absent means memory.
+   */
+  limitStore?: LimitStoreSelection;
+  /** Whether the site says it runs one instance; absent means not. */
+  singleInstance?: boolean;
   /** The most live entries the selected store holds; its default when absent. */
   maxEntries?: number;
   /** Function to generate a unique key for rate limiting (optional) */
