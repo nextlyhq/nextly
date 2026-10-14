@@ -158,6 +158,23 @@ describeEachDialect("the database limit store", dialect => {
     return Number(row?.rows ?? 0);
   }
 
+  /** Whether `generation`'s counter row is still there. */
+  async function counterOf(generation: string): Promise<boolean> {
+    const table = limitStoreTables(dialect).nextlyLimitStore;
+    const db = current.adapter.getDrizzle<{
+      select(fields: object): {
+        from(table: unknown): {
+          where(c: unknown): Promise<{ rows: number }[]>;
+        };
+      };
+    }>();
+    const [row] = await db
+      .select({ rows: count() })
+      .from(table)
+      .where(eq(table.id, `${LIMIT_STORE_COUNTER_PREFIX}${generation}`));
+    return Number(row?.rows ?? 0) > 0;
+  }
+
   describe("keeps the limit store contract", () => {
     const generation = freshGeneration();
     let first: LimitStore;
@@ -221,11 +238,14 @@ describeEachDialect("the database limit store", dialect => {
     expect(await rowsOf(generation)).toBe(10);
   });
 
-  it("removes a rotated-out secret's entries, so new keys are admitted after the rotation", async () => {
+  it("keeps a rotated-out secret's live entries out of the new count, and removes them once they expire", async () => {
     const before = freshGeneration();
     const old = open(current.adapter, before, 3);
     for (const key of ["old-a", "old-b", "old-c"]) {
-      await old.update([key], count1(key));
+      await old.update([key], (_current, now) => ({
+        write: new Map([[key, { value: { n: 1 }, expiresAt: now + 300 }]]),
+        result: undefined,
+      }));
     }
     expect(
       limitStoreUnavailableReason(
@@ -233,13 +253,37 @@ describeEachDialect("the database limit store", dialect => {
       )
     ).toBe("full");
 
-    // An instance restarted under the rotated secret.
+    // An instance restarted under the rotated secret, while the earlier one
+    // may still be running: its entries count apart, and stay while live.
     const rotated = open(other, freshGeneration(), 3);
     for (const key of ["new-a", "new-b", "new-c"]) {
       await expect(rotated.update([key], count1(key))).resolves.toBeUndefined();
     }
+    // A sweep while they are live leaves them.
+    await rotated.sweep();
+    expect(await rowsOf(before)).toBe(3);
+
+    await pause(500);
+    await rotated.sweep();
 
     expect(await rowsOf(before)).toBe(0);
+    expect(await counterOf(before)).toBe(false);
+  });
+
+  it("never sweeps again once closed", async () => {
+    const generation = freshGeneration();
+    const store = open(current.adapter, generation, undefined, 100);
+    store.close();
+    for (const key of ["closed-a", "closed-b"]) {
+      await store.update([key], (_current, now) => ({
+        write: new Map([[key, { value: { n: 1 }, expiresAt: now + 100 }]]),
+        result: undefined,
+      }));
+    }
+
+    await pause(800);
+
+    expect(await rowsOf(generation)).toBe(2);
   });
 
   it("reads expiry on the database's clock, never the caller's", async () => {

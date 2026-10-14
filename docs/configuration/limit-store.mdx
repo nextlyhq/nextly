@@ -5,11 +5,15 @@ description: Where limits keep their counts, how to share them between instances
 
 Limits count attempts: sign-ins, password resets, codes sent. The **limit store** is where those counts are kept. `rateLimit.store` selects it, and every limit built on the limit store contract counts there.
 
+Core's own sign-in and API limits do not count in it yet. They keep counting as before: in each process, or in an app's store of the earlier `RateLimitStore` contract.
+
 > **Experimental.** The setting's two shipped choices, `"memory"` and `"database"`, and `singleInstance` are stable. The contract for an app's own store, and `maxEntries`, may still change.
 
 ## Choosing a store
 
 ```ts title="nextly.config.ts"
+import { defineConfig } from "nextly";
+
 export default defineConfig({
   rateLimit: {
     store: "database",
@@ -55,15 +59,15 @@ Each limit decides what "unavailable" means for its own request. Watch for both 
 
 - **Atomic across instances.** Every count runs in a short transaction of its own, with the rows of its keys locked. Concurrent attempts on several instances count as if they ran one at a time, a key's first attempt included. A count never joins a transaction the calling code has open: calling a limit inside your own transaction is refused with an error, so a rollback can never undo a count.
 - **On the database's clock.** Expiry is judged on the database server's clock, so instances whose clocks differ still agree on when a window ends.
-- **Swept.** Each instance removes expired entries every 5 minutes, so an expired entry is gone within 5 minutes, plus the time to work through a backlog.
+- **Swept.** Each instance removes expired entries when it starts and every 5 minutes after, in the background. An expired entry is gone within 5 minutes, plus the time to work through a backlog.
 - **Keys are hashed.** Each row is stored under the SHA-256 of its key, never the key itself.
-- **Secret rotation.** Entries record which `NEXTLY_SECRET` they were written under. After a rotation they can no longer be read, so the store removes them rather than counting them against the bound.
+- **Secret rotation.** Entries record which `NEXTLY_SECRET` they were written under. After a rotation the new instances can't read them, and they never count against the new instances' bound. They are removed once they expire, not sooner: during a rolling deployment, instances still on the earlier secret keep counting with them.
 - **SQLite.** SQLite writes one transaction at a time on the instance, so every count waits for any transaction open on the instance at that moment. A long-running transaction delays sign-in for its whole length.
 - **Cost.** One short transaction per counted request. The table reaches existing databases through `nextly migrate`, like every core table.
 
 ## When a store does not answer
 
-Every store call, to any store, is answered within **2 seconds**. A call that takes longer, or a store that fails, is answered as unavailable, as when the store cannot be reached. With a store of your own, monitor it: while it is down, the limits built on it cannot count.
+Every store call, to any store, is answered within **2 seconds**. A call that takes longer, or a store that fails, is answered as unavailable, as when the store cannot be reached. A call past its deadline may still be running in the store, so at most 64 calls run at once: past that, a call is answered as unavailable at once, until the store catches up. With a store of your own, monitor it: while it is down, the limits built on it cannot count.
 
 ## Your own store
 
@@ -78,11 +82,17 @@ const store: LimitStore = {
   // Atomically: read the live entries for `keys`, call `apply` with them and
   // the store's clock (milliseconds since the epoch), and write what it
   // returns (`null` deletes), with no other update to these keys in between.
-  async update(keys, apply) { /* ... */ },
+  update(keys, apply) {
+    throw new Error("Implement against your store");
+  },
   // The live entries for `keys`, judged on the store's own clock.
-  async read(keys) { /* ... */ },
+  read(keys) {
+    throw new Error("Implement against your store");
+  },
   // Remove expired entries; answer how many went.
-  async sweep() { /* ... */ },
+  sweep() {
+    throw new Error("Implement against your store");
+  },
 };
 ```
 
@@ -91,7 +101,13 @@ Each entry is `{ value, expiresAt }`. `value` is JSON of at most 4 KB, and `expi
 Run the contract's cases against your store, with two handles on it as two instances would hold them:
 
 ```ts
+import type { LimitStore } from "nextly";
 import { limitStoreContract } from "nextly/testing";
+import { it } from "vitest";
+
+// Your store, as two instances of the site each hold it.
+declare const storeOnInstanceA: LimitStore;
+declare const storeOnInstanceB: LimitStore;
 
 for (const contractCase of limitStoreContract) {
   it(contractCase.name, () =>

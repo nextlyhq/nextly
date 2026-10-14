@@ -35,10 +35,10 @@ import {
   gt,
   inArray,
   isNotNull,
+  like,
   lte,
   ne,
   notLike,
-  or,
   sql,
   type SQL,
 } from "drizzle-orm";
@@ -287,19 +287,60 @@ export function createDatabaseLimitStore(
       return occupied;
     });
 
-  /** What a sweep removes: expired entries, and every row of another generation. */
-  const removable: SQL | undefined = or(
-    and(
-      lte(table.expiresAt, now),
-      notLike(table.id, `${LIMIT_STORE_COUNTER_PREFIX}%`)
-    ),
-    ne(table.generation, generation)
+  /**
+   * What a sweep removes: expired entries, whatever generation wrote them.
+   *
+   * Another generation's entries are kept until they expire, never sooner:
+   * during a rolling deployment that rotates the secret, instances of both
+   * generations run at once, and removing each other's live entries would
+   * start their counts again for as long as the rollout lasts. They never
+   * count against this generation's bound, which is counted per generation.
+   */
+  const removable: SQL | undefined = and(
+    lte(table.expiresAt, now),
+    notLike(table.id, `${LIMIT_STORE_COUNTER_PREFIX}%`)
   );
 
   /**
-   * Remove expired entries and those of other generations, a batch per
-   * transaction, then recount. Ids are removed in sorted order, the order
-   * updates take rows in.
+   * Remove the counter of every other generation that has no entries left:
+   * its instances are gone, and nothing will count under it again.
+   */
+  const removeSpentCounters = async (): Promise<void> => {
+    const counters = await adapter
+      .getDrizzle<StoreDb>()
+      .select<{ id: string; generation: string }>({
+        id: table.id,
+        generation: table.generation,
+      })
+      .from(table)
+      .where(
+        and(
+          like(table.id, `${LIMIT_STORE_COUNTER_PREFIX}%`),
+          ne(table.generation, generation)
+        )
+      );
+    for (const counter of counters) {
+      await inOwnTransaction(async db => {
+        const [left] = await db
+          .select<{ rows: number }>({ rows: count() })
+          .from(table)
+          .where(
+            and(
+              eq(table.generation, counter.generation),
+              notLike(table.id, `${LIMIT_STORE_COUNTER_PREFIX}%`)
+            )
+          );
+        if (Number(left?.rows ?? 0) === 0) {
+          await db.delete(table).where(eq(table.id, counter.id));
+        }
+      });
+    }
+  };
+
+  /**
+   * Remove expired entries, a batch per transaction, then spent counters,
+   * then recount. Ids are removed in sorted order, the order updates take
+   * rows in.
    */
   const sweepRows = async (): Promise<number> => {
     let removed = 0;
@@ -324,18 +365,34 @@ export function createDatabaseLimitStore(
       removed += found.removed;
       if (found.ids < SWEEP_BATCH) break;
     }
+    await removeSpentCounters();
     const occupied = await recount();
     watch.observe(occupied);
     return removed;
   };
 
-  // The first call removes what earlier generations left and recounts, so
-  // the bound is judged against a count of this generation alone. Kept until
-  // it succeeds; a failure is retried by the next call.
+  /** A sweep nobody waits for; a failure is logged, and the next one retries. */
+  const sweepInBackground = () => {
+    sweepRows().catch((error: unknown) => {
+      getNextlyLogger().warn({
+        kind: "limit-store-sweep-failed",
+        message: error instanceof Error ? error.message : String(error),
+      });
+    });
+  };
+
+  // The first call only recounts this generation's entries, so the bound is
+  // judged against a true count: one query. Removing expired entries can be
+  // a long job after a restart, so it runs in the background instead of
+  // holding the call. Kept until it succeeds; a failure is retried by the
+  // next call.
   let ready: Promise<void> | undefined;
   const ensureReady = (): Promise<void> => {
-    ready ??= sweepRows().then(
-      () => undefined,
+    ready ??= recount().then(
+      occupied => {
+        watch.observe(occupied);
+        startSweeping();
+      },
       (error: unknown) => {
         ready = undefined;
         throw error;
@@ -345,18 +402,16 @@ export function createDatabaseLimitStore(
   };
 
   let timer: ReturnType<typeof setInterval> | undefined;
+  let closed = false;
+  /** Sweep now in the background, and then on the interval, until closed. */
   const startSweeping = () => {
     const interval =
       options.sweepIntervalMs ?? DATABASE_LIMIT_STORE_SWEEP_INTERVAL_MS;
-    if (timer !== undefined || interval === false) return;
-    timer = setInterval(() => {
-      sweepRows().catch((error: unknown) => {
-        getNextlyLogger().warn({
-          kind: "limit-store-sweep-failed",
-          message: error instanceof Error ? error.message : String(error),
-        });
-      });
-    }, interval);
+    // Closed for good: a store kept after the services were released must
+    // not start reaching for its adapter again.
+    if (closed || timer !== undefined || interval === false) return;
+    sweepInBackground();
+    timer = setInterval(sweepInBackground, interval);
     // Never what keeps the process running.
     timer.unref?.();
   };
@@ -567,7 +622,6 @@ export function createDatabaseLimitStore(
       const applyFailure: { error?: unknown } = {};
       try {
         await ensureReady();
-        startSweeping();
         try {
           return await attemptUpdate(named, apply, false, applyFailure);
         } catch (error) {
@@ -630,6 +684,7 @@ export function createDatabaseLimitStore(
     },
 
     close() {
+      closed = true;
       if (timer !== undefined) clearInterval(timer);
       timer = undefined;
     },

@@ -22,14 +22,26 @@ import {
 export const LIMIT_STORE_CALL_TIMEOUT_MS = 2000;
 
 /**
+ * How many calls may be under way in the store at once, those already
+ * answered as timed out included. A call past its deadline still runs in the
+ * store, holding a connection and perhaps locks, so a store that has stopped
+ * answering would otherwise gather unbounded work behind it. Past this many,
+ * a call is answered as unavailable at once, and starts nothing.
+ */
+export const LIMIT_STORE_MAX_IN_FLIGHT = 64;
+
+/**
  * The same store, its every call answered within `timeoutMs`, and its own
  * failures answered as unavailable. What a caller's `apply` throws reaches the
  * caller unchanged.
  */
 export function withCallDeadline(
   store: LimitStore,
-  timeoutMs: number = LIMIT_STORE_CALL_TIMEOUT_MS
+  timeoutMs: number = LIMIT_STORE_CALL_TIMEOUT_MS,
+  maxInFlight: number = LIMIT_STORE_MAX_IN_FLIGHT
 ): LimitStore {
+  /** Calls the store has not yet settled, answered or not. */
+  let inFlight = 0;
   /**
    * `call`'s answer, or the unavailable answer once `timeoutMs` has passed
    * without one. A store's own failure is answered as unavailable; the
@@ -39,15 +51,23 @@ export function withCallDeadline(
     call: () => Promise<T>,
     applyFailure: { failed?: { error: unknown } } = {}
   ): Promise<T> => {
+    if (inFlight >= maxInFlight) {
+      throw limitStoreUnavailable("timeout", { logContext: { inFlight } });
+    }
     let timer: ReturnType<typeof setTimeout> | undefined;
     const deadline = new Promise<never>((_resolve, reject) => {
       timer = setTimeout(() => {
         reject(limitStoreUnavailable("timeout", { logContext: { timeoutMs } }));
       }, timeoutMs);
     });
+    inFlight += 1;
     const pending = Promise.resolve().then(call);
+    // Counted until the store settles it, not until its caller is answered.
     // A call that fails after its deadline has nobody waiting for it.
-    pending.catch(() => undefined);
+    pending.then(
+      () => (inFlight -= 1),
+      () => (inFlight -= 1)
+    );
     try {
       return await Promise.race([pending, deadline]);
     } catch (error) {

@@ -51,6 +51,41 @@ describe("a limit store call held to a time", () => {
     }
   });
 
+  it("starts nothing past its calls in flight, answering at once until the store settles them", async () => {
+    let started = 0;
+    const settleAll: Array<() => void> = [];
+    const hanging: LimitStore = {
+      shared: true,
+      update: () => {
+        started += 1;
+        return new Promise(resolve =>
+          settleAll.push(() => resolve(undefined as never))
+        );
+      },
+      read: () => Promise.resolve(new Map()),
+      sweep: () => Promise.resolve(0),
+    };
+    const store = withCallDeadline(hanging, 30, 3);
+    const update = () =>
+      settled(store.update(["k"], () => ({ write: new Map(), result: 1 })));
+
+    const timedOut = await Promise.all([update(), update(), update()]);
+    const fourth = await update();
+
+    expect(
+      timedOut.map(outcome => limitStoreUnavailableReason(outcome.error))
+    ).toEqual(["timeout", "timeout", "timeout"]);
+    expect(limitStoreUnavailableReason(fourth.error)).toBe("timeout");
+    expect(fourth.ms).toBeLessThan(25);
+    expect(started).toBe(3);
+
+    // Once the store settles them, calls start again.
+    for (const settle of settleAll) settle();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    await update();
+    expect(started).toBe(4);
+  });
+
   it("answers a store's own failure as unreachable", async () => {
     const store = withCallDeadline(failingStore, 1000);
 

@@ -215,10 +215,11 @@ export interface DatabaseConfig {
  */
 export interface RateLimitingConfig {
   /**
-   * Enable rate limiting.
+   * Enable rate limiting. Optional, as its default says: only `false` turns
+   * it off, so a block that sets only the store keeps limiting.
    * @default true
    */
-  enabled: boolean;
+  enabled?: boolean;
 
   /**
    * Maximum requests per window for read operations (GET).

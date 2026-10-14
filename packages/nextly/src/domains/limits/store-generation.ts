@@ -5,9 +5,11 @@
  * Limits key their entries with a value derived from the install's secret, so
  * rotating the secret starts every count again, as a store that restarts
  * empty does. The entries written under the earlier secret can then never be
- * read, and would only take room until they expired. Each entry records the
- * generation it was written under, and the store removes every entry of
- * another generation rather than counting it.
+ * read by the new one. Each entry records the generation it was written
+ * under, and the bound is counted per generation, so another generation's
+ * entries never count against this one's. They are removed once they expire:
+ * not sooner, since during a rolling deployment the earlier generation's
+ * instances are still counting with them.
  *
  * @module domains/limits/store-generation
  */
