@@ -185,6 +185,24 @@ describe.each(getConfiguredTestDialects())(
 
     const exists = (table: string) => handle.adapter.tableExists(table);
 
+    /**
+     * What a process that died leaves of its connections: none. MySQL's
+     * migrate lock belongs to a connection, and a process that stops frees it
+     * by closing it; one that throws and carries on, as this test's does, can
+     * leave the lock with an idle pooled connection, so that connection is
+     * closed here as the dying process's would be. PostgreSQL's lock is a
+     * row the command's own error path removes, and SQLite holds none.
+     */
+    async function endStoppedProcess(): Promise<void> {
+      if (dialect !== "mysql") return;
+      const [held] = (await handle.adapter.executeQuery(
+        "SELECT IS_USED_LOCK('nextly:migrate') AS holder"
+      )) as Array<{ holder: number | null }>;
+      if (held?.holder) {
+        await handle.adapter.executeQuery(`KILL ${String(held.holder)}`);
+      }
+    }
+
     const q = (name: string) =>
       dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
 
@@ -261,6 +279,7 @@ describe.each(getConfiguredTestDialects())(
       };
 
       await expect(uninstall(false)).rejects.toThrow("process stopped");
+      await endStoppedProcess();
 
       expect(await exists("lc__tags")).toBe(false);
       expect(await exists("lc__notes")).toBe(true);
