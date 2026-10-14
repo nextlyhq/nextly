@@ -1968,6 +1968,290 @@ export function tablesCreatedBy(
 }
 
 /**
+ * What a statement may begin with for `tablesLeftInPlace` to follow it: the
+ * statements a generated DOWN is made of. Data statements change no table's
+ * existence; schema statements on indexes, types and sequences change none
+ * either; the table statements are the ones `TableFates` follows. A rebuild
+ * is a CREATE TABLE, an INSERT, a DROP TABLE and an ALTER TABLE.
+ */
+const MODELED_STATEMENTS: readonly (readonly string[])[] = [
+  ["DROP", "TABLE"],
+  ["DROP", "TABLES"],
+  ["DROP", "INDEX"],
+  ["DROP", "TYPE"],
+  ["DROP", "SEQUENCE"],
+  ["ALTER", "TABLE"],
+  ["ALTER", "INDEX"],
+  ["ALTER", "SEQUENCE"],
+  ["CREATE", "TABLE"],
+  ["CREATE", "INDEX"],
+  ["CREATE", "UNIQUE", "INDEX"],
+  ["CREATE", "TYPE"],
+  ["CREATE", "SEQUENCE"],
+  ["RENAME", "TABLE"],
+  ["INSERT"],
+  ["UPDATE"],
+  ["DELETE"],
+  ["PRAGMA", "FOREIGN_KEYS"],
+  ["PRAGMA", "FOREIGN_KEY_CHECK"],
+];
+
+/**
+ * Whether `tablesLeftInPlace` can follow a statement: a single statement that
+ * begins as one of `MODELED_STATEMENTS` and names no table through a
+ * qualifier. Anything else is unmodeled, and refused: a savepoint and its
+ * rollback, a procedural block whose branches may not run, a view or virtual
+ * table taking a dropped table's name, a temporary table shadowing one, and
+ * a qualified name such as SQLite's `temp.t`, which can reach another table
+ * than the one its last part names.
+ */
+function modelsStatement(
+  statement: string,
+  dialect: SupportedDialect
+): boolean {
+  const tokens = soleStatementTokens(statement, dialect);
+  if (tokens === undefined) return false;
+  const words = tokens.map(token =>
+    token.kind === "word" ? token.upper : undefined
+  );
+  const begins = MODELED_STATEMENTS.some(prefix =>
+    prefix.every((word, at) => words[at] === word)
+  );
+  if (!begins) return false;
+  return !tokens.some(
+    (token, at) =>
+      token.kind === "punct" &&
+      token.char === "." &&
+      isNameToken(tokens[at - 1]) &&
+      isNameToken(tokens[at + 1])
+  );
+}
+
+/**
+ * A bare or quoted name: what can stand either side of a qualifier's dot. A
+ * bare word starting with a digit is a number, whose decimal point is no
+ * qualifier.
+ */
+function isNameToken(token: Token | undefined): boolean {
+  if (token?.kind === "name") return true;
+  return token?.kind === "word" && !/^\d/.test(token.text);
+}
+
+/** The holder of a name that a statement of the list created. */
+const MADE_BY_LIST = Symbol("made by the list");
+
+/**
+ * The name a statement physically acts on. The reader names a rebuild's
+ * `__new_` twin by the table it stands in for, so a rebuild cannot slip a
+ * drop past the ownership checks; a twin dropped on its own drops only the
+ * twin, though, and its fate is the twin's.
+ */
+function physicalName(table: TableRef): string {
+  return "twin" in table && table.twin === true
+    ? `${REBUILD_PREFIX}${table.name}`
+    : table.name;
+}
+
+/**
+ * Where each of a set of tables, standing before a list runs, is after each
+ * statement: under which name, or dropped. Only local names are followed; a
+ * qualified one may name another schema's table, so a drop of it drops
+ * nothing followed here, and a rename of one moves nothing.
+ */
+class TableFates {
+  /** Each name a statement has given a holder: a followed table, or one the list made. */
+  private readonly holders = new Map<string, string | typeof MADE_BY_LIST>();
+  /** Followed tables' own names that a statement has emptied. */
+  private readonly vacated = new Set<string>();
+  /** Followed tables the list dropped, under whatever name they then had. */
+  private readonly dropped = new Set<string>();
+
+  constructor(private readonly tables: ReadonlySet<string>) {}
+
+  /** What stands under `name` now, if anything. */
+  private holder(name: string): string | typeof MADE_BY_LIST | undefined {
+    if (this.holders.has(name)) return this.holders.get(name);
+    if (this.tables.has(name) && !this.vacated.has(name)) return name;
+    return undefined;
+  }
+
+  private vacate(name: string): void {
+    this.holders.delete(name);
+    this.vacated.add(name);
+  }
+
+  /** A CREATE: a table stands under the name, unless one already did. */
+  create(table: TableRef): void {
+    const name = physicalName(table);
+    if (!table.local || this.holder(name) !== undefined) return;
+    this.holders.set(name, MADE_BY_LIST);
+  }
+
+  /** A CREATE that replaces whatever stood under the name. */
+  replace(table: TableRef): void {
+    this.drop(table);
+    this.create(table);
+  }
+
+  drop(table: TableRef): void {
+    if (!table.local) return;
+    const name = physicalName(table);
+    const holder = this.holder(name);
+    if (holder === undefined) return;
+    this.vacate(name);
+    if (holder !== MADE_BY_LIST) this.dropped.add(holder);
+  }
+
+  /**
+   * A rename. Whatever `from` held stands under `to` afterwards; a name not
+   * followed here may still hold a table, so `to` is taken either way.
+   */
+  rename(from: TableRef, to: TableRef): void {
+    const holder = from.local ? this.holder(physicalName(from)) : undefined;
+    if (from.local) this.vacate(physicalName(from));
+    if (to.local) this.holders.set(physicalName(to), holder ?? MADE_BY_LIST);
+  }
+
+  /** A table moved away from its name, to another schema: kept, elsewhere. */
+  relocate(table: TableRef): void {
+    if (table.local) this.vacate(physicalName(table));
+  }
+
+  /** Whether `table` was dropped, with nothing standing under its name after. */
+  gone(table: string): boolean {
+    return this.dropped.has(table) && this.holder(table) === undefined;
+  }
+}
+
+/**
+ * A `DropReader` that also follows `tables` through the list (`TableFates`).
+ *
+ * The reader's own records stay as they are: they answer what a list may
+ * take from another owner, and read a drop by the name it is written
+ * against. Each statement reaches the fates once, from the walk, however the
+ * reader's methods call one another.
+ */
+class FollowingReader extends DropReader {
+  readonly fates: TableFates;
+  /** Whether a statement is one `modelsStatement` does not model. */
+  holdsUnmodeledStatement = false;
+  private depth = 0;
+
+  constructor(dialect: SupportedDialect, tables: ReadonlySet<string>) {
+    super(dialect, new Set());
+    this.fates = new TableFates(tables);
+  }
+
+  /**
+   * Also takes the name every CREATE TABLE names, which the walk does not
+   * report for a rebuild's twin or under `IF NOT EXISTS`: either puts a table
+   * under the name when none stands there.
+   */
+  override read(statement: string): void {
+    super.read(statement);
+    if (!modelsStatement(statement, this.dialect)) {
+      this.holdsUnmodeledStatement = true;
+    }
+    const created = tableNamedByCreate(statement, this.dialect);
+    if (created !== undefined)
+      this.fates.create({ name: created, local: true });
+  }
+
+  /** Runs `follow` for a call from the walk, not for one the reader nests. */
+  private step<T>(follow: () => void, read: () => T): T {
+    if (this.depth === 0) follow();
+    this.depth += 1;
+    try {
+      return read();
+    } finally {
+      this.depth -= 1;
+    }
+  }
+
+  override create(table: TableRef): void {
+    this.step(
+      () => this.fates.create(table),
+      () => super.create(table)
+    );
+  }
+
+  override replace(table: TableRef): void {
+    this.step(
+      () => this.fates.replace(table),
+      () => super.replace(table)
+    );
+  }
+
+  override drop(table: TableRef): void {
+    this.step(
+      () => this.fates.drop(table),
+      () => super.drop(table)
+    );
+  }
+
+  override rename(from: TableRef, to: TableRef): void {
+    this.step(
+      () => this.fates.rename(from, to),
+      () => super.rename(from, to)
+    );
+  }
+
+  override relocate(table: TableRef): string {
+    return this.step(
+      () => this.fates.relocate(table),
+      () => super.relocate(table)
+    );
+  }
+
+  /**
+   * PostgreSQL's `ALTER INDEX ... RENAME`, which renames a table too: the
+   * table moves to a name not read here, keeping its rows.
+   */
+  override renameRelation(name: string): void {
+    this.step(
+      () => this.fates.relocate({ name, local: true }),
+      () => super.renameRelation(name)
+    );
+  }
+}
+
+/**
+ * Of `tables`, those a statement list leaves in place: run in order, it does
+ * not drop the table under any name it is renamed to, or it leaves a table
+ * standing under the name once it has finished. Lower-cased, as `tables`
+ * holds them.
+ *
+ * Each table is followed through the list's renames: renamed away and kept,
+ * it is left, however many drops of its old name follow; renamed away and
+ * then dropped, it is gone. A rebuild is read as the drop and the rename back
+ * it is, so it leaves the table in place.
+ *
+ * Every table counts as left when the list holds a statement this reading
+ * does not model (`modelsStatement`), or one that may change which table an
+ * unqualified name reaches: what it drops is then not known, and an uninstall
+ * is refused rather than run on a guess. The reading models the statements a
+ * plugin's generated DOWN is made of, and refuses the rest by kind rather
+ * than by exception, so a form nobody listed is refused, not trusted.
+ */
+export function tablesLeftInPlace(
+  statements: readonly string[],
+  dialect: SupportedDialect,
+  tables: readonly string[]
+): string[] {
+  const reader = new FollowingReader(dialect, new Set(tables));
+  try {
+    readWith(statements, reader, new Map());
+  } catch (error) {
+    if (error instanceof UnparsableDropTarget) return [...tables];
+    throw error;
+  }
+  if (reader.resolutionMayChange || reader.holdsUnmodeledStatement) {
+    return [...tables];
+  }
+  return tables.filter(table => !reader.fates.gone(table));
+}
+
+/**
  * A statement list read as if no table existed — so a creation's credit
  * carries through a rename to the name it is renamed to — or undefined when
  * the list cannot be read; the guard refuses such a list on its own.

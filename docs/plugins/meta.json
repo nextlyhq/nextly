@@ -5,6 +5,7 @@
     "author-guide",
     "auth",
     "signed-in-people",
+    "security-helpers",
     "lifecycle",
     "services",
     "permissions",

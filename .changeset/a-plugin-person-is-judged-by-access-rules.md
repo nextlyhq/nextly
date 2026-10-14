@@ -14,6 +14,7 @@
 "@nextlyhq/storage-s3": patch
 "@nextlyhq/storage-uploadthing": patch
 "@nextlyhq/storage-vercel-blob": patch
+"@nextlyhq/plugin-accounts": patch
 "@nextlyhq/plugin-commerce": patch
 "@nextlyhq/plugin-form-builder": patch
 "@nextlyhq/plugin-page-builder": patch
@@ -41,10 +42,15 @@ Collection and Single operations on the Direct API, and a plugin's
 The call is refused before it runs if it also asks to skip access rules or
 the filterable-field check (`frameworkFilter`), names a staff user or an API
 key, or names a person core did not make; any other operation refuses the
-option. `findSingles` made as a person lists, and counts, only the Singles
-the person may read. A document created as a person has no owner.
+option, and it cannot be a Direct API instance default. `findSingles` made
+as a person lists, and counts, only the Singles the person may read. A document created as a person has no owner.
 `nextly.principals.byId` and `ctx.principals.byId` find a person through the
 kind's `lookup`, checked as a resolver's answer is.
+
+An update or delete by `where` made under access rules (a person's, or any
+call with `overrideAccess: false`) now refuses a `where` on a field the
+caller may not read before it writes anything, as a read already did; the
+rows it touched used to answer whether a guessed value matched.
 
 A dev reload now installs the kinds of signed-in person it reads only once it
 commits, and a kind's attributes may no longer be optional.

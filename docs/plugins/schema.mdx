@@ -105,6 +105,46 @@ A disabled plugin's transforms still run, so disabling it never changes a table,
 contribute no behaviour: a hook, access rule, validator or function default they set
 is put back to what the entity had.
 
+### What a transform may not change
+
+A transform hands back a whole definition, so Nextly records who put each part of an
+entity there and refuses, at boot, a change that isn't the transforming plugin's to make:
+
+- **Another plugin's entity needs that plugin in `dependsOn`.** A plugin that transforms
+  a collection, Single or component another plugin declares must list that plugin in
+  `dependsOn` (not `optionalDependsOn`), so the owner can't be uninstalled while the
+  change depends on it. The app's own entities need no dependency.
+- **A plugin's entity keeps its slug and its tables.** A transform can't rename it,
+  delete it, move it to another `dbName`, or change its `status` or `localized`
+  setting, which add the status column and the translations table its owner's data
+  sits in, or remove a unique compound index from its `indexes`. While another plugin
+  has added a field to an entity, not even its owner's transform, nor a transform of
+  the app's entity, may change its `dbName`, `status` or `localized`: that plugin's
+  stored values live there too.
+- **A field keeps its storage unless its declarer changes it.** Removing a field, or
+  changing how it's stored (its type, column, size, whether it's `required` or
+  `unique`, whether it holds one value or a list (`hasMany`, a field group's
+  `repeatable`), its relation target, whether it's translated, or, for a field stored as
+  JSON such as a group or repeater, or a `password` field, its type), is refused for a
+  field
+  another plugin declared:
+  the owner's own fields, and fields a third plugin added with `extend` or its own
+  transform, whatever the transforming plugin depends on. A field inside a group or
+  repeater is protected the same way. Labels, descriptions, select options, a plain
+  `index` and the like may change. The app's own fields stay open to plugins that reshape them.
+- **A third plugin's access rules, hooks, admin settings and functions stay**, a
+  validator, a function default or a function nested in a setting such as
+  `preview.url` among them. The
+  owner's may be replaced by any plugin allowed to transform the entity; one a third
+  plugin contributed, to the entity or to a field, only by a plugin that lists that
+  third plugin in `dependsOn`. That includes moving or repeating its hooks, since each
+  hook is handed what the one before it returned.
+- **The result passes the entity's own validation.** A transform can't set what
+  `defineCollection`, `defineSingle` or `defineFieldGroup` would refuse, such as
+  `db: { idType: "serial" }`. The refusal names the plugin.
+
+The refusals are listed in the [error reference](/docs/plugins/error-reference#transforms).
+
 ## Migrations & databases
 
 A plugin doesn't write SQL or manage tables itself — it **declares** schema through

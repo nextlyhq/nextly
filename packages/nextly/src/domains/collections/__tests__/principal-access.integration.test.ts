@@ -12,6 +12,7 @@
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { runAsPrincipal } from "../../../auth/principal-scope";
 import { defineCollection } from "../../../collections/config/define-collection";
 import { text } from "../../../collections/fields";
 import type { PluginDefinition } from "../../../plugins/plugin-context";
@@ -102,7 +103,12 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
     collections: [
       defineCollection({
         slug: "members_only",
-        access: { read: isMember, create: isMember, update: isMember },
+        access: {
+          read: isMember,
+          create: isMember,
+          update: isMember,
+          delete: isMember,
+        },
         fields: [
           text({ name: "title" }),
           // Refused to the kind: a person reads the row without it.
@@ -279,6 +285,106 @@ describe.each(getConfiguredTestDialects())(
         offset: 10,
       });
       expect(unrestricted.totalDocs).toBe(2);
+    });
+
+    it("refuses a where on a field the person may not read before an update writes", async () => {
+      const t = await boot(dialect);
+      const id = await seed(t, "members_only");
+      const member = await person(t, "m1");
+
+      // A guessed value on the withheld field: refused, and nothing written,
+      // so whether it matched cannot be read off the write.
+      await expect(
+        t.nextly.update({
+          collection: "members_only",
+          where: { staff_note: { equals: "internal" } },
+          data: { title: "probed" },
+          principal: member,
+        })
+      ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+      const row = (await t.nextly.findByID({
+        collection: "members_only",
+        id,
+      })) as Record<string, unknown>;
+      expect(row.title).toBe("seeded");
+
+      // The control: a where on a field the person may read updates.
+      await t.nextly.update({
+        collection: "members_only",
+        where: { title: { equals: "seeded" } },
+        data: { title: "renamed" },
+        principal: member,
+      });
+      const renamed = (await t.nextly.findByID({
+        collection: "members_only",
+        id,
+      })) as Record<string, unknown>;
+      expect(renamed.title).toBe("renamed");
+    });
+
+    it("refuses a where on a field the person may not read before a delete removes anything", async () => {
+      const t = await boot(dialect);
+      const id = await seed(t, "members_only");
+      const member = await person(t, "m1");
+
+      await expect(
+        t.nextly.delete({
+          collection: "members_only",
+          where: { staff_note: { equals: "internal" } },
+          principal: member,
+        })
+      ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+      expect(
+        await t.nextly.findByID({ collection: "members_only", id })
+      ).not.toBeNull();
+
+      // The control: a where on a field the person may read deletes.
+      await t.nextly.delete({
+        collection: "members_only",
+        where: { title: { equals: "seeded" } },
+        principal: member,
+      });
+      expect(
+        await t.nextly.findByID({
+          collection: "members_only",
+          id,
+          disableErrors: true,
+        })
+      ).toBeNull();
+    });
+
+    it("refuses a withheld where at the bulk service, which every way in reaches", async () => {
+      // The REST bulk routes call the collections handler directly, with no
+      // Direct API namespace in front, so the check has to live where the
+      // rows are found.
+      const t = await boot(dialect);
+      const id = await seed(t, "members_only");
+      const member = await person(t, "m1");
+
+      await expect(
+        runAsPrincipal(member, () =>
+          t.nextly.collectionsHandler.bulkUpdateByQuery({
+            collectionName: "members_only",
+            where: { staff_note: { equals: "internal" } },
+            data: { title: "probed" },
+            overrideAccess: false,
+          })
+        )
+      ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+      await expect(
+        runAsPrincipal(member, () =>
+          t.nextly.collectionsHandler.bulkDeleteByQuery({
+            collectionName: "members_only",
+            where: { staff_note: { equals: "internal" } },
+            overrideAccess: false,
+          })
+        )
+      ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+      const row = (await t.nextly.findByID({
+        collection: "members_only",
+        id,
+      })) as Record<string, unknown>;
+      expect(row.title).toBe("seeded");
     });
 
     it("hands collection hooks the person, and no staff user", async () => {

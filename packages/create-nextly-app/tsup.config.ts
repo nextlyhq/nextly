@@ -4,12 +4,9 @@ import { fileURLToPath } from "url";
 
 import { defineConfig } from "tsup";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+import { BUNDLED_TEMPLATES } from "./src/lib/bundled-templates";
 
-// Templates that are bundled into the CLI package for offline use.
-// Content templates (blog, etc.) are downloaded from GitHub at runtime.
-// `plugin` is bundled so plugins are scaffoldable offline (D44).
-const BUNDLED_TEMPLATES = ["base", "blank", "plugin"] as const;
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 function copyBundledTemplates(): void {
   const monoRepoTemplates = path.resolve(__dirname, "../../templates");

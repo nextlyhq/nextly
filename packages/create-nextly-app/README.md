@@ -30,7 +30,7 @@ bun create nextly-app@alpha my-app
 The CLI walks you through:
 
 1. Project name (or `.` to install in the current directory)
-2. Template (`blank` or `blog`)
+2. Template (`blank`, `blog` or `plugin`)
 3. Schema approach (`code-first` or `visual`), only for templates that support both
 4. Database (`sqlite`, `postgresql`, or `mysql`)
 5. Database connection string (skipped for SQLite)
@@ -39,12 +39,30 @@ After scaffolding, `pnpm dev` runs the project. Visit [http://localhost:3000/adm
 
 ## Templates
 
-| Template  | Description                                                                         |
-| --------- | ----------------------------------------------------------------------------------- |
-| **blank** | Empty config. Define your own collections from scratch.                             |
-| **blog**  | Posts, categories, tags, frontend pages, RSS, sitemap, and admin-editable homepage. |
+| Template   | Description                                                                         |
+| ---------- | ----------------------------------------------------------------------------------- |
+| **blank**  | Empty config. Define your own collections from scratch.                             |
+| **blog**   | Posts, categories, tags, frontend pages, RSS, sitemap, and admin-editable homepage. |
+| **plugin** | A publishable Nextly plugin package, with a playground app to try it in.            |
 
 More templates (portfolio, e-commerce, SaaS admin) are planned.
+
+### Plugin template
+
+`--template plugin` creates a library to publish on npm rather than an app, so
+it skips the schema-approach and database questions. Run from inside a
+Next.js app, it still creates the plugin in its own directory.
+
+- `src/` holds the plugin. Only the built `dist/` is published.
+- `dev/` is a small Nextly app on SQLite that registers the plugin. `pnpm dev`
+  runs it, and `/admin` opens signed in as `dev@nextly.local`, a user created
+  on first start under `next dev` only.
+- `pnpm test` boots the plugin in an in-memory Nextly; `pnpm build` builds it.
+
+By default the plugin is copied from the template bundled in the CLI, and its
+Nextly packages are pinned to that CLI's release, so its files and its
+packages come from the same release. A `--branch` other than `main`,
+`--local-template` or `--use-yalc` uses the live template instead.
 
 ## Schema approaches
 
@@ -64,6 +82,9 @@ pnpm create nextly-app@alpha my-blog --template blog --approach code-first
 # Blank project with PostgreSQL
 pnpm create nextly-app@alpha my-app --template blank --database postgresql
 
+# A plugin package with its playground app
+pnpm create nextly-app@alpha my-plugin --template plugin
+
 # Skip prompts entirely (defaults: blank, SQLite, local storage)
 pnpm create nextly-app@alpha my-app -y
 ```
@@ -73,7 +94,7 @@ pnpm create nextly-app@alpha my-app -y
 | Flag                | Short | Description                                                  | Default            |
 | ------------------- | ----- | ------------------------------------------------------------ | ------------------ |
 | `--yes`             | `-y`  | Skip prompts and use defaults (blank, SQLite, local storage) | `false`            |
-| `--template <name>` | `-t`  | Project template: `blank`, `blog`                            | Interactive prompt |
+| `--template <name>` | `-t`  | Project template: `blank`, `blog`, `plugin`                  | Interactive prompt |
 | `--approach <type>` | `-a`  | Schema approach: `code-first`, `visual`                      | Interactive prompt |
 | `--database <db>`   | `-d`  | Database: `sqlite`, `postgresql`, `mysql`                    | Interactive prompt |
 | `--branch <branch>` | `-b`  | Git branch for template download                             | `main`             |

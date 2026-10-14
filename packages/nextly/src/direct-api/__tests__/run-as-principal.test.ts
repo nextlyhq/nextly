@@ -28,7 +28,7 @@ import type { AuthenticatedScope } from "../../auth/authenticated-scope";
 import { currentPrincipal, runAsPrincipal } from "../../auth/principal-scope";
 import { makePrincipal } from "../../plugins/principals/principal";
 import type { Principal } from "../../plugins/principals/types";
-import type { Nextly } from "../nextly";
+import { Nextly as NextlyClass, requireNextly, type Nextly } from "../nextly";
 
 import {
   resetMocks,
@@ -235,6 +235,35 @@ describe("a Direct API call made as a person", () => {
     await expect(
       folders.create({ name: "x", principal: person })
     ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+  });
+
+  it("refuses a person as an instance default, which every call would ignore", () => {
+    // Ignored, the default would leave each call running as the server under
+    // the instance's `overrideAccess: true`.
+    expect(
+      () =>
+        new NextlyClass({
+          principal: person,
+        } as unknown as ConstructorParameters<typeof NextlyClass>[0])
+    ).toThrow(expect.objectContaining({ code: "INVALID_INPUT" }));
+  });
+
+  it("refuses a person as a requireNextly default, before any instance is reused", () => {
+    expect(() =>
+      requireNextly({ principal: person } as unknown as Parameters<
+        typeof requireNextly
+      >[0])
+    ).toThrow(expect.objectContaining({ code: "INVALID_INPUT" }));
+  });
+
+  it("hands an operation the instance's default context as it was given", () => {
+    // The settings are not a namespace: a helper held in them is not wrapped.
+    const helper = () => "kept";
+    const instance = new NextlyClass({ context: { helper } } as never);
+    const config = (
+      instance as unknown as { defaultConfig: { context: { helper: unknown } } }
+    ).defaultConfig;
+    expect(config.context.helper).toBe(helper);
   });
 
   it("leaves a plugin's own services alone", async () => {

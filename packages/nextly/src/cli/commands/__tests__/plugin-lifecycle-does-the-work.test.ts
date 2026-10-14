@@ -83,7 +83,12 @@ function deps(over: Partial<PluginLifecycleDeps> = {}): PluginLifecycleDeps {
       moduleNames.map(moduleName => ({
         moduleName,
         filename: `plugin:@acme/fx/${moduleName}`,
-        statements: [`DROP TABLE IF EXISTS fx__${moduleName}`],
+        // The first module created the plugin's table, so its DOWN drops it.
+        statements: [
+          moduleName === "0001_init"
+            ? "DROP TABLE IF EXISTS fx__notes"
+            : `DROP TABLE IF EXISTS fx__${moduleName}`,
+        ],
         transaction: true,
         destructive: true,
       }))
@@ -311,6 +316,266 @@ describe("what install reports", () => {
     expect(success).toHaveBeenCalledWith(
       "@acme/fx installed (1 table(s) recorded)."
     );
+  });
+});
+
+describe("plugins uninstall judges what its DOWNs drop before running them", () => {
+  const row = {
+    tableName: "fx__notes",
+    elementKind: "table",
+    elementName: "",
+    ownerKind: "plugin",
+    ownerId: "@acme/fx",
+    migratedBy: "plugin:@acme/fx",
+    ownerVersion: null,
+    schemaVersion: null,
+    state: "active",
+  };
+  const ownsNotes = {
+    select: () => ({
+      from: () => Object.assign([row], { where: () => [row] }),
+    }),
+    update: () => ({ set: () => ({ where: () => Promise.resolve() }) }),
+  };
+  /** A SQLite rebuild of fx__notes, as the pipeline writes one. */
+  const rebuild = [
+    'CREATE TABLE "__new_fx__notes" ("id" text PRIMARY KEY)',
+    'INSERT INTO "__new_fx__notes" ("id") SELECT "id" FROM "fx__notes"',
+    'DROP TABLE "fx__notes"',
+    'ALTER TABLE "__new_fx__notes" RENAME TO "fx__notes"',
+  ];
+
+  /** A registry holding these owner rows, as `ownsNotes` holds `row`. */
+  const owning = (rows: (typeof row)[]) => ({
+    select: () => ({
+      from: () => Object.assign(rows, { where: () => rows }),
+    }),
+    update: () => ({ set: () => ({ where: () => Promise.resolve() }) }),
+  });
+
+  async function uninstallWith(
+    statements: string[][],
+    db: unknown = ownsNotes,
+    over: Partial<PluginLifecycleDeps> = {}
+  ) {
+    const runDown = vi.fn(async () => 1);
+    const runLifecycleHook = vi.fn(async () => {});
+    const run = runPluginUninstallCommand(
+      "@acme/fx",
+      { keepData: false, yes: true },
+      deps({
+        db: db as never,
+        runLifecycleHook,
+        ...droppedByDowns(runDown),
+        prepareDowns: vi.fn(async (_plugin, moduleNames: readonly string[]) =>
+          moduleNames.map((moduleName, at) => ({
+            moduleName,
+            filename: `plugin:@acme/fx/${moduleName}`,
+            statements: statements[at] ?? [],
+            transaction: true,
+            destructive: true,
+          }))
+        ),
+        ...over,
+      })
+    );
+    return { run, runDown, runLifecycleHook };
+  }
+
+  it("refuses when no DOWN drops a table the plugin owns, running nothing", async () => {
+    const { run, runDown, runLifecycleHook } = await uninstallWith([
+      ["DROP TABLE IF EXISTS fx__other"],
+      [],
+    ]);
+    await expect(run).rejects.toMatchObject({
+      code: "PLUGIN_UNINSTALL_IRREVERSIBLE",
+      logContext: { reason: "down-leaves-tables", tables: ["fx__notes"] },
+    });
+    expect(runLifecycleHook).not.toHaveBeenCalled();
+    expect(runDown).not.toHaveBeenCalled();
+  });
+
+  it("counts a table a DOWN only rebuilds as left in place", async () => {
+    // A rebuild drops the table and renames its copy into the name.
+    const { run, runDown } = await uninstallWith([rebuild, []]);
+    await expect(run).rejects.toMatchObject({
+      logContext: { reason: "down-leaves-tables" },
+    });
+    expect(runDown).not.toHaveBeenCalled();
+  });
+
+  it("counts a table another is renamed into after its drop as left in place", async () => {
+    // The drop is read, but a table stands under the name once the DOWN ends.
+    const { run, runDown } = await uninstallWith([
+      ["DROP TABLE fx__notes", "ALTER TABLE fx__archive RENAME TO fx__notes"],
+      [],
+    ]);
+    await expect(run).rejects.toMatchObject({
+      logContext: { reason: "down-leaves-tables", tables: ["fx__notes"] },
+    });
+    expect(runDown).not.toHaveBeenCalled();
+  });
+
+  it("follows a table renamed away, so a drop of its old name does not count", async () => {
+    // The drop names fx__notes, which no longer holds anything: the table and
+    // its rows are under fx__backup.
+    const { run, runDown } = await uninstallWith([
+      [
+        "ALTER TABLE fx__notes RENAME TO fx__backup",
+        "DROP TABLE IF EXISTS fx__notes",
+      ],
+      [],
+    ]);
+    await expect(run).rejects.toMatchObject({
+      logContext: { reason: "down-leaves-tables", tables: ["fx__notes"] },
+    });
+    expect(runDown).not.toHaveBeenCalled();
+  });
+
+  it("counts a table created again under IF NOT EXISTS after its drop as left in place", async () => {
+    const { run, runDown } = await uninstallWith([
+      [
+        "DROP TABLE fx__notes",
+        "CREATE TABLE IF NOT EXISTS fx__notes (id text)",
+      ],
+      [],
+    ]);
+    await expect(run).rejects.toMatchObject({
+      logContext: { reason: "down-leaves-tables", tables: ["fx__notes"] },
+    });
+    expect(runDown).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      "a temporary table of the same name, created and dropped",
+      ["CREATE TEMP TABLE fx__notes (id text)", "DROP TABLE fx__notes"],
+    ],
+    [
+      "a temporary table dropped by name",
+      ["DROP TEMPORARY TABLE IF EXISTS fx__notes"],
+    ],
+    [
+      "a rebuild's twin dropped on its own",
+      ['DROP TABLE IF EXISTS "__new_fx__notes"'],
+    ],
+  ])("counts a table left in place under %s", async (_case, statements) => {
+    // Each drop reaches some other table: a temporary one shadowing the
+    // plugin's, or the twin, which the guard names by the table it stands
+    // in for.
+    const { run, runDown } = await uninstallWith([statements, []]);
+    await expect(run).rejects.toMatchObject({
+      logContext: { reason: "down-leaves-tables", tables: ["fx__notes"] },
+    });
+    expect(runDown).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      "a savepoint rolled back over the drop",
+      ["SAVEPOINT s", "DROP TABLE fx__notes", "ROLLBACK TO s", "RELEASE s"],
+    ],
+    [
+      "a view taking the name after the drop",
+      ["DROP TABLE fx__notes", "CREATE VIEW fx__notes AS SELECT 1 AS id"],
+    ],
+    [
+      "a virtual table taking the name after the drop",
+      [
+        "DROP TABLE fx__notes",
+        "CREATE VIRTUAL TABLE fx__notes USING fts5(body)",
+      ],
+    ],
+    ["a drop through the temp schema", ["DROP TABLE IF EXISTS temp.fx__notes"]],
+  ])(
+    "counts every table left when a DOWN holds %s, which the reading does not model",
+    async (_case, statements) => {
+      const { run, runDown } = await uninstallWith([statements, []]);
+      await expect(run).rejects.toMatchObject({
+        logContext: { reason: "down-leaves-tables", tables: ["fx__notes"] },
+      });
+      expect(runDown).not.toHaveBeenCalled();
+    }
+  );
+
+  it("counts an owned table whose stored name keeps upper case as left on PostgreSQL", async () => {
+    // `"Fx__Notes"` survives an unquoted drop of fx__notes there.
+    const { run, runDown } = await uninstallWith(
+      [["DROP TABLE IF EXISTS fx__notes"], []],
+      owning([{ ...row, tableName: "Fx__Notes" }]),
+      { dialect: "postgresql" }
+    );
+    await expect(run).rejects.toMatchObject({
+      logContext: { reason: "down-leaves-tables", tables: ["Fx__Notes"] },
+    });
+    expect(runDown).not.toHaveBeenCalled();
+  });
+
+  it("drops a table whose stored name keeps upper case on SQLite, where names ignore case", async () => {
+    // The control: the same uninstall where a lower-cased drop reaches it.
+    const { run, runDown } = await uninstallWith(
+      [["DROP TABLE IF EXISTS fx__notes"], []],
+      owning([{ ...row, tableName: "Fx__Notes" }])
+    );
+    await run;
+    expect(runDown).toHaveBeenCalledTimes(2);
+  });
+
+  it("refuses to run any DOWN once onUninstall has renamed a table away", async () => {
+    // The DOWNs were judged with fx__notes in place. The hook renamed it, so
+    // the drop they were approved for now reaches nothing.
+    let hookRan = false;
+    const { run, runDown } = await uninstallWith(
+      [["DROP TABLE IF EXISTS fx__notes"], []],
+      ownsNotes,
+      {
+        runLifecycleHook: vi.fn(async () => {
+          hookRan = true;
+        }),
+        liveTables: vi.fn(
+          async (tables: readonly string[]) => new Set(hookRan ? [] : tables)
+        ),
+      }
+    );
+    await expect(run).rejects.toMatchObject({
+      code: "PLUGIN_UNINSTALL_IRREVERSIBLE",
+      logContext: { reason: "tables-changed-by-hook", tables: ["fx__notes"] },
+    });
+    expect(runDown).not.toHaveBeenCalled();
+  });
+
+  it("counts two owned tables whose names differ only in case as left", async () => {
+    // Read lower-cased, the one drop could be either table's.
+    const { run, runDown } = await uninstallWith(
+      [["DROP TABLE fx__notes"], []],
+      owning([row, { ...row, tableName: "FX__Notes" }])
+    );
+    await expect(run).rejects.toMatchObject({
+      logContext: {
+        reason: "down-leaves-tables",
+        tables: ["fx__notes", "FX__Notes"],
+      },
+    });
+    expect(runDown).not.toHaveBeenCalled();
+  });
+
+  it("allows a table renamed away and dropped under its new name", async () => {
+    const { run, runDown } = await uninstallWith([
+      ["ALTER TABLE fx__notes RENAME TO fx__backup", "DROP TABLE fx__backup"],
+      [],
+    ]);
+    await run;
+    expect(runDown).toHaveBeenCalledTimes(2);
+  });
+
+  it("allows a table rebuilt by one DOWN and dropped by a later one", async () => {
+    // The control: newest first, so 0002's rebuild runs before 0001's drop.
+    const { run, runDown } = await uninstallWith([
+      rebuild,
+      ['DROP TABLE "fx__notes"'],
+    ]);
+    await run;
+    expect(runDown).toHaveBeenCalledTimes(2);
   });
 });
 

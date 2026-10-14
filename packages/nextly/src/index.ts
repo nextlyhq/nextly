@@ -482,6 +482,12 @@ export {
   type PluginCategory,
   type PluginAuditApi,
   type PluginAuditDeclaration,
+  // The password helper a plugin receives as `ctx.security.passwords`.
+  type PluginSecurityApi,
+  PasswordTooLongError,
+  type PasswordCheck,
+  type PasswordHelper,
+  type PasswordRules,
   type PluginAuthApi,
   type PluginCapabilities,
   type CompleteLoginOptions,
@@ -572,6 +578,20 @@ export {
   type PluginMenuItem,
   type PluginNavSection,
 } from "./plugins";
+
+// The plugin limiter: `contributes.limits` rules and `ctx.limits`.
+// @experimental
+export type { LimitRule } from "./domains/limits/limit-rules";
+export type {
+  AdmittedReservation,
+  EntryVerdict,
+  LimitCheck,
+  LimitEntry,
+  LimitOutcome,
+  LimitReservation,
+  LimitTarget,
+  PluginLimiter,
+} from "./domains/limits/plugin-limiter";
 
 // The widget domain's public surface: the registry every core and
 // plugin-contributed widget shares, the source registry a query names, and
@@ -997,6 +1017,10 @@ export {
   type PluginOverride,
 } from "./collections/config";
 
+// The breached-password source a plugin's password check asks, in
+// `security.breachedPasswords`.
+export type { BreachedPasswordsConfig } from "./shared/types/config";
+
 // ============================================================
 // MIDDLEWARE
 // ============================================================
@@ -1012,6 +1036,16 @@ export {
   type RateLimitResult,
   type RateLimitRecord,
 } from "./middleware";
+
+// The contract an app's own limit store implements, selected by
+// `rateLimit.store`. Types only: a store is plain code of the app's.
+// @experimental
+export type {
+  LimitStore,
+  LimitUpdate,
+  StoredLimit,
+} from "./domains/limits/limit-store";
+export type { RateLimitStoreSetting } from "./domains/limits/limit-store-setting";
 
 // The limiter a caller drives directly, over the same store the middleware
 // uses. Exported so a plugin limiting something of its own counts in the same

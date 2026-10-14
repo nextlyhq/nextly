@@ -8,6 +8,7 @@ import { describe, expect, it } from "vitest";
 import type { CatalogueItem } from "../contracts/catalogue-source";
 import { money } from "../money/money";
 
+import { productsCollection } from "./products-collection";
 import {
   createProductsSource,
   type ProductsSourceOptions,
@@ -610,5 +611,22 @@ describe("the products source", () => {
     expect(
       create.call({ collections, slug: "products", currency: "USD" })
     ).toMatchObject({ id: expect.any(String) });
+  });
+});
+
+describe("the products collection's text bounds", () => {
+  it("holds a product's name and SKU to the catalogue contract's 255 characters", () => {
+    // Bounded where staff type them, so a product saved is one the
+    // catalogue can carry; past the bound every catalogue read refuses it.
+    const bounds = Object.fromEntries(
+      productsCollection().fields.map(field => [
+        field.name,
+        "maxLength" in field ? field.maxLength : undefined,
+      ])
+    );
+    expect({ name: bounds.name, sku: bounds.sku }).toEqual({
+      name: 255,
+      sku: 255,
+    });
   });
 });

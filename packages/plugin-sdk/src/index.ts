@@ -204,6 +204,44 @@ export type {
 } from "nextly";
 
 /**
+ * Limits a plugin counts on keys it chooses, before the work they guard runs.
+ * @experimental `LimitRule` (`contributes.limits`), `PluginLimiter`
+ *   (`ctx.limits`) and its entry, reservation, outcome and check types. The
+ *   rule kinds and their meaning, `enforce` and the three `count` modes, the
+ *   per-entry verdicts, the atomic reservation, the three results with
+ *   `unavailable` distinct, `release`, `reset`, `check`, `clientKey`'s forms
+ *   and `store.shared` are meant to become stable (see STABILITY.md).
+ */
+export type {
+  AdmittedReservation,
+  EntryVerdict,
+  LimitCheck,
+  LimitEntry,
+  LimitOutcome,
+  LimitReservation,
+  LimitRule,
+  LimitTarget,
+  PluginLimiter,
+} from "nextly";
+
+/**
+ * Core's security helpers, lent to a plugin for the people it signs in itself.
+ * @experimental `PluginSecurityApi` (`ctx.security`); `PasswordHelper`
+ *   (`ctx.security.passwords`) with `PasswordRules`, `PasswordCheck` and
+ *   `PasswordTooLongError`; and `BreachedPasswordsConfig`, the site's
+ *   `security.breachedPasswords`. Held experimental until a first-party plugin
+ *   signs people in with them (see STABILITY.md).
+ */
+export { PasswordTooLongError } from "nextly";
+export type {
+  PluginSecurityApi,
+  PasswordHelper,
+  PasswordRules,
+  PasswordCheck,
+  BreachedPasswordsConfig,
+} from "nextly";
+
+/**
  * The database handles a plugin receives: `ctx.db` is a `PluginDatabase`
  * with a `raw` member that is a `PluginRawDatabase`.
  * @experimental `PluginDatabase` — typed, owner-checked access to the tables

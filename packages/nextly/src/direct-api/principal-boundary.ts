@@ -75,9 +75,11 @@ function refusingPrincipal(
  * Members the boundary leaves as they are. `plugins` hands out the services
  * plugins contribute: their own code, whose arguments mean whatever the plugin
  * says. A service taking `{ principal }` is passing a person to its own
- * logic, not asking core to run as one, so it is not refused.
+ * logic, not asking core to run as one, so it is not refused. `defaultConfig`
+ * is the instance's settings, not a namespace: its values, a `context`
+ * helper or a person held in it among them, reach operations as they are.
  */
-const UNGUARDED: ReadonlySet<string> = new Set(["plugins"]);
+const UNGUARDED: ReadonlySet<string> = new Set(["plugins", "defaultConfig"]);
 
 /** Whether `value` is a namespace: a plain object the instance hands out. */
 function isNamespace(value: unknown): value is Record<string, unknown> {

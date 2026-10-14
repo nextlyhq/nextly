@@ -1,0 +1,119 @@
+---
+title: Limit store
+description: Where limits keep their counts, how to share them between instances, and the contract for an app's own store.
+---
+
+Limits count attempts: sign-ins, password resets, codes sent. The **limit store** is where those counts are kept. `rateLimit.store` selects it, and every limit built on the limit store contract counts there.
+
+Core's own sign-in and API limits do not count in it yet. They keep counting as before: in each process, or in an app's store of the earlier `RateLimitStore` contract.
+
+> **Experimental.** The setting's two shipped choices, `"memory"` and `"database"`, and `singleInstance` are stable. The contract for an app's own store, and `maxEntries`, may still change.
+
+## Choosing a store
+
+```ts title="nextly.config.ts"
+import { defineConfig } from "nextly";
+
+export default defineConfig({
+  rateLimit: {
+    store: "database",
+  },
+});
+```
+
+| `rateLimit.store` | Where counts live | Shared between instances |
+|---|---|---|
+| `"memory"` (default) | In each server process. | No: on several instances, every budget is multiplied by their number. |
+| `"database"` | In the site's database, in the `nextly_limit_store` table. | Yes. |
+| Your own store | Wherever your store keeps them. | As your store says. |
+
+A site that runs one instance loses nothing with `"memory"`. Say so with `singleInstance: true`:
+
+```ts title="nextly.config.ts"
+rateLimit: {
+  singleInstance: true,
+}
+```
+
+An app that already passes a store of the earlier `RateLimitStore` contract (`increment`, `reset`) keeps it serving core's own sign-in and API limits, as before. Limits built on the newer contract then count in memory.
+
+## The bound
+
+Each store holds a limited number of live entries: 100,000 for memory and 1,000,000 for the database by default. `rateLimit.maxEntries` changes that:
+
+```ts title="nextly.config.ts"
+rateLimit: {
+  store: "database",
+  maxEntries: 200_000,
+}
+```
+
+A store never removes a live count to make room. Removing one would let anyone able to send new keys free the count of an attacker they are covering for. Instead:
+
+- At 80% of the bound, the store logs a warning (`kind: "limit-store-filling"`).
+- When full, it first removes expired entries. If there is still no room, it answers the new key as **unavailable** and logs an error (`kind: "limit-store-full"`), at most once a minute. Keys it already holds keep counting.
+
+Each limit decides what "unavailable" means for its own request. Watch for both log lines.
+
+## The database store
+
+- **Atomic across instances.** Every count runs in a short transaction of its own, with the rows of its keys locked. Concurrent attempts on several instances count as if they ran one at a time, a key's first attempt included. A count never joins a transaction the calling code has open: calling a limit inside your own transaction is refused with an error, so a rollback can never undo a count.
+- **On the database's clock.** Expiry is judged on the database server's clock, so instances whose clocks differ still agree on when a window ends.
+- **Swept.** Each instance removes expired entries when it starts and every 5 minutes after, in the background. An expired entry is gone within 5 minutes, plus the time to work through a backlog.
+- **Keys are hashed.** Each row is stored under the SHA-256 of its key, never the key itself.
+- **Secret rotation.** Entries record which `NEXTLY_SECRET` they were written under. After a rotation the new instances can't read them, and they never count against the new instances' bound. They are removed once they expire, not sooner: during a rolling deployment, instances still on the earlier secret keep counting with them.
+- **SQLite.** SQLite writes one transaction at a time on the instance, so every count waits for any transaction open on the instance at that moment. A long-running transaction delays sign-in for its whole length.
+- **Cost.** One short transaction per counted request. The table reaches existing databases through `nextly migrate`, like every core table.
+
+## When a store does not answer
+
+Every store call, to any store, is answered within **2 seconds**. A call that takes longer, or a store that fails, is answered as unavailable, as when the store cannot be reached. A call past its deadline may still be running in the store, so at most 64 calls run at once: past that, a call is answered as unavailable at once, until the store catches up. With a store of your own, monitor it: while it is down, the limits built on it cannot count.
+
+## Your own store
+
+An app can supply its own store, for example over Redis, by implementing the `LimitStore` contract (`@experimental`):
+
+```ts
+import type { LimitStore } from "nextly";
+
+const store: LimitStore = {
+  // True when every instance of the site sees the same entries.
+  shared: true,
+  // Atomically: read the live entries for `keys`, call `apply` with them and
+  // the store's clock (milliseconds since the epoch), and write what it
+  // returns (`null` deletes), with no other update to these keys in between.
+  update(keys, apply) {
+    throw new Error("Implement against your store");
+  },
+  // The live entries for `keys`, judged on the store's own clock.
+  read(keys) {
+    throw new Error("Implement against your store");
+  },
+  // Remove expired entries; answer how many went.
+  sweep() {
+    throw new Error("Implement against your store");
+  },
+};
+```
+
+Each entry is `{ value, expiresAt }`. `value` is JSON of at most 4 KB, and `expiresAt` is in milliseconds on the store's clock. `apply` is synchronous, and may run more than once if your store retries.
+
+Run the contract's cases against your store, with two handles on it as two instances would hold them:
+
+```ts
+import type { LimitStore } from "nextly";
+import { limitStoreContract } from "nextly/testing";
+import { it } from "vitest";
+
+// Your store, as two instances of the site each hold it.
+declare const storeOnInstanceA: LimitStore;
+declare const storeOnInstanceB: LimitStore;
+
+for (const contractCase of limitStoreContract) {
+  it(contractCase.name, () =>
+    contractCase.run({ first: storeOnInstanceA, second: storeOnInstanceB })
+  );
+}
+```
+
+A case that fails throws `LimitStoreContractViolation` saying what broke.

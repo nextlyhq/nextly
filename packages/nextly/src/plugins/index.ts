@@ -29,6 +29,7 @@ export {
   type PluginAdminConfig,
   type PluginActionRegistry,
   type PluginAuditApi,
+  type PluginSecurityApi,
   type PluginCapabilities,
   type PluginConfig,
   type PluginContext,
@@ -47,6 +48,12 @@ export {
   type PluginHookRegistry,
   type PluginSettingsApi,
 } from "./plugin-context";
+export {
+  PasswordTooLongError,
+  type PasswordCheck,
+  type PasswordHelper,
+  type PasswordRules,
+} from "./security/password-helper";
 
 // What each hook point carries, by name; a plugin augments the map.
 export type {
