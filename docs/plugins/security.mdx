@@ -320,6 +320,88 @@ callers carry no cookie a forged request could ride on, and many send no
 `Origin`. A server client that calls a `csrf: true` route without a `Bearer`
 token must send `Origin` with your site's origin or an allowed one.
 
+## Limits
+
+> **Experimental.** `contributes.limits` and `ctx.limits` may still change. The rule kinds and what they mean, `enforce` and the three `count` modes, the per-entry verdicts, the atomic reservation, the three results, `release`, `reset`, `check`, `clientKey`'s forms and `store.shared` are meant to become stable.
+
+A plugin that checks something guessable, such as a password or a code, limits the attempts. It declares named rules in `contributes.limits`, and reserves an attempt on keys it chooses with `ctx.limits` **before** the work runs.
+
+```ts
+import { definePlugin, type PluginLimiter } from "@nextlyhq/plugin-sdk";
+
+const DAY = 24 * 60 * 60 * 1000;
+let limits: PluginLimiter | undefined;
+
+export default definePlugin({
+  name: "@acme/accounts",
+  version: "1.0.0",
+  nextly: ">=0.0.2-alpha.66",
+  contributes: {
+    limits: {
+      // 5 code tries per address in any 24 hours, across every code sent to it.
+      codeTries: { type: "window", windows: [{ max: 5, perMs: DAY }] },
+      // 5 sign-ins in a row freely, then a growing wait between tries.
+      signIn: {
+        type: "backoff",
+        free: 5,
+        waitsMs: [1000, 2000, 4000, 60_000],
+        forgetAfterMs: DAY,
+      },
+    },
+  },
+  init(ctx) {
+    limits = ctx.limits;
+  },
+});
+
+export async function signIn(
+  request: Request,
+  address: string,
+  passwordIsRight: () => Promise<boolean>
+): Promise<string> {
+  if (!limits) return "not started";
+  const client = limits.clientKey(request);
+  const reserved = await limits.reserve([
+    { rule: "signIn", key: address, count: "unanimous" },
+    ...(client ? [{ rule: "signIn", key: client, count: "always" as const }] : []),
+  ]);
+  if (reserved.status === "unavailable") return "try again shortly";
+  if (reserved.status === "refused") return `wait ${reserved.retryAfterMs} ms`;
+
+  const right = await passwordIsRight();
+  if (right) await limits.reset({ rule: "signIn", key: address });
+  return right ? "signed in" : "wrong password";
+}
+```
+
+**Rules.** A rule is one of two kinds:
+- `window`: 1 to 4 rolling windows, each `max` attempts (1 to 10,000) per `perMs` (1 second to 30 days). An attempt is admitted only while every window has room. A window's edge is exact to 1/32 of its span, never past its `max`: at worst it refuses a little early.
+- `backoff`: `free` attempts in a row (1 to 1000) admitted with no wait. Then each attempt that brings the count to `free` or more sets a wait: `waitsMs[count - free]`, the last one repeating. Waits never shorten, and each is 1 ms to 24 hours. With no waits listed, there's no room once the count reaches `free`. The count is forgotten after `forgetAfterMs` (1 minute to 30 days) with nothing counted, never while a wait is in force.
+
+The app refuses to start on a rule outside these bounds, naming the plugin and the rule (`limit-rule-invalid`). Changing a rule starts its counts again: what an entry holds is read only under the rule it was written under.
+
+**Reserving.** `reserve` takes 1 to 16 entries, each a rule and a key, and decides and counts them in one atomic step on the [limit store](/docs/configuration/limit-store). So concurrent attempts, on every instance sharing the store, are admitted no more than the rules allow. A key is any non-empty string of at most 512 characters. It's stored only as a keyed hash, namespaced to your plugin and the rule: no other plugin can name, read or spend it. Each entry says:
+- `enforce` (default `true`): whether its lack of room refuses the reservation. `false` lets the attempt through while still reporting the entry's verdict.
+- `count`, when the entry is counted:
+  - `"admitted"` (default): when the reservation is admitted and this entry's rule has room;
+  - `"unanimous"`: only when every entry's rule has room, enforced or not;
+  - `"always"`: whatever happens.
+
+  An entry whose rule has no room is never counted unless `"always"`. Counting it then never moves a wait in force; it only makes the next wait longer.
+
+The answer is one of:
+- `admitted`, with each entry's verdict (`hadRoom`, `counted`) and an id to give the attempt back with;
+- `refused`, with `retryAfterMs`, the rules that refused, and each entry's verdict. A refused attempt never starts.
+- `unavailable`: the store didn't answer. The attempt is **not admitted**. It may still have been counted, if the store failed after committing.
+
+**Reserve outside any transaction.** `reserve`, `release` and `reset` throw when your code calls them inside a transaction it has open. A count must never roll back with the work it guarded: a failed attempt that rolls back would otherwise go uncounted. Another request's open transaction doesn't count; on SQLite your call just waits for it.
+
+**Giving back.** `release(reservation, { rules })` gives back an admitted reservation's count, on every entry or on the rules named, at most once per entry, however often it's called and however many other attempts were counted since. A backoff count given back also lifts the wait it set, while that wait is still the one in force. So a sign-in counted `"always"` and released on success leaves no wait behind. A later attempt counted during that wait keeps it, while its own count stands. One known limitation: a wait set by an attempt that is later released stays while a later count from the same entry still stands, even if that count is also released afterwards. That costs the client one extra wait and never admits past a rule. `reset({ rule, key })` forgets a key's count. `check(targets)` reads without counting; it only advises, and `reserve` decides.
+
+**Clients.** `clientKey(request)` is the IPv4 address, an IPv6 address's /64, or the IPv4 address inside an IPv4-mapped one. It's `null` when the address can't be resolved, as always with `security.trustProxy` unset, so key by what you do know (the address, the account) rather than share one bucket among unknown clients. An empty key is refused.
+
+**Which store.** `ctx.limits.store.shared` says whether every instance counts in one store, and `store.singleInstance` whether the site says it runs one instance. With the default memory store, each instance counts on its own.
+
 ## Secrets
 
 Settings keys named in `capabilities.secrets` are encrypted at rest with a key

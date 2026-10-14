@@ -578,6 +578,20 @@ export {
   type PluginNavSection,
 } from "./plugins";
 
+// The plugin limiter: `contributes.limits` rules and `ctx.limits`.
+// @experimental
+export type { LimitRule } from "./domains/limits/limit-rules";
+export type {
+  AdmittedReservation,
+  EntryVerdict,
+  LimitCheck,
+  LimitEntry,
+  LimitOutcome,
+  LimitReservation,
+  LimitTarget,
+  PluginLimiter,
+} from "./domains/limits/plugin-limiter";
+
 // The widget domain's public surface: the registry every core and
 // plugin-contributed widget shares, the source registry a query names, and
 // the validated query shape itself.
