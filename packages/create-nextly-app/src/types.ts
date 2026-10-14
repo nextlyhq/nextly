@@ -100,11 +100,6 @@ export interface CreateNextlyOptions {
   localTemplatePath?: string;
   /** Git branch for template download from GitHub (defaults to "main") */
   branch?: string;
-  /**
-   * This CLI's own version. A plugin copied from the template bundled in the
-   * CLI pins every Nextly package to it (see copyTemplate's releaseVersion).
-   */
-  cliVersion?: string;
 }
 
 /**

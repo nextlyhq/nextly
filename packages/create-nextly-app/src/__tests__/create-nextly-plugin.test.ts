@@ -5,9 +5,10 @@
  * so the test observes which questions are put to the developer and what the
  * scaffold step is handed.
  */
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -122,6 +123,35 @@ describe("createNextly for the plugin template", () => {
       })
     );
     expect(String(prompts.warn.mock.calls[0])).toContain("SQLite");
+  });
+
+  // createNextly is exported, so it is called without the binary too. The
+  // bundled template must still come with the packages of its own release,
+  // whichever way the scaffold was started.
+  it("pins a bundled plugin to this package's release when called directly", async () => {
+    const manifest = JSON.parse(
+      await readFile(
+        path.resolve(
+          path.dirname(fileURLToPath(import.meta.url)),
+          "../../package.json"
+        ),
+        "utf-8"
+      )
+    ) as { version: string };
+
+    await createNextly({
+      cwd,
+      projectType: "plugin",
+      projectNameFromArg: "my-plugin",
+      skipInstall: true,
+    });
+
+    expect(copyTemplate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        releaseVersion: manifest.version,
+        pinToRelease: true,
+      })
+    );
   });
 
   // The control: an app template still asks.

@@ -19,6 +19,7 @@ import {
   cleanupDownload,
   type TemplateSource,
 } from "./lib/download-template";
+import { packageVersion } from "./lib/package-version";
 import {
   templateHasApproaches,
   getDefaultApproach,
@@ -413,7 +414,7 @@ export async function createNextly(
         allowExistingTarget,
         // The bundled template was released with this CLI, so a plugin made
         // from it installs the packages released with it too.
-        releaseVersion: options.cliVersion,
+        releaseVersion: packageVersion(),
         pinToRelease: useBundledTemplate,
       });
 

@@ -9,13 +9,9 @@ import {
   validateTemplateName,
 } from "./cli-args";
 import { createNextly } from "./create-nextly";
+import { packageVersion } from "./lib/package-version";
 import { getAvailableTemplateNames } from "./lib/templates";
 import type { DatabaseType, ProjectApproach, ProjectType } from "./types";
-
-// Static require for package.json. Works because tsup adds the createRequire
-// banner (see tsup.config.ts) so `require` exists in our ESM output.
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const pkg = require("../package.json") as { version: string };
 
 const program = new Command();
 
@@ -86,7 +82,7 @@ Examples:
       // Initialize telemetry. Cheap, no network. Prints one-time banner if needed.
       await telemetry.init({
         cliName: "create-nextly-app",
-        cliVersion: pkg.version,
+        cliVersion: packageVersion(),
       });
 
       try {
@@ -147,7 +143,6 @@ Examples:
           useYalc: options.useYalc,
           projectNameFromArg: projectName,
           installInCwd,
-          cliVersion: pkg.version,
         });
       } finally {
         // Always flush. shutdown() has its own 2s timeout so this never hangs.
