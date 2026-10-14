@@ -648,3 +648,130 @@ describe("a transformed entity is validated as its definition would be", () => {
     expect(orders.admin).toEqual({ group: "Sales" });
   });
 });
+
+describe("what a transform of another plugin's entity may not change, besides its fields", () => {
+  it("may not retype an owner's field of a plugin type to a built-in one", () => {
+    // Plugin field types register after the fold, so a plugin type cannot be
+    // resolved to its column while transforms run: it is compared by name.
+    const refused = refusalOf(() =>
+      fold([
+        plugin("shop", {
+          collections: [
+            ordersCollection({
+              fields: [
+                { name: "title", type: "text" },
+                { name: "stars", type: "rating-stars" },
+              ],
+            }),
+          ],
+        }),
+        changing("reviews", entity => ({
+          ...entity,
+          fields: replacing(fieldsOf(entity), "stars", f => ({
+            ...f,
+            type: "text",
+          })),
+        })),
+      ])
+    );
+
+    expect(refused?.code).toBe("TRANSFORM_FIELD_PROTECTED");
+    expect(refused?.message).toContain('"stars"');
+  });
+
+  it("may not turn off the owner's Draft/Published status column", () => {
+    const refused = refusalOf(() =>
+      fold([
+        plugin("shop", { collections: [ordersCollection({ status: true })] }),
+        changing("reviews", entity => ({ ...entity, status: false })),
+      ])
+    );
+
+    expect(refused?.code).toBe("TRANSFORM_TABLE_CHANGED");
+    expect(refused?.message).toContain('"status"');
+  });
+
+  it("may not turn off the owner's localization", () => {
+    const refused = refusalOf(() =>
+      fold([
+        plugin("shop", {
+          collections: [ordersCollection({ localized: true })],
+        }),
+        changing("reviews", entity => ({ ...entity, localized: false })),
+      ])
+    );
+
+    expect(refused?.code).toBe("TRANSFORM_TABLE_CHANGED");
+  });
+});
+
+describe("the order of hooks a third plugin contributed", () => {
+  const first = (): void => undefined;
+  const second = (): void => undefined;
+
+  /** `reviews` adds two hooks after the owner's. */
+  const reviews = () =>
+    changing("reviews", entity => ({
+      ...entity,
+      hooks: { beforeChange: [ownersHook, first, second] },
+    }));
+
+  it("may not be changed without a dependency on their contributor", () => {
+    // Each hook is handed what the one before returned, so swapping two
+    // changes what both do.
+    const refused = refusalOf(() =>
+      fold([
+        shop(),
+        reviews(),
+        changing("badges", entity => ({
+          ...entity,
+          hooks: { beforeChange: [ownersHook, second, first] },
+        })),
+      ])
+    );
+
+    expect(refused?.code).toBe("TRANSFORM_BEHAVIOUR_PROTECTED");
+    expect(refused?.message).toContain("moves");
+  });
+
+  it("may not have one of them repeated", () => {
+    const refused = refusalOf(() =>
+      fold([
+        shop(),
+        reviews(),
+        changing("badges", entity => ({
+          ...entity,
+          hooks: { beforeChange: [ownersHook, first, second, first] },
+        })),
+      ])
+    );
+
+    expect(refused?.code).toBe("TRANSFORM_BEHAVIOUR_PROTECTED");
+    expect(refused?.message).toContain("repeats");
+  });
+
+  it("leaves the owner's hook free to move around them, and a later transform reads the new order", () => {
+    // The control: the owner's hook is the transforming plugin's to replace,
+    // so it may move it too. A third transform keeping the list as it now
+    // runs is accepted, which it is only if the ledger followed the move.
+    const badgesHook = (): void => undefined;
+    const orders = ordersOf([
+      shop(),
+      reviews(),
+      changing("badges", entity => ({
+        ...entity,
+        hooks: { beforeChange: [badgesHook, first, second, ownersHook] },
+      })),
+      changing("labels", entity => ({ ...entity }), {
+        dependsOn: ["shop"],
+      }),
+    ]);
+
+    expect((orders.hooks as { beforeChange: unknown[] }).beforeChange).toEqual([
+      badgesHook,
+      first,
+      second,
+      ownersHook,
+    ]);
+  });
+});

@@ -29,6 +29,7 @@ import { isDeepStrictEqual } from "node:util";
 
 import type { CollectionConfig } from "../collections/config/define-collection";
 import { validateCollectionConfig } from "../collections/config/validate-config";
+import { ALL_FIELD_TYPES } from "../collections/fields/types";
 import { extractFieldGroupReferences } from "../domains/field-groups/storage/field-group-field-type";
 import { isFieldLocalized } from "../domains/i18n/classify-fields";
 import {
@@ -238,6 +239,11 @@ function originOf(kind: EntityKind): ColumnOrigin {
  * How a field's value is stored: its column on each dialect, whether it moves
  * to a junction table or the translations table, and what it refers to.
  *
+ * A type that is not built in is also compared by name. Plugin field types
+ * register after the config is folded, so while transforms run the descriptor
+ * cannot resolve one and reads it as text: a number-backed plugin type
+ * retyped to `text` would otherwise compare as unchanged.
+ *
  * A nested field's value lives inside its parent's JSON, where nothing is
  * NOT NULL, so its nullability is left out: making it required changes no
  * column. A top-level field's is kept, because making one required alters
@@ -260,8 +266,10 @@ function storageOf(
       Object.entries(column).filter(([key]) => key !== "nullable")
     );
   });
+  const builtIn: readonly unknown[] = ALL_FIELD_TYPES;
   return {
     columns,
+    unresolvedType: builtIn.includes(field.type) ? undefined : field.type,
     junction: usesJunctionTable(field),
     translated:
       !placed.nested &&
@@ -274,7 +282,17 @@ function storageOf(
   };
 }
 
-/** Refuse moving a plugin's entity to another table. */
+/**
+ * The entity-level settings that decide its tables, as the desired schema
+ * reads them: its table's name, the `status` column Draft/Published adds,
+ * and the `_locales` companion localization adds.
+ */
+const TABLE_SETTINGS = ["dbName", "status", "localized"] as const;
+
+/**
+ * Refuse changing a plugin's entity's tables: moving it, or turning off a
+ * setting whose column or companion table holds its owner's data.
+ */
 function assertTableKept(
   slug: string,
   ledger: OwnershipLedger,
@@ -284,11 +302,14 @@ function assertTableKept(
 ): void {
   const owner = ledger.owner;
   if (owner === undefined || owner === plugin.name) return;
-  if (isDeepStrictEqual(before.dbName, after.dbName)) return;
+  const changed = TABLE_SETTINGS.find(
+    setting => !isDeepStrictEqual(before[setting], after[setting])
+  );
+  if (changed === undefined) return;
   throw refusal(
     plugin,
     "TRANSFORM_TABLE_CHANGED",
-    `Plugin "${plugin.name}" changes the table of "${slug}", which plugin "${owner}" declares. A transform may change another plugin's entity, but not where it is stored.`
+    `Plugin "${plugin.name}" changes "${changed}" of "${slug}", which plugin "${owner}" declares. A transform may change another plugin's entity, but not the tables it is stored in.`
   );
 }
 
@@ -344,10 +365,29 @@ function mayReplace(
   );
 }
 
+function protectedBehaviour(
+  plugin: TransformingPlugin,
+  slug: string,
+  item: ContributedBehaviour,
+  what: string
+): NextlyError {
+  return refusal(
+    plugin,
+    "TRANSFORM_BEHAVIOUR_PROTECTED",
+    `Plugin "${plugin.name}" ${what} "${item.key}" on "${slug}", which plugin "${String(item.by)}" contributed. Declare "${String(item.by)}" in dependsOn to change it.`
+  );
+}
+
 /**
  * Carry each piece of behaviour the transform kept to the new ledger, refuse
- * removing or replacing one a plugin contributed that the transforming plugin
- * may not touch, and record what the transform added as its own.
+ * changing one a plugin contributed that the transforming plugin may not
+ * touch, and record what the transform added as its own.
+ *
+ * A hook list runs in order, each hook handed what the one before returned,
+ * so a protected hook is changed by being moved or repeated as surely as by
+ * being removed. Protected entries must therefore appear in the order they
+ * had, and none a second time. What the transforming plugin may replace (the
+ * owner's, its own, a dependency's) it may also move around them.
  */
 function settleBehaviour(
   slug: string,
@@ -355,25 +395,54 @@ function settleBehaviour(
   after: Record<string, unknown>,
   plugin: TransformingPlugin
 ): ContributedBehaviour[] {
-  const unclaimed = behaviourOf(after);
-  const settled: ContributedBehaviour[] = [];
+  const next = behaviourOf(after);
+  const kept = new Map<number, Contributor>();
+  // Where each key's last protected entry was found: the next one is looked
+  // for only after it.
+  const lastProtected = new Map<string, number>();
   for (const item of ledger.behaviour) {
-    const index = unclaimed.findIndex(
-      next => next.key === item.key && isDeepStrictEqual(next.value, item.value)
+    const guarded = !mayReplace(item.by, ledger, plugin);
+    const from = guarded ? (lastProtected.get(item.key) ?? -1) + 1 : 0;
+    const index = next.findIndex(
+      (candidate, at) =>
+        at >= from &&
+        !kept.has(at) &&
+        candidate.key === item.key &&
+        isDeepStrictEqual(candidate.value, item.value)
     );
     if (index !== -1) {
-      settled.push({ ...item });
-      unclaimed.splice(index, 1);
+      kept.set(index, item.by);
+      if (guarded) lastProtected.set(item.key, index);
       continue;
     }
-    if (mayReplace(item.by, ledger, plugin)) continue;
-    throw refusal(
-      plugin,
-      "TRANSFORM_BEHAVIOUR_PROTECTED",
-      `Plugin "${plugin.name}" removes or replaces "${item.key}" on "${slug}", which plugin "${String(item.by)}" contributed. Declare "${String(item.by)}" in dependsOn to change it.`
-    );
+    if (guarded) {
+      throw protectedBehaviour(
+        plugin,
+        slug,
+        item,
+        "removes, replaces or moves"
+      );
+    }
   }
-  return [...settled, ...unclaimed.map(item => ({ ...item, by: plugin.name }))];
+  const repeated = ledger.behaviour.find(
+    item =>
+      !mayReplace(item.by, ledger, plugin) &&
+      next.some(
+        (candidate, at) =>
+          !kept.has(at) &&
+          candidate.key === item.key &&
+          isDeepStrictEqual(candidate.value, item.value)
+      )
+  );
+  if (repeated !== undefined) {
+    throw protectedBehaviour(plugin, slug, repeated, "repeats");
+  }
+  // In the order the result holds them, so the next transform's order check
+  // reads the list as it now runs.
+  return next.map((candidate, at) => ({
+    ...candidate,
+    by: kept.has(at) ? kept.get(at) : plugin.name,
+  }));
 }
 
 /** The fields after a transform: kept ones keep their declarer, new are its. */
