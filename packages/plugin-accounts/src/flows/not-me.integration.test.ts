@@ -12,7 +12,7 @@ import {
 import { afterEach, describe, expect, it } from "vitest";
 
 import type { AccountsOptions } from "../settings";
-import { accountByAddress } from "../storage/accounts";
+import { accountByAddress, writeAtVersion } from "../storage/accounts";
 import { bootAccounts } from "../test-support/boot";
 import { flowDeps } from "../test-support/flow-deps";
 
@@ -100,6 +100,45 @@ describe.each(getConfiguredTestDialects())(
         reason: "invalid",
       });
       expect(deletedIds(emitted)).toHaveLength(1);
+    });
+
+    it("keeps an account whose verification commits after the link's own transaction read it", async () => {
+      const { db, deps, emitted, signUpAs } = await boot();
+      const { notMe } = await signUpAs("dana@example.com");
+      // The verification commits from outside while the removal's
+      // transaction, having read the account unverified, voids its secrets.
+      const secrets = deps.core.secrets;
+      const raced = {
+        ...deps,
+        core: {
+          ...deps.core,
+          secrets: new Proxy(secrets, {
+            get(target, key) {
+              const member = Reflect.get(target, key) as unknown;
+              if (typeof member !== "function") return member;
+              const bound = (member as (...args: unknown[]) => unknown).bind(
+                target
+              );
+              if (key !== "voidFor") return bound;
+              return async (...args: unknown[]) => {
+                const account = await accountByAddress(db, "dana@example.com");
+                if (account !== null)
+                  await writeAtVersion(db, account, {
+                    verifiedAt: new Date(),
+                    verifiedBy: "link",
+                  });
+                return bound(...args);
+              };
+            },
+          }),
+        },
+      };
+
+      expect(
+        await removeUnverifiedAccount(raced, { token: notMe })
+      ).toMatchObject({ status: "refused" });
+      expect(await accountByAddress(db, "dana@example.com")).not.toBeNull();
+      expect(deletedIds(emitted)).toEqual([]);
     });
 
     it("never removes an account verified since", async () => {

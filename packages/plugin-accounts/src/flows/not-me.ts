@@ -1,4 +1,4 @@
-import { accountById, deleteAccount } from "../storage/accounts";
+import { accountById, deleteUnverifiedAccount } from "../storage/accounts";
 
 import { accountDeleted } from "./account-deleted";
 import type { FlowDeps } from "./deps";
@@ -40,7 +40,10 @@ export async function removeUnverifiedAccount(
       if (account === null) throw new Refusal("invalid");
       if (account.verifiedAt !== null) throw new Refusal("spent");
       await core.secrets.voidFor({ subject: account.id }, { tx });
-      await deleteAccount(tx, account.id);
+      // Deleted only while still unverified: a verification that commits
+      // after the read above keeps the account, and the link is refused.
+      if (!(await deleteUnverifiedAccount(tx, account.id)))
+        throw new Refusal("spent");
       return account.id;
     });
   } catch (error) {

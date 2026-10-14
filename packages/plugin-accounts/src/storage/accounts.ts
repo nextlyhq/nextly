@@ -219,6 +219,24 @@ export async function deleteAccount(
 }
 
 /**
+ * Deletes an account only while its address is still unverified, the
+ * condition in the delete itself, so a verification that committed after
+ * the account was read keeps it. Its sessions, known browsers and pending
+ * change go with it. Answers whether it was deleted.
+ */
+export async function deleteUnverifiedAccount(
+  db: AccountsDb,
+  id: string
+): Promise<boolean> {
+  const columns = db.table(accounts);
+  const unverified = and(eq(columns.id, id), isNull(columns.verifiedAt));
+  if (unverified === undefined)
+    throw new TypeError("The deletion lost its condition.");
+
+  return (await db.delete(accounts).where(unverified)) === 1;
+}
+
+/**
  * Deletes, oldest first and at most `limit` at a time, accounts nobody
  * verified that were made at or before `madeBy`; an account verified since
  * it was read is never deleted. Answers the ids it deleted.
