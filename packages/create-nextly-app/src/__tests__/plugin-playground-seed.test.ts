@@ -9,10 +9,20 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import config from "../../../../templates/plugin/dev/nextly.config";
+import { register } from "../../../../templates/plugin/dev/instrumentation";
 import {
   type SeedSuperAdmin,
   seedDevUser,
 } from "../../../../templates/plugin/dev/seed-dev-user";
+
+import { recorded, resetRecord, seedOptions } from "./stubs/nextly";
+
+// The playground config imports the plugin by name, which its tsconfig maps to
+// the template's own src/; that needs the plugin SDK, so the plugin is a stub.
+vi.mock("../../../../templates/plugin/src/index", () => ({
+  myPlugin: () => ({ name: "my-plugin" }),
+}));
 
 const LOGIN = { email: "dev@nextly.local", password: "DevPassword123!" };
 
@@ -85,5 +95,49 @@ describe("plugin playground seedDevUser()", () => {
 
     expect(warn).toHaveBeenCalledTimes(1);
     expect(String(warn.mock.calls[0])).toContain("database is locked");
+  });
+});
+
+/*
+ * The start-up hook itself, with Nextly replaced by the recording stub
+ * (vitest.config.ts). The cases above cover what seedDevUser decides; these
+ * cover that register() actually reaches it, after boot, with the account the
+ * playground config names.
+ */
+describe("plugin playground register()", () => {
+  const autoLogin = (
+    config as { admin: { devAutoLogin: { email: string; password: string } } }
+  ).admin.devAutoLogin;
+
+  beforeEach(() => {
+    resetRecord();
+    vi.stubEnv("NEXT_RUNTIME", "nodejs");
+    vi.stubEnv("NODE_ENV", "development");
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("boots, then creates the devAutoLogin account through the adapter", async () => {
+    await register();
+
+    expect(recorded).toEqual(["boot", "seed"]);
+    expect(seedOptions).toEqual([
+      { email: autoLogin.email, password: autoLogin.password },
+    ]);
+  });
+
+  it("boots without seeding outside next dev", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    await register();
+
+    expect(recorded).toEqual(["boot"]);
+  });
+
+  it("does nothing outside the Node.js runtime", async () => {
+    vi.stubEnv("NEXT_RUNTIME", "edge");
+    await register();
+
+    expect(recorded).toEqual([]);
   });
 });
