@@ -155,8 +155,10 @@ const READ_APART: ReadonlySet<string> = new Set([
 function functionsIn(
   value: unknown,
   key: string,
-  // Containers already walked: free-form settings such as `custom` may share
-  // or loop back to an object, which the copy a transform receives keeps.
+  // The containers on the path being walked: free-form settings such as
+  // `custom` may loop back to an object, which the copy a transform receives
+  // keeps. Only the current path, so a container two settings share is
+  // recorded under each, and replacing it under one is seen.
   seen: WeakSet<object> = new WeakSet()
 ): Behaviour[] {
   if (typeof value === "function") return [{ key, value }];
@@ -167,9 +169,11 @@ function functionsIn(
   const entries: [string, unknown][] = Array.isArray(value)
     ? value.map((item, index) => [String(index), item])
     : Object.entries(value);
-  return entries.flatMap(([name, item]) =>
+  const found = entries.flatMap(([name, item]) =>
     functionsIn(item, `${key}.${name}`, seen)
   );
+  seen.delete(value);
+  return found;
 }
 
 /**
@@ -339,6 +343,12 @@ function storageOf(
         ? field.type
         : undefined,
     unique: !placed.nested && field.unique === true,
+    // One value or a list of them: a `hasMany` text or select stores a JSON
+    // array in the same column a single value uses, and a field group's
+    // `repeatable` decides between one object and an array with no column
+    // of its own to show it.
+    hasMany: field.hasMany === true,
+    repeatable: field.repeatable === true,
     junction: usesJunctionTable(field),
     translated:
       !placed.nested &&
@@ -359,8 +369,29 @@ function storageOf(
 const TABLE_SETTINGS = ["dbName", "status", "localized"] as const;
 
 /**
- * Refuse changing a plugin's entity's tables: moving it, or turning off a
- * setting whose column or companion table holds its owner's data.
+ * Who, other than the transforming plugin, keeps data in the entity's
+ * tables: its owner, or else the first plugin that declared a field on it.
+ * The app's own data is the app's to move.
+ */
+function tableKeeper(
+  ledger: OwnershipLedger,
+  plugin: TransformingPlugin
+): string | undefined {
+  if (ledger.owner !== undefined && ledger.owner !== plugin.name) {
+    return ledger.owner;
+  }
+  for (const by of ledger.fields.values()) {
+    if (by !== undefined && by !== plugin.name) return by;
+  }
+  return undefined;
+}
+
+/**
+ * Refuse changing an entity's tables, moving it or turning off a setting
+ * whose column or companion table holds data, while another plugin keeps
+ * data there: its owner, or a plugin that added a field to it. The owner
+ * moving its own table, or a plugin moving the app's, would carry that
+ * plugin's stored values along.
  */
 function assertTableKept(
   slug: string,
@@ -369,8 +400,8 @@ function assertTableKept(
   after: Record<string, unknown>,
   plugin: TransformingPlugin
 ): void {
-  const owner = ledger.owner;
-  if (owner === undefined || owner === plugin.name) return;
+  const keeper = tableKeeper(ledger, plugin);
+  if (keeper === undefined) return;
   const changed = TABLE_SETTINGS.find(
     setting => !isDeepStrictEqual(before[setting], after[setting])
   );
@@ -378,7 +409,7 @@ function assertTableKept(
   throw refusal(
     plugin,
     "TRANSFORM_TABLE_CHANGED",
-    `Plugin "${plugin.name}" changes "${changed}" of "${slug}", which plugin "${owner}" declares. A transform may change another plugin's entity, but not the tables it is stored in.`
+    `Plugin "${plugin.name}" changes "${changed}" of "${slug}", where plugin "${keeper}" keeps data. A transform may change an entity, but not the tables another plugin's data is stored in.`
   );
 }
 
@@ -602,7 +633,10 @@ function errorIdentity(
   definition: Record<string, unknown>
 ): string {
   let fields: unknown = definition.fields;
-  const path = error.path.replace(/fields\[(\d+)\]/g, (segment, index) => {
+  // Only the chain that walks the entity's field tree: `indexes[0].fields[0]`
+  // numbers an index's own list, not a field.
+  const lead = /^fields\[\d+\](?:\.fields\[\d+\])*/.exec(error.path)?.[0] ?? "";
+  const named = lead.replace(/fields\[(\d+)\]/g, (segment, index) => {
     const field: unknown = Array.isArray(fields)
       ? fields[Number(index)]
       : undefined;
@@ -611,6 +645,7 @@ function errorIdentity(
       ? `fields.${field.name}`
       : segment;
   });
+  const path = named + error.path.slice(lead.length);
   return `${error.code}\u0000${path}\u0000${error.message}`;
 }
 

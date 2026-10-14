@@ -1127,3 +1127,139 @@ describe("a refusal the entity already carried", () => {
     );
   });
 });
+
+describe("how many values a field another plugin declared holds", () => {
+  it("may not turn an owner's text field into a list", () => {
+    // A `hasMany` text field keeps a JSON array in the same column a single
+    // value uses.
+    const refused = refusalOf(() =>
+      fold([
+        shop(),
+        changing("reviews", entity => ({
+          ...entity,
+          fields: replacing(fieldsOf(entity), "title", f => ({
+            ...f,
+            hasMany: true,
+          })),
+        })),
+      ])
+    );
+
+    expect(refused?.code).toBe("TRANSFORM_FIELD_PROTECTED");
+    expect(refused?.message).toContain('"title"');
+  });
+
+  it("may not make an owner's field group repeatable", () => {
+    // One object or an array of them, and no column to show which.
+    const refused = refusalOf(() =>
+      fold([
+        plugin("shop", {
+          collections: [
+            ordersCollection({
+              fields: [
+                { name: "title", type: "text" },
+                { name: "seo", type: "component", component: "seo-fields" },
+              ],
+            }),
+          ],
+        }),
+        changing("reviews", entity => ({
+          ...entity,
+          fields: replacing(fieldsOf(entity), "seo", f => ({
+            ...f,
+            repeatable: true,
+          })),
+        })),
+      ])
+    );
+
+    expect(refused?.code).toBe("TRANSFORM_FIELD_PROTECTED");
+    expect(refused?.message).toContain('"seo"');
+  });
+});
+
+describe("the table of an entity another plugin keeps a field on", () => {
+  /** `reviews` adds `rating` to `orders` with `extend`. */
+  const reviews = () =>
+    plugin("reviews", {
+      dependsOn: ["shop"],
+      extend: [
+        { target: "orders", fields: [{ name: "rating", type: "number" }] },
+      ],
+    });
+
+  /** `shop` moving its own `orders` to another table. */
+  const movingShop = () =>
+    plugin("shop", {
+      collections: [ordersCollection()],
+      transforms: [
+        {
+          target: "orders",
+          transform: entity => ({ ...entity, dbName: "legacy_orders" }),
+        },
+      ],
+    });
+
+  it("may not be moved, even by the entity's owner", () => {
+    const refused = refusalOf(() => fold([movingShop(), reviews()]));
+
+    expect(refused?.code).toBe("TRANSFORM_TABLE_CHANGED");
+    expect(refused?.message).toContain('"reviews"');
+  });
+
+  it("may be moved by its owner while no other plugin keeps data there", () => {
+    // The control: the owner's own data is the owner's to move.
+    const orders = ordersOf([movingShop()]);
+
+    expect(orders.dbName).toBe("legacy_orders");
+  });
+});
+
+describe("a function in a setting two settings share", () => {
+  it("is protected under each of them", () => {
+    // `primary` and `fallback` hold one object; replacing the function under
+    // `fallback` alone must still be seen.
+    const run = (): string => "run";
+    const shared = { run };
+    const refused = refusalOf(() =>
+      fold([
+        shop(),
+        changing("reviews", entity => ({
+          ...entity,
+          custom: { primary: shared, fallback: shared },
+        })),
+        changing("badges", entity => {
+          const custom = entity.custom as Record<string, unknown>;
+          return {
+            ...entity,
+            custom: {
+              primary: custom.primary,
+              fallback: { run: () => "other" },
+            },
+          };
+        }),
+      ])
+    );
+
+    expect(refused?.code).toBe("TRANSFORM_BEHAVIOUR_PROTECTED");
+    expect(refused?.message).toContain('"custom.fallback.run"');
+  });
+});
+
+describe("a refusal the entity already carried on one of its indexes", () => {
+  it("is not laid at the door of a transform that inserts a field", () => {
+    // `indexes[0].fields[0]` numbers the index's own list, not a field, so
+    // inserting a field moves nothing there.
+    const orders = ordersOf([
+      plugin("shop", {
+        collections: [ordersCollection({ indexes: [{ fields: [42] }] })],
+      }),
+      changing("reviews", entity => ({
+        ...entity,
+        fields: [{ name: "rating", type: "number" }, ...fieldsOf(entity)],
+      })),
+    ]);
+
+    expect(fieldsOf(orders)[0]).toMatchObject({ name: "rating" });
+  });
+});
