@@ -3,7 +3,7 @@ import type { PluginContext } from "@nextlyhq/plugin-sdk";
 import type { AccountsCore } from "../core/ports";
 import type { FlowDeps } from "../flows/deps";
 import type { AccountsEmail } from "../flows/mail";
-import { passwordPacer } from "../flows/pacer";
+import type { PasswordPacer } from "../flows/pacer";
 import { sweepUnverifiedAccounts } from "../flows/sweep-unverified";
 import type { AccountsSettings } from "../settings";
 import { sweepKnownBrowsers } from "../storage/known-browsers";
@@ -15,13 +15,14 @@ import { SEND_EMAIL_JOB } from "./jobs";
 
 /**
  * A flow's deps from the plugin's context: its database, core's helpers,
- * the site's settings, mail queued as a job, events on core's bus, and a
- * pacer that times core's own checks.
+ * the site's settings, mail queued as a job, events on core's bus, and the
+ * plugin's own pacer, which times core's checks across requests.
  */
 export function flowDepsFor(
   ctx: PluginContext,
   settings: AccountsSettings,
   core: AccountsCore,
+  pacer: PasswordPacer,
   db: PluginContext["db"] = ctx.db
 ): FlowDeps {
   return {
@@ -38,7 +39,7 @@ export function flowDepsFor(
       },
     },
     events: { emit: (name, payload) => ctx.events.emit(name, payload) },
-    pacer: passwordPacer(core.passwords),
+    pacer,
     logger: { warn: (message, context) => ctx.logger.warn(message, context) },
     now: () => new Date(),
   };

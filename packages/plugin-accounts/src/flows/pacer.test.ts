@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { passwordPacer } from "./pacer";
+import { passwordPacer, primedPasswordPacer } from "./pacer";
 
 /** A clock whose time moves only when a check runs, and that records each wait. */
 function fakeClock() {
@@ -51,5 +51,31 @@ describe("passwordPacer", () => {
     cost = 200;
     await pacer.verify("p", "h");
     expect(pacer.estimateMs()).toBe(120);
+  });
+
+  it("primed as it is made, has a first refusal wait for the priming check and then as long as it took", async () => {
+    const { clock, advance, waits } = fakeClock();
+    let release: () => void = () => undefined;
+    const slow = new Promise<void>(resolve => (release = resolve));
+    let checks = 0;
+    const pacer = primedPasswordPacer(
+      {
+        verify: async () => {
+          checks += 1;
+          await slow;
+          advance(100);
+          return false;
+        },
+      },
+      clock
+    );
+
+    const waited = pacer.waitAsLongAsACheck();
+    await Promise.resolve();
+    expect(waits).toEqual([]);
+    release();
+    await waited;
+    expect(waits).toEqual([100]);
+    expect(checks).toBe(1);
   });
 });

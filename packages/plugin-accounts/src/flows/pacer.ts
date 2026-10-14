@@ -51,3 +51,26 @@ export function passwordPacer(
     estimateMs: () => estimate ?? 0,
   };
 }
+
+/**
+ * The pacer a plugin keeps for its life, so its estimate carries from one
+ * request to the next: primed as it is made, and a wait asked for before
+ * the priming check has ended waits for it first, so no refusal ever waits
+ * nothing. A priming check that fails leaves the estimate to the first
+ * check a request makes.
+ */
+export function primedPasswordPacer(
+  passwords: Pick<PasswordHelper, "verify">,
+  clock?: { now(): number; sleep(ms: number): Promise<void> }
+): PasswordPacer {
+  const pacer = passwordPacer(passwords, clock);
+  const primed = pacer.prime().catch(() => undefined);
+
+  return {
+    verify: (password, hash) => pacer.verify(password, hash),
+    waitAsLongAsACheck: async () => {
+      await primed;
+      await pacer.waitAsLongAsACheck();
+    },
+  };
+}

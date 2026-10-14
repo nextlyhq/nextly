@@ -111,6 +111,39 @@ describe.each(getConfiguredTestDialects())(
       ).not.toBeNull();
     });
 
+    it("keeps one pacer for the started plugin, primed by a single check", async () => {
+      const core = fakeAccountsCore({
+        start: new Date(),
+        rules: accountsLimitRules(
+          resolveAccountsSettings({ origin: TEST_ORIGIN })
+        ),
+      });
+      const booted = await bootAccounts(dialect, { core });
+      current = booted.nextly;
+      const service = accountsServices(booted.ctx);
+      const attempt = () =>
+        service.signIn({
+          visitor: {
+            client: null,
+            sessionToken: null,
+            knownTokens: [],
+            signUpToken: null,
+          },
+          address: "nobody@example.com",
+          password: "a long passphrase",
+        });
+
+      await expect(attempt()).rejects.toMatchObject({
+        code: "ACCOUNTS_WRONG_CREDENTIALS",
+      });
+      await expect(attempt()).rejects.toMatchObject({
+        code: "ACCOUNTS_WRONG_CREDENTIALS",
+      });
+      // Each attempt for an address nobody has checks the decoy once; the
+      // pacer's priming is the one check more, made once for both requests.
+      expect(core.passwords.decoyVerifications).toBe(3);
+    });
+
     it("sweeps what has run out in one pass, and keeps everything live", async () => {
       const { db } = await boot();
       const settings = resolveAccountsSettings({

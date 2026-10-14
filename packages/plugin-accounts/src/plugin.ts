@@ -7,6 +7,7 @@ import { readAccountsCore } from "./core/adapter";
 import type { AccountsCore } from "./core/ports";
 import { accountsError } from "./errors";
 import { ACCOUNTS_EVENTS } from "./flows/deps";
+import { primedPasswordPacer, type PasswordPacer } from "./flows/pacer";
 import { accountKind } from "./http/principal";
 import { accountsRoutes } from "./http/routes";
 import {
@@ -63,14 +64,18 @@ export function buildAccounts(
     return context;
   };
 
+  // One pacer for the started plugin, made with its first request's deps
+  // and kept, so a refusal waits as long as the checks timed before it.
+  let pacer: PasswordPacer | null = null;
+
   // A flow's deps for a request, built from the started plugin's context.
-  const deps = () =>
-    flowDepsFor(
-      started(),
-      settings,
-      coreFor(started()),
-      databaseFor(started())
-    );
+  const deps = () => {
+    const ctx = started();
+    const core = coreFor(ctx);
+    pacer ??= primedPasswordPacer(core.passwords);
+
+    return flowDepsFor(ctx, settings, core, pacer, databaseFor(ctx));
+  };
 
   return definePlugin({
     name: PLUGIN_NAME,
@@ -118,6 +123,7 @@ export function buildAccounts(
     destroy: () => {
       forgetInstalled(deps);
       context = null;
+      pacer = null;
     },
   });
 }
