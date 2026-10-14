@@ -133,4 +133,5 @@ export type {
   PrincipalKindDefinition,
   PrincipalRecord,
   PrincipalRef,
+  PrincipalReportOptions,
 } from "./principals/types";

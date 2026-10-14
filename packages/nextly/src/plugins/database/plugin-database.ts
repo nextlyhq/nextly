@@ -45,6 +45,7 @@ import {
   type ContributedColumn,
   type TableAccessRules,
 } from "./access";
+import { runInPluginTransactionFlow } from "./plugin-transaction-in-flow";
 import { linkPluginTransaction } from "./plugin-transaction-link";
 
 /** What a caller may narrow a read or a write with. */
@@ -1323,7 +1324,12 @@ export function createPluginDatabase(deps: PluginDatabaseDeps): PluginDatabase {
           track: scope.track,
         });
         if (tx.adapterTx) linkPluginTransaction(scoped, tx.adapterTx, scope);
-        return scope.run(() => fn(scoped));
+        // Marked as the flow's transaction, so a core write that opens its
+        // own and needs a lock this one holds can join it instead of waiting
+        // on it (see `plugin-transaction-in-flow`).
+        return scope.run(() =>
+          runInPluginTransactionFlow(scoped, () => fn(scoped))
+        );
       });
     },
 

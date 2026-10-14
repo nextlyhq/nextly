@@ -555,6 +555,7 @@ export {
   type PrincipalKindDefinition,
   type PrincipalRecord,
   type PrincipalRef,
+  type PrincipalReportOptions,
   type ComponentPath,
   type JsonObject,
   type JsonValue,

@@ -80,6 +80,13 @@ export interface ErasureAwareInsert {
    * actor.
    */
   targetUserId?: string | null;
+  /**
+   * Parties already known to be gone before the write, decided by the caller:
+   * a plugin-defined person whose plugin reported them deleted. Erases the
+   * same columns a deleted account does in the same role, whatever the
+   * account columns say.
+   */
+  reportedGone?: { actor: boolean; target: boolean };
 }
 
 /** What a write learned that its caller may want to report. */
@@ -150,15 +157,18 @@ export async function insertErasureAware(
   server: RowLockServer,
   input: ErasureAwareInsert
 ): Promise<ErasureAwareOutcome> {
-  // A row naming nobody has no account to outlive. Storing an erasure stamp
-  // would claim a person was removed from a row that never held one.
+  // A row naming no account has no account to outlive. Storing an erasure
+  // stamp would claim a person was removed from a row that never held one,
+  // unless the caller already knows a party it names is gone.
   if (!erasureNeedsLock(input)) {
-    await db.insert(input.table).values({
-      ...input.row,
-      ...input.identity,
-      ...input.namesEitherParty,
-      identityErasedAt: null,
-    });
+    await db.insert(input.table).values(
+      decidedRow(input, {
+        actorGone: false,
+        targetGone: false,
+        fromAccount: {},
+        erasedAt: new Date(),
+      })
+    );
     return { targetAbsent: false };
   }
   if (server.dialect === "sqlite") {
@@ -299,23 +309,40 @@ function decidedRow(
   input: ErasureAwareInsert,
   looks: AccountLooks
 ): Record<string, unknown> {
+  const { actorGone, targetGone } = withReported(looks, input.reportedGone);
   const decided: Record<string, unknown> = {};
   for (const [column, value] of Object.entries(input.identity ?? {})) {
-    decided[column] = unlessGone(value, looks.actorGone);
+    decided[column] = unlessGone(value, actorGone);
   }
   for (const [column, value] of Object.entries(looks.fromAccount)) {
-    decided[column] = unlessGone(value, looks.actorGone);
+    decided[column] = unlessGone(value, actorGone);
   }
-  const eitherGone = anyGone(looks.actorGone, looks.targetGone);
+  const eitherGone = anyGone(actorGone, targetGone);
   for (const [column, value] of Object.entries(input.namesEitherParty ?? {})) {
     decided[column] = unlessGone(value, eitherGone);
   }
   return {
     ...input.row,
     ...decided,
-    identityErasedAt: whenGone(looks.erasedAt, looks.actorGone),
+    identityErasedAt: whenGone(looks.erasedAt, actorGone),
   };
 }
+
+/**
+ * Who is gone: a party the caller already knows is gone counts as gone
+ * whatever the account look found.
+ */
+function withReported(
+  looks: AccountLooks,
+  reported: ErasureAwareInsert["reportedGone"] = NOTHING_REPORTED
+): { actorGone: Gone; targetGone: Gone } {
+  return {
+    actorGone: anyGone(looks.actorGone, reported.actor),
+    targetGone: anyGone(looks.targetGone, reported.target),
+  };
+}
+
+const NOTHING_REPORTED = { actor: false, target: false } as const;
 
 /** The value while the account exists, NULL once it is gone. */
 function unlessGone(value: unknown, gone: Gone): unknown {

@@ -66,6 +66,19 @@ export function auditLogColumns() {
     identityErasedAt: timestamp("identity_erased_at", {
       withTimezone: false,
     }),
+    // Who acted, by kind: "staff", "apiKey", "core", "anonymous" (nobody
+    // identified, as on a failed sign-in), or a plugin's kind of signed-in
+    // person ("<plugin>:<name>"). NULL on rows written before the column
+    // existed, which read as they always did.
+    actorKind: varchar("actor_kind", { length: 191 }),
+    // A plugin-defined person, named apart from the staff columns above: a
+    // person's id in `actor_user_id` would be read as a staff user's, and
+    // one that is not a staff user's as an erased account. Once the person is
+    // reported deleted, the id is replaced by a keyed digest of kind and id.
+    actorPrincipalKind: varchar("actor_principal_kind", { length: 191 }),
+    actorPrincipalId: varchar("actor_principal_id", { length: 191 }),
+    targetPrincipalKind: varchar("target_principal_kind", { length: 191 }),
+    targetPrincipalId: varchar("target_principal_id", { length: 191 }),
   };
 }
 

@@ -44,6 +44,7 @@ import { createAdapterFromEnv, validateDatabaseEnv } from "../database/factory";
 import { resolveRelations } from "../database/resolve-relations";
 import type { SchemaRegistry } from "../database/schema-registry";
 import { requireNextly } from "../direct-api/nextly";
+import { resealPrincipalDigestKeyAtBoot } from "../domains/audit/erase-principal";
 import type { ResolvedAuditRetentionConfig } from "../domains/audit/retention-config";
 import type { ApiKeyService } from "../domains/auth/services/api-key-service";
 import type { AuthService } from "../domains/auth/services/auth-service";
@@ -67,6 +68,7 @@ import {
 import type { SanitizedLocalizationConfig } from "../domains/i18n/config/types";
 import type { JobDefinition } from "../domains/jobs/job-registry";
 import type { MetaService } from "../domains/meta";
+import { pluginSettingsSecrets } from "../domains/plugins/settings-service";
 import type { PreviewConfig } from "../domains/preview/route-config";
 import { resolvePreviewRoute } from "../domains/preview/route-config";
 import type { ReleasesService } from "../domains/releases/services/releases-service";
@@ -132,6 +134,7 @@ import {
 import { assertBootMigrationsNotRefused } from "../init/boot-migrations-gate";
 import type { RunProdMigrationsArgs } from "../init/prod-migrations";
 import { unwrittenSlugs } from "../init/sync-outcome";
+import { env } from "../lib/env";
 import type { PluginPermission, PluginRole } from "../plugins/contributions";
 import { getCoreVersion } from "../plugins/core-version";
 import { warnUndescribedPlugins } from "../plugins/describe-check";
@@ -943,6 +946,12 @@ async function registerServicesOnce(
   await checkForeignKeysToCodeFirstTables(adapter, bootExtensionSchema);
 
   assertBootRelationsResolve(schemaRegistry, resolvedLogger);
+
+  // Before any plugin starts, as stored plugin secrets are: the key naming
+  // deleted plugin-defined people, sealed under a secret since rotated, is
+  // sealed again under the current one, so the retired secret can go once
+  // the app has started with both.
+  await resealPrincipalDigestKeyAtBoot(adapter, pluginSettingsSecrets(env));
 
   // ----------------------------------------
   // Layer 7: Initialize Plugins
