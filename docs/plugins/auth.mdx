@@ -266,6 +266,12 @@ token is refused on whichever instance it reaches, before your `resolve` runs,
 and two correct answers sent at once mint one session. This holds whatever
 `rateLimit.store` is set to.
 
+That's the router core builds. An app that assembles `AuthRouterDeps` itself
+for `routeAuthRequest` gets it by passing `spentChallenges:
+databaseSpentChallenges(adapter)` (both from `nextly/auth`). Without it, the mark
+is kept in the rate-limit store, so the challenge is not single-use across
+instances unless that store is shared.
+
 Each pending sign-in has a budget of 5 attempts, spent before an answer is
 examined, right or wrong. It's counted in the selected limit store, or in an
 app's own store of the earlier `RateLimitStore` contract when one is set. With

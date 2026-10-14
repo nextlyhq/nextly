@@ -38,6 +38,7 @@ import {
   sweepSpentChallenges,
 } from "../../pipeline/spent-challenges";
 import { handleChallengeResolve } from "../challenge-resolve";
+import { buildAuthRouterDeps } from "../deps-bridge";
 
 import { fakeSessionRows } from "./session-row-fake";
 
@@ -203,6 +204,27 @@ describeEachDialect("a two-factor challenge on one database", dialect => {
     opened.push(store);
     return withCallDeadline(store);
   }
+
+  it("gives a booted site's auth router the database's marks, and the selected limit store", async () => {
+    const deps = buildAuthRouterDeps(
+      current.getService as unknown as (name: string) => unknown
+    );
+    const mark = `${randomUUID().replaceAll("-", "")}`.padEnd(64, "3");
+
+    expect(deps.spentChallenges).toBeDefined();
+    expect(deps.limitStore).toBeDefined();
+    expect(await deps.spentChallenges?.spend(mark, Date.now() + 60_000)).toBe(
+      true
+    );
+    // Written to the table, where every instance on this database reads it.
+    const rows = await current.adapter.executeQuery<{ id: string }>(
+      `SELECT id FROM ${SPENT_CHALLENGES_TABLE} WHERE id = '${mark}'`
+    );
+    expect(rows).toHaveLength(1);
+    expect(await deps.spentChallenges?.spend(mark, Date.now() + 60_000)).toBe(
+      false
+    );
+  });
 
   it("refuses on the other instance an answer already accepted, with the memory store, before the resolver runs", async () => {
     const first = instance(current.adapter, createMemoryLimitStore());
