@@ -159,17 +159,39 @@ export async function holdAtVersion(
   );
 }
 
+/**
+ * Holds the account as `holdAtVersion` does, and only while its address is
+ * still unverified: a verification moves no version, so a write that
+ * applies only to an unverified address asks for it too. False when the
+ * version moved or the address has been verified since it was read.
+ */
+export async function holdWhileUnverified(
+  db: AccountsDb,
+  account: Pick<AccountRow, "id" | "securityVersion">
+): Promise<boolean> {
+  return updateAtVersion(
+    db,
+    account,
+    { securityVersion: account.securityVersion },
+    false,
+    isNull(db.table(accounts).verifiedAt)
+  );
+}
+
 /** The one guarded update every guarded write goes through. */
 async function updateAtVersion(
   db: AccountsDb,
   account: Pick<AccountRow, "id" | "securityVersion">,
   set: Partial<InferInsert<typeof accounts>>,
-  endsSessions: boolean
+  endsSessions: boolean,
+  /** A further condition the row must meet, for a write that applies only to some states. */
+  also?: Parameters<typeof and>[number]
 ): Promise<boolean> {
   const columns = db.table(accounts);
   const atVersion = and(
     eq(columns.id, account.id),
-    eq(columns.securityVersion, account.securityVersion)
+    eq(columns.securityVersion, account.securityVersion),
+    also
   );
   // `and` of two conditions is never empty; the guard keeps an update from
   // ever running without its version check.

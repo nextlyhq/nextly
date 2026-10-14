@@ -2,6 +2,7 @@ import type { StaffAction, StaffRefusal } from "../admin-contract";
 import {
   accountById,
   deleteAccount,
+  holdWhileUnverified,
   writeAtVersion,
   type AccountRow,
   type AccountsDb,
@@ -13,7 +14,11 @@ import type { FlowDeps } from "./deps";
 import { queueNotice } from "./mail";
 import { sendResetLink } from "./reset-request";
 import { endEverything } from "./sessions";
-import { mintVerification, queueVerification } from "./verification-email";
+import {
+  mintVerification,
+  queueVerification,
+  type MintedVerification,
+} from "./verification-email";
 
 export type StaffActionResult =
   | { status: "done"; account: AccountRow }
@@ -121,25 +126,34 @@ function endSessionsByStaff(
 /**
  * Sends the verification email again to an unverified, active account: a
  * fresh link, a fresh code that voids the earlier one, and a fresh "this
- * wasn't me" link. It moves nothing else, so a reset link already sent
+ * wasn't me" link, minted while the account is held unverified at the
+ * version read, so a verification or a deactivation that commits first is
+ * seen and refused. It moves nothing else, so a reset link already sent
  * still works.
  */
 async function resendVerificationByStaff(
   deps: FlowDeps,
   accountId: string
 ): Promise<StaffActionResult> {
-  const account = await accountById(deps.db, accountId);
-  if (account === null) return { status: "missing" };
-  if (account.verifiedAt !== null)
-    return { status: "refused", reason: "already-verified" };
-  if (account.deactivatedAt !== null)
-    return { status: "refused", reason: "deactivated" };
-  const verification = await deps.db.transaction(tx =>
-    mintVerification(deps, tx, account.id)
+  let minted: MintedVerification | undefined;
+  const result = await atVersion(
+    deps,
+    accountId,
+    account => {
+      if (account.verifiedAt !== null) return "already-verified";
+      if (account.deactivatedAt !== null) return "deactivated";
+      return undefined;
+    },
+    async (tx, account) => {
+      if (!(await holdWhileUnverified(tx, account))) return false;
+      minted = await mintVerification(deps, tx, account.id);
+      return true;
+    }
   );
-  await queueVerification(deps, account, verification);
+  if (result.status !== "done" || minted === undefined) return result;
+  await queueVerification(deps, result.account, minted);
 
-  return { status: "done", account };
+  return result;
 }
 
 /**

@@ -12,7 +12,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { STAFF_ACTIONS } from "../admin-contract";
 import { knownBrowsers, sessions } from "../schema/tables";
-import { accountById } from "../storage/accounts";
+import { accountById, writeAtVersion } from "../storage/accounts";
 import { askAddressChange, pendingChangeOf } from "../storage/pending-changes";
 import { makeAccount, TEST_PASSWORD } from "../test-support/accounts";
 import { bootAccounts } from "../test-support/boot";
@@ -200,6 +200,33 @@ describe.each(getConfiguredTestDialects())(
         await runStaffAction(closed.deps, "resend-verification", closed.id)
       ).toEqual({ status: "refused", reason: "deactivated" });
       expect(closed.mail.queued).toEqual([]);
+    });
+
+    it("refuses to resend once the holder's verification commits after the account was read", async () => {
+      const { deps, mail, id } = await boot({ verified: false });
+      let verified = false;
+      const raced = {
+        ...deps,
+        db: new Proxy(deps.db, {
+          get(target, key, receiver) {
+            if (key !== "transaction" || verified)
+              return Reflect.get(target, key, receiver) as unknown;
+            return async (work: Parameters<typeof target.transaction>[0]) => {
+              verified = true;
+              const fresh = await accountById(target, id);
+              if (fresh !== null)
+                await writeAtVersion(target, fresh, { verifiedAt: new Date() });
+              return target.transaction(work);
+            };
+          },
+        }),
+      };
+
+      expect(await runStaffAction(raced, "resend-verification", id)).toEqual({
+        status: "refused",
+        reason: "already-verified",
+      });
+      expect(mail.ofKind("verify-address")).toEqual([]);
     });
 
     it("sends an active account a reset link that resets the password", async () => {
