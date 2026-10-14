@@ -98,7 +98,11 @@ They live under `/admin/api/plugins/@nextlyhq/plugin-commerce`:
 | `GET`    | `/catalogue/items` | `?reference=` once per item          | `{ items, meta }`         |
 | `GET`    | `/catalogue`       | `?limit=&cursor=&search=`            | `{ items, nextCursor }`   |
 
-`/catalogue` is there when the source can be browsed, as the built-in one can.
+`/catalogue` is there when the source can be browsed, as the built-in one can. Pass its
+`nextCursor` back as `cursor` for the next page; a source that names the page it was asked
+for as the next, or a cursor that is empty or over 1,024 characters, is refused as a broken
+answer rather than followed. A reference is compared exactly, letter case included, on
+every database.
 
 **Every write needs a CSRF token**, because a cart belongs to a shopper who is not signed
 in, and a cross-site form could otherwise change it. Fetch one from

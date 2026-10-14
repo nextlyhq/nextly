@@ -97,6 +97,41 @@ function cardViolations(table: Table): string[] {
   });
 }
 
+// A catalogue reference is compared exactly by the contract, and by MySQL's
+// default collation without regard to case or accents, so an index over the
+// reference itself would join two items into one on MySQL alone. Indexes go
+// over its key instead (`referenceKey`).
+function referenceIndexViolations(table: Table): string[] {
+  return table.indexes.flatMap(index =>
+    index.columns.includes("reference")
+      ? [`${table.name} indexes reference, not reference_key`]
+      : []
+  );
+}
+
+describe("the reference rule", () => {
+  it("finds an index over a catalogue reference itself", () => {
+    const broken = defineTable(
+      "broken_references",
+      { id: col.id(), reference: col.varchar(255) },
+      { indexes: [{ columns: ["reference"], unique: true }] }
+    );
+    expect(referenceIndexViolations(broken)).toEqual([
+      "broken_references indexes reference, not reference_key",
+    ]);
+  });
+
+  it("holds for every commerce table", () => {
+    expect(COMMERCE_TABLES.flatMap(referenceIndexViolations)).toEqual([]);
+    // The rule has something to check: the cart's lines are indexed by key.
+    expect(
+      COMMERCE_TABLES.flatMap(t => t.indexes).some(i =>
+        i.columns.includes("reference_key")
+      )
+    ).toBe(true);
+  });
+});
+
 describe("the money rule", () => {
   it("finds every way a table can hold money wrongly", () => {
     const broken = defineTable("broken_money", {

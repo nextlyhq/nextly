@@ -132,6 +132,33 @@ describe("reading items from a catalogue source", () => {
     });
   });
 
+  it("refuses a next cursor a storefront could not follow: the one it was given, empty, or too long", async () => {
+    const answeringCursor = (nextCursor: string): CatalogueSource => ({
+      ...answering([]),
+      list: async () => ({ items: [drill], nextCursor }),
+    });
+    for (const [given, next] of [
+      ["page-2", "page-2"],
+      [null, ""],
+      [null, "c".repeat(1025)],
+    ] as const) {
+      expect(
+        await codeOf(() =>
+          listItems(answeringCursor(next), "USD", { limit: 10, cursor: given })
+        )
+      ).toBe("COMMERCE_PROVIDER_CONTRACT");
+    }
+    // A cursor that moves on, at the longest a storefront can pass back, is
+    // followed.
+    const longest = "c".repeat(1024);
+    expect(
+      await listItems(answeringCursor(longest), "USD", {
+        limit: 10,
+        cursor: "page-1",
+      })
+    ).toEqual({ items: [drill], nextCursor: longest });
+  });
+
   it("calls a source that fails to answer unavailable, and passes on an error it raised", async () => {
     const failing: CatalogueSource = {
       ...answering([]),

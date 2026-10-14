@@ -8,14 +8,14 @@
 import type { PluginMigration } from "@nextlyhq/plugin-sdk/schema";
 
 export default {
-  name: "20261014_051845_478_create_carts",
+  name: "20261014_081712_081_create_carts",
   schemaVersion: 1,
-  checksum: "6bcf35c59612b8b4e06ec71c45582b7a2db9b1484713558d0900809f11020737",
+  checksum: "af4f1be50e2dbef90e20e344a5fc70cf96877669bd6998804cdfb5f724febe25",
   dialects: {
     postgresql: {
       up: [
         'CREATE TABLE "commerce__carts" (\n  "id" text PRIMARY KEY NOT NULL,\n  "token_hash" bpchar(64) NOT NULL,\n  "currency" bpchar(3) NOT NULL,\n  "version" int4 NOT NULL DEFAULT 0,\n  "expires_at" timestamp NOT NULL,\n  "account_kind" text,\n  "account_id" text,\n  "created_at" timestamp NOT NULL DEFAULT now(),\n  "updated_at" timestamp NOT NULL DEFAULT now()\n);\nCREATE UNIQUE INDEX IF NOT EXISTS "uq_commerce__carts_token_hash" ON "commerce__carts" ("token_hash");\nCREATE INDEX IF NOT EXISTS "idx_commerce__carts_expires_at" ON "commerce__carts" ("expires_at")',
-        'CREATE TABLE "commerce__cart_lines" (\n  "id" text PRIMARY KEY NOT NULL,\n  "cart_id" text NOT NULL,\n  "reference" text NOT NULL,\n  "quantity" int4 NOT NULL,\n  "seen_unit_price_amount" int8 NOT NULL,\n  "seen_unit_price_currency" bpchar(3) NOT NULL,\n  "created_at" timestamp NOT NULL DEFAULT now(),\n  "updated_at" timestamp NOT NULL DEFAULT now(),\n  CONSTRAINT "ck_commerce__cart_lines_quantity_positive" CHECK (quantity > 0),\n  CONSTRAINT "fk_commerce__cart_lines_cart_id" FOREIGN KEY ("cart_id") REFERENCES "commerce__carts" ("id") ON DELETE CASCADE ON UPDATE NO ACTION\n);\nCREATE UNIQUE INDEX IF NOT EXISTS "uq_commerce__cart_lines_cart_id_reference_1dhx82s" ON "commerce__cart_lines" ("cart_id", "reference")',
+        'CREATE TABLE "commerce__cart_lines" (\n  "id" text PRIMARY KEY NOT NULL,\n  "cart_id" text NOT NULL,\n  "reference" text NOT NULL,\n  "reference_key" bpchar(64) NOT NULL,\n  "quantity" int4 NOT NULL,\n  "seen_unit_price_amount" int8 NOT NULL,\n  "seen_unit_price_currency" bpchar(3) NOT NULL,\n  "created_at" timestamp NOT NULL DEFAULT now(),\n  "updated_at" timestamp NOT NULL DEFAULT now(),\n  CONSTRAINT "ck_commerce__cart_lines_quantity_positive" CHECK (quantity > 0),\n  CONSTRAINT "fk_commerce__cart_lines_cart_id" FOREIGN KEY ("cart_id") REFERENCES "commerce__carts" ("id") ON DELETE CASCADE ON UPDATE NO ACTION\n);\nCREATE UNIQUE INDEX IF NOT EXISTS "uq_commerce__cart_lines_cart_id_reference_key_0lz67zc" ON "commerce__cart_lines" ("cart_id", "reference_key")',
       ],
       down: [
         'DROP TABLE "commerce__cart_lines" CASCADE',
@@ -25,7 +25,7 @@ export default {
     mysql: {
       up: [
         "CREATE TABLE `commerce__carts` (\n  `id` varchar(36) PRIMARY KEY NOT NULL,\n  `token_hash` char(64) NOT NULL,\n  `currency` char(3) NOT NULL,\n  `version` int NOT NULL DEFAULT 0,\n  `expires_at` timestamp NOT NULL,\n  `account_kind` varchar(64),\n  `account_id` varchar(255),\n  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,\n  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP\n);\nCREATE UNIQUE INDEX `uq_commerce__carts_token_hash` ON `commerce__carts` (`token_hash`);\nCREATE INDEX `idx_commerce__carts_expires_at` ON `commerce__carts` (`expires_at`)",
-        "CREATE TABLE `commerce__cart_lines` (\n  `id` varchar(36) PRIMARY KEY NOT NULL,\n  `cart_id` varchar(36) NOT NULL,\n  `reference` varchar(255) NOT NULL,\n  `quantity` int NOT NULL,\n  `seen_unit_price_amount` bigint NOT NULL,\n  `seen_unit_price_currency` char(3) NOT NULL,\n  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,\n  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,\n  CONSTRAINT `ck_commerce__cart_lines_quantity_positive` CHECK (quantity > 0),\n  CONSTRAINT `fk_commerce__cart_lines_cart_id` FOREIGN KEY (`cart_id`) REFERENCES `commerce__carts` (`id`) ON DELETE CASCADE ON UPDATE NO ACTION\n);\nCREATE UNIQUE INDEX `uq_commerce__cart_lines_cart_id_reference_1dhx82s` ON `commerce__cart_lines` (`cart_id`, `reference`)",
+        "CREATE TABLE `commerce__cart_lines` (\n  `id` varchar(36) PRIMARY KEY NOT NULL,\n  `cart_id` varchar(36) NOT NULL,\n  `reference` varchar(255) NOT NULL,\n  `reference_key` char(64) NOT NULL,\n  `quantity` int NOT NULL,\n  `seen_unit_price_amount` bigint NOT NULL,\n  `seen_unit_price_currency` char(3) NOT NULL,\n  `created_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,\n  `updated_at` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,\n  CONSTRAINT `ck_commerce__cart_lines_quantity_positive` CHECK (quantity > 0),\n  CONSTRAINT `fk_commerce__cart_lines_cart_id` FOREIGN KEY (`cart_id`) REFERENCES `commerce__carts` (`id`) ON DELETE CASCADE ON UPDATE NO ACTION\n);\nCREATE UNIQUE INDEX `uq_commerce__cart_lines_cart_id_reference_key_0lz67zc` ON `commerce__cart_lines` (`cart_id`, `reference_key`)",
       ],
       down: [
         "DROP TABLE `commerce__cart_lines`",
@@ -35,7 +35,7 @@ export default {
     sqlite: {
       up: [
         'CREATE TABLE "commerce__carts" (\n  "id" text PRIMARY KEY NOT NULL,\n  "token_hash" text NOT NULL,\n  "currency" text NOT NULL,\n  "version" integer NOT NULL DEFAULT 0,\n  "expires_at" integer NOT NULL,\n  "account_kind" text,\n  "account_id" text,\n  "created_at" integer NOT NULL DEFAULT (strftime(\'%s\', \'now\')),\n  "updated_at" integer NOT NULL DEFAULT (strftime(\'%s\', \'now\'))\n);\nCREATE UNIQUE INDEX IF NOT EXISTS "uq_commerce__carts_token_hash" ON "commerce__carts" ("token_hash");\nCREATE INDEX IF NOT EXISTS "idx_commerce__carts_expires_at" ON "commerce__carts" ("expires_at")',
-        'CREATE TABLE "commerce__cart_lines" (\n  "id" text PRIMARY KEY NOT NULL,\n  "cart_id" text NOT NULL,\n  "reference" text NOT NULL,\n  "quantity" integer NOT NULL,\n  "seen_unit_price_amount" integer NOT NULL,\n  "seen_unit_price_currency" text NOT NULL,\n  "created_at" integer NOT NULL DEFAULT (strftime(\'%s\', \'now\')),\n  "updated_at" integer NOT NULL DEFAULT (strftime(\'%s\', \'now\')),\n  CONSTRAINT "ck_commerce__cart_lines_quantity_positive" CHECK (quantity > 0),\n  CONSTRAINT "fk_commerce__cart_lines_cart_id" FOREIGN KEY ("cart_id") REFERENCES "commerce__carts" ("id") ON DELETE CASCADE ON UPDATE NO ACTION\n);\nCREATE UNIQUE INDEX IF NOT EXISTS "uq_commerce__cart_lines_cart_id_reference_1dhx82s" ON "commerce__cart_lines" ("cart_id", "reference")',
+        'CREATE TABLE "commerce__cart_lines" (\n  "id" text PRIMARY KEY NOT NULL,\n  "cart_id" text NOT NULL,\n  "reference" text NOT NULL,\n  "reference_key" text NOT NULL,\n  "quantity" integer NOT NULL,\n  "seen_unit_price_amount" integer NOT NULL,\n  "seen_unit_price_currency" text NOT NULL,\n  "created_at" integer NOT NULL DEFAULT (strftime(\'%s\', \'now\')),\n  "updated_at" integer NOT NULL DEFAULT (strftime(\'%s\', \'now\')),\n  CONSTRAINT "ck_commerce__cart_lines_quantity_positive" CHECK (quantity > 0),\n  CONSTRAINT "fk_commerce__cart_lines_cart_id" FOREIGN KEY ("cart_id") REFERENCES "commerce__carts" ("id") ON DELETE CASCADE ON UPDATE NO ACTION\n);\nCREATE UNIQUE INDEX IF NOT EXISTS "uq_commerce__cart_lines_cart_id_reference_key_0lz67zc" ON "commerce__cart_lines" ("cart_id", "reference_key")',
       ],
       down: [
         'DROP TABLE "commerce__cart_lines"',
@@ -136,6 +136,12 @@ export default {
               nullable: false,
             },
             {
+              name: "reference_key",
+              type: "bpchar",
+              typeModifier: "64",
+              nullable: false,
+            },
+            {
               name: "quantity",
               type: "int4",
               nullable: false,
@@ -166,8 +172,8 @@ export default {
           ],
           indexes: [
             {
-              name: "uq_commerce__cart_lines_cart_id_reference_1dhx82s",
-              columns: ["cart_id", "reference"],
+              name: "uq_commerce__cart_lines_cart_id_reference_key_0lz67zc",
+              columns: ["cart_id", "reference_key"],
               unique: true,
             },
           ],
@@ -280,6 +286,11 @@ export default {
               nullable: false,
             },
             {
+              name: "reference_key",
+              type: "char(64)",
+              nullable: false,
+            },
+            {
               name: "quantity",
               type: "int",
               nullable: false,
@@ -309,8 +320,8 @@ export default {
           ],
           indexes: [
             {
-              name: "uq_commerce__cart_lines_cart_id_reference_1dhx82s",
-              columns: ["cart_id", "reference"],
+              name: "uq_commerce__cart_lines_cart_id_reference_key_0lz67zc",
+              columns: ["cart_id", "reference_key"],
               unique: true,
             },
           ],
@@ -423,6 +434,11 @@ export default {
               nullable: false,
             },
             {
+              name: "reference_key",
+              type: "text",
+              nullable: false,
+            },
+            {
               name: "quantity",
               type: "integer",
               nullable: false,
@@ -452,8 +468,8 @@ export default {
           ],
           indexes: [
             {
-              name: "uq_commerce__cart_lines_cart_id_reference_1dhx82s",
-              columns: ["cart_id", "reference"],
+              name: "uq_commerce__cart_lines_cart_id_reference_key_0lz67zc",
+              columns: ["cart_id", "reference_key"],
               unique: true,
             },
           ],

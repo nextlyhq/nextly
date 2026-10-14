@@ -577,6 +577,100 @@ describe.each(getConfiguredTestDialects())(
       );
     });
 
+    it("answers a cart that expired while the source was being read as none, and one a change moved on as it now is", async () => {
+      const { clock, outside, cart } = await setup();
+      const token = tokenOf(
+        await cart.add({ token: null, reference: "drill", quantity: 1 })
+      );
+      const deadline = new Date(clock.now.getTime() + 30 * DAY);
+      const original = outside.source.find.bind(outside.source);
+
+      // The read starts before the deadline, and the source answers after it.
+      clock.now = new Date(deadline.getTime() - 1_000);
+      outside.source.find = async input => {
+        clock.now = new Date(deadline.getTime() + 1_000);
+        return original(input);
+      };
+      expect(await cart.get({ token })).toEqual({
+        cart: expect.objectContaining({ lines: [] }),
+        cookie: { action: "clear" },
+      });
+
+      // The same, but a change lands while the source is read, moving the
+      // deadline on: the cart is answered as that change left it.
+      const second = tokenOf(
+        await cart.add({ token: null, reference: "drill", quantity: 1 })
+      );
+      const secondDeadline = new Date(clock.now.getTime() + 30 * DAY);
+      clock.now = new Date(secondDeadline.getTime() - 1_000);
+      let raced = false;
+      outside.source.find = async input => {
+        if (!raced) {
+          raced = true;
+          outside.source.find = original;
+          await cart.add({ token: second, reference: "bolt", quantity: 1 });
+          clock.now = new Date(secondDeadline.getTime() + 1_000);
+        }
+        return original(input);
+      };
+      const read = await cart.get({ token: second });
+      expect(read.cookie).toEqual({ action: "keep" });
+      expect(read.cart.lines.map(l => l.reference)).toEqual(["drill", "bolt"]);
+    });
+
+    it("keeps references that differ only in case as two lines, and changes each alone", async () => {
+      const { ctx, outside, cart } = await setup();
+      outside.set(listed("Bolt", 30, { kind: "untracked" }));
+      const token = tokenOf(
+        await cart.add({ token: null, reference: "bolt", quantity: 1 })
+      );
+      const both = await cart.add({ token, reference: "Bolt", quantity: 2 });
+      expect(both.cart.lines.map(l => [l.reference, l.quantity])).toEqual([
+        ["bolt", 1],
+        ["Bolt", 2],
+      ]);
+      await cart.setQuantity({ token, reference: "Bolt", quantity: 5 });
+      await cart.remove({ token, reference: "bolt" });
+      const rows = await ctx.db.select(cartLines).all();
+      expect(rows.map(row => [row.reference, row.quantity])).toEqual([
+        ["Bolt", 5],
+      ]);
+    });
+
+    it("refuses an argument it cannot parse as a validation error, before any work", async () => {
+      const { ctx, cart } = await setup();
+      // The service is server code's to call, so its arguments are outside
+      // input: each action is reached here as server code without types would.
+      // A method's parameter is compared both ways, so any action fits here.
+      interface Untyped {
+        call(input: unknown): Promise<unknown>;
+      }
+      const actions: Record<string, Untyped> = {
+        get: { call: cart.get },
+        add: { call: cart.add },
+        setQuantity: { call: cart.setQuantity },
+        remove: { call: cart.remove },
+        clear: { call: cart.clear },
+      };
+      for (const [name, action] of Object.entries(actions)) {
+        expect(await codeOf(() => action.call(null)), `${name}(null)`).toBe(
+          "VALIDATION_ERROR"
+        );
+        expect(
+          await codeOf(() =>
+            action.call({
+              token: null,
+              reference: "bolt",
+              quantity: 1,
+              cartId: "x",
+            })
+          ),
+          `${name} with a key it does not know`
+        ).toBe("VALIDATION_ERROR");
+      }
+      expect(await ctx.db.select(carts).all()).toEqual([]);
+    });
+
     it("reads price and availability from the source on every read", async () => {
       const { outside, cart } = await setup();
       const token = tokenOf(

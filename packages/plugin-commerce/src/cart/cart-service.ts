@@ -11,6 +11,7 @@ import type {
 } from "../contracts/catalogue-source";
 import { commerceError } from "../errors";
 import { parseRequest } from "../request-input";
+import { referenceKey } from "../schema/reference-key";
 import { cartLines, carts } from "../schema/tables";
 
 import { findItems } from "./catalogue-read";
@@ -100,16 +101,28 @@ export interface CartServiceOptions {
  */
 const MAX_ATTEMPTS = 8;
 
+// Each action parses its whole input exactly as it was passed: server code
+// calls the service directly, so a missing or malformed argument, or a key
+// the schema does not know, is a validation error rather than a crash or a
+// key silently dropped. The token's own shape is judged when it is looked up,
+// and a malformed one finds no cart.
+const tokenSchema = z.string().nullable();
 const referenceSchema = z.string().min(1).max(255);
+const tokenOnlySchema = z.strictObject({ token: tokenSchema });
 const addSchema = z.strictObject({
+  token: tokenSchema,
   reference: referenceSchema,
   quantity: z.number().int().min(1).max(MAX_LINE_QUANTITY),
 });
 const setSchema = z.strictObject({
+  token: tokenSchema,
   reference: referenceSchema,
   quantity: z.number().int().min(0).max(MAX_LINE_QUANTITY),
 });
-const removeSchema = z.strictObject({ reference: referenceSchema });
+const removeSchema = z.strictObject({
+  token: tokenSchema,
+  reference: referenceSchema,
+});
 
 /** A change to one cart, as the write applies it. */
 type CartChange =
@@ -352,17 +365,24 @@ export function createCartService(options: CartServiceOptions): CartService {
 
   return {
     async get(input) {
-      const cart = await liveCart(input.token, clock());
-      if (!cart) return noCart(input.token);
-      return { cart: await view(cart), cookie: { action: "keep" } };
+      const { token } = parseRequest(tokenOnlySchema, input);
+      const cart = await liveCart(token, clock());
+      if (!cart) return noCart(token);
+      const answer = await view(cart);
+      // The source can answer after the cart's deadline. A cart that expired
+      // meanwhile is answered as none, unless a change made while the source
+      // was read moved its deadline on, in which case that cart is read again.
+      if (!isCartExpired(cart, clock())) {
+        return { cart: answer, cookie: { action: "keep" } };
+      }
+      const moved = await liveCart(token, clock());
+      if (!moved) return noCart(token);
+      return { cart: await view(moved), cookie: { action: "keep" } };
     },
 
     async add(input) {
-      const { reference, quantity } = parseRequest(addSchema, {
-        reference: input.reference,
-        quantity: input.quantity,
-      });
-      return change(input.token, {
+      const { token, reference, quantity } = parseRequest(addSchema, input);
+      return change(token, {
         kind: "line",
         reference,
         quantity: current => current + quantity,
@@ -370,13 +390,10 @@ export function createCartService(options: CartServiceOptions): CartService {
     },
 
     async setQuantity(input) {
-      const { reference, quantity } = parseRequest(setSchema, {
-        reference: input.reference,
-        quantity: input.quantity,
-      });
+      const { token, reference, quantity } = parseRequest(setSchema, input);
       // Setting a line to nothing needs nothing from the source: an item it
       // no longer knows can still be taken out of a cart.
-      return change(input.token, {
+      return change(token, {
         kind: "line",
         reference,
         quantity: () => quantity,
@@ -384,10 +401,8 @@ export function createCartService(options: CartServiceOptions): CartService {
     },
 
     async remove(input) {
-      const { reference } = parseRequest(removeSchema, {
-        reference: input.reference,
-      });
-      return change(input.token, {
+      const { token, reference } = parseRequest(removeSchema, input);
+      return change(token, {
         kind: "line",
         reference,
         quantity: () => 0,
@@ -395,7 +410,8 @@ export function createCartService(options: CartServiceOptions): CartService {
     },
 
     async clear(input) {
-      return change(input.token, { kind: "clear" });
+      const { token } = parseRequest(tokenOnlySchema, input);
+      return change(token, { kind: "clear" });
     },
   };
 }
@@ -469,11 +485,11 @@ async function writeLines(
   // round trip inside the transaction, not one per line.
   const removed = before
     .filter(line => !wanted.has(line.reference))
-    .map(line => line.reference);
+    .map(line => referenceKey(line.reference));
   if (removed.length > 0) {
     await tx
       .delete(cartLines)
-      .where(allOf(eq(l.cartId, cartId), inArray(l.reference, removed)));
+      .where(allOf(eq(l.cartId, cartId), inArray(l.referenceKey, removed)));
   }
   for (const line of after) {
     const previous = had.get(line.reference);
@@ -481,6 +497,7 @@ async function writeLines(
       await tx.insert(cartLines, {
         cartId,
         reference: line.reference,
+        referenceKey: referenceKey(line.reference),
         quantity: line.quantity,
         seenUnitPriceAmount: line.seenUnitPriceAmount,
         seenUnitPriceCurrency: line.seenUnitPriceCurrency,
@@ -499,7 +516,12 @@ async function writeLines(
           seenUnitPriceCurrency: line.seenUnitPriceCurrency,
           updatedAt: now,
         })
-        .where(allOf(eq(l.cartId, cartId), eq(l.reference, line.reference)));
+        .where(
+          allOf(
+            eq(l.cartId, cartId),
+            eq(l.referenceKey, referenceKey(line.reference))
+          )
+        );
     }
   }
 }

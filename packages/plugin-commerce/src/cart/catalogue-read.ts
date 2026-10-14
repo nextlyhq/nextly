@@ -18,6 +18,12 @@ import { commerceError } from "../errors";
  * through as it was raised.
  */
 
+/**
+ * The longest cursor a storefront may pass back for the next page, and so the
+ * longest a source may hand out: one longer could never be followed.
+ */
+export const MAX_CURSOR_LENGTH = 1024;
+
 /** A page of the catalogue, and the cursor to the next, `null` after the last. */
 export interface CataloguePage {
   readonly items: readonly CatalogueItem[];
@@ -102,6 +108,20 @@ export async function listItems(
   // following cursors for ever.
   if (items.length === 0 && nextCursor !== null) {
     throw broken(source, "list answered an empty page with a next cursor");
+  }
+  // A cursor comes back as the next call's input, so it must be one that
+  // input accepts; and one naming the page just read as the next would have
+  // a storefront reading that page for ever.
+  if (
+    nextCursor !== null &&
+    (nextCursor.length === 0 || nextCursor.length > MAX_CURSOR_LENGTH)
+  ) {
+    throw broken(source, "list answered a cursor that cannot be passed back", {
+      length: nextCursor.length,
+    });
+  }
+  if (nextCursor !== null && nextCursor === input.cursor) {
+    throw broken(source, "list answered the cursor it was given as the next");
   }
   const seen = new Set<string>();
   const checked = items.map(raw => {

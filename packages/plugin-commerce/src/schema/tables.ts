@@ -63,6 +63,10 @@ export const cartLines = defineTable(
     id: col.id(),
     cartId: col.varchar(36),
     reference: col.varchar(255),
+    // What the line is found and kept unique by, rather than the reference
+    // itself, so references differing only in case are two lines on every
+    // dialect (see `referenceKey`).
+    referenceKey: col.char(64),
     quantity: col.integer(),
     seenUnitPriceAmount: col.bigint(),
     seenUnitPriceCurrency: col.char(3),
@@ -72,7 +76,7 @@ export const cartLines = defineTable(
     indexes: [
       // One line per item: adding an item already in the cart changes its
       // line, and two adds racing each other cannot make two lines.
-      { columns: ["cartId", "reference"], unique: true },
+      { columns: ["cartId", "referenceKey"], unique: true },
     ],
     foreignKeys: [
       {

@@ -1,6 +1,10 @@
 import { z } from "zod";
 
-import { findItems, listItems } from "../cart/catalogue-read";
+import {
+  findItems,
+  listItems,
+  MAX_CURSOR_LENGTH,
+} from "../cart/catalogue-read";
 import type {
   CatalogueItem,
   CatalogueSource,
@@ -66,7 +70,7 @@ const findSchema = z.strictObject({
 
 const listSchema = z.strictObject({
   limit: z.number().int().min(1).max(MAX_PAGE_SIZE).optional(),
-  cursor: z.string().min(1).max(1024).nullable().optional(),
+  cursor: z.string().min(1).max(MAX_CURSOR_LENGTH).nullable().optional(),
   search: z.string().min(1).max(200).optional(),
 });
 
@@ -77,10 +81,12 @@ export function createCatalogueService(options: {
 }): CatalogueService {
   const { source, currency } = options;
   return {
+    // Each method parses the input exactly as it was passed: server code
+    // calls these directly, so a missing or malformed argument, or a key the
+    // schema does not know, is a validation error rather than a crash or a
+    // key silently dropped.
     async find(input) {
-      const { references } = parseRequest(findSchema, {
-        references: input.references,
-      });
+      const { references } = parseRequest(findSchema, input);
       const found = await findItems(source, currency, references);
       const answered = new Set<string>();
       const items: CatalogueItemView[] = [];
@@ -94,11 +100,7 @@ export function createCatalogueService(options: {
     },
 
     async list(input) {
-      const { limit, cursor, search } = parseRequest(listSchema, {
-        ...(input.limit === undefined ? {} : { limit: input.limit }),
-        ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
-        ...(input.search === undefined ? {} : { search: input.search }),
-      });
+      const { limit, cursor, search } = parseRequest(listSchema, input);
       const page = await listItems(source, currency, {
         limit: limit ?? DEFAULT_PAGE_SIZE,
         cursor: cursor ?? null,
