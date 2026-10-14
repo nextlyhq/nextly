@@ -11,7 +11,7 @@ import {
 import { afterEach, describe, expect, it } from "vitest";
 
 import { knownBrowsers, pendingAddressChanges } from "../schema/tables";
-import { accountById } from "../storage/accounts";
+import { accountById, writeAtVersion } from "../storage/accounts";
 import { makeAccount, TEST_PASSWORD } from "../test-support/accounts";
 import { bootAccounts } from "../test-support/boot";
 import { flowDeps } from "../test-support/flow-deps";
@@ -180,6 +180,19 @@ describe.each(getConfiguredTestDialects())(
       expect(
         await change(session.token, TEST_PASSWORD, { knownTokens })
       ).toEqual({ status: "changed" });
+    });
+
+    it("clears the reset-required state, as a reset does, so the new password signs in anywhere", async () => {
+      const { db, id, browser, change } = await boot();
+      const { session } = await browser();
+      const account = await accountById(db, id);
+      if (account === null) throw new Error("expected the account");
+      await writeAtVersion(db, account, { resetRequiredAt: new Date() });
+
+      expect(await change(session.token, TEST_PASSWORD)).toEqual({
+        status: "changed",
+      });
+      expect((await accountById(db, id))?.resetRequiredAt).toBeNull();
     });
 
     it("refuses a new password the rules refuse, and a session that has ended", async () => {

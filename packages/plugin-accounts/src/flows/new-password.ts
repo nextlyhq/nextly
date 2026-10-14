@@ -1,5 +1,6 @@
 import { LIMIT_RULES } from "../core/limit-rules";
 import type { PasswordCheck } from "../core/ports";
+import type { AccountChange } from "../storage/accounts";
 
 import type { FlowDeps } from "./deps";
 
@@ -90,4 +91,22 @@ export async function accountPasswordRefusal(
   const breached = await breachedPasswordRefusal(deps, password);
 
   return breached === null ? null : { status: "refused", reason: breached };
+}
+
+/**
+ * What a new password writes to its account, in a change and a reset
+ * alike: the hash, when it changed, and the failures in a row and the
+ * reset-required state started again, since the password they were about
+ * is gone.
+ */
+export function passwordReplaced(
+  passwordHash: string,
+  now: Date
+): AccountChange {
+  return {
+    passwordHash,
+    passwordChangedAt: now,
+    failuresInARow: 0,
+    resetRequiredAt: null,
+  };
 }

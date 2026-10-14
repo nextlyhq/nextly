@@ -8,6 +8,7 @@ import { provenHolder } from "./holder";
 import { queueNotice } from "./mail";
 import {
   accountPasswordRefusal,
+  passwordReplaced,
   type AccountPasswordRefusal,
 } from "./new-password";
 import { attemptSucceeded, type AttemptRefusal } from "./password-attempt";
@@ -67,7 +68,7 @@ export async function changePassword(
       const written = await writeAtVersion(
         tx,
         account,
-        { passwordHash, passwordChangedAt: now, failuresInARow: 0 },
+        passwordReplaced(passwordHash, now),
         { endsSessions: true }
       );
       if (!written) throw new VersionMoved();

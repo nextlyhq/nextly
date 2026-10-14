@@ -10,6 +10,7 @@ import { linkedAccount } from "./linked-account";
 import { queueNotice } from "./mail";
 import {
   accountPasswordRefusal,
+  passwordReplaced,
   type AccountPasswordRefusal,
 } from "./new-password";
 import { PURPOSES } from "./purposes";
@@ -81,10 +82,7 @@ export async function completePasswordReset(
         tx,
         account,
         {
-          passwordHash,
-          passwordChangedAt: now,
-          failuresInARow: 0,
-          resetRequiredAt: null,
+          ...passwordReplaced(passwordHash, now),
           ...verifiedByReset(account, now),
         },
         { endsSessions: true }
