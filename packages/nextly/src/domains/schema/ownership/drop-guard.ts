@@ -1967,8 +1967,49 @@ export function tablesCreatedBy(
   return [...(readAsIfNoTableExisted(statements, dialect)?.creating ?? [])];
 }
 
+/** Words that may stand between CREATE and TEMPORARY. */
+const BEFORE_TEMPORARY: ReadonlySet<string> = new Set([
+  "GLOBAL",
+  "LOCAL",
+  "OR",
+  "REPLACE",
+]);
+
+/**
+ * Whether a statement creates or drops a temporary table: `CREATE [GLOBAL |
+ * LOCAL] TEMP[ORARY] TABLE`, or MySQL's `DROP TEMPORARY TABLE`. Read from
+ * the words, so a column called `temp` is not one.
+ */
+function namesTemporaryTable(
+  statement: string,
+  dialect: SupportedDialect
+): boolean {
+  const words = new Lexer(dialect, statement)
+    .tokens(statement)
+    .map(token => (token.kind === "word" ? token.upper : ""));
+  return words.some((word, at) => {
+    if (word === "DROP") return words[at + 1] === "TEMPORARY";
+    if (word !== "CREATE") return false;
+    let k = at + 1;
+    while (BEFORE_TEMPORARY.has(words[k] ?? "")) k += 1;
+    return words[k] === "TEMP" || words[k] === "TEMPORARY";
+  });
+}
+
 /** The holder of a name that a statement of the list created. */
 const MADE_BY_LIST = Symbol("made by the list");
+
+/**
+ * The name a statement physically acts on. The reader names a rebuild's
+ * `__new_` twin by the table it stands in for, so a rebuild cannot slip a
+ * drop past the ownership checks; a twin dropped on its own drops only the
+ * twin, though, and its fate is the twin's.
+ */
+function physicalName(table: TableRef): string {
+  return "twin" in table && table.twin === true
+    ? `${REBUILD_PREFIX}${table.name}`
+    : table.name;
+}
 
 /**
  * Where each of a set of tables, standing before a list runs, is after each
@@ -2000,8 +2041,9 @@ class TableFates {
 
   /** A CREATE: a table stands under the name, unless one already did. */
   create(table: TableRef): void {
-    if (!table.local || this.holder(table.name) !== undefined) return;
-    this.holders.set(table.name, MADE_BY_LIST);
+    const name = physicalName(table);
+    if (!table.local || this.holder(name) !== undefined) return;
+    this.holders.set(name, MADE_BY_LIST);
   }
 
   /** A CREATE that replaces whatever stood under the name. */
@@ -2012,9 +2054,10 @@ class TableFates {
 
   drop(table: TableRef): void {
     if (!table.local) return;
-    const holder = this.holder(table.name);
+    const name = physicalName(table);
+    const holder = this.holder(name);
     if (holder === undefined) return;
-    this.vacate(table.name);
+    this.vacate(name);
     if (holder !== MADE_BY_LIST) this.dropped.add(holder);
   }
 
@@ -2023,14 +2066,14 @@ class TableFates {
    * followed here may still hold a table, so `to` is taken either way.
    */
   rename(from: TableRef, to: TableRef): void {
-    const holder = from.local ? this.holder(from.name) : undefined;
-    if (from.local) this.vacate(from.name);
-    if (to.local) this.holders.set(to.name, holder ?? MADE_BY_LIST);
+    const holder = from.local ? this.holder(physicalName(from)) : undefined;
+    if (from.local) this.vacate(physicalName(from));
+    if (to.local) this.holders.set(physicalName(to), holder ?? MADE_BY_LIST);
   }
 
   /** A table moved away from its name, to another schema: kept, elsewhere. */
   relocate(table: TableRef): void {
-    if (table.local) this.vacate(table.name);
+    if (table.local) this.vacate(physicalName(table));
   }
 
   /** Whether `table` was dropped, with nothing standing under its name after. */
@@ -2049,6 +2092,8 @@ class TableFates {
  */
 class FollowingReader extends DropReader {
   readonly fates: TableFates;
+  /** Whether a statement creates or drops a temporary table. */
+  touchesTemporaryTables = false;
   private depth = 0;
 
   constructor(dialect: SupportedDialect, tables: ReadonlySet<string>) {
@@ -2063,6 +2108,9 @@ class FollowingReader extends DropReader {
    */
   override read(statement: string): void {
     super.read(statement);
+    if (namesTemporaryTable(statement, this.dialect)) {
+      this.touchesTemporaryTables = true;
+    }
     const created = tableNamedByCreate(statement, this.dialect);
     if (created !== undefined)
       this.fates.create({ name: created, local: true });
@@ -2137,9 +2185,11 @@ class FollowingReader extends DropReader {
  * then dropped, it is gone. A rebuild is read as the drop and the rename back
  * it is, so it leaves the table in place.
  *
- * Every table counts as left when the list cannot be read, or when it may
- * change which table an unqualified name reaches: what it drops is then not
- * known, and an uninstall is refused rather than run on a guess.
+ * Every table counts as left when the list cannot be read, when it may
+ * change which table an unqualified name reaches, or when it creates or drops
+ * a temporary table, which can shadow a permanent one of the same name: what
+ * it drops is then not known, and an uninstall is refused rather than run on
+ * a guess.
  */
 export function tablesLeftInPlace(
   statements: readonly string[],
@@ -2153,7 +2203,9 @@ export function tablesLeftInPlace(
     if (error instanceof UnparsableDropTarget) return [...tables];
     throw error;
   }
-  if (reader.resolutionMayChange) return [...tables];
+  if (reader.resolutionMayChange || reader.touchesTemporaryTables) {
+    return [...tables];
+  }
   return tables.filter(table => !reader.fates.gone(table));
 }
 

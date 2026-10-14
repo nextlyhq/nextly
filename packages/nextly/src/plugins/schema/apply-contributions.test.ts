@@ -1038,6 +1038,77 @@ describe("applyPluginSchemaContributions (behaviour a disabled plugin's transfor
     });
   });
 
+  it("keeps a sort for a collection named `access` in a relationship's sortOptions", () => {
+    const forms = disabledTransform(entity => ({
+      ...entity,
+      fields: [
+        {
+          name: "owner",
+          type: "relationship",
+          relationTo: ["users", "access"],
+          admin: { sortOptions: { access: "name" } },
+        },
+      ],
+    }));
+    expect(
+      (forms.fields[0]?.admin as { sortOptions: unknown }).sortOptions
+    ).toEqual({ access: "name" });
+  });
+
+  it("keeps a field's access rule when a tab is inserted before the tab holding it", () => {
+    // Tabs have no name. Paired by position, the inserted tab took the
+    // original's place, the original's field read as new, and its access
+    // rule as one the transform added, so it was stripped and the field
+    // opened.
+    const rule = { read: () => false };
+    const tabs = (fields: unknown[]) => [
+      { name: "layout", type: "group", tabs: fields },
+    ];
+    const forms = applyPluginSchemaContributions(cfg({ collections: [] }), [
+      plugin("plugin-a", {
+        collections: [
+          {
+            slug: "a-forms",
+            fields: tabs([
+              {
+                label: "Main",
+                fields: [{ name: "secret", type: "text", access: rule }],
+              },
+            ]),
+          } as unknown as CollectionConfig,
+        ],
+      }),
+      plugin(
+        "plugin-b",
+        {
+          transforms: [
+            {
+              target: "a-forms",
+              transform: entity => {
+                const [layout] = entity.fields as { tabs: unknown[] }[];
+                return {
+                  ...entity,
+                  fields: tabs([
+                    {
+                      label: "Extra",
+                      fields: [{ name: "note", type: "text" }],
+                    },
+                    ...(layout?.tabs ?? []),
+                  ]),
+                };
+              },
+            },
+          ],
+        },
+        false
+      ),
+    ]).collections?.[0] as unknown as {
+      fields: { tabs: { fields: Record<string, unknown>[] }[] }[];
+    };
+    expect(forms.fields[0]?.tabs[1]?.fields[0]?.access).toBe(rule);
+    expect(forms.fields[0]?.tabs[0]?.fields[0]).not.toHaveProperty("access");
+  });
+
   it("keeps a key named `access` in a field's pluginOptions", () => {
     const forms = disabledTransform(entity => ({
       ...entity,

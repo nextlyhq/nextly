@@ -353,7 +353,8 @@ type SchemaPosition = "schema" | "data";
  * The keys whose value is free-form data rather than schema, where a key
  * named `access` is the author's: a field's default, the settings a plugin or
  * the app hangs on an entity or field, a JSON field's schema, a relationship's
- * or upload's static filter query, and a field's inline styles. Everything
+ * or upload's static filter query and its sort per collection, and a field's
+ * inline styles. Everything
  * else is schema, so a nesting key added later keeps its access rules
  * restored without being listed here: a free-form key missing from this list
  * loses an `access` entry, where a schema key missing from an allowlist would
@@ -365,6 +366,7 @@ const DATA_KEYS: ReadonlySet<string> = new Set([
   "pluginOptions",
   "jsonSchema",
   "filterOptions",
+  "sortOptions",
   "style",
 ]);
 
@@ -427,7 +429,7 @@ function mergeArray(
   const previous = Array.isArray(before) ? before : [];
   return after
     .map((item, index) =>
-      mergeBehaviour(counterpart(previous, item, index), item, at)
+      mergeBehaviour(counterpart(previous, item, index, at), item, at)
     )
     .filter(item => item !== DROP);
 }
@@ -471,17 +473,64 @@ function restoreRemovedBehaviour(
   }
 }
 
-/** The element of `previous` that `item` replaced, by name or by position. */
+/**
+ * The element of `previous` that `item` replaced, or undefined for one it
+ * added. By `name`; in the schema, an element without one by `slug`, and
+ * then by the field names it holds: a tab or row has no name, and paired by
+ * position, a tab inserted before it would make its fields read as new and
+ * their access rules as added, and so stripped. By position otherwise.
+ */
 function counterpart(
   previous: readonly unknown[],
   item: unknown,
-  index: number
+  index: number,
+  at: SchemaPosition
 ): unknown {
-  const name = isRecord(item) ? item.name : undefined;
-  if (typeof name === "string") {
+  if (!isRecord(item)) return previous[index];
+  if (typeof item.name === "string") {
     return previous.find(
-      candidate => isRecord(candidate) && candidate.name === name
+      candidate => isRecord(candidate) && candidate.name === item.name
     );
   }
-  return previous[index];
+  if (at !== "schema") return previous[index];
+  if (typeof item.slug === "string") {
+    return previous.find(
+      candidate => isRecord(candidate) && candidate.slug === item.slug
+    );
+  }
+  const held = fieldNamesIn(item);
+  if (held.size === 0) return previous[index];
+  return sharingMostNames(previous, held);
+}
+
+/** The `name` of every record nested in `value`, outside the data keys. */
+function fieldNamesIn(value: unknown, into = new Set<string>()): Set<string> {
+  if (Array.isArray(value)) {
+    for (const item of value) fieldNamesIn(item, into);
+  } else if (isRecord(value)) {
+    if (typeof value.name === "string") into.add(value.name);
+    for (const [key, child] of Object.entries(value)) {
+      if (!DATA_KEYS.has(key)) fieldNamesIn(child, into);
+    }
+  }
+  return into;
+}
+
+/** The element of `previous` holding the most of `names`, if any holds one. */
+function sharingMostNames(
+  previous: readonly unknown[],
+  names: ReadonlySet<string>
+): unknown {
+  let best: unknown;
+  let most = 0;
+  for (const candidate of previous) {
+    const shared = [...fieldNamesIn(candidate)].filter(name =>
+      names.has(name)
+    ).length;
+    if (shared > most) {
+      best = candidate;
+      most = shared;
+    }
+  }
+  return best;
 }

@@ -345,14 +345,25 @@ describe("plugins uninstall judges what its DOWNs drop before running them", () 
     'ALTER TABLE "__new_fx__notes" RENAME TO "fx__notes"',
   ];
 
-  async function uninstallWith(statements: string[][]) {
+  /** A registry holding these owner rows, as `ownsNotes` holds `row`. */
+  const owning = (rows: (typeof row)[]) => ({
+    select: () => ({
+      from: () => Object.assign(rows, { where: () => rows }),
+    }),
+    update: () => ({ set: () => ({ where: () => Promise.resolve() }) }),
+  });
+
+  async function uninstallWith(
+    statements: string[][],
+    db: unknown = ownsNotes
+  ) {
     const runDown = vi.fn(async () => 1);
     const runLifecycleHook = vi.fn(async () => {});
     const run = runPluginUninstallCommand(
       "@acme/fx",
       { keepData: false, yes: true },
       deps({
-        db: ownsNotes as never,
+        db: db as never,
         runLifecycleHook,
         ...droppedByDowns(runDown),
         prepareDowns: vi.fn(async (_plugin, moduleNames: readonly string[]) =>
@@ -429,6 +440,45 @@ describe("plugins uninstall judges what its DOWNs drop before running them", () 
     ]);
     await expect(run).rejects.toMatchObject({
       logContext: { reason: "down-leaves-tables", tables: ["fx__notes"] },
+    });
+    expect(runDown).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      "a temporary table of the same name, created and dropped",
+      ["CREATE TEMP TABLE fx__notes (id text)", "DROP TABLE fx__notes"],
+    ],
+    [
+      "a temporary table dropped by name",
+      ["DROP TEMPORARY TABLE IF EXISTS fx__notes"],
+    ],
+    [
+      "a rebuild's twin dropped on its own",
+      ['DROP TABLE IF EXISTS "__new_fx__notes"'],
+    ],
+  ])("counts a table left in place under %s", async (_case, statements) => {
+    // Each drop reaches some other table: a temporary one shadowing the
+    // plugin's, or the twin, which the guard names by the table it stands
+    // in for.
+    const { run, runDown } = await uninstallWith([statements, []]);
+    await expect(run).rejects.toMatchObject({
+      logContext: { reason: "down-leaves-tables", tables: ["fx__notes"] },
+    });
+    expect(runDown).not.toHaveBeenCalled();
+  });
+
+  it("counts two owned tables whose names differ only in case as left", async () => {
+    // Read lower-cased, the one drop could be either table's.
+    const { run, runDown } = await uninstallWith(
+      [["DROP TABLE fx__notes"], []],
+      owning([row, { ...row, tableName: "FX__Notes" }])
+    );
+    await expect(run).rejects.toMatchObject({
+      logContext: {
+        reason: "down-leaves-tables",
+        tables: ["fx__notes", "FX__Notes"],
+      },
     });
     expect(runDown).not.toHaveBeenCalled();
   });

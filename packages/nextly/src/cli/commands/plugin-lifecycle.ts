@@ -501,12 +501,31 @@ function assertDownsDropTables(
 ): void {
   if (plan.finalState !== "uninstalled") return;
   const statements = downs.flatMap(down => down.statements);
-  const lowered = new Map(
-    plan.tablesDropped.map(table => [table.toLowerCase(), table])
+  // The statements are read lower-cased, so two owned tables whose names
+  // differ only in case, which PostgreSQL and a case-sensitive MySQL keep
+  // apart, cannot be told apart by them: both count as left.
+  const byLowered = new Map<string, string[]>();
+  for (const table of plan.tablesDropped) {
+    const key = table.toLowerCase();
+    byLowered.set(key, [...(byLowered.get(key) ?? []), table]);
+  }
+  const ambiguous = [...byLowered.values()].filter(names => names.length > 1);
+  const readable = [...byLowered.entries()].filter(
+    ([, names]) => names.length === 1
   );
-  const left = tablesLeftInPlace(statements, dialect, [...lowered.keys()]).map(
-    table => lowered.get(table) ?? table
+  const leftReadable = new Set(
+    tablesLeftInPlace(
+      statements,
+      dialect,
+      readable.map(([key]) => key)
+    )
   );
+  const left = [
+    ...ambiguous.flat(),
+    ...readable
+      .filter(([key]) => leftReadable.has(key))
+      .flatMap(([, names]) => names),
+  ];
   if (left.length === 0) return;
   throw new NextlyError({
     code: "PLUGIN_UNINSTALL_IRREVERSIBLE",
