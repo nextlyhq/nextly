@@ -9,7 +9,10 @@
  * @since 1.0.0
  */
 
-import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
+import type {
+  SupportedDialect,
+  TransactionContext,
+} from "@nextlyhq/adapter-drizzle/types";
 import { getTableName, type AnyRelations, type Table } from "drizzle-orm";
 
 import type { PluginAuthApi } from "../auth/plugin-auth-api";
@@ -1360,6 +1363,7 @@ function buildPluginDatabase(
           get relationalDb() {
             return tx.drizzleWithRelations(relations());
           },
+          adapterTx: asTransactionContext(tx),
         });
       const transactions = adapter();
       return runAdapterTransaction(
@@ -1411,6 +1415,25 @@ export interface AdapterTransactions extends AfterCommitAdapter {
 export interface AdapterTransactionHandles {
   getDrizzle: <D = unknown>() => D;
   drizzleWithRelations: <D = unknown>(relations: AnyRelations) => D;
+}
+
+/**
+ * The transaction's full adapter context when the adapter handed one, which
+ * every adapter core ships does; undefined for one that supplies only the two
+ * Drizzle handles this resolver's contract asks for. Core code a plugin passes
+ * its transaction to writes through it (`plugin-transaction-link`), and with
+ * none it refuses rather than writes outside the transaction.
+ */
+function asTransactionContext(
+  tx: AdapterTransactionHandles
+): TransactionContext | undefined {
+  const candidate = tx as Partial<TransactionContext>;
+  return typeof candidate.insert === "function" &&
+    typeof candidate.select === "function" &&
+    typeof candidate.updateCount === "function" &&
+    typeof candidate.delete === "function"
+    ? (tx as TransactionContext)
+    : undefined;
 }
 
 /**
