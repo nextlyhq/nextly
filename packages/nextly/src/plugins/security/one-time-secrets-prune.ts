@@ -35,19 +35,38 @@ export type OneTimeSecretsPruneAdapter = Pick<
 > &
   Partial<Pick<DrizzleAdapter, "transaction">>;
 
+/** Bounds on one sweep. */
+export interface OneTimeSecretsPruneLimits {
+  /** At most this many batches, for a capped pass offered by a write. */
+  maxBatches?: number;
+  /**
+   * Stop between batches once the clock reaches this moment: the scheduled
+   * drain's wall-clock budget, which a sweep must not carry it past.
+   */
+  deadline?: number;
+  /** The clock the deadline is read on; defaults to `Date.now`. */
+  clock?: () => number;
+}
+
 /**
- * Remove every secret more than a day past its expiry, in batches, at most
- * `maxBatches` of them when a capped pass asks for that. Returns how many
- * rows went.
+ * Remove every secret more than a day past its expiry, in batches, within the
+ * limits given. Returns how many rows went, and whether any batch was
+ * attempted: a sweep stopped by its deadline before the first batch did no
+ * work, which the drain needs to tell apart from a sweep of an empty table.
  */
 export async function pruneOneTimeSecrets(
   adapter: OneTimeSecretsPruneAdapter,
   now: Date,
-  maxBatches = Number.POSITIVE_INFINITY
-): Promise<number> {
+  limits: OneTimeSecretsPruneLimits = {}
+): Promise<{ removed: number; started: boolean }> {
   const cutoff = new Date(now.getTime() - ONE_TIME_SECRETS_GRACE_MS);
+  const maxBatches = limits.maxBatches ?? Number.POSITIVE_INFINITY;
+  const clock = limits.clock ?? Date.now;
   let removed = 0;
+  let started = false;
   for (let batch = 0; batch < maxBatches; batch++) {
+    if (limits.deadline !== undefined && clock() >= limits.deadline) break;
+    started = true;
     const rows = await adapter.select<{ id: string }>(ONE_TIME_SECRETS_TABLE, {
       columns: ["id"],
       where: { and: [{ column: "expiresAt", op: "<", value: cutoff }] },
@@ -69,5 +88,5 @@ export async function pruneOneTimeSecrets(
       : await adapter.delete(ONE_TIME_SECRETS_TABLE, where);
     if (rows.length < BATCH) break;
   }
-  return removed;
+  return { removed, started };
 }

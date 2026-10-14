@@ -153,7 +153,8 @@ export function registerWebhookServices(ctx: RegistrationContext): void {
         if (
           !policies.webhookPolicy &&
           !policies.auditPolicy &&
-          !policies.emailPolicy
+          !policies.emailPolicy &&
+          !policies.oneTimeSecrets
         ) {
           return undefined;
         }
@@ -165,6 +166,7 @@ export function registerWebhookServices(ctx: RegistrationContext): void {
           // dependency instead of needing a restart.
           auditPolicy: policies.auditPolicy,
           emailPolicy: policies.emailPolicy,
+          oneTimeSecrets: policies.oneTimeSecrets,
           prune: { adapter, logger },
           gate: new MetaRetentionGate(adapter),
         };

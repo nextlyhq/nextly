@@ -300,15 +300,17 @@ a code whose effect fails stays spent, and the person asks for a new one.
   with an error if the calling flow already has a transaction open, rather than
   silently joining it.
 - **Swept after expiry.** The retention runner removes a secret a day after it
-  expires, spent or not, so the table does not grow without bound. Until then
-  an expired secret still answers `expired`.
+  expires, spent or not. Writes offer the sweep and so does the scheduled drain,
+  so an install that only mints secrets, or goes quiet, still sweeps them and the
+  table does not grow without bound. Until then an expired secret still answers
+  `expired`.
 
 ### Bounds
 
 | Input | Bound |
 | --- | --- |
 | `purpose` | a lowercase letter, then up to 63 lowercase letters, digits, dots or hyphens |
-| `subject` | 1 to 255 characters, with no NUL character |
+| `subject` | 1 to 255 characters, with no NUL character; compared exactly, case and spaces included, on every database |
 | a token's `expiresInMs` | 1 minute to 30 days |
 | a code's `expiresInMs` | 1 to 60 minutes |
 | `digits` | 6 (the default), 7 or 8 |

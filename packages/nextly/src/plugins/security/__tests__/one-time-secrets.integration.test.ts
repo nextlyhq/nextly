@@ -10,6 +10,7 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { container } from "../../../di/container";
 import { NextlyError } from "../../../errors/nextly-error";
 import { pluginSettingsSecrets } from "../../../domains/plugins/settings-service";
 import { _resetEnvCache, env } from "../../../shared/lib/env";
@@ -436,11 +437,91 @@ describe.each(getConfiguredTestDialects())(
       const minted = Date.now();
       // Expired, but inside the day of grace: kept, so it still answers "expired".
       vi.setSystemTime(minted + 2 * 60_000);
-      expect(await pruneOneTimeSecrets(adapter, new Date())).toBe(0);
+      expect((await pruneOneTimeSecrets(adapter, new Date())).removed).toBe(0);
       expect(await rows()).toHaveLength(2);
       vi.setSystemTime(minted + ONE_TIME_SECRETS_GRACE_MS + 2 * 60_000);
-      expect(await pruneOneTimeSecrets(adapter, new Date())).toBe(1);
+      expect((await pruneOneTimeSecrets(adapter, new Date())).removed).toBe(1);
       expect(await rows()).toHaveLength(1);
+    });
+
+    it("hands the scheduled drain the sweep, so a secret-only install still sweeps", async () => {
+      await boot();
+      expect(
+        container.get<{ oneTimeSecrets?: boolean } | undefined>(
+          "webhookRetentionDeps"
+        )
+      ).toMatchObject({ oneTimeSecrets: true });
+    });
+
+    it("treats subjects that differ only by case or trailing space as different", async () => {
+      const { a } = await boot();
+      const kept = await a.security.secrets.mintToken({
+        purpose: "reset",
+        subject: "alice",
+        expiresInMs: 60_000,
+      });
+      const spaced = await a.security.secrets.mintToken({
+        purpose: "reset",
+        subject: "Alice ",
+        expiresInMs: 60_000,
+      });
+      // MySQL's default collation compares "Alice" equal to both.
+      expect(await a.security.secrets.voidFor({ subject: "Alice" })).toEqual({
+        voided: 0,
+      });
+      await a.security.secrets.mintToken({
+        purpose: "reset",
+        subject: "Alice",
+        expiresInMs: 60_000,
+        voidEarlier: true,
+      });
+      for (const token of [kept.token, spaced.token]) {
+        expect(
+          await a.security.secrets.peekToken({ purpose: "reset", token })
+        ).toMatchObject({ ok: true });
+      }
+    });
+
+    it("answers spent for a code spent after a longer-lived one it replaced", async () => {
+      const { a } = await boot();
+      await a.security.secrets.mintCode({
+        purpose: "sign-in",
+        subject,
+        expiresInMs: 60 * 60_000,
+        maxWrongTries: 3,
+      });
+      const { code } = await a.security.secrets.mintCode({
+        purpose: "sign-in",
+        subject,
+        expiresInMs: 60_000,
+        maxWrongTries: 3,
+      });
+      const spend = { purpose: "sign-in", subject, code };
+      expect(await a.security.secrets.consumeCode(spend)).toMatchObject({
+        ok: true,
+      });
+      // The voided first code expires later; the answer comes from the newer.
+      expect(await a.security.secrets.consumeCode(spend)).toEqual({
+        ok: false,
+        reason: "spent",
+      });
+    });
+
+    it("keeps the secrets of a plugin whose name is longer than any column width", async () => {
+      await boot();
+      const long = createOneTimeSecrets({
+        owner: `@test/${"x".repeat(300)}`,
+        adapter: () => current?.first.adapter as unknown as DrizzleAdapter,
+        secrets: () => pluginSettingsSecrets(env),
+      });
+      const { token } = await long.mintToken({
+        purpose: "reset",
+        subject,
+        expiresInMs: 60_000,
+      });
+      expect(
+        await long.consumeToken({ purpose: "reset", token })
+      ).toMatchObject({ ok: true, subject });
     });
 
     describe("on two instances at once", () => {

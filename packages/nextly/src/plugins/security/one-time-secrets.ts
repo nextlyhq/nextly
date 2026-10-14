@@ -185,6 +185,7 @@ interface SecretRow {
   voidedAt: Date | null;
   wrongTries: number;
   maxWrongTries: number | null;
+  createdAt: Date;
 }
 
 /** Build the helper a plugin receives as `ctx.security.secrets`. */
@@ -209,6 +210,13 @@ export function createOneTimeSecrets(
     subject: string,
     code: string
   ) => hmac(key, ["code", owner, purpose, subject, code]);
+  // What a subject's secrets are found by: compared as lower-case hex, it is
+  // exact on every dialect, where the subject itself is not on MySQL, whose
+  // default collation matches "Alice" to "alice" and ignores trailing spaces.
+  const subjectKeyFor = (subject: string): string =>
+    createHash("sha256")
+      .update([owner, subject].join("\u0000"), "utf8")
+      .digest("hex");
   const liveKeyFor = (purpose: string, subject: string): string =>
     createHash("sha256")
       .update([owner, purpose, subject].join("\u0000"), "utf8")
@@ -278,7 +286,7 @@ export function createOneTimeSecrets(
           await adapterTx.updateCount(
             ONE_TIME_SECRETS_TABLE,
             { voidedAt: createdAt },
-            subjectWhere(owner, subject, [purpose], "token")
+            subjectWhere(subjectKeyFor(subject), [purpose], "token")
           );
         }
         await adapterTx.insert(ONE_TIME_SECRETS_TABLE, {
@@ -286,6 +294,7 @@ export function createOneTimeSecrets(
           owner,
           purpose,
           subject,
+          subjectKey: subjectKeyFor(subject),
           kind: "token",
           secretHash: hmac(current ?? secretKey(""), [
             "token",
@@ -343,6 +352,7 @@ export function createOneTimeSecrets(
           owner,
           purpose,
           subject,
+          subjectKey: subjectKeyFor(subject),
           kind: "code",
           secretHash: codeHash(
             current ?? secretKey(""),
@@ -485,23 +495,49 @@ export function createOneTimeSecrets(
         logContext: { operation: "secrets.consumeCode", reason: "contention" },
       });
 
-      /** Why there is no live code: the latest one for the subject says. */
+      /**
+       * Why there is no live code: the newest one issued for the subject says.
+       * Newest by issue time, not by expiry: a short code minted after a long
+       * one expires first, and ordering by expiry would read the older code.
+       * Two reads rather than one, because issue times can tie (SQLite keeps
+       * whole seconds): a code replaced and its successor spent within one
+       * second share the time, and the spent one is the answer.
+       */
       async function noLiveCode(): Promise<"none" | "expired" | "spent"> {
-        const rows = await adapter.select<SecretRow>(ONE_TIME_SECRETS_TABLE, {
-          where: {
-            and: [
-              { column: "owner", op: "=", value: owner },
-              { column: "purpose", op: "=", value: purpose },
-              { column: "subject", op: "=", value: subject },
-              { column: "kind", op: "=", value: "code" },
-            ],
+        const ofSubject = [
+          {
+            column: "subjectKey",
+            op: "=" as const,
+            value: subjectKeyFor(subject),
           },
-        });
-        const latest = rows.sort(
-          (a, b) => b.expiresAt.getTime() - a.expiresAt.getTime()
-        )[0];
-        if (latest?.spentAt) return "spent";
-        return "none";
+          { column: "purpose", op: "=" as const, value: purpose },
+          { column: "kind", op: "=" as const, value: "code" },
+        ];
+        const [newest] = await adapter.select<Pick<SecretRow, "createdAt">>(
+          ONE_TIME_SECRETS_TABLE,
+          {
+            columns: ["createdAt"],
+            where: { and: ofSubject },
+            orderBy: [{ column: "createdAt", direction: "desc" }],
+            limit: 1,
+          }
+        );
+        if (newest === undefined) return "none";
+        const spent = await adapter.select<{ id: string }>(
+          ONE_TIME_SECRETS_TABLE,
+          {
+            columns: ["id"],
+            where: {
+              and: [
+                ...ofSubject,
+                { column: "createdAt", op: "=", value: newest.createdAt },
+                { column: "spentAt", op: "IS NOT NULL" },
+              ],
+            },
+            limit: 1,
+          }
+        );
+        return spent.length > 0 ? "spent" : "none";
       }
     },
 
@@ -512,7 +548,7 @@ export function createOneTimeSecrets(
         adapterTx.updateCount(
           ONE_TIME_SECRETS_TABLE,
           { voidedAt: now(), liveKey: null },
-          subjectWhere(owner, subject, purposes)
+          subjectWhere(subjectKeyFor(subject), purposes)
         )
       );
       return { voided };
@@ -520,17 +556,18 @@ export function createOneTimeSecrets(
   };
 }
 
-/** The unspent, unvoided secrets of a subject, of the purposes named. */
+/**
+ * The unspent, unvoided secrets of a subject (by its key, which names the
+ * plugin too), of the purposes named.
+ */
 function subjectWhere(
-  owner: string,
-  subject: string,
+  subjectKey: string,
   purposes?: readonly string[],
   kind?: "token" | "code"
 ): WhereClause {
   return {
     and: [
-      { column: "owner", op: "=", value: owner },
-      { column: "subject", op: "=", value: subject },
+      { column: "subjectKey", op: "=", value: subjectKey },
       ...(purposes
         ? [{ column: "purpose", op: "IN" as const, value: [...purposes] }]
         : []),

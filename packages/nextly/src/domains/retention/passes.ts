@@ -152,7 +152,7 @@ export function buildRetentionPasses(
           await pruneOneTimeSecrets(
             input.adapter,
             (input.now ?? (() => new Date()))(),
-            maxBatches
+            { maxBatches }
           );
         } catch (error) {
           input.logger?.warn("One-purpose secrets retention pass failed", {

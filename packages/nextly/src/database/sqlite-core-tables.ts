@@ -532,6 +532,7 @@ export function generateSqliteCoreTableStatements(): string[] {
       "owner" TEXT NOT NULL,
       "purpose" TEXT NOT NULL,
       "subject" TEXT NOT NULL,
+      "subject_key" TEXT NOT NULL,
       "kind" TEXT NOT NULL,
       "secret_hash" TEXT NOT NULL,
       "live_key" TEXT,
@@ -547,8 +548,8 @@ export function generateSqliteCoreTableStatements(): string[] {
       ON "nextly_one_time_secrets" ("live_key")`,
     `CREATE INDEX IF NOT EXISTS "nextly_one_time_secrets_hash_idx"
       ON "nextly_one_time_secrets" ("secret_hash")`,
-    `CREATE INDEX IF NOT EXISTS "nextly_one_time_secrets_subject_idx"
-      ON "nextly_one_time_secrets" ("owner", "subject")`,
+    `CREATE INDEX IF NOT EXISTS "nextly_one_time_secrets_subject_key_idx"
+      ON "nextly_one_time_secrets" ("subject_key")`,
     `CREATE INDEX IF NOT EXISTS "nextly_one_time_secrets_expires_idx"
       ON "nextly_one_time_secrets" ("expires_at")`,
     `CREATE TABLE IF NOT EXISTS "nextly_widget_layout" (

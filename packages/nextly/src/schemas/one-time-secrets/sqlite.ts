@@ -22,6 +22,7 @@ export const nextlyOneTimeSecrets = sqliteTable(
     owner: text("owner").notNull(),
     purpose: text("purpose").notNull(),
     subject: text("subject").notNull(),
+    subjectKey: text("subject_key").notNull(),
     kind: text("kind").notNull(),
     secretHash: text("secret_hash").notNull(),
     liveKey: text("live_key"),
@@ -36,7 +37,7 @@ export const nextlyOneTimeSecrets = sqliteTable(
   table => [
     uniqueIndex("nextly_one_time_secrets_live_key_unique").on(table.liveKey),
     index("nextly_one_time_secrets_hash_idx").on(table.secretHash),
-    index("nextly_one_time_secrets_subject_idx").on(table.owner, table.subject),
+    index("nextly_one_time_secrets_subject_key_idx").on(table.subjectKey),
     index("nextly_one_time_secrets_expires_idx").on(table.expiresAt),
   ]
 );

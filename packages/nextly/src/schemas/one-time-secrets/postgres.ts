@@ -37,6 +37,12 @@ export const nextlyOneTimeSecrets = pgTable(
     purpose: text("purpose").notNull(),
     /** What the secret is for: the plugin's choice, such as an account id. */
     subject: text("subject").notNull(),
+    /**
+     * SHA-256 of the plugin and subject, hex: what a subject's secrets are
+     * found by, so every dialect compares them exactly (MySQL's default
+     * collation would match "Alice" to "alice").
+     */
+    subjectKey: text("subject_key").notNull(),
     /** `token` (a link) or `code` (typed). */
     kind: text("kind").notNull(),
     /** HMAC-SHA-256 of the secret, hex. */
@@ -56,7 +62,7 @@ export const nextlyOneTimeSecrets = pgTable(
   table => [
     uniqueIndex("nextly_one_time_secrets_live_key_unique").on(table.liveKey),
     index("nextly_one_time_secrets_hash_idx").on(table.secretHash),
-    index("nextly_one_time_secrets_subject_idx").on(table.owner, table.subject),
+    index("nextly_one_time_secrets_subject_key_idx").on(table.subjectKey),
     index("nextly_one_time_secrets_expires_idx").on(table.expiresAt),
   ]
 );
