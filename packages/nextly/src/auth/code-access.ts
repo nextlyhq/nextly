@@ -104,6 +104,8 @@ export async function codeAccessAllows(
     // The RULE-facing spelling, which is what the context promises. The
     // stored spelling is a fallback for a scope that never carried the rows.
     permissions: [...(caller.rulePermissions ?? caller.permissions)],
+    // A staff user or an API key, never a plugin-defined person.
+    principal: null,
     operation,
     collection: resource,
   };

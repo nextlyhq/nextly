@@ -9,7 +9,7 @@
  *
  * @module plugins/principals/principal
  */
-import type { Principal, PrincipalAttributes } from "./types";
+import type { Principal, PrincipalAttributesOf } from "./types";
 
 /**
  * Every person core made, held weakly so a request's person is collected with
@@ -22,7 +22,7 @@ const madeByCore = new WeakSet<object>();
  * A person of `kind`, frozen, so nothing downstream can change who it names
  * after core recognised them.
  */
-export function makePrincipal<A extends PrincipalAttributes>(
+export function makePrincipal<A extends PrincipalAttributesOf<A>>(
   kind: string,
   id: string,
   attributes: A

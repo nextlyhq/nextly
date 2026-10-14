@@ -7,8 +7,11 @@
  * @packageDocumentation
  */
 
+import { currentPrincipal } from "../../auth/principal-scope";
+import type { ListSinglesOptions } from "../../domains/singles/services/single-registry-service";
 import { collectingWarnings } from "../../hooks/side-effect-warnings";
 import { transformRichTextFields } from "../../lib/field-transform";
+import type { Principal } from "../../plugins/principals/types";
 import type {
   MutationResult,
   RowFromSingleSlug,
@@ -117,12 +120,23 @@ export async function findSingles(
   args: FindSinglesArgs = {}
 ): Promise<SingleListResult> {
   const config = mergeConfig(ctx.defaultConfig, args);
-
-  const registryResult = await ctx.singleRegistryService.listSingles({
+  const filters = {
     source: args.source,
     migrationStatus: args.migrationStatus,
     locked: args.locked,
     search: args.search,
+  };
+
+  // Made as a person, the list holds only the Singles the person may read,
+  // and its total counts only those: a total taken before the read gate
+  // would say how many protected Singles match a search, and so whether one
+  // exists, even on a page past the end where no Single is read at all.
+  const person = currentPrincipal();
+  const registryResult = await ctx.singleRegistryService.listSingles({
+    ...filters,
+    ...(person === null
+      ? {}
+      : { slugAllowlist: await readableSingleSlugs(ctx, person, filters) }),
     limit: args.limit,
     offset: args.offset,
   });
@@ -155,4 +169,26 @@ export async function findSingles(
     limit: args.limit ?? registryResult.data.length,
     offset: args.offset ?? 0,
   };
+}
+
+/**
+ * The slugs of the Singles matching `filters` that `person` may read, asked
+ * of the same gate a Single read as them asks.
+ */
+async function readableSingleSlugs(
+  ctx: NextlyContext,
+  person: Principal,
+  filters: Omit<ListSinglesOptions, "limit" | "offset" | "slugAllowlist">
+): Promise<string[]> {
+  const { data } = await ctx.singleRegistryService.listSingles(filters);
+  const admitted = await Promise.all(
+    data.map(record =>
+      ctx.rbacAccessControlService.checkPrincipalCodeAccess({
+        operation: "read",
+        resource: record.slug,
+        principal: person,
+      })
+    )
+  );
+  return data.filter((_, index) => admitted[index]).map(record => record.slug);
 }

@@ -207,6 +207,7 @@ export {
 // Direct API types - core operation argument types
 export type {
   DirectAPIConfig,
+  RunAsPrincipal,
   FindArgs,
   FindByIDArgs,
   CreateArgs,

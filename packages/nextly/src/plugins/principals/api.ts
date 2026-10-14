@@ -7,7 +7,7 @@
  */
 import type { PluginDefinition } from "../plugin-context";
 
-import { principalFromRequest } from "./recognise";
+import { lookupPrincipal, principalFromRequest } from "./recognise";
 import { principalKindName } from "./registry";
 import type { NextlyPrincipals, PluginPrincipalsApi } from "./types";
 
@@ -15,6 +15,7 @@ import type { NextlyPrincipals, PluginPrincipalsApi } from "./types";
 export function createNextlyPrincipals(): NextlyPrincipals {
   return {
     fromRequest: (request, kind) => principalFromRequest(request, kind),
+    byId: (kind, id) => lookupPrincipal(kind, id),
   };
 }
 
@@ -37,5 +38,7 @@ export function createPluginPrincipals(
   return {
     fromRequest: (request, name) =>
       principalFromRequest(request, principalKindName(plugin.name, name)),
+    byId: (name, id) =>
+      lookupPrincipal(principalKindName(plugin.name, name), id),
   };
 }

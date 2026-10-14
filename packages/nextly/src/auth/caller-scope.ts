@@ -24,6 +24,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 
 import type { AuthenticatedScope } from "./authenticated-scope";
+import { currentPrincipal } from "./principal-scope";
 
 const callerScope = new AsyncLocalStorage<AuthenticatedScope>();
 
@@ -70,5 +71,9 @@ export function currentCallerScope(): AuthenticatedScope | undefined {
 export function effectiveCallerScope(
   explicit: AuthenticatedScope | undefined
 ): AuthenticatedScope | undefined {
+  // A call made as a plugin-defined person is that person, not the API key
+  // that authenticated the request around it: judged by the key's scope, a
+  // person would act with the key's grants.
+  if (explicit === undefined && currentPrincipal() !== null) return undefined;
   return explicit ?? currentCallerScope();
 }

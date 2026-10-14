@@ -12,6 +12,7 @@
  * @module shared/types/access
  * @since 1.0.0
  */
+import type { Principal } from "../../plugins/principals/types";
 
 // ============================================================
 // Minimal User Type
@@ -47,18 +48,41 @@ export interface MinimalUser {
  *   user: { id: 'user-123', email: 'user@example.com' },
  *   roles: ['editor', 'reviewer'],
  *   permissions: ['users:read', 'posts:create', 'posts:read', 'posts:update'],
+ *   principal: null,
  *   operation: 'create',
  *   collection: 'posts',
  * };
  * ```
  */
 export interface AccessControlContext {
-  /** The authenticated user (null for unauthenticated requests) */
+  /**
+   * The authenticated staff user: `null` for unauthenticated requests, and
+   * for a call made as a plugin-defined person, who is never a staff user.
+   */
   user: MinimalUser | null;
-  /** The user's role slugs (resolved from DB, includes inherited roles) */
+  /**
+   * The user's role slugs (resolved from DB, includes inherited roles). Empty
+   * for a plugin-defined person, who holds no role.
+   */
   roles: string[];
-  /** The user's effective permission slugs in 'resource:action' format */
+  /**
+   * The user's effective permission slugs in 'resource:action' format. Empty
+   * for a plugin-defined person, who holds no permission.
+   */
   permissions: string[];
+  /**
+   * @experimental The plugin-defined signed-in person this call is made as,
+   * with their kind, id and declared attributes, or `null` for any other
+   * caller.
+   *
+   * A rule is the only way such a person is admitted: database permissions
+   * and the super-admin bypass never apply to one, and a collection with no
+   * rule for the operation refuses them. A rule written as
+   * `({ user }) => !!user` therefore refuses a person, as it should; one
+   * that admits a person names them, e.g.
+   * `({ principal }) => principal?.kind === "accounts:account"`.
+   */
+  principal: Principal | null;
   /** The operation being performed */
   operation: "create" | "read" | "update" | "delete" | "publish" | "unpublish";
   /** The collection or single slug */
