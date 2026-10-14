@@ -43,10 +43,52 @@ export function readCookie(request: Request, name: string): string | undefined {
 }
 
 /**
- * A `Set-Cookie` value for one of the plugin's cookies: HTTP-only,
- * `SameSite=Lax`, path `/`, `Secure` over HTTPS, and lasting until
- * `expiresAt`, so it outlives a browser restart but never what it names.
+ * How one of the plugin's cookies is written, as a framework's cookie store
+ * takes it (Next.js's `cookies().set(name, value, options)` among them): the
+ * value unencoded, since the store encodes it.
  */
+export interface CookieWrite {
+  readonly name: string;
+  readonly value: string;
+  readonly options: {
+    readonly httpOnly: true;
+    readonly sameSite: "lax";
+    readonly path: "/";
+    readonly secure: boolean;
+    /** Whole seconds; 0 removes the cookie. */
+    readonly maxAge: number;
+  };
+}
+
+/**
+ * One of the plugin's cookies: HTTP-only, `SameSite=Lax`, path `/`, `Secure`
+ * over HTTPS, and lasting until `expiresAt`, so it outlives a browser
+ * restart but never what it names.
+ */
+export function cookieWrite(
+  settings: Pick<AccountsSettings, "origin">,
+  kind: CookieKind,
+  value: string,
+  expiresAt: Date,
+  now: Date
+): CookieWrite {
+  return {
+    name: cookieName(settings, kind),
+    value,
+    options: {
+      httpOnly: true,
+      sameSite: "lax",
+      path: "/",
+      secure: isHttps(settings),
+      maxAge: Math.max(
+        0,
+        Math.floor((expiresAt.getTime() - now.getTime()) / 1000)
+      ),
+    },
+  };
+}
+
+/** A `Set-Cookie` value for one of the plugin's cookies, written as {@link cookieWrite} says. */
 export function setCookie(
   settings: Pick<AccountsSettings, "origin">,
   kind: CookieKind,
@@ -54,18 +96,19 @@ export function setCookie(
   expiresAt: Date,
   now: Date
 ): string {
-  const maxAge = Math.max(
-    0,
-    Math.floor((expiresAt.getTime() - now.getTime()) / 1000)
-  );
+  return serializeCookie(cookieWrite(settings, kind, value, expiresAt, now));
+}
+
+/** A cookie write as a `Set-Cookie` value. */
+export function serializeCookie(write: CookieWrite): string {
   const parts = [
-    `${cookieName(settings, kind)}=${encodeURIComponent(value)}`,
+    `${write.name}=${encodeURIComponent(write.value)}`,
     "Path=/",
     "HttpOnly",
     "SameSite=Lax",
-    `Max-Age=${maxAge}`,
+    `Max-Age=${write.options.maxAge}`,
   ];
-  if (isHttps(settings)) parts.push("Secure");
+  if (write.options.secure) parts.push("Secure");
 
   return parts.join("; ");
 }
@@ -75,7 +118,15 @@ export function clearCookie(
   settings: Pick<AccountsSettings, "origin">,
   kind: CookieKind
 ): string {
-  return setCookie(settings, kind, "", new Date(0), new Date(0));
+  return serializeCookie(cookieClear(settings, kind));
+}
+
+/** The write that removes one of the plugin's cookies: empty, with its own attributes, so a `__Host-` cookie is matched. */
+export function cookieClear(
+  settings: Pick<AccountsSettings, "origin">,
+  kind: CookieKind
+): CookieWrite {
+  return cookieWrite(settings, kind, "", new Date(0), new Date(0));
 }
 
 /** The known-browser tokens a request's cookie holds, at most ten. */

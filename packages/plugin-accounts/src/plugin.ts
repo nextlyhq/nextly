@@ -10,6 +10,12 @@ import { accountKind } from "./http/principal";
 import { accountsRoutes } from "./http/routes";
 import { accountsSchema, PLUGIN_NAME } from "./schema/definition";
 import { SCHEMA_VERSION } from "./schema/tables";
+import {
+  ACCOUNTS_SERVICE,
+  forgetInstalled,
+  rememberInstalled,
+} from "./server/installed";
+import { accountsService } from "./server/service";
 import { resolveAccountsSettings, type AccountsOptions } from "./settings";
 import { accountsEmailTemplates } from "./wiring/emails";
 import { sendEmailJob, sweepJob } from "./wiring/jobs";
@@ -61,6 +67,9 @@ export function buildAccounts(
       schema: accountsSchema,
       principals: [accountKind(deps)],
       routes: accountsRoutes(deps),
+      // The typed server functions, for other plugins; a site's own server
+      // code reaches the same through `accountsServer`.
+      services: { [ACCOUNTS_SERVICE]: () => accountsService(deps) },
       emailTemplates: accountsEmailTemplates(),
       events: ACCOUNTS_EVENTS.map(name => ({ name })),
       jobs: [
@@ -72,6 +81,11 @@ export function buildAccounts(
     },
     init: ctx => {
       context = ctx;
+      rememberInstalled(deps);
+    },
+    destroy: () => {
+      forgetInstalled(deps);
+      context = null;
     },
   });
 }

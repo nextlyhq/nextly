@@ -1,66 +1,39 @@
-import {
-  confirmAddressChangeByCode,
-  confirmAddressChangeByLink,
-  cancelAddressChange,
-  requestAddressChange,
-} from "../flows/address-change";
-import { changePassword } from "../flows/change-password";
-import { deleteOwnAccount } from "../flows/delete-account";
 import { DAY, type FlowDeps } from "../flows/deps";
-import { removeUnverifiedAccount } from "../flows/not-me";
-import { resendVerification } from "../flows/resend";
-import { completePasswordReset } from "../flows/reset";
-import { requestPasswordReset } from "../flows/reset-request";
-import { sessionAccount, signOut, signOutEverywhere } from "../flows/sessions";
-import { signIn } from "../flows/sign-in";
-import { signUp } from "../flows/sign-up";
-import {
-  verifyByCode,
-  verifyByCodeWithPassword,
-  verifyByLink,
-  verifyByLinkWithPassword,
-} from "../flows/verify";
+import type { AccountOutcome, AccountsServer } from "../server/contract";
+import { accountsService } from "../server/service";
 
-import { answer, bodyOf, field, refuse, unlessRefused } from "./answers";
-import {
-  clearCookie,
-  cookieName,
-  knownTokensOf,
-  readCookie,
-  setCookie,
-  withKnownToken,
-} from "./cookies";
-import { assertSameSiteWrite, safeReturnPath } from "./guard";
+import { answer, bodyOf, field } from "./answers";
+import { cookieName, readCookie, serializeCookie, setCookie } from "./cookies";
+import { assertSameSiteWrite } from "./guard";
 
 /** An endpoint: the flows' deps and the request in, the answer out; a refusal is thrown. */
 export type Endpoint = (deps: FlowDeps, request: Request) => Promise<Response>;
 
-/** What every write reads: the guard passed, its body, its client, its cookies. */
+/**
+ * What every write reads, once the guard passes: its body, the server
+ * functions, and the visitor they act for.
+ */
 async function write(deps: FlowDeps, request: Request) {
   assertSameSiteWrite(request, deps.settings, deps.core);
+  const server = accountsService(() => deps);
+
   return {
     body: await bodyOf(request),
-    client: deps.core.limits.clientKey(request),
-    knownTokens: knownTokensOf(deps.settings, request),
-    sessionToken:
-      readCookie(request, cookieName(deps.settings, "session")) ?? "",
-    signUpToken: readCookie(request, cookieName(deps.settings, "signUp")),
+    server,
+    visitor: server.visitorFrom(request),
   };
 }
 
-/** The cookie that marks this browser known, with `token` added as the newest. */
-function knownCookie(
-  deps: FlowDeps,
-  held: readonly string[],
-  token: string
-): string {
-  const now = deps.now();
-  return setCookie(
-    deps.settings,
-    "knownBrowsers",
-    withKnownToken(held, token),
-    new Date(now.getTime() + deps.settings.knownBrowsers.days * DAY),
-    now
+/** A server function's outcome as the endpoint's answer, its cookie changes as `Set-Cookie` headers. */
+function reply(
+  server: AccountsServer,
+  outcome: AccountOutcome,
+  result: Record<string, unknown> = {}
+): Response {
+  return answer(
+    outcome.message,
+    result,
+    outcome.cookies.map(change => serializeCookie(server.cookieWrite(change)))
   );
 }
 
@@ -84,26 +57,17 @@ export const csrf: Endpoint = (deps, request) => {
 };
 
 export const signUpEndpoint: Endpoint = async (deps, request) => {
-  const { body, client, signUpToken } = await write(deps, request);
-  const result = unlessRefused(
-    await signUp(deps, {
+  const { body, server, visitor } = await write(deps, request);
+
+  return reply(
+    server,
+    await server.signUp({
+      visitor,
       name: field(body, "name"),
       address: field(body, "address"),
       password: field(body, "password"),
-      client,
-      ...(signUpToken === undefined ? {} : { browserToken: signUpToken }),
     })
   );
-
-  return answer("Check your email to confirm your address.", {}, [
-    setCookie(
-      deps.settings,
-      "signUp",
-      result.browserToken,
-      result.browserTokenExpiresAt,
-      deps.now()
-    ),
-  ]);
 };
 
 /**
@@ -112,259 +76,161 @@ export const signUpEndpoint: Endpoint = async (deps, request) => {
  * set as the session cookie, and the sign-up cookie goes.
  */
 export const verifyEndpoint: Endpoint = async (deps, request) => {
-  const { body, client, knownTokens, signUpToken } = await write(deps, request);
-  const password = field(body, "password");
+  const { body, server, visitor } = await write(deps, request);
   const token = field(body, "token");
-  const browser =
-    signUpToken === undefined ? {} : { browserToken: signUpToken };
-  const raw =
+  const password = field(body, "password");
+  const outcome = await server.verifyAddress(
     token !== ""
-      ? password !== ""
-        ? await verifyByLinkWithPassword(deps, {
-            token,
-            password,
-            client,
-            knownTokens,
-          })
-        : await verifyByLink(deps, { token, ...browser })
-      : password !== ""
-        ? await verifyByCodeWithPassword(deps, {
-            address: field(body, "address"),
-            code: field(body, "code"),
-            password,
-            client,
-            knownTokens,
-          })
-        : await verifyByCode(deps, {
-            address: field(body, "address"),
-            code: field(body, "code"),
-            ...browser,
-          });
-  const result = unlessRefused(raw);
-  if (result.status === "sign-in-needed")
-    refuse({ status: "refused", reason: "sign-in-needed" });
-
-  const cookies = [clearCookie(deps.settings, "signUp")];
-  if (result.session !== null) {
-    cookies.push(
-      setCookie(
-        deps.settings,
-        "session",
-        result.session.token,
-        result.session.expiresAt,
-        deps.now()
-      )
-    );
-  }
-
-  return answer(
-    "Your address is confirmed.",
-    { signedIn: result.session !== null },
-    cookies
+      ? { visitor, password, token }
+      : {
+          visitor,
+          password,
+          address: field(body, "address"),
+          code: field(body, "code"),
+        }
   );
+
+  return reply(server, outcome, { signedIn: outcome.signedIn });
 };
 
 export const resendEndpoint: Endpoint = async (deps, request) => {
-  const { body, client, knownTokens } = await write(deps, request);
-  unlessRefused(
-    await resendVerification(deps, {
-      address: field(body, "address"),
-      client,
-      knownTokens,
-    })
-  );
+  const { body, server, visitor } = await write(deps, request);
 
-  return answer(
-    "If that address needs confirming, we've sent the email again.",
-    {}
+  return reply(
+    server,
+    await server.resendVerification({
+      visitor,
+      address: field(body, "address"),
+    })
   );
 };
 
 export const notMeEndpoint: Endpoint = async (deps, request) => {
-  const { body } = await write(deps, request);
-  unlessRefused(
-    await removeUnverifiedAccount(deps, { token: field(body, "token") })
-  );
+  const { body, server } = await write(deps, request);
 
-  return answer("The account was removed.", {});
+  return reply(
+    server,
+    await server.removeUnverifiedAccount({ token: field(body, "token") })
+  );
 };
 
 /** Signs in, setting the session and known-browser cookies, and says where to go next: a path on the site only. */
 export const signInEndpoint: Endpoint = async (deps, request) => {
-  const { body, client, knownTokens } = await write(deps, request);
-  const result = unlessRefused(
-    await signIn(deps, {
-      address: field(body, "address"),
-      password: field(body, "password"),
-      client,
-      knownTokens,
-    })
-  );
+  const { body, server, visitor } = await write(deps, request);
+  const outcome = await server.signIn({
+    visitor,
+    address: field(body, "address"),
+    password: field(body, "password"),
+  });
 
-  return answer(
-    "Signed in.",
-    {
-      redirectTo: safeReturnPath(
-        deps.settings,
-        field(body, "next") || undefined
-      ),
-    },
-    [
-      setCookie(
-        deps.settings,
-        "session",
-        result.session.token,
-        result.session.expiresAt,
-        deps.now()
-      ),
-      knownCookie(deps, knownTokens, result.knownBrowserToken),
-    ]
-  );
+  return reply(server, outcome, {
+    redirectTo: server.returnPath(field(body, "next") || undefined),
+  });
 };
 
 export const signOutEndpoint: Endpoint = async (deps, request) => {
-  const { sessionToken } = await write(deps, request);
-  if (sessionToken !== "") await signOut(deps, { sessionToken });
+  const { server, visitor } = await write(deps, request);
 
-  return answer("Signed out.", {}, [clearCookie(deps.settings, "session")]);
+  return reply(server, await server.signOut({ visitor }));
 };
 
 export const signOutEverywhereEndpoint: Endpoint = async (deps, request) => {
-  const { sessionToken } = await write(deps, request);
-  if (!(await signOutEverywhere(deps, { sessionToken })))
-    refuse({ status: "refused", reason: "sign-in-needed" });
+  const { server, visitor } = await write(deps, request);
 
-  return answer("Signed out everywhere.", {}, [
-    clearCookie(deps.settings, "session"),
-  ]);
+  return reply(server, await server.signOutEverywhere({ visitor }));
 };
 
 export const resetRequestEndpoint: Endpoint = async (deps, request) => {
-  const { body, client, knownTokens } = await write(deps, request);
-  unlessRefused(
-    await requestPasswordReset(deps, {
-      address: field(body, "address"),
-      client,
-      knownTokens,
-    })
-  );
+  const { body, server, visitor } = await write(deps, request);
 
-  return answer(
-    "If that address has an account, we've sent a link to reset its password.",
-    {}
+  return reply(
+    server,
+    await server.requestPasswordReset({
+      visitor,
+      address: field(body, "address"),
+    })
   );
 };
 
 export const resetEndpoint: Endpoint = async (deps, request) => {
-  const { body, knownTokens } = await write(deps, request);
-  const result = unlessRefused(
-    await completePasswordReset(deps, {
+  const { body, server, visitor } = await write(deps, request);
+
+  return reply(
+    server,
+    await server.resetPassword({
+      visitor,
       token: field(body, "token"),
       password: field(body, "password"),
-      knownTokens,
     })
   );
-
-  return answer("Your password is changed. Sign in with it.", {}, [
-    knownCookie(deps, knownTokens, result.knownBrowserToken),
-  ]);
 };
 
 export const changePasswordEndpoint: Endpoint = async (deps, request) => {
-  const { body, client, knownTokens, sessionToken } = await write(
-    deps,
-    request
-  );
-  const result = await changePassword(deps, {
-    sessionToken,
-    currentPassword: field(body, "currentPassword"),
-    newPassword: field(body, "newPassword"),
-    client,
-    knownTokens,
-  });
-  if (result.status === "signed-out")
-    refuse({ status: "refused", reason: "sign-in-needed" });
-  unlessRefused(result);
+  const { body, server, visitor } = await write(deps, request);
 
-  return answer("Your password is changed.", {});
+  return reply(
+    server,
+    await server.changePassword({
+      visitor,
+      currentPassword: field(body, "currentPassword"),
+      newPassword: field(body, "newPassword"),
+    })
+  );
 };
 
 export const changeAddressEndpoint: Endpoint = async (deps, request) => {
-  const { body, client, knownTokens, sessionToken } = await write(
-    deps,
-    request
-  );
-  const result = await requestAddressChange(deps, {
-    sessionToken,
-    currentPassword: field(body, "currentPassword"),
-    newAddress: field(body, "newAddress"),
-    client,
-    knownTokens,
-  });
-  if (result.status === "signed-out")
-    refuse({ status: "refused", reason: "sign-in-needed" });
-  unlessRefused(result);
+  const { body, server, visitor } = await write(deps, request);
 
-  return answer("Check the new address's email to confirm it.", {});
+  return reply(
+    server,
+    await server.changeAddress({
+      visitor,
+      currentPassword: field(body, "currentPassword"),
+      newAddress: field(body, "newAddress"),
+    })
+  );
 };
 
 /** Confirms an address change by its link (`token`) or its code, inside the session that asked. */
 export const confirmAddressEndpoint: Endpoint = async (deps, request) => {
-  const { body, sessionToken } = await write(deps, request);
+  const { body, server, visitor } = await write(deps, request);
   const token = field(body, "token");
-  const result =
-    token !== ""
-      ? await confirmAddressChangeByLink(deps, { sessionToken, token })
-      : await confirmAddressChangeByCode(deps, {
-          sessionToken,
-          code: field(body, "code"),
-        });
-  if (result.status === "sign-in-needed")
-    refuse({ status: "refused", reason: "sign-in-needed" });
-  unlessRefused(result);
 
-  return answer("Your email address is changed.", {});
+  return reply(
+    server,
+    await server.confirmAddressChange(
+      token !== "" ? { visitor, token } : { visitor, code: field(body, "code") }
+    )
+  );
 };
 
 export const cancelAddressEndpoint: Endpoint = async (deps, request) => {
-  const { body } = await write(deps, request);
-  unlessRefused(
-    await cancelAddressChange(deps, { token: field(body, "token") })
-  );
+  const { body, server } = await write(deps, request);
 
-  return answer("The change of address is cancelled.", {});
+  return reply(
+    server,
+    await server.cancelAddressChange({ token: field(body, "token") })
+  );
 };
 
 export const deleteAccountEndpoint: Endpoint = async (deps, request) => {
-  const { body, client, knownTokens, sessionToken } = await write(
-    deps,
-    request
-  );
-  const result = await deleteOwnAccount(deps, {
-    sessionToken,
-    currentPassword: field(body, "currentPassword"),
-    client,
-    knownTokens,
-  });
-  if (result.status === "signed-out")
-    refuse({ status: "refused", reason: "sign-in-needed" });
-  unlessRefused(result);
+  const { body, server, visitor } = await write(deps, request);
 
-  return answer("Your account is deleted.", {}, [
-    clearCookie(deps.settings, "session"),
-  ]);
+  return reply(
+    server,
+    await server.deleteAccount({
+      visitor,
+      currentPassword: field(body, "currentPassword"),
+    })
+  );
 };
 
 /** The signed-in account, or null; never cached. */
 export const meEndpoint: Endpoint = async (deps, request) => {
-  const sessionToken = readCookie(
-    request,
-    cookieName(deps.settings, "session")
-  );
-  const account =
-    sessionToken === undefined
-      ? null
-      : await sessionAccount(deps, { sessionToken });
+  const server = accountsService(() => deps);
+  const account = await server.currentAccount({
+    visitor: server.visitorFrom(request),
+  });
 
   return answer("The signed-in account.", { account });
 };

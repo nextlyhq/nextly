@@ -21,16 +21,30 @@ export function assertSameSiteWrite(
   settings: Pick<AccountsSettings, "origin">,
   core: Pick<AccountsCore, "opaque">
 ): void {
-  const from =
-    request.headers.get("origin") ?? originOf(request.headers.get("referer"));
-  if (from !== new URL(settings.origin).origin)
-    throw accountsError("ACCOUNTS_CROSS_SITE", { reason: "origin" });
+  assertSameOrigin(request.headers, settings);
 
   const sent = request.headers.get(CSRF_HEADER) ?? "";
   const held = readCookie(request, cookieName(settings, "csrf")) ?? "";
   if (sent === "" || held === "" || !core.opaque.equal(sent, held)) {
     throw accountsError("ACCOUNTS_CROSS_SITE", { reason: "csrf" });
   }
+}
+
+/**
+ * Refuses a write whose `Origin` (or, without one, its `Referer`) is not
+ * the configured origin, whether or not it carries a cookie. A request with
+ * neither is refused too: every browser the plugin supports sends `Origin`
+ * on a POST, a form's included.
+ *
+ * @throws `ACCOUNTS_CROSS_SITE`
+ */
+export function assertSameOrigin(
+  headers: Headers,
+  settings: Pick<AccountsSettings, "origin">
+): void {
+  const from = headers.get("origin") ?? originOf(headers.get("referer"));
+  if (from !== new URL(settings.origin).origin)
+    throw accountsError("ACCOUNTS_CROSS_SITE", { reason: "origin" });
 }
 
 /**
