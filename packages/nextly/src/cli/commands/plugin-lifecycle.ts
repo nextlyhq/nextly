@@ -461,6 +461,7 @@ async function executeUninstall(
   await deps.runLifecycleHook(plugin, "onUninstall", {
     keepData: opts.keepData,
   });
+  await assertHookLeftTables(plugin, plan, deps);
 
   // `runDown` names a module whose DOWN runs outside a transaction before
   // it runs, as `migrate:down` does, through the same executor.
@@ -501,11 +502,19 @@ function assertDownsDropTables(
 ): void {
   if (plan.finalState !== "uninstalled") return;
   const statements = downs.flatMap(down => down.statements);
-  // The statements are read lower-cased, so two owned tables whose names
-  // differ only in case, which PostgreSQL and a case-sensitive MySQL keep
-  // apart, cannot be told apart by them: both count as left.
+  // The statements are read lower-cased. On SQLite, whose names ignore
+  // case, that is how the database reads them. PostgreSQL keeps a quoted
+  // name's case, and MySQL can, so there a table whose stored name is not
+  // lower-case may not be the one a lower-cased drop reaches: it counts as
+  // left. So do two owned tables whose names differ only in case, which the
+  // statements cannot tell apart.
+  const caseKept =
+    dialect === "sqlite"
+      ? []
+      : plan.tablesDropped.filter(table => table !== table.toLowerCase());
   const byLowered = new Map<string, string[]>();
   for (const table of plan.tablesDropped) {
+    if (caseKept.includes(table)) continue;
     const key = table.toLowerCase();
     byLowered.set(key, [...(byLowered.get(key) ?? []), table]);
   }
@@ -521,6 +530,7 @@ function assertDownsDropTables(
     )
   );
   const left = [
+    ...caseKept,
     ...ambiguous.flat(),
     ...readable
       .filter(([key]) => leftReadable.has(key))
@@ -534,6 +544,36 @@ function assertDownsDropTables(
       plugin: plugin.name,
       reason: "down-leaves-tables",
       tables: left,
+    },
+  });
+}
+
+/**
+ * Refuse to run the DOWNs of a full uninstall once `onUninstall` has dropped
+ * or renamed a table they were judged to drop.
+ *
+ * The DOWNs were judged against the tables as they stood before the hook
+ * (`assertDownsDropTables`). A hook can change them, through the raw SQL its
+ * context may be granted: a table it renamed away keeps its rows under a name
+ * the DOWNs do not drop, and the check after them reads only the old name.
+ * Refused before the first DOWN, so every module is still recorded applied.
+ */
+async function assertHookLeftTables(
+  plugin: LifecyclePlugin,
+  plan: UninstallPlan,
+  deps: Pick<PluginLifecycleDeps, "liveTables">
+): Promise<void> {
+  if (plan.finalState !== "uninstalled") return;
+  const live = await deps.liveTables(plan.tablesDropped);
+  const gone = plan.tablesDropped.filter(table => !live.has(table));
+  if (gone.length === 0) return;
+  throw new NextlyError({
+    code: "PLUGIN_UNINSTALL_IRREVERSIBLE",
+    publicMessage: `${plugin.name}'s onUninstall dropped or renamed ${gone.join(", ")}, which its DOWN migrations were to drop, so none of them was run. Put ${gone.length === 1 ? "that table" : "those tables"} back under ${gone.length === 1 ? "its name" : "their names"}, then run the uninstall again.`,
+    logContext: {
+      plugin: plugin.name,
+      reason: "tables-changed-by-hook",
+      tables: gone,
     },
   });
 }

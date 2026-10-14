@@ -1967,33 +1967,74 @@ export function tablesCreatedBy(
   return [...(readAsIfNoTableExisted(statements, dialect)?.creating ?? [])];
 }
 
-/** Words that may stand between CREATE and TEMPORARY. */
-const BEFORE_TEMPORARY: ReadonlySet<string> = new Set([
-  "GLOBAL",
-  "LOCAL",
-  "OR",
-  "REPLACE",
-]);
+/**
+ * What a statement may begin with for `tablesLeftInPlace` to follow it: the
+ * statements a generated DOWN is made of. Data statements change no table's
+ * existence; schema statements on indexes, types and sequences change none
+ * either; the table statements are the ones `TableFates` follows. A rebuild
+ * is a CREATE TABLE, an INSERT, a DROP TABLE and an ALTER TABLE.
+ */
+const MODELED_STATEMENTS: readonly (readonly string[])[] = [
+  ["DROP", "TABLE"],
+  ["DROP", "TABLES"],
+  ["DROP", "INDEX"],
+  ["DROP", "TYPE"],
+  ["DROP", "SEQUENCE"],
+  ["ALTER", "TABLE"],
+  ["ALTER", "INDEX"],
+  ["ALTER", "SEQUENCE"],
+  ["CREATE", "TABLE"],
+  ["CREATE", "INDEX"],
+  ["CREATE", "UNIQUE", "INDEX"],
+  ["CREATE", "TYPE"],
+  ["CREATE", "SEQUENCE"],
+  ["RENAME", "TABLE"],
+  ["INSERT"],
+  ["UPDATE"],
+  ["DELETE"],
+  ["PRAGMA", "FOREIGN_KEYS"],
+  ["PRAGMA", "FOREIGN_KEY_CHECK"],
+];
 
 /**
- * Whether a statement creates or drops a temporary table: `CREATE [GLOBAL |
- * LOCAL] TEMP[ORARY] TABLE`, or MySQL's `DROP TEMPORARY TABLE`. Read from
- * the words, so a column called `temp` is not one.
+ * Whether `tablesLeftInPlace` can follow a statement: a single statement that
+ * begins as one of `MODELED_STATEMENTS` and names no table through a
+ * qualifier. Anything else is unmodeled, and refused: a savepoint and its
+ * rollback, a procedural block whose branches may not run, a view or virtual
+ * table taking a dropped table's name, a temporary table shadowing one, and
+ * a qualified name such as SQLite's `temp.t`, which can reach another table
+ * than the one its last part names.
  */
-function namesTemporaryTable(
+function modelsStatement(
   statement: string,
   dialect: SupportedDialect
 ): boolean {
-  const words = new Lexer(dialect, statement)
-    .tokens(statement)
-    .map(token => (token.kind === "word" ? token.upper : ""));
-  return words.some((word, at) => {
-    if (word === "DROP") return words[at + 1] === "TEMPORARY";
-    if (word !== "CREATE") return false;
-    let k = at + 1;
-    while (BEFORE_TEMPORARY.has(words[k] ?? "")) k += 1;
-    return words[k] === "TEMP" || words[k] === "TEMPORARY";
-  });
+  const tokens = soleStatementTokens(statement, dialect);
+  if (tokens === undefined) return false;
+  const words = tokens.map(token =>
+    token.kind === "word" ? token.upper : undefined
+  );
+  const begins = MODELED_STATEMENTS.some(prefix =>
+    prefix.every((word, at) => words[at] === word)
+  );
+  if (!begins) return false;
+  return !tokens.some(
+    (token, at) =>
+      token.kind === "punct" &&
+      token.char === "." &&
+      isNameToken(tokens[at - 1]) &&
+      isNameToken(tokens[at + 1])
+  );
+}
+
+/**
+ * A bare or quoted name: what can stand either side of a qualifier's dot. A
+ * bare word starting with a digit is a number, whose decimal point is no
+ * qualifier.
+ */
+function isNameToken(token: Token | undefined): boolean {
+  if (token?.kind === "name") return true;
+  return token?.kind === "word" && !/^\d/.test(token.text);
 }
 
 /** The holder of a name that a statement of the list created. */
@@ -2092,8 +2133,8 @@ class TableFates {
  */
 class FollowingReader extends DropReader {
   readonly fates: TableFates;
-  /** Whether a statement creates or drops a temporary table. */
-  touchesTemporaryTables = false;
+  /** Whether a statement is one `modelsStatement` does not model. */
+  holdsUnmodeledStatement = false;
   private depth = 0;
 
   constructor(dialect: SupportedDialect, tables: ReadonlySet<string>) {
@@ -2108,8 +2149,8 @@ class FollowingReader extends DropReader {
    */
   override read(statement: string): void {
     super.read(statement);
-    if (namesTemporaryTable(statement, this.dialect)) {
-      this.touchesTemporaryTables = true;
+    if (!modelsStatement(statement, this.dialect)) {
+      this.holdsUnmodeledStatement = true;
     }
     const created = tableNamedByCreate(statement, this.dialect);
     if (created !== undefined)
@@ -2185,11 +2226,12 @@ class FollowingReader extends DropReader {
  * then dropped, it is gone. A rebuild is read as the drop and the rename back
  * it is, so it leaves the table in place.
  *
- * Every table counts as left when the list cannot be read, when it may
- * change which table an unqualified name reaches, or when it creates or drops
- * a temporary table, which can shadow a permanent one of the same name: what
- * it drops is then not known, and an uninstall is refused rather than run on
- * a guess.
+ * Every table counts as left when the list holds a statement this reading
+ * does not model (`modelsStatement`), or one that may change which table an
+ * unqualified name reaches: what it drops is then not known, and an uninstall
+ * is refused rather than run on a guess. The reading models the statements a
+ * plugin's generated DOWN is made of, and refuses the rest by kind rather
+ * than by exception, so a form nobody listed is refused, not trusted.
  */
 export function tablesLeftInPlace(
   statements: readonly string[],
@@ -2203,7 +2245,7 @@ export function tablesLeftInPlace(
     if (error instanceof UnparsableDropTarget) return [...tables];
     throw error;
   }
-  if (reader.resolutionMayChange || reader.touchesTemporaryTables) {
+  if (reader.resolutionMayChange || reader.holdsUnmodeledStatement) {
     return [...tables];
   }
   return tables.filter(table => !reader.fates.gone(table));

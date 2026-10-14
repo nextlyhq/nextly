@@ -355,7 +355,8 @@ describe("plugins uninstall judges what its DOWNs drop before running them", () 
 
   async function uninstallWith(
     statements: string[][],
-    db: unknown = ownsNotes
+    db: unknown = ownsNotes,
+    over: Partial<PluginLifecycleDeps> = {}
   ) {
     const runDown = vi.fn(async () => 1);
     const runLifecycleHook = vi.fn(async () => {});
@@ -375,6 +376,7 @@ describe("plugins uninstall judges what its DOWNs drop before running them", () 
             destructive: true,
           }))
         ),
+        ...over,
       })
     );
     return { run, runDown, runLifecycleHook };
@@ -464,6 +466,80 @@ describe("plugins uninstall judges what its DOWNs drop before running them", () 
     const { run, runDown } = await uninstallWith([statements, []]);
     await expect(run).rejects.toMatchObject({
       logContext: { reason: "down-leaves-tables", tables: ["fx__notes"] },
+    });
+    expect(runDown).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      "a savepoint rolled back over the drop",
+      ["SAVEPOINT s", "DROP TABLE fx__notes", "ROLLBACK TO s", "RELEASE s"],
+    ],
+    [
+      "a view taking the name after the drop",
+      ["DROP TABLE fx__notes", "CREATE VIEW fx__notes AS SELECT 1 AS id"],
+    ],
+    [
+      "a virtual table taking the name after the drop",
+      [
+        "DROP TABLE fx__notes",
+        "CREATE VIRTUAL TABLE fx__notes USING fts5(body)",
+      ],
+    ],
+    ["a drop through the temp schema", ["DROP TABLE IF EXISTS temp.fx__notes"]],
+  ])(
+    "counts every table left when a DOWN holds %s, which the reading does not model",
+    async (_case, statements) => {
+      const { run, runDown } = await uninstallWith([statements, []]);
+      await expect(run).rejects.toMatchObject({
+        logContext: { reason: "down-leaves-tables", tables: ["fx__notes"] },
+      });
+      expect(runDown).not.toHaveBeenCalled();
+    }
+  );
+
+  it("counts an owned table whose stored name keeps upper case as left on PostgreSQL", async () => {
+    // `"Fx__Notes"` survives an unquoted drop of fx__notes there.
+    const { run, runDown } = await uninstallWith(
+      [["DROP TABLE IF EXISTS fx__notes"], []],
+      owning([{ ...row, tableName: "Fx__Notes" }]),
+      { dialect: "postgresql" }
+    );
+    await expect(run).rejects.toMatchObject({
+      logContext: { reason: "down-leaves-tables", tables: ["Fx__Notes"] },
+    });
+    expect(runDown).not.toHaveBeenCalled();
+  });
+
+  it("drops a table whose stored name keeps upper case on SQLite, where names ignore case", async () => {
+    // The control: the same uninstall where a lower-cased drop reaches it.
+    const { run, runDown } = await uninstallWith(
+      [["DROP TABLE IF EXISTS fx__notes"], []],
+      owning([{ ...row, tableName: "Fx__Notes" }])
+    );
+    await run;
+    expect(runDown).toHaveBeenCalledTimes(2);
+  });
+
+  it("refuses to run any DOWN once onUninstall has renamed a table away", async () => {
+    // The DOWNs were judged with fx__notes in place. The hook renamed it, so
+    // the drop they were approved for now reaches nothing.
+    let hookRan = false;
+    const { run, runDown } = await uninstallWith(
+      [["DROP TABLE IF EXISTS fx__notes"], []],
+      ownsNotes,
+      {
+        runLifecycleHook: vi.fn(async () => {
+          hookRan = true;
+        }),
+        liveTables: vi.fn(
+          async (tables: readonly string[]) => new Set(hookRan ? [] : tables)
+        ),
+      }
+    );
+    await expect(run).rejects.toMatchObject({
+      code: "PLUGIN_UNINSTALL_IRREVERSIBLE",
+      logContext: { reason: "tables-changed-by-hook", tables: ["fx__notes"] },
     });
     expect(runDown).not.toHaveBeenCalled();
   });

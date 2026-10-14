@@ -1109,6 +1109,73 @@ describe("applyPluginSchemaContributions (behaviour a disabled plugin's transfor
     expect(forms.fields[0]?.tabs[0]?.fields[0]).not.toHaveProperty("access");
   });
 
+  it("keeps a field's access rule when the transform moves it into another group", () => {
+    const rule = { read: () => false };
+    const forms = applyPluginSchemaContributions(cfg({ collections: [] }), [
+      plugin("plugin-a", {
+        collections: [
+          {
+            slug: "a-forms",
+            fields: [
+              {
+                name: "a",
+                type: "group",
+                fields: [{ name: "secret", type: "text", access: rule }],
+              },
+              { name: "b", type: "group", fields: [] },
+            ],
+          } as unknown as CollectionConfig,
+        ],
+      }),
+      plugin(
+        "plugin-b",
+        {
+          transforms: [
+            {
+              target: "a-forms",
+              transform: entity => {
+                const [a, b] = entity.fields as {
+                  name: string;
+                  fields: unknown[];
+                }[];
+                return {
+                  ...entity,
+                  fields: [
+                    { ...a, fields: [] },
+                    { ...b, fields: a?.fields ?? [] },
+                  ],
+                };
+              },
+            },
+          ],
+        },
+        false
+      ),
+    ]).collections?.[0] as unknown as {
+      fields: { fields: Record<string, unknown>[] }[];
+    };
+    expect(forms.fields[1]?.fields[0]?.access).toBe(rule);
+  });
+
+  it("keeps a key named `access` in a plugin field type's own options", () => {
+    // A plugin's field type may carry options of its own on the field; their
+    // content is the plugin's data.
+    const forms = disabledTransform(entity => ({
+      ...entity,
+      fields: [
+        {
+          name: "rating",
+          type: "stars",
+          presentation: { access: "public", size: 5 },
+        },
+      ],
+    }));
+    expect(forms.fields[0]?.presentation).toEqual({
+      access: "public",
+      size: 5,
+    });
+  });
+
   it("keeps a key named `access` in a field's pluginOptions", () => {
     const forms = disabledTransform(entity => ({
       ...entity,
