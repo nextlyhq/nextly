@@ -175,6 +175,73 @@ describe("the payment contract suite catches a broken provider", () => {
     );
   });
 
+  it("fails a provider whose capture answer names another payment", async () => {
+    const failed = await failingCases(p => {
+      const capture = p.capture;
+      return {
+        ...p,
+        capture: capture
+          ? async input => ({
+              ...(await capture(input)),
+              providerReference: "pay_elsewhere",
+            })
+          : undefined,
+      };
+    });
+    expect(failed).toContain(
+      "holds money, and captures it once when the answer to a capture is lost"
+    );
+  });
+
+  it("fails a provider whose cancel answer names another payment", async () => {
+    const failed = await failingCases(p => {
+      const cancel = p.cancel;
+      return {
+        ...p,
+        cancel: cancel
+          ? async input => ({
+              ...(await cancel(input)),
+              reference: "pay-elsewhere",
+            })
+          : undefined,
+      };
+    });
+    expect(failed).toContain(
+      "cancels a payment once when the answer to a cancel is lost"
+    );
+  });
+
+  it("fails a provider whose read answer carries another payment's reference", async () => {
+    const failed = await failingCases(p => ({
+      ...p,
+      read: async input => ({
+        ...(await p.read(input)),
+        reference: "pay-elsewhere",
+      }),
+    }));
+    expect(failed).toContain(
+      "reads a payment back, and finds it by commerce's reference"
+    );
+  });
+
+  it("fails a provider whose lookup by reference answers with another amount", async () => {
+    const failed = await failingCases(p => ({
+      ...p,
+      findByReference: async input => {
+        const found = await p.findByReference(input);
+        return found === null
+          ? null
+          : {
+              ...found,
+              amount: money(found.amount.amount + 2, found.amount.currency),
+            };
+      },
+    }));
+    expect(failed).toContain(
+      "reads a payment back, and finds it by commerce's reference"
+    );
+  });
+
   it("fails a provider that checks a signature is present but not that it is right", async () => {
     // It refuses a missing header and a body that is not canonical JSON, so
     // only a changed signature over an unchanged body can catch it.

@@ -121,7 +121,9 @@ export async function paymentProviderContract(
   }
 
   // An answer about a payment must be about that payment: a structurally valid
-  // answer for another one would corrupt the record commerce keeps of it.
+  // answer for another one would corrupt the record commerce keeps of it. Every
+  // answer naming a payment is held to it: confirm, capture, cancel, read and
+  // the lookup by commerce's reference.
   function expectAnswerFor(answer: ProviderPayment, started: ProviderPayment) {
     expectContract(
       answer.providerReference === started.providerReference &&
@@ -193,19 +195,13 @@ export async function paymentProviderContract(
       const read = asPayment(
         await p.read({ providerReference: started.providerReference })
       );
-      expectContract(
-        read.providerReference === started.providerReference,
-        "read returns the payment asked for"
-      );
+      expectAnswerFor(read, started);
       const found = await p.findByReference({ reference });
       expectContract(
         found !== null,
         "a payment is found by commerce's reference"
       );
-      expectContract(
-        asPayment(found).providerReference === started.providerReference,
-        "the payment found by reference is the one started"
-      );
+      expectAnswerFor(asPayment(found), started);
       expectContract(
         (await p.findByReference({ reference: unique("unknown") })) === null,
         "an unknown reference finds nothing"
@@ -455,6 +451,7 @@ export async function paymentProviderContract(
             paymentMethod: options.paymentMethods.succeeds,
           })
         );
+        expectAnswerFor(held, started);
         expectContract(
           held.status === "authorised",
           `held money is authorised, not ${held.status}`
@@ -469,6 +466,7 @@ export async function paymentProviderContract(
         };
         await call(p, "capture", request); // the answer is lost
         const captured = asPayment(await call(p, "capture", request));
+        expectAnswerFor(captured, started);
         expectContract(
           captured.status === "paid",
           `a captured payment is paid, not ${captured.status}`
@@ -488,6 +486,7 @@ export async function paymentProviderContract(
         };
         await call(p, "cancel", request); // the answer is lost
         const cancelled = asPayment(await call(p, "cancel", request));
+        expectAnswerFor(cancelled, started);
         expectContract(
           cancelled.status === "cancelled",
           `the payment is cancelled, not ${cancelled.status}`
@@ -495,6 +494,7 @@ export async function paymentProviderContract(
         const read = asPayment(
           await p.read({ providerReference: started.providerReference })
         );
+        expectAnswerFor(read, started);
         expectContract(read.status === "cancelled", "the cancellation stays");
       }
     );
