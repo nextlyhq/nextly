@@ -338,6 +338,42 @@ describe("a person's writes", () => {
     expect(seen?.principal).toBeNull();
   });
 
+  it("are origin-checked, without a token, when nobody of the kind is signed in on a csrf: true route", async () => {
+    // Recognising nobody makes the caller anonymous, and a route that asks
+    // for the check holds an anonymous write to its origin: a cookie the
+    // plugin keeps for visitors not yet signed in travels cross-site too.
+    const route = match({
+      principal: { kind: "accounts:account", required: false },
+      csrf: true,
+    });
+    const crossSite = await runPluginRoute(
+      call("", { origin: "https://evil.example" }),
+      route
+    );
+    expect(crossSite.status).toBe(403);
+    expect(seen).toBeNull();
+
+    const sameSite = await runPluginRoute(call(""), route);
+    expect(sameSite.status).toBe(200);
+    expect(seen?.principal).toBeNull();
+  });
+
+  it("are not checked when nobody of the kind is signed in and the request carries a Bearer token", async () => {
+    // A Bearer token exempts by its presence whoever else the request does
+    // or does not name: a page on another site cannot make a browser send
+    // one, so recognising nobody must not take the exemption away.
+    const res = await runPluginRoute(
+      call("", { origin: "https://evil.example", bearer: true }),
+      match({
+        principal: { kind: "accounts:account", required: false },
+        csrf: true,
+      })
+    );
+    expect(res.status).toBe(200);
+    expect(seen?.principal).toBeNull();
+    expect(csrfRows()).toHaveLength(0);
+  });
+
   it("are not checked on a read", async () => {
     const res = await runPluginRoute(
       call(PERSON_COOKIE, { method: "GET", origin: "https://evil.example" }),

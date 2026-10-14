@@ -102,3 +102,24 @@ export async function detectProject(cwd: string): Promise<ProjectInfo> {
     appDir,
   };
 }
+
+/**
+ * Describe a freshly scaffolded plugin package.
+ *
+ * A plugin is a publishable library: its code lives in src/ and its Next.js
+ * playground in dev/, so {@link detectProject} rejects it ("App Router not
+ * detected") although that is exactly the layout the template ships. Nothing
+ * about the layout needs detecting; only the package manager does, and it is
+ * the one field a fresh scaffold's install and next steps read.
+ */
+export async function detectPluginPackage(cwd: string): Promise<ProjectInfo> {
+  return {
+    isNextJs: false,
+    isAppRouter: false,
+    hasTypescript: true,
+    packageManager: await detectPackageManager(cwd),
+    nextVersion: null,
+    srcDir: true,
+    appDir: "dev/src/app",
+  };
+}

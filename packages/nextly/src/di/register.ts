@@ -185,6 +185,7 @@ import {
   validateCrossPluginRelations,
 } from "../plugins/schema/validate-relations";
 import { extendTargetUnknownError } from "../plugins/schema-error";
+import { breachedPasswordsWarnings } from "../plugins/security/breached-passwords";
 import {
   clearPluginServices,
   registerPluginService,
@@ -2382,6 +2383,15 @@ export async function resolveBootPlugins(config: NextlyServiceConfig): Promise<{
     config,
     await applyPluginConfigTransformers(resolvedConfig)
   );
+  // A breached-password configuration the check cannot honour says so here,
+  // once, rather than leaving every plugin's check to answer "unchecked" in
+  // silence. Read from the transformed config, which is the one the plugin
+  // contexts receive: a `setup` transformer may have set it.
+  for (const warning of breachedPasswordsWarnings(
+    setupConfig.security?.breachedPasswords
+  )) {
+    (config.logger ?? consoleLogger).warn(warning);
+  }
 
   // RE-RESOLVED in full, not merely re-checked. A `setup` transformer may
   // add, rename or replace entries in `plugins`, and the rest of the boot

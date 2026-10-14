@@ -6,13 +6,29 @@
  * the frame from inside the mocked service: the service is where every access
  * decision below it reads the person from.
  */
-import { afterAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+
+// A plugin's services, as `nextly.plugins` hands them out.
+const pluginServices = vi.hoisted(() => ({
+  shop: {
+    orders: {
+      placeOrder: async (args: { principal: unknown }) =>
+        args.principal !== undefined,
+    },
+  },
+}));
+vi.mock("../../plugins/services/plugin-services-registry", async original => ({
+  ...(await original<
+    typeof import("../../plugins/services/plugin-services-registry")
+  >()),
+  buildPluginServicesNamespace: () => pluginServices,
+}));
 
 import type { AuthenticatedScope } from "../../auth/authenticated-scope";
 import { currentPrincipal, runAsPrincipal } from "../../auth/principal-scope";
 import { makePrincipal } from "../../plugins/principals/principal";
 import type { Principal } from "../../plugins/principals/types";
-import type { Nextly } from "../nextly";
+import { Nextly as NextlyClass, type Nextly } from "../nextly";
 
 import {
   resetMocks,
@@ -98,12 +114,24 @@ describe("a Direct API call made as a person", () => {
     expect(seen?.principal).toBeNull();
   });
 
+  it("runs an operation that cannot run as a person as no person, even inside a person's call", async () => {
+    // A hook's call to `forms` inside a person's operation reaches the same
+    // collection service, and must not be judged as the person there: the
+    // operation cannot be made as one.
+    await runAsPrincipal(person, () =>
+      nextly.forms.findBySlug({ slug: "contact", disableErrors: true })
+    );
+    expect(mocks.collectionsHandler.listEntries).toHaveBeenCalled();
+    expect(seen?.principal).toBeNull();
+  });
+
   it.each([
     ["sets overrideAccess: true", { overrideAccess: true }],
     ["sets trusted", { trusted: () => true }],
     ["names a staff user", { user: { id: "u1" } }],
     ["names a fieldAccessUser", { fieldAccessUser: { id: "u1" } }],
     ["names an API key", { actor: KEY }],
+    ["sets frameworkFilter", { frameworkFilter: true as const }],
   ])("is refused, and runs nothing, when it %s", async (_label, extra) => {
     await expect(
       nextly.find({ collection: "posts", principal: person, ...extra })
@@ -122,6 +150,19 @@ describe("a Direct API call made as a person", () => {
       })
     ).rejects.toMatchObject({ code: "INVALID_INPUT" });
     expect(mocks.collectionsHandler.listEntries).not.toHaveBeenCalled();
+  });
+
+  it("is refused on a count that sets frameworkFilter", async () => {
+    // A count answers 0 or 1 for a guessed value, so an exempted where on a
+    // field the person may not read would tell them what it holds.
+    await expect(
+      nextly.count({
+        collection: "posts",
+        principal: person,
+        frameworkFilter: true,
+      })
+    ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+    expect(mocks.collectionsHandler.countEntries).not.toHaveBeenCalled();
   });
 
   it("runs as the person with overrideAccess: false said outright", async () => {
@@ -194,5 +235,26 @@ describe("a Direct API call made as a person", () => {
     await expect(
       folders.create({ name: "x", principal: person })
     ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+  });
+
+  it("refuses a person as an instance default, which every call would ignore", () => {
+    // Ignored, the default would leave each call running as the server under
+    // the instance's `overrideAccess: true`.
+    expect(
+      () =>
+        new NextlyClass({
+          principal: person,
+        } as unknown as ConstructorParameters<typeof NextlyClass>[0])
+    ).toThrow(expect.objectContaining({ code: "INVALID_INPUT" }));
+  });
+
+  it("leaves a plugin's own services alone", async () => {
+    // A service is the plugin's code; `{ principal }` there is its own
+    // argument, not a request to run as a person.
+    const plugins = (nextly as unknown as { plugins: typeof pluginServices })
+      .plugins;
+    await expect(
+      plugins.shop.orders.placeOrder({ principal: person })
+    ).resolves.toBe(true);
   });
 });

@@ -30,6 +30,11 @@ export interface PersonCallOptions {
   trusted?: unknown;
   /** Who a plugin service call runs as: `user`, `system` or `public`. */
   as?: unknown;
+  /**
+   * The Direct API's word that a `where` was built by the framework, which
+   * exempts it from the filterable-field check a caller's own `where` gets.
+   */
+  frameworkFilter?: unknown;
 }
 
 function refusal(message: string): NextlyError {
@@ -74,6 +79,14 @@ export function assertRunnableAsPrincipal(
   if (options.as !== undefined) {
     throw refusal(
       "A call made as a signed-in person cannot also set as: it is made as the person."
+    );
+  }
+  // A person's `where` is the person's own, so it is held to the fields the
+  // person may read: exempted, a filter on a field their rules withhold would
+  // answer, row by row or as a count, what that field holds.
+  if (options.frameworkFilter !== undefined) {
+    throw refusal(
+      "A call made as a signed-in person cannot set frameworkFilter: its where is checked like any caller's."
     );
   }
 }
