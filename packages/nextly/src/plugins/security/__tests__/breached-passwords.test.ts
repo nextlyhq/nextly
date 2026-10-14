@@ -74,6 +74,25 @@ describe("asking the site's source", () => {
     });
   });
 
+  it.each([
+    ["an entry that is not a string", [null, SUFFIX]],
+    ["one string rather than a list", SUFFIX],
+    ["no list at all", { entries: [SUFFIX] }],
+  ])(
+    "leaves the password unchecked when the source answers %s",
+    async (_, answer) => {
+      // A source written in JavaScript, or one passing on a provider's decoded
+      // answer, can hand back anything its type says it will not.
+      const range = (async () => answer) as unknown as () => Promise<
+        readonly string[]
+      >;
+      expect(await check({ source: { range } })).toEqual({
+        ok: true,
+        breachedCheck: "unavailable",
+      });
+    }
+  );
+
   it("leaves the password unchecked when the source never answers in time", async () => {
     const range = () => new Promise<readonly string[]>(() => {});
     const started = performance.now();
