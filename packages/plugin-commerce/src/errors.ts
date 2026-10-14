@@ -44,7 +44,9 @@ export type CommerceErrorCode =
   /** A catalogue source that cannot be browsed, only looked up by reference. */
   | "COMMERCE_CATALOGUE_NOT_LISTABLE"
   /** A stored catalogue entry whose values the catalogue cannot carry, such as a fractional price. */
-  | "COMMERCE_CATALOGUE_ENTRY_INVALID";
+  | "COMMERCE_CATALOGUE_ENTRY_INVALID"
+  /** A checkout refused because the background jobs that finish it are not running. */
+  | "COMMERCE_JOBS_NOT_RUNNING";
 
 /**
  * Raise a commerce error.
@@ -93,6 +95,8 @@ const PUBLIC_MESSAGES: Record<CommerceErrorCode, string> = {
   COMMERCE_CATALOGUE_NOT_LISTABLE: "The catalogue cannot be browsed.",
   COMMERCE_CATALOGUE_ENTRY_INVALID:
     "A product is stored in a way commerce cannot use.",
+  COMMERCE_JOBS_NOT_RUNNING:
+    "Checkout is unavailable right now; please try again later.",
 };
 
 // A provider's broken answer is the server's fault, not the caller's, so it
@@ -106,7 +110,9 @@ const PUBLIC_MESSAGES: Record<CommerceErrorCode, string> = {
 // catalogue that only looks items up is a well-formed request its source
 // cannot serve: 409, like an operation a payment provider does not offer. A
 // product stored in a shape the catalogue cannot carry is the store's own data
-// at fault, not the caller's and not an upstream's: 500.
+// at fault, not the caller's and not an upstream's: 500. Checkout refused
+// while the store's background jobs are not running is the store being
+// unable to serve the request for now: 503.
 const STATUS_CODES: Record<CommerceErrorCode, number> = {
   COMMERCE_UNKNOWN_CURRENCY: 400,
   COMMERCE_INVALID_AMOUNT: 400,
@@ -127,4 +133,5 @@ const STATUS_CODES: Record<CommerceErrorCode, number> = {
   COMMERCE_CATALOGUE_UNAVAILABLE: 503,
   COMMERCE_CATALOGUE_NOT_LISTABLE: 409,
   COMMERCE_CATALOGUE_ENTRY_INVALID: 500,
+  COMMERCE_JOBS_NOT_RUNNING: 503,
 };
