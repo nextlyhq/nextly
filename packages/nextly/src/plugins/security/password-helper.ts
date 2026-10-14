@@ -23,6 +23,7 @@ import type { BreachedPasswordsConfig } from "../../shared/types/config";
 
 import { checkBreached } from "./breached-passwords";
 import { COMMON_PASSWORDS } from "./common-passwords";
+import { isWellFormed } from "./well-formed";
 
 /**
  * @experimental Hashing, verifying and checking passwords for a plugin's own
@@ -252,20 +253,6 @@ export function createPasswordHelper(
       };
     },
   };
-}
-
-/** A UTF-16 unit of a surrogate pair standing alone, in either order. */
-const LONE_SURROGATE =
-  /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
-
-/**
- * Whether the string is well-formed Unicode. One holding a lone surrogate,
- * which JSON can carry as an escape, would be encoded to UTF-8 with every such
- * unit replaced by the same character, so two different passwords would hash
- * alike. The helper refuses them rather than let them collapse.
- */
-function isWellFormed(text: string): boolean {
-  return !LONE_SURROGATE.test(text);
 }
 
 /** A validation error for a password that is not well-formed Unicode. */

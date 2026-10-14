@@ -528,6 +528,34 @@ export function generateSqliteCoreTableStatements(): string[] {
       "updated_by" TEXT,
       PRIMARY KEY ("owner", "key")
     )`,
+    `CREATE TABLE IF NOT EXISTS "nextly_one_time_secrets" (
+      "id" TEXT PRIMARY KEY NOT NULL,
+      "owner" TEXT NOT NULL,
+      "purpose" TEXT NOT NULL,
+      "subject" TEXT NOT NULL,
+      "subject_key" TEXT NOT NULL,
+      "kind" TEXT NOT NULL,
+      "secret_hash" TEXT NOT NULL,
+      "live_key" TEXT,
+      "issue_seq" INTEGER,
+      "data" TEXT,
+      "expires_at" INTEGER NOT NULL,
+      "spent_at" INTEGER,
+      "voided_at" INTEGER,
+      "wrong_tries" INTEGER NOT NULL DEFAULT 0,
+      "max_wrong_tries" INTEGER,
+      "created_at" INTEGER NOT NULL
+    )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS "nextly_one_time_secrets_live_key_unique"
+      ON "nextly_one_time_secrets" ("live_key")`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS "nextly_one_time_secrets_issue_unique"
+      ON "nextly_one_time_secrets" ("subject_key", "purpose", "kind", "issue_seq")`,
+    `CREATE INDEX IF NOT EXISTS "nextly_one_time_secrets_hash_idx"
+      ON "nextly_one_time_secrets" ("secret_hash")`,
+    `CREATE INDEX IF NOT EXISTS "nextly_one_time_secrets_subject_key_idx"
+      ON "nextly_one_time_secrets" ("subject_key")`,
+    `CREATE INDEX IF NOT EXISTS "nextly_one_time_secrets_expires_idx"
+      ON "nextly_one_time_secrets" ("expires_at")`,
     // The database limit store's counts, used when a site selects it. An
     // integer of milliseconds for the expiry, as the Drizzle bundle declares.
     `CREATE TABLE IF NOT EXISTS "${LIMIT_STORE_TABLE}" (

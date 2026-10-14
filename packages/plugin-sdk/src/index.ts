@@ -226,9 +226,11 @@ export type {
  * Core's security helpers, lent to a plugin for the people it signs in itself.
  * @experimental `PluginSecurityApi` (`ctx.security`); `PasswordHelper`
  *   (`ctx.security.passwords`) with `PasswordRules`, `PasswordCheck` and
- *   `PasswordTooLongError`; and `BreachedPasswordsConfig`, the site's
- *   `security.breachedPasswords`. Held experimental until a first-party plugin
- *   signs people in with them (see STABILITY.md).
+ *   `PasswordTooLongError`; `BreachedPasswordsConfig`, the site's
+ *   `security.breachedPasswords`; `OpaqueSecrets` (`ctx.security.opaque`); and
+ *   `OneTimeSecrets` (`ctx.security.secrets`) with `SecretData` and
+ *   `TxOption`. Held experimental until a first-party plugin signs people in
+ *   with them (see STABILITY.md).
  */
 export { PasswordTooLongError } from "nextly";
 export type {
@@ -237,6 +239,10 @@ export type {
   PasswordRules,
   PasswordCheck,
   BreachedPasswordsConfig,
+  OpaqueSecrets,
+  OneTimeSecrets,
+  SecretData,
+  TxOption,
 } from "nextly";
 
 /**

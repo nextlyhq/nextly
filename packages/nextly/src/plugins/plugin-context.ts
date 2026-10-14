@@ -52,6 +52,7 @@ import {
   type AfterCommitAdapter,
   runAdapterTransaction,
 } from "../shared/lib/run-adapter-transaction";
+import { secretGenerations } from "../shared/lib/secret-generations";
 import type { DatabaseInstance } from "../types/database-operations";
 
 import type { AdminPlacement } from "./admin-placement";
@@ -83,6 +84,15 @@ import type { PluginSinglesService } from "./plugin-singles";
 import { isInPluginNamespace } from "./plugin-slug";
 import { createPluginPrincipals } from "./principals/api";
 import type { PluginPrincipalsApi } from "./principals/types";
+import {
+  createOneTimeSecrets,
+  type OneTimeSecrets,
+  type SecretsAdapter,
+} from "./security/one-time-secrets";
+import {
+  createOpaqueSecrets,
+  type OpaqueSecrets,
+} from "./security/opaque-secrets";
 import {
   createPasswordHelper,
   type PasswordHelper,
@@ -656,6 +666,10 @@ export interface PluginContext {
 export interface PluginSecurityApi {
   /** Hashing, verifying and checking passwords. */
   readonly passwords: PasswordHelper;
+  /** Random secrets for the plugin's own records, with a stable hash. */
+  readonly opaque: OpaqueSecrets;
+  /** One-purpose links and codes, spent once. */
+  readonly secrets: OneTimeSecrets;
 }
 
 /** @experimental Writing one plugin's declared audit events. */
@@ -1449,6 +1463,36 @@ function asTransactionContext(
     : undefined;
 }
 
+/** Whether `value` has every method the one-purpose secrets helper calls. */
+function isSecretsAdapter(value: unknown): value is SecretsAdapter {
+  if (typeof value !== "object" || value === null) return false;
+  const methods: readonly (keyof SecretsAdapter)[] = [
+    "transaction",
+    "select",
+    "transactionOpenInFlow",
+  ];
+  return methods.every(
+    name => typeof (value as Record<string, unknown>)[name] === "function"
+  );
+}
+
+/**
+ * The adapter as the one-purpose secrets helper uses it. The resolver's
+ * contract names only the transaction methods, and every adapter core ships
+ * has the rest; one that does not is refused with a clear error, rather than
+ * failing on a missing method partway through a secret's write.
+ */
+function asSecretsAdapter(adapter: AdapterTransactions): SecretsAdapter {
+  if (isSecretsAdapter(adapter)) return adapter;
+  throw new NextlyError({
+    code: "INTERNAL_ERROR",
+    publicMessage: "An unexpected error occurred.",
+    logMessage:
+      "The adapter this plugin context resolves has no select or transactionOpenInFlow, which one-purpose secrets need.",
+    logContext: { reason: "secrets-adapter-incomplete" },
+  });
+}
+
 /**
  * @experimental The handle a plugin receives as `ctx.db.raw`: Drizzle's fluent
  * builder and a transaction whose handle is the same restricted builder. For
@@ -2026,6 +2070,21 @@ export function createPluginContext(
       passwords: createPasswordHelper({
         breachedPasswords: config.security?.breachedPasswords,
         logger,
+      }),
+      opaque: createOpaqueSecrets(),
+      // Kept within this plugin's name. The adapter is read per call, as the
+      // context can be built before the database connects, and through this
+      // context's own resolver rather than the global container: a context
+      // outlives a container being cleared, as on a reload while old plugins
+      // finish tearing down. The install's secrets are read per call so a
+      // rotation applies at once.
+      secrets: createOneTimeSecrets({
+        owner: plugin?.name ?? "nextly",
+        adapter: () => asSecretsAdapter(getServiceFn("adapter")),
+        // Every generation, the unkeyed one included: a secret minted before
+        // NEXTLY_SECRET was set stays readable while '[null]' keeps it.
+        secrets: () =>
+          secretGenerations(env.NEXTLY_SECRET, env.NEXTLY_SECRET_PREVIOUS),
       }),
     },
     // Present only when the plugin declared a settings schema: without one
