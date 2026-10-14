@@ -276,6 +276,22 @@ describe("the test payment provider", () => {
     expect(control.refunds()).toHaveLength(0);
   });
 
+  it("cancels a payment still processing, as its cancel capability promises for an unpaid one", async () => {
+    const { provider } = createTestPaymentProvider();
+    const processing = await confirmed(
+      provider,
+      1000,
+      TEST_PAYMENT_METHODS.processing
+    );
+    expect(processing.status).toBe("processing");
+    const cancelled = await present(provider.cancel)({
+      operationId: "op-3",
+      providerReference: processing.providerReference,
+    });
+    expect(cancelled.status).toBe("cancelled");
+    expect(cancelled.amountCaptured.amount).toBe(0);
+  });
+
   it("refuses a partial refund when it does not offer them", async () => {
     const { provider } = createTestPaymentProvider({
       capabilities: { partialRefund: false },

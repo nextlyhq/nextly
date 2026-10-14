@@ -329,9 +329,15 @@ export function createTestPaymentProvider(
     return view(p);
   }
 
+  // Every status before paid can be cancelled, as the cancel capability
+  // promises for a payment not yet paid: a bank debit still processing too.
   function cancel(input: PaymentOperationInput): ProviderPayment {
     const p = record(input.providerReference);
-    requireStatus(p, ["pending", "requires_action", "authorised"], "cancel");
+    requireStatus(
+      p,
+      ["pending", "requires_action", "processing", "authorised"],
+      "cancel"
+    );
     p.status = "cancelled";
     return view(p);
   }
