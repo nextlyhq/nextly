@@ -15,7 +15,8 @@ import { TEST_ORIGIN } from "./boot";
  */
 export function flowDeps(
   ctx: PluginContext,
-  options: Partial<AccountsOptions> = {}
+  options: Partial<AccountsOptions> = {},
+  existing?: FakeAccountsCore
 ): {
   deps: FlowDeps;
   core: FakeAccountsCore;
@@ -27,7 +28,8 @@ export function flowDeps(
   emitted: Array<{ name: string; payload: unknown }>;
 } {
   const settings = resolveAccountsSettings({ origin: TEST_ORIGIN, ...options });
-  const core = fakeAccountsCore({ rules: accountsLimitRules(settings) });
+  const core =
+    existing ?? fakeAccountsCore({ rules: accountsLimitRules(settings) });
   const mail = new FakeAccountsMail();
   const warnings: string[] = [];
   const pacing = { checks: 0, waits: 0 };
