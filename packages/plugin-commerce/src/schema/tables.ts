@@ -221,12 +221,12 @@ export const payments = defineTable(
     provider: col.varchar(64),
     // Which account at the provider the payment was begun with (empty for a
     // provider that names none): its later steps go to that account alone,
-    // and a provider's references are unique within it.
+    // and its reference is keyed within it.
     providerAccount: col.varchar(255, { default: "" }),
     providerReference: col.varchar(255, { nullable: true }),
-    // What the provider's reference is kept unique by: a provider's own ids
-    // can differ only in case, which MySQL's default collation would take as
-    // one (see `referenceKey`).
+    // What the provider's reference is kept unique by, with the account it
+    // was issued in: ids and accounts can differ only in case, which MySQL's
+    // default collation would take as one (see `providerReferenceKey`).
     providerReferenceKey: col.char(64, { nullable: true }),
     status: col.enum([
       "pending",
@@ -248,10 +248,7 @@ export const payments = defineTable(
     indexes: [
       { columns: ["reference"], unique: true },
       { columns: ["startOperationId"], unique: true },
-      {
-        columns: ["provider", "providerAccount", "providerReferenceKey"],
-        unique: true,
-      },
+      { columns: ["provider", "providerReferenceKey"], unique: true },
       { columns: ["orderId"] },
     ],
     foreignKeys: [

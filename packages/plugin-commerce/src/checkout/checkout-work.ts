@@ -15,7 +15,7 @@ import {
 import { commerceError } from "../errors";
 import { money, type Money } from "../money/money";
 import { ownTransaction } from "../own-transaction";
-import { referenceKey } from "../schema/reference-key";
+import { providerReferenceKey } from "../schema/reference-key";
 import { orders, payments, stockHolds } from "../schema/tables";
 import type { WorkHandler, WorkItem } from "../work/work-runner";
 
@@ -178,7 +178,11 @@ function assertAnswerFor(
  */
 async function recordStart(
   db: PluginDatabase,
-  payment: { readonly id: string; readonly version: number },
+  payment: {
+    readonly id: string;
+    readonly version: number;
+    readonly providerAccount: string;
+  },
   answer: ProviderPayment | null,
   now: Date
 ): Promise<void> {
@@ -190,7 +194,10 @@ async function recordStart(
         answer
           ? {
               providerReference: answer.providerReference,
-              providerReferenceKey: referenceKey(answer.providerReference),
+              providerReferenceKey: providerReferenceKey(
+                payment.providerAccount,
+                answer.providerReference
+              ),
               status: answer.status,
               failureCode: answer.failureCode ?? null,
               version: payment.version + 1,

@@ -8,20 +8,20 @@
 import type { PluginMigration } from "@nextlyhq/plugin-sdk/schema";
 
 export default {
-  name: "20261014_130826_255_key_provider_references",
+  name: "20261014_131952_270_key_provider_references",
   schemaVersion: 3,
-  checksum: "4286eba7dfccbf98378859bb4b63b3ad3d01f4e0713c96d89e511a6679ff0960",
+  checksum: "7f90d017d2c57cfe07495d338587f855bb0f77feb2f5fb06e0435fc8667f1c06",
   dialects: {
     postgresql: {
       up: [
         'ALTER TABLE "commerce__payments" ADD COLUMN "provider_account" text NOT NULL DEFAULT \'\'',
         'ALTER TABLE "commerce__payments" ADD COLUMN "provider_reference_key" bpchar(64)',
-        'CREATE UNIQUE INDEX IF NOT EXISTS "uq_commerce__payments_provider_provider_account_provide_17a76gc" ON "commerce__payments" ("provider", "provider_account", "provider_reference_key")',
+        'CREATE UNIQUE INDEX IF NOT EXISTS "uq_commerce__payments_provider_provider_reference_key_036qlwv" ON "commerce__payments" ("provider", "provider_reference_key")',
         'ALTER TABLE "commerce__payments" DROP CONSTRAINT IF EXISTS "uq_commerce__payments_provider_provider_reference_0s0x4mn"; DROP INDEX IF EXISTS "uq_commerce__payments_provider_provider_reference_0s0x4mn"',
       ],
       down: [
         'CREATE UNIQUE INDEX IF NOT EXISTS "uq_commerce__payments_provider_provider_reference_0s0x4mn" ON "commerce__payments" ("provider", "provider_reference")',
-        'ALTER TABLE "commerce__payments" DROP CONSTRAINT IF EXISTS "uq_commerce__payments_provider_provider_account_provide_17a76gc"; DROP INDEX IF EXISTS "uq_commerce__payments_provider_provider_account_provide_17a76gc"',
+        'ALTER TABLE "commerce__payments" DROP CONSTRAINT IF EXISTS "uq_commerce__payments_provider_provider_reference_key_036qlwv"; DROP INDEX IF EXISTS "uq_commerce__payments_provider_provider_reference_key_036qlwv"',
         'ALTER TABLE "commerce__payments" DROP COLUMN "provider_reference_key"',
         'ALTER TABLE "commerce__payments" DROP COLUMN "provider_account"',
       ],
@@ -30,12 +30,12 @@ export default {
       up: [
         "ALTER TABLE `commerce__payments` ADD COLUMN `provider_account` varchar(255) NOT NULL DEFAULT ''",
         "ALTER TABLE `commerce__payments` ADD COLUMN `provider_reference_key` char(64)",
-        "CREATE UNIQUE INDEX `uq_commerce__payments_provider_provider_account_provide_17a76gc` ON `commerce__payments` (`provider`, `provider_account`, `provider_reference_key`)",
+        "CREATE UNIQUE INDEX `uq_commerce__payments_provider_provider_reference_key_036qlwv` ON `commerce__payments` (`provider`, `provider_reference_key`)",
         "DROP INDEX `uq_commerce__payments_provider_provider_reference_0s0x4mn` ON `commerce__payments`",
       ],
       down: [
         "CREATE UNIQUE INDEX `uq_commerce__payments_provider_provider_reference_0s0x4mn` ON `commerce__payments` (`provider`, `provider_reference`)",
-        "DROP INDEX `uq_commerce__payments_provider_provider_account_provide_17a76gc` ON `commerce__payments`",
+        "DROP INDEX `uq_commerce__payments_provider_provider_reference_key_036qlwv` ON `commerce__payments`",
         "ALTER TABLE `commerce__payments` DROP COLUMN `provider_reference_key`",
         "ALTER TABLE `commerce__payments` DROP COLUMN `provider_account`",
       ],
@@ -44,12 +44,12 @@ export default {
       up: [
         'ALTER TABLE "commerce__payments" ADD COLUMN "provider_account" text NOT NULL DEFAULT \'\'',
         'ALTER TABLE "commerce__payments" ADD COLUMN "provider_reference_key" text',
-        'CREATE UNIQUE INDEX IF NOT EXISTS "uq_commerce__payments_provider_provider_account_provide_17a76gc" ON "commerce__payments" ("provider", "provider_account", "provider_reference_key")',
+        'CREATE UNIQUE INDEX IF NOT EXISTS "uq_commerce__payments_provider_provider_reference_key_036qlwv" ON "commerce__payments" ("provider", "provider_reference_key")',
         'DROP INDEX IF EXISTS "uq_commerce__payments_provider_provider_reference_0s0x4mn"',
       ],
       down: [
         'CREATE UNIQUE INDEX IF NOT EXISTS "uq_commerce__payments_provider_provider_reference_0s0x4mn" ON "commerce__payments" ("provider", "provider_reference")',
-        'DROP INDEX IF EXISTS "uq_commerce__payments_provider_provider_account_provide_17a76gc"',
+        'DROP INDEX IF EXISTS "uq_commerce__payments_provider_provider_reference_key_036qlwv"',
         'ALTER TABLE "commerce__payments" DROP COLUMN "provider_reference_key"',
         'ALTER TABLE "commerce__payments" DROP COLUMN "provider_account"',
       ],
@@ -572,12 +572,8 @@ export default {
               unique: true,
             },
             {
-              name: "uq_commerce__payments_provider_provider_account_provide_17a76gc",
-              columns: [
-                "provider",
-                "provider_account",
-                "provider_reference_key",
-              ],
+              name: "uq_commerce__payments_provider_provider_reference_key_036qlwv",
+              columns: ["provider", "provider_reference_key"],
               unique: true,
             },
             {
@@ -1406,12 +1402,8 @@ export default {
               unique: true,
             },
             {
-              name: "uq_commerce__payments_provider_provider_account_provide_17a76gc",
-              columns: [
-                "provider",
-                "provider_account",
-                "provider_reference_key",
-              ],
+              name: "uq_commerce__payments_provider_provider_reference_key_036qlwv",
+              columns: ["provider", "provider_reference_key"],
               unique: true,
             },
             {
@@ -2238,12 +2230,8 @@ export default {
               unique: true,
             },
             {
-              name: "uq_commerce__payments_provider_provider_account_provide_17a76gc",
-              columns: [
-                "provider",
-                "provider_account",
-                "provider_reference_key",
-              ],
+              name: "uq_commerce__payments_provider_provider_reference_key_036qlwv",
+              columns: ["provider", "provider_reference_key"],
               unique: true,
             },
             {

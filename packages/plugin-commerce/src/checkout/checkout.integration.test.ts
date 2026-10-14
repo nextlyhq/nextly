@@ -1158,7 +1158,7 @@ describe.each(getConfiguredTestDialects())(
       expect(first.control.payments()).toHaveLength(1);
     });
 
-    it("keeps a provider reference unique within its account: two accounts may share one, one account may not", async () => {
+    it("keeps a provider reference unique within its account, exactly: two accounts may share one, one account may not", async () => {
       // Each account answers every start with the same account-local id.
       const sharing = (account?: string): PaymentProvider => {
         const { provider } = createTestPaymentProvider(
@@ -1173,7 +1173,8 @@ describe.each(getConfiguredTestDialects())(
         };
       };
       const first = sharing("acct_first");
-      const second = sharing("acct_second");
+      // Another account whose id differs only in case, as a provider's may.
+      const second = sharing("acct_First");
       const { ctx, checkout, cart } = await setup({ provider: first });
       const place = async (payments: PaymentProvider) => {
         const token = await shopper(cart, [["bolt", 1]]);
@@ -1193,9 +1194,9 @@ describe.each(getConfiguredTestDialects())(
       expect(
         rows.map(row => [row.providerAccount, row.providerReference]).sort()
       ).toEqual([
+        ["acct_First", "pi_same"],
         ["acct_first", null],
         ["acct_first", "pi_same"],
-        ["acct_second", "pi_same"],
       ]);
     });
 
