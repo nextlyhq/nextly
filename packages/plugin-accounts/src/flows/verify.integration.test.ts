@@ -280,6 +280,23 @@ describe.each(getConfiguredTestDialects())(
       ).not.toBeNull();
     });
 
+    it("keeps the first email's link working after a repeated sign-up, and it starts the session there", async () => {
+      const { db, deps, core, linkToken, browserToken } = await signedUp();
+      // The repeat is sent once the first sign-up has answered.
+      await signUp(deps, { ...dana, browserToken });
+
+      const result = verified(
+        await verifyByLink(deps, { token: linkToken, browserToken })
+      );
+      expect(
+        await liveSession(
+          db,
+          core.opaque.hash(required(result.session).token),
+          deps.now()
+        )
+      ).not.toBeNull();
+    });
+
     it("verifies a deactivated account's address, leaves it deactivated, and starts no session", async () => {
       const { db, deps, linkToken, account, browserToken } = await signedUp();
       await writeAtVersion(
