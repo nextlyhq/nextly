@@ -76,6 +76,10 @@ import { createPluginSettings } from "./plugin-settings-provider";
 import { wrapSinglesForPlugin } from "./plugin-singles";
 import type { PluginSinglesService } from "./plugin-singles";
 import { isInPluginNamespace } from "./plugin-slug";
+import {
+  createPasswordHelper,
+  type PasswordHelper,
+} from "./security/password-helper";
 import type { PluginSelf } from "./self";
 import { resolvePluginSelf } from "./self";
 import { methodFacade } from "./service-facade";
@@ -575,6 +579,15 @@ export interface PluginContext {
   auth: PluginAuthApi;
 
   /**
+   * @experimental Core's security helpers, lent to the plugin for the people
+   * it signs in itself: `passwords` hashes, verifies and checks passwords.
+   *
+   * Independent of the staff path's hashing and of an app's
+   * `passwordHasher`: a plugin's people never share a format with staff.
+   */
+  security: PluginSecurityApi;
+
+  /**
    * @experimental This plugin's stored configuration.
    *
    * Present only when the plugin declares `contributes.settings`. Values are
@@ -607,6 +620,12 @@ export interface PluginContext {
    * stored would be the worse outcome.
    */
   audit?: PluginAuditApi;
+}
+
+/** @experimental Core's security helpers on `ctx.security`. */
+export interface PluginSecurityApi {
+  /** Hashing, verifying and checking passwords. */
+  readonly passwords: PasswordHelper;
 }
 
 /** @experimental Writing one plugin's declared audit events. */
@@ -1949,6 +1968,14 @@ export function createPluginContext(
     // Bound to the plugin, so `completeLogin` answers to its manifest; a
     // context built for no plugin is core's own and gets the shared one.
     auth: plugin ? getPluginAuthApiFor(plugin) : getPluginAuthApi(),
+    // Built once here and kept as a plain property, like `auth`: it holds no
+    // per-request state, so the copy every route spreads is the same helper.
+    security: {
+      passwords: createPasswordHelper({
+        breachedPasswords: config.security?.breachedPasswords,
+        logger,
+      }),
+    },
     // Present only when the plugin declared a settings schema: without one
     // there is nothing to validate a write against, and an untyped bag is
     // exactly what this store exists to replace.

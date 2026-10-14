@@ -185,6 +185,7 @@ import {
   validateCrossPluginRelations,
 } from "../plugins/schema/validate-relations";
 import { extendTargetUnknownError } from "../plugins/schema-error";
+import { breachedPasswordsSourceWarning } from "../plugins/security/breached-passwords";
 import {
   clearPluginServices,
   registerPluginService,
@@ -2370,6 +2371,14 @@ export async function resolveBootPlugins(config: NextlyServiceConfig): Promise<{
     pluginConsent
   )) {
     (config.logger ?? consoleLogger).warn(warning);
+  }
+  // A breached-password source that will never be asked says so here, once,
+  // rather than leaving every plugin's check to answer "unchecked" in silence.
+  const breachedSourceWarning = breachedPasswordsSourceWarning(
+    config.security?.breachedPasswords
+  );
+  if (breachedSourceWarning) {
+    (config.logger ?? consoleLogger).warn(breachedSourceWarning);
   }
   const resolvedConfig = setupTransformerInput(config, resolvedPlugins);
 
