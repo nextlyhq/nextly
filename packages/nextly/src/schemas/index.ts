@@ -55,6 +55,10 @@ import { jobsTables } from "./jobs";
 import { mediaTables } from "./media";
 import { nextlyI18nArchiveTables } from "./nextly-i18n-archive";
 import { nextlyMetaTables } from "./nextly-meta";
+import {
+  ONE_TIME_SECRETS_TABLE,
+  oneTimeSecretsTables,
+} from "./one-time-secrets";
 import { PLUGIN_SETTINGS_TABLE, pluginSettingsTables } from "./plugin-settings";
 import { rbacTables } from "./rbac";
 import { RBAC_EPOCH_TABLE, rbacEpochTables } from "./rbac-epoch";
@@ -189,6 +193,10 @@ export function getCoreSchema(
     // same reason as its neighbours: a table outside this set is never created
     // on a real installation, however completely its own module declares it.
     ...Object.values(pluginSettingsTables(dialect)),
+    // `nextly_one_time_secrets` — the one-purpose links and codes plugins
+    // mint, each stored only as a keyed hash. Declared here for the same
+    // reason as its neighbours.
+    ...Object.values(oneTimeSecretsTables(dialect)),
     // `nextly_schema_owners` — which owner each table belongs to, and which
     // migration stream carries it. A table with no row here is never dropped
     // by any path, so absence is the safe answer rather than an invitation.
@@ -313,6 +321,7 @@ export const CORE_TABLE_NAMES: readonly string[] = [
   "nextly_document_lock",
   RBAC_EPOCH_TABLE,
   PLUGIN_SETTINGS_TABLE,
+  ONE_TIME_SECRETS_TABLE,
   SCHEMA_OWNERS_TABLE,
   "nextly_widget_layout",
   "dynamic_collections",
