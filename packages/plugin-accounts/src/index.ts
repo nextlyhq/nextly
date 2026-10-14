@@ -6,6 +6,7 @@
  * @module index
  */
 export { accountsError, type AccountsErrorCode } from "./errors";
+export { accounts } from "./plugin";
 export {
   resolveAccountsSettings,
   type AccountsOptions,
