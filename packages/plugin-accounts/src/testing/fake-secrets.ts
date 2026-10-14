@@ -179,8 +179,12 @@ export class FakeOneTimeSecrets implements OneTimeSecrets {
           secret.purpose === input.purpose &&
           secret.subject === input.subject
       );
-    if (stored === undefined) return { ok: false, reason: "none" };
-    if (stored.state !== "live" || stored.claimed)
+    // As core: with no live code, the newest one decides. Spent, it says so;
+    // voided (replaced, its tries run out, or voided by a change), there is
+    // no code to try.
+    if (stored === undefined || stored.state === "void")
+      return { ok: false, reason: "none" };
+    if (stored.state === "spent" || stored.claimed)
       return { ok: false, reason: "spent" };
     if (this.#clock.now() >= stored.expiresAt)
       return { ok: false, reason: "expired" };
@@ -272,8 +276,10 @@ export class FakeOneTimeSecrets implements OneTimeSecrets {
         secret.purpose === input.purpose &&
         secret.value === hash
     );
-    if (stored === undefined) return { ok: false, reason: "invalid" };
-    if (stored.state !== "live" || stored.claimed)
+    // As core: a voided token is no token at all; only a spent one says so.
+    if (stored === undefined || stored.state === "void")
+      return { ok: false, reason: "invalid" };
+    if (stored.state === "spent" || stored.claimed)
       return { ok: false, reason: "spent" };
     if (this.#clock.now() >= stored.expiresAt)
       return { ok: false, reason: "expired" };
