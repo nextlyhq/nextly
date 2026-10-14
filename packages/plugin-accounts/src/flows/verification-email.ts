@@ -1,4 +1,8 @@
-import type { AccountRow, AccountsDb } from "../storage/accounts";
+import {
+  holdWhileUnverified,
+  type AccountRow,
+  type AccountsDb,
+} from "../storage/accounts";
 
 import { HOUR, MINUTE, type FlowDeps } from "./deps";
 import { pageLink } from "./links";
@@ -38,6 +42,22 @@ export async function mintVerification(
   );
 
   return { link, code, notMe };
+}
+
+/**
+ * Mints the verification secrets while the account is held unverified at
+ * the version read, so a verification or a change that ends sessions which
+ * committed since is seen and nothing is minted (null).
+ */
+export async function mintWhileUnverified(
+  deps: FlowDeps,
+  account: Pick<AccountRow, "id" | "securityVersion">
+): Promise<MintedVerification | null> {
+  return deps.db.transaction(async tx =>
+    (await holdWhileUnverified(tx, account))
+      ? mintVerification(deps, tx, account.id)
+      : null
+  );
 }
 
 export async function queueVerification(

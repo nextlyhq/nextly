@@ -22,8 +22,10 @@ import {
   createAccount,
   writeAtVersion,
 } from "../storage/accounts";
+import { liveSession, touchSession } from "../storage/sessions";
 import { bootAccounts } from "../test-support/boot";
 import { flowDeps } from "../test-support/flow-deps";
+import { commitBeforeFirstTransaction } from "../test-support/race";
 
 import { sessionAccount, signOut, signOutEverywhere } from "./sessions";
 import { signIn, type SignInResult } from "./sign-in";
@@ -168,19 +170,12 @@ describe.each(getConfiguredTestDialects())(
       // and a sign-in made since with the new password.
       const raced = {
         ...deps,
-        db: new Proxy(deps.db, {
-          get(target, key, receiver) {
-            if (key !== "transaction" || later !== undefined)
-              return Reflect.get(target, key, receiver) as unknown;
-            return async (work: Parameters<typeof target.transaction>[0]) => {
-              await signOut(deps, { sessionToken: asking.session.token });
-              const fresh = await accountById(db, accountId);
-              if (fresh !== null)
-                await writeAtVersion(db, fresh, {}, { endsSessions: true });
-              later = await browser();
-              return target.transaction(work);
-            };
-          },
+        db: commitBeforeFirstTransaction(deps.db, async () => {
+          await signOut(deps, { sessionToken: asking.session.token });
+          const fresh = await accountById(db, accountId);
+          if (fresh !== null)
+            await writeAtVersion(db, fresh, {}, { endsSessions: true });
+          later = await browser();
         }),
       };
 
@@ -190,6 +185,26 @@ describe.each(getConfiguredTestDialects())(
       expect(
         await sessionAccount(deps, { sessionToken: later?.session.token ?? "" })
       ).not.toBeNull();
+    });
+
+    it("never moves a session's idle expiry back for a slower request's older use", async () => {
+      const { db, deps, core, browser } = await boot();
+      const { session } = await browser();
+      const row = await liveSession(
+        db,
+        core.opaque.hash(session.token),
+        deps.now()
+      );
+      if (row === null) throw new Error("expected a live session");
+      const limits = { idleMs: 10 * HOUR };
+      const at = (hours: number) =>
+        new Date(row.lastUsedAt.getTime() + hours * HOUR);
+
+      expect(await touchSession(db, row, at(3), limits)).toBe(true);
+      expect(await touchSession(db, row, at(2), limits)).toBe(false);
+      expect(
+        (await liveSession(db, row.tokenHash, at(3)))?.idleExpiresAt
+      ).toEqual(new Date(at(3).getTime() + 10 * HOUR));
     });
 
     it("leaves no session from a sign-in under way when it commits", async () => {

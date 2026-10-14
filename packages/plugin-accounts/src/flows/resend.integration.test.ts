@@ -17,6 +17,7 @@ import { accountByAddress, writeAtVersion } from "../storage/accounts";
 import { knownBrowserOf, makeAccount } from "../test-support/accounts";
 import { bootAccounts } from "../test-support/boot";
 import { flowDeps } from "../test-support/flow-deps";
+import { commitBeforeFirstTransaction } from "../test-support/race";
 
 import { resendVerification } from "./resend";
 import { signUp } from "./sign-up";
@@ -80,6 +81,31 @@ describe.each(getConfiguredTestDialects())(
       expect(mail.queued.map(email => [email.kind, email.to])).toEqual([
         ["verify-address", "pending@example.com"],
       ]);
+    });
+
+    it("sends nothing once the address's verification commits after the account was read", async () => {
+      const { ctx, deps, mail } = await boot();
+      await signUpAs(deps, "pending@example.com");
+      mail.queued.length = 0;
+      const raced = {
+        ...deps,
+        db: commitBeforeFirstTransaction(deps.db, async () => {
+          const pending = await accountByAddress(ctx.db, "pending@example.com");
+          if (pending !== null)
+            await writeAtVersion(ctx.db, pending, {
+              verifiedAt: new Date(),
+              verifiedBy: "link",
+            });
+        }),
+      };
+
+      expect(
+        await resendVerification(raced, {
+          address: "pending@example.com",
+          client,
+        })
+      ).toEqual({ status: "accepted" });
+      expect(mail.queued).toEqual([]);
     });
 
     it("sends a fresh code that voids the earlier one, in the browser that signed up", async () => {
