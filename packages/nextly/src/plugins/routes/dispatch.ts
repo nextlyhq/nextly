@@ -16,6 +16,7 @@ import {
 } from "../../auth/middleware";
 import { toNextlyAuthError } from "../../auth/middleware/to-nextly-error";
 import { beginSessionConsultation } from "../../auth/plugin-auth-api";
+import { getSession } from "../../auth/session/get-session";
 import { NextlyError } from "../../errors/nextly-error";
 import { runWithRequestScope } from "../../hooks/request-scope";
 import { currentFlattenedErrors } from "../../hooks/side-effect-warnings";
@@ -121,10 +122,10 @@ async function resolvePluginRouteAuth(
       caller: null,
       principal: null,
       // No credential resolved anyone on a public route, and a handler may
-      // still resolve the session cookie through ctx.auth.currentUser — so the
-      // session cookie itself is what decides, not the presence of any
-      // cookie at all.
-      credential: publicCallerCredential(req),
+      // still resolve the session cookie through ctx.auth.currentUser — so
+      // whether that cookie authenticates is what decides, not the presence
+      // of it or of any other cookie.
+      credential: publicCallerCredential(req, await sessionAuthenticates(req)),
     };
   }
 
@@ -144,6 +145,19 @@ async function resolvePluginRouteAuth(
 }
 
 /**
+ * Whether the request's session cookie authenticates anyone.
+ *
+ * Through `getSession` with the secret `requireAuthentication` and
+ * `ctx.auth.currentUser` verify it with, so a public route's caller counts as
+ * signed in exactly when its handler would see a user. An expired or malformed
+ * cookie authenticates nobody, and its caller is anonymous.
+ */
+async function sessionAuthenticates(req: Request): Promise<boolean> {
+  const { env } = await import("../../lib/env");
+  return (await getSession(req, env.NEXTLY_SECRET || "")).authenticated;
+}
+
+/**
  * Auth for a route that asks for a plugin's kind of signed-in person.
  *
  * A route that requires the kind refuses a request with nobody of it exactly
@@ -154,8 +168,10 @@ async function resolvePluginRouteAuth(
  * A plugin's session is whatever the plugin made it, so core cannot tell its
  * cookie from its header; treating the person as a cookie caller holds their
  * writes to the route's cross-site check, and a `Bearer` token exempts by its
- * presence, as it does for every caller. Nobody recognised is no credential:
- * there is no one a forged request could act for.
+ * presence, as it does for every caller, whether or not anyone was
+ * recognised. Nobody recognised and no `Bearer` token is an anonymous caller,
+ * held to the origin check where the route sets `csrf: true`, as any
+ * anonymous write to such a route is.
  */
 async function principalRouteAuth(
   req: Request,
@@ -195,12 +211,13 @@ async function principalRouteAuth(
     user: null,
     caller: null,
     principal,
-    credential:
-      principal === null
+    // The Bearer token first: it exempts by its presence whether or not
+    // anyone was recognised, so nobody recognised does not take it away.
+    credential: carriesBearerToken(req)
+      ? "bearer"
+      : principal === null
         ? "none"
-        : carriesBearerToken(req)
-          ? "bearer"
-          : "cookie",
+        : "cookie",
   };
 }
 

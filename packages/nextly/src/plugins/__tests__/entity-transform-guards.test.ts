@@ -24,6 +24,7 @@ function entity(slug: string, fields: Record<string, unknown>[]) {
 function contribution(transform: (definition: unknown) => unknown) {
   return {
     source: "@acme/fx",
+    name: "@acme/fx",
     transforms: [{ target: "posts", kind: "collection" as const, transform }],
   };
 }
@@ -83,7 +84,8 @@ describe("a transform that mutates instead of returning", () => {
         ...(definition as object),
         fields: [
           ...(definition as { fields: unknown[] }).fields,
-          { name: "added" },
+          // A whole field: the result is validated as a definition would be.
+          { name: "added", type: "text" },
         ],
       })),
     ] as never);

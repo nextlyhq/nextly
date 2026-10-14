@@ -31,13 +31,17 @@ const cfg = (partial: Partial<NextlyServiceConfig>): NextlyServiceConfig =>
 const plugin = (
   name: string,
   contributes: PluginContributions,
-  enabled = true
+  enabled = true,
+  dependsOn: string[] = []
 ): PluginDefinition => ({
   name,
   version: "1.0.0",
   nextly: ">=0.0.0",
   enabled,
   contributes,
+  ...(dependsOn.length > 0
+    ? { dependsOn: Object.fromEntries(dependsOn.map(on => [on, "*"])) }
+    : {}),
 });
 
 const slugs = (entities: { slug: string }[] | undefined): string[] =>
@@ -724,14 +728,19 @@ describe("applyPluginSchemaContributions (transforms — C11)", () => {
     const config = cfg({ collections: [] });
     const plugins = [
       plugin("plugin-a", { collections: [coll("a-forms")] }),
-      plugin("plugin-b", {
-        transforms: [
-          {
-            target: "a-forms",
-            transform: entity => ({ ...entity, internal: true }),
-          },
-        ],
-      }),
+      plugin(
+        "plugin-b",
+        {
+          transforms: [
+            {
+              target: "a-forms",
+              transform: entity => ({ ...entity, internal: true }),
+            },
+          ],
+        },
+        true,
+        ["plugin-a"]
+      ),
     ];
 
     const result = applyPluginSchemaContributions(config, plugins);
@@ -764,17 +773,22 @@ describe("applyPluginSchemaContributions (transforms — C11)", () => {
     let frozen: boolean | undefined;
     const plugins = [
       plugin("plugin-a", { collections: [coll("a-forms")] }),
-      plugin("plugin-b", {
-        transforms: [
-          {
-            target: "a-forms",
-            transform: entity => {
-              frozen = Object.isFrozen(entity);
-              return { ...entity };
+      plugin(
+        "plugin-b",
+        {
+          transforms: [
+            {
+              target: "a-forms",
+              transform: entity => {
+                frozen = Object.isFrozen(entity);
+                return { ...entity };
+              },
             },
-          },
-        ],
-      }),
+          ],
+        },
+        true,
+        ["plugin-a"]
+      ),
     ];
 
     applyPluginSchemaContributions(cfg({ collections: [] }), plugins);
@@ -835,7 +849,8 @@ describe("applyPluginSchemaContributions (a disabled plugin's transforms)", () =
           },
         ],
       },
-      enabled
+      enabled,
+      ["plugin-a"]
     );
 
   const formsOf = (enabled: boolean) =>
@@ -890,7 +905,8 @@ describe("applyPluginSchemaContributions (behaviour a disabled plugin's transfor
       plugin(
         "plugin-b",
         { transforms: [{ target: "a-forms", transform: change }] },
-        false
+        false,
+        ["plugin-a"]
       ),
     ]).collections?.[0] as unknown as {
       hooks?: { beforeChange?: unknown[] };
@@ -950,7 +966,8 @@ describe("applyPluginSchemaContributions (behaviour a disabled plugin's transfor
             },
           ],
         },
-        false
+        false,
+        ["plugin-a"]
       ),
     ]).collections?.[0] as unknown as {
       admin: { components: unknown };
@@ -973,6 +990,223 @@ describe("applyPluginSchemaContributions (behaviour a disabled plugin's transfor
       ],
     }));
     expect(forms.fields[0]?.defaultValue).toEqual({ access: "public", n: 2 });
+  });
+
+  it("adds no access rule to a field nested under a key other than `fields` or `blocks`", () => {
+    // Every key but the data keys is schema, so an access rule restores
+    // wherever a layout nests its fields, not only in `fields` and `blocks`.
+    const forms = disabledTransform(entity => ({
+      ...entity,
+      fields: [
+        {
+          name: "layout",
+          type: "group",
+          tabs: [
+            {
+              label: "Main",
+              fields: [{ name: "note", type: "text", access: { read: false } }],
+            },
+          ],
+        },
+      ],
+    }));
+    const layout = forms.fields[0] as {
+      tabs: { fields: Record<string, unknown>[] }[];
+    };
+    expect(layout.tabs[0]?.fields[0]).toEqual({ name: "note", type: "text" });
+  });
+
+  it("keeps a property named `access` in a JSON field's schema", () => {
+    // `jsonSchema.properties` maps property names to their schemas: a
+    // property called `access` is the author's data, not an access rule.
+    const forms = disabledTransform(entity => ({
+      ...entity,
+      fields: [
+        {
+          name: "meta",
+          type: "json",
+          jsonSchema: {
+            type: "object",
+            properties: { access: { type: "string" } },
+          },
+        },
+      ],
+    }));
+    expect(forms.fields[0]?.jsonSchema).toEqual({
+      type: "object",
+      properties: { access: { type: "string" } },
+    });
+  });
+
+  it("keeps a query on a field named `access` in a relationship's filterOptions", () => {
+    const forms = disabledTransform(entity => ({
+      ...entity,
+      fields: [
+        {
+          name: "owner",
+          type: "relationship",
+          relationTo: "users",
+          filterOptions: { access: { equals: "public" } },
+        },
+      ],
+    }));
+    expect(forms.fields[0]?.filterOptions).toEqual({
+      access: { equals: "public" },
+    });
+  });
+
+  it("keeps a sort for a collection named `access` in a relationship's sortOptions", () => {
+    const forms = disabledTransform(entity => ({
+      ...entity,
+      fields: [
+        {
+          name: "owner",
+          type: "relationship",
+          relationTo: ["users", "access"],
+          admin: { sortOptions: { access: "name" } },
+        },
+      ],
+    }));
+    expect(
+      (forms.fields[0]?.admin as { sortOptions: unknown }).sortOptions
+    ).toEqual({ access: "name" });
+  });
+
+  it("keeps a field's access rule when a tab is inserted before the tab holding it", () => {
+    // Tabs have no name. Paired by position, the inserted tab took the
+    // original's place, the original's field read as new, and its access
+    // rule as one the transform added, so it was stripped and the field
+    // opened.
+    const rule = { read: () => false };
+    const tabs = (fields: unknown[]) => [
+      { name: "layout", type: "group", tabs: fields },
+    ];
+    const forms = applyPluginSchemaContributions(cfg({ collections: [] }), [
+      plugin("plugin-a", {
+        collections: [
+          {
+            slug: "a-forms",
+            fields: tabs([
+              {
+                label: "Main",
+                fields: [{ name: "secret", type: "text", access: rule }],
+              },
+            ]),
+          } as unknown as CollectionConfig,
+        ],
+      }),
+      plugin(
+        "plugin-b",
+        {
+          transforms: [
+            {
+              target: "a-forms",
+              transform: entity => {
+                const [layout] = entity.fields as { tabs: unknown[] }[];
+                return {
+                  ...entity,
+                  fields: tabs([
+                    {
+                      label: "Extra",
+                      fields: [{ name: "note", type: "text" }],
+                    },
+                    ...(layout?.tabs ?? []),
+                  ]),
+                };
+              },
+            },
+          ],
+        },
+        false
+      ),
+    ]).collections?.[0] as unknown as {
+      fields: { tabs: { fields: Record<string, unknown>[] }[] }[];
+    };
+    expect(forms.fields[0]?.tabs[1]?.fields[0]?.access).toBe(rule);
+    expect(forms.fields[0]?.tabs[0]?.fields[0]).not.toHaveProperty("access");
+  });
+
+  it("keeps a field's access rule when the transform moves it into another group", () => {
+    const rule = { read: () => false };
+    const forms = applyPluginSchemaContributions(cfg({ collections: [] }), [
+      plugin("plugin-a", {
+        collections: [
+          {
+            slug: "a-forms",
+            fields: [
+              {
+                name: "a",
+                type: "group",
+                fields: [{ name: "secret", type: "text", access: rule }],
+              },
+              { name: "b", type: "group", fields: [] },
+            ],
+          } as unknown as CollectionConfig,
+        ],
+      }),
+      plugin(
+        "plugin-b",
+        {
+          transforms: [
+            {
+              target: "a-forms",
+              transform: entity => {
+                const [a, b] = entity.fields as {
+                  name: string;
+                  fields: unknown[];
+                }[];
+                return {
+                  ...entity,
+                  fields: [
+                    { ...a, fields: [] },
+                    { ...b, fields: a?.fields ?? [] },
+                  ],
+                };
+              },
+            },
+          ],
+        },
+        false
+      ),
+    ]).collections?.[0] as unknown as {
+      fields: { fields: Record<string, unknown>[] }[];
+    };
+    expect(forms.fields[1]?.fields[0]?.access).toBe(rule);
+  });
+
+  it("keeps a key named `access` in a plugin field type's own options", () => {
+    // A plugin's field type may carry options of its own on the field; their
+    // content is the plugin's data.
+    const forms = disabledTransform(entity => ({
+      ...entity,
+      fields: [
+        {
+          name: "rating",
+          type: "stars",
+          presentation: { access: "public", size: 5 },
+        },
+      ],
+    }));
+    expect(forms.fields[0]?.presentation).toEqual({
+      access: "public",
+      size: 5,
+    });
+  });
+
+  it("keeps a key named `access` in a field's pluginOptions", () => {
+    const forms = disabledTransform(entity => ({
+      ...entity,
+      fields: [
+        {
+          name: "title",
+          type: "text",
+          pluginOptions: { seo: { access: "public" } },
+        },
+      ],
+    }));
+    expect(forms.fields[0]?.pluginOptions).toEqual({
+      seo: { access: "public" },
+    });
   });
 
   it("adds no field access rule, boolean or function", () => {

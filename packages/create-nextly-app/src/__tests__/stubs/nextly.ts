@@ -1,0 +1,48 @@
+/**
+ * Stands in for `nextly`, `nextly/config` and `nextly/database/seeders` when a
+ * test runs template code that imports them (vitest.config.ts aliases all
+ * three here). create-nextly-app never installs Nextly: it only writes imports
+ * of it into the projects it scaffolds, so the templates' imports have nothing
+ * to resolve to beside this suite.
+ *
+ * It records what the template asked for, in order, so a test can assert what
+ * a start-up hook did rather than what its source says.
+ */
+
+/** Each call the template made, in order: `boot`, then any `seed`. */
+export const recorded: string[] = [];
+
+/** The options each seedSuperAdmin call received. */
+export const seedOptions: Array<{ email: string; password: string }> = [];
+
+/** The services getService handed out, by name. */
+export const services = { adapter: { stub: "adapter" } };
+
+/** Clears the record between cases. */
+export function resetRecord(): void {
+  recorded.length = 0;
+  seedOptions.length = 0;
+}
+
+export function defineConfig<T>(config: T): T {
+  return config;
+}
+
+export function createRegister(_config: unknown): () => Promise<void> {
+  return async () => {
+    recorded.push("boot");
+  };
+}
+
+export function getService(name: string): unknown {
+  return name === "adapter" ? services.adapter : undefined;
+}
+
+export async function seedSuperAdmin(
+  adapter: unknown,
+  options: { email: string; password: string }
+): Promise<{ success: boolean }> {
+  recorded.push(adapter === services.adapter ? "seed" : "seed:wrong-adapter");
+  seedOptions.push({ email: options.email, password: options.password });
+  return { success: true };
+}

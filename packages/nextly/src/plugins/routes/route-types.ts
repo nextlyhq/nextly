@@ -257,21 +257,45 @@ export interface PluginRoute {
    */
   rawBody?: boolean;
   /**
-   * @experimental The cross-site check for unsafe methods from a
-   * session-cookie caller.
+   * @experimental The cross-site check for unsafe methods.
    *
-   * - Left unset, an authenticated route checks the request's `Origin` (or
-   *   `Referer`): it must be this site or one in `NEXTLY_ALLOWED_ORIGINS`.
-   *   A same-origin write passes it without a token.
-   * - `true` also requires a valid double-submit CSRF token, in the
-   *   `x-csrf-token` header or as `csrfToken` in a JSON body. On a `public`
-   *   route it applies to callers carrying the session cookie.
+   * The origin check means the request's `Origin` (or `Referer`) must be
+   * this site or one in `NEXTLY_ALLOWED_ORIGINS`; a write naming no origin
+   * is refused.
+   *
+   * - Left unset, an authenticated route checks the origin of a write the
+   *   session cookie authenticates. A same-origin write passes it without a
+   *   token. A `public` route checks no write here, though
+   *   `ctx.auth.currentUser` answers no user to a cross-site one.
+   * - `true` checks the origin and requires a valid double-submit CSRF
+   *   token, in the `x-csrf-token` header or as `csrfToken` in a JSON body,
+   *   from a caller the session cookie authenticates. It also checks the
+   *   origin, with no token, of a write no session authenticates, such as an
+   *   anonymous visitor's to a `public` route: a cookie the plugin keeps for
+   *   such visitors, a guest cart's id say, travels on a cross-site post. A
+   *   session cookie that is expired or malformed authenticates nobody.
    * - `false` refuses every unsafe-method request the session cookie
    *   authenticates, from any origin, so the route takes writes only from
    *   callers with another credential. It cannot be combined with
    *   `public: true`: the pair is refused when routes are collected, and
-   *   the app does not boot. API-key and webhook callers need no opt-out:
-   *   they are never checked, and a webhook route is `public: true`.
+   *   the app does not boot.
+   *
+   * A person a route's `principal` recognises is checked as a caller the
+   * session cookie authenticates is.
+   *
+   * A request that sends an `Authorization: Bearer` token (an API key) is not
+   * checked, whatever the setting, unless the session cookie authenticates
+   * it: a browser cannot attach the token cross-site, and the attack this
+   * prevents needs the credential to travel automatically. On a `public`
+   * route a session the cookie authenticates takes precedence over the
+   * header, and the request is checked as a session-cookie caller's. On a
+   * route that asks for a `principal`, the token exempts the request whether
+   * or not anyone of the kind is recognised.
+   * The scheme is matched in any case. Any other scheme, such
+   * as the Basic, Digest, Negotiate or NTLM credentials a browser attaches
+   * on its own, exempts nothing. A route for webhooks or other server
+   * callers is `public: true` and leaves `csrf` unset; on `true`, such a
+   * caller without a `Bearer` token must send `Origin`.
    *
    * The admin's `usePluginRouteMutation` sends the token on every write, so a
    * route the plugin's admin page writes to works with `csrf` unset or
@@ -279,10 +303,7 @@ export interface PluginRoute {
    * unset or fetches a token from `/auth/csrf` and sends it.
    *
    * A refusal answers 403 `CSRF_FAILED` and records a `csrf-failed` audit
-   * event. API-key and Bearer callers are exempt, because a browser cannot
-   * attach those cross-site — the attack this prevents needs the credential
-   * to travel automatically, which is what a cookie does and a header does
-   * not.
+   * event.
    */
   csrf?: boolean;
   /**
