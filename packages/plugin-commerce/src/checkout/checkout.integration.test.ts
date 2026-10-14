@@ -1102,6 +1102,62 @@ describe.each(getConfiguredTestDialects())(
       ]);
     });
 
+    it("refuses to retry a payment's start with another account at the same provider", async () => {
+      // The same provider, pointed at another account while a start waits.
+      const first = createTestPaymentProvider({ account: "acct_first" });
+      const flaky: PaymentProvider = {
+        ...first.provider,
+        start: async () => {
+          throw new Error("connect ECONNREFUSED");
+        },
+      };
+      const { ctx, checkout, cart, clock, memory } = await setup({
+        provider: flaky,
+      });
+      const token = await shopper(cart, [["bolt", 1]]);
+      await checkout().complete({
+        token,
+        quoteKey: (await checkout().quote({ token })).quoteKey,
+        email: "ada@example.com",
+        addresses: ADDRESSES,
+      });
+      expect(await ctx.db.select(payments).all()).toMatchObject([
+        { provider: "test", providerAccount: "acct_first" },
+      ]);
+
+      const second = createTestPaymentProvider({ account: "acct_second" });
+      clock.now = new Date(clock.now.getTime() + MINUTE);
+      await runDueWork({
+        db: ctx.db,
+        handlers: checkoutWorkHandlers({
+          db: ctx.db,
+          provider: second.provider,
+          source: memory.source,
+          now: () => clock.now,
+        }),
+        alerts: { abandoned: () => undefined },
+        now: () => clock.now,
+      });
+      expect(second.control.payments()).toEqual([]);
+      expect(await ctx.db.select(work).all()).toMatchObject([
+        { attempts: 2, lastError: "COMMERCE_PAYMENTS_NOT_CONFIGURED" },
+      ]);
+
+      // The account it began with still finishes it.
+      await runDueWork({
+        db: ctx.db,
+        handlers: checkoutWorkHandlers({
+          db: ctx.db,
+          provider: first.provider,
+          source: memory.source,
+          now: () => new Date(clock.now.getTime() + 10 * MINUTE),
+        }),
+        alerts: { abandoned: () => undefined },
+        now: () => new Date(clock.now.getTime() + 10 * MINUTE),
+      });
+      expect(first.control.payments()).toHaveLength(1);
+    });
+
     it("refuses at checkout a line past the per-line limit the source gives now", async () => {
       let cap = 9;
       const memory = createInMemoryCatalogueSource({

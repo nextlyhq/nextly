@@ -8,12 +8,13 @@
 import type { PluginMigration } from "@nextlyhq/plugin-sdk/schema";
 
 export default {
-  name: "20261014_121957_332_key_provider_references",
+  name: "20261014_125126_485_key_provider_references",
   schemaVersion: 3,
-  checksum: "388c399c3d115a85e22e252a5fb45047fab7d1aaba5c6bba892afe36f3c939b0",
+  checksum: "9642e52efd52fc18f2675326ab7a4e1ce10d99c0d49d8544935cf0920f3e4beb",
   dialects: {
     postgresql: {
       up: [
+        'ALTER TABLE "commerce__payments" ADD COLUMN "provider_account" text',
         'ALTER TABLE "commerce__payments" ADD COLUMN "provider_reference_key" bpchar(64)',
         'CREATE UNIQUE INDEX IF NOT EXISTS "uq_commerce__payments_provider_provider_reference_key_036qlwv" ON "commerce__payments" ("provider", "provider_reference_key")',
         'ALTER TABLE "commerce__payments" DROP CONSTRAINT IF EXISTS "uq_commerce__payments_provider_provider_reference_0s0x4mn"; DROP INDEX IF EXISTS "uq_commerce__payments_provider_provider_reference_0s0x4mn"',
@@ -22,10 +23,12 @@ export default {
         'CREATE UNIQUE INDEX IF NOT EXISTS "uq_commerce__payments_provider_provider_reference_0s0x4mn" ON "commerce__payments" ("provider", "provider_reference")',
         'ALTER TABLE "commerce__payments" DROP CONSTRAINT IF EXISTS "uq_commerce__payments_provider_provider_reference_key_036qlwv"; DROP INDEX IF EXISTS "uq_commerce__payments_provider_provider_reference_key_036qlwv"',
         'ALTER TABLE "commerce__payments" DROP COLUMN "provider_reference_key"',
+        'ALTER TABLE "commerce__payments" DROP COLUMN "provider_account"',
       ],
     },
     mysql: {
       up: [
+        "ALTER TABLE `commerce__payments` ADD COLUMN `provider_account` varchar(255)",
         "ALTER TABLE `commerce__payments` ADD COLUMN `provider_reference_key` char(64)",
         "CREATE UNIQUE INDEX `uq_commerce__payments_provider_provider_reference_key_036qlwv` ON `commerce__payments` (`provider`, `provider_reference_key`)",
         "DROP INDEX `uq_commerce__payments_provider_provider_reference_0s0x4mn` ON `commerce__payments`",
@@ -34,10 +37,12 @@ export default {
         "CREATE UNIQUE INDEX `uq_commerce__payments_provider_provider_reference_0s0x4mn` ON `commerce__payments` (`provider`, `provider_reference`)",
         "DROP INDEX `uq_commerce__payments_provider_provider_reference_key_036qlwv` ON `commerce__payments`",
         "ALTER TABLE `commerce__payments` DROP COLUMN `provider_reference_key`",
+        "ALTER TABLE `commerce__payments` DROP COLUMN `provider_account`",
       ],
     },
     sqlite: {
       up: [
+        'ALTER TABLE "commerce__payments" ADD COLUMN "provider_account" text',
         'ALTER TABLE "commerce__payments" ADD COLUMN "provider_reference_key" text',
         'CREATE UNIQUE INDEX IF NOT EXISTS "uq_commerce__payments_provider_provider_reference_key_036qlwv" ON "commerce__payments" ("provider", "provider_reference_key")',
         'DROP INDEX IF EXISTS "uq_commerce__payments_provider_provider_reference_0s0x4mn"',
@@ -46,6 +51,7 @@ export default {
         'CREATE UNIQUE INDEX IF NOT EXISTS "uq_commerce__payments_provider_provider_reference_0s0x4mn" ON "commerce__payments" ("provider", "provider_reference")',
         'DROP INDEX IF EXISTS "uq_commerce__payments_provider_provider_reference_key_036qlwv"',
         'ALTER TABLE "commerce__payments" DROP COLUMN "provider_reference_key"',
+        'ALTER TABLE "commerce__payments" DROP COLUMN "provider_account"',
       ],
     },
   },
@@ -491,6 +497,11 @@ export default {
               name: "provider",
               type: "text",
               nullable: false,
+            },
+            {
+              name: "provider_account",
+              type: "text",
+              nullable: true,
             },
             {
               name: "provider_reference",
@@ -1319,6 +1330,11 @@ export default {
               nullable: false,
             },
             {
+              name: "provider_account",
+              type: "varchar(255)",
+              nullable: true,
+            },
+            {
               name: "provider_reference",
               type: "varchar(255)",
               nullable: true,
@@ -2139,6 +2155,11 @@ export default {
               name: "provider",
               type: "text",
               nullable: false,
+            },
+            {
+              name: "provider_account",
+              type: "text",
+              nullable: true,
             },
             {
               name: "provider_reference",

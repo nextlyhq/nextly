@@ -22,6 +22,7 @@ import type {
 } from "../contracts/catalogue-source";
 import {
   isPayableAmount,
+  isRecordedProvider,
   parseProviderAnswer,
   providerPaymentSchema,
   requirePaymentAmount,
@@ -185,6 +186,7 @@ const completeSchema = z.strictObject({
 /** A payment as it is stored, as far as reading it back needs. */
 interface StoredPayment {
   readonly provider: string;
+  readonly providerAccount: string | null;
   readonly reference: string;
   readonly providerReference: string | null;
   readonly chargeAmount: number;
@@ -458,7 +460,7 @@ export function createCheckoutService(
     if (
       providerReference === null ||
       !provider ||
-      provider.id !== payment.provider
+      !isRecordedProvider(payment, provider)
     ) {
       return null;
     }
@@ -638,6 +640,7 @@ export function createCheckoutService(
         orderId: order.id,
         reference: paymentReference,
         provider: placing.provider.id,
+        providerAccount: placing.provider.account ?? null,
         status: "pending",
         chargeAmount: summary.total.amount,
         chargeCurrency: summary.total.currency,

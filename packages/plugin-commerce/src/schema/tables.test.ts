@@ -108,6 +108,23 @@ function cardViolations(table: Table): string[] {
 // column is indexed as it is.
 const OWN_REFERENCE_TABLES = new Set(["payments"]);
 
+// And each key column is what keeps its identifier unique: a key no unique
+// index covers keeps nothing apart.
+const KEY_COLUMNS = ["reference_key", "provider_reference_key"];
+
+function keyIndexViolations(table: Table): string[] {
+  return KEY_COLUMNS.filter(column =>
+    table.columns.some(c => c.name === column)
+  )
+    .filter(
+      column =>
+        !table.indexes.some(
+          index => index.unique && index.columns.includes(column)
+        )
+    )
+    .map(column => `${table.name} keeps ${column} in no unique index`);
+}
+
 function referenceIndexViolations(table: Table): string[] {
   const outside = OWN_REFERENCE_TABLES.has(table.name)
     ? ["provider_reference"]
@@ -153,8 +170,31 @@ describe("the reference rule", () => {
     ]);
   });
 
+  it("finds a key column no unique index covers", () => {
+    const broken = defineTable(
+      "payments",
+      {
+        id: col.id(),
+        provider: col.varchar(64),
+        providerReferenceKey: col.char(64, { nullable: true }),
+      },
+      { indexes: [{ columns: ["provider", "providerReferenceKey"] }] }
+    );
+    expect(keyIndexViolations(broken)).toEqual([
+      "payments keeps provider_reference_key in no unique index",
+    ]);
+  });
+
   it("holds for every commerce table", () => {
     expect(COMMERCE_TABLES.flatMap(referenceIndexViolations)).toEqual([]);
+    expect(COMMERCE_TABLES.flatMap(keyIndexViolations)).toEqual([]);
+    // Both kinds of key are there to check.
+    for (const column of KEY_COLUMNS) {
+      expect(
+        COMMERCE_TABLES.some(t => t.columns.some(c => c.name === column)),
+        column
+      ).toBe(true);
+    }
     // The rule has something to check: the cart's lines are indexed by key.
     expect(
       COMMERCE_TABLES.flatMap(t => t.indexes).some(i =>

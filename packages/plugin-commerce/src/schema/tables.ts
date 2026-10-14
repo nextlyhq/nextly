@@ -219,6 +219,9 @@ export const payments = defineTable(
     orderId: col.varchar(36),
     reference: col.varchar(64),
     provider: col.varchar(64),
+    // Which account at the provider the payment was begun with, for a
+    // provider that names one: its later steps go to that account alone.
+    providerAccount: col.varchar(255, { nullable: true }),
     providerReference: col.varchar(255, { nullable: true }),
     // What the provider's reference is kept unique by: a provider's own ids
     // can differ only in case, which MySQL's default collation would take as

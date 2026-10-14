@@ -4,6 +4,7 @@ import type { PluginDatabase } from "@nextlyhq/plugin-sdk/schema";
 import { allOf } from "../cart/conditions";
 import type { CatalogueSource } from "../contracts/catalogue-source";
 import {
+  isRecordedProvider,
   parseProviderAnswer,
   providerPaymentSchema,
   startProviderPayment,
@@ -89,20 +90,27 @@ async function startPayment(
 }
 
 /**
- * Refuse a start for a payment begun with another provider. Only that one
- * knows its operation key: a retry sent to another, after the store's
- * provider changed, would start a second payment. The step is refused, and
- * retried until staff are alerted.
+ * Refuse a start for a payment begun with another provider, or with another
+ * account at the same one. Only that one knows its operation key: a retry
+ * sent elsewhere, after the store's provider or its account changed, would
+ * start a second payment. The step is refused, and retried until staff are
+ * alerted.
  */
 function assertRecordedProvider(
-  payment: { readonly provider: string; readonly reference: string },
+  payment: {
+    readonly provider: string;
+    readonly providerAccount: string | null;
+    readonly reference: string;
+  },
   provider: PaymentProvider
 ): void {
-  if (payment.provider === provider.id) return;
+  if (isRecordedProvider(payment, provider)) return;
   throw commerceError("COMMERCE_PAYMENTS_NOT_CONFIGURED", {
     payment: payment.reference,
     recordedProvider: payment.provider,
+    recordedAccount: payment.providerAccount,
     configuredProvider: provider.id,
+    configuredAccount: provider.account ?? null,
   });
 }
 

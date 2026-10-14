@@ -196,6 +196,15 @@ export interface RefundPaymentInput {
 export interface PaymentProvider {
   /** A short, stable key for the provider, such as "stripe". */
   readonly id: string;
+  /**
+   * Which account at the provider this instance acts for, for a provider a
+   * store can point at more than one: a stable identifier that is not a
+   * secret, such as an account's own id. Commerce records it with each
+   * payment and never sends a payment's later steps to another account,
+   * since an operation key one account issued means nothing to the next.
+   * Left out, the provider is taken to have one account.
+   */
+  readonly account?: string;
   readonly capabilities: PaymentProviderCapabilities;
   /** Create the provider's payment for commerce's reference and amount. */
   start(input: StartPaymentInput): Promise<ProviderPayment>;
@@ -351,6 +360,24 @@ export function isPayableAmount(amount: Money): boolean {
 }
 
 /**
+ * Whether `provider` is the one a payment was begun with: the same provider,
+ * acting for the same account. Only that one knows the payment's operation
+ * keys and can answer for it.
+ */
+export function isRecordedProvider(
+  payment: {
+    readonly provider: string;
+    readonly providerAccount: string | null;
+  },
+  provider: Pick<PaymentProvider, "id" | "account">
+): boolean {
+  return (
+    payment.provider === provider.id &&
+    payment.providerAccount === (provider.account ?? null)
+  );
+}
+
+/**
  * Refuse a payment the provider cannot take, before anything is sent.
  *
  * @experimental
@@ -458,6 +485,17 @@ export function assertPaymentProvider(
   ) {
     throw commerceError("COMMERCE_PROVIDER_CONTRACT", {
       reason: "id is not a lower-case slug",
+    });
+  }
+  if (
+    candidate.account !== undefined &&
+    (typeof candidate.account !== "string" ||
+      candidate.account.length === 0 ||
+      candidate.account.length > 255)
+  ) {
+    throw commerceError("COMMERCE_PROVIDER_CONTRACT", {
+      provider: candidate.id,
+      reason: "account is not a string of 1 to 255 characters",
     });
   }
   const capabilities = paymentProviderCapabilitiesSchema.safeParse(
