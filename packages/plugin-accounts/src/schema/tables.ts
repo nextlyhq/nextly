@@ -14,7 +14,7 @@ export const SCHEMA_PREFIX = "accounts";
  * moves with every migration module, and a production boot refuses a database
  * whose accounts schema is behind it.
  */
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 /** Long enough for any address RFC 5321 lets through: 64 + 1 + 255. */
 const ADDRESS_LENGTH = 320;
@@ -163,10 +163,35 @@ export const pendingAddressChanges = defineTable(
   }
 );
 
+/**
+ * An email job that has sent its email, by the job's id, which is the same
+ * on every attempt at the job: a retried job finds its email sent and sends
+ * nothing more. Core's email service takes no key to deduplicate on, so
+ * this is the plugin's own record; kept a week, long past a job's last
+ * retry.
+ */
+export const sentEmails = defineTable(
+  "sent_emails",
+  {
+    id: col.id(),
+    jobId: col.varchar(64),
+    sentAt: col.timestamp(),
+    ...col.timestamps(),
+  },
+  {
+    indexes: [
+      { columns: ["jobId"], unique: true },
+      // The sweep forgets sends by when they went.
+      { columns: ["sentAt"] },
+    ],
+  }
+);
+
 /** Every table the plugin declares, in the order they are created. */
 export const ACCOUNTS_TABLES = [
   accounts,
   sessions,
   knownBrowsers,
   pendingAddressChanges,
+  sentEmails,
 ] as const;

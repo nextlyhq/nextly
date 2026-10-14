@@ -112,7 +112,9 @@ export function buildAccounts(
       emailTemplates: accountsEmailTemplates(),
       events: ACCOUNTS_EVENTS.map(name => ({ name })),
       jobs: [
-        sendEmailJob(email => sendQueuedEmail(started(), email)),
+        sendEmailJob((email, attempt) =>
+          sendQueuedEmail(started(), email, attempt)
+        ),
         sweepJob(now => sweepAll({ ...deps(), now: () => now }, now)),
       ],
     },

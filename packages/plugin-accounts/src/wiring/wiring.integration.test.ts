@@ -19,17 +19,19 @@ import {
   accounts as accountsTable,
   knownBrowsers,
   pendingAddressChanges,
+  sentEmails,
   sessions,
 } from "../schema/tables";
 import { resolveAccountsSettings } from "../settings";
 import { createAccount, writeAtVersion } from "../storage/accounts";
 import { rememberBrowser } from "../storage/known-browsers";
 import { askAddressChange } from "../storage/pending-changes";
+import { recordEmailSent } from "../storage/sent-emails";
 import { startSession } from "../storage/sessions";
 import { TEST_ORIGIN } from "../test-support/boot";
 
-import { SEND_EMAIL_JOB, SWEEP_JOB } from "./jobs";
-import { sweepAll } from "./runtime";
+import { SEND_EMAIL_JOB, sendEmailJob, SWEEP_JOB } from "./jobs";
+import { sendQueuedEmail, sweepAll } from "./runtime";
 import { accountsServices } from "../server/installed";
 import { bootAccounts } from "../test-support/boot";
 import { fakeAccountsCore } from "../testing";
@@ -144,6 +146,59 @@ describe.each(getConfiguredTestDialects())(
       expect(core.passwords.decoyVerifications).toBe(3);
     });
 
+    it("sends a job's email once however many times the job runs, and again after a failed send", async () => {
+      const booted = await bootAccounts(dialect);
+      current = booted.nextly;
+      const outcomes = [true, false, true, true];
+      const sends: string[] = [];
+      const ctx = {
+        db: booted.ctx.db,
+        dialect: booted.ctx.dialect,
+        services: {
+          email: {
+            sendWithTemplate: async (_slug: string, to: string) => {
+              sends.push(to);
+              return { success: outcomes.shift() ?? true };
+            },
+          },
+        },
+      };
+      const email = {
+        kind: "account-deleted" as const,
+        accountId: "a1",
+        to: "dana@example.com",
+      };
+      const now = new Date();
+
+      // One job, run three times: it sends once.
+      for (let attempt = 0; attempt < 3; attempt += 1)
+        await sendQueuedEmail(ctx, email, { jobId: "job-1", now });
+      expect(sends).toHaveLength(1);
+
+      // Another job whose first send fails: it is free to send on its retry.
+      await expect(
+        sendQueuedEmail(ctx, email, { jobId: "job-2", now })
+      ).rejects.toThrow("did not send");
+      await sendQueuedEmail(ctx, email, { jobId: "job-2", now });
+      await sendQueuedEmail(ctx, email, { jobId: "job-2", now });
+      expect(sends).toHaveLength(3);
+    });
+
+    it("hands the send its job's id, the same on every attempt", async () => {
+      const seen: string[] = [];
+      const job = sendEmailJob(async (_email, attempt) => {
+        seen.push(attempt.jobId);
+      });
+      const email = { kind: "account-deleted", accountId: "a1", to: "d@e.com" };
+      for (const attempt of [1, 2])
+        await job.handler({ email }, {
+          jobId: "job-7",
+          attempt,
+          now: new Date(),
+        } as Parameters<typeof job.handler>[1]);
+      expect(seen).toEqual(["job-7", "job-7"]);
+    });
+
     it("sweeps what has run out in one pass, and keeps everything live", async () => {
       const { db } = await boot();
       const settings = resolveAccountsSettings({
@@ -198,6 +253,8 @@ describe.each(getConfiguredTestDialects())(
         expiresAt: then,
       });
 
+      await recordEmailSent(db, dialect, "long-gone", then);
+      await recordEmailSent(db, dialect, "recent", now);
       const deleted: unknown[] = [];
       await sweepAll(
         {
@@ -220,6 +277,9 @@ describe.each(getConfiguredTestDialects())(
       ).toEqual(["4".repeat(64)]);
       expect(await db.select(pendingAddressChanges).all()).toEqual([]);
       expect(deleted).toEqual([{ accountId: stale }]);
+      expect((await db.select(sentEmails).all()).map(row => row.jobId)).toEqual(
+        ["recent"]
+      );
     });
   }
 );

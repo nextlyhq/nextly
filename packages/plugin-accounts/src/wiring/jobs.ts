@@ -11,21 +11,29 @@ export const SWEEP_JOB = "accounts:sweep";
 /** Sends emails a few times over before giving up, as a mail server can be down a while. */
 const SEND_ATTEMPTS = 5;
 
+/** The attempt a send runs in: its job's id, the same on every attempt, and the runner's now. */
+export interface SendAttempt {
+  jobId: string;
+  now: Date;
+}
+
 /**
  * The job that sends a queued email, so a flow's answer never waits on a mail
- * server. `send` throws when the email did not go, and the runner tries again.
+ * server. `send` throws when the email did not go, and the runner tries again;
+ * it is handed the job's id, so a retry of a job whose email went sends
+ * nothing more.
  */
 export function sendEmailJob(
-  send: (email: AccountsEmail) => Promise<void>
+  send: (email: AccountsEmail, attempt: SendAttempt) => Promise<void>
 ): JobDefinition {
   return defineJob({
     slug: SEND_EMAIL_JOB,
     retry: { maxAttempts: SEND_ATTEMPTS },
-    handler: async input => {
+    handler: async (input, context) => {
       const email = input?.email;
       if (!isQueuedEmail(email))
         throw new TypeError("A queued accounts email is malformed.");
-      await send(email);
+      await send(email, { jobId: context.jobId, now: context.now });
     },
   });
 }
