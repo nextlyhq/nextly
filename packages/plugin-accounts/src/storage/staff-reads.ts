@@ -9,20 +9,10 @@ import {
   or,
 } from "@nextlyhq/plugin-sdk/db";
 
+import type { AccountState } from "../admin-contract";
 import { accounts, sessions } from "../schema/tables";
 
 import { normaliseAddress, type AccountRow, type AccountsDb } from "./accounts";
-
-/** The states staff filter the list of accounts by. */
-export const ACCOUNT_STATES = [
-  "verified",
-  "unverified",
-  "active",
-  "deactivated",
-  "reset-required",
-] as const;
-
-export type AccountState = (typeof ACCOUNT_STATES)[number];
 
 /** One page of the list, as staff ask for it. */
 export interface AccountsPageQuery {

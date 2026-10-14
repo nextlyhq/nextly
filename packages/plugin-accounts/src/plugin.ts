@@ -2,13 +2,19 @@ import { definePlugin, type PluginContext } from "@nextlyhq/plugin-sdk";
 
 import { version as PLUGIN_VERSION } from "../package.json";
 
+import { ADMIN_PAGES, adminPageHref } from "./admin-contract";
 import { readAccountsCore } from "./core/adapter";
 import type { AccountsCore } from "./core/ports";
 import { accountsError } from "./errors";
 import { ACCOUNTS_EVENTS } from "./flows/deps";
 import { accountKind } from "./http/principal";
 import { accountsRoutes } from "./http/routes";
-import { STAFF_AUDIT, STAFF_PERMISSIONS, staffRoutes } from "./http/staff";
+import {
+  READ_ACCOUNTS,
+  STAFF_AUDIT,
+  STAFF_PERMISSIONS,
+  staffRoutes,
+} from "./http/staff";
 import { accountsSchema, PLUGIN_NAME } from "./schema/definition";
 import { SCHEMA_VERSION } from "./schema/tables";
 import {
@@ -82,6 +88,22 @@ export function buildAccounts(
       // The typed server functions, for other plugins; a site's own server
       // code reaches the same through `accountsServer`.
       services: { [ACCOUNTS_SERVICE]: () => accountsService(deps) },
+      // The list of accounts and an account's page, both behind
+      // read-accounts; what staff may do there is the routes' to decide.
+      admin: {
+        menu: [
+          {
+            label: "Accounts",
+            to: adminPageHref("list"),
+            icon: "Contact",
+            requiredPermission: READ_ACCOUNTS,
+          },
+        ],
+        pages: [ADMIN_PAGES.list, ADMIN_PAGES.account].map(page => ({
+          ...page,
+          requiredPermission: READ_ACCOUNTS,
+        })),
+      },
       emailTemplates: accountsEmailTemplates(),
       events: ACCOUNTS_EVENTS.map(name => ({ name })),
       jobs: [

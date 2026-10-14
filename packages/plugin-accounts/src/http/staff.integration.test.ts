@@ -21,8 +21,8 @@ import {
 import { createDynamicHandlers } from "nextly/runtime";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { STAFF_ACTIONS, type StaffAction } from "../admin-contract";
 import { accountsLimitRules } from "../core/limit-rules";
-import { STAFF_ACTIONS, type StaffAction } from "../flows/staff-actions";
 import { signIn } from "../flows/sign-in";
 import { accounts, sessions } from "../schema/tables";
 import { resolveAccountsSettings } from "../settings";

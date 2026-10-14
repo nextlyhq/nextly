@@ -1,12 +1,14 @@
 import { definePlugin } from "@nextlyhq/plugin-sdk";
 
 import { version as PLUGIN_VERSION } from "../../package.json";
+import { PLUGIN_NAME } from "../admin-contract";
 
 import { migrations } from "./migrations";
 import { ACCOUNTS_TABLES, SCHEMA_PREFIX, SCHEMA_VERSION } from "./tables";
 
-/** The package's name, under which Nextly records the plugin's tables and migrations. */
-export const PLUGIN_NAME = "@nextlyhq/plugin-accounts";
+// The package's name, under which Nextly records the plugin's tables and
+// migrations; declared with the rest of what the admin screens share.
+export { PLUGIN_NAME };
 
 /**
  * The plugin's schema contribution: its tables and the migration modules that

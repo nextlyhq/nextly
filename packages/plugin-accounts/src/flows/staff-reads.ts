@@ -1,3 +1,7 @@
+import type {
+  StaffAccountDetail,
+  StaffAccountSummary,
+} from "../admin-contract";
 import { accountById, type AccountRow } from "../storage/accounts";
 import {
   accountsPage,
@@ -6,35 +10,6 @@ import {
 } from "../storage/staff-reads";
 
 import type { FlowDeps } from "./deps";
-
-/**
- * An account as staff see it in the list. Built field by field from the
- * row, never by copying it, so no column added to the table later (and no
- * password hash) reaches staff without being named here.
- */
-export interface StaffAccountSummary {
-  id: string;
-  address: string;
-  /** Plain text the visitor typed: shown as text, never as markup. */
-  name: string;
-  verified: boolean;
-  active: boolean;
-  resetRequired: boolean;
-  createdAt: string;
-  lastSignedInAt: string | null;
-}
-
-/** An account as staff see it on its own page. */
-export interface StaffAccountDetail extends StaffAccountSummary {
-  verifiedAt: string | null;
-  /** How the address was proven: "link", "code" or "reset". */
-  verifiedBy: string | null;
-  deactivatedAt: string | null;
-  resetRequiredAt: string | null;
-  passwordChangedAt: string | null;
-  /** How many of its sessions are live now. */
-  liveSessions: number;
-}
 
 /** One page of the list, and whether another follows. */
 export interface StaffAccountsPage {

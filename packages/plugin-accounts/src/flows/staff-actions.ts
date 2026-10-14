@@ -1,3 +1,4 @@
+import type { StaffAction, StaffRefusal } from "../admin-contract";
 import {
   accountById,
   deleteAccount,
@@ -11,29 +12,6 @@ import type { FlowDeps } from "./deps";
 import { sendResetLink } from "./reset-request";
 import { endEverything } from "./sessions";
 import { mintVerification, queueVerification } from "./verification-email";
-
-/**
- * What staff may do to an account, and nothing more: they never see or set
- * a password and never sign in as the account, so helping its holder always
- * goes through the holder's email.
- */
-export const STAFF_ACTIONS = [
-  "deactivate",
-  "reactivate",
-  "end-sessions",
-  "resend-verification",
-  "send-reset",
-  "delete",
-] as const;
-
-export type StaffAction = (typeof STAFF_ACTIONS)[number];
-
-/** Why an action does not apply to the account as it stands. */
-export type StaffRefusal =
-  | "already-deactivated"
-  | "already-active"
-  | "already-verified"
-  | "deactivated";
 
 export type StaffActionResult =
   | { status: "done"; account: AccountRow }

@@ -8,15 +8,18 @@ import {
 } from "@nextlyhq/plugin-sdk";
 import { z } from "zod";
 
+import {
+  ACCOUNT_STATES,
+  STAFF_ACTIONS,
+  STAFF_API_PATH,
+  type StaffAccountBody,
+  type StaffAccountsListBody,
+  type StaffAction,
+} from "../admin-contract";
 import { accountsError } from "../errors";
 import type { FlowDeps } from "../flows/deps";
-import {
-  runStaffAction,
-  STAFF_ACTIONS,
-  type StaffAction,
-} from "../flows/staff-actions";
+import { runStaffAction } from "../flows/staff-actions";
 import { accountForStaff, listAccountsForStaff } from "../flows/staff-reads";
-import { ACCOUNT_STATES } from "../storage/staff-reads";
 
 import { ACCOUNT_PRINCIPAL } from "./routes";
 
@@ -104,14 +107,14 @@ export function staffRoutes(deps: () => FlowDeps): PluginRoute[] {
   return [
     {
       method: "GET",
-      path: "/staff/accounts",
+      path: STAFF_API_PATH,
       requiredPermission: READ_ACCOUNTS,
       noStore: true,
       handler: request => listEndpoint(deps(), request),
     },
     {
       method: "GET",
-      path: "/staff/accounts/:id",
+      path: `${STAFF_API_PATH}/:id`,
       requiredPermission: READ_ACCOUNTS,
       noStore: true,
       handler: (_request, ctx) => accountEndpoint(deps(), ctx),
@@ -119,7 +122,7 @@ export function staffRoutes(deps: () => FlowDeps): PluginRoute[] {
     ...STAFF_ACTIONS.map(
       (action): PluginRoute => ({
         method: "POST",
-        path: `/staff/accounts/:id/${action}`,
+        path: `${STAFF_API_PATH}/:id/${action}`,
         requiredPermission: MANAGE_ACCOUNTS,
         csrf: true,
         noStore: true,
@@ -151,7 +154,7 @@ async function listEndpoint(
     );
   const page = await listAccountsForStaff(deps, parsed.data);
 
-  return Response.json({
+  const body: StaffAccountsListBody = {
     items: page.items,
     meta: {
       page: page.page,
@@ -159,7 +162,9 @@ async function listEndpoint(
       hasNext: page.hasNext,
       hasPrev: page.page > 1,
     },
-  });
+  };
+
+  return Response.json(body);
 }
 
 /** An account's page, and whether this staff member may act on it. */
@@ -170,10 +175,12 @@ async function accountEndpoint(
   const account = await accountForStaff(deps, accountIdOf(ctx));
   if (account === null) throw accountsError("ACCOUNTS_NOT_FOUND");
 
-  return respondDoc({
+  const body: StaffAccountBody = {
     account,
     canManage: (await ctx.caller?.can("manage", "accounts")) ?? false,
-  });
+  };
+
+  return respondDoc(body);
 }
 
 /** Runs one action, and records it in the audit log once it is done. */

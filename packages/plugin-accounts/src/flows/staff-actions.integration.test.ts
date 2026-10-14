@@ -10,6 +10,7 @@ import {
 } from "@nextlyhq/plugin-sdk/testing";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { STAFF_ACTIONS } from "../admin-contract";
 import { knownBrowsers, sessions } from "../schema/tables";
 import { accountById } from "../storage/accounts";
 import { askAddressChange, pendingChangeOf } from "../storage/pending-changes";
@@ -20,7 +21,7 @@ import { flowDeps } from "../test-support/flow-deps";
 import { PURPOSES } from "./purposes";
 import { completePasswordReset } from "./reset";
 import { signIn } from "./sign-in";
-import { runStaffAction, STAFF_ACTIONS } from "./staff-actions";
+import { runStaffAction } from "./staff-actions";
 
 const ADDRESS = "dana@example.com";
 const UNKNOWN_ID = "00000000-0000-4000-8000-000000000000";

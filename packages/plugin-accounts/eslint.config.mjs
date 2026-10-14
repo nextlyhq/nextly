@@ -1,9 +1,12 @@
-import { config } from "@nextlyhq/eslint-config/base";
+import { designTokensConfig } from "@nextlyhq/eslint-config/design-tokens";
+import { config } from "@nextlyhq/eslint-config/react-internal";
 
-// The base rules alone: this package has no admin UI, so the design-token
-// rules the UI plugins load do not apply, and its config files use no Node
-// globals that would need declaring.
+// The React rules, for the admin screens under `src/admin`, and the
+// design-token rules over every source file, so the admin screens use the
+// theme's tokens alone and work in both of its modes. The config files use
+// no Node globals that would need declaring.
 export default [
+  ...designTokensConfig(["src/**/*.{ts,tsx}"]),
   ...config,
   {
     ignores: [
