@@ -19,6 +19,7 @@ import {
   createJobsNamespace,
   type JobsNamespace,
 } from "../direct-api/namespaces/jobs";
+import type { PluginLimiter } from "../domains/limits/plugin-limiter";
 import { getActiveExtensionSchema } from "../domains/schema/extension/build-extension-schema";
 import type {
   ExtensionColumn,
@@ -65,6 +66,7 @@ import type {
   HookPointValue,
 } from "./hook-point-payloads";
 import { createPayloadChecker, getDeclaredHookPoints } from "./hook-points";
+import { createPluginLimits } from "./limits/plugin-limits";
 import { createPluginAudit } from "./plugin-audit-provider";
 import { getPluginAuthApi, getPluginAuthApiFor } from "./plugin-auth-provider";
 import type { PluginCategory } from "./plugin-categories";
@@ -621,6 +623,17 @@ export interface PluginContext {
    * `auth.currentUser` gives it no user.
    */
   principals?: PluginPrincipalsApi;
+
+  /**
+   * @experimental This plugin's limiter: reserve an attempt on keys the
+   * plugin chooses, before the work it guards runs, under the rules it
+   * declared in `contributes.limits`.
+   *
+   * Present only when the plugin declares a rule. Reserve before opening a
+   * transaction: `reserve`, `release` and `reset` throw inside one, since a
+   * count must never roll back with the work it guarded.
+   */
+  limits?: PluginLimiter;
 }
 
 /** @experimental Writing one plugin's declared audit events. */
@@ -1862,6 +1875,7 @@ export function createPluginContext(
   // allowlist, and nothing about it changes between requests.
   const pluginFetch = plugin ? createPluginFetchFor(plugin) : undefined;
   const pluginPrincipals = plugin ? createPluginPrincipals(plugin) : undefined;
+  const pluginLimits = plugin ? createPluginLimits(plugin) : undefined;
 
   const filterRegistry = getFilterRegistry();
   filterRegistry.setLogger(logger);
@@ -1992,5 +2006,6 @@ export function createPluginContext(
     // own to recognise has no use for it, as one with no settings has none
     // for `settings`.
     ...(pluginPrincipals ? { principals: pluginPrincipals } : {}),
+    ...(pluginLimits ? { limits: pluginLimits } : {}),
   };
 }
