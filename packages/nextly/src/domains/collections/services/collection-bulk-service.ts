@@ -27,6 +27,7 @@ import type { TrustBound } from "../../../services/collections/trust-grant";
 import { narrows } from "../../../services/collections/trust-grant";
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
+import { assertFilterableFields } from "../../../shared/lib/filterable-fields";
 import { PAGINATION_DEFAULTS } from "../../../types/pagination";
 
 import type { CollectionAccessService } from "./collection-access-service";
@@ -917,6 +918,7 @@ export class CollectionBulkService extends BaseService {
         },
       });
     }
+    assertCallerFilterReadable(params);
 
     // 2. Enumerate the target rows under the UPDATE rule. The collection-level
     // UPDATE access was already checked above, so this runs with overrideAccess
@@ -1098,6 +1100,7 @@ export class CollectionBulkService extends BaseService {
         },
       });
     }
+    assertCallerFilterReadable(params);
 
     // 2. Enumerate the target rows under the DELETE rule. overrideAccess skips
     // the READ rules (a role allowed to delete but not read must still see its
@@ -2194,4 +2197,25 @@ export class CollectionBulkService extends BaseService {
       () => true
     );
   }
+}
+
+/**
+ * Refuse a by-query write whose `where` names a field the caller may not read,
+ * before any row is found or written.
+ *
+ * The rows are found with a trusted read, which skips the check every read
+ * makes of a caller's filter. Without it, a caller allowed to write but not
+ * to read a field could guess its value in `where` and learn from which rows
+ * were written, or which ids came back, whether it matched. Asked here, where
+ * the trusted read is, so every way in (the Direct API, a plugin's service
+ * call, the REST bulk routes) is held to it.
+ */
+function assertCallerFilterReadable(params: {
+  collectionName: string;
+  where: WhereFilter;
+  overrideAccess?: boolean;
+}): void {
+  assertFilterableFields("collection", params.collectionName, params.where, {
+    overrideAccess: params.overrideAccess,
+  });
 }
