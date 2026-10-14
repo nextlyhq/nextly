@@ -13,6 +13,7 @@ import {
 } from "../storage/sessions";
 
 import { sessionLimits, type FlowDeps } from "./deps";
+import { sessionHolder } from "./holder";
 
 /** The signed-in account a request's session names, as server code and access rules see it. */
 export interface SignedInAccount {
@@ -35,16 +36,15 @@ export async function sessionAccount(
   deps: Pick<FlowDeps, "db" | "core" | "settings" | "now">,
   input: { sessionToken: string }
 ): Promise<SignedInAccount | null> {
-  const now = deps.now();
-  const session = await liveSession(
+  const holder = await sessionHolder(deps, input.sessionToken);
+  if (holder === null) return null;
+  const { session, account } = holder;
+  await touchSession(
     deps.db,
-    deps.core.opaque.hash(input.sessionToken),
-    now
+    session,
+    deps.now(),
+    sessionLimits(deps.settings)
   );
-  if (session === null) return null;
-  const account = await accountById(deps.db, session.accountId);
-  if (account === null || account.deactivatedAt !== null) return null;
-  await touchSession(deps.db, session, now, sessionLimits(deps.settings));
 
   return {
     id: account.id,
