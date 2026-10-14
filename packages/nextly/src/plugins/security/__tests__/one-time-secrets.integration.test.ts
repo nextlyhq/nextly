@@ -20,6 +20,10 @@ import {
 import { definePlugin, type PluginContext } from "../../plugin-context";
 import { getConfiguredTestDialects } from "../../test-nextly";
 import { createOneTimeSecrets, type OneTimeSecrets } from "../one-time-secrets";
+import {
+  ONE_TIME_SECRETS_GRACE_MS,
+  pruneOneTimeSecrets,
+} from "../one-time-secrets-prune";
 
 let current: TwoInstances | undefined;
 
@@ -375,6 +379,68 @@ describe.each(getConfiguredTestDialects())(
       expect(
         await a.security.secrets.consumeToken({ purpose: "reset", token })
       ).toMatchObject({ ok: true });
+    });
+
+    it("keeps a spend another flow's rolled-back transaction ran beside", async () => {
+      const { a } = await boot();
+      const { token } = await a.security.secrets.mintToken({
+        purpose: "reset",
+        subject,
+        expiresInMs: 60_000,
+      });
+      let release: () => void = () => {};
+      const held = new Promise<void>(resolve => {
+        release = resolve;
+      });
+      let opened: () => void = () => {};
+      const isOpen = new Promise<void>(resolve => {
+        opened = resolve;
+      });
+      // Another request: opens a transaction, waits, then rolls back.
+      const other = a.db
+        .transaction(async () => {
+          opened();
+          await held;
+          throw new Error("the other request's work failed");
+        })
+        .catch(() => undefined);
+      await isOpen;
+      // This flow has no transaction of its own open, so the spend is not
+      // refused; on SQLite its transaction waits behind the other one.
+      const spending = a.security.secrets.consumeToken({
+        purpose: "reset",
+        token,
+      });
+      release();
+      await other;
+      expect(await spending).toMatchObject({ ok: true });
+      expect(
+        await a.security.secrets.consumeToken({ purpose: "reset", token })
+      ).toEqual({ ok: false, reason: "spent" });
+    });
+
+    it("sweeps a secret a day past its expiry, and keeps one that is not", async () => {
+      const { a, rows } = await boot();
+      const adapter = current?.first.adapter as unknown as DrizzleAdapter;
+      await a.security.secrets.mintToken({
+        purpose: "reset",
+        subject,
+        expiresInMs: 60_000,
+      });
+      await a.security.secrets.mintToken({
+        purpose: "reset",
+        subject,
+        expiresInMs: 30 * 86_400_000,
+      });
+      vi.useFakeTimers({ toFake: ["Date"] });
+      const minted = Date.now();
+      // Expired, but inside the day of grace: kept, so it still answers "expired".
+      vi.setSystemTime(minted + 2 * 60_000);
+      expect(await pruneOneTimeSecrets(adapter, new Date())).toBe(0);
+      expect(await rows()).toHaveLength(2);
+      vi.setSystemTime(minted + ONE_TIME_SECRETS_GRACE_MS + 2 * 60_000);
+      expect(await pruneOneTimeSecrets(adapter, new Date())).toBe(1);
+      expect(await rows()).toHaveLength(1);
     });
 
     describe("on two instances at once", () => {
