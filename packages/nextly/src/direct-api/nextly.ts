@@ -114,6 +114,7 @@ import {
   type UsersNamespace,
 } from "./namespaces/index";
 import * as singlesNs from "./namespaces/singles";
+import { guardPrincipalOperations } from "./principal-boundary";
 import type {
   AuthResult,
   BulkDeleteArgs,
@@ -295,6 +296,12 @@ export class Nextly implements NextlyContext {
     this.jobs = createJobsNamespace();
     this.releases = createReleasesNamespace(this);
     this.principals = createNextlyPrincipals();
+
+    // The instance its callers reach: only the collection and Single
+    // operations may be made as a plugin-defined person, and every other
+    // method and namespace refuses `principal` rather than ignore it and run
+    // as the server.
+    return guardPrincipalOperations(this);
   }
 
   /**

@@ -145,4 +145,42 @@ describe("a Direct API call made as a person", () => {
       code: "INVALID_INPUT",
     });
   });
+
+  it.each([
+    ["roles.create", (n: Nextly) => n.roles],
+    ["apiKeys.create", (n: Nextly) => n.apiKeys],
+    ["users.delete", (n: Nextly) => n.users],
+  ])("refuses %s named with a person", async (label, pick) => {
+    // Operations that never read their options through a shared helper: a
+    // person ignored there would run a privileged operation as the server.
+    const method = label.split(".")[1] as string;
+    const namespace = pick(nextly) as unknown as Record<
+      string,
+      (args: Record<string, unknown>) => Promise<unknown>
+    >;
+    await expect(
+      namespace[method]!({ id: "x", principal: person })
+    ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+  });
+
+  it("refuses register named with a person", async () => {
+    const register = nextly.register as unknown as (
+      args: Record<string, unknown>
+    ) => Promise<unknown>;
+    await expect(
+      register({ email: "a@x.com", password: "pw", principal: person })
+    ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+  });
+
+  it("refuses an operation that cannot run as a person even inside that person's call", async () => {
+    // A hook running for the person forwarding the same person on.
+    const users = nextly.users as unknown as {
+      delete(args: Record<string, unknown>): Promise<unknown>;
+    };
+    await expect(
+      runAsPrincipal(person, () =>
+        users.delete({ id: "u1", principal: person })
+      )
+    ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+  });
 });

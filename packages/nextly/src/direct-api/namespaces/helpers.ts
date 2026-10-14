@@ -10,7 +10,7 @@
  */
 
 import type { AuthenticatedScope } from "../../auth/authenticated-scope";
-import { currentPrincipal, runAsPrincipal } from "../../auth/principal-scope";
+import { runAsPrincipal } from "../../auth/principal-scope";
 import type { RequestActor } from "../../auth/request-actor";
 import { errorFromServiceEnvelope } from "../../errors/from-service-envelope";
 import { NextlyError } from "../../errors/nextly-error";
@@ -38,35 +38,10 @@ export function mergeConfig<T extends DirectAPIConfig>(
   defaultConfig: DirectAPIConfig,
   args: T
 ): T & DirectAPIConfig {
-  refuseStrayPrincipal(args);
   return {
     ...defaultConfig,
     ...args,
   };
-}
-
-/**
- * Refuse a person named on an operation that cannot run as one.
- *
- * Only the collection and Single operations decide access through code
- * rules, and only they open the person's frame ({@link runAsCaller}), so a
- * person named anywhere outside that frame was named on some other
- * operation. Every other operation that takes a caller defaults to running as
- * the server, and a person named there and quietly ignored would turn "as
- * this visitor" into "as the server". Asked where those operations read their
- * options, which every one of them does, so a new operation cannot forget it.
- * A nested collection read inside a person's operation names the same person
- * and runs inside the same frame, so it passes.
- */
-function refuseStrayPrincipal(args: object): void {
-  const named = (args as RunAsPrincipal).principal;
-  if (named !== undefined && named !== currentPrincipal()) {
-    throw NextlyError.invalidInput({
-      message:
-        "This operation cannot be made as a signed-in person; only collection and Single operations can.",
-      logContext: { reason: "principal-call-refused" },
-    });
-  }
 }
 
 /**
@@ -106,7 +81,9 @@ export async function runAsCaller<
       user: config.user,
       fieldAccessUser: config.fieldAccessUser,
       actor: config.actor,
-      trusted: config.trusted,
+      // The call's own bound, not an instance default: a bound narrows an
+      // override, and a person's call has none for it to narrow.
+      trusted: args.trusted,
       // The call's own setting, never the instance default of `true`, which
       // a call made as a person replaces rather than asks for.
       overrideAccess: args.overrideAccess,
@@ -261,7 +238,6 @@ export function callerAccess(
  * aren't available in a Direct API context.
  */
 export function createRequestContext(args: DirectAPIConfig): RequestContext {
-  refuseStrayPrincipal(args);
   if (!args.user) {
     return { locale: args.locale };
   }
