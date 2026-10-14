@@ -1,10 +1,14 @@
 import { defineConfig } from "vitest/config";
 
-// Unit suites only: nothing in this package boots a Nextly instance yet, so it
-// has no integration lane to keep apart.
+// Unit suites only: the suites that boot a Nextly instance against a database
+// are *.integration.test.ts, run by vitest.integration.config.ts.
 export default defineConfig({
   test: {
     include: ["src/**/*.{test,spec}.ts"],
-    exclude: ["**/node_modules/**", "**/dist/**"],
+    exclude: [
+      "**/node_modules/**",
+      "**/dist/**",
+      "src/**/*.integration.test.ts",
+    ],
   },
 });

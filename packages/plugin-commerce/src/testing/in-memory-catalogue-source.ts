@@ -1,6 +1,8 @@
 import { NextlyError } from "@nextlyhq/plugin-sdk";
+import { z } from "zod";
 
 import {
+  assertCatalogueSource,
   catalogueItemSchema,
   stockReportSchema,
   type CatalogueItem,
@@ -29,6 +31,35 @@ export interface InMemoryCatalogueSourceControl {
   stock(reference: string): CatalogueStock | undefined;
   /** Every stock report it recorded, once each, oldest first. */
   reports(): readonly StockReport[];
+}
+
+// What a caller may ask, held to the contract before the source answers: a
+// page of at least one item, and lines each naming a reference and a whole
+// quantity of at least one.
+const listInputSchema = z.object({
+  limit: z.number().int().positive(),
+  cursor: z.string().nullish(),
+  search: z.string().optional(),
+});
+const priceLinesSchema = z.array(
+  z.object({
+    reference: z.string().min(1),
+    quantity: z.number().int().positive(),
+  })
+);
+
+function parsed<S extends z.ZodType>(schema: S, input: unknown): z.output<S> {
+  const result = schema.safeParse(input);
+  if (!result.success) {
+    throw NextlyError.validation({
+      errors: result.error.issues.map(issue => ({
+        path: issue.path.join("."),
+        code: "INVALID",
+        message: issue.message,
+      })),
+    });
+  }
+  return result.data;
 }
 
 /**
@@ -64,7 +95,15 @@ export function createInMemoryCatalogueSource(
 
   function adjustForSale(report: StockReport): void {
     const item = items.get(report.reference);
-    if (!item || item.stock.kind === "untracked") return;
+    // Neither is counted: an untracked item is commerce's to count, and an
+    // item sold to order has no stock to lower.
+    if (
+      !item ||
+      item.stock.kind === "untracked" ||
+      item.stock.kind === "to-order"
+    ) {
+      return;
+    }
     // A sale already happened by the time it is reported, so the count stops
     // at zero rather than refusing a report commerce cannot take back.
     const available = Math.max(0, item.stock.available - report.quantity);
@@ -92,6 +131,7 @@ export function createInMemoryCatalogueSource(
       }),
     price: input =>
       later(() => {
+        parsed(priceLinesSchema, input.lines);
         if (input.currency !== options.currency) {
           throw commerceError("COMMERCE_CURRENCY_MISMATCH", {
             asked: input.currency,
@@ -117,6 +157,7 @@ export function createInMemoryCatalogueSource(
       }),
     list: input =>
       later(() => {
+        parsed(listInputSchema, input);
         const search = input.search?.toLowerCase();
         const matching = order
           .map(reference => items.get(reference))
@@ -180,5 +221,8 @@ export function createInMemoryCatalogueSource(
     reports: () => [...recorded.values()].map(r => r.report),
   };
 
+  // The same declaration rules commerce applies (a lower-case slug for an
+  // id among them), so a source made here is never one commerce refuses.
+  assertCatalogueSource(source);
   return { source, control };
 }

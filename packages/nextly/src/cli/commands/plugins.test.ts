@@ -16,6 +16,7 @@ function info(overrides: Partial<PluginInfo> = {}): PluginInfo {
     fieldGroups: [],
     permissions: ["export-submissions"],
     events: ["nextlyhq-plugin-form-builder.submitted"],
+    principalKinds: [],
     routeCount: 1,
     adminMenuCount: 1,
     adminPageCount: 1,
@@ -103,6 +104,23 @@ describe("renderPluginInfo (D48)", () => {
     expect(kv["settings page"]).toBe("yes");
     // Permissions are itemized.
     expect(logger.item).toHaveBeenCalledWith("export-submissions", 1);
+  });
+
+  it("lists the kinds of signed-in person a plugin registers", () => {
+    const logger = {
+      header: vi.fn(),
+      keyValue: vi.fn(),
+      item: vi.fn(),
+      info: vi.fn(),
+    };
+    renderPluginInfo(
+      info({ principalKinds: ["acme-accounts:account"] }),
+      logger
+    );
+
+    const kv = Object.fromEntries(logger.keyValue.mock.calls);
+    expect(kv["signed-in kinds"]).toBe("1");
+    expect(logger.item).toHaveBeenCalledWith("acme-accounts:account", 1);
   });
 
   it("prints the manifest an operator reviews before installing", () => {

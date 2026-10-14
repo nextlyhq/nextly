@@ -4,6 +4,7 @@
     "index",
     "author-guide",
     "auth",
+    "signed-in-people",
     "lifecycle",
     "services",
     "permissions",
@@ -18,6 +19,7 @@
     "api-reference",
     "error-reference",
     "form-builder",
-    "seo"
+    "seo",
+    "commerce"
   ]
 }
