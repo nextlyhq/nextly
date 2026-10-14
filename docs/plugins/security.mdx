@@ -232,9 +232,10 @@ send `Origin` (or `Referer`) on cross-site writes, so a forged request is
 refused, while a same-origin write passes without sending a token. This is
 the origin half of what core's `/auth/*` routes check. Declare
 `csrf: true` to require a double-submit CSRF token as well, the protection
-core's `/auth/*` routes take. Only **cookie**-authenticated callers are
-checked: a browser cannot attach an API key cross-site, so there is no
-cross-site request to forge, and API-key and webhook callers need no opt-out.
+core's `/auth/*` routes take. A caller with an API key (`Authorization:
+Bearer`) is never checked: a browser cannot attach one cross-site, so there
+is no cross-site request to forge, and an API-key caller needs no opt-out. On
+a public route, `csrf: true` checks anonymous callers too (below).
 `csrf: false` makes a route refuse every unsafe request the session cookie
 authenticates, from any origin, so it takes writes only from callers with
 another credential. A refusal answers
