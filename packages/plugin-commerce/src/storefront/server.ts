@@ -41,6 +41,16 @@ export function rememberInstalled(ctx: PluginContext): void {
 }
 
 /**
+ * Forget the context a stopped plugin recorded, so `commerceServer` refuses
+ * rather than answering with services over a closed database. Only that
+ * context is forgotten: a newer boot that recorded its own before this one's
+ * teardown ran keeps it.
+ */
+export function forgetInstalled(ctx: PluginContext): void {
+  if (holder[INSTALLED] === ctx) delete holder[INSTALLED];
+}
+
+/**
  * Commerce's server functions, for server code with no plugin context: a
  * storefront page, a server action. The cart functions take the token from
  * the cart cookie and say what to do with the cookie after; the caller reads
@@ -51,6 +61,11 @@ export function rememberInstalled(ctx: PluginContext): void {
  */
 export async function commerceServer(): Promise<CommerceServer> {
   await getCachedNextly();
+  return fromInstalled();
+}
+
+/** The started plugin's functions, from the context it recorded. */
+export function fromInstalled(): CommerceServer {
   const ctx = holder[INSTALLED];
   if (!ctx) {
     throw new Error(

@@ -9,7 +9,7 @@ import { commerceError } from "../errors";
 import { money } from "../money/money";
 import { createInMemoryCatalogueSource } from "../testing/in-memory-catalogue-source";
 
-import { findItems } from "./catalogue-read";
+import { findItems, listItems } from "./catalogue-read";
 
 async function codeOf(
   body: () => Promise<unknown>
@@ -88,6 +88,48 @@ describe("reading items from a catalogue source", () => {
         await codeOf(() => findItems(answering(answer), "USD", ["drill"]))
       ).toBe("COMMERCE_PROVIDER_CONTRACT");
     }
+  });
+
+  it("reports a source that fails to answer by the error's kind, never its message", async () => {
+    const failing: CatalogueSource = {
+      ...answering([]),
+      find: async () => {
+        throw new TypeError(
+          "fetch failed: https://api.example/items?key=sk_live_secret"
+        );
+      },
+    };
+    let caught: unknown;
+    try {
+      await findItems(failing, "USD", ["drill"]);
+    } catch (error) {
+      caught = error;
+    }
+    expect(NextlyError.is(caught) && caught.logContext).toEqual({
+      source: "fake",
+      method: "find",
+      errorKind: "TypeError",
+    });
+    expect(JSON.stringify(caught)).not.toContain("sk_live_secret");
+  });
+
+  it("refuses a listing page that holds nothing yet names a next one", async () => {
+    const stuck: CatalogueSource = {
+      ...answering([]),
+      list: async () => ({ items: [], nextCursor: "again" }),
+    };
+    expect(
+      await codeOf(() => listItems(stuck, "USD", { limit: 10, cursor: null }))
+    ).toBe("COMMERCE_PROVIDER_CONTRACT");
+    // An empty last page is a catalogue with nothing in it, which is fine.
+    const empty: CatalogueSource = {
+      ...answering([]),
+      list: async () => ({ items: [], nextCursor: null }),
+    };
+    expect(await listItems(empty, "USD", { limit: 10, cursor: null })).toEqual({
+      items: [],
+      nextCursor: null,
+    });
   });
 
   it("calls a source that fails to answer unavailable, and passes on an error it raised", async () => {

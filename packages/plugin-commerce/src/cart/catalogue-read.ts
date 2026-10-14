@@ -97,6 +97,12 @@ export async function listItems(
   if (nextCursor !== null && typeof nextCursor !== "string") {
     throw broken(source, "list answered a cursor that is not a string");
   }
+  // Every page but the last holds an item, so a listing always moves
+  // forward; an empty page that names a next one would have a storefront
+  // following cursors for ever.
+  if (items.length === 0 && nextCursor !== null) {
+    throw broken(source, "list answered an empty page with a next cursor");
+  }
   const seen = new Set<string>();
   const checked = items.map(raw => {
     const item = checkedItem(source, currency, "list", raw);
@@ -120,10 +126,13 @@ async function ask<T>(
     return await call();
   } catch (error) {
     if (error instanceof NextlyError) throw error;
+    // The error's kind only, never its message: a source's HTTP client can
+    // put a request URL, and the key in it, into the message, and this
+    // context is written to the logs.
     throw commerceError("COMMERCE_CATALOGUE_UNAVAILABLE", {
       source: source.id,
       method,
-      reason: error instanceof Error ? error.message : String(error),
+      errorKind: error instanceof Error ? error.name : typeof error,
     });
   }
 }

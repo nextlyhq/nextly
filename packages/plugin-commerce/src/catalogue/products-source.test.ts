@@ -123,7 +123,7 @@ function sorted(
 function selected(
   row: Stored,
   select: Record<string, unknown> | undefined
-): Record<string, unknown> {
+): Stored {
   if (!select) return row;
   return {
     ...Object.fromEntries(

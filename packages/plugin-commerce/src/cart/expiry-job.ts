@@ -66,8 +66,10 @@ export async function sweepExpiredCarts(
 export function cartExpiryJob(deps: {
   /** The database, once the plugin has started. */
   readonly db: () => PluginDatabase;
-  /** The clock, for tests; the job's own `now` otherwise. */
+  /** The clock the deadline is checked against, for tests. */
   readonly clock?: () => Date;
+  /** Carts removed per batch, for tests. */
+  readonly batchSize?: number;
 }): JobDefinition {
   return defineJob({
     slug: CART_EXPIRY_JOB,
@@ -78,7 +80,8 @@ export function cartExpiryJob(deps: {
       const clock = deps.clock ?? (() => new Date());
       for (;;) {
         if (clock().getTime() >= context.deadline.getTime()) return;
-        if ((await sweepExpiredCarts(db, now)) < BATCH_SIZE) return;
+        const batch = deps.batchSize ?? BATCH_SIZE;
+        if ((await sweepExpiredCarts(db, now, batch)) < batch) return;
       }
     },
   });

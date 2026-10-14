@@ -15,7 +15,7 @@ import {
   clearCartCookieHeader,
   readCartToken,
 } from "../cart/token";
-import { parseRequest } from "../request-input";
+import { parseRequest, readJsonBody } from "../request-input";
 
 import {
   MAX_FIND_REFERENCES,
@@ -28,17 +28,19 @@ export interface StorefrontRuntime {
   readonly secureCookies: boolean;
   /** Whether the configured source can be browsed, so the listing route exists. */
   readonly listable: boolean;
+  /** How many cart changes one client may make in a window. */
+  readonly writeLimit: { readonly max: number; readonly windowMs: number };
   cart(ctx: PluginContext): CartService;
   catalogue(ctx: PluginContext): CatalogueService;
 }
 
 /**
- * How often one client may change its cart. Reads take core's general
- * allowance; writes take a tighter one, since each may call the catalogue
- * source and write rows. Counted per process until core shares its limiter
- * between instances.
+ * How often one client may change its cart unless the site says otherwise.
+ * Reads take core's general allowance; writes take a tighter one, since each
+ * may call the catalogue source and write rows. Counted per process until
+ * core shares its limiter between instances.
  */
-const WRITE_LIMIT = { max: 60, windowMs: 60_000 };
+export const DEFAULT_CART_WRITE_LIMIT = { max: 60, windowMs: 60_000 };
 
 // A JSON body with a line's fields. Anything else in it, such as a price or a
 // cart id a page sent, is dropped here and never reaches the cart: the cart
@@ -98,7 +100,7 @@ export function storefrontRoutes(runtime: StorefrontRuntime): PluginRoute[] {
       path,
       public: true,
       noStore: true,
-      rateLimit: WRITE_LIMIT,
+      rateLimit: { ...runtime.writeLimit },
       handler: async (req, ctx) => {
         await assertSameSiteWrite(req, ctx);
         const result = await write(
@@ -128,7 +130,7 @@ export function storefrontRoutes(runtime: StorefrontRuntime): PluginRoute[] {
       "POST",
       "/cart/lines",
       async (cart, token, req) => {
-        const body = parseRequest(lineBody, await jsonBody(req));
+        const body = parseRequest(lineBody, await readJsonBody(req));
         return cart.add({
           token,
           reference: body.reference,
@@ -141,7 +143,7 @@ export function storefrontRoutes(runtime: StorefrontRuntime): PluginRoute[] {
       "PATCH",
       "/cart/lines",
       async (cart, token, req) => {
-        const body = parseRequest(lineBody, await jsonBody(req));
+        const body = parseRequest(lineBody, await readJsonBody(req));
         return cart.setQuantity({
           token,
           reference: body.reference,
@@ -235,14 +237,6 @@ async function assertSameSiteWrite(
       logMessage: "A storefront cart write failed the CSRF check.",
       logContext: { reason: verdict.reason },
     });
-  }
-}
-
-async function jsonBody(req: Request): Promise<unknown> {
-  try {
-    return await req.json();
-  } catch {
-    return undefined;
   }
 }
 

@@ -23,10 +23,14 @@ import {
   createCatalogueService,
   type CatalogueService,
 } from "./storefront/catalogue-service";
-import { storefrontRoutes } from "./storefront/routes";
+import {
+  DEFAULT_CART_WRITE_LIMIT,
+  storefrontRoutes,
+} from "./storefront/routes";
 import {
   CART_SERVICE,
   CATALOGUE_SERVICE,
+  forgetInstalled,
   rememberInstalled,
 } from "./storefront/server";
 
@@ -56,6 +60,12 @@ export interface CommerceOptions {
    * cookie a plain-HTTP development server sets.
    */
   readonly secureCookies?: boolean;
+  /**
+   * How many cart changes one client may make in a window: 60 a minute by
+   * default. A site whose shoppers share a network address, as behind a
+   * corporate proxy, may need it higher.
+   */
+  readonly cartWriteLimit?: { readonly max: number; readonly windowMs: number };
 }
 
 const optionsSchema = z.object({
@@ -72,6 +82,12 @@ const optionsSchema = z.object({
     .max(MAX_CART_LIFETIME_DAYS)
     .optional(),
   secureCookies: z.boolean().optional(),
+  cartWriteLimit: z
+    .strictObject({
+      max: z.number().int().positive(),
+      windowMs: z.number().int().positive(),
+    })
+    .optional(),
 });
 
 /**
@@ -143,6 +159,10 @@ export function commerce(options: CommerceOptions) {
       installed = ctx;
       rememberInstalled(ctx);
     },
+    destroy() {
+      if (installed) forgetInstalled(installed);
+      installed = null;
+    },
     contributes: {
       schema: commerceSchema,
       // The built-in catalogue only when the site has none of its own, so a
@@ -155,6 +175,7 @@ export function commerce(options: CommerceOptions) {
       },
       routes: storefrontRoutes({
         secureCookies,
+        writeLimit: parsed.cartWriteLimit ?? DEFAULT_CART_WRITE_LIMIT,
         listable: own === undefined ? true : typeof own.list === "function",
         cart: cartFor,
         catalogue: catalogueFor,

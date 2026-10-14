@@ -8,8 +8,8 @@
  * behind, the CSRF check on every write, the fixed shapes of every answer,
  * and that nothing in a request but the cookie reaches a cart.
  *
- * Writes stay well under the routes' own allowance, which is counted per
- * process: the refusal past it has a file of its own.
+ * The routes' write allowance is counted per process, so this suite raises
+ * it; the refusal past the default has a file of its own.
  *
  * @module storefront/routes.integration.test
  */
@@ -125,6 +125,9 @@ describe.each(getConfiguredTestDialects())(
     ): Promise<PluginContext> {
       const plugin = commerce({
         currency: "USD",
+        // The writes of every case on every dialect share one process's
+        // count; the default allowance is the rate-limit suite's to test.
+        cartWriteLimit: { max: 10_000, windowMs: 60_000 },
         catalogue: createInMemoryCatalogueSource({
           currency: "USD",
           items: ITEMS,
@@ -406,6 +409,26 @@ describe.each(getConfiguredTestDialects())(
           error: { code: "VALIDATION_ERROR" },
         });
       }
+    });
+
+    it("refuses a body far larger than any cart request before reading it whole, and makes no cart", async () => {
+      const ctx = await boot();
+      const refused = await call("POST", "/cart/lines", {
+        body: {
+          reference: "drill",
+          quantity: 1,
+          padding: "x".repeat(32 * 1024),
+        },
+      });
+      expect(refused.status).toBe(400);
+      expect(refused.body).toMatchObject({
+        error: {
+          code: "VALIDATION_ERROR",
+          data: { errors: [{ code: "too_large" }] },
+        },
+      });
+      expect(refused.setCookie).toBeNull();
+      expect(await ctx.db.select(carts).all()).toEqual([]);
     });
 
     it("looks items up and lists the catalogue a page at a time", async () => {

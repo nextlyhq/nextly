@@ -73,6 +73,29 @@ describe("commerce()", () => {
     ).not.toContain("GET /catalogue");
   });
 
+  it("applies the site's cart write limit to every cart write, and 60 a minute otherwise", () => {
+    const writes = (plugin: ReturnType<typeof commerce>) =>
+      (plugin.contributes?.routes ?? [])
+        .filter(r => r.method !== "GET")
+        .map(r => r.rateLimit);
+    expect(writes(commerce({ currency: "USD" }))).toEqual(
+      Array(4).fill({ max: 60, windowMs: 60_000 })
+    );
+    expect(
+      writes(
+        commerce({
+          currency: "USD",
+          cartWriteLimit: { max: 300, windowMs: 60_000 },
+        })
+      )
+    ).toEqual(Array(4).fill({ max: 300, windowMs: 60_000 }));
+    expect(
+      codeOf(() =>
+        commerce({ currency: "USD", cartWriteLimit: { max: 0, windowMs: 1 } })
+      )
+    ).toBe("VALIDATION_ERROR");
+  });
+
   it("makes every storefront route public, uncached and rate-limited", () => {
     const routes = commerce({ currency: "USD" }).contributes?.routes ?? [];
     expect(routes.length).toBeGreaterThan(0);

@@ -1,4 +1,4 @@
-import { asc, eq } from "@nextlyhq/plugin-sdk/db";
+import { asc, eq, inArray } from "@nextlyhq/plugin-sdk/db";
 import type {
   PluginDatabase,
   PluginTransaction,
@@ -207,19 +207,31 @@ export function createCartService(options: CartServiceOptions): CartService {
    * finds no live cart and makes a new one. So of two changes racing on one cart, one
    * commits and the other reads the cart again and applies to what it finds;
    * neither is lost and neither applies to a cart that has since changed.
-   * The item is looked up once, before the first attempt and outside any
-   * transaction.
+   *
+   * Every item the answer shows is read from the source before the write, in
+   * one call outside any transaction, and the answer is built from what was
+   * written. The write is then the last thing that can fail: a change that
+   * committed always answers, with the cookie for the cart it changed, so a
+   * new cart is never left without its token and a retried request is never
+   * one whose change had in fact applied.
    */
   async function change(
     presented: string | null,
-    cartChange: CartChange,
-    item: CatalogueItem | undefined
+    cartChange: CartChange
   ): Promise<CartResult> {
     for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
       const now = clock();
       const cart = await liveCart(presented, now);
       const lines = cart ? await storedLines(cart.id) : [];
-      const next = planWrite(cartChange, lines, item);
+      const items = await findItems(source, currency, [
+        ...lines.map(line => line.reference),
+        ...(cartChange.kind === "line" ? [cartChange.reference] : []),
+      ]);
+      const next = planWrite(
+        cartChange,
+        lines,
+        cartChange.kind === "line" ? items.get(cartChange.reference) : undefined
+      );
       const expiresAt = cartDeadline(now, lifetimeDays);
 
       if (!cart) {
@@ -231,7 +243,7 @@ export function createCartService(options: CartServiceOptions): CartService {
         // browser chose would let whoever planted it in that browser read the
         // cart that grew from it.
         const fresh = newCartToken();
-        const made = await db.transaction(async tx => {
+        await db.transaction(async tx => {
           const row = await tx.insertReturning(carts, {
             tokenHash: hashCartToken(fresh),
             currency,
@@ -240,15 +252,14 @@ export function createCartService(options: CartServiceOptions): CartService {
             updatedAt: now,
           });
           await writeLines(tx, row.id, [], next.lines, now);
-          return {
-            token: fresh,
-            id: row.id,
-            version: row.version,
-            expiresAt,
-          };
         });
         return {
-          cart: await view(made),
+          cart: buildCartView({
+            currency,
+            expiresAt,
+            lines: next.lines,
+            items,
+          }),
           cookie: { action: "set", token: fresh, expiresAt },
         };
       }
@@ -282,7 +293,7 @@ export function createCartService(options: CartServiceOptions): CartService {
       if (!applied) continue;
 
       return {
-        cart: await view({ ...cart, version: cart.version + 1, expiresAt }),
+        cart: buildCartView({ currency, expiresAt, lines: next.lines, items }),
         cookie: { action: "set", token: cart.token, expiresAt },
       };
     }
@@ -313,11 +324,11 @@ export function createCartService(options: CartServiceOptions): CartService {
         reference: input.reference,
         quantity: input.quantity,
       });
-      return change(
-        input.token,
-        { kind: "line", reference, quantity: current => current + quantity },
-        await lookUp(reference)
-      );
+      return change(input.token, {
+        kind: "line",
+        reference,
+        quantity: current => current + quantity,
+      });
     },
 
     async setQuantity(input) {
@@ -327,32 +338,28 @@ export function createCartService(options: CartServiceOptions): CartService {
       });
       // Setting a line to nothing needs nothing from the source: an item it
       // no longer knows can still be taken out of a cart.
-      return change(
-        input.token,
-        { kind: "line", reference, quantity: () => quantity },
-        quantity === 0 ? undefined : await lookUp(reference)
-      );
+      return change(input.token, {
+        kind: "line",
+        reference,
+        quantity: () => quantity,
+      });
     },
 
     async remove(input) {
       const { reference } = parseRequest(removeSchema, {
         reference: input.reference,
       });
-      return change(
-        input.token,
-        { kind: "line", reference, quantity: () => 0 },
-        undefined
-      );
+      return change(input.token, {
+        kind: "line",
+        reference,
+        quantity: () => 0,
+      });
     },
 
     async clear(input) {
-      return change(input.token, { kind: "clear" }, undefined);
+      return change(input.token, { kind: "clear" });
     },
   };
-
-  async function lookUp(reference: string): Promise<CatalogueItem | undefined> {
-    return (await findItems(source, currency, [reference])).get(reference);
-  }
 }
 
 /** A line as it is written: its quantity and the unit price shown for it. */
@@ -420,12 +427,15 @@ async function writeLines(
   const wanted = new Map(after.map(line => [line.reference, line]));
   const had = new Map(before.map(line => [line.reference, line]));
 
-  for (const line of before) {
-    if (!wanted.has(line.reference)) {
-      await tx
-        .delete(cartLines)
-        .where(allOf(eq(l.cartId, cartId), eq(l.reference, line.reference)));
-    }
+  // Every line that went, in one statement: emptying a full cart is one
+  // round trip inside the transaction, not one per line.
+  const removed = before
+    .filter(line => !wanted.has(line.reference))
+    .map(line => line.reference);
+  if (removed.length > 0) {
+    await tx
+      .delete(cartLines)
+      .where(allOf(eq(l.cartId, cartId), inArray(l.reference, removed)));
   }
   for (const line of after) {
     const previous = had.get(line.reference);

@@ -405,6 +405,42 @@ describe.each(getConfiguredTestDialects())(
       await job.handler(null, context(new Date(Date.now() + 60_000)));
     });
 
+    it("checks the pass's deadline before every batch, and leaves the rest of a backlog to the next pass", async () => {
+      const { ctx, clock, cart } = await setup();
+      for (const reference of ["drill", "bolt", "bench", "drill", "bolt"]) {
+        await cart.add({ token: null, reference, quantity: 1 });
+      }
+      const later = new Date(clock.now.getTime() + 30 * DAY + SWEEP_GRACE_MS);
+      const deadline = new Date("2030-01-01T00:00:00.000Z");
+      // In time for the first batch, out of time before the second.
+      const readings = [new Date(deadline.getTime() - 1), deadline];
+      const job = cartExpiryJob({
+        db: () => ctx.db,
+        batchSize: 2,
+        clock: () => readings.shift() ?? deadline,
+      });
+      await job.handler(null, {
+        jobId: "test",
+        attempt: 1,
+        user: null,
+        now: later,
+        deadline,
+        content: {},
+      } as unknown as JobContext);
+      expect(await ctx.db.select(carts).all()).toHaveLength(3);
+
+      // The next pass, with time to spare, takes the rest.
+      await cartExpiryJob({ db: () => ctx.db, batchSize: 2 }).handler(null, {
+        jobId: "test",
+        attempt: 1,
+        user: null,
+        now: later,
+        deadline: new Date(Date.now() + 60_000),
+        content: {},
+      } as unknown as JobContext);
+      expect(await ctx.db.select(carts).all()).toEqual([]);
+    });
+
     it("keeps a cart's deadline when the lifetime setting changes, until the cart next changes", async () => {
       const { clock, service } = await setup();
       const longLived = service(30);
@@ -447,6 +483,37 @@ describe.each(getConfiguredTestDialects())(
       expect(
         Object.fromEntries(view.lines.map(l => [l.reference, l.quantity]))
       ).toEqual({ drill: 5, bolt: 3, bench: 2 });
+    });
+
+    it("reads the source before a change commits, so a committed change always answers with its cookie", async () => {
+      const { outside, ctx, cart } = await setup();
+      // A source that answers once and then fails: any read of it after the
+      // write would leave a committed cart behind an error, its token never
+      // sent.
+      const answered = outside.finds();
+      const original = outside.source.find.bind(outside.source);
+      outside.source.find = async input => {
+        if (outside.finds() > answered) throw new Error("the source went away");
+        return original(input);
+      };
+      const added = await cart.add({
+        token: null,
+        reference: "drill",
+        quantity: 1,
+      });
+      expect(outside.finds()).toBe(answered + 1);
+      expect(added.cookie).toMatchObject({ action: "set" });
+      expect(added.cart.lines).toMatchObject([
+        { reference: "drill", quantity: 1 },
+      ]);
+
+      // With the source down before the write, nothing is written.
+      expect(
+        await codeOf(() =>
+          cart.add({ token: tokenOf(added), reference: "bolt", quantity: 1 })
+        )
+      ).toBe("COMMERCE_CATALOGUE_UNAVAILABLE");
+      expect(await ctx.db.select(cartLines).all()).toHaveLength(1);
     });
 
     it("reads price and availability from the source on every read", async () => {

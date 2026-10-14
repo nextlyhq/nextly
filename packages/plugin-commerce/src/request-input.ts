@@ -42,3 +42,65 @@ function asSentence(message: string): string {
   const sentence = message.charAt(0).toUpperCase() + message.slice(1);
   return sentence.endsWith(".") ? sentence : `${sentence}.`;
 }
+
+/** The largest request body commerce reads: far more than a cart line needs. */
+export const MAX_REQUEST_BYTES = 16 * 1024;
+
+/**
+ * A request's JSON body, read in chunks and refused at the first chunk past
+ * `maxBytes`, so a body far larger than any commerce request is never held in
+ * memory whole. `Content-Length` refuses an honest oversized body at once;
+ * the running count is what enforces, since a chunked body declares none.
+ * A body that is not JSON answers `undefined`, which the request's own schema
+ * then refuses.
+ *
+ * @throws `VALIDATION_ERROR` with a `too_large` field error
+ */
+export async function readJsonBody(
+  request: Request,
+  maxBytes: number = MAX_REQUEST_BYTES
+): Promise<unknown> {
+  const declared = Number(request.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    throw tooLarge(maxBytes);
+  }
+  const stream = request.body;
+  if (!stream) return undefined;
+  const reader = stream.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > maxBytes) {
+      await reader.cancel();
+      throw tooLarge(maxBytes);
+    }
+    chunks.push(value);
+  }
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  try {
+    return JSON.parse(new TextDecoder().decode(bytes));
+  } catch {
+    return undefined;
+  }
+}
+
+function tooLarge(maxBytes: number): NextlyError {
+  return NextlyError.validation({
+    errors: [
+      {
+        path: "",
+        code: "too_large",
+        message: `The request body is larger than ${String(maxBytes)} bytes.`,
+      },
+    ],
+    logContext: { reason: "body-too-large", maxBytes },
+  });
+}
