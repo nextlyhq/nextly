@@ -280,6 +280,9 @@ export interface PluginRoute {
    *   `public: true`: the pair is refused when routes are collected, and
    *   the app does not boot.
    *
+   * A person a route's `principal` recognises is checked as a caller the
+   * session cookie authenticates is.
+   *
    * A request that sends an `Authorization: Bearer` token (an API key) is not
    * checked, whatever the setting, unless the session cookie authenticates
    * it: a browser cannot attach the token cross-site, and the attack this

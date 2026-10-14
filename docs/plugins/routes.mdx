@@ -140,7 +140,7 @@ Return a standard web `Response`. A thrown error is isolated into a JSON error r
 
 A write the session cookie authenticates is also checked for cross-site forgery. Left
 unset, `csrf` checks only the request's origin, which a same-origin write passes;
-`csrf: true` also requires a CSRF token. A route your admin page writes to through
+`csrf: true` also requires a CSRF token of such a write. A route your admin page writes to through
 `usePluginRouteMutation` works either way, because that hook sends the token on every
 write. A page that writes with its own `fetch` leaves `csrf` unset, or fetches
 `/admin/api/auth/csrf` and sends the token as `x-csrf-token`.

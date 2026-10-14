@@ -256,8 +256,12 @@ when the page writes through `usePluginRouteMutation` (from
 from the `nextly_csrf` cookie or fetched once from `/admin/api/auth/csrf`. A
 page that writes with its own `fetch` either leaves `csrf` unset, or fetches
 `/admin/api/auth/csrf` and sends the token as `x-csrf-token` (or as
-`csrfToken` in a JSON body); with `csrf: true` and no token, every save
-answers 403.
+`csrfToken` in a JSON body); with `csrf: true` and no token, every save a
+signed-in user makes answers 403. Only a caller the session cookie
+authenticates is asked for the token: an anonymous write to a public
+`csrf: true` route is checked for its origin alone (see the table below), so
+a route that must have a token from such callers checks one in its handler
+with `ctx.auth.verifyCsrf`.
 
 A public route that leaves `csrf` unset skips the default check: it
 authenticated no one, and it takes cross-origin writes, as a webhook receiver
