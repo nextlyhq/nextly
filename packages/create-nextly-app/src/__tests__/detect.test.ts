@@ -5,7 +5,11 @@
 import fs from "fs-extra";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { detectPackageManager, detectProject } from "../utils/detect";
+import {
+  detectPackageManager,
+  detectPluginPackage,
+  detectProject,
+} from "../utils/detect";
 
 /** A path in `/` form, so expectations written with `/` hold on Windows too, where `path.join` gives `\\`. */
 const posix = (p: unknown) => String(p).replaceAll("\\", "/");
@@ -282,5 +286,40 @@ describe("detectProject", () => {
     const result = await detectProject("/test/project");
 
     expect(result.nextVersion).toBe("14.2.3");
+  });
+});
+
+describe("detectPluginPackage", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    delete process.env.npm_config_user_agent;
+  });
+
+  afterEach(() => {
+    if (originalUserAgent !== undefined) {
+      process.env.npm_config_user_agent = originalUserAgent;
+    }
+  });
+
+  // A plugin scaffold keeps its library in src/ and its Next.js app in dev/,
+  // which the app detector rejects with "App Router not detected" although the
+  // scaffold is exactly what the template ships.
+  it("accepts the plugin layout the app detector rejects", async () => {
+    mockPathExists.mockImplementation(async p => {
+      const pathStr = posix(p);
+      if (pathStr.endsWith("package.json")) return true;
+      if (pathStr.endsWith("/src")) return true;
+      if (pathStr.endsWith("pnpm-lock.yaml")) return true;
+      return false;
+    });
+    mockReadJson.mockResolvedValue({ devDependencies: { next: "^16.0.0" } });
+
+    await expect(detectProject("/test/plugin")).rejects.toThrow(
+      "App Router not detected"
+    );
+
+    const result = await detectPluginPackage("/test/plugin");
+    expect(result.packageManager).toBe("pnpm");
+    expect(result.appDir).toBe("dev/src/app");
   });
 });

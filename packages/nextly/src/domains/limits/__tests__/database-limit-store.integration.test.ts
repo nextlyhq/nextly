@@ -315,6 +315,39 @@ describeEachDialect("the database limit store", dialect => {
     expect(await counterOf(generation)).toBe(false);
   });
 
+  it("keeps two generations' entries for one key apart during a rolling rotation", async () => {
+    const earlier = open(current.adapter, freshGeneration());
+    const later = open(other, freshGeneration());
+    const key = "same-key-both-cohorts";
+    const increment = (
+      current: ReadonlyMap<string, StoredLimit>,
+      now: number
+    ) => ({
+      write: new Map([
+        [
+          key,
+          {
+            value: {
+              n:
+                ((current.get(key)?.value as { n?: number } | undefined)?.n ??
+                  0) + 1,
+            },
+            expiresAt: now + 3_600_000,
+          },
+        ],
+      ]),
+      result: undefined,
+    });
+
+    await earlier.update([key], increment);
+    await later.update([key], increment);
+    await later.update([key], increment);
+
+    // Each cohort still reads its own count, and neither overwrote the other.
+    expect((await earlier.read([key])).get(key)?.value).toEqual({ n: 1 });
+    expect((await later.read([key])).get(key)?.value).toEqual({ n: 2 });
+  });
+
   it("never sweeps again once closed", async () => {
     const generation = freshGeneration();
     const store = open(current.adapter, generation, undefined, 100);

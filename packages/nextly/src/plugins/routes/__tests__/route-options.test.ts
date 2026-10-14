@@ -32,38 +32,73 @@ function request(
 }
 
 describe("publicCallerCredential", () => {
-  it("reads the SESSION cookie as the automatic credential", () => {
+  it("reads an authenticating session as the automatic credential", () => {
     expect(
-      publicCallerCredential(request("POST", { cookie: "nextly_session=x" }))
+      publicCallerCredential(
+        request("POST", { cookie: "nextly_session=x" }),
+        true
+      )
     ).toBe("cookie");
   });
 
-  it("does not read an unrelated cookie as a session", () => {
-    // Any cookie at all counted, so an analytics or locale cookie held a
-    // browser to a check it had no session to pass — and a root-mounted
-    // route never receives the `/admin`-scoped csrf cookie either.
+  it("reads a session cookie that authenticates nobody as no credential", () => {
+    // An expired or malformed cookie: holding its caller to the token a
+    // signed-in caller owes refused a guest who could never have one.
     expect(
       publicCallerCredential(
-        request("POST", { cookie: "_ga=GA1.2.3; NEXT_LOCALE=en" })
+        request("POST", { cookie: "nextly_session=x" }),
+        false
       )
     ).toBe("none");
   });
 
-  it("reads an Authorization header as a deliberate credential", () => {
+  it("reads a Bearer token as a deliberate credential", () => {
     expect(
-      publicCallerCredential(request("POST", { authorization: "Bearer k" }))
+      publicCallerCredential(
+        request("POST", { authorization: "Bearer k" }),
+        false
+      )
     ).toBe("bearer");
   });
 
-  it("prefers the session cookie over an Authorization header", () => {
+  it.each([["bearer k"], ["BEARER k"], ["Bearer\tk"]])(
+    "compares the Bearer scheme case-insensitively: %j",
+    header => {
+      expect(
+        publicCallerCredential(
+          request("POST", { authorization: header }),
+          false
+        )
+      ).toBe("bearer");
+    }
+  );
+
+  it.each([
+    ["Basic dXNlcjpwYXNz"],
+    ["Digest username=u"],
+    ["Negotiate YIIG"],
+    ["NTLM TlRMTVNTUAAB"],
+    ["Cartkey abc"],
+    ["Bearerish abc"],
+    ["Bearer"],
+  ])("reads any other Authorization header as no credential: %j", header => {
+    // A browser attaches the HTTP authentication schemes on its own,
+    // cross-site included; none of them shows the caller chose to send it.
+    expect(
+      publicCallerCredential(request("POST", { authorization: header }), false)
+    ).toBe("none");
+  });
+
+  it("prefers the session over an Authorization header", () => {
     // The header may be ambient HTTP authentication the browser attached on
     // its own; the session cookie is what a handler would act on.
     expect(
       publicCallerCredential(
         request("POST", {
-          authorization: "Basic dXNlcjpwYXNz",
+          authorization: "Bearer k",
           cookie: "nextly_session=x",
-        })
+        }),
+        true
       )
     ).toBe("cookie");
   });
@@ -145,8 +180,7 @@ describe("routeCsrfMode", () => {
 
   it("honors an explicit csrf on a public route", () => {
     // A public handler that resolves the session user and acts on them
-    // declares the check; only session-cookie callers are asked for a token,
-    // so webhook callers stay free.
+    // declares the check; only session-cookie callers are asked for a token.
     expect(
       routeCsrfMode(
         route({ public: true, csrf: true }),
@@ -154,6 +188,35 @@ describe("routeCsrfMode", () => {
         "cookie"
       )
     ).toBe("token");
+  });
+
+  it("checks an anonymous caller's origin where the route declares csrf: true", () => {
+    // A plugin's own cookie, such as a guest cart's id, rides along on a
+    // cross-site post; the caller holds no token, so the origin is the check.
+    expect(
+      routeCsrfMode(
+        route({ public: true, csrf: true }),
+        request("POST"),
+        "none"
+      )
+    ).toBe("origin");
+  });
+
+  it("checks nothing for an anonymous caller where the route leaves csrf unset", () => {
+    // A webhook receiver takes cross-origin writes and leaves csrf unset.
+    expect(
+      routeCsrfMode(route({ public: true }), request("POST"), "none")
+    ).toBe("none");
+  });
+
+  it("checks nothing for a Bearer caller where the route declares csrf: true", () => {
+    expect(
+      routeCsrfMode(
+        route({ public: true, csrf: true }),
+        request("POST"),
+        "bearer"
+      )
+    ).toBe("none");
   });
 });
 
@@ -445,6 +508,26 @@ describe("checkRouteCsrf with the resolved credential", () => {
       "cookie"
     );
     expect(verdict.valid).toBe(true);
+  });
+
+  it("refuses an anonymous cross-site write for its origin, not a token", () => {
+    const req = request("POST", {
+      cookie: "nextly_session=expired; cart_id=c1",
+      origin: "https://evil.example",
+    });
+    expect(
+      checkRouteCsrf(route({ public: true, csrf: true }), req, {}, [], "none")
+    ).toEqual({ valid: false, error: "Invalid request origin" });
+  });
+
+  it("admits an anonymous same-origin write that sends no token", () => {
+    const req = new Request("http://localhost/admin/api/plugins/x/thing", {
+      method: "POST",
+      headers: { origin: "http://localhost" },
+    });
+    expect(
+      checkRouteCsrf(route({ public: true, csrf: true }), req, {}, [], "none")
+    ).toEqual({ valid: true });
   });
 
   it("REFUSES when the session-admitted request carries no token", () => {

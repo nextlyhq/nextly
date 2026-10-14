@@ -4,7 +4,10 @@ dist
 
 # Embedded dev playground — never published, never committed build output
 dev/.next
-dev/*.db
-dev/*.db-journal
+# SQLite files, and the journal and WAL files beside them, wherever they land.
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
 .env
 .env.local
