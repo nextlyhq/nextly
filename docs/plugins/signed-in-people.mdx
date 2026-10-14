@@ -121,7 +121,10 @@ A person's writes take the route's [cross-site check](/docs/plugins/security#rou
 exactly as a staff session cookie's do: the origin by default, a token with
 `csrf: true`, and a refusal with `csrf: false`. A request carrying an
 `Authorization: Bearer` header is exempt, because a page on another site cannot
-make a browser send one.
+make a browser send one. On a route whose `principal` is not `required`, a write
+with nobody of the kind signed in is anonymous: left unchecked with `csrf` unset,
+and checked for its origin, without a token, with `csrf: true` (see
+[which callers each `csrf` setting checks](/docs/plugins/security#which-callers-each-csrf-setting-checks)).
 
 **Leave `csrf` at its default for routes your site's pages call.** `csrf: true`
 asks for core's admin token, whose cookie lives on `/admin`, so a page outside the

@@ -992,6 +992,7 @@ describe("a plugin changing another plugin's entities", () => {
       [
         {
           source: "plugin:fx",
+          name: "fx",
           transforms: [
             {
               target: "posts",

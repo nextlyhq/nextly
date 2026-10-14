@@ -227,12 +227,18 @@ function applyTransforms(
     NextlyServiceConfig,
     "collections" | "singles" | "fieldGroups"
   >,
-  plugins: PluginDefinition[]
+  plugins: PluginDefinition[],
+  owners: ReadonlyMap<string, string>
 ): Pick<NextlyServiceConfig, "collections" | "singles" | "fieldGroups"> {
   const contributions: TransformContribution[] = plugins
     .filter(plugin => (plugin.contributes?.transforms?.length ?? 0) > 0)
     .map(plugin => ({
       source: `plugin:${plugin.name}`,
+      name: plugin.name,
+      // Required dependencies only, as `validateCrossPluginRelations` asks of
+      // a relation to another plugin's entity: a transform needs the entity's
+      // owner present, which an optional dependency does not promise.
+      dependsOn: Object.keys(plugin.dependsOn ?? {}),
       transforms: plugin.contributes?.transforms ?? [],
       // Run all the same, so disabling the plugin never changes a table;
       // `runEntityTransforms` keeps its storage changes and drops its
@@ -243,22 +249,23 @@ function applyTransforms(
   // so a config with no transforms is not re-created on every fold.
   if (contributions.length === 0) return entities;
 
+  const extendedBy = extendersBySlug(plugins);
+  const transformable =
+    (kind: TransformableEntity["kind"]) =>
+    (entity: unknown): TransformableEntity => {
+      const slug = (entity as { slug: string }).slug;
+      return {
+        slug,
+        kind,
+        definition: entity as Record<string, unknown>,
+        owner: owners.get(slug),
+        extendedBy: extendedBy.get(slug),
+      };
+    };
   const flat: TransformableEntity[] = [
-    ...(entities.collections ?? []).map(entity => ({
-      slug: (entity as { slug: string }).slug,
-      kind: "collection" as const,
-      definition: entity as unknown as Record<string, unknown>,
-    })),
-    ...(entities.singles ?? []).map(entity => ({
-      slug: (entity as { slug: string }).slug,
-      kind: "single" as const,
-      definition: entity as unknown as Record<string, unknown>,
-    })),
-    ...(entities.fieldGroups ?? []).map(entity => ({
-      slug: (entity as { slug: string }).slug,
-      kind: "component" as const,
-      definition: entity as unknown as Record<string, unknown>,
-    })),
+    ...(entities.collections ?? []).map(transformable("collection")),
+    ...(entities.singles ?? []).map(transformable("single")),
+    ...(entities.fieldGroups ?? []).map(transformable("component")),
   ];
 
   const transformed = runEntityTransforms(flat, contributions);
@@ -270,6 +277,25 @@ function applyTransforms(
     singles: of("single") as NextlyServiceConfig["singles"],
     fieldGroups: of("component") as NextlyServiceConfig["fieldGroups"],
   };
+}
+
+/**
+ * Target slug → field name → the plugin whose `extend` added the field: who
+ * declared each field the transforms are handed, beside the entity's owner.
+ */
+function extendersBySlug(
+  plugins: PluginDefinition[]
+): Map<string, Map<string, string>> {
+  const bySlug = new Map<string, Map<string, string>>();
+  for (const { target, fields, owner } of flattenExtends(plugins)) {
+    const names = bySlug.get(target) ?? new Map<string, string>();
+    for (const field of fields) {
+      const name = (field as { name?: unknown }).name;
+      if (typeof name === "string") names.set(name, owner);
+    }
+    bySlug.set(target, names);
+  }
+  return bySlug;
 }
 
 function flattenExtends(plugins: PluginDefinition[]): DeferredExtend[] {
@@ -573,13 +599,24 @@ export function assertRegisteredKeepTheirKind(
 function mergeRenamed(
   config: NextlyServiceConfig,
   plugins: PluginDefinition[]
-): Pick<NextlyServiceConfig, "collections" | "singles" | "fieldGroups"> {
+): Pick<NextlyServiceConfig, "collections" | "singles" | "fieldGroups"> & {
+  /** Slug → the plugin that contributed the entity; the app's are absent. */
+  owners: Map<string, string>;
+} {
   const renamed = plugins.map(p => ({
     owner: p.name,
     contributes: renamePluginContributes(p),
   }));
-  assertOneKindPerSlug(slugClaims(config, renamed));
+  const claims = slugClaims(config, renamed);
+  assertOneKindPerSlug(claims);
   return {
+    // A plugin's slug is unique across kinds once the claims pass, so the
+    // slug alone names its owner.
+    owners: new Map(
+      claims
+        .filter(claim => claim.owner !== "code")
+        .map(claim => [claim.slug, claim.owner])
+    ),
     collections: mergeKind(
       "collection",
       config.collections ?? [],
@@ -623,7 +660,10 @@ export function applyPluginSchemaContributions(
   // The fold is the one point every runtime and CLI path reaches, including
   // after a plugin setup transformer has returned a new config object.
   assertNoLegacyFieldGroupKey(config, "pluginFold");
-  const { collections, singles, fieldGroups } = mergeRenamed(config, plugins);
+  const { collections, singles, fieldGroups, owners } = mergeRenamed(
+    config,
+    plugins
+  );
 
   // Second pass: apply `extend` over the fully-merged entity set (a plugin may
   // extend a code, own, or earlier-plugin entity). `extend[].target` is matched
@@ -632,7 +672,7 @@ export function applyPluginSchemaContributions(
   // renamed slug. (No current plugin extends its own entity.)
   const extended = applyExtends(collections, singles, fieldGroups, plugins);
 
-  return { ...config, ...applyTransforms(extended, plugins) };
+  return { ...config, ...applyTransforms(extended, plugins, owners) };
 }
 
 /**
@@ -651,7 +691,10 @@ export function applyPluginSchemaContributionsDeferred(
   // The fold is the one point every runtime and CLI path reaches, including
   // after a plugin setup transformer has returned a new config object.
   assertNoLegacyFieldGroupKey(config, "pluginFold");
-  const { collections, singles, fieldGroups } = mergeRenamed(config, plugins);
+  const { collections, singles, fieldGroups, owners } = mergeRenamed(
+    config,
+    plugins
+  );
   const r = applyExtendClauses(
     collections,
     singles,
@@ -668,7 +711,8 @@ export function applyPluginSchemaContributionsDeferred(
           singles: r.singles,
           fieldGroups: r.fieldGroups,
         },
-        plugins
+        plugins,
+        owners
       ),
     },
     deferredExtends: r.deferred,

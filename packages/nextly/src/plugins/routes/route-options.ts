@@ -13,12 +13,12 @@
  * @module plugins/routes/route-options
  * @since 1.0.0
  */
-import { readAccessTokenCookie } from "../../auth/cookies/access-token-cookie";
 import {
   readCsrfCookie,
   readCsrfFromRequest,
 } from "../../auth/csrf/csrf-cookie";
 import {
+  carriesBearerToken,
   isUnsafeMethod,
   validateCsrf,
   validateOrigin,
@@ -35,17 +35,24 @@ export type CallerCredential = "cookie" | "bearer" | "none";
 /**
  * The credential a PUBLIC route's caller carries, for the CSRF decision.
  *
- * A public route resolved nobody, so this reads the one cookie a handler can
- * act on — the session cookie `ctx.auth.currentUser` resolves — rather than
- * any cookie at all. Classifying by the `Cookie` header's presence treated an
- * analytics or locale cookie as a session, and a caller with any cookie was
- * then held to a check it could never pass. The session cookie wins over an
- * `Authorization` header: the header may be ambient HTTP authentication a
- * browser attached on its own.
+ * A public route resolved nobody, so this takes whether the session cookie
+ * authenticates — the cookie `ctx.auth.currentUser` resolves, rather than any
+ * cookie at all. Classifying by the `Cookie` header's presence treated an
+ * analytics or locale cookie as a session, and classifying by the session
+ * cookie's presence held a caller whose expired or malformed cookie
+ * authenticates nobody to a token only a signed-in caller can hold. The
+ * session wins over an `Authorization` header; without one, only a `Bearer`
+ * token makes the caller a bearer caller (see {@link carriesBearerToken}). A
+ * browser attaches Basic, Digest, Negotiate or NTLM credentials on its own,
+ * cross-site included, so no other scheme does: the scheme is matched
+ * exactly, not against a list of browser schemes a new one would slip past.
  */
-export function publicCallerCredential(request: Request): CallerCredential {
-  if (readAccessTokenCookie(request)) return "cookie";
-  return request.headers.get("authorization") ? "bearer" : "none";
+export function publicCallerCredential(
+  request: Request,
+  sessionAuthenticated: boolean
+): CallerCredential {
+  if (sessionAuthenticated) return "cookie";
+  return carriesBearerToken(request) ? "bearer" : "none";
 }
 
 /** The cross-site rule {@link routeCsrfMode} decides for one request. */
@@ -59,9 +66,11 @@ export type RouteCsrfMode = "none" | "origin" | "token" | "refuse";
  *   `Referer`) on every cross-site write, so this refuses a forged request
  *   while a same-origin write that carries no token passes. It is the
  *   origin check `validateCsrf` applies on core's `/auth/*` handlers, without
- *   the token those handlers also require.
- * - `"token"` — the route set `csrf: true`: a double-submit token as well as
- *   the origin, the protection core's `/auth/*` handlers take.
+ *   the token those handlers also require. Also what `csrf: true` asks of an
+ *   anonymous caller.
+ * - `"token"` — the route set `csrf: true` and the session cookie is the
+ *   credential: a double-submit token as well as the origin, the protection
+ *   core's `/auth/*` handlers take.
  * - `"refuse"` — the route set `csrf: false` and the session cookie is the
  *   credential. A route that opts out of the check accepts no write the
  *   session cookie authenticates: without the check, any page the browser
@@ -69,14 +78,19 @@ export type RouteCsrfMode = "none" | "origin" | "token" | "refuse";
  *   callers an opt-out is for — an API key, a Bearer token — carry no session
  *   cookie. `csrf: false` cannot be combined with `public: true`;
  *   {@link validateRouteOptions} refuses the pair when routes are collected.
- * - `"none"` — the method changes nothing, the caller did not authenticate
- *   with the session cookie, or a public route did not set `csrf: true`.
+ * - `"none"` — the method changes nothing, the caller sent a `Bearer` token,
+ *   or the route did not set `csrf: true` and the session cookie is not the
+ *   credential, or a public route did not set it at all.
  *
- * Only a cookie travels automatically, so only a cookie-authenticated request
- * can be made by a site the user did not intend to act on. The RESOLVED
- * credential decides: a browser can attach an Authorization header on its own
- * (ambient HTTP authentication), and classifying by header presence skipped
- * the check for a request whose session cookie admitted it.
+ * Only a cookie travels automatically, so only a request carrying one can be
+ * made by a site the user did not intend to act on. That is not only the
+ * session cookie: a plugin's own cookie for anonymous visitors, such as a
+ * guest cart's id, rides along on a cross-site form post too, which is why
+ * `csrf: true` checks an anonymous caller's origin. Such a caller holds no
+ * token, and needs none for the origin to be checked. The RESOLVED credential
+ * decides: a browser can attach an Authorization header on its own (ambient
+ * HTTP authentication), and classifying by header presence skipped the check
+ * for a request whose session cookie admitted it.
  */
 export function routeCsrfMode(
   route: PluginRoute,
@@ -84,7 +98,13 @@ export function routeCsrfMode(
   credential: CallerCredential
 ): RouteCsrfMode {
   if (!isUnsafeMethod(request.method)) return "none";
-  if (credential !== "cookie") return "none";
+  // A browser never attaches a Bearer token by itself, so a cross-site page
+  // cannot make this request on someone else's behalf.
+  if (credential === "bearer") return "none";
+  // Anonymous: a route that asked for the check gets the origin half of it.
+  // A route that did not ask keeps taking cross-origin writes, as a webhook
+  // receiver or other server-facing route must.
+  if (credential === "none") return route.csrf === true ? "origin" : "none";
   if (route.csrf === true) return "token";
   // Ahead of the public rule: collection refuses `csrf: false` on a public
   // route, and a route that reached here regardless still holds to it.
