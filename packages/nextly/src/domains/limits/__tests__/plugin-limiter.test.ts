@@ -3,6 +3,8 @@
  * several entries, the counting modes, giving back, and what it answers when
  * the store cannot.
  */
+import { createHash } from "node:crypto";
+
 import { afterEach, describe, expect, it } from "vitest";
 
 import { setNextlyLogger } from "../../../observability/logger";
@@ -12,7 +14,11 @@ import {
   type LimitStore,
   type StoredLimit,
 } from "../limit-store";
-import { limitRuleProblem, type LimitRule } from "../limit-rules";
+import {
+  limitRuleProblem,
+  readRuleState,
+  type LimitRule,
+} from "../limit-rules";
 import { createMemoryLimitStore } from "../memory-limit-store";
 import {
   createPluginLimiter,
@@ -985,6 +991,37 @@ describe("giving back once, however long after", () => {
     expect((await limits.reserve([{ rule: "r", key: "k" }])).status).toBe(
       "refused"
     );
+  });
+});
+
+describe("an entry written by the previous release", () => {
+  it("starts again in a run of its own, rather than being read without one", () => {
+    const rule: LimitRule = {
+      type: "window",
+      windows: [{ max: 3, perMs: HOUR }],
+    };
+    const now = 1_700_000_000_000;
+    // The previous release's shape, under the fingerprint it wrote: its
+    // rule's alone, with `since` and no epoch.
+    const fingerprint = createHash("sha256")
+      .update(JSON.stringify(["window", [[3, HOUR]]]))
+      .digest("base64url")
+      .slice(0, 16);
+    const earlier = {
+      kind: "window",
+      rule: fingerprint,
+      since: now - 1000,
+      released: [],
+      windows: [{ base: Math.floor(now / 112_500), buckets: [[0, 3]] }],
+    };
+
+    const state = readRuleState(rule, earlier, now);
+
+    expect(state).toMatchObject({ kind: "window", releasedThrough: 0 });
+    expect((state as { epoch?: unknown }).epoch).toEqual(expect.any(String));
+    expect(
+      (state as { windows: { buckets: unknown[] }[] }).windows[0]?.buckets
+    ).toEqual([]);
   });
 });
 

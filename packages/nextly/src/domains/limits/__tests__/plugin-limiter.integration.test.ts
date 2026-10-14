@@ -5,7 +5,7 @@
  * rotation, keys stored only hashed, a count made while another request's
  * transaction is open, and an outage.
  */
-import { randomUUID } from "node:crypto";
+import { createHash, createHmac, randomUUID } from "node:crypto";
 
 import { afterAll, afterEach, beforeAll, expect, it } from "vitest";
 
@@ -328,6 +328,60 @@ describeEachDialect("the plugin limiter on the database store", dialect => {
 
     expect((await limits.reserve([{ rule: "r", key: "k" }])).status).toBe(
       "refused"
+    );
+  });
+
+  it("gives back a count on a key whose entry the previous release wrote", async () => {
+    const generation = randomUUID().slice(0, 8);
+    const rules: Record<string, LimitRule> = {
+      r: { type: "window", windows: [{ max: 1, perMs: HOUR }] },
+    };
+    const store = createDatabaseLimitStore({
+      adapter: current.adapter,
+      generation,
+      sweepIntervalMs: false,
+    });
+    opened.push(store);
+    // The key the limiter stores `k` under, and an entry in the previous
+    // release's shape there: its rule's fingerprint, `since`, no epoch.
+    const hashKey = createHmac("sha256", "install secret")
+      .update("nextly plugin limit keys")
+      .digest();
+    const storeKey = [
+      "@test/limits",
+      "r",
+      createHmac("sha256", hashKey).update("k", "utf8").digest("base64url"),
+    ].join("\u001f");
+    const fingerprint = createHash("sha256")
+      .update(JSON.stringify(["window", [[1, HOUR]]]))
+      .digest("base64url")
+      .slice(0, 16);
+    await store.update([storeKey], (_current, now) => ({
+      write: new Map([
+        [
+          storeKey,
+          {
+            value: {
+              kind: "window",
+              rule: fingerprint,
+              since: now,
+              released: [],
+              windows: [{ base: 0, buckets: [] }],
+            },
+            expiresAt: now + HOUR,
+          },
+        ],
+      ]),
+      result: undefined,
+    }));
+    const limits = limiterOn(current.adapter, { generation, rules });
+
+    const reservation = await limits.reserve([{ rule: "r", key: "k" }]);
+    if (reservation.status !== "admitted") throw new Error("not admitted");
+    await limits.release(reservation.reservation);
+
+    expect((await limits.reserve([{ rule: "r", key: "k" }])).status).toBe(
+      "admitted"
     );
   });
 

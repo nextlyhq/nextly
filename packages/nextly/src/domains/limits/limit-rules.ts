@@ -219,22 +219,42 @@ type BackoffRule = Extract<LimitRule, { type: "backoff" }>;
 const bucketWidth = (perMs: number) =>
   Math.max(1, Math.ceil(perMs / BUCKETS_PER_WINDOW));
 
+/**
+ * The shape an entry's state is written in. Part of every fingerprint, so a
+ * state written in an earlier shape, by an earlier release, reads as empty
+ * and starts again, as a state written under another rule does, rather than
+ * being read without the fields this one relies on. Raised whenever the
+ * state's shape changes.
+ */
+const STATE_FORMAT = 2;
+
 /** Fingerprints already worked out, by rule object. */
 const fingerprints = new WeakMap<LimitRule, string>();
 
 /**
- * A short fingerprint of everything `rule` says. An entry records the one it
- * was written under, since what it holds means something only under that
- * rule: a window's buckets are offsets in units of the window's span, and a
- * backoff's wait was worked out from its waits.
+ * A short fingerprint of everything `rule` says, and of the shape its entries
+ * are written in. An entry records the one it was written under, since what
+ * it holds means something only under that rule and that shape: a window's
+ * buckets are offsets in units of the window's span, and a backoff's wait was
+ * worked out from its waits.
  */
 function ruleFingerprint(rule: LimitRule): string {
   const known = fingerprints.get(rule);
   if (known !== undefined) return known;
   const shape =
     rule.type === "window"
-      ? ["window", rule.windows.map(window => [window.max, window.perMs])]
-      : ["backoff", rule.free, [...rule.waitsMs], rule.forgetAfterMs];
+      ? [
+          STATE_FORMAT,
+          "window",
+          rule.windows.map(window => [window.max, window.perMs]),
+        ]
+      : [
+          STATE_FORMAT,
+          "backoff",
+          rule.free,
+          [...rule.waitsMs],
+          rule.forgetAfterMs,
+        ];
   const fingerprint = createHash("sha256")
     .update(JSON.stringify(shape))
     .digest("base64url")
