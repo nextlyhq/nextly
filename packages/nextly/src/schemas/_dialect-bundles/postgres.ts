@@ -38,6 +38,7 @@ export { nextlyDeletedPrincipals } from "../deleted-principals/postgres";
 // CORE_TABLE_NAMES: the manifest decides what is EXPECTED, this decides what
 // is CREATED, and a table in one but not the other is never made.
 export { nextlyPluginSettings } from "../plugin-settings/postgres";
+export { nextlyLimitStore } from "../limit-store/postgres";
 export { nextlySchemaOwners } from "../schema-owners/postgres";
 export { nextlyWidgetLayout } from "../widget-layout/postgres";
 

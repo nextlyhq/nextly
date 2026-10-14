@@ -15,6 +15,8 @@ const { execFileSync } = require("node:child_process");
 const { readFileSync } = require("node:fs");
 const path = require("node:path");
 
+const { rqbCallbackFilterLines } = require("./drizzle-v1-legacy-rules.cjs");
+
 const ROOT = path.resolve(__dirname, "..");
 const SRC_GLOBS = ["packages", "apps", "templates"];
 
@@ -93,14 +95,20 @@ grep("no getTableColumns", "\\bgetTableColumns\\b");
 // so parse the import clause instead of allowlisting whole lines.
 grep(
   "no relations() imports from drizzle-orm",
-  "import [^;]*\\{[^}]*relations[^}]*\\} from \"drizzle-orm\"",
+  'import [^;]*\\{[^}]*relations[^}]*\\} from "drizzle-orm"',
   {
     lineTest: l => {
       const m = l.match(/import[^;]*\{([^}]*)\}/);
       if (!m) return true;
       return m[1]
         .split(",")
-        .map(n => n.trim().replace(/^type\s+/, "").split(/\s+as\s+/)[0])
+        .map(
+          n =>
+            n
+              .trim()
+              .replace(/^type\s+/, "")
+              .split(/\s+as\s+/)[0]
+        )
         .includes("relations");
     },
   }
@@ -135,9 +143,13 @@ grep("no statementsToExecute in nextly src", "statementsToExecute", {
 
 // 7. Forbidden escape hatches. `drizzle-orm/_relations` still RESOLVES in
 // rc.4 — this is a policy grep, not a compile error.
-grep("no _relations/_query escape hatches", "drizzle-orm/_relations|\\b_query\\b", {
-  extraFilters: [/\.test\.tsx?:/],
-});
+grep(
+  "no _relations/_query escape hatches",
+  "drizzle-orm/_relations|\\b_query\\b",
+  {
+    extraFilters: [/\.test\.tsx?:/],
+  }
+);
 
 // 8. Exact drizzle pins. `keywords` arrays legitimately contain "drizzle".
 {
@@ -167,19 +179,31 @@ grep(
 // string literals, and url/connection-string variable names. Pure comment
 // lines are skipped by content, never by "contains //" (which used to hide
 // real hits carrying trailing comments or :// inside strings).
-grep("no positional drizzle() constructors", "\\bdrizzle(Pg|Mysql|Sqlite)?\\s*\\(", {
-  lineTest: l => {
-    const code = l.replace(/^[^:]+:\d+:/, "");
-    if (/^\s*(\/\/|\*|\/\*)/.test(code)) return false; // comment line
-    const call = code.match(/\bdrizzle(?:Pg|Mysql|Sqlite)?\s*\(\s*([A-Za-z_$][\w$]*|[{"'`)])/);
-    if (!call) return false;
-    const arg = call[1];
-    if (arg === "{" || arg === '"' || arg === "'" || arg === "`" || arg === ")")
-      return false; // object form / string literal / no-arg
-    if (/url|connectionstring|dsn/i.test(arg)) return false; // string config var
-    return true; // positional client variable
-  },
-});
+grep(
+  "no positional drizzle() constructors",
+  "\\bdrizzle(Pg|Mysql|Sqlite)?\\s*\\(",
+  {
+    lineTest: l => {
+      const code = l.replace(/^[^:]+:\d+:/, "");
+      if (/^\s*(\/\/|\*|\/\*)/.test(code)) return false; // comment line
+      const call = code.match(
+        /\bdrizzle(?:Pg|Mysql|Sqlite)?\s*\(\s*([A-Za-z_$][\w$]*|[{"'`)])/
+      );
+      if (!call) return false;
+      const arg = call[1];
+      if (
+        arg === "{" ||
+        arg === '"' ||
+        arg === "'" ||
+        arg === "`" ||
+        arg === ")"
+      )
+        return false; // object form / string literal / no-arg
+      if (/url|connectionstring|dsn/i.test(arg)) return false; // string config var
+      return true; // positional client variable
+    },
+  }
+);
 
 // 10b. The same ban, but for MULTILINE constructor calls. Check #10 is
 // line-based (grep -n), so `drizzle(\n  client,\n)` — the argument on a later
@@ -228,7 +252,13 @@ grep("no positional drizzle() constructors", "\\bdrizzle(Pg|Mysql|Sqlite)?\\s*\\
     let m;
     while ((m = callRe.exec(code)) !== null) {
       const arg = m[1];
-      if (arg === "{" || arg === '"' || arg === "'" || arg === "`" || arg === ")")
+      if (
+        arg === "{" ||
+        arg === '"' ||
+        arg === "'" ||
+        arg === "`" ||
+        arg === ")"
+      )
         continue; // object form / string literal / no-arg
       if (/url|connectionstring|dsn/i.test(arg)) continue; // string config var
       hits.push(`${rel}: drizzle(${arg} …)`);
@@ -253,24 +283,53 @@ grep("no .default(new Date()) DDL defaults", "\\.default\\(new Date\\(\\)\\)", {
   paths: ["packages"],
 });
 
-
 // 12. The removed RQB callback filter form. v1 silently IGNORES a function
 // passed as `where:` (no enumerable keys → no filter), so `findMany` returns
-// every row and assertions pass by luck. Banned in src AND tests.
-grep("no RQB callback where-filters", "where:\\s*\\(", {
-  lineTest: l => {
-    const code = l.replace(/^[^:]+:\d+:/, "");
-    if (/^\s*(\/\/|\*|\/\*)/.test(code)) return false;
-    // Flag the RQB filter SIGNATURE `where: (table, { operators }) =>` —
-    // two parameters, the second being the operator bag. Zero-param
-    // `where: () => chain` is a select-builder method stub on a mock, and
-    // single-param `where: (cond: unknown) => {...}` is a TYPE declaration
-    // of the builder's where method — both fine.
-    return /where:\s*(?:async\s*)?\(\s*[A-Za-z_$][\w$]*\s*,\s*[{A-Za-z_$]/.test(
-      code
+// every row and assertions pass by luck. Banned in src AND tests. Each
+// candidate file is scanned whole, so a filter split across lines is found
+// too; what the rule refuses and leaves alone lives, with its test, in
+// drizzle-v1-legacy-rules.cjs.
+{
+  let fileList = "";
+  try {
+    fileList = execFileSync(
+      "grep",
+      [
+        "-rlE",
+        "where\\s*:",
+        ...SRC_GLOBS,
+        "--include=*.ts",
+        "--include=*.tsx",
+        "--include=*.js",
+        "--include=*.cjs",
+        "--include=*.mjs",
+        "--exclude-dir=node_modules",
+        "--exclude-dir=dist",
+        "--exclude-dir=.next",
+        "--exclude-dir=.turbo",
+        "--exclude-dir=build",
+      ],
+      { cwd: ROOT, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 }
     );
-  },
-});
+  } catch (e) {
+    // grep exits 1 when no file matches — the pass case.
+    if (e.status !== 1) throw e;
+  }
+  const hits = [];
+  for (const rel of fileList.split("\n").filter(Boolean)) {
+    const text = readFileSync(path.join(ROOT, rel), "utf8");
+    for (const line of rqbCallbackFilterLines(text))
+      hits.push(`${rel}:${line}`);
+  }
+  if (hits.length > 0) {
+    failures++;
+    console.error(`✗ no RQB callback where-filters (${hits.length} hit(s)):`);
+    for (const h of hits.slice(0, 12)) console.error(`    ${h}`);
+    if (hits.length > 12) console.error(`    … ${hits.length - 12} more`);
+  } else {
+    console.log("✓ no RQB callback where-filters");
+  }
+}
 
 // 13. The runtime version constant must equal the scripts-side source of
 // truth — two constants that can drift are worse than one.

@@ -14,6 +14,7 @@
 "@nextlyhq/storage-s3": patch
 "@nextlyhq/storage-uploadthing": patch
 "@nextlyhq/storage-vercel-blob": patch
+"@nextlyhq/plugin-accounts": patch
 "@nextlyhq/plugin-commerce": patch
 "@nextlyhq/plugin-form-builder": patch
 "@nextlyhq/plugin-page-builder": patch
@@ -45,6 +46,11 @@ option, and it cannot be a Direct API instance default. `findSingles` made
 as a person lists, and counts, only the Singles the person may read. A document created as a person has no owner.
 `nextly.principals.byId` and `ctx.principals.byId` find a person through the
 kind's `lookup`, checked as a resolver's answer is.
+
+An update or delete by `where` made under access rules (a person's, or any
+call with `overrideAccess: false`) now refuses a `where` on a field the
+caller may not read before it writes anything, as a read already did; the
+rows it touched used to answer whether a guessed value matched.
 
 A dev reload now installs the kinds of signed-in person it reads only once it
 commits, and a kind's attributes may no longer be optional.
