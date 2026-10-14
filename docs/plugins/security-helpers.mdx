@@ -1,0 +1,173 @@
+---
+title: Security helpers
+description: Core's helpers for the people a plugin signs in itself — hashing, verifying and checking passwords — with their guarantees and bounds.
+---
+
+# Security helpers
+
+> **Alpha (`0.x`) — `@experimental`.** Everything on this page is new and ships
+> `@experimental`: it works and is tested, but stays experimental until a
+> first-party plugin signs people in with it. Pin your `nextly` and
+> `@nextlyhq/plugin-sdk` versions while you build on it.
+
+A plugin that signs in people of its own, such as a shop's customers, needs the
+same care with their secrets that core takes with staff. These helpers lend it
+core's implementation, so a plugin never writes its own password hashing. They
+are on the plugin's context as `ctx.security`, and their types come from
+`@nextlyhq/plugin-sdk`.
+
+They serve a plugin's own people only. Staff passwords keep core's own
+hashing, and an app's `passwordHasher` option is never used by these helpers:
+a plugin's people never share a hashing format with staff.
+
+## Passwords
+
+`ctx.security.passwords` hashes a password, verifies one against a stored
+hash, says whether a stored hash should be rehashed, and checks a new password
+against your rules.
+
+```ts
+import {
+  definePlugin,
+  PasswordTooLongError,
+  type PasswordHelper,
+} from "@nextlyhq/plugin-sdk";
+
+/** Sign-up: check the password, then store only its hash. */
+async function signUp(passwords: PasswordHelper, password: string) {
+  const checked = await passwords.check(password, { breached: true });
+  if (!checked.ok) return { error: checked.reason };
+  try {
+    return { hash: await passwords.hash(password) };
+  } catch (error) {
+    if (error instanceof PasswordTooLongError) return { error: "too-long" };
+    throw error;
+  }
+}
+
+/** Sign-in: verify, and move an old hash to today's setting. */
+async function signIn(
+  passwords: PasswordHelper,
+  password: string,
+  stored: string | null // null when no account has this address
+) {
+  // With null, verify still spends a real verification's time, so how long
+  // the answer takes never tells a visitor whether the account exists.
+  const ok = await passwords.verify(password, stored);
+  if (ok && stored !== null && passwords.needsRehash(stored)) {
+    return { ok, newHash: await passwords.hash(password) };
+  }
+  return { ok };
+}
+
+export default definePlugin({
+  name: "@acme/accounts",
+  version: "1.0.0",
+  nextly: ">=0.0.0",
+  init(ctx) {
+    ctx.logger.info(`passwords up to ${ctx.security.passwords.ceiling} characters`);
+    void signUp;
+    void signIn;
+  },
+});
+```
+
+### What `hash` guarantees
+
+- **Every character counts.** The whole password is hashed after Unicode NFC
+  normalisation, so two passwords that differ only past the 72nd byte never
+  verify against each other's hash, and a composed and a decomposed form of the
+  same text verify alike. Compatibility-distinct characters stay distinct: a
+  full-width letter is not its ordinary form.
+- **Well-formed Unicode only.** A password holding a lone surrogate, as JSON
+  can carry one, is refused by `hash` and `check` with a validation error and
+  never verifies: encoded to UTF-8, every lone surrogate becomes the same
+  character, so two different passwords would otherwise hash alike.
+- **A ceiling, never a cut.** A password longer than `ceiling` (256 code points)
+  throws `PasswordTooLongError`, and `verify` answers false for one; neither ever
+  cuts a password to fit.
+- **The algorithm.** scrypt from `node:crypto`, at N = 2^15, r = 8, p = 3: a
+  setting OWASP's Password Storage Cheat Sheet lists, 32 MiB a hash, deriving
+  32 bytes from a fresh 16-byte salt. Expect around 150 ms a hash on a
+  developer machine, more on a small server.
+- **The stored string.** At most 255 ASCII characters, naming its algorithm and
+  setting. Size your column for 255, and treat the string as opaque: its format
+  inside may change.
+
+### What `verify` and `needsRehash` answer
+
+- `verify` answers false for a wrong password, a malformed hash, and a hash it
+  did not write (a staff bcrypt hash among them), and never throws for any of
+  them. A hash it cannot read is logged as a warning, without the hash or the
+  password.
+- `verify(password, null)` spends a real verification's time and answers false.
+  Call it when no account matches, so the response time is the same either way.
+- `needsRehash` answers true for any string that is not a hash at today's
+  setting, a format the helper does not know included. When it does after a
+  successful sign-in, hash the password again and store the new hash: that is
+  how a stored hash moves to a later setting.
+
+### Checking a new password
+
+`check(password, rules?)` goes by length and lists, never by the kinds of
+characters a password holds: a long password of lowercase letters is accepted.
+
+| Rule | Bounds | Default |
+| --- | --- | --- |
+| `minLength` | 8 to 64 code points | 8 |
+| `maxLength` | 64 to 256 code points | 128 |
+| `breached` | `true` or `false` | `false` |
+
+Rules outside their bounds throw a validation error naming the rule and its
+bounds. Lengths are counted in code points after NFC, as NIST SP 800-63B
+counts them, so an emoji is one character.
+
+Every check also refuses the 3,000 most common passwords of 8 characters or
+more, compared without regard to case. The list is the UK NCSC's list of the
+passwords seen most often in Have I Been Pwned's breach data, as SecLists
+publishes it.
+
+The answer is `{ ok: true, breachedCheck }` or `{ ok: false, reason }`, where
+`reason` is `"too-short"`, `"too-long"`, `"common"` or `"breached"`, and
+`breachedCheck` is `"passed"`, `"skipped"` (the check was not asked for) or
+`"unavailable"`.
+
+### Breached passwords
+
+With `breached: true`, the check also asks the site's breached-password source,
+set in `nextly.config.ts`:
+
+```typescript
+security: {
+  breachedPasswords: {
+    // "pwned-passwords" (the default), { url: "https://…" }, or a list you hold:
+    source: "pwned-passwords",
+    timeoutMs: 2000,
+  },
+},
+```
+
+- `"pwned-passwords"` asks Have I Been Pwned's range service at its public
+  address.
+- `{ url }` asks a range service at `<url>/<prefix>`. It must be `https`: any
+  other address is sent nothing, every check answers `"unavailable"`, and boot
+  logs a warning.
+- `{ range(prefix) }` asks a list you hold, in the process: it receives the
+  prefix and answers with the suffixes it knows.
+
+Only the first 5 hex digits (20 bits) of the password's SHA-1 ever leave the
+process. A range service is asked with a user agent naming Nextly, as Have I
+Been Pwned asks of every client, and for padded answers, so the size of the answer
+says nothing about the prefix. When the source fails, answers with an error, or
+does not answer within `timeoutMs` (1 to 60,000 ms; another value is named at boot and replaced by the default of 2,000), or answers with anything that is not a list of suffixes, the password is accepted with
+`breachedCheck: "unavailable"`: a source that is down neither locks people out
+nor pretends to have checked. Decide what your plugin does with an unchecked
+password; asking again on the next sign-in is a reasonable choice.
+
+### Building a context by hand
+
+`ctx.security` is a required member of `PluginContext`. A context from
+`createTestNextly` (`@nextlyhq/plugin-sdk/testing`) has the real helpers; a
+test double you build yourself needs a `security` member of its own.
+
+See also: [Plugin security](/docs/plugins/security) · [Auth extensibility](/docs/plugins/auth) · [API stability](/docs/plugins/stability).

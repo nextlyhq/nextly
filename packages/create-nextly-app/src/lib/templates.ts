@@ -9,6 +9,8 @@
 
 import type { ProjectApproach, TemplateManifest } from "../types.js";
 
+import { BUNDLED_TEMPLATES } from "./bundled-templates";
+
 // All available templates - ordered as they appear in the CLI prompt
 export const AVAILABLE_TEMPLATES: readonly TemplateManifest[] = [
   {
@@ -95,4 +97,30 @@ export function templateHasDemoData(name: string): boolean {
 export function getDefaultApproach(name: string): ProjectApproach {
   const template = getTemplate(name);
   return template?.defaultApproach ?? "code-first";
+}
+
+/**
+ * Whether a scaffold should copy the template bundled in the CLI rather than
+ * resolve one from GitHub or a local path.
+ *
+ * The bundled copy works offline and matches the package versions this CLI
+ * release installs, where a template downloaded from GitHub `main` can already
+ * use APIs those packages do not have. An explicit source (--local-template,
+ * --use-yalc, or a --branch other than main) still resolves live, because the
+ * bundled copy would quietly ignore what was asked for.
+ */
+export function shouldUseBundledTemplate(
+  projectType: string,
+  options: {
+    localTemplatePath?: string;
+    useYalc?: boolean;
+    branch?: string;
+  }
+): boolean {
+  return (
+    BUNDLED_TEMPLATES.some(name => name === projectType) &&
+    !options.localTemplatePath &&
+    !options.useYalc &&
+    (options.branch ?? "main") === "main"
+  );
 }

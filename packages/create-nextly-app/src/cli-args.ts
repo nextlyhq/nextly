@@ -8,6 +8,8 @@
 
 import path from "path";
 
+import { getAvailableTemplateNames } from "./lib/templates";
+
 export interface ResolvedArg {
   /** Project name for the new directory. undefined = prompt or use default. */
   projectName: string | undefined;
@@ -87,3 +89,16 @@ export function validateProjectNamePromptInput(
   return validateProjectName(path.basename(candidate));
 }
 
+/**
+ * Validate the `--template` flag. Returns an error string when the name is not
+ * a registered template, or `undefined` when it is.
+ *
+ * Checked against the same registry the interactive prompt lists, so the flag
+ * accepts exactly the templates the prompt offers and the message names all of
+ * them.
+ */
+export function validateTemplateName(name: string): string | undefined {
+  const available = getAvailableTemplateNames();
+  if (available.includes(name)) return undefined;
+  return `Template '${name}' is not available. Use: ${available.join(", ")}`;
+}

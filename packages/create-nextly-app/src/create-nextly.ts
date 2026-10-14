@@ -19,7 +19,12 @@ import {
   cleanupDownload,
   type TemplateSource,
 } from "./lib/download-template";
-import { templateHasApproaches, getDefaultApproach } from "./lib/templates";
+import { packageVersion } from "./lib/package-version";
+import {
+  templateHasApproaches,
+  getDefaultApproach,
+  shouldUseBundledTemplate,
+} from "./lib/templates";
 import { getApproachPromptOptions } from "./prompts/approach";
 import { DATABASE_CONFIGS, DATABASE_LABELS } from "./prompts/database";
 import {
@@ -39,7 +44,11 @@ import type {
   ProjectApproach,
   ProjectType,
 } from "./types";
-import { detectPackageManager, detectProject } from "./utils/detect";
+import {
+  detectPackageManager,
+  detectPluginPackage,
+  detectProject,
+} from "./utils/detect";
 import { emptyDirectory, isDirectoryNotEmpty } from "./utils/fs";
 import { scriptRunner } from "./utils/package-manager-commands";
 import { copyTemplate } from "./utils/template";
@@ -99,7 +108,12 @@ export async function createNextly(
 
   // --- Step 1: Detect or prompt for project name ---
 
-  const existingProject = await isExistingNextProject(cwd);
+  // The plugin template creates a standalone package and never installs into an
+  // app. Run from inside a Next.js app, which is a natural place to start a
+  // plugin for it, it still takes the fresh-scaffold path: installing into the
+  // app would add app dependencies and config and never copy the plugin.
+  const existingProject =
+    options.projectType !== "plugin" && (await isExistingNextProject(cwd));
 
   if (existingProject) {
     p.log.success(`${pc.green("Next.js")} project detected`);
@@ -272,7 +286,16 @@ export async function createNextly(
 
   let databaseType: DatabaseType;
 
-  if (options.database) {
+  if (projectType === "plugin") {
+    // The plugin playground always runs on SQLite (dev/.env.example), so an
+    // answer here would be collected and then ignored.
+    if (options.database && options.database !== "sqlite") {
+      p.log.warn(
+        `The plugin playground runs on SQLite; --database ${options.database} does not apply.`
+      );
+    }
+    databaseType = "sqlite";
+  } else if (options.database) {
     databaseType = options.database;
   } else if (defaults) {
     databaseType = "sqlite";
@@ -344,13 +367,18 @@ export async function createNextly(
 
     try {
       // Resolve template source (download from GitHub or use local path).
-      // For "blank" template without --local-template, we use the bundled
-      // fallback embedded in the CLI. For content templates (blog) we
-      // resolve via GitHub or a local path. --use-yalc also triggers
-      // resolution for the blank template so local-dev runs always pair
-      // yalc-linked packages with the live template rather than a
-      // potentially-stale bundled copy.
-      if (projectType !== "blank" || options.localTemplatePath || useYalc) {
+      // Bundled templates (blank, plugin) copy the version shipped inside the
+      // CLI, which matches the packages this release installs. Content
+      // templates (blog) resolve via GitHub or a local path, and so does any
+      // template given an explicit source: --local-template, a non-main
+      // --branch, or --use-yalc, so local-dev runs pair yalc-linked packages
+      // with the live template rather than the bundled copy.
+      const useBundledTemplate = shouldUseBundledTemplate(projectType, {
+        localTemplatePath: options.localTemplatePath,
+        useYalc,
+        branch: options.branch,
+      });
+      if (!useBundledTemplate) {
         s.start("Resolving template...");
         templateSource = await resolveTemplateSource(projectType, {
           localTemplatePath: options.localTemplatePath,
@@ -384,6 +412,10 @@ export async function createNextly(
         // this, the "ignore" path would still throw on the subdirectory
         // case where the target was non-empty.
         allowExistingTarget,
+        // The bundled template was released with this CLI, so a plugin made
+        // from it installs the packages released with it too.
+        releaseVersion: packageVersion(),
+        pinToRelease: useBundledTemplate,
       });
 
       if (!installInCwd) cwd = targetDir;
@@ -428,8 +460,15 @@ export async function createNextly(
     const s = p.spinner();
     s.start("Detecting project...");
     try {
-      projectInfo = await detectProject(cwd);
-      s.stop(`Detected Next.js ${projectInfo.nextVersion || "unknown"}`);
+      if (projectType === "plugin") {
+        // A plugin keeps its library in src/ and its Next.js app in dev/, a
+        // layout the app detector rejects ("App Router not detected").
+        projectInfo = await detectPluginPackage(cwd);
+        s.stop("Detected plugin package");
+      } else {
+        projectInfo = await detectProject(cwd);
+        s.stop(`Detected Next.js ${projectInfo.nextVersion || "unknown"}`);
+      }
     } catch (error) {
       s.stop("Detection failed");
       telemetry.capture("scaffold_failed", {
@@ -534,7 +573,7 @@ export async function createNextly(
     );
     lines.push("");
     lines.push(
-      `  Open ${pc.cyan("http://localhost:3000/admin")} — your plugin is registered.`
+      `  Open ${pc.cyan("http://localhost:3000/admin")} — signed in as the dev user, your plugin registered.`
     );
     lines.push(
       `  Edit your plugin in ${pc.dim("src/")}; the ${pc.dim("dev/")} app is never published.`

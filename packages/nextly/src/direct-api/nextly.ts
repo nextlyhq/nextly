@@ -276,6 +276,17 @@ export class Nextly implements NextlyContext {
    * @param config - Default configuration for all operations
    */
   constructor(config: DirectAPIConfig = {}) {
+    // A person is named per call, never as an instance default. Each
+    // operation reads `principal` off its own arguments only, so a default
+    // one would be ignored, and every call would run as the server under the
+    // instance's `overrideAccess: true`: refused rather than ignored.
+    if ((config as { principal?: unknown }).principal !== undefined) {
+      throw NextlyError.invalidInput({
+        message:
+          "principal cannot be a Direct API default: pass it on each collection or Single operation made as the person.",
+        logContext: { reason: "principal-default-refused" },
+      });
+    }
     this.defaultConfig = {
       overrideAccess: true,
       ...config,

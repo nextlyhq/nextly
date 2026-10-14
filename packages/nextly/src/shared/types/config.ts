@@ -434,6 +434,47 @@ export interface SecurityConfig {
    * @default false
    */
   trustProxy?: boolean;
+
+  /**
+   * @experimental Where a plugin's password check asks whether a password
+   * has appeared in a breach, when the plugin asks for that check.
+   *
+   * Unset, the check uses `"pwned-passwords"`. Only the first 5 hex digits of
+   * the password's SHA-1 (20 bits) ever leave the process.
+   */
+  breachedPasswords?: BreachedPasswordsConfig;
+}
+
+/**
+ * @experimental The site's breached-password source.
+ *
+ * A range service is asked for every known hash that starts with a 5-digit
+ * prefix, and answers with their suffixes; the password's own hash never
+ * leaves the process.
+ */
+export interface BreachedPasswordsConfig {
+  /**
+   * - `"pwned-passwords"`: Have I Been Pwned's range service at its public
+   *   address.
+   * - `{ url }`: a range service at this address, asked at `<url>/<prefix>`.
+   *   Must be `https`: any other address is sent nothing, every check answers
+   *   that it went unchecked, and boot warns.
+   * - `{ range }`: a list the site holds, read in the process. It receives the
+   *   5-digit prefix and answers with the known suffixes; the site answers
+   *   for its transport.
+   */
+  source:
+    | "pwned-passwords"
+    | { url: string }
+    | { range(prefix: string): Promise<readonly string[]> };
+  /**
+   * How long a check waits for the source before it answers that the
+   * password went unchecked: a whole number of milliseconds from 1 to 60000.
+   * Any other value is named at boot and replaced by the default.
+   *
+   * @default 2000
+   */
+  timeoutMs?: number;
 }
 
 // ============================================================
