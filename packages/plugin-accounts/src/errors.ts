@@ -15,7 +15,9 @@ export type AccountsErrorCode =
    * In production, the limiter's counts are kept by one instance alone and
    * the site has not said it runs only one.
    */
-  | "ACCOUNTS_LIMITS_NOT_SHARED";
+  | "ACCOUNTS_LIMITS_NOT_SHARED"
+  /** Work the plugin runs (a job) reached it before the plugin started. */
+  | "ACCOUNTS_NOT_STARTED";
 
 /**
  * Raise an accounts error.
@@ -44,6 +46,7 @@ const PUBLIC_MESSAGES: Record<AccountsErrorCode, string> = {
     "The accounts plugin cannot start on this version of Nextly.",
   ACCOUNTS_LIMITS_NOT_SHARED:
     "The accounts plugin is not configured correctly.",
+  ACCOUNTS_NOT_STARTED: "The accounts plugin has not started.",
 };
 
 // A site's own configuration, or the core it runs, is the server's fault,
@@ -52,4 +55,5 @@ const STATUS_CODES: Record<AccountsErrorCode, number> = {
   ACCOUNTS_INVALID_OPTIONS: 500,
   ACCOUNTS_CORE_MISSING: 500,
   ACCOUNTS_LIMITS_NOT_SHARED: 500,
+  ACCOUNTS_NOT_STARTED: 500,
 };

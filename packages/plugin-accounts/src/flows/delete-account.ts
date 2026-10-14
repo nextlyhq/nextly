@@ -52,7 +52,9 @@ export async function deleteOwnAccount(
   }
 
   await attemptSucceeded(deps, attempt);
-  deps.events.emit("account.deleted", { accountId: account.id });
+  deps.events.emit("nextlyhq-plugin-accounts.account.deleted", {
+    accountId: account.id,
+  });
   await deps.mail.queue({
     kind: "account-deleted",
     accountId: account.id,

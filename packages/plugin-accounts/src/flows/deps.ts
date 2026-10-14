@@ -24,11 +24,19 @@ export interface FlowDeps {
   readonly now: () => Date;
 }
 
-/** The events the flows emit, with what each carries. */
+/**
+ * The events the flows emit, with what each carries. Core requires a
+ * plugin's events to begin with its own name.
+ */
 export interface AccountsEventPayloads {
   /** An account is gone: other plugins remove or anonymise what they hold for it. */
-  "account.deleted": { accountId: string };
+  "nextlyhq-plugin-accounts.account.deleted": { accountId: string };
 }
+
+/** The events the plugin declares, one per name it emits. */
+export const ACCOUNTS_EVENTS = [
+  "nextlyhq-plugin-accounts.account.deleted",
+] as const satisfies ReadonlyArray<keyof AccountsEventPayloads>;
 
 export interface AccountsEvents {
   emit<K extends keyof AccountsEventPayloads>(

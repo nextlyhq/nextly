@@ -73,7 +73,10 @@ describe.each(getConfiguredTestDialects())(
         await core.secrets.peekToken({ purpose: "reset", token })
       ).toMatchObject({ ok: false });
       expect(emitted).toEqual([
-        { name: "account.deleted", payload: { accountId: id } },
+        {
+          name: "nextlyhq-plugin-accounts.account.deleted",
+          payload: { accountId: id },
+        },
       ]);
       expect(mail.ofKind("account-deleted").map(email => email.to)).toEqual([
         "dana@example.com",
