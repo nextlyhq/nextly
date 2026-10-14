@@ -45,6 +45,7 @@ import { safeCode } from "../../database/errors";
 import { NextlyError } from "../../errors/nextly-error";
 import { ONE_TIME_SECRETS_TABLE } from "../../schemas/one-time-secrets";
 import { assertNoOpenTransaction } from "../../shared/lib/open-transaction";
+import type { SecretGeneration } from "../../shared/lib/secret-generations";
 import { isUniqueViolation } from "../../shared/lib/unique-violation";
 import type { PluginTransaction } from "../database/plugin-database";
 import { linkedTransaction } from "../database/plugin-transaction-link";
@@ -165,7 +166,12 @@ export interface OneTimeSecretsOptions {
   /** The adapter, resolved per call: the context can be built before it connects. */
   adapter: () => SecretsAdapter;
   /** The install's secrets that may be read with, current first. */
-  secrets: () => readonly string[];
+  /**
+   * The install's secret generations that may be read with, current first.
+   * `undefined` is the unkeyed generation (no `NEXTLY_SECRET`), which an
+   * operator keeps readable with `NEXTLY_SECRET_PREVIOUS='[null]'`.
+   */
+  secrets: () => readonly SecretGeneration[];
   /** The clock; injectable for tests. */
   now?: () => Date;
 }
@@ -210,8 +216,12 @@ export function createOneTimeSecrets(
   const keys = (): Buffer[] => {
     const generations = options.secrets();
     // No secret configured, which production refuses at boot: one key from
-    // the empty secret, so development still works and stays consistent.
-    return (generations.length > 0 ? generations : [""]).map(secretKey);
+    // the empty secret, so development still works and stays consistent. The
+    // unkeyed generation derives that same key, so what was minted before a
+    // secret was configured stays readable while it is kept.
+    return (generations.length > 0 ? generations : [undefined]).map(
+      generation => secretKey(generation ?? "")
+    );
   };
   const tokenHashes = (purpose: string, token: string): string[] =>
     keys().map(key => hmac(key, ["token", owner, purpose, token]));
@@ -228,9 +238,19 @@ export function createOneTimeSecrets(
     createHash("sha256")
       .update([owner, subject].join("\u0000"), "utf8")
       .digest("hex");
-  const liveKeyFor = (purpose: string, subject: string): string =>
+  const liveKeyFor = (
+    purpose: string,
+    subject: string,
+    kind: "code" | "token" = "code"
+  ): string =>
     createHash("sha256")
-      .update([owner, purpose, subject].join("\u0000"), "utf8")
+      .update(
+        (kind === "code"
+          ? [owner, purpose, subject]
+          : ["token", owner, purpose, subject]
+        ).join("\u0000"),
+        "utf8"
+      )
       .digest("hex");
 
   /**
@@ -292,11 +312,19 @@ export function createOneTimeSecrets(
       const createdAt = now();
       const expiresAt = new Date(createdAt.getTime() + expiresInMs);
       const [current] = keys();
-      await write("secrets.mintToken", txOption?.tx, async adapterTx => {
+      // A token minted to replace the earlier ones takes the subject's token
+      // live key, whose unique index admits one holder: two such mints at once
+      // cannot both commit with the other's token left unvoided, as each would
+      // under PostgreSQL's isolation. The loser runs again and voids the
+      // winner's token. Tokens minted alongside others take no key.
+      const tokenLiveKey = input.voidEarlier
+        ? liveKeyFor(purpose, subject, "token")
+        : null;
+      const mint = async (adapterTx: TransactionContext): Promise<void> => {
         if (input.voidEarlier) {
           await adapterTx.updateCount(
             ONE_TIME_SECRETS_TABLE,
-            { voidedAt: createdAt },
+            { voidedAt: createdAt, liveKey: null },
             subjectWhere(subjectKeyFor(subject), [purpose], "token")
           );
         }
@@ -313,7 +341,7 @@ export function createOneTimeSecrets(
             purpose,
             token,
           ]),
-          liveKey: null,
+          liveKey: tokenLiveKey,
           issueSeq: null,
           data,
           expiresAt,
@@ -323,7 +351,21 @@ export function createOneTimeSecrets(
           maxWrongTries: null,
           createdAt,
         });
-      });
+      };
+      if (txOption?.tx !== undefined || tokenLiveKey === null) {
+        // In the plugin's transaction a lost race cannot be retried (the
+        // failed insert ends it): it surfaces, and nothing is minted.
+        await write("secrets.mintToken", txOption?.tx, mint);
+      } else {
+        for (let attempt = 0; ; attempt++) {
+          try {
+            await write("secrets.mintToken", undefined, mint);
+            break;
+          } catch (error) {
+            if (attempt >= 3 || !lostRace(error)) throw error;
+          }
+        }
+      }
       return { token, expiresAt };
     },
 
@@ -344,12 +386,30 @@ export function createOneTimeSecrets(
       if (!DIGITS.has(digits))
         throw invalid("digits", "digits must be 6, 7 or 8.");
       const data = serialiseData(input.data);
-      const code = String(randomInt(0, 10 ** digits)).padStart(digits, "0");
+      const draw = (): string =>
+        String(randomInt(0, 10 ** digits)).padStart(digits, "0");
+      let code = draw();
       const liveKey = liveKeyFor(purpose, subject);
       const [current] = keys();
 
       const mint = async (adapterTx: TransactionContext): Promise<Date> => {
         const createdAt = now();
+        // The new code never repeats the live one it replaces: a holder of the
+        // earlier code could otherwise spend its successor, with a fresh
+        // budget of tries. Compared under every key the install reads with.
+        const [live] = await adapterTx.select<Pick<SecretRow, "secretHash">>(
+          ONE_TIME_SECRETS_TABLE,
+          {
+            columns: ["secretHash"],
+            where: { and: [{ column: "liveKey", op: "=", value: liveKey }] },
+          }
+        );
+        const repeatsLive = (candidate: string): boolean =>
+          live !== undefined &&
+          keys().some(key =>
+            sameHex(codeHash(key, purpose, subject, candidate), live.secretHash)
+          );
+        while (repeatsLive(code)) code = draw();
         // The earlier live code is voided in the same transaction as the new
         // one is inserted, and the new row takes the plugin, purpose and
         // subject's live key, whose unique index admits one holder at a time.
@@ -455,7 +515,9 @@ export function createOneTimeSecrets(
         // The spend: one conditional update, won by exactly one caller.
         const spent = await adapterTx.updateCount(
           ONE_TIME_SECRETS_TABLE,
-          { spentAt: at },
+          // The live key goes with the spend, so a later replacing mint does
+          // not meet this spent token on the key's unique index.
+          { spentAt: at, liveKey: null },
           {
             and: [
               ...ownerWhere(purpose),

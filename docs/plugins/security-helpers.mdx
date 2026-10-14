@@ -296,7 +296,8 @@ a code whose effect fails stays spent, and the person asks for a new one.
   guesses across instances never gets more than the code's budget.
 - **One live code.** A new code for a purpose and subject voids the earlier
   one, and if two are minted at once, exactly one is live afterwards. Tokens
-  are voided only when you pass `voidEarlier`, or call `voidFor`.
+  are voided only when you pass `voidEarlier`, or call `voidFor`; two replacing
+  mints at once also leave exactly one token live.
 - **Writes in a transaction.** Pass `{ tx }`, the handle `ctx.db.transaction`
   gives its callback, and a mint, spend or void commits or rolls back with your
   work. Without it the write runs in a transaction of its own, and is refused

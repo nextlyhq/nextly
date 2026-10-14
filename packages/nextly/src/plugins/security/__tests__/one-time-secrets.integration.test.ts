@@ -461,6 +461,51 @@ describe.each(getConfiguredTestDialects())(
       ).toMatchObject({ ok: true });
     });
 
+    it("keeps a token minted before a secret was configured readable while '[null]' keeps it", async () => {
+      vi.stubEnv("NEXTLY_SECRET", undefined);
+      vi.stubEnv("NEXTLY_SECRET_PREVIOUS", undefined);
+      _resetEnvCache();
+      const { a } = await boot();
+      const { token } = await a.security.secrets.mintToken({
+        purpose: "reset",
+        subject,
+        expiresInMs: 60_000,
+      });
+      vi.stubEnv(
+        "NEXTLY_SECRET",
+        "the-first-install-secret-long-enough-for-prod"
+      );
+      vi.stubEnv("NEXTLY_SECRET_PREVIOUS", "[null]");
+      _resetEnvCache();
+      expect(
+        await a.security.secrets.consumeToken({ purpose: "reset", token })
+      ).toMatchObject({ ok: true });
+    });
+
+    it("lets a spent replacing token make way for the next one", async () => {
+      const { a } = await boot();
+      const replacing = {
+        purpose: "reset",
+        subject,
+        expiresInMs: 60_000,
+        voidEarlier: true,
+      };
+      const first = await a.security.secrets.mintToken(replacing);
+      expect(
+        await a.security.secrets.consumeToken({
+          purpose: "reset",
+          token: first.token,
+        })
+      ).toMatchObject({ ok: true });
+      const next = await a.security.secrets.mintToken(replacing);
+      expect(
+        await a.security.secrets.peekToken({
+          purpose: "reset",
+          token: next.token,
+        })
+      ).toMatchObject({ ok: true });
+    });
+
     it("keeps a spend another flow's rolled-back transaction ran beside", async () => {
       const { a } = await boot();
       const { token } = await a.security.secrets.mintToken({
@@ -604,6 +649,28 @@ describe.each(getConfiguredTestDialects())(
     });
 
     describe("on two instances at once", () => {
+      it("leaves exactly one token live after two replacing mints at once", async () => {
+        const { a, elsewhere } = await boot();
+        const replacing = {
+          purpose: "reset",
+          subject,
+          expiresInMs: 60_000,
+          voidEarlier: true,
+        };
+        for (let round = 0; round < 5; round++) {
+          const minted = await Promise.all([
+            a.security.secrets.mintToken(replacing),
+            elsewhere.mintToken(replacing),
+          ]);
+          const live = await Promise.all(
+            minted.map(({ token }) =>
+              a.security.secrets.peekToken({ purpose: "reset", token })
+            )
+          );
+          expect(live.filter(answer => answer.ok)).toHaveLength(1);
+        }
+      });
+
       it("lets exactly one of two spends of a token succeed", async () => {
         const { a, elsewhere } = await boot();
         for (let round = 0; round < 5; round++) {

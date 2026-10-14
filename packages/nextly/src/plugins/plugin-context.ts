@@ -23,7 +23,6 @@ import {
   type JobsNamespace,
 } from "../direct-api/namespaces/jobs";
 import type { PluginLimiter } from "../domains/limits/plugin-limiter";
-import { pluginSettingsSecrets } from "../domains/plugins/settings-service";
 import { getActiveExtensionSchema } from "../domains/schema/extension/build-extension-schema";
 import type {
   ExtensionColumn,
@@ -53,6 +52,7 @@ import {
   type AfterCommitAdapter,
   runAdapterTransaction,
 } from "../shared/lib/run-adapter-transaction";
+import { secretGenerations } from "../shared/lib/secret-generations";
 import type { DatabaseInstance } from "../types/database-operations";
 
 import type { AdminPlacement } from "./admin-placement";
@@ -2081,7 +2081,10 @@ export function createPluginContext(
       secrets: createOneTimeSecrets({
         owner: plugin?.name ?? "nextly",
         adapter: () => asSecretsAdapter(getServiceFn("adapter")),
-        secrets: () => pluginSettingsSecrets(env),
+        // Every generation, the unkeyed one included: a secret minted before
+        // NEXTLY_SECRET was set stays readable while '[null]' keeps it.
+        secrets: () =>
+          secretGenerations(env.NEXTLY_SECRET, env.NEXTLY_SECRET_PREVIOUS),
       }),
     },
     // Present only when the plugin declared a settings schema: without one
