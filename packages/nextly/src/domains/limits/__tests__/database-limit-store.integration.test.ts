@@ -114,7 +114,7 @@ describeEachDialect("the database limit store", dialect => {
   });
 
   afterAll(async () => {
-    for (const store of opened) store.close();
+    await Promise.all(opened.map(store => store.close()));
     if (other !== current.adapter) await other.disconnect();
     await current.destroy();
   });
@@ -270,10 +270,55 @@ describeEachDialect("the database limit store", dialect => {
     expect(await counterOf(before)).toBe(false);
   });
 
+  it("settles close only once a sweep under way has finished", async () => {
+    const store = open(current.adapter, freshGeneration());
+    let swept = false;
+    const sweeping = store.sweep().then(() => {
+      swept = true;
+    });
+
+    await store.close();
+
+    expect(swept).toBe(true);
+    await sweeping;
+  });
+
+  it("gives a burst after expiry the room a sweep frees, rather than refusing it", async () => {
+    const generation = freshGeneration();
+    const store = open(current.adapter, generation, 3);
+    for (const key of ["lapsing-a", "lapsing-b", "lapsing-c"]) {
+      await store.update([key], (_current, now) => ({
+        write: new Map([[key, { value: { n: 1 }, expiresAt: now + 100 }]]),
+        result: undefined,
+      }));
+    }
+    await pause(300);
+
+    const outcomes = await Promise.allSettled(
+      Array.from({ length: 6 }, (_, index) =>
+        store.update([`burst-after-${index}`], count1(`burst-after-${index}`))
+      )
+    );
+
+    // The three lapsed entries make room for three; the rest find it full.
+    expect(
+      outcomes.filter(outcome => outcome.status === "fulfilled")
+    ).toHaveLength(3);
+  });
+
+  it("writes nothing on a first read, which may be made inside the caller's transaction", async () => {
+    const generation = freshGeneration();
+    const store = open(current.adapter, generation);
+
+    await current.adapter.transaction(() => store.read(["quiet"]));
+
+    expect(await counterOf(generation)).toBe(false);
+  });
+
   it("never sweeps again once closed", async () => {
     const generation = freshGeneration();
     const store = open(current.adapter, generation, undefined, 100);
-    store.close();
+    await store.close();
     for (const key of ["closed-a", "closed-b"]) {
       await store.update([key], (_current, now) => ({
         write: new Map([[key, { value: { n: 1 }, expiresAt: now + 100 }]]),

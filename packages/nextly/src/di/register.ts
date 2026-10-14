@@ -544,7 +544,7 @@ const globalForReg = globalThis as unknown as {
    * Stops the selected limit store's own sweeping, once it has been built.
    * Called when the services are released, so no timer outlives them.
    */
-  __nextly_closeLimitStore?: () => void;
+  __nextly_closeLimitStore?: () => Promise<void>;
   /** The registration currently running, so a concurrent caller waits on it. */
   __nextly_registrationInFlight?: Promise<void>;
   /** Resolved plugins + their contexts, for reverse-order destroy on shutdown (D4). */
@@ -4481,9 +4481,10 @@ export async function destroyRegisteredPlugins(): Promise<void> {
  * store's sweep, so no timer outlives the services. The store keeps
  * answering calls a teardown still makes.
  */
-function stopLimitStore(): void {
-  globalForReg.__nextly_closeLimitStore?.();
+function stopLimitStore(): Promise<void> {
+  const close = globalForReg.__nextly_closeLimitStore;
   globalForReg.__nextly_closeLimitStore = undefined;
+  return close?.() ?? Promise.resolve();
 }
 
 export async function shutdownServices(): Promise<void> {
@@ -4504,7 +4505,8 @@ async function releaseServices(opts: {
 }): Promise<void> {
   // Before the adapter disconnects, so destroy can still use db.
   await destroyRegisteredPlugins();
-  stopLimitStore();
+  // Before the adapter disconnects, so a sweep under way finishes with it.
+  await stopLimitStore();
 
   try {
     if (opts.disconnectAdapter && container.has("adapter")) {
@@ -4571,7 +4573,8 @@ export function clearServices(): void {
       inTeardown.restored = container.restore(inTeardown.cleared);
     }
   }
-  stopLimitStore();
+  // Synchronous here: the sweep stops, and one under way finishes on its own.
+  void stopLimitStore();
   // Clear the process-global recording policy alongside the container so a
   // re-initialization does not inherit a prior config's opt-outs.
   resetWebhookRecordingPolicy();

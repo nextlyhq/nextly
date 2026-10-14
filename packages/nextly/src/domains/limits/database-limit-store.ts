@@ -109,8 +109,12 @@ export interface DatabaseLimitStoreOptions {
 
 /** The database store, with what shuts it down. */
 export interface DatabaseLimitStore extends LimitStore {
-  /** Stop sweeping on its own. Further calls still work. */
-  close(): void;
+  /**
+   * Stop sweeping on its own, and settle once a sweep already running has
+   * finished, so nothing still uses the adapter after it. Further calls
+   * still work.
+   */
+  close(): Promise<void>;
 }
 
 /** A row as an update reads it, with the database's clock. */
@@ -372,8 +376,23 @@ export function createDatabaseLimitStore(
   };
 
   /** A sweep nobody waits for; a failure is logged, and the next one retries. */
+  /**
+   * The sweep under way, if one is. One at a time on each instance: a sweep
+   * slowed by a lock wait or an outage is joined, never piled on, so sweeps
+   * cannot gather connections and locks behind it.
+   */
+  let running: Promise<number> | undefined;
+  const sweepOnce = (): Promise<number> => {
+    running ??= sweepRows().finally(() => {
+      running = undefined;
+    });
+    return running;
+  };
+
+  /** A sweep nobody waits for, unless one is under way; a failure is logged. */
   const sweepInBackground = () => {
-    sweepRows().catch((error: unknown) => {
+    if (running !== undefined) return;
+    sweepOnce().catch((error: unknown) => {
       getNextlyLogger().warn({
         kind: "limit-store-sweep-failed",
         message: error instanceof Error ? error.message : String(error),
@@ -417,8 +436,16 @@ export function createDatabaseLimitStore(
   };
 
   let lastRoomSweep: number | undefined;
-  /** Sweep to find room, unless one ran moments ago. True when it ran. */
+  /**
+   * Sweep to find room. A sweep already under way is waited for, since it
+   * may be about to free the room; otherwise one is started, unless one
+   * finished moments ago. True when a sweep has run for this call.
+   */
   const makeRoom = async (): Promise<boolean> => {
+    if (running !== undefined) {
+      await running;
+      return true;
+    }
     const at = Date.now();
     if (
       lastRoomSweep !== undefined &&
@@ -427,7 +454,7 @@ export function createDatabaseLimitStore(
       return false;
     }
     lastRoomSweep = at;
-    await sweepRows();
+    await sweepOnce();
     return true;
   };
 
@@ -641,7 +668,8 @@ export function createDatabaseLimitStore(
       const named = checkLimitKeys(keys);
       const keyOf = new Map(named.map(key => [rowId(key), key]));
       try {
-        await ensureReady();
+        // No recount and no sweep from a read: a read may be made inside
+        // the caller's transaction, and must write nothing.
         const db = adapter.getDrizzle<StoreDb>();
         const rows = await db
           .select<{ id: string; value: string; expiresAt: number }>({
@@ -677,16 +705,17 @@ export function createDatabaseLimitStore(
     async sweep() {
       assertNoOpenTransaction(adapter, "A limit store sweep");
       try {
-        return await sweepRows();
+        return await sweepOnce();
       } catch (error) {
         throw answerFor(error, {});
       }
     },
 
-    close() {
+    async close() {
       closed = true;
       if (timer !== undefined) clearInterval(timer);
       timer = undefined;
+      await running?.catch(() => undefined);
     },
   };
 }
