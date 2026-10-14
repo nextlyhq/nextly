@@ -13,7 +13,6 @@ const SAMPLES: {
   "verify-address": {
     ...base,
     kind: "verify-address",
-    name: "Dana",
     link: "L",
     code: "123456",
     notMeLink: "N",
