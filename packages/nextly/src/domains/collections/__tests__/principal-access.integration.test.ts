@@ -281,6 +281,41 @@ describe.each(getConfiguredTestDialects())(
       expect(unrestricted.totalDocs).toBe(2);
     });
 
+    it("refuses a where on a field the person may not read before an update writes", async () => {
+      const t = await boot(dialect);
+      const id = await seed(t, "members_only");
+      const member = await person(t, "m1");
+
+      // A guessed value on the withheld field: refused, and nothing written,
+      // so whether it matched cannot be read off the write.
+      await expect(
+        t.nextly.update({
+          collection: "members_only",
+          where: { staff_note: { equals: "internal" } },
+          data: { title: "probed" },
+          principal: member,
+        })
+      ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+      const row = (await t.nextly.findByID({
+        collection: "members_only",
+        id,
+      })) as Record<string, unknown>;
+      expect(row.title).toBe("seeded");
+
+      // The control: a where on a field the person may read updates.
+      await t.nextly.update({
+        collection: "members_only",
+        where: { title: { equals: "seeded" } },
+        data: { title: "renamed" },
+        principal: member,
+      });
+      const renamed = (await t.nextly.findByID({
+        collection: "members_only",
+        id,
+      })) as Record<string, unknown>;
+      expect(renamed.title).toBe("renamed");
+    });
+
     it("hands collection hooks the person, and no staff user", async () => {
       const t = await boot(dialect);
       await seed(t, "members_only");

@@ -276,17 +276,7 @@ export class Nextly implements NextlyContext {
    * @param config - Default configuration for all operations
    */
   constructor(config: DirectAPIConfig = {}) {
-    // A person is named per call, never as an instance default. Each
-    // operation reads `principal` off its own arguments only, so a default
-    // one would be ignored, and every call would run as the server under the
-    // instance's `overrideAccess: true`: refused rather than ignored.
-    if ((config as { principal?: unknown }).principal !== undefined) {
-      throw NextlyError.invalidInput({
-        message:
-          "principal cannot be a Direct API default: pass it on each collection or Single operation made as the person.",
-        logContext: { reason: "principal-default-refused" },
-      });
-    }
+    refusePrincipalDefault(config);
     this.defaultConfig = {
       overrideAccess: true,
       ...config,
@@ -763,7 +753,29 @@ const globalForDirectApi = globalThis as unknown as {
  * result.meta.total;  // number
  * ```
  */
+/**
+ * Refuse a person named as a Direct API default. A person is named per call:
+ * each operation reads `principal` off its own arguments only, so a default
+ * one would be ignored, and every call would run as the server under the
+ * instance's `overrideAccess: true`.
+ */
+function refusePrincipalDefault(config: DirectAPIConfig | undefined): void {
+  if (
+    (config as { principal?: unknown } | undefined)?.principal === undefined
+  ) {
+    return;
+  }
+  throw NextlyError.invalidInput({
+    message:
+      "principal cannot be a Direct API default: pass it on each collection or Single operation made as the person.",
+    logContext: { reason: "principal-default-refused" },
+  });
+}
+
 export function requireNextly(config?: DirectAPIConfig): Nextly {
+  // Before the singleton is reused, whose construction would otherwise be
+  // the only place a default person is refused.
+  refusePrincipalDefault(config);
   // Registered is not the same as allowed to serve: a process whose boot
   // migrations refused must not serve, and a boot still migrating has not
   // answered yet. This getter is synchronous, so it cannot wait for that
