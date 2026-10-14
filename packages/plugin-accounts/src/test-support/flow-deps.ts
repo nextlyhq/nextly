@@ -1,5 +1,6 @@
 import type { PluginContext } from "@nextlyhq/plugin-sdk";
 
+import { accountsLimitRules } from "../core/limit-rules";
 import type { FlowDeps } from "../flows/deps";
 import { resolveAccountsSettings, type AccountsOptions } from "../settings";
 import { fakeAccountsCore, type FakeAccountsCore } from "../testing/fake-core";
@@ -21,14 +22,15 @@ export function flowDeps(
   mail: FakeAccountsMail;
   warnings: string[];
 } {
-  const core = fakeAccountsCore();
+  const settings = resolveAccountsSettings({ origin: TEST_ORIGIN, ...options });
+  const core = fakeAccountsCore({ rules: accountsLimitRules(settings) });
   const mail = new FakeAccountsMail();
   const warnings: string[] = [];
   const deps: FlowDeps = {
     db: core.watch(ctx.db),
     dialect: ctx.dialect,
     core,
-    settings: resolveAccountsSettings({ origin: TEST_ORIGIN, ...options }),
+    settings,
     mail,
     logger: { warn: message => void warnings.push(message) },
     now: () => new Date(core.clock.now()),

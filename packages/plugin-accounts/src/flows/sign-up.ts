@@ -7,6 +7,7 @@ import {
   accountByAddress,
   createAccount,
   type AccountRow,
+  type AccountsDb,
 } from "../storage/accounts";
 
 import { HOUR, MINUTE, type FlowDeps } from "./deps";
@@ -91,57 +92,36 @@ async function createAndMint(
   deps: FlowDeps,
   input: { name: string; address: string; passwordHash: string }
 ): Promise<SignUpResult> {
-  const { core, settings } = deps;
-  const linkMs = settings.verification.linkHours * HOUR;
   const minted = await deps.db.transaction(async tx => {
     const created = await createAccount(tx, deps.dialect, input);
     // A refusal aborts the transaction on PostgreSQL, so it is rolled back
     // here and the taken answer is made outside it.
     if (created.status === "taken") throw new AddressTaken();
-    const subject = created.account.id;
-    const link = await core.secrets.mintToken(
-      { purpose: PURPOSES.verifyLink, subject, expiresInMs: linkMs },
-      { tx }
-    );
-    const code = await core.secrets.mintCode(
+    const verification = await mintVerification(deps, tx, created.account.id);
+    const browser = await deps.core.secrets.mintToken(
       {
-        purpose: PURPOSES.verifyCode,
-        subject,
-        expiresInMs: settings.verification.codeMinutes * MINUTE,
-        digits: codeDigits(settings.verification.codeDigits),
-        maxWrongTries: settings.verification.codeTries,
+        purpose: PURPOSES.signUpBrowser,
+        subject: created.account.id,
+        expiresInMs: deps.settings.verification.linkHours * HOUR,
       },
       { tx }
     );
-    const notMe = await core.secrets.mintToken(
-      { purpose: PURPOSES.notMe, subject, expiresInMs: linkMs },
-      { tx }
-    );
-    const browser = await core.secrets.mintToken(
-      { purpose: PURPOSES.signUpBrowser, subject, expiresInMs: linkMs },
-      { tx }
-    );
-    return { account: created.account, link, code, notMe, browser };
+    return { account: created.account, verification, browser };
   });
-
-  await deps.mail.queue({
-    kind: "verify-address",
-    accountId: minted.account.id,
-    to: minted.account.address,
-    name: minted.account.name,
-    link: pageLink(settings, "verify", minted.link.token),
-    code: minted.code.code,
-    notMeLink: pageLink(settings, "notMe", minted.notMe.token),
-  });
+  await queueVerification(deps, minted.account, minted.verification);
 
   return accepted(minted.browser);
 }
 
 /**
  * The taken address's answer: the same sign-up browser token as a free
- * address gets, bound to no account, and an email to the address. A browser
- * whose token is already bound to the address's pending account (a retry, or
- * a double submit) keeps that binding, so it stays the browser that signed up.
+ * address gets, and an email to the address. Usually the token is bound to
+ * no account and the email says someone tried to sign up. A browser whose
+ * token is already bound to the address's pending account (a retry, or a
+ * double submit) keeps that binding, so it stays the browser that signed
+ * up, and the address gets a fresh verification email instead, whose code
+ * voids the earlier one: the commonest reason to sign up twice is that the
+ * first email never came.
  */
 async function answerTaken(
   deps: FlowDeps,
@@ -151,15 +131,20 @@ async function answerTaken(
   const { core, settings } = deps;
   const existing = await accountByAddress(deps.db, address);
   const kept = await keptBinding(deps, existing, browserToken);
-  const browser =
-    kept ??
-    (await core.secrets.mintToken({
-      purpose: PURPOSES.signUpBrowser,
-      // Never an account's id, so the token signs nothing in.
-      subject: `unbound-${randomUUID()}`,
-      expiresInMs: settings.verification.linkHours * HOUR,
-    }));
+  if (existing !== null && kept !== null) {
+    const verification = await deps.db.transaction(tx =>
+      mintVerification(deps, tx, existing.id)
+    );
+    await queueVerification(deps, existing, verification);
+    return accepted(kept);
+  }
 
+  const browser = await core.secrets.mintToken({
+    purpose: PURPOSES.signUpBrowser,
+    // Never an account's id, so the token signs nothing in.
+    subject: `unbound-${randomUUID()}`,
+    expiresInMs: settings.verification.linkHours * HOUR,
+  });
   if (existing !== null) {
     await deps.mail.queue({
       kind: "sign-up-taken",
@@ -172,6 +157,58 @@ async function answerTaken(
   }
 
   return accepted(browser);
+}
+
+interface MintedVerification {
+  link: { token: string };
+  code: { code: string };
+  notMe: { token: string };
+}
+
+/** A verification email's secrets: its link, its code (voiding any earlier code) and its "this wasn't me" link. */
+async function mintVerification(
+  deps: FlowDeps,
+  tx: AccountsDb,
+  subject: string
+): Promise<MintedVerification> {
+  const { core, settings } = deps;
+  const linkMs = settings.verification.linkHours * HOUR;
+  const link = await core.secrets.mintToken(
+    { purpose: PURPOSES.verifyLink, subject, expiresInMs: linkMs },
+    { tx }
+  );
+  const code = await core.secrets.mintCode(
+    {
+      purpose: PURPOSES.verifyCode,
+      subject,
+      expiresInMs: settings.verification.codeMinutes * MINUTE,
+      digits: codeDigits(settings.verification.codeDigits),
+      maxWrongTries: settings.verification.codeTries,
+    },
+    { tx }
+  );
+  const notMe = await core.secrets.mintToken(
+    { purpose: PURPOSES.notMe, subject, expiresInMs: linkMs },
+    { tx }
+  );
+
+  return { link, code, notMe };
+}
+
+async function queueVerification(
+  deps: FlowDeps,
+  account: Pick<AccountRow, "id" | "address" | "name">,
+  minted: MintedVerification
+): Promise<void> {
+  await deps.mail.queue({
+    kind: "verify-address",
+    accountId: account.id,
+    to: account.address,
+    name: account.name,
+    link: pageLink(deps.settings, "verify", minted.link.token),
+    code: minted.code.code,
+    notMeLink: pageLink(deps.settings, "notMe", minted.notMe.token),
+  });
 }
 
 async function keptBinding(
