@@ -101,7 +101,14 @@ function cardViolations(table: Table): string[] {
 // default collation without regard to case or accents, so an index over the
 // reference itself would join two items into one on MySQL alone. Indexes go
 // over its key instead (`referenceKey`).
+//
+// A payment's `reference` is not a catalogue's: commerce mints it as `pay_`
+// and lower-case hex, which every collation compares exactly, so it is
+// indexed as it is.
+const OWN_REFERENCES = new Set(["payments"]);
+
 function referenceIndexViolations(table: Table): string[] {
+  if (OWN_REFERENCES.has(table.name)) return [];
   return table.indexes.flatMap(index =>
     index.columns.includes("reference")
       ? [`${table.name} indexes reference, not reference_key`]

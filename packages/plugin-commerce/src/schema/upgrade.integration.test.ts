@@ -37,6 +37,7 @@ import { commerce } from "../plugin";
 import { createInMemoryCatalogueSource } from "../testing/in-memory-catalogue-source";
 
 import { migrations } from "./migrations";
+import { referenceKey } from "./reference-key";
 
 const run = promisify(execFile);
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -103,11 +104,12 @@ describe("commerce's migrations on an existing install", () => {
         ]
       );
       await adapter.executeQuery(
-        "INSERT INTO commerce__cart_lines (id, cart_id, reference, quantity, seen_unit_price_amount, seen_unit_price_currency, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO commerce__cart_lines (id, cart_id, reference, reference_key, quantity, seen_unit_price_amount, seen_unit_price_currency, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         [
           "01a1394a-0000-7000-8000-000000000002",
           "01a1394a-0000-7000-8000-000000000001",
           "bolt",
+          referenceKey("bolt"),
           3,
           25,
           "USD",

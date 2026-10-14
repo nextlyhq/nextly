@@ -28,6 +28,7 @@ import {
 import { commerceError } from "../errors";
 import { money, multiply, sum, type Money } from "../money/money";
 import { parseRequest } from "../request-input";
+import { referenceKey } from "../schema/reference-key";
 import { orderLines, orderNumbers, orders, payments } from "../schema/tables";
 import {
   holdStock,
@@ -543,6 +544,7 @@ export function createCheckoutService(
           orderId: order.id,
           position,
           reference: line.reference,
+          referenceKey: referenceKey(line.reference),
           name: line.name,
           sku: line.sku,
           quantity: line.quantity,

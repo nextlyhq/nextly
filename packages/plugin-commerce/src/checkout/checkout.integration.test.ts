@@ -267,6 +267,9 @@ describe.each(getConfiguredTestDialects())(
         reference: done.payment.reference,
         amount: { amount: 25_825, currency: "USD" },
       });
+      // Minted in lower-case hex, which every collation compares exactly: the
+      // reason the schema rules let the payments table index it as it is.
+      expect(done.payment.reference).toMatch(/^pay_[0-9a-f]{32}$/);
 
       const [stock] = await ctx.db.select(stockItems).all();
       expect(stock).toMatchObject({ reference: "drill", held: 2 });
@@ -280,6 +283,47 @@ describe.each(getConfiguredTestDialects())(
       expect((await cart.get({ token })).cart.lines).toEqual([]);
       const next = await cart.add({ token, reference: "bolt", quantity: 1 });
       expect(tokenOf(next)).not.toBe(token);
+    });
+
+    it("holds the stock of references that differ only in case apart", async () => {
+      const lamps = createInMemoryCatalogueSource({
+        currency: "USD",
+        items: [
+          {
+            reference: "Lamp",
+            name: "Floor lamp",
+            price: { kind: "listed", unitPrice: money(5_000, "USD") },
+            stock: { kind: "counted", available: 1 },
+          },
+          {
+            reference: "lamp",
+            name: "Desk lamp",
+            price: { kind: "listed", unitPrice: money(3_000, "USD") },
+            stock: { kind: "counted", available: 1 },
+          },
+        ],
+      });
+      const { ctx, checkout, cart } = await setup({ source: lamps.source });
+      const token = await shopper(cart, [
+        ["Lamp", 1],
+        ["lamp", 1],
+      ]);
+      const service = checkout();
+      const { quoteKey } = await service.quote({ token });
+      const done = await service.complete({
+        token,
+        quoteKey,
+        email: "ada@example.com",
+        addresses: ADDRESSES,
+      });
+      expect(done.order.lines.map(l => l.reference)).toEqual(["Lamp", "lamp"]);
+      const stock = await ctx.db.select(stockItems).all();
+      expect(stock.map(s => [s.reference, s.held]).sort()).toEqual([
+        ["Lamp", 1],
+        ["lamp", 1],
+      ]);
+      const holds = await ctx.db.select(stockHolds).all();
+      expect(holds.map(h => h.reference).sort()).toEqual(["Lamp", "lamp"]);
     });
 
     it("answers the same order and starts one payment however often completion is called", async () => {

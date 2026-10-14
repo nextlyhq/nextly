@@ -10,6 +10,7 @@ import type {
   CatalogueStock,
 } from "../contracts/catalogue-source";
 import { commerceError } from "../errors";
+import { referenceKey } from "../schema/reference-key";
 import { stockHolds, stockItems } from "../schema/tables";
 
 /**
@@ -55,7 +56,7 @@ export async function stockRecords(
   const s = db.table(stockItems);
   const rows = await db
     .select(stockItems)
-    .where(inArray(s.reference, [...new Set(references)]))
+    .where(inArray(s.referenceKey, [...new Set(references)].map(referenceKey)))
     .all();
   for (const row of rows) {
     found.set(row.reference, {
@@ -173,6 +174,7 @@ export async function holdStock(
     if (!record) {
       await tx.insert(stockItems, {
         reference: line.reference,
+        referenceKey: referenceKey(line.reference),
         held: line.quantity,
         createdAt: hold.now,
         updatedAt: hold.now,
@@ -191,6 +193,7 @@ export async function holdStock(
     const row = await tx.insertReturning(stockHolds, {
       orderId: hold.orderId,
       reference: line.reference,
+      referenceKey: referenceKey(line.reference),
       quantity: line.quantity,
       state: "active",
       expiresAt: hold.expiresAt,

@@ -171,6 +171,10 @@ export const orderLines = defineTable(
     orderId: col.varchar(36),
     position: col.integer(),
     reference: col.varchar(255),
+    // Found and kept unique by this, not the reference itself, so references
+    // differing only in case stay apart on every dialect (see
+    // `referenceKey`).
+    referenceKey: col.char(64),
     name: col.text(),
     sku: col.varchar(255, { nullable: true }),
     quantity: col.integer(),
@@ -181,7 +185,7 @@ export const orderLines = defineTable(
     ...col.timestamps(),
   },
   {
-    indexes: [{ columns: ["orderId", "reference"], unique: true }],
+    indexes: [{ columns: ["orderId", "referenceKey"], unique: true }],
     foreignKeys: [
       {
         columns: ["orderId"],
@@ -302,6 +306,10 @@ export const stockItems = defineTable(
   {
     id: col.id(),
     reference: col.varchar(255),
+    // Found and kept unique by this, not the reference itself, so references
+    // differing only in case stay apart on every dialect (see
+    // `referenceKey`).
+    referenceKey: col.char(64),
     onHand: col.integer({ nullable: true }),
     held: col.integer({ default: 0 }),
     countedAt: col.timestamp({ nullable: true }),
@@ -309,7 +317,7 @@ export const stockItems = defineTable(
     ...col.timestamps(),
   },
   {
-    indexes: [{ columns: ["reference"], unique: true }],
+    indexes: [{ columns: ["referenceKey"], unique: true }],
     checks: [{ name: "stock_held_not_negative", sql: "held >= 0" }],
   }
 );
@@ -325,6 +333,10 @@ export const stockHolds = defineTable(
     id: col.id(),
     orderId: col.varchar(36),
     reference: col.varchar(255),
+    // Found and kept unique by this, not the reference itself, so references
+    // differing only in case stay apart on every dialect (see
+    // `referenceKey`).
+    referenceKey: col.char(64),
     quantity: col.integer(),
     state: col.enum(["active", "released", "sold"]),
     expiresAt: col.timestamp(),
@@ -333,8 +345,8 @@ export const stockHolds = defineTable(
   },
   {
     indexes: [
-      { columns: ["orderId", "reference"], unique: true },
-      { columns: ["reference", "state"] },
+      { columns: ["orderId", "referenceKey"], unique: true },
+      { columns: ["referenceKey", "state"] },
     ],
     foreignKeys: [
       {
