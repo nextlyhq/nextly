@@ -285,7 +285,16 @@ export async function createNextly(
 
   let databaseType: DatabaseType;
 
-  if (options.database) {
+  if (projectType === "plugin") {
+    // The plugin playground always runs on SQLite (dev/.env.example), so an
+    // answer here would be collected and then ignored.
+    if (options.database && options.database !== "sqlite") {
+      p.log.warn(
+        `The plugin playground runs on SQLite; --database ${options.database} does not apply.`
+      );
+    }
+    databaseType = "sqlite";
+  } else if (options.database) {
     databaseType = options.database;
   } else if (defaults) {
     databaseType = "sqlite";
@@ -404,7 +413,8 @@ export async function createNextly(
         allowExistingTarget,
         // The bundled template was released with this CLI, so a plugin made
         // from it installs the packages released with it too.
-        releaseVersion: useBundledTemplate ? options.cliVersion : undefined,
+        releaseVersion: options.cliVersion,
+        pinToRelease: useBundledTemplate,
       });
 
       if (!installInCwd) cwd = targetDir;

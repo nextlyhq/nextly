@@ -1293,6 +1293,15 @@ const CARET_VERSION = /^\^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
 const EXACT_VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
 
 /**
+ * This CLI's version, and whether the scaffold pins to it. See
+ * CopyTemplateOptions.releaseVersion.
+ */
+interface PluginRelease {
+  releaseVersion?: string;
+  pinToRelease?: boolean;
+}
+
+/**
  * The version each Nextly package resolves to in a scaffolded plugin: the one
  * answer its package.json and its definePlugin range both read.
  *
@@ -1307,10 +1316,11 @@ const EXACT_VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
 async function pluginNextlyVersions(
   useYalc: boolean,
   channel: NextlyDistTag,
-  releaseVersion: string | undefined
+  release: PluginRelease
 ): Promise<Record<string, string>> {
   if (useYalc) return {};
-  if (releaseVersion && EXACT_VERSION.test(releaseVersion)) {
+  const { releaseVersion, pinToRelease } = release;
+  if (pinToRelease && releaseVersion && EXACT_VERSION.test(releaseVersion)) {
     return Object.fromEntries(
       NEXTLY_PACKAGES.map(pkg => [pkg, releaseVersion] as const)
     );
@@ -1324,12 +1334,24 @@ async function pluginNextlyVersions(
  * A semver range, never a dist-tag: pnpm 11 rejects a tag in peerDependencies
  * (ERR_PNPM_INVALID_PEER_DEPENDENCY_SPECIFICATION) and then refuses to run any
  * script in the scaffold, `pnpm dev` included. A tag is all there is offline,
- * after a failed registry lookup and under --use-yalc, so only a known version
- * becomes a caret range and anything else declares the open range.
+ * after a failed registry lookup and under --use-yalc.
+ *
+ * Without a known version the range anchors on this CLI's release, which the
+ * whole family shares, and not on an open `>=0.0.0`: under semver a prerelease
+ * such as `0.0.2-alpha.66` satisfies only a range naming a prerelease of the
+ * same version, so `>=0.0.0` would leave every installed alpha an unmet peer.
+ * The open range remains only when not even the CLI's version is known.
  */
-function pluginPeerRange(resolved: string | undefined): string {
+function pluginPeerRange(
+  resolved: string | undefined,
+  releaseVersion: string | undefined
+): string {
   if (resolved && EXACT_VERSION.test(resolved)) return `^${resolved}`;
-  return resolved && CARET_VERSION.test(resolved) ? resolved : ">=0.0.0";
+  if (resolved && CARET_VERSION.test(resolved)) return resolved;
+  if (releaseVersion && EXACT_VERSION.test(releaseVersion)) {
+    return `^${releaseVersion}`;
+  }
+  return ">=0.0.0";
 }
 
 /**
@@ -1342,14 +1364,14 @@ function pluginPeerRange(resolved: string | undefined): string {
  */
 async function resolvePluginNextlyRange(
   useYalc: boolean,
-  releaseVersion: string | undefined
+  release: PluginRelease
 ): Promise<string> {
   const versions = await pluginNextlyVersions(
     useYalc,
     templateNextlyChannel("plugin"),
-    releaseVersion
+    release
   );
-  return pluginPeerRange(versions["nextly"]);
+  return pluginPeerRange(versions["nextly"], release.releaseVersion);
 }
 
 /**
@@ -1371,13 +1393,10 @@ async function generatePluginPackageJson(
    * author's first `pnpm lint` fails on the config that imports it.
    */
   channel: NextlyDistTag,
-  /**
-   * This CLI's version, when the plugin is copied from the template bundled in
-   * it; see {@link pluginNextlyVersions}.
-   */
-  releaseVersion?: string
+  /** This CLI's version, and whether to pin to it; see {@link pluginNextlyVersions}. */
+  release: PluginRelease = {}
 ): Promise<string> {
-  const versions = await pluginNextlyVersions(useYalc, channel, releaseVersion);
+  const versions = await pluginNextlyVersions(useYalc, channel, release);
   const runtimeVersions = await resolveRuntimeVersions();
   /*
    * The fallback is the TEMPLATE's channel rather than `latest`.
@@ -1395,7 +1414,8 @@ async function generatePluginPackageJson(
 
   // Peers go through pluginPeerRange, which never declares a dist-tag. Dev
   // dependencies keep the tag `range` falls back to, which is valid there.
-  const peerRange = (pkg: string): string => pluginPeerRange(range(pkg));
+  const peerRange = (pkg: string): string =>
+    pluginPeerRange(range(pkg), release.releaseVersion);
 
   const peerDependencies: Record<string, string> = {
     nextly: peerRange("nextly"),
@@ -1708,11 +1728,17 @@ export interface CopyTemplateOptions {
    */
   allowExistingTarget?: boolean;
   /**
-   * This CLI's version, set when the template is the copy bundled in it. A
-   * plugin scaffold then pins every Nextly package to it, so the template and
-   * the packages come from the same release. Other templates ignore it.
+   * This CLI's version. The whole Nextly family versions in lockstep with it,
+   * so a plugin scaffold anchors its peer ranges on it when nothing else is
+   * known (offline, --use-yalc). Other templates ignore it.
    */
   releaseVersion?: string;
+  /**
+   * Set when the template is the copy bundled in this CLI: a plugin scaffold
+   * then pins every Nextly package to `releaseVersion`, so the template and the
+   * packages come from the same release.
+   */
+  pinToRelease?: boolean;
 }
 
 /**
@@ -1743,6 +1769,7 @@ export async function copyTemplate(
     packageManager,
     allowExistingTarget = false,
     releaseVersion,
+    pinToRelease,
   } = options;
 
   // Guard against silently overwriting an existing subdirectory. Skip
@@ -1785,6 +1812,7 @@ export async function copyTemplate(
       useYalc,
       packageManager,
       releaseVersion,
+      pinToRelease,
     });
     return;
   }
@@ -1978,6 +2006,7 @@ async function copyPluginTemplate(opts: {
   useYalc: boolean;
   packageManager: PackageManager;
   releaseVersion?: string;
+  pinToRelease?: boolean;
 }): Promise<void> {
   const {
     projectName,
@@ -1986,6 +2015,7 @@ async function copyPluginTemplate(opts: {
     useYalc,
     packageManager,
     releaseVersion,
+    pinToRelease,
   } = opts;
 
   if (!(await fs.pathExists(typeDir))) {
@@ -2009,7 +2039,7 @@ async function copyPluginTemplate(opts: {
     projectName,
     useYalc,
     templateNextlyChannel("plugin"),
-    releaseVersion
+    { releaseVersion, pinToRelease }
   );
   await fs.writeFile(
     path.join(targetDir, "package.json"),
@@ -2041,7 +2071,10 @@ async function copyPluginTemplate(opts: {
   // The plugin scaffold is a git repository too, and npm strips its ignore file the same way. It
   // carries its own agent guide — a publishable library rather than an app, so the base guide
   // would describe the wrong project — and that guide is restored by the same table.
-  const nextlyRange = await resolvePluginNextlyRange(useYalc, releaseVersion);
+  const nextlyRange = await resolvePluginNextlyRange(useYalc, {
+    releaseVersion,
+    pinToRelease,
+  });
   const placeholders = buildPlaceholderMap({
     pluginName: projectName,
     nextlyRange,

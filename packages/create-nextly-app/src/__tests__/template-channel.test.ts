@@ -230,6 +230,7 @@ describe("a plugin's declared nextly range follows its channel", () => {
         templatePath: path.join(templatesRoot, "plugin"),
       },
       releaseVersion: RELEASE,
+      pinToRelease: true,
     });
 
     const pkg = JSON.parse(
@@ -249,6 +250,56 @@ describe("a plugin's declared nextly range follows its channel", () => {
       expect(version, name).toBe(RELEASE);
     }
     expect(pkg.peerDependencies["nextly"]).toBe(`^${RELEASE}`);
+    expect(/nextly: "([^"]+)"/.exec(pluginSource)?.[1]).toBe(`^${RELEASE}`);
+  });
+  // A live template is not pinned, but when no version resolves (offline,
+  // --use-yalc) its peers still anchor on the CLI's release: an installed
+  // prerelease such as 0.0.2-alpha.40 does not satisfy `>=0.0.0` under semver.
+  it.each([
+    ["under --use-yalc", true],
+    ["offline", false],
+  ])("anchors peer ranges on the CLI's release %s", async (_label, useYalc) => {
+    const RELEASE = "0.0.2-alpha.40";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: false, json: async () => ({}) }))
+    );
+    const { copyTemplate } = await import("../utils/template");
+    workdir = await mkdtemp(path.join(tmpdir(), "nextly-plugin-anchor-"));
+    const target = path.join(workdir, "my-plugin");
+    const templatesRoot = path.resolve(
+      path.dirname(fileURLToPath(import.meta.url)),
+      "../../../../templates"
+    );
+
+    await copyTemplate({
+      projectName: "my-plugin",
+      projectType: "plugin",
+      targetDir: target,
+      database: pgDatabase,
+      useYalc,
+      templateSource: {
+        basePath: path.join(templatesRoot, "base"),
+        templatePath: path.join(templatesRoot, "plugin"),
+      },
+      releaseVersion: RELEASE,
+    });
+
+    const pkg = JSON.parse(
+      await readFile(path.join(target, "package.json"), "utf-8")
+    );
+    const pluginSource = await readFile(
+      path.join(target, "src/plugin.ts"),
+      "utf-8"
+    );
+    for (const name of [
+      "nextly",
+      "@nextlyhq/admin",
+      "@nextlyhq/plugin-sdk",
+      "@nextlyhq/ui",
+    ]) {
+      expect(pkg.peerDependencies[name], name).toBe(`^${RELEASE}`);
+    }
     expect(/nextly: "([^"]+)"/.exec(pluginSource)?.[1]).toBe(`^${RELEASE}`);
   });
 });

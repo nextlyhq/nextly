@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import {
   mkdir,
   mkdtemp,
@@ -422,6 +423,36 @@ describe("a plugin scaffold runs as created", () => {
     expect(lookups[0]).toHaveProperty("id");
     // The removed spelling would compile in JavaScript and fail at run time.
     expect(objectCallsTo(suite, "findById")).toEqual([]);
+  });
+
+  // `pnpm dev` runs `next dev dev` from the plugin root and Next.js keeps that
+  // working directory, so the SQLite adapter resolves DATABASE_URL from there.
+  it("keeps the playground database in dev/ and out of git", async () => {
+    const url = /^DATABASE_URL=file:(.+)$/m.exec(await read("dev/.env"))?.[1];
+    expect(url).toBeDefined();
+    const database = path.resolve(project, url ?? "");
+    expect(path.relative(project, database).split(path.sep)[0]).toBe("dev");
+
+    execFileSync("git", ["init", "-q"], { cwd: project });
+    const ignored = (file: string): boolean => {
+      try {
+        execFileSync("git", ["check-ignore", "-q", file], { cwd: project });
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    // The database with the files SQLite writes beside it, and the same name
+    // at the root, where it lands if dev is started from elsewhere.
+    for (const file of [
+      path.relative(project, database),
+      `${path.relative(project, database)}-journal`,
+      `${path.relative(project, database)}-wal`,
+      `${path.relative(project, database)}-shm`,
+      path.basename(database),
+    ]) {
+      expect(ignored(file), file).toBe(true);
+    }
   });
 
   // Next.js looks for the start-up hook beside app/, which is under src/ here;
