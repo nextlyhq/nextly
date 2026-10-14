@@ -87,6 +87,9 @@ export async function runAsCaller<
       // The call's own setting, never the instance default of `true`, which
       // a call made as a person replaces rather than asks for.
       overrideAccess: args.overrideAccess,
+      // Only `find` and `count` take it; read off the call itself, since no
+      // config supplies it.
+      frameworkFilter: (args as { frameworkFilter?: unknown }).frameworkFilter,
     });
     return operation({ ...args, overrideAccess: false });
   });

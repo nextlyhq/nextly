@@ -19,6 +19,7 @@ import type { Principal } from "../../../plugins/principals/types";
 import { runPluginRoute } from "../../../plugins/routes/dispatch";
 import { getPluginRouteRegistry } from "../../../plugins/routes/route-registry";
 import type { PluginRouteContext } from "../../../plugins/routes/route-types";
+import { defineSingle } from "../../../singles/config/define-single";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -133,6 +134,18 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
         fields: [text({ name: "title" })],
       }),
     ],
+    singles: [
+      defineSingle({
+        slug: "member_banner",
+        access: { read: isMember },
+        fields: [text({ name: "headline" })],
+      }),
+      defineSingle({
+        slug: "staff_banner",
+        access: { read: ({ user }) => !!user },
+        fields: [text({ name: "headline" })],
+      }),
+    ],
   });
   return current;
 }
@@ -239,6 +252,33 @@ describe.each(getConfiguredTestDialects())(
       const row = found.items[0] as Record<string, unknown>;
       expect(row).not.toHaveProperty("staff_note");
       expect(row.open_note).toBe("public");
+    });
+
+    it("lists and counts only the Singles the person may read", async () => {
+      const t = await boot(dialect);
+      const member = await person(t, "m1");
+
+      const all = await t.nextly.findSingles({ principal: member });
+      expect(all.docs.map(single => single.slug)).toEqual(["member_banner"]);
+      expect(all.totalDocs).toBe(1);
+
+      // A page past the end, where no Single is read: its total must not
+      // count the protected Single. (No `search` here: the registry's search
+      // is ILIKE, which SQLite and MySQL do not have; and a limit beside the
+      // offset, which SQLite requires.)
+      const probe = await t.nextly.findSingles({
+        principal: member,
+        limit: 10,
+        offset: 10,
+      });
+      expect(probe.docs).toEqual([]);
+      expect(probe.totalDocs).toBe(1);
+      // The control: without a person, both Singles count.
+      const unrestricted = await t.nextly.findSingles({
+        limit: 10,
+        offset: 10,
+      });
+      expect(unrestricted.totalDocs).toBe(2);
     });
 
     it("hands collection hooks the person, and no staff user", async () => {
