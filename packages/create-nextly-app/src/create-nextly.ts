@@ -363,13 +363,12 @@ export async function createNextly(
       // template given an explicit source: --local-template, a non-main
       // --branch, or --use-yalc, so local-dev runs pair yalc-linked packages
       // with the live template rather than the bundled copy.
-      if (
-        !shouldUseBundledTemplate(projectType, {
-          localTemplatePath: options.localTemplatePath,
-          useYalc,
-          branch: options.branch,
-        })
-      ) {
+      const useBundledTemplate = shouldUseBundledTemplate(projectType, {
+        localTemplatePath: options.localTemplatePath,
+        useYalc,
+        branch: options.branch,
+      });
+      if (!useBundledTemplate) {
         s.start("Resolving template...");
         templateSource = await resolveTemplateSource(projectType, {
           localTemplatePath: options.localTemplatePath,
@@ -403,6 +402,9 @@ export async function createNextly(
         // this, the "ignore" path would still throw on the subdirectory
         // case where the target was non-empty.
         allowExistingTarget,
+        // The bundled template was released with this CLI, so a plugin made
+        // from it installs the packages released with it too.
+        releaseVersion: useBundledTemplate ? options.cliVersion : undefined,
       });
 
       if (!installInCwd) cwd = targetDir;

@@ -206,4 +206,49 @@ describe("a plugin's declared nextly range follows its channel", () => {
     expect(pkg.peerDependencies["nextly"]).toBe(`^${ALPHA}`);
     expect(declared).toBe(pkg.peerDependencies["nextly"]);
   });
+
+  // The template bundled in a CLI release was written against the packages
+  // released with it. Run as an older release while the channel has moved on,
+  // the scaffold must install that release's packages, not the channel's.
+  it("pins every Nextly package to the CLI's own release for the bundled template", async () => {
+    const RELEASE = "0.0.2-alpha.40";
+    const { copyTemplate } = await import("../utils/template");
+    workdir = await mkdtemp(path.join(tmpdir(), "nextly-plugin-release-"));
+    const target = path.join(workdir, "my-plugin");
+    const templatesRoot = path.resolve(
+      path.dirname(fileURLToPath(import.meta.url)),
+      "../../../../templates"
+    );
+
+    await copyTemplate({
+      projectName: "my-plugin",
+      projectType: "plugin",
+      targetDir: target,
+      database: pgDatabase,
+      templateSource: {
+        basePath: path.join(templatesRoot, "base"),
+        templatePath: path.join(templatesRoot, "plugin"),
+      },
+      releaseVersion: RELEASE,
+    });
+
+    const pkg = JSON.parse(
+      await readFile(path.join(target, "package.json"), "utf-8")
+    );
+    const pluginSource = await readFile(
+      path.join(target, "src/plugin.ts"),
+      "utf-8"
+    );
+    const nextlyFamily = Object.entries(
+      pkg.devDependencies as Record<string, string>
+    ).filter(([name]) => name === "nextly" || name.startsWith("@nextlyhq/"));
+
+    // The whole family, installed exactly as released.
+    expect(nextlyFamily.length).toBeGreaterThan(0);
+    for (const [name, version] of nextlyFamily) {
+      expect(version, name).toBe(RELEASE);
+    }
+    expect(pkg.peerDependencies["nextly"]).toBe(`^${RELEASE}`);
+    expect(/nextly: "([^"]+)"/.exec(pluginSource)?.[1]).toBe(`^${RELEASE}`);
+  });
 });

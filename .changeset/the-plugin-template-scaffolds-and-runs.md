@@ -33,8 +33,8 @@ and runs as created. The flag accepts every template the interactive prompt
 offers, and a plugin scaffold no longer stops at "App Router not detected": its
 Next.js app lives in `dev/`, so only the package manager is detected.
 
-The plugin is copied from the template bundled with the CLI, so it matches the
-package versions the CLI installs; `--local-template`, `--use-yalc` or a
+The plugin is copied from the template bundled with the CLI, and its Nextly
+packages are pinned to that CLI's release, so the two always match; `--local-template`, `--use-yalc` or a
 `--branch` other than main still resolve the template live, for `blank` too.
 Run from inside a Next.js app, `--template plugin` creates the package in its
 own directory instead of installing into the app.

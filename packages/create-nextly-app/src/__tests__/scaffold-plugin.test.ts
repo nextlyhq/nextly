@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import ts from "typescript";
 import {
   afterAll,
   afterEach,
@@ -23,6 +24,113 @@ import {
 
 import type { DatabaseConfig } from "../types";
 import { copyTemplate } from "../utils/template";
+
+/*
+ * Scaffolded source is checked by its syntax tree rather than its text: a
+ * substring stays present when the code around it no longer does what it
+ * should, such as a provider that no longer wraps the component it names, or a
+ * call that lost one of its arguments.
+ */
+
+function parseSource(file: string, text: string): ts.SourceFile {
+  return ts.createSourceFile(
+    file,
+    text,
+    ts.ScriptTarget.Latest,
+    true,
+    file.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS
+  );
+}
+
+/** Every node in a file, depth first. */
+function allNodes(root: ts.Node): ts.Node[] {
+  const nodes: ts.Node[] = [];
+  const visit = (node: ts.Node): void => {
+    nodes.push(node);
+    ts.forEachChild(node, visit);
+  };
+  visit(root);
+  return nodes;
+}
+
+/** The names a file imports from one module. */
+function namedImportsFrom(source: ts.SourceFile, from: string): string[] {
+  return source.statements.flatMap(statement => {
+    if (
+      !ts.isImportDeclaration(statement) ||
+      !ts.isStringLiteral(statement.moduleSpecifier) ||
+      statement.moduleSpecifier.text !== from
+    ) {
+      return [];
+    }
+    const bindings = statement.importClause?.namedBindings;
+    return bindings && ts.isNamedImports(bindings)
+      ? bindings.elements.map(element => element.name.text)
+      : [];
+  });
+}
+
+/** The element tree a JSX expression renders, as `Outer(Inner(Leaf))`. */
+function jsxShape(node: ts.Node): string {
+  if (ts.isParenthesizedExpression(node)) return jsxShape(node.expression);
+  if (ts.isJsxSelfClosingElement(node)) return node.tagName.getText();
+  if (ts.isJsxElement(node)) {
+    const children = node.children
+      .filter(
+        child => ts.isJsxElement(child) || ts.isJsxSelfClosingElement(child)
+      )
+      .map(jsxShape);
+    return `${node.openingElement.tagName.getText()}(${children.join(",")})`;
+  }
+  return "";
+}
+
+/** What a file's default-exported function returns. */
+function defaultExportReturns(source: ts.SourceFile): ts.Expression[] {
+  const exported = source.statements.find(
+    (statement): statement is ts.FunctionDeclaration =>
+      ts.isFunctionDeclaration(statement) &&
+      (statement.modifiers ?? []).some(
+        modifier => modifier.kind === ts.SyntaxKind.DefaultKeyword
+      )
+  );
+  return (exported?.body?.statements ?? []).flatMap(statement =>
+    ts.isReturnStatement(statement) && statement.expression
+      ? [statement.expression]
+      : []
+  );
+}
+
+/**
+ * Each call to `<anything>.<method>(...)` in a file, as the properties of its
+ * one object argument: `{ collection: '"examples"', data: "{ ... }" }`. A call
+ * whose argument is not a single object literal is returned as `null`.
+ */
+function objectCallsTo(
+  source: ts.SourceFile,
+  method: string
+): Array<Record<string, string> | null> {
+  return allNodes(source)
+    .filter(
+      (node): node is ts.CallExpression =>
+        ts.isCallExpression(node) &&
+        ts.isPropertyAccessExpression(node.expression) &&
+        node.expression.name.text === method
+    )
+    .map(call => {
+      const [only, ...rest] = call.arguments;
+      if (!only || rest.length > 0 || !ts.isObjectLiteralExpression(only)) {
+        return null;
+      }
+      return Object.fromEntries(
+        only.properties.flatMap(property =>
+          ts.isPropertyAssignment(property)
+            ? [[property.name.getText(), property.initializer.getText()]]
+            : []
+        )
+      );
+    });
+}
 
 // Repo-root templates/ (this test exercises the real, bundled plugin template).
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -285,19 +393,47 @@ describe("a plugin scaffold runs as created", () => {
   // The admin's data hooks read their client from QueryProvider; a bare
   // RootLayout renders /admin as a 500 ("No QueryClient set").
   it("mounts the admin inside the providers its hooks need", async () => {
-    const adminPage = await read("dev/src/app/admin/[[...params]]/page.tsx");
-    expect(adminPage).toContain("<QueryProvider>");
-    expect(adminPage).toContain("<ErrorBoundary");
+    const file = "dev/src/app/admin/[[...params]]/page.tsx";
+    const page = parseSource(file, await read(file));
+
+    // What the page renders, and that each name is the admin's own export.
+    expect(defaultExportReturns(page).map(jsxShape)).toEqual([
+      "ErrorBoundary(QueryProvider(RootLayout))",
+    ]);
+    expect(namedImportsFrom(page, "@nextlyhq/admin")).toEqual(
+      expect.arrayContaining(["ErrorBoundary", "QueryProvider", "RootLayout"])
+    );
   });
 
   // The Direct API takes one argument object and spells the lookup findByID;
   // the positional form fails before the first assertion runs.
   it("generates a test written against the current Direct API", async () => {
-    const suite = await read("src/plugin.test.ts");
-    expect(suite).toMatch(/\.create\(\{\s*collection: "examples"/);
-    expect(suite).toMatch(/\.findByID\(\{\s*collection: "examples"/);
-    expect(suite).not.toMatch(/\.create\("examples"/);
-    expect(suite).not.toContain(".findById(");
+    const file = "src/plugin.test.ts";
+    const suite = parseSource(file, await read(file));
+
+    // One argument object per call, carrying what each call needs.
+    const creates = objectCallsTo(suite, "create");
+    const lookups = objectCallsTo(suite, "findByID");
+    expect(creates).toHaveLength(1);
+    expect(lookups).toHaveLength(1);
+    expect(creates[0]).toMatchObject({ collection: '"examples"' });
+    expect(creates[0]).toHaveProperty("data");
+    expect(lookups[0]).toMatchObject({ collection: '"examples"' });
+    expect(lookups[0]).toHaveProperty("id");
+    // The removed spelling would compile in JavaScript and fail at run time.
+    expect(objectCallsTo(suite, "findById")).toEqual([]);
+  });
+
+  // Next.js looks for the start-up hook beside app/, which is under src/ here;
+  // anywhere else, `next build` never runs it.
+  it("puts the start-up hook beside the playground's app directory", async () => {
+    expect(await exists(path.join(project, "dev/src/app"))).toBe(true);
+    expect(await exists(path.join(project, "dev/src/instrumentation.ts"))).toBe(
+      true
+    );
+    expect(await exists(path.join(project, "dev/instrumentation.ts"))).toBe(
+      false
+    );
   });
 
   // The playground's start-up hook, which creates the auto-login user, is run

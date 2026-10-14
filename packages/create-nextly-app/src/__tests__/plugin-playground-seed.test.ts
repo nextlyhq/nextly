@@ -3,18 +3,18 @@
  *
  * `admin.devAutoLogin` signs in a user that already exists and never creates
  * one, so the playground creates it at start-up through
- * `templates/plugin/dev/seed-dev-user.ts`. This runs that function with a
+ * `templates/plugin/dev/src/seed-dev-user.ts`. This runs that function with a
  * recording seeder and asserts what it asked for: a scan of the source would
  * stay green with the call removed, unreachable, or failing.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import config from "../../../../templates/plugin/dev/nextly.config";
-import { register } from "../../../../templates/plugin/dev/instrumentation";
+import { register } from "../../../../templates/plugin/dev/src/instrumentation";
 import {
   type SeedSuperAdmin,
   seedDevUser,
-} from "../../../../templates/plugin/dev/seed-dev-user";
+} from "../../../../templates/plugin/dev/src/seed-dev-user";
 
 import { recorded, resetRecord, seedOptions } from "./stubs/nextly";
 

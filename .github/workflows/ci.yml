@@ -1608,12 +1608,18 @@ jobs:
       - name: Scaffold plugin template from tarball
         shell: bash
         run: |
+          release=$(node -p "require('./packages/create-nextly-app/package.json').version")
           cd /tmp/scaffold-test
           tarball=$(ls /tmp/nextly-pack/*.tgz | head -1)
           npm exec --yes --package="$tarball" -- create-nextly-app smoke-plugin --template plugin --skip-install --yes
           test -f smoke-plugin/package.json
           test -f smoke-plugin/src/plugin.ts
           test -f smoke-plugin/dev/.env
+          # Next.js runs the start-up hook only from beside app/, under src/.
+          test -f smoke-plugin/dev/src/instrumentation.ts
+          # The bundled template installs the packages released with this CLI.
+          pinned=$(node -p "require('./smoke-plugin/package.json').devDependencies.nextly")
+          test "$pinned" = "$release" || { echo "nextly is $pinned, expected $release"; exit 1; }
           echo "plugin scaffold ok"
 
       # The generated scripts and the CLI's command set live in two different

@@ -147,6 +147,7 @@ Examples:
           useYalc: options.useYalc,
           projectNameFromArg: projectName,
           installInCwd,
+          cliVersion: pkg.version,
         });
       } finally {
         // Always flush. shutdown() has its own 2s timeout so this never hangs.
