@@ -14,9 +14,13 @@
 import { createHash } from "node:crypto";
 
 import type { BreachedPasswordsConfig } from "../../shared/types/config";
+import { getCoreVersion } from "../core-version";
 
 /** Have I Been Pwned's range service, at its public address. */
 const PWNED_PASSWORDS_RANGE_URL = "https://api.pwnedpasswords.com/range";
+
+/** How this check names itself to a range service. */
+const USER_AGENT = `Nextly/${getCoreVersion()} (plugin password helper)`;
 
 /** How long a check waits for its source, unless the site says otherwise. */
 const DEFAULT_TIMEOUT_MS = 2000;
@@ -92,9 +96,16 @@ function isHttps(url: string): boolean {
   }
 }
 
-/** `<base>/<prefix>`, with exactly one slash between them. */
+/**
+ * The prefix appended as the last segment of `base`'s path, with exactly one
+ * slash before it. Parsed rather than concatenated, so a query string or a
+ * fragment in the configured address stays where it was and the prefix lands
+ * in the path.
+ */
 function rangeUrl(base: string, prefix: string): string {
-  return `${base.replace(/\/+$/, "")}/${prefix}`;
+  const url = new URL(base);
+  url.pathname = `${url.pathname.replace(/\/+$/, "")}/${prefix}`;
+  return url.toString();
 }
 
 /**
@@ -119,7 +130,10 @@ async function fetchRange(
   try {
     const response = await withinTime(
       fetchImpl(url, {
-        headers: { "Add-Padding": "true" },
+        // Have I Been Pwned asks every client to name itself in its user
+        // agent, and may refuse one that does not; refused, every check would
+        // answer "unavailable".
+        headers: { "Add-Padding": "true", "User-Agent": USER_AGENT },
         signal: controller.signal,
         redirect: "error",
       }),

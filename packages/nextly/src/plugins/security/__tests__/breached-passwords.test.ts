@@ -104,9 +104,21 @@ describe("a range service over https", () => {
     expect(requests).toHaveLength(1);
     expect(requests[0]?.url).toBe(`https://ranges.example/range/${PREFIX}`);
     expect(requests[0]?.headers["add-padding"]).toBe("true");
+    expect(requests[0]?.headers["user-agent"]).toMatch(/^Nextly\//);
     const sent = JSON.stringify(requests);
     expect(sent).not.toContain(SUFFIX);
     expect(sent).not.toContain(PASSWORD);
+  });
+
+  it("puts the prefix in the path of an address that carries a query string", async () => {
+    const { fetch, requests } = recordingFetch("");
+    await check(
+      { source: { url: "https://ranges.example/range?token=site-key" } },
+      fetch
+    );
+    expect(requests[0]?.url).toBe(
+      `https://ranges.example/range/${PREFIX}?token=site-key`
+    );
   });
 
   it("asks Have I Been Pwned's public address when nothing is configured", async () => {

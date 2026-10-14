@@ -31,8 +31,9 @@ import { COMMON_PASSWORDS } from "./common-passwords";
 export interface PasswordHelper {
   /**
    * Hashes the whole password, NFC-normalised, with a fresh salt. Throws
-   * {@link PasswordTooLongError} past `ceiling`. The result is opaque ASCII of
-   * at most 255 characters.
+   * {@link PasswordTooLongError} past `ceiling`, and a validation error for a
+   * password that is not well-formed Unicode (a lone surrogate). The result is
+   * opaque ASCII of at most 255 characters.
    */
   hash(password: string): Promise<string>;
   /**
@@ -47,7 +48,10 @@ export interface PasswordHelper {
    * a format the helper does not know included.
    */
   needsRehash(hash: string): boolean;
-  /** Checks a new password against the rules. */
+  /**
+   * Checks a new password against the rules. Throws a validation error for
+   * rules outside their bounds, or a password that is not well-formed Unicode.
+   */
   check(password: string, rules?: PasswordRules): Promise<PasswordCheck>;
   /** The hard maximum, in code points after NFC: 256. */
   readonly ceiling: number;
@@ -155,6 +159,7 @@ export function createPasswordHelper(
     ceiling: CEILING,
 
     async hash(password) {
+      assertWellFormed(password);
       const normalised = password.normalize("NFC");
       if (codePoints(normalised) > CEILING) throw new PasswordTooLongError();
       const salt = randomBytes(SALT_BYTES);
@@ -182,10 +187,15 @@ export function createPasswordHelper(
           { length: hash.length }
         );
       }
-      // An unknown person, a hash the helper cannot read, and a password past
-      // the ceiling all cost what a real verification costs, so how long the
-      // answer takes says nothing about which of them it was.
-      if (parsed === null || codePoints(normalised) > CEILING) {
+      // An unknown person, a hash the helper cannot read, a password past the
+      // ceiling and one that is not well-formed Unicode all cost what a real
+      // verification costs, so how long the answer takes says nothing about
+      // which of them it was.
+      if (
+        parsed === null ||
+        codePoints(normalised) > CEILING ||
+        !isWellFormed(password)
+      ) {
         await spendDecoy(normalised);
         return false;
       }
@@ -209,6 +219,7 @@ export function createPasswordHelper(
     },
 
     async check(password, rules = {}) {
+      assertWellFormed(password);
       const minLength = bounded(
         "minLength",
         rules.minLength ?? MIN_LENGTH.default,
@@ -239,6 +250,34 @@ export function createPasswordHelper(
       };
     },
   };
+}
+
+/** A UTF-16 unit of a surrogate pair standing alone, in either order. */
+const LONE_SURROGATE =
+  /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+
+/**
+ * Whether the string is well-formed Unicode. One holding a lone surrogate,
+ * which JSON can carry as an escape, would be encoded to UTF-8 with every such
+ * unit replaced by the same character, so two different passwords would hash
+ * alike. The helper refuses them rather than let them collapse.
+ */
+function isWellFormed(text: string): boolean {
+  return !LONE_SURROGATE.test(text);
+}
+
+/** A validation error for a password that is not well-formed Unicode. */
+function assertWellFormed(password: string): void {
+  if (isWellFormed(password)) return;
+  throw NextlyError.validation({
+    errors: [
+      {
+        path: "password",
+        code: "INVALID_UNICODE",
+        message: "The password is not well-formed Unicode.",
+      },
+    ],
+  });
 }
 
 /**

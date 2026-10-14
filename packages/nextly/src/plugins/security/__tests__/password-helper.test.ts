@@ -201,6 +201,28 @@ describe("hashes from other settings and formats", () => {
   });
 });
 
+describe("ill-formed Unicode", () => {
+  // JSON can carry a lone surrogate as an escape. UTF-8 encoding replaces each
+  // with U+FFFD, so two different passwords would hash alike.
+  const lone = `${"x".repeat(10)}\ud800`;
+  const replaced = `${"x".repeat(10)}\ufffd`;
+
+  it("is refused by hash and check with a validation error", async () => {
+    const passwords = helper();
+    for (const attempt of [passwords.hash(lone), passwords.check(lone)]) {
+      const error = await attempt.catch((caught: unknown) => caught);
+      expect(JSON.stringify(error)).toMatch(/not well-formed Unicode/);
+    }
+  });
+
+  it("never verifies against the hash of the character it would collapse to", async () => {
+    const passwords = helper();
+    const hash = await passwords.hash(replaced);
+    expect(await passwords.verify(replaced, hash)).toBe(true);
+    expect(await passwords.verify(lone, hash)).toBe(false);
+  });
+});
+
 describe("normalisation", () => {
   it("verifies a composed and a decomposed form alike, and keeps a full-width form distinct", async () => {
     const passwords = helper();
