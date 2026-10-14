@@ -29,4 +29,4 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-The accounts plugin declares its limit rules to core, which checks each against its bounds when the site starts, and takes core's limiter types from the plugin SDK.
+The accounts plugin runs on core's own helpers: its password, one-purpose secret, opaque secret and limiter types come from the plugin SDK, and it declares its limit rules to core, which checks each when the site starts. It now refuses to start on a core that does not lend every helper it is built on, and, in production, on limit counts each instance keeps apart.
