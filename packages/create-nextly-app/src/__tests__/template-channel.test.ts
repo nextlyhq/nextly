@@ -10,6 +10,11 @@
  * line, and `latest` lags it.
  */
 
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { DatabaseConfig } from "../types";
@@ -89,7 +94,9 @@ describe("content-template dist-tag pinning", () => {
     );
     expect(pkg.devDependencies["@nextlyhq/eslint-plugin"]).toBe("alpha");
     expect(pkg.devDependencies["nextly"]).toBe("alpha");
-    expect(pkg.peerDependencies["nextly"]).toBe("alpha");
+    // A peer cannot take the tag: pnpm rejects it there
+    // (ERR_PNPM_INVALID_PEER_DEPENDENCY_SPECIFICATION), so it gets the open range.
+    expect(pkg.peerDependencies["nextly"]).toBe(">=0.0.0");
   });
 
   it("pins the blank scaffold's nextly to the latest channel", async () => {
@@ -136,5 +143,163 @@ describe("alpha pin survives a registry lookup failure", () => {
     const { generatePackageJson: gen } = await import("../utils/template");
     const pkg = JSON.parse(await gen("blog-app", pgDatabase, false, "blog"));
     expect(pkg.dependencies["nextly"]).toBe("alpha");
+  });
+});
+
+/*
+ * A plugin states the `nextly` it supports twice: as the peer range in its
+ * package.json, and as `nextly` in definePlugin, which boot checks against the
+ * running core and refuses on a mismatch. The scaffold installs that core from
+ * the plugin's channel, so both statements have to come from the same one.
+ * `latest` and `alpha` are set far apart here, as they are whenever the alpha
+ * line moves ahead of the last stable release.
+ */
+describe("a plugin's declared nextly range follows its channel", () => {
+  const STABLE = "0.0.1";
+  let workdir: string | undefined;
+
+  beforeEach(() => {
+    vi.resetModules();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        json: async () => ({ latest: STABLE, alpha: ALPHA }),
+      }))
+    );
+  });
+
+  afterEach(async () => {
+    vi.unstubAllGlobals();
+    if (workdir) await rm(workdir, { recursive: true, force: true });
+  });
+
+  it("writes the alpha range into definePlugin, matching the peer range", async () => {
+    const { copyTemplate } = await import("../utils/template");
+    workdir = await mkdtemp(path.join(tmpdir(), "nextly-plugin-range-"));
+    const target = path.join(workdir, "my-plugin");
+    const templatesRoot = path.resolve(
+      path.dirname(fileURLToPath(import.meta.url)),
+      "../../../../templates"
+    );
+
+    await copyTemplate({
+      projectName: "my-plugin",
+      projectType: "plugin",
+      targetDir: target,
+      database: pgDatabase,
+      templateSource: {
+        basePath: path.join(templatesRoot, "base"),
+        templatePath: path.join(templatesRoot, "plugin"),
+      },
+    });
+
+    const pkg = JSON.parse(
+      await readFile(path.join(target, "package.json"), "utf-8")
+    );
+    const pluginSource = await readFile(
+      path.join(target, "src/plugin.ts"),
+      "utf-8"
+    );
+    const declared = /nextly: "([^"]+)"/.exec(pluginSource)?.[1];
+
+    expect(pkg.peerDependencies["nextly"]).toBe(`^${ALPHA}`);
+    expect(declared).toBe(pkg.peerDependencies["nextly"]);
+  });
+
+  // The template bundled in a CLI release was written against the packages
+  // released with it. Run as an older release while the channel has moved on,
+  // the scaffold must install that release's packages, not the channel's.
+  it("pins every Nextly package to the CLI's own release for the bundled template", async () => {
+    const RELEASE = "0.0.2-alpha.40";
+    const { copyTemplate } = await import("../utils/template");
+    workdir = await mkdtemp(path.join(tmpdir(), "nextly-plugin-release-"));
+    const target = path.join(workdir, "my-plugin");
+    const templatesRoot = path.resolve(
+      path.dirname(fileURLToPath(import.meta.url)),
+      "../../../../templates"
+    );
+
+    await copyTemplate({
+      projectName: "my-plugin",
+      projectType: "plugin",
+      targetDir: target,
+      database: pgDatabase,
+      templateSource: {
+        basePath: path.join(templatesRoot, "base"),
+        templatePath: path.join(templatesRoot, "plugin"),
+      },
+      releaseVersion: RELEASE,
+      pinToRelease: true,
+    });
+
+    const pkg = JSON.parse(
+      await readFile(path.join(target, "package.json"), "utf-8")
+    );
+    const pluginSource = await readFile(
+      path.join(target, "src/plugin.ts"),
+      "utf-8"
+    );
+    const nextlyFamily = Object.entries(
+      pkg.devDependencies as Record<string, string>
+    ).filter(([name]) => name === "nextly" || name.startsWith("@nextlyhq/"));
+
+    // The whole family, installed exactly as released.
+    expect(nextlyFamily.length).toBeGreaterThan(0);
+    for (const [name, version] of nextlyFamily) {
+      expect(version, name).toBe(RELEASE);
+    }
+    expect(pkg.peerDependencies["nextly"]).toBe(`^${RELEASE}`);
+    expect(/nextly: "([^"]+)"/.exec(pluginSource)?.[1]).toBe(`^${RELEASE}`);
+  });
+  // A live template is not pinned, but when no version resolves (offline,
+  // --use-yalc) its peers still anchor on the CLI's release: an installed
+  // prerelease such as 0.0.2-alpha.40 does not satisfy `>=0.0.0` under semver.
+  it.each([
+    ["under --use-yalc", true],
+    ["offline", false],
+  ])("anchors peer ranges on the CLI's release %s", async (_label, useYalc) => {
+    const RELEASE = "0.0.2-alpha.40";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: false, json: async () => ({}) }))
+    );
+    const { copyTemplate } = await import("../utils/template");
+    workdir = await mkdtemp(path.join(tmpdir(), "nextly-plugin-anchor-"));
+    const target = path.join(workdir, "my-plugin");
+    const templatesRoot = path.resolve(
+      path.dirname(fileURLToPath(import.meta.url)),
+      "../../../../templates"
+    );
+
+    await copyTemplate({
+      projectName: "my-plugin",
+      projectType: "plugin",
+      targetDir: target,
+      database: pgDatabase,
+      useYalc,
+      templateSource: {
+        basePath: path.join(templatesRoot, "base"),
+        templatePath: path.join(templatesRoot, "plugin"),
+      },
+      releaseVersion: RELEASE,
+    });
+
+    const pkg = JSON.parse(
+      await readFile(path.join(target, "package.json"), "utf-8")
+    );
+    const pluginSource = await readFile(
+      path.join(target, "src/plugin.ts"),
+      "utf-8"
+    );
+    for (const name of [
+      "nextly",
+      "@nextlyhq/admin",
+      "@nextlyhq/plugin-sdk",
+      "@nextlyhq/ui",
+    ]) {
+      expect(pkg.peerDependencies[name], name).toBe(`^${RELEASE}`);
+    }
+    expect(/nextly: "([^"]+)"/.exec(pluginSource)?.[1]).toBe(`^${RELEASE}`);
   });
 });

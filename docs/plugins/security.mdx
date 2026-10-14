@@ -232,9 +232,12 @@ send `Origin` (or `Referer`) on cross-site writes, so a forged request is
 refused, while a same-origin write passes without sending a token. This is
 the origin half of what core's `/auth/*` routes check. Declare
 `csrf: true` to require a double-submit CSRF token as well, the protection
-core's `/auth/*` routes take. Only **cookie**-authenticated callers are
-checked: a browser cannot attach an API key cross-site, so there is no
-cross-site request to forge, and API-key and webhook callers need no opt-out.
+core's `/auth/*` routes take. A request with an API key (`Authorization:
+Bearer`) is not checked unless a session also authenticates it: a browser
+cannot attach the key cross-site, so there is no cross-site request to forge,
+and an API-key caller needs no opt-out. A request that carries both a key and
+a session cookie that authenticates is checked as the session's. On
+a public route, `csrf: true` checks anonymous callers too (below).
 `csrf: false` makes a route refuse every unsafe request the session cookie
 authenticates, from any origin, so it takes writes only from callers with
 another credential. A refusal answers
@@ -253,24 +256,32 @@ when the page writes through `usePluginRouteMutation` (from
 from the `nextly_csrf` cookie or fetched once from `/admin/api/auth/csrf`. A
 page that writes with its own `fetch` either leaves `csrf` unset, or fetches
 `/admin/api/auth/csrf` and sends the token as `x-csrf-token` (or as
-`csrfToken` in a JSON body); with `csrf: true` and no token, every save
-answers 403.
+`csrfToken` in a JSON body); with `csrf: true` and no token, every save a
+signed-in user makes answers 403. Only a caller the session cookie
+authenticates is asked for the token: an anonymous write to a public
+`csrf: true` route is checked for its origin alone (see the table below), so
+a route that must have a token from such callers checks one in its handler
+with `ctx.auth.verifyCsrf`.
 
-A public route skips the default check — it authenticated no one, and a cookie
-on the request says nothing about what admitted it. A public handler that
-resolves the session user through `ctx.auth.currentUser` is checked there
-instead: a POST, PUT, PATCH or DELETE whose origin is not your site or an
-allowed one, or that names no origin, gets no user (`null`). When that
-request carried the session cookie, it is recorded as a `csrf-failed` audit
-event naming your plugin and the route, once per request however often the
-handler asks, just as an authenticated route records the cross-site write it
-refuses. Declare
-`csrf: true` to require the token as well; only callers carrying the session
-cookie are asked for it, so webhook callers and browsers with only unrelated
-cookies stay free. `csrf: false` cannot be combined with `public: true`: boot refuses
-such a route, naming the plugin and the route.
-`ctx.auth.verifyCsrf` remains the tool when the check must stay conditional
-inside the handler instead.
+A public route that leaves `csrf` unset skips the default check: it
+authenticated no one, and it takes cross-origin writes, as a webhook receiver
+must. A public handler that resolves the session user through
+`ctx.auth.currentUser` is checked there instead: a POST, PUT, PATCH or DELETE
+whose origin is not your site or an allowed one, or that names no origin, gets
+no user (`null`). When that request carried the session cookie, it is recorded
+as a `csrf-failed` audit event naming your plugin and the route, once per
+request however often the handler asks, just as an authenticated route records
+the cross-site write it refuses.
+
+Declare `csrf: true` on a public route that browsers write to, and always on
+one that keeps its own cookie for anonymous visitors, such as a guest cart's
+id: a browser sends that cookie on a cross-site form post just as it sends the
+session cookie. Such a route checks every unsafe request, anonymous ones
+included, before the handler runs, except one carrying a `Bearer` token that
+no session authenticates. `csrf: false`
+cannot be combined with `public: true`: boot refuses such a route, naming the
+plugin and the route. `ctx.auth.verifyCsrf` remains the tool when the check
+must stay conditional inside the handler instead.
 
 A route never sees the refresh cookie. A request carrying it, which a browser
 sends only to `/admin/api/auth/*`, reaches auth hooks, strategies and plugin
@@ -278,6 +289,36 @@ routes as a copy without that cookie. The copy reads at most 64 KiB of the
 body, the same cap the `csrf` option reads under, before the request is
 authenticated or rate limited; a larger body is refused with
 `VALIDATION_ERROR` (field code `too_large`).
+
+### Which callers each `csrf` setting checks
+
+For a POST, PUT, PATCH or DELETE; a GET is never checked.
+
+| Caller                                                   | `csrf` unset                                                                          | `csrf: true`     | `csrf: false` |
+| -------------------------------------------------------- | ------------------------------------------------------------------------------------- | ---------------- | ------------- |
+| The session cookie authenticates it                      | origin; on a public route nothing here, and `ctx.auth.currentUser` checks the origin | origin and token | refused       |
+| It sends `Authorization: Bearer …`, and no session does | nothing                                                                               | nothing          | nothing       |
+| Anonymous: no session and no `Bearer` token              | nothing                                                                               | origin, no token | nothing       |
+
+- **Origin** means the request's `Origin`, or without one its `Referer`, names
+  your site or an origin in `NEXTLY_ALLOWED_ORIGINS`. A write that names no
+  origin is refused.
+- **Anonymous** callers reach only a public route, or one whose `principal` is
+  not `required` when nobody of that kind is signed in; any other route
+  answers them 401 first. A session cookie that is expired or malformed
+  authenticates nobody, so its caller is anonymous, and is not asked for a
+  token either.
+- **Only `Bearer`** exempts a caller no session authenticates, matched in
+  any case (`bearer` too), and
+  whether or not the token is a valid key. Any other `Authorization` scheme
+  (Basic, Digest, Negotiate, NTLM, or one of your own) does not: a browser
+  attaches the HTTP authentication schemes by itself, cross-site included,
+  but never a `Bearer` token.
+
+A route for webhooks or other server callers leaves `csrf` unset: those
+callers carry no cookie a forged request could ride on, and many send no
+`Origin`. A server client that calls a `csrf: true` route without a `Bearer`
+token must send `Origin` with your site's origin or an allowed one.
 
 ## Secrets
 

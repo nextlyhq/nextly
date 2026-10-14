@@ -198,6 +198,23 @@ export type {
 } from "nextly";
 
 /**
+ * Core's security helpers, lent to a plugin for the people it signs in itself.
+ * @experimental `PluginSecurityApi` (`ctx.security`); `PasswordHelper`
+ *   (`ctx.security.passwords`) with `PasswordRules`, `PasswordCheck` and
+ *   `PasswordTooLongError`; and `BreachedPasswordsConfig`, the site's
+ *   `security.breachedPasswords`. Held experimental until a first-party plugin
+ *   signs people in with them (see STABILITY.md).
+ */
+export { PasswordTooLongError } from "nextly";
+export type {
+  PluginSecurityApi,
+  PasswordHelper,
+  PasswordRules,
+  PasswordCheck,
+  BreachedPasswordsConfig,
+} from "nextly";
+
+/**
  * The database handles a plugin receives: `ctx.db` is a `PluginDatabase`
  * with a `raw` member that is a `PluginRawDatabase`.
  * @experimental `PluginDatabase` — typed, owner-checked access to the tables
