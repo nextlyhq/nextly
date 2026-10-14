@@ -54,12 +54,19 @@ describe("rateLimit.store", () => {
 
   it("reaches the sanitized config under both contracts", () => {
     const earlier = new InMemoryRateLimitStore();
-    const withEarlier = sanitizeConfig({ rateLimit: { store: earlier } });
+    const withEarlier = sanitizeConfig({
+      rateLimit: { enabled: true, store: earlier },
+    });
     expect(withEarlier.rateLimit?.store).toBe(earlier);
     expect(withEarlier.rateLimit?.limitStore).toBe("memory");
 
     const withDatabase = sanitizeConfig({
-      rateLimit: { store: "database", singleInstance: true, maxEntries: 50 },
+      rateLimit: {
+        enabled: true,
+        store: "database",
+        singleInstance: true,
+        maxEntries: 50,
+      },
     });
     // Core's own limits see no store of the earlier contract, as before.
     expect(withDatabase.rateLimit?.store).toBeUndefined();
@@ -73,12 +80,12 @@ describe("rateLimit.store", () => {
   });
 
   it("refuses a bound that is not a positive whole number", () => {
-    expect(() => sanitizeConfig({ rateLimit: { maxEntries: 0 } })).toThrow(
-      expect.objectContaining({ code: "VALIDATION_ERROR" })
-    );
-    expect(() => sanitizeConfig({ rateLimit: { maxEntries: 1.5 } })).toThrow(
-      expect.objectContaining({ code: "VALIDATION_ERROR" })
-    );
+    expect(() =>
+      sanitizeConfig({ rateLimit: { enabled: true, maxEntries: 0 } })
+    ).toThrow(expect.objectContaining({ code: "VALIDATION_ERROR" }));
+    expect(() =>
+      sanitizeConfig({ rateLimit: { enabled: true, maxEntries: 1.5 } })
+    ).toThrow(expect.objectContaining({ code: "VALIDATION_ERROR" }));
   });
 
   it("builds the store each selection names: memory unshared, the database and an app's own shared", () => {
