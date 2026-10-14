@@ -13,7 +13,7 @@ export const SCHEMA_PREFIX = "commerce";
  * with every migration module, and a production boot refuses a database whose
  * commerce schema is behind it.
  */
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 /**
  * A shopper's cart.
@@ -219,7 +219,15 @@ export const payments = defineTable(
     orderId: col.varchar(36),
     reference: col.varchar(64),
     provider: col.varchar(64),
+    // Which account at the provider the payment was begun with (empty for a
+    // provider that names none): its later steps go to that account alone,
+    // and its reference is keyed within it.
+    providerAccount: col.varchar(255, { default: "" }),
     providerReference: col.varchar(255, { nullable: true }),
+    // What the provider's reference is kept unique by, with the account it
+    // was issued in: ids and accounts can differ only in case, which MySQL's
+    // default collation would take as one (see `providerReferenceKey`).
+    providerReferenceKey: col.char(64, { nullable: true }),
     status: col.enum([
       "pending",
       "requires_action",
@@ -240,7 +248,7 @@ export const payments = defineTable(
     indexes: [
       { columns: ["reference"], unique: true },
       { columns: ["startOperationId"], unique: true },
-      { columns: ["provider", "providerReference"], unique: true },
+      { columns: ["provider", "providerReferenceKey"], unique: true },
       { columns: ["orderId"] },
     ],
     foreignKeys: [

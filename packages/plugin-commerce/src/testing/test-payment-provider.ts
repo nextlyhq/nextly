@@ -47,6 +47,8 @@ export const TEST_PAYMENT_METHODS = {
 export interface TestPaymentProviderOptions {
   /** The provider's id. Defaults to "test". */
   readonly id?: string;
+  /** The account it acts for, for a test of a provider that names one. */
+  readonly account?: string;
   /**
    * Capabilities to change from the defaults, which offer everything. Turning
    * `refund` off turns `partialRefund` off too, unless it is given. A result
@@ -444,6 +446,7 @@ export function createTestPaymentProvider(
 
   const provider: PaymentProvider = {
     id,
+    ...(options.account === undefined ? {} : { account: options.account }),
     capabilities,
     start: input => later(() => once("start", input, () => start(input))),
     confirm: input => later(() => once("confirm", input, () => confirm(input))),
