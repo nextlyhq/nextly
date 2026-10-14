@@ -27,6 +27,11 @@ import type {
   SanitizedLocalizationConfig,
 } from "../../domains/i18n/config/types";
 import type { JobDefinition } from "../../domains/jobs/job-registry";
+import {
+  resolveStoreSetting,
+  type LimitStoreSelection,
+  type RateLimitStoreSetting,
+} from "../../domains/limits/limit-store-setting";
 import type { PreviewConfig } from "../../domains/preview/route-config";
 import type { DrizzleSchemaHook } from "../../domains/schema/extension/after-drizzle";
 import type { SchemaHook } from "../../domains/schema/extension/draft";
@@ -35,6 +40,7 @@ import type {
   ResolvedWebhookRetentionConfig,
   WebhookRetentionConfig,
 } from "../../domains/webhooks/retention-config";
+import { NextlyError } from "../../errors/nextly-error";
 import type { FieldGroupConfig } from "../../field-groups/config/types";
 import type { CorsConfig } from "../../middleware/cors";
 import type { RateLimitStore } from "../../middleware/rate-limit";
@@ -233,12 +239,38 @@ export interface RateLimitingConfig {
   windowMs?: number;
 
   /**
-   * Custom store for rate limit state.
-   * Defaults to in-memory store if not provided.
+   * Where limits keep their counts.
    *
-   * For production with multiple instances, use a Redis-backed store.
+   * - `"memory"` (the default): in each process, so on several instances each
+   *   budget is multiplied by their number.
+   * - `"database"`: in the site's database, shared by every instance.
+   * - An app's own store implementing the limit store contract
+   *   (`@experimental`).
+   * - An app's store of the earlier `RateLimitStore` contract, which keeps
+   *   serving core's own limits; limits built on the newer contract then
+   *   count in memory.
+   *
+   * @default "memory"
    */
-  store?: RateLimitStore;
+  store?: RateLimitStoreSetting;
+
+  /**
+   * Says the site runs one instance, so limits counting in memory are not a
+   * gap. Silences the production warning about it.
+   *
+   * @default false
+   */
+  singleInstance?: boolean;
+
+  /**
+   * The most live entries the selected store holds: 100,000 for memory,
+   * 1,000,000 for the database by default. Once full, a store answers a new
+   * key as unavailable rather than dropping a live count, and warns before
+   * that.
+   *
+   * @experimental
+   */
+  maxEntries?: number;
 
   /**
    * Function to generate a unique key for rate limiting.
@@ -285,8 +317,17 @@ export interface SanitizedRateLimitingConfig {
   writeLimit: number;
   /** Time window in milliseconds */
   windowMs: number;
-  /** Custom store for rate limit state (optional) */
+  /**
+   * An app's store of the earlier `RateLimitStore` contract, which core's own
+   * limits keep counting in. Absent for any other `rateLimit.store`.
+   */
   store?: RateLimitStore;
+  /** The store limits on the newer contract count in. */
+  limitStore: LimitStoreSelection;
+  /** Whether the site says it runs one instance. */
+  singleInstance: boolean;
+  /** The most live entries the selected store holds; its default when absent. */
+  maxEntries?: number;
   /** Function to generate a unique key for rate limiting (optional) */
   keyGenerator?: (request: Request) => string;
   /** Function to skip rate limiting for certain requests (optional) */
@@ -975,6 +1016,36 @@ export const DEFAULT_API_KEYS_CONFIG = {
  * @returns Sanitized configuration with defaults applied
  * @throws Error if `apiKeys.rateLimit` values are invalid
  */
+/**
+ * The stores `rateLimit.store` selects: the earlier contract's for core's own
+ * limits, under the key it always had, and the newer contract's selection.
+ */
+function rateLimitStores(
+  setting: unknown
+): Pick<SanitizedRateLimitingConfig, "store" | "limitStore"> {
+  const { selection, legacy } = resolveStoreSetting(setting);
+  return { store: legacy, limitStore: selection };
+}
+
+/**
+ * `rateLimit.maxEntries`, checked: a positive whole number, or absent.
+ *
+ * @throws {NextlyError} `VALIDATION_ERROR` naming the setting otherwise
+ */
+function rateLimitMaxEntries(value: number | undefined): number | undefined {
+  if (value === undefined) return undefined;
+  if (Number.isSafeInteger(value) && value > 0) return value;
+  throw NextlyError.validation({
+    errors: [
+      {
+        path: "rateLimit.maxEntries",
+        code: "INVALID_VALUE",
+        message: "Must be a positive whole number.",
+      },
+    ],
+  });
+}
+
 export function sanitizeConfig(config: NextlyConfig): SanitizedNextlyConfig {
   // Validate apiKeys.rateLimit bounds — these are runtime-critical.
   if (config.apiKeys?.rateLimit?.requestsPerHour !== undefined) {
@@ -1010,7 +1081,9 @@ export function sanitizeConfig(config: NextlyConfig): SanitizedNextlyConfig {
     writeLimit:
       config.rateLimit?.writeLimit ?? DEFAULT_RATE_LIMIT_CONFIG.writeLimit,
     windowMs: config.rateLimit?.windowMs ?? DEFAULT_RATE_LIMIT_CONFIG.windowMs,
-    store: config.rateLimit?.store,
+    ...rateLimitStores(config.rateLimit?.store),
+    singleInstance: config.rateLimit?.singleInstance === true,
+    maxEntries: rateLimitMaxEntries(config.rateLimit?.maxEntries),
     keyGenerator: config.rateLimit?.keyGenerator,
     skip: config.rateLimit?.skip,
     collections: config.rateLimit?.collections,
