@@ -233,6 +233,21 @@ describe("the fake limiter's guards", () => {
     ).toThrow(/max is outside/);
   });
 
+  it("records when an admitted reservation was counted, and refuses to release one reserve did not admit", async () => {
+    const core = limiter();
+    const reservation = admitted(
+      await core.limits.reserve([{ rule: "tries", key: "a" }])
+    );
+
+    expect(reservation.at).toBe(core.clock.now());
+    await expect(
+      core.limits.release({ ...reservation, at: Number.NaN })
+    ).rejects.toThrow(/reserve did not admit/);
+    await expect(core.limits.release(reservation)).resolves.toEqual({
+      status: "done",
+    });
+  });
+
   it("reads a client's key in core's forms", () => {
     const { limits } = limiter();
     const from = (address?: string) =>
