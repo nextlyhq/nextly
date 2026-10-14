@@ -387,15 +387,21 @@ export async function paymentProviderContract(
         event.providerReference === started.providerReference,
         "the verified event names the payment"
       );
+      expectContract(
+        event.type === "payment.updated",
+        `the verified event is the type signed, payment.updated, not ${event.type}`
+      );
       const again = asEvent(await p.verifyWebhook(signed));
       expectContract(
         again.eventId === event.eventId,
         "the same delivery has the same event id"
       );
+      // Another type than the first, so a provider answering every event with
+      // one fixed type is caught whichever type it picked.
       const other = asEvent(
         await p.verifyWebhook(
           await signWebhook({
-            type: "payment.updated",
+            type: "refund.updated",
             providerReference: started.providerReference,
           })
         )
@@ -403,6 +409,10 @@ export async function paymentProviderContract(
       expectContract(
         other.eventId !== event.eventId,
         "another event has another id, so commerce does not drop it as a repeat"
+      );
+      expectContract(
+        other.type === "refund.updated",
+        `the verified event is the type signed, refund.updated, not ${other.type}`
       );
 
       const tampered = await expectRefusal(

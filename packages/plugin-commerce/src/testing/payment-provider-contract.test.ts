@@ -346,6 +346,34 @@ describe("the payment contract suite catches a broken provider", () => {
     );
   });
 
+  it("fails a provider that answers every webhook as type other", async () => {
+    const failed = await failingCases(p => ({
+      ...p,
+      verifyWebhook: async input => ({
+        ...(await p.verifyWebhook(input)),
+        type: "other",
+      }),
+    }));
+    expect(failed).toContain(
+      "verifies a signed webhook, and refuses a tampered or unsigned one"
+    );
+  });
+
+  it("fails a provider that answers every webhook as a payment update", async () => {
+    // The suite signs more than one type, so a fixed answer that happens to
+    // match the first is still caught.
+    const failed = await failingCases(p => ({
+      ...p,
+      verifyWebhook: async input => ({
+        ...(await p.verifyWebhook(input)),
+        type: "payment.updated",
+      }),
+    }));
+    expect(failed).toContain(
+      "verifies a signed webhook, and refuses a tampered or unsigned one"
+    );
+  });
+
   it("fails a provider that gives every webhook the same event id", async () => {
     // Commerce records an event once by its id, so one id for every delivery
     // would drop every update after the first.
