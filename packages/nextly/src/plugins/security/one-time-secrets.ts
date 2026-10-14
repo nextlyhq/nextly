@@ -357,14 +357,7 @@ export function createOneTimeSecrets(
         // failed insert ends it): it surfaces, and nothing is minted.
         await write("secrets.mintToken", txOption?.tx, mint);
       } else {
-        for (let attempt = 0; ; attempt++) {
-          try {
-            await write("secrets.mintToken", undefined, mint);
-            break;
-          } catch (error) {
-            if (attempt >= 3 || !lostRace(error)) throw error;
-          }
-        }
+        await retryLostRace(() => write("secrets.mintToken", undefined, mint));
       }
       return { token, expiresAt };
     },
@@ -470,14 +463,10 @@ export function createOneTimeSecrets(
       // first's live key once the first commits, or the database ends one of
       // the two as a deadlock (MySQL does). Run again, it voids that code and
       // takes the key, so exactly one code is live after both.
-      for (let attempt = 0; ; attempt++) {
-        try {
-          const expiresAt = await write("secrets.mintCode", undefined, mint);
-          return { code, expiresAt };
-        } catch (error) {
-          if (attempt >= 3 || !lostRace(error)) throw error;
-        }
-      }
+      const expiresAt = await retryLostRace(() =>
+        write("secrets.mintCode", undefined, mint)
+      );
+      return { code, expiresAt };
     },
 
     async peekToken(input, txOption) {
@@ -663,6 +652,21 @@ function subjectWhere(
   };
 }
 
+/**
+ * Run `attempt`, and run it again (up to three more times) when it loses a
+ * race: one helper for every mint that takes a unique key, so the token and
+ * code mints cannot drift apart in how they retry.
+ */
+async function retryLostRace<R>(attempt: () => Promise<R>): Promise<R> {
+  for (let tries = 0; ; tries++) {
+    try {
+      return await attempt();
+    } catch (error) {
+      if (tries >= 3 || !lostRace(error)) throw error;
+    }
+  }
+}
+
 /** Codes a database gives a transaction it ended to resolve a race. */
 const RACE_CODES = new Set(["40P01", "40001", "1213", "ER_LOCK_DEADLOCK"]);
 
@@ -775,31 +779,40 @@ function checkWhole(
  */
 function serialiseData(data: SecretData | undefined): string | null {
   if (data === undefined) return null;
-  const prototype =
-    typeof data === "object" && data !== null
-      ? Object.getPrototypeOf(data)
+  const entries = plainEntries(data);
+  const json =
+    entries !== undefined && entries.every(([, value]) => isStoredValue(value))
+      ? JSON.stringify(Object.fromEntries(entries))
       : undefined;
-  const entries =
-    prototype === Object.prototype || prototype === null
-      ? Object.entries(data)
-      : undefined;
-  const flat =
-    entries !== undefined &&
-    entries.every(
-      ([, value]) =>
-        value === null ||
-        typeof value === "string" ||
-        typeof value === "boolean" ||
-        (typeof value === "number" && Number.isFinite(value))
-    );
-  const json = flat ? JSON.stringify(Object.fromEntries(entries)) : "";
-  if (!flat || Buffer.byteLength(json, "utf8") > BOUNDS.dataBytes) {
+  if (
+    json === undefined ||
+    Buffer.byteLength(json, "utf8") > BOUNDS.dataBytes
+  ) {
     throw invalid(
       "data",
       `data must be a plain object: a flat record of strings, finite numbers, booleans and nulls, at most ${BOUNDS.dataBytes} bytes as JSON.`
     );
   }
   return json;
+}
+
+/** The entries of a plain object (plain or null prototype), read once; else undefined. */
+function plainEntries(value: unknown): [string, unknown][] | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  const prototype: unknown = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null
+    ? Object.entries(value)
+    : undefined;
+}
+
+/** A value `data` may hold: a string, a finite number, a boolean or null. */
+function isStoredValue(value: unknown): boolean {
+  return (
+    value === null ||
+    typeof value === "string" ||
+    typeof value === "boolean" ||
+    (typeof value === "number" && Number.isFinite(value))
+  );
 }
 
 function parseData(stored: string | null): SecretData | null {
