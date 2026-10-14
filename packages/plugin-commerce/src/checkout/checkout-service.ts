@@ -142,7 +142,7 @@ export interface CheckoutServiceOptions {
   readonly source: CatalogueSource;
   readonly payments: PaymentProvider | undefined;
   readonly currency: string;
-  /** How long an unpaid order holds its stock. */
+  /** How long after it is placed an unpaid order's recorded deadline falls. */
   readonly unpaidOrderMs: number;
   /** How long the work job may go without running before checkout is refused. */
   readonly jobsStaleAfterMs: number;
