@@ -79,7 +79,9 @@ async function deactivateAccount(
 /**
  * Reactivates a deactivated account. It has no session, link or code to
  * end, since deactivating ended them all, so the version stays where it is;
- * the holder signs in again, or asks for a reset.
+ * the holder signs in again, or asks for a reset. Written only while the
+ * account is still deactivated, so of two reactivations at once one
+ * applies, and the other reads the account again and finds it active.
  */
 async function reactivateAccount(
   deps: FlowDeps,
@@ -89,7 +91,13 @@ async function reactivateAccount(
     deps,
     accountId,
     account => (account.deactivatedAt === null ? "already-active" : undefined),
-    (tx, account) => writeAtVersion(tx, account, { deactivatedAt: null })
+    (tx, account) =>
+      writeAtVersion(
+        tx,
+        account,
+        { deactivatedAt: null },
+        { only: "deactivated" }
+      )
   );
   if (result.status === "done")
     deps.events.emit("nextlyhq-plugin-accounts.account.reactivated", {

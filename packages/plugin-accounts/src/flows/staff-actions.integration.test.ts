@@ -138,6 +138,26 @@ describe.each(getConfiguredTestDialects())(
       });
     });
 
+    it("applies one of two reactivations at once, telling other plugins once", async () => {
+      const { deps, emitted, id } = await boot({ deactivated: true });
+      const raced = {
+        ...deps,
+        db: commitBeforeFirstTransaction(deps.db, () =>
+          runStaffAction(deps, "reactivate", id)
+        ),
+      };
+
+      expect(await runStaffAction(raced, "reactivate", id)).toEqual({
+        status: "refused",
+        reason: "already-active",
+      });
+      expect(
+        emitted.filter(
+          event => event.name === "nextlyhq-plugin-accounts.account.reactivated"
+        )
+      ).toHaveLength(1);
+    });
+
     it("ends the sessions and moves the version, but voids no link and keeps a pending change", async () => {
       const { deps, core, id } = await boot();
       await signedIn(deps);
