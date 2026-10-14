@@ -54,6 +54,8 @@ function suiteFor(
       unknown: "no-such-item",
       soldFrom: "drill-press",
       toOrder: { reference: "made-to-order-bench", maxPerLine: 99 },
+      catalogue: items.map(item => item.reference),
+      search: { query: "drill", finds: "drill-press", skips: "custom-rig" },
     },
     create: () =>
       breakIt(createInMemoryCatalogueSource({ currency: "USD", items }).source),
@@ -86,6 +88,47 @@ describe("the catalogue contract suite's options", () => {
   });
 });
 
+describe("the catalogue contract suite's search option", () => {
+  it("refuses a source that lists but names no search to narrow it by", async () => {
+    // Without one, a source that ignores the search passes: nothing asks.
+    await expect(
+      catalogueSourceContract({
+        currency: "USD",
+        fixtures: {
+          listed: "drill-press",
+          unknown: "no-such-item",
+          soldFrom: "drill-press",
+        },
+        create: () =>
+          createInMemoryCatalogueSource({ currency: "USD", items }).source,
+      })
+    ).rejects.toBeInstanceOf(ContractViolation);
+  });
+});
+
+describe("the catalogue contract suite's whole-catalogue option", () => {
+  it("names the listing case for the named fixtures when no whole catalogue is given", async () => {
+    // Without the whole catalogue, the case can only check the fixtures it
+    // names, so it says that rather than claiming every item.
+    const cases = await catalogueSourceContract({
+      currency: "USD",
+      fixtures: {
+        listed: "drill-press",
+        unknown: "no-such-item",
+        soldFrom: "drill-press",
+        search: { query: "drill", finds: "drill-press", skips: "custom-rig" },
+      },
+      create: () =>
+        createInMemoryCatalogueSource({ currency: "USD", items }).source,
+    });
+    const names = cases.map(c => c.name);
+    expect(names).toContain(
+      "lists the named fixtures a page at a time, each once"
+    );
+    expect(names).not.toContain("lists every item a page at a time, each once");
+  });
+});
+
 describe("the catalogue contract suite against a large catalogue", () => {
   it("lists every item however many pages it takes", async () => {
     // At two items a page, 2,100 items take 1,050 pages: more than any fixed
@@ -103,6 +146,8 @@ describe("the catalogue contract suite against a large catalogue", () => {
         onRequest: "custom-rig",
         unknown: "no-such-item",
         soldFrom: "drill-press",
+        catalogue: [...items, ...many].map(item => item.reference),
+        search: { query: "drill", finds: "drill-press", skips: "custom-rig" },
       },
       create: () =>
         createInMemoryCatalogueSource({
@@ -230,6 +275,7 @@ describe("the catalogue contract suite catches a broken source", () => {
         onRequest: "custom-rig",
         unknown: "no-such-item",
         soldFrom: "used-lathe",
+        search: { query: "drill", finds: "drill-press", skips: "custom-rig" },
       },
       create: () =>
         breakIt(
@@ -482,6 +528,47 @@ describe("the catalogue contract suite catches a broken source", () => {
       }),
     }));
     expect(failed).toContain("lists every item a page at a time, each once");
+  });
+
+  it("fails a source whose listing holds only the named fixtures", async () => {
+    // Every fixture the suite names is listed; the item none of them names
+    // (the used lathe) is not, which only the whole catalogue shows.
+    const fixtureReferences = new Set([
+      "drill-press",
+      "custom-rig",
+      "made-to-order-bench",
+    ]);
+    const failed = await failingCases(s => {
+      const list = s.list?.bind(s);
+      if (!list) return s;
+      return {
+        ...s,
+        list: async input => {
+          const page = await list(input);
+          return {
+            ...page,
+            items: page.items.filter(item =>
+              fixtureReferences.has(item.reference)
+            ),
+          };
+        },
+      };
+    });
+    expect(failed).toContain("lists every item a page at a time, each once");
+  });
+
+  it("fails a source whose listing ignores the search", async () => {
+    const failed = await failingCases(s => {
+      const list = s.list?.bind(s);
+      if (!list) return s;
+      return {
+        ...s,
+        list: input => list({ limit: input.limit, cursor: input.cursor }),
+      };
+    });
+    expect(failed).toContain(
+      "narrows the listing to a search, a page at a time"
+    );
   });
 
   it("passes every case for the unbroken source, so the failures above are the breaks", async () => {
