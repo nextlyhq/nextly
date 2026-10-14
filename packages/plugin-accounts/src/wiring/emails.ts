@@ -20,7 +20,7 @@ const TEMPLATES: Record<Kind, Template> = {
   "verify-address": {
     name: "Verify an address",
     subject: "Confirm your email address",
-    html: `<p>Hello {{name}},</p><p>Confirm your address: <a href="{{link}}">confirm</a>, or type the code <strong>{{code}}</strong>.</p><p>Didn't sign up? <a href="{{notMeLink}}">Remove this account</a>.</p>`,
+    html: `<p>Confirm your email address: <a href="{{link}}">confirm</a>, or type the code <strong>{{code}}</strong>.</p><p>Didn't sign up? <a href="{{notMeLink}}">Remove this account</a>.</p>`,
   },
   "sign-up-taken": {
     name: "Sign-up with an address that has an account",

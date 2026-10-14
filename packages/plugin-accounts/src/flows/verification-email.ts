@@ -42,14 +42,13 @@ export async function mintVerification(
 
 export async function queueVerification(
   deps: FlowDeps,
-  account: Pick<AccountRow, "id" | "address" | "name">,
+  account: Pick<AccountRow, "id" | "address">,
   minted: MintedVerification
 ): Promise<void> {
   await deps.mail.queue({
     kind: "verify-address",
     accountId: account.id,
     to: account.address,
-    name: account.name,
     link: pageLink(deps.settings, "verify", minted.link.token),
     code: minted.code.code,
     notMeLink: pageLink(deps.settings, "notMe", minted.notMe.token),

@@ -5,11 +5,14 @@
  */
 export type AccountsEmail =
   | {
-      /** A new account's verification: a link, a code to type, and a link to remove it. */
+      /**
+       * A new account's verification: a link, a code to type, and a link to
+       * remove it. The address is not verified yet, so it carries nothing a
+       * visitor typed, not even the name: anyone may sign up with any address.
+       */
       kind: "verify-address";
       accountId: string;
       to: string;
-      name: string;
       link: string;
       code: string;
       notMeLink: string;

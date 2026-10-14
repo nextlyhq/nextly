@@ -88,7 +88,6 @@ describe.each(getConfiguredTestDialects())(
       expect(email).toMatchObject({
         accountId: account.id,
         to: "Dana@Example.com",
-        name: "Dana Reyes",
       });
       expect(email.code).toMatch(/^\d{6}$/);
       const link = new URL(email.link);
@@ -103,6 +102,18 @@ describe.each(getConfiguredTestDialects())(
         subject: account.id,
       });
       expect(new URL(email.notMeLink).pathname).toBe("/account/not-me");
+    });
+
+    it("puts nothing the visitor typed in the email to the unverified address", async () => {
+      const { mail, deps } = await boot();
+      accepted(
+        await signUp(deps, {
+          ...dana,
+          name: 'Click <a href="https://evil.example.com">here</a>',
+        })
+      );
+
+      expect(JSON.stringify(mail.queued)).not.toContain("evil.example.com");
     });
 
     it("ties the browser that signed up to the new account", async () => {
