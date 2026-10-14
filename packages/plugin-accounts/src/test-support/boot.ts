@@ -15,12 +15,18 @@ export const TEST_ORIGIN = "https://shop.example.com";
 /**
  * Boots Nextly on `dialect` with the accounts plugin, for an integration
  * test, and hands back the plugin's own context. The plugin starts as a
- * site's does, built on `core` when one is given. Destroy `nextly` after
- * each test.
+ * site's does, built on `core` when one is given, beside the site's own
+ * `collections` when some are given. Destroy `nextly` after each test.
  */
 export async function bootAccounts(
   dialect: TestDialect,
-  options: { core?: FakeAccountsCore } = {}
+  options: {
+    core?: FakeAccountsCore;
+    /** The site's own collections, booted beside the plugin. */
+    collections?: NonNullable<
+      Parameters<typeof createTestNextly>[0]
+    >["collections"];
+  } = {}
 ): Promise<{ ctx: PluginContext; nextly: TestNextly }> {
   const plugin =
     options.core === undefined
@@ -29,6 +35,9 @@ export async function bootAccounts(
   let captured: PluginContext | undefined;
   const nextly = await createTestNextly({
     dialect,
+    ...(options.collections === undefined
+      ? {}
+      : { collections: options.collections }),
     plugins: [
       {
         ...plugin,
