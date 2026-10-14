@@ -1,0 +1,129 @@
+---
+title: Commerce
+description: A catalogue to sell from and a cart kept on the server, behind a cookie, with the REST routes and typed server functions a storefront uses.
+---
+
+> **Alpha, and not published yet.**
+>
+> Everything `@nextlyhq/plugin-commerce` exports is `@experimental`. The stability
+> boundary is `@nextlyhq/plugin-sdk` (see [API stability](/docs/plugins/stability)); this
+> package's own exports are outside it and may change between alpha releases.
+
+The commerce plugin gives a site a catalogue to sell from and a cart that lives on the
+server. Checkout, orders and payments build on it and are not in this release.
+
+## Setup
+
+```ts
+import { defineConfig } from "nextly";
+import { commerce } from "@nextlyhq/plugin-commerce";
+
+export default defineConfig({
+  plugins: [commerce({ currency: "USD" })],
+});
+```
+
+| Option             | Default                 | What it does                                                                                                         |
+| ------------------ | ----------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `currency`         | required                | The store's ISO 4217 currency. Every price and cart is in it                                                         |
+| `catalogue`        | the products collection | A catalogue source of the site's own, such as an outside product API                                                 |
+| `productsSlug`     | `products`              | The built-in products collection's slug                                                                              |
+| `cartLifetimeDays` | `30`                    | How long a cart lives after its last change. At most 365, inside the 400 days browsers keep a cookie                 |
+| `secureCookies`    | on in production only   | Whether the cart cookie is `Secure`, under the `__Host-` name. A browser drops a `Secure` cookie set over plain HTTP |
+
+Commerce keeps its records in its own tables, `commerce__carts` and `commerce__cart_lines`,
+created by its migration modules. Run `nextly migrate` after installing or upgrading it: a
+production boot refuses a database that has not applied them, with
+`PLUGIN_SCHEMA_BEHIND`. In development the push creates them at boot.
+
+## The catalogue
+
+Without a `catalogue` option, commerce adds a **Products** collection to the admin and
+sells from it. Each product has a name, an optional SKU, a price and its stock:
+
+| Field        | Notes                                                                                            |
+| ------------ | ------------------------------------------------------------------------------------------------ |
+| `price`      | A whole number of the currency's minor unit (cents for USD). Empty means the price is on request |
+| `stockKind`  | `counted`, `one-off`, `untracked` (the default) or `to-order`                                    |
+| `stockCount` | How many are on hand, for `counted` and `one-off`                                                |
+| `maxPerLine` | The most one cart line may ask for, for `to-order`                                               |
+| `sellable`   | Unticked, the product is left out of the catalogue and cannot be added to a cart                 |
+
+A site that keeps its products elsewhere passes its own source instead, an object that
+implements the `CatalogueSource` contract. It is used for listing, pricing and availability
+with nothing else changed, and the contract's test suite, at
+`@nextlyhq/plugin-commerce/testing`, proves a source against it.
+
+Every answer from a source is checked against the contract before it is used. A source that
+fails to answer is reported as `COMMERCE_CATALOGUE_UNAVAILABLE` (503), and one that answers
+outside the contract as `COMMERCE_PROVIDER_CONTRACT` (502).
+
+## The cart
+
+A cart is kept on the server and found by the hash of a random token in an HTTP-only,
+same-site cookie, `commerce-cart` (`__Host-commerce-cart` when `Secure`). The token is
+never stored, and no request parameter can reach a cart: not an id, not another shopper's
+token in a body. A cookie that finds no live cart, because it is forged, unknown or past its
+cart's deadline, is cleared, and the next change starts a fresh cart with a new token.
+
+- **Prices come from the catalogue on every read.** A line keeps the unit price shown when
+  it was last added to or changed, and the cart says when the price now differs
+  (`priceChanged`). Nothing is ever charged from a price the browser holds.
+- **Availability comes from the source on every read**, with the number available where
+  there is one. A one-off item is held to one unit, and an item sold to order to its
+  source's per-line limit. A counted item's stock is checked at checkout, which holds it.
+- **An item priced on request cannot be added**, and is refused with
+  `COMMERCE_PRICE_ON_REQUEST` so the storefront can offer a quote instead.
+- **A cart expires** `cartLifetimeDays` after its last change and is never served after
+  that, whether or not it has been removed yet. The cookie carries the same deadline, so it
+  outlives neither the cart nor a closed browser. A change to `cartLifetimeDays` reaches
+  each cart at its next change. A background sweep removes expired carts an hour after
+  their deadline; it runs whenever your site runs [jobs](/docs/jobs).
+
+A cart holds at most 100 lines and 999 units on one line.
+
+## REST routes
+
+Every route is public, answers `Cache-Control: no-store` and is rate-limited per client.
+They live under `/admin/api/plugins/@nextlyhq/plugin-commerce`:
+
+| Method   | Path               | Body or query                        | Answers                   |
+| -------- | ------------------ | ------------------------------------ | ------------------------- |
+| `GET`    | `/cart`            |                                      | the cart                  |
+| `POST`   | `/cart/lines`      | `{ reference, quantity }`            | `{ message, item: cart }` |
+| `PATCH`  | `/cart/lines`      | `{ reference, quantity }`, 0 removes | `{ message, item: cart }` |
+| `DELETE` | `/cart/lines`      | `?reference=`                        | `{ message, item: cart }` |
+| `DELETE` | `/cart`            |                                      | `{ message, item: cart }` |
+| `GET`    | `/catalogue/items` | `?reference=` once per item          | `{ items, meta }`         |
+| `GET`    | `/catalogue`       | `?limit=&cursor=&search=`            | `{ items, nextCursor }`   |
+
+`/catalogue` is there when the source can be browsed, as the built-in one can.
+
+**Every write needs a CSRF token**, because a cart belongs to a shopper who is not signed
+in, and a cross-site form could otherwise change it. Fetch one from
+`/admin/api/auth/csrf`, which answers `{ token }` and sets the matching cookie, and send it
+as `x-csrf-token` (or as `csrfToken` in the JSON body) from a page on your own site or an
+origin in `NEXTLY_ALLOWED_ORIGINS`. A write without it answers 403 `CSRF_FAILED`.
+
+Writes are allowed 60 a minute per client, and reads take the general allowance. The
+counts are kept per server process, and every client shares one count unless
+`security.trustProxy` lets Nextly read client addresses (see [Security](/docs/plugins/security)).
+
+## Typed server functions
+
+Server code calls the same actions without HTTP:
+
+```ts
+import { commerceServer } from "@nextlyhq/plugin-commerce";
+
+export async function addToCart(token: string | null) {
+  const { cart } = await commerceServer();
+  return cart.add({ token, reference: "drill", quantity: 1 });
+}
+```
+
+The cart functions take the token from the cart cookie, or `null` for a shopper without
+one, and answer the cart with what to do with the cookie: `keep` it, `set` it to a token
+until a deadline, or `clear` it. The caller reads and writes the cookie, with
+`readCartToken`, `cartCookieHeader` and `clearCartCookieHeader` from the same package. A
+plugin reaches them through its own context with `commerceServices(ctx)`.

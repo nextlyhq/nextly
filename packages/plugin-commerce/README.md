@@ -1,18 +1,36 @@
 # @nextlyhq/plugin-commerce
 
-Commerce for [Nextly](https://nextlyhq.com): exact money, and the contracts that
-catalogue sources and payment providers implement so a store can swap one for
-another.
+Commerce for [Nextly](https://nextlyhq.com): a catalogue to sell from, a cart
+kept on the server, exact money, and the contracts that catalogue sources and
+payment providers implement so a store can swap one for another.
 
 ## Status
 
-`@experimental`, and not published to npm yet. This is the foundation the rest
-of the plugin builds on: the money type and its allocation rule, the
-catalogue-source and payment-provider contracts, their test suites, a test
-payment provider and an in-memory catalogue source. Carts, checkout, orders and
-the admin screens come later.
+`@experimental`, and not published to npm yet. It has:
+
+- `commerce()`, the plugin: its own tables and migrations, a built-in products
+  collection to sell from (or a catalogue source of the site's own), and a cart
+  kept on the server behind an HTTP-only cookie, with REST routes and typed
+  server functions for a storefront. See the
+  [commerce docs](https://nextlyhq.com/docs/plugins/commerce).
+- The money type and its allocation rule.
+- The catalogue-source and payment-provider contracts, their test suites, a
+  test payment provider and an in-memory catalogue source.
+
+Checkout, orders, payments and the admin screens come later.
 
 ## Usage
+
+### The plugin
+
+```ts
+import { defineConfig } from "nextly";
+import { commerce } from "@nextlyhq/plugin-commerce";
+
+export default defineConfig({
+  plugins: [commerce({ currency: "USD" })],
+});
+```
 
 ### Money
 

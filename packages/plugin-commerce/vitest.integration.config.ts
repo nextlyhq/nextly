@@ -1,0 +1,22 @@
+// Integration tests for commerce. Runs only *.integration.test.ts files.
+//
+// A separate config, as core and the page builder keep: these boot a real
+// Nextly against a database on each dialect, so they need longer timeouts and
+// must not run in the unit job, where no database is provisioned.
+
+import { defineConfig } from "vitest/config";
+
+export default defineConfig({
+  test: {
+    name: "plugin-commerce-integration",
+    environment: "node",
+    include: ["src/**/*.integration.test.ts"],
+    exclude: ["**/node_modules/**", "**/dist/**"],
+    // Real database I/O, schema setup and teardown, so the unit default is
+    // far too tight.
+    testTimeout: 30_000,
+    hookTimeout: 30_000,
+    // System tables are shared, so suites cannot safely interleave.
+    fileParallelism: false,
+  },
+});

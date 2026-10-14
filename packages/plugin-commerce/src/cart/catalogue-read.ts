@@ -1,0 +1,165 @@
+import { NextlyError } from "@nextlyhq/plugin-sdk";
+
+import {
+  catalogueItemSchema,
+  type CatalogueItem,
+  type CatalogueSource,
+} from "../contracts/catalogue-source";
+import { commerceError } from "../errors";
+
+/**
+ * Reading a catalogue source, for the cart and the catalogue routes alike.
+ *
+ * A source is code commerce does not control, so its answer is checked
+ * against the contract before anything uses it: an item that is malformed,
+ * that was not asked for, or whose listed price is in another currency is
+ * refused as a broken answer rather than shown. A source that fails to answer
+ * at all is an outage, said as one; an error it raised on purpose passes
+ * through as it was raised.
+ */
+
+/** A page of the catalogue, and the cursor to the next, `null` after the last. */
+export interface CataloguePage {
+  readonly items: readonly CatalogueItem[];
+  readonly nextCursor: string | null;
+}
+
+/**
+ * The source's items for `references`, keyed by reference, read with one call.
+ *
+ * @throws `COMMERCE_PROVIDER_CONTRACT`, `COMMERCE_CATALOGUE_UNAVAILABLE`
+ */
+export async function findItems(
+  source: CatalogueSource,
+  currency: string,
+  references: readonly string[]
+): Promise<Map<string, CatalogueItem>> {
+  const found = new Map<string, CatalogueItem>();
+  if (references.length === 0) return found;
+  const asked = new Set(references);
+
+  const answer = await ask(source, "find", () =>
+    source.find({ references: [...asked] })
+  );
+  if (!Array.isArray(answer)) {
+    throw broken(source, "find did not answer a list");
+  }
+  for (const raw of answer) {
+    const item = checkedItem(source, currency, "find", raw);
+    if (!asked.has(item.reference) || found.has(item.reference)) {
+      throw broken(
+        source,
+        "find answered an item it was not asked for, or one twice",
+        { reference: item.reference }
+      );
+    }
+    found.set(item.reference, item);
+  }
+  return found;
+}
+
+/**
+ * One page of the source's listing.
+ *
+ * @throws `COMMERCE_CATALOGUE_NOT_LISTABLE` for a source that only looks
+ *   items up, `COMMERCE_PROVIDER_CONTRACT`, `COMMERCE_CATALOGUE_UNAVAILABLE`
+ */
+export async function listItems(
+  source: CatalogueSource,
+  currency: string,
+  input: {
+    readonly limit: number;
+    readonly cursor: string | null;
+    readonly search?: string;
+  }
+): Promise<CataloguePage> {
+  // Bound, so a source written as a class keeps its `this`.
+  const list = source.list?.bind(source);
+  if (!list) {
+    throw commerceError("COMMERCE_CATALOGUE_NOT_LISTABLE", {
+      source: source.id,
+    });
+  }
+  const answer: unknown = await ask(source, "list", () =>
+    list({
+      limit: input.limit,
+      cursor: input.cursor,
+      ...(input.search === undefined ? {} : { search: input.search }),
+    })
+  );
+  if (typeof answer !== "object" || answer === null) {
+    throw broken(source, "list did not answer a page");
+  }
+  const { items, nextCursor } = answer as Record<string, unknown>;
+  if (!Array.isArray(items) || items.length > input.limit) {
+    throw broken(source, "list answered no items, or more than asked for");
+  }
+  if (nextCursor !== null && typeof nextCursor !== "string") {
+    throw broken(source, "list answered a cursor that is not a string");
+  }
+  const seen = new Set<string>();
+  const checked = items.map(raw => {
+    const item = checkedItem(source, currency, "list", raw);
+    if (seen.has(item.reference)) {
+      throw broken(source, "list answered an item twice", {
+        reference: item.reference,
+      });
+    }
+    seen.add(item.reference);
+    return item;
+  });
+  return { items: checked, nextCursor };
+}
+
+async function ask<T>(
+  source: CatalogueSource,
+  method: string,
+  call: () => Promise<T>
+): Promise<T> {
+  try {
+    return await call();
+  } catch (error) {
+    if (error instanceof NextlyError) throw error;
+    throw commerceError("COMMERCE_CATALOGUE_UNAVAILABLE", {
+      source: source.id,
+      method,
+      reason: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+function checkedItem(
+  source: CatalogueSource,
+  currency: string,
+  method: string,
+  raw: unknown
+): CatalogueItem {
+  const parsed = catalogueItemSchema.safeParse(raw);
+  if (!parsed.success) {
+    throw broken(source, `${method} answered an item outside the contract`, {
+      issues: parsed.error.issues.map(issue => issue.message),
+    });
+  }
+  const item = parsed.data;
+  if (
+    item.price.kind === "listed" &&
+    item.price.unitPrice.currency !== currency
+  ) {
+    throw broken(source, `${method} answered a price in another currency`, {
+      reference: item.reference,
+    });
+  }
+  return item;
+}
+
+function broken(
+  source: CatalogueSource,
+  reason: string,
+  detail: Record<string, unknown> = {}
+): NextlyError {
+  return commerceError("COMMERCE_PROVIDER_CONTRACT", {
+    source: source.id,
+    reason,
+    ...detail,
+  });
+}

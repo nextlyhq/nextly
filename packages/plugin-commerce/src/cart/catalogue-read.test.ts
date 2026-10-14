@@ -1,0 +1,114 @@
+import { NextlyError } from "@nextlyhq/plugin-sdk";
+import { describe, expect, it } from "vitest";
+
+import type {
+  CatalogueItem,
+  CatalogueSource,
+} from "../contracts/catalogue-source";
+import { commerceError } from "../errors";
+import { money } from "../money/money";
+import { createInMemoryCatalogueSource } from "../testing/in-memory-catalogue-source";
+
+import { findItems } from "./catalogue-read";
+
+async function codeOf(
+  body: () => Promise<unknown>
+): Promise<string | undefined> {
+  try {
+    await body();
+  } catch (error) {
+    return NextlyError.is(error) ? String(error.code) : "not a NextlyError";
+  }
+  return undefined;
+}
+
+const drill: CatalogueItem = {
+  reference: "drill",
+  name: "Drill",
+  price: { kind: "listed", unitPrice: money(12_900, "USD") },
+  stock: { kind: "counted", available: 4 },
+};
+
+function answering(answer: unknown): CatalogueSource {
+  return {
+    id: "fake",
+    find: async () => answer as readonly CatalogueItem[],
+    price: async () => [],
+  };
+}
+
+describe("reading items from a catalogue source", () => {
+  it("asks once for every reference, each once, and keys the answer by reference", async () => {
+    const asked: string[][] = [];
+    const { source } = createInMemoryCatalogueSource({
+      currency: "USD",
+      items: [drill],
+    });
+    const found = await findItems(
+      {
+        ...source,
+        find: input => {
+          asked.push([...input.references]);
+          return source.find(input);
+        },
+      },
+      "USD",
+      ["drill", "unknown", "drill"]
+    );
+    expect(asked).toEqual([["drill", "unknown"]]);
+    expect([...found.keys()]).toEqual(["drill"]);
+  });
+
+  it("does not ask at all for no references", async () => {
+    let calls = 0;
+    const source = answering([]);
+    await findItems(
+      {
+        ...source,
+        find: async () => {
+          calls += 1;
+          return [];
+        },
+      },
+      "USD",
+      []
+    );
+    expect(calls).toBe(0);
+  });
+
+  it("refuses an answer outside the contract rather than showing it", async () => {
+    for (const answer of [
+      "not a list",
+      [{ ...drill, stock: { kind: "counted", available: -1 } }],
+      [{ ...drill, reference: "never-asked" }],
+      [drill, drill],
+      [{ ...drill, price: { kind: "listed", unitPrice: money(1, "EUR") } }],
+    ]) {
+      expect(
+        await codeOf(() => findItems(answering(answer), "USD", ["drill"]))
+      ).toBe("COMMERCE_PROVIDER_CONTRACT");
+    }
+  });
+
+  it("calls a source that fails to answer unavailable, and passes on an error it raised", async () => {
+    const failing: CatalogueSource = {
+      ...answering([]),
+      find: async () => {
+        throw new Error("connect ECONNREFUSED");
+      },
+    };
+    expect(await codeOf(() => findItems(failing, "USD", ["drill"]))).toBe(
+      "COMMERCE_CATALOGUE_UNAVAILABLE"
+    );
+
+    const raising: CatalogueSource = {
+      ...answering([]),
+      find: async () => {
+        throw commerceError("COMMERCE_UNKNOWN_CURRENCY");
+      },
+    };
+    expect(await codeOf(() => findItems(raising, "USD", ["drill"]))).toBe(
+      "COMMERCE_UNKNOWN_CURRENCY"
+    );
+  });
+});

@@ -21,7 +21,11 @@ export const SCHEMA_VERSION = 1;
  * Found by the hash of the token in the shopper's cookie, never by an id the
  * browser sends, so no parameter can reach another shopper's cart. The token
  * itself is never stored. `version` moves with every change, so two changes
- * racing each other cannot both apply to the cart as it was. The account
+ * racing each other cannot both apply to the cart as it was. `expiresAt` is
+ * the cart's deadline, set from the cart lifetime whenever the cart is created
+ * or changes and copied into the cookie, so a site that changes the lifetime
+ * moves no cart's deadline until that cart next changes, and the browser and
+ * the server always agree on it. The account
  * columns are laid down now and stay empty until signing in attaches a cart to
  * a customer; nothing reads them yet.
  */
@@ -32,6 +36,7 @@ export const carts = defineTable(
     tokenHash: col.char(64),
     currency: col.char(3),
     version: col.integer({ default: 0 }),
+    expiresAt: col.timestamp(),
     accountKind: col.varchar(64, { nullable: true }),
     accountId: col.varchar(255, { nullable: true }),
     ...col.timestamps(),
@@ -39,15 +44,16 @@ export const carts = defineTable(
   {
     indexes: [
       { columns: ["tokenHash"], unique: true },
-      // The expiry sweep reads carts by when they last changed.
-      { columns: ["updatedAt"] },
+      // The expiry sweep reads carts by their deadline.
+      { columns: ["expiresAt"] },
     ],
   }
 );
 
 /**
  * One line of a cart: a catalogue reference, a quantity, and the unit price
- * the shopper saw when the line was added. That price is shown, and lets
+ * the shopper saw when the line was last added to or changed. That price is
+ * shown, and lets
  * checkout say a price changed since, but nothing is ever charged from it:
  * every total is priced again from the catalogue source.
  */
