@@ -585,8 +585,14 @@ export async function paymentProviderContract(
           reference,
           amount: refundAmount,
         };
-        await call(p, "refund", request); // the answer is lost
+        // The answer commerce never saw is kept, so the repeat can be held to
+        // the refund the first call made.
+        const lost = asRefund(await call(p, "refund", request));
         const repeated = asRefund(await call(p, "refund", request));
+        expectContract(
+          repeated.providerRefundReference === lost.providerRefundReference,
+          "the repeated refund returns the first refund, not a second one"
+        );
         expectContract(
           repeated.reference === reference &&
             repeated.providerReference === payment.providerReference,
@@ -597,13 +603,21 @@ export async function paymentProviderContract(
             repeated.amount.currency === refundAmount.currency,
           `the refund is for the amount asked (${repeated.amount.amount} answered, ${refundAmount.amount} asked)`
         );
-        const read = asPayment(
-          await p.read({ providerReference: payment.providerReference })
-        );
         expectContract(
-          read.amountRefunded.amount === refundAmount.amount,
-          `the refund happened once (${read.amountRefunded.amount} refunded, ${refundAmount.amount} asked)`
+          repeated.status === "succeeded" || repeated.status === "pending",
+          `a refund asked for is succeeded or pending, not ${repeated.status}`
         );
+        // A pending refund settles later, so only a succeeded one is in the
+        // payment's refunded amount already.
+        if (repeated.status === "succeeded") {
+          const read = asPayment(
+            await p.read({ providerReference: payment.providerReference })
+          );
+          expectContract(
+            read.amountRefunded.amount === refundAmount.amount,
+            `the refund happened once (${read.amountRefunded.amount} refunded, ${refundAmount.amount} asked)`
+          );
+        }
         const found = await call(p, "findRefundByReference", { reference });
         expectContract(
           found !== null,
@@ -692,22 +706,27 @@ export async function paymentProviderContract(
           reference: unique("refund"),
           amount: money(options.amount / 2, options.currency),
         });
+        const before = asPayment(
+          await p.read({ providerReference: payment.providerReference })
+        );
+        const refused = unique("refund");
         await expectRefusal(
           () =>
             call(p, "refund", {
               operationId: unique("op"),
               providerReference: payment.providerReference,
-              reference: unique("refund"),
+              reference: refused,
               amount,
             }),
           "a refund beyond what is left to refund is refused"
         );
-        const read = asPayment(
-          await p.read({ providerReference: payment.providerReference })
-        );
+        // Compared with the payment as it was, not with half the amount: the
+        // first refund may still be pending, and so not yet refunded.
+        await expectUnchanged(p, before);
         expectContract(
-          read.amountRefunded.amount === options.amount / 2,
-          "the refused refund changed nothing"
+          (await call(p, "findRefundByReference", { reference: refused })) ===
+            null,
+          "a refused refund leaves nothing at the provider"
         );
       }
     );

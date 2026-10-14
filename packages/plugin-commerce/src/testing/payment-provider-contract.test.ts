@@ -65,6 +65,13 @@ describe("the payment contract suite against a provider whose limit is the large
   for (const c of cases) it(c.name, c.run);
 });
 
+describe("the payment contract suite against a provider whose refunds stay pending", async () => {
+  // A refund a provider settles later is answered as pending: the suite must
+  // accept it, and hold it to being made once and found again.
+  for (const c of await suiteFor({ refundStatus: "pending" }))
+    it(c.name, c.run);
+});
+
 describe("the payment contract suite at the largest even safe amount", async () => {
   // Every request the suite makes must stay inside the money domain, the one
   // it builds to differ from another included.
