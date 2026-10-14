@@ -147,6 +147,46 @@ export async function paymentProviderContract(
     );
   }
 
+  // A used key with a different request must be refused as a reuse.
+  async function expectKeyReuseRefused(
+    attempt: () => Promise<unknown>,
+    operation: string
+  ) {
+    const error = await expectRefusal(
+      attempt,
+      `a ${operation} key reused for a different request is refused`
+    );
+    expectContract(
+      NextlyError.isCode(error, "COMMERCE_OPERATION_KEY_REUSED"),
+      `the refusal is COMMERCE_OPERATION_KEY_REUSED, not ${describeError(error)}`
+    );
+  }
+
+  // The payment a refused request named, read back as it was before: a
+  // provider that performs the request and only then refuses it fails here.
+  async function expectUnchanged(p: PaymentProvider, before: ProviderPayment) {
+    const after = asPayment(
+      await p.read({ providerReference: before.providerReference })
+    );
+    expectContract(
+      after.status === before.status &&
+        after.amountCaptured.amount === before.amountCaptured.amount &&
+        after.amountRefunded.amount === before.amountRefunded.amount,
+      `the refused request changed nothing (before: ${state(before)}; after: ${state(after)})`
+    );
+  }
+
+  async function heldPayment(p: PaymentProvider) {
+    const { started } = await startPayment(p, "later");
+    return asPayment(
+      await p.confirm({
+        operationId: unique("op"),
+        providerReference: started.providerReference,
+        paymentMethod: options.paymentMethods.succeeds,
+      })
+    );
+  }
+
   const cases: ContractCase[] = [];
   const add = (name: string, run: () => Promise<void>) =>
     cases.push({ name, run });
@@ -250,12 +290,14 @@ export async function paymentProviderContract(
       capture: "now",
     });
     const reference = unique("pay");
+    // Half the amount, not more: a request differing by an added amount would
+    // leave the money domain at the largest even amount the options allow.
     const error = await expectRefusal(
       () =>
         p.start({
           operationId,
           reference,
-          amount: money(options.amount + 2, options.currency),
+          amount: money(options.amount / 2, options.currency),
           capture: "now",
         }),
       "a key reused for a different request is refused"
@@ -311,6 +353,25 @@ export async function paymentProviderContract(
       "a declined payment captured nothing"
     );
   });
+
+  add(
+    "refuses a confirm key reused for a different request, and changes nothing",
+    async () => {
+      const { p } = await setUp();
+      const first = (await startPayment(p)).started;
+      const second = (await startPayment(p)).started;
+      const operationId = unique("op");
+      const confirmWithKey = (payment: ProviderPayment) =>
+        p.confirm({
+          operationId,
+          providerReference: payment.providerReference,
+          paymentMethod: options.paymentMethods.succeeds,
+        });
+      await confirmWithKey(first);
+      await expectKeyReuseRefused(() => confirmWithKey(second), "confirm");
+      await expectUnchanged(p, second);
+    }
+  );
 
   add(
     "verifies a signed webhook, and refuses a tampered or unsigned one",
@@ -547,6 +608,70 @@ export async function paymentProviderContract(
     );
 
     addIf(
+      supportsPaymentOperation(declared, "capture"),
+      "refuses a capture key reused for a different request, and changes nothing",
+      async p => {
+        const [first, second] = [await heldPayment(p), await heldPayment(p)];
+        const operationId = unique("op");
+        const captureWithKey = (payment: ProviderPayment) =>
+          call(p, "capture", {
+            operationId,
+            providerReference: payment.providerReference,
+          });
+        await captureWithKey(first);
+        await expectKeyReuseRefused(() => captureWithKey(second), "capture");
+        await expectUnchanged(p, second);
+      }
+    );
+
+    addIf(
+      supportsPaymentOperation(declared, "cancel"),
+      "refuses a cancel key reused for a different request, and changes nothing",
+      async p => {
+        const first = (await startPayment(p)).started;
+        const second = (await startPayment(p)).started;
+        const operationId = unique("op");
+        const cancelWithKey = (payment: ProviderPayment) =>
+          call(p, "cancel", {
+            operationId,
+            providerReference: payment.providerReference,
+          });
+        await cancelWithKey(first);
+        await expectKeyReuseRefused(() => cancelWithKey(second), "cancel");
+        await expectUnchanged(p, second);
+      }
+    );
+
+    addIf(
+      supportsPaymentOperation(declared, "refund"),
+      "refuses a refund key reused for a different request, and changes nothing",
+      async p => {
+        const first = (await paidPayment(p)).payment;
+        const second = (await paidPayment(p)).payment;
+        const operationId = unique("op");
+        const refundWithKey = (payment: ProviderPayment, reference: string) =>
+          call(p, "refund", {
+            operationId,
+            providerReference: payment.providerReference,
+            reference,
+            amount,
+          });
+        await refundWithKey(first, unique("refund"));
+        const refused = unique("refund");
+        await expectKeyReuseRefused(
+          () => refundWithKey(second, refused),
+          "refund"
+        );
+        await expectUnchanged(p, second);
+        expectContract(
+          (await call(p, "findRefundByReference", { reference: refused })) ===
+            null,
+          "a refused refund leaves nothing at the provider"
+        );
+      }
+    );
+
+    addIf(
       supportsPaymentOperation(declared, "refund") && declared.partialRefund,
       "refuses to refund more than is left to refund",
       async p => {
@@ -671,6 +796,11 @@ function tamperHeaders(
       return [name, `${value.slice(0, -1)}${swapped}`];
     })
   );
+}
+
+/** A payment's status and money, as a refused request must leave them. */
+function state(payment: ProviderPayment): string {
+  return `${payment.status}, ${payment.amountCaptured.amount} captured, ${payment.amountRefunded.amount} refunded`;
 }
 
 function issues(

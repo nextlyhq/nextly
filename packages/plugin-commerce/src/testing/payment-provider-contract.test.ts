@@ -65,6 +65,44 @@ describe("the payment contract suite against a provider whose limit is the large
   for (const c of cases) it(c.name, c.run);
 });
 
+describe("the payment contract suite at the largest even safe amount", async () => {
+  // Every request the suite makes must stay inside the money domain, the one
+  // it builds to differ from another included.
+  const cases = await paymentProviderContract({
+    ...base,
+    amount: Number.MAX_SAFE_INTEGER - 1,
+    create() {
+      const { provider, control } = createTestPaymentProvider({
+        capabilities: { maxAmounts: { USD: Number.MAX_SAFE_INTEGER } },
+      });
+      return { provider, signWebhook: control.signWebhook };
+    },
+  });
+  for (const c of cases) it(c.name, c.run);
+});
+
+/**
+ * A provider operation that, given a used key with a different request,
+ * performs that request under a fresh key and only then refuses: the refusal
+ * the suite sees is right, and only a look at what changed can catch it.
+ */
+function performsThenRefuses<I extends { readonly operationId: string }, R>(
+  operation: (input: I) => Promise<R>
+): (input: I) => Promise<R> {
+  const requests = new Map<string, string>();
+  let n = 0;
+  return async input => {
+    const request = JSON.stringify({ ...input, operationId: null });
+    const seen = requests.get(input.operationId);
+    if (seen === undefined) requests.set(input.operationId, request);
+    if (seen !== undefined && seen !== request) {
+      await operation({ ...input, operationId: `late-${++n}` });
+      throw commerceError("COMMERCE_OPERATION_KEY_REUSED");
+    }
+    return operation(input);
+  };
+}
+
 describe("the payment contract suite catches a broken provider", () => {
   // Each provider below breaks one rule of the contract. The suite must fail
   // the case that guards that rule; otherwise the case proves nothing.
@@ -172,6 +210,46 @@ describe("the payment contract suite catches a broken provider", () => {
     }));
     expect(failed).toContain(
       "charges once when the answer to a confirm is lost and the confirm is repeated"
+    );
+  });
+
+  it("fails a provider that confirms a changed request under a used key before refusing it", async () => {
+    const failed = await failingCases(p => ({
+      ...p,
+      confirm: performsThenRefuses(p.confirm),
+    }));
+    expect(failed).toContain(
+      "refuses a confirm key reused for a different request, and changes nothing"
+    );
+  });
+
+  it("fails a provider that captures a changed request under a used key before refusing it", async () => {
+    const failed = await failingCases(p => ({
+      ...p,
+      capture: p.capture ? performsThenRefuses(p.capture) : undefined,
+    }));
+    expect(failed).toContain(
+      "refuses a capture key reused for a different request, and changes nothing"
+    );
+  });
+
+  it("fails a provider that cancels a changed request under a used key before refusing it", async () => {
+    const failed = await failingCases(p => ({
+      ...p,
+      cancel: p.cancel ? performsThenRefuses(p.cancel) : undefined,
+    }));
+    expect(failed).toContain(
+      "refuses a cancel key reused for a different request, and changes nothing"
+    );
+  });
+
+  it("fails a provider that refunds a changed request under a used key before refusing it", async () => {
+    const failed = await failingCases(p => ({
+      ...p,
+      refund: p.refund ? performsThenRefuses(p.refund) : undefined,
+    }));
+    expect(failed).toContain(
+      "refuses a refund key reused for a different request, and changes nothing"
     );
   });
 
