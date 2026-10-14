@@ -88,6 +88,7 @@ export async function signUp(
       name: name.data,
       address: address.data,
       passwordHash,
+      createdAt: deps.now(),
     });
   } catch (error) {
     if (!(error instanceof AddressTaken)) throw error;
@@ -98,7 +99,12 @@ export async function signUp(
 
 async function createAndMint(
   deps: FlowDeps,
-  input: { name: string; address: string; passwordHash: string }
+  input: {
+    name: string;
+    address: string;
+    passwordHash: string;
+    createdAt: Date;
+  }
 ): Promise<SignUpResult> {
   const minted = await deps.db.transaction(async tx => {
     const created = await createAccount(tx, deps.dialect, input);
