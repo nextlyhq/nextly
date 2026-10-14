@@ -166,6 +166,17 @@ describe("the fake limiter's backoff rule", () => {
     admitted(await core.limits.reserve([entry]));
   });
 
+  it("lifts, when a count is given back, a wait only that count set", async () => {
+    const core = limiter();
+    const entry: LimitEntry = { rule: "waits", key: "dana@example.com" };
+    admitted(await core.limits.reserve([entry]));
+    const second = admitted(await core.limits.reserve([entry]));
+
+    await core.limits.release(second);
+    admitted(await core.limits.reserve([entry]));
+    expect((await core.limits.reserve([entry])).status).toBe("refused");
+  });
+
   it("never moves the wait in force for an attempt counted without room", async () => {
     const core = limiter();
     const entry: LimitEntry = {

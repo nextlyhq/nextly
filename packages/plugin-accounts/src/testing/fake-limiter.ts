@@ -36,6 +36,11 @@ interface Counted {
   readonly target: LimitTarget;
   /** The window's timestamp it added; absent for a backoff rule. */
   readonly at?: number;
+  /**
+   * For a backoff rule, the wait this count set and the one in force before
+   * it, so giving it back lifts a wait only it set; absent when it set none.
+   */
+  readonly setWait?: { until: number; before: number };
   released: boolean;
 }
 
@@ -151,7 +156,16 @@ export class FakeLimiter implements PluginLimiter {
       return;
     }
     const state = this.#backoffs.get(slot(counted.target));
-    if (state !== undefined) state.count = Math.max(0, state.count - 1);
+    if (state === undefined) return;
+    state.count = Math.max(0, state.count - 1);
+    // A count given back never leaves a wait behind that only it set: an
+    // attempt that succeeded is no failure to wait for.
+    if (
+      counted.setWait !== undefined &&
+      state.waitUntil === counted.setWait.until
+    ) {
+      state.waitUntil = counted.setWait.before;
+    }
   }
 
   async reset(target: LimitTarget): Promise<LimitOutcome> {
@@ -261,6 +275,7 @@ export class FakeLimiter implements PluginLimiter {
     const state = this.#backoff(target, rule, now);
     state.count += 1;
     state.lastCountedAt = now;
+    let setWait: Counted["setWait"];
     // Counted with room, an attempt sets the next wait; counted without
     // room ("always"), it leaves the wait in force where it is.
     if (hadRoom && state.count >= rule.free) {
@@ -268,11 +283,17 @@ export class FakeLimiter implements PluginLimiter {
         rule.waitsMs[
           Math.min(state.count - rule.free, rule.waitsMs.length - 1)
         ];
+      const before = state.waitUntil;
       state.waitUntil = wait === undefined ? Infinity : now + wait;
+      setWait = { until: state.waitUntil, before };
     }
     this.#backoffs.set(slot(target), state);
 
-    return { target: { rule: target.rule, key: target.key }, released: false };
+    return {
+      target: { rule: target.rule, key: target.key },
+      ...(setWait === undefined ? {} : { setWait }),
+      released: false,
+    };
   }
 
   /** A backoff key's state, forgotten once idle past `forgetAfterMs` with no wait in force. */
