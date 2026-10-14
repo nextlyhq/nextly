@@ -1,4 +1,4 @@
-import { asc, eq, lte, or } from "@nextlyhq/plugin-sdk/db";
+import { and, asc, eq, lt, lte, or } from "@nextlyhq/plugin-sdk/db";
 import type { InferRow } from "@nextlyhq/plugin-sdk/schema";
 
 import { sessions } from "../schema/tables";
@@ -78,8 +78,9 @@ export async function liveSession(
 /**
  * Records a session's use, moving its idle expiry on. Written at most once a
  * tenth of the idle period, which is how close to its last use the idle
- * expiry is counted, so a busy session is not a write on every request.
- * Answers whether it wrote.
+ * expiry is counted, so a busy session is not a write on every request, and
+ * only over an older use: of two requests at once, the slower never moves
+ * the expiry back. Answers whether it wrote.
  */
 export async function touchSession(
   db: AccountsDb,
@@ -90,7 +91,9 @@ export async function touchSession(
   if (now.getTime() - session.lastUsedAt.getTime() < limits.idleMs / 10)
     return false;
   const columns = db.table(sessions);
-  await db
+  const older = and(eq(columns.id, session.id), lt(columns.lastUsedAt, now));
+  if (older === undefined) throw new TypeError("The touch lost its condition.");
+  const written = await db
     .update(sessions, {
       lastUsedAt: now,
       idleExpiresAt: earlier(
@@ -98,9 +101,9 @@ export async function touchSession(
         session.absoluteExpiresAt
       ),
     })
-    .where(eq(columns.id, session.id));
+    .where(older);
 
-  return true;
+  return written === 1;
 }
 
 /** Ends the session a token's hash names (signing out). */
