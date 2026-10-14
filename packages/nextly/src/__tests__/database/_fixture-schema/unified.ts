@@ -492,9 +492,24 @@ export const nextlyTables: TableDefinition[] = [
         name: "identity_erased_at",
         type: "datetime",
       },
+      // Which kind of caller acted, and a plugin-defined person by kind and
+      // id, apart from the staff user columns.
+      { name: "actor_kind", type: "varchar(191)" },
+      { name: "actor_principal_kind", type: "varchar(191)" },
+      { name: "actor_principal_id", type: "varchar(191)" },
+      { name: "target_principal_kind", type: "varchar(191)" },
+      { name: "target_principal_id", type: "varchar(191)" },
     ],
     indexes: [
       { name: "audit_log_kind_idx", columns: ["kind"] },
+      {
+        name: "audit_log_actor_principal_idx",
+        columns: ["actor_principal_kind", "actor_principal_id"],
+      },
+      {
+        name: "audit_log_target_principal_idx",
+        columns: ["target_principal_kind", "target_principal_id"],
+      },
       { name: "audit_log_actor_user_id_idx", columns: ["actor_user_id"] },
       { name: "audit_log_target_user_id_idx", columns: ["target_user_id"] },
       { name: "audit_log_created_at_idx", columns: ["created_at"] },

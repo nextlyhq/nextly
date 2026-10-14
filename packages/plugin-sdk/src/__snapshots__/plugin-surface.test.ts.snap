@@ -435,6 +435,7 @@ exports[`plugin-sdk public export surface > \`.\` (index) surface is unchanged 1
   "PrincipalKindDefinition (type)",
   "PrincipalRecord (type)",
   "PrincipalRef (type)",
+  "PrincipalReportOptions (type)",
   "ProviderAvailability (type)",
   "QueryOptions (type)",
   "QuerylessWidgetArchetype (type)",
