@@ -84,8 +84,20 @@ export async function withCommerceStock(
     db,
     counted.map(item => item.reference)
   );
+  return availableStock(items, records);
+}
+
+/**
+ * `withCommerceStock` once the records are read: each counted or one-off
+ * item's stock replaced by what `availableUnits` leaves of it, a one-off item
+ * never above one unit, and every other item as the source gave it.
+ */
+export function availableStock(
+  items: ReadonlyMap<string, CatalogueItem>,
+  records: ReadonlyMap<string, StockRecord>
+): Map<string, CatalogueItem> {
   const adjusted = new Map(items);
-  for (const item of counted) {
+  for (const item of items.values()) {
     if (!isCounted(item.stock)) continue;
     const available = availableUnits(
       item.stock.available,

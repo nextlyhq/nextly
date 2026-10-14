@@ -87,7 +87,8 @@ export interface CommerceOptions {
    */
   readonly payments?: PaymentProvider;
   /**
-   * How many minutes an unpaid order holds its stock before it is given up.
+   * How many minutes after it is placed an unpaid order's deadline falls,
+   * recorded with the order: the moment it is due to be given up.
    * 30 by default.
    */
   readonly unpaidOrderMinutes?: number;

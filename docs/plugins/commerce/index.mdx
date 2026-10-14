@@ -33,7 +33,7 @@ export default defineConfig({
 | `secureCookies`         | on in production only   | Whether the cart cookie is `Secure`, under the `__Host-` name. A browser drops a `Secure` cookie set over plain HTTP                               |
 | `cartWriteLimit`        | 60 a minute             | How many requests one client may make to each cart write route in a window, as `{ max, windowMs }`. Raise it when shoppers share a network address |
 | `payments`              | none                    | The payment provider checkout starts payments with. Without one, a checkout can be quoted but not completed                                        |
-| `unpaidOrderMinutes`    | `30`                    | How long an unpaid order holds its stock before it is given up. 5 to 1,440                                                                         |
+| `unpaidOrderMinutes`    | `30`                    | How long after it is placed an unpaid order's deadline falls. 5 to 1,440. Giving up orders past it comes in a later release                        |
 | `jobsStaleAfterMinutes` | `15`                    | How long commerce's jobs may go without running before checkout stops taking orders. 1 to 1,440                                                    |
 
 Commerce keeps its records in its own tables, all named `commerce__…` (carts, orders,
@@ -112,10 +112,14 @@ A cart becomes one order. Completing it again, because a response was lost or a 
 pressed twice, answers the same order and starts no second payment, and the cart then shows
 empty. Order numbers are whole numbers from 1, in the order checkouts commit.
 
-An unpaid order holds its stock for `unpaidOrderMinutes`. When two buyers reach the last unit
-at once, exactly one gets it, and the other is refused with `COMMERCE_OUT_OF_STOCK`. If the
-provider cannot be reached when an order is completed, the order still stands and commerce
-starts the payment later, through its jobs, under the same key, so it is never started twice.
+An unpaid order holds its stock, and records a deadline `unpaidOrderMinutes` after it is
+placed. **Not in this release:** giving up an order past its deadline, which releases its
+stock, and marking a paid order's units sold. Until those arrive, a held unit stays held.
+
+When two buyers reach the last unit at once, exactly one gets it, and the other is refused
+with `COMMERCE_OUT_OF_STOCK`. If the provider cannot be reached when an order is completed,
+the order still stands and commerce starts the payment later, through its jobs, under the
+same key, so it is never started twice.
 
 ### Before launch: run the jobs
 
