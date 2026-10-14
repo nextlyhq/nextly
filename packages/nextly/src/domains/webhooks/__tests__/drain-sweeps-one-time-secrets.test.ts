@@ -9,12 +9,26 @@
 
 import { describe, expect, it, vi } from "vitest";
 
+import type { retentionPoliciesFrom } from "../../retention/passes";
 import {
   ONE_TIME_SECRETS_RETENTION_DRAIN_GATE_KEY,
   ONE_TIME_SECRETS_RETENTION_GATE_KEY,
   type RetentionGateStore,
 } from "../../retention/gate";
 import { runDrain } from "../run-drain";
+
+// Every policy the shared list names is a field the drain takes (the webhook
+// policy arrives as `policy`). A domain added to `retentionPoliciesFrom` that
+// the drain does not handle fails to compile here, rather than reaching the
+// drain's dependency as a property nothing reads.
+type DrainRetention = NonNullable<Parameters<typeof runDrain>[0]["retention"]>;
+type UnhandledPolicies = Exclude<
+  keyof ReturnType<typeof retentionPoliciesFrom>,
+  "webhookPolicy" | keyof DrainRetention
+>;
+const drainTakesEveryPolicy: [UnhandledPolicies] extends [never]
+  ? true
+  : UnhandledPolicies = true;
 
 /** A database with no events and no deliveries due, so only retention runs. */
 function idleDb(): never {
@@ -85,6 +99,10 @@ describe("the scheduled drain and plugins' one-purpose secrets", () => {
     expect(claimed).toContain(ONE_TIME_SECRETS_RETENTION_DRAIN_GATE_KEY);
     expect(store.tables).toContain("nextly_one_time_secrets");
     expect(result.pruned.oneTimeSecrets).toBe(1);
+  });
+
+  it("takes every policy the shared list names", () => {
+    expect(drainTakesEveryPolicy).toBe(true);
   });
 
   it("claims a marker the capped write path cannot take from it", () => {
