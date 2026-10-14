@@ -198,6 +198,8 @@ defineCollection({
 - A field's rule receives `principal` too, so a field can be kept from members
   with `read: ({ principal }) => principal === null`. A field with no rule
   follows the collection's decision.
+- Related media in a row a person may read reaches them as it reaches an
+  anonymous visitor; a related staff user, role or permission never does.
 - A rule that limits a read to the rows a person owns is not offered yet. Check
   ownership in your own code.
 
