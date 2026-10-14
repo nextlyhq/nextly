@@ -4,6 +4,7 @@ import { version as PLUGIN_VERSION } from "../package.json";
 
 import { ADMIN_PAGES, adminPageHref } from "./admin-contract";
 import { readAccountsCore } from "./core/adapter";
+import { accountsLimitRules } from "./core/limit-rules";
 import type { AccountsCore } from "./core/ports";
 import { accountsError } from "./errors";
 import { ACCOUNTS_EVENTS } from "./flows/deps";
@@ -86,6 +87,9 @@ export function buildAccounts(
     schemaVersion: SCHEMA_VERSION,
     contributes: {
       schema: accountsSchema,
+      // The limit rules every flow reserves on, from the site's settings;
+      // core checks each against its bounds at start.
+      limits: accountsLimitRules(settings),
       principals: [accountKind(deps)],
       routes: [...accountsRoutes(deps), ...staffRoutes(deps)],
       permissions: STAFF_PERMISSIONS,
