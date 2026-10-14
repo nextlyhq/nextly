@@ -94,6 +94,8 @@ export async function installDependencies(
       // generatePackageJson(useYalc: true). Install npm-only deps first,
       // then layer yalc packages on top. Include ALL adapter packages because
       // yalc file: links cause Turbopack to resolve conditional dynamic imports.
+      // A plugin scaffold imports @nextlyhq/plugin-sdk directly, so it is linked
+      // too; otherwise the local packages would run against the published SDK.
       const yalcPackages = [
         ...new Set([
           "nextly",
@@ -102,6 +104,7 @@ export async function installDependencies(
           "@nextlyhq/adapter-drizzle",
           ...ALL_ADAPTER_PACKAGES,
           ...pluginPackages,
+          ...(projectType === "plugin" ? ["@nextlyhq/plugin-sdk"] : []),
         ]),
       ];
 

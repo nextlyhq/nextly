@@ -13,6 +13,10 @@ Your plugin lives in `src/`. The `dev/` folder is a minimal Nextly app on SQLite
 that registers this plugin so you can exercise it in a real admin with hot-reload.
 Editing files under `src/` reloads the playground. **`dev/` is never published.**
 
+The playground signs you in automatically as `dev@nextly.local` (password
+`DevPassword123!`). That user is created on the first `pnpm dev`, and only
+under `next dev`; production builds ignore the auto-login setting.
+
 ## Test
 
 ```bash

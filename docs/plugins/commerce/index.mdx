@@ -59,7 +59,8 @@ implements the `CatalogueSource` contract. It is used for listing, pricing and a
 with nothing else changed, and the contract's test suite, at
 `@nextlyhq/plugin-commerce/testing`, proves a source against it.
 
-Every answer from a source is checked against the contract before it is used. A source that
+An item's name and SKU are at most 255 characters. Every answer from a source is checked
+against the contract before it is used. A source that
 fails to answer is reported as `COMMERCE_CATALOGUE_UNAVAILABLE` (503), and one that answers
 outside the contract as `COMMERCE_PROVIDER_CONTRACT` (502).
 
@@ -196,6 +197,7 @@ Besides core's `VALIDATION_ERROR` and `CSRF_FAILED`, checkout answers these:
 | `COMMERCE_CART_EMPTY`              | 409    | There is no cart, or nothing in it                     |
 | `COMMERCE_QUOTE_CHANGED`           | 409    | The cart or a price changed since the quote            |
 | `COMMERCE_OUT_OF_STOCK`            | 409    | An item no longer has the stock asked for              |
+| `COMMERCE_QUANTITY_NOT_ALLOWED`    | 400    | A line is past what its item now allows on one line    |
 | `COMMERCE_NOTHING_TO_PAY`          | 409    | The total is nothing; free orders cannot be placed yet |
 | `COMMERCE_JOBS_NOT_RUNNING`        | 503    | Commerce's jobs have not run recently, or ever         |
 | `COMMERCE_PAYMENTS_NOT_CONFIGURED` | 500    | The store has no `payments` provider                   |

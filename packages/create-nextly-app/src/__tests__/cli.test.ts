@@ -8,6 +8,7 @@ import {
   resolveProjectArg,
   validateProjectName,
   validateProjectNamePromptInput,
+  validateTemplateName,
 } from "../cli-args";
 
 // ============================================================
@@ -133,5 +134,24 @@ describe("validateProjectNamePromptInput", () => {
 
   it("rejects '..' (path traversal masquerading as name)", () => {
     expect(validateProjectNamePromptInput("..")).toBeDefined();
+  });
+});
+
+// ============================================================
+// validateTemplateName
+// ============================================================
+
+describe("validateTemplateName", () => {
+  // The interactive prompt offers every registered template, so the flag has
+  // to accept the same set or `--template plugin` is refused for a template
+  // the prompt would have scaffolded.
+  it.each(["blank", "blog", "plugin"])("accepts the '%s' template", name => {
+    expect(validateTemplateName(name)).toBeUndefined();
+  });
+
+  it("rejects an unknown template and lists every registered one", () => {
+    const error = validateTemplateName("nope");
+    expect(error).toContain("'nope'");
+    expect(error).toContain("blank, blog, plugin");
   });
 });

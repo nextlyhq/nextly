@@ -482,6 +482,12 @@ export {
   type PluginCategory,
   type PluginAuditApi,
   type PluginAuditDeclaration,
+  // The password helper a plugin receives as `ctx.security.passwords`.
+  type PluginSecurityApi,
+  PasswordTooLongError,
+  type PasswordCheck,
+  type PasswordHelper,
+  type PasswordRules,
   type PluginAuthApi,
   type PluginCapabilities,
   type CompleteLoginOptions,
@@ -995,6 +1001,10 @@ export {
   type AdminBrandingColors,
   type PluginOverride,
 } from "./collections/config";
+
+// The breached-password source a plugin's password check asks, in
+// `security.breachedPasswords`.
+export type { BreachedPasswordsConfig } from "./shared/types/config";
 
 // ============================================================
 // MIDDLEWARE

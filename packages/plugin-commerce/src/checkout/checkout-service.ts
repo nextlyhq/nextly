@@ -15,12 +15,15 @@ import {
   type LiveCart,
 } from "../cart/cart-store";
 import { findItems, priceItems } from "../cart/catalogue-read";
+import { allowLine } from "../cart/line-rules";
 import type {
   CatalogueSource,
   CatalogueStock,
 } from "../contracts/catalogue-source";
 import {
   isPayableAmount,
+  isRecordedProvider,
+  storedAccount,
   parseProviderAnswer,
   providerPaymentSchema,
   requirePaymentAmount,
@@ -183,6 +186,8 @@ const completeSchema = z.strictObject({
 
 /** A payment as it is stored, as far as reading it back needs. */
 interface StoredPayment {
+  readonly provider: string;
+  readonly providerAccount: string;
   readonly reference: string;
   readonly providerReference: string | null;
   readonly chargeAmount: number;
@@ -337,20 +342,19 @@ export function createCheckoutService(
     const answer = await priceItems(source, currency, asked);
     return asked.map((line, index) => {
       const priced = answer[index];
+      // The cart's own rule for what a line may hold, against the source's
+      // answer now: an item it no longer knows, one now priced on request,
+      // or more than its current per-line limit (a one-off unit, an item
+      // sold to order) is refused before an order is made of it.
       if (!priced?.found) {
         throw commerceError("COMMERCE_ITEM_NOT_FOUND", {
-          reference: line.reference,
-        });
-      }
-      if (priced.price.kind !== "listed") {
-        throw commerceError("COMMERCE_PRICE_ON_REQUEST", {
           reference: line.reference,
         });
       }
       return {
         reference: line.reference,
         quantity: line.quantity,
-        unitPrice: priced.price.unitPrice,
+        unitPrice: allowLine(line.reference, priced, line.quantity),
         stock: priced.stock,
       };
     });
@@ -453,7 +457,14 @@ export function createCheckoutService(
   ): Promise<ProviderPayment["clientData"] | null> {
     const provider = options.payments;
     const providerReference = payment.providerReference;
-    if (providerReference === null || !provider) return null;
+    // Only the provider that holds the payment can answer for it.
+    if (
+      providerReference === null ||
+      !provider ||
+      !isRecordedProvider(payment, provider)
+    ) {
+      return null;
+    }
     const raw = await reachProvider(() => provider.read({ providerReference }));
     if (raw === unreachable) return null;
     const read = parseProviderAnswer(providerPaymentSchema, raw, {
@@ -511,8 +522,11 @@ export function createCheckoutService(
     const placed = await orderFor(cart.id);
     if (placed) return answer(placed.id);
 
-    // Preconditions of a new order, before anything is written: money is
-    // never taken while the work that must follow it cannot run.
+    const { summary, lines } = await summarize(cart);
+    assertPlaceable(summary, lines.length, request.quoteKey, provider);
+    // The last precondition, after the catalogue was read, so a source slow
+    // enough for the jobs to go stale meanwhile cannot slip an order past it:
+    // money is never taken while the work that must follow it cannot run.
     await assertJobsRunning({
       db,
       job: WORK_JOB,
@@ -520,8 +534,6 @@ export function createCheckoutService(
       staleAfterMs: options.jobsStaleAfterMs,
       alert: lastRunAt => options.alerts.jobsNotRunning(lastRunAt),
     });
-    const { summary, lines } = await summarize(cart);
-    assertPlaceable(summary, lines.length, request.quoteKey, provider);
 
     try {
       const orderId = await placeOrder({
@@ -629,6 +641,7 @@ export function createCheckoutService(
         orderId: order.id,
         reference: paymentReference,
         provider: placing.provider.id,
+        providerAccount: storedAccount(placing.provider),
         status: "pending",
         chargeAmount: summary.total.amount,
         chargeCurrency: summary.total.currency,
