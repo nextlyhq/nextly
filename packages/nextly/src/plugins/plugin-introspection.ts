@@ -22,6 +22,7 @@ import { collectCustomPermissions } from "./permissions/collect-permissions";
 import { pluginCollectionSlugs } from "./plugin-admin-meta";
 import type { PluginConsent } from "./plugin-consent";
 import type { PluginDefinition } from "./plugin-context";
+import { collectPrincipalKinds } from "./principals/registry";
 import { resolvePlugins } from "./resolve";
 import { collectPluginRoutes } from "./routes/collect-routes";
 
@@ -43,6 +44,11 @@ export interface PluginInfo {
   permissions: string[];
   /** Custom event names this plugin declares it may emit. */
   events: string[];
+  /**
+   * The kinds of signed-in person this plugin registers, by full name
+   * (`<plugin>:<name>`): who besides staff it lets sign in.
+   */
+  principalKinds: string[];
   /** Number of HTTP routes contributed (0 when disabled, D49). */
   routeCount: number;
   adminMenuCount: number;
@@ -123,6 +129,15 @@ export function collectPluginInfo(
     );
   }
 
+  // Kinds per plugin, from the fold resolution publishes, so the CLI names
+  // exactly the kinds a route or `nextly.principals` can ask for.
+  const principalKindsByPlugin = new Map<string, string[]>();
+  for (const registered of collectPrincipalKinds(resolved).values()) {
+    const list = principalKindsByPlugin.get(registered.plugin) ?? [];
+    list.push(registered.kind);
+    principalKindsByPlugin.set(registered.plugin, list);
+  }
+
   // Admin menu/page/settings (host overrides only affect placement/appearance,
   // not these counts, so we fold with no overrides).
   const adminMetaByName = new Map(
@@ -144,6 +159,7 @@ export function collectPluginInfo(
       fieldGroups: (contributes?.fieldGroups ?? []).map(c => c.slug),
       permissions: (permissionsByOwner.get(plugin.name) ?? []).sort(),
       events: (contributes?.events ?? []).map(e => e.name),
+      principalKinds: principalKindsByPlugin.get(plugin.name) ?? [],
       routeCount: routeCountByPlugin.get(plugin.name) ?? 0,
       adminMenuCount: meta?.menu?.length ?? 0,
       adminPageCount: meta?.pages?.length ?? 0,

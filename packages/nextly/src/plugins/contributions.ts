@@ -23,6 +23,7 @@ import type {
 import type { PluginAuthContributions } from "./auth-contributions";
 import type { EntityTransform } from "./entity-transforms";
 import type { PluginContext } from "./plugin-context";
+import type { PrincipalKindContribution } from "./principals/types";
 import type { PluginRoute } from "./routes/route-types";
 import type { PluginWidgetSource } from "./widgets/collect-widget-sources";
 
@@ -710,6 +711,21 @@ export interface PluginContributions {
    * VETO, and is the only one that fails closed — see `ctx.filters.decide`.
    */
   hookPoints?: PluginHookPointDeclaration[];
+
+  /**
+   * @experimental Kinds of signed-in person this plugin defines: a shop's
+   * customers, a site's members, anyone who signs in without being staff.
+   *
+   * Each is named `<plugin>:<name>`, where `<plugin>` is this plugin's admin
+   * slug. Core calls a kind's resolver only where an entry point asks for
+   * that kind: a route declaring `principal`, `ctx.principals.fromRequest`
+   * or `nextly.principals.fromRequest`. No staff path ever does, so such a
+   * person never reaches the admin, holds no role and no permission, and is
+   * never taken for a staff user. The app refuses to start on a kind whose
+   * name, attributes or resolver cannot be used, or whose full name another
+   * plugin's kind already holds.
+   */
+  principals?: PrincipalKindContribution[];
 }
 
 /** @experimental `contributes.audit`: the kinds a plugin writes. */

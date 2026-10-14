@@ -2,13 +2,16 @@ import { NextlyError } from "@nextlyhq/plugin-sdk";
 
 import {
   catalogueItemSchema,
+  pricedLineSchema,
   type CatalogueItem,
   type CatalogueSource,
+  type PricedLine,
 } from "../contracts/catalogue-source";
 import { commerceError } from "../errors";
 
 /**
- * Reading a catalogue source, for the cart and the catalogue routes alike.
+ * Reading a catalogue source, for the cart, checkout and the catalogue routes
+ * alike.
  *
  * A source is code commerce does not control, so its answer is checked
  * against the contract before anything uses it: an item that is malformed,
@@ -135,6 +138,50 @@ export async function listItems(
     return item;
   });
   return { items: checked, nextCursor };
+}
+
+/**
+ * The source's priced lines for `asked`, one per line asked, in its order,
+ * read with one call. A line the source does not know is answered as not
+ * found, for the caller to refuse; a listed price in another currency is a
+ * broken answer.
+ *
+ * @throws `COMMERCE_PROVIDER_CONTRACT`, `COMMERCE_CATALOGUE_UNAVAILABLE`
+ */
+export async function priceItems(
+  source: CatalogueSource,
+  currency: string,
+  asked: readonly { readonly reference: string; readonly quantity: number }[]
+): Promise<PricedLine[]> {
+  if (asked.length === 0) return [];
+  const answer: unknown = await ask(source, "price", () =>
+    source.price({ currency, lines: asked })
+  );
+  if (!Array.isArray(answer) || answer.length !== asked.length) {
+    throw broken(source, "price did not answer one line per line asked");
+  }
+  return asked.map((line, index) => {
+    const parsed = pricedLineSchema.safeParse(answer[index]);
+    if (
+      !parsed.success ||
+      parsed.data.reference !== line.reference ||
+      parsed.data.quantity !== line.quantity
+    ) {
+      throw broken(
+        source,
+        "price answered a line outside the contract, or out of order"
+      );
+    }
+    const priced = parsed.data;
+    if (
+      priced.found &&
+      priced.price.kind === "listed" &&
+      priced.price.unitPrice.currency !== currency
+    ) {
+      throw broken(source, "price answered another currency");
+    }
+    return priced;
+  });
 }
 
 async function ask<T>(

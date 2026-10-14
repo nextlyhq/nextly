@@ -1,4 +1,4 @@
-import { asc, eq, inArray } from "@nextlyhq/plugin-sdk/db";
+import { eq, inArray } from "@nextlyhq/plugin-sdk/db";
 import type {
   PluginDatabase,
   PluginTransaction,
@@ -13,12 +13,19 @@ import { commerceError } from "../errors";
 import { parseRequest } from "../request-input";
 import { referenceKey } from "../schema/reference-key";
 import { cartLines, carts } from "../schema/tables";
+import { withCommerceStock } from "../stock/stock-ledger";
 
+import {
+  findLiveCart,
+  moveCart,
+  readCartLines,
+  type LiveCart,
+} from "./cart-store";
 import { findItems } from "./catalogue-read";
 import { allOf } from "./conditions";
-import { cartDeadline, isCartExpired, liveCartCondition } from "./lifetime";
+import { cartDeadline, isCartExpired } from "./lifetime";
 import { allowLine, MAX_CART_LINES, MAX_LINE_QUANTITY } from "./line-rules";
-import { hashCartToken, newCartToken, parseCartToken } from "./token";
+import { hashCartToken, newCartToken } from "./token";
 import {
   buildCartView,
   emptyCartView,
@@ -134,61 +141,28 @@ type CartChange =
     }
   | { readonly kind: "clear" };
 
-interface LiveCart {
-  /** The token that found the cart, which its cookie keeps. */
-  readonly token: string;
-  readonly id: string;
-  readonly version: number;
-  readonly expiresAt: Date;
-}
-
 /** @experimental */
 export function createCartService(options: CartServiceOptions): CartService {
   const { db, source, currency, lifetimeDays } = options;
   const clock = options.now ?? (() => new Date());
 
-  /**
-   * The live cart the token finds, or `null`. A cart past its deadline, or
-   * made in another currency than the store's, is not served, whether or not
-   * the sweep has removed it yet.
-   */
-  async function liveCart(
-    presented: string | null,
-    now: Date
-  ): Promise<LiveCart | null> {
-    const token = parseCartToken(presented);
-    if (token === null) return null;
-    const c = db.table(carts);
-    const row = await db
-      .select(carts)
-      .where(eq(c.tokenHash, hashCartToken(token)))
-      .first();
-    if (!row || isCartExpired(row, now) || row.currency !== currency) {
-      return null;
-    }
-    return {
-      token,
-      id: row.id,
-      version: row.version,
-      expiresAt: row.expiresAt,
-    };
-  }
+  // A cart that has become an order takes no more changes: the next change
+  // starts a new cart, with a new token.
+  const liveCart = async (presented: string | null, now: Date) => {
+    const cart = await findLiveCart(db, presented, currency, now);
+    return cart && !cart.checkedOut ? cart : null;
+  };
+  const storedLines = (cartId: string) => readCartLines(db, cartId);
 
-  async function storedLines(cartId: string): Promise<StoredCartLine[]> {
-    const l = db.table(cartLines);
-    // UUIDv7 ids sort by when they were made, so lines read in the order
-    // they were added.
-    const rows = await db
-      .select(cartLines)
-      .where(eq(l.cartId, cartId))
-      .orderBy(asc(l.id))
-      .all();
-    return rows.map(row => ({
-      reference: row.reference,
-      quantity: row.quantity,
-      seenUnitPriceAmount: row.seenUnitPriceAmount,
-      seenUnitPriceCurrency: row.seenUnitPriceCurrency,
-    }));
+  /**
+   * The items for `references` as a shopper may buy them now: the source's
+   * answer, with each counted item's stock less commerce's own holds, worked
+   * out as checkout works it out.
+   */
+  async function shownItems(
+    references: readonly string[]
+  ): Promise<Map<string, CatalogueItem>> {
+    return withCommerceStock(db, await findItems(source, currency, references));
   }
 
   // The source is asked for the whole cart at once, outside any transaction:
@@ -196,11 +170,7 @@ export function createCartService(options: CartServiceOptions): CartService {
   // its connection and locks for as long as the call takes.
   async function view(cart: LiveCart): Promise<CartView> {
     const lines = await storedLines(cart.id);
-    const items = await findItems(
-      source,
-      currency,
-      lines.map(line => line.reference)
-    );
+    const items = await shownItems(lines.map(line => line.reference));
     return buildCartView({
       currency,
       expiresAt: cart.expiresAt,
@@ -230,14 +200,10 @@ export function createCartService(options: CartServiceOptions): CartService {
     const adds = cartChange.kind === "line" && cartChange.quantity(current) > 0;
     if (!adds) {
       const next = planWrite(cartChange, lines, undefined);
-      const items = await findItems(
-        source,
-        currency,
-        next.lines.map(line => line.reference)
-      );
+      const items = await shownItems(next.lines.map(line => line.reference));
       return { next, items };
     }
-    const items = await findItems(source, currency, [
+    const items = await shownItems([
       ...lines.map(line => line.reference),
       cartChange.reference,
     ]);
@@ -316,28 +282,7 @@ export function createCartService(options: CartServiceOptions): CartService {
       }
 
       const applied = await db.transaction(async tx => {
-        const c = tx.table(carts);
-        const moved = await tx
-          .update(carts, {
-            version: cart.version + 1,
-            expiresAt,
-            updatedAt: now,
-          })
-          .where(
-            allOf(
-              eq(c.id, cart.id),
-              eq(c.version, cart.version),
-              liveCartCondition(c.expiresAt, now)
-            )
-          );
-        if (moved < 0) {
-          // A driver that cannot say how many rows it changed cannot tell a
-          // won race from a lost one, so the change is refused, never assumed.
-          throw commerceError("COMMERCE_CART_BUSY", {
-            reason: "the database did not report the rows the write changed",
-          });
-        }
-        if (moved === 0) return false;
+        if (!(await moveCart(tx, cart, now, { expiresAt }))) return false;
         await writeLines(tx, cart.id, lines, next.lines, now);
         return true;
       });
@@ -366,18 +311,23 @@ export function createCartService(options: CartServiceOptions): CartService {
   return {
     async get(input) {
       const { token } = parseRequest(tokenOnlySchema, input);
-      const cart = await liveCart(token, clock());
-      if (!cart) return noCart(token);
-      const answer = await view(cart);
       // The source can answer after the cart's deadline. A cart that expired
       // meanwhile is answered as none, unless a change made while the source
-      // was read moved its deadline on, in which case that cart is read again.
-      if (!isCartExpired(cart, clock())) {
-        return { cart: answer, cookie: { action: "keep" } };
+      // was read moved its deadline on, in which case that cart is read again,
+      // once: a deadline a change set lies a whole lifetime ahead.
+      for (let pass = 0; ; pass++) {
+        const cart = await findLiveCart(db, token, currency, clock());
+        // Shown empty, its cookie kept: the cookie still finds the order a
+        // repeated completion of its checkout answers with.
+        if (cart?.checkedOut) {
+          return { cart: emptyCartView(currency), cookie: { action: "keep" } };
+        }
+        if (!cart) return noCart(token);
+        const answer = await view(cart);
+        if (pass > 0 || !isCartExpired(cart, clock())) {
+          return { cart: answer, cookie: { action: "keep" } };
+        }
       }
-      const moved = await liveCart(token, clock());
-      if (!moved) return noCart(token);
-      return { cart: await view(moved), cookie: { action: "keep" } };
     },
 
     async add(input) {

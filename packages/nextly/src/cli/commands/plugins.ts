@@ -96,6 +96,9 @@ export function renderPluginInfo(
   list("field groups", info.fieldGroups);
   list("permissions", info.permissions);
   list("events", info.events);
+  // Who besides staff the plugin lets sign in, which an operator weighs as
+  // they weigh its permissions.
+  list("signed-in kinds", info.principalKinds);
 
   logger.keyValue("routes", String(info.routeCount));
   logger.keyValue("admin menu items", String(info.adminMenuCount));

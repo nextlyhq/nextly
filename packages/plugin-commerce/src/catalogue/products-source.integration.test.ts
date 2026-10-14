@@ -109,20 +109,27 @@ describe.each(getConfiguredTestDialects())(
         maxPerLine: 20,
       });
       // More products than one page of two holds, so the listing case pages.
+      const others: string[] = [];
       for (const name of ["Lathe", "Press brake", "Grinder"]) {
-        await seed(ctx, { name, price: 1_000 });
+        others.push(await seed(ctx, { name, price: 1_000 }));
       }
 
       const cases = await catalogueSourceContract({
         currency: "USD",
-        // Not an id the collection could have issued, so an unknown
-        // reference also proves a lookup by an id of another shape is
-        // answered as unknown rather than failing in the database.
         fixtures: {
           listed,
           onRequest,
           toOrder: { reference: toOrder, maxPerLine: 20 },
+          // Not an id the collection could have issued, so an unknown
+          // reference also proves a lookup by an id of another shape is
+          // answered as unknown rather than failing in the database.
           unknown: "no-such-product",
+          // Every product seeded, so the listing is held to the whole
+          // catalogue rather than only the fixtures it names.
+          catalogue: [listed, onRequest, toOrder, ...others],
+          // The search reads the name and SKU, ignoring case: "drill" finds
+          // the drill press and leaves out the custom rig.
+          search: { query: "drill", finds: listed, skips: onRequest },
         },
         create: () => sourceFor(ctx),
       });

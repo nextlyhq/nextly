@@ -1,6 +1,7 @@
 import { getCachedNextly, type PluginContext } from "@nextlyhq/plugin-sdk";
 
 import type { CartService } from "../cart/cart-service";
+import type { CheckoutService } from "../checkout/checkout-service";
 import { PLUGIN_NAME } from "../schema/definition";
 
 import type { CatalogueService } from "./catalogue-service";
@@ -8,6 +9,7 @@ import type { CatalogueService } from "./catalogue-service";
 /** The service keys commerce registers its typed functions under. */
 export const CART_SERVICE = "cart";
 export const CATALOGUE_SERVICE = "catalogue";
+export const CHECKOUT_SERVICE = "checkout";
 
 /**
  * Commerce's typed server functions: the cart and the catalogue, the same
@@ -18,6 +20,7 @@ export const CATALOGUE_SERVICE = "catalogue";
 export interface CommerceServer {
   readonly cart: CartService;
   readonly catalogue: CatalogueService;
+  readonly checkout: CheckoutService;
 }
 
 /**
@@ -91,14 +94,19 @@ function fromNamespace(
 ): CommerceServer {
   const cart = services?.[CART_SERVICE];
   const catalogue = services?.[CATALOGUE_SERVICE];
-  if (!isCartService(cart) || !isCatalogueService(catalogue)) {
+  const checkout = services?.[CHECKOUT_SERVICE];
+  if (
+    !isCartService(cart) ||
+    !isCatalogueService(catalogue) ||
+    !isCheckoutService(checkout)
+  ) {
     // Named rather than a generic missing-service message: the likely cause
     // is that commerce is not in the site's plugins.
     throw new Error(
       `"${PLUGIN_NAME}" is not installed, or is registered without its "${CART_SERVICE}" and "${CATALOGUE_SERVICE}" services. Add commerce() to defineConfig({ plugins: [...] }).`
     );
   }
-  return { cart, catalogue };
+  return { cart, catalogue, checkout };
 }
 
 function hasMethods(value: unknown, methods: readonly string[]): boolean {
@@ -113,4 +121,8 @@ function isCartService(value: unknown): value is CartService {
 
 function isCatalogueService(value: unknown): value is CatalogueService {
   return hasMethods(value, ["find", "list"]);
+}
+
+function isCheckoutService(value: unknown): value is CheckoutService {
+  return hasMethods(value, ["quote", "complete"]);
 }

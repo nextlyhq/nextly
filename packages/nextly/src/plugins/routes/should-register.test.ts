@@ -353,6 +353,38 @@ describe("a secure route a caller brought nothing for", () => {
     ).toEqual({ kind: "boot" });
   });
 
+  it("boots a route asking for a plugin's kind of signed-in person", () => {
+    // The person arrives with the plugin's own cookie, which `hasCredential`
+    // cannot see: refusing here would refuse every person on a cold worker
+    // and serve them once it was warm. The fixed-slug case below is the
+    // control, the same route refused when it asks for staff.
+    const personRoute = [
+      {
+        name: "@acme/forms",
+        contributes: {
+          routes: [
+            {
+              method: "GET",
+              path: "/export",
+              principal: { kind: "acme-forms:member" },
+            },
+          ],
+        },
+      },
+    ] as never;
+    expect(
+      pluginRouteBootDecision(
+        personRoute,
+        {
+          method: "GET",
+          path: "/plugins/@acme/forms/export",
+          hasCredential: false,
+        },
+        "plugin"
+      )
+    ).toEqual({ kind: "boot" });
+  });
+
   it("still refuses when the gate is a fixed slug", () => {
     // The control. A fixed slug cannot throw, so nothing is hidden by deciding
     // here, and the cold start an anonymous caller could force is worth more

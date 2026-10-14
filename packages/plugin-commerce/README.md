@@ -1,8 +1,9 @@
 # @nextlyhq/plugin-commerce
 
 Commerce for [Nextly](https://nextlyhq.com): a catalogue to sell from, a cart
-kept on the server, exact money, and the contracts that catalogue sources and
-payment providers implement so a store can swap one for another.
+kept on the server, a checkout that turns it into an order, exact money, and the
+contracts that catalogue sources and payment providers implement so a store can
+swap one for another.
 
 ## Status
 
@@ -10,14 +11,16 @@ payment providers implement so a store can swap one for another.
 
 - `commerce()`, the plugin: its own tables and migrations, a built-in products
   collection to sell from (or a catalogue source of the site's own), and a cart
-  kept on the server behind an HTTP-only cookie, with REST routes and typed
-  server functions for a storefront. See the
-  [commerce docs](https://nextlyhq.com/docs/plugins/commerce).
+  kept on the server behind an HTTP-only cookie, and a checkout that turns a
+  cart into a numbered order, holds its stock and starts its payment, with REST
+  routes and typed server functions for a storefront. See the
+  [commerce docs](https://nextlyhq.com/docs/plugins/commerce), whose launch step
+  matters: checkout takes no orders until commerce's jobs have run.
 - The money type and its allocation rule.
 - The catalogue-source and payment-provider contracts, their test suites, a
   test payment provider and an in-memory catalogue source.
 
-Checkout, orders, payments and the admin screens come later.
+Confirming payments, fulfilment, refunds and the admin screens come later.
 
 ## Usage
 

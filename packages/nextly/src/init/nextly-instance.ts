@@ -107,6 +107,7 @@ import type {
   UserContext,
   VerifyEmailArgs,
 } from "../direct-api/types";
+import type { NextlyPrincipals } from "../plugins/principals/types";
 import type { EmailProviderRecord } from "../schemas/email-providers/types";
 import type { EmailTemplateRecord } from "../schemas/email-templates/types";
 import type { UserFieldDefinitionRecord } from "../schemas/user-field-definitions/types";
@@ -903,6 +904,22 @@ export interface Nextly {
    * ```
    */
   jobs: JobsNamespace;
+
+  /**
+   * @experimental Recognising a plugin's kind of signed-in person on a
+   * request: a shop's customer, a site's member.
+   *
+   * Declared as the namespace's own type, as `jobs` is, so a method added to
+   * it cannot be missing here. Calls the kind's resolver at most once per
+   * request, and answers nobody for a write from another site.
+   *
+   * @example
+   * ```typescript
+   * const nextly = await getNextly({ config });
+   * const member = await nextly.principals.fromRequest(request, "accounts:account");
+   * ```
+   */
+  principals: NextlyPrincipals;
 
   /**
    * Content releases — batch documents and put them live at one instant.

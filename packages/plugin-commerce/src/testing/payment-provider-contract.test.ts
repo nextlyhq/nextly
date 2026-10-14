@@ -65,6 +65,51 @@ describe("the payment contract suite against a provider whose limit is the large
   for (const c of cases) it(c.name, c.run);
 });
 
+describe("the payment contract suite against a provider whose refunds stay pending", async () => {
+  // A refund a provider settles later is answered as pending: the suite must
+  // accept it, and hold it to being made once and found again.
+  for (const c of await suiteFor({ refundStatus: "pending" }))
+    it(c.name, c.run);
+});
+
+describe("the payment contract suite at the largest even safe amount", async () => {
+  // Every request the suite makes must stay inside the money domain, the one
+  // it builds to differ from another included.
+  const cases = await paymentProviderContract({
+    ...base,
+    amount: Number.MAX_SAFE_INTEGER - 1,
+    create() {
+      const { provider, control } = createTestPaymentProvider({
+        capabilities: { maxAmounts: { USD: Number.MAX_SAFE_INTEGER } },
+      });
+      return { provider, signWebhook: control.signWebhook };
+    },
+  });
+  for (const c of cases) it(c.name, c.run);
+});
+
+/**
+ * A provider operation that, given a used key with a different request,
+ * performs that request under a fresh key and only then refuses: the refusal
+ * the suite sees is right, and only a look at what changed can catch it.
+ */
+function performsThenRefuses<I extends { readonly operationId: string }, R>(
+  operation: (input: I) => Promise<R>
+): (input: I) => Promise<R> {
+  const requests = new Map<string, string>();
+  let n = 0;
+  return async input => {
+    const request = JSON.stringify({ ...input, operationId: null });
+    const seen = requests.get(input.operationId);
+    if (seen === undefined) requests.set(input.operationId, request);
+    if (seen !== undefined && seen !== request) {
+      await operation({ ...input, operationId: `late-${++n}` });
+      throw commerceError("COMMERCE_OPERATION_KEY_REUSED");
+    }
+    return operation(input);
+  };
+}
+
 describe("the payment contract suite catches a broken provider", () => {
   // Each provider below breaks one rule of the contract. The suite must fail
   // the case that guards that rule; otherwise the case proves nothing.
@@ -175,6 +220,113 @@ describe("the payment contract suite catches a broken provider", () => {
     );
   });
 
+  it("fails a provider that confirms a changed request under a used key before refusing it", async () => {
+    const failed = await failingCases(p => ({
+      ...p,
+      confirm: performsThenRefuses(p.confirm),
+    }));
+    expect(failed).toContain(
+      "refuses a confirm key reused for a different request, and changes nothing"
+    );
+  });
+
+  it("fails a provider that captures a changed request under a used key before refusing it", async () => {
+    const failed = await failingCases(p => ({
+      ...p,
+      capture: p.capture ? performsThenRefuses(p.capture) : undefined,
+    }));
+    expect(failed).toContain(
+      "refuses a capture key reused for a different request, and changes nothing"
+    );
+  });
+
+  it("fails a provider that cancels a changed request under a used key before refusing it", async () => {
+    const failed = await failingCases(p => ({
+      ...p,
+      cancel: p.cancel ? performsThenRefuses(p.cancel) : undefined,
+    }));
+    expect(failed).toContain(
+      "refuses a cancel key reused for a different request, and changes nothing"
+    );
+  });
+
+  it("fails a provider that refunds a changed request under a used key before refusing it", async () => {
+    const failed = await failingCases(p => ({
+      ...p,
+      refund: p.refund ? performsThenRefuses(p.refund) : undefined,
+    }));
+    expect(failed).toContain(
+      "refuses a refund key reused for a different request, and changes nothing"
+    );
+  });
+
+  it("fails a provider whose capture answer names another payment", async () => {
+    const failed = await failingCases(p => {
+      const capture = p.capture;
+      return {
+        ...p,
+        capture: capture
+          ? async input => ({
+              ...(await capture(input)),
+              providerReference: "pay_elsewhere",
+            })
+          : undefined,
+      };
+    });
+    expect(failed).toContain(
+      "holds money, and captures it once when the answer to a capture is lost"
+    );
+  });
+
+  it("fails a provider whose cancel answer names another payment", async () => {
+    const failed = await failingCases(p => {
+      const cancel = p.cancel;
+      return {
+        ...p,
+        cancel: cancel
+          ? async input => ({
+              ...(await cancel(input)),
+              reference: "pay-elsewhere",
+            })
+          : undefined,
+      };
+    });
+    expect(failed).toContain(
+      "cancels a payment once when the answer to a cancel is lost"
+    );
+  });
+
+  it("fails a provider whose read answer carries another payment's reference", async () => {
+    const failed = await failingCases(p => ({
+      ...p,
+      read: async input => ({
+        ...(await p.read(input)),
+        reference: "pay-elsewhere",
+      }),
+    }));
+    expect(failed).toContain(
+      "reads a payment back, and finds it by commerce's reference"
+    );
+  });
+
+  it("fails a provider whose lookup by reference answers with another amount", async () => {
+    const failed = await failingCases(p => ({
+      ...p,
+      findByReference: async input => {
+        const found = await p.findByReference(input);
+        return found === null
+          ? null
+          : {
+              ...found,
+              amount: money(found.amount.amount + 2, found.amount.currency),
+            };
+      },
+    }));
+    expect(failed).toContain(
+      "reads a payment back, and finds it by commerce's reference"
+    );
+  });
+
   it("fails a provider that checks a signature is present but not that it is right", async () => {
     // It refuses a missing header and a body that is not canonical JSON, so
     // only a changed signature over an unchanged body can catch it.
@@ -195,6 +347,34 @@ describe("the payment contract suite catches a broken provider", () => {
         }
         return body;
       },
+    }));
+    expect(failed).toContain(
+      "verifies a signed webhook, and refuses a tampered or unsigned one"
+    );
+  });
+
+  it("fails a provider that answers every webhook as type other", async () => {
+    const failed = await failingCases(p => ({
+      ...p,
+      verifyWebhook: async input => ({
+        ...(await p.verifyWebhook(input)),
+        type: "other",
+      }),
+    }));
+    expect(failed).toContain(
+      "verifies a signed webhook, and refuses a tampered or unsigned one"
+    );
+  });
+
+  it("fails a provider that answers every webhook as a payment update", async () => {
+    // The suite signs more than one type, so a fixed answer that happens to
+    // match the first is still caught.
+    const failed = await failingCases(p => ({
+      ...p,
+      verifyWebhook: async input => ({
+        ...(await p.verifyWebhook(input)),
+        type: "payment.updated",
+      }),
     }));
     expect(failed).toContain(
       "verifies a signed webhook, and refuses a tampered or unsigned one"

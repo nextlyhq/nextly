@@ -1,0 +1,195 @@
+/**
+ * The kinds of signed-in person the running plugins register.
+ *
+ * Collected and checked once, when the plugin list is resolved, so a kind
+ * that cannot work stops the application from starting rather than surfacing
+ * as a route that refuses everyone. Published, like the declared hook points,
+ * because recognition runs long after resolution and has only the kind's
+ * name to go on.
+ *
+ * @module plugins/principals/registry
+ */
+import type { PluginDefinition } from "../plugin-context";
+import { pluginAdminSlug } from "../plugin-slug";
+import { resolutionError } from "../resolution-error";
+
+import type {
+  PrincipalAttributeType,
+  PrincipalKindContribution,
+} from "./types";
+
+/** One registered kind, and the plugin that registered it. */
+export interface RegisteredPrincipalKind {
+  /** `<plugin>:<name>`, the one name every entry point asks by. */
+  readonly kind: string;
+  /** The registering plugin's name, as declared. */
+  readonly plugin: string;
+  /** The name the plugin gave it, without the plugin's prefix. */
+  readonly name: string;
+  /**
+   * The declared attributes, copied when the kind was collected, so a plugin
+   * that changes its definition object afterwards changes nothing that
+   * recognition checks an answer against.
+   */
+  readonly attributes: Readonly<Record<string, PrincipalAttributeType>>;
+  /** The definition itself, called as a method so a class-based one keeps its `this`. */
+  readonly definition: PrincipalKindContribution;
+}
+
+/**
+ * A kind's own name: a lowercase letter, then up to 31 lowercase letters,
+ * digits or dashes. Short and plain, because it is half of a name that lands
+ * in audit rows and email records.
+ */
+const KIND_NAME = /^[a-z][a-z0-9-]{0,31}$/;
+
+/**
+ * An attribute's name: a letter, then letters, digits or underscores. Rules
+ * read attributes by property, so a name like `__proto__` would reach the
+ * object's prototype rather than a value.
+ */
+const ATTRIBUTE_NAME = /^[A-Za-z][A-Za-z0-9_]{0,63}$/;
+
+const ATTRIBUTE_TYPES: ReadonlySet<string> = new Set<PrincipalAttributeType>([
+  "boolean",
+  "string",
+  "number",
+]);
+
+/** The full name core gives a plugin's kind: `<plugin slug>:<name>`. */
+export function principalKindName(pluginName: string, name: string): string {
+  return `${pluginAdminSlug(pluginName)}:${name}`;
+}
+
+/**
+ * The kinds this process resolved.
+ *
+ * Module-level for the reason the declared hook points are: resolution runs
+ * once, and every request asks the same question of its result afterwards.
+ */
+let registeredKinds: ReadonlyMap<string, RegisteredPrincipalKind> = new Map();
+
+export function publishPrincipalKinds(
+  kinds: ReadonlyMap<string, RegisteredPrincipalKind>
+): void {
+  registeredKinds = kinds;
+}
+
+/**
+ * Every kind published now. A dev reload captures it before it reads the new
+ * config, which publishes that config's kinds, and puts it back when the
+ * reload does not land.
+ */
+export function publishedPrincipalKinds(): ReadonlyMap<
+  string,
+  RegisteredPrincipalKind
+> {
+  return registeredKinds;
+}
+
+/** The registered kind with this full name, or `undefined`. */
+export function getPrincipalKind(
+  kind: string
+): RegisteredPrincipalKind | undefined {
+  return registeredKinds.get(kind);
+}
+
+/**
+ * The declared attributes, checked and copied, or the reason they cannot be
+ * used.
+ *
+ * Checked here rather than trusted to the type: a JavaScript plugin has no
+ * type, and an attribute declared as `"date"` would otherwise make every
+ * answer fail recognition at runtime, with nothing at boot to say why.
+ */
+function declaredAttributes(
+  value: unknown
+): Record<string, PrincipalAttributeType> | string {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return "attributes must be an object naming each attribute's type";
+  }
+  const attributes: Record<string, PrincipalAttributeType> = {};
+  for (const [name, type] of Object.entries(value)) {
+    if (!ATTRIBUTE_NAME.test(name)) {
+      return `attribute name ${JSON.stringify(name)} must start with a letter and hold only letters, digits and underscores, at most 64 characters`;
+    }
+    if (typeof type !== "string" || !ATTRIBUTE_TYPES.has(type)) {
+      return `attribute ${JSON.stringify(name)} must be "boolean", "string" or "number", not ${JSON.stringify(type)}`;
+    }
+    attributes[name] = type as PrincipalAttributeType;
+  }
+  return attributes;
+}
+
+/** Why a plugin's kind cannot be registered, or the kind to register. */
+function checkedKind(
+  plugin: PluginDefinition,
+  definition: PrincipalKindContribution
+): RegisteredPrincipalKind | string {
+  if (
+    typeof definition?.name !== "string" ||
+    !KIND_NAME.test(definition.name)
+  ) {
+    return `name ${JSON.stringify(definition?.name)} must be a lowercase letter followed by at most 31 lowercase letters, digits or dashes`;
+  }
+  if (typeof definition.resolve !== "function") {
+    return "resolve must be a function";
+  }
+  if (
+    definition.lookup !== undefined &&
+    typeof definition.lookup !== "function"
+  ) {
+    return "lookup must be a function when given";
+  }
+  const attributes = declaredAttributes(definition.attributes);
+  if (typeof attributes === "string") return attributes;
+  return {
+    kind: principalKindName(plugin.name, definition.name),
+    plugin: plugin.name,
+    name: definition.name,
+    attributes: Object.freeze(attributes),
+    definition,
+  };
+}
+
+/**
+ * Collect every enabled plugin's kinds, refusing one that cannot work or
+ * whose full name another already holds.
+ *
+ * Disabled plugins are skipped, as their hook points are: a plugin that is off
+ * recognises nobody, and refusing its declaration would let something nobody
+ * runs stop the application from starting.
+ */
+export function collectPrincipalKinds(
+  plugins: readonly PluginDefinition[]
+): Map<string, RegisteredPrincipalKind> {
+  const kinds = new Map<string, RegisteredPrincipalKind>();
+  for (const plugin of plugins) {
+    if (plugin.enabled === false) continue;
+    for (const definition of plugin.contributes?.principals ?? []) {
+      const checked = checkedKind(plugin, definition);
+      if (typeof checked === "string") {
+        throw resolutionError(
+          "principal-kind-invalid",
+          `Plugin "${plugin.name}" registers a kind of signed-in person that cannot be used: ${checked}.`,
+          { plugin: plugin.name, problem: checked }
+        );
+      }
+      const existing = kinds.get(checked.kind);
+      if (existing) {
+        // Both owners named, as for a hook point: two plugins whose names
+        // reduce to one slug collide here without either declaring the other.
+        throw resolutionError(
+          "principal-kind-collision",
+          `Plugins "${existing.plugin}" and "${plugin.name}" both register the kind of signed-in person "${checked.kind}".`,
+          {
+            principalKind: checked.kind,
+            owners: [existing.plugin, plugin.name],
+          }
+        );
+      }
+      kinds.set(checked.kind, checked);
+    }
+  }
+  return kinds;
+}
