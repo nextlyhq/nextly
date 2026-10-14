@@ -11,7 +11,7 @@ import {
 import { afterEach, describe, expect, it } from "vitest";
 
 import { pendingAddressChanges } from "../schema/tables";
-import { accountById } from "../storage/accounts";
+import { accountById, writeAtVersion } from "../storage/accounts";
 import { sweepPendingChanges } from "../storage/pending-changes";
 import { makeAccount, TEST_PASSWORD } from "../test-support/accounts";
 import { bootAccounts } from "../test-support/boot";
@@ -341,6 +341,48 @@ describe.each(getConfiguredTestDialects())(
         status: "changed",
       });
       expect(await address()).toBe("dana@example.com");
+    });
+
+    it("asks for nothing once a change that ended the session commits after the password was proven", async () => {
+      const { db, deps, mail, id, browser } = await boot();
+      const session = await browser();
+      // A password change commits between the proven password and the
+      // request's own counts: the version moves and the session ends.
+      const raced = {
+        ...deps,
+        core: {
+          ...deps.core,
+          limits: new Proxy(deps.core.limits, {
+            get(target, key) {
+              const member = Reflect.get(target, key) as unknown;
+              if (key !== "reserve")
+                return typeof member === "function"
+                  ? (member as (...args: unknown[]) => unknown).bind(target)
+                  : member;
+              return async (entries: Parameters<typeof target.reserve>[0]) => {
+                if (entries.some(e => e.rule === "address-change-account")) {
+                  const fresh = await accountById(db, id);
+                  if (fresh !== null)
+                    await writeAtVersion(db, fresh, {}, { endsSessions: true });
+                }
+                return target.reserve(entries);
+              };
+            },
+          }),
+        },
+      };
+
+      expect(
+        await requestAddressChange(raced, {
+          sessionToken: session,
+          currentPassword: TEST_PASSWORD,
+          newAddress: "new@example.com",
+          client: null,
+        })
+      ).toEqual({ status: "refused", reason: "try-again" });
+      expect(await db.select(pendingAddressChanges).all()).toEqual([]);
+      expect(mail.ofKind("address-change-asked")).toEqual([]);
+      expect(mail.ofKind("confirm-new-address")).toEqual([]);
     });
 
     it("counts a wrong current password as a failed sign-in, and asks for nothing more", async () => {

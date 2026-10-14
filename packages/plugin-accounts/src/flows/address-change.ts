@@ -3,6 +3,7 @@ import type { LimitEntry, SecretData } from "../core/ports";
 import {
   accountByAddress,
   changeAddressAtVersion,
+  holdAtVersion,
   normaliseAddress,
   type AccountRow,
   type AccountsDb,
@@ -86,6 +87,7 @@ export async function requestAddressChange(
       now,
     })
   );
+  if (secrets === null) return { status: "refused", reason: "try-again" };
   await deps.mail.queue({
     kind: "address-change-asked",
     accountId: account.id,
@@ -139,15 +141,23 @@ async function reserveChange(
  * The pending change and its secrets, replacing any earlier one: the old
  * address's cancel link always, the new address's link and code only when
  * it is free. Each names the change, so a link from an earlier request
- * never confirms a later one.
+ * never confirms a later one. Written only while the account is at the
+ * version the holder's session was proven at: a password change, a reset
+ * or a sign-out everywhere that committed since ended that session, and
+ * nothing is asked (null).
  */
 async function askChange(
   deps: FlowDeps,
   tx: AccountsDb,
   input: { account: AccountRow; newAddress: string; free: boolean; now: Date }
-): Promise<{ cancel: string; link: string | null; code: string | null }> {
+): Promise<{
+  cancel: string;
+  link: string | null;
+  code: string | null;
+} | null> {
   const { core, settings } = deps;
   const subject = input.account.id;
+  if (!(await holdAtVersion(tx, input.account))) return null;
   const lifeMs = settings.verification.linkHours * HOUR;
   await core.secrets.voidFor({ subject, purposes: CHANGE_PURPOSES }, { tx });
   const change = await askAddressChange(tx, {

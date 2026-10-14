@@ -139,7 +139,27 @@ export async function changeAddressAtVersion(
   }
 }
 
-/** The one guarded update both writes go through. */
+/**
+ * Holds the account at the version its flow read, for a transaction whose
+ * writes are elsewhere: the row is written with the values it has, which
+ * locks it until the transaction ends. A change that moves the version
+ * either committed first, and this answers false, or waits for this
+ * transaction and then sees what it wrote. MySQL's driver counts the rows
+ * an update matched, not only those it changed, so an unchanged row counts.
+ */
+export async function holdAtVersion(
+  db: AccountsDb,
+  account: Pick<AccountRow, "id" | "securityVersion">
+): Promise<boolean> {
+  return updateAtVersion(
+    db,
+    account,
+    { securityVersion: account.securityVersion },
+    false
+  );
+}
+
+/** The one guarded update every guarded write goes through. */
 async function updateAtVersion(
   db: AccountsDb,
   account: Pick<AccountRow, "id" | "securityVersion">,
