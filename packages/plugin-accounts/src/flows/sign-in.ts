@@ -1,16 +1,10 @@
-import {
-  accountByAddress,
-  normaliseAddress,
-  writeAtVersion,
-  type AccountRow,
-} from "../storage/accounts";
+import { writeAtVersion, type AccountRow } from "../storage/accounts";
 import { rememberBrowser } from "../storage/known-browsers";
 import { startSession } from "../storage/sessions";
 
 import { sessionLimits, type FlowDeps } from "./deps";
-import { ADDRESS } from "./input";
 import {
-  attemptPassword,
+  attemptForAddress,
   attemptSucceeded,
   WRONG,
   type AttemptRefusal,
@@ -49,24 +43,9 @@ export async function signIn(
   deps: FlowDeps,
   input: SignInInput
 ): Promise<SignInResult> {
-  const address = ADDRESS.safeParse(input.address);
-  if (!address.success) {
-    await deps.pacer.waitAsLongAsACheck();
-    return WRONG;
-  }
-  const now = deps.now();
-  const account = await accountByAddress(deps.db, address.data);
-  const attempt = await attemptPassword(deps, {
-    account,
-    addressKey: normaliseAddress(address.data),
-    password: input.password,
-    client: input.client,
-    knownTokens: input.knownTokens ?? [],
-    now,
-  });
-  if (attempt.status === "refused") return attempt.refusal;
-  // A proven password means the account exists.
-  if (account === null) return WRONG;
+  const proven = await attemptForAddress(deps, input);
+  if (proven.status !== "proven") return proven;
+  const { account, attempt } = proven;
   const refusal = accountRefusal(deps, account, attempt.known);
   if (refusal !== null) return refusal;
 
@@ -74,7 +53,7 @@ export async function signIn(
     account,
     password: input.password,
     own: attempt.own,
-    now,
+    now: deps.now(),
   });
   if (result.status === "signed-in") await attemptSucceeded(deps, attempt);
 

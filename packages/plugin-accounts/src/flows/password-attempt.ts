@@ -1,7 +1,9 @@
 import { LIMIT_RULES } from "../core/limit-rules";
 import type { AdmittedReservation, LimitEntry } from "../core/ports";
 import {
+  accountByAddress,
   claimResetRequiredEmail,
+  normaliseAddress,
   recordFailedPassword,
   type AccountRow,
 } from "../storage/accounts";
@@ -14,6 +16,7 @@ import {
 } from "../storage/known-browsers";
 
 import { MINUTE, type FlowDeps } from "./deps";
+import { ADDRESS } from "./input";
 import { validTokens } from "./known-tokens";
 import { pageLink } from "./links";
 import { PURPOSES } from "./purposes";
@@ -119,6 +122,49 @@ export async function attemptPassword(
     reservation: reservation.reservation,
     addressKey: input.addressKey,
   };
+}
+
+/**
+ * An attempt at the password of whatever account an address a visitor
+ * typed names: an address that is not one is answered as a wrong password
+ * in a check's time, and one with no account is checked against the decoy.
+ * Proven, it answers the account.
+ */
+export async function attemptForAddress(
+  deps: FlowDeps,
+  input: {
+    address: string;
+    password: string;
+    client: string | null;
+    knownTokens?: readonly string[];
+  }
+): Promise<
+  | {
+      status: "proven";
+      account: AccountRow;
+      attempt: Extract<PasswordAttempt, { status: "proven" }>;
+    }
+  | AttemptRefusal
+> {
+  const address = ADDRESS.safeParse(input.address);
+  if (!address.success) {
+    await deps.pacer.waitAsLongAsACheck();
+    return WRONG;
+  }
+  const account = await accountByAddress(deps.db, address.data);
+  const attempt = await attemptPassword(deps, {
+    account,
+    addressKey: normaliseAddress(address.data),
+    password: input.password,
+    client: input.client,
+    knownTokens: input.knownTokens ?? [],
+    now: deps.now(),
+  });
+  if (attempt.status === "refused") return attempt.refusal;
+  // A proven password means the account exists.
+  if (account === null) return WRONG;
+
+  return { status: "proven", account, attempt };
 }
 
 /**

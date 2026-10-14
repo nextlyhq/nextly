@@ -25,9 +25,16 @@ import { liveSession } from "../storage/sessions";
 import { bootAccounts } from "../test-support/boot";
 import { flowDeps } from "../test-support/flow-deps";
 
+import type { AttemptRefusal } from "./password-attempt";
 import { PURPOSES } from "./purposes";
 import { signUp } from "./sign-up";
-import { verifyByCode, verifyByLink, type VerifyResult } from "./verify";
+import {
+  verifyByCode,
+  verifyByCodeWithPassword,
+  verifyByLink,
+  verifyByLinkWithPassword,
+  type VerifyResult,
+} from "./verify";
 
 const dana = {
   name: "Dana Reyes",
@@ -43,7 +50,7 @@ function required<T>(value: T | null | undefined): T {
   return value;
 }
 
-function verified(result: VerifyResult) {
+function verified(result: VerifyResult | AttemptRefusal) {
   if (result.status !== "verified")
     throw new Error(`expected verified, got ${JSON.stringify(result)}`);
   return result;
@@ -168,6 +175,73 @@ describe.each(getConfiguredTestDialects())(
       expect((await accountByAddress(db, dana.address))?.verifiedAt).toBeNull();
       expect(await db.select(sessions).all()).toEqual([]);
       verified(await verifyByLink(deps, { token: linkToken, browserToken }));
+    });
+
+    it("verifies by link in another browser only once the account's password is given there", async () => {
+      const { db, deps, core, linkToken } = await signedUp();
+
+      expect(
+        await verifyByLinkWithPassword(deps, {
+          token: linkToken,
+          password: "not the password",
+          client: null,
+        })
+      ).toEqual({ status: "refused", reason: "wrong-credentials" });
+      expect((await accountByAddress(db, dana.address))?.verifiedAt).toBeNull();
+
+      const result = verified(
+        await verifyByLinkWithPassword(deps, {
+          token: linkToken,
+          password: dana.password,
+          client: null,
+        })
+      );
+      expect(await accountByAddress(db, dana.address)).toMatchObject({
+        verifiedBy: "link",
+      });
+      expect(
+        await liveSession(
+          db,
+          core.opaque.hash(required(result.session).token),
+          deps.now()
+        )
+      ).not.toBeNull();
+    });
+
+    it("verifies by code in another browser once the password is given, and a wrong password spends no try", async () => {
+      const { db, deps, core, email, account } = await signedUp({
+        verification: { codeTries: 3 },
+      });
+      for (let n = 0; n < 5; n += 1) {
+        expect(
+          await verifyByCodeWithPassword(deps, {
+            address: dana.address,
+            code: email.code,
+            password: "not the password",
+            client: `198.51.100.${n}`,
+          })
+        ).toMatchObject({ status: "refused", reason: "wrong-credentials" });
+        core.clock.advance(60_000);
+      }
+      expect(
+        await core.limits.check([
+          { rule: LIMIT_RULES.codeTries, key: account.addressNormalised },
+        ])
+      ).toMatchObject({
+        entries: [{ wouldAdmit: true }],
+      });
+
+      verified(
+        await verifyByCodeWithPassword(deps, {
+          address: dana.address,
+          code: email.code,
+          password: dana.password,
+          client: null,
+        })
+      );
+      expect(await accountByAddress(db, dana.address)).toMatchObject({
+        verifiedBy: "code",
+      });
     });
 
     it("verifies by code in the browser that signed up, and gives the right code's try back", async () => {

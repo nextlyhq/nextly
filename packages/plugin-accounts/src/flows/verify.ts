@@ -8,6 +8,12 @@ import { startSession, type SessionRow } from "../storage/sessions";
 
 import { sessionLimits, type FlowDeps } from "./deps";
 import { linkedAccount } from "./linked-account";
+import {
+  attemptForAddress,
+  attemptPassword,
+  attemptSucceeded,
+  type AttemptRefusal,
+} from "./password-attempt";
 import { PURPOSES } from "./purposes";
 import { spendCode } from "./spend-code";
 
@@ -96,6 +102,80 @@ export async function verifyByCode(
   if (spent.status === "refused") return spent;
 
   return completeVerification(deps, account, "code");
+}
+
+/**
+ * Verifies an address by its link in any browser, once the account's
+ * password is given there: the attempt is counted and checked as a sign-in
+ * is, so an account someone else made with the address is never verified
+ * by its owner's click alone. A proven password spends the link, verifies
+ * and starts the session, as in the browser that signed up.
+ */
+export async function verifyByLinkWithPassword(
+  deps: FlowDeps,
+  input: {
+    token: string;
+    password: string;
+    client: string | null;
+    knownTokens?: readonly string[];
+  }
+): Promise<VerifyResult | AttemptRefusal> {
+  const linked = await linkedAccount(deps, PURPOSES.verifyLink, input.token);
+  if (linked.status === "refused") return linked;
+  const { account } = linked;
+  const attempt = await attemptPassword(deps, {
+    account,
+    addressKey: account.addressNormalised,
+    password: input.password,
+    client: input.client,
+    knownTokens: input.knownTokens ?? [],
+    now: deps.now(),
+  });
+  if (attempt.status === "refused") return attempt.refusal;
+
+  const result = await completeVerification(deps, account, "link", async tx => {
+    const spent = await deps.core.secrets.consumeToken(
+      { purpose: PURPOSES.verifyLink, token: input.token },
+      { tx }
+    );
+    return spent.ok;
+  });
+  if (result.status === "verified") await attemptSucceeded(deps, attempt);
+
+  return result;
+}
+
+/**
+ * Verifies an address by its typed code in any browser, once the account's
+ * password is given there. The password is attempted first, as a sign-in
+ * is, so nobody without it can spend the address's code tries; then the
+ * code is spent as in the browser that signed up.
+ */
+export async function verifyByCodeWithPassword(
+  deps: FlowDeps,
+  input: {
+    address: string;
+    code: string;
+    password: string;
+    client: string | null;
+    knownTokens?: readonly string[];
+  }
+): Promise<VerifyResult | AttemptRefusal> {
+  const proven = await attemptForAddress(deps, input);
+  if (proven.status !== "proven") return proven;
+  const { account, attempt } = proven;
+
+  const spent = await spendCode(deps, {
+    addressKey: account.addressNormalised,
+    purpose: PURPOSES.verifyCode,
+    subject: account.id,
+    code: input.code,
+  });
+  if (spent.status === "refused") return spent;
+  const result = await completeVerification(deps, account, "code");
+  if (result.status === "verified") await attemptSucceeded(deps, attempt);
+
+  return result;
 }
 
 /** Whether this browser's sign-up token ties it to the account. */
