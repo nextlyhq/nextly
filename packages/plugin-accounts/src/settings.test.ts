@@ -27,6 +27,12 @@ describe("resolveAccountsSettings", () => {
   it("fills every default the design states", () => {
     expect(resolveAccountsSettings({ origin })).toEqual({
       origin,
+      pages: {
+        verify: "/account/verify",
+        notMe: "/account/not-me",
+        signIn: "/account/sign-in",
+        reset: "/account/reset",
+      },
       verificationRequired: true,
       session: { idleHours: 336, absoluteDays: 30, perAccount: 20 },
       unverifiedKeptDays: 7,
@@ -132,6 +138,25 @@ describe("resolveAccountsSettings", () => {
     expect(refusalOf({ origin: "javascript:alert(1)" })?.paths).toEqual([
       "origin",
     ]);
+  });
+
+  it("takes a page as a path on the site, never another host or a query", () => {
+    expect(
+      resolveAccountsSettings({ origin, pages: { verify: "/verify-email" } })
+        .pages.verify
+    ).toBe("/verify-email");
+    for (const verify of [
+      "//evil.example.com/x",
+      "https://evil.example.com/x",
+      "verify",
+      "/v?next=x",
+      "/v#t",
+      "/\\evil",
+    ]) {
+      expect(refusalOf({ origin, pages: { verify } })?.paths).toEqual([
+        "pages.verify",
+      ]);
+    }
   });
 
   it("refuses an option it does not know, so a misspelt one is not ignored", () => {

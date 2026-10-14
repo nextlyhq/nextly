@@ -15,10 +15,45 @@ const DAY = 24 * HOUR;
 
 const whole = (min: number, max: number) => z.number().int().min(min).max(max);
 
+/**
+ * A page of the site, as a path on its origin: one leading slash, never two
+ * (which a browser reads as another host), and no query or fragment, since
+ * the plugin adds the link's own.
+ */
+const sitePath = z
+  .string()
+  .regex(
+    /^\/(?!\/)[^?#\s\\]*$/,
+    "must be a path on the site, such as /account/verify"
+  );
+
+const DEFAULT_PAGES = {
+  verify: "/account/verify",
+  notMe: "/account/not-me",
+  signIn: "/account/sign-in",
+  reset: "/account/reset",
+};
+
 const accountsOptionsSchema = z
   .strictObject({
     /** The site's own origin, which every link in an email is built on. */
     origin: z.url({ protocol: /^https?$/ }),
+    /**
+     * The site's pages that links in emails land on, as paths on `origin`:
+     * each shows what its link will do and asks the visitor to confirm.
+     */
+    pages: z
+      .strictObject({
+        /** Where a verification link lands. */
+        verify: sitePath.default(DEFAULT_PAGES.verify),
+        /** Where "this wasn't me" lands, to remove an account made with the address. */
+        notMe: sitePath.default(DEFAULT_PAGES.notMe),
+        /** Where a visitor signs in. */
+        signIn: sitePath.default(DEFAULT_PAGES.signIn),
+        /** Where a reset link lands. */
+        reset: sitePath.default(DEFAULT_PAGES.reset),
+      })
+      .default(DEFAULT_PAGES),
     /** Whether an address must be verified before its account signs in. */
     verificationRequired: z.boolean().default(true),
     session: z
