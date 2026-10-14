@@ -13,6 +13,9 @@ import {
   type ChallengeResolveDeps,
 } from "../challenge-resolve";
 
+import { authRateLimiter } from "../../middleware/rate-limiter";
+import { SlidingWindowMemoryStore } from "../../middleware/sliding-window-store";
+
 import { fakeSessionRows } from "./session-row-fake";
 import { fakeSpentChallenges } from "./spent-challenges-fake";
 
@@ -1181,6 +1184,150 @@ describe("settling a flow", () => {
 
     expect(first.status).toBe(200);
     expect(replay.status).toBe(401);
+    expect(deps.sessionRows.committed).toHaveLength(1);
+  });
+});
+
+describe("marks injected in place of the database's", () => {
+  it("are told to keep a mark past its token's end, so two answers reaching them after it mint one session", async () => {
+    // Marks that keep each one only until the expiry they are given, with a
+    // clock already past the token's five minutes, as two answers let
+    // through before the end reach them after it.
+    const kept = new Map<string, number>();
+    const afterTheEnd = () => Date.now() + 301_000;
+    const deps = makeDeps();
+    const strict = {
+      isSpent: async (mark: string) => (kept.get(mark) ?? 0) > afterTheEnd(),
+      spend: async (mark: string, expiresAt: number) => {
+        if ((kept.get(mark) ?? 0) > afterTheEnd()) return false;
+        kept.set(mark, expiresAt);
+        return true;
+      },
+    };
+    let arrived = 0;
+    let release: () => void = () => undefined;
+    const bothArrived = new Promise<void>(resolve => {
+      release = resolve;
+    });
+    deps.challengeRegistry = new ChallengeRegistry();
+    deps.challengeRegistry.add({
+      id: "totp",
+      resolve: async () => {
+        arrived += 1;
+        if (arrived === 2) release();
+        await bothArrived;
+        return { ok: true };
+      },
+    });
+    const withStrict = { ...deps, spentChallenges: strict };
+    const pendingToken = await mint({ userId: "u1", challengeId: "totp" });
+    const answer = () =>
+      handleChallengeResolve(
+        makeRequest({ pendingToken, response: { code: "123456" } }),
+        withStrict
+      );
+
+    const statuses = (await Promise.all([answer(), answer()])).map(
+      res => res.status
+    );
+
+    expect(statuses.sort()).toEqual([200, 401]);
+    expect(deps.sessionRows.committed).toHaveLength(1);
+  });
+});
+
+describe("a rolling upgrade on a shared store of the earlier contract", () => {
+  /** What an instance of the earlier release does with a flow, in that store. */
+  function earlierRelease(store: SlidingWindowMemoryStore, flow: string) {
+    const limiter = authRateLimiter(store);
+    const key = `u1:totp:${flow}`;
+    return {
+      // It settles a flow by taking this mark, then filling the budget.
+      settle: async () => {
+        await limiter.check(`${key}:settled`, 1, 300_000);
+        for (let i = 0; i < 5; i++) await limiter.check(key, 5, 300_000);
+      },
+      // And refuses an answer when its budget is spent, or its mark taken.
+      wouldRefuse: async () =>
+        !(await limiter.check(key, 5, 300_000)).allowed ||
+        !(await limiter.check(`${key}:settled`, 1, 300_000)).allowed,
+    };
+  }
+
+  it("refuses, before the resolver, a flow an instance of the earlier release settled", async () => {
+    const store = new SlidingWindowMemoryStore();
+    const deps = { ...makeDeps(), authRateLimit: { store } };
+    const resolve = vi.spyOn(deps.challengeRegistry, "resolve");
+    const flow = randomUUID();
+    await earlierRelease(store, flow).settle();
+    const pendingToken = await mint({
+      userId: "u1",
+      challengeId: "totp",
+      flow,
+    });
+
+    const res = await handleChallengeResolve(
+      makeRequest({ pendingToken, response: { code: "123456" } }),
+      deps
+    );
+
+    expect(res.status).toBe(401);
+    expect(resolve).not.toHaveBeenCalled();
+    expect(deps.sessionRows.committed).toHaveLength(0);
+  });
+
+  it("leaves a flow it settled refused by an instance of the earlier release", async () => {
+    const store = new SlidingWindowMemoryStore();
+    const deps = { ...makeDeps(), authRateLimit: { store } };
+    const flow = randomUUID();
+    const pendingToken = await mint({
+      userId: "u1",
+      challengeId: "totp",
+      flow,
+    });
+
+    const res = await handleChallengeResolve(
+      makeRequest({ pendingToken, response: { code: "123456" } }),
+      deps
+    );
+
+    expect(res.status).toBe(200);
+    expect(await earlierRelease(store, flow).wouldRefuse()).toBe(true);
+  });
+});
+
+describe("deps assembled without the database's marks, over a store with no consume", () => {
+  it("refuses a replay before the resolver runs again", async () => {
+    // The earlier contract's required methods only: it cannot be read
+    // without recording, so the mark cannot be peeked at.
+    const counts = new Map<string, number>();
+    const store = {
+      increment: async (key: string, windowMs: number) => {
+        const count = (counts.get(key) ?? 0) + 1;
+        counts.set(key, count);
+        return { count, resetTime: Date.now() + windowMs };
+      },
+      reset: async (key: string) => {
+        counts.delete(key);
+      },
+    };
+    const { spentChallenges: _unused, ...rest } = makeDeps();
+    const deps = { ...rest, authRateLimit: { store } };
+    const resolve = vi.spyOn(deps.challengeRegistry, "resolve");
+    const pendingToken = await mint({ userId: "u1", challengeId: "totp" });
+
+    const first = await handleChallengeResolve(
+      makeRequest({ pendingToken, response: { code: "123456" } }),
+      deps
+    );
+    const replay = await handleChallengeResolve(
+      makeRequest({ pendingToken, response: { code: "123456" } }),
+      deps
+    );
+
+    expect(first.status).toBe(200);
+    expect(replay.status).toBe(401);
+    expect(resolve).toHaveBeenCalledTimes(1);
     expect(deps.sessionRows.committed).toHaveLength(1);
   });
 });

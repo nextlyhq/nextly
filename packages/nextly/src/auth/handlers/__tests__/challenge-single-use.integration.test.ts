@@ -34,8 +34,8 @@ import { mintPendingToken } from "../../pipeline/pending-token";
 import type { AccountState } from "../../session/account-state";
 import {
   databaseSpentChallenges,
-  SPENT_MARK_GRACE_MS,
   sweepSpentChallenges,
+  type SpentChallenges,
 } from "../../pipeline/spent-challenges";
 import { handleChallengeResolve } from "../challenge-resolve";
 import { buildAuthRouterDeps } from "../deps-bridge";
@@ -68,7 +68,13 @@ function barrier(count: number): () => Promise<void> {
 function instance(
   adapter: TestAdapter,
   limitStore: LimitStore,
-  options: { beforeResolve?: () => Promise<void> } = {}
+  options: {
+    beforeResolve?: () => Promise<void>;
+    /** The clock the marks sweep by, when not this one. */
+    marksNow?: () => number;
+    /** Runs each spend of a mark, so a case can put them in order. */
+    spendIn?: <T>(spend: () => Promise<T>) => Promise<T>;
+  } = {}
 ) {
   const challengeRegistry = new ChallengeRegistry();
   const resolve = vi.fn(
@@ -120,7 +126,11 @@ function instance(
     requireEmailVerification: true,
     fetchAccountState,
     limitStore,
-    spentChallenges: databaseSpentChallenges(adapter as never),
+    spentChallenges: ((marks: SpentChallenges): SpentChallenges => ({
+      isSpent: mark => marks.isSpent(mark),
+      spend: (mark, expiresAt) =>
+        (options.spendIn ?? (run => run()))(() => marks.spend(mark, expiresAt)),
+    }))(databaseSpentChallenges(adapter as never, { now: options.marksNow })),
   };
   return {
     sessions: () => sessionRows.committed.length,
@@ -325,7 +335,7 @@ describeEachDialect("a two-factor challenge on one database", dialect => {
     expect(rows).not.toContain(userId);
   });
 
-  it("sweeps a mark once its pending token ended a grace ago, and keeps one still inside it", async () => {
+  it("sweeps a mark once it has been kept as long as it was given, and keeps one still inside that", async () => {
     const marks = databaseSpentChallenges(current.adapter as never);
     const now = Date.now();
     const expired = `${randomUUID().replaceAll("-", "")}`.padEnd(64, "0");
@@ -333,27 +343,49 @@ describeEachDialect("a two-factor challenge on one database", dialect => {
     await marks.spend(expired, now + 60_000);
     await marks.spend(live, now + 10 * 60_000);
 
-    // The grace past the first token's end, plus five minutes: the first
-    // mark guards nothing now, while the second's token ended only just
-    // inside the grace.
-    await sweepSpentChallenges(
-      current.adapter as never,
-      now + 60_000 + SPENT_MARK_GRACE_MS + 5 * 60_000
-    );
+    // Five minutes on: the first mark's keep-until has passed, the
+    // second's not.
+    await sweepSpentChallenges(current.adapter as never, now + 5 * 60_000);
 
     expect(await marks.isSpent(expired)).toBe(false);
     expect(await marks.isSpent(live)).toBe(true);
   });
 
-  it("keeps a mark written after its token's end, so a second answer let through before the end is still refused", async () => {
-    const marks = databaseSpentChallenges(current.adapter as never);
-    const mark = `${randomUUID().replaceAll("-", "")}`.padEnd(64, "2");
-    // Both answers were let through before the token's end, a second ago,
-    // and reach the mark only now.
-    const ended = Date.now() - 1000;
+  it("mints one session when two answers let through before the token's end reach their marks after it", async () => {
+    // Both are past the settled check together, and the marks sweep as if
+    // the token's five minutes were over by then: the first mark's own sweep
+    // must not remove it before the second answer meets it.
+    const together = barrier(2);
+    const afterTheEnd = () => Date.now() + 301_000;
+    // One spend after the other, the first with its sweep finished, so the
+    // second meets whatever the first's sweep left.
+    let queue: Promise<unknown> = Promise.resolve();
+    const oneAtATime = <T>(spend: () => Promise<T>): Promise<T> => {
+      const next = queue.then(spend);
+      queue = next.catch(() => undefined);
+      return next;
+    };
+    const first = instance(current.adapter, createMemoryLimitStore(), {
+      beforeResolve: together,
+      marksNow: afterTheEnd,
+      spendIn: oneAtATime,
+    });
+    const second = instance(other, createMemoryLimitStore(), {
+      beforeResolve: together,
+      marksNow: afterTheEnd,
+      spendIn: oneAtATime,
+    });
+    const token = await pendingFor(randomUUID());
 
-    expect(await marks.spend(mark, ended)).toBe(true);
-    expect(await marks.spend(mark, ended)).toBe(false);
+    const statuses = (
+      await Promise.all([
+        first.answer(token, RIGHT),
+        second.answer(token, RIGHT),
+      ])
+    ).map(response => response.status);
+
+    expect(statuses.sort()).toEqual([200, 401]);
+    expect(first.sessions() + second.sessions()).toBe(1);
   });
 
   it("refuses an answer with one to try again shortly while the budget's store is away, and examines answers again once it is back", async () => {

@@ -375,27 +375,117 @@ async function peekAttempts(
 /** What reaching the marks needs, whether core supplied them or not. */
 type SpentChallengesDeps = Pick<
   ChallengeResolveDeps,
-  "spentChallenges" | "authRateLimit" | "challengeTokenTTL"
+  | "spentChallenges"
+  | "authRateLimit"
+  | "challengeTokenTTL"
+  | "maxChallengeAttempts"
 >;
 
 /**
- * The marks of settled flows: the database's, or, for deps assembled
- * without them, marks kept in the rate-limit store as they used to be, one
- * count under the mark that only the first spend can take.
+ * Whether the earlier release's mark is kept as well: in the rate-limit
+ * store, under the key that release used.
+ *
+ * Where an app's own store of the earlier contract is configured, instances
+ * still on the earlier release read and write that mark there during a
+ * rolling upgrade, so this release takes and reads it too, and each refuses a
+ * flow the other settled. Deps assembled without the database's marks keep it
+ * as their only mark, as they did.
  */
-function spentChallengesOf(deps: SpentChallengesDeps): SpentChallenges {
-  if (deps.spentChallenges) return deps.spentChallenges;
-  const windowMs = deps.challengeTokenTTL * 1000 + SPENT_MARK_GRACE_MS;
-  const limiter = async () => {
-    const { authRateLimiter } = await import("../middleware/rate-limiter");
-    return authRateLimiter(deps.authRateLimit?.store);
-  };
-  return {
-    isSpent: async mark =>
-      ((await (await limiter()).peek(`spent:${mark}`, windowMs)) ?? 0) >= 1,
-    spend: async mark =>
-      (await (await limiter()).check(`spent:${mark}`, 1, windowMs)).allowed,
-  };
+function keepsEarlierMark(deps: SpentChallengesDeps): boolean {
+  return (
+    deps.authRateLimit?.store !== undefined ||
+    deps.spentChallenges === undefined
+  );
+}
+
+/**
+ * The key the earlier release counts a flow's budget under; its settled mark
+ * is this with `:settled`. It names the account, as it always did in an
+ * app's own store.
+ */
+function earlierFlowKey(pending: PendingFlow): string {
+  return `${pending.userId}:${pending.challengeId}:${pending.flow ?? "0"}`;
+}
+
+/** The limiter over the store the earlier mark lives in. */
+async function earlierLimiter(deps: SpentChallengesDeps) {
+  const { authRateLimiter } = await import("../middleware/rate-limiter");
+  return authRateLimiter(deps.authRateLimit?.store);
+}
+
+/**
+ * Whether the earlier mark says the flow is settled, or its budget is full,
+ * as the earlier release leaves it once a flow settles. False where the store
+ * cannot tell without recording; such a flow is refused when its budget is
+ * spent instead, which settling fills.
+ */
+async function earlierMarkTaken(
+  deps: SpentChallengesDeps,
+  pending: PendingFlow
+): Promise<boolean> {
+  if (!keepsEarlierMark(deps)) return false;
+  const limiter = await earlierLimiter(deps);
+  const key = earlierFlowKey(pending);
+  const windowMs = deps.challengeTokenTTL * 1000;
+  const [mark, budget] = await Promise.all([
+    limiter.peek(`${key}:settled`, windowMs),
+    limiter.peek(key, windowMs),
+  ]);
+  return (mark ?? 0) >= 1 || (budget ?? 0) >= deps.maxChallengeAttempts;
+}
+
+/**
+ * Take the earlier mark, as the earlier release did: true for the first
+ * caller, false once taken. Then fill the flow's budgets, its earlier one and
+ * this release's, so either release refuses a later answer before examining
+ * it, even where its store cannot be read without recording.
+ */
+async function takeEarlierMark(
+  deps: SpentChallengesDeps & AttemptCounterDeps,
+  pending: PendingFlow
+): Promise<boolean> {
+  if (!keepsEarlierMark(deps)) return true;
+  const limiter = await earlierLimiter(deps);
+  const key = earlierFlowKey(pending);
+  const windowMs = deps.challengeTokenTTL * 1000;
+  if (!(await limiter.check(`${key}:settled`, 1, windowMs)).allowed) {
+    return false;
+  }
+  const count = attemptCounter(deps, pending);
+  const budget = challengeFlowKeys(deps.secret, pending).budget;
+  // Bounded by the budget: each call records one attempt, so each budget is
+  // full after at most `maxChallengeAttempts` of them. Best effort: the mark
+  // is what refuses, and a store that fails here has already taken it.
+  try {
+    for (let i = 0; i < deps.maxChallengeAttempts; i++) {
+      const earlier = await limiter.check(
+        key,
+        deps.maxChallengeAttempts,
+        windowMs
+      );
+      const current = await count(budget, deps.maxChallengeAttempts, windowMs);
+      if (!earlier.allowed && !current.allowed) break;
+    }
+  } catch {
+    // The flow is settled whatever the budgets say.
+  }
+  return true;
+}
+
+/**
+ * Whether a correct answer already settled the flow: its mark in the
+ * database, or the earlier mark wherever that is kept. The one question the
+ * resolve path and `/auth/pending` both ask.
+ */
+async function flowSettled(
+  deps: Pick<ChallengeResolveDeps, "secret"> & SpentChallengesDeps,
+  pending: PendingFlow
+): Promise<boolean> {
+  if (deps.spentChallenges) {
+    const { mark } = challengeFlowKeys(deps.secret, pending);
+    if (await deps.spentChallenges.isSpent(mark)) return true;
+  }
+  return earlierMarkTaken(deps, pending);
 }
 
 /**
@@ -412,7 +502,7 @@ export async function challengeFlowOver(
   const count = await peekAttempts(deps, keys.budget);
   if (count !== undefined && count >= deps.maxChallengeAttempts) return true;
   try {
-    return await spentChallengesOf(deps).isSpent(keys.mark);
+    return await flowSettled(deps, pending);
   } catch {
     return false;
   }
@@ -430,8 +520,7 @@ async function refuseIfFlowSettled(
   deps: Pick<ChallengeResolveDeps, "secret"> & SpentChallengesDeps,
   pending: PendingFlow
 ): Promise<void> {
-  const { mark } = challengeFlowKeys(deps.secret, pending);
-  if (await spentChallengesOf(deps).isSpent(mark)) {
+  if (await flowSettled(deps, pending)) {
     throw NextlyError.invalidCredentials({
       logContext: { reason: auditReason("challenge-flow-settled") },
     });
@@ -447,26 +536,31 @@ async function refuseIfFlowSettled(
  * the database, written in a transaction of its own and committed before any
  * session is issued. Its key is unique, so of two answers that are both
  * correct at the same moment, on any instances, exactly one writes it and
- * continues; the other is refused here.
+ * continues; the other is refused here. Where the earlier mark is kept, it is
+ * taken too, and an answer that loses either is refused.
  */
 async function settleChallengeFlow(
   deps: Pick<ChallengeResolveDeps, "secret" | "maxChallengeAttempts"> &
-    SpentChallengesDeps,
+    SpentChallengesDeps &
+    AttemptCounterDeps,
   pending: PendingFlow & { attempts: number }
 ): Promise<void> {
   // The flow's lifetime again, now that the resolver has run: an answer let
   // through just before the end may only reach this after it, and a flow
   // past its end never settles, whatever its answer.
   refuseIfFlowExhausted(pending, deps);
-  const { mark } = challengeFlowKeys(deps.secret, pending);
-  // The token's end; the marks are kept a grace past it, so every answer let
-  // through before the end meets this one.
-  const expiresAt = (pending.flowExpiresAt ?? 0) * 1000;
-  if (!(await spentChallengesOf(deps).spend(mark, expiresAt))) {
-    throw NextlyError.invalidCredentials({
+  const settled = () =>
+    NextlyError.invalidCredentials({
       logContext: { reason: auditReason("challenge-flow-settled") },
     });
+  if (deps.spentChallenges) {
+    const { mark } = challengeFlowKeys(deps.secret, pending);
+    // A grace past the token's end: an answer let through before the end
+    // may reach its mark after it, and must still meet this one.
+    const keepUntil = (pending.flowExpiresAt ?? 0) * 1000 + SPENT_MARK_GRACE_MS;
+    if (!(await deps.spentChallenges.spend(mark, keepUntil))) throw settled();
   }
+  if (!(await takeEarlierMark(deps, pending))) throw settled();
 }
 
 /**

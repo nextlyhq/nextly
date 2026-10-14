@@ -32,14 +32,15 @@ import { isUniqueViolation } from "../../shared/lib/unique-violation";
 const SWEEP_BATCH = 500;
 
 /**
- * How long past its pending token's end a mark is kept.
+ * How long past its pending token's end a mark must be kept: what a caller
+ * adds to that end to make the mark's `expiresAt`.
  *
  * An answer is let through on the token's lifetime when it arrives, and may
  * reach the mark after that lifetime has ended, its resolver having taken
- * the time. Were the mark removed at the end, the sweep its own write starts
- * could delete it before a second answer, let through at the same moment,
- * wrote its own, and both would go on to a session. Kept this long after,
- * every answer let through before the end meets it.
+ * the time. Were the mark gone at the end, a second answer let through at
+ * the same moment could write its own after the first had been removed, and
+ * both would go on to a session. Kept this long after, every answer let
+ * through before the end meets it, whichever store keeps the marks.
  */
 export const SPENT_MARK_GRACE_MS = 60 * 60_000;
 
@@ -48,10 +49,11 @@ export interface SpentChallenges {
   /** Whether the flow whose mark is `mark` was answered already. */
   isSpent(mark: string): Promise<boolean>;
   /**
-   * Mark the flow answered until `expiresAt` (ms since the epoch), when its
-   * pending token stops being accepted. True for the one caller whose mark
-   * was written, false for every other. Commits on its own before it
-   * returns, and throws when the calling flow has a transaction open.
+   * Mark the flow answered, keeping the mark until `expiresAt` (ms since the
+   * epoch): its pending token's end plus {@link SPENT_MARK_GRACE_MS}. True
+   * for the one caller whose mark was written, false for every other, for
+   * as long as the mark is kept. Commits on its own before it returns, and
+   * throws when the calling flow has a transaction open.
    */
   spend(mark: string, expiresAt: number): Promise<boolean>;
 }
@@ -80,15 +82,13 @@ function inOwnTransaction<T>(
 }
 
 /**
- * Remove marks whose pending token ended more than {@link SPENT_MARK_GRACE_MS}
- * before `now` (ms since the epoch), at most `batch` of them, and say how
- * many went.
+ * Remove marks kept until `now` (ms since the epoch) or before, at most
+ * `batch` of them, and say how many went.
  *
- * By then a mark guards nothing: the token it was written for is refused on
- * its own lifetime, and every answer let through before that lifetime ended
- * has long reached it. Each mark written sweeps after itself, so the table
- * holds about as many rows as flows answered within a token lifetime and the
- * grace.
+ * By then a mark guards nothing: its `expiresAt` is a grace past its token's
+ * end, so every answer let through before that end has long reached it. Each
+ * mark written sweeps after itself, so the table holds about as many rows as
+ * flows answered within a token lifetime and the grace.
  */
 export async function sweepSpentChallenges(
   adapter: DrizzleAdapter,
@@ -98,12 +98,11 @@ export async function sweepSpentChallenges(
   const table = spentChallengesTables(
     adapter.getCapabilities().dialect
   ).nextlySpentChallenges;
-  const before = now - SPENT_MARK_GRACE_MS;
   const expired = await adapter
     .getDrizzle<MarkDb>()
     .select<{ id: string }>({ id: table.id })
     .from(table)
-    .where(lte(table.expiresAt, before))
+    .where(lte(table.expiresAt, now))
     .limit(batch);
   if (expired.length === 0) return 0;
   // A write like the mark itself: in a transaction of its own, so another
@@ -116,7 +115,7 @@ export async function sweepSpentChallenges(
             table.id,
             expired.map(row => row.id)
           ),
-          lte(table.expiresAt, before)
+          lte(table.expiresAt, now)
         )
       )
     )
