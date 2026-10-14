@@ -14,7 +14,7 @@ export const SCHEMA_PREFIX = "accounts";
  * moves with every migration module, and a production boot refuses a database
  * whose accounts schema is behind it.
  */
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 2;
 
 /** Long enough for any address RFC 5321 lets through: 64 + 1 + 255. */
 const ADDRESS_LENGTH = 320;
@@ -69,6 +69,8 @@ export const accounts = defineTable(
       { columns: ["addressNormalised"], unique: true },
       // The sweep of accounts nobody verified reads them by age.
       { columns: ["verifiedAt", "createdAt"] },
+      // Staff's list of accounts reads them newest first, then by id.
+      { columns: ["createdAt", "id"] },
     ],
     checks: [
       { name: "failures_not_negative", sql: "failures_in_a_row >= 0" },

@@ -4,5 +4,6 @@
  * changes nothing.
  */
 import migration0 from "./20261014_081308_231_create_accounts";
+import migration1 from "./20261014_152732_303_index_accounts_by_age";
 
-export const migrations = [migration0];
+export const migrations = [migration0, migration1];
