@@ -7,6 +7,7 @@ import type { AccountsCore } from "./core/ports";
 import { accountsError } from "./errors";
 import { ACCOUNTS_EVENTS } from "./flows/deps";
 import { accountKind } from "./http/principal";
+import { accountsRoutes } from "./http/routes";
 import { accountsSchema, PLUGIN_NAME } from "./schema/definition";
 import { SCHEMA_VERSION } from "./schema/tables";
 import { resolveAccountsSettings, type AccountsOptions } from "./settings";
@@ -46,6 +47,9 @@ export function buildAccounts(
     return context;
   };
 
+  // A flow's deps for a request, built from the started plugin's context.
+  const deps = () => flowDepsFor(started(), settings, coreFor(started()));
+
   return definePlugin({
     name: PLUGIN_NAME,
     version: PLUGIN_VERSION,
@@ -55,9 +59,8 @@ export function buildAccounts(
     schemaVersion: SCHEMA_VERSION,
     contributes: {
       schema: accountsSchema,
-      principals: [
-        accountKind(() => flowDepsFor(started(), settings, coreFor(started()))),
-      ],
+      principals: [accountKind(deps)],
+      routes: accountsRoutes(deps),
       emailTemplates: accountsEmailTemplates(),
       events: ACCOUNTS_EVENTS.map(name => ({ name })),
       jobs: [
