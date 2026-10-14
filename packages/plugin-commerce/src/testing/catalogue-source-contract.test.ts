@@ -198,6 +198,50 @@ describe("the catalogue contract suite catches a broken source", () => {
     );
   });
 
+  it("fails a source that applies a repeated sale twice, even watching an item with one unit", async () => {
+    // With one unit, a sale applied twice stops at zero just as one sale
+    // does, so the suite must watch an item holding at least two.
+    const breakIt = (s: CatalogueSource): CatalogueSource => {
+      const stock = s.stock;
+      if (!stock) return s;
+      const seen = new Set<string>();
+      return {
+        ...s,
+        stock: {
+          report: async input => {
+            const repeat = seen.has(input.operationId);
+            seen.add(input.operationId);
+            await stock.report(input);
+            if (repeat && input.kind === "sale") {
+              await stock.report({
+                ...input,
+                operationId: `${input.operationId}-again`,
+              });
+            }
+          },
+          confirm: input => stock.confirm(input),
+        },
+      };
+    };
+    const cases = await catalogueSourceContract({
+      currency: "USD",
+      fixtures: {
+        listed: "drill-press",
+        onRequest: "custom-rig",
+        unknown: "no-such-item",
+        soldFrom: "used-lathe",
+      },
+      create: () =>
+        breakIt(
+          createInMemoryCatalogueSource({ currency: "USD", items }).source
+        ),
+    });
+    const run = await runContractCases(cases);
+    expect(run.failed.map(f => f.name)).toContain(
+      "records a stock report once when its answer is lost and it is repeated"
+    );
+  });
+
   it("fails a source whose listing repeats an item across pages", async () => {
     const failed = await failingCases(s => {
       const list = s.list;

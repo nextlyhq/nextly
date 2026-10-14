@@ -32,10 +32,11 @@ export interface CatalogueSourceContractOptions {
     /** A reference the source does not know. */
     readonly unknown: string;
     /**
-     * A counted or one-off item with stock left, whose figure goes down when a
-     * sale is reported. Required when the source hears stock reports: it is
-     * how the suite sees a repeated report applied once, which the
-     * listener's own confirmation cannot show.
+     * A counted item with at least two units left, whose figure goes down
+     * when a sale is reported. Required when the source hears stock reports:
+     * it is how the suite sees a repeated report applied once, which the
+     * listener's own confirmation cannot show. Two units at least, because
+     * with one a sale applied twice stops at zero just as one sale does.
      */
     readonly soldFrom?: string;
     /**
@@ -269,8 +270,8 @@ export async function catalogueSourceContract(
         expectContract(stock !== undefined, "the source hears stock reports");
         const before = await available(source, soldFrom);
         expectContract(
-          before > 0,
-          `the fixture item ${soldFrom} has stock left`
+          before >= 2,
+          `the fixture item ${soldFrom} holds at least two units, so one sale and two differ (it holds ${before})`
         );
         const report = {
           operationId: unique("op"),
