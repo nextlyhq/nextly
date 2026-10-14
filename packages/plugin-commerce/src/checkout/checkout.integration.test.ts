@@ -594,6 +594,103 @@ describe.each(getConfiguredTestDialects())(
       }
     });
 
+    it("keeps a confirmed hold from a second buyer when the source leaves holds out of its figure", async () => {
+      // The in-memory source records a hold without lowering its own figure,
+      // so after confirming it still reports the one-off unit available.
+      const { ctx, checkout, cart, clock, workPass, memory } = await setup();
+      const service = checkout();
+      const place = async (token: string) => {
+        const { quoteKey } = await service.quote({ token });
+        return service.complete({
+          token,
+          quoteKey,
+          email: "buyer@example.com",
+          addresses: ADDRESSES,
+        });
+      };
+      await place(await shopper(cart, [["lathe", 1]]));
+      clock.now = new Date(clock.now.getTime() + MINUTE);
+      await workPass();
+      const [hold] = await ctx.db.select(stockHolds).all();
+      expect(hold?.confirmedAt).not.toBeNull();
+      expect(memory.control.stock("lathe")).toEqual({
+        kind: "one-off",
+        available: 1,
+      });
+
+      const second = await shopper(cart, [["lathe", 1]]);
+      expect(await codeOf(() => place(second))).toBe("COMMERCE_OUT_OF_STOCK");
+      expect(await ctx.db.select(orders).all()).toHaveLength(1);
+    });
+
+    it("never shows less than none when a source counts holds in its own figure", async () => {
+      // A source that lowers its figure for every hold it records.
+      const counts = new Map([["drill", 4]]);
+      const recorded = new Set<string>();
+      const counting: CatalogueSource = {
+        id: "counting",
+        find: async ({ references }) =>
+          references.flatMap(reference =>
+            reference === "drill"
+              ? [
+                  {
+                    ...ITEMS[0],
+                    stock: {
+                      kind: "counted",
+                      available: counts.get("drill") ?? 0,
+                    },
+                  } as CatalogueItem,
+                ]
+              : []
+          ),
+        price: async ({ lines }) =>
+          lines.map(line => ({
+            ...line,
+            found: true as const,
+            price: { kind: "listed" as const, unitPrice: money(12_900, "USD") },
+            stock: {
+              kind: "counted" as const,
+              available: counts.get("drill") ?? 0,
+            },
+          })),
+        stock: {
+          report: async input => {
+            if (recorded.has(input.operationId)) return;
+            recorded.add(input.operationId);
+            if (input.kind === "hold") {
+              counts.set(
+                input.reference,
+                Math.max(0, (counts.get(input.reference) ?? 0) - input.quantity)
+              );
+            }
+          },
+          confirm: async input => ({
+            recorded: recorded.has(input.operationId),
+          }),
+        },
+      };
+      const { checkout, cart, clock, workPass } = await setup({
+        source: counting,
+      });
+      const service = checkout();
+      const token = await shopper(cart, [["drill", 4]]);
+      const { quoteKey } = await service.quote({ token });
+      await service.complete({
+        token,
+        quoteKey,
+        email: "buyer@example.com",
+        addresses: ADDRESSES,
+      });
+      clock.now = new Date(clock.now.getTime() + MINUTE);
+      await workPass();
+      // The source now says 0 and commerce still holds 4: none, not -4.
+      const other = await shopper(cart, [["drill", 1]]);
+      const [line] = (await cart.get({ token: other })).cart.lines;
+      expect(line?.availability).toEqual({ kind: "sold-out" });
+      const summary = await service.quote({ token: other });
+      expect(summary.lines[0]?.available).toBe(0);
+    });
+
     it("reports each hold to a source that hears them once, with a lost answer along the way, and keeps a confirmed hold coming off", async () => {
       const memory = createInMemoryCatalogueSource({
         currency: "USD",

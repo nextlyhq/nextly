@@ -10,7 +10,11 @@
  *
  * @module work/work-runner.integration.test
  */
-import { NextlyError, type PluginContext } from "@nextlyhq/plugin-sdk";
+import {
+  NextlyError,
+  type JobContext,
+  type PluginContext,
+} from "@nextlyhq/plugin-sdk";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -23,7 +27,10 @@ import { commerce } from "../plugin";
 import { jobHealth, work } from "../schema/tables";
 import { createInMemoryCatalogueSource } from "../testing/in-memory-catalogue-source";
 
+import { WORK_JOB } from "../checkout/checkout-service";
+
 import { assertJobsRunning, lastJobRun, recordJobRun } from "./job-health";
+import { workJob } from "./work-job";
 import {
   recordWork,
   runDueWork,
@@ -310,6 +317,43 @@ describe.each(getConfiguredTestDialects())(
         attempts: 2,
         lastError: null,
       });
+    });
+
+    it("runs as the work job: records that it ran, then runs what is due", async () => {
+      const ctx = await boot();
+      const now = new Date();
+      await ctx.db.transaction(tx =>
+        recordWork(tx, {
+          kind: "greet",
+          subjectId: "order-1",
+          operationId: "greet:order-1",
+          now,
+        })
+      );
+      const ran: string[] = [];
+      const job = workJob(() => ({
+        db: ctx.db,
+        dialect: ctx.dialect,
+        handlers: { greet: async item => void ran.push(item.operationId) },
+        alerts: { abandoned: () => undefined },
+      }));
+      expect(job).toMatchObject({ slug: WORK_JOB, sweep: true });
+      await job.handler(null, {
+        jobId: "test",
+        attempt: 1,
+        user: null,
+        now,
+        deadline: new Date(Date.now() + 60_000),
+        content: {},
+      } as unknown as JobContext);
+      expect(ran).toEqual(["greet:order-1"]);
+      // Within a second: MySQL keeps whole seconds, rounded, where
+      // PostgreSQL keeps more, and a staleness measured in minutes reads
+      // either the same.
+      const lastRunAt = await lastJobRun(ctx.db, WORK_JOB);
+      expect(
+        Math.abs((lastRunAt?.getTime() ?? 0) - now.getTime())
+      ).toBeLessThanOrEqual(1_000);
     });
 
     it("runs only one subject's steps when asked, and stops at the pass's deadline", async () => {
