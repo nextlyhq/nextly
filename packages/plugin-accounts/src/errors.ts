@@ -71,6 +71,15 @@ const CODES = {
     409,
     "That email address can't be used. Try another.",
   ],
+
+  // Staff, in the admin.
+  /** Staff named an account that is not there. */
+  ACCOUNTS_NOT_FOUND: [404, "No such account."],
+  /** A staff action that does not apply to the account as it stands (`data.reason` says why). */
+  ACCOUNTS_NOT_APPLICABLE: [
+    409,
+    "That can't be done to this account as it stands.",
+  ],
 } as const satisfies Record<string, readonly [number, string]>;
 
 /**

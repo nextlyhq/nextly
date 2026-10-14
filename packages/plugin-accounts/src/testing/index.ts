@@ -25,7 +25,10 @@ export { FakeClock, FakeCoreMisuse } from "./fake-transactions";
 
 /**
  * The plugin built on stand-ins for core's helpers, for a site's tests that
- * run before core lends the real ones.
+ * run before core lends the real ones. Given `fakeAccountsCore()`, the
+ * plugin's own database is watched by it, so a secret written inside one of
+ * the plugin's transactions lands at that transaction's commit, as core's
+ * does, rather than being refused as written outside one.
  *
  * @experimental
  */

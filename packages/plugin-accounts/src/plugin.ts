@@ -8,6 +8,7 @@ import { accountsError } from "./errors";
 import { ACCOUNTS_EVENTS } from "./flows/deps";
 import { accountKind } from "./http/principal";
 import { accountsRoutes } from "./http/routes";
+import { STAFF_AUDIT, STAFF_PERMISSIONS, staffRoutes } from "./http/staff";
 import { accountsSchema, PLUGIN_NAME } from "./schema/definition";
 import { SCHEMA_VERSION } from "./schema/tables";
 import {
@@ -35,7 +36,8 @@ export function accounts(options: AccountsOptions) {
 
 /**
  * The plugin, with where it finds core's helpers given: on the plugin
- * context, as a site runs it, or stand-ins, as `./testing` builds it.
+ * context, as a site runs it, or stand-ins, as `./testing` builds it, which
+ * also hands the plugin the view of its database the stand-ins watch.
  */
 export function buildAccounts(
   options: AccountsOptions,
@@ -74,7 +76,9 @@ export function buildAccounts(
     contributes: {
       schema: accountsSchema,
       principals: [accountKind(deps)],
-      routes: accountsRoutes(deps),
+      routes: [...accountsRoutes(deps), ...staffRoutes(deps)],
+      permissions: STAFF_PERMISSIONS,
+      audit: STAFF_AUDIT,
       // The typed server functions, for other plugins; a site's own server
       // code reaches the same through `accountsServer`.
       services: { [ACCOUNTS_SERVICE]: () => accountsService(deps) },
