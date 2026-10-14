@@ -13,7 +13,10 @@ import type { PluginDefinition } from "../plugin-context";
 import { pluginAdminSlug } from "../plugin-slug";
 import { resolutionError } from "../resolution-error";
 
-import type { PrincipalAttributeType, PrincipalKindDefinition } from "./types";
+import type {
+  PrincipalAttributeType,
+  PrincipalKindContribution,
+} from "./types";
 
 /** One registered kind, and the plugin that registered it. */
 export interface RegisteredPrincipalKind {
@@ -30,7 +33,7 @@ export interface RegisteredPrincipalKind {
    */
   readonly attributes: Readonly<Record<string, PrincipalAttributeType>>;
   /** The definition itself, called as a method so a class-based one keeps its `this`. */
-  readonly definition: PrincipalKindDefinition;
+  readonly definition: PrincipalKindContribution;
 }
 
 /**
@@ -72,6 +75,18 @@ export function publishPrincipalKinds(
   registeredKinds = kinds;
 }
 
+/**
+ * Every kind published now. A dev reload captures it before it reads the new
+ * config, which publishes that config's kinds, and puts it back when the
+ * reload does not land.
+ */
+export function publishedPrincipalKinds(): ReadonlyMap<
+  string,
+  RegisteredPrincipalKind
+> {
+  return registeredKinds;
+}
+
 /** The registered kind with this full name, or `undefined`. */
 export function getPrincipalKind(
   kind: string
@@ -109,7 +124,7 @@ function declaredAttributes(
 /** Why a plugin's kind cannot be registered, or the kind to register. */
 function checkedKind(
   plugin: PluginDefinition,
-  definition: PrincipalKindDefinition
+  definition: PrincipalKindContribution
 ): RegisteredPrincipalKind | string {
   if (
     typeof definition?.name !== "string" ||

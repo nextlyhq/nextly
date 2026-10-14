@@ -22,6 +22,19 @@ export type PrincipalAttributeValue = boolean | string | number | null;
 export type PrincipalAttributes = Record<string, PrincipalAttributeValue>;
 
 /**
+ * @experimental The bound on a kind's attribute shape `A`: every attribute a
+ * value an attribute may hold.
+ *
+ * Checked key by key rather than as {@link PrincipalAttributes}, because an
+ * `interface` has no index signature and is never assignable to a record:
+ * `interface Account { verified: boolean }` would otherwise be refused as a
+ * kind's attributes although every one of them is allowed.
+ */
+export type PrincipalAttributesOf<A> = {
+  [K in keyof A]: PrincipalAttributeValue;
+};
+
+/**
  * @experimental The descriptor a value's type takes.
  *
  * Mapped from the value rather than left open, so a kind whose attributes are
@@ -39,13 +52,14 @@ export type PrincipalAttributeTypeOf<V> = [NonNullable<V>] extends [boolean]
       : PrincipalAttributeType;
 
 /** @experimental A kind's attribute descriptors, typed from its values. */
-export type PrincipalAttributeDescriptors<A extends PrincipalAttributes> = {
-  readonly [K in keyof A]: PrincipalAttributeTypeOf<A[K]>;
-};
+export type PrincipalAttributeDescriptors<A extends PrincipalAttributesOf<A>> =
+  {
+    readonly [K in keyof A]: PrincipalAttributeTypeOf<A[K]>;
+  };
 
 /** @experimental What a resolver or a lookup answers for one person. */
 export interface PrincipalRecord<
-  A extends PrincipalAttributes = PrincipalAttributes,
+  A extends PrincipalAttributesOf<A> = PrincipalAttributes,
 > {
   /**
    * Non-empty, at most 128 characters, unique within the kind, never reused
@@ -62,7 +76,7 @@ export interface PrincipalRecord<
  * `contributes.principals`.
  */
 export interface PrincipalKindDefinition<
-  A extends PrincipalAttributes = PrincipalAttributes,
+  A extends PrincipalAttributesOf<A> = PrincipalAttributes,
 > {
   /**
    * `[a-z][a-z0-9-]{0,31}`. Core names the kind `<plugin>:<name>`, where
@@ -86,6 +100,28 @@ export interface PrincipalKindDefinition<
 }
 
 /**
+ * @experimental Any kind, whatever its attributes: what
+ * `contributes.principals` holds.
+ *
+ * Its own type rather than {@link PrincipalKindDefinition} at its default,
+ * for the reason {@link PrincipalAttributesOf} exists: a kind typed with an
+ * interface answers records whose attributes no record type accepts. Each
+ * entry is checked when it is collected, and every answer as it arrives.
+ */
+export interface PrincipalKindContribution {
+  name: string;
+  attributes: { readonly [name: string]: PrincipalAttributeType };
+  resolve(request: Request): Promise<PrincipalAnswer | null>;
+  lookup?(id: string): Promise<PrincipalAnswer | null>;
+}
+
+/** @experimental What a kind's resolver or lookup answers, at its widest. */
+export interface PrincipalAnswer {
+  id: string;
+  attributes: object;
+}
+
+/**
  * @experimental A signed-in person of a plugin-defined kind, as core hands
  * one out.
  *
@@ -93,7 +129,7 @@ export interface PrincipalKindDefinition<
  * hand. Holds no role and no permission, and its id is never a staff user's.
  */
 export interface Principal<
-  A extends PrincipalAttributes = PrincipalAttributes,
+  A extends PrincipalAttributesOf<A> = PrincipalAttributes,
 > {
   readonly type: "principal";
   /** `<plugin>:<name>`, e.g. `"accounts:account"`. */

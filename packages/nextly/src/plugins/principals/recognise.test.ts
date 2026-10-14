@@ -71,7 +71,10 @@ function request(
 
 beforeEach(() => {
   answer = person;
-  resolve.mockClear();
+  // Reset rather than cleared: a one-shot answer a test left unused must not
+  // become the next test's answer.
+  resolve.mockReset();
+  resolve.mockImplementation(async () => answer);
   warn.mockReset();
   setNextlyLogger({ warn, error() {}, info() {}, debug() {} });
   publishPrincipalKinds(collectPrincipalKinds([accounts]));
@@ -153,6 +156,25 @@ describe("the answer a resolver gives", () => {
     );
   });
 
+  it("takes an answer that throws while it is read for nobody", async () => {
+    answer = {
+      id: "acc_1",
+      get attributes(): never {
+        throw new RangeError("secret-session-token-123");
+      },
+    };
+    expect(await recognisePrincipal(request(), KIND)).toBeNull();
+    expect(warn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "principal-answer-invalid",
+        problem: "reading the answer threw RangeError",
+      })
+    );
+    expect(JSON.stringify(warn.mock.calls)).not.toContain(
+      "secret-session-token-123"
+    );
+  });
+
   it("takes null for nobody, without a warning", async () => {
     answer = null;
     expect(await recognisePrincipal(request(), KIND)).toBeNull();
@@ -208,6 +230,27 @@ describe("asking more than once", () => {
       await recognisePrincipal(new Request(req), KIND);
     });
     expect(resolve).toHaveBeenCalledTimes(1);
+  });
+
+  it("asks about a different request inside a route invocation on its own", async () => {
+    // Another person's session on a request the handler builds must not be
+    // answered with the routed request's person.
+    resolve
+      .mockImplementationOnce(async () => person)
+      .mockImplementationOnce(async () => ({ ...person, id: "acc_2" }));
+    const req = request();
+    const other = new Request("http://localhost:3000/shop/cart", {
+      headers: { cookie: "acc_session=someone-else" },
+    });
+    const answers = await runWithPrincipalAnswers(req, async () => [
+      await recognisePrincipal(req, KIND),
+      await recognisePrincipal(other, KIND),
+    ]);
+    expect(answers.map(found => found?.id)).toEqual(["acc_1", "acc_2"]);
+    expect(resolve).toHaveBeenCalledTimes(2);
+    expect(resolve.mock.calls[1]?.[0].headers.get("cookie")).toBe(
+      "acc_session=someone-else"
+    );
   });
 
   it("hands the resolver the request without its body", async () => {
@@ -301,11 +344,21 @@ describe("server code asking for a person", () => {
   });
 
   it("asks through ctx.principals by the plugin's own name for the kind", async () => {
-    const got = await createPluginPrincipals(accounts).fromRequest(
+    const got = await createPluginPrincipals(accounts)?.fromRequest(
       request(),
       "account"
     );
     expect(got?.kind).toBe(KIND);
+  });
+
+  it("gives a plugin that registers no kind no ctx.principals", () => {
+    const none = {
+      ...accounts,
+      contributes: { principals: [] },
+    } as PluginDefinition;
+    expect(createPluginPrincipals(none)).toBeUndefined();
+    // The control: the same plugin with its kinds has one.
+    expect(createPluginPrincipals(accounts)).toBeDefined();
   });
 
   it("reaches only the plugin's own kinds through ctx.principals", async () => {
@@ -313,7 +366,7 @@ describe("server code asking for a person", () => {
     // joined to its own slug, the name is a kind nobody registered.
     const other = { ...accounts, name: "forum" } as PluginDefinition;
     await expect(
-      createPluginPrincipals(other).fromRequest(request(), "account")
+      createPluginPrincipals(other)?.fromRequest(request(), "account")
     ).rejects.toThrow(/"forum:account"/);
   });
 });

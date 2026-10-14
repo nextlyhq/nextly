@@ -12,6 +12,7 @@ import type { PluginRouteContext } from "../routes/route-types";
 import type {
   Principal,
   PrincipalAttributeDescriptors,
+  PrincipalAttributesOf,
   PrincipalKindDefinition,
 } from "./types";
 
@@ -51,6 +52,27 @@ expectTypeOf<
   PluginRouteContext["principal"]
 >().toEqualTypeOf<Principal | null>();
 
+// A kind's attributes may be an interface, which has no index signature,
+// and the kind registers like one typed with a type alias.
+interface Account {
+  verified: boolean;
+  plan: string | null;
+}
+expectTypeOf<PrincipalAttributeDescriptors<Account>>().toEqualTypeOf<{
+  readonly verified: "boolean";
+  readonly plan: "string";
+}>();
+const account: PrincipalKindDefinition<Account> = {
+  name: "account",
+  attributes: { verified: "boolean", plan: "string" },
+  resolve: () => Promise.resolve(null),
+};
+
+// An attribute of a type no attribute may hold is still refused.
+expectTypeOf<{ joined: Date }>().not.toExtend<
+  PrincipalAttributesOf<{ joined: Date }>
+>();
+
 // A typed kind registers, and a route asks for it.
 const member: PrincipalKindDefinition<Member> = {
   name: "member",
@@ -66,7 +88,7 @@ definePlugin({
   version: "1.0.0",
   nextly: ">=0.0.1",
   contributes: {
-    principals: [member],
+    principals: [member, account],
     routes: [
       {
         method: "GET",

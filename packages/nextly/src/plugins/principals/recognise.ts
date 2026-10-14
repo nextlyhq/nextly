@@ -11,6 +11,7 @@
  * @module plugins/principals/recognise
  */
 import { AsyncLocalStorage } from "node:async_hooks";
+import { createHash } from "node:crypto";
 
 import {
   carriesBearerToken,
@@ -39,17 +40,38 @@ export const MAX_PRINCIPAL_ID_LENGTH = 128;
 type Answer = Promise<Principal | null>;
 
 /**
- * The answers for the plugin route invocation running now, by kind.
+ * The answers for the plugin route invocation running now.
  *
  * Per INVOCATION as well as per `Request` object, for the reason a route's
  * session consultation is: a handler that passes `req.clone()`, or any other
  * copy of its request, would otherwise miss the answer the route already has
- * and call the resolver a second time for the same request.
+ * and call the resolver a second time for the same request. Keyed by what
+ * the resolver sees of each request (see {@link answerKey}), so a copy shares
+ * the routed request's answer and a different request, carrying someone
+ * else's session, gets its own.
  */
 const invocationAnswers = new AsyncLocalStorage<Map<string, Answer>>();
 
-/** The answers for each request seen outside a route invocation, by kind. */
+/** The answers for each request seen outside a route invocation. */
 const requestAnswers = new WeakMap<Request, Map<string, Answer>>();
+
+/**
+ * The key an answer is kept under: the kind, and everything the kind's
+ * resolver can see of the request.
+ *
+ * A resolver is handed the method, the address and the headers, and nothing
+ * else ({@link withoutBody}), so two requests alike in all three are the same
+ * question and get the same answer, and requests that differ in any of them
+ * are asked apart. Hashed, so the map holds no session cookie or token.
+ */
+function answerKey(request: Request, kind: string): string {
+  const hash = createHash("sha256");
+  hash.update(`${kind}\0${request.method}\0${request.url}`);
+  for (const [name, value] of request.headers) {
+    hash.update(`\0${name}:${value}`);
+  }
+  return hash.digest("base64url");
+}
 
 function answersFor(request: Request): Map<string, Answer> {
   const pinned = invocationAnswers.getStore();
@@ -63,8 +85,9 @@ function answersFor(request: Request): Map<string, Answer> {
 }
 
 /**
- * Run `operation` with `request`'s answers pinned, so every entry point
- * inside it shares them, whichever copy of the request it is handed.
+ * Run `operation` with `request`'s answers pinned, so every entry point inside
+ * it shares them when handed the request or any copy of it. A different
+ * request asked about inside it is still asked about on its own.
  */
 export function runWithPrincipalAnswers<T>(
   request: Request,
@@ -182,7 +205,15 @@ async function resolveOnce(
     });
     return null;
   }
-  const checked = checkedAnswer(registered, answer);
+  let checked: Principal | null | string;
+  try {
+    checked = checkedAnswer(registered, answer);
+  } catch (error) {
+    // An answer with a getter or a proxy that throws while it is read is as
+    // unusable as one of the wrong shape, and is nobody like it. Inside the
+    // guard, so a route serves its usual refusal rather than a 500.
+    checked = `reading the answer threw ${error instanceof Error ? error.name : typeof error}`;
+  }
   if (typeof checked === "string") {
     getNextlyLogger().warn({
       kind: "principal-answer-invalid",
@@ -222,10 +253,11 @@ export function requirePrincipalKind(kind: string): RegisteredPrincipalKind {
 export function recognisePrincipal(request: Request, kind: string): Answer {
   const registered = requirePrincipalKind(kind);
   const answers = answersFor(request);
-  const known = answers.get(kind);
+  const key = answerKey(request, kind);
+  const known = answers.get(key);
   if (known) return known;
   const answer = resolveOnce(registered, request);
-  answers.set(kind, answer);
+  answers.set(key, answer);
   return answer;
 }
 

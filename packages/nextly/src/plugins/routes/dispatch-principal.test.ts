@@ -196,6 +196,29 @@ describe("a route that asks for a kind", () => {
     expect(resolve).toHaveBeenCalledTimes(1);
     expect(seen?.askedAgain).toBe(seen?.principal);
   });
+
+  it("asks about a different request the handler builds on its own", async () => {
+    // A request carrying another person's session is not the routed one, and
+    // must not be answered with the routed request's person.
+    let other: { id?: string } | null | undefined;
+    const res = await runPluginRoute(
+      call(PERSON_COOKIE),
+      match({
+        handler: async (_req: Request, ctx: PluginRouteContext) => {
+          other = await ctx.principals?.fromRequest(
+            new Request(`${SITE}/shop`, {
+              headers: { cookie: "acc_session=member-2" },
+            }),
+            "account"
+          );
+          return Response.json({ ok: true });
+        },
+      })
+    );
+    expect(res.status).toBe(200);
+    expect(other?.id).toBe("member-2");
+    expect(resolve).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe("a route that requires the kind", () => {

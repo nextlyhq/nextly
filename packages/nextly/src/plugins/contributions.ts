@@ -23,7 +23,7 @@ import type {
 import type { PluginAuthContributions } from "./auth-contributions";
 import type { EntityTransform } from "./entity-transforms";
 import type { PluginContext } from "./plugin-context";
-import type { PrincipalKindDefinition } from "./principals/types";
+import type { PrincipalKindContribution } from "./principals/types";
 import type { PluginRoute } from "./routes/route-types";
 import type { PluginWidgetSource } from "./widgets/collect-widget-sources";
 
@@ -725,7 +725,7 @@ export interface PluginContributions {
    * name, attributes or resolver cannot be used, or whose full name another
    * plugin's kind already holds.
    */
-  principals?: PrincipalKindDefinition[];
+  principals?: PrincipalKindContribution[];
 }
 
 /** @experimental `contributes.audit`: the kinds a plugin writes. */
