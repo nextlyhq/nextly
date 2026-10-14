@@ -83,6 +83,7 @@ function instance(
     isActive: true,
     lockedUntil: null,
     emailVerified: new Date("2026-01-01T00:00:00Z"),
+    passwordUpdatedAt: null,
   });
   const sessionRows = fakeSessionRows(fetchAccountState);
   const deps = {
