@@ -12,6 +12,13 @@ export type KnownBrowserRow = InferRow<typeof knownBrowsers>;
 /** Sign-in attempts in a row a known browser's token may fail before it skips nothing. */
 export const KNOWN_BROWSER_CAP = 10;
 
+/** A token's count started again, as a proven password through it leaves it. */
+const COUNT_STARTED_AGAIN = {
+  failuresInARow: 0,
+  cappedAt: null,
+  lastFailedCheckAt: null,
+} as const;
+
 /** How many times a charge re-reads a count another attempt moved first, before refusing. */
 const CHARGE_RETRIES = 50;
 
@@ -91,6 +98,18 @@ export async function knownBrowserById(
   return db.select(knownBrowsers).where(eq(columns.id, id)).first();
 }
 
+/**
+ * Starts a token's count again, as a password proven through it does: the
+ * attempts it was charged with were its own holder's.
+ */
+export async function startCountAgain(
+  db: AccountsDb,
+  id: string
+): Promise<void> {
+  const columns = db.table(knownBrowsers);
+  await db.update(knownBrowsers, COUNT_STARTED_AGAIN).where(eq(columns.id, id));
+}
+
 /** Records a failed password check through a token, which a capped token's own wait runs from. */
 export async function recordFailedCheck(
   db: AccountsDb,
@@ -136,12 +155,7 @@ export async function rememberBrowser(
   perAccount: number
 ): Promise<void> {
   const columns = db.table(knownBrowsers);
-  const known = {
-    knownAt: input.now,
-    failuresInARow: 0,
-    cappedAt: null,
-    lastFailedCheckAt: null,
-  };
+  const known = { knownAt: input.now, ...COUNT_STARTED_AGAIN };
   const existing = await db
     .select(knownBrowsers)
     .where(eq(columns.tokenHash, input.tokenHash))

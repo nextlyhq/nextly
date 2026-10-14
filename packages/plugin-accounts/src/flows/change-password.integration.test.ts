@@ -165,6 +165,23 @@ describe.each(getConfiguredTestDialects())(
       expect((await accountById(db, id))?.failuresInARow).toBe(0);
     });
 
+    it("starts the browser's own token's count again once the current password is proven", async () => {
+      const { browser, change } = await boot();
+      const { session, knownBrowserToken } = await browser();
+      const knownTokens = [knownBrowserToken];
+
+      for (let n = 0; n < 12; n += 1)
+        expect(
+          await change(session.token, TEST_PASSWORD, {
+            knownTokens,
+            newPassword: "short",
+          })
+        ).toMatchObject({ reason: "too-short" });
+      expect(
+        await change(session.token, TEST_PASSWORD, { knownTokens })
+      ).toEqual({ status: "changed" });
+    });
+
     it("refuses a new password the rules refuse, and a session that has ended", async () => {
       const { deps, browser, change } = await boot();
       const { session } = await browser();

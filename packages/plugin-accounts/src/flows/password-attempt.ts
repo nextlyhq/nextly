@@ -12,6 +12,7 @@ import {
   chargeKnownBrowser,
   knownBrowserById,
   recordFailedCheck,
+  startCountAgain,
   type KnownBrowserRow,
 } from "../storage/known-browsers";
 
@@ -169,12 +170,15 @@ export async function attemptForAddress(
 
 /**
  * After an attempt whose password was proven succeeds: the address's waits
- * end, and the client is given the attempt back.
+ * end, the client is given the attempt back, and the account's own token,
+ * if the attempt carried it, starts its count again.
  */
 export async function attemptSucceeded(
   deps: FlowDeps,
   attempt: Extract<PasswordAttempt, { status: "proven" }>
 ): Promise<void> {
+  if (attempt.own !== undefined)
+    await startCountAgain(deps.db, attempt.own.row.id);
   await deps.core.limits.reset({
     rule: LIMIT_RULES.signInAddress,
     key: attempt.addressKey,
