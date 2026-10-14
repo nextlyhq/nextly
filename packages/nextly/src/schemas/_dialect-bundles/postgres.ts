@@ -38,6 +38,7 @@ export { nextlyRbacEpoch } from "../rbac-epoch/postgres";
 // is CREATED, and a table in one but not the other is never made.
 export { nextlyPluginSettings } from "../plugin-settings/postgres";
 export { nextlyOneTimeSecrets } from "../one-time-secrets/postgres";
+export { nextlyLimitStore } from "../limit-store/postgres";
 export { nextlySchemaOwners } from "../schema-owners/postgres";
 export { nextlyWidgetLayout } from "../widget-layout/postgres";
 

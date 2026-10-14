@@ -42,3 +42,26 @@ export {
   isAbortedTransactionError,
   PG_ABORTED_TRANSACTION_SQLSTATE,
 } from "./plugins/aborted-transaction-sightings";
+
+/**
+ * The limit store contract, as cases a store can be run through (`@experimental`).
+ *
+ * An app supplying its own store through `rateLimit.store` runs these against it, one test per
+ * case, handing each case two handles on the store as two instances of the site would hold them:
+ *
+ * ```ts
+ * import { limitStoreContract } from "nextly/testing";
+ *
+ * for (const contractCase of limitStoreContract) {
+ *   it(contractCase.name, () => contractCase.run({ first: storeA, second: storeB }));
+ * }
+ * ```
+ *
+ * A case that fails throws `LimitStoreContractViolation` with what broke.
+ */
+export {
+  limitStoreContract,
+  LimitStoreContractViolation,
+  type LimitStoreContractCase,
+  type LimitStorePair,
+} from "./domains/limits/limit-store-contract";

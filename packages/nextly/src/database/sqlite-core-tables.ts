@@ -1,3 +1,4 @@
+import { LIMIT_STORE_TABLE } from "../schemas/limit-store/table-name";
 import { RBAC_EPOCH_TABLE } from "../schemas/rbac-epoch/table-name";
 import { SCHEMA_OWNERS_TABLE } from "../schemas/schema-owners/table-name";
 import { STORAGE_FORMAT } from "../schemas/storage-format";
@@ -552,6 +553,18 @@ export function generateSqliteCoreTableStatements(): string[] {
       ON "nextly_one_time_secrets" ("subject_key")`,
     `CREATE INDEX IF NOT EXISTS "nextly_one_time_secrets_expires_idx"
       ON "nextly_one_time_secrets" ("expires_at")`,
+    // The database limit store's counts, used when a site selects it. An
+    // integer of milliseconds for the expiry, as the Drizzle bundle declares.
+    `CREATE TABLE IF NOT EXISTS "${LIMIT_STORE_TABLE}" (
+      "id" TEXT PRIMARY KEY NOT NULL,
+      "value" TEXT,
+      "expires_at" INTEGER NOT NULL,
+      "generation" TEXT NOT NULL
+    )`,
+    `CREATE INDEX IF NOT EXISTS "nls_expires_at_idx"
+      ON "${LIMIT_STORE_TABLE}" ("expires_at")`,
+    `CREATE INDEX IF NOT EXISTS "nls_generation_idx"
+      ON "${LIMIT_STORE_TABLE}" ("generation")`,
     `CREATE TABLE IF NOT EXISTS "nextly_widget_layout" (
       "id" TEXT PRIMARY KEY NOT NULL,
       "scope_kind" TEXT NOT NULL,
