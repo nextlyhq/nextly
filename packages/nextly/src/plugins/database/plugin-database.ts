@@ -19,6 +19,7 @@
  * @module plugins/database/plugin-database
  * @since 1.0.0
  */
+import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import type { AnyColumn, AnyRelations, SQL, Table } from "drizzle-orm";
 import { eq, getColumns, inArray } from "drizzle-orm";
 
@@ -44,6 +45,7 @@ import {
   type ContributedColumn,
   type TableAccessRules,
 } from "./access";
+import { linkPluginTransaction } from "./plugin-transaction-link";
 
 /** What a caller may narrow a read or a write with. */
 export interface PortableWhere<TResult> {
@@ -92,7 +94,17 @@ export interface PluginDatabaseDeps {
    * transaction.
    */
   transaction: <R>(
-    fn: (tx: { db: unknown; relationalDb: unknown }) => Promise<R>
+    fn: (tx: {
+      db: unknown;
+      relationalDb: unknown;
+      /**
+       * The adapter transaction both handles run on, when the supplier has
+       * one: registered with the surface the callback receives, so core code
+       * a plugin hands that surface as `{ tx }` writes inside it
+       * (`plugin-transaction-link`).
+       */
+      adapterTx?: TransactionContext;
+    }) => Promise<R>
   ) => Promise<R>;
   /**
    * Called with every statement's promise as it starts, and returns the
@@ -1310,6 +1322,7 @@ export function createPluginDatabase(deps: PluginDatabaseDeps): PluginDatabase {
           transaction: () => Promise.reject(nestedTransactionError()),
           track: scope.track,
         });
+        if (tx.adapterTx) linkPluginTransaction(scoped, tx.adapterTx, scope);
         return scope.run(() => fn(scoped));
       });
     },
