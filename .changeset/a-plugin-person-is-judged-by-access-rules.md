@@ -41,8 +41,8 @@ Collection and Single operations on the Direct API, and a plugin's
 The call is refused before it runs if it also asks to skip access rules or
 the filterable-field check (`frameworkFilter`), names a staff user or an API
 key, or names a person core did not make; any other operation refuses the
-option. `findSingles` made as a person lists, and counts, only the Singles
-the person may read. A document created as a person has no owner.
+option, and it cannot be a Direct API instance default. `findSingles` made
+as a person lists, and counts, only the Singles the person may read. A document created as a person has no owner.
 `nextly.principals.byId` and `ctx.principals.byId` find a person through the
 kind's `lookup`, checked as a resolver's answer is.
 

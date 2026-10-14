@@ -28,7 +28,7 @@ import type { AuthenticatedScope } from "../../auth/authenticated-scope";
 import { currentPrincipal, runAsPrincipal } from "../../auth/principal-scope";
 import { makePrincipal } from "../../plugins/principals/principal";
 import type { Principal } from "../../plugins/principals/types";
-import type { Nextly } from "../nextly";
+import { Nextly as NextlyClass, type Nextly } from "../nextly";
 
 import {
   resetMocks,
@@ -235,6 +235,17 @@ describe("a Direct API call made as a person", () => {
     await expect(
       folders.create({ name: "x", principal: person })
     ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+  });
+
+  it("refuses a person as an instance default, which every call would ignore", () => {
+    // Ignored, the default would leave each call running as the server under
+    // the instance's `overrideAccess: true`.
+    expect(
+      () =>
+        new NextlyClass({
+          principal: person,
+        } as unknown as ConstructorParameters<typeof NextlyClass>[0])
+    ).toThrow(expect.objectContaining({ code: "INVALID_INPUT" }));
   });
 
   it("leaves a plugin's own services alone", async () => {
