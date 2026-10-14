@@ -982,10 +982,19 @@ following each table through renames. DOWNs that leave one of the plugin's
 tables in place are refused (`logContext.reason` is `down-leaves-tables`): a
 table no statement drops, one only rebuilt, one renamed away and kept, or one
 whose name another table takes after its drop. Fix the plugin's DOWN, or use
-`--keep-data`. A drop written schema-qualified is not counted, so the
-uninstall is refused rather than run on a drop it cannot read. If a table is
-still there after the DOWNs ran, the plugin is not recorded as uninstalled
-(`tables-left-by-down`); drop the table and run the uninstall again.
+`--keep-data`.
+
+Only the statements a generated DOWN is made of are read this way: dropping,
+altering and creating tables and indexes, type and sequence statements, data
+statements, and a SQLite rebuild. A DOWN holding anything else (a savepoint,
+a procedural block, a view, a temporary table) or a schema-qualified name such
+as `temp.notes` is refused the same way, since what it drops cannot be read
+from its text. So are a plugin's tables whose stored names keep upper case,
+on PostgreSQL and MySQL. If `onUninstall` drops or renames one of the tables
+the DOWNs are to drop, the uninstall stops before the first DOWN
+(`tables-changed-by-hook`). If a table is still there after the DOWNs ran,
+the plugin is not recorded as uninstalled (`tables-left-by-down`); drop the
+table and run the uninstall again.
 
 `plugins install` holds the migrate lock from its first migration until
 `onInstall` returns, and `plugins uninstall` from its final decision until the
