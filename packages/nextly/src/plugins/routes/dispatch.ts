@@ -168,8 +168,9 @@ async function sessionAuthenticates(req: Request): Promise<boolean> {
  * A plugin's session is whatever the plugin made it, so core cannot tell its
  * cookie from its header; treating the person as a cookie caller holds their
  * writes to the route's cross-site check, and a `Bearer` token exempts by its
- * presence, as it does for every caller. Nobody recognised is an anonymous
- * caller, held to the origin check where the route sets `csrf: true`, as any
+ * presence, as it does for every caller, whether or not anyone was
+ * recognised. Nobody recognised and no `Bearer` token is an anonymous caller,
+ * held to the origin check where the route sets `csrf: true`, as any
  * anonymous write to such a route is.
  */
 async function principalRouteAuth(
@@ -210,12 +211,13 @@ async function principalRouteAuth(
     user: null,
     caller: null,
     principal,
-    credential:
-      principal === null
+    // The Bearer token first: it exempts by its presence whether or not
+    // anyone was recognised, so nobody recognised does not take it away.
+    credential: carriesBearerToken(req)
+      ? "bearer"
+      : principal === null
         ? "none"
-        : carriesBearerToken(req)
-          ? "bearer"
-          : "cookie",
+        : "cookie",
   };
 }
 

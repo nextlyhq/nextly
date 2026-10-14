@@ -280,10 +280,15 @@ export interface PluginRoute {
    *   `public: true`: the pair is refused when routes are collected, and
    *   the app does not boot.
    *
-   * A caller that sends an `Authorization: Bearer` token (an API key) is
-   * never checked, whatever the setting: a browser cannot attach one
-   * cross-site, and the attack this prevents needs the credential to travel
-   * automatically. The scheme is matched in any case. Any other scheme, such
+   * A request that sends an `Authorization: Bearer` token (an API key) is not
+   * checked, whatever the setting, unless the session cookie authenticates
+   * it: a browser cannot attach the token cross-site, and the attack this
+   * prevents needs the credential to travel automatically. On a `public`
+   * route a session the cookie authenticates takes precedence over the
+   * header, and the request is checked as a session-cookie caller's. On a
+   * route that asks for a `principal`, the token exempts the request whether
+   * or not anyone of the kind is recognised.
+   * The scheme is matched in any case. Any other scheme, such
    * as the Basic, Digest, Negotiate or NTLM credentials a browser attaches
    * on its own, exempts nothing. A route for webhooks or other server
    * callers is `public: true` and leaves `csrf` unset; on `true`, such a
