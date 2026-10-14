@@ -65,20 +65,15 @@ describe("which lines a cart refuses", () => {
   });
 
   it("refuses an item whose price is given on request", () => {
-    expect(
-      codeOf(() =>
-        allowLine(
-          "rig",
-          {
-            reference: "rig",
-            name: "Rig",
-            price: { kind: "on-request" },
-            stock: { kind: "untracked" },
-          },
-          1
-        )
-      )
-    ).toBe("COMMERCE_PRICE_ON_REQUEST");
+    const rig: CatalogueItem = {
+      reference: "rig",
+      name: "Rig",
+      price: { kind: "on-request" },
+      stock: { kind: "untracked" },
+    };
+    expect(codeOf(() => allowLine("rig", rig, 1))).toBe(
+      "COMMERCE_PRICE_ON_REQUEST"
+    );
   });
 
   it("refuses more units than the item allows, and accepts exactly that many", () => {

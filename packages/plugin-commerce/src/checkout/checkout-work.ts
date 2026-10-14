@@ -4,6 +4,8 @@ import type { PluginDatabase } from "@nextlyhq/plugin-sdk/schema";
 import { allOf } from "../cart/conditions";
 import type { CatalogueSource } from "../contracts/catalogue-source";
 import {
+  isRecordedProvider,
+  storedAccount,
   parseProviderAnswer,
   providerPaymentSchema,
   startProviderPayment,
@@ -13,6 +15,7 @@ import {
 import { commerceError } from "../errors";
 import { money, type Money } from "../money/money";
 import { ownTransaction } from "../own-transaction";
+import { providerReferenceKey } from "../schema/reference-key";
 import { orders, payments, stockHolds } from "../schema/tables";
 import type { WorkHandler, WorkItem } from "../work/work-runner";
 
@@ -68,16 +71,10 @@ async function startPayment(
   // succeeded but could not record it as done.
   if (!pending) return;
   const { payment, email } = pending;
+  assertRecordedProvider(payment, provider);
 
   const amount = money(payment.chargeAmount, payment.chargeCurrency);
-  // The first attempt always calls: no call has been made yet, so there is
-  // nothing to look up, and the first attempt's moment is stored to the
-  // second, which could otherwise read as older than a short key lifetime.
-  const withinKeyLifetime =
-    item.attempt === 1 ||
-    deps.now().getTime() - item.firstAttemptAt.getTime() <
-      provider.capabilities.operationKeyLifetimeMs;
-  const answer = withinKeyLifetime
+  const answer = mayRepeatStart(item, provider, deps.now())
     ? await startProviderPayment(provider, {
         operationId: payment.startOperationId,
         reference: payment.reference,
@@ -91,6 +88,50 @@ async function startPayment(
   if (recorded) assertAnswerFor(provider, recorded, payment.reference, amount);
   await recordStart(deps.db, payment, recorded, deps.now());
   if (recorded) deps.started?.(payment.id, recorded);
+}
+
+/**
+ * Refuse a start for a payment begun with another provider, or with another
+ * account at the same one. Only that one knows its operation key: a retry
+ * sent elsewhere, after the store's provider or its account changed, would
+ * start a second payment. The step is refused, and retried until staff are
+ * alerted.
+ */
+function assertRecordedProvider(
+  payment: {
+    readonly provider: string;
+    readonly providerAccount: string;
+    readonly reference: string;
+  },
+  provider: PaymentProvider
+): void {
+  if (isRecordedProvider(payment, provider)) return;
+  throw commerceError("COMMERCE_PAYMENTS_NOT_CONFIGURED", {
+    payment: payment.reference,
+    recordedProvider: payment.provider,
+    recordedAccount: payment.providerAccount,
+    configuredProvider: provider.id,
+    configuredAccount: storedAccount(provider),
+  });
+}
+
+/**
+ * Whether a start may be sent again under its key: inside the provider's key
+ * lifetime, counted from the first attempt. The first attempt always may: no
+ * call has been made yet, so there is nothing to look up, and its moment is
+ * stored to the second, which could otherwise read as older than a short
+ * lifetime.
+ */
+function mayRepeatStart(
+  item: WorkItem,
+  provider: PaymentProvider,
+  now: Date
+): boolean {
+  return (
+    item.attempt === 1 ||
+    now.getTime() - item.firstAttemptAt.getTime() <
+      provider.capabilities.operationKeyLifetimeMs
+  );
 }
 
 /** The payment a start step is for, with its order's email, while it is still unstarted. */
@@ -137,7 +178,11 @@ function assertAnswerFor(
  */
 async function recordStart(
   db: PluginDatabase,
-  payment: { readonly id: string; readonly version: number },
+  payment: {
+    readonly id: string;
+    readonly version: number;
+    readonly providerAccount: string;
+  },
   answer: ProviderPayment | null,
   now: Date
 ): Promise<void> {
@@ -149,6 +194,10 @@ async function recordStart(
         answer
           ? {
               providerReference: answer.providerReference,
+              providerReferenceKey: providerReferenceKey(
+                payment.providerAccount,
+                answer.providerReference
+              ),
               status: answer.status,
               failureCode: answer.failureCode ?? null,
               version: payment.version + 1,
