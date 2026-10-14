@@ -18,6 +18,7 @@ import {
   readCsrfFromRequest,
 } from "../../auth/csrf/csrf-cookie";
 import {
+  carriesBearerToken,
   isUnsafeMethod,
   validateCsrf,
   validateOrigin,
@@ -32,22 +33,6 @@ import type { PluginRoute, RouteMethod } from "./route-types";
 export type CallerCredential = "cookie" | "bearer" | "none";
 
 /**
- * Whether the request carries a `Bearer` token.
- *
- * The one `Authorization` scheme that proves a caller chose to send it: a
- * browser attaches Basic, Digest, Negotiate or NTLM credentials on its own,
- * cross-site included, but never a `Bearer` token, and a cross-origin page can
- * set one only after a CORS preflight that names the header. So the scheme
- * decides, by an exact match rather than a list of browser schemes a new one
- * would slip past, and case-insensitively, as RFC 9110 §11.1 defines scheme
- * names. Whether the token authenticates does not enter into it.
- */
-function carriesBearerToken(request: Request): boolean {
-  const header = request.headers.get("authorization");
-  return header !== null && /^bearer[ \t]+\S/i.test(header);
-}
-
-/**
  * The credential a PUBLIC route's caller carries, for the CSRF decision.
  *
  * A public route resolved nobody, so this takes whether the session cookie
@@ -57,7 +42,10 @@ function carriesBearerToken(request: Request): boolean {
  * cookie's presence held a caller whose expired or malformed cookie
  * authenticates nobody to a token only a signed-in caller can hold. The
  * session wins over an `Authorization` header; without one, only a `Bearer`
- * token makes the caller a bearer caller (see {@link carriesBearerToken}).
+ * token makes the caller a bearer caller (see {@link carriesBearerToken}). A
+ * browser attaches Basic, Digest, Negotiate or NTLM credentials on its own,
+ * cross-site included, so no other scheme does: the scheme is matched
+ * exactly, not against a list of browser schemes a new one would slip past.
  */
 export function publicCallerCredential(
   request: Request,

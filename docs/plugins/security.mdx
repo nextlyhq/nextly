@@ -296,9 +296,11 @@ For a POST, PUT, PATCH or DELETE; a GET is never checked.
 - **Origin** means the request's `Origin`, or without one its `Referer`, names
   your site or an origin in `NEXTLY_ALLOWED_ORIGINS`. A write that names no
   origin is refused.
-- **Anonymous** callers reach only a public route; any other route answers
-  them 401 first. A session cookie that is expired or malformed authenticates
-  nobody, so its caller is anonymous, and is not asked for a token either.
+- **Anonymous** callers reach only a public route, or one whose `principal` is
+  not `required` when nobody of that kind is signed in; any other route
+  answers them 401 first. A session cookie that is expired or malformed
+  authenticates nobody, so its caller is anonymous, and is not asked for a
+  token either.
 - **Only `Bearer`** exempts a caller, matched in any case (`bearer` too), and
   whether or not the token is a valid key. Any other `Authorization` scheme
   (Basic, Digest, Negotiate, NTLM, or one of your own) does not: a browser
