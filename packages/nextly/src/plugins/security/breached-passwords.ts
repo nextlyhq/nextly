@@ -13,6 +13,8 @@
 
 import { createHash } from "node:crypto";
 
+import { z } from "zod";
+
 import type { BreachedPasswordsConfig } from "../../shared/types/config";
 import { getCoreVersion } from "../core-version";
 
@@ -57,11 +59,17 @@ export async function checkBreached(
 
   let suffixes: readonly string[] | null;
   if (typeof source === "object" && "range" in source) {
-    // The site's own list, in the process: no transport here to secure.
-    suffixes = await withinTime(
-      Promise.resolve().then(() => source.range(prefix)),
-      timeoutMs
+    // The site's own list, in the process: no transport here to secure. Its
+    // answer is parsed rather than trusted to match its type, since a source
+    // in JavaScript, or one passing on a provider's decoded answer, can hand
+    // back anything; what is not a list of strings proves nothing.
+    const answer = RANGE_ANSWER.safeParse(
+      await withinTime(
+        Promise.resolve().then(() => source.range(prefix)),
+        timeoutMs
+      )
     );
+    suffixes = answer.success ? answer.data : null;
   } else {
     const base =
       source === "pwned-passwords" ? PWNED_PASSWORDS_RANGE_URL : source.url;
@@ -145,6 +153,9 @@ function rangeUrl(base: string, prefix: string): string {
   url.pathname = `${url.pathname.replace(/\/+$/, "")}/${prefix}`;
   return url.toString();
 }
+
+/** What a site's own range source must answer: a list of entries. */
+const RANGE_ANSWER = z.array(z.string());
 
 /** A range answer's entry: a 35-hex-digit suffix, and a count when given. */
 const RANGE_ENTRY = /^([0-9A-Fa-f]{35})(?::(\d+))?$/;
