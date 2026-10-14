@@ -37,6 +37,7 @@ vi.mock("../../domains/audit/audit-log-writer", async importOriginal => ({
 vi.mock("../../di/register", () => ({ getService: () => ({}) }));
 
 import { signAccessToken } from "../../auth/jwt/sign";
+import { requireAuthentication } from "../../auth/middleware";
 import { _resetEnvCache } from "../../shared/lib/env";
 import type { PluginContext } from "../plugin-context";
 
@@ -283,6 +284,22 @@ describe("an Authorization header on an anonymous write to a csrf: true route", 
     const res = await runPluginRoute(
       write({ authorization: "Bearer not-a-key" }),
       match({ csrf: true })
+    );
+    expectAdmitted(res);
+  });
+
+  it("exempts a Bearer token that authenticates, with no origin and no token", async () => {
+    // A route that requires a caller resolves the key; the API key, not a
+    // cookie, admitted the request, so there is nothing for a page to forge.
+    vi.mocked(requireAuthentication).mockResolvedValueOnce({
+      userId: "u1",
+      userEmail: "u1@x.com",
+      userName: "U",
+      authMethod: "api-key",
+    } as never);
+    const res = await runPluginRoute(
+      write({ authorization: "Bearer nx_live_abc" }),
+      match({ csrf: true, public: false })
     );
     expectAdmitted(res);
   });
