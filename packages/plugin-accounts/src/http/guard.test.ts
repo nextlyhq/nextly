@@ -76,6 +76,8 @@ describe("safeReturnPath", () => {
       "/\\evil.example.com",
       "/%2F%2Fevil.example.com",
       "/%5cevil.example.com",
+      "/%2e%2e//evil.example.com/path",
+      "/./%2e//evil.example.com",
       "javascript:alert(1)",
       "checkout",
     ]) {

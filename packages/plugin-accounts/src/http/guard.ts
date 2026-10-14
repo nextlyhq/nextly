@@ -51,23 +51,30 @@ export function assertSameOrigin(
  * Where a visitor may be sent back to after signing in: a path on the
  * site's own origin. Another origin, a protocol-relative address, a
  * backslash a browser reads as one, and an encoded path are all refused,
- * answering `fallback`.
+ * answering `fallback`. The path is judged again once the URL parser has
+ * normalised it, since dot segments such as `/%2e%2e//host` normalise to a
+ * protocol-relative path.
  */
 export function safeReturnPath(
   settings: Pick<AccountsSettings, "origin">,
   next: string | undefined,
   fallback = "/"
 ): string {
-  if (
-    next === undefined ||
-    !/^\/(?![/\\])/.test(next) ||
-    /[\\\s]|%2f|%5c/i.test(next)
-  )
-    return fallback;
+  if (next === undefined || !isLocalPath(next)) return fallback;
   const url = new URL(next, settings.origin);
   if (url.origin !== new URL(settings.origin).origin) return fallback;
+  const path = `${url.pathname}${url.search}${url.hash}`;
 
-  return `${url.pathname}${url.search}${url.hash}`;
+  return isLocalPath(path) ? path : fallback;
+}
+
+/**
+ * A path that stays on the origin it is resolved against: one leading
+ * slash, never two, and no backslash, whitespace or encoded slash a
+ * browser could read as a host.
+ */
+function isLocalPath(path: string): boolean {
+  return /^\/(?![/\\])/.test(path) && !/[\\\s]|%2f|%5c/i.test(path);
 }
 
 function originOf(referer: string | null): string | null {
