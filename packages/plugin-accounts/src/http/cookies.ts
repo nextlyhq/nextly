@@ -28,7 +28,11 @@ export function cookieName(
   return isHttps(settings) ? `__Host-${BASE_NAMES[kind]}` : BASE_NAMES[kind];
 }
 
-/** A cookie's value on a request, or undefined. */
+/**
+ * A cookie's value on a request, or undefined. A value that is not valid
+ * percent-encoding is the visitor's to send but never one the plugin set,
+ * so it reads as no cookie at all rather than failing the request.
+ */
 export function readCookie(request: Request, name: string): string | undefined {
   const header = request.headers.get("cookie");
   if (header === null) return undefined;
@@ -36,10 +40,20 @@ export function readCookie(request: Request, name: string): string | undefined {
     const index = part.indexOf("=");
     if (index === -1) continue;
     if (part.slice(0, index).trim() === name)
-      return decodeURIComponent(part.slice(index + 1).trim());
+      return decodedOrAbsent(part.slice(index + 1).trim());
   }
 
   return undefined;
+}
+
+/** A cookie value decoded, or undefined when its percent-encoding is malformed. */
+function decodedOrAbsent(value: string): string | undefined {
+  try {
+    return decodeURIComponent(value);
+  } catch (error) {
+    if (error instanceof URIError) return undefined;
+    throw error;
+  }
 }
 
 /**

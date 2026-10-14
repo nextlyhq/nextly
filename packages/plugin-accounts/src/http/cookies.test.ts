@@ -47,6 +47,14 @@ describe("the plugin's cookies", () => {
     expect(readCookie(request, cookieName(https, "signUp"))).toBeUndefined();
   });
 
+  it("read a value that is not valid percent-encoding as no cookie, and decode a valid one", () => {
+    const request = new Request("https://shop.example.com", {
+      headers: { cookie: "__Host-nx-account=%E0%A4%A; nx-account-csrf=a%20b" },
+    });
+    expect(readCookie(request, cookieName(https, "session"))).toBeUndefined();
+    expect(readCookie(request, "nx-account-csrf")).toBe("a b");
+  });
+
   it("hold at most ten known-browser tokens, the newest last and each once", () => {
     const tokens = Array.from({ length: 10 }, (_, n) => `t${n}`);
     expect(withKnownToken(tokens, "t11").split(".")).toEqual([
