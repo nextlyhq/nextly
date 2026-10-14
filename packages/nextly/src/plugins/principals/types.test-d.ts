@@ -6,6 +6,13 @@
  */
 import { expectTypeOf } from "vitest";
 
+import type { FindArgs } from "../../direct-api/types/collections";
+import type {
+  CreateUserArgs,
+  DeleteUserArgs,
+  FindUserByIDArgs,
+  UpdateUserArgs,
+} from "../../direct-api/types/users";
 import { definePlugin } from "../plugin-context";
 import type { PluginRouteContext } from "../routes/route-types";
 
@@ -109,3 +116,11 @@ definePlugin({
     ],
   },
 });
+
+// A collection operation takes `principal`; a users operation, which the
+// instance refuses to run as a person, does not offer it.
+expectTypeOf<FindArgs>().toHaveProperty("principal");
+expectTypeOf<FindUserByIDArgs>().not.toHaveProperty("principal");
+expectTypeOf<CreateUserArgs>().not.toHaveProperty("principal");
+expectTypeOf<UpdateUserArgs>().not.toHaveProperty("principal");
+expectTypeOf<DeleteUserArgs>().not.toHaveProperty("principal");
