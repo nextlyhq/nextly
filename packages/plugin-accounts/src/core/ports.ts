@@ -1,4 +1,4 @@
-import type { PluginTransaction } from "@nextlyhq/plugin-sdk";
+import type { PasswordHelper, PluginTransaction } from "@nextlyhq/plugin-sdk";
 
 /**
  * What the accounts plugin borrows from core: the password, one-purpose
@@ -6,46 +6,19 @@ import type { PluginTransaction } from "@nextlyhq/plugin-sdk";
  * shapes the platform's sign-in design states for them. Every flow is written
  * against these shapes and nothing else, and `./adapter` is the one module
  * that finds them on the plugin context, so a move of where core hangs them
- * changes that module alone. Once the plugin SDK exports these types, this
- * file re-exports them rather than declaring its own.
+ * changes that module alone. A type the plugin SDK publishes is re-exported
+ * from it; the rest are declared here until core publishes them.
  */
 
-/** Core's password hashing and rules. */
-export interface PasswordHelper {
-  /**
-   * Hashes the whole password, NFC-normalised, into opaque ASCII of at most
-   * 255 characters (the accounts table sizes its column by it). Throws past
-   * `ceiling`.
-   */
-  hash(password: string): Promise<string>;
-  /**
-   * False on a mismatch, a malformed hash or one the helper did not write;
-   * never throws for any of them. Verifies a hash written at the helper's
-   * own earlier settings. With null, spends a real verification's time
-   * against a decoy and answers false, so an unknown address costs what a
-   * known one does.
-   */
-  verify(password: string, hash: string | null): Promise<boolean>;
-  /** True for any string that is not a hash at today's algorithm and setting. */
-  needsRehash(hash: string): boolean;
-  /** The rules for a new password. */
-  check(password: string, rules?: PasswordRules): Promise<PasswordCheck>;
-  /** The hard maximum, in code points: 256. */
-  readonly ceiling: number;
-}
-
-export interface PasswordRules {
-  /** 8 to 64, default 8: code points after NFC. */
-  minLength?: number;
-  /** 64 to `ceiling`, default 128. */
-  maxLength?: number;
-  /** Default false: ask the site's breached-password source. */
-  breached?: boolean;
-}
-
-export type PasswordCheck =
-  | { ok: true; breachedCheck: "passed" | "skipped" | "unavailable" }
-  | { ok: false; reason: "too-short" | "too-long" | "common" | "breached" };
+/**
+ * Core's password hashing and rules, as the plugin SDK publishes them
+ * (`ctx.security.passwords`).
+ */
+export type {
+  PasswordCheck,
+  PasswordHelper,
+  PasswordRules,
+} from "@nextlyhq/plugin-sdk";
 
 /** Kept beside a one-purpose secret, in clear, at most 1 KB serialised. */
 export type SecretData = Record<string, string | number | boolean | null>;

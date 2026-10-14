@@ -1,5 +1,7 @@
 import { createHash, randomBytes } from "node:crypto";
 
+import { PasswordTooLongError } from "@nextlyhq/plugin-sdk";
+
 import type {
   PasswordCheck,
   PasswordHelper,
@@ -19,11 +21,6 @@ const COMMON = new Set([
   "qwertyuiop",
   "iloveyou",
 ]);
-
-/** Thrown by `hash` past the ceiling, as core's helper throws its own error. */
-export class FakePasswordTooLongError extends Error {
-  override readonly name = "PasswordTooLongError";
-}
 
 /**
  * Core's password helper, fast: a salted SHA-256 rather than a slow hash,
@@ -45,9 +42,8 @@ export class FakePasswordHelper implements PasswordHelper {
     await roundTrip();
     const normalised = password.normalize("NFC");
     if (codePoints(normalised) > CEILING) {
-      throw new FakePasswordTooLongError(
-        "The password is longer than the ceiling."
-      );
+      // Core's own error, so a caller's handling is tried against it.
+      throw new PasswordTooLongError();
     }
     const salt = randomBytes(8).toString("hex");
 

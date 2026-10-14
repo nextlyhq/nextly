@@ -19,7 +19,7 @@ export {
 export { FakeLimiter } from "./fake-limiter";
 export { FakeAccountsMail } from "./fake-mail";
 export { FakeOpaqueSecrets } from "./fake-opaque";
-export { FakePasswordHelper, FakePasswordTooLongError } from "./fake-passwords";
+export { FakePasswordHelper } from "./fake-passwords";
 export { FakeOneTimeSecrets, type MintedSecret } from "./fake-secrets";
 export { FakeClock, FakeCoreMisuse } from "./fake-transactions";
 

@@ -1,6 +1,7 @@
+import { PasswordTooLongError } from "@nextlyhq/plugin-sdk";
 import { describe, expect, it } from "vitest";
 
-import { FakePasswordHelper, FakePasswordTooLongError } from "./fake-passwords";
+import { FakePasswordHelper } from "./fake-passwords";
 
 describe("the fake password helper", () => {
   it("verifies the password it hashed, NFC-normalised, and nothing else", async () => {
@@ -61,7 +62,7 @@ describe("the fake password helper", () => {
   it("refuses to hash past the ceiling", async () => {
     const passwords = new FakePasswordHelper();
     await expect(passwords.hash("x".repeat(257))).rejects.toBeInstanceOf(
-      FakePasswordTooLongError
+      PasswordTooLongError
     );
     await expect(passwords.hash("x".repeat(256))).resolves.toBeTypeOf("string");
   });
