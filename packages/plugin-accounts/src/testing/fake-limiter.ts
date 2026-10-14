@@ -29,6 +29,8 @@ interface BackoffState {
   /** When the wait in force ends; 0 with none, Infinity until reset or forgotten. */
   waitUntil: number;
   lastCountedAt: number;
+  /** Every count ever made on the entry, given back or not: which count came last. */
+  counted: number;
 }
 
 /** What one counted entry added, so a release can take it back once. */
@@ -40,7 +42,7 @@ interface Counted {
    * For a backoff rule, the wait this count set and the one in force before
    * it, so giving it back lifts a wait only it set; absent when it set none.
    */
-  readonly setWait?: { until: number; before: number };
+  readonly setWait?: { until: number; before: number; atCount: number };
   released: boolean;
 }
 
@@ -158,11 +160,14 @@ export class FakeLimiter implements PluginLimiter {
     const state = this.#backoffs.get(slot(counted.target));
     if (state === undefined) return;
     state.count = Math.max(0, state.count - 1);
-    // A count given back never leaves a wait behind that only it set: an
-    // attempt that succeeded is no failure to wait for.
+    // A count given back never leaves a wait behind that only it set (an
+    // attempt that succeeded is no failure to wait for), but only while
+    // nothing was counted on the entry since: a later count would have set
+    // a wait of its own.
     if (
       counted.setWait !== undefined &&
-      state.waitUntil === counted.setWait.until
+      state.waitUntil === counted.setWait.until &&
+      state.counted === counted.setWait.atCount
     ) {
       state.waitUntil = counted.setWait.before;
     }
@@ -274,6 +279,7 @@ export class FakeLimiter implements PluginLimiter {
     }
     const state = this.#backoff(target, rule, now);
     state.count += 1;
+    state.counted += 1;
     state.lastCountedAt = now;
     let setWait: Counted["setWait"];
     // Counted with room, an attempt sets the next wait; counted without
@@ -285,7 +291,7 @@ export class FakeLimiter implements PluginLimiter {
         ];
       const before = state.waitUntil;
       state.waitUntil = wait === undefined ? Infinity : now + wait;
-      setWait = { until: state.waitUntil, before };
+      setWait = { until: state.waitUntil, before, atCount: state.counted };
     }
     this.#backoffs.set(slot(target), state);
 
@@ -305,7 +311,7 @@ export class FakeLimiter implements PluginLimiter {
       (state.waitUntil === Infinity || now >= state.waitUntil);
     if (state === undefined || forgotten) {
       this.#backoffs.delete(slot(target));
-      return { count: 0, waitUntil: 0, lastCountedAt: now };
+      return { count: 0, waitUntil: 0, lastCountedAt: now, counted: 0 };
     }
 
     return state;
