@@ -232,8 +232,14 @@ export function accountsService(deps: () => FlowDeps): AccountsServer {
       return sessionAccount(deps(), { sessionToken: visitor.sessionToken });
     },
 
-    visitorFrom(request) {
+    visitorFrom(from) {
       const { settings, core } = deps();
+      // Headers alone are read as a request to the site's own origin: only
+      // its headers are ever read.
+      const request =
+        from instanceof Request
+          ? from
+          : new Request(settings.origin, { headers: new Headers(from) });
 
       return {
         client: core.limits.clientKey(request),

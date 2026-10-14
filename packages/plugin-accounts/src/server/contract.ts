@@ -157,8 +157,12 @@ export interface AccountsServer {
   /** The signed-in account, or null. */
   currentAccount(input: ForVisitor): Promise<SignedInAccount | null>;
 
-  /** The visitor a request carries: its network key and the plugin's cookies. */
-  visitorFrom(request: Request): AccountVisitor;
+  /**
+   * The visitor a request carries: its network key and the plugin's
+   * cookies. Takes the request's headers alone where there is no request,
+   * as in a server component or a server action.
+   */
+  visitorFrom(request: Request | Headers): AccountVisitor;
   /**
    * Refuses a request whose `Origin` (or, without one, its `Referer`) is not
    * the site's configured origin.

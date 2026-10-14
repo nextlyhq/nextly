@@ -1,11 +1,16 @@
 import { defineConfig } from "tsup";
 
 export default defineConfig({
-  // Two Node-safe entries. The root carries the plugin, its settings and its
-  // schema; `testing` carries the stand-ins for core's account capabilities,
-  // so a site's tests can use them without ever loading test code from the
-  // root.
-  entry: ["src/index.ts", "src/testing/index.ts"],
+  // Three entries. The root carries the plugin, its settings, its schema and
+  // its typed server functions, all Node-safe; `testing` carries the
+  // stand-ins for core's account capabilities, so a site's tests can use them
+  // without ever loading test code from the root; `next` carries the server
+  // actions and helpers, the one entry that imports Next.js.
+  entry: ["src/index.ts", "src/testing/index.ts", "src/next/index.ts"],
+  // Next.js is the site's own, an optional peer dependency: bundling it would
+  // load a second copy beside the site's, whose request context ours would
+  // never see.
+  external: [/^next(\/|$)/],
   format: ["esm"],
   dts: true,
   clean: true,

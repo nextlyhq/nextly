@@ -18,6 +18,11 @@
       "types": "./dist/testing/index.d.ts",
       "import": "./dist/testing/index.js",
       "default": "./dist/testing/index.js"
+    },
+    "./next": {
+      "types": "./dist/next/index.d.ts",
+      "import": "./dist/next/index.js",
+      "default": "./dist/next/index.js"
     }
   },
   "files": [
@@ -39,7 +44,13 @@
   },
   "peerDependencies": {
     "@nextlyhq/plugin-sdk": "workspace:*",
+    "next": "^14.0.0 || ^15.0.0 || ^16.0.0",
     "nextly": "0.0.2-alpha.66"
+  },
+  "peerDependenciesMeta": {
+    "next": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@nextlyhq/eslint-config": "workspace:*",
