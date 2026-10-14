@@ -32,6 +32,7 @@ export type {
   RequestContext,
   DirectAPIConfig,
   PopulateOptions,
+  RunAsPrincipal,
 } from "./shared";
 
 export type {

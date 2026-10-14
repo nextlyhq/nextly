@@ -4,9 +4,9 @@ description: Let people who are not staff sign in through your plugin — a shop
 ---
 
 > **Alpha (`0.x`) — `@experimental`.** Plugin-defined kinds of signed-in person are
-> new. Recognising a person on a request works today; access rules, the Direct
-> API acting as a person, and audit records naming one are still to come. Pin your
-> versions.
+> new. Recognising a person on a request, access rules that admit one, and the
+> Direct API acting as one work today; audit records naming a person are still to
+> come. Pin your versions.
 
 Nextly's own sign-in is for staff: the people who use the admin. A plugin that
 signs in anyone else — a shop's customers, a site's members — registers its own
@@ -77,7 +77,8 @@ used, or whose full name another plugin's kind already holds.
   the kind, and never reused once the person is deleted. An id outside those
   bounds counts as nobody, and a warning says why.
 - **Every declared attribute**, each with a value of its declared type or `null`
-  for "not known". A missing attribute or a value of the wrong type counts as
+  for "not known". An attribute type cannot be optional: write `plan: string |
+  null`, not `plan?: string`. A missing attribute or a value of the wrong type counts as
   nobody. An attribute you did not declare is dropped.
 
 `resolve` reads cookies and headers. It is handed the request without its body,
@@ -143,14 +144,87 @@ const account = await ctx.principals?.fromRequest(request, "account");
 From the app's own server code, `nextly.principals` takes the full kind:
 
 ```ts
-const nextly = await getNextly({ config });
-const account = await nextly.principals.fromRequest(request, "acme-accounts:account");
+import { nextly } from "nextly";
+
+export async function GET(request: Request) {
+  const account = await nextly.principals.fromRequest(
+    request,
+    "acme-accounts:account"
+  );
+  return Response.json({ signedIn: account !== null });
+}
 ```
 
 Both share the request's answer with every other entry point asking for the same
 kind. Both answer `null` to a write from another site, as `ctx.auth.currentUser`
 does, unless the request carries a `Bearer` token. Asking for a kind nobody
 registered throws, rather than answering nobody.
+
+To act as a person without a request, for example in a job, look them up by id.
+`byId` calls the kind's `lookup`, checks its answer exactly as a resolver's is
+checked, and answers `null` for an id the plugin does not return. It throws for a
+kind with no `lookup`. The plugin that owns the kind has
+`ctx.principals.byId(name, id)` too.
+
+```ts
+import { nextly } from "nextly";
+
+export async function forAccount(accountId: string) {
+  return nextly.principals.byId("acme-accounts:account", accountId);
+}
+```
+
+## Let a person read and write your collections
+
+A collection admits a person only through its own code-defined rule. Rules see the
+person as `principal`, with their kind, id and declared attributes, beside a
+`user` that is `null`:
+
+```ts
+defineCollection({
+  slug: "orders",
+  access: {
+    read: ({ principal }) => principal?.kind === "acme-accounts:account",
+    create: ({ principal }) => principal?.attributes.verified === true,
+  },
+  fields: [/* ... */],
+});
+```
+
+- A collection with **no rule** for the operation refuses a person, where an
+  anonymous visitor would fall through to the public default.
+- A rule written for staff, such as `({ user }) => !!user`, refuses a person,
+  because their `user` is `null`.
+- A rule set to `true` admits a person, as it admits every anonymous visitor.
+- Database permissions and the super-admin bypass never apply to a person, and a
+  person can never publish or unpublish.
+- A field's rule receives `principal` too, so a field can be kept from members
+  with `read: ({ principal }) => principal === null`. A field with no rule
+  follows the collection's decision.
+- A rule that limits a read to the rows a person owns is not offered yet. Check
+  ownership in your own code.
+
+Run an operation as the person by passing them as `principal`. Access rules always
+apply:
+
+```ts
+import { nextly, type Principal } from "nextly";
+
+export async function ordersOf(account: Principal) {
+  return nextly.find({ collection: "orders", principal: account });
+}
+```
+
+A plugin's own service call takes the same option:
+`ctx.services.collections.createEntry("orders", data, { principal: account })`.
+
+The call is refused, and runs nothing, when it also sets `overrideAccess: true`,
+`trusted` or `frameworkFilter`, names a `user` or an API key, or names a person core
+did not make. Only collection and Single operations can run as a person; any other
+operation refuses the option. `findSingles` made as a person lists, and counts,
+only the Singles the person may read. Hooks for the operation receive the person as `principal`, with no
+`user`. A document created as a person has no owner, because the owner column
+names staff users; an update made as one leaves the owner as it was.
 
 ## A person is not a staff user
 
@@ -165,6 +239,8 @@ person's kind and id.
 Everything here is `@experimental` until the feature is complete. These are meant
 to become stable: a definition's fields and their meaning, the `<plugin>:<name>`
 naming, what `resolve` must answer, the id bounds, a route's `principal` with
-`required`, `ctx.principal`, `fromRequest`, `Principal` and `PrincipalRef`. The
-`contributes.principals` key, where `nextly.principals` hangs, and the spelling of
-a route's `principal` may still change.
+`required`, `ctx.principal`, `fromRequest`, `byId`, `principal` in collection and
+field rules, the `principal` option's refusals, `Principal` and `PrincipalRef`. The
+`contributes.principals` key, where `nextly.principals` hangs, the spelling of a
+route's `principal`, the option's name and where the person sits in a hook's
+context may still change.

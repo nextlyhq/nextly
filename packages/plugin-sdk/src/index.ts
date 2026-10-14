@@ -173,10 +173,13 @@ export type {
  * Kinds of signed-in person a plugin defines: a shop's customers, a site's
  * members, anyone who signs in without being staff.
  * @experimental `PrincipalKindDefinition` and `PrincipalKindContribution`
- *   (`contributes.principals`) with their attribute and record types; `PluginRoutePrincipal` (a route's
- *   `principal`); `Principal`, the person core hands to `ctx.principal`;
+ *   (`contributes.principals`) with their attribute and record types;
+ *   `PluginRoutePrincipal` (a route's `principal`); `Principal`, the person
+ *   core hands to `ctx.principal`;
  *   `PrincipalRef`, a person named by kind and id; `PluginPrincipalsApi`
- *   (`ctx.principals`) and `NextlyPrincipals` (`nextly.principals`). Meant to
+ *   (`ctx.principals`) and `NextlyPrincipals` (`nextly.principals`), with
+ *   their `byId`; `RunAsPrincipal`, the `principal` option a collection or
+ *   Single operation and a `ctx.services` call run as. Meant to
  *   become stable once the feature is complete (see STABILITY.md).
  */
 export type {
@@ -195,6 +198,7 @@ export type {
   PrincipalKindDefinition,
   PrincipalRecord,
   PrincipalRef,
+  RunAsPrincipal,
 } from "nextly";
 
 /**

@@ -11,6 +11,7 @@ import {
   codeAccessAllows,
   readAccessCaller,
 } from "../../../auth/entity-read-access";
+import { currentPrincipal } from "../../../auth/principal-scope";
 import { canReadSystemResource } from "../../../auth/resource-readable";
 import { getDialectTables } from "../../../database";
 import { container } from "../../../di/container";
@@ -1780,6 +1781,22 @@ export class CollectionRelationshipService extends BaseService {
     const rbac = container.has("rbacAccessControlService")
       ? container.get<RBACAccessControlService>("rbacAccessControlService")
       : undefined;
+
+    // A call made as a plugin-defined person reads a populated target only
+    // where the target's own rule admits them: the one decision the direct
+    // read of the target asks, so a relationship serves a person nothing they
+    // would be refused by name. No rule, or no service to consult, refuses.
+    const principal = currentPrincipal();
+    if (principal !== null) {
+      return (
+        rbac !== undefined &&
+        rbac.checkPrincipalCodeAccess({
+          operation: "read",
+          resource: targetCollection,
+          principal,
+        })
+      );
+    }
 
     if (!user) {
       // `undefined` is no opinion — the target names no rule for reading, and

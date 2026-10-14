@@ -11,6 +11,7 @@ import type { PluginDefinition } from "../plugin-context";
 import { createNextlyPrincipals, createPluginPrincipals } from "./api";
 import { isCorePrincipal } from "./principal";
 import {
+  lookupPrincipal,
   principalFromRequest,
   recognisePrincipal,
   runWithPrincipalAnswers,
@@ -26,6 +27,9 @@ const warn = vi.fn();
 let answer: unknown;
 const resolve = vi.fn(async (_request: Request): Promise<unknown> => answer);
 
+let lookupAnswer: unknown;
+const lookup = vi.fn(async (_id: string): Promise<unknown> => lookupAnswer);
+
 const accounts = {
   name: "accounts",
   version: "1.0.0",
@@ -36,6 +40,7 @@ const accounts = {
         name: "account",
         attributes: { verified: "boolean", plan: "string", visits: "number" },
         resolve,
+        lookup,
       },
       {
         name: "guest",
@@ -368,5 +373,93 @@ describe("server code asking for a person", () => {
     await expect(
       createPluginPrincipals(other)?.fromRequest(request(), "account")
     ).rejects.toThrow(/"forum:account"/);
+  });
+});
+
+describe("looking a person up by id", () => {
+  beforeEach(() => {
+    lookupAnswer = person;
+    lookup.mockReset();
+    lookup.mockImplementation(async () => lookupAnswer);
+  });
+
+  it("finds the person through the kind's lookup, without a request", async () => {
+    const found = await lookupPrincipal(KIND, "acc_1");
+    expect(found).toMatchObject({ kind: KIND, id: "acc_1" });
+    expect(isCorePrincipal(found)).toBe(true);
+    expect(lookup).toHaveBeenCalledWith("acc_1");
+    expect(resolve).not.toHaveBeenCalled();
+  });
+
+  it("answers nobody for an id the plugin does not return", async () => {
+    lookupAnswer = null;
+    expect(await lookupPrincipal(KIND, "acc_9")).toBeNull();
+  });
+
+  it("checks the lookup's answer as a resolver's is checked", async () => {
+    lookupAnswer = {
+      id: "acc_1",
+      attributes: { ...person.attributes, verified: "yes", role: "admin" },
+    };
+    expect(await lookupPrincipal(KIND, "acc_1")).toBeNull();
+    expect(warn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "principal-answer-invalid",
+        source: "lookup",
+      })
+    );
+  });
+
+  it("drops an attribute the kind did not declare", async () => {
+    lookupAnswer = {
+      id: "acc_1",
+      attributes: { ...person.attributes, role: "admin" },
+    };
+    const found = await lookupPrincipal(KIND, "acc_1");
+    expect(found?.attributes).not.toHaveProperty("role");
+  });
+
+  it("answers nobody when the lookup names someone else", async () => {
+    lookupAnswer = { ...person, id: "acc_2" };
+    expect(await lookupPrincipal(KIND, "acc_1")).toBeNull();
+  });
+
+  it.each([
+    ["an empty id", ""],
+    ["an id of 129 characters", "a".repeat(129)],
+  ])("answers nobody for %s without asking the plugin", async (_l, id) => {
+    expect(await lookupPrincipal(KIND, id)).toBeNull();
+    expect(lookup).not.toHaveBeenCalled();
+  });
+
+  it("takes a throw for nobody, and logs it without its message", async () => {
+    lookup.mockImplementationOnce(async () => {
+      throw new TypeError("secret-session-token-123");
+    });
+    expect(await lookupPrincipal(KIND, "acc_1")).toBeNull();
+    expect(warn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "principal-lookup-failed",
+        errorName: "TypeError",
+      })
+    );
+    expect(JSON.stringify(warn.mock.calls)).not.toContain(
+      "secret-session-token-123"
+    );
+  });
+
+  it("refuses a kind with no lookup rather than answer nobody", async () => {
+    await expect(lookupPrincipal("accounts:guest", "g1")).rejects.toThrow(
+      /has no lookup/
+    );
+  });
+
+  it("is reached through nextly.principals and ctx.principals", async () => {
+    expect((await createNextlyPrincipals().byId(KIND, "acc_1"))?.id).toBe(
+      "acc_1"
+    );
+    expect(
+      (await createPluginPrincipals(accounts)?.byId("account", "acc_1"))?.id
+    ).toBe("acc_1");
   });
 });

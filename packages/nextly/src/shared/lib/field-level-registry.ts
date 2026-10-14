@@ -31,11 +31,16 @@ import {
   ruleFacingPermissions,
 } from "../../auth/authenticated-scope";
 import { effectiveCallerScope } from "../../auth/caller-scope";
+import {
+  currentPrincipal,
+  withCurrentPrincipal,
+} from "../../auth/principal-scope";
 import { NextlyError } from "../../errors/nextly-error";
 import { normalizeHookError } from "../../hooks/normalize-hook-error";
 import { singleHookNamespace } from "../../hooks/register-single-hooks";
 import { recordSideEffectWarning } from "../../hooks/side-effect-warnings";
 import type { FieldHookHandler } from "../../hooks/types";
+import type { Principal } from "../../plugins/principals/types";
 import {
   listEffectivePermissions,
   listRoleSlugsForUser,
@@ -57,6 +62,7 @@ type FieldAccessFn = (args: {
   data?: Record<string, unknown>;
   permissions: string[];
   roles: string[];
+  principal: Principal | null;
 }) => MaybePromise<boolean>;
 
 /**
@@ -481,6 +487,43 @@ function levelHasAccessCallback(
   return false;
 }
 
+/** What a field rule is told about the caller and the row. */
+interface FieldRuleCaller {
+  user?: Record<string, unknown>;
+  id?: string;
+  grants: () => Promise<CallerGrants>;
+}
+
+/**
+ * Run one field's access rule. The read and the write ask it identically, so
+ * one function asks: a rule told different things on the two paths is how
+ * one field ends up readable by a caller who may not write it, or the
+ * reverse, for no reason anyone chose.
+ */
+async function fieldRuleAllows(
+  fn: FieldAccessFn,
+  ctx: FieldRuleCaller,
+  snapshot: Record<string, unknown> | undefined
+): Promise<boolean> {
+  try {
+    const { permissions, roles } = await ctx.grants();
+    return await fn({
+      req: { user: ctx.user },
+      id: ctx.id,
+      data: snapshot,
+      permissions,
+      roles,
+      // The person the operation is made as, from the same frame the
+      // collection gate reads, so a field rule and the gate above it agree
+      // on who is asking.
+      principal: currentPrincipal(),
+    });
+  } catch {
+    // Fail-secure: an access rule that throws denies the field.
+    return false;
+  }
+}
+
 /**
  * Recursive worker for write access. Every rule at one level is evaluated
  * against the SAME immutable snapshot of that level's data, so a rule that
@@ -517,20 +560,7 @@ async function applyWriteAccessRec(
     }
     const fn = entry.access?.[operation];
     if (!fn) continue;
-    let allowed = false;
-    try {
-      const { permissions, roles } = await ctx.grants();
-      allowed = await fn({
-        req: { user: ctx.user },
-        id: ctx.id,
-        data: snapshot,
-        permissions,
-        roles,
-      });
-    } catch {
-      // Fail-secure: an access rule that throws denies the field.
-      allowed = false;
-    }
+    const allowed = await fieldRuleAllows(fn, ctx, snapshot);
     if (!allowed) denied.push(name);
   }
   for (const name of denied) delete data[name];
@@ -750,20 +780,7 @@ async function applyReadAccessRec(
     }
     const fn = fieldFns.access?.read;
     if (!fn) continue;
-    let allowed = false;
-    try {
-      const { permissions, roles } = await ctx.grants();
-      allowed = await fn({
-        req: { user: ctx.user },
-        id: ctx.id,
-        data: snapshot,
-        permissions,
-        roles,
-      });
-    } catch {
-      // Fail-secure: an access rule that throws denies the field.
-      allowed = false;
-    }
+    const allowed = await fieldRuleAllows(fn, ctx, snapshot);
     if (!allowed) denied.push(name);
   }
   // Record what stays removed for the next pass to restore as evidence. A prior
@@ -944,14 +961,16 @@ async function runFieldHooksRec(
       // not happened yet.
       if (phase === "afterChange") {
         try {
-          const result = await handler({
-            collection: ctx.slug,
-            operation: ctx.operation,
-            fieldName: name,
-            value,
-            data,
-            user: ctx.user,
-          });
+          const result = await handler(
+            withCurrentPrincipal({
+              collection: ctx.slug,
+              operation: ctx.operation,
+              fieldName: name,
+              value,
+              data,
+              user: ctx.user,
+            })
+          );
           if (result !== undefined) value = result;
         } catch (error) {
           // The registry has no `afterChange` phase: it maps onto
@@ -988,14 +1007,16 @@ async function runFieldHooksRec(
         }
         continue;
       }
-      const result = await handler({
-        collection: ctx.slug,
-        operation: ctx.operation,
-        fieldName: name,
-        value,
-        data,
-        user: ctx.user,
-      });
+      const result = await handler(
+        withCurrentPrincipal({
+          collection: ctx.slug,
+          operation: ctx.operation,
+          fieldName: name,
+          value,
+          data,
+          user: ctx.user,
+        })
+      );
       if (result !== undefined) value = result;
     }
     data[name] = value;

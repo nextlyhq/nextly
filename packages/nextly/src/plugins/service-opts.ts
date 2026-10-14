@@ -2,6 +2,7 @@ import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
 import type { AuthenticatedScope } from "../auth/authenticated-scope";
 import { effectiveCallerScope, runWithCallerScope } from "../auth/caller-scope";
+import { runAsPrincipal } from "../auth/principal-scope";
 import { buildUserContext } from "../auth/user-context";
 import { buildMutationMessage } from "../direct-api/namespaces/helpers";
 import type { MutationResult } from "../direct-api/types/shared";
@@ -16,6 +17,8 @@ import { listRoleSlugsForUserOrRefuse } from "../services/lib/permissions";
 import type { RequestContext } from "../services/shared";
 import type { AuthUser } from "../types/auth";
 
+import { assertRunnableAsPrincipal } from "./principals/run-as";
+import type { Principal } from "./principals/types";
 import { methodFacade } from "./service-facade";
 import { type TransactionScope, transactionScope } from "./transaction-scope";
 
@@ -45,6 +48,16 @@ export interface ServiceOpts {
    */
   as?: "user" | "system" | "public";
   user?: AuthUser;
+  /**
+   * @experimental A plugin-defined signed-in person this operation is made as,
+   * as `ctx.principals.fromRequest` or `byId` returned them.
+   *
+   * Access rules always apply: the collection's code-defined rule is the only
+   * way in. The call is refused, and runs nothing, when it also sets `as`,
+   * names a `user` or an `authenticatedScope`, or names a person core did
+   * not make.
+   */
+  principal?: Principal;
   /**
    * Arbitrary data handed to this operation's hooks as `ctx.context`.
    *
@@ -233,6 +246,19 @@ export async function resolveServiceOpts(
   // pinned for this request. A route that omits it is the common case, not the
   // exception, so the ambient value is what makes the key's grants reach the
   // access check at all.
+  // A call made as a plugin-defined person: under the rules, with no staff
+  // user and no API key. Answered before the request's scope is read, since
+  // that scope is the key the person's request may have arrived beside, not
+  // the person. The person is pinned around the call by the facade.
+  if (opts.principal !== undefined) {
+    assertRunnableAsPrincipal(opts.principal, {
+      user: opts.user,
+      authenticatedScope: opts.authenticatedScope,
+      as: opts.as,
+    });
+    return { overrideAccess: false, ...carried };
+  }
+
   const authenticatedScope = effectiveCallerScope(opts.authenticatedScope);
 
   // No caller, rules still enforced. Named rather than inferred from an absent
@@ -617,10 +643,8 @@ function translateServiceOpts(
         prop as string
       ];
       return async (...args: unknown[]) => {
-        const resolved = await resolveServiceOpts(
-          (args[idx] as ServiceOpts) ?? {},
-          deps
-        );
+        const opts = (args[idx] as ServiceOpts | undefined) ?? {};
+        const resolved = await resolveServiceOpts(opts, deps);
         // Nothing past the context travels. The context is the last argument
         // a plugin may name; a parameter the service accepts after it (the
         // delete's `actor`) is the service's own, and an extra argument
@@ -642,9 +666,17 @@ function translateServiceOpts(
         // and none could be relied on to forward one — so without re-pinning,
         // a handler that gave up a grant still got the field that grant opens,
         // which is the narrowing silently not happening.
+        //
+        // The person, too, for the same reason and more: a gate that missed
+        // the person would judge the call as anonymous, and an anonymous
+        // caller reaches a collection's public default where a person must be
+        // refused. A call naming no person runs as none, so it never inherits
+        // the person of an operation that set it going.
         const call = () =>
-          runWithCallerScope(resolved.authenticatedScope, () =>
-            (fn as (...a: unknown[]) => Promise<unknown>).apply(target, next)
+          runAsPrincipal(opts.principal ?? null, () =>
+            runWithCallerScope(resolved.authenticatedScope, () =>
+              (fn as (...a: unknown[]) => Promise<unknown>).apply(target, next)
+            )
           );
 
         if (verb === undefined) return call();

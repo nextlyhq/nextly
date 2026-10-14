@@ -457,6 +457,7 @@ exports[`plugin-sdk public export surface > \`.\` (index) surface is unchanged 1
   "ResolvedDraftSplitCollection (type)",
   "ResolverOptions (type)",
   "RouteMethod (type)",
+  "RunAsPrincipal (type)",
   "ScheduledTask (type)",
   "Secret (value)",
   "SecretData (type)",

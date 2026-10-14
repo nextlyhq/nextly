@@ -69,22 +69,47 @@ export function principalKindName(pluginName: string, name: string): string {
  */
 let registeredKinds: ReadonlyMap<string, RegisteredPrincipalKind> = new Map();
 
+/**
+ * Where publication goes while a dev reload holds it: the reload's own stage,
+ * or nowhere when no reload is running.
+ */
+let stage: { kinds?: ReadonlyMap<string, RegisteredPrincipalKind> } | null =
+  null;
+
 export function publishPrincipalKinds(
   kinds: ReadonlyMap<string, RegisteredPrincipalKind>
 ): void {
+  if (stage !== null) {
+    stage.kinds = kinds;
+    return;
+  }
   registeredKinds = kinds;
 }
 
 /**
- * Every kind published now. A dev reload captures it before it reads the new
- * config, which publishes that config's kinds, and puts it back when the
- * reload does not land.
+ * Hold publication for the length of a dev reload.
+ *
+ * Reading the reloaded config publishes its kinds, long before the reload
+ * knows whether it will land, and requests keep being served meanwhile. Held,
+ * those kinds wait on the stage: routes go on recognising people through the
+ * kinds in force until `commit` installs the new ones, and `abandon` drops
+ * them, so no request ever reaches a resolver from a config the process has
+ * not accepted. Each settles once; whichever comes second does nothing.
  */
-export function publishedPrincipalKinds(): ReadonlyMap<
-  string,
-  RegisteredPrincipalKind
-> {
-  return registeredKinds;
+export function stagePrincipalKinds(): {
+  commit: () => void;
+  abandon: () => void;
+} {
+  const held: { kinds?: ReadonlyMap<string, RegisteredPrincipalKind> } = {};
+  stage = held;
+  let settled = false;
+  const settle = (install: boolean): void => {
+    if (settled) return;
+    settled = true;
+    if (stage === held) stage = null;
+    if (install && held.kinds !== undefined) registeredKinds = held.kinds;
+  };
+  return { commit: () => settle(true), abandon: () => settle(false) };
 }
 
 /** The registered kind with this full name, or `undefined`. */
