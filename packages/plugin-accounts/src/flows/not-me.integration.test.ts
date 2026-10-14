@@ -23,6 +23,14 @@ import { sweepUnverifiedAccounts } from "./sweep-unverified";
 import { verifyByLink } from "./verify";
 
 const DAY = 24 * 60 * 60 * 1000;
+const DELETED = "nextlyhq-plugin-accounts.account.deleted";
+
+/** The accounts the flows said were deleted, in order. */
+function deletedIds(emitted: Array<{ name: string; payload: unknown }>) {
+  return emitted
+    .filter(event => event.name === DELETED)
+    .map(event => event.payload);
+}
 
 function tokenOf(link: string): string {
   const token = new URL(link).searchParams.get("token");
@@ -65,14 +73,16 @@ describe.each(getConfiguredTestDialects())(
       return { db: booted.ctx.db, ...made, signUpAs };
     }
 
-    it("removes the account by its owner's link, voiding its links, and spends the link once", async () => {
-      const { db, deps, core, signUpAs } = await boot();
+    it("removes the account by its owner's link, voiding its links, tells other plugins, and spends the link once", async () => {
+      const { db, deps, core, emitted, signUpAs } = await boot();
       const { link, notMe } = await signUpAs("dana@example.com");
+      const id = (await accountByAddress(db, "dana@example.com"))?.id;
 
       expect(await removeUnverifiedAccount(deps, { token: notMe })).toEqual({
         status: "removed",
       });
       expect(await accountByAddress(db, "dana@example.com")).toBeNull();
+      expect(deletedIds(emitted)).toEqual([{ accountId: id }]);
       expect(
         await core.secrets.peekToken({
           purpose: PURPOSES.verifyLink,
@@ -89,6 +99,7 @@ describe.each(getConfiguredTestDialects())(
         status: "refused",
         reason: "invalid",
       });
+      expect(deletedIds(emitted)).toHaveLength(1);
     });
 
     it("never removes an account verified since", async () => {
@@ -104,8 +115,8 @@ describe.each(getConfiguredTestDialects())(
       expect(await accountByAddress(db, "dana@example.com")).not.toBeNull();
     });
 
-    it("sweeps accounts nobody verified past the kept days, and keeps the rest", async () => {
-      const { db, deps, core, signUpAs } = await boot({
+    it("sweeps accounts nobody verified past the kept days, telling other plugins, and keeps the rest", async () => {
+      const { db, deps, core, emitted, signUpAs } = await boot({
         unverifiedKeptDays: 3,
       });
       await signUpAs("old@example.com");
@@ -117,8 +128,11 @@ describe.each(getConfiguredTestDialects())(
       await signUpAs("young@example.com");
       core.clock.advance(DAY);
 
+      const old = (await accountByAddress(db, "old@example.com"))?.id;
+
       expect(await sweepUnverifiedAccounts(deps)).toBe(1);
       expect(await accountByAddress(db, "old@example.com")).toBeNull();
+      expect(deletedIds(emitted)).toEqual([{ accountId: old }]);
       expect(
         await accountByAddress(db, "old-verified@example.com")
       ).not.toBeNull();

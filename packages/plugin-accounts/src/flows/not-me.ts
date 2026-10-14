@@ -1,5 +1,6 @@
 import { accountById, deleteAccount } from "../storage/accounts";
 
+import { accountDeleted } from "./account-deleted";
 import type { FlowDeps } from "./deps";
 import { PURPOSES } from "./purposes";
 
@@ -19,15 +20,17 @@ class Refusal extends Error {
  * an account someone made with their address and nobody verified. The link
  * is spent, every secret of the account voided and the account deleted, in
  * one transaction. An account verified since keeps going: its verification
- * voided this link.
+ * voided this link. Other plugins are told once it is gone, since a site
+ * that lets an unverified account sign in may have let it hold data there.
  */
 export async function removeUnverifiedAccount(
   deps: FlowDeps,
   input: { token: string }
 ): Promise<NotMeResult> {
   const { core } = deps;
+  let removed: string;
   try {
-    await deps.db.transaction(async tx => {
+    removed = await deps.db.transaction(async tx => {
       const spent = await core.secrets.consumeToken(
         { purpose: PURPOSES.notMe, token: input.token },
         { tx }
@@ -38,12 +41,14 @@ export async function removeUnverifiedAccount(
       if (account.verifiedAt !== null) throw new Refusal("spent");
       await core.secrets.voidFor({ subject: account.id }, { tx });
       await deleteAccount(tx, account.id);
+      return account.id;
     });
   } catch (error) {
     if (error instanceof Refusal)
       return { status: "refused", reason: error.reason };
     throw error;
   }
+  accountDeleted(deps, removed);
 
   return { status: "removed" };
 }

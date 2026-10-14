@@ -59,7 +59,7 @@ export async function sendQueuedEmail(
 
 /** One pass of every sweep the plugin's tables need. */
 export async function sweepAll(
-  deps: Pick<FlowDeps, "db" | "settings" | "now">,
+  deps: Pick<FlowDeps, "db" | "settings" | "now" | "events">,
   now: Date
 ): Promise<void> {
   await sweepSessions(deps.db, now);

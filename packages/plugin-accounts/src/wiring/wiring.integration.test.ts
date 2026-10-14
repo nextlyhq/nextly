@@ -136,7 +136,7 @@ describe.each(getConfiguredTestDialects())(
           await writeAtVersion(db, created.account, { verifiedAt: createdAt });
         return created.account.id;
       };
-      await make("stale@example.com", then, false);
+      const stale = await make("stale@example.com", then, false);
       const kept = await make("kept@example.com", then, true);
       const limits = { idleMs: DAY, absoluteMs: 30 * DAY, perAccount: 20 };
       await startSession(
@@ -165,7 +165,16 @@ describe.each(getConfiguredTestDialects())(
         expiresAt: then,
       });
 
-      await sweepAll({ db, settings, now: () => now }, now);
+      const deleted: unknown[] = [];
+      await sweepAll(
+        {
+          db,
+          settings,
+          now: () => now,
+          events: { emit: (_name, payload) => void deleted.push(payload) },
+        },
+        now
+      );
 
       expect((await db.select(accountsTable).all()).map(row => row.id)).toEqual(
         [kept]
@@ -177,6 +186,7 @@ describe.each(getConfiguredTestDialects())(
         (await db.select(knownBrowsers).all()).map(row => row.tokenHash)
       ).toEqual(["4".repeat(64)]);
       expect(await db.select(pendingAddressChanges).all()).toEqual([]);
+      expect(deleted).toEqual([{ accountId: stale }]);
     });
   }
 );

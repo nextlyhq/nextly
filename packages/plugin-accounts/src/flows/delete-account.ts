@@ -1,5 +1,6 @@
 import { deleteAccount, writeAtVersion } from "../storage/accounts";
 
+import { accountDeleted } from "./account-deleted";
 import type { FlowDeps } from "./deps";
 import { provenHolder } from "./holder";
 import { attemptSucceeded, type AttemptRefusal } from "./password-attempt";
@@ -52,9 +53,7 @@ export async function deleteOwnAccount(
   }
 
   await attemptSucceeded(deps, attempt);
-  deps.events.emit("nextlyhq-plugin-accounts.account.deleted", {
-    accountId: account.id,
-  });
+  accountDeleted(deps, account.id);
   await deps.mail.queue({
     kind: "account-deleted",
     accountId: account.id,

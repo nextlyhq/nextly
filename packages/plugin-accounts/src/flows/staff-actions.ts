@@ -8,6 +8,7 @@ import {
 } from "../storage/accounts";
 import { endAccountSessions } from "../storage/sessions";
 
+import { accountDeleted } from "./account-deleted";
 import type { FlowDeps } from "./deps";
 import { sendResetLink } from "./reset-request";
 import { endEverything } from "./sessions";
@@ -180,7 +181,7 @@ async function deleteAccountByStaff(
     }
   );
   if (result.status !== "done") return result;
-  deps.events.emit("nextlyhq-plugin-accounts.account.deleted", { accountId });
+  accountDeleted(deps, accountId);
   await deps.mail.queue({
     kind: "account-deleted",
     accountId,

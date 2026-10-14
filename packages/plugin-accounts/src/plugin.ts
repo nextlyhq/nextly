@@ -108,9 +108,7 @@ export function buildAccounts(
       events: ACCOUNTS_EVENTS.map(name => ({ name })),
       jobs: [
         sendEmailJob(email => sendQueuedEmail(started(), email)),
-        sweepJob(now =>
-          sweepAll({ db: started().db, settings, now: () => now }, now)
-        ),
+        sweepJob(now => sweepAll({ ...deps(), now: () => now }, now)),
       ],
     },
     init: ctx => {
