@@ -131,6 +131,7 @@ describe("a Direct API call made as a person", () => {
     ["names a staff user", { user: { id: "u1" } }],
     ["names a fieldAccessUser", { fieldAccessUser: { id: "u1" } }],
     ["names an API key", { actor: KEY }],
+    ["sets frameworkFilter", { frameworkFilter: true as const }],
   ])("is refused, and runs nothing, when it %s", async (_label, extra) => {
     await expect(
       nextly.find({ collection: "posts", principal: person, ...extra })
@@ -149,6 +150,19 @@ describe("a Direct API call made as a person", () => {
       })
     ).rejects.toMatchObject({ code: "INVALID_INPUT" });
     expect(mocks.collectionsHandler.listEntries).not.toHaveBeenCalled();
+  });
+
+  it("is refused on a count that sets frameworkFilter", async () => {
+    // A count answers 0 or 1 for a guessed value, so an exempted where on a
+    // field the person may not read would tell them what it holds.
+    await expect(
+      nextly.count({
+        collection: "posts",
+        principal: person,
+        frameworkFilter: true,
+      })
+    ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+    expect(mocks.collectionsHandler.countEntries).not.toHaveBeenCalled();
   });
 
   it("runs as the person with overrideAccess: false said outright", async () => {
