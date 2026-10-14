@@ -65,6 +65,10 @@ import { SCHEMA_OWNERS_TABLE, schemaOwnersTables } from "./schema-owners";
 import { siteSettingsMysql } from "./site-settings/mysql";
 import { siteSettingsPg } from "./site-settings/postgres";
 import { siteSettingsSqlite } from "./site-settings/sqlite";
+import {
+  SPENT_CHALLENGES_TABLE,
+  spentChallengesTables,
+} from "./spent-challenges";
 import { STORAGE_FORMAT } from "./storage-format";
 import { userFieldDefinitionsMysql } from "./user-field-definitions/mysql";
 import { userFieldDefinitionsPg } from "./user-field-definitions/postgres";
@@ -195,6 +199,11 @@ export function getCoreSchema(
     // neighbours: a table outside this set is never created on a real
     // installation, however completely its own module declares it.
     ...Object.values(limitStoreTables(dialect)),
+    // `nextly_spent_challenges` — the two-factor challenges already answered,
+    // so an answer is accepted once on every instance. Declared here for the
+    // same reason as its neighbours: a table outside this set is never created
+    // on a real installation, however completely its own module declares it.
+    ...Object.values(spentChallengesTables(dialect)),
     // `nextly_schema_owners` — which owner each table belongs to, and which
     // migration stream carries it. A table with no row here is never dropped
     // by any path, so absence is the safe answer rather than an invitation.
@@ -320,6 +329,7 @@ export const CORE_TABLE_NAMES: readonly string[] = [
   RBAC_EPOCH_TABLE,
   PLUGIN_SETTINGS_TABLE,
   LIMIT_STORE_TABLE,
+  SPENT_CHALLENGES_TABLE,
   SCHEMA_OWNERS_TABLE,
   "nextly_widget_layout",
   "dynamic_collections",

@@ -14,6 +14,7 @@ import {
 } from "../challenge-resolve";
 
 import { fakeSessionRows } from "./session-row-fake";
+import { fakeSpentChallenges } from "./spent-challenges-fake";
 
 const SECRET = "test-secret-that-is-at-least-32-characters-long!!";
 
@@ -73,6 +74,7 @@ function makeDeps() {
     peekChallengeAttempts: undefined as
       | ChallengeResolveDeps["peekChallengeAttempts"]
       | undefined,
+    spentChallenges: fakeSpentChallenges(),
   };
 }
 
@@ -346,7 +348,7 @@ describe("handleChallengeResolve (D71)", () => {
  */
 describe("the challenge attempt budget", () => {
   /** Answer wrongly as `userId`, returning the key the counter was given. */
-  async function keyFor(userId: string): Promise<string> {
+  async function keyFor(userId: string, challengeId = "totp"): Promise<string> {
     const deps = makeDeps();
     const seen: string[] = [];
     const withCounter = {
@@ -360,7 +362,7 @@ describe("the challenge attempt budget", () => {
     // one login rather than two logins with budgets of their own.
     const pendingToken = await mint({
       userId,
-      challengeId: "totp",
+      challengeId,
       attempts: 0,
       flow: "one-login",
     });
@@ -379,12 +381,15 @@ describe("the challenge attempt budget", () => {
     const second = await keyFor("u2");
 
     expect(first).not.toBe(second);
-    expect(first).toContain("u1");
-    expect(second).toContain("u2");
-    // Both still name the challenge, so a user answering TOTP wrongly does
-    // not spend the budget for a different factor they also hold.
-    expect(first).toContain("totp");
-    expect(second).toContain("totp");
+    // The key names an account, so it is stored only as a keyed hash.
+    expect(first).not.toContain("u1");
+    expect(second).not.toContain("u2");
+  });
+
+  it("gives one account's two factors separate budgets", async () => {
+    // A user answering TOTP wrongly does not spend the budget for a
+    // different factor they also hold.
+    expect(await keyFor("u1", "totp")).not.toBe(await keyFor("u1", "sms"));
   });
 
   it("gives one account the SAME budget across attempts", async () => {
@@ -498,8 +503,6 @@ describe("the challenge attempt budget, per login flow", () => {
     const second = await keyFor({ flow: "flow-two" });
 
     expect(first).not.toBe(second);
-    expect(first).toContain("flow-one");
-    expect(second).toContain("flow-two");
   });
 
   it("keeps one budget across the retries of a single login", async () => {
@@ -536,7 +539,6 @@ describe("the challenge attempt budget, per login flow", () => {
 
     expect(seen).toHaveLength(2);
     expect(seen[0]).toBe(seen[1]);
-    expect(seen[0]).toContain("flow-one");
   });
 
   it("REFUSES a token carrying no flow lifetime", async () => {
@@ -1035,9 +1037,9 @@ describe("an account the gate refuses never reaches the resolver", () => {
 
 describe("a pending token after its challenge succeeded", () => {
   it("cannot be replayed to mint a second session", async () => {
-    // The default counter (process memory), so the settle mark and the
-    // budget live where production keeps them without a shared store. A
-    // flow id of its own keeps other cases' counts out of this one.
+    // The default counter (process memory) for the budget, and the marks a
+    // correct answer writes. A flow id of its own keeps other cases' counts
+    // out of this one.
     const deps = makeDeps();
     const pendingToken = await mint({
       userId: "u1",
@@ -1122,8 +1124,8 @@ describe("a pending token after its challenge succeeded", () => {
         deps
       );
 
-    // The loser arriving once the winner has finished: it meets the spent
-    // budget, which a correct answer filled, not the settle mark.
+    // The loser arriving once the winner has finished: it meets the settled
+    // flow's mark, a refusal that never takes the cookie.
     const winner = await overCookie();
     const loser = await overCookie();
 
@@ -1444,10 +1446,9 @@ describe("a cookie-mode flow that can no longer succeed", () => {
   it("reports the flow over when an injected counter says its budget is spent", async () => {
     const deps = makeDeps();
     deps.countChallengeAttempt = async () => ({ allowed: false });
-    // The budget full and no settle mark taken: the refusal still cannot
-    // know whether a correct answer is about to take it.
-    deps.peekChallengeAttempts = async key =>
-      key.endsWith(":settled") ? 0 : 5;
+    // The budget full and no flow settled: the refusal still cannot know
+    // whether a correct answer is about to settle it.
+    deps.peekChallengeAttempts = async () => 5;
     const token = await mint({ userId: "u1", challengeId: "totp" });
 
     const res = await handleChallengeResolve(
@@ -1480,7 +1481,7 @@ describe("a cookie-mode flow that can no longer succeed", () => {
   });
 
   it("clears the cookie when the session is refused after the flow settled", async () => {
-    // The answer was right and settled the flow, spending its budget; the
+    // The answer was right and settled the flow, marking it answered; the
     // password was set again since the sign-in proved it, so the session is
     // refused. Nothing the token presents can succeed after that.
     const deps = makeDeps();

@@ -23,6 +23,7 @@ export { nextlyRbacEpoch } from "../rbac-epoch/sqlite";
 // is CREATED, and a table in one but not the other is never made.
 export { nextlyPluginSettings } from "../plugin-settings/sqlite";
 export { nextlyLimitStore } from "../limit-store/sqlite";
+export { nextlySpentChallenges } from "../spent-challenges/sqlite";
 export { nextlySchemaOwners } from "../schema-owners/sqlite";
 export { nextlyWidgetLayout } from "../widget-layout/sqlite";
 

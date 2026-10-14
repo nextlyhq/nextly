@@ -23,6 +23,7 @@ export { nextlyRbacEpoch } from "../rbac-epoch/mysql";
 // is CREATED, and a table in one but not the other is never made.
 export { nextlyPluginSettings } from "../plugin-settings/mysql";
 export { nextlyLimitStore } from "../limit-store/mysql";
+export { nextlySpentChallenges } from "../spent-challenges/mysql";
 export { nextlySchemaOwners } from "../schema-owners/mysql";
 export { nextlyWidgetLayout } from "../widget-layout/mysql";
 

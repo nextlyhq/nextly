@@ -1,6 +1,7 @@
 import { LIMIT_STORE_TABLE } from "../schemas/limit-store/table-name";
 import { RBAC_EPOCH_TABLE } from "../schemas/rbac-epoch/table-name";
 import { SCHEMA_OWNERS_TABLE } from "../schemas/schema-owners/table-name";
+import { SPENT_CHALLENGES_TABLE } from "../schemas/spent-challenges/table-name";
 import { STORAGE_FORMAT } from "../schemas/storage-format";
 
 // Raw CREATE TABLE IF NOT EXISTS DDL for all Nextly core SQLite tables.
@@ -540,6 +541,15 @@ export function generateSqliteCoreTableStatements(): string[] {
       ON "${LIMIT_STORE_TABLE}" ("expires_at")`,
     `CREATE INDEX IF NOT EXISTS "nls_generation_idx"
       ON "${LIMIT_STORE_TABLE}" ("generation")`,
+    // The two-factor challenges already answered, so an answer is accepted
+    // once on every instance. An integer of milliseconds for the expiry, as
+    // the Drizzle bundle declares.
+    `CREATE TABLE IF NOT EXISTS "${SPENT_CHALLENGES_TABLE}" (
+      "id" TEXT PRIMARY KEY NOT NULL,
+      "expires_at" INTEGER NOT NULL
+    )`,
+    `CREATE INDEX IF NOT EXISTS "nsc_expires_at_idx"
+      ON "${SPENT_CHALLENGES_TABLE}" ("expires_at")`,
     `CREATE TABLE IF NOT EXISTS "nextly_widget_layout" (
       "id" TEXT PRIMARY KEY NOT NULL,
       "scope_kind" TEXT NOT NULL,
