@@ -12,6 +12,7 @@ export {
   type FakeAccountsCoreOptions,
 } from "./fake-core";
 export { FakeLimiter } from "./fake-limiter";
+export { FakeAccountsMail } from "./fake-mail";
 export { FakeOpaqueSecrets } from "./fake-opaque";
 export { FakePasswordHelper, FakePasswordTooLongError } from "./fake-passwords";
 export { FakeOneTimeSecrets, type MintedSecret } from "./fake-secrets";

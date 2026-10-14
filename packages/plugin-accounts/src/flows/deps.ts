@@ -1,0 +1,22 @@
+import type { PluginContext, PluginDatabase } from "@nextlyhq/plugin-sdk";
+
+import type { AccountsCore } from "../core/ports";
+import type { AccountsSettings } from "../settings";
+
+import type { AccountsMail } from "./mail";
+
+/** What every flow is given: the plugin's database, core's helpers, the site's settings, mail and a clock. */
+export interface FlowDeps {
+  readonly db: PluginDatabase;
+  readonly dialect: PluginContext["dialect"];
+  readonly core: AccountsCore;
+  readonly settings: AccountsSettings;
+  readonly mail: AccountsMail;
+  readonly logger: {
+    warn(message: string, context?: Record<string, unknown>): void;
+  };
+  readonly now: () => Date;
+}
+
+export const MINUTE = 60_000;
+export const HOUR = 60 * MINUTE;
