@@ -33,6 +33,7 @@ import {
   ONE_TIME_SECRETS_RETENTION_DRAIN_GATE_KEY,
   WEBHOOK_RETENTION_GATE_KEY,
 } from "../../domains/retention/gate";
+import { warnQuietly } from "../../domains/retention/safe-log";
 import {
   ONE_TIME_SECRETS_SWEEP_INTERVAL_MS,
   pruneOneTimeSecrets,
@@ -459,9 +460,12 @@ export async function runDrain(deps: RunDrainDeps): Promise<RunDrainResult> {
             clock: () => now().getTime(),
           }
         ).catch((error: unknown) => {
-          retention.prune.logger?.warn?.(
+          // Quietly: an app-supplied logger that throws here would reject a
+          // drain whose deliveries already succeeded.
+          warnQuietly(
+            retention.prune.logger,
             "One-purpose secrets retention pass failed",
-            { error: error instanceof Error ? error.message : String(error) }
+            { error: error instanceof Error ? error.message : "unknown error" }
           );
           return { removed: 0, started: true };
         });

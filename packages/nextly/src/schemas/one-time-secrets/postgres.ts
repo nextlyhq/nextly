@@ -49,6 +49,11 @@ export const nextlyOneTimeSecrets = pgTable(
     secretHash: text("secret_hash").notNull(),
     /** Set while a code is live; see the module comment. */
     liveKey: text("live_key"),
+    /**
+     * A code's issue number among its plugin, purpose and subject's codes:
+     * what its status is read by, as issue times can tie. Null for a token.
+     */
+    issueSeq: integer("issue_seq"),
     /** The plugin's data, JSON, stored in clear. */
     data: text("data"),
     expiresAt: timestamp("expires_at", { withTimezone: false }).notNull(),
@@ -61,6 +66,12 @@ export const nextlyOneTimeSecrets = pgTable(
   },
   table => [
     uniqueIndex("nextly_one_time_secrets_live_key_unique").on(table.liveKey),
+    uniqueIndex("nextly_one_time_secrets_issue_unique").on(
+      table.subjectKey,
+      table.purpose,
+      table.kind,
+      table.issueSeq
+    ),
     index("nextly_one_time_secrets_hash_idx").on(table.secretHash),
     index("nextly_one_time_secrets_subject_key_idx").on(table.subjectKey),
     index("nextly_one_time_secrets_expires_idx").on(table.expiresAt),

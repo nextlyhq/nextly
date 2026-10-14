@@ -236,7 +236,10 @@ async function resetPassword(ctx: PluginContext, token: string) {
 
 `peekToken` reads a token without spending it, for a page that shows what a
 link will do before the person confirms. Both answer `invalid`, `expired` or
-`spent` when they refuse, and never say whether the subject exists.
+`spent` when they refuse, and never say whether the subject exists. Inside
+your own transaction, pass it `{ tx }` too, so it reads what that transaction
+wrote; without one it is refused while a transaction is open, as a write is,
+so a read answers the same on every database.
 
 ### A code: sign in by email
 
@@ -310,12 +313,12 @@ a code whose effect fails stays spent, and the person asks for a new one.
 | Input | Bound |
 | --- | --- |
 | `purpose` | a lowercase letter, then up to 63 lowercase letters, digits, dots or hyphens |
-| `subject` | 1 to 255 characters, with no NUL character; compared exactly, case and spaces included, on every database |
+| `subject` | 1 to 255 characters of well-formed Unicode, with no NUL character; compared exactly, case and spaces included, on every database |
 | a token's `expiresInMs` | 1 minute to 30 days |
 | a code's `expiresInMs` | 1 to 60 minutes |
 | `digits` | 6 (the default), 7 or 8 |
 | `maxWrongTries` | 1 to 10 |
-| `data` | a flat record of strings, finite numbers, booleans and nulls, at most 1 KB as JSON, stored in clear |
+| `data` | a plain object (not a `Date` or class instance) holding strings, finite numbers, booleans and nulls, at most 1 KB as JSON, stored in clear |
 
 A value outside its bound is refused with a validation error before anything
 is written. Keep secrets out of `data`: it is stored as given and returned to

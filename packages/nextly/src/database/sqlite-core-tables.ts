@@ -537,6 +537,7 @@ export function generateSqliteCoreTableStatements(): string[] {
       "kind" TEXT NOT NULL,
       "secret_hash" TEXT NOT NULL,
       "live_key" TEXT,
+      "issue_seq" INTEGER,
       "data" TEXT,
       "expires_at" INTEGER NOT NULL,
       "spent_at" INTEGER,
@@ -547,6 +548,8 @@ export function generateSqliteCoreTableStatements(): string[] {
     )`,
     `CREATE UNIQUE INDEX IF NOT EXISTS "nextly_one_time_secrets_live_key_unique"
       ON "nextly_one_time_secrets" ("live_key")`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS "nextly_one_time_secrets_issue_unique"
+      ON "nextly_one_time_secrets" ("subject_key", "purpose", "kind", "issue_seq")`,
     `CREATE INDEX IF NOT EXISTS "nextly_one_time_secrets_hash_idx"
       ON "nextly_one_time_secrets" ("secret_hash")`,
     `CREATE INDEX IF NOT EXISTS "nextly_one_time_secrets_subject_key_idx"

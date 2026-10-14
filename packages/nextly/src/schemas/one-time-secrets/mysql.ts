@@ -35,6 +35,7 @@ export const nextlyOneTimeSecrets = mysqlTable(
     kind: varchar("kind", { length: 8 }).notNull(),
     secretHash: varchar("secret_hash", { length: 64 }).notNull(),
     liveKey: varchar("live_key", { length: 64 }),
+    issueSeq: int("issue_seq"),
     data: text("data"),
     expiresAt: timestamp("expires_at").notNull(),
     spentAt: timestamp("spent_at"),
@@ -45,6 +46,12 @@ export const nextlyOneTimeSecrets = mysqlTable(
   },
   table => [
     uniqueIndex("nextly_one_time_secrets_live_key_unique").on(table.liveKey),
+    uniqueIndex("nextly_one_time_secrets_issue_unique").on(
+      table.subjectKey,
+      table.purpose,
+      table.kind,
+      table.issueSeq
+    ),
     index("nextly_one_time_secrets_hash_idx").on(table.secretHash),
     index("nextly_one_time_secrets_subject_key_idx").on(table.subjectKey),
     index("nextly_one_time_secrets_expires_idx").on(table.expiresAt),

@@ -359,6 +359,85 @@ describe.each(getConfiguredTestDialects())(
       ).rejects.toBeInstanceOf(NextlyError);
     });
 
+    it("reads a token through the plugin's transaction, and refuses a read beside one", async () => {
+      const { a } = await boot();
+      await a.db.transaction(async tx => {
+        const { token } = await a.security.secrets.mintToken(
+          { purpose: "reset", subject, expiresInMs: 60_000 },
+          { tx }
+        );
+        // Through the transaction it sees its own, uncommitted mint.
+        expect(
+          await a.security.secrets.peekToken(
+            { purpose: "reset", token },
+            { tx }
+          )
+        ).toMatchObject({ ok: true, subject });
+        // Beside it, SQLite's one connection would see the mint and another
+        // dialect's pooled one would not: refused on every dialect instead.
+        await expect(
+          a.security.secrets.peekToken({ purpose: "reset", token })
+        ).rejects.toBeInstanceOf(NextlyError);
+      });
+    });
+
+    describe("when codes are issued within one second", () => {
+      // SQLite and MySQL keep these timestamps in whole seconds, so a frozen
+      // clock gives every code the same issue time, as a fast flow would.
+      const frozen = () => {
+        vi.useFakeTimers({ toFake: ["Date"] });
+        vi.setSystemTime(new Date("2026-10-15T00:00:00.000Z"));
+      };
+
+      it("answers none, not spent, once the newer code after a spent one is exhausted", async () => {
+        const { a } = await boot();
+        frozen();
+        const spend = (code: string) =>
+          a.security.secrets.consumeCode({ purpose: "sign-in", subject, code });
+        const first = await a.security.secrets.mintCode({
+          purpose: "sign-in",
+          subject,
+          expiresInMs: 60_000,
+          maxWrongTries: 3,
+        });
+        expect(await spend(first.code)).toMatchObject({ ok: true });
+        const second = await a.security.secrets.mintCode({
+          purpose: "sign-in",
+          subject,
+          expiresInMs: 60_000,
+          maxWrongTries: 1,
+        });
+        const wrong = second.code === "111111" ? "222222" : "111111";
+        expect(await spend(wrong)).toMatchObject({ reason: "wrong" });
+        expect(await spend(second.code)).toEqual({ ok: false, reason: "none" });
+      });
+
+      it("answers spent once the newer code that replaced another is spent", async () => {
+        const { a } = await boot();
+        frozen();
+        await a.security.secrets.mintCode({
+          purpose: "sign-in",
+          subject,
+          expiresInMs: 60 * 60_000,
+          maxWrongTries: 3,
+        });
+        const { code } = await a.security.secrets.mintCode({
+          purpose: "sign-in",
+          subject,
+          expiresInMs: 60_000,
+          maxWrongTries: 3,
+        });
+        const spend = { purpose: "sign-in", subject, code };
+        expect(await a.security.secrets.consumeCode(spend)).toMatchObject({
+          ok: true,
+        });
+        expect(await a.security.secrets.consumeCode(spend)).toEqual({
+          ok: false,
+          reason: "spent",
+        });
+      });
+    });
+
     it("accepts a token minted under the install's previous secret", async () => {
       vi.stubEnv(
         "NEXTLY_SECRET",

@@ -49,6 +49,8 @@ import { isUniqueViolation } from "../../shared/lib/unique-violation";
 import type { PluginTransaction } from "../database/plugin-database";
 import { linkedTransaction } from "../database/plugin-transaction-link";
 
+import { isWellFormed } from "./well-formed";
+
 /** @experimental A secret's data: stored in clear, at most 1 KB serialised. */
 export type SecretData = Record<string, string | number | boolean | null>;
 
@@ -100,11 +102,19 @@ export interface OneTimeSecrets {
     options?: TxOption
   ): Promise<{ code: string; expiresAt: Date }>;
 
-  /** Reads without spending, for a page that shows what a link will do. */
-  peekToken(input: {
-    purpose: string;
-    token: string;
-  }): Promise<
+  /**
+   * Reads without spending, for a page that shows what a link will do. Reads
+   * through the plugin's transaction when given one, so it sees what that
+   * transaction wrote; refused inside an open transaction that passes none,
+   * as a write is, so a read answers the same on every dialect.
+   */
+  peekToken(
+    input: {
+      purpose: string;
+      token: string;
+    },
+    options?: TxOption
+  ): Promise<
     | { ok: true; subject: string; data: SecretData | null; expiresAt: Date }
     | { ok: false; reason: "invalid" | "expired" | "spent" }
   >;
@@ -186,6 +196,7 @@ interface SecretRow {
   wrongTries: number;
   maxWrongTries: number | null;
   createdAt: Date;
+  issueSeq: number | null;
 }
 
 /** Build the helper a plugin receives as `ctx.security.secrets`. */
@@ -303,6 +314,7 @@ export function createOneTimeSecrets(
             token,
           ]),
           liveKey: null,
+          issueSeq: null,
           data,
           expiresAt,
           spentAt: null,
@@ -346,6 +358,20 @@ export function createOneTimeSecrets(
           { voidedAt: createdAt, liveKey: null },
           { and: [{ column: "liveKey", op: "=", value: liveKey }] }
         );
+        // The issue order a code's status is read by: one more than the
+        // subject's newest code, never a timestamp, which SQLite and MySQL
+        // keep in whole seconds so two codes can share one. The unique index
+        // on it makes a mint racing for the same number lose and run again.
+        const [latest] = await adapterTx.select<Pick<SecretRow, "issueSeq">>(
+          ONE_TIME_SECRETS_TABLE,
+          {
+            columns: ["issueSeq"],
+            where: { and: codesOf(subjectKeyFor(subject), purpose) },
+            orderBy: [{ column: "issueSeq", direction: "desc" }],
+            limit: 1,
+          }
+        );
+        const issueSeq = (latest?.issueSeq ?? 0) + 1;
         const expiresAt = new Date(createdAt.getTime() + expiresInMs);
         await adapterTx.insert(ONE_TIME_SECRETS_TABLE, {
           id: randomUUID(),
@@ -361,6 +387,7 @@ export function createOneTimeSecrets(
             code
           ),
           liveKey,
+          issueSeq,
           data,
           expiresAt,
           spentAt: null,
@@ -393,9 +420,22 @@ export function createOneTimeSecrets(
       }
     },
 
-    async peekToken(input) {
+    async peekToken(input, txOption) {
       const purpose = checkPurpose(input.purpose);
-      const row = await readTokenRow(purpose, input.token, options.adapter());
+      const tx = txOption?.tx;
+      let row: SecretRow | null;
+      if (tx !== undefined) {
+        row = await linkedTransaction(tx, "secrets.peekToken").run(adapterTx =>
+          readTokenRow(purpose, input.token, adapterTx)
+        );
+      } else {
+        // A read made beside an open transaction would see its uncommitted
+        // writes on SQLite's one connection and not on another dialect's
+        // pooled one, so it is refused as a write is.
+        const adapter = options.adapter();
+        assertNoOpenTransaction(adapter, "secrets.peekToken");
+        row = await readTokenRow(purpose, input.token, adapter);
+      }
       const reason = refusal(row, now());
       if (reason !== null || row === null) {
         return { ok: false, reason: reason ?? "invalid" };
@@ -496,48 +536,22 @@ export function createOneTimeSecrets(
       });
 
       /**
-       * Why there is no live code: the newest one issued for the subject says.
-       * Newest by issue time, not by expiry: a short code minted after a long
-       * one expires first, and ordering by expiry would read the older code.
-       * Two reads rather than one, because issue times can tie (SQLite keeps
-       * whole seconds): a code replaced and its successor spent within one
-       * second share the time, and the spent one is the answer.
+       * Why there is no live code: the newest one issued for the subject says,
+       * newest by issue number. Not by expiry, as a short code minted after a
+       * long one expires first, and not by issue time, which ties within a
+       * second on SQLite and MySQL.
        */
       async function noLiveCode(): Promise<"none" | "expired" | "spent"> {
-        const ofSubject = [
-          {
-            column: "subjectKey",
-            op: "=" as const,
-            value: subjectKeyFor(subject),
-          },
-          { column: "purpose", op: "=" as const, value: purpose },
-          { column: "kind", op: "=" as const, value: "code" },
-        ];
-        const [newest] = await adapter.select<Pick<SecretRow, "createdAt">>(
+        const [newest] = await adapter.select<Pick<SecretRow, "spentAt">>(
           ONE_TIME_SECRETS_TABLE,
           {
-            columns: ["createdAt"],
-            where: { and: ofSubject },
-            orderBy: [{ column: "createdAt", direction: "desc" }],
+            columns: ["spentAt"],
+            where: { and: codesOf(subjectKeyFor(subject), purpose) },
+            orderBy: [{ column: "issueSeq", direction: "desc" }],
             limit: 1,
           }
         );
-        if (newest === undefined) return "none";
-        const spent = await adapter.select<{ id: string }>(
-          ONE_TIME_SECRETS_TABLE,
-          {
-            columns: ["id"],
-            where: {
-              and: [
-                ...ofSubject,
-                { column: "createdAt", op: "=", value: newest.createdAt },
-                { column: "spentAt", op: "IS NOT NULL" },
-              ],
-            },
-            limit: 1,
-          }
-        );
-        return spent.length > 0 ? "spent" : "none";
+        return newest?.spentAt ? "spent" : "none";
       }
     },
 
@@ -554,6 +568,15 @@ export function createOneTimeSecrets(
       return { voided };
     },
   };
+}
+
+/** Every code of a subject (by its key, which names the plugin too) and purpose. */
+function codesOf(subjectKey: string, purpose: string): WhereClause["and"] {
+  return [
+    { column: "subjectKey", op: "=", value: subjectKey },
+    { column: "purpose", op: "=", value: purpose },
+    { column: "kind", op: "=", value: "code" },
+  ];
 }
 
 /**
@@ -650,13 +673,16 @@ function checkSubject(subject: string): string {
     typeof subject === "string" &&
     subject.length > 0 &&
     subject.length <= BOUNDS.subjectLength &&
-    !subject.includes("\u0000")
+    !subject.includes("\u0000") &&
+    // Lone surrogates all encode to one replacement character, so two such
+    // subjects would share a key and reach each other's secrets.
+    isWellFormed(subject)
   ) {
     return subject;
   }
   throw invalid(
     "subject",
-    `subject must be from 1 to ${BOUNDS.subjectLength} characters.`
+    `subject must be from 1 to ${BOUNDS.subjectLength} characters of well-formed Unicode.`
   );
 }
 
@@ -678,25 +704,37 @@ function checkWhole(
   );
 }
 
-/** The data as stored: JSON of a flat record of primitives, at most 1 KB. */
+/**
+ * The data as stored: JSON of a flat record of primitives, at most 1 KB. Only
+ * a plain object qualifies: a `Date`, a class instance or anything with its
+ * own serialisation would store a shape other than the one validated. Its
+ * entries are read once and those are what is serialised, so a getter cannot
+ * answer one thing to the check and another to the store.
+ */
 function serialiseData(data: SecretData | undefined): string | null {
   if (data === undefined) return null;
+  const prototype =
+    typeof data === "object" && data !== null
+      ? Object.getPrototypeOf(data)
+      : undefined;
+  const entries =
+    prototype === Object.prototype || prototype === null
+      ? Object.entries(data)
+      : undefined;
   const flat =
-    typeof data === "object" &&
-    data !== null &&
-    !Array.isArray(data) &&
-    Object.values(data).every(
-      value =>
+    entries !== undefined &&
+    entries.every(
+      ([, value]) =>
         value === null ||
         typeof value === "string" ||
         typeof value === "boolean" ||
         (typeof value === "number" && Number.isFinite(value))
     );
-  const json = flat ? JSON.stringify(data) : "";
+  const json = flat ? JSON.stringify(Object.fromEntries(entries)) : "";
   if (!flat || Buffer.byteLength(json, "utf8") > BOUNDS.dataBytes) {
     throw invalid(
       "data",
-      `data must be a flat record of strings, finite numbers, booleans and nulls, at most ${BOUNDS.dataBytes} bytes as JSON.`
+      `data must be a plain object: a flat record of strings, finite numbers, booleans and nulls, at most ${BOUNDS.dataBytes} bytes as JSON.`
     );
   }
   return json;

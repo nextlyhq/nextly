@@ -40,6 +40,7 @@ import {
   type RetentionGateStore,
 } from "./gate";
 import { RetentionRunner, type RetentionPass } from "./runner";
+import { warnQuietly } from "./safe-log";
 
 export interface RetentionPassInput {
   adapter: AuditPruneAdapter &
@@ -155,9 +156,15 @@ export function buildRetentionPasses(
             { maxBatches }
           );
         } catch (error) {
-          input.logger?.warn("One-purpose secrets retention pass failed", {
-            error: error instanceof Error ? error.message : String(error),
-          });
+          // Quietly, for the reason the runner reports its own failures so:
+          // a logger throwing here would reach the write that offered the pass.
+          warnQuietly(
+            input.logger,
+            "One-purpose secrets retention pass failed",
+            {
+              error: error instanceof Error ? error.message : "unknown error",
+            }
+          );
         }
       },
     });

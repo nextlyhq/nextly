@@ -26,6 +26,7 @@ export const nextlyOneTimeSecrets = sqliteTable(
     kind: text("kind").notNull(),
     secretHash: text("secret_hash").notNull(),
     liveKey: text("live_key"),
+    issueSeq: integer("issue_seq"),
     data: text("data"),
     expiresAt: integer("expires_at", { mode: "timestamp" }).notNull(),
     spentAt: integer("spent_at", { mode: "timestamp" }),
@@ -36,6 +37,12 @@ export const nextlyOneTimeSecrets = sqliteTable(
   },
   table => [
     uniqueIndex("nextly_one_time_secrets_live_key_unique").on(table.liveKey),
+    uniqueIndex("nextly_one_time_secrets_issue_unique").on(
+      table.subjectKey,
+      table.purpose,
+      table.kind,
+      table.issueSeq
+    ),
     index("nextly_one_time_secrets_hash_idx").on(table.secretHash),
     index("nextly_one_time_secrets_subject_key_idx").on(table.subjectKey),
     index("nextly_one_time_secrets_expires_idx").on(table.expiresAt),

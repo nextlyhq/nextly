@@ -9,26 +9,53 @@
 
 import { describe, expect, it, vi } from "vitest";
 
-import type { retentionPoliciesFrom } from "../../retention/passes";
+import { resolveAuditRetentionConfig } from "../../audit/retention-config";
+import { resolveEmailRetentionConfig } from "../../email/retention-config";
 import {
+  buildRetentionPasses,
+  type retentionPoliciesFrom,
+} from "../../retention/passes";
+import {
+  AUDIT_RETENTION_DRAIN_GATE_KEY,
+  EMAIL_RETENTION_DRAIN_GATE_KEY,
   ONE_TIME_SECRETS_RETENTION_DRAIN_GATE_KEY,
   ONE_TIME_SECRETS_RETENTION_GATE_KEY,
   type RetentionGateStore,
+  WEBHOOK_RETENTION_GATE_KEY,
 } from "../../retention/gate";
+import { resolveWebhookRetentionConfig } from "../retention-config";
 import { runDrain } from "../run-drain";
 
-// Every policy the shared list names is a field the drain takes (the webhook
-// policy arrives as `policy`). A domain added to `retentionPoliciesFrom` that
-// the drain does not handle fails to compile here, rather than reaching the
-// drain's dependency as a property nothing reads.
 type DrainRetention = NonNullable<Parameters<typeof runDrain>[0]["retention"]>;
-type UnhandledPolicies = Exclude<
-  keyof ReturnType<typeof retentionPoliciesFrom>,
-  "webhookPolicy" | keyof DrainRetention
->;
-const drainTakesEveryPolicy: [UnhandledPolicies] extends [never]
-  ? true
-  : UnhandledPolicies = true;
+type PolicyName = keyof ReturnType<typeof retentionPoliciesFrom>;
+
+/**
+ * For every policy the shared list names: the drain input that carries it
+ * alone, and the gate the drain claims when it handles it. Keyed by the list's
+ * own type, so a domain added there does not compile until it is entered here,
+ * and the test below then runs it.
+ */
+const DRAIN_PASS: Record<
+  PolicyName,
+  { input: Partial<DrainRetention>; claims: string }
+> = {
+  webhookPolicy: {
+    input: { policy: resolveWebhookRetentionConfig(undefined) ?? undefined },
+    claims: WEBHOOK_RETENTION_GATE_KEY,
+  },
+  auditPolicy: {
+    input: { auditPolicy: resolveAuditRetentionConfig() },
+    claims: AUDIT_RETENTION_DRAIN_GATE_KEY,
+  },
+  emailPolicy: {
+    input: { emailPolicy: resolveEmailRetentionConfig({ maxAgeMs: 1000 }) },
+    claims: EMAIL_RETENTION_DRAIN_GATE_KEY,
+  },
+  oneTimeSecrets: {
+    input: { oneTimeSecrets: true },
+    claims: ONE_TIME_SECRETS_RETENTION_DRAIN_GATE_KEY,
+  },
+};
 
 /** A database with no events and no deliveries due, so only retention runs. */
 function idleDb(): never {
@@ -101,8 +128,48 @@ describe("the scheduled drain and plugins' one-purpose secrets", () => {
     expect(result.pruned.oneTimeSecrets).toBe(1);
   });
 
-  it("takes every policy the shared list names", () => {
-    expect(drainTakesEveryPolicy).toBe(true);
+  it.each(Object.entries(DRAIN_PASS))(
+    "runs a pass for %s on its own",
+    async (_, { input, claims }) => {
+      const claimed: string[] = [];
+      await drain({
+        ...input,
+        prune: {
+          adapter: { select: async () => [], delete: async () => 0 },
+        } as never,
+        gate: {
+          claim: async (key: string) => {
+            claimed.push(key);
+            return true;
+          },
+          release: async () => undefined,
+        },
+      });
+      expect(claimed).toContain(claims);
+    }
+  );
+
+  it("does not reject when the sweep fails and the logger throws too", async () => {
+    // Retention is housekeeping after delivery: a failing sweep reported
+    // through a logger that itself throws must not reject the drain.
+    const result = await drain({
+      oneTimeSecrets: true,
+      prune: {
+        adapter: {
+          select: async () => {
+            throw new Error("database gone");
+          },
+          delete: async () => 0,
+        },
+        logger: {
+          warn: () => {
+            throw new Error("logger gone");
+          },
+        },
+      } as never,
+      gate: { claim: async () => true, release: async () => undefined },
+    });
+    expect(result.pruned.oneTimeSecrets).toBe(0);
   });
 
   it("claims a marker the capped write path cannot take from it", () => {
@@ -140,5 +207,31 @@ describe("the scheduled drain and plugins' one-purpose secrets", () => {
     expect(store.tables).not.toContain("nextly_one_time_secrets");
     expect(result.pruned.oneTimeSecrets).toBe(0);
     expect(released).toContain(ONE_TIME_SECRETS_RETENTION_DRAIN_GATE_KEY);
+  });
+});
+
+describe("the write paths' one-purpose secrets pass", () => {
+  it("does not reach the write when the sweep fails and the logger throws too", async () => {
+    // Every write offers this pass; a sweep failure reported through a
+    // throwing logger must stay inside it rather than fail the write.
+    const passes = buildRetentionPasses({
+      oneTimeSecrets: true,
+      adapter: {
+        select: async () => {
+          throw new Error("database gone");
+        },
+        delete: async () => 0,
+      } as never,
+      gate: { claim: async () => true, release: async () => undefined },
+      logger: {
+        warn: () => {
+          throw new Error("logger gone");
+        },
+      } as never,
+    });
+    const pass = passes.find(
+      candidate => candidate.key === ONE_TIME_SECRETS_RETENTION_GATE_KEY
+    );
+    await expect(pass?.run(2)).resolves.toBeUndefined();
   });
 });

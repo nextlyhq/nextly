@@ -111,6 +111,17 @@ const refusals: Array<[string, (s: Secrets) => Promise<unknown>, RegExp]> = [
     calls.mintToken({ subject: "a\u0000b" }),
     /subject must be from 1 to 255/,
   ],
+  // Lone surrogates all encode to one character, so two would share a key.
+  [
+    "a subject holding a lone high surrogate",
+    calls.mintToken({ subject: "account-\ud800" }),
+    /well-formed Unicode/,
+  ],
+  [
+    "a void for a subject holding a lone low surrogate",
+    s => s.voidFor({ subject: "\udc00account" }),
+    /well-formed Unicode/,
+  ],
   // A token lives 1 minute to 30 days, in whole milliseconds.
   [
     "a token living under a minute",
@@ -164,6 +175,21 @@ const refusals: Array<[string, (s: Secrets) => Promise<unknown>, RegExp]> = [
     /flat record/,
   ],
   ["data holding a list", calls.mintToken({ data: [1, 2] }), /flat record/],
+  // Serialised other than validated: a Date has no own values to check.
+  [
+    "data that is a Date",
+    calls.mintToken({ data: new Date(0) }),
+    /flat record/,
+  ],
+  [
+    "data that is a class instance",
+    calls.mintToken({
+      data: new (class Note {
+        text = "x";
+      })(),
+    }),
+    /flat record/,
+  ],
   [
     "data holding a number that is not finite",
     calls.mintCode({ data: { n: Number.NaN } }),
@@ -220,6 +246,14 @@ describe("accepts input on its bounds", () => {
     [
       "a subject of 255 characters",
       calls.mintToken({ subject: "s".repeat(255) }),
+    ],
+    [
+      "a subject holding a surrogate pair",
+      calls.mintToken({ subject: "account-\ud83d\ude00" }),
+    ],
+    [
+      "data with no prototype",
+      calls.mintToken({ data: Object.assign(Object.create(null), { a: 1 }) }),
     ],
     ["a token living a minute", calls.mintToken({ expiresInMs: MINUTE })],
     ["a token living 30 days", calls.mintToken({ expiresInMs: 30 * DAY })],
