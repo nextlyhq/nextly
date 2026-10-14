@@ -16,6 +16,7 @@ import {
 import { afterEach, describe, expect, it } from "vitest";
 
 import { accounts } from "../plugin";
+import { bootAccounts, TEST_ORIGIN } from "../test-support/boot";
 
 import {
   accounts as accountsTable,
@@ -23,8 +24,6 @@ import {
   pendingAddressChanges,
   sessions,
 } from "./tables";
-
-const origin = "https://shop.example.com";
 
 describe.each(getConfiguredTestDialects())(
   "the accounts tables (%s)",
@@ -38,16 +37,9 @@ describe.each(getConfiguredTestDialects())(
 
     /** Boot with the plugin, and hand back its context. */
     async function boot(): Promise<PluginContext> {
-      const plugin = accounts({ origin });
-      let captured: PluginContext | undefined;
-      current = await createTestNextly({
-        dialect,
-        plugins: [
-          { ...plugin, init: (ctx: PluginContext) => void (captured = ctx) },
-        ],
-      });
-      if (!captured) throw new Error("the plugin's init did not run");
-      return captured;
+      const booted = await bootAccounts(dialect);
+      current = booted.nextly;
+      return booted.ctx;
     }
 
     const account = (id: string, address: string) => ({
@@ -169,7 +161,7 @@ describe.each(getConfiguredTestDialects())(
       try {
         const booted = await createTestNextly({
           dialect,
-          plugins: [accounts({ origin })],
+          plugins: [accounts({ origin: TEST_ORIGIN })],
         });
         await booted.destroy();
       } catch (error) {

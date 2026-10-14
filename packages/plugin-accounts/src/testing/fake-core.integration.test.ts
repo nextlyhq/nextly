@@ -5,23 +5,20 @@
  *
  * @module testing/fake-core.integration.test
  */
-import { type PluginContext } from "@nextlyhq/plugin-sdk";
 import { eq } from "@nextlyhq/plugin-sdk/db";
 import {
-  createTestNextly,
   getConfiguredTestDialects,
   type TestDialect,
   type TestNextly,
 } from "@nextlyhq/plugin-sdk/testing";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { accounts } from "../plugin";
 import { accounts as accountsTable } from "../schema/tables";
+import { bootAccounts } from "../test-support/boot";
 
 import { fakeAccountsCore } from "./fake-core";
 import { FakeCoreMisuse } from "./fake-transactions";
 
-const origin = "https://shop.example.com";
 const MINUTE = 60_000;
 
 describe.each(getConfiguredTestDialects())(
@@ -36,21 +33,14 @@ describe.each(getConfiguredTestDialects())(
 
     /** Boot with the plugin, and hand back a fake core watching its database. */
     async function boot() {
-      const plugin = accounts({ origin });
-      let captured: PluginContext | undefined;
-      current = await createTestNextly({
-        dialect,
-        plugins: [
-          { ...plugin, init: (ctx: PluginContext) => void (captured = ctx) },
-        ],
-      });
-      if (!captured) throw new Error("the plugin's init did not run");
+      const booted = await bootAccounts(dialect);
+      current = booted.nextly;
       const core = fakeAccountsCore({
         rules: {
           tries: { type: "window", windows: [{ max: 5, perMs: MINUTE }] },
         },
       });
-      return { core, db: core.watch(captured.db) };
+      return { core, db: core.watch(booted.ctx.db) };
     }
 
     const account = {
