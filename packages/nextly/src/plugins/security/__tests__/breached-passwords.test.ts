@@ -11,7 +11,7 @@ import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 
 import type { BreachedPasswordsConfig } from "../../../shared/types/config";
-import { breachedPasswordsSourceWarning } from "../breached-passwords";
+import { breachedPasswordsWarnings } from "../breached-passwords";
 import { createPasswordHelper } from "../password-helper";
 
 const PASSWORD = "a password that is long enough";
@@ -130,7 +130,7 @@ describe("a range service over https", () => {
   });
 
   it("never counts a padding entry, whose count is 0, as a match", async () => {
-    const { fetch } = recordingFetch(`${SUFFIX}:0\r\nABCDEF:3\r\n`);
+    const { fetch } = recordingFetch(`${SUFFIX}:0\r\n${"A".repeat(35)}:3\r\n`);
     expect(
       await check({ source: { url: "https://ranges.example/range" } }, fetch)
     ).toEqual({ ok: true, breachedCheck: "passed" });
@@ -168,15 +168,64 @@ describe("a range service that is not https", () => {
 
   it("is named in the warning boot logs; an https source is not", () => {
     expect(
-      breachedPasswordsSourceWarning({
+      breachedPasswordsWarnings({
         source: { url: "http://ranges.example/range" },
-      })
+      }).join("\n")
     ).toMatch(/not an https address/);
     expect(
-      breachedPasswordsSourceWarning({
+      breachedPasswordsWarnings({
         source: { url: "https://ranges.example/range" },
       })
-    ).toBeNull();
-    expect(breachedPasswordsSourceWarning(undefined)).toBeNull();
+    ).toEqual([]);
+    expect(breachedPasswordsWarnings(undefined)).toEqual([]);
   });
+});
+
+describe("an answer that is not a range", () => {
+  it("leaves the password unchecked when a 200 carries something else", async () => {
+    const source = { source: { url: "https://ranges.example/range" } };
+    for (const body of [
+      "<html><body>Service temporarily unavailable</body></html>",
+      "not a range at all",
+      // A suffix with no count: a range service always gives one.
+      `${"B".repeat(35)}\r\n`,
+    ]) {
+      expect(await check(source, recordingFetch(body).fetch)).toEqual({
+        ok: true,
+        breachedCheck: "unavailable",
+      });
+    }
+  });
+
+  it("leaves the password unchecked when the site's list answers with something else", async () => {
+    const range = async () => ["not a suffix"];
+    expect(await check({ source: { range } })).toEqual({
+      ok: true,
+      breachedCheck: "unavailable",
+    });
+  });
+});
+
+describe("a configured time limit", () => {
+  it.each([-1, Number.NaN, Number.POSITIVE_INFINITY, 1e9, 1.5])(
+    "outside its bounds (%s) is named at boot and replaced by the default",
+    async timeoutMs => {
+      expect(
+        breachedPasswordsWarnings({
+          source: "pwned-passwords",
+          timeoutMs,
+        }).join("\n")
+      ).toMatch(/timeoutMs must be a whole number/);
+      // A source that answers in 20 ms is answered, as under the default wait;
+      // a timer clamped to a millisecond would have given up first.
+      const range = () =>
+        new Promise<readonly string[]>(resolve =>
+          setTimeout(() => resolve([SUFFIX]), 20)
+        );
+      expect(await check({ source: { range }, timeoutMs })).toEqual({
+        ok: false,
+        reason: "breached",
+      });
+    }
+  );
 });

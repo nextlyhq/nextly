@@ -173,7 +173,11 @@ describe("hashes from other settings and formats", () => {
     expect(warn).toHaveBeenCalledTimes(4);
     const logged = JSON.stringify(warn.mock.calls);
     expect(logged).not.toContain(password);
-    expect(logged).not.toContain(BCRYPT_HASH);
+    // Every stored value, not only the bcrypt one, so a log that redacts one
+    // kind of hash and prints the others is caught.
+    for (const stored of [BCRYPT_HASH, "$scrypt$ln=15", unbounded]) {
+      expect(logged).not.toContain(stored);
+    }
     expect(logged).not.toContain("R9h/cIPz0gi");
   });
 

@@ -76,6 +76,34 @@ describe("booting with a breached-password source", () => {
   });
 });
 
+describe("booting with a source a plugin's setup sets", () => {
+  it("warns about the configuration the plugins receive, after setup", async () => {
+    const { logger, warn } = recordingLogger();
+    current = await createTestNextly({
+      logger,
+      plugins: [
+        definePlugin({
+          name: "@test/breached-source",
+          version: "1.0.0",
+          nextly: ">=0.0.0",
+          setup: config => ({
+            ...config,
+            security: {
+              ...config.security,
+              breachedPasswords: {
+                source: { url: "http://ranges.example/range" },
+              },
+            },
+          }),
+        }),
+      ],
+    });
+    expect(JSON.stringify(warn.mock.calls)).toMatch(
+      /breachedPasswords\.source\.url is not an https address/
+    );
+  });
+});
+
 describe("ctx.security.passwords", () => {
   it("never calls the app's configured passwordHasher", async () => {
     const passwordHasher = {

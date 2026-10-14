@@ -159,7 +159,7 @@ Only the first 5 hex digits (20 bits) of the password's SHA-1 ever leave the
 process. A range service is asked with a user agent naming Nextly, as Have I
 Been Pwned asks of every client, and for padded answers, so the size of the answer
 says nothing about the prefix. When the source fails, answers with an error, or
-does not answer within `timeoutMs`, the password is accepted with
+does not answer within `timeoutMs` (1 to 60,000 ms; another value is named at boot and replaced by the default of 2,000), or answers with anything that is not a list of suffixes, the password is accepted with
 `breachedCheck: "unavailable"`: a source that is down neither locks people out
 nor pretends to have checked. Decide what your plugin does with an unchecked
 password; asking again on the next sign-in is a reasonable choice.

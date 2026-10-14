@@ -100,8 +100,10 @@ const CURRENT: ScryptSetting = { ln: 15, r: 8, p: 3 };
  * stored string can never make the helper allocate or spin without bound.
  */
 const VERIFIABLE: readonly ScryptSetting[] = [
+  // Named rather than restated, so moving CURRENT can never leave the helper
+  // writing hashes it would then refuse to read.
+  CURRENT,
   { ln: 16, r: 8, p: 2 },
-  { ln: 15, r: 8, p: 3 },
   { ln: 14, r: 8, p: 5 },
   { ln: 13, r: 8, p: 10 },
 ];
