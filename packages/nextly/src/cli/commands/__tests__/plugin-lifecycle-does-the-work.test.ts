@@ -403,6 +403,45 @@ describe("plugins uninstall judges what its DOWNs drop before running them", () 
     expect(runDown).not.toHaveBeenCalled();
   });
 
+  it("follows a table renamed away, so a drop of its old name does not count", async () => {
+    // The drop names fx__notes, which no longer holds anything: the table and
+    // its rows are under fx__backup.
+    const { run, runDown } = await uninstallWith([
+      [
+        "ALTER TABLE fx__notes RENAME TO fx__backup",
+        "DROP TABLE IF EXISTS fx__notes",
+      ],
+      [],
+    ]);
+    await expect(run).rejects.toMatchObject({
+      logContext: { reason: "down-leaves-tables", tables: ["fx__notes"] },
+    });
+    expect(runDown).not.toHaveBeenCalled();
+  });
+
+  it("counts a table created again under IF NOT EXISTS after its drop as left in place", async () => {
+    const { run, runDown } = await uninstallWith([
+      [
+        "DROP TABLE fx__notes",
+        "CREATE TABLE IF NOT EXISTS fx__notes (id text)",
+      ],
+      [],
+    ]);
+    await expect(run).rejects.toMatchObject({
+      logContext: { reason: "down-leaves-tables", tables: ["fx__notes"] },
+    });
+    expect(runDown).not.toHaveBeenCalled();
+  });
+
+  it("allows a table renamed away and dropped under its new name", async () => {
+    const { run, runDown } = await uninstallWith([
+      ["ALTER TABLE fx__notes RENAME TO fx__backup", "DROP TABLE fx__backup"],
+      [],
+    ]);
+    await run;
+    expect(runDown).toHaveBeenCalledTimes(2);
+  });
+
   it("allows a table rebuilt by one DOWN and dropped by a later one", async () => {
     // The control: newest first, so 0002's rebuild runs before 0001's drop.
     const { run, runDown } = await uninstallWith([

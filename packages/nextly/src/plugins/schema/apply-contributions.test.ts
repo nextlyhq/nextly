@@ -999,6 +999,45 @@ describe("applyPluginSchemaContributions (behaviour a disabled plugin's transfor
     expect(layout.tabs[0]?.fields[0]).toEqual({ name: "note", type: "text" });
   });
 
+  it("keeps a property named `access` in a JSON field's schema", () => {
+    // `jsonSchema.properties` maps property names to their schemas: a
+    // property called `access` is the author's data, not an access rule.
+    const forms = disabledTransform(entity => ({
+      ...entity,
+      fields: [
+        {
+          name: "meta",
+          type: "json",
+          jsonSchema: {
+            type: "object",
+            properties: { access: { type: "string" } },
+          },
+        },
+      ],
+    }));
+    expect(forms.fields[0]?.jsonSchema).toEqual({
+      type: "object",
+      properties: { access: { type: "string" } },
+    });
+  });
+
+  it("keeps a query on a field named `access` in a relationship's filterOptions", () => {
+    const forms = disabledTransform(entity => ({
+      ...entity,
+      fields: [
+        {
+          name: "owner",
+          type: "relationship",
+          relationTo: "users",
+          filterOptions: { access: { equals: "public" } },
+        },
+      ],
+    }));
+    expect(forms.fields[0]?.filterOptions).toEqual({
+      access: { equals: "public" },
+    });
+  });
+
   it("keeps a key named `access` in a field's pluginOptions", () => {
     const forms = disabledTransform(entity => ({
       ...entity,

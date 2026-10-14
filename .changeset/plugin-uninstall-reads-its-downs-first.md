@@ -38,8 +38,9 @@ every level of an entity's schema.
   any**, in the order they will run, and refuses a full uninstall that
   would leave one of the plugin's tables in place
   (`PLUGIN_UNINSTALL_IRREVERSIBLE`, `down-leaves-tables`), naming the table.
-  A table a SQLite rebuild drops and renames back, or one another table is
-  renamed into after its drop, counts as left. Every module stays recorded
+  Each table is followed through renames: one a SQLite rebuild drops and
+  renames back, one renamed away and kept, or one whose name another table
+  takes after its drop, counts as left. Every module stays recorded
   as applied, so the ledger still says what the plugin's schema is. Before,
   this was found only after the DOWNs had run and recorded each module
   rolled back, and the next uninstall stopped on `no-applied-module`.
@@ -49,5 +50,6 @@ every level of an entity's schema.
   says so.
 - **A disabled plugin's transform keeps access rules wherever they sit in
   an entity's schema**, not only on the entity and on items of `fields` and
-  `blocks` lists. A key named `access` under `defaultValue`, `custom` or
-  `pluginOptions` is data, and merges like any other key.
+  `blocks` lists. A key named `access` under a free-form value — a field's
+  `defaultValue`, `custom`, `pluginOptions`, `jsonSchema`, `filterOptions`
+  or `admin.style` — is data, and merges like any other key.

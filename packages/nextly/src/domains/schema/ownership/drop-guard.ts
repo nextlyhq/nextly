@@ -681,11 +681,6 @@ class DropReader {
    */
   readonly creating = new Set<string>();
   /**
-   * Every local name the list renames a table to, whichever table it was —
-   * one it created or one that stood before it ran (`tablesPutInPlaceBy`).
-   */
-  readonly renamedInto = new Set<string>();
-  /**
    * Whether the list holds a statement that may change which table an
    * unqualified name reaches (`changesNameResolution`). Once it does, no
    * creation is credited anywhere in the list (`readStatements`).
@@ -761,7 +756,6 @@ class DropReader {
   }
 
   rename(from: TableRef, to: TableRef): void {
-    if (to.local) this.renamedInto.add(to.name);
     if (this.takeCreated(from)) {
       this.create(to);
       return;
@@ -1973,19 +1967,194 @@ export function tablesCreatedBy(
   return [...(readAsIfNoTableExisted(statements, dialect)?.creating ?? [])];
 }
 
+/** The holder of a name that a statement of the list created. */
+const MADE_BY_LIST = Symbol("made by the list");
+
 /**
- * The local names, lower-cased, a list puts a table under: by a CREATE, or by
- * renaming a table to it, whether the list created that table or not. Wider
- * than `tablesCreatedBy`, which credits a rename only of a table the list
- * made: a table renamed into a name stands there afterwards all the same.
- * Empty for a list that cannot be read, which the drop guard refuses whole.
+ * Where each of a set of tables, standing before a list runs, is after each
+ * statement: under which name, or dropped. Only local names are followed; a
+ * qualified one may name another schema's table, so a drop of it drops
+ * nothing followed here, and a rename of one moves nothing.
  */
-export function tablesPutInPlaceBy(
+class TableFates {
+  /** Each name a statement has given a holder: a followed table, or one the list made. */
+  private readonly holders = new Map<string, string | typeof MADE_BY_LIST>();
+  /** Followed tables' own names that a statement has emptied. */
+  private readonly vacated = new Set<string>();
+  /** Followed tables the list dropped, under whatever name they then had. */
+  private readonly dropped = new Set<string>();
+
+  constructor(private readonly tables: ReadonlySet<string>) {}
+
+  /** What stands under `name` now, if anything. */
+  private holder(name: string): string | typeof MADE_BY_LIST | undefined {
+    if (this.holders.has(name)) return this.holders.get(name);
+    if (this.tables.has(name) && !this.vacated.has(name)) return name;
+    return undefined;
+  }
+
+  private vacate(name: string): void {
+    this.holders.delete(name);
+    this.vacated.add(name);
+  }
+
+  /** A CREATE: a table stands under the name, unless one already did. */
+  create(table: TableRef): void {
+    if (!table.local || this.holder(table.name) !== undefined) return;
+    this.holders.set(table.name, MADE_BY_LIST);
+  }
+
+  /** A CREATE that replaces whatever stood under the name. */
+  replace(table: TableRef): void {
+    this.drop(table);
+    this.create(table);
+  }
+
+  drop(table: TableRef): void {
+    if (!table.local) return;
+    const holder = this.holder(table.name);
+    if (holder === undefined) return;
+    this.vacate(table.name);
+    if (holder !== MADE_BY_LIST) this.dropped.add(holder);
+  }
+
+  /**
+   * A rename. Whatever `from` held stands under `to` afterwards; a name not
+   * followed here may still hold a table, so `to` is taken either way.
+   */
+  rename(from: TableRef, to: TableRef): void {
+    const holder = from.local ? this.holder(from.name) : undefined;
+    if (from.local) this.vacate(from.name);
+    if (to.local) this.holders.set(to.name, holder ?? MADE_BY_LIST);
+  }
+
+  /** A table moved away from its name, to another schema: kept, elsewhere. */
+  relocate(table: TableRef): void {
+    if (table.local) this.vacate(table.name);
+  }
+
+  /** Whether `table` was dropped, with nothing standing under its name after. */
+  gone(table: string): boolean {
+    return this.dropped.has(table) && this.holder(table) === undefined;
+  }
+}
+
+/**
+ * A `DropReader` that also follows `tables` through the list (`TableFates`).
+ *
+ * The reader's own records stay as they are: they answer what a list may
+ * take from another owner, and read a drop by the name it is written
+ * against. Each statement reaches the fates once, from the walk, however the
+ * reader's methods call one another.
+ */
+class FollowingReader extends DropReader {
+  readonly fates: TableFates;
+  private depth = 0;
+
+  constructor(dialect: SupportedDialect, tables: ReadonlySet<string>) {
+    super(dialect, new Set());
+    this.fates = new TableFates(tables);
+  }
+
+  /**
+   * Also takes the name every CREATE TABLE names, which the walk does not
+   * report for a rebuild's twin or under `IF NOT EXISTS`: either puts a table
+   * under the name when none stands there.
+   */
+  override read(statement: string): void {
+    super.read(statement);
+    const created = tableNamedByCreate(statement, this.dialect);
+    if (created !== undefined)
+      this.fates.create({ name: created, local: true });
+  }
+
+  /** Runs `follow` for a call from the walk, not for one the reader nests. */
+  private step<T>(follow: () => void, read: () => T): T {
+    if (this.depth === 0) follow();
+    this.depth += 1;
+    try {
+      return read();
+    } finally {
+      this.depth -= 1;
+    }
+  }
+
+  override create(table: TableRef): void {
+    this.step(
+      () => this.fates.create(table),
+      () => super.create(table)
+    );
+  }
+
+  override replace(table: TableRef): void {
+    this.step(
+      () => this.fates.replace(table),
+      () => super.replace(table)
+    );
+  }
+
+  override drop(table: TableRef): void {
+    this.step(
+      () => this.fates.drop(table),
+      () => super.drop(table)
+    );
+  }
+
+  override rename(from: TableRef, to: TableRef): void {
+    this.step(
+      () => this.fates.rename(from, to),
+      () => super.rename(from, to)
+    );
+  }
+
+  override relocate(table: TableRef): string {
+    return this.step(
+      () => this.fates.relocate(table),
+      () => super.relocate(table)
+    );
+  }
+
+  /**
+   * PostgreSQL's `ALTER INDEX ... RENAME`, which renames a table too: the
+   * table moves to a name not read here, keeping its rows.
+   */
+  override renameRelation(name: string): void {
+    this.step(
+      () => this.fates.relocate({ name, local: true }),
+      () => super.renameRelation(name)
+    );
+  }
+}
+
+/**
+ * Of `tables`, those a statement list leaves in place: run in order, it does
+ * not drop the table under any name it is renamed to, or it leaves a table
+ * standing under the name once it has finished. Lower-cased, as `tables`
+ * holds them.
+ *
+ * Each table is followed through the list's renames: renamed away and kept,
+ * it is left, however many drops of its old name follow; renamed away and
+ * then dropped, it is gone. A rebuild is read as the drop and the rename back
+ * it is, so it leaves the table in place.
+ *
+ * Every table counts as left when the list cannot be read, or when it may
+ * change which table an unqualified name reaches: what it drops is then not
+ * known, and an uninstall is refused rather than run on a guess.
+ */
+export function tablesLeftInPlace(
   statements: readonly string[],
-  dialect: SupportedDialect
+  dialect: SupportedDialect,
+  tables: readonly string[]
 ): string[] {
-  const reader = readAsIfNoTableExisted(statements, dialect);
-  return reader ? [...reader.creating, ...reader.renamedInto] : [];
+  const reader = new FollowingReader(dialect, new Set(tables));
+  try {
+    readWith(statements, reader, new Map());
+  } catch (error) {
+    if (error instanceof UnparsableDropTarget) return [...tables];
+    throw error;
+  }
+  if (reader.resolutionMayChange) return [...tables];
+  return tables.filter(table => !reader.fates.gone(table));
 }
 
 /**
@@ -2479,25 +2648,6 @@ const TABLE_CONSTRAINT_WORDS = new Set([
 
 /** A rebuild's twin name for `table`. */
 const REBUILD_PREFIX = "__new_";
-
-/**
- * The indexes of the `DROP TABLE` statements that sit inside a rebuild block,
- * whatever columns its twin keeps: the table survives such a drop under its
- * own name, rebuilt. `rebuildBlockStatements` asks the narrower question of
- * whether the rebuild also keeps every live column.
- */
-export function rebuildDropStatements(
-  statements: readonly string[],
-  dialect: SupportedDialect
-): ReadonlySet<number> {
-  const drops = new Set<number>();
-  for (let i = 0; i < statements.length; i += 1) {
-    if (rebuildBlockAt(statements, i, dialect) === undefined) continue;
-    drops.add(i + 2);
-    i += 3;
-  }
-  return drops;
-}
 
 /**
  * The indexes of the statements, within a statement list, that belong to a

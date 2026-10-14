@@ -19,11 +19,7 @@
  * @module cli/commands/plugin-lifecycle
  */
 
-import {
-  rebuildDropStatements,
-  tablesDroppedIn,
-  tablesPutInPlaceBy,
-} from "../../domains/schema/ownership/drop-guard";
+import { tablesLeftInPlace } from "../../domains/schema/ownership/drop-guard";
 import { assertDependenciesInstalled } from "../../domains/schema/ownership/install-plan";
 import { createOwnerRegistry } from "../../domains/schema/ownership/owner-registry";
 import { SchemaOwnersRepository } from "../../domains/schema/ownership/schema-owners-repository";
@@ -490,7 +486,8 @@ async function executeUninstall(
  * Refuse, before anything runs, a full uninstall whose DOWNs leave one of the
  * plugin's tables in place: a DOWN that drops one of the two tables its UP
  * created runs without error. Read from the statements, in the order they
- * run, so a table a rebuild drops and puts back counts as left.
+ * run, following each table through renames (`tablesLeftInPlace`): a table a
+ * rebuild drops and puts back, or one renamed away and kept, counts as left.
  *
  * Before, not only after: once a DOWN has run, its module is recorded rolled
  * back, and a refusal then leaves a ledger that no longer says what the
@@ -504,8 +501,11 @@ function assertDownsDropTables(
 ): void {
   if (plan.finalState !== "uninstalled") return;
   const statements = downs.flatMap(down => down.statements);
-  const left = plan.tablesDropped.filter(table =>
-    leftInPlace(table.toLowerCase(), statements, dialect)
+  const lowered = new Map(
+    plan.tablesDropped.map(table => [table.toLowerCase(), table])
+  );
+  const left = tablesLeftInPlace(statements, dialect, [...lowered.keys()]).map(
+    table => lowered.get(table) ?? table
   );
   if (left.length === 0) return;
   throw new NextlyError({
@@ -517,34 +517,6 @@ function assertDownsDropTables(
       tables: left,
     },
   });
-}
-
-/**
- * Whether `table` exists once `statements` have run, if it did before.
- *
- * Left when no statement drops it, or when one creates it again, or renames
- * another table to its name, after its last drop. A drop inside a rebuild
- * block does not count: the table survives it under its own name, rebuilt.
- *
- * A drop written schema-qualified, or that cannot be read, is not counted
- * either: the uninstall is refused rather than allowed on a drop it cannot
- * see.
- */
-function leftInPlace(
-  table: string,
-  statements: readonly string[],
-  dialect: PluginLifecycleDeps["dialect"]
-): boolean {
-  const rebuilt = rebuildDropStatements(statements, dialect);
-  let lastDrop = -1;
-  statements.forEach((statement, at) => {
-    if (rebuilt.has(at)) return;
-    if (tablesDroppedIn(statement, dialect).includes(table)) lastDrop = at;
-  });
-  if (lastDrop === -1) return true;
-  return tablesPutInPlaceBy(statements.slice(lastDrop + 1), dialect).includes(
-    table
-  );
 }
 
 /**

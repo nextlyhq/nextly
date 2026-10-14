@@ -350,15 +350,22 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 type SchemaPosition = "schema" | "data";
 
 /**
- * The keys whose value is free-form data rather than schema: a field's
- * default, and the settings a plugin or the app hangs on an entity or field.
- * Everything else is schema, so a nesting key added later keeps its access
- * rules restored without being listed here.
+ * The keys whose value is free-form data rather than schema, where a key
+ * named `access` is the author's: a field's default, the settings a plugin or
+ * the app hangs on an entity or field, a JSON field's schema, a relationship's
+ * or upload's static filter query, and a field's inline styles. Everything
+ * else is schema, so a nesting key added later keeps its access rules
+ * restored without being listed here: a free-form key missing from this list
+ * loses an `access` entry, where a schema key missing from an allowlist would
+ * let a transform set an access rule.
  */
 const DATA_KEYS: ReadonlySet<string> = new Set([
   "defaultValue",
   "custom",
   "pluginOptions",
+  "jsonSchema",
+  "filterOptions",
+  "style",
 ]);
 
 function mergeBehaviour(
