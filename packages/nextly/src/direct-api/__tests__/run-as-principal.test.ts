@@ -1,0 +1,148 @@
+/**
+ * A Direct API call made as a plugin-defined person: what reaches the
+ * service, and each call refused before it runs.
+ *
+ * The person travels in a frame rather than an argument, so these tests read
+ * the frame from inside the mocked service: the service is where every access
+ * decision below it reads the person from.
+ */
+import { afterAll, beforeEach, describe, expect, it } from "vitest";
+
+import type { AuthenticatedScope } from "../../auth/authenticated-scope";
+import { currentPrincipal, runAsPrincipal } from "../../auth/principal-scope";
+import { makePrincipal } from "../../plugins/principals/principal";
+import type { Principal } from "../../plugins/principals/types";
+import type { Nextly } from "../nextly";
+
+import {
+  resetMocks,
+  setupTestNextly,
+  type TestMocks,
+} from "./helpers/test-setup";
+
+const person = makePrincipal("accounts:account", "acc_1", { verified: true });
+
+const KEY: AuthenticatedScope = {
+  actorType: "apiKey",
+  permissions: ["read-posts"],
+};
+
+const EMPTY_LIST = {
+  success: true,
+  statusCode: 200,
+  message: "OK",
+  data: { docs: [], totalDocs: 0, limit: 10, page: 1, totalPages: 1 },
+};
+
+describe("a Direct API call made as a person", () => {
+  let nextly: Nextly;
+  let mocks: TestMocks;
+  let cleanup: () => void;
+  /** What the service saw the last time it ran. */
+  let seen: {
+    principal: Principal | null;
+    overrideAccess: unknown;
+    user: unknown;
+  } | null;
+
+  beforeEach(() => {
+    const setup = setupTestNextly();
+    nextly = setup.nextly;
+    mocks = setup.mocks;
+    cleanup = setup.cleanup;
+    resetMocks(mocks);
+    seen = null;
+    mocks.collectionsHandler.listEntries.mockImplementation(
+      async (options: { overrideAccess?: unknown; user?: unknown }) => {
+        seen = {
+          principal: currentPrincipal(),
+          overrideAccess: options.overrideAccess,
+          user: options.user,
+        };
+        return EMPTY_LIST;
+      }
+    );
+  });
+
+  afterAll(() => {
+    cleanup?.();
+  });
+
+  it("reaches the service as the person, under access rules, with no user", async () => {
+    // The instance default is `overrideAccess: true`; a person's call replaces
+    // it rather than inheriting it.
+    await nextly.find({ collection: "posts", principal: person });
+    expect(seen).toEqual({
+      principal: person,
+      overrideAccess: false,
+      user: undefined,
+    });
+  });
+
+  it("reaches a Single read as the person too", async () => {
+    let principal: Principal | null = null;
+    mocks.singleEntryService.get.mockImplementation(async () => {
+      principal = currentPrincipal();
+      return { success: true, statusCode: 200, data: { id: "s1" } };
+    });
+    await nextly.findSingle({ slug: "settings", principal: person });
+    expect(principal).toBe(person);
+  });
+
+  it("runs as no person when it names none, even inside a person's call", async () => {
+    // A hook's own call inside a person's operation is judged as what it says
+    // it is, not as the person the outer operation was made as.
+    await runAsPrincipal(person, () =>
+      nextly.find({ collection: "posts", overrideAccess: false })
+    );
+    expect(seen?.principal).toBeNull();
+  });
+
+  it.each([
+    ["sets overrideAccess: true", { overrideAccess: true }],
+    ["sets trusted", { trusted: () => true }],
+    ["names a staff user", { user: { id: "u1" } }],
+    ["names a fieldAccessUser", { fieldAccessUser: { id: "u1" } }],
+    ["names an API key", { actor: KEY }],
+  ])("is refused, and runs nothing, when it %s", async (_label, extra) => {
+    await expect(
+      nextly.find({ collection: "posts", principal: person, ...extra })
+    ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+    expect(mocks.collectionsHandler.listEntries).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["a person built by hand", { ...person }],
+    ["null", null],
+  ])("is refused when it names %s", async (_label, principal) => {
+    await expect(
+      nextly.find({
+        collection: "posts",
+        principal: principal as unknown as Principal,
+      })
+    ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+    expect(mocks.collectionsHandler.listEntries).not.toHaveBeenCalled();
+  });
+
+  it("runs as the person with overrideAccess: false said outright", async () => {
+    // The control for the refusal of `true`: the setting itself is not what
+    // is refused.
+    await nextly.find({
+      collection: "posts",
+      principal: person,
+      overrideAccess: false,
+    });
+    expect(seen?.principal).toBe(person);
+  });
+
+  it("is refused on an operation that cannot run as a person", async () => {
+    // Typed out of reach, so this is a JavaScript caller's mistake. Ignored,
+    // the media read would run as the server.
+    const media = nextly.media as unknown as {
+      find(args: Record<string, unknown>): Promise<unknown>;
+    };
+    await expect(media.find({ principal: person })).rejects.toMatchObject({
+      code: "INVALID_INPUT",
+    });
+  });
+});
