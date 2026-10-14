@@ -1021,6 +1021,16 @@ export {
   type RateLimitRecord,
 } from "./middleware";
 
+// The contract an app's own limit store implements, selected by
+// `rateLimit.store`. Types only: a store is plain code of the app's.
+// @experimental
+export type {
+  LimitStore,
+  LimitUpdate,
+  StoredLimit,
+} from "./domains/limits/limit-store";
+export type { RateLimitStoreSetting } from "./domains/limits/limit-store-setting";
+
 // The limiter a caller drives directly, over the same store the middleware
 // uses. Exported so a plugin limiting something of its own counts in the same
 // window as the REST and auth limiters rather than in one of its own.
