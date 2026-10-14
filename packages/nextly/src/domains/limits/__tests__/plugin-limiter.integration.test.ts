@@ -81,7 +81,8 @@ describeEachDialect("the plugin limiter on the database store", dialect => {
   });
 
   afterAll(async () => {
-    for (const store of opened) store.close();
+    // Each store drains its sweep before the database it sweeps goes away.
+    for (const store of opened) await store.close();
     if (other !== current.adapter) await other.disconnect();
     await current.destroy();
   });
