@@ -80,6 +80,10 @@ import { wrapSinglesForPlugin } from "./plugin-singles";
 import type { PluginSinglesService } from "./plugin-singles";
 import { isInPluginNamespace } from "./plugin-slug";
 import {
+  createOpaqueSecrets,
+  type OpaqueSecrets,
+} from "./security/opaque-secrets";
+import {
   createPasswordHelper,
   type PasswordHelper,
 } from "./security/password-helper";
@@ -629,6 +633,8 @@ export interface PluginContext {
 export interface PluginSecurityApi {
   /** Hashing, verifying and checking passwords. */
   readonly passwords: PasswordHelper;
+  /** Random secrets for the plugin's own records, with a stable hash. */
+  readonly opaque: OpaqueSecrets;
 }
 
 /** @experimental Writing one plugin's declared audit events. */
@@ -1980,6 +1986,7 @@ export function createPluginContext(
         breachedPasswords: config.security?.breachedPasswords,
         logger,
       }),
+      opaque: createOpaqueSecrets(),
     },
     // Present only when the plugin declared a settings schema: without one
     // there is nothing to validate a write against, and an untyped bag is
