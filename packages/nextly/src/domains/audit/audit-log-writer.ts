@@ -42,14 +42,8 @@ import { NEXTLY_ERROR_STATUS } from "../../errors/error-codes";
 import { NextlyError } from "../../errors/nextly-error";
 import { env } from "../../lib/env";
 import { getNextlyLogger } from "../../observability/logger";
-import { pluginTransactionInFlow } from "../../plugins/database/plugin-transaction-in-flow";
-import { linkedTransaction } from "../../plugins/database/plugin-transaction-link";
 import type { PrincipalRef } from "../../plugins/principals/types";
 import type { RowLockServer } from "../../shared/lib/row-lock";
-import {
-  serializeOnSqlite,
-  type SerializingAdapter,
-} from "../../shared/lib/run-adapter-transaction";
 import { isValidUUID } from "../auth/services/role/utils";
 import { pluginSettingsSecrets } from "../plugins/settings-service";
 
@@ -61,8 +55,9 @@ import {
   type ErasureAwareInsert,
   type ErasureAwareOutcome,
 } from "./erasure-aware-insert";
+import { runLockedWrite } from "./person-write";
 import {
-  holdsDeletionLock,
+  principalDigestTablesOf,
   readPrincipalDigests,
   type PrincipalDigestDb,
   type PrincipalDigestTables,
@@ -628,72 +623,6 @@ function reportTargetAbsent(event: AuditEvent): void {
   });
 }
 
-/** One row's write, on whichever executor it is handed. */
-type RowWrite = (executor: ErasureAwareDb) => Promise<ErasureAwareOutcome>;
-
-/**
- * Run a row's write in the transaction its decision needs.
- *
- * The lock the decision rests on is only worth anything inside a
- * transaction, and this writer owns none. On SQLite the write goes through the
- * adapter's transaction instead: the adapter queues it behind another
- * request's open transaction rather than letting it run inside one, whose
- * rollback would erase the audit entry, and its `BEGIN IMMEDIATE` holds the
- * write lock across the decision and the insert. A write made inside the
- * caller's own transaction nests in it.
- *
- * A row naming a person takes the deleted-people lock as well. When the flow
- * is inside a plugin transaction that took that lock to report a deletion, the
- * row is written in that transaction: one of its own would wait for the
- * plugin's commit while the plugin waits for the write.
- */
-async function runRowWrite(
-  adapter: SerializingAdapter,
-  db: unknown,
-  dialect: SupportedDialect,
-  write: RowWrite,
-  needs: { namesPerson: boolean; needsLock: boolean }
-): Promise<ErasureAwareOutcome> {
-  if (dialect === "sqlite") {
-    return serializeOnSqlite(adapter, () => write(db as ErasureAwareDb));
-  }
-  const reporting = needs.namesPerson ? reportingTransaction() : undefined;
-  if (reporting) {
-    return linkedTransaction(reporting, "audit write").run(tx =>
-      write(tx.getDrizzle<ErasureAwareDb>())
-    );
-  }
-  if (needs.namesPerson || needs.needsLock) {
-    return (db as TransactionalErasureDb).transaction(tx => write(tx));
-  }
-  return write(db as ErasureAwareDb);
-}
-
-/**
- * The plugin transaction the calling flow is inside, when it holds the
- * deleted-people lock; undefined otherwise.
- */
-function reportingTransaction(): object | undefined {
-  const handle = pluginTransactionInFlow();
-  return handle !== undefined && holdsDeletionLock(handle) ? handle : undefined;
-}
-
-/** The deleted-people key and record, from the dialect's tables. */
-function principalDigestTables(schema: unknown): PrincipalDigestTables {
-  const tables = schema as {
-    nextlyMeta?: PrincipalDigestTables["meta"];
-    nextlyDeletedPrincipals?: PrincipalDigestTables["deleted"];
-  };
-  if (!tables.nextlyMeta || !tables.nextlyDeletedPrincipals) {
-    // Thrown into the writer's own catch, which logs it: a row naming a
-    // person is not written where whether they were deleted cannot be read.
-    throw NextlyError.internal({
-      logContext: { reason: "no deleted-people tables in this schema" },
-    });
-  }
-  return { meta: tables.nextlyMeta, deleted: tables.nextlyDeletedPrincipals };
-}
-
 /**
  * Write a row naming a plugin-defined person: read under the shared
  * deleted-people lock whether each person it names was reported deleted, and
@@ -735,11 +664,6 @@ async function writeNamingPerson(
     },
     reportedGone: { actor: actorGone, target: targetGone },
   });
-}
-
-/** The write surface plus the transaction the lock has to be held inside. */
-interface TransactionalErasureDb extends ErasureAwareDb {
-  transaction<T>(work: (tx: ErasureAwareDb) => Promise<T>): Promise<T>;
 }
 
 /** What a writer reads besides the container. */
@@ -795,21 +719,26 @@ export function buildAuditLogWriter(
         const namesPerson = Boolean(
           event.actorPrincipal || event.targetPrincipal
         );
-        const write: RowWrite = namesPerson
-          ? executor =>
+        const write = namesPerson
+          ? (executor: ErasureAwareDb) =>
               writeNamingPerson(
                 executor as ErasureAwareDb & PrincipalDigestDb,
                 server,
-                principalDigestTables(schema),
+                principalDigestTablesOf(schema),
                 event,
                 input,
                 secrets()
               )
-          : executor => insertErasureAware(executor, server, input);
-        const outcome = await runRowWrite(adapter, db, dialect, write, {
-          namesPerson,
-          needsLock: erasureNeedsLock(input),
-        });
+          : (executor: ErasureAwareDb) =>
+              insertErasureAware(executor, server, input);
+        const outcome = await runLockedWrite(
+          adapter,
+          db,
+          dialect,
+          write,
+          { namesPerson, needsLock: erasureNeedsLock(input) },
+          "audit write"
+        );
         if (outcome.targetAbsent) reportTargetAbsent(event);
 
         // Offer a retention pass, for the same reason content writes do: there

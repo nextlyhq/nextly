@@ -35,6 +35,9 @@ const PERSON_INDEXES = [
   "audit_log_actor_principal_idx",
   "audit_log_target_principal_idx",
 ];
+/** The email delivery log's columns naming the person a send went to. */
+const DELIVERY_PERSON_COLUMNS = ["principal_kind", "principal_id"];
+const LEGACY_DELIVERY_ID = "00000000-0000-4000-8000-000000000001";
 
 interface Db {
   select: () => {
@@ -57,6 +60,25 @@ async function removePersonSchema(fresh: FreshDatabase): Promise<void> {
     await fresh.exec(`ALTER TABLE audit_log DROP COLUMN ${column}`);
   }
   await fresh.exec("DROP TABLE nextly_deleted_principals");
+  await fresh.exec(
+    fresh.dialect === "mysql"
+      ? "DROP INDEX email_deliveries_principal_idx ON email_deliveries"
+      : "DROP INDEX email_deliveries_principal_idx"
+  );
+  for (const column of DELIVERY_PERSON_COLUMNS) {
+    await fresh.exec(`ALTER TABLE email_deliveries DROP COLUMN ${column}`);
+  }
+}
+
+/** A delivery recorded before the person columns, by statement. */
+async function insertLegacyDelivery(fresh: FreshDatabase): Promise<void> {
+  // Milliseconds on SQLite, where the column is `timestamp_ms`.
+  const writtenAt =
+    fresh.dialect === "sqlite" ? "1767225600000" : "'2026-01-01 00:00:00'";
+  await fresh.exec(
+    "INSERT INTO email_deliveries (id, provider_type, recipient_hash, recipient_kind, status, attempt_count, retention_class, created_at) " +
+      `VALUES ('${LEGACY_DELIVERY_ID}', 'smtp', 'legacy-digest', 'to', 'sent', 1, 'operational', ${writtenAt})`
+  );
 }
 
 /** An app with no migration files, so only the core phase has work to do. */
@@ -76,6 +98,9 @@ describe.each(availableDialects())(
         expect(
           (await fresh.columnsOf("nextly_deleted_principals")).sort()
         ).toEqual(["deleted_at", "digest"]);
+        expect(await fresh.columnsOf("email_deliveries")).toEqual(
+          expect.arrayContaining(DELIVERY_PERSON_COLUMNS)
+        );
       });
     }, 180_000);
 
@@ -94,8 +119,10 @@ describe.each(availableDialects())(
           "INSERT INTO audit_log (id, kind, actor_user_id, ip_address, user_agent, created_at) " +
             `VALUES ('legacy-row', 'login-succeeded', 'legacy-user', '203.0.113.9', 'legacy-browser/1.0', ${writtenAt})`
         );
-        const { auditLog } = fresh.tables as unknown as {
+        await insertLegacyDelivery(fresh);
+        const { auditLog, emailDeliveries } = fresh.tables as unknown as {
           auditLog: { id: unknown };
+          emailDeliveries: { id: unknown };
         };
         const db = fresh.db as unknown as Db;
 
@@ -120,6 +147,20 @@ describe.each(availableDialects())(
           actorPrincipalId: null,
           targetPrincipalKind: null,
           targetPrincipalId: null,
+        });
+
+        expect(await fresh.columnsOf("email_deliveries")).toEqual(
+          expect.arrayContaining(DELIVERY_PERSON_COLUMNS)
+        );
+        const [delivery] = await db
+          .select()
+          .from(emailDeliveries)
+          .where(eq(emailDeliveries.id as never, LEGACY_DELIVERY_ID));
+        expect(delivery).toMatchObject({
+          recipientHash: "legacy-digest",
+          status: "sent",
+          principalKind: null,
+          principalId: null,
         });
 
         // Nothing left to add.

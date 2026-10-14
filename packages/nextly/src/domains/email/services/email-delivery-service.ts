@@ -28,9 +28,20 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { and, desc, eq, inArray } from "drizzle-orm";
 
 import { toDbError } from "../../../database/errors";
+import { getDialectTables } from "../../../database/index";
 import { NextlyError } from "../../../errors";
+import { env } from "../../../lib/env";
+import type { PrincipalRef } from "../../../plugins/principals/types";
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
+import { rowLockServer } from "../../audit/audit-log-writer";
+import { runLockedWrite } from "../../audit/person-write";
+import {
+  principalDigestTablesOf,
+  readPrincipalDigests,
+  type PrincipalDigestDb,
+} from "../../audit/principal-digest";
+import { pluginSettingsSecrets } from "../../plugins/settings-service";
 import { warnQuietly } from "../../retention/safe-log";
 import {
   deliveriesTableFor,
@@ -38,6 +49,7 @@ import {
 } from "../deliveries-table";
 import {
   EMAIL_RETENTION_CLASS,
+  ERASED_RECIPIENT_HASH,
   isErasedRecipientHash,
   recipientDigest,
   recipientDigests,
@@ -48,6 +60,9 @@ import {
 } from "../delivery-record";
 import { eraseRecipientDeliveries } from "../erase-recipient";
 import type { ResolvedEmailRetentionConfig } from "../retention-config";
+
+/** The Drizzle surface a write naming a person needs. */
+type PersonRowsDb = PrincipalDigestDb;
 
 /**
  * Rows per insert statement.
@@ -181,16 +196,24 @@ export class EmailDeliveryService extends BaseService {
     | ResolvedEmailRetentionConfig
     | undefined;
 
+  /**
+   * The install's secrets, current first, that seal the key naming deleted
+   * plugin-defined people. Read per write, as a rotation is read on restart.
+   */
+  private readonly digestSecrets: () => readonly string[];
+
   constructor(
     adapter: DrizzleAdapter,
     logger: Logger,
     retention?: { maybeRun(maxBatches?: number): Promise<void> },
-    retentionPolicy?: () => ResolvedEmailRetentionConfig | undefined
+    retentionPolicy?: () => ResolvedEmailRetentionConfig | undefined,
+    digestSecrets: () => readonly string[] = () => pluginSettingsSecrets(env)
   ) {
     super(adapter, logger);
     this.deliveries = deliveriesTableFor(this.dialect);
     this.retention = retention;
     this.retentionPolicy = retentionPolicy;
+    this.digestSecrets = digestSecrets;
   }
 
   /**
@@ -450,32 +473,93 @@ export class EmailDeliveryService extends BaseService {
     now: Date,
     withProvider: boolean
   ): Promise<void> {
-    await this.db.insert(this.deliveries).values(
-      inputs.map((input, index) => ({
-        id: ids[index],
-        providerId: withProvider ? (input.providerId ?? null) : null,
-        providerType: input.providerType,
-        templateSlug: input.templateSlug ?? null,
-        // The address is hashed here and nowhere retained. Callers hand over
-        // the real one because they are sending to it; this is the boundary
-        // where it stops travelling.
-        //
-        // Through `recipientDigest`, the same function the reader and the
-        // erasure use. A send addressed `Jane <jane@example.com>` must store
-        // what a lookup for `jane@example.com` will compute, or the row is
-        // written in a form nothing can ever find again.
-        recipientHash: recipientDigest(input.to),
-        recipientKind: input.recipientKind ?? "to",
-        status: input.status,
-        attemptCount: 1,
-        retentionClass: EMAIL_RETENTION_CLASS,
-        error: input.error ? storableError(input.error) : null,
-        messageId: input.messageId ?? null,
-        // One timestamp for the whole message: the rows describe a single
-        // send, and staggering them by microseconds would suggest otherwise.
-        createdAt: now,
-      }))
+    const rows = this.rowsFor(inputs, ids, now, withProvider);
+    const people = inputs.map(input => input.person ?? null);
+    if (people.every(person => person === null)) {
+      await this.db.insert(this.deliveries).values(rows);
+      return;
+    }
+    // A row naming a person is decided under the deleted-people lock, in the
+    // transaction that lock needs: the one insert every delivery record goes
+    // through, so a send, and any writer added later, is held to it.
+    await runLockedWrite<PersonRowsDb, void>(
+      this.adapter,
+      this.db,
+      this.dialect,
+      executor => this.insertNamingPeople(executor, rows, people),
+      { namesPerson: true, needsLock: false },
+      "email delivery record"
     );
+  }
+
+  /**
+   * Insert rows some of which name a person: each person's row is written as
+   * it is while they exist, and with no address digest, naming them by the
+   * keyed digest, once their plugin has reported them deleted. Read under the
+   * shared lock a deletion report takes exclusively, so a report either
+   * finishes first and is seen, or waits for this insert and erases it.
+   */
+  private async insertNamingPeople(
+    db: PersonRowsDb,
+    rows: Record<string, unknown>[],
+    people: (PrincipalRef | null)[]
+  ): Promise<void> {
+    const digests = await readPrincipalDigests(
+      db,
+      rowLockServer(this.adapter, this.dialect),
+      principalDigestTablesOf(getDialectTables(this.dialect)),
+      "shared",
+      this.digestSecrets()
+    );
+    const decided: Record<string, unknown>[] = [];
+    for (const [index, row] of rows.entries()) {
+      const person = people[index];
+      if (!person) {
+        decided.push(row);
+        continue;
+      }
+      const gone = await digests.isDeleted(person);
+      decided.push({
+        ...row,
+        principalKind: person.kind,
+        principalId: gone ? digests.digest(person) : person.id,
+        ...(gone ? { recipientHash: ERASED_RECIPIENT_HASH } : {}),
+      });
+    }
+    await db.insert(this.deliveries).values(decided);
+  }
+
+  /** The rows for one chunk, with or without the provider reference. */
+  private rowsFor(
+    inputs: EmailDeliveryInput[],
+    ids: string[],
+    now: Date,
+    withProvider: boolean
+  ): Record<string, unknown>[] {
+    return inputs.map((input, index) => ({
+      id: ids[index],
+      providerId: withProvider ? (input.providerId ?? null) : null,
+      providerType: input.providerType,
+      templateSlug: input.templateSlug ?? null,
+      // The address is hashed here and nowhere retained. Callers hand over
+      // the real one because they are sending to it; this is the boundary
+      // where it stops travelling.
+      //
+      // Through `recipientDigest`, the same function the reader and the
+      // erasure use. A send addressed `Jane <jane@example.com>` must store
+      // what a lookup for `jane@example.com` will compute, or the row is
+      // written in a form nothing can ever find again.
+      recipientHash: recipientDigest(input.to),
+      recipientKind: input.recipientKind ?? "to",
+      status: input.status,
+      attemptCount: 1,
+      retentionClass: EMAIL_RETENTION_CLASS,
+      error: input.error ? storableError(input.error) : null,
+      messageId: input.messageId ?? null,
+      // One timestamp for the whole message: the rows describe a single
+      // send, and staggering them by microseconds would suggest otherwise.
+      createdAt: now,
+    }));
   }
 
   /**

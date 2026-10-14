@@ -20,7 +20,10 @@
  *
  * @module domains/audit/erase-principal
  */
-import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
+import type {
+  SupportedDialect,
+  TransactionContext,
+} from "@nextlyhq/adapter-drizzle/types";
 import {
   and,
   eq,
@@ -42,6 +45,11 @@ import {
 } from "../../shared/lib/open-transaction";
 import type { RowLockServer } from "../../shared/lib/row-lock";
 import { runAdapterTransaction } from "../../shared/lib/run-adapter-transaction";
+import { deliveriesTableFor } from "../email/deliveries-table";
+import {
+  erasePrincipalDeliveries,
+  type PersonDeliveriesTable,
+} from "../email/erase-recipient";
 
 import { adapterDialect, rowLockServer } from "./audit-log-writer";
 import {
@@ -179,9 +187,7 @@ export async function resealPrincipalDigestKeyAtBoot(
 }
 
 /** The tables a person's erasure touches, on this dialect. */
-function principalErasureTables(
-  dialect: Parameters<typeof getDialectTables>[0]
-): PrincipalDigestTables & { auditLog: PrincipalAuditLog } {
+function principalErasureTables(dialect: SupportedDialect): ErasureTables {
   const schema = getDialectTables(dialect) as unknown as {
     auditLog: PrincipalAuditLog;
     nextlyMeta: PrincipalDigestTables["meta"];
@@ -189,10 +195,17 @@ function principalErasureTables(
   };
   return {
     auditLog: schema.auditLog,
+    deliveries: deliveriesTableFor(dialect),
     meta: schema.nextlyMeta,
     deleted: schema.nextlyDeletedPrincipals,
   };
 }
+
+/** Every table a person's deletion report reads or erases. */
+type ErasureTables = PrincipalDigestTables & {
+  auditLog: PrincipalAuditLog;
+  deliveries: PersonDeliveriesTable;
+};
 
 /**
  * Inside the report's transaction: take the deleted-people lock, record the
@@ -204,7 +217,7 @@ function principalErasureTables(
 async function erasePrincipal(
   db: PrincipalErasureDb,
   server: RowLockServer,
-  tables: PrincipalDigestTables & { auditLog: PrincipalAuditLog },
+  tables: ErasureTables,
   subject: DigestSubject,
   secrets: readonly string[]
 ): Promise<void> {
@@ -223,6 +236,9 @@ async function erasePrincipal(
     await db.insert(tables.deleted).values({ digest, deletedAt: erasedAt });
   }
   await erasePrincipalAuditRows(db, tables.auditLog, subject, digest, erasedAt);
+  // The same transaction erases the email they were sent, so the report
+  // leaves no record naming them either way or neither.
+  await erasePrincipalDeliveries(db, tables.deliveries, subject, digest);
 }
 
 /**

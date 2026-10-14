@@ -69,6 +69,9 @@ export const emailDeliveriesMysql = mysqlTable(
 
     /** Swept by `domains/email/prune.ts`. See the PostgreSQL definition. */
     retentionClass: varchar("retention_class", { length: 50 }).notNull(),
+    // The person a plugin's email went to: see the PostgreSQL definition.
+    principalKind: varchar("principal_kind", { length: 191 }),
+    principalId: varchar("principal_id", { length: 191 }),
 
     /**
      * `fsp: 3` — milliseconds, not whole seconds.
@@ -92,6 +95,8 @@ export const emailDeliveriesMysql = mysqlTable(
     index("email_deliveries_status_created_idx").on(t.status, t.createdAt),
     index("email_deliveries_provider_idx").on(t.providerId, t.createdAt),
     index("email_deliveries_retention_idx").on(t.retentionClass, t.createdAt),
+    // Erasure finds a person's rows by kind and id.
+    index("email_deliveries_principal_idx").on(t.principalKind, t.principalId),
   ]
 );
 

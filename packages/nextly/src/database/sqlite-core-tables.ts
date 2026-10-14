@@ -553,6 +553,8 @@ export function generateSqliteCoreTableStatements(): string[] {
       "error" TEXT,
       "message_id" TEXT,
       "retention_class" TEXT NOT NULL,
+      "principal_kind" TEXT,
+      "principal_id" TEXT,
       "created_at" INTEGER NOT NULL
     )`,
     `CREATE INDEX IF NOT EXISTS "email_deliveries_created_idx"
@@ -565,6 +567,8 @@ export function generateSqliteCoreTableStatements(): string[] {
       ON "email_deliveries" ("provider_id", "created_at")`,
     `CREATE INDEX IF NOT EXISTS "email_deliveries_retention_idx"
       ON "email_deliveries" ("retention_class", "created_at")`,
+    `CREATE INDEX IF NOT EXISTS "email_deliveries_principal_idx"
+      ON "email_deliveries" ("principal_kind", "principal_id")`,
   ];
 }
 

@@ -64,6 +64,24 @@ const KEY_BYTES = 32;
 const SEALED = "sealed:";
 const UNSEALED = "unsealed:";
 
+/** The deleted-people key and record, from a dialect's table bundle. */
+export function principalDigestTablesOf(
+  schema: unknown
+): PrincipalDigestTables {
+  const tables = schema as {
+    nextlyMeta?: PrincipalDigestTables["meta"];
+    nextlyDeletedPrincipals?: PrincipalDigestTables["deleted"];
+  };
+  if (!tables.nextlyMeta || !tables.nextlyDeletedPrincipals) {
+    // A record naming a person is not written where whether they were
+    // deleted cannot be read.
+    throw NextlyError.internal({
+      logContext: { reason: "no deleted-people tables in this schema" },
+    });
+  }
+  return { meta: tables.nextlyMeta, deleted: tables.nextlyDeletedPrincipals };
+}
+
 /** A person, by the kind their plugin registered and their id in it. */
 export interface DigestSubject {
   kind: string;
