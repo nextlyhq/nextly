@@ -13,6 +13,12 @@ export const LIMIT_RULES = {
   signUpAddress: "sign-up-address",
   /** Verification resends per address. */
   resendAddress: "resend-address",
+  /** Verification resends per known-browser token a request carries. */
+  resendToken: "resend-token",
+  /** Reset requests per address. */
+  resetAddress: "reset-address",
+  /** Reset requests per known-browser token a request carries. */
+  resetToken: "reset-token",
   /** Requests that send an email, of every kind together, per client. */
   emailClient: "email-client",
   /** Failed sign-ins per address. */
@@ -66,6 +72,11 @@ export function accountsLimitRules(
     },
     [LIMIT_RULES.signUpAddress]: PER_ADDRESS,
     [LIMIT_RULES.resendAddress]: PER_ADDRESS,
+    // A known browser's own requests stop at the address's numbers, from
+    // any number of clients.
+    [LIMIT_RULES.resendToken]: PER_ADDRESS,
+    [LIMIT_RULES.resetAddress]: PER_ADDRESS,
+    [LIMIT_RULES.resetToken]: PER_ADDRESS,
     [LIMIT_RULES.emailClient]: PER_CLIENT,
     // 5 failures in a row for an address run free, then the waits, until a
     // sign-in succeeds, a reset completes, or 24 hours pass without one.

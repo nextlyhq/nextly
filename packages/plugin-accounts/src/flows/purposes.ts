@@ -12,4 +12,6 @@ export const PURPOSES = {
   notMe: "not-me",
   /** Ties a sign-up to the browser that made it, so only it is signed in by verifying. */
   signUpBrowser: "sign-up-browser",
+  /** The link in a reset email. */
+  reset: "reset",
 } as const;

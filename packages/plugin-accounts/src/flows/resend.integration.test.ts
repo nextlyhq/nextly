@@ -14,6 +14,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import type { AccountsOptions } from "../settings";
 import { accountByAddress, writeAtVersion } from "../storage/accounts";
+import { knownBrowserOf, makeAccount } from "../test-support/accounts";
 import { bootAccounts } from "../test-support/boot";
 import { flowDeps } from "../test-support/flow-deps";
 
@@ -129,6 +130,23 @@ describe.each(getConfiguredTestDialects())(
           reason: "too-many-requests",
         });
       }
+    });
+
+    it("sends a verified account's own known browser the same answer and no email", async () => {
+      const { deps, mail } = await boot();
+      await makeAccount(deps, "done@example.com");
+      const owner = await knownBrowserOf(deps, "done@example.com");
+
+      expect(
+        await resendVerification(deps, {
+          address: "done@example.com",
+          client,
+          knownTokens: [owner],
+        })
+      ).toEqual({
+        status: "accepted",
+      });
+      expect(mail.queued).toEqual([]);
     });
 
     it("counts resends and sign-ups together against the client", async () => {

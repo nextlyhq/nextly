@@ -1,15 +1,9 @@
-import { LIMIT_RULES } from "../core/limit-rules";
-import { accountByAddress, normaliseAddress } from "../storage/accounts";
-
 import type { FlowDeps } from "./deps";
-import { reserveEmailRequest, type EmailRequestVerdict } from "./email-limits";
-import { ADDRESS } from "./input";
+import { EMAIL_REQUESTS } from "./email-limits";
+import { admitEmailRequest, type EmailRequestRefusal } from "./email-request";
 import { mintVerification, queueVerification } from "./verification-email";
 
-export type ResendResult =
-  | { status: "accepted" }
-  | { status: "refused"; reason: "invalid-address" }
-  | Extract<EmailRequestVerdict, { status: "refused" }>;
+export type ResendResult = { status: "accepted" } | EmailRequestRefusal;
 
 /**
  * Sends the verification email again: a fresh link, a fresh code that
@@ -21,20 +15,16 @@ export type ResendResult =
  */
 export async function resendVerification(
   deps: FlowDeps,
-  input: { address: string; client: string | null }
+  input: {
+    address: string;
+    client: string | null;
+    knownTokens?: readonly string[];
+  }
 ): Promise<ResendResult> {
-  const address = ADDRESS.safeParse(input.address);
-  if (!address.success) return { status: "refused", reason: "invalid-address" };
-
-  const verdict = await reserveEmailRequest(deps, {
-    rule: LIMIT_RULES.resendAddress,
-    addressKey: normaliseAddress(address.data),
-    client: input.client,
-  });
-  if (verdict.status === "refused") return verdict;
-
-  const account = await accountByAddress(deps.db, address.data);
-  if (account !== null && account.verifiedAt === null) {
+  const admitted = await admitEmailRequest(deps, EMAIL_REQUESTS.resend, input);
+  if (admitted.status === "refused") return admitted;
+  const { account } = admitted;
+  if (account !== null && account.verifiedAt === null && admitted.mayEmail) {
     const verification = await deps.db.transaction(tx =>
       mintVerification(deps, tx, account.id)
     );

@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 
-import { LIMIT_RULES } from "../core/limit-rules";
 import {
   accountByAddress,
   createAccount,
@@ -9,7 +8,11 @@ import {
 } from "../storage/accounts";
 
 import { HOUR, type FlowDeps } from "./deps";
-import { reserveEmailRequest, type EmailRequestVerdict } from "./email-limits";
+import {
+  EMAIL_REQUESTS,
+  reserveEmailRequest,
+  type EmailRequestVerdict,
+} from "./email-limits";
 import { ADDRESS, NAME } from "./input";
 import { pageLink } from "./links";
 import {
@@ -72,7 +75,7 @@ export async function signUp(
   // Counted before the breached-password lookup and the hash, the work a
   // flood of sign-ups would make the site do.
   const verdict = await reserveEmailRequest(deps, {
-    rule: LIMIT_RULES.signUpAddress,
+    kind: EMAIL_REQUESTS.signUp,
     addressKey: normaliseAddress(address.data),
     client: input.client,
   });

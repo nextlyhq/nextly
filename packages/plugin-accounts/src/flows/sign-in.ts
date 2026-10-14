@@ -11,7 +11,6 @@ import {
   cappedUntil,
   chargeKnownBrowser,
   knownBrowserById,
-  liveKnownBrowsers,
   recordFailedCheck,
   rememberBrowser,
   type KnownBrowserRow,
@@ -20,10 +19,8 @@ import { startSession } from "../storage/sessions";
 
 import { sessionLimits, type FlowDeps } from "./deps";
 import { ADDRESS } from "./input";
+import { validTokens } from "./known-tokens";
 import type { StartedSession } from "./verify";
-
-/** The most known-browser tokens one cookie holds; any past them are ignored. */
-const TOKENS_PER_COOKIE = 10;
 
 export interface SignInInput {
   address: string;
@@ -232,21 +229,11 @@ async function chargeCarriedTokens(
   tokens: readonly string[],
   now: Date
 ): Promise<CarriedToken[]> {
-  const byHash = new Map(
-    tokens
-      .slice(0, TOKENS_PER_COOKIE)
-      .map(token => [deps.core.opaque.hash(token), token])
-  );
-  const rows = await liveKnownBrowsers(
-    deps.db,
-    [...byHash.keys()],
-    now,
-    deps.settings.knownBrowsers.days
-  );
+  const valid = await validTokens(deps, tokens, now);
 
   return Promise.all(
-    rows.map(async row => ({
-      token: byHash.get(row.tokenHash) ?? "",
+    valid.map(async ({ token, row }) => ({
+      token,
       row,
       underCap: await chargeKnownBrowser(deps.db, row.id, now),
     }))

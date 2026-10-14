@@ -23,6 +23,19 @@ export type AccountsEmail =
       deactivated: boolean;
       signInLink: string;
       resetLink: string;
+    }
+  | {
+      /** A reset link, asked for by someone who named the address. */
+      kind: "reset-password";
+      accountId: string;
+      to: string;
+      link: string;
+    }
+  | {
+      /** The account's password changed, by a reset or by its holder. */
+      kind: "password-changed";
+      accountId: string;
+      to: string;
     };
 
 export interface AccountsMail {
