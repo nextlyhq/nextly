@@ -240,11 +240,16 @@ export async function catalogueSourceContract(
         : "lists the named fixtures a page at a time, each once",
       async source => {
         const seen = await listAll(source, 2);
-        if (catalogue !== undefined) {
-          expectSameReferences(seen, catalogue);
-          return;
-        }
-        const named = [fixtures.listed, fixtures.onRequest, fixtures.soldFrom];
+        if (catalogue !== undefined) expectSameReferences(seen, catalogue);
+        // Every named fixture is listed either way, the item sold to order
+        // among them, so a source that lists only some kinds of item fails
+        // however the whole catalogue was given, or if it was not.
+        const named = [
+          fixtures.listed,
+          fixtures.onRequest,
+          fixtures.soldFrom,
+          fixtures.toOrder?.reference,
+        ];
         for (const reference of named) {
           if (reference === undefined) continue;
           expectContract(

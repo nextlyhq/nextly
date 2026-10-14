@@ -127,6 +127,47 @@ describe("the catalogue contract suite's whole-catalogue option", () => {
     );
     expect(names).not.toContain("lists every item a page at a time, each once");
   });
+
+  it("fails a source that leaves its item sold to order out of the listing, when only the fixtures are named", async () => {
+    const run = await runContractCases(
+      await catalogueSourceContract({
+        currency: "USD",
+        fixtures: {
+          listed: "drill-press",
+          onRequest: "custom-rig",
+          unknown: "no-such-item",
+          soldFrom: "drill-press",
+          toOrder: { reference: "made-to-order-bench", maxPerLine: 99 },
+          search: { query: "drill", finds: "drill-press", skips: "custom-rig" },
+        },
+        create: () => {
+          const source = createInMemoryCatalogueSource({
+            currency: "USD",
+            items,
+          }).source;
+          const list = source.list?.bind(source);
+          if (!list) throw new Error("the in-memory source lists");
+          // Finds and prices the item sold to order, but never lists it.
+          return {
+            ...source,
+            list: async input => {
+              const page = await list(input);
+              return {
+                ...page,
+                items: page.items.filter(i => i.stock.kind !== "to-order"),
+              };
+            },
+          };
+        },
+      })
+    );
+    expect(run.failed.map(f => [f.name, String(f.error)])).toEqual([
+      [
+        "lists the named fixtures a page at a time, each once",
+        expect.stringContaining("the listing includes made-to-order-bench"),
+      ],
+    ]);
+  });
 });
 
 describe("the catalogue contract suite against a large catalogue", () => {
