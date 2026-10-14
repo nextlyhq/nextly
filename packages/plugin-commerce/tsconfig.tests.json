@@ -1,0 +1,16 @@
+// Type-checks what `tsconfig.json` leaves out: this package's test files and
+// its type tests (`*.test-d.ts`). The shipping config excludes `*.test.ts`,
+// and Vitest strips annotations rather than checking them, so without this a
+// test file's types, and every assertion a type test makes, are in no
+// TypeScript program at all. `rootDir` widens to the package because the
+// shipping config's `src` would refuse the package manifest the plugin reads
+// its version from.
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": "."
+  },
+  "include": ["src/**/*"],
+  "exclude": ["dist", "node_modules"]
+}
