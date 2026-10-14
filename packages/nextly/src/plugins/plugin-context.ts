@@ -9,7 +9,10 @@
  * @since 1.0.0
  */
 
-import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
+import type {
+  SupportedDialect,
+  TransactionContext,
+} from "@nextlyhq/adapter-drizzle/types";
 import { getTableName, type AnyRelations, type Table } from "drizzle-orm";
 
 import type { PluginAuthApi } from "../auth/plugin-auth-api";
@@ -1327,6 +1330,7 @@ function buildPluginDatabase(
           get relationalDb() {
             return tx.drizzleWithRelations(relations());
           },
+          adapterTx: tx,
         });
       const transactions = adapter();
       return runAdapterTransaction(
@@ -1374,11 +1378,12 @@ export interface AdapterTransactions extends AfterCommitAdapter {
   getDrizzle: <D = unknown>(relations?: AnyRelations) => D;
 }
 
-/** The Drizzle handles bound to one transaction's connection. */
-export interface AdapterTransactionHandles {
-  getDrizzle: <D = unknown>() => D;
-  drizzleWithRelations: <D = unknown>(relations: AnyRelations) => D;
-}
+/**
+ * The adapter's own transaction context: the Drizzle handles bound to the
+ * transaction's connection, and the adapter's methods on that connection,
+ * which core code a plugin passes its transaction to writes through.
+ */
+export type AdapterTransactionHandles = TransactionContext;
 
 /**
  * @experimental The handle a plugin receives as `ctx.db.raw`: Drizzle's fluent
