@@ -17,7 +17,11 @@ import {
   pendingAddressChanges,
   sessions,
 } from "../schema/tables";
-import { createAccount, writeAtVersion } from "../storage/accounts";
+import {
+  accountById,
+  createAccount,
+  writeAtVersion,
+} from "../storage/accounts";
 import { bootAccounts } from "../test-support/boot";
 import { flowDeps } from "../test-support/flow-deps";
 
@@ -153,6 +157,39 @@ describe.each(getConfiguredTestDialects())(
       expect(
         await signOutEverywhere(deps, { sessionToken: first.session.token })
       ).toBe(false);
+    });
+
+    it("does nothing once a change that ended the asking session commits before it", async () => {
+      const { db, deps, accountId, browser } = await boot();
+      const asking = await browser();
+      let later: Awaited<ReturnType<typeof browser>> | undefined;
+      // The first try's transaction finds a password change committed after
+      // the account was read: the asking session gone, the version moved,
+      // and a sign-in made since with the new password.
+      const raced = {
+        ...deps,
+        db: new Proxy(deps.db, {
+          get(target, key, receiver) {
+            if (key !== "transaction" || later !== undefined)
+              return Reflect.get(target, key, receiver) as unknown;
+            return async (work: Parameters<typeof target.transaction>[0]) => {
+              await signOut(deps, { sessionToken: asking.session.token });
+              const fresh = await accountById(db, accountId);
+              if (fresh !== null)
+                await writeAtVersion(db, fresh, {}, { endsSessions: true });
+              later = await browser();
+              return target.transaction(work);
+            };
+          },
+        }),
+      };
+
+      expect(
+        await signOutEverywhere(raced, { sessionToken: asking.session.token })
+      ).toBe(false);
+      expect(
+        await sessionAccount(deps, { sessionToken: later?.session.token ?? "" })
+      ).not.toBeNull();
     });
 
     it("leaves no session from a sign-in under way when it commits", async () => {

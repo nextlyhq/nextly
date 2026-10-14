@@ -68,24 +68,27 @@ export async function signOut(
  * issued for it is voided, and a pending address change is cancelled, in
  * one transaction that moves the account's security version, so a sign-in,
  * a verification or a reset already under way writes nothing. Known
- * browsers stay known. False when the session had already ended.
+ * browsers stay known. The session asking is checked again inside each
+ * try, so a try after a password change or a reset ended it does nothing.
+ * False when the session had already ended.
  */
 export async function signOutEverywhere(
   deps: FlowDeps,
   input: { sessionToken: string }
 ): Promise<boolean> {
-  const session = await liveSession(
-    deps.db,
-    deps.core.opaque.hash(input.sessionToken),
-    deps.now()
-  );
+  const tokenHash = deps.core.opaque.hash(input.sessionToken);
+  const session = await liveSession(deps.db, tokenHash, deps.now());
   if (session === null) return false;
 
   for (let attempt = 0; attempt < VERSION_RETRIES; attempt += 1) {
     const account = await accountById(deps.db, session.accountId);
     if (account === null) return false;
-    if (await deps.db.transaction(tx => endEverything(deps, tx, account)))
-      return true;
+    const outcome = await deps.db.transaction(async tx => {
+      if ((await liveSession(tx, tokenHash, deps.now())) === null)
+        return "ended";
+      return (await endEverything(deps, tx, account)) ? "done" : "moved";
+    });
+    if (outcome !== "moved") return outcome === "done";
   }
   throw new Error(
     "The account kept changing while it was signed out everywhere."
