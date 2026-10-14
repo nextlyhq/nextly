@@ -61,9 +61,11 @@ export interface CommerceOptions {
    */
   readonly secureCookies?: boolean;
   /**
-   * How many cart changes one client may make in a window: 60 a minute by
-   * default. A site whose shoppers share a network address, as behind a
-   * corporate proxy, may need it higher.
+   * How many requests one client may make to each cart write route in a
+   * window: 60 a minute by default. Core counts a route's own allowance per
+   * route and method, so adding lines, setting them, removing one and
+   * emptying the cart each have this allowance. A site whose shoppers share a
+   * network address, as behind a corporate proxy, may need it higher.
    */
   readonly cartWriteLimit?: { readonly max: number; readonly windowMs: number };
 }

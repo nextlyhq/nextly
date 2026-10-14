@@ -35,10 +35,11 @@ export interface StorefrontRuntime {
 }
 
 /**
- * How often one client may change its cart unless the site says otherwise.
- * Reads take core's general allowance; writes take a tighter one, since each
- * may call the catalogue source and write rows. Counted per process until
- * core shares its limiter between instances.
+ * How often one client may call each cart write route unless the site says
+ * otherwise. Reads take core's general allowance; writes take a tighter one,
+ * since each may call the catalogue source and write rows. Core counts it per
+ * route and method, and per process until it shares its limiter between
+ * instances.
  */
 export const DEFAULT_CART_WRITE_LIMIT = { max: 60, windowMs: 60_000 };
 

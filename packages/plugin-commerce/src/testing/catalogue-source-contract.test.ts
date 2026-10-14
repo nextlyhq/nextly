@@ -53,7 +53,7 @@ function suiteFor(
       onRequest: "custom-rig",
       unknown: "no-such-item",
       soldFrom: "drill-press",
-      toOrder: "made-to-order-bench",
+      toOrder: { reference: "made-to-order-bench", maxPerLine: 99 },
     },
     create: () =>
       breakIt(createInMemoryCatalogueSource({ currency: "USD", items }).source),
@@ -222,6 +222,28 @@ describe("the catalogue contract suite catches a broken source", () => {
     });
     expect(failed).toContain(
       "refuses a stock report that reuses another report's operation id"
+    );
+  });
+
+  it("fails a source that reports another cap for an item sold to order", async () => {
+    const failed = await failingCases(s => {
+      const capped = (stock: CatalogueItem["stock"]): CatalogueItem["stock"] =>
+        stock.kind === "to-order" ? { kind: "to-order", maxPerLine: 1 } : stock;
+      return {
+        ...s,
+        find: async input =>
+          (await s.find(input)).map(item => ({
+            ...item,
+            stock: capped(item.stock),
+          })),
+        price: async input =>
+          (await s.price(input)).map(line =>
+            line.found ? { ...line, stock: capped(line.stock) } : line
+          ),
+      };
+    });
+    expect(failed).toContain(
+      "reports an item sold to order, with the most a line may ask for"
     );
   });
 

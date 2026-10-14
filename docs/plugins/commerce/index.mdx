@@ -23,14 +23,14 @@ export default defineConfig({
 });
 ```
 
-| Option             | Default                 | What it does                                                                                                                  |
-| ------------------ | ----------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `currency`         | required                | The store's ISO 4217 currency. Every price and cart is in it                                                                  |
-| `catalogue`        | the products collection | A catalogue source of the site's own, such as an outside product API                                                          |
-| `productsSlug`     | `products`              | The built-in products collection's slug                                                                                       |
-| `cartLifetimeDays` | `30`                    | How long a cart lives after its last change. At most 365, inside the 400 days browsers keep a cookie                          |
-| `secureCookies`    | on in production only   | Whether the cart cookie is `Secure`, under the `__Host-` name. A browser drops a `Secure` cookie set over plain HTTP          |
-| `cartWriteLimit`   | 60 a minute             | How many cart changes one client may make in a window, as `{ max, windowMs }`. Raise it when shoppers share a network address |
+| Option             | Default                 | What it does                                                                                                                                       |
+| ------------------ | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `currency`         | required                | The store's ISO 4217 currency. Every price and cart is in it                                                                                       |
+| `catalogue`        | the products collection | A catalogue source of the site's own, such as an outside product API                                                                               |
+| `productsSlug`     | `products`              | The built-in products collection's slug                                                                                                            |
+| `cartLifetimeDays` | `30`                    | How long a cart lives after its last change. At most 365, inside the 400 days browsers keep a cookie                                               |
+| `secureCookies`    | on in production only   | Whether the cart cookie is `Secure`, under the `__Host-` name. A browser drops a `Secure` cookie set over plain HTTP                               |
+| `cartWriteLimit`   | 60 a minute             | How many requests one client may make to each cart write route in a window, as `{ max, windowMs }`. Raise it when shoppers share a network address |
 
 Commerce keeps its records in its own tables, `commerce__carts` and `commerce__cart_lines`,
 created by its migration modules. Run `nextly migrate` after installing or upgrading it: a
@@ -106,7 +106,7 @@ in, and a cross-site form could otherwise change it. Fetch one from
 as `x-csrf-token` (or as `csrfToken` in the JSON body) from a page on your own site or an
 origin in `NEXTLY_ALLOWED_ORIGINS`. A write without it answers 403 `CSRF_FAILED`.
 
-Writes are allowed 60 a minute per client unless `cartWriteLimit` says otherwise, and reads take the general allowance. The
+Each write route allows a client 60 requests a minute unless `cartWriteLimit` says otherwise, counted per route, and reads take the general allowance. The
 counts are kept per server process, and every client shares one count unless
 `security.trustProxy` lets Nextly read client addresses (see [Security](/docs/plugins/security)).
 

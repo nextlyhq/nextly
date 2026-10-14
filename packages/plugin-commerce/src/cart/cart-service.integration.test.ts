@@ -516,6 +516,67 @@ describe.each(getConfiguredTestDialects())(
       expect(await ctx.db.select(cartLines).all()).toHaveLength(1);
     });
 
+    it("refuses a change whose answer cannot be built, and writes nothing", async () => {
+      const { ctx, outside, cart } = await setup();
+      // A price the source may give, whose total for two is past the safe
+      // range of whole minor units.
+      outside.set(
+        listed("statue", Number.MAX_SAFE_INTEGER - 1, { kind: "untracked" })
+      );
+      expect(
+        await codeOf(() =>
+          cart.add({ token: null, reference: "statue", quantity: 2 })
+        )
+      ).toBe("COMMERCE_INVALID_AMOUNT");
+      expect(await ctx.db.select(carts).all()).toEqual([]);
+    });
+
+    it("empties a cart, and takes its last line out, while the source is down", async () => {
+      const { outside, cart } = await setup();
+      const single = tokenOf(
+        await cart.add({ token: null, reference: "drill", quantity: 1 })
+      );
+      const pair = tokenOf(
+        await cart.add({ token: null, reference: "drill", quantity: 1 })
+      );
+      await cart.add({ token: pair, reference: "bolt", quantity: 1 });
+      outside.source.find = async () => {
+        throw new Error("the source is down");
+      };
+      // Nothing is left to show, so nothing is asked of the source.
+      expect(
+        (await cart.remove({ token: single, reference: "drill" })).cart.lines
+      ).toEqual([]);
+      expect((await cart.clear({ token: pair })).cart.lines).toEqual([]);
+    });
+
+    it("never changes a cart that expired while the source was being read", async () => {
+      const { clock, outside, cart } = await setup();
+      const old = tokenOf(
+        await cart.add({ token: null, reference: "drill", quantity: 1 })
+      );
+      const deadline = new Date(clock.now.getTime() + 30 * DAY);
+      // Read just before the deadline; the source answers just after it.
+      clock.now = new Date(deadline.getTime() - 1_000);
+      const original = outside.source.find.bind(outside.source);
+      outside.source.find = async input => {
+        clock.now = new Date(deadline.getTime() + 1_000);
+        return original(input);
+      };
+      const changed = await cart.add({
+        token: old,
+        reference: "bolt",
+        quantity: 1,
+      });
+      // A new cart with a new token, holding only the change: the expired one
+      // was not extended.
+      expect(tokenOf(changed)).not.toBe(old);
+      expect(changed.cart.lines.map(l => l.reference)).toEqual(["bolt"]);
+      expect(changed.cart.expiresAt).toBe(
+        new Date(deadline.getTime() + 1_000 + 30 * DAY).toISOString()
+      );
+    });
+
     it("reads price and availability from the source on every read", async () => {
       const { outside, cart } = await setup();
       const token = tokenOf(

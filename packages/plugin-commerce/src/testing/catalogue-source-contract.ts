@@ -39,10 +39,15 @@ export interface CatalogueSourceContractOptions {
      */
     readonly soldFrom?: string;
     /**
-     * An item made to order or on backorder, for a source that sells any: it
-     * holds no stock and caps each line instead.
+     * An item made to order or on backorder, for a source that sells any, and
+     * the most one line may ask for, as the source holds it: such an item
+     * holds no stock and caps each line instead, so the cap the source
+     * reports is the cap a cart enforces.
      */
-    readonly toOrder?: string;
+    readonly toOrder?: {
+      readonly reference: string;
+      readonly maxPerLine: number;
+    };
   };
 }
 
@@ -161,8 +166,9 @@ export async function catalogueSourceContract(
     }
   );
 
-  const toOrder = fixtures.toOrder;
-  if (toOrder !== undefined) {
+  const toOrder = fixtures.toOrder?.reference;
+  const cap = fixtures.toOrder?.maxPerLine;
+  if (toOrder !== undefined && cap !== undefined) {
     add(
       "reports an item sold to order, with the most a line may ask for",
       async source => {
@@ -174,8 +180,12 @@ export async function catalogueSourceContract(
           `the fixture item ${toOrder} exists`
         );
         expectContract(
-          item.stock.kind === "to-order" && item.stock.maxPerLine > 0,
+          item.stock.kind === "to-order",
           `${toOrder} is sold to order with a per-line cap, not ${item.stock.kind}`
+        );
+        expectContract(
+          item.stock.maxPerLine === cap,
+          `${toOrder}'s cap is ${String(cap)}, not ${String(item.stock.maxPerLine)}`
         );
         const [line] = (
           await source.price({
@@ -184,8 +194,10 @@ export async function catalogueSourceContract(
           })
         ).map(asLine);
         expectContract(
-          line.found && line.stock.kind === "to-order",
-          "pricing reports the same kind as finding"
+          line.found &&
+            line.stock.kind === "to-order" &&
+            line.stock.maxPerLine === cap,
+          "pricing reports the same kind and cap as finding"
         );
       }
     );

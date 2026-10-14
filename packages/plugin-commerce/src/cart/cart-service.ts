@@ -197,6 +197,44 @@ export function createCartService(options: CartServiceOptions): CartService {
   }
 
   /**
+   * The lines a change leaves, and the source's items for them, read in one
+   * call. A change that adds needs the changed item; one that leaves the
+   * cart empty, or takes a line out, needs nothing of the source but the
+   * lines that stay, so a cart can still be emptied while its source is down.
+   */
+  async function plan(
+    cartChange: CartChange,
+    lines: readonly StoredCartLine[]
+  ): Promise<{
+    next: { lines: PlannedLine[] };
+    items: Map<string, CatalogueItem>;
+  }> {
+    const current =
+      cartChange.kind === "line"
+        ? (lines.find(line => line.reference === cartChange.reference)
+            ?.quantity ?? 0)
+        : 0;
+    const adds = cartChange.kind === "line" && cartChange.quantity(current) > 0;
+    if (!adds) {
+      const next = planWrite(cartChange, lines, undefined);
+      const items = await findItems(
+        source,
+        currency,
+        next.lines.map(line => line.reference)
+      );
+      return { next, items };
+    }
+    const items = await findItems(source, currency, [
+      ...lines.map(line => line.reference),
+      cartChange.reference,
+    ]);
+    return {
+      next: planWrite(cartChange, lines, items.get(cartChange.reference)),
+      items,
+    };
+  }
+
+  /**
    * Apply one change, retrying while other changes to the same cart commit
    * first.
    *
@@ -220,19 +258,24 @@ export function createCartService(options: CartServiceOptions): CartService {
     cartChange: CartChange
   ): Promise<CartResult> {
     for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-      const now = clock();
-      const cart = await liveCart(presented, now);
+      const read = clock();
+      const cart = await liveCart(presented, read);
       const lines = cart ? await storedLines(cart.id) : [];
-      const items = await findItems(source, currency, [
-        ...lines.map(line => line.reference),
-        ...(cartChange.kind === "line" ? [cartChange.reference] : []),
-      ]);
-      const next = planWrite(
-        cartChange,
-        lines,
-        cartChange.kind === "line" ? items.get(cartChange.reference) : undefined
-      );
+      const { next, items } = await plan(cartChange, lines);
+
+      // The write's own moment, taken after the source was read: a cart that
+      // expired while a slow source answered is not changed, and the new
+      // deadline runs from the write, not from before the lookup.
+      const now = clock();
       const expiresAt = cartDeadline(now, lifetimeDays);
+      // Built before the write, so an answer that cannot be built (an amount
+      // past the safe range) refuses the change rather than following it.
+      const answer = buildCartView({
+        currency,
+        expiresAt,
+        lines: next.lines,
+        items,
+      });
 
       if (!cart) {
         // Nothing to remove from a cart that does not exist, and no cart is
@@ -254,12 +297,7 @@ export function createCartService(options: CartServiceOptions): CartService {
           await writeLines(tx, row.id, [], next.lines, now);
         });
         return {
-          cart: buildCartView({
-            currency,
-            expiresAt,
-            lines: next.lines,
-            items,
-          }),
+          cart: answer,
           cookie: { action: "set", token: fresh, expiresAt },
         };
       }
@@ -293,7 +331,7 @@ export function createCartService(options: CartServiceOptions): CartService {
       if (!applied) continue;
 
       return {
-        cart: buildCartView({ currency, expiresAt, lines: next.lines, items }),
+        cart: answer,
         cookie: { action: "set", token: cart.token, expiresAt },
       };
     }

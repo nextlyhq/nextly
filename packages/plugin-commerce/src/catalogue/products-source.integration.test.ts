@@ -118,7 +118,12 @@ describe.each(getConfiguredTestDialects())(
         // Not an id the collection could have issued, so an unknown
         // reference also proves a lookup by an id of another shape is
         // answered as unknown rather than failing in the database.
-        fixtures: { listed, onRequest, toOrder, unknown: "no-such-product" },
+        fixtures: {
+          listed,
+          onRequest,
+          toOrder: { reference: toOrder, maxPerLine: 20 },
+          unknown: "no-such-product",
+        },
         create: () => sourceFor(ctx),
       });
       const run = await runContractCases(cases);
