@@ -95,6 +95,7 @@ describeEachDialect("the plugin limiter on the database store", dialect => {
       secret?: string;
       maxEntries?: number;
       store?: LimitStore;
+      rules?: Record<string, LimitRule>;
     } = {}
   ): PluginLimiter {
     const generation = options.generation ?? "gen-a";
@@ -111,7 +112,7 @@ describeEachDialect("the plugin limiter on the database store", dialect => {
     }
     return createPluginLimiter({
       plugin: "@test/limits",
-      rules: RULES,
+      rules: options.rules ? new Map(Object.entries(options.rules)) : RULES,
       store,
       secret: options.secret ?? "install secret",
       singleInstance: false,
@@ -212,6 +213,69 @@ describeEachDialect("the plugin limiter on the database store", dialect => {
         (await after.reserve([{ rule: "perKey", key: `k${index}` }])).status
       ).toBe("admitted");
     }
+  });
+
+  it("starts a rule's counts again on every instance when the plugin changes the rule", async () => {
+    const generation = randomUUID().slice(0, 8);
+    const window = (perMs: number): Record<string, LimitRule> => ({
+      r: { type: "window", windows: [{ max: 1, perMs }] },
+    });
+    const before = limiterOn(current.adapter, {
+      generation,
+      rules: window(10 * 60_000),
+    });
+    await before.reserve([{ rule: "r", key: "k" }]);
+    expect((await before.reserve([{ rule: "r", key: "k" }])).status).toBe(
+      "refused"
+    );
+
+    const after = limiterOn(other, { generation, rules: window(20 * 60_000) });
+
+    expect((await after.reserve([{ rule: "r", key: "k" }])).status).toBe(
+      "admitted"
+    );
+  });
+
+  it("gives back the first of 40 outstanding reservations from another instance", async () => {
+    const generation = randomUUID().slice(0, 8);
+    const rules: Record<string, LimitRule> = {
+      r: { type: "window", windows: [{ max: 100, perMs: HOUR }] },
+    };
+    const first = limiterOn(current.adapter, { generation, rules });
+    const second = limiterOn(other, { generation, rules });
+    const earliest = await first.reserve([{ rule: "r", key: "k" }]);
+    if (earliest.status !== "admitted") throw new Error("not admitted");
+    for (let attempt = 1; attempt < 40; attempt += 1) {
+      await first.reserve([{ rule: "r", key: "k" }]);
+    }
+
+    await second.release(earliest.reservation);
+
+    let admitted = 0;
+    while (
+      (await second.reserve([{ rule: "r", key: "k" }])).status === "admitted"
+    ) {
+      admitted += 1;
+    }
+    expect(admitted).toBe(61);
+  });
+
+  it("removes an entry's row once its only count is given back", async () => {
+    const generation = randomUUID().slice(0, 8);
+    const limits = limiterOn(current.adapter, { generation });
+    const rowsOfGeneration = async () =>
+      (
+        await current.adapter.executeQuery<Record<string, unknown>>(
+          `SELECT id FROM ${LIMIT_STORE_TABLE} WHERE generation = '${generation}' AND id NOT LIKE 'capacity:%'`
+        )
+      ).length;
+    const success = await limits.reserve([{ rule: "signin", key: "c" }]);
+    if (success.status !== "admitted") throw new Error("not admitted");
+    expect(await rowsOfGeneration()).toBe(1);
+
+    await limits.release(success.reservation);
+
+    expect(await rowsOfGeneration()).toBe(0);
   });
 
   it("stores no key as given: neither the address nor the client", async () => {

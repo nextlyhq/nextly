@@ -15,6 +15,7 @@
  * @experimental
  * @module domains/limits/limit-rules
  */
+import { createHash } from "node:crypto";
 
 /** A rule a plugin declares, by name, in `contributes.limits`. @experimental */
 export type LimitRule =
@@ -141,8 +142,18 @@ export function limitRuleProblem(
   return 'be of type "window" or "backoff"';
 }
 
-/** How many reservations an entry remembers, so each is given back at most once. */
-const REMEMBERED_RESERVATIONS = 32;
+/**
+ * How many given-back reservations an entry remembers, so a release retried
+ * after its answer was lost gives nothing more back.
+ */
+const REMEMBERED_RELEASES = 32;
+
+/**
+ * How many counted reservations a backoff entry remembers in order, to tell
+ * whether the one given back is the last still standing. Releasability never
+ * depends on it: a reservation older than these is still given back.
+ */
+const REMEMBERED_COUNTS = 32;
 
 /** Buckets a rolling window is kept in: its edge is exact to 1/32 of its span. */
 const BUCKETS_PER_WINDOW = 32;
@@ -153,16 +164,28 @@ interface WindowCounts {
   buckets: Array<[number, number]>;
 }
 
+/** What every entry holds, whatever its rule's kind. */
+interface StateBase {
+  /** The fingerprint of the rule the entry was written under. */
+  rule: string;
+  /**
+   * When the entry began counting. A reservation counted before it counted
+   * on an entry since reset, forgotten or written under another rule, so it
+   * has nothing here to give back.
+   */
+  since: number;
+  /** The most recent reservations given back here. */
+  released: string[];
+}
+
 /** A window rule's entry. */
-interface WindowState {
+interface WindowState extends StateBase {
   kind: "window";
   windows: WindowCounts[];
-  /** Reservations counted here and not given back: id and when. */
-  reservations: Array<[string, number]>;
 }
 
 /** A backoff rule's entry. */
-interface BackoffState {
+interface BackoffState extends StateBase {
   kind: "backoff";
   /** Attempts in a row. */
   count: number;
@@ -172,8 +195,8 @@ interface BackoffState {
   waitSetBy: string | null;
   /** When the last attempt was counted. */
   lastCounted: number;
-  /** Reservations counted here and not given back. */
-  reservations: string[];
+  /** The most recent reservations counted here and not given back, oldest first. */
+  recent: string[];
 }
 
 /** One key's entry under one rule. */
@@ -186,28 +209,56 @@ type BackoffRule = Extract<LimitRule, { type: "backoff" }>;
 const bucketWidth = (perMs: number) =>
   Math.max(1, Math.ceil(perMs / BUCKETS_PER_WINDOW));
 
-/** An entry under `rule` that has counted nothing. */
-function emptyState(rule: LimitRule): RuleState {
+/** Fingerprints already worked out, by rule object. */
+const fingerprints = new WeakMap<LimitRule, string>();
+
+/**
+ * A short fingerprint of everything `rule` says. An entry records the one it
+ * was written under, since what it holds means something only under that
+ * rule: a window's buckets are offsets in units of the window's span, and a
+ * backoff's wait was worked out from its waits.
+ */
+function ruleFingerprint(rule: LimitRule): string {
+  const known = fingerprints.get(rule);
+  if (known !== undefined) return known;
+  const shape =
+    rule.type === "window"
+      ? ["window", rule.windows.map(window => [window.max, window.perMs])]
+      : ["backoff", rule.free, [...rule.waitsMs], rule.forgetAfterMs];
+  const fingerprint = createHash("sha256")
+    .update(JSON.stringify(shape))
+    .digest("base64url")
+    .slice(0, 16);
+  fingerprints.set(rule, fingerprint);
+  return fingerprint;
+}
+
+/** An entry under `rule` that has counted nothing, beginning at `now`. */
+function emptyState(rule: LimitRule, now: number): RuleState {
+  const base = { rule: ruleFingerprint(rule), since: now, released: [] };
   return rule.type === "window"
     ? {
+        ...base,
         kind: "window",
         windows: rule.windows.map(() => ({ base: 0, buckets: [] })),
-        reservations: [],
       }
     : {
+        ...base,
         kind: "backoff",
         count: 0,
         waitUntil: 0,
         waitSetBy: null,
         lastCounted: 0,
-        reservations: [],
+        recent: [],
       };
 }
 
 /**
  * The entry a stored value holds under `rule`, as of `now`: empty when there
- * is none, when it was written for a different rule shape, or when a backoff
- * count has been forgotten. Buckets past their window are dropped.
+ * is none, when it was written under any other rule (a rule the plugin has
+ * since changed starts its counts again, rather than reading them in units
+ * they were not written in), or when a backoff count has been forgotten.
+ * Buckets past their window are dropped.
  */
 export function readRuleState(
   rule: LimitRule,
@@ -215,27 +266,22 @@ export function readRuleState(
   now: number
 ): RuleState {
   const state = stored as Partial<RuleState> | undefined;
+  if (state?.kind !== rule.type || state.rule !== ruleFingerprint(rule)) {
+    return emptyState(rule, now);
+  }
   if (rule.type === "window") {
-    if (
-      state?.kind !== "window" ||
-      !Array.isArray(state.windows) ||
-      state.windows.length !== rule.windows.length
-    ) {
-      return emptyState(rule);
-    }
+    const window = state as WindowState;
     return {
-      kind: "window",
-      windows: state.windows.map((counts, index) =>
+      ...window,
+      windows: window.windows.map((counts, index) =>
         liveBuckets(counts, rule.windows[index]?.perMs ?? 0, now)
       ),
-      reservations: Array.isArray(state.reservations) ? state.reservations : [],
     };
   }
-  if (state?.kind !== "backoff") return emptyState(rule);
   const backoff = state as BackoffState;
   const forgotten =
     now - backoff.lastCounted >= rule.forgetAfterMs && now >= backoff.waitUntil;
-  return forgotten ? emptyState(rule) : backoff;
+  return forgotten ? emptyState(rule, now) : backoff;
 }
 
 /** The buckets of one window still inside it at `now`. */
@@ -359,14 +405,10 @@ export function countAttempt(
 ): RuleState {
   if (rule.type === "window" && state.kind === "window") {
     return {
-      kind: "window",
+      ...state,
       windows: state.windows.map((counts, index) =>
         addToWindow(counts, rule.windows[index]?.perMs ?? 1, now)
       ),
-      reservations: [
-        ...state.reservations,
-        [id, now] as [string, number],
-      ].slice(-REMEMBERED_RESERVATIONS),
     };
   }
   if (rule.type === "backoff" && state.kind === "backoff") {
@@ -375,7 +417,7 @@ export function countAttempt(
       ...state,
       count,
       lastCounted: now,
-      reservations: [...state.reservations, id].slice(-REMEMBERED_RESERVATIONS),
+      recent: [...state.recent, id].slice(-REMEMBERED_COUNTS),
     };
     if (withRoom && rule.waitsMs.length > 0 && count >= rule.free) {
       const index = Math.min(count - rule.free, rule.waitsMs.length - 1);
@@ -388,8 +430,15 @@ export function countAttempt(
 }
 
 /**
- * The entry once reservation `id`'s count is given back, or undefined when it
- * holds no such count (never counted here, or already given back).
+ * The entry once reservation `id`, counted at `at`, is given back, or
+ * undefined when it holds no such count: counted before the entry began
+ * counting (it was reset, forgotten or written under another rule since),
+ * given back already, or for a window, counted in buckets that have all left
+ * their windows.
+ *
+ * Nothing needs the entry to remember what it counted, so a reservation is
+ * given back however many others were counted after it: a window takes one
+ * from the bucket `at` falls in, and a backoff takes one from its count.
  *
  * A backoff count given back also lifts the wait it set, but only while that
  * wait is still the one in force and nothing has been counted since: a wait
@@ -400,35 +449,46 @@ export function countAttempt(
 export function releaseAttempt(
   rule: LimitRule,
   state: RuleState,
-  id: string
+  id: string,
+  at: number
 ): RuleState | undefined {
+  if (at < state.since || state.released.includes(id)) return undefined;
+  const released = [...state.released, id].slice(-REMEMBERED_RELEASES);
   if (rule.type === "window" && state.kind === "window") {
-    const held = state.reservations.find(([reservation]) => reservation === id);
-    if (held === undefined) return undefined;
-    return {
-      kind: "window",
-      windows: state.windows.map((counts, index) =>
-        takeFromWindow(counts, rule.windows[index]?.perMs ?? 1, held[1])
-      ),
-      reservations: state.reservations.filter(
-        ([reservation]) => reservation !== id
-      ),
-    };
+    const windows = state.windows.map((counts, index) =>
+      takeFromWindow(counts, rule.windows[index]?.perMs ?? 1, at)
+    );
+    const took = windows.some(
+      (counts, index) => total(counts) < total(state.windows[index] ?? counts)
+    );
+    return took ? { ...state, windows, released } : undefined;
   }
   if (rule.type === "backoff" && state.kind === "backoff") {
-    if (!state.reservations.includes(id)) return undefined;
-    const lifts = state.waitSetBy === id && state.reservations.at(-1) === id;
+    if (state.count === 0) return undefined;
+    const lifts = state.waitSetBy === id && state.recent.at(-1) === id;
     return {
       ...state,
-      count: Math.max(0, state.count - 1),
+      count: state.count - 1,
       waitUntil: lifts ? 0 : state.waitUntil,
       waitSetBy: lifts ? null : state.waitSetBy,
-      reservations: state.reservations.filter(
-        reservation => reservation !== id
-      ),
+      recent: state.recent.filter(reservation => reservation !== id),
+      released,
     };
   }
   return undefined;
+}
+
+/**
+ * Whether an entry holds nothing a later reservation would read: no count in
+ * any window, or no backoff count and no wait in force. Such an entry is
+ * removed rather than kept until it would expire, so given-back attempts
+ * never hold room in a bounded store.
+ */
+export function holdsNothing(state: RuleState, now: number): boolean {
+  if (state.kind === "window") {
+    return state.windows.every(counts => counts.buckets.length === 0);
+  }
+  return state.count === 0 && state.waitUntil <= now;
 }
 
 /** Take back one attempt counted at `at` from a window's buckets. */

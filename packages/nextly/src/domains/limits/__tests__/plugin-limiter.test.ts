@@ -7,7 +7,11 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { setNextlyLogger } from "../../../observability/logger";
 import { rateLimitClient } from "../../../plugins/routes/route-options";
-import { limitStoreUnavailable, type LimitStore } from "../limit-store";
+import {
+  limitStoreUnavailable,
+  type LimitStore,
+  type StoredLimit,
+} from "../limit-store";
 import { limitRuleProblem, type LimitRule } from "../limit-rules";
 import { createMemoryLimitStore } from "../memory-limit-store";
 import {
@@ -78,11 +82,27 @@ function setup(
   } = {}
 ) {
   const time = clock();
-  const store = options.store ?? createMemoryLimitStore({ clock: time.now });
-  const limiter = (plugin = options.plugin ?? "@test/limits") =>
+  const memory = options.store ?? createMemoryLimitStore({ clock: time.now });
+  // Every entry each update writes, in order: `null` for one it deletes.
+  const writes: Array<[string, StoredLimit | null]> = [];
+  const store: LimitStore = {
+    shared: memory.shared,
+    update: (keys, apply) =>
+      memory.update(keys, (current, now) => {
+        const outcome = apply(current, now);
+        writes.push(...outcome.write);
+        return outcome;
+      }),
+    read: keys => memory.read(keys),
+    sweep: () => memory.sweep(),
+  };
+  const limiter = (
+    plugin = options.plugin ?? "@test/limits",
+    rules: Record<string, LimitRule> = RULES
+  ) =>
     createPluginLimiter({
       plugin,
-      rules: new Map(Object.entries(RULES)),
+      rules: new Map(Object.entries(rules)),
       store,
       secret: "install secret",
       singleInstance: false,
@@ -93,7 +113,7 @@ function setup(
         options.trustProxy ? request.headers.get("x-forwarded-for") : null,
       clientOf: rateLimitClient,
     });
-  return { time, store, limits: limiter(), limiter };
+  return { time, store, writes, limits: limiter(), limiter };
 }
 
 /** Reserve, expecting an answer of `status`. */
@@ -721,6 +741,198 @@ describe("giving back and forgetting", () => {
   });
 });
 
+describe("a rule that changes while its entries live", () => {
+  it("starts a window rule's counts again when its windows change, with an expiry the new rule bounds", async () => {
+    const { limiter, time, writes } = setup();
+    const before = limiter("@test/limits", {
+      r: { type: "window", windows: [{ max: 1, perMs: 10 * MINUTE }] },
+    });
+    await before.reserve([{ rule: "r", key: "k" }]);
+    expect((await before.reserve([{ rule: "r", key: "k" }])).status).toBe(
+      "refused"
+    );
+
+    const after = limiter("@test/limits", {
+      r: { type: "window", windows: [{ max: 1, perMs: 20 * MINUTE }] },
+    });
+
+    expect((await after.reserve([{ rule: "r", key: "k" }])).status).toBe(
+      "admitted"
+    );
+    const [, written] = writes.at(-1) ?? [];
+    // At most the new window and one bucket of it past now.
+    expect(written?.expiresAt).toBeLessThanOrEqual(
+      time.now() + 20 * MINUTE + Math.ceil((20 * MINUTE) / 32)
+    );
+  });
+
+  it("starts a backoff rule's count again when its waits change, leaving no wait set under the old ones", async () => {
+    const { limiter } = setup();
+    const before = limiter("@test/limits", {
+      r: { type: "backoff", free: 1, waitsMs: [HOUR], forgetAfterMs: HOUR },
+    });
+    await before.reserve([{ rule: "r", key: "k" }]); // sets the hour's wait
+    expect((await before.reserve([{ rule: "r", key: "k" }])).status).toBe(
+      "refused"
+    );
+
+    const after = limiter("@test/limits", {
+      r: { type: "backoff", free: 1, waitsMs: [MINUTE], forgetAfterMs: HOUR },
+    });
+
+    expect((await after.reserve([{ rule: "r", key: "k" }])).status).toBe(
+      "admitted"
+    );
+  });
+});
+
+describe("giving back however many reservations are outstanding", () => {
+  it("gives back the first of 40 admitted reservations on a window", async () => {
+    const { limiter } = setup();
+    const limits = limiter("@test/limits", {
+      r: { type: "window", windows: [{ max: 100, perMs: HOUR }] },
+    });
+    const first = await limits.reserve([{ rule: "r", key: "k" }]);
+    if (first.status !== "admitted") throw new Error("not admitted");
+    for (let attempt = 1; attempt < 40; attempt += 1) {
+      await limits.reserve([{ rule: "r", key: "k" }]);
+    }
+
+    await limits.release(first.reservation);
+
+    let admitted = 0;
+    while (
+      (await limits.reserve([{ rule: "r", key: "k" }])).status === "admitted"
+    ) {
+      admitted += 1;
+    }
+    // 39 still counted of 100: 61 more fit.
+    expect(admitted).toBe(61);
+  });
+
+  it("gives back the first of 40 admitted reservations on a backoff count", async () => {
+    const { limiter } = setup();
+    const limits = limiter("@test/limits", {
+      r: { type: "backoff", free: 40, waitsMs: [], forgetAfterMs: HOUR },
+    });
+    const first = await limits.reserve([{ rule: "r", key: "k" }]);
+    if (first.status !== "admitted") throw new Error("not admitted");
+    for (let attempt = 1; attempt < 40; attempt += 1) {
+      await limits.reserve([{ rule: "r", key: "k" }]);
+    }
+    expect((await limits.reserve([{ rule: "r", key: "k" }])).status).toBe(
+      "refused"
+    );
+
+    await limits.release(first.reservation);
+
+    expect((await limits.reserve([{ rule: "r", key: "k" }])).status).toBe(
+      "admitted"
+    );
+  });
+
+  it("gives back once when a release whose answer was lost is retried", async () => {
+    const memory = createMemoryLimitStore();
+    let loseNextAnswer = false;
+    const store: LimitStore = {
+      shared: true,
+      update: async (keys, apply) => {
+        const result = await memory.update(keys, apply);
+        if (loseNextAnswer) {
+          loseNextAnswer = false;
+          throw limitStoreUnavailable("timeout");
+        }
+        return result;
+      },
+      read: keys => memory.read(keys),
+      sweep: () => memory.sweep(),
+    };
+    const { limits } = setup({ store });
+    await limits.reserve([{ rule: "window", key: "k" }]);
+    const second = await limits.reserve([{ rule: "window", key: "k" }]);
+    await limits.reserve([{ rule: "window", key: "k" }]);
+    if (second.status !== "admitted") throw new Error("not admitted");
+
+    loseNextAnswer = true;
+    expect(await limits.release(second.reservation)).toEqual({
+      status: "unavailable",
+    });
+    expect(await limits.release(second.reservation)).toEqual({
+      status: "done",
+    });
+
+    // One count given back of three: room for one more, not two.
+    expect((await limits.reserve([{ rule: "window", key: "k" }])).status).toBe(
+      "admitted"
+    );
+    expect((await limits.reserve([{ rule: "window", key: "k" }])).status).toBe(
+      "refused"
+    );
+  });
+});
+
+describe("the time a counted refusal says to wait", () => {
+  it("counts a window's refused attempt in the time it says, so a retry then is admitted", async () => {
+    const { limiter, time } = setup();
+    const limits = limiter("@test/limits", {
+      r: { type: "window", windows: [{ max: 1, perMs: 10 * SECOND }] },
+    });
+    await limits.reserve([{ rule: "r", key: "k" }]);
+    time.advance(9 * SECOND);
+    const refused = await limits.reserve([
+      { rule: "r", key: "k", count: "always" },
+    ]);
+    if (refused.status !== "refused") throw new Error("not refused");
+
+    time.advance(refused.retryAfterMs);
+
+    expect((await limits.reserve([{ rule: "r", key: "k" }])).status).toBe(
+      "admitted"
+    );
+  });
+
+  it("counts a backoff refusal with no waits in the time it says, so a retry then is admitted", async () => {
+    const { limiter, time } = setup();
+    const limits = limiter("@test/limits", {
+      r: { type: "backoff", free: 1, waitsMs: [], forgetAfterMs: MINUTE },
+    });
+    await limits.reserve([{ rule: "r", key: "k" }]);
+    time.advance(30 * SECOND);
+    const refused = await limits.reserve([
+      { rule: "r", key: "k", count: "always" },
+    ]);
+    if (refused.status !== "refused") throw new Error("not refused");
+
+    time.advance(refused.retryAfterMs);
+
+    expect((await limits.reserve([{ rule: "r", key: "k" }])).status).toBe(
+      "admitted"
+    );
+  });
+});
+
+describe("an entry that holds nothing", () => {
+  it("is removed once its only backoff count is given back", async () => {
+    const { limits, writes } = setup();
+    const success = await limits.reserve([{ rule: "signin", key: "c" }]);
+    if (success.status !== "admitted") throw new Error("not admitted");
+
+    await limits.release(success.reservation);
+
+    expect(writes.at(-1)?.[1]).toBeNull();
+  });
+
+  it("is removed once its only window count is given back", async () => {
+    const { limits, writes } = setup();
+    const only = await limits.reserve([{ rule: "window", key: "k" }]);
+    if (only.status !== "admitted") throw new Error("not admitted");
+
+    await limits.release(only.reservation);
+
+    expect(writes.at(-1)?.[1]).toBeNull();
+  });
+});
+
 describe("keys and transactions", () => {
   it("refuses to reserve, release or reset while the calling flow has a transaction open", async () => {
     let open = false;
@@ -817,6 +1029,7 @@ describe("when the store cannot answer", () => {
     const { limits } = setup({ store: failing });
     const reservation = {
       id: "r",
+      at: 0,
       entries: [{ rule: "window", key: "k", hadRoom: true, counted: true }],
     };
 

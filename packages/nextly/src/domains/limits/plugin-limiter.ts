@@ -31,6 +31,7 @@ import {
 import {
   countAttempt,
   hasRoom,
+  holdsNothing,
   readRuleState,
   releaseAttempt,
   retryAfterMs,
@@ -83,6 +84,8 @@ export interface EntryVerdict extends LimitTarget {
 /** An admitted reservation, to give back with `release`. @experimental */
 export interface AdmittedReservation {
   readonly id: string;
+  /** When it was counted, on the store's clock: what `release` gives back by. */
+  readonly at: number;
   /** Per entry, in the order given: an `enforce: false` entry may have had no room. */
   readonly entries: readonly EntryVerdict[];
 }
@@ -285,15 +288,27 @@ export function createPluginLimiter(deps: PluginLimiterDeps): PluginLimiter {
     return { status: "unavailable" };
   };
 
-  /** The entry to write for `state` under `rule`, or null once it holds nothing live. */
+  /**
+   * The entry to write for `state` under `rule`, or null once it holds
+   * nothing: removed, rather than kept to its expiry holding room in the store.
+   */
   const stored = (
     rule: LimitRule,
     state: RuleState,
     now: number
   ): StoredLimit | null => {
     const expiresAt = stateExpiresAt(rule, state);
-    return expiresAt > now ? { value: state, expiresAt } : null;
+    return expiresAt > now && !holdsNothing(state, now)
+      ? { value: state, expiresAt }
+      : null;
   };
+
+  /**
+   * The rules of each reservation this limiter has given back, so releasing
+   * the same object again goes no further. The entries remember recent
+   * releases too, for a retry after an answer that was lost.
+   */
+  const givenBack = new WeakMap<AdmittedReservation, Set<string>>();
 
   return {
     async reserve(entries) {
@@ -320,6 +335,10 @@ export function createPluginLimiter(deps: PluginLimiterDeps): PluginLimiter {
             const unanimous = room.every(Boolean);
 
             const write = new Map<string, StoredLimit | null>();
+            // What each entry holds once this reservation is counted: a
+            // refusal's wait is worked out from it, since a count the
+            // refusal itself made can push room further off.
+            const after = [...states];
             const verdicts = checked.map((entry, index): EntryVerdict => {
               const mode = entry.target.count ?? "admitted";
               const hadRoom = room[index] === true;
@@ -335,6 +354,7 @@ export function createPluginLimiter(deps: PluginLimiterDeps): PluginLimiter {
                   hadRoom,
                   id
                 );
+                after[index] = next;
                 write.set(entry.key, stored(entry.rule, next, now));
               }
               return {
@@ -350,7 +370,7 @@ export function createPluginLimiter(deps: PluginLimiterDeps): PluginLimiter {
                 write,
                 result: {
                   status: "admitted",
-                  reservation: { id, entries: verdicts },
+                  reservation: { id, at: now, entries: verdicts },
                 },
               };
             }
@@ -360,7 +380,7 @@ export function createPluginLimiter(deps: PluginLimiterDeps): PluginLimiter {
                 status: "refused",
                 retryAfterMs: Math.max(
                   ...refusing.map(({ entry, index }) =>
-                    retryAfterMs(entry.rule, states[index], now)
+                    retryAfterMs(entry.rule, after[index], now)
                   )
                 ),
                 refusedBy: [
@@ -378,15 +398,24 @@ export function createPluginLimiter(deps: PluginLimiterDeps): PluginLimiter {
 
     async release(reservation, options) {
       const named = options?.rules;
+      const done = givenBack.get(reservation);
       const targets = reservation.entries.filter(
         entry =>
-          entry.counted && (named === undefined || named.includes(entry.rule))
+          entry.counted &&
+          (named === undefined || named.includes(entry.rule)) &&
+          !done?.has(entry.rule)
       );
       if (targets.length === 0) return { status: "done" };
       const checked = checkTargets(targets);
+      if (!Number.isFinite(reservation.at)) {
+        throw misuse(
+          plugin,
+          "a released reservation must be one `reserve` admitted."
+        );
+      }
       assertNoOpenTransaction(deps.transactions, "A plugin limit release");
       try {
-        return await store.update(
+        const outcome = await store.update(
           checked.map(entry => entry.key),
           (current, now) => {
             const write = new Map<string, StoredLimit | null>();
@@ -400,7 +429,8 @@ export function createPluginLimiter(deps: PluginLimiterDeps): PluginLimiter {
               const released = releaseAttempt(
                 entry.rule,
                 state,
-                reservation.id
+                reservation.id,
+                reservation.at
               );
               if (released)
                 write.set(entry.key, stored(entry.rule, released, now));
@@ -408,6 +438,11 @@ export function createPluginLimiter(deps: PluginLimiterDeps): PluginLimiter {
             return { write, result: { status: "done" } as const };
           }
         );
+        givenBack.set(
+          reservation,
+          new Set([...(done ?? []), ...targets.map(entry => entry.rule)])
+        );
+        return outcome;
       } catch (error) {
         return unavailable("release", error);
       }
