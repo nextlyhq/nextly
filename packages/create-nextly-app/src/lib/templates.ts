@@ -9,6 +9,8 @@
 
 import type { ProjectApproach, TemplateManifest } from "../types.js";
 
+import { BUNDLED_TEMPLATES } from "./bundled-templates";
+
 // All available templates - ordered as they appear in the CLI prompt
 export const AVAILABLE_TEMPLATES: readonly TemplateManifest[] = [
   {
@@ -98,12 +100,6 @@ export function getDefaultApproach(name: string): ProjectApproach {
 }
 
 /**
- * Templates whose files ship inside the CLI package itself (tsup.config.ts
- * copies them in at build time). Content templates (blog) are download-only.
- */
-const BUNDLED_TEMPLATES: ReadonlySet<string> = new Set(["blank", "plugin"]);
-
-/**
  * Whether a scaffold should copy the template bundled in the CLI rather than
  * resolve one from GitHub or a local path.
  *
@@ -122,7 +118,7 @@ export function shouldUseBundledTemplate(
   }
 ): boolean {
   return (
-    BUNDLED_TEMPLATES.has(projectType) &&
+    BUNDLED_TEMPLATES.some(name => name === projectType) &&
     !options.localTemplatePath &&
     !options.useYalc &&
     (options.branch ?? "main") === "main"

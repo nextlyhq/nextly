@@ -1290,15 +1290,31 @@ export async function generatePackageJson(
 const CARET_VERSION = /^\^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
 
 /**
- * Resolve the `nextly` compat range a scaffolded plugin declares + uses to fill
- * `{{nextlyRange}}`. Uses the latest published `nextly` (`^x.y.z`); falls back to
- * an open range when offline / using yalc.
+ * The range a scaffolded plugin declares for a Nextly package it supports.
+ *
+ * A semver range, never a dist-tag: pnpm 11 rejects a tag in peerDependencies
+ * (ERR_PNPM_INVALID_PEER_DEPENDENCY_SPECIFICATION) and then refuses to run any
+ * script in the scaffold, `pnpm dev` included. A tag is all there is offline,
+ * after a failed registry lookup and under --use-yalc, so only a resolved
+ * caret version is kept and anything else declares the open range.
+ */
+function pluginPeerRange(resolved: string | undefined): string {
+  return resolved && CARET_VERSION.test(resolved) ? resolved : ">=0.0.0";
+}
+
+/**
+ * Resolve the `nextly` range a scaffolded plugin declares in definePlugin
+ * (`{{nextlyRange}}`), which boot checks against the running core.
+ *
+ * The same range its package.json declares as the `nextly` peer, from the same
+ * channel the scaffold installs that core from: a range resolved from another
+ * tag can exclude the very core the playground boots.
  */
 async function resolvePluginNextlyRange(useYalc: boolean): Promise<string> {
-  if (useYalc) return ">=0.0.0";
-  const versions = await resolveNextlyVersions();
-  const v = versions["nextly"];
-  return v && v !== "latest" ? v : ">=0.0.0";
+  const versions = useYalc
+    ? {}
+    : await resolveNextlyVersions(templateNextlyChannel("plugin"));
+  return pluginPeerRange(versions["nextly"]);
 }
 
 /**
@@ -1337,18 +1353,9 @@ async function generatePluginPackageJson(
    */
   const range = (pkg: string): string => versions[pkg] ?? channel;
 
-  /*
-   * A peer takes a semver range, never a dist-tag: pnpm 11 rejects a tag there
-   * (ERR_PNPM_INVALID_PEER_DEPENDENCY_SPECIFICATION) and then refuses to run any
-   * script in the scaffold, `pnpm dev` included. The tag is what `range` falls
-   * back to offline, after a failed registry lookup and under --use-yalc, so a
-   * peer accepts only a resolved caret version and otherwise declares the open
-   * range. Dev dependencies keep the tag, which is valid for an install.
-   */
-  const peerRange = (pkg: string): string => {
-    const v = range(pkg);
-    return CARET_VERSION.test(v) ? v : ">=0.0.0";
-  };
+  // Peers go through pluginPeerRange, which never declares a dist-tag. Dev
+  // dependencies keep the tag `range` falls back to, which is valid there.
+  const peerRange = (pkg: string): string => pluginPeerRange(range(pkg));
 
   const peerDependencies: Record<string, string> = {
     nextly: peerRange("nextly"),

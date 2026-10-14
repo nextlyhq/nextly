@@ -1,4 +1,10 @@
+import { existsSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+
+import { BUNDLED_TEMPLATES } from "../lib/bundled-templates";
 
 import {
   getAvailableTemplateNames,
@@ -58,6 +64,27 @@ describe("shouldUseBundledTemplate", () => {
   ])("resolves live when %s is given", (_label, options) => {
     expect(shouldUseBundledTemplate("blank", options)).toBe(false);
     expect(shouldUseBundledTemplate("plugin", options)).toBe(false);
+  });
+});
+
+// The build copies BUNDLED_TEMPLATES into the package and the CLI copies from
+// that copy, so a name there that is not a template directory is a scaffold
+// that fails only once published.
+describe("BUNDLED_TEMPLATES", () => {
+  const templatesRoot = path.resolve(
+    path.dirname(fileURLToPath(import.meta.url)),
+    "../../../../templates"
+  );
+
+  it.each([...BUNDLED_TEMPLATES])("names a template directory: %s", name => {
+    expect(existsSync(path.join(templatesRoot, name))).toBe(true);
+  });
+
+  it("lists only registered templates, besides the shared base", () => {
+    for (const name of BUNDLED_TEMPLATES) {
+      if (name === "base") continue;
+      expect(getAvailableTemplateNames()).toContain(name);
+    }
   });
 });
 

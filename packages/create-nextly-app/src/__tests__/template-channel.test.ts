@@ -10,6 +10,11 @@
  * line, and `latest` lags it.
  */
 
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { DatabaseConfig } from "../types";
@@ -138,5 +143,67 @@ describe("alpha pin survives a registry lookup failure", () => {
     const { generatePackageJson: gen } = await import("../utils/template");
     const pkg = JSON.parse(await gen("blog-app", pgDatabase, false, "blog"));
     expect(pkg.dependencies["nextly"]).toBe("alpha");
+  });
+});
+
+/*
+ * A plugin states the `nextly` it supports twice: as the peer range in its
+ * package.json, and as `nextly` in definePlugin, which boot checks against the
+ * running core and refuses on a mismatch. The scaffold installs that core from
+ * the plugin's channel, so both statements have to come from the same one.
+ * `latest` and `alpha` are set far apart here, as they are whenever the alpha
+ * line moves ahead of the last stable release.
+ */
+describe("a plugin's declared nextly range follows its channel", () => {
+  const STABLE = "0.0.1";
+  let workdir: string | undefined;
+
+  beforeEach(() => {
+    vi.resetModules();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        json: async () => ({ latest: STABLE, alpha: ALPHA }),
+      }))
+    );
+  });
+
+  afterEach(async () => {
+    vi.unstubAllGlobals();
+    if (workdir) await rm(workdir, { recursive: true, force: true });
+  });
+
+  it("writes the alpha range into definePlugin, matching the peer range", async () => {
+    const { copyTemplate } = await import("../utils/template");
+    workdir = await mkdtemp(path.join(tmpdir(), "nextly-plugin-range-"));
+    const target = path.join(workdir, "my-plugin");
+    const templatesRoot = path.resolve(
+      path.dirname(fileURLToPath(import.meta.url)),
+      "../../../../templates"
+    );
+
+    await copyTemplate({
+      projectName: "my-plugin",
+      projectType: "plugin",
+      targetDir: target,
+      database: pgDatabase,
+      templateSource: {
+        basePath: path.join(templatesRoot, "base"),
+        templatePath: path.join(templatesRoot, "plugin"),
+      },
+    });
+
+    const pkg = JSON.parse(
+      await readFile(path.join(target, "package.json"), "utf-8")
+    );
+    const pluginSource = await readFile(
+      path.join(target, "src/plugin.ts"),
+      "utf-8"
+    );
+    const declared = /nextly: "([^"]+)"/.exec(pluginSource)?.[1];
+
+    expect(pkg.peerDependencies["nextly"]).toBe(`^${ALPHA}`);
+    expect(declared).toBe(pkg.peerDependencies["nextly"]);
   });
 });
