@@ -975,6 +975,46 @@ describe("applyPluginSchemaContributions (behaviour a disabled plugin's transfor
     expect(forms.fields[0]?.defaultValue).toEqual({ access: "public", n: 2 });
   });
 
+  it("adds no access rule to a field nested under a key other than `fields` or `blocks`", () => {
+    // Every key but the data keys is schema, so an access rule restores
+    // wherever a layout nests its fields, not only in `fields` and `blocks`.
+    const forms = disabledTransform(entity => ({
+      ...entity,
+      fields: [
+        {
+          name: "layout",
+          type: "group",
+          tabs: [
+            {
+              label: "Main",
+              fields: [{ name: "note", type: "text", access: { read: false } }],
+            },
+          ],
+        },
+      ],
+    }));
+    const layout = forms.fields[0] as {
+      tabs: { fields: Record<string, unknown>[] }[];
+    };
+    expect(layout.tabs[0]?.fields[0]).toEqual({ name: "note", type: "text" });
+  });
+
+  it("keeps a key named `access` in a field's pluginOptions", () => {
+    const forms = disabledTransform(entity => ({
+      ...entity,
+      fields: [
+        {
+          name: "title",
+          type: "text",
+          pluginOptions: { seo: { access: "public" } },
+        },
+      ],
+    }));
+    expect(forms.fields[0]?.pluginOptions).toEqual({
+      seo: { access: "public" },
+    });
+  });
+
   it("adds no field access rule, boolean or function", () => {
     const forms = disabledTransform(entity => ({
       ...entity,

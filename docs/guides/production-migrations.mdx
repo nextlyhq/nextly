@@ -975,10 +975,16 @@ that the configured version of the plugin no longer ships
 (`logContext.reason` is `module-not-shipped`): configure the version that
 shipped it first. `--keep-data` leaves everything in place and marks the owner
 orphaned. A plugin whose modules `migrate:down --plugin` already rolled back
-can still be uninstalled: only the tables that exist are dropped. A DOWN that
-leaves one of the plugin's tables in place stops the uninstall before the
-plugin is recorded as uninstalled (`logContext.reason` is
-`tables-left-by-down`).
+can still be uninstalled: only the tables that exist are dropped.
+
+The DOWN statements are read before any runs, in the order they will run.
+DOWNs that leave one of the plugin's tables in place, dropping none of it,
+only rebuilding it, or renaming another table into its name, are refused (`logContext.reason` is `down-leaves-tables`):
+fix the plugin's DOWN, or use `--keep-data`. A drop written schema-qualified
+is not counted, so the uninstall is refused rather than run on a drop it
+cannot read. If a table is still there after the DOWNs ran, the plugin is not
+recorded as uninstalled (`tables-left-by-down`); drop the table and run the
+uninstall again.
 
 `plugins install` holds the migrate lock from its first migration until
 `onInstall` returns, and `plugins uninstall` from its final decision until the

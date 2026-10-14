@@ -327,7 +327,7 @@ function withBehaviourOf(
   before: Record<string, unknown>,
   after: Record<string, unknown>
 ): Record<string, unknown> {
-  const merged = mergeBehaviour(before, after, "node");
+  const merged = mergeBehaviour(before, after, "schema");
   return isRecord(merged) ? merged : before;
 }
 
@@ -342,15 +342,24 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * Where a value sits in the entity's schema: `node` is the entity or one of
- * its fields, where `access` is an access rule; `nodes` is a `fields` or
- * `blocks` list of them; `data` is anything else, where a key named
- * `access` is ordinary data, such as a JSON default's.
+ * Where a value sits in the entity: `schema` is the definition itself, where
+ * a key named `access` is an access rule; `data` is a value the definition
+ * carries for its author, where `access` is ordinary data, such as a JSON
+ * default's.
  */
-type SchemaPosition = "node" | "nodes" | "data";
+type SchemaPosition = "schema" | "data";
 
-/** The keys under a schema node that hold more schema nodes. */
-const NODE_LIST_KEYS: ReadonlySet<string> = new Set(["fields", "blocks"]);
+/**
+ * The keys whose value is free-form data rather than schema: a field's
+ * default, and the settings a plugin or the app hangs on an entity or field.
+ * Everything else is schema, so a nesting key added later keeps its access
+ * rules restored without being listed here.
+ */
+const DATA_KEYS: ReadonlySet<string> = new Set([
+  "defaultValue",
+  "custom",
+  "pluginOptions",
+]);
 
 function mergeBehaviour(
   before: unknown,
@@ -409,29 +418,28 @@ function mergeArray(
   at: SchemaPosition
 ): unknown[] {
   const previous = Array.isArray(before) ? before : [];
-  const element: SchemaPosition = at === "nodes" ? "node" : "data";
   return after
     .map((item, index) =>
-      mergeBehaviour(counterpart(previous, item, index), item, element)
+      mergeBehaviour(counterpart(previous, item, index), item, at)
     )
     .filter(item => item !== DROP);
 }
 
 /**
- * `after`'s keys merged with `previous`'s. On a schema node, `access` is
- * taken from `previous`; anywhere else it merges like any other key.
+ * `after`'s keys merged with `previous`'s. In the schema, `access` is taken
+ * from `previous`; in data it merges like any other key.
  */
 function mergeRecord(
   previous: Record<string, unknown>,
   after: Record<string, unknown>,
   at: SchemaPosition
 ): Record<string, unknown> {
-  const rules = at === "node";
+  const rules = at === "schema";
   const out: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(after)) {
     if (rules && key === "access") continue;
     const child: SchemaPosition =
-      rules && NODE_LIST_KEYS.has(key) ? "nodes" : "data";
+      rules && !DATA_KEYS.has(key) ? "schema" : "data";
     const merged = mergeBehaviour(previous[key], value, child);
     if (merged !== DROP) out[key] = merged;
   }

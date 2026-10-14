@@ -83,7 +83,12 @@ function deps(over: Partial<PluginLifecycleDeps> = {}): PluginLifecycleDeps {
       moduleNames.map(moduleName => ({
         moduleName,
         filename: `plugin:@acme/fx/${moduleName}`,
-        statements: [`DROP TABLE IF EXISTS fx__${moduleName}`],
+        // The first module created the plugin's table, so its DOWN drops it.
+        statements: [
+          moduleName === "0001_init"
+            ? "DROP TABLE IF EXISTS fx__notes"
+            : `DROP TABLE IF EXISTS fx__${moduleName}`,
+        ],
         transaction: true,
         destructive: true,
       }))
@@ -311,6 +316,101 @@ describe("what install reports", () => {
     expect(success).toHaveBeenCalledWith(
       "@acme/fx installed (1 table(s) recorded)."
     );
+  });
+});
+
+describe("plugins uninstall judges what its DOWNs drop before running them", () => {
+  const row = {
+    tableName: "fx__notes",
+    elementKind: "table",
+    elementName: "",
+    ownerKind: "plugin",
+    ownerId: "@acme/fx",
+    migratedBy: "plugin:@acme/fx",
+    ownerVersion: null,
+    schemaVersion: null,
+    state: "active",
+  };
+  const ownsNotes = {
+    select: () => ({
+      from: () => Object.assign([row], { where: () => [row] }),
+    }),
+    update: () => ({ set: () => ({ where: () => Promise.resolve() }) }),
+  };
+  /** A SQLite rebuild of fx__notes, as the pipeline writes one. */
+  const rebuild = [
+    'CREATE TABLE "__new_fx__notes" ("id" text PRIMARY KEY)',
+    'INSERT INTO "__new_fx__notes" ("id") SELECT "id" FROM "fx__notes"',
+    'DROP TABLE "fx__notes"',
+    'ALTER TABLE "__new_fx__notes" RENAME TO "fx__notes"',
+  ];
+
+  async function uninstallWith(statements: string[][]) {
+    const runDown = vi.fn(async () => 1);
+    const runLifecycleHook = vi.fn(async () => {});
+    const run = runPluginUninstallCommand(
+      "@acme/fx",
+      { keepData: false, yes: true },
+      deps({
+        db: ownsNotes as never,
+        runLifecycleHook,
+        ...droppedByDowns(runDown),
+        prepareDowns: vi.fn(async (_plugin, moduleNames: readonly string[]) =>
+          moduleNames.map((moduleName, at) => ({
+            moduleName,
+            filename: `plugin:@acme/fx/${moduleName}`,
+            statements: statements[at] ?? [],
+            transaction: true,
+            destructive: true,
+          }))
+        ),
+      })
+    );
+    return { run, runDown, runLifecycleHook };
+  }
+
+  it("refuses when no DOWN drops a table the plugin owns, running nothing", async () => {
+    const { run, runDown, runLifecycleHook } = await uninstallWith([
+      ["DROP TABLE IF EXISTS fx__other"],
+      [],
+    ]);
+    await expect(run).rejects.toMatchObject({
+      code: "PLUGIN_UNINSTALL_IRREVERSIBLE",
+      logContext: { reason: "down-leaves-tables", tables: ["fx__notes"] },
+    });
+    expect(runLifecycleHook).not.toHaveBeenCalled();
+    expect(runDown).not.toHaveBeenCalled();
+  });
+
+  it("counts a table a DOWN only rebuilds as left in place", async () => {
+    // A rebuild drops the table and renames its copy into the name.
+    const { run, runDown } = await uninstallWith([rebuild, []]);
+    await expect(run).rejects.toMatchObject({
+      logContext: { reason: "down-leaves-tables" },
+    });
+    expect(runDown).not.toHaveBeenCalled();
+  });
+
+  it("counts a table another is renamed into after its drop as left in place", async () => {
+    // The drop is read, but a table stands under the name once the DOWN ends.
+    const { run, runDown } = await uninstallWith([
+      ["DROP TABLE fx__notes", "ALTER TABLE fx__archive RENAME TO fx__notes"],
+      [],
+    ]);
+    await expect(run).rejects.toMatchObject({
+      logContext: { reason: "down-leaves-tables", tables: ["fx__notes"] },
+    });
+    expect(runDown).not.toHaveBeenCalled();
+  });
+
+  it("allows a table rebuilt by one DOWN and dropped by a later one", async () => {
+    // The control: newest first, so 0002's rebuild runs before 0001's drop.
+    const { run, runDown } = await uninstallWith([
+      rebuild,
+      ['DROP TABLE "fx__notes"'],
+    ]);
+    await run;
+    expect(runDown).toHaveBeenCalledTimes(2);
   });
 });
 

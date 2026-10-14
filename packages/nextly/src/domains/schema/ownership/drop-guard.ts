@@ -681,6 +681,11 @@ class DropReader {
    */
   readonly creating = new Set<string>();
   /**
+   * Every local name the list renames a table to, whichever table it was —
+   * one it created or one that stood before it ran (`tablesPutInPlaceBy`).
+   */
+  readonly renamedInto = new Set<string>();
+  /**
    * Whether the list holds a statement that may change which table an
    * unqualified name reaches (`changesNameResolution`). Once it does, no
    * creation is credited anywhere in the list (`readStatements`).
@@ -756,6 +761,7 @@ class DropReader {
   }
 
   rename(from: TableRef, to: TableRef): void {
+    if (to.local) this.renamedInto.add(to.name);
     if (this.takeCreated(from)) {
       this.create(to);
       return;
@@ -1968,6 +1974,21 @@ export function tablesCreatedBy(
 }
 
 /**
+ * The local names, lower-cased, a list puts a table under: by a CREATE, or by
+ * renaming a table to it, whether the list created that table or not. Wider
+ * than `tablesCreatedBy`, which credits a rename only of a table the list
+ * made: a table renamed into a name stands there afterwards all the same.
+ * Empty for a list that cannot be read, which the drop guard refuses whole.
+ */
+export function tablesPutInPlaceBy(
+  statements: readonly string[],
+  dialect: SupportedDialect
+): string[] {
+  const reader = readAsIfNoTableExisted(statements, dialect);
+  return reader ? [...reader.creating, ...reader.renamedInto] : [];
+}
+
+/**
  * A statement list read as if no table existed — so a creation's credit
  * carries through a rename to the name it is renamed to — or undefined when
  * the list cannot be read; the guard refuses such a list on its own.
@@ -2458,6 +2479,25 @@ const TABLE_CONSTRAINT_WORDS = new Set([
 
 /** A rebuild's twin name for `table`. */
 const REBUILD_PREFIX = "__new_";
+
+/**
+ * The indexes of the `DROP TABLE` statements that sit inside a rebuild block,
+ * whatever columns its twin keeps: the table survives such a drop under its
+ * own name, rebuilt. `rebuildBlockStatements` asks the narrower question of
+ * whether the rebuild also keeps every live column.
+ */
+export function rebuildDropStatements(
+  statements: readonly string[],
+  dialect: SupportedDialect
+): ReadonlySet<number> {
+  const drops = new Set<number>();
+  for (let i = 0; i < statements.length; i += 1) {
+    if (rebuildBlockAt(statements, i, dialect) === undefined) continue;
+    drops.add(i + 2);
+    i += 3;
+  }
+  return drops;
+}
 
 /**
  * The indexes of the statements, within a statement list, that belong to a
