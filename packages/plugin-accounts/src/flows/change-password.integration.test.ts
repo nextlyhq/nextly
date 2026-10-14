@@ -151,6 +151,20 @@ describe.each(getConfiguredTestDialects())(
       expect((await accountById(db, id))?.passwordChangedAt).toBeNull();
     });
 
+    it("settles a proven current password even when the new one is refused, so mistakes never make the holder wait", async () => {
+      const { db, id, browser, change } = await boot();
+      const { session } = await browser();
+
+      for (let n = 0; n < 7; n += 1)
+        expect(
+          await change(session.token, TEST_PASSWORD, { newPassword: "short" })
+        ).toMatchObject({ reason: "too-short" });
+      expect(await change(session.token, TEST_PASSWORD)).toEqual({
+        status: "changed",
+      });
+      expect((await accountById(db, id))?.failuresInARow).toBe(0);
+    });
+
     it("refuses a new password the rules refuse, and a session that has ended", async () => {
       const { deps, browser, change } = await boot();
       const { session } = await browser();

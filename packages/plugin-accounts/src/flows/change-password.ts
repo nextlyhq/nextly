@@ -6,9 +6,8 @@ import { endAccountSessions } from "../storage/sessions";
 import type { FlowDeps } from "./deps";
 import { provenHolder } from "./holder";
 import {
-  breachedPasswordRefusal,
-  localPasswordRefusal,
-  type NewPasswordRefusal,
+  accountPasswordRefusal,
+  type AccountPasswordRefusal,
 } from "./new-password";
 import { attemptSucceeded, type AttemptRefusal } from "./password-attempt";
 
@@ -17,15 +16,17 @@ export type ChangePasswordResult =
   /** The session has ended: the holder signs in again. */
   | { status: "signed-out" }
   | AttemptRefusal
-  | { status: "refused"; reason: NewPasswordRefusal };
+  | AccountPasswordRefusal;
 
 /** Ends the change's transaction with "try again", rolling it back. */
 class VersionMoved extends Error {}
 
 /**
  * The holder changes their password. The current one is asked for and
- * counted as a sign-in attempt is, a wrong one as a failed sign-in. The new
- * one meets the site's rules. Then, in one transaction that writes only at
+ * counted as a sign-in attempt is, a wrong one as a failed sign-in and a
+ * right one as a successful sign-in, whatever becomes of the new one. The
+ * new one meets the site's rules, its breached-password lookup counted
+ * against the account. Then, in one transaction that writes only at
  * the account's security version: the password is set, every session but
  * this one ends, every link and code is voided, a pending address change is
  * cancelled, and every browser known to the account is forgotten but this
@@ -47,11 +48,17 @@ export async function changePassword(
   });
   if (proven.status !== "proven") return proven;
   const { account, session, attempt, now } = proven;
+  // The current password is proven, so the attempt is settled as a
+  // successful sign-in is, whatever becomes of the new one: a mistyped new
+  // password must not count toward the address's or the browser's waits.
+  await attemptSucceeded(deps, attempt);
 
-  const refusal =
-    (await localPasswordRefusal(deps, input.newPassword)) ??
-    (await breachedPasswordRefusal(deps, input.newPassword));
-  if (refusal !== null) return { status: "refused", reason: refusal };
+  const refusal = await accountPasswordRefusal(
+    deps,
+    account.id,
+    input.newPassword
+  );
+  if (refusal !== null) return refusal;
   const passwordHash = await deps.core.passwords.hash(input.newPassword);
 
   try {
@@ -76,7 +83,6 @@ export async function changePassword(
     throw error;
   }
 
-  await attemptSucceeded(deps, attempt);
   await deps.mail.queue({
     kind: "password-changed",
     accountId: account.id,
