@@ -11,7 +11,6 @@
 
 import { NextlyError } from "../../errors/nextly-error";
 import { collectingWarnings } from "../../hooks/side-effect-warnings";
-import { assertFilterableFields } from "../../shared/lib/filterable-fields";
 import type { PaginatedResponse } from "../../types/pagination";
 import type {
   BulkDeleteArgs,
@@ -252,16 +251,6 @@ export async function update<TSlug extends CollectionSlug>(
     // Captured before the closure: the id/where branch above narrows `where`,
     // and that narrowing does not reach inside a callback.
     const where = args.where;
-    // A precondition, before any row is written: the bulk path finds its rows
-    // with a trusted read, so the caller's own `where` would otherwise skip
-    // the check every read gives it, and a guessed value on a field the
-    // caller may not read would show in which rows were written.
-    assertFilterableFields(
-      "collection",
-      args.collection,
-      where,
-      accessOptions(config)
-    );
     const { result: bulkResult, warnings } = await collectingWarnings(() =>
       ctx.collectionsHandler.bulkUpdateByQuery(
         {
@@ -373,16 +362,6 @@ export async function deleteEntry<
     // Captured before the closure: the id/where branch narrows `where`, and
     // that narrowing does not reach inside a callback.
     const where = args.where;
-    // A precondition, before any row is written: the bulk path finds its rows
-    // with a trusted read, so the caller's own `where` would otherwise skip
-    // the check every read gives it, and a guessed value on a field the
-    // caller may not read would show in which rows were written.
-    assertFilterableFields(
-      "collection",
-      args.collection,
-      where,
-      accessOptions(config)
-    );
     const { result: bulkResult, warnings } = await collectingWarnings(() =>
       ctx.collectionsHandler.bulkDeleteByQuery(
         {
