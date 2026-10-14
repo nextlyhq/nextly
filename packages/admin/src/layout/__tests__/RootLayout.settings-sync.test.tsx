@@ -37,7 +37,7 @@ vi.mock("../DashboardLayout", () => ({
 }));
 
 const syncMounts: number[] = [];
-vi.mock("@admin/context/providers/GeneralSettingsSyncProvider", () => ({
+vi.mock("@admin/context/providers/GeneralSettingsSync", () => ({
   GeneralSettingsSync: () => {
     syncMounts.push(Date.now());
     return null;
