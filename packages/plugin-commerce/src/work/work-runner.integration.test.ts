@@ -170,7 +170,9 @@ describe.each(getConfiguredTestDialects())(
       const handlers = {
         flaky: async (item: WorkItem) => {
           attempts.push(item.attempt);
-          throw new Error("the service is down");
+          throw new TypeError(
+            "fetch failed: https://api.example/charge?key=sk_live_secret"
+          );
         },
       };
       const run = () =>
@@ -195,10 +197,11 @@ describe.each(getConfiguredTestDialects())(
       expect(abandoned).toEqual(["flaky:order-1"]);
 
       const [row] = await ctx.db.select(work).all();
+      // Recorded by its kind: the message, and the key in it, are not kept.
       expect(row).toMatchObject({
         state: "abandoned",
         attempts: 3,
-        lastError: "the service is down",
+        lastError: "TypeError",
       });
       // An abandoned step is never picked up again.
       time.advance(10 * 60_000);

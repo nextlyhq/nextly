@@ -5,6 +5,7 @@ import {
 } from "@nextlyhq/plugin-sdk/schema";
 
 import { commerceError } from "../errors";
+import { ownTransaction } from "../own-transaction";
 import { jobHealth } from "../schema/tables";
 
 /**
@@ -18,23 +19,25 @@ export async function recordJobRun(
   job: string,
   now: Date
 ): Promise<void> {
-  const h = db.table(jobHealth);
-  const moved = await db
-    .update(jobHealth, { lastRunAt: now, updatedAt: now })
-    .where(eq(h.job, job));
-  if (moved > 0) return;
+  const moveForward = () =>
+    ownTransaction(db, tx =>
+      tx
+        .update(jobHealth, { lastRunAt: now, updatedAt: now })
+        .where(eq(tx.table(jobHealth).job, job))
+    );
+  if ((await moveForward()) > 0) return;
   try {
-    await db.insert(jobHealth, {
-      job,
-      lastRunAt: now,
-      createdAt: now,
-      updatedAt: now,
-    });
+    await ownTransaction(db, tx =>
+      tx.insert(jobHealth, {
+        job,
+        lastRunAt: now,
+        createdAt: now,
+        updatedAt: now,
+      })
+    );
   } catch (error) {
     if (!isUniqueViolation(dialect, error)) throw error;
-    await db
-      .update(jobHealth, { lastRunAt: now, updatedAt: now })
-      .where(eq(h.job, job));
+    await moveForward();
   }
 }
 

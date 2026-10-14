@@ -37,6 +37,10 @@ export const carts = defineTable(
     currency: col.char(3),
     version: col.integer({ default: 0 }),
     expiresAt: col.timestamp(),
+    // When the cart became an order. A checked-out cart takes no more changes
+    // (the next one starts a new cart) and shows empty, while its cookie still
+    // finds the order a repeated completion answers with.
+    checkedOutAt: col.timestamp({ nullable: true }),
     accountKind: col.varchar(64, { nullable: true }),
     accountId: col.varchar(255, { nullable: true }),
     ...col.timestamps(),
@@ -196,9 +200,10 @@ export const orderLines = defineTable(
  * `reference` is commerce's own, sent to the provider with the payment, so a
  * payment whose answer was lost can be found there by it. `startOperationId`
  * is the idempotency key the start is sent under, saved before the first call
- * and reused on every retry; `startedAt` is when that first call was made,
- * which decides whether a retry may repeat the key or must look the payment up
- * instead. The provider's own reference is unique per provider once known.
+ * and reused on every retry; the work row carrying the start records when the
+ * first call was made, which decides whether a retry may repeat the key or
+ * must look the payment up instead. The provider's own reference is unique
+ * per provider once known.
  */
 export const payments = defineTable(
   "payments",
@@ -220,7 +225,6 @@ export const payments = defineTable(
     chargeAmount: col.bigint(),
     chargeCurrency: col.char(3),
     startOperationId: col.varchar(255),
-    startedAt: col.timestamp({ nullable: true }),
     failureCode: col.varchar(255, { nullable: true }),
     version: col.integer({ default: 0 }),
     ...col.timestamps(),
@@ -288,9 +292,10 @@ export const work = defineTable(
  * - `onHand` is commerce's own figure, once it keeps one: recorded when staff
  *   count the item, then lowered by each sale. Until then it is empty, and the
  *   catalogue source's figure is the item's stock.
- * - `held` is every unit active holds take; `heldUnconfirmed` the part a
- *   source that hears reports has not yet confirmed recording. Available
- *   stock is the stock less the holds the source's figure does not carry.
+ * - `held` is every unit active holds take. It always comes off: a source
+ *   that hears reports may or may not count a hold in its own figure, and
+ *   taking it off either way can understate stock while an order is unpaid,
+ *   but never sells a unit twice.
  */
 export const stockItems = defineTable(
   "stock_items",
@@ -299,20 +304,13 @@ export const stockItems = defineTable(
     reference: col.varchar(255),
     onHand: col.integer({ nullable: true }),
     held: col.integer({ default: 0 }),
-    heldUnconfirmed: col.integer({ default: 0 }),
     countedAt: col.timestamp({ nullable: true }),
     version: col.integer({ default: 0 }),
     ...col.timestamps(),
   },
   {
     indexes: [{ columns: ["reference"], unique: true }],
-    checks: [
-      { name: "stock_held_not_negative", sql: "held >= 0" },
-      {
-        name: "stock_unconfirmed_within_held",
-        sql: "held_unconfirmed >= 0 AND held_unconfirmed <= held",
-      },
-    ],
+    checks: [{ name: "stock_held_not_negative", sql: "held >= 0" }],
   }
 );
 

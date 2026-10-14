@@ -46,7 +46,15 @@ export type CommerceErrorCode =
   /** A stored catalogue entry whose values the catalogue cannot carry, such as a fractional price. */
   | "COMMERCE_CATALOGUE_ENTRY_INVALID"
   /** A checkout refused because the background jobs that finish it are not running. */
-  | "COMMERCE_JOBS_NOT_RUNNING";
+  | "COMMERCE_JOBS_NOT_RUNNING"
+  /** An item no longer has the stock a checkout asked for. */
+  | "COMMERCE_OUT_OF_STOCK"
+  /** A checkout asked of a store with no payment provider configured. */
+  | "COMMERCE_PAYMENTS_NOT_CONFIGURED"
+  /** A checkout of a cart that has nothing in it, or no cart at all. */
+  | "COMMERCE_CART_EMPTY"
+  /** A checkout whose quote no longer matches the cart: a price, a quantity or the cart itself changed. */
+  | "COMMERCE_QUOTE_CHANGED";
 
 /**
  * Raise a commerce error.
@@ -97,6 +105,11 @@ const PUBLIC_MESSAGES: Record<CommerceErrorCode, string> = {
     "A product is stored in a way commerce cannot use.",
   COMMERCE_JOBS_NOT_RUNNING:
     "Checkout is unavailable right now; please try again later.",
+  COMMERCE_OUT_OF_STOCK: "An item in the cart is no longer available.",
+  COMMERCE_PAYMENTS_NOT_CONFIGURED: "Payments are not set up for this store.",
+  COMMERCE_CART_EMPTY: "The cart is empty.",
+  COMMERCE_QUOTE_CHANGED:
+    "The cart or its prices changed; review the new total before paying.",
 };
 
 // A provider's broken answer is the server's fault, not the caller's, so it
@@ -112,7 +125,10 @@ const PUBLIC_MESSAGES: Record<CommerceErrorCode, string> = {
 // product stored in a shape the catalogue cannot carry is the store's own data
 // at fault, not the caller's and not an upstream's: 500. Checkout refused
 // while the store's background jobs are not running is the store being
-// unable to serve the request for now: 503.
+// unable to serve the request for now: 503. Stock another buyer has taken is
+// state that refuses a well-formed request: 409, as are an empty cart and a
+// quote the cart has moved past. A store set up with no payment provider is
+// the server's misconfiguration: 500.
 const STATUS_CODES: Record<CommerceErrorCode, number> = {
   COMMERCE_UNKNOWN_CURRENCY: 400,
   COMMERCE_INVALID_AMOUNT: 400,
@@ -134,4 +150,8 @@ const STATUS_CODES: Record<CommerceErrorCode, number> = {
   COMMERCE_CATALOGUE_NOT_LISTABLE: 409,
   COMMERCE_CATALOGUE_ENTRY_INVALID: 500,
   COMMERCE_JOBS_NOT_RUNNING: 503,
+  COMMERCE_OUT_OF_STOCK: 409,
+  COMMERCE_PAYMENTS_NOT_CONFIGURED: 500,
+  COMMERCE_CART_EMPTY: 409,
+  COMMERCE_QUOTE_CHANGED: 409,
 };

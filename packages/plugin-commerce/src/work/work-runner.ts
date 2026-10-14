@@ -1,3 +1,4 @@
+import { NextlyError } from "@nextlyhq/plugin-sdk";
 import { asc, eq, lte } from "@nextlyhq/plugin-sdk/db";
 import type {
   PluginDatabase,
@@ -5,6 +6,7 @@ import type {
 } from "@nextlyhq/plugin-sdk/schema";
 
 import { allOf } from "../cart/conditions";
+import { ownTransaction } from "../own-transaction";
 import { work } from "../schema/tables";
 
 /**
@@ -47,6 +49,17 @@ export interface WorkRetry {
   readonly leaseMs: number;
 }
 
+/**
+ * A time as the work table stores it: whole seconds, rounded down. SQLite
+ * stores no finer, and MySQL rounds a fraction to the nearest second, which
+ * can put a step due now a moment into the future, where `now` does not
+ * reach it. Rounding down first, as every time this module writes is, keeps a
+ * step due at the moment it is written on every dialect.
+ */
+export function wholeSecond(time: Date): Date {
+  return new Date(Math.floor(time.getTime() / 1000) * 1000);
+}
+
 export const DEFAULT_WORK_RETRY: WorkRetry = {
   maxAttempts: 12,
   firstDelayMs: 5_000,
@@ -78,7 +91,7 @@ export async function recordWork(
     subjectId: step.subjectId,
     operationId: step.operationId,
     state: "pending",
-    nextAttemptAt: step.now,
+    nextAttemptAt: wholeSecond(step.now),
     createdAt: step.now,
     updatedAt: step.now,
   });
@@ -182,24 +195,26 @@ async function claim(
   now: Date,
   retry: WorkRetry
 ): Promise<WorkItem | null> {
-  const w = db.table(work);
-  const firstAttemptAt = row.firstAttemptAt ?? now;
-  const claimed = await db
-    .update(work, {
-      attempts: row.attempts + 1,
-      version: row.version + 1,
-      firstAttemptAt,
-      nextAttemptAt: new Date(now.getTime() + retry.leaseMs),
-      updatedAt: now,
-    })
-    .where(
-      allOf(
-        eq(w.id, row.id),
-        eq(w.version, row.version),
-        eq(w.state, "pending"),
-        lte(w.nextAttemptAt, now)
-      )
-    );
+  const firstAttemptAt = row.firstAttemptAt ?? wholeSecond(now);
+  const claimed = await ownTransaction(db, tx => {
+    const w = tx.table(work);
+    return tx
+      .update(work, {
+        attempts: row.attempts + 1,
+        version: row.version + 1,
+        firstAttemptAt,
+        nextAttemptAt: wholeSecond(new Date(now.getTime() + retry.leaseMs)),
+        updatedAt: now,
+      })
+      .where(
+        allOf(
+          eq(w.id, row.id),
+          eq(w.version, row.version),
+          eq(w.state, "pending"),
+          lte(w.nextAttemptAt, now)
+        )
+      );
+  });
   if (claimed !== 1) return null;
   return {
     id: row.id,
@@ -244,7 +259,9 @@ async function runOne(
       state: "pending",
       now,
       error: describe(error),
-      nextAttemptAt: new Date(now.getTime() + backoff(item.attempt, retry)),
+      nextAttemptAt: wholeSecond(
+        new Date(now.getTime() + backoff(item.attempt, retry))
+      ),
     });
     return "retried";
   }
@@ -265,17 +282,19 @@ async function settle(
     readonly nextAttemptAt?: Date;
   }
 ): Promise<void> {
-  const w = db.table(work);
-  await db
-    .update(work, {
-      state: outcome.state,
-      lastError: outcome.error ?? null,
-      updatedAt: outcome.now,
-      ...(outcome.nextAttemptAt
-        ? { nextAttemptAt: outcome.nextAttemptAt }
-        : {}),
-    })
-    .where(allOf(eq(w.id, item.id), eq(w.attempts, item.attempt)));
+  await ownTransaction(db, tx => {
+    const w = tx.table(work);
+    return tx
+      .update(work, {
+        state: outcome.state,
+        lastError: outcome.error ?? null,
+        updatedAt: outcome.now,
+        ...(outcome.nextAttemptAt
+          ? { nextAttemptAt: outcome.nextAttemptAt }
+          : {}),
+      })
+      .where(allOf(eq(w.id, item.id), eq(w.attempts, item.attempt)));
+  });
 }
 
 /** The wait after the given attempt failed: doubling, up to the most allowed. */
@@ -283,9 +302,13 @@ export function backoff(attempt: number, retry: WorkRetry): number {
   return Math.min(retry.firstDelayMs * 2 ** (attempt - 1), retry.maxDelayMs);
 }
 
-// Kept short and free of provider payloads: the message only, which is what
-// an operator needs to find the cause, and never a body that might hold data.
+/**
+ * What a failed attempt is recorded as: a commerce or core error's code, or
+ * an error's kind. Never its message, since an outside service's client can
+ * put a request URL, and a key in it, into the message, and this is stored
+ * where operators read it.
+ */
 function describe(error: unknown): string {
-  const message = error instanceof Error ? error.message : String(error);
-  return message.slice(0, 1000);
+  if (NextlyError.is(error)) return String(error.code);
+  return error instanceof Error ? error.name : typeof error;
 }
