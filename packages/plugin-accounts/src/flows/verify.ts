@@ -1,5 +1,6 @@
 import {
   accountByAddress,
+  accountById,
   writeAtVersion,
   type AccountRow,
   type AccountsDb,
@@ -178,6 +179,16 @@ export async function verifyByCodeWithPassword(
   return result;
 }
 
+/** Why a verification wrote nothing: the address was verified since ("spent"), or another change moved the version. */
+async function whyNotWritten(
+  tx: AccountsDb,
+  id: string
+): Promise<"spent" | "try-again"> {
+  const now = await accountById(tx, id);
+
+  return now !== null && now.verifiedAt !== null ? "spent" : "try-again";
+}
+
 /** Whether this browser's sign-up token ties it to the account. */
 async function signedUpHere(
   deps: FlowDeps,
@@ -213,11 +224,19 @@ async function completeVerification(
   try {
     started = await deps.db.transaction(async tx => {
       if (spend !== undefined && !(await spend(tx))) throw new Refusal("spent");
-      const written = await writeAtVersion(tx, account, {
-        verifiedAt: account.verifiedAt ?? now,
-        verifiedBy: account.verifiedBy ?? by,
-      });
-      if (!written) throw new Refusal("try-again");
+      // Applied only while the address is still unverified: a verification
+      // moves no version, so of a link and a code used at once, one applies
+      // and the other finds the address verified, its secret already spent.
+      const written = await writeAtVersion(
+        tx,
+        account,
+        {
+          verifiedAt: account.verifiedAt ?? now,
+          verifiedBy: account.verifiedBy ?? by,
+        },
+        account.verifiedAt === null ? { only: "unverified" } : {}
+      );
+      if (!written) throw new Refusal(await whyNotWritten(tx, account.id));
       await core.secrets.voidFor(
         { subject: account.id, purposes: VERIFICATION_PURPOSES },
         { tx }

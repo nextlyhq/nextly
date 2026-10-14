@@ -24,6 +24,7 @@ import {
 import { liveSession } from "../storage/sessions";
 import { bootAccounts } from "../test-support/boot";
 import { flowDeps } from "../test-support/flow-deps";
+import { commitBeforeFirstTransaction } from "../test-support/race";
 
 import type { AttemptRefusal } from "./password-attempt";
 import { PURPOSES } from "./purposes";
@@ -130,6 +131,35 @@ describe.each(getConfiguredTestDialects())(
         ok: false,
         reason: "spent",
       });
+    });
+
+    it("applies one of a link and a code used at once: the other finds the address verified", async () => {
+      const { db, deps, email, linkToken, account, browserToken } =
+        await signedUp();
+      // The code is spent, then the link's verification commits before the
+      // code's own transaction writes.
+      const raced = {
+        ...deps,
+        db: commitBeforeFirstTransaction(deps.db, () =>
+          verifyByLink(deps, { token: linkToken, browserToken })
+        ),
+      };
+
+      expect(
+        await verifyByCode(raced, {
+          address: dana.address,
+          code: email.code,
+          browserToken,
+        })
+      ).toEqual({ status: "refused", reason: "spent" });
+      expect(await accountByAddress(db, dana.address)).toMatchObject({
+        verifiedBy: "link",
+      });
+      expect(
+        (await db.select(sessions).all()).filter(
+          row => row.accountId === account.id
+        )
+      ).toHaveLength(1);
     });
 
     it("spends a link once", async () => {

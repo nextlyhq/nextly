@@ -4,6 +4,7 @@ import {
   asc,
   eq,
   inArray,
+  isNotNull,
   isNull,
   lte,
   or,
@@ -95,21 +96,43 @@ export async function accountByAddress(
 }
 
 /**
+ * A state a guarded write applies only in: an address still unverified, or
+ * an account still deactivated. Neither moves the security version when it
+ * changes, so a write that must apply once asks for the state itself.
+ */
+export type AccountState = "unverified" | "deactivated";
+
+/**
  * Writes `change` only while the account's security version is still
- * `version`, the one the flow read when it began, and moves the version on
- * when the change ends the account's sessions (`endsSessions`). False when
- * nothing was written: a change that ends sessions committed since the flow
- * read the version, and the flow's effect must not land. Run it in the
- * transaction that writes the rest of the effect, so the check and the
- * effect commit together.
+ * `version`, the one the flow read when it began, and, with `only`, while
+ * the account is still in that state; and moves the version on when the
+ * change ends the account's sessions (`endsSessions`). False when nothing
+ * was written: a change committed since the flow read the account, and the
+ * flow's effect must not land. Run it in the transaction that writes the
+ * rest of the effect, so the check and the effect commit together.
  */
 export async function writeAtVersion(
   db: AccountsDb,
   account: Pick<AccountRow, "id" | "securityVersion">,
   change: AccountChange,
-  options: { endsSessions?: boolean } = {}
+  options: { endsSessions?: boolean; only?: AccountState } = {}
 ): Promise<boolean> {
-  return updateAtVersion(db, account, change, options.endsSessions === true);
+  return updateAtVersion(
+    db,
+    account,
+    change,
+    options.endsSessions === true,
+    options.only === undefined ? undefined : inState(db, options.only)
+  );
+}
+
+/** The condition a row in `state` meets. */
+function inState(db: AccountsDb, state: AccountState) {
+  const columns = db.table(accounts);
+
+  return state === "unverified"
+    ? isNull(columns.verifiedAt)
+    : isNotNull(columns.deactivatedAt);
 }
 
 /**
@@ -174,7 +197,7 @@ export async function holdWhileUnverified(
     account,
     { securityVersion: account.securityVersion },
     false,
-    isNull(db.table(accounts).verifiedAt)
+    inState(db, "unverified")
   );
 }
 
