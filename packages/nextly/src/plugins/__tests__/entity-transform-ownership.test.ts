@@ -825,3 +825,73 @@ describe("the indexes on an owner's field", () => {
     expect(fieldsOf(orders)[2]).toMatchObject({ name: "total", index: false });
   });
 });
+
+describe("a field whose type decides the shape of what it stores", () => {
+  it("may not turn an owner's group into a repeater", () => {
+    // One JSON column holds either, so only the type tells an object from an
+    // array.
+    const refused = refusalOf(() =>
+      fold([
+        shop(),
+        changing("reviews", entity => ({
+          ...entity,
+          fields: replacing(fieldsOf(entity), "shipping", f => ({
+            ...f,
+            type: "repeater",
+          })),
+        })),
+      ])
+    );
+
+    expect(refused?.code).toBe("TRANSFORM_FIELD_PROTECTED");
+    expect(refused?.message).toContain('"shipping"');
+  });
+
+  it("may turn an owner's text field into an email field", () => {
+    // The control: both store the same string in the same column.
+    const orders = ordersOf([
+      shop(),
+      changing("reviews", entity => ({
+        ...entity,
+        fields: replacing(fieldsOf(entity), "title", f => ({
+          ...f,
+          type: "email",
+        })),
+      })),
+    ]);
+
+    expect(fieldsOf(orders)[0]).toMatchObject({ name: "title", type: "email" });
+  });
+});
+
+describe("a function default a third plugin contributed", () => {
+  it("may not be replaced without a dependency on its contributor", () => {
+    const today = (): string => "today";
+    const refused = refusalOf(() =>
+      fold([
+        shop(),
+        plugin("reviews", {
+          dependsOn: ["shop"],
+          extend: [
+            {
+              target: "orders",
+              fields: [
+                { name: "reviewedOn", type: "text", defaultValue: today },
+              ],
+            },
+          ],
+        }),
+        changing("badges", entity => ({
+          ...entity,
+          fields: replacing(fieldsOf(entity), "reviewedOn", f => ({
+            ...f,
+            defaultValue: "never",
+          })),
+        })),
+      ])
+    );
+
+    expect(refused?.code).toBe("TRANSFORM_BEHAVIOUR_PROTECTED");
+    expect(refused?.message).toContain("fields.reviewedOn.defaultValue");
+  });
+});

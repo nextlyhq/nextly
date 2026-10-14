@@ -130,10 +130,12 @@ function fieldsByPath(definition: Record<string, unknown>) {
 const RULE_BLOCKS = ["access", "admin"] as const;
 
 /**
- * Each access rule, hook, validator and admin setting on `node`, keyed by
- * where it sits: one entry per access operation and per admin setting, and
- * one per hook in each hook list, so adding a hook beside another's removes
- * nothing.
+ * Each access rule, hook, admin setting and function on `node`, keyed by
+ * where it sits: one entry per access operation and per admin setting, one
+ * per hook in each hook list, so adding a hook beside another's removes
+ * nothing, and one per function-valued key — a validator, a function
+ * default, a filter — since a function is behaviour wherever it sits, as a
+ * disabled plugin's transform also treats it.
  */
 function behaviourOn(node: Record<string, unknown>, at: string): Behaviour[] {
   const found: Behaviour[] = [];
@@ -151,8 +153,8 @@ function behaviourOn(node: Record<string, unknown>, at: string): Behaviour[] {
       found.push(...list.map(value => ({ key, value })));
     }
   }
-  if (node.validate !== undefined) {
-    found.push({ key: `${at}validate`, value: node.validate });
+  for (const [key, value] of Object.entries(node)) {
+    if (typeof value === "function") found.push({ key: `${at}${key}`, value });
   }
   return found;
 }
@@ -244,6 +246,12 @@ function originOf(kind: EntityKind): ColumnOrigin {
  * cannot resolve one and reads it as text: a number-backed plugin type
  * retyped to `text` would otherwise compare as unchanged.
  *
+ * So is a field stored as JSON. One JSON column holds a group's object, a
+ * repeater's array and a chips list alike, so the column cannot tell them
+ * apart; the type decides the shape of every value already stored. Types
+ * that share a string column (`text` and `email`, `select` and `radio`)
+ * store the same value and stay interchangeable.
+ *
  * A top-level field's uniqueness is part of it: the owner's rows, and its
  * code, rely on no two holding one value. Its plain `index` is not, since an
  * index changes no value and a plugin may change another's indexes.
@@ -271,9 +279,13 @@ function storageOf(
     );
   });
   const builtIn: readonly unknown[] = ALL_FIELD_TYPES;
+  const storedAsJson = columns.some(
+    column => column !== null && column.kind === "json"
+  );
   return {
     columns,
-    unresolvedType: builtIn.includes(field.type) ? undefined : field.type,
+    typeByName:
+      storedAsJson || !builtIn.includes(field.type) ? field.type : undefined,
     unique: !placed.nested && field.unique === true,
     junction: usesJunctionTable(field),
     translated:
