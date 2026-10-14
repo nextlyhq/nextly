@@ -5,6 +5,7 @@ import { allOf } from "../cart/conditions";
 import type { CatalogueSource } from "../contracts/catalogue-source";
 import {
   isRecordedProvider,
+  storedAccount,
   parseProviderAnswer,
   providerPaymentSchema,
   startProviderPayment,
@@ -99,7 +100,7 @@ async function startPayment(
 function assertRecordedProvider(
   payment: {
     readonly provider: string;
-    readonly providerAccount: string | null;
+    readonly providerAccount: string;
     readonly reference: string;
   },
   provider: PaymentProvider
@@ -110,7 +111,7 @@ function assertRecordedProvider(
     recordedProvider: payment.provider,
     recordedAccount: payment.providerAccount,
     configuredProvider: provider.id,
-    configuredAccount: provider.account ?? null,
+    configuredAccount: storedAccount(provider),
   });
 }
 

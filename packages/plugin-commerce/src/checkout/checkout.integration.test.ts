@@ -1158,6 +1158,47 @@ describe.each(getConfiguredTestDialects())(
       expect(first.control.payments()).toHaveLength(1);
     });
 
+    it("keeps a provider reference unique within its account: two accounts may share one, one account may not", async () => {
+      // Each account answers every start with the same account-local id.
+      const sharing = (account?: string): PaymentProvider => {
+        const { provider } = createTestPaymentProvider(
+          account === undefined ? {} : { account }
+        );
+        return {
+          ...provider,
+          start: async input => ({
+            ...(await provider.start(input)),
+            providerReference: "pi_same",
+          }),
+        };
+      };
+      const first = sharing("acct_first");
+      const second = sharing("acct_second");
+      const { ctx, checkout, cart } = await setup({ provider: first });
+      const place = async (payments: PaymentProvider) => {
+        const token = await shopper(cart, [["bolt", 1]]);
+        const service = checkout({ payments });
+        await service.complete({
+          token,
+          quoteKey: (await service.quote({ token })).quoteKey,
+          email: "ada@example.com",
+          addresses: ADDRESSES,
+        });
+      };
+      await place(first);
+      await place(second);
+      // The same account handing out the same id again is one payment too many.
+      await place(first);
+      const rows = await ctx.db.select(payments).all();
+      expect(
+        rows.map(row => [row.providerAccount, row.providerReference]).sort()
+      ).toEqual([
+        ["acct_first", null],
+        ["acct_first", "pi_same"],
+        ["acct_second", "pi_same"],
+      ]);
+    });
+
     it("refuses at checkout a line past the per-line limit the source gives now", async () => {
       let cap = 9;
       const memory = createInMemoryCatalogueSource({

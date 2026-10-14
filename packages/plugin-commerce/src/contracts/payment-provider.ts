@@ -367,14 +367,26 @@ export function isPayableAmount(amount: Money): boolean {
 export function isRecordedProvider(
   payment: {
     readonly provider: string;
-    readonly providerAccount: string | null;
+    readonly providerAccount: string;
   },
   provider: Pick<PaymentProvider, "id" | "account">
 ): boolean {
   return (
     payment.provider === provider.id &&
-    payment.providerAccount === (provider.account ?? null)
+    payment.providerAccount === storedAccount(provider)
   );
+}
+
+/**
+ * A provider's account as a payment records it: the account it names, or
+ * the empty string for a provider that names none, which an account never
+ * is. Never null, so a unique index over it keeps one account's references
+ * apart from another's and still holds for a provider with one account.
+ */
+export function storedAccount(
+  provider: Pick<PaymentProvider, "account">
+): string {
+  return provider.account ?? "";
 }
 
 /**

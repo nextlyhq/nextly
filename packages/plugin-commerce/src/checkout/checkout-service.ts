@@ -23,6 +23,7 @@ import type {
 import {
   isPayableAmount,
   isRecordedProvider,
+  storedAccount,
   parseProviderAnswer,
   providerPaymentSchema,
   requirePaymentAmount,
@@ -186,7 +187,7 @@ const completeSchema = z.strictObject({
 /** A payment as it is stored, as far as reading it back needs. */
 interface StoredPayment {
   readonly provider: string;
-  readonly providerAccount: string | null;
+  readonly providerAccount: string;
   readonly reference: string;
   readonly providerReference: string | null;
   readonly chargeAmount: number;
@@ -640,7 +641,7 @@ export function createCheckoutService(
         orderId: order.id,
         reference: paymentReference,
         provider: placing.provider.id,
-        providerAccount: placing.provider.account ?? null,
+        providerAccount: storedAccount(placing.provider),
         status: "pending",
         chargeAmount: summary.total.amount,
         chargeCurrency: summary.total.currency,
