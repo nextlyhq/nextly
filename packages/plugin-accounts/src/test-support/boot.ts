@@ -5,9 +5,9 @@ import {
   type TestNextly,
 } from "@nextlyhq/plugin-sdk/testing";
 
-import type { AccountsCore } from "../core/ports";
 import { accounts } from "../plugin";
 import { accountsWithCore } from "../testing";
+import type { FakeAccountsCore } from "../testing/fake-core";
 
 /** The origin every integration test configures the plugin with. */
 export const TEST_ORIGIN = "https://shop.example.com";
@@ -20,7 +20,7 @@ export const TEST_ORIGIN = "https://shop.example.com";
  */
 export async function bootAccounts(
   dialect: TestDialect,
-  options: { core?: AccountsCore } = {}
+  options: { core?: FakeAccountsCore } = {}
 ): Promise<{ ctx: PluginContext; nextly: TestNextly }> {
   const plugin =
     options.core === undefined

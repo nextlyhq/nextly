@@ -21,10 +21,11 @@ import { SEND_EMAIL_JOB } from "./jobs";
 export function flowDepsFor(
   ctx: PluginContext,
   settings: AccountsSettings,
-  core: AccountsCore
+  core: AccountsCore,
+  db: PluginContext["db"] = ctx.db
 ): FlowDeps {
   return {
-    db: ctx.db,
+    db,
     dialect: ctx.dialect,
     core,
     settings,

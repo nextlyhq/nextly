@@ -54,8 +54,9 @@ describe("the started plugin's deps", () => {
       { origin: ORIGIN, pages: { signIn: "/members/sign-in" } },
       fakeAccountsCore()
     );
-    // Only what building the deps reads; no flow runs here.
-    const ctx = {} as unknown as PluginContext;
+    // Only what building the deps reads (the stand-ins watch its database);
+    // no flow runs here.
+    const ctx = { db: {} } as unknown as PluginContext;
     await plugin.init?.(ctx);
     expect(fromInstalled().signInPath("/orders")).toBe(
       "/members/sign-in?next=%2Forders"

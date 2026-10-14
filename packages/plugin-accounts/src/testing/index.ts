@@ -6,9 +6,10 @@
  *
  * @module testing
  */
-import type { AccountsCore } from "../core/ports";
 import { buildAccounts } from "../plugin";
 import type { AccountsOptions } from "../settings";
+
+import type { FakeAccountsCore } from "./fake-core";
 
 export {
   fakeAccountsCore,
@@ -30,7 +31,13 @@ export { FakeClock, FakeCoreMisuse } from "./fake-transactions";
  */
 export function accountsWithCore(
   options: AccountsOptions,
-  core: AccountsCore
+  core: FakeAccountsCore
 ): ReturnType<typeof buildAccounts> {
-  return buildAccounts(options, () => core);
+  // The stand-ins hold the plugin to core's transaction rules only on a
+  // database they watch, so the started plugin is handed that view.
+  return buildAccounts(
+    options,
+    () => core,
+    ctx => core.watch(ctx.db)
+  );
 }

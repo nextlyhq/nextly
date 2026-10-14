@@ -39,7 +39,9 @@ export function accounts(options: AccountsOptions) {
  */
 export function buildAccounts(
   options: AccountsOptions,
-  coreFor: (ctx: PluginContext) => AccountsCore
+  coreFor: (ctx: PluginContext) => AccountsCore,
+  /** How the started plugin reaches its database: its own `ctx.db`, or a view of it the stand-ins watch. */
+  databaseFor: (ctx: PluginContext) => PluginContext["db"] = ctx => ctx.db
 ) {
   // Checked when the site's configuration is read, so a site never boots on
   // a number it did not choose.
@@ -54,7 +56,13 @@ export function buildAccounts(
   };
 
   // A flow's deps for a request, built from the started plugin's context.
-  const deps = () => flowDepsFor(started(), settings, coreFor(started()));
+  const deps = () =>
+    flowDepsFor(
+      started(),
+      settings,
+      coreFor(started()),
+      databaseFor(started())
+    );
 
   return definePlugin({
     name: PLUGIN_NAME,
