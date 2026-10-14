@@ -54,6 +54,12 @@ export {
   type PasswordHelper,
   type PasswordRules,
 } from "./security/password-helper";
+export type {
+  OneTimeSecrets,
+  SecretData,
+  TxOption,
+} from "./security/one-time-secrets";
+export type { OpaqueSecrets } from "./security/opaque-secrets";
 
 // What each hook point carries, by name; a plugin augments the map.
 export type {
