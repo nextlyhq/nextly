@@ -12,7 +12,7 @@ import { endAccountSessions } from "../storage/sessions";
 import { accountDeleted } from "./account-deleted";
 import type { FlowDeps } from "./deps";
 import { queueNotice } from "./mail";
-import { sendResetLink } from "./reset-request";
+import { mintResetLink, queueResetLink } from "./reset-request";
 import { endEverything } from "./sessions";
 import {
   mintVerification,
@@ -165,13 +165,20 @@ async function sendResetByStaff(
   deps: FlowDeps,
   accountId: string
 ): Promise<StaffActionResult> {
-  const account = await accountById(deps.db, accountId);
-  if (account === null) return { status: "missing" };
-  if (account.deactivatedAt !== null)
-    return { status: "refused", reason: "deactivated" };
-  await sendResetLink(deps, account);
+  let token: string | null = null;
+  const result = await atVersion(
+    deps,
+    accountId,
+    account => (account.deactivatedAt !== null ? "deactivated" : undefined),
+    async (tx, account) => {
+      token = await mintResetLink(deps, tx, account);
+      return token !== null;
+    }
+  );
+  if (result.status !== "done" || token === null) return result;
+  await queueResetLink(deps, result.account, token);
 
-  return { status: "done", account };
+  return result;
 }
 
 /**

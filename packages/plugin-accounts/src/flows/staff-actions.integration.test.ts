@@ -17,6 +17,7 @@ import { askAddressChange, pendingChangeOf } from "../storage/pending-changes";
 import { makeAccount, TEST_PASSWORD } from "../test-support/accounts";
 import { bootAccounts } from "../test-support/boot";
 import { flowDeps } from "../test-support/flow-deps";
+import { commitBeforeFirstTransaction } from "../test-support/race";
 
 import { PURPOSES } from "./purposes";
 import { completePasswordReset } from "./reset";
@@ -204,21 +205,12 @@ describe.each(getConfiguredTestDialects())(
 
     it("refuses to resend once the holder's verification commits after the account was read", async () => {
       const { deps, mail, id } = await boot({ verified: false });
-      let verified = false;
       const raced = {
         ...deps,
-        db: new Proxy(deps.db, {
-          get(target, key, receiver) {
-            if (key !== "transaction" || verified)
-              return Reflect.get(target, key, receiver) as unknown;
-            return async (work: Parameters<typeof target.transaction>[0]) => {
-              verified = true;
-              const fresh = await accountById(target, id);
-              if (fresh !== null)
-                await writeAtVersion(target, fresh, { verifiedAt: new Date() });
-              return target.transaction(work);
-            };
-          },
+        db: commitBeforeFirstTransaction(deps.db, async () => {
+          const fresh = await accountById(deps.db, id);
+          if (fresh !== null)
+            await writeAtVersion(deps.db, fresh, { verifiedAt: new Date() });
         }),
       };
 
@@ -245,6 +237,29 @@ describe.each(getConfiguredTestDialects())(
           password: "another long passphrase",
         })
       ).toMatchObject({ status: "reset" });
+    });
+
+    it("sends no reset link once a deactivation commits after the account was read", async () => {
+      const { deps, mail, id } = await boot();
+      const raced = {
+        ...deps,
+        db: commitBeforeFirstTransaction(deps.db, async () => {
+          const fresh = await accountById(deps.db, id);
+          if (fresh !== null)
+            await writeAtVersion(
+              deps.db,
+              fresh,
+              { deactivatedAt: new Date() },
+              { endsSessions: true }
+            );
+        }),
+      };
+
+      expect(await runStaffAction(raced, "send-reset", id)).toEqual({
+        status: "refused",
+        reason: "deactivated",
+      });
+      expect(mail.ofKind("reset-password")).toEqual([]);
     });
 
     it("sends a deactivated account no reset link", async () => {

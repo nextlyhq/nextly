@@ -16,11 +16,11 @@ import {
   type KnownBrowserRow,
 } from "../storage/known-browsers";
 
-import { MINUTE, type FlowDeps } from "./deps";
+import type { FlowDeps } from "./deps";
 import { ADDRESS } from "./input";
 import { validTokens } from "./known-tokens";
 import { pageLink } from "./links";
-import { PURPOSES } from "./purposes";
+import { mintResetLink } from "./reset-request";
 
 /** A known-browser token an attempt carries, charged with the attempt. */
 export interface CarriedToken {
@@ -301,11 +301,10 @@ async function emailResetRequired(
     !(await claimResetRequiredEmail(deps.db, account.id, now))
   )
     return;
-  const { token } = await deps.core.secrets.mintToken({
-    purpose: PURPOSES.reset,
-    subject: account.id,
-    expiresInMs: deps.settings.resetLinkMinutes * MINUTE,
-  });
+  const token = await deps.db.transaction(tx =>
+    mintResetLink(deps, tx, account)
+  );
+  if (token === null) return;
   await deps.mail.queue({
     kind: "reset-required",
     accountId: account.id,

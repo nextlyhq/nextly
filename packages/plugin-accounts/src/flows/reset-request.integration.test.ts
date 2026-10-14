@@ -16,6 +16,7 @@ import { accountById, writeAtVersion } from "../storage/accounts";
 import { knownBrowserOf, makeAccount } from "../test-support/accounts";
 import { bootAccounts, TEST_ORIGIN } from "../test-support/boot";
 import { flowDeps } from "../test-support/flow-deps";
+import { commitBeforeFirstTransaction } from "../test-support/race";
 
 import { PURPOSES } from "./purposes";
 import { requestPasswordReset } from "./reset-request";
@@ -74,6 +75,32 @@ describe.each(getConfiguredTestDialects())(
       expect(
         await core.secrets.peekToken({ purpose: PURPOSES.reset, token })
       ).toEqual({ ok: false, reason: "expired" });
+    });
+
+    it("mints no link once a deactivation commits after the account was read", async () => {
+      const { deps, resetsTo } = await boot();
+      const id = await makeAccount(deps, "dana@example.com");
+      const raced = {
+        ...deps,
+        db: commitBeforeFirstTransaction(deps.db, async () => {
+          const fresh = await accountById(deps.db, id);
+          if (fresh !== null)
+            await writeAtVersion(
+              deps.db,
+              fresh,
+              { deactivatedAt: new Date() },
+              { endsSessions: true }
+            );
+        }),
+      };
+
+      expect(
+        await requestPasswordReset(raced, {
+          address: "dana@example.com",
+          client: null,
+        })
+      ).toEqual({ status: "accepted" });
+      expect(resetsTo("dana@example.com")).toBe(0);
     });
 
     it("refuses a fourth request for one address in 15 minutes, whether or not it has an account", async () => {
