@@ -36,6 +36,12 @@ describe("the accounts plugin's migration modules against its declaration", () =
         recursive: true,
         filter: source => !source.includes("node_modules"),
       });
+      // The declaration takes the plugin's name from the module it shares
+      // with the admin screens, which imports nothing, so it is copied too.
+      cpSync(
+        join(packageRoot, "src/admin-contract.ts"),
+        join(scratch, "src/admin-contract.ts")
+      );
       cpSync(join(packageRoot, "package.json"), join(scratch, "package.json"));
       symlinkSync(
         join(packageRoot, "node_modules"),
