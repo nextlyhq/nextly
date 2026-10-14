@@ -775,3 +775,53 @@ describe("the order of hooks a third plugin contributed", () => {
     ]);
   });
 });
+
+describe("the indexes on an owner's field", () => {
+  const indexedOrders = () =>
+    plugin("shop", {
+      collections: [
+        ordersCollection({
+          fields: [
+            { name: "title", type: "text" },
+            { name: "reference", type: "text", unique: true },
+            { name: "total", type: "number", index: true },
+          ],
+        }),
+      ],
+    });
+
+  it("keep its uniqueness: the owner's rows rely on it", () => {
+    const refused = refusalOf(() =>
+      fold([
+        indexedOrders(),
+        changing("reviews", entity => ({
+          ...entity,
+          fields: replacing(fieldsOf(entity), "reference", f => ({
+            ...f,
+            unique: false,
+          })),
+        })),
+      ])
+    );
+
+    expect(refused?.code).toBe("TRANSFORM_FIELD_PROTECTED");
+    expect(refused?.message).toContain('"reference"');
+  });
+
+  it("may lose a plain index, which a plugin may change", () => {
+    // The control: an index changes no value, and modifying another plugin's
+    // indexes is what a transform may do.
+    const orders = ordersOf([
+      indexedOrders(),
+      changing("reviews", entity => ({
+        ...entity,
+        fields: replacing(fieldsOf(entity), "total", f => ({
+          ...f,
+          index: false,
+        })),
+      })),
+    ]);
+
+    expect(fieldsOf(orders)[2]).toMatchObject({ name: "total", index: false });
+  });
+});

@@ -244,6 +244,10 @@ function originOf(kind: EntityKind): ColumnOrigin {
  * cannot resolve one and reads it as text: a number-backed plugin type
  * retyped to `text` would otherwise compare as unchanged.
  *
+ * A top-level field's uniqueness is part of it: the owner's rows, and its
+ * code, rely on no two holding one value. Its plain `index` is not, since an
+ * index changes no value and a plugin may change another's indexes.
+ *
  * A nested field's value lives inside its parent's JSON, where nothing is
  * NOT NULL, so its nullability is left out: making it required changes no
  * column. A top-level field's is kept, because making one required alters
@@ -270,6 +274,7 @@ function storageOf(
   return {
     columns,
     unresolvedType: builtIn.includes(field.type) ? undefined : field.type,
+    unique: !placed.nested && field.unique === true,
     junction: usesJunctionTable(field),
     translated:
       !placed.nested &&
