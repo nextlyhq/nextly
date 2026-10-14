@@ -17,6 +17,7 @@ import type { AccountsOptions } from "../settings";
 import {
   accountByAddress,
   accountById,
+  claimResetRequiredEmail,
   createAccount,
   recordFailedPassword,
   writeAtVersion,
@@ -393,6 +394,54 @@ describe.each(getConfiguredTestDialects())(
           knownTokens: [knownBrowserToken],
         })
       );
+    });
+
+    it("emails a reset link when the account reaches its threshold, and at most once a day after", async () => {
+      const { core, mail, account, attempt } = await boot({
+        failuresBeforeReset: 10,
+      });
+      await account("dana@example.com");
+      const fail = async () => {
+        await attempt("dana@example.com", "wrong");
+        core.clock.advance(60 * SECOND);
+      };
+      for (let n = 0; n < 9; n += 1) await fail();
+      expect(mail.ofKind("reset-required")).toEqual([]);
+
+      await fail();
+      const [email] = mail.ofKind("reset-required");
+      expect(email?.to).toBe("dana@example.com");
+      expect(new URL(email?.link ?? "").pathname).toBe("/account/reset");
+      await fail();
+      expect(mail.ofKind("reset-required")).toHaveLength(1);
+      core.clock.advance(24 * 60 * 60 * SECOND);
+      await fail();
+      expect(mail.ofKind("reset-required")).toHaveLength(2);
+    });
+
+    it("never emails a deactivated account a reset link, and one of two claims at once wins", async () => {
+      const { db, deps, mail, account } = await boot({
+        failuresBeforeReset: 10,
+      });
+      const id = await account("gone@example.com", { deactivated: true });
+      for (let n = 0; n < 10; n += 1) {
+        await signIn(deps, {
+          address: "gone@example.com",
+          password: "wrong",
+          client: null,
+        });
+        await deps.core.limits.reset({
+          rule: "sign-in-address",
+          key: "gone@example.com",
+        });
+      }
+      expect(mail.ofKind("reset-required")).toEqual([]);
+
+      const claims = await Promise.all([
+        claimResetRequiredEmail(db, id, deps.now()),
+        claimResetRequiredEmail(db, id, deps.now()),
+      ]);
+      expect(claims.filter(Boolean)).toHaveLength(1);
     });
 
     it("re-hashes a password stored at an older setting", async () => {

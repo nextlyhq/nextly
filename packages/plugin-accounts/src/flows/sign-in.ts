@@ -2,6 +2,7 @@ import { LIMIT_RULES } from "../core/limit-rules";
 import type { AdmittedReservation, LimitEntry } from "../core/ports";
 import {
   accountByAddress,
+  claimResetRequiredEmail,
   normaliseAddress,
   recordFailedPassword,
   writeAtVersion,
@@ -17,9 +18,11 @@ import {
 } from "../storage/known-browsers";
 import { startSession } from "../storage/sessions";
 
-import { sessionLimits, type FlowDeps } from "./deps";
+import { MINUTE, sessionLimits, type FlowDeps } from "./deps";
 import { ADDRESS } from "./input";
 import { validTokens } from "./known-tokens";
+import { pageLink } from "./links";
+import { PURPOSES } from "./purposes";
 import type { StartedSession } from "./verify";
 
 export interface SignInInput {
@@ -189,15 +192,44 @@ async function passwordProven(
   const { account, own, now } = input;
   if (await deps.pacer.verify(input.password, account.passwordHash))
     return true;
-  await recordFailedPassword(
+  const counted = await recordFailedPassword(
     deps.db,
     account.id,
     now,
     deps.settings.failuresBeforeReset
   );
   if (own !== undefined) await recordFailedCheck(deps.db, own.row.id, now);
+  if (counted?.resetRequired === true)
+    await emailResetRequired(deps, account, now);
 
   return false;
+}
+
+/**
+ * Emails the holder of an account that needs a reset a reset link, at most
+ * once a day and never for a deactivated account.
+ */
+async function emailResetRequired(
+  deps: FlowDeps,
+  account: AccountRow,
+  now: Date
+): Promise<void> {
+  if (
+    account.deactivatedAt !== null ||
+    !(await claimResetRequiredEmail(deps.db, account.id, now))
+  )
+    return;
+  const { token } = await deps.core.secrets.mintToken({
+    purpose: PURPOSES.reset,
+    subject: account.id,
+    expiresInMs: deps.settings.resetLinkMinutes * MINUTE,
+  });
+  await deps.mail.queue({
+    kind: "reset-required",
+    accountId: account.id,
+    to: account.address,
+    link: pageLink(deps.settings, "reset", token),
+  });
 }
 
 /**

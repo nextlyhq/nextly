@@ -1,5 +1,13 @@
 import type { PluginContext, PluginTransaction } from "@nextlyhq/plugin-sdk";
-import { and, asc, eq, inArray, isNull, lte } from "@nextlyhq/plugin-sdk/db";
+import {
+  and,
+  asc,
+  eq,
+  inArray,
+  isNull,
+  lte,
+  or,
+} from "@nextlyhq/plugin-sdk/db";
 import {
   isUniqueViolation,
   type InferInsert,
@@ -207,5 +215,31 @@ export async function recordFailedPassword(
   }
   throw new Error(
     "The failure count kept moving: too many failed checks at once for one account."
+  );
+}
+
+/**
+ * Claims the day's reset-required email for the account: true for exactly
+ * one caller a day, however many failures reach the threshold at once, by
+ * one conditional write; false when one went within the last day.
+ */
+export async function claimResetRequiredEmail(
+  db: AccountsDb,
+  id: string,
+  now: Date
+): Promise<boolean> {
+  const columns = db.table(accounts);
+  const dayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+  const due = or(
+    isNull(columns.resetRequiredEmailedAt),
+    lte(columns.resetRequiredEmailedAt, dayAgo)
+  );
+  const claim = due === undefined ? undefined : and(eq(columns.id, id), due);
+  if (claim === undefined) throw new TypeError("The claim lost its condition.");
+
+  return (
+    (await db
+      .update(accounts, { resetRequiredEmailedAt: now })
+      .where(claim)) === 1
   );
 }

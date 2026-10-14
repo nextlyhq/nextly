@@ -32,6 +32,13 @@ export type AccountsEmail =
       link: string;
     }
   | {
+      /** Too many wrong passwords in a row: only a reset, or a known browser, signs it in now. */
+      kind: "reset-required";
+      accountId: string;
+      to: string;
+      link: string;
+    }
+  | {
       /** The account's password changed, by a reset or by its holder. */
       kind: "password-changed";
       accountId: string;
