@@ -1,6 +1,6 @@
 ---
 title: Commerce
-description: A catalogue to sell from and a cart kept on the server, behind a cookie, with the REST routes and typed server functions a storefront uses.
+description: A catalogue to sell from, a cart kept on the server behind a cookie, and a checkout that turns it into an order and starts its payment, with the REST routes and typed server functions a storefront uses.
 ---
 
 > **Alpha, and not published yet.**
@@ -9,8 +9,9 @@ description: A catalogue to sell from and a cart kept on the server, behind a co
 > boundary is `@nextlyhq/plugin-sdk` (see [API stability](/docs/plugins/stability)); this
 > package's own exports are outside it and may change between alpha releases.
 
-The commerce plugin gives a site a catalogue to sell from and a cart that lives on the
-server. Checkout, orders and payments build on it and are not in this release.
+The commerce plugin gives a site a catalogue to sell from, a cart that lives on the server,
+and a checkout that turns the cart into an order, holds its stock and starts its payment.
+Confirming payments, fulfilment and refunds build on it and are not in this release.
 
 ## Setup
 
@@ -23,17 +24,20 @@ export default defineConfig({
 });
 ```
 
-| Option             | Default                 | What it does                                                                                                                                       |
-| ------------------ | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `currency`         | required                | The store's ISO 4217 currency. Every price and cart is in it                                                                                       |
-| `catalogue`        | the products collection | A catalogue source of the site's own, such as an outside product API                                                                               |
-| `productsSlug`     | `products`              | The built-in products collection's slug                                                                                                            |
-| `cartLifetimeDays` | `30`                    | How long a cart lives after its last change. At most 365, inside the 400 days browsers keep a cookie                                               |
-| `secureCookies`    | on in production only   | Whether the cart cookie is `Secure`, under the `__Host-` name. A browser drops a `Secure` cookie set over plain HTTP                               |
-| `cartWriteLimit`   | 60 a minute             | How many requests one client may make to each cart write route in a window, as `{ max, windowMs }`. Raise it when shoppers share a network address |
+| Option                  | Default                 | What it does                                                                                                                                       |
+| ----------------------- | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `currency`              | required                | The store's ISO 4217 currency. Every price and cart is in it                                                                                       |
+| `catalogue`             | the products collection | A catalogue source of the site's own, such as an outside product API                                                                               |
+| `productsSlug`          | `products`              | The built-in products collection's slug                                                                                                            |
+| `cartLifetimeDays`      | `30`                    | How long a cart lives after its last change. At most 365, inside the 400 days browsers keep a cookie                                               |
+| `secureCookies`         | on in production only   | Whether the cart cookie is `Secure`, under the `__Host-` name. A browser drops a `Secure` cookie set over plain HTTP                               |
+| `cartWriteLimit`        | 60 a minute             | How many requests one client may make to each cart write route in a window, as `{ max, windowMs }`. Raise it when shoppers share a network address |
+| `payments`              | none                    | The payment provider checkout starts payments with. Without one, a checkout can be quoted but not completed                                        |
+| `unpaidOrderMinutes`    | `30`                    | How long after it is placed an unpaid order's deadline falls. 5 to 1,440. Giving up orders past it comes in a later release                        |
+| `jobsStaleAfterMinutes` | `15`                    | How long commerce's jobs may go without running before checkout stops taking orders. 1 to 1,440                                                    |
 
-Commerce keeps its records in its own tables, `commerce__carts` and `commerce__cart_lines`,
-created by its migration modules. Run `nextly migrate` after installing or upgrading it: a
+Commerce keeps its records in its own tables, all named `commerce__…` (carts, orders,
+payments, stock and the work that follows a checkout), created by its migration modules. Run `nextly migrate` after installing or upgrading it: a
 production boot refuses a database that has not applied them, with
 `PLUGIN_SCHEMA_BEHIND`. In development the push creates them at boot.
 
@@ -83,20 +87,66 @@ cart's deadline, is cleared, and the next change starts a fresh cart with a new 
 
 A cart holds at most 100 lines and 999 units on one line.
 
+### Stock counts
+
+For a `counted` or `one-off` product, `stockCount` is the number of units you have that are
+**not yet sold**. Count units an unpaid order is holding, since commerce takes its own holds
+off; leave out units already sold that are waiting to ship. What a shopper can buy is that
+count less the units unpaid orders hold, never less than none.
+
+## Checkout
+
+Checkout is two steps, both read from the cart cookie, never from ids the browser sends:
+
+1. **Quote.** Commerce prices the cart from the catalogue again and answers its lines, its
+   subtotal and total, and a `quoteKey` naming exactly that summary.
+2. **Complete**, with the `quoteKey`, the buyer's email and a shipping address (a billing
+   address too, if it differs). If the cart or any price has changed since the quote,
+   completion is refused with `COMMERCE_QUOTE_CHANGED` and nothing is created: quote again
+   and show the new total. Otherwise, in one transaction, commerce creates the order with a
+   snapshot of its lines, numbers it, holds the stock of every counted or one-off item, and
+   records its payment. It then starts the payment with your provider and answers the order
+   and the payment, with the data the provider's own payment form needs.
+
+A cart becomes one order. Completing it again, because a response was lost or a button was
+pressed twice, answers the same order and starts no second payment, and the cart then shows
+empty. Order numbers are whole numbers counting up from 1, never two alike; a checkout
+that fails partway can leave a number unused.
+
+An unpaid order holds its stock, and records a deadline `unpaidOrderMinutes` after it is
+placed. **Not in this release:** giving up an order past its deadline, which releases its
+stock, and marking a paid order's units sold. Until those arrive, a held unit stays held.
+
+When two buyers reach the last unit at once, exactly one gets it, and the other is refused
+with `COMMERCE_OUT_OF_STOCK`. If the provider cannot be reached when an order is completed,
+the order still stands and commerce starts the payment later, through its jobs, under the
+same key, so it is never started twice.
+
+### Before launch: run the jobs
+
+Commerce finishes work after each checkout, such as starting a payment the provider could not
+take at first, in a background job, `commerce:work`, which runs when your site runs
+[jobs](/docs/jobs). Until that job has run, and whenever it has not run for
+`jobsStaleAfterMinutes`, **checkout refuses to take orders** with `COMMERCE_JOBS_NOT_RUNNING`
+(503) and logs an error naming the job, since an order taken then might never finish.
+Quoting still works. So set up the jobs trigger, and run it once, before the store opens.
+
 ## REST routes
 
 Every route is public, answers `Cache-Control: no-store` and is rate-limited per client.
 They live under `/admin/api/plugins/@nextlyhq/plugin-commerce`:
 
-| Method   | Path               | Body or query                        | Answers                   |
-| -------- | ------------------ | ------------------------------------ | ------------------------- |
-| `GET`    | `/cart`            |                                      | the cart                  |
-| `POST`   | `/cart/lines`      | `{ reference, quantity }`            | `{ message, item: cart }` |
-| `PATCH`  | `/cart/lines`      | `{ reference, quantity }`, 0 removes | `{ message, item: cart }` |
-| `DELETE` | `/cart/lines`      | `?reference=`                        | `{ message, item: cart }` |
-| `DELETE` | `/cart`            |                                      | `{ message, item: cart }` |
-| `GET`    | `/catalogue/items` | `?reference=` once per item          | `{ items, meta }`         |
-| `GET`    | `/catalogue`       | `?limit=&cursor=&search=`            | `{ items, nextCursor }`   |
+| Method   | Path                 | Body or query                                            | Answers                                 |
+| -------- | -------------------- | -------------------------------------------------------- | --------------------------------------- |
+| `GET`    | `/cart`              |                                                          | the cart                                |
+| `POST`   | `/cart/lines`        | `{ reference, quantity }`                                | `{ message, item: cart }`               |
+| `PATCH`  | `/cart/lines`        | `{ reference, quantity }`, 0 removes                     | `{ message, item: cart }`               |
+| `DELETE` | `/cart/lines`        | `?reference=`                                            | `{ message, item: cart }`               |
+| `DELETE` | `/cart`              |                                                          | `{ message, item: cart }`               |
+| `GET`    | `/catalogue/items`   | `?reference=` once per item                              | `{ items, meta }`                       |
+| `GET`    | `/catalogue`         | `?limit=&cursor=&search=`                                | `{ items, nextCursor }`                 |
+| `POST`   | `/checkout/quote`    |                                                          | the quote                               |
+| `POST`   | `/checkout/complete` | `{ quoteKey, email, addresses: { shipping, billing? } }` | `{ message, item: { order, payment } }` |
 
 `/catalogue` is there when the source can be browsed, as the built-in one can. Pass its
 `nextCursor` back as `cursor` for the next page; a source that names the page it was asked
@@ -110,7 +160,9 @@ in, and a cross-site form could otherwise change it. Fetch one from
 as `x-csrf-token` (or as `csrfToken` in the JSON body) from a page on your own site or an
 origin in `NEXTLY_ALLOWED_ORIGINS`. A write without it answers 403 `CSRF_FAILED`.
 
-Each write route allows a client 60 requests a minute unless `cartWriteLimit` says otherwise, counted per route, and reads take the general allowance. The
+Each cart write route, and the quote, allows a client 60 requests a minute unless
+`cartWriteLimit` says otherwise, counted per route; completing a checkout allows 10 a minute,
+and reads take the general allowance. The
 counts are kept per server process, and every client shares one count unless
 `security.trustProxy` lets Nextly read client addresses (see [Security](/docs/plugins/security)).
 
@@ -130,5 +182,20 @@ export async function addToCart(token: string | null) {
 The cart functions take the token from the cart cookie, or `null` for a shopper without
 one, and answer the cart with what to do with the cookie: `keep` it, `set` it to a token
 until a deadline, or `clear` it. The caller reads and writes the cookie, with
-`readCartToken`, `cartCookieHeader` and `clearCartCookieHeader` from the same package. A
-plugin reaches them through its own context with `commerceServices(ctx)`.
+`readCartToken`, `cartCookieHeader` and `clearCartCookieHeader` from the same package.
+`checkout.quote({ token })` and `checkout.complete({ token, quoteKey, email, addresses })`
+take the same token. A plugin reaches them all through its own context with
+`commerceServices(ctx)`.
+
+## Errors
+
+Besides core's `VALIDATION_ERROR` and `CSRF_FAILED`, checkout answers these:
+
+| Code                               | Status | When                                                   |
+| ---------------------------------- | ------ | ------------------------------------------------------ |
+| `COMMERCE_CART_EMPTY`              | 409    | There is no cart, or nothing in it                     |
+| `COMMERCE_QUOTE_CHANGED`           | 409    | The cart or a price changed since the quote            |
+| `COMMERCE_OUT_OF_STOCK`            | 409    | An item no longer has the stock asked for              |
+| `COMMERCE_NOTHING_TO_PAY`          | 409    | The total is nothing; free orders cannot be placed yet |
+| `COMMERCE_JOBS_NOT_RUNNING`        | 503    | Commerce's jobs have not run recently, or ever         |
+| `COMMERCE_PAYMENTS_NOT_CONFIGURED` | 500    | The store has no `payments` provider                   |

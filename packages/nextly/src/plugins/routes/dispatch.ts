@@ -8,6 +8,7 @@ import {
 import { runWithCallerScope } from "../../auth/caller-scope";
 import { withoutRefreshCookie } from "../../auth/cookies/refresh-token-cookie";
 import { readCsrfBody } from "../../auth/csrf/read-csrf-body";
+import { carriesBearerToken } from "../../auth/csrf/validate";
 import {
   isErrorResponse,
   requireAuthentication,
@@ -24,6 +25,11 @@ import {
 } from "../../middleware/rate-limit";
 import { SKIP_TIMEZONE_FORMAT_HEADER } from "../../shared/lib/date-formatting";
 import type { AuthUser } from "../../types/auth";
+import {
+  recognisePrincipal,
+  runWithPrincipalAnswers,
+} from "../principals/recognise";
+import type { Principal, PluginRoutePrincipal } from "../principals/types";
 import type { PluginSelf } from "../self";
 
 import { composeMiddleware } from "./middleware";
@@ -73,11 +79,24 @@ function toErrorResponse(req: Request, err: unknown): Response {
   });
 }
 
+/** Who a route's caller turned out to be, and how they proved it. */
+interface RouteAuth {
+  user: AuthUser | null;
+  authenticatedScope?: AuthenticatedScope;
+  caller: PluginRouteCaller | null;
+  /** The plugin's kind of signed-in person, on a route that asks for one. */
+  principal: Principal | null;
+  /** How the caller actually authenticated, for the CSRF decision. */
+  credential: CallerCredential;
+}
+
 /**
  * Resolve secure-by-default auth for a route. `public: true` skips auth
- * (`user` is `null`). Otherwise the request must be authenticated; if the route
- * declares `requiredPermission`, that permission is enforced too. Returns either
- * the resolved `user` or the failure (401/403) for the caller to serialize.
+ * (`user` is `null`). A route asking for a `principal` recognises that kind of
+ * person and reads no staff credential. Otherwise the request must be
+ * authenticated; if the route declares `requiredPermission`, that permission
+ * is enforced too. Returns either the caller or the failure (401/403) for the
+ * caller to serialize.
  *
  * The failure rather than a finished Response, so the one boundary that builds
  * a plugin route's error body builds all of them. Returning a ready response
@@ -89,20 +108,18 @@ async function resolvePluginRouteAuth(
   req: Request,
   route: PluginRoute,
   self: PluginSelf
-): Promise<
-  | {
-      user: AuthUser | null;
-      authenticatedScope?: AuthenticatedScope;
-      caller: PluginRouteCaller | null;
-      /** How the caller actually authenticated, for the CSRF decision. */
-      credential: CallerCredential;
-    }
-  | { error: NextlyError }
-> {
+): Promise<RouteAuth | { error: NextlyError }> {
+  // First, and instead of every staff path below: a route asking for a kind
+  // never reads the staff session or an API key, so its handler cannot be
+  // handed staff on a request a person made from a browser holding both.
+  if (route.principal !== undefined) {
+    return principalRouteAuth(req, route.principal, self);
+  }
   if (route.public === true) {
     return {
       user: null,
       caller: null,
+      principal: null,
       // No credential resolved anyone on a public route, and a handler may
       // still resolve the session cookie through ctx.auth.currentUser — so the
       // session cookie itself is what decides, not the presence of any
@@ -127,6 +144,67 @@ async function resolvePluginRouteAuth(
 }
 
 /**
+ * Auth for a route that asks for a plugin's kind of signed-in person.
+ *
+ * A route that requires the kind refuses a request with nobody of it exactly
+ * as a secure route refuses an unauthenticated one, so the answer says
+ * nothing a staff route's would not.
+ *
+ * The credential is a cookie's unless the request carries a `Bearer` token.
+ * A plugin's session is whatever the plugin made it, so core cannot tell its
+ * cookie from its header; treating the person as a cookie caller holds their
+ * writes to the route's cross-site check, and a `Bearer` token exempts by its
+ * presence, as it does for every caller. Nobody recognised is no credential:
+ * there is no one a forged request could act for.
+ */
+async function principalRouteAuth(
+  req: Request,
+  asked: PluginRoutePrincipal,
+  self: PluginSelf
+): Promise<RouteAuth | { error: NextlyError }> {
+  let principal: Principal | null;
+  try {
+    principal = await recognisePrincipal(req, asked.kind);
+  } catch (cause) {
+    // Only a kind missing from the registry throws here, which collection
+    // refuses at boot. Answered as a server fault rather than let through:
+    // the catch-all above this maps no thrown error to a response.
+    return {
+      error: NextlyError.internal({
+        ...(cause instanceof Error ? { cause } : {}),
+        logContext: {
+          reason: "plugin-route-principal-unresolved",
+          plugin: self.name,
+          principalKind: asked.kind,
+        },
+      }),
+    };
+  }
+  if (principal === null && asked.required !== false) {
+    return {
+      error: NextlyError.authRequired({
+        logContext: {
+          reason: "plugin-route-principal-required",
+          plugin: self.name,
+          principalKind: asked.kind,
+        },
+      }),
+    };
+  }
+  return {
+    user: null,
+    caller: null,
+    principal,
+    credential:
+      principal === null
+        ? "none"
+        : carriesBearerToken(req)
+          ? "bearer"
+          : "cookie",
+  };
+}
+
+/**
  * The successful half of route auth: who is asking, with what scope, and how
  * they actually authenticated.
  *
@@ -144,12 +222,7 @@ function authenticatedCaller(
     Awaited<ReturnType<typeof requireAuthentication>>,
     { statusCode: number }
   >
-): {
-  user: AuthUser;
-  authenticatedScope?: AuthenticatedScope;
-  caller: PluginRouteCaller;
-  credential: "cookie" | "bearer";
-} {
+): RouteAuth & { user: AuthUser; caller: PluginRouteCaller } {
   const user: AuthUser = {
     id: authResult.userId as AuthUser["id"],
     email: authResult.userEmail ?? "",
@@ -165,6 +238,7 @@ function authenticatedCaller(
     // the raw grant and the question asked of it cannot disagree about who
     // is asking.
     caller: buildPluginRouteCaller(authResult),
+    principal: null,
     credential: authResult.authMethod === "session" ? "cookie" : "bearer",
   };
 }
@@ -635,6 +709,7 @@ export async function runPluginRoute(
     user: auth.user,
     authenticatedScope: auth.authenticatedScope,
     caller: auth.caller,
+    principal: auth.principal,
     params: matched.params,
   };
 
@@ -647,7 +722,12 @@ export async function runPluginRoute(
   // that read a session and then threw produced a personal error response,
   // and a refusal a shared cache holds for one caller is the same defect as
   // an answer it holds.
-  const session = beginSessionConsultation();
+  // A route asking for a kind hides the staff session from the handler too:
+  // `ctx.auth.currentUser` there answers no user, so the handler sees the
+  // person or nobody however it asks.
+  const session = beginSessionConsultation({
+    staffHidden: matched.route.principal !== undefined,
+  });
   // A public route's handler that asked for the user of a write another site
   // posted with a session cookie got "no user" from `ctx.auth.currentUser`.
   // Recorded here, once and on either path out, as the refusal above records
@@ -664,9 +744,15 @@ export async function runPluginRoute(
     // existed composes `{ as: "user", user }` by hand: an opt-in field leaves
     // all of them authorizing the key as its owner, and leaves every read and
     // write they make looking like background work to a hook.
+    //
+    // The request's answers about plugin-defined people are pinned as well,
+    // so a handler asking for a person through a copy of its request gets the
+    // answer the route already has rather than a second resolver call.
     const response = await session.run(() =>
       runWithRequestScope(req, () =>
-        runWithCallerScope(auth.authenticatedScope, () => run(req, ctx))
+        runWithPrincipalAnswers(req, () =>
+          runWithCallerScope(auth.authenticatedScope, () => run(req, ctx))
+        )
       )
     );
     await recordCrossSiteRead();

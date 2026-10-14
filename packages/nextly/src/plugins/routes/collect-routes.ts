@@ -1,4 +1,5 @@
 import type { PluginDefinition } from "../plugin-context";
+import { collectPrincipalKinds } from "../principals/registry";
 
 import { rootMountUnreachableReason } from "./root-mount-reach";
 import {
@@ -126,6 +127,9 @@ export function collectPluginRoutes(
 ): CollectedRoute[] {
   const collected: CollectedRoute[] = [];
   const seen: ClaimedPattern[] = [];
+  // Every enabled plugin's kinds, from the same fold resolution publishes, so
+  // a route can name a kind only if recognition will find one by that name.
+  const kinds = collectPrincipalKinds(plugins);
 
   for (const plugin of plugins) {
     if (plugin.enabled === false) continue;
@@ -142,6 +146,17 @@ export function collectPluginRoutes(
           route.method,
           route.path,
           optionProblem
+        );
+      }
+      // Refused here rather than left to answer every request 401: a kind
+      // nobody registers recognises nobody, so the route could never serve
+      // anyone, and a misspelt kind would look like a sign-in that fails.
+      if (route.principal !== undefined && !kinds.has(route.principal.kind)) {
+        throw routeInvalidOptionsError(
+          plugin.name,
+          route.method,
+          route.path,
+          `principal names the kind ${JSON.stringify(route.principal.kind)}, which no enabled plugin registers`
         );
       }
       // Resolved once, so the claim is checked against the same mount the

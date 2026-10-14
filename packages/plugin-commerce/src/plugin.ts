@@ -12,9 +12,19 @@ import {
 import { productsCollection } from "./catalogue/products-collection";
 import { createProductsSource } from "./catalogue/products-source";
 import {
+  createCheckoutService,
+  WORK_JOB,
+  type CheckoutService,
+} from "./checkout/checkout-service";
+import { checkoutWorkHandlers } from "./checkout/checkout-work";
+import {
   assertCatalogueSource,
   type CatalogueSource,
 } from "./contracts/catalogue-source";
+import {
+  assertPaymentProvider,
+  type PaymentProvider,
+} from "./contracts/payment-provider";
 import { assertCurrency } from "./money/currency";
 import { parseRequest } from "./request-input";
 import { commerceSchema, PLUGIN_NAME } from "./schema/definition";
@@ -30,9 +40,12 @@ import {
 import {
   CART_SERVICE,
   CATALOGUE_SERVICE,
+  CHECKOUT_SERVICE,
   forgetInstalled,
   rememberInstalled,
 } from "./storefront/server";
+import { workJob } from "./work/work-job";
+import type { WorkItem } from "./work/work-runner";
 
 /**
  * What a site passes to `commerce()`.
@@ -68,6 +81,23 @@ export interface CommerceOptions {
    * network address, as behind a corporate proxy, may need it higher.
    */
   readonly cartWriteLimit?: { readonly max: number; readonly windowMs: number };
+  /**
+   * The payment provider checkout starts payments with. Without one, a
+   * checkout can be quoted but not completed.
+   */
+  readonly payments?: PaymentProvider;
+  /**
+   * How many minutes after it is placed an unpaid order's deadline falls,
+   * recorded with the order: the moment it is due to be given up.
+   * 30 by default.
+   */
+  readonly unpaidOrderMinutes?: number;
+  /**
+   * How many minutes commerce's work job may go without running before
+   * checkout refuses to take money. 15 by default. The jobs must have run
+   * at least once before the first checkout: running them is a launch step.
+   */
+  readonly jobsStaleAfterMinutes?: number;
 }
 
 const optionsSchema = z.object({
@@ -90,7 +120,12 @@ const optionsSchema = z.object({
       windowMs: z.number().int().positive(),
     })
     .optional(),
+  payments: z.unknown().optional(),
+  unpaidOrderMinutes: z.number().int().min(5).max(1440).optional(),
+  jobsStaleAfterMinutes: z.number().int().min(1).max(1440).optional(),
 });
+
+const MINUTE = 60_000;
 
 /**
  * Commerce for a Nextly site: its tables, the catalogue it sells from, the
@@ -106,6 +141,10 @@ export function commerce(options: CommerceOptions) {
   assertCurrency(parsed.currency);
   const own = options.catalogue;
   if (own !== undefined) assertCatalogueSource(own);
+  const provider = options.payments;
+  if (provider !== undefined) assertPaymentProvider(provider);
+  const unpaidOrderMs = (parsed.unpaidOrderMinutes ?? 30) * MINUTE;
+  const jobsStaleAfterMs = (parsed.jobsStaleAfterMinutes ?? 15) * MINUTE;
 
   const currency = parsed.currency;
   const productsSlug = parsed.productsSlug ?? "products";
@@ -150,6 +189,39 @@ export function commerce(options: CommerceOptions) {
     return createCatalogueService({ source: sourceFor(ctx), currency });
   }
 
+  /**
+   * Where staff hear of work given up and of checkouts refused because the
+   * jobs are not running. The operator's log for now; the admin shows job
+   * health once its screens exist.
+   */
+  function alertsFor(ctx: PluginContext) {
+    return {
+      abandoned(item: WorkItem, error: unknown) {
+        ctx.logger.error(
+          `[commerce] gave up "${item.kind}" for ${item.subjectId} after ${String(item.attempt)} attempts (${errorKind(error)})`
+        );
+      },
+      jobsNotRunning(lastRunAt: Date | null) {
+        ctx.logger.error(
+          `[commerce] refused a checkout: the "${WORK_JOB}" job ${lastRunAt ? `last ran at ${lastRunAt.toISOString()}` : "has never run"}; run the jobs trigger`
+        );
+      },
+    };
+  }
+
+  function checkoutFor(ctx: PluginContext): CheckoutService {
+    return createCheckoutService({
+      db: ctx.db,
+      dialect: ctx.dialect,
+      source: sourceFor(ctx),
+      payments: provider,
+      currency,
+      unpaidOrderMs,
+      jobsStaleAfterMs,
+      alerts: alertsFor(ctx),
+    });
+  }
+
   return definePlugin({
     name: PLUGIN_NAME,
     version: PLUGIN_VERSION,
@@ -170,10 +242,27 @@ export function commerce(options: CommerceOptions) {
       // The built-in catalogue only when the site has none of its own, so a
       // site selling from an outside API gets no empty products screen.
       collections: own === undefined ? [productsCollection(productsSlug)] : [],
-      jobs: [cartExpiryJob({ db: () => requireInstalled().db })],
+      jobs: [
+        cartExpiryJob({ db: () => requireInstalled().db }),
+        workJob(() => {
+          const ctx = requireInstalled();
+          return {
+            db: ctx.db,
+            dialect: ctx.dialect,
+            handlers: checkoutWorkHandlers({
+              db: ctx.db,
+              provider,
+              source: sourceFor(ctx),
+              now: () => new Date(),
+            }),
+            alerts: alertsFor(ctx),
+          };
+        }),
+      ],
       services: {
         [CART_SERVICE]: ctx => cartFor(ctx),
         [CATALOGUE_SERVICE]: ctx => catalogueFor(ctx),
+        [CHECKOUT_SERVICE]: ctx => checkoutFor(ctx),
       },
       routes: storefrontRoutes({
         secureCookies,
@@ -181,7 +270,13 @@ export function commerce(options: CommerceOptions) {
         listable: own === undefined ? true : typeof own.list === "function",
         cart: cartFor,
         catalogue: catalogueFor,
+        checkout: checkoutFor,
       }),
     },
   });
+}
+
+function errorKind(error: unknown): string {
+  if (error instanceof Error) return error.name;
+  return typeof error;
 }

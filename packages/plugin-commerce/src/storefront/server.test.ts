@@ -7,12 +7,13 @@ import { PLUGIN_NAME } from "../schema/definition";
 import {
   CART_SERVICE,
   CATALOGUE_SERVICE,
+  CHECKOUT_SERVICE,
   forgetInstalled,
   fromInstalled,
   rememberInstalled,
 } from "./server";
 
-/** A context carrying commerce's two services, marked so a test can tell them apart. */
+/** A context carrying commerce's services, marked so a test can tell them apart. */
 function contextWith(mark: string): PluginContext {
   const service = {
     mark,
@@ -23,6 +24,8 @@ function contextWith(mark: string): PluginContext {
     clear() {},
     find() {},
     list() {},
+    quote() {},
+    complete() {},
   };
   return {
     services: {
@@ -30,6 +33,7 @@ function contextWith(mark: string): PluginContext {
         [PLUGIN_NAME]: {
           [CART_SERVICE]: service,
           [CATALOGUE_SERVICE]: service,
+          [CHECKOUT_SERVICE]: service,
         },
       },
     },

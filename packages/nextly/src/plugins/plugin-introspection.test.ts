@@ -128,6 +128,29 @@ describe("collectPluginInfo", () => {
     ).toBeUndefined();
   });
 
+  it("lists the kinds of signed-in person each plugin registers", () => {
+    const accounts = {
+      name: "@acme/accounts",
+      version: "1.0.0",
+      nextly: "*",
+      contributes: {
+        principals: [
+          { name: "account", attributes: {}, resolve: async () => null },
+          { name: "guest", attributes: {}, resolve: async () => null },
+        ],
+      },
+    } as unknown as PluginDefinition;
+    const infos = collectPluginInfo(cfg(), [basePlugin(), accounts], {
+      coreVersion: "1.0.0",
+      consent: NO_PLUGIN_CONSENT,
+    });
+    expect(findPluginInfo(infos, "@acme/accounts")!.principalKinds).toEqual([
+      "acme-accounts:account",
+      "acme-accounts:guest",
+    ]);
+    expect(findPluginInfo(infos, "@acme/base")!.principalKinds).toEqual([]);
+  });
+
   it("reports a disabled plugin: schema listed, behavior counts zeroed", () => {
     const infos = collectPluginInfo(
       cfg(),

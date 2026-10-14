@@ -11,6 +11,8 @@
  * @packageDocumentation
  */
 
+import { AsyncLocalStorage } from "node:async_hooks";
+
 import { count, getColumns, sql } from "drizzle-orm";
 import type { AnyRelations, SQL } from "drizzle-orm";
 
@@ -54,6 +56,28 @@ import type {
 } from "./types";
 import { createDatabaseError, isDatabaseError } from "./types";
 import { buildUpdateStatement } from "./update-statement";
+
+/**
+ * A transaction an async flow runs inside, as that flow sees it: its own, or
+ * one it was started from inside.
+ */
+interface FlowTransaction {
+  /** False once the transaction's work has settled. */
+  open: boolean;
+  /** The transaction the flow that opened this one was itself inside. */
+  enclosing: FlowTransaction | undefined;
+}
+
+/**
+ * Drizzle's database handle, as far as running a transaction goes.
+ *
+ * The callback takes `unknown` and the options `never`, so every dialect's
+ * handle fits, whose callback receives its own transaction type and whose
+ * options are its own.
+ */
+interface DrizzleTransactor {
+  transaction<T>(work: (tx: unknown) => Promise<T>, config?: never): Promise<T>;
+}
 
 /**
  * A Drizzle column that decodes its own driver representation.
@@ -401,6 +425,102 @@ export abstract class DrizzleAdapter {
    */
   inTransaction(): boolean {
     return false;
+  }
+
+  /**
+   * The transaction each async flow is inside, kept per flow rather than per
+   * connection: on SQLite every request shares the one connection, and
+   * another request's open transaction says nothing about this one.
+   */
+  private readonly flowTransactions = new AsyncLocalStorage<FlowTransaction>();
+
+  /**
+   * Whether the calling async flow is inside a transaction on this adapter
+   * that has not finished: its own, or one it was started from inside.
+   *
+   * A write that must outlive any rollback — a count of a failed attempt, the
+   * spend of a single-use secret — asks this before running in a transaction
+   * of its own. Made inside an open transaction on SQLite, it joins that
+   * transaction as a savepoint and is undone with it. On PostgreSQL and MySQL
+   * it would commit on a connection of its own, so refusing it there too
+   * keeps code that passes on one dialect from failing on another. Unlike
+   * {@link inTransaction}, which asks whether a call would nest and is always
+   * false on a pooled adapter, this answers alike on every dialect, and
+   * another flow's open transaction never answers true.
+   *
+   * Covers transactions opened through {@link transaction} and through the
+   * Drizzle handle's own `transaction` on the dialects whose handle takes
+   * async work. A dialect that keeps scopes of its own judges from those
+   * instead; an adapter that does neither answers false.
+   *
+   * @experimental
+   * @returns True while a transaction the calling flow is inside is open
+   */
+  transactionOpenInFlow(): boolean {
+    for (
+      let at = this.flowTransactions.getStore();
+      at !== undefined;
+      at = at.enclosing
+    ) {
+      if (at.open) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Run a whole transaction, from its BEGIN until its COMMIT or ROLLBACK has
+   * run, as the calling flow's open transaction, for
+   * {@link transactionOpenInFlow}. A dialect's `transaction` runs through
+   * this unless it judges the flow from scopes of its own.
+   *
+   * The transaction counts as open for its work and for anything the work
+   * starts, awaited or not, until it has finished. Something the work starts
+   * that outlives it then sees it closed, or the one enclosing it still open.
+   *
+   * @param run - The transaction, BEGIN to COMMIT or ROLLBACK
+   * @returns What `run` resolves to
+   */
+  protected runInFlowTransaction<T>(run: () => Promise<T>): Promise<T> {
+    const scope: FlowTransaction = {
+      open: true,
+      enclosing: this.flowTransactions.getStore(),
+    };
+    return this.flowTransactions.run(scope, async () => {
+      try {
+        return await run();
+      } finally {
+        scope.open = false;
+      }
+    });
+  }
+
+  /**
+   * Make a Drizzle handle's own `transaction` count for
+   * {@link transactionOpenInFlow}, as the adapter's does.
+   *
+   * Core's services run their transactions through the handle on PostgreSQL
+   * and MySQL; without this, a call made inside one would be refused on
+   * SQLite, where they go through the adapter, and let through on the
+   * others. Not for SQLite's handle: its `transaction` takes only
+   * synchronous work, which no async flow can be inside.
+   *
+   * @param db - A Drizzle handle this adapter created
+   * @returns The same handle, its `transaction` tracked
+   */
+  protected trackFlowTransactions<D extends DrizzleTransactor>(db: D): D {
+    const transactor: DrizzleTransactor = db;
+    const untracked = transactor.transaction.bind(transactor);
+    // Around the whole call, so the transaction stays open for the flow
+    // until Drizzle has run its COMMIT or ROLLBACK.
+    const tracked: DrizzleTransactor["transaction"] = (work, config) =>
+      this.runInFlowTransaction(() => untracked(work, config));
+    // An own property over the prototype's method, on this handle alone.
+    Object.defineProperty(db, "transaction", {
+      value: tracked,
+      configurable: true,
+      writable: true,
+    });
+    return db;
   }
 
   /**

@@ -1497,6 +1497,16 @@ async function applyReload(opts?: {
         registerFieldType(fieldType);
       }
     });
+    // The same for plugin-defined kinds of signed-in person: resolving the
+    // new config's plugins publishes their kinds, and a reload that is then
+    // refused keeps the previous config's routes, which ask for the previous
+    // kinds. Left in place, a route could reach a refused config's resolver,
+    // or find its kind gone and answer 500.
+    const { publishedPrincipalKinds, publishPrincipalKinds } = await import(
+      "../plugins/principals/registry"
+    );
+    const previousPrincipalKinds = publishedPrincipalKinds();
+    reloadUndo.push(() => publishPrincipalKinds(previousPrincipalKinds));
     clearConfigCache();
     const result = await loadConfig();
     newConfig = (

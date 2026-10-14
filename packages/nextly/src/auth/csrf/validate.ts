@@ -29,6 +29,20 @@ export function isUnsafeMethod(method: string): boolean {
 }
 
 /**
+ * Whether the request carries a `Bearer` token, which exempts it from the
+ * cross-site check by its presence.
+ *
+ * A page on another site cannot make the browser attach a `Bearer` header, so
+ * a request carrying one was sent by code that holds the token. The scheme is
+ * matched without regard to case, as HTTP defines it, and the token must not
+ * be empty: `Authorization: Bearer` alone carries nothing.
+ */
+export function carriesBearerToken(request: Request): boolean {
+  const header = request.headers.get("authorization");
+  return header !== null && /^bearer[ \t]+\S/i.test(header);
+}
+
+/**
  * Validate the Origin or Referer header against allowed origins.
  * Returns true if the request origin is allowed.
  */
