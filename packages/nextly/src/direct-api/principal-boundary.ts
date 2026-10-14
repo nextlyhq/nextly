@@ -74,23 +74,35 @@ function isNamespace(value: unknown): value is Record<string, unknown> {
   );
 }
 
-/** A namespace whose every method refuses a call naming a person. */
+/**
+ * A namespace whose every method refuses a call naming a person, and every
+ * namespace nested in it the same, however deep: `media.folders` is a
+ * namespace of its own, and one left unwrapped is a way round the boundary.
+ * Each guarded object is kept, so a namespace read twice is one proxy.
+ */
 function guardNamespace(
   namespace: Record<string, unknown>,
-  name: string
+  name: string,
+  guarded: WeakMap<object, Record<string, unknown>>
 ): Record<string, unknown> {
-  return new Proxy(namespace, {
+  const known = guarded.get(namespace);
+  if (known !== undefined) return known;
+  const proxy = new Proxy(namespace, {
     get(target, prop, receiver) {
       const value = Reflect.get(target, prop, receiver) as unknown;
-      return typeof value === "function"
-        ? refusingPrincipal(
-            value as (...args: unknown[]) => unknown,
-            target,
-            `${name}.${String(prop)}`
-          )
-        : value;
+      const path = `${name}.${String(prop)}`;
+      if (typeof value === "function") {
+        return refusingPrincipal(
+          value as (...args: unknown[]) => unknown,
+          target,
+          path
+        );
+      }
+      return isNamespace(value) ? guardNamespace(value, path, guarded) : value;
     },
   });
+  guarded.set(namespace, proxy);
+  return proxy;
 }
 
 /**
@@ -116,14 +128,7 @@ export function guardPrincipalOperations<T extends object>(instance: T): T {
               name
             );
       }
-      if (isNamespace(value)) {
-        let wrapped = namespaces.get(value);
-        if (wrapped === undefined) {
-          wrapped = guardNamespace(value, name);
-          namespaces.set(value, wrapped);
-        }
-        return wrapped;
-      }
+      if (isNamespace(value)) return guardNamespace(value, name, namespaces);
       return value;
     },
   });

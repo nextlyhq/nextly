@@ -183,4 +183,16 @@ describe("a Direct API call made as a person", () => {
       )
     ).rejects.toMatchObject({ code: "INVALID_INPUT" });
   });
+
+  it("refuses a nested namespace named with a person", async () => {
+    // `media.folders` is a namespace inside a namespace.
+    const folders = (
+      nextly.media as unknown as {
+        folders: { create(args: Record<string, unknown>): Promise<unknown> };
+      }
+    ).folders;
+    await expect(
+      folders.create({ name: "x", principal: person })
+    ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+  });
 });
