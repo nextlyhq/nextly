@@ -67,10 +67,12 @@ export async function requestAddressChange(
   });
   if (proven.status !== "proven") return proven;
   const { account, attempt, now } = proven;
+  // The current password is proven, so the attempt is settled whatever
+  // becomes of the request, as a change of password settles it.
+  await attemptSucceeded(deps, attempt);
   const newKey = normaliseAddress(parsed.data);
   if (newKey === account.addressNormalised)
     return { status: "refused", reason: "same-address" };
-  await attemptSucceeded(deps, attempt);
 
   const counted = await reserveChange(deps, {
     accountId: account.id,

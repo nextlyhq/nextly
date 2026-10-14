@@ -385,6 +385,33 @@ describe.each(getConfiguredTestDialects())(
       expect(mail.ofKind("confirm-new-address")).toEqual([]);
     });
 
+    it("settles a proven password before refusing the same address, so the holder's browser is never capped", async () => {
+      const { deps, browser } = await boot();
+      const session = await browser();
+      const known = await signIn(deps, {
+        address: "dana@example.com",
+        password: TEST_PASSWORD,
+        client: null,
+      });
+      if (known.status !== "signed-in") throw new Error("expected a sign-in");
+      const knownTokens = [known.knownBrowserToken];
+      const ask = (newAddress: string) =>
+        requestAddressChange(deps, {
+          sessionToken: session,
+          currentPassword: TEST_PASSWORD,
+          newAddress,
+          client: null,
+          knownTokens,
+        });
+
+      for (let n = 0; n < 12; n += 1)
+        expect(await ask(" DANA@example.com ")).toEqual({
+          status: "refused",
+          reason: "same-address",
+        });
+      expect(await ask("new@example.com")).toEqual({ status: "accepted" });
+    });
+
     it("counts a wrong current password as a failed sign-in, and asks for nothing more", async () => {
       const { deps, mail, browser, ask } = await boot();
       const session = await browser();
