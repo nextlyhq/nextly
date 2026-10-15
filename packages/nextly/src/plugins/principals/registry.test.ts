@@ -6,6 +6,8 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { auditLog as mysqlAuditLog } from "../../schemas/audit/mysql";
 import { auditLog as postgresAuditLog } from "../../schemas/audit/postgres";
+import { emailDeliveriesMysql } from "../../schemas/email-deliveries/mysql";
+import { emailDeliveriesPg } from "../../schemas/email-deliveries/postgres";
 import type { PluginDefinition } from "../plugin-context";
 import { resolvePlugins } from "../resolve";
 
@@ -132,6 +134,8 @@ describe("collectPrincipalKinds", () => {
       mysqlAuditLog.actorKind,
       mysqlAuditLog.actorPrincipalKind,
       mysqlAuditLog.targetPrincipalKind,
+      emailDeliveriesPg.principalKind,
+      emailDeliveriesMysql.principalKind,
     ].map(column => (column as { length?: number }).length);
     expect(widths.every(width => typeof width === "number")).toBe(true);
     expect(PRINCIPAL_KIND_MAX_LENGTH).toBe(Math.min(...(widths as number[])));

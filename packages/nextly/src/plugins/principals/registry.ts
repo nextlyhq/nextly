@@ -11,6 +11,8 @@
  */
 import { auditLog as mysqlAuditLog } from "../../schemas/audit/mysql";
 import { auditLog as postgresAuditLog } from "../../schemas/audit/postgres";
+import { emailDeliveriesMysql } from "../../schemas/email-deliveries/mysql";
+import { emailDeliveriesPg } from "../../schemas/email-deliveries/postgres";
 import type { PluginDefinition } from "../plugin-context";
 import { pluginAdminSlug } from "../plugin-slug";
 import { resolutionError } from "../resolution-error";
@@ -54,7 +56,7 @@ const ATTRIBUTE_NAME = /^[A-Za-z][A-Za-z0-9_]{0,63}$/;
 
 /**
  * The longest full kind name (`<plugin slug>:<name>`) core accepts: the
- * narrowest column an audit row stores one in.
+ * narrowest column an audit row or an email delivery record stores one in.
  *
  * PostgreSQL and MySQL keep a kind in bounded varchars, and SQLite in text,
  * which holds anything, so the bounded declarations decide. A longer name
@@ -71,6 +73,8 @@ export const PRINCIPAL_KIND_MAX_LENGTH = Math.min(
     mysqlAuditLog.actorKind,
     mysqlAuditLog.actorPrincipalKind,
     mysqlAuditLog.targetPrincipalKind,
+    emailDeliveriesPg.principalKind,
+    emailDeliveriesMysql.principalKind,
   ].map(column => {
     // Read as a plain property: the column-collecting helper is banned by
     // the drizzle v1 legacy gate, and a table's columns are its own
