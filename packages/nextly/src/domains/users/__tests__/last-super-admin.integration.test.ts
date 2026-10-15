@@ -25,7 +25,7 @@ process.env.NEXTLY_SECRET =
   process.env.NEXTLY_SECRET ??
   "test-secret-must-be-at-least-32-characters-long!!";
 
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 /** Run once, inside the next `user.deleted` record, then cleared. */
@@ -57,6 +57,7 @@ vi.mock("../../webhooks/record-mutation-event", async importOriginal => {
 });
 
 import { getDialectTables } from "../../../database/index";
+import { seedPermissions } from "../../../database/seeders";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -110,21 +111,10 @@ interface DirectRoles {
   }) => Promise<{ item: { id: string } }>;
 }
 
-interface DirectPermissions {
-  find: (a: { limit: number }) => Promise<{
-    items: { id: string; slug: string }[];
-  }>;
-}
-
-function direct(): {
-  users: DirectUsers;
-  roles: DirectRoles;
-  permissions: DirectPermissions;
-} {
+function direct(): { users: DirectUsers; roles: DirectRoles } {
   return handle!.nextly as unknown as {
     users: DirectUsers;
     roles: DirectRoles;
-    permissions: DirectPermissions;
   };
 }
 
@@ -174,14 +164,19 @@ async function boot(on: TestDialect): Promise<Install> {
 
   // The caller REST requests come from: it may manage users, and is not a
   // super-admin itself, so it is never one of the accounts being counted.
-  const permissions = await direct().permissions.find({ limit: 500 });
-  const userGrants = ["read-users", "update-users", "delete-users"].map(
-    slug => {
-      const found = permissions.items.find(p => p.slug === slug);
-      expect(found, `\`${slug}\` must be seeded`).toBeDefined();
-      return found!.id;
-    }
-  );
+  // The core permissions are seeded by first-run setup, which this instance
+  // never ran, so they are seeded here as setup seeds them.
+  await seedPermissions(handle.adapter, { silent: true });
+  const slugs = ["read-users", "update-users", "delete-users"];
+  const seeded = await raw()
+    .select({ id: tables.permissions.id, slug: tables.permissions.slug })
+    .from(tables.permissions)
+    .where(inArray(tables.permissions.slug, slugs));
+  const userGrants = slugs.map(slug => {
+    const found = seeded.find(p => p.slug === slug);
+    expect(found, `\`${slug}\` must be seeded`).toBeDefined();
+    return String(found!.id);
+  });
   const userAdmin = await direct().roles.create({
     data: {
       name: "User admin",
