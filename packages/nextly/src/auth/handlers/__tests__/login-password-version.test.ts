@@ -30,7 +30,10 @@ const LATER = new Date("2026-02-01T00:00:00Z");
 async function loginDeps(
   gateReads: Date,
   hooks = new AuthHookRegistry(),
-  gateEpoch = 0
+  gateEpoch = 0,
+  // What the credential lookup reads beside the hash; "omitted" for a lookup
+  // that does not select the column, as one an app assembled may not.
+  rowEpoch: number | "omitted" = 0
 ) {
   const passwordHash = await hashPassword("Pass1234!");
   const credentials = {
@@ -47,6 +50,7 @@ async function loginDeps(
       lockedUntil: null,
       deactivatedAt: null,
       passwordUpdatedAt: PROVEN,
+      ...(rowEpoch === "omitted" ? {} : { sessionEpoch: rowEpoch }),
     }),
     incrementFailedAttempts: vi.fn(),
     lockAccount: vi.fn(),
@@ -145,6 +149,23 @@ describe("the password version a sign-in proved", () => {
 
     expect(res.status).toBe(401);
     expect(rows.committed).toHaveLength(0);
+  });
+
+  it("judges against the account's own epoch when the lookup did not read one", async () => {
+    // Not reading the column says nothing about the epoch. Read as zero, it
+    // would refuse every password sign-in of an account whose sessions had
+    // ever been ended.
+    const { deps, rows } = await loginDeps(
+      PROVEN,
+      new AuthHookRegistry(),
+      3,
+      "omitted"
+    );
+
+    const res = await handleLogin(loginRequest(), deps);
+
+    expect(res.status).toBe(200);
+    expect(rows.committed).toHaveLength(1);
   });
 
   it("signs the proven epoch into the token a second factor pauses on", async () => {

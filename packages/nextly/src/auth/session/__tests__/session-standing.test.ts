@@ -114,13 +114,53 @@ describe("createSessionStandingCache", () => {
     const slow = cache.standing("u1", 0);
     c.advance(SESSION_STANDING_TTL_MS);
     release(ACTIVE);
-    await slow;
+    await slow.catch(() => undefined);
 
     expect(await cache.standing("u1", 0)).toEqual({
       isActive: false,
       sessionEpoch: 1,
     });
     expect(read).toHaveBeenCalledTimes(2);
+  });
+
+  it("fails a read that outlived the lifetime, rather than admitting with it", async () => {
+    // The request that was waiting on the slow read is the one the bound is
+    // about: its answer may be from before a change that has since passed
+    // the bound, so it is not an answer to admit on.
+    const c = clock();
+    let release: (value: SessionStanding) => void = () => {};
+    const read = vi.fn(
+      () =>
+        new Promise<SessionStanding>(resolve => {
+          release = resolve;
+        })
+    );
+    const cache = createSessionStandingCache({ read, now: c.now });
+
+    const slow = cache.standing("u1", 0);
+    c.advance(SESSION_STANDING_TTL_MS);
+    release(ACTIVE);
+
+    await expect(slow).rejects.toMatchObject({ code: "SERVICE_UNAVAILABLE" });
+  });
+
+  it("answers a read that came back within the lifetime", async () => {
+    // The control: a read that is merely slow, not too old, still answers.
+    const c = clock();
+    let release: (value: SessionStanding) => void = () => {};
+    const read = vi.fn(
+      () =>
+        new Promise<SessionStanding>(resolve => {
+          release = resolve;
+        })
+    );
+    const cache = createSessionStandingCache({ read, now: c.now });
+
+    const slow = cache.standing("u1", 0);
+    c.advance(SESSION_STANDING_TTL_MS - 1);
+    release(ACTIVE);
+
+    expect(await slow).toEqual(ACTIVE);
   });
 
   it("reads again when the clock has moved backward", async () => {
