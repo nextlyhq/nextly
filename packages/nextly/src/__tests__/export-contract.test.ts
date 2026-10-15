@@ -42,6 +42,17 @@ const FORBIDDEN = [
   "COMPONENT_MIGRATION_STATUSES",
 ];
 
+// The validators of the retired linked-account endpoints (listing a user's
+// linked accounts and unlinking one). The endpoints and the service methods
+// behind them are gone, so a validator still published for them describes a
+// request nothing accepts. The types inferred from them are erased at runtime
+// and cannot be seen here; the type check is what refuses a use of them.
+const RETIRED_ACCOUNT_NAMES = [
+  "DeleteUserAccountSchema",
+  "UnlinkAccountSchema",
+  "UnlinkAccountResponseSchema",
+];
+
 /**
  * What a published function looks like from an import site.
  *
@@ -136,6 +147,31 @@ describe("published export surface", () => {
   // is checked separately so the failure says which of the two happened.
   it.each(ENTRY_POINTS)("%s resolves to a source module", (_name, source) => {
     expect(existsSync(source), `no source module at ${source}`).toBe(true);
+  });
+
+  it.each(ENTRY_POINTS)(
+    "%s exposes no retired linked-account validators",
+    async (_name, source) => {
+      const mod = (await import(pathToFileURL(source).href)) as Record<
+        string,
+        unknown
+      >;
+      const leaked = RETIRED_ACCOUNT_NAMES.filter(name => name in mod);
+      expect(leaked).toEqual([]);
+    }
+  );
+
+  it("still publishes the user validators beside the retired ones", async () => {
+    // The control: an absence check is also satisfied by an entry point that
+    // published nothing. `nextly/schemas` is where the retired validators
+    // were, and its other user validators are asserted there, so the scan
+    // above is seen reading the module they lived in.
+    const schemas = (await import("../schemas/index")) as Record<
+      string,
+      unknown
+    >;
+    expect(schemas.UserListResponseSchema).toBeDefined();
+    expect(schemas.DeleteUserResponseSchema).toBeDefined();
   });
 
   it.each(ENTRY_POINTS)(
