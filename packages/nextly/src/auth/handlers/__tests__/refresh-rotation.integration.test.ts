@@ -64,9 +64,18 @@ async function signedIn(
   dialect: TestDialect
 ): Promise<{ t: TestNextly; userId: string }> {
   handle = await createTestNextly(dialect === "sqlite" ? {} : { dialect });
-  const created = await new ServiceContainer(
-    handle.adapter
-  ).users.createLocalUser({
+  const users = new ServiceContainer(handle.adapter).users;
+  // The install's first account is made its super-admin, which may not be
+  // deactivated or deleted while it is the only one. The account under test
+  // is another, so the write it takes is the one this file is about.
+  await users.createLocalUser({
+    email: "owner@example.com",
+    name: "Owner",
+    password: "Str0ng-P@ssw0rd!",
+    isActive: true,
+    emailVerification: "admin-vouched",
+  });
+  const created = await users.createLocalUser({
     email: "race@example.com",
     name: "Race",
     password: "Str0ng-P@ssw0rd!",

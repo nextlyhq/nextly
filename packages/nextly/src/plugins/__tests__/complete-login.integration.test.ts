@@ -209,6 +209,10 @@ describe("ctx.auth.completeLogin, end to end", () => {
 
   it("refuses a deactivated account with a generic failure", async () => {
     const t = await boot([capturingPlugin]);
+    // The install's first account is made its super-admin, which may not be
+    // deactivated while it is the only one; the account deactivated here is
+    // another.
+    await makeUser(t, "owner@example.com");
     const userId = await makeUser(t, "deactivated@example.com");
     await new ServiceContainer(t.adapter).users.updateUser(userId, {
       isActive: false,
