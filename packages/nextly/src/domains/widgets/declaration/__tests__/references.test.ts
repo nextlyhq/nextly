@@ -147,6 +147,40 @@ describe("a declared widget's starting query, once content is synced", () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
+  it("refuses a query function that throws or answers no query, with every fault at once", async () => {
+    // As a plain JavaScript plugin could write them: no types stop either.
+    const throwing = {
+      ...listing("acme/throws", "orders", "state"),
+      data: {
+        query: () => {
+          throw new Error("settings.colection is undefined");
+        },
+      },
+    };
+    const answersNothing = {
+      ...listing("acme/null", "orders", "state"),
+      data: { query: () => null },
+    };
+    registerWidgetDeclarations([
+      { owner: SHOP, declarations: [throwing, answersNothing] },
+    ]);
+    let refused: unknown;
+    try {
+      await checkDeclaredWidgetReferences(CODE);
+    } catch (error) {
+      refused = error;
+    }
+    expect(refused).toBeInstanceOf(NextlyError);
+    const message = (refused as NextlyError).logMessage ?? "";
+    expect(message).toContain("2 widget declarations cannot work");
+    expect(message).toContain(
+      `${SHOP}, widget "acme/throws": its query function, run with its starting settings, failed: settings.colection is undefined`
+    );
+    expect(message).toContain(
+      `${SHOP}, widget "acme/null": its query function, run with its starting settings, failed: it answered null, not a query`
+    );
+  });
+
   it("reports every refused widget at once", async () => {
     let refused: unknown;
     try {

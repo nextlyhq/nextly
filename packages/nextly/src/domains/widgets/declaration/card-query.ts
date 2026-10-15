@@ -9,6 +9,7 @@
  * @module domains/widgets/declaration/card-query
  */
 
+import { NextlyError } from "../../../errors/nextly-error";
 import type { WidgetQuery } from "../query";
 import { resolveWidgetSettings, type WidgetSetting } from "../settings";
 
@@ -111,7 +112,17 @@ export function buildCardQuery(
   const data = declaration.data;
   if (!isQuerySource(data)) return undefined;
   const settings = resolveCardSettings(declaration.settings, stored);
-  const { collection, ...rest } = data.query({ settings });
+  const answer = data.query({ settings });
+  // A query function written in plain JavaScript may answer anything; only an
+  // object can be a query, and destructuring anything else fails unreadably.
+  if (!isRecord(answer)) {
+    throw new NextlyError({
+      code: "INTERNAL_ERROR",
+      publicMessage: "An unexpected error occurred.",
+      logMessage: `it answered ${answer === null ? "null" : typeof answer}, not a query`,
+    });
+  }
+  const { collection, ...rest } = answer;
   // No query yet for a card whose collection is not chosen: the Collection
   // setting has no starting value, and a card is given one when it is placed.
   if (typeof collection !== "string" || collection.trim() === "")

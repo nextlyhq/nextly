@@ -22,9 +22,10 @@
  * @module domains/widgets/declaration/references
  */
 
+import { NextlyError } from "../../../errors/nextly-error";
 import { getNextlyLogger } from "../../../observability/logger";
 import { refreshCollectionSources } from "../collection-sources";
-import { validateWidgetQuery } from "../query";
+import { validateWidgetQuery, type WidgetQuery } from "../query";
 import { refreshSingleSources } from "../single-sources";
 
 import { buildCardQuery } from "./card-query";
@@ -69,6 +70,31 @@ function queryProblem(query: unknown): string | undefined {
 }
 
 /**
+ * A declared widget's query as its starting settings build it, or why its
+ * query function could not build one.
+ *
+ * Caught here, per widget, because a query function is the plugin's own code:
+ * one that throws, or answers something that is not a query, is a fault in
+ * that declaration, reported with every other, not a crash of startup.
+ */
+function startingQuery(declaration: Parameters<typeof buildCardQuery>[0]): {
+  query?: WidgetQuery;
+  failure?: string;
+} {
+  try {
+    return { query: buildCardQuery(declaration, undefined) };
+  } catch (error) {
+    const reason =
+      error instanceof NextlyError && error.logMessage !== undefined
+        ? error.logMessage
+        : error instanceof Error
+          ? error.message
+          : String(error);
+    return { failure: reason };
+  }
+}
+
+/**
  * Checks every declared widget's starting query against the synced content:
  * refuses startup, with every fault in one message, over what deployed code
  * fixes, and warns about the rest.
@@ -82,7 +108,15 @@ export async function checkDeclaredWidgetReferences(
 
   const faults: WidgetDeclarationFault[] = [];
   for (const { owner, declaration } of listDeclaredWidgets()) {
-    const query = buildCardQuery(declaration, undefined);
+    const { query, failure } = startingQuery(declaration);
+    if (failure !== undefined) {
+      faults.push({
+        owner,
+        widget: declaration.id,
+        problem: `its query function, run with its starting settings, failed: ${failure}`,
+      });
+      continue;
+    }
     if (query === undefined) continue;
     const problem = queryProblem(query);
     if (problem === undefined) continue;
