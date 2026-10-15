@@ -28,7 +28,14 @@ import {
 } from "../../../plugins/test-nextly";
 import { createDynamicHandlers } from "../../../routeHandler";
 import { layoutRowId } from "../../../schemas/widget-layout";
-import type { WidgetLayoutService } from "../widget-layout-service";
+import { WidgetLayoutService } from "../widget-layout-service";
+
+const silentLogger = {
+  debug: () => {},
+  info: () => {},
+  warn: () => {},
+  error: () => {},
+};
 
 interface Placement {
   id: string;
@@ -160,8 +167,9 @@ describe.each(getConfiguredTestDialects())(
       });
     }
 
+    /** A service over the same adapter, used only to reach the row directly. */
     function service(): WidgetLayoutService {
-      return handle.getService("widgetLayoutService") as WidgetLayoutService;
+      return new WidgetLayoutService(handle.adapter, silentLogger);
     }
 
     /** The stored text and version, read from the table, not through the decoder. */

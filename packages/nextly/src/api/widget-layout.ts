@@ -279,6 +279,10 @@ export const getWidgetLayout = withErrorHandler(async (req: Request) => {
   return respondData(
     {
       placements,
+      // The default as this reader would see it, from the same computation a
+      // reader following it is shown: a staged reset draws it, and the admin
+      // never works the default out for itself.
+      defaultPlacements: visibleArrangement(undefined, view.visibleIds),
       widgets: widths,
       available,
       version: stored.version,

@@ -170,6 +170,7 @@ interface LayoutPayload {
   version?: number;
   source?: string;
   scope?: string;
+  defaultPlacements?: WidgetPlacement[];
   widgets?: Record<
     string,
     { allowedWidths: string[]; defaultWidth: string; allowsSeveral: boolean }
@@ -581,7 +582,7 @@ describe("a row nobody arranged still follows the defaults", () => {
 });
 
 describe("the kind of write a PUT is", () => {
-  const onePlacement = (removed: boolean, id = "core/a") => [
+  const onePlacement = (removed: boolean, id = "core/a"): WidgetPlacement[] => [
     { id, widgetId: "core/a", width: "full", removed },
   ];
 
@@ -1326,11 +1327,13 @@ describe("PUT /api/dashboard/layout", () => {
       })
     );
 
-    // Sorted the way a later read will sort it, with the gate lifted.
-    const order = [...(saved?.placements ?? [])]
-      .sort((x, y) => x.order - y.order)
-      .map(p => p.widgetId);
-    expect(order).toEqual(["core/a", "core/gated", "core/b"]);
+    // In the order a later read will draw it once the gate lifts: the array
+    // order is the arrangement, and the carried card is back in its place.
+    expect(saved?.placements.map(p => p.widgetId)).toEqual([
+      "core/a",
+      "core/gated",
+      "core/b",
+    ]);
   });
 
   it("refuses an oversized body without buffering it", async () => {
@@ -1476,13 +1479,14 @@ describe("DELETE /api/dashboard/layout", () => {
   it("refuses a reset that names no version, or not a whole number", async () => {
     // Absent must not read as 0, "there is no row", which would let a reset
     // past a row the caller never read.
-    for (const query of [
+    const queries: Array<Record<string, string>> = [
       { scope: scopeFor() },
       { version: "", scope: scopeFor() },
       { version: "4.5", scope: scopeFor() },
       { version: "-1", scope: scopeFor() },
       { version: "four", scope: scopeFor() },
-    ]) {
+    ];
+    for (const query of queries) {
       const res = await deleteWidgetLayout(deleteReq(query));
       expect(res.status).toBe(400);
     }
@@ -1783,5 +1787,34 @@ describe("cards the writer could not see, through a save", () => {
     expect(saved?.placements.map(p => p.id)).toEqual(["b", "a", "g"]);
     // And the reply names only what the caller sent.
     expect((await itemOf(res)).placements?.map(p => p.id)).toEqual(["b", "a"]);
+  });
+});
+
+describe("the default dashboard, answered beside a reader's own", () => {
+  it("is what a reader following the default would see, whatever they saved", async () => {
+    // A staged reset draws it, and the admin must not work the default out
+    // for itself: the server's one computation answers both.
+    registerWidget(widget({ id: "core/a", defaultOrder: 0 }));
+    registerWidget(
+      widget({ id: "core/gated", defaultOrder: 5, requiredPermission: "x" })
+    );
+    registerWidget(
+      widget({ id: "core/b", defaultOrder: 10, defaultSize: "sm" })
+    );
+    stored = {
+      version: 2,
+      layout: serializeLayout([
+        { id: "mine", widgetId: "core/b", width: "full", removed: false },
+      ]),
+    };
+    callerHoldsPermission.mockResolvedValue(false);
+
+    const body = await bodyOf(await getWidgetLayout(getReq()));
+
+    expect(body.placements?.map(p => p.id)).toEqual(["mine"]);
+    expect(body.defaultPlacements).toEqual([
+      { id: "core/a", widgetId: "core/a", width: "full", removed: false },
+      { id: "core/b", widgetId: "core/b", width: "quarter", removed: false },
+    ]);
   });
 });
