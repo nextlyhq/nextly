@@ -151,13 +151,20 @@ describe.each(getConfiguredTestDialects())(
       current = booted.nextly;
       const outcomes = [true, false, true, true];
       const sends: string[] = [];
+      const people: unknown[] = [];
       const ctx = {
         db: booted.ctx.db,
         dialect: booted.ctx.dialect,
         services: {
           email: {
-            sendWithTemplate: async (_slug: string, to: string) => {
+            sendWithTemplate: async (
+              _slug: string,
+              to: string,
+              _variables: Record<string, unknown>,
+              options?: { person?: unknown }
+            ) => {
               sends.push(to);
+              people.push(options?.person);
               return { success: outcomes.shift() ?? true };
             },
           },
@@ -182,6 +189,14 @@ describe.each(getConfiguredTestDialects())(
       await sendQueuedEmail(ctx, email, { jobId: "job-2", now });
       await sendQueuedEmail(ctx, email, { jobId: "job-2", now });
       expect(sends).toHaveLength(3);
+      // Every send names the account it is to, so core erases its delivery
+      // record with the account.
+      expect(people).toEqual(
+        sends.map(() => ({
+          kind: "nextlyhq-plugin-accounts:account",
+          id: "a1",
+        }))
+      );
     });
 
     it("hands the send its job's id, the same on every attempt", async () => {
