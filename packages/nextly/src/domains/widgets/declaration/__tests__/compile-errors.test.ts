@@ -18,7 +18,7 @@
  *
  * The exact types each reader is handed are asserted in `declaration.test-d.ts`.
  */
-import { dirname, join } from "node:path";
+import { posix } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import ts from "typescript";
@@ -26,7 +26,12 @@ import { beforeAll, describe, expect, it } from "vitest";
 
 import { CORE_DISPLAYS } from "../displays";
 
-const here = dirname(fileURLToPath(import.meta.url));
+// Paths in `/` form on every platform, because that is how TypeScript names a
+// file: it normalises every path it is handed, so a case registered under
+// `D:\\...\\case-0-faulty.ts` on Windows would never be found by the name the
+// program gives it, and the case would not be compiled at all.
+const { dirname, join } = posix;
+const here = dirname(fileURLToPath(import.meta.url).replaceAll("\\", "/"));
 const packageRoot = join(here, "..", "..", "..", "..", "..");
 
 /** Marks the line a faulty form's one error must be reported on. */
