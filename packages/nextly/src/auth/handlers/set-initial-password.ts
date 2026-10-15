@@ -43,14 +43,19 @@ export interface SetInitialPasswordDeps extends IssueSessionDeps {
   auditLog: AuditLogWriter;
   /**
    * Replaces the admin-set password and clears the must-change flag, and
-   * returns the `passwordUpdatedAt` it wrote, read back as stored. Throws
+   * returns the `passwordUpdatedAt` and session epoch it wrote, read back as
+   * stored. Throws
    * NextlyError(VALIDATION_ERROR) on a weak password and NextlyError(INVALID_INPUT)
    * when the account is no longer in the must-change state.
    */
   setInitialPassword: (
     userId: string,
     newPassword: string
-  ) => Promise<{ userId: string; passwordUpdatedAt: Date | null }>;
+  ) => Promise<{
+    userId: string;
+    passwordUpdatedAt: Date | null;
+    sessionEpoch: number;
+  }>;
   findUserById: (userId: string) => Promise<{
     id: string;
     email: string;
@@ -179,6 +184,25 @@ export async function handleSetInitialPassword(
       userAgent: request.headers.get("user-agent"),
     });
 
+    // The epoch this request's write left is what the session is judged
+    // against, as its password time is. A later read may already hold the
+    // epoch of a reset made in the same second, which would pass, so a write
+    // that does not say is not signed in from.
+    if (
+      !Number.isSafeInteger(written.sessionEpoch) ||
+      written.sessionEpoch < 0
+    ) {
+      throw NextlyError.internal({
+        logContext: {
+          userId: pending.userId,
+          reason: "initial-password-write-without-session-epoch",
+          remedy:
+            "setInitialPassword must return the sessionEpoch its write left, " +
+            "read back in the same transaction as passwordUpdatedAt",
+        },
+      });
+    }
+
     return await finishResumedSignIn(
       user,
       deps,
@@ -192,6 +216,7 @@ export async function handleSetInitialPassword(
         strategy: pending.strategy,
         next: pending.next,
         passwordUpdatedAt: written.passwordUpdatedAt?.getTime() ?? null,
+        sessionEpoch: written.sessionEpoch,
       },
       startTime
     );

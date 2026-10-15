@@ -14,6 +14,7 @@
 "@nextlyhq/storage-s3": patch
 "@nextlyhq/storage-uploadthing": patch
 "@nextlyhq/storage-vercel-blob": patch
+"@nextlyhq/plugin-accounts": patch
 "@nextlyhq/plugin-commerce": patch
 "@nextlyhq/plugin-form-builder": patch
 "@nextlyhq/plugin-page-builder": patch

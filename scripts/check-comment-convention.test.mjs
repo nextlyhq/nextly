@@ -264,8 +264,9 @@ describe("the allowlist", () => {
   // rewritten to describe the code, and four of those entries emptied (226 ->
   // 222). 491 -> 489: the recorded offences in `migrate-status.ts` and one in
   // `migrate-create/generate.ts` no longer exist, and the first entry emptied
-  // (222 -> 221).
-  const EXPECTED_TOTAL = 489;
+  // (222 -> 221). 489 -> 487: the recorded offence in `domains/users/index.ts`
+  // and `types.ts`, a comment naming a numbered change, no longer exists.
+  const EXPECTED_TOTAL = 487;
 
   it("matches its pinned size exactly", () => {
     expect(readAllowlist().size).toBe(EXPECTED_ENTRIES);

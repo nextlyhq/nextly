@@ -317,7 +317,9 @@ export interface PluginActionRegistry {
  *
  * The context provides:
  * - `services`: Core business logic services (collections, users, media, email)
- * - `db` / `logger`: Raw database escape hatch + diagnostics logger
+ * - `db`: Typed, owner-checked access to the plugin's tables, with Drizzle's
+ *   fluent builder as the `db.raw` escape hatch
+ * - `logger`: Diagnostics logger
  * - `events`: Post-commit, observe-only event bus
  * - `self` / `nextlyVersion`: Resolved own-entity names + core version
  * - `config`: Read-only configuration
@@ -1618,8 +1620,8 @@ function fluentOnly(handle: DatabaseInstance): DatabaseInstance {
  * it. Drizzle's builders hold the session they were made from, not this
  * handle, and run when first awaited, so a kept
  * `tx.insert(t).values(v)` awaited after the transaction still runs. An
- * object read off a full Drizzle handle (`tx.query`, for a plugin declaring
- * raw SQL) is the same case: it is Drizzle's, and handing it out wrapped would
+ * object read off a full Drizzle handle (`tx.query`, for a plugin the app
+ * granted raw SQL) is the same case: it is Drizzle's, and handing it out wrapped would
  * break the identity Drizzle looks its tables up by. The typed
  * `ctx.db.transaction` covers those cases; this escape hatch does not.
  */

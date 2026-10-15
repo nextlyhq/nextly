@@ -89,6 +89,10 @@ import { VersionsRepository } from "../../versions/versions-repository";
 import { recordMutationEventInTx } from "../../webhooks/record-mutation-event";
 
 import { emailVerificationColumns } from "./email-verification-write";
+import {
+  refuseRemovingLastSuperAdmin,
+  type LastSuperAdminTx,
+} from "./last-super-admin";
 import { passwordColumns, updateUserEndingSessions } from "./password-write";
 import { activationChanges } from "./user-activation";
 import type { UserExtSchemaService } from "./user-ext-schema-service";
@@ -1858,6 +1862,20 @@ export class UserMutationService extends BaseService {
         // and hand back the roles just removed.
         await this.withTransaction(async tx => {
           const txDb = tx as DrizzleTransactionLike;
+          // A deactivation or a role replacement may not leave the install
+          // without an active super-admin. First, before any row lock, for
+          // the lock order `refuseRemovingLastSuperAdmin` describes.
+          if (changes.isActive === false || requestedRoleIds) {
+            await refuseRemovingLastSuperAdmin(
+              tx as LastSuperAdminTx,
+              this.tables,
+              this.dialect,
+              currentUser.id,
+              changes.isActive === false
+                ? { kind: "deactivate" }
+                : { kind: "replaceRoles", roleIds: requestedRoleIds ?? [] }
+            );
+          }
           if (guardsAdministrator) {
             await this.refuseSuperAdminAccount(
               currentUser.id,
@@ -2575,6 +2593,17 @@ export class UserMutationService extends BaseService {
     try {
       await this.withTransaction(async tx => {
         const txDb = tx as DrizzleTransactionLike;
+
+        // Never the last active super-admin, whoever asks. First in the
+        // transaction: its lock is the one every removal takes, so it comes
+        // before the row lock below, in the same order everywhere.
+        await refuseRemovingLastSuperAdmin(
+          tx as LastSuperAdminTx,
+          this.tables,
+          this.dialect,
+          userId,
+          { kind: "delete" }
+        );
 
         // Read the removed account's identity INSIDE the transaction, right
         // before the delete, so the event reports the row actually being

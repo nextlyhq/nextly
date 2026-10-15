@@ -1,5 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
 
+// These tests read a session with no database behind it. Whether the account
+// may still use its token is the session check's own question, covered by
+// `auth/session/__tests__/session-standing.test.ts` and, on each dialect,
+// `session-cutoff.integration.test.ts`; here every account may.
+vi.mock("../session/session-standing", async importOriginal => ({
+  ...(await importOriginal<typeof import("../session/session-standing")>()),
+  sessionTokenIsCurrent: async () => true,
+}));
+
 import { NextlyError } from "../../errors/nextly-error";
 import { fakeSessionRows } from "../handlers/__tests__/session-row-fake";
 import {
@@ -32,6 +41,17 @@ interface Overrides {
   hooks?: AuthHookRegistry;
 }
 
+/**
+ * The identity a session is signed with comes from the account read, so both
+ * reads answer the default fixture user's.
+ */
+const identity = {
+  email: "a@b.c",
+  name: "A",
+  image: null,
+  sessionEpoch: 0,
+};
+
 function makeDeps(o: Overrides = {}): CompleteLoginDeps {
   const user =
     o.user === undefined
@@ -52,6 +72,7 @@ function makeDeps(o: Overrides = {}): CompleteLoginDeps {
   const sessionRows = fakeSessionRows(async userId => ({
     userId,
     passwordUpdatedAt: null,
+    ...identity,
     ...state,
   }));
   return {
@@ -67,6 +88,7 @@ function makeDeps(o: Overrides = {}): CompleteLoginDeps {
     fetchAccountState: vi.fn(async (userId: string) => ({
       userId,
       passwordUpdatedAt: null,
+      ...identity,
       ...state,
     })),
     fetchSessionRoles: vi.fn(async () => ({

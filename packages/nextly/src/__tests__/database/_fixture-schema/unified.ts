@@ -113,6 +113,12 @@ export const nextlyTables: TableDefinition[] = [
         type: "boolean",
       },
       {
+        // Nullable, as on the real table: unset reads as epoch zero, an
+        // account whose sessions no change has ended yet.
+        name: "session_epoch",
+        type: "integer",
+      },
+      {
         name: "password_hash",
         type: "text",
         nullable: false,

@@ -166,7 +166,6 @@ import type { GeneralSettingsService } from "./services/general-settings/general
 import {
   isSuperAdmin,
   containsSuperAdminRole,
-  hasSuperAdminExcluding,
   resolveRoleSlugs,
 } from "./services/lib/permissions";
 import {
@@ -333,47 +332,6 @@ async function guardSuperAdminRoleAssignment(
       error: "Only super-admins can assign the super_admin role",
     }),
     { status: 403, headers: { "Content-Type": "application/json" } }
-  );
-}
-
-/**
- * Prevent removing the super_admin role from the last super-admin.
- *
- * Applies only to updateUser when the new roles array no longer includes
- * the super-admin role and the target user is currently a super-admin.
- *
- * @returns A 400 Response if protection triggers, or null if allowed.
- */
-async function guardLastSuperAdminRemoval(
-  targetUserId: string,
-  method: string,
-  body: unknown
-): Promise<Response | null> {
-  if (method !== "updateUser") return null;
-
-  const b = body as Record<string, unknown> | undefined;
-  if (!Array.isArray(b?.roles)) return null;
-
-  const newRoles = b.roles as string[];
-
-  // Only check if the super-admin role is being removed (not present in new roles)
-  const newRolesContainSuperAdmin = await containsSuperAdminRole(newRoles);
-  if (newRolesContainSuperAdmin) return null;
-
-  // Check if the target user currently holds the super-admin role
-  const targetIsSuperAdmin = await isSuperAdmin(targetUserId);
-  if (!targetIsSuperAdmin) return null;
-
-  // Check if any other user has the super-admin role
-  const othersExist = await hasSuperAdminExcluding(targetUserId);
-  if (othersExist) return null;
-
-  return new Response(
-    JSON.stringify({
-      error:
-        "Cannot remove the super_admin role: this user is the last super-admin. Assign the super_admin role to another user first.",
-    }),
-    { status: 400, headers: { "Content-Type": "application/json" } }
   );
 }
 
@@ -936,8 +894,9 @@ async function resolveAuthorization(
     // The caller is authenticated first. A request this gate refuses for want
     // of a session or key must not make the process boot, run its startup
     // migrations or start plugins, which is why the dispatch path keeps
-    // authorization ahead of boot too. Authentication itself needs no booted
-    // service; only the permission it is then judged by does.
+    // authorization ahead of boot too. Authentication boots only for a session
+    // token whose signature verified, to read whether its account may still
+    // use it; anything else is refused without a booted service.
     //
     // The permission is judged on that same caller rather than by
     // authenticating the request again: each authentication of an API key
@@ -1489,17 +1448,9 @@ async function handleServiceRequest(
       body
     );
     if (guardResult) return guardResult;
-
-    // Prevent removing the super_admin role from the last super-admin
-    const targetUserId = routeParams?.userId;
-    if (targetUserId) {
-      const lastSuperAdminGuard = await guardLastSuperAdminRemoval(
-        targetUserId,
-        method,
-        body
-      );
-      if (lastSuperAdminGuard) return lastSuperAdminGuard;
-    }
+    // Removing the last active super-admin, by its role or otherwise, is
+    // refused by the user services themselves, inside the write's own
+    // transaction: there it holds for every path and when requests race.
   }
 
   // ==================== DISPATCH REQUEST ====================

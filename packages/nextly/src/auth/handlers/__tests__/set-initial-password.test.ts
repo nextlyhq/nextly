@@ -7,7 +7,7 @@ import {
 } from "../../pipeline/pending-token";
 import { handleSetInitialPassword } from "../set-initial-password";
 
-import { fakeSessionRows } from "./session-row-fake";
+import { fakeSessionRows, fixtureIdentity } from "./session-row-fake";
 
 const SECRET = "test-secret-that-is-at-least-32-characters-long!!";
 
@@ -16,6 +16,7 @@ function makeDeps(state: { isActive: boolean; emailVerified: Date | null }) {
     userId,
     lockedUntil: null,
     passwordUpdatedAt: null,
+    ...fixtureIdentity,
     ...state,
   }));
   return {
@@ -41,11 +42,16 @@ function makeDeps(state: { isActive: boolean; emailVerified: Date | null }) {
       userId: "u1",
       lockedUntil: null,
       passwordUpdatedAt: null,
+      ...fixtureIdentity,
       ...state,
     }),
     setInitialPassword: vi
       .fn()
-      .mockResolvedValue({ userId: "u1", passwordUpdatedAt: null }),
+      .mockResolvedValue({
+        userId: "u1",
+        passwordUpdatedAt: null,
+        sessionEpoch: 0,
+      }),
     findUserById: vi.fn().mockResolvedValue({
       id: "u1",
       email: "a@b.c",
@@ -98,6 +104,22 @@ describe("the forced first-sign-in password change", () => {
 
     expect(res.status).toBe(401);
     expect(deps.setInitialPassword).not.toHaveBeenCalled();
+    expect(deps.sessionRows.insertRefreshToken).not.toHaveBeenCalled();
+  });
+
+  it("issues no session when the write does not say which epoch it left", async () => {
+    // The epoch the change wrote is what the session is judged against; a
+    // later read could already hold the epoch of a reset made in the same
+    // second, which would pass the comparison. Without it, nothing is issued.
+    const deps = makeDeps({ isActive: true, emailVerified: new Date() });
+    deps.setInitialPassword.mockResolvedValue({
+      userId: "u1",
+      passwordUpdatedAt: null,
+    });
+
+    const res = await handleSetInitialPassword(await request(), deps);
+
+    expect(res.status).toBe(500);
     expect(deps.sessionRows.insertRefreshToken).not.toHaveBeenCalled();
   });
 

@@ -141,7 +141,7 @@ export function buildAuthRouterDeps(
       const adapter = getService("adapter");
       const { eq } = await import("drizzle-orm");
       const result = await accountStateQuery(adapter.getDrizzle(), eq, userId);
-      return result[0] || null;
+      return toAccountState(result[0]);
     },
 
     fetchSessionRoles: async (userId: string): Promise<SessionRoles> => {
@@ -439,6 +439,7 @@ export function buildAuthRouterDeps(
         image: u.image,
         mustChangePassword: u.mustChangePassword,
         passwordUpdatedAt: u.passwordUpdatedAt,
+        sessionEpoch: u.sessionEpoch,
       };
     },
   });
@@ -583,7 +584,7 @@ interface SessionRowDb {
   select(fields: unknown): {
     from(table: unknown): {
       where(condition: unknown): {
-        limit(count: number): LockableRead<AccountState[]>;
+        limit(count: number): LockableRead<AccountStateRow[]>;
       };
     };
   };
@@ -600,6 +601,21 @@ interface SessionRowAdapter {
 // Type only: the bridge loads drizzle-orm lazily, on first use.
 type Eq = typeof drizzleEq;
 
+/** The account-state read as the row holds it, before {@link toAccountState}. */
+type AccountStateRow = Omit<AccountState, "sessionEpoch"> & {
+  sessionEpoch: number | null;
+};
+
+/**
+ * The row as the gate and the mint read it. A row written before the session
+ * epoch column existed holds null there, which is epoch zero, where every
+ * account starts.
+ */
+function toAccountState(row: AccountStateRow | undefined): AccountState | null {
+  if (!row) return null;
+  return { ...row, sessionEpoch: Number(row.sessionEpoch ?? 0) };
+}
+
 /**
  * The account-state read, as one query for both its uses: the plain read the
  * gate makes, and the read under a row lock the session-row write makes.
@@ -614,6 +630,10 @@ function accountStateQuery(db: SessionRowDb, eq: Eq, userId: string) {
       emailVerified: users.emailVerified,
       mustChangePassword: users.mustChangePassword,
       passwordUpdatedAt: users.passwordUpdatedAt,
+      email: users.email,
+      name: users.name,
+      image: users.image,
+      sessionEpoch: users.sessionEpoch,
     })
     .from(users)
     .where(eq(users.id, userId))
@@ -643,7 +663,7 @@ function sessionRowTransaction(
         { dialect },
         "session"
       );
-      return rows[0] ?? null;
+      return toAccountState(rows[0]);
     },
     insertRefreshToken: async record => {
       await db.insert(refreshTokens).values(record);

@@ -341,6 +341,11 @@
       "suppressed #3 error TS2322: Type 'unknown' is not assignable to type 'ReactNode'.": 1,
       "suppressed #3 error TS2322: Type 'unknown' is not assignable to type 'string | TrustedHTML'.": 1
     },
+    "docs/guides/authentication.mdx": {
+      "reader-file #0 error TS2307: Cannot find module '../../../nextly.config' or its corresponding type declarations.": 1,
+      "reader-file #1 error TS2307: Cannot find module '../../../nextly.config' or its corresponding type declarations.": 1,
+      "reader-file #2 error TS2307: Cannot find module '../../../nextly.config' or its corresponding type declarations.": 1
+    },
     "docs/guides/media-storage.mdx": {
       "#10 error TS2353: Object literal may only specify known properties, and 'media' does not exist in type 'NextlyConfig'.": 1,
       "reader-file #12 error TS2307: Cannot find module '../../../nextly.config' or its corresponding type declarations.": 1

@@ -248,7 +248,11 @@ export interface AuthRouterDeps {
   setInitialPassword: (
     userId: string,
     newPassword: string
-  ) => Promise<{ userId: string; passwordUpdatedAt: Date | null }>;
+  ) => Promise<{
+    userId: string;
+    passwordUpdatedAt: Date | null;
+    sessionEpoch: number;
+  }>;
   changePassword: (
     userId: string,
     currentPassword: string,

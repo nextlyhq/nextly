@@ -75,6 +75,15 @@ function services(t: TestNextly) {
   return new ServiceContainer(t.adapter);
 }
 
+/**
+ * The install's first account, which its creation makes super-admin. A test
+ * that deletes an account makes this one first, since the only super-admin
+ * may not be deleted; the account it deletes is then another.
+ */
+async function owner(t: TestNextly): Promise<void> {
+  await makeUser(t, "owner@example.com");
+}
+
 async function makeUser(t: TestNextly, email: string): Promise<string> {
   const created = await services(t).users.createLocalUser({
     email,
@@ -104,6 +113,7 @@ describe.each(getConfiguredTestDialects())("on %s", dialect => {
 
     it("tells a subscriber when a user is deleted", async () => {
       const t = await boot(dialect);
+      await owner(t);
       const userId = await makeUser(t, "deleted@example.com");
 
       const seen: Array<{ userId: string }> = [];
@@ -123,6 +133,7 @@ describe.each(getConfiguredTestDialects())("on %s", dialect => {
       // Emitting from the loser would hand subscribers a second deletion for a
       // user that was already gone.
       const t = await boot(dialect);
+      await owner(t);
       const userId = await makeUser(t, "once@example.com");
 
       const seen: unknown[] = [];
@@ -173,6 +184,7 @@ describe.each(getConfiguredTestDialects())("on %s", dialect => {
 
     it("tells a subscriber about a DELETE without the outbox too", async () => {
       const t = await bootWithRecordingOff(dialect);
+      await owner(t);
       const userId = await makeUser(t, "no-outbox-delete@example.com");
       const seen: Array<{ userId: string }> = [];
       t.events.on("user.deleted", e => {

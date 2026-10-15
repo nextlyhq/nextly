@@ -613,6 +613,7 @@ async function wrongAnswer(
       flow?: string;
       flowExpiresAt?: number;
       passwordUpdatedAt?: number | null;
+      sessionEpoch?: number;
     };
     usedCookie: boolean;
     requestId: string;
@@ -651,6 +652,9 @@ async function wrongAnswer(
       // the session the answer mints is still judged against it.
       ...(args.pending.passwordUpdatedAt !== undefined
         ? { passwordUpdatedAt: args.pending.passwordUpdatedAt }
+        : {}),
+      ...(args.pending.sessionEpoch !== undefined
+        ? { sessionEpoch: args.pending.sessionEpoch }
         : {}),
     },
     deps.secret,

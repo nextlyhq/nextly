@@ -52,6 +52,12 @@ export function usersColumns() {
     // column can be added to an existing table without a data-losing default;
     // null and false both mean "no forced change".
     mustChangePassword: boolean("must_change_password"),
+    // Raised whenever the account's sessions are ended: a deactivation, or a
+    // password set. Every access token carries the value it was signed at, and
+    // one signed at an older value is refused (auth/session/session-standing).
+    // Nullable, so adding it to an existing table rewrites no row; null reads
+    // as zero, the value an account starts at.
+    sessionEpoch: int("session_epoch"),
     // Brute-force protection: tracks failed login attempts and account lockout
     failedLoginAttempts: int("failed_login_attempts").notNull().default(0),
     lockedUntil: datetime("locked_until"),

@@ -84,7 +84,8 @@ export type SessionHandlerDeps = Pick<
 };
 
 // Reasons we treat the request as not-authenticated. The first three
-// come from `getSession` (purely JWT shape and signature). `user_gone`
+// come from `getSession`: the token's shape and signature, and whether its
+// account may still use it, which answers `invalid`. `user_gone`
 // is the dev-only stale-cookie case: the JWT verifies fine, but the
 // user it points to has been deleted (e.g. `pnpm dev:reset` wiped the
 // DB and re-seeded with a different super-admin id). Treated like
@@ -150,7 +151,7 @@ export async function handleSession(
     // mismatch means the JWT's user has been replaced.
     //
     // One findUserByEmail per session check is acceptable in dev; the
-    // production path keeps the existing zero-DB-hit fast case.
+    // production path reads only the cached account check in `getSession`.
     const live = await deps.findUserByEmail(result.user.email);
     if (!live || live.id !== result.user.id) failureReason = "user_gone";
   }
@@ -278,6 +279,8 @@ async function attemptDevAutoLogin(
     name: user.name,
     image: user.image,
     roleIds,
+    // Null on a row from before the column existed: epoch zero.
+    sessionEpoch: user.sessionEpoch ?? 0,
     customFields,
   });
 

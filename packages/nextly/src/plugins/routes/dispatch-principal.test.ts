@@ -7,6 +7,17 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+// These tests read a session with no database behind it. Whether the account
+// may still use its token is the session check's own question, covered by
+// `auth/session/__tests__/session-standing.test.ts` and, on each dialect,
+// `session-cutoff.integration.test.ts`; here every account may.
+vi.mock("../../auth/session/session-standing", async importOriginal => ({
+  ...(await importOriginal<
+    typeof import("../../auth/session/session-standing")
+  >()),
+  sessionTokenIsCurrent: async () => true,
+}));
+
 vi.mock("../../auth/middleware", () => ({
   requireAuthentication: vi.fn(),
   requirePermission: vi.fn(),

@@ -53,7 +53,32 @@ export interface AccountState {
    * than reading as "never set" and refusing, or admitting, every session.
    */
   passwordUpdatedAt: Date | null;
+  /**
+   * The identity a session is signed with: read with the state the gate
+   * judged, so the session names the account that was checked rather than
+   * whatever user object a login hook handed back.
+   */
+  email: string;
+  name: string | null;
+  image: string | null;
+  /**
+   * The account's session epoch, zero until its sessions are first ended. A
+   * session signed now carries it, so the session check can refuse every
+   * token signed before the next change (`auth/session/session-standing`).
+   */
+  sessionEpoch: number;
 }
+
+/**
+ * The facts the gate itself decides on: every field of {@link AccountState}
+ * except the identity and epoch a session is signed with, which the gate does
+ * not judge. A caller that holds only these, such as the password check
+ * before any session exists, can still ask it.
+ */
+export type AccountGateState = Omit<
+  AccountState,
+  "email" | "name" | "image" | "sessionEpoch"
+>;
 
 export interface AccountGateOptions {
   /** Whether an unverified email blocks sign-in, mirroring the password path. */
@@ -89,7 +114,7 @@ export interface AccountGateOptions {
  * first, so a locked account answers generically even to a correct password.
  */
 export function assertAccountUsable(
-  state: AccountState,
+  state: AccountGateState,
   opts: AccountGateOptions
 ): void {
   const now = opts.now ?? new Date();
@@ -130,6 +155,36 @@ export function assertAccountUsable(
 }
 
 /**
+ * Throw unless `state` carries the identity and session epoch a session is
+ * signed with.
+ *
+ * Core's account read always does. A caller that assembles the auth deps
+ * itself may still return the shape from before these fields, and a session
+ * signed from it would carry no email and epoch zero, which every check after
+ * the account's first change refuses. Refused here instead, with the log
+ * naming what the read must return, rather than as an account-state refusal
+ * that would send the operator looking at the account.
+ */
+export function assertSessionIdentity(state: AccountState): void {
+  if (
+    typeof state.email === "string" &&
+    Number.isSafeInteger(state.sessionEpoch) &&
+    state.sessionEpoch >= 0
+  ) {
+    return;
+  }
+  throw NextlyError.internal({
+    logContext: {
+      userId: state.userId,
+      reason: "account-state-without-session-identity",
+      remedy:
+        "fetchAccountState and lockAccountState must return the user row's " +
+        "email, name, image and sessionEpoch with its state",
+    },
+  });
+}
+
+/**
  * The gate as a question rather than an error: whether an account may hold a
  * session, for a caller that refuses in its own way rather than by throwing —
  * a refresh ending the session it was asked to renew, a session check
@@ -139,7 +194,7 @@ export function assertAccountUsable(
  * gate's own refusal is rethrown: a failure to judge is not a judgement.
  */
 export function accountMayHoldSession(
-  state: AccountState | null,
+  state: AccountGateState | null,
   opts: AccountGateOptions
 ): boolean {
   if (!state) return false;

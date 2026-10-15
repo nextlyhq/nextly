@@ -16,7 +16,7 @@ import {
 import { authRateLimiter } from "../../middleware/rate-limiter";
 import { SlidingWindowMemoryStore } from "../../middleware/sliding-window-store";
 
-import { fakeSessionRows } from "./session-row-fake";
+import { fakeSessionRows, fixtureIdentity } from "./session-row-fake";
 import { fakeSpentChallenges } from "./spent-challenges-fake";
 
 const SECRET = "test-secret-that-is-at-least-32-characters-long!!";
@@ -33,6 +33,11 @@ function makeDeps() {
     isActive: true,
     lockedUntil: null,
     emailVerified: new Date("2026-01-01T00:00:00Z"),
+    // The identity the session is signed with comes from this read.
+    email: "a@b.c",
+    name: null,
+    image: null,
+    sessionEpoch: 0,
   });
   // The locked re-read answers what the plain read answers, including what a
   // case installs on it.
@@ -1514,7 +1519,7 @@ describe("a password set while the second factor is outstanding", () => {
   const JAN = new Date("2026-01-01T00:00:00Z");
   const FEB = new Date("2026-02-01T00:00:00Z");
 
-  function depsWithPasswordSetAt(passwordUpdatedAt: Date) {
+  function depsWithPasswordSetAt(passwordUpdatedAt: Date, sessionEpoch = 0) {
     const deps = makeDeps();
     deps.fetchAccountState.mockResolvedValue({
       userId: "u1",
@@ -1522,9 +1527,56 @@ describe("a password set while the second factor is outstanding", () => {
       lockedUntil: null,
       emailVerified: JAN,
       passwordUpdatedAt,
+      email: "a@b.c",
+      name: null,
+      image: null,
+      sessionEpoch,
     });
     return deps;
   }
+
+  it("refuses the session when the sessions were ended in the second the sign-in proved it", async () => {
+    // A reset within the same second leaves the stored password time
+    // unchanged on MySQL and SQLite; the epoch the token carries from the
+    // proof is what shows the sign-in no longer belongs to the account.
+    const deps = depsWithPasswordSetAt(JAN, 1);
+    const pendingToken = await mint({
+      userId: "u1",
+      challengeId: "totp",
+      passwordUpdatedAt: JAN.getTime(),
+      sessionEpoch: 0,
+    });
+
+    const res = await handleChallengeResolve(
+      makeRequest({ pendingToken, response: { code: "123456" } }),
+      deps
+    );
+
+    expect(res.status).toBe(401);
+    expect(deps.sessionRows.committed).toHaveLength(0);
+  });
+
+  it("carries the proven epoch on the token a wrong answer re-issues", async () => {
+    const deps = depsWithPasswordSetAt(JAN);
+    const pendingToken = await mint({
+      userId: "u1",
+      challengeId: "totp",
+      passwordUpdatedAt: JAN.getTime(),
+      sessionEpoch: 0,
+    });
+
+    const res = await handleChallengeResolve(
+      makeRequest({ pendingToken, response: { code: "000000" } }),
+      deps
+    );
+    const body = (await res.json()) as Record<string, unknown>;
+    const reissued = await verifyPendingToken(
+      retryPayload(body).pendingToken as string,
+      SECRET
+    );
+
+    expect(reissued.sessionEpoch).toBe(0);
+  });
 
   it("refuses the session when the password changed since the sign-in proved it", async () => {
     // The paused sign-in proved the January password. An administrator's
@@ -1686,6 +1738,7 @@ describe("a cookie-mode flow that can no longer succeed", () => {
       lockedUntil: null,
       emailVerified: JAN,
       passwordUpdatedAt: FEB,
+      ...fixtureIdentity,
     });
     const token = await mint({
       userId: "u1",
@@ -1711,6 +1764,7 @@ describe("a cookie-mode flow that can no longer succeed", () => {
       lockedUntil: null,
       emailVerified: JAN,
       passwordUpdatedAt: null,
+      ...fixtureIdentity,
     };
     // Usable when the flow is gated before the resolver, deactivated by the
     // time the session is.

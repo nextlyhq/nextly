@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   createTestDb,
@@ -12,7 +12,27 @@ import {
   expectArrayLength,
   expectSuccessResponse,
 } from "../../../__tests__/utils/assertions";
+import { NextlyError } from "../../../errors";
 import { UserRoleService } from "../services/user-role-service";
+
+/** When set, the last-super-admin guard fails as a lost connection would. */
+const guardRead = vi.hoisted(() => ({ fails: false }));
+
+vi.mock("../../users/services/last-super-admin", async importOriginal => {
+  const real =
+    await importOriginal<
+      typeof import("../../users/services/last-super-admin")
+    >();
+  return {
+    ...real,
+    refuseRemovingLastSuperAdmin: async (
+      ...args: Parameters<typeof real.refuseRemovingLastSuperAdmin>
+    ) => {
+      if (guardRead.fails) throw new Error("Connection lost: read ECONNRESET");
+      return real.refuseRemovingLastSuperAdmin(...args);
+    },
+  };
+});
 
 describe("UserRoleService", () => {
   let testDb: TestDb;
@@ -210,6 +230,35 @@ describe("UserRoleService", () => {
 
         expectArrayLength(userRoles, 1);
         expect(userRoles[0].roleId).toBe(role2.id);
+      });
+    });
+
+    describe("when the last-super-admin guard cannot read", () => {
+      afterEach(() => {
+        guardRead.fails = false;
+      });
+
+      // The dispatcher answers any result as a success, so a failure reported
+      // as `{ success: false }` told the caller the role was taken while the
+      // transaction had rolled it back.
+      it("throws a typed error and keeps the role", async () => {
+        const user = userFactory();
+        const role = roleFactory();
+        await testDb.db.insert(testDb.schema.users).values(user);
+        await testDb.db.insert(testDb.schema.roles).values(role);
+        await service.assignRoleToUser(user.id, role.id);
+
+        guardRead.fails = true;
+        const err = await service.unassignRoleFromUser(user.id, role.id).then(
+          () => undefined,
+          (e: unknown) => e
+        );
+
+        expect(NextlyError.is(err), String(err)).toBe(true);
+        const userRoles = await testDb.db.query.userRoles.findMany({
+          where: { userId: user.id },
+        });
+        expectArrayLength(userRoles, 1);
       });
     });
 

@@ -8,14 +8,17 @@ export interface PasswordStrategyDeps {
    * failure leg (bad password / locked / unverified / inactive) — exactly as the
    * legacy login path did — and returns the user on success.
    *
-   * `passwordUpdatedAt`, when returned, is when the proven password was set; it
-   * is kept off the user the strategy hands on, and read back with
-   * {@link provenPasswordVersion}.
+   * `passwordUpdatedAt`, when returned, is when the proven password was set,
+   * and `sessionEpoch` the account's session epoch read with it; both are kept
+   * off the user the strategy hands on, and read back with
+   * {@link provenPasswordVersion} and {@link provenSessionEpoch}.
    */
   verify: (creds: {
     email: string;
     password: string;
-  }) => Promise<AuthUser & { passwordUpdatedAt?: Date | null }>;
+  }) => Promise<
+    AuthUser & { passwordUpdatedAt?: Date | null; sessionEpoch?: number }
+  >;
 }
 
 /**
@@ -29,6 +32,14 @@ export interface PasswordStrategyDeps {
 const provenPasswordVersions = new WeakMap<AuthUser, Date | null>();
 
 /**
+ * The session epoch read with each proven password, keyed the same way. The
+ * stored password time has whole seconds on MySQL and SQLite, so a reset in
+ * the same second as the proof leaves it unchanged; the epoch it raised is
+ * what shows the proof is from before the reset.
+ */
+const provenSessionEpochs = new WeakMap<AuthUser, number>();
+
+/**
  * When the password `user` proved was set, if the built-in password strategy
  * authenticated it; `undefined` for a user any other strategy returned.
  *
@@ -39,6 +50,16 @@ const provenPasswordVersions = new WeakMap<AuthUser, Date | null>();
  */
 export function provenPasswordVersion(user: AuthUser): Date | null | undefined {
   return provenPasswordVersions.get(user);
+}
+
+/**
+ * The session epoch read with the password `user` proved, if the built-in
+ * password strategy authenticated it; `undefined` otherwise. The session the
+ * login issues is signed at it, and refused if the account's sessions were
+ * ended before its refresh row is written.
+ */
+export function provenSessionEpoch(user: AuthUser): number | undefined {
+  return provenSessionEpochs.get(user);
 }
 
 /**
@@ -57,12 +78,15 @@ export function createPasswordStrategy(
       if (typeof email !== "string" || typeof password !== "string") {
         return { type: "pass" };
       }
-      const { passwordUpdatedAt, ...user } = await deps.verify({
+      const { passwordUpdatedAt, sessionEpoch, ...user } = await deps.verify({
         email,
         password,
       });
       if (passwordUpdatedAt !== undefined) {
         provenPasswordVersions.set(user, passwordUpdatedAt);
+      }
+      if (sessionEpoch !== undefined) {
+        provenSessionEpochs.set(user, sessionEpoch);
       }
       return { type: "authenticated", user };
     },

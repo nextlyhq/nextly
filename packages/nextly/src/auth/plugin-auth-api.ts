@@ -103,11 +103,12 @@ export interface PluginAuthApi {
    * an authenticated route's cookie writes, and it refuses a write that
    * names no origin at all. Reads are answered whatever their origin.
    *
-   * It reads the access token and does not re-check the account's state, as
-   * core's own `requireAuth` does not: an account deactivated after its
-   * token was issued is still returned until that token expires, which is at
-   * most the 15-minute access-token lifetime. A handler acting on something
-   * sensitive re-reads the account itself.
+   * It reads the access token and checks it against the account, as core's
+   * own `requireAuth` does: within ten seconds of the account being
+   * deactivated, or of an administrator setting its password, a token issued
+   * before is answered as null. The account's other state, such as a lockout,
+   * is not judged here; a handler acting on something sensitive re-reads the
+   * account itself.
    */
   currentUser(request: Request): Promise<{ id: string; email: string } | null>;
   /**

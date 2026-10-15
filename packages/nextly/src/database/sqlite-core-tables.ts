@@ -50,6 +50,7 @@ export function generateSqliteCoreTableStatements(): string[] {
       "failed_login_attempts" INTEGER NOT NULL DEFAULT 0,
       "locked_until" INTEGER,
       "must_change_password" INTEGER,
+      "session_epoch" INTEGER,
       "created_at" INTEGER NOT NULL DEFAULT (unixepoch()),
       "updated_at" INTEGER NOT NULL DEFAULT (unixepoch())
     )`,

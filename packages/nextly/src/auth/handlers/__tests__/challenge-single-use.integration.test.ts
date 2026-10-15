@@ -40,7 +40,7 @@ import {
 import { handleChallengeResolve } from "../challenge-resolve";
 import { buildAuthRouterDeps } from "../deps-bridge";
 
-import { fakeSessionRows } from "./session-row-fake";
+import { fakeSessionRows, fixtureIdentity } from "./session-row-fake";
 
 type TestAdapter = Awaited<ReturnType<typeof createAdapter>>;
 
@@ -92,6 +92,7 @@ function instance(
     lockedUntil: null,
     emailVerified: new Date("2026-01-01T00:00:00Z"),
     passwordUpdatedAt: null,
+    ...fixtureIdentity,
   });
   const sessionRows = fakeSessionRows(fetchAccountState);
   const deps = {

@@ -20,6 +20,7 @@ import {
 import { sanitizeAdminPath } from "../redirect/sanitize-admin-path";
 import {
   assertAccountUsable,
+  assertSessionIdentity,
   type AccountGateOptions,
   type AccountState,
 } from "../session/account-state";
@@ -175,6 +176,13 @@ export interface IssueSessionOptions {
    * gate reads is the one compared.
    */
   passwordUpdatedAt?: Date | null;
+  /**
+   * The session epoch read with that password, when the sign-in proved one
+   * before this call. The session is signed at it and refused if the account's
+   * sessions were ended before its refresh row is written. Absent, the epoch
+   * this call's own gate reads is the one signed and compared.
+   */
+  sessionEpoch?: number;
 }
 
 /** A minted session: the cookies to set, and the body a login response returns. */
@@ -257,19 +265,29 @@ export async function mintSession(
   // strategy reaches a session through here, so this is the one place that can
   // refuse an account no matter which path authenticated it.
   const gated = await gateAccountForSession(deps, user.id, opts?.strategy);
+  assertSessionIdentity(gated);
 
   const [sessionRoles, customFields] = await Promise.all([
     deps.fetchSessionRoles(user.id),
     deps.fetchCustomFields(user.id),
   ]);
   const { roleIds } = sessionRoles;
+  // One epoch for both the token and the locked comparison below, so a token
+  // is never signed at an epoch the refresh row was not judged against.
+  const sessionEpoch =
+    opts?.sessionEpoch !== undefined ? opts.sessionEpoch : gated.sessionEpoch;
 
+  // The identity comes from the row the gate just judged, not from `user`:
+  // that is whatever the login hooks returned, and a hook that rewrote an
+  // email, name or image would otherwise sign the session readers trust as
+  // the signed-in person with details the checked account does not have.
   let claims = buildClaims({
     userId: user.id,
-    email: user.email,
-    name: user.name ?? "",
-    image: user.image ?? null,
+    email: gated.email,
+    name: gated.name ?? "",
+    image: gated.image ?? null,
     roleIds,
+    sessionEpoch,
     customFields,
   });
   // customizeClaims (D71) — add/rename claims. No-op when no hooks registered.
@@ -307,6 +325,7 @@ export async function mintSession(
       opts?.passwordUpdatedAt !== undefined
         ? opts.passwordUpdatedAt
         : gated.passwordUpdatedAt,
+    sessionEpoch,
   });
 
   // Last, after the post-login hooks. A hook that throws sends the caller into
@@ -342,11 +361,13 @@ export async function mintSession(
   return {
     cookies,
     body: {
+      // The same checked identity the token carries, so the body never
+      // names someone the session does not.
       user: {
         id: user.id,
-        email: user.email,
-        name: user.name ?? null,
-        image: user.image ?? null,
+        email: gated.email,
+        name: gated.name ?? null,
+        image: gated.image ?? null,
         roleIds,
       },
       accessToken,
@@ -427,13 +448,17 @@ export async function finishResumedSignIn(
   deps: IssueSessionDeps & { loginStallTimeMs: number },
   request: Request,
   requestId: string,
-  pending: Pick<PendingClaims, "strategy" | "next" | "passwordUpdatedAt">,
+  pending: Pick<
+    PendingClaims,
+    "strategy" | "next" | "passwordUpdatedAt" | "sessionEpoch"
+  >,
   startTime: number
 ): Promise<Response> {
   const response = await issueSession(user, deps, request, requestId, {
     strategy: pending.strategy,
     next: pending.next,
     passwordUpdatedAt: pendingPasswordVersion(pending),
+    sessionEpoch: pending.sessionEpoch,
   });
   response.headers.append("Set-Cookie", clearPendingCookie());
   await stallResponse(startTime, deps.loginStallTimeMs);

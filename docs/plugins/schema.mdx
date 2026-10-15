@@ -207,13 +207,15 @@ nextly prune --force   # actually drops them (and their data + seeded permission
 
 `prune` only ever targets `plugin:<name>` provenance. Code-first (`code`) and
 Builder (`ui`) entities are **always retained** — they're yours, not the plugin's. This
-is why declaring everything through `contributes` (rather than hand-writing tables via
-`ctx.db`) matters: it's what lets uninstall be clean and reversible.
+is why declaring everything through `contributes` (rather than creating tables yourself
+with raw SQL through `ctx.db.raw`) matters: it's what lets uninstall be clean and reversible.
 
 > **Tip for plugin authors:** anything you create through `contributes` /
-> `ctx.services` is provenance-tagged and pruned automatically. Anything you create by
-> reaching into `ctx.db` (raw DDL, side tables) is **not** tracked and will be left
-> behind on uninstall — document it, or avoid it.
+> `ctx.services` is provenance-tagged and pruned automatically. `ctx.db` itself runs no
+> DDL: it reads and writes declared tables, and creates none. Anything you create with raw
+> SQL through `ctx.db.raw` (DDL, side tables), which needs `capabilities.db.rawSql`
+> and the app's `db.rawSqlPlugins` listing, is **not** tracked and will be left behind
+> on uninstall — document it, or avoid it.
 
 ### Tables declared with `defineTable`
 

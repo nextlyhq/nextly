@@ -444,8 +444,9 @@ declare const pluginTransactionBrand: unique symbol;
  * @experimental The transaction `ctx.services.collections.withTransaction`
  * hands its work: a token to pass to the `*InTransaction` methods, and
  * nothing else. The adapter's transaction it stands for carries `execute`,
- * raw SQL on the transaction's connection, which a plugin holds only with
- * `capabilities.db.rawSql`, through `ctx.db.raw`.
+ * raw SQL on the transaction's connection, which a plugin holds only through
+ * `ctx.db.raw`, and only when it declares `capabilities.db.rawSql` and the
+ * app lists it in `db.rawSqlPlugins`.
  */
 export interface PluginCollectionTransaction {
   readonly [pluginTransactionBrand]: "PluginCollectionTransaction";

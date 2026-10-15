@@ -22,6 +22,7 @@ import { signAccessTokenWithExpiry } from "../jwt/sign";
 import type { AuthHookRegistry } from "../pipeline/hooks";
 import {
   accountMayHoldSession,
+  assertSessionIdentity,
   type AccountGateOptions,
   type AccountState,
 } from "../session/account-state";
@@ -178,13 +179,21 @@ export async function handleRefresh(
     if (!accountState || !accountMayHoldSession(accountState, gate)) {
       return refuseAccount(deps, tokenRecord.id);
     }
+    // Before anything is signed: the rotated token carries this read's epoch.
+    assertSessionIdentity(accountState);
     const [sessionRoles, customFields] = await Promise.all([
       deps.fetchSessionRoles(user.id),
       deps.fetchCustomFields(user.id),
     ]);
     const { roleIds } = sessionRoles;
 
-    const claims = await refreshedClaims(deps, user, roleIds, customFields);
+    const claims = await refreshedClaims(
+      deps,
+      user,
+      roleIds,
+      accountState.sessionEpoch,
+      customFields
+    );
     // Ending no later than the first of its roles lapses, and reporting the
     // expiry the token actually carries rather than a second reading of it.
     const { token: accessToken, expiresAt: accessTokenExpiresAt } =
@@ -201,6 +210,8 @@ export async function handleRefresh(
       userId: user.id,
       gate,
       passwordUpdatedAt: accountState.passwordUpdatedAt,
+      // The epoch the token above was signed at.
+      sessionEpoch: accountState.sessionEpoch,
     });
     if (rotated instanceof Response) return rotated;
     const newRawToken = rotated.rawToken;
@@ -252,6 +263,7 @@ async function refreshedClaims(
   deps: RefreshHandlerDeps,
   user: { id: string; email: string; name: string; image: string | null },
   roleIds: string[],
+  sessionEpoch: number,
   customFields: Record<string, unknown>
 ): Promise<ReturnType<typeof buildClaims>> {
   const claims = buildClaims({
@@ -260,6 +272,10 @@ async function refreshedClaims(
     name: user.name,
     image: user.image,
     roleIds,
+    // The epoch the gate read with the account's state. Were the sessions
+    // ended after that read, the refresh row's write refuses this rotation,
+    // and a token already signed at the old epoch is refused where read.
+    sessionEpoch,
     customFields,
   });
   if (!deps.authHooks || !deps.pluginCtx) return claims;
@@ -293,6 +309,8 @@ async function rotateRefreshRow(
     userId: string;
     gate: AccountGateOptions;
     passwordUpdatedAt: Date | null;
+    /** The epoch the rotated token is signed at, compared under the lock. */
+    sessionEpoch: number;
   }
 ): Promise<{ rawToken: string } | Response> {
   const { rawToken, record } = newRefreshToken(deps, args.userId, request);
@@ -302,6 +320,7 @@ async function rotateRefreshRow(
       record,
       gate: args.gate,
       passwordUpdatedAt: args.passwordUpdatedAt,
+      sessionEpoch: args.sessionEpoch,
       consumeId: args.presentedId,
     });
   } catch (error) {
