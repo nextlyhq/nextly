@@ -115,6 +115,7 @@ function loginPipelineDeps(lockoutDeps: {
         image: u.image,
         mustChangePassword: u.mustChangePassword,
         passwordUpdatedAt: u.passwordUpdatedAt,
+        sessionEpoch: u.sessionEpoch,
       };
     },
   });
@@ -166,6 +167,7 @@ describe("login handler: respondAction shape", () => {
       emailVerified: new Date(),
       isActive: true,
       failedLoginAttempts: 0,
+      sessionEpoch: 0,
       lockedUntil: null,
     };
 
@@ -249,6 +251,7 @@ describe("login handler: respondAction shape", () => {
       isActive: true,
       emailVerified: true,
       failedLoginAttempts: 0,
+      sessionEpoch: 0,
       lockedUntil: null,
       mustChangePassword: false,
     };
@@ -320,6 +323,7 @@ describe("login handler: respondAction shape", () => {
       isActive: true,
       emailVerified: true,
       failedLoginAttempts: 0,
+      sessionEpoch: 0,
       lockedUntil: null,
       mustChangePassword: false,
     };
@@ -484,6 +488,7 @@ describe("login handler: respondAction shape", () => {
       // The account still holds an admin-set password.
       mustChangePassword: true,
       failedLoginAttempts: 0,
+      sessionEpoch: 0,
       lockedUntil: null,
     };
 
@@ -582,6 +587,7 @@ describe("login handler: an unverified account", () => {
       isActive: false,
       mustChangePassword: false,
       failedLoginAttempts: 0,
+      sessionEpoch: 0,
       lockedUntil: null,
       deactivatedAt,
     };
