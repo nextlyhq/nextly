@@ -251,7 +251,8 @@ export async function readSessionStanding(
 ): Promise<SessionStanding | null> {
   const adapter = through ?? (await standingAdapter());
   const { users } = getDialectTables(adapter.getCapabilities().dialect);
-  const db = adapter.getDrizzle() as StandingSelect;
+  // Typed by the narrow view it is used through, as the RBAC epoch's read is.
+  const db: StandingSelect = adapter.getDrizzle();
   const rows = await db
     .select({ isActive: users.isActive, sessionEpoch: users.sessionEpoch })
     .from(users)
