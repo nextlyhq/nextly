@@ -42,10 +42,13 @@ export interface WidgetDeclarationFault {
   problem: string;
 }
 
-/** The declarations one owner contributes. */
+/**
+ * The declarations one owner contributes: a list, as an author writes it, or
+ * whatever a plain JavaScript plugin put there instead, which is a fault.
+ */
 export interface WidgetDeclarationGroup {
   owner: string;
-  declarations: readonly unknown[];
+  declarations: unknown;
 }
 
 /** The widths a card may take. */
@@ -438,6 +441,14 @@ export function collectWidgetDeclarationFaults(
   const faults: WidgetDeclarationFault[] = [];
   const claimed = new Map<string, string>();
   for (const { owner, declarations } of groups) {
+    if (!Array.isArray(declarations)) {
+      faults.push({
+        owner,
+        widget: "(none)",
+        problem: "its dashboard widgets must be a list of widget declarations",
+      });
+      continue;
+    }
     for (const declaration of declarations) {
       faults.push(...widgetDeclarationFaults(declaration, owner));
       const id = isRecord(declaration) ? declaration.id : undefined;

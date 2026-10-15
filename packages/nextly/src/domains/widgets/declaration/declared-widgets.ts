@@ -146,7 +146,7 @@ function sharedWithLegacy(
     for (const id of ids) if (!oldOwners.has(id)) oldOwners.set(id, owner);
   }
   return groups.flatMap(({ owner, declarations }) =>
-    declarations.flatMap(declaration => {
+    (Array.isArray(declarations) ? declarations : []).flatMap(declaration => {
       const id = (declaration as { id?: unknown }).id;
       const oldOwner = typeof id === "string" ? oldOwners.get(id) : undefined;
       return oldOwner === undefined
@@ -214,7 +214,8 @@ export function registerWidgetDeclarations(
   warnSharedLegacyIds(legacy);
 
   for (const { owner, declarations } of groups) {
-    for (const raw of declarations) {
+    // Every group is a list by now: one that was not is a fault, refused above.
+    for (const raw of declarations as readonly unknown[]) {
       const declaration = raw as DeclaredWidgetShape;
       store().set(declaration.id, { owner, declaration });
       registerWidget(toDefinition(declaration), { source: owner });
