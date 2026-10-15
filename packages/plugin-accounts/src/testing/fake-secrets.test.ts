@@ -128,6 +128,19 @@ describe("the fake codes", () => {
     });
   });
 
+  it("never mints a code that repeats the live one it replaces, as core does", async () => {
+    const { secrets } = fakeAccountsCore();
+    const draws = ["123456", "123456", "123456", "654321"];
+    secrets.drawCode = () => draws.shift() ?? "000000";
+    const code = { purpose: "verify", subject, expiresInMs: 10 * MINUTE };
+
+    const first = await secrets.mintCode({ ...code, maxWrongTries: 3 });
+    const second = await secrets.mintCode({ ...code, maxWrongTries: 3 });
+
+    expect(first.code).toBe("123456");
+    expect(second.code).toBe("654321");
+  });
+
   it("voids the earlier code when a new one is minted", async () => {
     const { secrets } = fakeAccountsCore();
     const first = await secrets.mintCode({

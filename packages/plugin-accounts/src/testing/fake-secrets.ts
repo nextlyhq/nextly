@@ -40,7 +40,7 @@ export interface MintedSecret {
  * Core's one-purpose secrets, kept in memory, with core's bounds and its
  * transaction rules: a write given `{ tx }` lands at that transaction's
  * commit, and `consumeCode` refuses to run inside one. A void secret
- * answers as a spent one.
+ * answers as core answers it: a token that is no token, and no code.
  */
 export class FakeOneTimeSecrets implements OneTimeSecrets {
   readonly #stored: StoredSecret[] = [];
@@ -48,10 +48,24 @@ export class FakeOneTimeSecrets implements OneTimeSecrets {
   readonly #transactions: FakeTransactions;
   /** Every secret minted, in the order minted. */
   readonly minted: MintedSecret[] = [];
+  /** Where a new code's digits come from; a test sets it to control them. */
+  drawCode: (digits: number) => string = digits =>
+    String(randomInt(0, 10 ** digits)).padStart(digits, "0");
 
   constructor(clock: FakeClock, transactions: FakeTransactions) {
     this.#clock = clock;
     this.#transactions = transactions;
+  }
+
+  /** The live code of a purpose and subject, if one is. */
+  #liveCode(purpose: string, subject: string): string | undefined {
+    return this.#stored.find(
+      secret =>
+        secret.kind === "code" &&
+        secret.state === "live" &&
+        secret.purpose === purpose &&
+        secret.subject === subject
+    )?.value;
   }
 
   /** The last secret minted for a subject and purpose. */
@@ -103,7 +117,11 @@ export class FakeOneTimeSecrets implements OneTimeSecrets {
         `maxWrongTries ${input.maxWrongTries} is outside 1 to 10`
       );
     }
-    const code = String(randomInt(0, 10 ** digits)).padStart(digits, "0");
+    // As core: a new code never repeats the live one it replaces, so a
+    // holder of the old code cannot spend the new one by chance.
+    const live = this.#liveCode(input.purpose, input.subject);
+    let code = this.drawCode(digits);
+    while (code === live) code = this.drawCode(digits);
     const stored = this.#store("code", input, code, input.maxWrongTries);
     this.#transactions.write("mintCode", options, () => {
       this.#voidLive("code", input.purpose, input.subject);
