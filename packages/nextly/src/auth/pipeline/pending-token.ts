@@ -85,6 +85,13 @@ export interface PendingClaims {
    * the claim existed; the session then compares against its own first read.
    */
   passwordUpdatedAt?: number | null;
+  /**
+   * The session epoch read with that password. The session the answer mints
+   * is signed at it and refused if the account's sessions were ended since,
+   * which catches a reset in the same second as the proof, where the stored
+   * password time cannot. Absent as `passwordUpdatedAt` is.
+   */
+  sessionEpoch?: number;
 }
 
 /**
@@ -111,6 +118,9 @@ export async function mintPendingToken(
         : {}),
       ...(claims.passwordUpdatedAt !== undefined
         ? { passwordUpdatedAt: claims.passwordUpdatedAt }
+        : {}),
+      ...(claims.sessionEpoch !== undefined
+        ? { sessionEpoch: claims.sessionEpoch }
         : {}),
     },
     secret,
@@ -163,6 +173,12 @@ export async function verifyPendingToken(
       typeof result.payload.passwordUpdatedAt === "number" ||
       result.payload.passwordUpdatedAt === null
         ? result.payload.passwordUpdatedAt
+        : undefined,
+    sessionEpoch:
+      typeof result.payload.sessionEpoch === "number" &&
+      Number.isSafeInteger(result.payload.sessionEpoch) &&
+      result.payload.sessionEpoch >= 0
+        ? result.payload.sessionEpoch
         : undefined,
   };
 }

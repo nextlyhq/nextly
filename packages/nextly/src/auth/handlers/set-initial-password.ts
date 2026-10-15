@@ -43,14 +43,19 @@ export interface SetInitialPasswordDeps extends IssueSessionDeps {
   auditLog: AuditLogWriter;
   /**
    * Replaces the admin-set password and clears the must-change flag, and
-   * returns the `passwordUpdatedAt` it wrote, read back as stored. Throws
+   * returns the `passwordUpdatedAt` and session epoch it wrote, read back as
+   * stored. Throws
    * NextlyError(VALIDATION_ERROR) on a weak password and NextlyError(INVALID_INPUT)
    * when the account is no longer in the must-change state.
    */
   setInitialPassword: (
     userId: string,
     newPassword: string
-  ) => Promise<{ userId: string; passwordUpdatedAt: Date | null }>;
+  ) => Promise<{
+    userId: string;
+    passwordUpdatedAt: Date | null;
+    sessionEpoch?: number;
+  }>;
   findUserById: (userId: string) => Promise<{
     id: string;
     email: string;
@@ -192,6 +197,7 @@ export async function handleSetInitialPassword(
         strategy: pending.strategy,
         next: pending.next,
         passwordUpdatedAt: written.passwordUpdatedAt?.getTime() ?? null,
+        sessionEpoch: written.sessionEpoch,
       },
       startTime
     );

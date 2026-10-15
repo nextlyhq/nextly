@@ -439,6 +439,7 @@ export function buildAuthRouterDeps(
         image: u.image,
         mustChangePassword: u.mustChangePassword,
         passwordUpdatedAt: u.passwordUpdatedAt,
+        sessionEpoch: u.sessionEpoch,
       };
     },
   });

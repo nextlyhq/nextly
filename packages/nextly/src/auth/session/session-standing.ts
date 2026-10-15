@@ -27,13 +27,17 @@
  *
  * ## Cached for a few seconds, and why that is the bound
  *
- * The row is read at most once per {@link SESSION_STANDING_TTL_MS} per account
- * per process, which turns a read on every request into one per active person
- * every few seconds. Another instance's change reaches this one only through
- * the database, so that lifetime is the bound on how long a token can outlive
- * the change, and the documentation states it as {@link SESSION_CUTOFF_SECONDS}.
- * The instance that makes the change drops its own entry at once
- * ({@link forgetSessionStanding}).
+ * An active account's row is read at most once per
+ * {@link SESSION_STANDING_TTL_MS} per process, which turns a read on every
+ * request into one per active person every few seconds. Another instance's
+ * change reaches this one only through the database, so that lifetime is the
+ * bound on how long a token can outlive the change, and the documentation
+ * states it as {@link SESSION_CUTOFF_SECONDS}. The instance that makes the
+ * change drops its own entry at once ({@link forgetSessionStanding}).
+ *
+ * The cache can only ever be slow to refuse, never slow to admit: a refusal
+ * is not kept, so a reactivated account's next sign-in is seen at once, and a
+ * token newer than the held answer proves that answer stale and reads again.
  *
  * A failed read is never cached and is never an answer: the error travels, so
  * the request fails rather than being let through or signed out.
@@ -46,6 +50,7 @@ import { eq } from "drizzle-orm";
 import { getDialectTables } from "../../database/index";
 import { container } from "../../di/container";
 import { NextlyError } from "../../errors/nextly-error";
+import { awaitBootMigrations } from "../../init/boot-migrations-gate";
 import { SESSION_EPOCH_CLAIM } from "../jwt/claims";
 
 /** What the user row says about the sessions the account may hold. */
@@ -81,19 +86,43 @@ export const SESSION_CUTOFF_SECONDS = 10;
 const MAX_ENTRIES = 10_000;
 
 export interface SessionStandingCache {
-  /** The account's standing, from memory while it is fresh. */
-  standing(userId: string): Promise<SessionStanding | null>;
+  /**
+   * The account's standing, as fresh as a token signed at `tokenEpoch` needs.
+   *
+   * Served from memory only while the held answer is fresh, is for an active
+   * account, and is at least as new as the token: a token can only carry an
+   * epoch the row once held, so one newer than the held answer means the held
+   * answer is stale, and the row is read again rather than refusing a session
+   * just signed.
+   */
+  standing(userId: string, tokenEpoch: number): Promise<SessionStanding | null>;
   /** Drop what is held for the account, so its next request reads the row. */
   forget(userId: string): void;
+}
+
+/** A read of one account's row, and whether a `forget` has overtaken it. */
+interface Reading {
+  promise: Promise<SessionStanding | null>;
+  superseded: boolean;
 }
 
 /**
  * A per-process cache of account standings over `read`.
  *
+ * Only an active account's standing is kept. A refusal — an account that is
+ * not active, or no longer exists — is read again on the next request, so
+ * reactivating an account, here or on another instance, is seen by the next
+ * sign-in at once rather than refusing its new session for the lifetime. The
+ * cost is one read per request carrying a token for such an account, which is
+ * the per-request read the cache otherwise saves; tokens older than a held
+ * active epoch are still refused from memory.
+ *
  * One read runs per account at a time, and callers arriving while it runs
  * share it. A {@link SessionStandingCache.forget} while a read is running
- * means that read may have queried before the change, so its answer is handed
- * to the callers already waiting and is not kept.
+ * marks that read superseded, because it may have queried before the change:
+ * its answer goes to the callers already waiting and is not kept. The mark
+ * lives on the read and goes with it, so nothing is held for an account once
+ * its reads are done.
  */
 export function createSessionStandingCache(options: {
   read: ReadSessionStanding;
@@ -104,15 +133,10 @@ export function createSessionStandingCache(options: {
   const ttlMs = options.ttlMs ?? SESSION_STANDING_TTL_MS;
   const maxEntries = options.maxEntries ?? MAX_ENTRIES;
   const now = options.now ?? Date.now;
-  const held = new Map<
-    string,
-    { standing: SessionStanding | null; readAt: number }
-  >();
-  const reading = new Map<string, Promise<SessionStanding | null>>();
-  // Raised by `forget`, so a read that started before it can tell.
-  const forgotten = new Map<string, number>();
+  const held = new Map<string, { standing: SessionStanding; readAt: number }>();
+  const reading = new Map<string, Reading>();
 
-  function keep(userId: string, standing: SessionStanding | null): void {
+  function keep(userId: string, standing: SessionStanding): void {
     held.delete(userId);
     if (held.size >= maxEntries) {
       // A Map iterates in insertion order, so the first key is the oldest.
@@ -122,52 +146,59 @@ export function createSessionStandingCache(options: {
     held.set(userId, { standing, readAt: now() });
   }
 
-  return {
-    standing(userId) {
-      const entry = held.get(userId);
-      if (entry && now() - entry.readAt < ttlMs) {
-        return Promise.resolve(entry.standing);
-      }
-      const running = reading.get(userId);
-      if (running) return running;
-
-      const generation = forgotten.get(userId) ?? 0;
-      const read = options
+  function readRow(userId: string): Promise<SessionStanding | null> {
+    const running = reading.get(userId);
+    if (running) return running.promise;
+    const entry: Reading = {
+      superseded: false,
+      promise: options
         .read(userId)
         .then(standing => {
-          if ((forgotten.get(userId) ?? 0) === generation) {
+          if (!entry.superseded && standing?.isActive === true) {
             keep(userId, standing);
           }
           return standing;
         })
         .finally(() => {
-          if (reading.get(userId) === read) reading.delete(userId);
-        });
-      reading.set(userId, read);
-      return read;
+          if (reading.get(userId) === entry) reading.delete(userId);
+        }),
+    };
+    reading.set(userId, entry);
+    return entry.promise;
+  }
+
+  return {
+    standing(userId, tokenEpoch) {
+      const entry = held.get(userId);
+      if (
+        entry &&
+        now() - entry.readAt < ttlMs &&
+        entry.standing.sessionEpoch >= tokenEpoch
+      ) {
+        return Promise.resolve(entry.standing);
+      }
+      return readRow(userId);
     },
 
     forget(userId) {
       held.delete(userId);
-      reading.delete(userId);
-      forgotten.set(userId, (forgotten.get(userId) ?? 0) + 1);
+      const running = reading.get(userId);
+      if (running) {
+        running.superseded = true;
+        reading.delete(userId);
+      }
     },
   };
 }
 
 /**
- * Whether `standing` admits a token carrying `claims`.
+ * The session epoch a token was signed at.
  *
- * Refused when the account no longer exists, is not active, or has had its
- * sessions ended since the token was signed. A token with no epoch claim was
- * signed before the claim existed and reads as epoch zero; one whose claim is
- * not a whole number of zero or more was not signed by core and is refused.
+ * A token with no epoch claim was signed before the claim existed and reads
+ * as epoch zero. One whose claim is not a whole number of zero or more was
+ * not signed by core, and answers undefined, which the check refuses.
  */
-export function standingAdmits(
-  standing: SessionStanding | null,
-  claims: Record<string, unknown>
-): boolean {
-  if (!standing || !standing.isActive) return false;
+function tokenEpoch(claims: Record<string, unknown>): number | undefined {
   const signed = Object.prototype.hasOwnProperty.call(
     claims,
     SESSION_EPOCH_CLAIM
@@ -175,10 +206,25 @@ export function standingAdmits(
     ? claims[SESSION_EPOCH_CLAIM]
     : 0;
   if (typeof signed !== "number" || !Number.isSafeInteger(signed)) {
-    return false;
+    return undefined;
   }
-  if (signed < 0) return false;
-  return signed === standing.sessionEpoch;
+  return signed < 0 ? undefined : signed;
+}
+
+/**
+ * Whether `standing` admits a token carrying `claims`.
+ *
+ * Refused when the account no longer exists, is not active, or has had its
+ * sessions ended since the token was signed, and when the token's epoch claim
+ * is malformed.
+ */
+export function standingAdmits(
+  standing: SessionStanding | null,
+  claims: Record<string, unknown>
+): boolean {
+  if (!standing || !standing.isActive) return false;
+  const signed = tokenEpoch(claims);
+  return signed !== undefined && signed === standing.sessionEpoch;
 }
 
 /**
@@ -235,8 +281,19 @@ interface StandingSelect {
  * names the one line that fixes it, as `getCachedNextly()` does.
  */
 async function standingAdapter(): Promise<DrizzleAdapter> {
-  if (!adapterIsRegistered() && boot) await boot();
-  if (!adapterIsRegistered()) {
+  // Ready only once registration has finished, not as soon as the adapter is
+  // in the container: registration puts it there before it runs the boot
+  // migrations, and a read in between may meet a column those migrations are
+  // still adding. Loaded on first use, as this module is imported by every
+  // session read and the registry imports most of core.
+  const { isServicesRegistered } = await import("../../di/register");
+  if (!isServicesRegistered() && boot) await boot();
+  // The gate every serving surface waits on (`getCachedNextly()` does too):
+  // a boot still migrating is waited for, and one that refused keeps
+  // refusing here, rather than this check reading a schema it has not
+  // confirmed.
+  await awaitBootMigrations();
+  if (!isServicesRegistered() || !adapterIsRegistered()) {
     throw new NextlyError({
       code: "CONFIGURATION_ERROR",
       statusCode: 500,
@@ -315,7 +372,12 @@ export async function sessionTokenIsCurrent(
 ): Promise<boolean> {
   const userId = claims.sub;
   if (typeof userId !== "string" || userId === "") return false;
-  const standing = await cacheFor(await standingAdapter()).standing(userId);
+  const signed = tokenEpoch(claims);
+  if (signed === undefined) return false;
+  const standing = await cacheFor(await standingAdapter()).standing(
+    userId,
+    signed
+  );
   return standingAdmits(standing, claims);
 }
 

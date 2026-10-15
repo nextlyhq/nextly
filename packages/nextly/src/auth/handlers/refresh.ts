@@ -207,6 +207,8 @@ export async function handleRefresh(
       userId: user.id,
       gate,
       passwordUpdatedAt: accountState.passwordUpdatedAt,
+      // The epoch the token above was signed at.
+      sessionEpoch: accountState.sessionEpoch,
     });
     if (rotated instanceof Response) return rotated;
     const newRawToken = rotated.rawToken;
@@ -304,6 +306,8 @@ async function rotateRefreshRow(
     userId: string;
     gate: AccountGateOptions;
     passwordUpdatedAt: Date | null;
+    /** The epoch the rotated token is signed at, compared under the lock. */
+    sessionEpoch: number;
   }
 ): Promise<{ rawToken: string } | Response> {
   const { rawToken, record } = newRefreshToken(deps, args.userId, request);
@@ -313,6 +317,7 @@ async function rotateRefreshRow(
       record,
       gate: args.gate,
       passwordUpdatedAt: args.passwordUpdatedAt,
+      sessionEpoch: args.sessionEpoch,
       consumeId: args.presentedId,
     });
   } catch (error) {

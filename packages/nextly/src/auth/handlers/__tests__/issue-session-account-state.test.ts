@@ -275,12 +275,9 @@ describe("mintSession against a revocation during the mint", () => {
     // revocation. Missed, the refresh row written here would outlive it.
     const d = deps(usable, { ...usable, sessionEpoch: 1 });
 
-    const refusal = await mintSession(user, d, req, { strategy: "test" }).then(
-      () => null,
-      (err: unknown) => err
-    );
-
-    expect((refusal as NextlyError).code).toBe("AUTH_INVALID_CREDENTIALS");
+    await expect(
+      mintSession(user, d, req, { strategy: "test" })
+    ).rejects.toMatchObject({ code: "AUTH_INVALID_CREDENTIALS" });
     expect(d.rows.committed).toHaveLength(0);
   });
 

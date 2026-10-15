@@ -1135,7 +1135,11 @@ export class AuthService extends BaseService {
   async setInitialPassword(
     userId: string,
     newPassword: string
-  ): Promise<{ userId: string; passwordUpdatedAt: Date | null }> {
+  ): Promise<{
+    userId: string;
+    passwordUpdatedAt: Date | null;
+    sessionEpoch: number;
+  }> {
     const passwordStrength = validatePasswordStrength(newPassword);
     if (!passwordStrength.ok) {
       throw NextlyError.validation({
@@ -1184,8 +1188,12 @@ export class AuthService extends BaseService {
 
     // The version as stored, read back in the transaction that wrote it:
     // MySQL and SQLite keep whole seconds, so the value written here is not
-    // the one a later read compares against.
-    let written: { passwordUpdatedAt: Date | null } | undefined;
+    // the one a later read compares against. The session epoch the write
+    // raised comes back with it, for the same reason: it is what tells a
+    // reset in the same second apart.
+    let written:
+      | { passwordUpdatedAt: Date | null; sessionEpoch: number | null }
+      | undefined;
     try {
       await this.withTransaction(async txRaw => {
         const tx = txRaw as TransactionLike;
@@ -1209,7 +1217,10 @@ export class AuthService extends BaseService {
         );
         if (claimed !== 1) return;
         const [row] = await tx
-          .select({ passwordUpdatedAt: this.tables.users.passwordUpdatedAt })
+          .select({
+            passwordUpdatedAt: this.tables.users.passwordUpdatedAt,
+            sessionEpoch: this.tables.users.sessionEpoch,
+          })
           .from(this.tables.users)
           .where(eq(this.tables.users.id, userId))
           .limit(1);
@@ -1227,7 +1238,11 @@ export class AuthService extends BaseService {
       });
     }
 
-    return { userId, passwordUpdatedAt: written.passwordUpdatedAt };
+    return {
+      userId,
+      passwordUpdatedAt: written.passwordUpdatedAt,
+      sessionEpoch: Number(written.sessionEpoch ?? 0),
+    };
   }
 
   /**

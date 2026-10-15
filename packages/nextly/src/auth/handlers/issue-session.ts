@@ -175,6 +175,13 @@ export interface IssueSessionOptions {
    * gate reads is the one compared.
    */
   passwordUpdatedAt?: Date | null;
+  /**
+   * The session epoch read with that password, when the sign-in proved one
+   * before this call. The session is signed at it and refused if the account's
+   * sessions were ended before its refresh row is written. Absent, the epoch
+   * this call's own gate reads is the one signed and compared.
+   */
+  sessionEpoch?: number;
 }
 
 /** A minted session: the cookies to set, and the body a login response returns. */
@@ -263,6 +270,10 @@ export async function mintSession(
     deps.fetchCustomFields(user.id),
   ]);
   const { roleIds } = sessionRoles;
+  // One epoch for both the token and the locked comparison below, so a token
+  // is never signed at an epoch the refresh row was not judged against.
+  const sessionEpoch =
+    opts?.sessionEpoch !== undefined ? opts.sessionEpoch : gated.sessionEpoch;
 
   // The identity comes from the row the gate just judged, not from `user`:
   // that is whatever the login hooks returned, and a hook that rewrote an
@@ -274,7 +285,7 @@ export async function mintSession(
     name: gated.name ?? "",
     image: gated.image ?? null,
     roleIds,
-    sessionEpoch: gated.sessionEpoch,
+    sessionEpoch,
     customFields,
   });
   // customizeClaims (D71) — add/rename claims. No-op when no hooks registered.
@@ -312,6 +323,7 @@ export async function mintSession(
       opts?.passwordUpdatedAt !== undefined
         ? opts.passwordUpdatedAt
         : gated.passwordUpdatedAt,
+    sessionEpoch,
   });
 
   // Last, after the post-login hooks. A hook that throws sends the caller into
@@ -434,13 +446,17 @@ export async function finishResumedSignIn(
   deps: IssueSessionDeps & { loginStallTimeMs: number },
   request: Request,
   requestId: string,
-  pending: Pick<PendingClaims, "strategy" | "next" | "passwordUpdatedAt">,
+  pending: Pick<
+    PendingClaims,
+    "strategy" | "next" | "passwordUpdatedAt" | "sessionEpoch"
+  >,
   startTime: number
 ): Promise<Response> {
   const response = await issueSession(user, deps, request, requestId, {
     strategy: pending.strategy,
     next: pending.next,
     passwordUpdatedAt: pendingPasswordVersion(pending),
+    sessionEpoch: pending.sessionEpoch,
   });
   response.headers.append("Set-Cookie", clearPendingCookie());
   await stallResponse(startTime, deps.loginStallTimeMs);
