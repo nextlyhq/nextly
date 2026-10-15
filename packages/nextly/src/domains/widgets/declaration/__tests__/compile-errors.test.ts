@@ -95,7 +95,17 @@ const WRONG_SHAPE: Record<(typeof CORE_DISPLAYS)[number], string> = {
   list: SHAPES.metric,
   table: SHAPES.bars,
   bars: SHAPES.timeseries,
-  timeseries: SHAPES.metric,
+  // Its interval without its points, so exactly one drawn field is missing.
+  timeseries: `{ interval: "day" }`,
+};
+
+/** The field each display draws from, which a wrong shape lacks. */
+const DRAWN_FIELD: Record<(typeof CORE_DISPLAYS)[number], string> = {
+  metric: "total",
+  list: "items",
+  table: "items",
+  bars: "buckets",
+  timeseries: "points",
 };
 
 /** A query whose op answers what the display does not draw. */
@@ -206,7 +216,7 @@ export function Card({ data }: WidgetProps<typeof revenue>) {
         SHAPES[display]
       ),
       code: 2322,
-      message: `DisplayData<"${display}">`,
+      message: `Property '${DRAWN_FIELD[display]}' is missing`,
     })
   ),
   ...CORE_DISPLAYS.map(

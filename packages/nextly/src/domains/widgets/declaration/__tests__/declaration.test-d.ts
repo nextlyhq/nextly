@@ -152,3 +152,23 @@ expectTypeOf<WidgetData<typeof ordersByState>>().toEqualTypeOf<{
   buckets: { value: string | null; count: number }[];
   truncated?: boolean;
 }>();
+
+// A list's rows may be any object type, an interface included: the wire type's
+// `Record<string, unknown>` rows would refuse an interface, which has no index
+// signature, though every value in it travels. The answer still has to be
+// transportable (compile-errors.test.ts).
+interface OrderRow {
+  title: string;
+  total: number;
+}
+declare const rows: OrderRow[];
+defineWidget({
+  id: "test/interface-rows",
+  title: "Orders",
+  description: "Rows typed by an interface",
+  category: "Test",
+  widths: ["full"],
+  width: "full",
+  data: async () => ({ items: rows }),
+  display: "list",
+});

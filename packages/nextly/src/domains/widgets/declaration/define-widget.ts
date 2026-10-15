@@ -384,8 +384,14 @@ export type WidgetData<W> = W extends { readonly [widgetData]?: infer D }
   ? D
   : never;
 
-/** A card's current size, which changes as its width does. */
-export interface WidgetSize {
+/**
+ * A card's current size, which changes as its width does.
+ *
+ * Not `WidgetSize`: that name is the published `"sm" | … | "full"` step of
+ * the column grid, and a plugin reading both must not find one name meaning
+ * two things.
+ */
+export interface WidgetRenderSize {
   width: WidgetWidth;
   class: "small" | "medium" | "large";
 }
@@ -410,7 +416,7 @@ export interface WidgetProps<W extends AnyWidget> {
   /** The card's id: one widget may sit on a dashboard more than once. */
   placementId: string;
   settings: WidgetSettingValues<W>;
-  size: WidgetSize;
+  size: WidgetRenderSize;
   /**
    * The card's data, always present: the host draws loading, no permission
    * and error itself, and calls the component only once there is data.

@@ -27,10 +27,20 @@ import type { WidgetQuery } from "../query";
 declare const settingValue: unique symbol;
 
 /**
- * One setting, as a widget declares it.
+ * One setting, as a widget declares it: core's own setting definition
+ * (`WidgetSetting` in `../settings.ts`), with its value type carried along.
+ *
+ * 🔴 The SAME vocabulary as the definitions registration validates and
+ * `FieldRenderer` draws: `type` and `defaultValue`, and the existing types
+ * (`text`, `number`, `checkbox`, `select`) wherever one fits. The record key
+ * becomes the definition's `name`. So a declaration is not a second schema to
+ * convert and keep in step; only the controls core has no type for yet
+ * (`collection`, `filter`, `sort`, `groupBy`), and a dependency (`of`), are
+ * added to that one union.
  *
  * - `Value` is the type of what a person can choose, and what readers get.
- * - `Kind` names the builder, so a dependency can require a sibling of a kind.
+ * - `Kind` is the definition's `type`, so a dependency can require a sibling
+ *   of a kind.
  * - `On` is the sibling this setting depends on, when it depends on one.
  */
 export interface SettingDeclaration<
@@ -38,14 +48,14 @@ export interface SettingDeclaration<
   Kind extends string = string,
   On extends string = never,
 > {
-  readonly kind: Kind;
+  readonly type: Kind;
   /**
    * The starting value, used until a person changes the setting.
    *
    * Absent only where core supplies it when the card is placed: a Collection
    * setting starts as the collection whose group the card was added from.
    */
-  readonly default?: Value;
+  readonly defaultValue?: Value;
   /** The setting this one depends on, and is reset with. */
   readonly of?: On;
   readonly [settingValue]?: Value;
@@ -127,10 +137,22 @@ export type WidgetFilter = NonNullable<WidgetQuery["where"]>;
  * value type needs to be visible to the compiler.
  */
 function declare<Value, Kind extends string, On extends string = never>(
-  kind: Kind,
-  options: { default?: Value; of?: On; [option: string]: unknown } = {}
+  type: Kind,
+  {
+    default: defaultValue,
+    ...rest
+  }: { default?: Value; of?: On; [option: string]: unknown } = {}
 ): SettingDeclaration<Value, Kind, On> {
-  return { kind, ...options };
+  // `default` is what an author writes; `defaultValue` is the definition's own
+  // field, so the object needs no translation on its way to registration.
+  return defaultValue === undefined
+    ? { type, ...rest }
+    : { type, defaultValue, ...rest };
+}
+
+/** A fixed set of values, as a select definition lists its options. */
+function choices<Option extends string>(values: readonly Option[]) {
+  return values.map(value => ({ label: value, value }));
 }
 
 /**
@@ -151,18 +173,24 @@ export const settings = {
   /** Group by: status, or a choice field of the collection it names. */
   groupBy: <const On extends string>(options: { of: On; default?: string }) =>
     declare<string, "groupBy", On>("groupBy", options),
-  /** Number of items: 1 to 25, 5 by default. */
-  items: (options: { default?: number } = {}) =>
-    declare<number, "items">("items", options),
-  /** Date range: the last 30 days by default. */
-  dateRange: (options: { default?: DateRange } = {}) =>
-    declare<DateRange, "dateRange">("dateRange", options),
-  /** Chart style: a line by default. */
-  chartStyle: (options: { default?: ChartStyle } = {}) =>
-    declare<ChartStyle, "chartStyle">("chartStyle", options),
-  /** Only mine: off by default. */
-  onlyMine: (options: { default?: boolean } = {}) =>
-    declare<boolean, "onlyMine">("onlyMine", options),
+  /** Number of items: a number from 1 to 25, 5 by default. */
+  items: ({ default: start = 5 }: { default?: number } = {}) =>
+    declare<number, "number">("number", { default: start, min: 1, max: 25 }),
+  /** Date range: a select of the four ranges, the last 30 days by default. */
+  dateRange: ({ default: start = "30d" }: { default?: DateRange } = {}) =>
+    declare<DateRange, "select">("select", {
+      default: start,
+      options: choices(DATE_RANGES),
+    }),
+  /** Chart style: a select of line or bars, a line by default. */
+  chartStyle: ({ default: start = "line" }: { default?: ChartStyle } = {}) =>
+    declare<ChartStyle, "select">("select", {
+      default: start,
+      options: choices(CHART_STYLES),
+    }),
+  /** Only mine: a checkbox, off by default. */
+  onlyMine: ({ default: start = false }: { default?: boolean } = {}) =>
+    declare<boolean, "checkbox">("checkbox", { default: start }),
 
   /** A setting of the widget's own: a line of text. */
   text: (options: { default: string }) =>
@@ -170,9 +198,9 @@ export const settings = {
   /** A setting of the widget's own: a number. */
   number: (options: { default: number; min?: number; max?: number }) =>
     declare<number, "number">("number", options),
-  /** A setting of the widget's own: on or off. */
+  /** A setting of the widget's own: on or off, a checkbox. */
   toggle: (options: { default: boolean }) =>
-    declare<boolean, "toggle">("toggle", options),
+    declare<boolean, "checkbox">("checkbox", options),
   /**
    * A setting of the widget's own: one of a fixed set.
    *
@@ -183,5 +211,9 @@ export const settings = {
   select: <const Option extends string>(options: {
     options: readonly Option[];
     default: NoInfer<Option>;
-  }) => declare<Option, "select">("select", options),
+  }) =>
+    declare<Option, "select">("select", {
+      default: options.default,
+      options: choices(options.options),
+    }),
 };

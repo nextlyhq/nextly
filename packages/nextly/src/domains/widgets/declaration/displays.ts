@@ -10,7 +10,11 @@
  * @module domains/widgets/declaration/displays
  */
 
-import { DATA_ARCHETYPES, type DataWidgetArchetype } from "../definition";
+import {
+  type ARCHETYPE_OPS,
+  DATA_ARCHETYPES,
+  type DataWidgetArchetype,
+} from "../definition";
 import type { WidgetResult } from "../result";
 import type { WidgetOp } from "../sources";
 
@@ -24,28 +28,13 @@ export const CORE_DISPLAYS = DATA_ARCHETYPES;
 export type CoreDisplay = DataWidgetArchetype;
 
 /**
- * Requires a table to name every core display, each with an op.
- *
- * A bound rather than an annotation, so the table keeps its literal ops: a
- * display left out, or an op that does not exist, fails the bound.
+ * Which query answer each display draws, read from the table registration
+ * checks at startup (`ARCHETYPE_OPS` in `definition.ts`), so the compile-time
+ * pairing and the startup check are one table.
  */
-type EveryDisplay<T extends Record<CoreDisplay, WidgetOp>> = T;
-
-/**
- * Which query answer each display draws.
- *
- * 🔴 The same pairing the registry checks at startup (`ARCHETYPE_RESULTS` in
- * `definition.ts`). There it is a runtime map, here a type; one should be
- * read from the other once both exist in one implementation, so the
- * compile-time check and the startup check cannot disagree.
- */
-type DisplayAnswers = EveryDisplay<{
-  metric: "count";
-  list: "list";
-  table: "list";
-  bars: "groupBy";
-  timeseries: "timeseries";
-}>;
+type DisplayAnswers = {
+  [D in CoreDisplay]: (typeof ARCHETYPE_OPS)[D][number];
+};
 
 /** The op of the query whose answer a display draws. */
 export type DisplayOp<D extends CoreDisplay> = DisplayAnswers[D];
@@ -70,10 +59,23 @@ export type QueryAnswer<Op extends WidgetOp> = Extract<
  * carries it, and an extra property is no mismatch, so the answer of a `list`
  * query is data the `list` display draws.
  */
-export type DisplayData<D extends CoreDisplay> = Omit<
-  QueryAnswer<DisplayOp<D>>,
-  "op"
+export type DisplayData<D extends CoreDisplay> = AuthoredRows<
+  Omit<QueryAnswer<DisplayOp<D>>, "op">
 >;
+
+/**
+ * A list's rows as an author may write them: any plain object.
+ *
+ * 🔴 The wire type says `Record<string, unknown>`, and an interface has no
+ * implicit index signature, so `interface Row { title: string }` was refused
+ * as a row although every value in it is safe. A row only has to be an
+ * object here; what JSON carries is checked separately, by the transport
+ * bound on the answer. A query's own answer, `Record<string, unknown>` rows
+ * included, still fits.
+ */
+type AuthoredRows<T> = T extends { items: Record<string, unknown>[] }
+  ? Omit<T, "items"> & { items: readonly object[] }
+  : T;
 
 /**
  * A component of the widget's own, named by where the admin can load it.
