@@ -1,3 +1,4 @@
+import { decodeJwt } from "jose";
 import { describe, expect, it, vi } from "vitest";
 
 import { NextlyError } from "../../../errors/nextly-error";
@@ -9,6 +10,14 @@ import {
 } from "../issue-session";
 
 import { fakeSessionRows, type FakeSessionRows } from "./session-row-fake";
+
+/** The identity the user row holds: what the session claims are judged against. */
+const CHECKED = {
+  email: "a@b.c",
+  name: "Ada",
+  image: "/avatars/ada.png",
+  sessionEpoch: 0,
+};
 
 interface State {
   isActive: boolean;
@@ -29,6 +38,7 @@ function deps(
   const rows = fakeSessionRows(async userId => ({
     userId,
     passwordUpdatedAt: null,
+    ...CHECKED,
     ...lockedState,
   }));
   return {
@@ -44,6 +54,7 @@ function deps(
     fetchAccountState: vi.fn(async (userId: string) => ({
       userId,
       passwordUpdatedAt: null,
+      ...CHECKED,
       ...state,
     })),
     fetchSessionRoles: vi.fn(async () => ({
@@ -155,6 +166,55 @@ describe("mintSession", () => {
     expect(res.headers.getSetCookie().map(cookieShape)).toEqual(
       minted.cookies.map(cookieShape)
     );
+  });
+});
+
+describe("mintSession's identity claims", () => {
+  const usable = {
+    isActive: true,
+    lockedUntil: null,
+    emailVerified: new Date(),
+  };
+
+  it.each([
+    ["email", { email: "someone-else@evil.test" }],
+    ["name", { name: "Not Ada" }],
+    ["image", { image: "https://evil.test/a.png" }],
+  ] as const)(
+    "signs the checked account's %s, not the one an afterAuthenticate hook returned",
+    async (claim, altered) => {
+      // The user handed to the mint is what the hooks returned. The account
+      // the gate checked is the row, so a hook rewriting a detail must not
+      // put it into the session readers trust as the signed-in person.
+      const minted = await mintSession(
+        { ...user, name: "Ada", image: CHECKED.image, ...altered },
+        deps(usable),
+        req,
+        { strategy: "test" }
+      );
+
+      const claims = decodeJwt(minted.body.accessToken);
+      expect(claims[claim]).toBe(CHECKED[claim]);
+      expect(minted.body.user[claim]).toBe(CHECKED[claim]);
+    }
+  );
+
+  it("signs the checked account's details when the hook changed none", async () => {
+    // The control: the same values arrive whichever copy is read, so the
+    // cases above fail only where the two copies differ.
+    const minted = await mintSession(
+      { ...user, name: CHECKED.name, image: CHECKED.image },
+      deps(usable),
+      req,
+      { strategy: "test" }
+    );
+
+    expect(decodeJwt(minted.body.accessToken)).toMatchObject({
+      sub: "u1",
+      email: CHECKED.email,
+      name: CHECKED.name,
+      image: CHECKED.image,
+    });
   });
 });
 
