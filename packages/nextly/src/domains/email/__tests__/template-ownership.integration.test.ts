@@ -1,0 +1,420 @@
+/**
+ * Owners keep their templates up to date until a site overrides them, on every
+ * dialect.
+ *
+ * Each "boot" here is what the post-init boot does: a new service, told which
+ * plugins run and what the site's code sets, reconciling the stored rows.
+ */
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
+
+import { container } from "../../../di/container";
+import type { PluginEmailTemplate } from "../../../plugins/contributions";
+import type { LogActivityInput } from "../../../services/dashboard/activity-log-service";
+import type { EmailProviderService } from "../services/email-provider-service";
+import { EmailService } from "../services/email-service";
+import type { EmailTemplateService } from "../services/email-template-service";
+import { passwordResetTemplate } from "../services/templates";
+import type { EmailConfig } from "../types";
+
+import {
+  openTemplateStore,
+  silentLogger,
+  TEMPLATE_STORE_DIALECTS,
+  type TemplateStore,
+} from "./template-ownership-fixture";
+
+const ACTOR = { type: "user" as const, id: "user-1" };
+const ORDERS = "@acme/plugin-orders";
+const lines = (...l: string[]) => l.join("\n");
+
+// The plugin's version 1 of its template, and version 2 with two changes.
+const V1 = lines(
+  "<h1>Your order shipped</h1>",
+  "<p>Hi {{name}},</p>",
+  "<p>Order {{number}} left our warehouse.</p>",
+  '<a href="{{trackingUrl}}">Track it</a>',
+  "<p>It should arrive in {{days}} days.</p>",
+  "<p>Questions? Reply to this email.</p>"
+);
+const V2 = V1.replace(
+  "<p>Hi {{name}},</p>",
+  '<p>Hi {{name | default: "there"}},</p>'
+).replace(
+  "<p>It should arrive in {{days}} days.</p>",
+  "<p>It should arrive within {{days}} working days.</p>"
+);
+const shipped = (htmlContent: string): PluginEmailTemplate => ({
+  slug: "orders-shipped",
+  name: "Order shipped",
+  subject: "Your order shipped",
+  htmlContent,
+  description: "Sent when an order ships.",
+});
+
+const logged: LogActivityInput[] = [];
+
+for (const entry of TEMPLATE_STORE_DIALECTS) {
+  const suite = entry.url ? describe : describe.skip;
+
+  suite(`template owners — ${entry.dialect}`, () => {
+    let store: TemplateStore;
+
+    /** A boot with the orders plugin at `html`, or without it when null. */
+    async function boot(
+      html: string | null,
+      codeTemplates?: EmailConfig["templates"]
+    ): Promise<EmailTemplateService> {
+      const service = store.newService();
+      service.configureOwnership({
+        plugins:
+          html === null ? [] : [{ name: ORDERS, templates: [shipped(html)] }],
+        codeTemplates,
+      });
+      await service.ensureBuiltInTemplates();
+      return service;
+    }
+
+    async function shippedTemplate(service: EmailTemplateService) {
+      const template = await service.getTemplateBySlug("orders-shipped");
+      if (!template) throw new Error("orders-shipped is missing");
+      return template;
+    }
+
+    beforeAll(async () => {
+      store = await openTemplateStore(entry);
+    }, 60_000);
+
+    afterAll(async () => {
+      await store?.close();
+    });
+
+    beforeEach(async () => {
+      await store.clear();
+      logged.length = 0;
+      container.register("activityLogService", () => ({
+        logActivity: (input: LogActivityInput) => {
+          logged.push(input);
+          return Promise.resolve();
+        },
+      }));
+    });
+
+    afterEach(() => {
+      container.clear();
+    });
+
+    describe("owners update their templates", () => {
+      it("stores the owner's new version at the next boot when the site has not overridden it", async () => {
+        await boot(V1);
+        const service = await boot(V2);
+        const template = await shippedTemplate(service);
+        expect(template.htmlContent).toBe(V2);
+        expect(template.overridden).toBe(false);
+        expect(template.owner).toEqual({
+          kind: "plugin",
+          name: ORDERS,
+          installed: true,
+        });
+      });
+
+      it("keeps the site's version when the owner's changes, and marks that it changed", async () => {
+        const first = await boot(V1);
+        const id = (await shippedTemplate(first)).id;
+        await first.overrideTemplate(id, undefined, ACTOR);
+        await first.updateTemplate(
+          id,
+          { htmlContent: V1.replace("Hi", "Hello") },
+          ACTOR
+        );
+
+        const second = await boot(V2);
+        const template = await shippedTemplate(second);
+        expect(template.overridden).toBe(true);
+        expect(template.ownerChanged).toBe(true);
+        expect(template.htmlContent).toBe(V1.replace("Hi", "Hello"));
+
+        // The control: before the owner moved, nothing was waiting.
+        const unchanged = await boot(V2);
+        await unchanged.resetTemplate(id, ACTOR);
+        expect((await shippedTemplate(unchanged)).ownerChanged).toBe(false);
+      });
+
+      it("overrides a template whose wording an editor changes, so the next boot keeps the edit", async () => {
+        const first = await boot(V1);
+        const id = (await shippedTemplate(first)).id;
+        await first.updateTemplate(id, { subject: "It's on its way!" }, ACTOR);
+
+        const second = await boot(V2);
+        const template = await shippedTemplate(second);
+        expect(template.subject).toBe("It's on its way!");
+        expect(template.htmlContent).toBe(V1);
+        expect(template.ownerChanged).toBe(true);
+        expect(logged.at(-1)).toMatchObject({
+          action: "update",
+          metadata: { operation: "override" },
+        });
+      });
+
+      it("keeps a removed plugin's templates, as not installed, and lets the site delete them for good", async () => {
+        await boot(V1);
+        const without = await boot(null);
+        const template = await shippedTemplate(without);
+        expect(template.owner).toEqual({
+          kind: "plugin",
+          name: ORDERS,
+          installed: false,
+        });
+
+        await without.deleteTemplate(template.id, ACTOR);
+        const again = await boot(null);
+        expect(await again.getTemplateBySlug("orders-shipped")).toBeNull();
+      });
+    });
+
+    describe("override, review, undo and reset", () => {
+      it("reviews two upstream changes one by one, with overlapping edits offered both ways, then undoes", async () => {
+        const first = await boot(V1);
+        const id = (await shippedTemplate(first)).id;
+        await first.overrideTemplate(id, undefined, ACTOR);
+        // The site rewrote the greeting (the owner changes it too) and the
+        // last line (the owner leaves it alone).
+        const mine = V1.replace(
+          "<p>Hi {{name}},</p>",
+          "<p>Hello {{name}}, from the shop.</p>"
+        ).replace(
+          "<p>Questions? Reply to this email.</p>",
+          "<p>Questions? Write to help@example.com.</p>"
+        );
+        await first.updateTemplate(id, { htmlContent: mine }, ACTOR);
+
+        const service = await boot(V2);
+        const comparison = await service.compareTemplate(id);
+        expect(comparison.base.htmlContent).toBe(V1);
+        expect(comparison.theirs.htmlContent).toBe(V2);
+        expect(comparison.changes).toHaveLength(2);
+        expect(comparison.changes[0]).toMatchObject({
+          id: "htmlContent:0",
+          conflict: true,
+          theirs: ['<p>Hi {{name | default: "there"}},</p>'],
+          mine: ["<p>Hello {{name}}, from the shop.</p>"],
+        });
+        expect(comparison.changes[1]).toMatchObject({
+          id: "htmlContent:1",
+          conflict: false,
+        });
+
+        logged.length = 0;
+        const { template, undo } = await service.applyOwnerUpdate(
+          id,
+          {
+            "htmlContent:0": {
+              use: "edited",
+              text: '<p>Hello {{name | default: "there"}}, from the shop.</p>',
+            },
+            "htmlContent:1": { use: "theirs" },
+          },
+          ACTOR
+        );
+        expect(template.htmlContent).toBe(
+          lines(
+            "<h1>Your order shipped</h1>",
+            '<p>Hello {{name | default: "there"}}, from the shop.</p>',
+            "<p>Order {{number}} left our warehouse.</p>",
+            '<a href="{{trackingUrl}}">Track it</a>',
+            "<p>It should arrive within {{days}} working days.</p>",
+            "<p>Questions? Write to help@example.com.</p>"
+          )
+        );
+        expect(template.overridden).toBe(true);
+        expect(template.ownerChanged).toBe(false);
+        expect(logged).toEqual([
+          expect.objectContaining({
+            action: "update",
+            entryId: id,
+            userId: ACTOR.id,
+            metadata: expect.objectContaining({
+              operation: "apply-owner-update",
+            }),
+          }),
+        ]);
+
+        // Rebased: the same changes are not offered again.
+        expect((await service.compareTemplate(id)).changes).toEqual([]);
+
+        const undone = await service.undoOwnerUpdate(id, undo, ACTOR);
+        expect(undone.htmlContent).toBe(mine);
+        expect(undone.ownerChanged).toBe(true);
+        expect((await service.compareTemplate(id)).changes).toHaveLength(2);
+      });
+
+      it("resets an override to the owner's current version and records it", async () => {
+        await boot(V1);
+        const service = await boot(V1);
+        const id = (await shippedTemplate(service)).id;
+        await service.overrideTemplate(id, undefined, ACTOR);
+        await service.updateTemplate(id, { htmlContent: "<p>mine</p>" }, ACTOR);
+        const later = await boot(V2);
+
+        logged.length = 0;
+        const reset = await later.resetTemplate(id, ACTOR);
+        expect(reset.htmlContent).toBe(V2);
+        expect(reset.overridden).toBe(false);
+        expect(logged).toEqual([
+          expect.objectContaining({
+            action: "update",
+            metadata: expect.objectContaining({ operation: "reset" }),
+          }),
+        ]);
+      });
+
+      it("records an override in the activity log", async () => {
+        const service = await boot(V1);
+        const id = (await shippedTemplate(service)).id;
+        logged.length = 0;
+        await service.overrideTemplate(id, undefined, ACTOR);
+        expect(logged).toEqual([
+          expect.objectContaining({
+            action: "update",
+            entryId: id,
+            metadata: expect.objectContaining({ operation: "override" }),
+          }),
+        ]);
+      });
+    });
+
+    describe("deleting", () => {
+      it("refuses to delete core's template or an installed plugin's, and offers Reset", async () => {
+        const service = await boot(V1);
+        for (const slug of [
+          "password-reset",
+          "default-layout",
+          "orders-shipped",
+        ]) {
+          const template = await service.getTemplateBySlug(slug);
+          await expect(
+            service.deleteTemplate(template!.id, ACTOR)
+          ).rejects.toMatchObject({
+            code: "BUSINESS_RULE_VIOLATION",
+            publicMessage: expect.stringContaining("Reset"),
+          });
+          expect(await service.getTemplateBySlug(slug)).not.toBeNull();
+        }
+      });
+
+      it("deletes the site's own template, and the next boot does not recreate it", async () => {
+        const service = await boot(V1);
+        const own = await service.createTemplate(
+          {
+            name: "Newsletter",
+            slug: "newsletter",
+            subject: "Hi",
+            htmlContent: "<p>Hi</p>",
+          },
+          ACTOR
+        );
+        await service.deleteTemplate(own.id, ACTOR);
+        const next = await boot(V1);
+        expect(await next.getTemplateBySlug("newsletter")).toBeNull();
+      });
+    });
+
+    describe("which version is sent", () => {
+      const fromCode = () => ({ subject: "Reset (code)", html: "<p>code</p>" });
+
+      function sender(
+        service: EmailTemplateService,
+        codeTemplates?: EmailConfig["templates"]
+      ) {
+        const email = new EmailService(
+          store.adapter,
+          silentLogger,
+          {} as EmailProviderService,
+          service,
+          { templates: codeTemplates } as EmailConfig
+        );
+        const send = vi
+          .spyOn(email, "send")
+          .mockResolvedValue({ success: true, messageId: "m" });
+        return { email, send };
+      }
+
+      async function sentSubject(
+        service: EmailTemplateService,
+        codeTemplates?: EmailConfig["templates"]
+      ) {
+        const { email, send } = sender(service, codeTemplates);
+        await email.sendWithTemplate("password-reset", "to@example.com", {
+          appName: "Shop",
+          resetLink: "https://example.com/r",
+          expiresIn: "1 hour",
+        });
+        return (send.mock.calls[0]?.[0] as { subject: string }).subject;
+      }
+
+      it("sends the override, then the site's code, then the owner's default, as each is removed", async () => {
+        const code = { passwordReset: fromCode };
+        const service = await boot(V1, code);
+        const id = (await service.getTemplateBySlug("password-reset"))!.id;
+        await service.overrideTemplate(
+          id,
+          { version: { subject: "Reset (override)" } },
+          ACTOR
+        );
+
+        expect(await sentSubject(service, code)).toBe("Reset (override)");
+
+        await service.resetTemplate(id, ACTOR);
+        expect(await sentSubject(service, code)).toBe("Reset (code)");
+
+        const withoutCode = await boot(V1);
+        expect(await sentSubject(withoutCode)).toBe("Reset your Shop password");
+        expect(passwordResetTemplate.subject).toBe(
+          "Reset your {{appName}} password"
+        );
+      });
+
+      it("uses a configured passwordReset function on a fresh install", async () => {
+        const code = { passwordReset: fromCode };
+        const service = await boot(V1, code);
+        const template = await service.getTemplateBySlug("password-reset");
+        expect(template?.setInCode).toBe(true);
+        expect(template?.overridden).toBe(false);
+        expect(await sentSubject(service, code)).toBe("Reset (code)");
+      });
+
+      it("treats a plugin's replacement through its options as that template's default", async () => {
+        // A site that configures the plugin to ship different wording: the
+        // plugin contributes it, the row follows it, an override wins over
+        // it, and Reset returns to it.
+        const replaced = V1.replace(
+          "Your order shipped",
+          "Your parcel is on its way"
+        );
+        const service = await boot(replaced);
+        const id = (await shippedTemplate(service)).id;
+        expect((await shippedTemplate(service)).htmlContent).toBe(replaced);
+
+        await service.overrideTemplate(
+          id,
+          { version: { htmlContent: "<p>mine</p>" } },
+          ACTOR
+        );
+        expect((await shippedTemplate(await boot(replaced))).htmlContent).toBe(
+          "<p>mine</p>"
+        );
+
+        const reset = await service.resetTemplate(id, ACTOR);
+        expect(reset.htmlContent).toBe(replaced);
+      });
+    });
+  });
+}

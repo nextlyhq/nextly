@@ -55,6 +55,7 @@ import {
   buildTemplateOwnerRegistry,
   isProtectedOwner,
   ownerOf,
+  sameStoredValue,
   sameVersion,
   storedOwner,
   versionDigest,
@@ -1098,7 +1099,7 @@ export class EmailTemplateService extends BaseService {
       const variables = entry.defaults.variables ?? row.variables;
       if (
         description !== row.description ||
-        JSON.stringify(variables) !== JSON.stringify(row.variables)
+        !sameStoredValue(variables, row.variables)
       ) {
         await this.db
           .update(this.emailTemplates)
@@ -1117,7 +1118,7 @@ export class EmailTemplateService extends BaseService {
       useLayout: row.useLayout,
       description: row.description ?? null,
     };
-    if (JSON.stringify(current) !== JSON.stringify({ ...current, ...wanted })) {
+    if (!sameStoredValue(current, { ...current, ...wanted })) {
       await this.db
         .update(this.emailTemplates)
         .set({ ...wanted, updatedAt: now })
