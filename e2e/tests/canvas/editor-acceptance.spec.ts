@@ -31,9 +31,11 @@ import {
   clickBlock,
   field as fieldOf,
   glyphPoint,
+  canvasScope,
   layerRow,
   openEditorWith,
   openLayers,
+  selectedLayers,
   selection,
   structure,
 } from "./editor-driver";
@@ -170,11 +172,10 @@ const SCENARIOS: Readonly<Record<number, (page: Page) => Promise<void>>> = {
     expect(await selection(page)).not.toContain("ea-second");
     await clickBlock(page, "ea-second");
     expect(await selection(page)).toEqual(["ea-second"]);
+    // The same SET on both surfaces: a stale row left marked in Layers would
+    // pass a check of only the rows it names.
+    await expect.poll(() => selectedLayers(page)).toEqual(["ea-second"]);
     await expect(layerRow(page, "ea-second")).toHaveAttribute(
-      "aria-selected",
-      "true"
-    );
-    await expect(layerRow(page, "ea-first")).not.toHaveAttribute(
       "aria-selected",
       "true"
     );
@@ -224,8 +225,17 @@ const SCENARIOS: Readonly<Record<number, (page: Page) => Promise<void>>> = {
     // Still selected, so a run of presses keeps moving the same block.
     expect(await selection(page)).toEqual(["ea-second"]);
 
+    // The down move announces too, and FRESHLY: its words are the same as the
+    // up move's, so the region alternates a zero-width space to make the text
+    // change. Unchanged text would be the up move's announcement still sitting
+    // there.
+    const afterUp = await announcer(page).evaluate(n => n.textContent ?? "");
     await page.keyboard.press("Alt+ArrowDown");
     await expect.poll(() => structure(page)).toEqual(SEEDED);
+    await expect
+      .poll(() => announcer(page).evaluate(n => n.textContent ?? ""))
+      .not.toBe(afterUp);
+    await expect(announcer(page)).toHaveText("Block moved");
   },
   6: async page => {
     await clickBlock(page, "ea-third");
@@ -397,6 +407,53 @@ test.describe("the editor acceptance suite", () => {
     expect(new Set(EDITOR_PROPERTIES.map(p => p.n)).size).toBe(
       EDITOR_PROPERTIES.length
     );
+  });
+
+  test("the driver aims through a bordered, padded and scaled canvas frame", async ({
+    page,
+  }) => {
+    // The canvas is meant to render in a frame, and every inline edit is aimed
+    // through `glyphPoint`. This builds such a frame directly, with a border,
+    // padding, an offset and a scale, and checks a press at the point it
+    // returns lands on the words inside, at the place it was aimed.
+    await page.setContent(`
+      <iframe title="Page canvas: driver check"
+        style="position:absolute;left:30px;top:40px;width:800px;height:600px;
+               border:7px solid;padding:5px;transform:scale(0.5);transform-origin:0 0"
+        srcdoc="<div class='nx-canvas'><p data-nx-prop='text'
+          style='margin:120px 0 0 200px;font:20px sans-serif'>Glyphs to aim at</p></div>">
+      </iframe>`);
+    const target = (await canvasScope(page)).locator('[data-nx-prop="text"]');
+    await expect(target).toHaveText("Glyphs to aim at");
+    const aimedAt = await target.evaluate(element => {
+      const range = element.ownerDocument.createRange();
+      range.selectNodeContents(element.firstChild as Node);
+      const box = range.getBoundingClientRect();
+      element.ownerDocument.addEventListener("click", event => {
+        Object.assign(element.ownerDocument.defaultView ?? {}, {
+          hit: {
+            onTarget: event.target === element,
+            x: event.clientX,
+            y: event.clientY,
+          },
+        });
+      });
+      return { x: box.x + box.width * 0.5, y: box.y + box.height / 2 };
+    });
+    const point = await glyphPoint(page, target, 0.5);
+    await page.mouse.click(point.x, point.y);
+    const hit = await target.evaluate(
+      element =>
+        (
+          element.ownerDocument.defaultView as unknown as {
+            hit?: { onTarget: boolean; x: number; y: number };
+          }
+        ).hit
+    );
+    expect(hit?.onTarget).toBe(true);
+    // Within a page pixel, which is two frame pixels at this scale.
+    expect(Math.abs((hit?.x ?? 0) - aimedAt.x)).toBeLessThanOrEqual(2);
+    expect(Math.abs((hit?.y ?? 0) - aimedAt.y)).toBeLessThanOrEqual(2);
   });
 
   test("the deferred properties are reported, not hidden", async () => {

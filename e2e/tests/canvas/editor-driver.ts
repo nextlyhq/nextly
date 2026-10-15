@@ -88,6 +88,26 @@ export async function openLayers(page: Page): Promise<void> {
   await expect(page.getByRole("tree", { name: "Layers" })).toBeVisible();
 }
 
+/**
+ * The blocks Layers marks as selected, by the `data-nx-layer` of each selected
+ * row's own label.
+ *
+ * Rows nest, so a selected row CONTAINS the rows of its children: the first
+ * label inside a row is its own, and the ones after it are its children's.
+ */
+export async function selectedLayers(page: Page): Promise<string[]> {
+  return page
+    .getByRole("tree", { name: "Layers" })
+    .locator('[role="treeitem"][aria-selected="true"]')
+    .evaluateAll(rows =>
+      rows.map(
+        row =>
+          row.querySelector("[data-nx-layer]")?.getAttribute("data-nx-layer") ??
+          ""
+      )
+    );
+}
+
 /** The keyboard actions' live region, where a move is announced. */
 export function announcer(page: Page): Locator {
   return page.locator('p.nx-sr-only[role="status"][aria-live="polite"]');
@@ -172,9 +192,8 @@ export async function clickBlock(
  * Aimed at the glyphs rather than the element: a short text occupies the left
  * of a full-width block, so the element's centre is past its last word and a
  * double-click there lands at the end of the text. Measured inside the
- * element's own document, then offset by the canvas frame's position when
- * there is one; at a scale other than 1 that offset would need the scale as
- * well, and this says so rather than guessing.
+ * element's own document, then, when the canvas is framed, mapped out through
+ * the frame's border, padding and scale to a point on the page.
  */
 export async function glyphPoint(
   page: Page,
@@ -199,9 +218,28 @@ export async function glyphPoint(
   if (local === null) throw new Error("[e2e] the element rendered no text");
   const frame = page.locator(CANVAS_FRAME);
   if ((await frame.count()) === 0) return local;
-  const origin = await frame.boundingBox();
-  if (origin === null) throw new Error("[e2e] the canvas frame has no box");
-  return { x: origin.x + local.x, y: origin.y + local.y };
+  const content = await frame.evaluate(element => {
+    // Where the frame's CONTENT starts, and how much it is scaled: the border
+    // box's corner plus the border and padding, each multiplied by the scale.
+    // The same arithmetic as the builder's geometry mapping
+    // (`frameContentOrigin`, `pointToHost`), restated because this suite
+    // imports no product code.
+    const iframe = element as HTMLIFrameElement;
+    const box = iframe.getBoundingClientRect();
+    const style = iframe.ownerDocument.defaultView?.getComputedStyle(iframe);
+    const scale = iframe.offsetWidth > 0 ? box.width / iframe.offsetWidth : 1;
+    const padLeft = parseFloat(style?.paddingLeft ?? "0") || 0;
+    const padTop = parseFloat(style?.paddingTop ?? "0") || 0;
+    return {
+      x: box.left + (iframe.clientLeft + padLeft) * scale,
+      y: box.top + (iframe.clientTop + padTop) * scale,
+      scale,
+    };
+  });
+  return {
+    x: content.x + local.x * content.scale,
+    y: content.y + local.y * content.scale,
+  };
 }
 
 /**
