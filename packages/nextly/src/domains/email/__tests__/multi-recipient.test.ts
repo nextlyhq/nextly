@@ -397,6 +397,57 @@ describe("several `to` addresses reach the provider", () => {
     expect(send).toHaveBeenCalledTimes(100);
   });
 
+  it("reads a comma-joined string of addresses as the list it names", async () => {
+    // SMTP sent such a string to every address in it before `to` took a list.
+    const { adapter, send } = mockAdapter(10);
+    const { service } = build(adapter);
+
+    await service.send({ to: `${A}, ${B}`, subject: "Hi", html: "<p>x</p>" });
+
+    expect(send.mock.calls[0][0]).toMatchObject({ to: A, toList: [A, B] });
+  });
+
+  it("keeps a display name with a comma in it as one address", async () => {
+    const { adapter, send } = mockAdapter(10);
+    const { service } = build(adapter);
+
+    await service.send({
+      to: '"Doe, Jane" <jane@example.com>',
+      subject: "Hi",
+      html: "<p>x</p>",
+    });
+
+    expect(send.mock.calls[0][0].to).toBe('"Doe, Jane" <jane@example.com>');
+    expect(send.mock.calls[0][0]).not.toHaveProperty("toList");
+  });
+
+  it.each([
+    "a@@example.com",
+    "a b@example.com",
+    "a@exa mple.com",
+    "@example.com",
+    "a@",
+  ])(
+    "refuses %s, and sends dev@localhost and a display-name form",
+    async address => {
+      const { adapter, send } = mockAdapter(10);
+      const { service } = build(adapter);
+
+      const error = await service
+        .send({ to: address, subject: "Hi", html: "<p>x</p>" })
+        .catch((thrown: unknown) => thrown);
+
+      expect(error).toBeInstanceOf(NextlyError);
+      expect(send).not.toHaveBeenCalled();
+      await service.send({
+        to: ["dev@localhost", "Ann <ann@example.com>"],
+        subject: "Hi",
+        html: "<p>x</p>",
+      });
+      expect(send).toHaveBeenCalledTimes(1);
+    }
+  );
+
   it("sends the same address once when it is listed twice", async () => {
     const { adapter, send } = mockAdapter();
     const { service } = build(adapter);

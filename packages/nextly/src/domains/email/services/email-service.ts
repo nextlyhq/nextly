@@ -520,8 +520,9 @@ export class EmailService extends BaseService {
     const afterSend =
       messages.length === 1
         ? runAfterSend
-        : async (value: EmailAfterSendValue) => {
+        : (value: EmailAfterSendValue) => {
             deferred.push(value);
+            return Promise.resolve();
           };
 
     const outcomes: Array<{ success: boolean; messageId?: string }> = [];

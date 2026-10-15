@@ -23,7 +23,9 @@ import { mailboxOf } from "../delivery-record";
 export function toAddressList(to: string | readonly unknown[]): unknown[] {
   // Elements are `unknown` because a filter handler's result is plain data at
   // runtime; `assertSendable` is what establishes they are addresses.
-  const given: unknown[] = typeof to === "string" ? [to] : [...to];
+  const given: unknown[] = (typeof to === "string" ? [to] : [...to]).flatMap(
+    commaJoined
+  );
   const seen = new Set<string>();
   const list: unknown[] = [];
   for (const address of given) {
@@ -36,22 +38,39 @@ export function toAddressList(to: string | readonly unknown[]): unknown[] {
   return list;
 }
 
+/** One `@` between a local part and a domain, neither holding a separator. */
+const MAILBOX = /^[^\s@,;"'<>()[\]\\]+@[^\s@,;"'<>()[\]\\]+$/;
+
 /**
- * Whether a value has the shape of an address a message can be sent to.
+ * Whether a value is an address a message can be sent to.
  *
- * A shape check, not a deliverability check: it refuses an empty value and one
- * with no local part or no domain, and leaves everything else to the provider,
- * as before. The domain is read after the LAST `@`, and a dotless domain is
- * accepted, so `dev@localhost` and a display-name form such as
- * `Name <user@example.com>` stay sendable.
+ * Checked as a mailbox: the part in angle brackets when there is a display
+ * name, else the whole value. It must have exactly one `@`, with a local part
+ * and a domain, and no whitespace, comma, semicolon, quote or bracket. Not a
+ * deliverability check, which stays the provider's: a dotless domain passes,
+ * so `dev@localhost` and `Name <user@example.com>` stay sendable.
  */
 export function isSendableAddress(value: unknown): value is string {
   if (typeof value !== "string") return false;
-  const mailbox = mailboxOf(value);
-  const at = mailbox.lastIndexOf("@");
-  if (at <= 0) return false;
-  const domain = mailbox.slice(at + 1);
-  return domain !== "" && !/[\s<>]/.test(domain);
+  return MAILBOX.test(mailboxOf(value));
+}
+
+/**
+ * A string of bare addresses joined by commas, as the list it names.
+ *
+ * SMTP sends such a string to every address in it, so a caller may already
+ * pass one; reading it as a list keeps that working, on every provider. Split
+ * only when every part is an address on its own, so a display name with a
+ * comma in it (`"Doe, Jane" <jane@example.com>`) stays one address.
+ */
+function commaJoined(value: unknown): unknown[] {
+  if (typeof value !== "string" || !value.includes(",")) return [value];
+  const parts = value.split(",").map(part => part.trim());
+  return parts.every(
+    part => part === mailboxOf(part) && isSendableAddress(part)
+  )
+    ? parts
+    : [value];
 }
 
 /** The envelope a send goes out with, once filters have run. */
