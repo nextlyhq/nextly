@@ -56,6 +56,19 @@ const AA_TAGS = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"];
 const HOST_OWNED_RULES = ["document-title"];
 
 /**
+ * One known defect outside the dashboard, set aside by rule AND place.
+ *
+ * The sidebar's icon rail shows an icon only on each link, with the name in a
+ * tooltip, so axe reports `link-name` on every one of them, on every admin
+ * screen. It is a real defect in the admin's shared chrome, filed to be fixed
+ * there; when that lands, this goes. Until then the scan drops exactly those
+ * results: `link-name` nodes inside the rail. Every other rule still runs on
+ * the rail, and `link-name` still fails anywhere else, so a new problem in
+ * either place is not hidden the way excluding the element would hide it.
+ */
+const KNOWN_DEFECT = { rule: "link-name", within: "aside nav" } as const;
+
+/**
  * Answer the sample-content probe with `status`, as the route would for this
  * person. Resolves `release` lets a test hold the answer, to look at the page
  * while the offer is still unanswered. Returns the probes seen, so a test can
@@ -90,6 +103,20 @@ async function answerProbe(
       : route.fallback()
   );
   return probes;
+}
+
+/**
+ * The reads of the site's answer to the offer. The admin asks for it only once
+ * the probe has said yes, so it is the observable trace of a yes.
+ */
+function trackStatusReads(page: Page): string[] {
+  const reads: string[] = [];
+  page.on("request", request => {
+    if (request.url().endsWith("/admin/api/meta/seed-status")) {
+      reads.push(request.method());
+    }
+  });
+  return reads;
 }
 
 /** Pass the layout read through, with the sample-content card placed first. */
@@ -135,11 +162,27 @@ async function expectNoAxeViolations(page: Page): Promise<void> {
     results.passes.length,
     "axe reported no passing rules, so it scanned nothing"
   ).toBeGreaterThan(10);
-  const findings = results.violations.map(v => ({
-    id: v.id,
-    impact: v.impact ?? "unknown",
-    targets: v.nodes.flatMap(n => n.target.map(String)),
-  }));
+  const findings = [];
+  for (const v of results.violations) {
+    const targets: string[] = [];
+    for (const node of v.nodes) {
+      const selector = node.target.map(String).join(" ");
+      if (v.id === KNOWN_DEFECT.rule) {
+        // Asked of the page itself: a selector alone cannot say where its
+        // element sits.
+        const inRail = await page.evaluate(
+          ([sel, within]) =>
+            document.querySelector(sel)?.closest(within) != null,
+          [selector, KNOWN_DEFECT.within] as const
+        );
+        if (inRail) continue;
+      }
+      targets.push(selector);
+    }
+    if (targets.length > 0) {
+      findings.push({ id: v.id, impact: v.impact ?? "unknown", targets });
+    }
+  }
   expect(
     findings,
     `axe reported ${findings.length} violation(s):\n${JSON.stringify(findings, null, 2)}`
@@ -192,13 +235,18 @@ test.describe("the sample-content offer", () => {
     page,
   }) => {
     await answerProbe(page, 200);
+    const statusReads = trackStatusReads(page);
     await placeSeedCard(page);
     await gotoAdmin(page, "/");
     await expect(page.getByRole("button", OFFER_ACTION)).toBeVisible();
+    // The trace the refusal test looks for in vain is there for a yes, so
+    // its absence there is a measurement and not a listener that never fires.
+    expect(statusReads).toContain("GET");
   });
 
   test("is not made to a person the route refuses", async ({ page }) => {
     const probes = await answerProbe(page, 403);
+    const statusReads = trackStatusReads(page);
     await placeSeedCard(page);
     await gotoAdmin(page, "/");
     // The probe was asked and answered before the verdict, so "no offer" is
@@ -206,10 +254,21 @@ test.describe("the sample-content offer", () => {
     await expect.poll(() => probes.length).toBeGreaterThan(0);
     const answered = await probes[0]!.response();
     expect(answered?.status()).toBe(403);
-    // An absence passes at once, before a probe that took the refusal for a
-    // yes would have read the site's answer and drawn the card. Let those
-    // reads finish first, so the absence below is the verdict.
-    await page.waitForLoadState("networkidle");
+    // "No offer" has no event of its own: a card that is not drawn looks the
+    // same before the probe's answer is read as after, and nothing else on
+    // the page is ordered after it (the cards come from their own reads, in
+    // no fixed order with this one). A probe that took the refusal for a yes
+    // goes on to read the site's answer and draws the card within
+    // milliseconds, so give it a second to, then check it did neither. The
+    // wait cannot fail a correct build, which never reads the site's answer;
+    // a slow machine can only let a broken one through, and the probe's unit
+    // tests are the proof of each answer. (Not `networkidle`: the dev server
+    // holds a long poll open, so the page never goes idle.)
+    await page.waitForTimeout(1_000);
+    expect(
+      statusReads,
+      "the site's answer was read, so the probe said yes"
+    ).toEqual([]);
     await expectOneMainHeading(page);
     await expect(page.getByRole("button", OFFER_ACTION)).toHaveCount(0);
     await expect(
