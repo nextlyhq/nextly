@@ -307,9 +307,14 @@ async function activeSuperAdmin(userId: string): Promise<boolean> {
 }
 
 /**
- * Resolves once another transaction on this test's database is waiting for
- * a lock, or after `timeoutMs` when none does. SQLite has no such view, and
+ * Resolves once another statement on this test's database is waiting for a
+ * lock, or after `timeoutMs` when none does. SQLite has no such view, and
  * serializes write transactions anyway, so there it only yields.
+ *
+ * PostgreSQL names the wait. MySQL lists a statement blocked on a row lock
+ * taken while its plan is read (`FOR UPDATE` on a unique key) in neither
+ * `INNODB_TRX` nor `LOCK WAIT`, so there a statement still running after a
+ * full second, while the first transaction sits paused, is the wait.
  */
 async function untilAnotherWaitsOnALock(timeoutMs = 5000): Promise<boolean> {
   if (dialect === "sqlite") {
@@ -320,9 +325,9 @@ async function untilAnotherWaitsOnALock(timeoutMs = 5000): Promise<boolean> {
     dialect === "postgresql"
       ? `SELECT count(*)::int AS n FROM pg_stat_activity
          WHERE datname = current_database() AND wait_event_type = 'Lock'`
-      : `SELECT COUNT(*) AS n FROM information_schema.INNODB_TRX t
-         JOIN information_schema.PROCESSLIST p ON p.ID = t.trx_mysql_thread_id
-         WHERE t.trx_state = 'LOCK WAIT' AND p.DB = DATABASE()`;
+      : `SELECT COUNT(*) AS n FROM information_schema.PROCESSLIST
+         WHERE DB = DATABASE() AND ID <> CONNECTION_ID()
+           AND COMMAND = 'Query' AND TIME >= 1`;
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const rows = await handle!.adapter.executeQuery<{ n: number | string }>(
