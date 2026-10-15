@@ -83,7 +83,10 @@ import {
   resolvePromotedDocument,
 } from "../../../shared/lib/denied-change";
 import { detachData } from "../../../shared/lib/detach";
-import { validateEntryData } from "../../../shared/lib/entry-validation";
+import {
+  validateEntryData,
+  type EntryWriteContext,
+} from "../../../shared/lib/entry-validation";
 import { applyFieldDefaults } from "../../../shared/lib/field-defaults";
 import {
   applyFieldReadAccess,
@@ -209,6 +212,7 @@ import {
   collectionTableName,
   generateSlug,
 } from "./collection-utils";
+import { entryWriteContext } from "./stored-field-read";
 
 /** The Drizzle executor shape the companion-join readers accept (a transaction
  * handle's `getDrizzle()` result, or the pooled `this.db`). */
@@ -1300,6 +1304,77 @@ export class CollectionMutationService extends BaseService {
     }
     if (args.status === "published" && args.previousStatus !== "published") {
       emitDocumentEvent("published", args.collection, docBase);
+    }
+  }
+
+  /**
+   * The entry write a validation is for, reading on the connection this write
+   * uses: `tx` inside a transaction, the pool before one opens.
+   *
+   * A field type judging a value against stored rows — a component that must
+   * not end up containing itself — has to see what this write sees. Inside a
+   * batch that is the batch's own transaction, because the rows it wrote
+   * before this one are visible nowhere else until it commits.
+   */
+  private validationWrite(
+    slug: string,
+    id: string | undefined,
+    tx?: TransactionContext
+  ): EntryWriteContext {
+    const defaultLocale = this.localization?.defaultLocale ?? null;
+    return entryWriteContext({
+      kind: "collection",
+      slug,
+      ...(id === undefined ? {} : { id }),
+      connection:
+        tx === undefined
+          ? { db: this.adapter, executor: undefined, defaultLocale }
+          : { db: tx, executor: tx.getDrizzle(), defaultLocale },
+    });
+  }
+
+  /**
+   * Refuse a write whose values break the collection's rules.
+   *
+   * One place for what every write path asks of validation — the validation
+   * view of the data, the field validators registered for it, the caller, and
+   * the entry write a field type may read stored rows through — so a write
+   * path cannot hand a validator a different connection from the one its write
+   * runs on.
+   */
+  private async assertEntryValid(args: {
+    data: Record<string, unknown>;
+    fields: FieldDefinition[];
+    collectionName: string;
+    mode: "create" | "update";
+    user: UserContext | undefined;
+    /** What {@link localizedRequiredContext} resolved for a localized write. */
+    localeCtx?: {
+      localizedFieldNames: ReadonlySet<string>;
+      enforceLocalizedRequired: boolean;
+    };
+    /** The stored entry's id, on an update. */
+    id?: string;
+    /** The write's own transaction, where it runs inside one. */
+    tx?: TransactionContext;
+  }): Promise<void> {
+    const issues = await validateEntryData(
+      this.validationView(args.data, args.fields),
+      attachFieldValidators("collection", args.collectionName, args.fields),
+      {
+        mode: args.mode,
+        req: args.user ? { user: args.user } : {},
+        ...args.localeCtx,
+        write: this.validationWrite(
+          args.collectionName,
+          args.id ??
+            suppliedCreateId(args.mode, args.collectionName, args.data),
+          args.tx
+        ),
+      }
+    );
+    if (issues.length > 0) {
+      throw NextlyError.validation({ errors: issues });
     }
   }
 
@@ -3334,18 +3409,16 @@ export class CollectionMutationService extends BaseService {
           params.collectionName,
           params.locale
         );
-        const validationIssues = await validateEntryData(
-          this.validationView(finalData, fields),
-          attachFieldValidators("collection", params.collectionName, fields),
-          {
-            mode: "create",
-            req: params.user ? { user: params.user } : {},
-            ...localeCtx,
-          }
-        );
-        if (validationIssues.length > 0) {
-          throw NextlyError.validation({ errors: validationIssues });
-        }
+        await this.assertEntryValid({
+          data: finalData,
+          fields,
+          collectionName: params.collectionName,
+          mode: "create",
+          user: params.user,
+          localeCtx,
+          // No transaction yet, so stored rows are read on the pool: no row
+          // of this write exists for a read to miss.
+        });
       }
 
       // Collection-level beforeChange hooks, on data the validation gate has
@@ -5944,18 +6017,15 @@ export class CollectionMutationService extends BaseService {
           params.collectionName,
           params.locale
         );
-        const validationIssues = await validateEntryData(
-          this.validationView(finalData, fields),
-          attachFieldValidators("collection", params.collectionName, fields),
-          {
-            mode: "update",
-            req: params.user ? { user: params.user } : {},
-            ...localeCtx,
-          }
-        );
-        if (validationIssues.length > 0) {
-          throw NextlyError.validation({ errors: validationIssues });
-        }
+        await this.assertEntryValid({
+          data: finalData,
+          fields,
+          collectionName: params.collectionName,
+          mode: "update",
+          user: params.user,
+          localeCtx,
+          id: params.entryId,
+        });
       }
 
       // Collection-level beforeChange hooks, on data the validation gate has
@@ -6367,18 +6437,15 @@ export class CollectionMutationService extends BaseService {
             params.collectionName,
             params.locale
           );
-          const promoteIssues = await validateEntryData(
-            this.validationView(merged, fields),
-            attachFieldValidators("collection", params.collectionName, fields),
-            {
-              mode: "update",
-              req: params.user ? { user: params.user } : {},
-              ...localeCtx,
-            }
-          );
-          if (promoteIssues.length > 0) {
-            throw NextlyError.validation({ errors: promoteIssues });
-          }
+          await this.assertEntryValid({
+            data: merged,
+            fields,
+            collectionName: params.collectionName,
+            mode: "update",
+            user: params.user,
+            localeCtx,
+            id: params.entryId,
+          });
         }
       }
 
@@ -8733,17 +8800,16 @@ export class CollectionMutationService extends BaseService {
       }
 
       {
-        const validationIssues = await validateEntryData(
-          this.validationView(finalData, fields),
-          attachFieldValidators("collection", params.collectionName, fields),
-          {
-            mode: "create",
-            req: params.user ? { user: params.user } : {},
-          }
-        );
-        if (validationIssues.length > 0) {
-          throw NextlyError.validation({ errors: validationIssues });
-        }
+        await this.assertEntryValid({
+          data: finalData,
+          fields,
+          collectionName: params.collectionName,
+          mode: "create",
+          user: params.user,
+          // On the caller's transaction, so a row an earlier entry of the
+          // same batch wrote is seen.
+          tx,
+        });
       }
 
       // Collection-level then field-level beforeChange hooks, on data the
@@ -9270,17 +9336,15 @@ export class CollectionMutationService extends BaseService {
       }
 
       {
-        const validationIssues = await validateEntryData(
-          this.validationView(finalData, fields),
-          attachFieldValidators("collection", params.collectionName, fields),
-          {
-            mode: "update",
-            req: params.user ? { user: params.user } : {},
-          }
-        );
-        if (validationIssues.length > 0) {
-          throw NextlyError.validation({ errors: validationIssues });
-        }
+        await this.assertEntryValid({
+          data: finalData,
+          fields,
+          collectionName: params.collectionName,
+          mode: "update",
+          user: params.user,
+          id: entryId,
+          tx,
+        });
       }
 
       // Collection-level then field-level beforeChange hooks, on data the
@@ -10528,4 +10592,25 @@ export class CollectionMutationService extends BaseService {
       })
     );
   }
+}
+
+/**
+ * The id a create will be stored under, where the CALLER chose it.
+ *
+ * A collection that accepts client ids (`db.allowIdOnCreate`) stores the one
+ * supplied, so a validator judging the new entry against rows that already name
+ * that id — a component a page places before it exists — has to know it. Any
+ * other create mints its id in the write, and nothing can name it yet. The
+ * shape of a supplied id is the insert's own check (`resolveEntryId`).
+ */
+function suppliedCreateId(
+  mode: "create" | "update",
+  collectionName: string,
+  data: Record<string, unknown>
+): string | undefined {
+  if (mode !== "create") return undefined;
+  if (collectionDbOptions(collectionName).allowIdOnCreate !== true) {
+    return undefined;
+  }
+  return typeof data.id === "string" && data.id !== "" ? data.id : undefined;
 }

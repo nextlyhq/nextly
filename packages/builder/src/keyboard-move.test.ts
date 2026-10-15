@@ -1,5 +1,11 @@
-import { moveNode, type BlockNode } from "@nextlyhq/blocks-engine";
-import { describe, expect, it } from "vitest";
+import {
+  clearBlocks,
+  DEFAULT_SLOT,
+  moveNode,
+  registerBlocks,
+  type BlockNode,
+} from "@nextlyhq/blocks-engine";
+import { afterEach, describe, expect, it } from "vitest";
 
 import {
   keyboardMovePosition,
@@ -19,7 +25,7 @@ function box(id: string, children: BlockNode[]): BlockNode {
     type: "core/group",
     version: 1,
     props: {},
-    slots: { default: children },
+    slots: { [DEFAULT_SLOT]: children },
   };
 }
 
@@ -30,7 +36,7 @@ function box(id: string, children: BlockNode[]): BlockNode {
 function shape(nodes: BlockNode[]): string {
   return nodes
     .map(node => {
-      const children = node.slots?.default;
+      const children = node.slots?.[DEFAULT_SLOT];
       if (children === undefined) return node.id;
       return `${node.id}(${children.map(c => c.id).join(" ")})`;
     })
@@ -101,6 +107,20 @@ describe("indent and outdent change the parent", () => {
     expect(afterMove([box("box", [leaf("x")]), leaf("b")], "b", "indent")).toBe(
       "box(x b)"
     );
+  });
+
+  it("indents into the engine's default slot, the one core containers render", () => {
+    // Pinned to the literal as well as the constant: a module-local slot name
+    // that matched only its own fixtures put indented blocks where no
+    // container drew them, and a test reading the same constant back could
+    // never have said so.
+    const move = keyboardMovePosition(
+      [box("box", [leaf("x")]), leaf("b")],
+      "b",
+      "indent"
+    );
+    expect(move?.to).toEqual({ parentId: "box", slot: DEFAULT_SLOT, index: 1 });
+    expect(DEFAULT_SLOT).toBe("children");
   });
 
   it("outdents to become the parent's next sibling", () => {
@@ -260,7 +280,7 @@ describe("the slot a departing block leaves behind", () => {
     const nodes = [leaf("a"), box("box", [leaf("x")])];
     expect(
       keyboardMovePosition(nodes, "x", "outdent")?.dropSlotIfEmpty
-    ).toEqual({ parentId: "box", slot: "default" });
+    ).toEqual({ parentId: "box", slot: DEFAULT_SLOT });
   });
 
   it("names nothing when reordering, because nothing is vacated", () => {
@@ -279,5 +299,74 @@ describe("the slot a departing block leaves behind", () => {
       keyboardMovePosition([box("box", [leaf("x")]), leaf("b")], "b", "indent")
         ?.dropSlotIfEmpty
     ).toBeUndefined();
+  });
+});
+
+describe("the slot an indented block enters, read from the container's definition", () => {
+  afterEach(() => {
+    clearBlocks();
+  });
+
+  /** A container type declaring exactly these slots. */
+  function declare(name: string, slots: readonly string[]): void {
+    registerBlocks(
+      [
+        {
+          version: 1,
+          description: "A container.",
+          example: { props: {} },
+          render: () => null,
+          name,
+          props: {},
+          slots: Object.fromEntries(slots.map(slot => [slot, {}])),
+        },
+      ] as never,
+      { source: "keyboard-move-test" }
+    );
+  }
+
+  function container(type: string): BlockNode {
+    return { id: "box", type, version: 1, props: {} };
+  }
+
+  function indentInto(type: string) {
+    return keyboardMovePosition([container(type), leaf("b")], "b", "indent")
+      ?.to;
+  }
+
+  it.each(["default", "items"])(
+    "uses a container's only slot whatever it is called (%s)",
+    slot => {
+      // A plugin container rendering a slot of its own name must receive the
+      // block there: filed under any other name it is stored and never drawn.
+      declare("acme/one-region", [slot]);
+      expect(indentInto("acme/one-region")).toEqual({
+        parentId: "box",
+        slot,
+        index: 0,
+      });
+    }
+  );
+
+  it("uses the engine's default slot among several", () => {
+    declare("acme/two-regions", ["aside", DEFAULT_SLOT]);
+    expect(indentInto("acme/two-regions")?.slot).toBe(DEFAULT_SLOT);
+  });
+
+  it("offers no indent into several slots none of which is the default", () => {
+    // Which region the author meant is not something one key press can say.
+    declare("acme/header-footer", ["header", "footer"]);
+    expect(indentInto("acme/header-footer")).toBeUndefined();
+    expect(
+      keyboardMovePosition(
+        [container("acme/header-footer"), leaf("b")],
+        "b",
+        "indent"
+      )
+    ).toBeNull();
+  });
+
+  it("falls back to the engine's default slot for a type with no definition", () => {
+    expect(indentInto("acme/unregistered")?.slot).toBe(DEFAULT_SLOT);
   });
 });

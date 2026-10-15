@@ -1,7 +1,7 @@
 {
   "coverage": {
     "pages": 77,
-    "samples": 445,
+    "samples": 446,
     "compiled": 279
   },
   "samplesPerPage": {
@@ -150,7 +150,7 @@
       "compiled": 7
     },
     "docs/plugins/api-reference.mdx": {
-      "samples": 22,
+      "samples": 23,
       "compiled": 1
     },
     "docs/plugins/auth.mdx": {

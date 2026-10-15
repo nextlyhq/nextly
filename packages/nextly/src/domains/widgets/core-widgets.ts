@@ -75,7 +75,7 @@ export const CORE_WIDGET_COMPONENT_PREFIX = "core#";
  * between two of these later without renumbering the rest -- the reason
  * `defaultOrder` is a number and not an index.
  */
-export const CORE_WIDGETS: readonly WidgetDefinition[] = [
+const CORE_WIDGET_LITERALS = [
   {
     id: "core/seed-demo-content",
     title: "Get started",
@@ -313,4 +313,23 @@ export const CORE_WIDGETS: readonly WidgetDefinition[] = [
     defaultOrder: 45,
     component: "core#RecentActivity",
   },
-] as const;
+] as const satisfies readonly WidgetDefinition[];
+
+/**
+ * Core's widgets, as every reader of a definition sees them.
+ *
+ * The same array as `CORE_WIDGET_LITERALS`, typed as definitions: callers
+ * read optional fields (`requiredPermission`, `chrome`, `lifecycle`) that a
+ * literal type would only have on the entries that set them.
+ */
+export const CORE_WIDGETS: readonly WidgetDefinition[] = CORE_WIDGET_LITERALS;
+
+/**
+ * The id of one of core's widgets.
+ *
+ * Read from the list itself, kept literal by `as const` above, so a widget
+ * added, renamed or removed there changes this with no second edit: a plugin
+ * offering an alternative to a built-in is checked against the widgets core
+ * actually has.
+ */
+export type CoreWidgetId = (typeof CORE_WIDGET_LITERALS)[number]["id"];
