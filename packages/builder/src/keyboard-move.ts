@@ -169,19 +169,29 @@ function declaredSlots(
   container: BlockNode,
   components: ComponentLookup | undefined
 ): readonly string[] | undefined {
-  if (container.type !== COMPONENT_INSTANCE_TYPE) {
-    const definition = getBlock(container.type);
-    return definition === undefined
-      ? undefined
-      : Object.keys(definition.slots ?? {});
-  }
-  const componentId = (container.props as Record<string, unknown> | undefined)
+  return container.type === COMPONENT_INSTANCE_TYPE
+    ? exposedSlots(container, components)
+    : registeredSlots(container.type);
+}
+
+/** The slots a registered block type declares, or `undefined` for none registered. */
+function registeredSlots(type: string): readonly string[] | undefined {
+  const definition = getBlock(type);
+  return definition === undefined
+    ? undefined
+    : Object.keys(definition.slots ?? {});
+}
+
+/** The slots an instance's component exposes, or `undefined` when unreadable. */
+function exposedSlots(
+  instance: BlockNode,
+  components: ComponentLookup | undefined
+): readonly string[] | undefined {
+  const componentId = (instance.props as Record<string, unknown> | undefined)
     ?.componentId;
-  if (typeof componentId !== "string" || components === undefined) {
-    return undefined;
-  }
+  if (typeof componentId !== "string") return undefined;
   try {
-    const definition = readableDefinition(components.get(componentId));
+    const definition = readableDefinition(components?.get(componentId));
     return definition === undefined
       ? undefined
       : Object.keys(definition.slots ?? {});
