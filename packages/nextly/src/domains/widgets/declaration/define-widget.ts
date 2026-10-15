@@ -173,8 +173,12 @@ export interface WidgetEmpty<Data> {
   when?: (data: Data) => boolean;
   /** One line saying why there is nothing, in place of the frame's own. */
   message?: string;
-  /** The empty state's single action, such as "Add a product". */
-  action?: { label: string; link: string };
+  /**
+   * The empty state's single action, such as "Add a product": a path relative
+   * to the admin, offered only to a person holding `permission` when it names
+   * one, so nobody is shown a step they cannot take.
+   */
+  action?: { label: string; link: string; permission?: string };
 }
 
 /**
@@ -345,3 +349,33 @@ export interface WidgetProps<W extends AnyWidget> {
   /** Asks for the card's data again. */
   retry: () => void;
 }
+
+/** The component path a widget declares, for one drawn by its own component. */
+type ComponentPathOf<W> = W extends {
+  readonly display: { component: infer Path extends string };
+}
+  ? Path
+  : never;
+
+/**
+ * The component map an admin entry registers, checked against the widgets it
+ * draws: one entry per declared component path, each a component taking THAT
+ * widget's props.
+ *
+ * 🔴 What closes the gap props alone leave. A component reaches the admin by
+ * the path string its declaration names, and its own signature says which
+ * widget's props it takes; nothing related the two. The path is a literal
+ * type (`display` is inferred `const`), so the map keyed by it can demand the
+ * right component for each key: a component written for another widget is
+ * refused, and so is a declared path with no component, which would otherwise
+ * be an empty card.
+ *
+ * ```ts
+ * export const components = {
+ *   "@acme/shop/admin#RevenueCard": RevenueCard,
+ * } satisfies WidgetComponentMap<(typeof widgets)[number]>;
+ * ```
+ */
+export type WidgetComponentMap<W extends AnyWidget> = {
+  [K in W as ComponentPathOf<K>]: (props: WidgetProps<K>) => unknown;
+};

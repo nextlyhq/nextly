@@ -86,7 +86,11 @@ export const revenue = defineWidget({
   empty: {
     when: data => data.points.length === 0,
     message: "No takings in this range",
-    action: { label: "Add a product", link: "collections/products/create" },
+    action: {
+      label: "Add a product",
+      link: "collections/products/create",
+      permission: "create-products",
+    },
   },
   example: { currency: "eur", points: [{ day: "2026-10-01", total: 12 }] },
 });
@@ -107,12 +111,23 @@ export const unpaidCount = defineWidget({
 });
 
 /**
+ * Every widget the plugin declares, as a tuple so each keeps its own type: the
+ * admin half checks its component map against these.
+ */
+export const widgets = [
+  ordersByState,
+  recentOrders,
+  revenue,
+  unpaidCount,
+] as const;
+
+/**
  * The plugin's `contributes.dashboard`: its widgets, the one it suggests for
  * the default dashboard, the one it offers in place of a built-in card, and a
  * line for the Needs attention card.
  */
 export const dashboard: DashboardContribution = {
-  widgets: [ordersByState, recentOrders, revenue, unpaidCount],
+  widgets,
   suggest: ["acme/orders-by-state"],
   alternatives: { "acme/recent-orders": "core/recently-edited" },
   attention: [

@@ -332,6 +332,43 @@ export function Card(props: WidgetProps<typeof w>) { ${MARK}
     message: `Type '("7d" | "30d" | "90d" | "12m")[]' is not assignable to type 'string'`,
   },
 
+  {
+    name: "an admin entry registers a component written for another widget",
+    ...pair(
+      card => `import type { WidgetComponentMap } from "../define-widget";
+import { RevenueCard, UnpaidCard } from "./plugin/admin";
+import type { widgets } from "./plugin/widgets";
+
+export const components = {
+  "@acme/nextly-plugin-shop/admin#RevenueCard": ${card}, ${MARK}
+  "@acme/nextly-plugin-shop/admin#UnpaidCard": UnpaidCard,
+} satisfies WidgetComponentMap<(typeof widgets)[number]>;
+`,
+      "UnpaidCard",
+      "RevenueCard"
+    ),
+    code: 2322,
+    message: "is not assignable to type '(props: WidgetProps<",
+  },
+  {
+    name: "an admin entry leaves a declared component path without a component",
+    ...pair(
+      entry => `import type { WidgetComponentMap } from "../define-widget";
+import { RevenueCard, UnpaidCard } from "./plugin/admin";
+import type { widgets } from "./plugin/widgets";
+
+export const components = {
+  "@acme/nextly-plugin-shop/admin#RevenueCard": RevenueCard,${entry}
+} satisfies WidgetComponentMap<(typeof widgets)[number]>; ${MARK}
+`,
+      "",
+      `
+  "@acme/nextly-plugin-shop/admin#UnpaidCard": UnpaidCard,`
+    ),
+    code: 1360,
+    message: "@acme/nextly-plugin-shop/admin#UnpaidCard",
+  },
+
   // ---- What else the declaration checks where it is written.
   {
     name: "a dependent setting names no Collection setting of the widget's",
