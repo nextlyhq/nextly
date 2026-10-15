@@ -294,31 +294,33 @@ export interface WidgetSize {
 }
 
 /**
- * What a widget's own component is handed.
+ * What a widget's own component is handed: its settings, its size and its
+ * data, all typed from the declaration (`WidgetProps<typeof myWidget>`).
  *
- * Its data is not among them: the host draws loading, no permission and error
- * itself, and the component reads the data through `useWidgetData`, where it
- * is always present.
+ * 🔴 The data is a PROP, not something a hook fetches by naming the widget.
+ * A hook typed by a type argument (`useData<typeof w>()`) takes whatever
+ * widget it is told, so a component naming the wrong one compiles and is
+ * lied to; a prop is typed by the same `W` as the settings beside it, so the
+ * two cannot disagree. A component is then also a plain function of its
+ * props: a test or the preview page renders it with data in hand, with no
+ * provider around it.
+ *
+ * `W extends AnyWidget`, so a declaration refused by its own checks (see
+ * `CheckedDeclaration`) cannot be given a component.
  */
-export interface WidgetProps<W> {
+export interface WidgetProps<W extends AnyWidget> {
   widgetId: string;
   /** The card's id: one widget may sit on a dashboard more than once. */
   placementId: string;
   settings: WidgetSettingValues<W>;
   size: WidgetSize;
-}
-
-/** What `useWidgetData` returns inside a component. */
-export interface WidgetDataState<W> {
+  /**
+   * The card's data, always present: the host draws loading, no permission
+   * and error itself, and calls the component only once there is data.
+   */
   data: WidgetData<W>;
   /** True while a newer answer is on its way; `data` is the last one. */
   refreshing: boolean;
+  /** Asks for the card's data again. */
   retry: () => void;
 }
-
-/**
- * The admin hook a component reads its data through, typed by its widget.
- *
- * A type only: the hook itself belongs to the admin, which renders the card.
- */
-export type UseWidgetData = <W extends AnyWidget>() => WidgetDataState<W>;

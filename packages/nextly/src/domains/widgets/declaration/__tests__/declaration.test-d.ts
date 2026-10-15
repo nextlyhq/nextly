@@ -117,7 +117,7 @@ defineWidget({
 });
 
 // 🔴 In a component, through `import type` of the declaration: its settings
-// and its data. The component file (`plugin/admin.ts`) compiles against these
+// and its data, both props typed by the same widget. The component file (`plugin/admin.ts`) compiles against these
 // types; asserting them here pins what it was handed.
 expectTypeOf<WidgetProps<typeof revenue>["settings"]>().toEqualTypeOf<{
   readonly range: DateRange;
@@ -128,6 +128,9 @@ expectTypeOf<WidgetData<typeof revenue>>().toEqualTypeOf<{
   currency: "usd" | "eur";
   points: { day: string; total: number }[];
 }>();
+expectTypeOf<WidgetProps<typeof revenue>["data"]>().toEqualTypeOf<
+  WidgetData<typeof revenue>
+>();
 expectTypeOf<Parameters<typeof RevenueCard>[0]>().toEqualTypeOf<
   WidgetProps<typeof revenue>
 >();

@@ -9,15 +9,15 @@
  * handed, not how it renders.
  */
 
-import type { UseWidgetData, WidgetProps } from "../../define-widget";
+import type { WidgetProps } from "../../define-widget";
 
 import type { revenue, unpaidCount } from "./widgets";
 
-/** The admin's hook, as a plugin's component sees it. */
-declare const useWidgetData: UseWidgetData;
-
-export function RevenueCard({ settings, size }: WidgetProps<typeof revenue>) {
-  const { data } = useWidgetData<typeof revenue>();
+export function RevenueCard({
+  settings,
+  size,
+  data,
+}: WidgetProps<typeof revenue>) {
   const total = data.points.reduce((sum, point) => sum + point.total, 0);
   const label = settings.net ? "net" : "gross";
   return size.class === "small"
@@ -25,7 +25,6 @@ export function RevenueCard({ settings, size }: WidgetProps<typeof revenue>) {
     : `${total} ${data.currency} ${label}, ${settings.range}`;
 }
 
-export function UnpaidCard(_props: WidgetProps<typeof unpaidCount>) {
-  const { data } = useWidgetData<typeof unpaidCount>();
+export function UnpaidCard({ data }: WidgetProps<typeof unpaidCount>) {
   return data.atLeast === true ? `${data.total}+` : `${data.total}`;
 }

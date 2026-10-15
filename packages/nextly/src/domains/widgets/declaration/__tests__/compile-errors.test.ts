@@ -177,15 +177,12 @@ export function Card({ settings }: WidgetProps<typeof revenue>) {
     message: "have no overlap",
   },
   {
-    name: "a component reads its data as the wrong type, through useWidgetData",
+    name: "a component reads its data as the wrong type",
     ...pair(
-      t => `import type { UseWidgetData } from "../define-widget";
+      t => `import type { WidgetProps } from "../define-widget";
 import type { revenue } from "./plugin/widgets";
 
-declare const useWidgetData: UseWidgetData;
-
-export function Card() {
-  const { data } = useWidgetData<typeof revenue>();
+export function Card({ data }: WidgetProps<typeof revenue>) {
   const total: ${t} = data.points[0].total; ${MARK}
   return total;
 }
@@ -289,6 +286,35 @@ export const contributed: AnyWidget = w; ${MARK}
     ),
     code: 2739,
     message: "ExampleDoesNotMatchTheWidgetData",
+  },
+
+  {
+    name: "a component cannot be typed for a widget with a mismatched example",
+    ...pair(
+      range => `${imports}import type { WidgetProps } from "../define-widget";
+
+const w = defineWidget({
+  id: "test/w",
+  title: "W",
+  description: "A widget under test",
+  category: "Test",
+  widths: ["full"],
+  width: "full",
+  settings: { range: settings.dateRange() },
+  data: async ({ settings }) => ({ range: settings.range }),
+  display: { component: "@test/w/admin#Card" },
+  example: { range: "${range}" },
+});
+
+export function Card(props: WidgetProps<typeof w>) { ${MARK}
+  return props.widgetId;
+}
+`,
+      "1y",
+      "7d"
+    ),
+    code: 2344,
+    message: "does not satisfy the constraint 'AnyWidget'",
   },
 
   // ---- What else the declaration checks where it is written.
