@@ -56,6 +56,15 @@ read in a process where Nextly has not been initialised fails with an
 internal error, and the server log names this fix. The blog template's seed
 routes do this now.
 
+`getSession`, `requireAuth` and `ctx.auth.currentUser` can now throw: when
+the account's row cannot be read, or the read takes longer than five
+seconds, the request fails rather than being answered either way. Before,
+they never read the database. `verifyAccessToken` still checks only a
+token's signature; read sessions through `getSession` or `requireAuth` to
+get the cut-off. `GET /api/auth/state` refuses a token whose account's
+sessions were ended, and still reports an inactive account whose sessions
+were not as `disabled`.
+
 `buildClaims` takes an optional `sessionEpoch`. Left out, it is zero, so a
 token built that way works until the account's sessions are first ended.
 `AccountState` now carries the account's `email`, `name`, `image` and

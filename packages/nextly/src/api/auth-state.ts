@@ -83,9 +83,14 @@ export const GET = withErrorHandler(async (request: NextRequest) => {
     });
   }
 
-  // The same check every session read makes: a token its account can no
-  // longer use reports no signed-in state, here as everywhere else.
-  if (!(await sessionTokenIsCurrent(verifyResult.payload))) {
+  // The same check every session read makes, on the token's epoch: a token
+  // whose account's sessions were ended, by a deactivation or a password set,
+  // reports no signed-in state here either. Not on whether the account is
+  // active, since reporting an inactive account as `disabled` below is this
+  // route's purpose and grants nothing.
+  if (
+    !(await sessionTokenIsCurrent(verifyResult.payload, { activeOnly: false }))
+  ) {
     throw NextlyError.authRequired({
       logContext: { reason: "session-ended" },
     });
@@ -105,8 +110,9 @@ export const GET = withErrorHandler(async (request: NextRequest) => {
   }
 
   // Read the live user row so the account state reflects the current DB,
-  // not the JWT snapshot. A locked / disabled user with a still-valid JWT
-  // still gets `locked: true` / `disabled: true` here.
+  // not the JWT snapshot. A locked user with a still-valid JWT gets
+  // `locked: true`, and an inactive one whose sessions were not ended gets
+  // `disabled: true`; one deactivated through core was refused above.
   const nextly = await getCachedNextly();
   // The adapter is typed as `unknown` from the public surface; narrow once
   // here with the minimum shape we need (a Drizzle-style select chain

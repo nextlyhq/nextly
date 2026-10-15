@@ -55,6 +55,12 @@ export async function verifyToken(
  * A thin wrapper over {@link verifyToken} for the session purpose, so every
  * existing caller gets the typed-token rules without being edited.
  *
+ * Checks the signature and the token's purpose only: it does not ask whether
+ * the account may still use the token. A token issued before its account was
+ * deactivated, or before an administrator set its password, still verifies
+ * here. To read a session, use `getSession` or `requireAuth`, which also make
+ * that check (`auth/session/session-standing`).
+ *
  * @param token - The JWT string from the cookie
  * @param secret - The NEXTLY_SECRET string
  * @returns VerifyResult with payload on success or reason on failure
