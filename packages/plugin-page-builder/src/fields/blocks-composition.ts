@@ -70,6 +70,7 @@ import {
   hostPlacing,
   type BoundedReader,
   type ComponentSource,
+  type ReadComposition,
 } from "../composition-reading";
 
 /** The issue shape core's validation envelope carries. */
@@ -91,16 +92,24 @@ export interface HostRef {
   readonly localized: boolean;
 }
 
-/** The documents that place one component, and whether that is all of them. */
-export type HostFinder = (componentId: string) => Promise<{
-  readonly hosts: readonly HostRef[];
+/** Who places a component, as the usage index answers it. */
+export interface HostFinder {
   /**
-   * `false` where the list is a floor: the index held more than was read, or
-   * cannot vouch that it covers every document (a backfill not finished, or
-   * content it cannot index at all).
+   * Whether the index covers every document it is meant to — false while a
+   * backfill has not finished, or where content exists it cannot index at all.
+   * Read once per host walk.
    */
-  readonly complete: boolean;
-}>;
+  whole(): Promise<boolean>;
+  /**
+   * The documents placing any of these components, and whether this lookup
+   * read every row there was (false where the index held more than one save
+   * reads).
+   */
+  placing(componentIds: readonly string[]): Promise<{
+    readonly hosts: readonly HostRef[];
+    readonly complete: boolean;
+  }>;
+}
 
 /** Hosts a component save could not judge, and why, for the site's operators. */
 export interface UnjudgedHosts {
@@ -145,9 +154,11 @@ export interface CompositionSetup {
 /** The hosts a refused component save would have broken, for the server log. */
 export interface BrokenHosts {
   readonly componentId: string;
+  /** One entry per document, with the blocks fields it places the component in. */
   readonly hosts: readonly {
     readonly slug: string;
     readonly id: string;
+    readonly fields: readonly string[];
     readonly messages: readonly string[];
   }[];
 }
@@ -394,27 +405,34 @@ function hostTally(componentId: string, setup: CompositionSetup) {
   const unjudged = new Set<string>();
   let listIncomplete = false;
   const reasons = new Set<string>();
-  const broken = new Map<
-    string,
-    { host: HostRef; faults: CompositionFault[] }
-  >();
+  // Keyed by DOCUMENT: the index lists one host per field, and a page placing
+  // the component in two fields is still one page an operator has to open.
+  const broken = new Map<string, HostDamage>();
   return {
     host(host: HostRef, reason: string): void {
-      unjudged.add(hostKey(host));
+      unjudged.add(documentKey(host));
       reasons.add(reason);
     },
     incomplete(reason: string): void {
       listIncomplete = true;
       reasons.add(reason);
     },
-    broke(host: HostRef, fault: CompositionFault): void {
-      const entry = broken.get(hostKey(host)) ?? { host, faults: [] };
-      // Once per placement and rule: a publish judges both forms, and they
-      // usually agree.
-      const same = (f: CompositionFault) =>
-        f.code === fault.code && f.instanceId === fault.instanceId;
-      if (!entry.faults.some(same)) entry.faults.push(fault);
-      broken.set(hostKey(host), entry);
+    broke(host: HostRef, fault: HostFault): void {
+      const entry = broken.get(documentKey(host)) ?? {
+        host,
+        fields: new Set<string>(),
+        faults: [],
+      };
+      entry.fields.add(host.field);
+      // Once per field, placement and rule: a publish judges both forms, and
+      // they usually agree.
+      const same = (f: HostFault & { field: string }) =>
+        f.field === host.field &&
+        f.code === fault.code &&
+        f.instanceId === fault.instanceId;
+      if (!entry.faults.some(same))
+        entry.faults.push({ ...fault, field: host.field });
+      broken.set(documentKey(host), entry);
     },
     flush(report: Report): void {
       if (broken.size > 0) {
@@ -424,9 +442,10 @@ function hostTally(componentId: string, setup: CompositionSetup) {
         );
         setup.onHostsBroken?.({
           componentId,
-          hosts: [...broken.values()].map(({ host, faults }) => ({
+          hosts: [...broken.values()].map(({ host, fields, faults }) => ({
             slug: host.slug,
             id: host.id,
+            fields: [...fields],
             messages: faults.map(f => f.message),
           })),
         });
@@ -442,8 +461,23 @@ function hostTally(componentId: string, setup: CompositionSetup) {
   };
 }
 
-function hostKey(host: HostRef): string {
-  return `${host.slug}\u0000${host.id}\u0000${host.field}`;
+/** One document, whichever of its fields placed the component. */
+function documentKey(host: HostRef): string {
+  return `${host.slug}\u0000${host.id}`;
+}
+
+/** What one host is broken by: a composition fault, or a loop it now closes. */
+interface HostFault {
+  readonly code: string;
+  readonly instanceId: string;
+  readonly message: string;
+}
+
+/** Everything one document would suffer from the save. */
+interface HostDamage {
+  readonly host: HostRef;
+  readonly fields: Set<string>;
+  readonly faults: (HostFault & { field: string })[];
 }
 
 /**
@@ -455,7 +489,7 @@ function hostKey(host: HostRef): string {
  * server log instead ({@link CompositionSetup.onHostsBroken}).
  */
 function brokenMessage(
-  broken: readonly { faults: readonly CompositionFault[] }[],
+  broken: readonly { faults: readonly HostFault[] }[],
   setup: CompositionSetup
 ): string {
   const rules = new Set<string>();
@@ -478,6 +512,8 @@ function ruleBroken(code: string, setup: CompositionSetup): string {
       return `content would be nested deeper than the maximum of ${String(setup.limits.maxDepth)} levels`;
     case "composed-depth":
       return "components would be nested inside one another too deeply";
+    case "cycle":
+      return "a component would end up containing itself";
     default:
       return "a block would sit where it is not allowed to";
   }
@@ -493,7 +529,10 @@ async function everyHost(
 ): Promise<{ hosts: readonly HostRef[]; complete: boolean } | null> {
   const hostsOf = setup.hostsOf;
   if (hostsOf === undefined) return null;
-  const listing: HostListing = { found: new Map(), whole: true };
+  const listing: HostListing = {
+    found: new Map(),
+    whole: await hostsOf.whole(),
+  };
   let frontier = [self];
   // Components nest at most this deep, so a host further out composes this one
   // nowhere a reader receives it.
@@ -502,13 +541,9 @@ async function everyHost(
     level < MAX_COMPOSED_DEPTH && frontier.length > 0;
     level += 1
   ) {
-    const next: string[] = [];
-    for (const id of frontier) {
-      const answer = await hostsOf(id);
-      if (!answer.complete) listing.whole = false;
-      next.push(...admitHosts(answer.hosts, self, setup, listing));
-    }
-    frontier = next;
+    const answer = await hostsOf.placing(frontier);
+    if (!answer.complete) listing.whole = false;
+    frontier = admitHosts(answer.hosts, self, setup, listing);
   }
   return { hosts: [...listing.found.values()], complete: listing.whole };
 }
@@ -583,6 +618,32 @@ async function judgeOneHost(args: {
     );
     return;
   }
+  reportWhatBroke({ host, stored, before, after, setup, tally });
+}
+
+/**
+ * What the save does to one host that was not wrong with it already.
+ *
+ * A loop the HOST's own overrides close once the component changes is among
+ * them: the component composed alone shows none, because the host's placement
+ * is what re-points the nested reference back at it.
+ */
+function reportWhatBroke(args: {
+  host: HostRef;
+  stored: BlockDocument;
+  before: ReadComposition;
+  after: ReadComposition;
+  setup: CompositionSetup;
+  tally: Tally;
+}): void {
+  const { host, stored, before, after, setup, tally } = args;
+  if (after.loopClosed && !before.loopClosed) {
+    tally.broke(host, {
+      code: "cycle",
+      instanceId: "",
+      message: `With this change, ${describeHost(host)} would place a component inside itself.`,
+    });
+  }
   const had = new Set(
     faultsIn(stored, before.composition, setup).map(
       f => `${f.code}\u0000${f.instanceId}`
@@ -638,6 +699,8 @@ interface Footprint {
   readonly selections: ReadonlyMap<string, SelectionFootprint>;
   /** Each exposed slot, as the holder type, its slot and its depth. */
   readonly slots: ReadonlyMap<string, string>;
+  /** Each exposed property, as the node, prop path and type it writes to. */
+  readonly exposures: ReadonlyMap<string, string>;
 }
 
 interface SelectionFootprint {
@@ -673,7 +736,12 @@ async function footprintOf(
       componentDepth: componentDepthOf(self, variant, library.held, setup),
     });
   }
-  return { complete, selections, slots: exposedSlots(document, setup) };
+  return {
+    complete,
+    selections,
+    slots: exposedSlots(document, setup),
+    exposures: exposedProperties(document),
+  };
 }
 
 /** The deepest node of a composed forest, counted from its own top. */
@@ -720,6 +788,23 @@ function componentDepthOf(
   return MAX_COMPOSED_DEPTH + 1;
 }
 
+/** Each exposed property, keyed by its id, as `nodeId|propPath|type`. */
+function exposedProperties(
+  document: BlockDocument
+): ReadonlyMap<string, string> {
+  const declared = (document as { exposed?: unknown }).exposed;
+  const out = new Map<string, string>();
+  if (!Array.isArray(declared)) return out;
+  for (const entry of declared as Record<string, unknown>[]) {
+    if (typeof entry?.id !== "string") continue;
+    out.set(
+      entry.id,
+      `${String(entry.nodeId)}|${String(entry.propPath)}|${String(entry.type)}`
+    );
+  }
+  return out;
+}
+
 /** Each exposed slot, keyed by its id, as `type|slot|depth` of its holder. */
 function exposedSlots(
   document: BlockDocument,
@@ -763,13 +848,45 @@ function exposedSlots(
  */
 function mayWorsen(was: Footprint, now: Footprint): boolean {
   if (!was.complete || !now.complete) return true;
+  return (
+    selectionsWorsen(was, now) ||
+    removedSelectionsWorsen(was, now) ||
+    // What a placement can override: a new or re-aimed exposure lets a host's
+    // existing override reach somewhere it could not, a loop included.
+    moved(was.exposures, now.exposures) ||
+    moved(was.slots, now.slots)
+  );
+}
+
+/** Whether any selection that exists now is worse than it was, or new. */
+function selectionsWorsen(was: Footprint, now: Footprint): boolean {
   for (const [name, after] of now.selections) {
     const before = was.selections.get(name);
     if (before === undefined || selectionWorsens(before, after)) return true;
   }
-  for (const [id, where] of now.slots) {
-    if (was.slots.get(id) !== where) return true;
+  return false;
+}
+
+/**
+ * Whether a selection that went away hands its placements something worse: a
+ * placement that picked it now gets the default.
+ */
+function removedSelectionsWorsen(was: Footprint, now: Footprint): boolean {
+  const fallback = now.selections.get("");
+  for (const [name, before] of was.selections) {
+    if (now.selections.has(name)) continue;
+    if (fallback === undefined || selectionWorsens(before, fallback))
+      return true;
   }
+  return false;
+}
+
+/** Whether any entry present now is new or different. Removals do not count. */
+function moved(
+  before: ReadonlyMap<string, string>,
+  after: ReadonlyMap<string, string>
+): boolean {
+  for (const [key, value] of after) if (before.get(key) !== value) return true;
   return false;
 }
 

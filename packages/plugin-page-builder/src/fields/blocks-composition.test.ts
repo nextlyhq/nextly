@@ -388,11 +388,14 @@ describe("a component save judged inside the documents that use it", () => {
   };
 
   /** A finder over a fixed map of who places whom. */
-  function finder(map: Record<string, HostRef[]>, complete = true) {
+  function finder(map: Record<string, HostRef[]>, whole = true) {
     const asked: string[] = [];
-    const hostsOf: HostFinder = async id => {
-      asked.push(id);
-      return { hosts: map[id] ?? [], complete };
+    const hostsOf: HostFinder = {
+      whole: async () => whole,
+      placing: async ids => {
+        asked.push(...ids);
+        return { hosts: ids.flatMap(id => map[id] ?? []), complete: true };
+      },
     };
     return { hostsOf, asked };
   }
@@ -433,6 +436,7 @@ describe("a component save judged inside the documents that use it", () => {
           {
             slug: "pages",
             id: "home",
+            fields: ["content"],
             messages: [expect.stringContaining("deeper")],
           },
         ],
@@ -618,10 +622,7 @@ describe("a component save judged inside the documents that use it", () => {
         home: { published: page([box("p1", [placing("i1", "deep")])]) },
       },
     });
-    const hostsOf = vi.fn<HostFinder>(async () => ({
-      hosts: [hostPage],
-      complete: true,
-    }));
+    const { hostsOf, lookups } = listing([hostPage]);
 
     // A status-less save changes the preview; the page's preview IS its live
     // row here, so the deepening reaches it there too.
@@ -684,10 +685,7 @@ describe("a component save judged inside its hosts: what each selection and writ
         },
       },
     });
-    const hostsOf = vi.fn<HostFinder>(async () => ({
-      hosts: [hostPage],
-      complete: true,
-    }));
+    const { hostsOf, lookups } = listing([hostPage]);
 
     const issues = await judge(
       swapping("shallow", "deep"),
@@ -699,7 +697,7 @@ describe("a component save judged inside its hosts: what each selection and writ
       }
     );
 
-    expect(hostsOf).toHaveBeenCalled();
+    expect(lookups).toHaveBeenCalled();
     expect(codes(issues)).toEqual(["COMPONENT_HOST_BROKEN"]);
   });
 
@@ -732,10 +730,7 @@ describe("a component save judged inside its hosts: what each selection and writ
     const { readStored } = storeOf({
       [COMPONENTS]: { x: { published: shallowComponent } },
     });
-    const hostsOf = vi.fn<HostFinder>(async () => ({
-      hosts: [hostPage],
-      complete: true,
-    }));
+    const { hostsOf, lookups } = listing([hostPage]);
     const unjudged: UnjudgedHosts[] = [];
 
     await judge(deepComponent, write(readStored, COMPONENTS, "x", true), {
@@ -745,10 +740,136 @@ describe("a component save judged inside its hosts: what each selection and writ
       onUnjudged: u => unjudged.push(u),
     });
 
-    expect(hostsOf).not.toHaveBeenCalled();
+    expect(lookups).not.toHaveBeenCalled();
     expect(unjudged[0]!.reasons).toEqual(
       expect.arrayContaining([expect.stringContaining("inside a transaction")])
     );
+  });
+
+  it("judges the hosts of a variant that is removed, which then get the default", async () => {
+    // A page picks `v`, which was shallow; the default is deep. Removing `v`
+    // leaves the default exactly as it was, and hands the page the deep tree.
+    const { readStored } = storeOf({
+      [COMPONENTS]: {
+        x: { published: swapping("deep", "shallow") },
+        deep: { published: deepComponent },
+        shallow: { published: shallowComponent },
+      },
+      pages: {
+        home: {
+          published: page([
+            box("p1", [
+              {
+                ...placing("i1", "x"),
+                props: { componentId: "x", variant: "v" },
+              },
+            ]),
+          ]),
+        },
+      },
+    });
+    const { hostsOf, lookups } = listing([hostPage]);
+    const withoutVariant = component([box("x1", [placing("n", "deep")])], {
+      exposed: [
+        {
+          id: "swap",
+          label: "Which",
+          nodeId: "n",
+          propPath: "componentId",
+          type: "select",
+        },
+      ],
+    });
+
+    const issues = await judge(
+      withoutVariant,
+      write(readStored, COMPONENTS, "x"),
+      {
+        limits,
+        hostsOf,
+        status: "published",
+      }
+    );
+
+    expect(lookups).toHaveBeenCalled();
+    expect(codes(issues)).toEqual(["COMPONENT_HOST_BROKEN"]);
+  });
+
+  it("refuses a change that lets a host's own override close a loop", async () => {
+    // The page already overrides `swap` to point at `a`. Before the change `a`
+    // exposes nothing, so the override reaches nowhere; once `a` exposes its
+    // nested placement's id, the page composes `a` inside itself. Composed
+    // alone, `a` closes nothing.
+    const leaf = component([node("l1")]);
+    const before = component([box("a1", [placing("n", "leaf")])]);
+    const after = component([box("a1", [placing("n", "leaf")])], {
+      exposed: [
+        {
+          id: "swap",
+          label: "Which",
+          nodeId: "n",
+          propPath: "componentId",
+          type: "select",
+        },
+      ],
+    });
+    const { readStored } = storeOf({
+      [COMPONENTS]: { a: { published: before }, leaf: { published: leaf } },
+      pages: {
+        home: {
+          published: page([
+            {
+              ...placing("i1", "a"),
+              props: { componentId: "a", overrides: { swap: "a" } },
+            },
+          ]),
+        },
+      },
+    });
+    const { hostsOf } = listing([hostPage]);
+
+    const issues = await judge(after, write(readStored, COMPONENTS, "a"), {
+      hostsOf,
+      status: "published",
+    });
+
+    expect(codes(issues)).toEqual(["COMPONENT_HOST_BROKEN"]);
+    expect(issues[0]!.message).toContain(
+      "a component would end up containing itself"
+    );
+  });
+
+  it("counts a page placing the component in two fields as one document", async () => {
+    const { readStored } = storeOf({
+      [COMPONENTS]: { x: { published: shallowComponent } },
+      pages: {
+        home: {
+          published: page([box("p1", [box("p2", [placing("i1", "x")])])]),
+        },
+      },
+    });
+    const { hostsOf } = listing([hostPage, { ...hostPage, field: "sidebar" }]);
+    const logged: BrokenHosts[] = [];
+
+    const issues = await judge(
+      deepComponent,
+      write(readStored, COMPONENTS, "x"),
+      {
+        limits,
+        hostsOf,
+        status: "published",
+        onHostsBroken: b => logged.push(b),
+      }
+    );
+
+    expect(issues[0]!.message).toContain("break 1 document that places it");
+    expect(logged[0]!.hosts).toEqual([
+      expect.objectContaining({
+        slug: "pages",
+        id: "home",
+        fields: ["content", "sidebar"],
+      }),
+    ]);
   });
 
   it("composes no document where the renderer draws components from elsewhere, and still refuses a loop", async () => {
@@ -784,9 +905,22 @@ describe("a component save judged inside its hosts: what each selection and writ
 
 /** A finder over a fixed map of who places whom. */
 function finderOf(map: Record<string, HostRef[]>) {
-  const hostsOf: HostFinder = async id => ({
-    hosts: map[id] ?? [],
-    complete: true,
-  });
+  const hostsOf: HostFinder = {
+    whole: async () => true,
+    placing: async ids => ({
+      hosts: ids.flatMap(id => map[id] ?? []),
+      complete: true,
+    }),
+  };
   return { hostsOf };
+}
+
+/** A finder that lists `hosts` for any lookup, and records each lookup. */
+function listing(hosts: HostRef[]) {
+  const lookups = vi.fn<HostFinder["placing"]>(async () => ({
+    hosts,
+    complete: true,
+  }));
+  const hostsOf: HostFinder = { whole: async () => true, placing: lookups };
+  return { hostsOf, lookups };
 }

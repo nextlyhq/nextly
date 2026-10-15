@@ -311,14 +311,14 @@ fieldTypes: [
 
 `args` carries:
 
-| Key     | What it is                                                                                                                                                                                                                                                                                                  |
-| ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `data`  | The write payload, for rules spanning fields. On update this is the patch, not the merged stored entry. Always the top-level payload, even for a field nested in a repeater row.                                                                                                                            |
-| `req`   | Request context; carries `user` when authenticated. Empty for a field inside a field group instance.                                                                                                                                                                                                        |
-| `field` | The instance, so you can read the options your type declares. A detached copy: records, arrays, dates, sets and maps are rebuilt, so editing them changes nothing. Functions and class instances stay shared — treat it as read-only.                                                                       |
-| `path`  | Where this field sits in the write (`"stars"`, `"rows[1].stars"`).                                                                                                                                                                                                                                          |
-| `mode`  | `"create"` or `"update"`.                                                                                                                                                                                                                                                                                   |
-| `write` | _Experimental._ The entry write this value belongs to: `kind` (`"collection"` or `"single"`), `slug`, the stored `id` on an update of a collection entry, and `readStored` (below). Absent when no entry write is behind the validation — a default value being judged, or a call to `validateFieldValues`. |
+| Key     | What it is                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `data`  | The write payload, for rules spanning fields. On update this is the patch, not the merged stored entry. Always the top-level payload, even for a field nested in a repeater row.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| `req`   | Request context; carries `user` when authenticated. Empty for a field inside a field group instance.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `field` | The instance, so you can read the options your type declares. A detached copy: records, arrays, dates, sets and maps are rebuilt, so editing them changes nothing. Functions and class instances stay shared — treat it as read-only.                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `path`  | Where this field sits in the write (`"stars"`, `"rows[1].stars"`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `mode`  | `"create"` or `"update"`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `write` | _Experimental._ The entry write this value belongs to: `kind` (`"collection"` or `"single"`), `slug`, `id`, `inTransaction`, and `readStored` (below). `id` is the id the entry is stored under: the stored id on an update, and on a **create** the caller's own id where the collection accepts one (`db.allowIdOnCreate`); it is absent on any other create, and for a single. `inTransaction` says whether the write runs inside a transaction (a batch, an import). `write` itself is absent when no entry write is behind the validation — a default value being judged, or a call to `validateFieldValues`. Use `mode`, not the presence of `id`, to tell a create from an update. |
 
 Return `true` to accept, a string for one problem, or an array when one value
 can be wrong in several places at once. Issue paths are used as given, so build
@@ -353,7 +353,10 @@ runs on:
 
 ```ts
 async validate(value, { write }) {
-  if (write?.id === undefined) return true; // a create, or no write behind it
+  // No write behind it, or an entry nothing can name yet. Whether this is a
+  // create is `mode`'s to say: `id` is set on a create too where the collection
+  // accepts the caller's id (`db.allowIdOnCreate`).
+  if (write?.id === undefined) return true;
   const other = await write.readStored({
     collection: "components",
     id: "b",
@@ -368,7 +371,10 @@ async validate(value, { write }) {
 
 - **The write's own connection.** Inside a batch or an import, that is the
   batch's transaction, so rows the same batch wrote before this one are seen.
-  Before a single write's transaction opens, it is the pool.
+  Before a single write's transaction opens, it is the pool. When
+  `write.inTransaction` is true, a read of your own on another connection (the
+  Direct API) cannot see those rows, and can wait on the connection the
+  transaction holds.
 - **As the system.** No read hooks and no access rules shape the answer: a
   value a hook hides from a reader is still what that reader's page is built
   from.

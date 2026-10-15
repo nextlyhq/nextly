@@ -62,7 +62,7 @@ describe("finding a component's hosts in the usage index", () => {
       [row(), row({ variant: "draft" }), row({ entityKey: "about" })],
     ]);
 
-    expect(await hostsOf("hero")).toEqual({
+    expect(await hostsOf.placing(["hero"])).toEqual({
       hosts: [
         { slug: "pages", id: "home", field: "content", localized: false },
         { slug: "pages", id: "about", field: "content", localized: false },
@@ -74,12 +74,12 @@ describe("finding a component's hosts in the usage index", () => {
   it("asks for references to this component only, as the system", async () => {
     const { hostsOf, asked } = finder([[row()]]);
 
-    await hostsOf("hero");
+    await hostsOf.placing(["hero"]);
 
     expect(asked[0]).toMatchObject({
       collection: "nx_pb_component_usage",
       where: {
-        componentId: { equals: "hero" },
+        componentId: { in: ["hero"] },
         kind: { equals: "reference" },
       },
       overrideAccess: true,
@@ -89,7 +89,7 @@ describe("finding a component's hosts in the usage index", () => {
   it("reads every page of rows", async () => {
     const { hostsOf } = finder([[row()], [row({ entityKey: "about" })]]);
 
-    expect((await hostsOf("hero")).hosts.map(h => h.id)).toEqual([
+    expect((await hostsOf.placing(["hero"])).hosts.map(h => h.id)).toEqual([
       "home",
       "about",
     ]);
@@ -98,7 +98,7 @@ describe("finding a component's hosts in the usage index", () => {
   it("marks a host localized when any of its rows is in one language", async () => {
     const { hostsOf } = finder([[row(), row({ locale: "fr" }), row()]]);
 
-    expect((await hostsOf("hero")).hosts).toEqual([
+    expect((await hostsOf.placing(["hero"])).hosts).toEqual([
       { slug: "pages", id: "home", field: "content", localized: true },
     ]);
   });
@@ -109,7 +109,9 @@ describe("finding a component's hosts in the usage index", () => {
       anyUndetermined: false,
     });
 
-    expect((await hostsOf("hero")).complete).toBe(false);
+    expect(await hostsOf.whole()).toBe(false);
+    // CONTROL: the lookup itself read every row there was.
+    expect((await hostsOf.placing(["hero"])).complete).toBe(true);
   });
 
   it("is a floor when a row names something other than a collection entry", async () => {
@@ -117,7 +119,7 @@ describe("finding a component's hosts in the usage index", () => {
       [row(), row({ scope: "single", entityKey: "" }), row({ entity: "" })],
     ]);
 
-    const answer = await hostsOf("hero");
+    const answer = await hostsOf.placing(["hero"]);
     expect(answer.complete).toBe(false);
     expect(answer.hosts.map(h => h.id)).toEqual(["home"]);
   });
@@ -130,8 +132,31 @@ describe("finding a component's hosts in the usage index", () => {
     );
     const { hostsOf, asked } = finder(pages);
 
-    const answer = await hostsOf("hero");
+    const answer = await hostsOf.placing(["hero"]);
     expect(answer.complete).toBe(false);
     expect(asked.length).toBe(25);
+  });
+
+  it("is whole when the index covers every document", async () => {
+    const { hostsOf } = finder([[row()]]);
+
+    expect(await hostsOf.whole()).toBe(true);
+  });
+
+  it("asks for a whole frontier in one query, not one per component", async () => {
+    const { hostsOf, asked } = finder([
+      [
+        row({ componentId: "a" }),
+        row({ componentId: "b", entityKey: "about" }),
+      ],
+    ]);
+
+    const answer = await hostsOf.placing(["a", "b"]);
+
+    expect(asked).toHaveLength(1);
+    expect(asked[0]).toMatchObject({
+      where: { componentId: { in: ["a", "b"] } },
+    });
+    expect(answer.hosts.map(h => h.id)).toEqual(["home", "about"]);
   });
 });
