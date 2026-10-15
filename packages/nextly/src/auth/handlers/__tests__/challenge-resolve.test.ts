@@ -16,7 +16,7 @@ import {
 import { authRateLimiter } from "../../middleware/rate-limiter";
 import { SlidingWindowMemoryStore } from "../../middleware/sliding-window-store";
 
-import { fakeSessionRows } from "./session-row-fake";
+import { fakeSessionRows, fixtureIdentity } from "./session-row-fake";
 import { fakeSpentChallenges } from "./spent-challenges-fake";
 
 const SECRET = "test-secret-that-is-at-least-32-characters-long!!";
@@ -1738,6 +1738,7 @@ describe("a cookie-mode flow that can no longer succeed", () => {
       lockedUntil: null,
       emailVerified: JAN,
       passwordUpdatedAt: FEB,
+      ...fixtureIdentity,
     });
     const token = await mint({
       userId: "u1",
@@ -1763,6 +1764,7 @@ describe("a cookie-mode flow that can no longer succeed", () => {
       lockedUntil: null,
       emailVerified: JAN,
       passwordUpdatedAt: null,
+      ...fixtureIdentity,
     };
     // Usable when the flow is gated before the resolver, deactivated by the
     // time the session is.
