@@ -1,6 +1,10 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { NextlyError } from "../../../errors/nextly-error";
+import {
+  collectPrincipalKinds,
+  publishPrincipalKinds,
+} from "../../../plugins/principals/registry";
 import { auditLog as postgresAuditLog } from "../../../schemas/audit/postgres";
 import {
   collectPluginAuditKinds,
@@ -365,6 +369,25 @@ describe("collectPluginAuditKinds: one kind declared once", () => {
 });
 
 describe("projectPluginAuditEvent: a plugin-defined person", () => {
+  // The kind the events below name, registered as a running plugin would.
+  beforeEach(() =>
+    publishPrincipalKinds(
+      collectPrincipalKinds([
+        {
+          name: "@acme/accounts",
+          version: "1.0.0",
+          nextly: "*",
+          contributes: {
+            principals: [
+              { name: "account", attributes: {}, resolve: async () => null },
+            ],
+          },
+        },
+      ])
+    )
+  );
+  afterEach(() => publishPrincipalKinds(new Map()));
+
   const event = (extra: Record<string, unknown>) =>
     projectPluginAuditEvent(
       { kind: `${SLUG}.identity-linked`, ...extra } as never,
@@ -403,6 +426,21 @@ describe("projectPluginAuditEvent: a plugin-defined person", () => {
   ])("drops an event naming %s", (_label, actorPrincipal) => {
     expect(event({ actorPrincipal })).toBeNull();
   });
+
+  it.each([
+    ["actor", "actorPrincipal"],
+    ["target", "targetPrincipal"],
+  ])(
+    "drops an event naming, as %s, a person of a kind no plugin registered",
+    (_role, field) => {
+      // Well formed but misspelled: no plugin declares it, so no deletion
+      // report could ever reach the row, and what it keeps would outlive the
+      // person. The registered spelling, kept above, is the control.
+      expect(
+        event({ [field]: { kind: "acme-account:account", id: "acc_1" } })
+      ).toBeNull();
+    }
+  );
 
   it.each([
     [

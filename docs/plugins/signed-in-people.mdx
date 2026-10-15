@@ -66,7 +66,8 @@ route and server code ask for it.
 | `lookup(id)` | Optional. The person with this id, for running as them without a request. |
 
 The app refuses to start on a kind whose name, attributes or resolver cannot be
-used, or whose full name another plugin's kind already holds.
+used, whose full name is longer than 191 characters (the width audit rows store
+it in), or whose full name another plugin's kind already holds.
 
 ### What `resolve` must answer
 
@@ -246,7 +247,9 @@ The row keeps the person's kind and id in fields of its own, and keeps its
 network address, browser and metadata, as it does for a staff user who exists.
 A person's writes appear in the audit log, not the activity log, which records
 staff users only. Name one party per role: a role named with both a person and
-a user id is dropped, and a warning is logged.
+a user id is dropped, and a warning is logged. So is an event naming a person
+of a kind no running plugin registers, a misspelled kind for instance: no
+deletion report could ever reach its row.
 
 ## Report a person deleted
 

@@ -9,6 +9,8 @@
  *
  * @module plugins/principals/registry
  */
+import { auditLog as mysqlAuditLog } from "../../schemas/audit/mysql";
+import { auditLog as postgresAuditLog } from "../../schemas/audit/postgres";
 import type { PluginDefinition } from "../plugin-context";
 import { pluginAdminSlug } from "../plugin-slug";
 import { resolutionError } from "../resolution-error";
@@ -49,6 +51,34 @@ const KIND_NAME = /^[a-z][a-z0-9-]{0,31}$/;
  * object's prototype rather than a value.
  */
 const ATTRIBUTE_NAME = /^[A-Za-z][A-Za-z0-9_]{0,63}$/;
+
+/**
+ * The longest full kind name (`<plugin slug>:<name>`) core accepts: the
+ * narrowest column an audit row stores one in.
+ *
+ * PostgreSQL and MySQL keep a kind in bounded varchars, and SQLite in text,
+ * which holds anything, so the bounded declarations decide. A longer name
+ * fails every audit write naming such a person, and audit writes are
+ * fail-safe, so the failure would be a log line and the row would never
+ * exist. Read from the columns rather than restated, so a column narrowed
+ * later tightens the bound instead of silently disagreeing with it.
+ */
+export const PRINCIPAL_KIND_MAX_LENGTH = Math.min(
+  ...[
+    postgresAuditLog.actorKind,
+    postgresAuditLog.actorPrincipalKind,
+    postgresAuditLog.targetPrincipalKind,
+    mysqlAuditLog.actorKind,
+    mysqlAuditLog.actorPrincipalKind,
+    mysqlAuditLog.targetPrincipalKind,
+  ].map(column => {
+    // Read as a plain property: the column-collecting helper is banned by
+    // the drizzle v1 legacy gate, and a table's columns are its own
+    // properties either way.
+    const length = (column as { length?: number }).length;
+    return typeof length === "number" ? length : Number.MAX_SAFE_INTEGER;
+  })
+);
 
 const ATTRIBUTE_TYPES: ReadonlySet<string> = new Set<PrincipalAttributeType>([
   "boolean",
@@ -146,17 +176,32 @@ function declaredAttributes(
   return attributes;
 }
 
+/**
+ * The full name a plugin's kind gets, or why its name cannot be used: not of
+ * the kind-name form, or, joined to the plugin's slug, too long to store.
+ */
+function fullKindName(
+  pluginName: string,
+  name: unknown
+): { kind: string } | string {
+  if (typeof name !== "string" || !KIND_NAME.test(name)) {
+    return `name ${JSON.stringify(name)} must be a lowercase letter followed by at most 31 lowercase letters, digits or dashes`;
+  }
+  const kind = principalKindName(pluginName, name);
+  if (kind.length > PRINCIPAL_KIND_MAX_LENGTH) {
+    return `the full name ${JSON.stringify(kind)} is longer than the ${PRINCIPAL_KIND_MAX_LENGTH} characters an audit row stores a kind in`;
+  }
+  return { kind };
+}
+
 /** Why a plugin's kind cannot be registered, or the kind to register. */
 function checkedKind(
   plugin: PluginDefinition,
   definition: PrincipalKindContribution
 ): RegisteredPrincipalKind | string {
-  if (
-    typeof definition?.name !== "string" ||
-    !KIND_NAME.test(definition.name)
-  ) {
-    return `name ${JSON.stringify(definition?.name)} must be a lowercase letter followed by at most 31 lowercase letters, digits or dashes`;
-  }
+  const named = fullKindName(plugin.name, definition?.name);
+  if (typeof named === "string") return named;
+  const { kind } = named;
   if (typeof definition.resolve !== "function") {
     return "resolve must be a function";
   }
@@ -169,7 +214,7 @@ function checkedKind(
   const attributes = declaredAttributes(definition.attributes);
   if (typeof attributes === "string") return attributes;
   return {
-    kind: principalKindName(plugin.name, definition.name),
+    kind,
     plugin: plugin.name,
     name: definition.name,
     attributes: Object.freeze(attributes),
