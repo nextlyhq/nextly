@@ -324,6 +324,29 @@ export function storedOwner(
   };
 }
 
+/**
+ * Whether two stored values are equal, whatever order their object keys come
+ * back in. PostgreSQL's `jsonb` returns keys in an order of its own, so the
+ * same declared variables read back differently from how they were written.
+ */
+export function sameStoredValue(a: unknown, b: unknown): boolean {
+  return stable(a) === stable(b);
+}
+
+function stable(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stable).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.keys(value)
+      .sort()
+      .map(
+        key =>
+          `${JSON.stringify(key)}:${stable((value as Record<string, unknown>)[key])}`
+      )
+      .join(",")}}`;
+  }
+  return JSON.stringify(value ?? null);
+}
+
 /** Whether an owner's template is one the site may not delete. */
 export function isProtectedOwner(owner: EmailTemplateOwner): boolean {
   return owner.kind === "core" || (owner.kind === "plugin" && owner.installed);
