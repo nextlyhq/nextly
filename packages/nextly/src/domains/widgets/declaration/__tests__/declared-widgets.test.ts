@@ -85,6 +85,40 @@ describe("registering declared widgets", () => {
   });
 });
 
+describe("declarations plain JavaScript can hand over", () => {
+  it("reports an entry that is not an object with the other faults, beside old-shape ids", () => {
+    let thrown: unknown;
+    try {
+      registerWidgetDeclarations(
+        [{ owner: SHOP, declarations: [null, { ...revenue, title: "" }] }],
+        [{ owner: 'plugin "@old/stats"', ids: ["old/x"] }]
+      );
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(NextlyError);
+    const message = (thrown as NextlyError).logMessage ?? "";
+    expect(message).toContain("2 widget declarations cannot work");
+    expect(message).toContain("title must be a non-empty string");
+  });
+
+  it("keeps the values startup checked, whatever a getter answers later", () => {
+    // An accessor answering one id when checked and another when kept would
+    // get past the reserved namespaces and the duplicate check.
+    let reads = 0;
+    const shifting = { ...recentOrders };
+    Object.defineProperty(shifting, "id", {
+      enumerable: true,
+      get: () => (reads++ === 0 ? "acme/recent-orders" : "core/recent-orders"),
+    });
+    registerWidgetDeclarations([{ owner: SHOP, declarations: [shifting] }]);
+    expect(declaredWidget("acme/recent-orders")?.declaration.id).toBe(
+      "acme/recent-orders"
+    );
+    expect(declaredWidget("core/recent-orders")).toBeUndefined();
+  });
+});
+
 describe("widgets in today's shape", () => {
   it("stop startup when a declared widget takes an id one of them uses", () => {
     expect(() =>

@@ -14,7 +14,11 @@ import * as loggerModule from "../../../../observability/logger";
 import { definePlugin } from "../../../../plugins/plugin-context";
 import type { PluginContributions } from "../../../../plugins/contributions";
 import { getWidget } from "../../registry";
-import { declaredWidget, resetLegacyIdWarnings } from "../declared-widgets";
+import {
+  cardQueryFor,
+  declaredWidget,
+  resetLegacyIdWarnings,
+} from "../declared-widgets";
 import { dashboard, revenue } from "./plugin/widgets";
 
 function plugin(
@@ -68,6 +72,22 @@ describe("startup with plugins that declare widgets", () => {
     // the admin reads holds none of them, and core's own cards as before.
     expect(getWidget("acme/orders-by-state")).toBeUndefined();
     expect(getWidget("core/recently-edited")).toBeDefined();
+  });
+
+  it("builds a card's query under the slug a site renamed the plugin's collection to", () => {
+    const shop = definePlugin({
+      name: "@acme/shop",
+      version: "1.0.0",
+      nextly: "*",
+      contributes: {
+        collections: [{ slug: "orders", fields: [] }],
+        dashboard,
+      },
+    });
+    resetWidgetRegistries([shop.rename!({ orders: "sales" })]);
+    expect(
+      cardQueryFor("acme/recent-orders", { collection: "orders" })
+    ).toMatchObject({ source: "collection:sales" });
   });
 
   it("registers nothing from a disabled plugin", () => {

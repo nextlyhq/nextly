@@ -21,16 +21,13 @@ import { isValidWidgetId } from "../definition";
 import { MAX_WIDGET_SETTINGS, widgetSettingsProblem } from "../settings";
 
 import type { WidgetWidth } from "./define-widget";
-import {
-  CORE_DISPLAYS,
-  displayDataProblem,
-  type CoreDisplay,
-} from "./displays";
+import { CORE_DISPLAYS, displayDataProblem, isCoreDisplay } from "./displays";
 import {
   DEPENDENT_SETTING_TYPES,
   fitsNewSetting,
   NEW_SETTING_TYPES,
 } from "./setting-builders";
+import { transportableProblem } from "./transportable";
 
 /** One thing wrong with one declaration, said where an author reads it. */
 export interface WidgetDeclarationFault {
@@ -93,8 +90,19 @@ const nonBlank = z.string().trim().min(1);
 const isFunction = (value: unknown): boolean => typeof value === "function";
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
-const quote = (value: unknown): string =>
-  JSON.stringify(value) ?? String(value);
+/**
+ * A value as a fault quotes it. Total, because the value is whatever a plain
+ * JavaScript declaration holds: `JSON.stringify` throws on a bigint or a
+ * cycle, and the fault must still be reported, with every other.
+ */
+function quote(value: unknown): string {
+  if (typeof value === "bigint") return `${value}n`;
+  try {
+    return JSON.stringify(value) ?? String(value);
+  } catch {
+    return `a ${typeof value} that cannot be written out`;
+  }
+}
 
 /** One line of text: no line break anywhere in it. */
 const oneLine = (text: string): boolean => !/[\r\n]/.test(text);
@@ -113,10 +121,6 @@ function isAdminRelative(link: unknown): boolean {
     !link.includes("\\")
   );
 }
-
-const isCoreDisplay = (value: unknown): value is CoreDisplay =>
-  typeof value === "string" &&
-  (CORE_DISPLAYS as readonly string[]).includes(value);
 
 /**
  * Everything wrong with one declaration, in field order.
@@ -199,12 +203,21 @@ function requiredTextProblem(
     : `${field} must be a non-empty string`;
 }
 
-/** A core display's example must have the shape that display draws. */
+/**
+ * An example must reach the browser as itself, since the admin draws it as a
+ * preview, and a core display's example must have the shape that display
+ * draws.
+ */
 function exampleProblem(
   example: unknown,
   display: unknown
 ): string | undefined {
-  if (example === undefined || !isCoreDisplay(display)) return undefined;
+  if (example === undefined) return undefined;
+  const untransportable = transportableProblem(example);
+  if (untransportable !== undefined) {
+    return `example cannot be sent to the browser as it is: ${untransportable.replace("the value", "example")}`;
+  }
+  if (!isCoreDisplay(display)) return undefined;
   const mismatch = displayDataProblem(display, example);
   return mismatch === undefined
     ? undefined

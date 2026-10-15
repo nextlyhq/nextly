@@ -11,10 +11,13 @@
  * @module plugins/dashboard-declarations
  */
 
-import type { LegacyWidgetIds } from "../domains/widgets/declaration/declared-widgets";
-import type { WidgetDeclarationGroup } from "../domains/widgets/declaration/validate";
+import type {
+  DeclaredWidgetGroup,
+  LegacyWidgetIds,
+} from "../domains/widgets/declaration/declared-widgets";
 
 import type { PluginDefinition } from "./plugin-context";
+import { resolvePluginSelf } from "./self";
 
 /** How a fault names the plugin it is about. */
 export const pluginOwner = (plugin: PluginDefinition): string =>
@@ -27,15 +30,20 @@ const enabled = (plugins: readonly PluginDefinition[]) =>
  * Each enabled plugin's declared widgets, as given: whatever sits under
  * `contributes.dashboard.widgets` is handed on unchecked, since startup checks
  * every declaration together and names whatever is wrong.
+ *
+ * With each, the slugs the plugin's own collections were renamed to, read from
+ * `resolvePluginSelf` as `ctx.self` is: a widget's query names a collection as
+ * the plugin declared it, and the site may have renamed it.
  */
 export function pluginWidgetDeclarationGroups(
   plugins: readonly PluginDefinition[]
-): WidgetDeclarationGroup[] {
+): DeclaredWidgetGroup[] {
   return enabled(plugins)
     .filter(plugin => plugin.contributes?.dashboard !== undefined)
     .map(plugin => ({
       owner: pluginOwner(plugin),
       declarations: plugin.contributes?.dashboard?.widgets,
+      collections: resolvePluginSelf(plugin).collections,
     }));
 }
 

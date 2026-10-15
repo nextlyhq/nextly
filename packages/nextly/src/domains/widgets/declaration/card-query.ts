@@ -96,38 +96,83 @@ export function resolveCardSettings(
 }
 
 /**
- * The query core runs for one card, or `undefined` when there is none: a
- * widget whose data is not a query written from its settings, or a card whose
- * query names no collection yet.
+ * The query core runs for one card, or `undefined` when there is none yet: a
+ * widget whose data is not a query written from its settings, or a card with
+ * a setting that has no value (a Collection setting is given one when a card
+ * is placed).
  *
- * The declaration's query function is handed the card's resolved values, and
- * the collection it names becomes core's `collection:<slug>` source. Nothing is
- * checked here beyond that: the endpoint that runs a query validates it, as
- * the person asking, whoever wrote it.
+ * The query function is not run until every setting it is handed has a value:
+ * its settings are typed as always present, so a valid widget may read one
+ * without a check, and would throw on a value that is not there.
+ *
+ * The collection it names becomes core's `collection:<slug>` source, through
+ * `collections` when the owner's collection was renamed. An answer that is not
+ * a query is refused here, naming why; whether the query can run is checked
+ * by the endpoint that runs it, as the person asking.
  */
 export function buildCardQuery(
   declaration: CardQueryDeclaration,
-  stored: Record<string, unknown> | undefined
+  stored: Record<string, unknown> | undefined,
+  collections?: Readonly<Record<string, string>>
 ): WidgetQuery | undefined {
   const data = declaration.data;
   if (!isQuerySource(data)) return undefined;
   const settings = resolveCardSettings(declaration.settings, stored);
-  const answer = data.query({ settings });
-  // A query function written in plain JavaScript may answer anything; only an
-  // object can be a query, and destructuring anything else fails unreadably.
+  const unset = declaredSettings(declaration.settings).some(
+    ([name]) => settings[name] === undefined
+  );
+  if (unset) return undefined;
+  const { collection, ...rest } = queryAnswer(data.query({ settings }));
+  return { ...rest, source: `collection:${renamed(collection, collections)}` };
+}
+
+/** A refusal of what a query function answered, naming why. */
+const notAQuery = (reason: string): NextlyError =>
+  new NextlyError({
+    code: "INTERNAL_ERROR",
+    publicMessage: "An unexpected error occurred.",
+    logMessage: reason,
+  });
+
+/**
+ * What a query function answered, once it is known to be a query naming its
+ * collection. A function written in plain JavaScript may answer anything:
+ * `null`, which fails to destructure unreadably, or a promise, which has no
+ * collection and would otherwise look like a card not yet placed.
+ */
+function queryAnswer(answer: unknown): ContentQuery & { collection: string } {
   if (!isRecord(answer)) {
-    throw new NextlyError({
-      code: "INTERNAL_ERROR",
-      publicMessage: "An unexpected error occurred.",
-      logMessage: `it answered ${answer === null ? "null" : typeof answer}, not a query`,
-    });
+    throw notAQuery(
+      `it answered ${answer === null ? "null" : typeof answer}, not a query`
+    );
   }
-  const { collection, ...rest } = answer;
-  // No query yet for a card whose collection is not chosen: the Collection
-  // setting has no starting value, and a card is given one when it is placed.
-  if (typeof collection !== "string" || collection.trim() === "")
-    return undefined;
-  return { ...rest, source: `collection:${collection}` };
+  if (typeof answer.then === "function") {
+    throw notAQuery(
+      "it answered a promise: a query function returns its query, and is not async"
+    );
+  }
+  const { collection } = answer;
+  if (typeof collection !== "string" || collection.trim() === "") {
+    throw notAQuery("it named no collection, though every setting has a value");
+  }
+  // Checked as far as this module reads it; the rest is the query endpoint's.
+  return answer as ContentQuery & { collection: string };
+}
+
+/**
+ * The slug the site uses for a collection a query names: the owner's renamed
+ * one where `.rename()` moved it, and the name as written otherwise. Trimmed,
+ * as a slug never carries spaces. `Object.hasOwn`, since a plugin may own a
+ * collection named `constructor`.
+ */
+function renamed(
+  collection: string,
+  collections: Readonly<Record<string, string>> | undefined
+): string {
+  const slug = collection.trim();
+  return collections !== undefined && Object.hasOwn(collections, slug)
+    ? collections[slug]
+    : slug;
 }
 
 /**

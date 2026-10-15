@@ -29,7 +29,8 @@ import { validateWidgetQuery, type WidgetQuery } from "../query";
 import { refreshSingleSources } from "../single-sources";
 
 import { buildCardQuery } from "./card-query";
-import { listDeclaredWidgets } from "./declared-widgets";
+import { type DeclaredWidget, listDeclaredWidgets } from "./declared-widgets";
+import { displayOpProblem, isCoreDisplay } from "./displays";
 import {
   widgetDeclarationsRefused,
   type WidgetDeclarationFault,
@@ -77,12 +78,12 @@ function queryProblem(query: unknown): string | undefined {
  * one that throws, or answers something that is not a query, is a fault in
  * that declaration, reported with every other, not a crash of startup.
  */
-function startingQuery(declaration: Parameters<typeof buildCardQuery>[0]): {
+function startingQuery({ declaration, collections }: DeclaredWidget): {
   query?: WidgetQuery;
   failure?: string;
 } {
   try {
-    return { query: buildCardQuery(declaration, undefined) };
+    return { query: buildCardQuery(declaration, undefined, collections) };
   } catch (error) {
     const reason =
       error instanceof NextlyError && error.logMessage !== undefined
@@ -92,6 +93,55 @@ function startingQuery(declaration: Parameters<typeof buildCardQuery>[0]): {
           : String(error);
     return { failure: reason };
   }
+}
+
+/**
+ * What is wrong with one declared widget's starting query, as a fault, or
+ * `undefined`. A query over the database's content that cannot run is warned
+ * about here instead, and is no fault.
+ */
+function startingQueryFault(
+  declared: DeclaredWidget,
+  content: CodeDefinedContent
+): string | undefined {
+  const { query, failure } = startingQuery(declared);
+  if (failure !== undefined) {
+    return `its query function, run with its starting settings, failed: ${failure}`;
+  }
+  if (query === undefined) return undefined;
+  // What a core display draws is fixed by the code, whatever the database
+  // holds: the types refuse the pairing, and plain JavaScript is refused here.
+  const { display } = declared.declaration;
+  if (isCoreDisplay(display)) {
+    const mismatch = displayOpProblem(display, query.op);
+    if (mismatch !== undefined) return mismatch;
+  }
+  const problem = queryProblem(query);
+  if (problem === undefined) return undefined;
+  if (fixedByCode(query.source, content)) {
+    return `its query, built from its starting settings, cannot run: ${problem}`;
+  }
+  warnMissingContent(declared, query.source, problem);
+  return undefined;
+}
+
+/** The warning for a query over the database's content that cannot run. */
+function warnMissingContent(
+  { owner, declaration }: DeclaredWidget,
+  source: string,
+  problem: string
+): void {
+  getNextlyLogger().warn({
+    kind: "widget-query-names-missing-content",
+    owner,
+    widget: declaration.id,
+    source,
+    message:
+      `${owner}, widget "${declaration.id}": its query, built from its ` +
+      `starting settings, cannot run (${problem}). The content it names ` +
+      "is the database's, not the code's, so startup goes on; its cards " +
+      "will show an error until the content or the widget is changed.",
+  });
 }
 
 /**
@@ -106,39 +156,13 @@ export async function checkDeclaredWidgetReferences(
   // synced content only now.
   await Promise.all([refreshCollectionSources(), refreshSingleSources()]);
 
-  const faults: WidgetDeclarationFault[] = [];
-  for (const { owner, declaration } of listDeclaredWidgets()) {
-    const { query, failure } = startingQuery(declaration);
-    if (failure !== undefined) {
-      faults.push({
-        owner,
-        widget: declaration.id,
-        problem: `its query function, run with its starting settings, failed: ${failure}`,
-      });
-      continue;
+  const faults: WidgetDeclarationFault[] = listDeclaredWidgets().flatMap(
+    declared => {
+      const problem = startingQueryFault(declared, content);
+      return problem === undefined
+        ? []
+        : [{ owner: declared.owner, widget: declared.declaration.id, problem }];
     }
-    if (query === undefined) continue;
-    const problem = queryProblem(query);
-    if (problem === undefined) continue;
-    if (fixedByCode(query.source, content)) {
-      faults.push({
-        owner,
-        widget: declaration.id,
-        problem: `its query, built from its starting settings, cannot run: ${problem}`,
-      });
-    } else {
-      getNextlyLogger().warn({
-        kind: "widget-query-names-missing-content",
-        owner,
-        widget: declaration.id,
-        source: query.source,
-        message:
-          `${owner}, widget "${declaration.id}": its query, built from its ` +
-          `starting settings, cannot run (${problem}). The content it names ` +
-          "is the database's, not the code's, so startup goes on; its cards " +
-          "will show an error until the content or the widget is changed.",
-      });
-    }
-  }
+  );
   if (faults.length > 0) throw widgetDeclarationsRefused(faults);
 }

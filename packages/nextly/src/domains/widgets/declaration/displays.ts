@@ -14,7 +14,7 @@ import { z } from "zod";
 
 import { TIMESERIES_INTERVALS } from "../../collections/query/timeseries-interval";
 import {
-  type ARCHETYPE_OPS,
+  ARCHETYPE_OPS,
   DATA_ARCHETYPES,
   type DataWidgetArchetype,
 } from "../definition";
@@ -29,6 +29,26 @@ export const CORE_DISPLAYS = DATA_ARCHETYPES;
 
 /** One of core's displays that draws data. */
 export type CoreDisplay = DataWidgetArchetype;
+
+/** Whether a value names one of core's displays. */
+export const isCoreDisplay = (value: unknown): value is CoreDisplay =>
+  typeof value === "string" &&
+  (CORE_DISPLAYS as readonly string[]).includes(value);
+
+/**
+ * Why a core display cannot draw what a query with this op answers, or
+ * `undefined` when it can: the run-time half of {@link DisplayOp}, read from
+ * the same table, for a declaration no type checked.
+ */
+export function displayOpProblem(
+  display: CoreDisplay,
+  op: unknown
+): string | undefined {
+  const ops: readonly string[] = ARCHETYPE_OPS[display];
+  return typeof op === "string" && ops.includes(op)
+    ? undefined
+    : `its query's operation ${JSON.stringify(op) ?? String(op)} is not one the "${display}" display draws (${ops.join(", ")})`;
+}
 
 /**
  * Which query answer each display draws, read from the table registration

@@ -157,6 +157,29 @@ describe("a widget declaration as startup receives it", () => {
     ).toEqual([]);
   });
 
+  it("refuses an example that cannot be sent to the browser as it is", () => {
+    const row = (value: unknown) =>
+      valid({ display: "list", example: { items: [{ id: value }] } });
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+    // The control: a row of plain values passes.
+    expect(problemsOf(row("a"))).toEqual([]);
+    for (const value of [1n, new Date(0), circular, () => 1, Symbol("s")]) {
+      const [problem] = problemsOf(row(value));
+      expect(problem, String(typeof value)).toContain(
+        "example cannot be sent to the browser"
+      );
+    }
+  });
+
+  it("names a value it cannot write out without failing to report it", () => {
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+    // `JSON.stringify` throws on both; the fault must still be reported.
+    expect(problemsOf(valid({ width: 1n }))[0]).toContain("got 1n");
+    expect(problemsOf(valid({ width: circular }))[0]).toContain("width");
+  });
+
   it("refuses a description of more than one line or 80 characters", () => {
     expect(problemsOf(valid({ description: "One\nTwo" }))[0]).toContain(
       "one line"

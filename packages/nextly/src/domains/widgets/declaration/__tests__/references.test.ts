@@ -181,6 +181,61 @@ describe("a declared widget's starting query, once content is synced", () => {
     );
   });
 
+  it("refuses a starting query whose operation its core display cannot draw", async () => {
+    // Plain JavaScript: the types refuse a metric over a list at compile time.
+    const metricOfList = {
+      ...listing("acme/a", "orders", "state"),
+      display: "metric",
+    };
+    registerWidgetDeclarations([{ owner: SHOP, declarations: [metricOfList] }]);
+    let refused: unknown;
+    try {
+      await checkDeclaredWidgetReferences(CODE);
+    } catch (error) {
+      refused = error;
+    }
+    expect(refused).toBeInstanceOf(NextlyError);
+    expect((refused as NextlyError).logMessage).toContain(
+      `${SHOP}, widget "acme/a": its query's operation "list" is not one the "metric" display draws (count)`
+    );
+    // The control: the same query under the display that draws it passes.
+    clearDeclaredWidgets();
+    await expect(check(listing("acme/a", "orders", "state"))).resolves.toBe(
+      undefined
+    );
+  });
+
+  it("checks a plugin's renamed collection under the slug the site uses", async () => {
+    // The plugin declared `orders`; the site renamed it `sales`, so only
+    // `sales` exists, and the code defines it.
+    clearSources();
+    registerBuiltInSources([
+      { slug: "sales", fields: [{ name: "state", type: "text" }] },
+    ]);
+    registerWidgetDeclarations([
+      {
+        owner: SHOP,
+        declarations: [listing("acme/a", "orders", "missing")],
+        collections: { orders: "sales" },
+      },
+    ]);
+    let refused: unknown;
+    try {
+      await checkDeclaredWidgetReferences({
+        collections: new Set(["sales"]),
+        singles: new Set(),
+      });
+    } catch (error) {
+      refused = error;
+    }
+    // Refused, not warned about: the renamed collection is the code's, and its
+    // field is missing.
+    expect((refused as NextlyError).logMessage).toContain(
+      'widget "acme/a": its query, built from its starting settings, cannot run'
+    );
+    expect(warn).not.toHaveBeenCalled();
+  });
+
   it("reports every refused widget at once", async () => {
     let refused: unknown;
     try {

@@ -6,7 +6,9 @@
  * The declaration is built with `defineWidget` and the real builders, so the
  * settings it holds are exactly what a plugin's would be.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+import { NextlyError } from "../../../../errors/nextly-error";
 
 import { buildCardQuery, resolveCardSettings } from "../card-query";
 import { defineWidget } from "../define-widget";
@@ -76,6 +78,72 @@ describe("the query core runs for a card", () => {
   it("is not built for a card whose collection is not chosen yet", () => {
     expect(buildCardQuery(recentEntries, { items: 3 })).toBeUndefined();
   });
+
+  it("does not run the query function while a setting it reads has no value", () => {
+    // Typed as a string, so a valid widget may call a method on it: run before
+    // a card's collection is chosen, this would throw.
+    const query = vi.fn(
+      ({ settings }: { settings: { collection: string } }) => ({
+        collection: settings.collection.trim(),
+        op: "count" as const,
+      })
+    );
+    const trims = defineWidget({
+      id: "test/trims",
+      title: "Trims",
+      description: "Counts one collection",
+      category: "Test",
+      widths: ["full"],
+      width: "full",
+      settings: { collection: settings.collection() },
+      data: { query },
+      display: "metric",
+    });
+    expect(buildCardQuery(trims, undefined)).toBeUndefined();
+    expect(query).not.toHaveBeenCalled();
+    expect(buildCardQuery(trims, { collection: " posts " })).toMatchObject({
+      source: "collection:posts",
+    });
+  });
+
+  it("names a collection the site renamed by the slug the site uses", () => {
+    const base = { collection: "orders", sort: "title", range: "7d", items: 1 };
+    expect(
+      buildCardQuery(recentEntries, base, { orders: "sales" })
+    ).toMatchObject({ source: "collection:sales" });
+    // Only the owner's renamed collections move; any other is as written.
+    expect(
+      buildCardQuery(
+        recentEntries,
+        { ...base, collection: "posts" },
+        {
+          orders: "sales",
+        }
+      )
+    ).toMatchObject({ source: "collection:posts" });
+  });
+
+  it.each([
+    [
+      "answers a promise",
+      async () => ({ collection: "posts", op: "count" }),
+      "a promise",
+    ],
+    ["names no collection", () => ({ op: "count" }), "named no collection"],
+  ])(
+    "refuses a plain JavaScript query function that %s",
+    (_label, query, reason) => {
+      const declaration = { data: { query }, settings: {} };
+      let thrown: unknown;
+      try {
+        buildCardQuery(declaration, undefined);
+      } catch (error) {
+        thrown = error;
+      }
+      expect(thrown).toBeInstanceOf(NextlyError);
+      expect((thrown as NextlyError).logMessage).toContain(reason);
+    }
+  );
 
   it("is not built for a widget whose data is a data function", () => {
     const fn = defineWidget({

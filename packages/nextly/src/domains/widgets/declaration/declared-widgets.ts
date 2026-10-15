@@ -31,10 +31,22 @@ import {
   type WidgetDeclarationGroup,
 } from "./validate";
 
+/**
+ * One owner's declarations, with the slugs its own collections were renamed
+ * to: a plugin's `.rename()` moves a collection, and the queries its widgets
+ * write still name it as the plugin declared it.
+ */
+export interface DeclaredWidgetGroup extends WidgetDeclarationGroup {
+  /** Declared slug to the slug the site uses, for the owner's collections. */
+  readonly collections?: Readonly<Record<string, string>>;
+}
+
 /** A declaration as startup kept it, with who declared it. */
 export interface DeclaredWidget {
   readonly owner: string;
   readonly declaration: DeclaredWidgetShape;
+  /** The owner's renamed collections, as its group carried them. */
+  readonly collections?: Readonly<Record<string, string>>;
 }
 
 /** The fields of a declaration this module reads, checked at startup. */
@@ -42,6 +54,7 @@ interface DeclaredWidgetShape {
   readonly id: string;
   readonly settings?: Readonly<Record<string, Record<string, unknown>>>;
   readonly data: unknown;
+  readonly display?: unknown;
 }
 
 /** The ids one owner declares in today's shape. */
@@ -79,7 +92,8 @@ function sharedWithLegacy(
   }
   return groups.flatMap(({ owner, declarations }) =>
     (Array.isArray(declarations) ? declarations : []).flatMap(declaration => {
-      const id = (declaration as { id?: unknown }).id;
+      // An entry that is not an object is a fault already; it has no id here.
+      const id = isRecord(declaration) ? declaration.id : undefined;
       const oldOwner = typeof id === "string" ? oldOwners.get(id) : undefined;
       return oldOwner === undefined
         ? []
@@ -92,6 +106,31 @@ function sharedWithLegacy(
           ];
     })
   );
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+/**
+ * Each declaration copied once, property by property, before anything reads
+ * it, so what is checked is what is kept.
+ *
+ * The declaration is the plugin's object, and an accessor or a proxy on it
+ * could answer one id while it is checked and another when it is stored,
+ * past the reserved namespaces and the duplicate check. The copy is shallow:
+ * the functions it holds are kept as they are, since running them is their
+ * purpose.
+ */
+function snapshot(group: DeclaredWidgetGroup): DeclaredWidgetGroup {
+  const { declarations } = group;
+  return {
+    ...group,
+    declarations: Array.isArray(declarations)
+      ? declarations.map((entry: unknown) =>
+          isRecord(entry) ? { ...entry } : entry
+        )
+      : declarations,
+  };
 }
 
 const WARNED_LEGACY_IDS = new Set<string>();
@@ -135,9 +174,10 @@ function warnSharedLegacyIds(legacy: readonly LegacyWidgetIds[]): void {
  * `legacy` is the ids each plugin declares in today's shape.
  */
 export function registerWidgetDeclarations(
-  groups: readonly WidgetDeclarationGroup[],
+  given: readonly DeclaredWidgetGroup[],
   legacy: readonly LegacyWidgetIds[] = []
 ): void {
+  const groups = given.map(snapshot);
   const faults = [
     ...collectWidgetDeclarationFaults(groups),
     ...sharedWithLegacy(groups, legacy),
@@ -145,11 +185,15 @@ export function registerWidgetDeclarations(
   if (faults.length > 0) throw widgetDeclarationsRefused(faults);
   warnSharedLegacyIds(legacy);
 
-  for (const { owner, declarations } of groups) {
+  for (const { owner, declarations, collections } of groups) {
     // Every group is a list by now: one that was not is a fault, refused above.
     for (const raw of declarations as readonly unknown[]) {
       const declaration = raw as DeclaredWidgetShape;
-      store().set(declaration.id, { owner, declaration });
+      store().set(declaration.id, {
+        owner,
+        declaration,
+        ...(collections === undefined ? {} : { collections }),
+      });
     }
   }
 }
@@ -176,7 +220,7 @@ export function cardQueryFor(
   const declared = store().get(widgetId);
   return declared === undefined
     ? undefined
-    : buildCardQuery(declared.declaration, stored);
+    : buildCardQuery(declared.declaration, stored, declared.collections);
 }
 
 /** Forgets every declared widget. Called at boot before declaring again. */
