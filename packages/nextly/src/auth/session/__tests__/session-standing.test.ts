@@ -9,6 +9,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { container } from "../../../di/container";
+import type { NextlyError } from "../../../errors/nextly-error";
 import {
   SESSION_CUTOFF_SECONDS,
   SESSION_STANDING_TTL_MS,
@@ -290,10 +291,16 @@ describe("readSessionStanding before services are registered", () => {
     expect(boot).toHaveBeenCalledTimes(1);
   });
 
-  it("refuses to answer when nothing can start them", async () => {
-    // Failing closed: an unanswerable question is not a yes.
-    await expect(readSessionStanding("u1")).rejects.toMatchObject({
-      code: "INTERNAL_ERROR",
-    });
+  it("refuses to answer when nothing can start them, naming the fix", async () => {
+    // Failing closed: an unanswerable question is not a yes. An app's own
+    // route that reads a session before initialising Nextly lands here, so
+    // the operator is told the line that fixes it.
+    const refusal = await readSessionStanding("u1").then(
+      () => null,
+      (error: unknown) => error
+    );
+
+    expect(refusal).toMatchObject({ code: "CONFIGURATION_ERROR" });
+    expect((refusal as NextlyError).logMessage).toContain("getNextly");
   });
 });

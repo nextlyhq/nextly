@@ -76,6 +76,21 @@ describe("buildClaims", () => {
     expect(claims.sev).toBe(4);
   });
 
+  it("signs epoch zero when the caller gives none", () => {
+    // Code that builds its own claims predates the epoch. Zero is where every
+    // account starts, so its token works until the account's sessions are
+    // first ended, and not after.
+    const claims = buildClaims({
+      userId: "user_123",
+      email: "test@example.com",
+      name: "Test",
+      image: null,
+      roleIds: [],
+    });
+
+    expect(claims.sev).toBe(0);
+  });
+
   it("lets no custom field replace the session epoch", () => {
     // A custom user field named like the claim would otherwise decide which
     // of the account's tokens stay valid.

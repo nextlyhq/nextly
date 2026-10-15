@@ -17,7 +17,7 @@ There is no OAuth provider integration in the runtime. Authentication is local t
 
 Sessions use a two-token architecture:
 
-- **Access token** -- JWT signed with HS256 (jose), 15-minute TTL, stateless verification (no database hit). Sent as the HTTP-only `nextly_session` cookie.
+- **Access token** -- JWT signed with HS256 (jose), 15-minute TTL. Its signature is verified, and its account is checked to still be allowed to use it, read from the database at most once every five seconds per account (see [When an account may hold a session](#when-an-account-may-hold-a-session)). Sent as the HTTP-only `nextly_session` cookie.
 - **Refresh token** -- opaque random string, 7-day TTL, SHA-256 hashed in the database for revocation support. Sent as the HTTP-only `nextly_refresh` cookie, scoped to `/admin/api/auth` so that both refresh and sign-out receive it.
 
 When the access token expires, the admin UI silently refreshes it using the refresh token. Users only see a re-login prompt once the refresh token itself expires (7 days of inactivity by default). Every refresh consumes the old refresh token and issues a new one. A token whose row is gone is refused and logged as `refresh-token-not-found` (see [Refresh-token rotation](#refresh-token-rotation)).
@@ -26,11 +26,23 @@ Cookies are scoped to `/admin/*` so Nextly auth never collides with frontend app
 
 ### Reading the session in code
 
+Reading a session checks its account in the database, so Nextly must be
+initialised in the process first. Nextly's own routes start it themselves. In
+your own route, call `await getNextly({ config })` before `getSession` or
+`requireAuth`, or initialise Nextly at startup in `instrumentation.ts` with
+`createRegister(config)`. A session read in a process where Nextly has not
+been initialised throws a configuration error that says so, rather than
+answering without the check.
+
 ```typescript
 // app/api/my-route/route.ts
+import { getNextly } from "nextly";
 import { getSession } from "nextly/auth";
 
+import config from "../../../nextly.config";
+
 export async function GET(req: Request) {
+  await getNextly({ config });
   const result = await getSession(req, process.env.NEXTLY_SECRET ?? "");
 
   if (!result.authenticated) {
@@ -61,9 +73,13 @@ Custom user fields defined via `defineConfig({ users: { fields } })` are also su
 ### Requiring authentication
 
 ```typescript
+import { getNextly } from "nextly";
 import { requireAuth } from "nextly/auth";
 
+import config from "../../../nextly.config";
+
 export async function GET(req: Request) {
+  await getNextly({ config });
   // Throws AuthenticationError if no valid session.
   const user = await requireAuth(req, process.env.NEXTLY_SECRET ?? "");
   return Response.json({ email: user.email });
@@ -168,6 +184,7 @@ The seeded `Super Admin` role bypasses every check. Other roles you create are g
 ### Checking roles in code
 
 ```typescript
+import { getNextly } from "nextly";
 import {
   getSession,
   hasRole,
@@ -175,7 +192,10 @@ import {
   hasAllRoles,
 } from "nextly/auth";
 
+import config from "../../../nextly.config";
+
 export async function GET(req: Request) {
+  await getNextly({ config });
   const result = await getSession(req, process.env.NEXTLY_SECRET ?? "");
   if (!result.authenticated) {
     return Response.json({ error: "Unauthorized" }, { status: 401 });

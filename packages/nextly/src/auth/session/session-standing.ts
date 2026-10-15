@@ -229,12 +229,24 @@ interface StandingSelect {
  * none is registered and something can start them.
  *
  * Throws, rather than answering, when no database can be reached, because a
- * question nobody could answer is not a yes.
+ * question nobody could answer is not a yes. That is a process where Nextly
+ * has not been initialised and no Nextly route has been loaded to start it,
+ * such as an app's own route running in a function of its own, so the error
+ * names the one line that fixes it, as `getCachedNextly()` does.
  */
 async function standingAdapter(): Promise<DrizzleAdapter> {
   if (!adapterIsRegistered() && boot) await boot();
   if (!adapterIsRegistered()) {
-    throw NextlyError.internal({
+    throw new NextlyError({
+      code: "CONFIGURATION_ERROR",
+      statusCode: 500,
+      publicMessage: "Server configuration error.",
+      logMessage:
+        "A session was read before Nextly was initialised in this process, " +
+        "so whether its account may still use it cannot be checked. Call " +
+        "`await getNextly({ config })` before `getSession` or `requireAuth`, " +
+        "or initialise Nextly in `instrumentation.ts` with " +
+        "`createRegister(config)`.",
       logContext: { reason: "session-standing-unreadable" },
     });
   }

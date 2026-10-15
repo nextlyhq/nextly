@@ -57,12 +57,13 @@ export interface BuildClaimsInput {
   image: string | null;
   roleIds: string[];
   /**
-   * The account's session epoch as the user row holds it now. Required, so a
-   * caller that minted a session without reading it fails to compile rather
-   * than signing a token every later check refuses, or one it admits after
-   * the sessions it belongs to were ended.
+   * The account's session epoch as the user row holds it now. Every core
+   * caller passes it. Optional so code that builds its own claims keeps
+   * compiling: left out, it is zero, so the token works until the account's
+   * sessions are first ended and is refused from then on, which errs toward
+   * signing the person out rather than keeping them in.
    */
-  sessionEpoch: number;
+  sessionEpoch?: number;
   customFields?: Record<string, unknown>;
 }
 
@@ -77,7 +78,7 @@ export function buildClaims(input: BuildClaimsInput): Record<string, unknown> {
     name: input.name,
     image: input.image,
     roleIds: input.roleIds,
-    [SESSION_EPOCH_CLAIM]: input.sessionEpoch,
+    [SESSION_EPOCH_CLAIM]: input.sessionEpoch ?? 0,
   };
 
   // Spread custom user fields (from user_ext table)
