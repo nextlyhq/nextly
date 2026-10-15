@@ -459,20 +459,28 @@ export function collectWidgetDeclarationFaults(
 /**
  * Refuses startup when any declaration cannot work, with every fault in one
  * message.
- *
- * The public message stays generic, as every boot-time plugin error's does;
- * the list an author acts on goes to the log a boot failure is read in.
  */
 export function assertWidgetDeclarations(
   groups: readonly WidgetDeclarationGroup[]
 ): void {
   const faults = collectWidgetDeclarationFaults(groups);
-  if (faults.length === 0) return;
+  if (faults.length > 0) throw widgetDeclarationsRefused(faults);
+}
+
+/**
+ * The startup error for a list of faults.
+ *
+ * The public message stays generic, as every boot-time plugin error's does;
+ * the list an author acts on goes to the log a boot failure is read in.
+ */
+export function widgetDeclarationsRefused(
+  faults: readonly WidgetDeclarationFault[]
+): NextlyError {
   const count =
     faults.length === 1
       ? "1 widget declaration cannot work"
       : `${faults.length} widget declarations cannot work`;
-  throw new NextlyError({
+  return new NextlyError({
     code: "NEXTLY_PLUGIN_ADMIN_WIDGET_INVALID",
     publicMessage: "Plugin configuration is invalid.",
     logMessage: [
