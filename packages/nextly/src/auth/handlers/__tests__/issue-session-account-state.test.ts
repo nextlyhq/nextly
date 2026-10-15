@@ -24,6 +24,7 @@ interface State {
   lockedUntil: Date | null;
   emailVerified: Date | null;
   passwordUpdatedAt?: Date | null;
+  sessionEpoch?: number;
 }
 
 /**
@@ -266,6 +267,47 @@ describe("mintSession against a revocation during the mint", () => {
       "password-changed"
     );
     expect(d.rows.committed).toHaveLength(0);
+  });
+
+  it("refuses when the sessions were ended after the first gate, within the same second", async () => {
+    // A password set in the same second as the first read leaves the stored
+    // time unchanged on MySQL and SQLite, so the epoch is what shows the
+    // revocation. Missed, the refresh row written here would outlive it.
+    const d = deps(usable, { ...usable, sessionEpoch: 1 });
+
+    const refusal = await mintSession(user, d, req, { strategy: "test" }).then(
+      () => null,
+      (err: unknown) => err
+    );
+
+    expect((refusal as NextlyError).code).toBe("AUTH_INVALID_CREDENTIALS");
+    expect(d.rows.committed).toHaveLength(0);
+  });
+
+  it("judges against the epoch the sign-in proved, not a later read", async () => {
+    // The password was proven at epoch 0; the gate's own read already sees
+    // the epoch a same-second reset raised. Comparing with the gate's read
+    // would pass, and sign in the old password's holder.
+    const d = deps({ ...usable, sessionEpoch: 1 });
+
+    await expect(
+      mintSession(user, d, req, {
+        strategy: "password",
+        passwordUpdatedAt: usable.passwordUpdatedAt,
+        sessionEpoch: 0,
+      })
+    ).rejects.toSatisfy(NextlyError.is);
+    expect(d.rows.committed).toHaveLength(0);
+  });
+
+  it("signs the epoch it compares under the lock", async () => {
+    // The control: unchanged, the session is issued, carrying that epoch.
+    const d = deps({ ...usable, sessionEpoch: 3 });
+
+    const minted = await mintSession(user, d, req, { strategy: "test" });
+
+    expect(decodeJwt(minted.body.accessToken).sev).toBe(3);
+    expect(d.rows.committed).toHaveLength(1);
   });
 
   it("judges against the password version the sign-in proved, not a later read", async () => {

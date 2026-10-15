@@ -27,7 +27,11 @@ const LATER = new Date("2026-02-01T00:00:00Z");
  * Login deps whose credential row says the password was set at `PROVEN`,
  * while every later read of the account says `gateReads`.
  */
-async function loginDeps(gateReads: Date, hooks = new AuthHookRegistry()) {
+async function loginDeps(
+  gateReads: Date,
+  hooks = new AuthHookRegistry(),
+  gateEpoch = 0
+) {
   const passwordHash = await hashPassword("Pass1234!");
   const credentials = {
     findUserByEmail: vi.fn().mockResolvedValue({
@@ -58,6 +62,7 @@ async function loginDeps(gateReads: Date, hooks = new AuthHookRegistry()) {
     emailVerified: PROVEN,
     passwordUpdatedAt: gateReads,
     ...fixtureIdentity,
+    sessionEpoch: gateEpoch,
   });
   const rows = fakeSessionRows(state);
   const deps = {
@@ -89,6 +94,7 @@ async function loginDeps(gateReads: Date, hooks = new AuthHookRegistry()) {
             image: u.image,
             mustChangePassword: u.mustChangePassword,
             passwordUpdatedAt: u.passwordUpdatedAt,
+            sessionEpoch: u.sessionEpoch,
           };
         },
       }),
@@ -127,6 +133,34 @@ describe("the password version a sign-in proved", () => {
 
     expect(res.status).toBe(401);
     expect(rows.committed).toHaveLength(0);
+  });
+
+  it("refuses the session when the sessions were ended in the second the password was proven", async () => {
+    // The password time reads the same, as a reset within the same second
+    // leaves it on MySQL and SQLite; only the epoch read beside the hash
+    // shows the proof is from before the reset.
+    const { deps, rows } = await loginDeps(PROVEN, new AuthHookRegistry(), 1);
+
+    const res = await handleLogin(loginRequest(), deps);
+
+    expect(res.status).toBe(401);
+    expect(rows.committed).toHaveLength(0);
+  });
+
+  it("signs the proven epoch into the token a second factor pauses on", async () => {
+    const hooks = new AuthHookRegistry();
+    hooks.add({
+      afterAuthenticate: user => ({
+        challenge: { id: "totp", userId: String(user.id) },
+      }),
+    });
+    const { deps } = await loginDeps(PROVEN, hooks, 1);
+
+    const res = await handleLogin(loginRequest(), deps);
+    const body = (await res.json()) as { pendingToken: string };
+    const claims = await verifyPendingToken(body.pendingToken, SECRET);
+
+    expect(claims.sessionEpoch).toBe(0);
   });
 
   it("issues the session when the password proven is the current one", async () => {

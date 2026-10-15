@@ -11,6 +11,7 @@ interface State {
   lockedUntil: Date | null;
   emailVerified: Date | null;
   passwordUpdatedAt?: Date | null;
+  sessionEpoch?: number;
 }
 
 /**
@@ -190,6 +191,17 @@ describe("refresh rotation spends the presented token once", () => {
     [
       "given a new password",
       { ...usable, passwordUpdatedAt: new Date("2026-02-01T00:00:00Z") },
+    ],
+    // The same password time and a raised epoch: a password set within the
+    // same second, which MySQL and SQLite store whole, so only the epoch can
+    // tell the rotation the account's sessions were ended.
+    [
+      "whose sessions were ended within the same second",
+      {
+        ...usable,
+        passwordUpdatedAt: new Date("2026-01-01T00:00:00Z"),
+        sessionEpoch: 1,
+      },
     ],
   ])(
     "refuses an account %s while the rotation was being prepared",

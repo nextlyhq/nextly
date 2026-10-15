@@ -8,6 +8,19 @@
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+// Whether services are registered, and the boot-migration gate, as this file
+// sets them: the check may read the database only once both say it is ready.
+const ready = vi.hoisted(() => ({
+  registered: false,
+  migrations: Promise.resolve() as Promise<void>,
+}));
+vi.mock("../../../di/register", () => ({
+  isServicesRegistered: () => ready.registered,
+}));
+vi.mock("../../../init/boot-migrations-gate", () => ({
+  awaitBootMigrations: () => ready.migrations,
+}));
+
 import { container } from "../../../di/container";
 import type { NextlyError } from "../../../errors/nextly-error";
 import {
@@ -57,9 +70,9 @@ describe("createSessionStandingCache", () => {
     const c = clock();
     const cache = createSessionStandingCache({ read, now: c.now });
 
-    await cache.standing("u1");
+    await cache.standing("u1", 0);
     c.advance(SESSION_STANDING_TTL_MS - 1);
-    await cache.standing("u1");
+    await cache.standing("u1", 0);
 
     expect(read).toHaveBeenCalledTimes(1);
   });
@@ -71,11 +84,11 @@ describe("createSessionStandingCache", () => {
     const c = clock();
     const cache = createSessionStandingCache({ read, now: c.now });
 
-    expect(await cache.standing("u1")).toEqual(ACTIVE);
+    expect(await cache.standing("u1", 0)).toEqual(ACTIVE);
     rows.u1 = { isActive: false, sessionEpoch: 1 };
     c.advance(SESSION_STANDING_TTL_MS);
 
-    expect(await cache.standing("u1")).toEqual({
+    expect(await cache.standing("u1", 0)).toEqual({
       isActive: false,
       sessionEpoch: 1,
     });
@@ -91,7 +104,10 @@ describe("createSessionStandingCache", () => {
     );
     const cache = createSessionStandingCache({ read });
 
-    const both = Promise.all([cache.standing("u1"), cache.standing("u1")]);
+    const both = Promise.all([
+      cache.standing("u1", 0),
+      cache.standing("u1", 0),
+    ]);
     release(ACTIVE);
 
     expect(await both).toEqual([ACTIVE, ACTIVE]);
@@ -107,8 +123,8 @@ describe("createSessionStandingCache", () => {
       .mockResolvedValueOnce(ACTIVE);
     const cache = createSessionStandingCache({ read });
 
-    await expect(cache.standing("u1")).rejects.toThrow("connection reset");
-    expect(await cache.standing("u1")).toEqual(ACTIVE);
+    await expect(cache.standing("u1", 0)).rejects.toThrow("connection reset");
+    expect(await cache.standing("u1", 0)).toEqual(ACTIVE);
     expect(read).toHaveBeenCalledTimes(2);
   });
 
@@ -118,11 +134,11 @@ describe("createSessionStandingCache", () => {
     const { rows, read } = table({ u1: ACTIVE });
     const cache = createSessionStandingCache({ read });
 
-    await cache.standing("u1");
+    await cache.standing("u1", 0);
     rows.u1 = { isActive: true, sessionEpoch: 1 };
     cache.forget("u1");
 
-    expect(await cache.standing("u1")).toEqual({
+    expect(await cache.standing("u1", 0)).toEqual({
       isActive: true,
       sessionEpoch: 1,
     });
@@ -143,26 +159,78 @@ describe("createSessionStandingCache", () => {
       .mockResolvedValue({ isActive: false, sessionEpoch: 1 });
     const cache = createSessionStandingCache({ read });
 
-    const early = cache.standing("u1");
+    const early = cache.standing("u1", 0);
     cache.forget("u1");
     release(ACTIVE);
     await early;
 
-    expect(await cache.standing("u1")).toEqual({
+    expect(await cache.standing("u1", 0)).toEqual({
       isActive: false,
       sessionEpoch: 1,
     });
     expect(read).toHaveBeenCalledTimes(2);
   });
 
-  it("keeps an account that no longer exists as refused, for the lifetime", async () => {
-    // A deleted account's token is refused, and the refusal costs no more
-    // reads than an answer for a live one does.
+  it("reads an account that no longer exists again on its next request", async () => {
+    // Only an active account's answer is kept. A refusal kept for the
+    // lifetime would refuse the account's next session too, had it come back.
     const { read } = table({});
     const cache = createSessionStandingCache({ read });
 
-    expect(await cache.standing("gone")).toBeNull();
-    expect(await cache.standing("gone")).toBeNull();
+    expect(await cache.standing("gone", 0)).toBeNull();
+    expect(await cache.standing("gone", 0)).toBeNull();
+    expect(read).toHaveBeenCalledTimes(2);
+  });
+
+  it("sees a reactivation at once, rather than refusing the new session", async () => {
+    // An old token checked while the account was off would otherwise leave
+    // `inactive` held, and the sign-in straight after the account is switched
+    // back on would be refused for the lifetime: GET /auth/session would
+    // then clear the cookie it had just been given.
+    const { rows, read } = table({ u1: { isActive: false, sessionEpoch: 1 } });
+    const cache = createSessionStandingCache({ read });
+
+    expect(await cache.standing("u1", 0)).toEqual({
+      isActive: false,
+      sessionEpoch: 1,
+    });
+    rows.u1 = { isActive: true, sessionEpoch: 1 };
+
+    expect(await cache.standing("u1", 1)).toEqual({
+      isActive: true,
+      sessionEpoch: 1,
+    });
+  });
+
+  it("reads again for a token newer than the answer it holds", async () => {
+    // A token carries only an epoch the row once held, so one newer than the
+    // held answer proves the answer stale: a password set on another
+    // instance, and a sign-in with the new password straight after.
+    const { rows, read } = table({ u1: ACTIVE });
+    const cache = createSessionStandingCache({ read });
+
+    await cache.standing("u1", 0);
+    rows.u1 = { isActive: true, sessionEpoch: 1 };
+
+    expect(await cache.standing("u1", 1)).toEqual({
+      isActive: true,
+      sessionEpoch: 1,
+    });
+    expect(read).toHaveBeenCalledTimes(2);
+  });
+
+  it("answers a token older than the answer it holds from memory", async () => {
+    // The control for the case above: a token from before the account's
+    // last change is refused without a read, so tokens the change ended
+    // cost nothing.
+    const { read } = table({ u1: { isActive: true, sessionEpoch: 2 } });
+    const cache = createSessionStandingCache({ read });
+
+    await cache.standing("u1", 2);
+    expect(await cache.standing("u1", 1)).toEqual({
+      isActive: true,
+      sessionEpoch: 2,
+    });
     expect(read).toHaveBeenCalledTimes(1);
   });
 
@@ -174,11 +242,11 @@ describe("createSessionStandingCache", () => {
     });
     const cache = createSessionStandingCache({ read, maxEntries: 2 });
 
-    await cache.standing("a");
-    await cache.standing("b");
-    await cache.standing("c");
+    await cache.standing("a", 0);
+    await cache.standing("b", 0);
+    await cache.standing("c", 0);
     // `a` was the oldest, so it went to make room and is read again.
-    await cache.standing("a");
+    await cache.standing("a", 0);
 
     expect(read.mock.calls.map(call => call[0])).toEqual(["a", "b", "c", "a"]);
   });
@@ -246,6 +314,7 @@ describe("sessionTokenIsCurrent across a change of database", () => {
   afterEach(() => {
     resetSessionStandingForTests();
     container.clear();
+    ready.registered = false;
   });
 
   it("keeps no answer from the database it no longer reads", async () => {
@@ -254,6 +323,7 @@ describe("sessionTokenIsCurrent across a change of database", () => {
     // gave is about a row the new one may not hold, and served from the
     // cache it would decide this database's sessions for the whole lifetime.
     const claims = { sub: "u1", sev: 0 };
+    ready.registered = true;
     container.registerSingleton("adapter", () => adapterHolding(ACTIVE));
     expect(await sessionTokenIsCurrent(claims)).toBe(true);
 
@@ -271,6 +341,8 @@ describe("readSessionStanding before services are registered", () => {
     setSessionStandingBoot(undefined);
     resetSessionStandingForTests();
     container.clear();
+    ready.registered = false;
+    ready.migrations = Promise.resolve();
   });
 
   it("starts the services, then reads", async () => {
@@ -281,6 +353,7 @@ describe("readSessionStanding before services are registered", () => {
     const adapter = adapterHolding({ isActive: true, sessionEpoch: 4 });
     const boot = vi.fn(async () => {
       container.registerSingleton("adapter", () => adapter);
+      ready.registered = true;
     });
     setSessionStandingBoot(boot);
 
@@ -289,6 +362,51 @@ describe("readSessionStanding before services are registered", () => {
       sessionEpoch: 4,
     });
     expect(boot).toHaveBeenCalledTimes(1);
+  });
+
+  it("waits for a registration under way rather than reading through its adapter", async () => {
+    // Registration puts the adapter in the container before it has run the
+    // boot migrations and marked itself done. A request arriving in between
+    // must not read through it: on an upgrade the column it reads may be
+    // the one those migrations are adding.
+    const adapter = adapterHolding({ isActive: true, sessionEpoch: 4 });
+    container.registerSingleton("adapter", () => adapter);
+    const boot = vi.fn(async () => {
+      ready.registered = true;
+    });
+    setSessionStandingBoot(boot);
+
+    await readSessionStanding("u1");
+
+    expect(boot).toHaveBeenCalledTimes(1);
+  });
+
+  it("reads only once the boot migrations have settled", async () => {
+    // The same gate `getCachedNextly()` waits on: a read while it is open
+    // may meet a schema the migrations have not finished, and a refused boot
+    // must keep refusing here too.
+    let settle: () => void = () => {};
+    ready.migrations = new Promise<void>(resolve => {
+      settle = resolve;
+    });
+    ready.registered = true;
+    const limit = vi.fn(async () => [{ isActive: true, sessionEpoch: 0 }]);
+    container.registerSingleton("adapter", () => ({
+      getCapabilities: () => ({ dialect: "sqlite" }),
+      getDrizzle: () => ({
+        select: () => ({ from: () => ({ where: () => ({ limit }) }) }),
+      }),
+    }));
+
+    const read = readSessionStanding("u1");
+    // Long enough for every other step of the read to have run, so the read
+    // not having happened is the gate's doing rather than a slow import.
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(limit).not.toHaveBeenCalled();
+
+    settle();
+    await read;
+    expect(limit).toHaveBeenCalledTimes(1);
   });
 
   it("refuses to answer when nothing can start them, naming the fix", async () => {
