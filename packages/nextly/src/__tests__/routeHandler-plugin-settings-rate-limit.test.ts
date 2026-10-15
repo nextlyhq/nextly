@@ -7,9 +7,9 @@
  * permission spent two slots per request, and a key with one slot left was
  * refused with a 429 a request it could afford.
  *
- * Judging the caller it already holds, the gate must hold one whose grants are
- * settled: a boot in flight may still be seeding the permission the key is
- * judged by.
+ * Judging the caller it already holds, the gate must judge it on the grants
+ * the boot left: a boot may still be seeding the permission the key is judged
+ * by when the key is authenticated.
  *
  * A real request goes through the real handler, the real auth middleware and
  * the real in-memory limiter. Only what sits outside them is replaced: the
@@ -47,6 +47,9 @@ const services = vi.hoisted(() => ({
   config: {} as Record<string, unknown>,
 }));
 
+/** The boot a request waits for; a case holds it open to seed during it. */
+const boot = vi.hoisted(() => ({ finished: Promise.resolve() }));
+
 /** The requests the gate let through to the dispatcher. */
 const dispatched = vi.hoisted(
   () => [] as Array<{ service: string; method: string }>
@@ -58,7 +61,9 @@ vi.mock("../auth/session", () => ({
 
 vi.mock("../route-handler", async importOriginal => ({
   ...(await importOriginal<typeof import("../route-handler")>()),
-  ensureServicesInitialized: async () => undefined,
+  ensureServicesInitialized: async () => {
+    await boot.finished;
+  },
   getDispatcher: async () => ({
     dispatch: async (request: { service: string; method: string }) => {
       dispatched.push({ service: request.service, method: request.method });
@@ -69,7 +74,6 @@ vi.mock("../route-handler", async importOriginal => ({
 
 import { rateLimiter } from "../auth/middleware/rate-limiter";
 import { container } from "../di/container";
-import { holdBootSeeding } from "../init/seed-permissions";
 import { createDynamicHandlers } from "../routeHandler";
 import { sanitizeConfig } from "../shared/types/config";
 
@@ -137,6 +141,7 @@ beforeEach(async () => {
   await rateLimiter.clear(KEY_ID);
   dispatched.length = 0;
   services.grants = [PAY_GRANT];
+  boot.finished = Promise.resolve();
   services.config = {
     plugins,
     apiKeys: { rateLimit: { requestsPerHour: LIMIT, windowMs: WINDOW_MS } },
@@ -177,18 +182,22 @@ describe.each(["GET", "PATCH"] as const)(
       expect(dispatched).toEqual([]);
     });
 
-    it("is judged on the grants a boot in flight leaves it", async () => {
+    it("is judged on the grants the boot it waited for leaves it", async () => {
       // A boot seeding the plugin's permission grants it to the key's owner
-      // as it goes. Read before that seeding finished, the key's grants lack
-      // it, and the request was refused a permission the boot had given it.
+      // as it goes. The key is authenticated before the request waits for the
+      // boot, so its grants as authentication read them lack the permission,
+      // and a request judged on them was refused what the boot had given it.
       services.grants = [];
-      const release = holdBootSeeding();
+      let finishBoot: () => void = () => {};
+      boot.finished = new Promise(resolve => {
+        finishBoot = resolve;
+      });
       const response = send(httpMethod);
-      // Let the request run as far as it will before the boot completes.
+      // Let the request authenticate and reach the boot before it completes.
       await new Promise(resolve => setTimeout(resolve, 50));
 
       services.grants = [PAY_GRANT];
-      release();
+      finishBoot();
 
       expect((await response).status).toBe(200);
       expect(dispatched).toEqual([{ service: "pluginSettings", method }]);
