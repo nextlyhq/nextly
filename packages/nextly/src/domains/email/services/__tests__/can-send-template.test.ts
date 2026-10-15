@@ -47,18 +47,24 @@ function buildService(opts: {
     getProviderDecrypted: vi.fn().mockResolvedValue(providerRecord),
   } as unknown as EmailProviderService;
 
+  const lookup = opts.templateThrows
+    ? vi.fn().mockRejectedValue(new Error("db not ready"))
+    : vi.fn().mockResolvedValue(
+        opts.templateProviderId === undefined
+          ? null
+          : {
+              slug: "email-verification",
+              isActive: opts.templateActive ?? true,
+              providerId: opts.templateProviderId,
+            }
+      );
   const templateService = {
-    getTemplateBySlug: opts.templateThrows
-      ? vi.fn().mockRejectedValue(new Error("db not ready"))
-      : vi.fn().mockResolvedValue(
-          opts.templateProviderId === undefined
-            ? null
-            : {
-                slug: "email-verification",
-                isActive: opts.templateActive ?? true,
-                providerId: opts.templateProviderId,
-              }
-        ),
+    getTemplateBySlug: lookup,
+    // The send path asks which version to render; the stored row comes first.
+    resolveForSend: async (slug: string) => ({
+      template: await lookup(slug),
+      preferCode: false,
+    }),
   } as unknown as EmailTemplateService;
 
   const service = new EmailService(

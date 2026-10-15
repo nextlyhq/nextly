@@ -38,7 +38,7 @@ import {
 
 import type { EmailAttachmentInput } from "../../domains/email/types";
 
-import type { EmailTemplateVariable } from "./types";
+import type { EmailTemplateVariable, EmailTemplateVersion } from "./types";
 
 // ============================================================
 // Email Templates Table (MySQL)
@@ -187,6 +187,40 @@ export const emailTemplatesMysql = mysqlTable(
      * When null, no default attachments are applied.
      */
     attachments: json("attachments").$type<EmailAttachmentInput[]>(),
+
+    // --------------------------------------------------------
+    // Ownership
+    //
+    // Every column here is nullable with no foreign key, so it reaches an
+    // existing table as a plain ADD COLUMN on every dialect. A row whose
+    // owner is still null has not been reconciled yet: the boot
+    // reconciliation assigns it.
+    // --------------------------------------------------------
+
+    /** Who owns the template: `core`, `plugin` or `site`. */
+    ownerKind: varchar("owner_kind", { length: 20 }),
+
+    /** The owning plugin's name, for `ownerKind = 'plugin'`. */
+    ownerName: varchar("owner_name", { length: 255 }),
+
+    /**
+     * Whether the site has overridden an owned template. While true the row
+     * holds the site's version and owner updates wait for review; null reads
+     * as false.
+     */
+    overridden: boolean("overridden"),
+
+    /** Digest of the owner's version an override started from. */
+    baseDigest: varchar("base_digest", { length: 64 }),
+
+    /**
+     * The owner's version an override started from, kept so a later owner
+     * update can be reviewed change by change against it.
+     */
+    baseVersion: json("base_version").$type<EmailTemplateVersion>(),
+
+    /** When the template is sent, written by its owner (or the site). */
+    description: text("description"),
 
     // --------------------------------------------------------
     // Metadata
