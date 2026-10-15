@@ -195,25 +195,33 @@ export function mayBindToAccount(
   );
 }
 
+/** A token table, of either kind. */
+export type TokenTable = ReturnType<typeof tokenTable>;
+
+/** The token tables by their names in the database, for a presence check. */
+export const TOKEN_TABLE_NAMES = {
+  "password-reset": "password_reset_tokens",
+  "email-verification": "email_verification_tokens",
+} as const satisfies Record<AuthTokenKind, string>;
+
 /**
- * Delete every reset and verification token of an account, in the transaction
- * `tx` belongs to: the ones bound to it, and any not yet bound that were
- * issued to one of `addresses` (the spellings it held).
+ * Delete every reset and verification token of an account from `tokenTables`,
+ * in the transaction `tx` belongs to: the ones bound to it, and any not yet
+ * bound that were issued to one of `addresses` (the spellings it held).
  *
  * Called when the account moves to another address and when it is deleted.
  * Every token of an account was issued to the address it held, so after a
- * move none of them is for the address it holds now.
+ * move none of them is for the address it holds now. The caller names the
+ * tables, so a database an earlier release created without one is not
+ * asked about a table it does not have.
  */
 export async function revokeAccountTokens(
   tx: Pick<TokenBindingDb, "delete">,
-  tables: Pick<Tables, "passwordResetTokens" | "emailVerificationTokens">,
+  tokenTables: readonly TokenTable[],
   account: { userId: string; addresses: readonly string[] }
 ): Promise<void> {
   const addresses = [...new Set(account.addresses.filter(a => a !== ""))];
-  for (const table of [
-    tables.passwordResetTokens,
-    tables.emailVerificationTokens,
-  ]) {
+  for (const table of tokenTables) {
     const unbound =
       addresses.length > 0
         ? and(isNull(table.userId), inArray(table.identifier, addresses))

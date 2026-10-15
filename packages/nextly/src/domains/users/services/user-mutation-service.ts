@@ -81,7 +81,12 @@ import {
   generateInviteTokenValue,
 } from "../../auth/lib/invite-token";
 import { affectedRowCount } from "../../auth/services/auth-service";
-import { revokeAccountTokens } from "../../auth/services/token-account-binding";
+import {
+  revokeAccountTokens,
+  TOKEN_TABLE_NAMES,
+  tokenTable,
+  type TokenTable,
+} from "../../auth/services/token-account-binding";
 import { deliveriesTableFor } from "../../email/deliveries-table";
 import { eraseRecipientDeliveries } from "../../email/erase-recipient";
 import { revalidateMedia } from "../../media/revalidate-media";
@@ -1854,6 +1859,13 @@ export class UserMutationService extends BaseService {
         // old sessions still valid.
         const endsSessions =
           changes.isActive === false || updateData.passwordHash !== undefined;
+        // The token tables to revoke the account's links in, when the update
+        // writes its address; asked before the transaction, as the deletion's
+        // presence checks are.
+        const revokesTokens =
+          updateData.email !== undefined
+            ? await this.presentTokenTables()
+            : undefined;
         // One transaction for the fields and the roles. A plugin's write to
         // an account-controlling field asks about the account again in it,
         // holding its row, immediately before writing. Removing the roles and
@@ -1908,8 +1920,8 @@ export class UserMutationService extends BaseService {
           // write above, which holds the account's row: a link being issued
           // for the old address either committed first and is removed here,
           // or finds the account no longer there.
-          if (updateData.email !== undefined) {
-            await revokeAccountTokens(txDb, this.tables, {
+          if (revokesTokens) {
+            await revokeAccountTokens(txDb, revokesTokens, {
               userId: String(currentUser.id),
               addresses:
                 typeof currentUser.email === "string"
@@ -2135,6 +2147,20 @@ export class UserMutationService extends BaseService {
     } catch {
       return true;
     }
+  }
+
+  /**
+   * The reset and verification token tables this database has. An install
+   * created by an earlier release may lack either, as it may lack media.
+   */
+  private async presentTokenTables(): Promise<TokenTable[]> {
+    const present: TokenTable[] = [];
+    for (const kind of ["password-reset", "email-verification"] as const) {
+      if (await this.tablePresent(TOKEN_TABLE_NAMES[kind])) {
+        present.push(tokenTable(this.tables, kind));
+      }
+    }
+    return present;
   }
 
   /**
@@ -2517,6 +2543,7 @@ export class UserMutationService extends BaseService {
     // commits, so it is declared out here rather than in the closure.
     let deletedAddress: string | undefined;
     const deliveriesExist = await this.tablePresent("email_deliveries");
+    const tokenTables = await this.presentTokenTables();
 
     // Asked out here for the same reason, and treated as present when the
     // probe cannot answer, for the same reason too. `media.uploaded_by`
@@ -2733,7 +2760,7 @@ export class UserMutationService extends BaseService {
         // Under the preimage's row lock, so a link being issued for the
         // account now either lands first and is removed here, or finds the
         // account gone.
-        await revokeAccountTokens(txDb, this.tables, {
+        await revokeAccountTokens(txDb, tokenTables, {
           userId: String(userId),
           addresses: typeof preimage.email === "string" ? [preimage.email] : [],
         });
