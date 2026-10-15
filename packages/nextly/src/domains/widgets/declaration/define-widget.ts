@@ -1,0 +1,324 @@
+/**
+ * One declaration that gives a widget its data and its display.
+ *
+ * `defineWidget()` takes everything a widget is: who it is, the widths it
+ * allows, its settings, where its data comes from and how it is drawn. The
+ * compiler reads the settings once and hands their types to every reader --
+ * the data function, the query core runs, and the widget's own component --
+ * with no cast and no generated file. The component gets them through a
+ * type-only import of the declaration (`WidgetProps<typeof myWidget>`), which
+ * the bundler erases, so no server code follows it into the browser.
+ *
+ * The same declaration is accepted from a plugin and from the site's config.
+ *
+ * @module domains/widgets/declaration/define-widget
+ */
+
+import type { UserContext } from "../../collections/services/collection-types";
+import type { WidgetQuerySpec } from "../query";
+import type { WidgetOp } from "../sources";
+
+import type {
+  CoreDisplay,
+  DisplayData,
+  DisplayOp,
+  QueryAnswer,
+  WidgetDisplay,
+} from "./displays";
+import type {
+  DependentSettings,
+  SettingValues,
+  WidgetFilter,
+  WidgetSettings,
+} from "./setting-builders";
+import type { Transportable, TransportableValue } from "./transportable";
+
+/** The five widths a card may take on the dashboard. */
+export type WidgetWidth = "1/4" | "1/3" | "1/2" | "2/3" | "full";
+
+/**
+ * Reads a data function may make, already bound to the person asking.
+ *
+ * 🔴 They take no person, user or access option: core binds the person before
+ * handing them over, so a data function cannot leave the person out and read
+ * as the system. Rows come back as transportable values, so a function can
+ * answer them as they are.
+ */
+export interface WidgetReadServices {
+  count(
+    collection: string,
+    options?: { where?: WidgetFilter; signal?: AbortSignal }
+  ): Promise<number>;
+  find(
+    collection: string,
+    options?: {
+      where?: WidgetFilter;
+      sort?: string;
+      limit?: number;
+      select?: readonly string[];
+      signal?: AbortSignal;
+    }
+  ): Promise<{ items: { readonly [field: string]: TransportableValue }[] }>;
+}
+
+/** What a data function is handed. */
+export interface WidgetDataInput<Values> {
+  /** The card's settings: the person's values, or the starting ones. */
+  settings: Values;
+  /** The person looking at the card. */
+  user: UserContext;
+  /** Aborted when the person leaves or the card's time budget runs out. */
+  signal: AbortSignal;
+  services: WidgetReadServices;
+}
+
+/** A widget's own data function, run on the server for each card. */
+export type WidgetDataFunction<Values, Data> = (
+  input: WidgetDataInput<Values>
+) => Promise<Data>;
+
+/**
+ * A query core runs over content, as the widget's settings write it.
+ *
+ * Today's query with `collection` in place of `source`: a widget reads a
+ * collection by its slug, and the `collection:` prefix is core's business.
+ */
+export type ContentQuery = WidgetQuerySpec extends infer Spec
+  ? Spec extends WidgetQuerySpec
+    ? Omit<Spec, "source"> & { collection: string }
+    : never
+  : never;
+
+/**
+ * A query core runs over content, written from the card's settings.
+ *
+ * 🔴 A function under a `query` key, not a call to a `query()` helper. A helper
+ * call nested in the declaration is checked before the declaration's settings
+ * type is known, so its `settings` came out as `unknown`; a function in an
+ * object is read after them, like a data function is. The answer's type
+ * follows from the `op` the function returns.
+ */
+export interface WidgetQuerySource<Values, Op extends WidgetOp> {
+  query: (input: { settings: Values }) => ContentQuery & { op: Op };
+}
+
+/** Carries a declaration's data type without a runtime property. */
+declare const widgetData: unique symbol;
+
+/**
+ * What a widget declares.
+ *
+ * - `Data` is a data function's answer, inferred from what it returns.
+ * - `Op` is a query's op, inferred from the query it writes; its answer is
+ *   what core sends for that op.
+ *
+ * 🔴 Two parameters for the two sources, rather than one, because only a data
+ * function's answer is the author's to keep transportable: a query's answer is
+ * core's, already sent as JSON. One parameter would hold either, and the bound
+ * that refuses a `Date` in a data function's answer would then have to be
+ * waived for queries as well.
+ */
+export interface WidgetDeclarationInput<
+  Id extends string,
+  Widths extends readonly WidgetWidth[],
+  S,
+  Display extends WidgetDisplay,
+  Data,
+  Op extends WidgetOp,
+  Example,
+> {
+  /** `namespace/name`, unique across core, every plugin and the site. */
+  id: Id;
+  title: string;
+  /** One line, at most 80 characters, shown in the add panel. */
+  description: string;
+  category: string;
+  widths: Widths;
+  /** The starting width, one of `widths`. */
+  width: NoInfer<Widths[number]>;
+  /** The permission a person needs to be offered this widget at all. */
+  permission?: string;
+  /** Whether a person may add it more than once. Once, unless it says so. */
+  several?: boolean;
+  /** The core display whose sketch the add panel borrows. */
+  sketch?: CoreDisplay;
+  settings?: S;
+  data:
+    | WidgetDataFunction<SettingValues<S>, DataFor<Display, Data>>
+    | WidgetQuerySource<SettingValues<S>, OpFor<Display, Op>>;
+  display: Display;
+  /**
+   * Data the preview page and the scaffold draw the ready state from, of the
+   * widget's own data type, so an example that drifts from the data it stands
+   * in for fails to compile. How that is checked depends on the display
+   * (`ExampleFor`, `CheckedDeclaration`).
+   */
+  example?: ExampleFor<Display, Example>;
+}
+
+/**
+ * The data a widget draws: its display's shape for a core display, or its own
+ * data for a component.
+ */
+type DataFor<Display, Own> = Display extends CoreDisplay
+  ? DisplayData<Display>
+  : Own;
+
+/** The op a widget's query may have: its display's, or any for a component. */
+type OpFor<Display, Own extends WidgetOp> = Display extends CoreDisplay
+  ? DisplayOp<Display>
+  : Own;
+
+/**
+ * What a widget's `example` is typed as where it is written.
+ *
+ * For a core display, the display's own shape, so a wrong example is refused
+ * at the property that is wrong. For a component, whatever the author wrote:
+ * see `CheckedDeclaration` for where that is checked, and why there.
+ */
+type ExampleFor<Display, Example> = Display extends CoreDisplay
+  ? DisplayData<Display>
+  : Example;
+
+/**
+ * `T` with every array and property read-only.
+ *
+ * What the example is compared against. It is inferred `const`, so `"7d"`
+ * stays the literal a date-range setting allows rather than widening to
+ * `string`; `const` also makes its arrays read-only, and a read-only array is
+ * not assignable to a mutable one, which is no fault of the example's.
+ */
+type ReadonlyDeep<T> = T extends object
+  ? { readonly [K in keyof T]: ReadonlyDeep<T[K]> }
+  : T;
+
+/**
+ * Stands in for a component widget whose example is not of its data type.
+ *
+ * Not assignable to `AnyWidget`, so the widget cannot be contributed, put in
+ * the site config or read by `WidgetProps`, and each of those errors names
+ * this type, which names the fault.
+ */
+export interface ExampleDoesNotMatchTheWidgetData<Example, Data> {
+  readonly exampleDoesNotMatchTheWidgetData: { example: Example; data: Data };
+}
+
+/**
+ * The declaration, once its example has been checked against its data.
+ *
+ * 🔴 Checked HERE, in the return type, for a component widget. Its data type
+ * is inferred from what its data function answers, and that function is read
+ * last, after every property that is not a function. Any type relating the
+ * example to the data, given to the example where it is written, made the
+ * compiler settle the data type before the function was read, as `never`.
+ * The return type is worked out once everything is inferred, so the check sees
+ * the real data type; the cost is that the error appears where the widget is
+ * used rather than at the example.
+ */
+type CheckedDeclaration<
+  Id extends string,
+  Widths extends readonly WidgetWidth[],
+  S,
+  Display extends WidgetDisplay,
+  Data,
+  Op extends WidgetOp,
+  Example,
+> = Display extends CoreDisplay
+  ? WidgetDeclaration<Id, Widths, S, Display, Data, Op, Example>
+  : [Example] extends [ReadonlyDeep<Data | QueryAnswer<Op>>]
+    ? WidgetDeclaration<Id, Widths, S, Display, Data, Op, Example>
+    : ExampleDoesNotMatchTheWidgetData<Example, Data | QueryAnswer<Op>>;
+
+/** A declared widget, carrying the types its readers need. */
+export type WidgetDeclaration<
+  Id extends string,
+  Widths extends readonly WidgetWidth[],
+  S,
+  Display extends WidgetDisplay,
+  Data,
+  Op extends WidgetOp,
+  Example = never,
+> = WidgetDeclarationInput<Id, Widths, S, Display, Data, Op, Example> & {
+  readonly [widgetData]?: DataFor<Display, Data | QueryAnswer<Op>>;
+};
+
+/**
+ * Declares a widget.
+ *
+ * The type parameters are all inferred; an author writes none of them.
+ *
+ * - `S extends DependentSettings<S>` checks that every dependent setting names
+ *   one of the widget's own Collection settings.
+ * - `Data extends Transportable<Data>` keeps a data function's answer to what
+ *   JSON carries unchanged, and reports the property that is not.
+ * - The display is inferred before the data function is read, so a core
+ *   display's shape is the type its data function must answer.
+ */
+export function defineWidget<
+  const Id extends string,
+  const Widths extends readonly WidgetWidth[],
+  const Display extends WidgetDisplay,
+  S extends WidgetSettings & DependentSettings<S> = Record<never, never>,
+  Data extends { [K in keyof Data]: Transportable<Data[K]> } = never,
+  Op extends WidgetOp = never,
+  const Example = never,
+>(
+  declaration: WidgetDeclarationInput<Id, Widths, S, Display, Data, Op, Example>
+): CheckedDeclaration<Id, Widths, S, Display, Data, Op, Example>;
+// The implementation hands the declaration back as it came: every type above
+// is the compiler's reading of it, and nothing at run time changes.
+export function defineWidget(declaration: AnyWidget): AnyWidget {
+  return declaration;
+}
+
+/** Any declared widget. */
+export interface AnyWidget {
+  readonly id: string;
+  readonly display: WidgetDisplay;
+}
+
+/** The settings a widget's readers are handed. */
+export type WidgetSettingValues<W> = W extends { settings?: infer S }
+  ? SettingValues<NonNullable<S>>
+  : never;
+
+/** The data a widget's component draws. */
+export type WidgetData<W> = W extends { readonly [widgetData]?: infer D }
+  ? D
+  : never;
+
+/** A card's current size, which changes as its width does. */
+export interface WidgetSize {
+  width: WidgetWidth;
+  class: "small" | "medium" | "large";
+}
+
+/**
+ * What a widget's own component is handed.
+ *
+ * Its data is not among them: the host draws loading, no permission and error
+ * itself, and the component reads the data through `useWidgetData`, where it
+ * is always present.
+ */
+export interface WidgetProps<W> {
+  widgetId: string;
+  /** The card's id: one widget may sit on a dashboard more than once. */
+  placementId: string;
+  settings: WidgetSettingValues<W>;
+  size: WidgetSize;
+}
+
+/** What `useWidgetData` returns inside a component. */
+export interface WidgetDataState<W> {
+  data: WidgetData<W>;
+  /** True while a newer answer is on its way; `data` is the last one. */
+  refreshing: boolean;
+  retry: () => void;
+}
+
+/**
+ * The admin hook a component reads its data through, typed by its widget.
+ *
+ * A type only: the hook itself belongs to the admin, which renders the card.
+ */
+export type UseWidgetData = <W extends AnyWidget>() => WidgetDataState<W>;

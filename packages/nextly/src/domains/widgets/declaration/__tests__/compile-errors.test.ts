@@ -1,0 +1,465 @@
+/**
+ * What a widget declaration REFUSES to compile, each refusal named.
+ *
+ * Every case is a small file, compiled with the TypeScript compiler beside the
+ * real declaration modules, in two forms:
+ *
+ * - the FAULTY form must produce exactly one error, on the line marked
+ *   `/*!*\/`, with the error code and the words this test expects;
+ * - the CORRECTED form, the same file with only the fault put right, must
+ *   compile with none.
+ *
+ * Why not `@ts-expect-error` in a `.test-d.ts`: the directive is satisfied by
+ * ANY error on the next line, so it would stay green after the refusal stopped
+ * happening, provided something else on that line broke. Naming the code, the
+ * line and the message is what tells the intended refusal from an unrelated
+ * one; the corrected twin is what shows the case reaches the mechanism at all,
+ * rather than failing for a reason the fix does not touch.
+ *
+ * The exact types each reader is handed are asserted in `declaration.test-d.ts`.
+ */
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
+import ts from "typescript";
+import { beforeAll, describe, expect, it } from "vitest";
+
+import { CORE_DISPLAYS } from "../displays";
+
+const here = dirname(fileURLToPath(import.meta.url));
+const packageRoot = join(here, "..", "..", "..", "..", "..");
+
+/** Marks the line a faulty form's one error must be reported on. */
+const MARK = "/*!*/";
+
+interface Case {
+  name: string;
+  /** The faulty form, with `MARK` on the line of the fault. */
+  faulty: string;
+  /** The same file with only the fault put right. */
+  corrected: string;
+  code: number;
+  /** Words the error's message must contain. */
+  message: string;
+}
+
+const imports = `import { defineWidget } from "../define-widget";
+import { settings } from "../setting-builders";
+`;
+
+/** A widget with every field a case does not care about filled in. */
+function widget(fields: string): string {
+  return `${imports}
+export const w = defineWidget({
+  id: "test/w",
+  title: "W",
+  description: "A widget under test",
+  category: "Test",
+  widths: ["1/2", "full"],
+  width: "full",
+${fields}
+});
+`;
+}
+
+/** A pair whose only difference is one fragment. */
+function pair(
+  build: (fragment: string) => string,
+  faulty: string,
+  corrected: string
+): Pick<Case, "faulty" | "corrected"> {
+  return { faulty: build(faulty), corrected: build(corrected) };
+}
+
+/** The data each core display draws, as a data function would answer it. */
+const SHAPES: Record<(typeof CORE_DISPLAYS)[number], string> = {
+  metric: `{ total: 3 }`,
+  list: `{ items: [{ title: "First" }] }`,
+  table: `{ items: [{ title: "First" }] }`,
+  bars: `{ buckets: [{ value: "paid", count: 3 }] }`,
+  timeseries: `{ points: [{ start: "2026-10-01", count: 3 }], interval: "day" }`,
+};
+
+/** The query each core display draws, as a widget writes it. */
+const QUERIES: Record<(typeof CORE_DISPLAYS)[number], string> = {
+  metric: `op: "count"`,
+  list: `op: "list"`,
+  table: `op: "list"`,
+  bars: `op: "groupBy", groupBy: "state"`,
+  timeseries: `op: "timeseries", dateField: "createdAt", interval: "day"`,
+};
+
+/** A shape no display draws in the form its neighbour does. */
+const WRONG_SHAPE: Record<(typeof CORE_DISPLAYS)[number], string> = {
+  metric: SHAPES.bars,
+  list: SHAPES.metric,
+  table: SHAPES.bars,
+  bars: SHAPES.timeseries,
+  timeseries: SHAPES.metric,
+};
+
+/** A query whose op answers what the display does not draw. */
+const WRONG_QUERY: Record<(typeof CORE_DISPLAYS)[number], string> = {
+  metric: `op: "list"`,
+  list: `op: "count"`,
+  table: `op: "count"`,
+  bars: `op: "count"`,
+  timeseries: `op: "list"`,
+};
+
+const CASES: Case[] = [
+  // ---- A setting read as the wrong type, in each of the three places.
+  {
+    name: "a data function reads a setting as the wrong type",
+    ...pair(
+      t =>
+        widget(`  settings: { items: settings.items({ default: 5 }) },
+  data: async ({ settings }) => {
+    const items: ${t} = settings.items; ${MARK}
+    return { total: Number(items) };
+  },
+  display: "metric",`),
+      "string",
+      "number"
+    ),
+    code: 2322,
+    message: "Type 'number' is not assignable to type 'string'",
+  },
+  {
+    name: "a query core runs reads a setting as the wrong type",
+    ...pair(
+      t =>
+        widget(`  settings: { collection: settings.collection() },
+  data: {
+    query: ({ settings }) => {
+      const slug: ${t} = settings.collection; ${MARK}
+      return { collection: String(slug), op: "count" };
+    },
+  },
+  display: "metric",`),
+      "number",
+      "string"
+    ),
+    code: 2322,
+    message: "Type 'string' is not assignable to type 'number'",
+  },
+  {
+    name: "a component reads a setting as the wrong type, through import type",
+    ...pair(
+      t => `import type { WidgetProps } from "../define-widget";
+import type { revenue } from "./plugin/widgets";
+
+export function Card({ settings }: WidgetProps<typeof revenue>) {
+  const net: ${t} = settings.net; ${MARK}
+  return net;
+}
+`,
+      "string",
+      "boolean"
+    ),
+    code: 2322,
+    message: "Type 'boolean' is not assignable to type 'string'",
+  },
+  {
+    name: "a component compares a select setting with a value it does not offer",
+    ...pair(
+      option => `import type { WidgetProps } from "../define-widget";
+import type { revenue } from "./plugin/widgets";
+
+export function Card({ settings }: WidgetProps<typeof revenue>) {
+  return settings.currency === "${option}"; ${MARK}
+}
+`,
+      "gbp",
+      "eur"
+    ),
+    code: 2367,
+    message: "have no overlap",
+  },
+  {
+    name: "a component reads its data as the wrong type, through useWidgetData",
+    ...pair(
+      t => `import type { UseWidgetData } from "../define-widget";
+import type { revenue } from "./plugin/widgets";
+
+declare const useWidgetData: UseWidgetData;
+
+export function Card() {
+  const { data } = useWidgetData<typeof revenue>();
+  const total: ${t} = data.points[0].total; ${MARK}
+  return total;
+}
+`,
+      "string",
+      "number"
+    ),
+    code: 2322,
+    message: "Type 'number' is not assignable to type 'string'",
+  },
+
+  // ---- Each core display refuses data of a shape it does not draw.
+  ...CORE_DISPLAYS.map(
+    (display): Case => ({
+      name: `the ${display} display refuses a data function's answer of another shape`,
+      ...pair(
+        shape =>
+          widget(`  data: async () => (${shape}), ${MARK}
+  display: "${display}",`),
+        WRONG_SHAPE[display],
+        SHAPES[display]
+      ),
+      code: 2322,
+      message: `DisplayData<"${display}">`,
+    })
+  ),
+  ...CORE_DISPLAYS.map(
+    (display): Case => ({
+      name: `the ${display} display refuses a query whose answer it does not draw`,
+      ...pair(
+        query =>
+          widget(`  settings: { collection: settings.collection() },
+  data: { query: ({ settings }) => ({ collection: settings.collection, ${query} }) }, ${MARK}
+  display: "${display}",`),
+        WRONG_QUERY[display],
+        QUERIES[display]
+      ),
+      code: 2322,
+      message: "is not assignable to type",
+    })
+  ),
+
+  // ---- A data function's answer holds only what JSON carries unchanged.
+  ...[
+    { kind: "a function", value: `() => "today"` },
+    { kind: "a date object", value: `new Date("2026-10-01")` },
+    { kind: "a map", value: `new Map([["paid", 3]])` },
+    { kind: "a set", value: `new Set(["paid"])` },
+    { kind: "a bigint", value: `BigInt(3)` },
+  ].map(
+    ({ kind, value }): Case => ({
+      name: `a data function's answer may not hold ${kind}`,
+      ...pair(
+        held =>
+          widget(`  data: async () => ({ held: ${held} }), ${MARK}
+  display: { component: "@test/w/admin#Card" },`),
+        value,
+        `"today"`
+      ),
+      code: 2322,
+      message: "is not assignable to type 'never'",
+    })
+  ),
+
+  // ---- An example is of the widget's own data type.
+  {
+    name: "a core display refuses an example of another shape, at the example",
+    ...pair(
+      count =>
+        widget(`  data: async () => ({ total: 3 }),
+  display: "metric",
+  example: { total: ${count} }, ${MARK}`),
+      `"three"`,
+      "3"
+    ),
+    code: 2322,
+    message: "Type 'string' is not assignable to type 'number'",
+  },
+  {
+    name: "a component widget with a mismatched example cannot be used",
+    ...pair(
+      range => `${imports}import type { AnyWidget } from "../define-widget";
+
+const w = defineWidget({
+  id: "test/w",
+  title: "W",
+  description: "A widget under test",
+  category: "Test",
+  widths: ["full"],
+  width: "full",
+  settings: { range: settings.dateRange() },
+  data: async ({ settings }) => ({ range: settings.range }),
+  display: { component: "@test/w/admin#Card" },
+  example: { range: "${range}" },
+});
+
+export const contributed: AnyWidget = w; ${MARK}
+`,
+      "1y",
+      "7d"
+    ),
+    code: 2739,
+    message: "ExampleDoesNotMatchTheWidgetData",
+  },
+
+  // ---- What else the declaration checks where it is written.
+  {
+    name: "a dependent setting names no Collection setting of the widget's",
+    ...pair(
+      on =>
+        widget(`  settings: {
+    collection: settings.collection(),
+    sort: settings.sort({ of: "${on}" }), ${MARK}
+  },
+  data: async () => ({ total: 3 }),
+  display: "metric",`),
+      "colection",
+      "collection"
+    ),
+    code: 2322,
+    message: `'"colection"' is not assignable to type '"collection"'`,
+  },
+  {
+    name: "the starting width is not one the widget allows",
+    ...pair(
+      width => `${imports}
+export const w = defineWidget({
+  id: "test/w",
+  title: "W",
+  description: "A widget under test",
+  category: "Test",
+  widths: ["1/3", "1/2"],
+  width: "${width}", ${MARK}
+  data: async () => ({ total: 3 }),
+  display: "metric",
+});
+`,
+      "full",
+      "1/2"
+    ),
+    code: 2322,
+    message: `Type '"full"' is not assignable to type '"1/3" | "1/2"'`,
+  },
+  {
+    name: "a plugin offers an alternative to a built-in widget that does not exist",
+    ...pair(
+      core => `import type { DashboardContribution } from "../dashboard";
+import { recentOrders } from "./plugin/widgets";
+
+export const dashboard: DashboardContribution = {
+  widgets: [recentOrders],
+  alternatives: { "acme/recent-orders": "${core}" }, ${MARK}
+};
+`,
+      "core/recently-edit",
+      "core/recently-edited"
+    ),
+    // 2820 is 2322 with a suggestion: the compiler names the id it meant.
+    code: 2820,
+    message: `Did you mean '"core/recently-edited"'?`,
+  },
+  {
+    name: "where a plugin's widgets are known, it may suggest only its own",
+    ...pair(
+      id => `import type { DashboardContribution } from "../dashboard";
+import { ordersByState, recentOrders } from "./plugin/widgets";
+
+export const dashboard: DashboardContribution<
+  typeof ordersByState | typeof recentOrders
+> = {
+  widgets: [ordersByState, recentOrders],
+  suggest: ["${id}"], ${MARK}
+};
+`,
+      "acme/revenue",
+      "acme/orders-by-state"
+    ),
+    code: 2322,
+    message: `Type '"acme/revenue"' is not assignable to type`,
+  },
+];
+
+/** Where each case's two forms are compiled, as if they sat in this folder. */
+function casePath(index: number, form: "faulty" | "corrected"): string {
+  return join(here, `case-${index}-${form}.ts`);
+}
+
+/** The diagnostics of every case file, compiled together in one program. */
+let diagnosticsByFile: Map<string, readonly ts.Diagnostic[]>;
+
+beforeAll(() => {
+  const virtual = new Map<string, string>();
+  CASES.forEach((c, index) => {
+    virtual.set(casePath(index, "faulty"), c.faulty);
+    virtual.set(casePath(index, "corrected"), c.corrected);
+  });
+
+  // The package's own compiler options, so a case compiles exactly as a file
+  // in this folder would under `check-types`.
+  const configPath = join(packageRoot, "tsconfig.json");
+  const config = ts.readConfigFile(configPath, path => ts.sys.readFile(path));
+  const options = {
+    ...ts.parseJsonConfigFileContent(config.config, ts.sys, packageRoot)
+      .options,
+    noEmit: true,
+  };
+
+  const host = ts.createCompilerHost(options);
+  const { fileExists, readFile, getSourceFile } = host;
+  host.fileExists = path => virtual.has(path) || fileExists(path);
+  host.readFile = path => virtual.get(path) ?? readFile(path);
+  host.getSourceFile = (path, language, onError, create) => {
+    const text = virtual.get(path);
+    return text === undefined
+      ? getSourceFile(path, language, onError, create)
+      : ts.createSourceFile(path, text, language);
+  };
+
+  const program = ts.createProgram([...virtual.keys()], options, host);
+  diagnosticsByFile = new Map(
+    [...virtual.keys()].map(path => {
+      const file = program.getSourceFile(path);
+      if (file === undefined) throw new Error(`Not compiled: ${path}`);
+      return [
+        path,
+        [
+          ...program.getSyntacticDiagnostics(file),
+          ...program.getSemanticDiagnostics(file),
+        ],
+      ];
+    })
+  );
+}, 120_000);
+
+/** One diagnostic, as a reader of a failure would want it. */
+function describeDiagnostic(diagnostic: ts.Diagnostic) {
+  const { file, start } = diagnostic;
+  const line =
+    file !== undefined && start !== undefined
+      ? file.getLineAndCharacterOfPosition(start).line + 1
+      : undefined;
+  return {
+    line,
+    code: diagnostic.code,
+    message: ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n"),
+  };
+}
+
+describe("a widget declaration refuses to compile", () => {
+  it("compiles every case, so none is skipped for want of a file", () => {
+    expect(diagnosticsByFile.size).toBe(CASES.length * 2);
+  });
+
+  CASES.forEach((c, index) => {
+    describe(c.name, () => {
+      it("fails once, on the marked line, for the named reason", () => {
+        const markedLine =
+          c.faulty.split("\n").findIndex(line => line.includes(MARK)) + 1;
+        expect(markedLine).toBeGreaterThan(0);
+
+        const found = (
+          diagnosticsByFile.get(casePath(index, "faulty")) ?? []
+        ).map(describeDiagnostic);
+        expect(found).toHaveLength(1);
+        expect(found[0]).toMatchObject({ line: markedLine, code: c.code });
+        expect(found[0]?.message).toContain(c.message);
+      });
+
+      it("compiles once the fault is put right", () => {
+        const found = (
+          diagnosticsByFile.get(casePath(index, "corrected")) ?? []
+        ).map(describeDiagnostic);
+        expect(found).toEqual([]);
+      });
+    });
+  });
+});
