@@ -253,6 +253,22 @@ describe.each(getConfiguredTestDialects())(
       expect(sent).toEqual([]);
     }, 120_000);
 
+    it("refuses, before sending, a person of a kind no plugin registered", async () => {
+      // Well formed but misspelled: no deletion report could name the kind,
+      // so a record kept under it would outlive the person. The registered
+      // `accounts:account`, sent above, is the control.
+      await boot(dialect);
+      await expect(
+        plugin().services.email.send({
+          to: "member@example.com",
+          subject: "Hello",
+          html: "<p>hi</p>",
+          person: { kind: "accounts:acount", id: "acc_1" },
+        })
+      ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+      expect(sent).toEqual([]);
+    }, 120_000);
+
     it("erases a reported person's records, and the deletion email after it, keeping a staff user's at the same address", async () => {
       const t = await boot(dialect);
       // Resolved before the report, as a request in flight would have.

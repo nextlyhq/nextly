@@ -23,6 +23,7 @@ import {
 } from "../../../filters";
 import { getBaseUrl } from "../../../lib/get-base-url";
 import { principalRefOf } from "../../../plugins/principals/ref";
+import { getPrincipalKind } from "../../../plugins/principals/registry";
 import type { PrincipalRef } from "../../../plugins/principals/types";
 import type { EmailTemplateRecord } from "../../../schemas/email-templates/types";
 import type { Logger } from "../../../services/shared";
@@ -1108,14 +1109,17 @@ export class EmailService extends BaseService {
 function personToRecord(value: unknown): PrincipalRef | null {
   if (value === undefined || value === null) return null;
   const ref = principalRefOf(value);
-  if (ref) return ref;
+  // Of a kind a running plugin registers, too: a misspelled kind is one no
+  // deletion report can name, so a record kept under it would outlive the
+  // person it names.
+  if (ref && getPrincipalKind(ref.kind)) return ref;
   throw NextlyError.validation({
     errors: [
       {
         path: "person",
         code: "INVALID",
         message:
-          "`person` must name a plugin-defined person by full kind and an id of 1 to 128 characters.",
+          "`person` must name a plugin-defined person by the full name of a registered kind and an id of 1 to 128 characters.",
       },
     ],
     logContext: { operation: "email.send" },

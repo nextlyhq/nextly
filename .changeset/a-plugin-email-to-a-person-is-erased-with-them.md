@@ -33,8 +33,8 @@ A plugin's email to one of its signed-in people can now name them:
 `ctx.services.email.send` and `sendWithTemplate` take `person`, by kind and
 id. The delivery record of the message keeps the person's kind and id, on the
 row of the `to` address, in new `principal_kind` and `principal_id` columns of
-`email_deliveries`. A `person` that cannot name one is refused before anything
-is sent.
+`email_deliveries`. A `person` that cannot name one, or names a kind no
+running plugin registers, is refused before anything is sent.
 
 `ctx.principals.reportDeleted` now also erases, in the same transaction, the
 address digest on every delivery record naming the person, and names them
