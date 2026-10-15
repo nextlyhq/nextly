@@ -212,6 +212,7 @@ describe("handleSession determineUser gate", () => {
       name: "Cookie User",
       image: null,
       roleIds: [],
+      sessionEpoch: 0,
     });
     const token = await signAccessToken(claims, SECRET, 900);
 
