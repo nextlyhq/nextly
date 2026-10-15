@@ -465,10 +465,21 @@ function refuseDisallowedWidths(
   shown: readonly WidgetPlacement[],
   widths: Readonly<Record<string, WidgetWidthFacts>>
 ): void {
-  const shownWidth = new Map(shown.map(p => [p.id, p.width]));
+  // Unchanged means the SAME card: same id, same widget, same width. A card
+  // whose id now names a different widget is a new card, and its width is
+  // judged against the widget it now draws.
+  const shownById = new Map(shown.map(p => [p.id, p]));
+  const unchanged = (placement: WidgetPlacement) => {
+    const before = shownById.get(placement.id);
+    return (
+      before !== undefined &&
+      before.widgetId === placement.widgetId &&
+      before.width === placement.width
+    );
+  };
   const refused = submitted.find(
     placement =>
-      shownWidth.get(placement.id) !== placement.width &&
+      !unchanged(placement) &&
       !widths[placement.widgetId]?.allowedWidths.includes(placement.width)
   );
   if (refused) {
@@ -481,6 +492,43 @@ function refuseDisallowedWidths(
         },
       ],
     });
+  }
+}
+
+/**
+ * Refuses a second card of a widget that allows one.
+ *
+ * Counted against what the caller was SHOWN, so an arrangement that already
+ * held more than one card of such a widget (rows written before widgets said
+ * how many they allow) can still be saved as it is; only a card ADDED beyond
+ * the widget's allowance is refused.
+ */
+function refuseExtraCards(
+  submitted: readonly WidgetPlacement[],
+  shown: readonly WidgetPlacement[],
+  widths: Readonly<Record<string, WidgetWidthFacts>>
+): void {
+  const count = (placements: readonly WidgetPlacement[]) => {
+    const counts = new Map<string, number>();
+    for (const p of placements) {
+      counts.set(p.widgetId, (counts.get(p.widgetId) ?? 0) + 1);
+    }
+    return counts;
+  };
+  const shownCounts = count(shown);
+  for (const [widgetId, cards] of count(submitted)) {
+    if (widths[widgetId]?.allowsSeveral) continue;
+    if (cards > Math.max(1, shownCounts.get(widgetId) ?? 0)) {
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: "placements",
+            code: "INVALID_VALUE",
+            message: `"${widgetId}" allows one card on a dashboard.`,
+          },
+        ],
+      });
+    }
   }
 }
 
@@ -564,11 +612,10 @@ export const putWidgetLayout = withErrorHandler(async (req: Request) => {
     writeArranges,
     replaceUnreadable
   );
-  refuseDisallowedWidths(
-    submitted,
-    visibleArrangement(stored.layout, view.visibleIds),
-    widthsOf(view.widgets)
-  );
+  const shown = visibleArrangement(stored.layout, view.visibleIds);
+  const widths = widthsOf(view.widgets);
+  refuseDisallowedWidths(submitted, shown, widths);
+  refuseExtraCards(submitted, shown, widths);
 
   // 🔴 MONOTONIC. A row a reader has arranged stays arranged whatever a later
   // write says: a removal outside customise mode states `false` because IT is

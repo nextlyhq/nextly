@@ -1818,3 +1818,74 @@ describe("the default dashboard, answered beside a reader's own", () => {
     ]);
   });
 });
+
+describe("a placement that changes widget", () => {
+  it("is judged as a new card: it may not keep a width its new widget does not allow", async () => {
+    registerWidget(widget({ id: "core/wide" }));
+    registerWidget(
+      widget({
+        id: "core/narrow",
+        defaultSize: "md",
+        minSize: "md",
+        maxSize: "md",
+      })
+    );
+    stored = {
+      version: 1,
+      layout: serializeLayout([
+        { id: "p1", widgetId: "core/wide", width: "full", removed: false },
+      ]),
+    };
+    const res = await putWidgetLayout(
+      putReq({
+        placements: [
+          { id: "p1", widgetId: "core/narrow", width: "full", removed: false },
+        ],
+        version: 1,
+        scope: scopeFor(),
+      })
+    );
+    expect(res.status).toBe(400);
+    expect(saved).toBeUndefined();
+  });
+});
+
+describe("a widget that allows one card", () => {
+  const two = (widgetId: string) => [
+    { id: "a", widgetId, width: "full", removed: false },
+    { id: "b", widgetId, width: "full", removed: false },
+  ];
+
+  it("is refused a second card", async () => {
+    registerWidget(widget({ id: "core/one" }));
+    const res = await putWidgetLayout(
+      putReq({ placements: two("core/one"), version: 0, scope: scopeFor() })
+    );
+    expect(res.status).toBe(400);
+    expect(saved).toBeUndefined();
+  });
+
+  it("still saves a row that already held two, so an older arrangement stays savable", async () => {
+    registerWidget(widget({ id: "core/one" }));
+    stored = {
+      version: 1,
+      layout: serializeLayout(two("core/one") as WidgetPlacement[]),
+    };
+    const res = await putWidgetLayout(
+      putReq({ placements: two("core/one"), version: 1, scope: scopeFor() })
+    );
+    expect(res.status).toBe(200);
+  });
+
+  it("CONTROL: a widget that allows several takes a second card", async () => {
+    setContributedWidgets([{ id: "forms/many", allowsSeveral: true }]);
+    const res = await putWidgetLayout(
+      putReq({
+        placements: two("forms/many"),
+        version: 0,
+        scope: scopeFor(["forms/many"]),
+      })
+    );
+    expect(res.status).toBe(200);
+  });
+});
