@@ -69,6 +69,17 @@ export interface AccountState {
   sessionEpoch: number;
 }
 
+/**
+ * The facts the gate itself decides on: every field of {@link AccountState}
+ * except the identity and epoch a session is signed with, which the gate does
+ * not judge. A caller that holds only these, such as the password check
+ * before any session exists, can still ask it.
+ */
+export type AccountGateState = Omit<
+  AccountState,
+  "email" | "name" | "image" | "sessionEpoch"
+>;
+
 export interface AccountGateOptions {
   /** Whether an unverified email blocks sign-in, mirroring the password path. */
   requireEmailVerification: boolean;
@@ -103,7 +114,7 @@ export interface AccountGateOptions {
  * first, so a locked account answers generically even to a correct password.
  */
 export function assertAccountUsable(
-  state: AccountState,
+  state: AccountGateState,
   opts: AccountGateOptions
 ): void {
   const now = opts.now ?? new Date();
@@ -153,7 +164,7 @@ export function assertAccountUsable(
  * gate's own refusal is rethrown: a failure to judge is not a judgement.
  */
 export function accountMayHoldSession(
-  state: AccountState | null,
+  state: AccountGateState | null,
   opts: AccountGateOptions
 ): boolean {
   if (!state) return false;
