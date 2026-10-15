@@ -20,6 +20,7 @@ import {
   buildAuditLogWriter,
   isStrategyName,
 } from "../../domains/audit/audit-log-writer";
+import type { LimitStore } from "../../domains/limits/limit-store";
 import { NextlyError } from "../../errors";
 import { getHookRegistry } from "../../hooks/hook-registry";
 import { env } from "../../lib/env";
@@ -51,6 +52,7 @@ import { verifyCredentials } from "../credentials/verify-credentials";
 import { ChallengeRegistry } from "../pipeline/challenge";
 import { AuthHookRegistry } from "../pipeline/hooks";
 import { createPasswordStrategy } from "../pipeline/password-strategy";
+import { databaseSpentChallenges } from "../pipeline/spent-challenges";
 import type { AuthHooks, ChallengeDefinition } from "../pipeline/types";
 import type { AccountState } from "../session/account-state";
 import type { SessionRoles } from "../session/session-roles";
@@ -102,6 +104,15 @@ export function buildAuthRouterDeps(
     allowedOrigins: env.NEXTLY_ALLOWED_ORIGINS_PARSED || [],
     ...readProxyTrustSettings(() => getService("config")),
     authRateLimit: readAuthRateLimit(getService),
+    limitStore: readLimitStore(getService),
+    // Resolved per call, like the lookups below: the adapter is the
+    // container's, and nothing here should hold one captured at build time.
+    spentChallenges: {
+      isSpent: mark =>
+        databaseSpentChallenges(getService("adapter")).isSpent(mark),
+      spend: (mark, expiresAt) =>
+        databaseSpentChallenges(getService("adapter")).spend(mark, expiresAt),
+    },
     auditLog: buildAuditLogWriter(getService),
 
     findUserById: async (userId: string) => {
@@ -805,6 +816,20 @@ function numberOr(value: unknown, fallback: number): number {
 }
 
 /**
+ * The limit store the site selected, or undefined where the container has
+ * none registered (a context built without the limit services).
+ */
+function readLimitStore(
+  getService: (name: string) => unknown
+): LimitStore | undefined {
+  try {
+    return getService("limitStore") as LimitStore;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * The configured per-IP auth limit.
  *
  * Exported so a plugin route opting into `rateLimit: "auth"` uses the same
@@ -849,12 +874,14 @@ export function readAuthRateLimit(getService: (name: string) => unknown): {
 /**
  * The boot warning owed when a second-factor attempt budget is per process.
  *
- * The budget lives in the configured rate-limit store, and in this process's
- * memory when none is configured. On serverless or any multi-instance
- * deployment each instance then counts its own attempts, so the effective cap
- * grows with the instance count. That is a sound default for one process and
- * a silent weakening for many, so an install that registers a challenge
- * without a shared store is told once, at boot, rather than never.
+ * The budget lives in an app's own store of the earlier contract when one is
+ * configured, and otherwise in the selected limit store. With the memory
+ * store on serverless or any multi-instance deployment each instance counts
+ * its own wrong answers, so the effective cap grows with the instance count.
+ * That is a sound default for one process and a silent weakening for many, so
+ * an install that registers a challenge without a shared store, and without
+ * saying it runs one instance, is told once, at boot, rather than never.
+ * Single use is not at stake: a correct answer is marked in the database.
  */
 export function challengeBudgetWarning(
   plugins: readonly PluginDefinition[],
@@ -865,11 +892,24 @@ export function challengeBudgetWarning(
     .flatMap(plugin => plugin.contributes?.auth?.challenges ?? []);
   if (challenges.length === 0) return null;
   if (readAuthRateLimit(() => config).store !== undefined) return null;
+  const rateLimit = configBlock(config, "rateLimit");
+  if (rateLimit?.["singleInstance"] === true) return null;
+  const selected = rateLimit?.["limitStore"];
+  if (
+    selected === "database" ||
+    (typeof selected === "object" &&
+      selected !== null &&
+      (selected as { shared?: unknown }).shared === true)
+  ) {
+    return null;
+  }
   return (
     "[nextly] Second-factor challenges are registered but no shared rate-limit " +
-    "store is configured (rateLimit.store), so each process counts its own " +
-    "attempts: with several instances the attempt cap is multiplied by their " +
-    "number. Configure a shared store for a multi-instance deployment."
+    "store is selected, so each instance counts its own wrong answers: with " +
+    "several instances the attempt cap is multiplied by their number. Select " +
+    'the database store (rateLimit.store: "database"), or set ' +
+    "rateLimit.singleInstance if the site runs one instance. A correct answer " +
+    "is accepted once on every instance either way."
   );
 }
 

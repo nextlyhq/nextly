@@ -13,7 +13,11 @@ import {
   type ChallengeResolveDeps,
 } from "../challenge-resolve";
 
+import { authRateLimiter } from "../../middleware/rate-limiter";
+import { SlidingWindowMemoryStore } from "../../middleware/sliding-window-store";
+
 import { fakeSessionRows } from "./session-row-fake";
+import { fakeSpentChallenges } from "./spent-challenges-fake";
 
 const SECRET = "test-secret-that-is-at-least-32-characters-long!!";
 
@@ -73,6 +77,7 @@ function makeDeps() {
     peekChallengeAttempts: undefined as
       | ChallengeResolveDeps["peekChallengeAttempts"]
       | undefined,
+    spentChallenges: fakeSpentChallenges(),
   };
 }
 
@@ -346,7 +351,7 @@ describe("handleChallengeResolve (D71)", () => {
  */
 describe("the challenge attempt budget", () => {
   /** Answer wrongly as `userId`, returning the key the counter was given. */
-  async function keyFor(userId: string): Promise<string> {
+  async function keyFor(userId: string, challengeId = "totp"): Promise<string> {
     const deps = makeDeps();
     const seen: string[] = [];
     const withCounter = {
@@ -360,7 +365,7 @@ describe("the challenge attempt budget", () => {
     // one login rather than two logins with budgets of their own.
     const pendingToken = await mint({
       userId,
-      challengeId: "totp",
+      challengeId,
       attempts: 0,
       flow: "one-login",
     });
@@ -379,12 +384,15 @@ describe("the challenge attempt budget", () => {
     const second = await keyFor("u2");
 
     expect(first).not.toBe(second);
-    expect(first).toContain("u1");
-    expect(second).toContain("u2");
-    // Both still name the challenge, so a user answering TOTP wrongly does
-    // not spend the budget for a different factor they also hold.
-    expect(first).toContain("totp");
-    expect(second).toContain("totp");
+    // The key names an account, so it is stored only as a keyed hash.
+    expect(first).not.toContain("u1");
+    expect(second).not.toContain("u2");
+  });
+
+  it("gives one account's two factors separate budgets", async () => {
+    // A user answering TOTP wrongly does not spend the budget for a
+    // different factor they also hold.
+    expect(await keyFor("u1", "totp")).not.toBe(await keyFor("u1", "sms"));
   });
 
   it("gives one account the SAME budget across attempts", async () => {
@@ -498,8 +506,6 @@ describe("the challenge attempt budget, per login flow", () => {
     const second = await keyFor({ flow: "flow-two" });
 
     expect(first).not.toBe(second);
-    expect(first).toContain("flow-one");
-    expect(second).toContain("flow-two");
   });
 
   it("keeps one budget across the retries of a single login", async () => {
@@ -536,7 +542,6 @@ describe("the challenge attempt budget, per login flow", () => {
 
     expect(seen).toHaveLength(2);
     expect(seen[0]).toBe(seen[1]);
-    expect(seen[0]).toContain("flow-one");
   });
 
   it("REFUSES a token carrying no flow lifetime", async () => {
@@ -1035,9 +1040,9 @@ describe("an account the gate refuses never reaches the resolver", () => {
 
 describe("a pending token after its challenge succeeded", () => {
   it("cannot be replayed to mint a second session", async () => {
-    // The default counter (process memory), so the settle mark and the
-    // budget live where production keeps them without a shared store. A
-    // flow id of its own keeps other cases' counts out of this one.
+    // The default counter (process memory) for the budget, and the marks a
+    // correct answer writes. A flow id of its own keeps other cases' counts
+    // out of this one.
     const deps = makeDeps();
     const pendingToken = await mint({
       userId: "u1",
@@ -1122,8 +1127,8 @@ describe("a pending token after its challenge succeeded", () => {
         deps
       );
 
-    // The loser arriving once the winner has finished: it meets the spent
-    // budget, which a correct answer filled, not the settle mark.
+    // The loser arriving once the winner has finished: it meets the settled
+    // flow's mark, a refusal that never takes the cookie.
     const winner = await overCookie();
     const loser = await overCookie();
 
@@ -1132,6 +1137,198 @@ describe("a pending token after its challenge succeeded", () => {
     expect(loser.headers.getSetCookie().join("\n")).not.toMatch(
       /nextly_pending=;/
     );
+  });
+});
+
+describe("settling a flow", () => {
+  it("refuses a correct answer its resolver finished after the flow's end, minting no session", async () => {
+    vi.useFakeTimers({ toFake: ["Date"], now: Date.now() });
+    try {
+      const deps = makeDeps();
+      deps.challengeRegistry = new ChallengeRegistry();
+      deps.challengeRegistry.add({
+        id: "totp",
+        // Right, but answered once the flow's five minutes are over.
+        resolve: async () => {
+          vi.setSystemTime(Date.now() + 301_000);
+          return { ok: true };
+        },
+      });
+      const pendingToken = await mint({ userId: "u1", challengeId: "totp" });
+
+      const res = await handleChallengeResolve(
+        makeRequest({ pendingToken, response: { code: "123456" } }),
+        deps
+      );
+
+      expect(res.status).toBe(401);
+      expect(deps.sessionRows.committed).toHaveLength(0);
+      expect(deps.spentChallenges.marks.size).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps single use, in the rate-limit store, for deps assembled without the database's marks", async () => {
+    const { spentChallenges: _unused, ...deps } = makeDeps();
+    const pendingToken = await mint({ userId: "u1", challengeId: "totp" });
+
+    const first = await handleChallengeResolve(
+      makeRequest({ pendingToken, response: { code: "123456" } }),
+      deps
+    );
+    const replay = await handleChallengeResolve(
+      makeRequest({ pendingToken, response: { code: "123456" } }),
+      deps
+    );
+
+    expect(first.status).toBe(200);
+    expect(replay.status).toBe(401);
+    expect(deps.sessionRows.committed).toHaveLength(1);
+  });
+});
+
+describe("marks injected in place of the database's", () => {
+  it("are told to keep a mark past its token's end, so two answers reaching them after it mint one session", async () => {
+    // Marks that keep each one only until the expiry they are given, with a
+    // clock already past the token's five minutes, as two answers let
+    // through before the end reach them after it.
+    const kept = new Map<string, number>();
+    const afterTheEnd = () => Date.now() + 301_000;
+    const deps = makeDeps();
+    const strict = {
+      isSpent: async (mark: string) => (kept.get(mark) ?? 0) > afterTheEnd(),
+      spend: async (mark: string, expiresAt: number) => {
+        if ((kept.get(mark) ?? 0) > afterTheEnd()) return false;
+        kept.set(mark, expiresAt);
+        return true;
+      },
+    };
+    let arrived = 0;
+    let release: () => void = () => undefined;
+    const bothArrived = new Promise<void>(resolve => {
+      release = resolve;
+    });
+    deps.challengeRegistry = new ChallengeRegistry();
+    deps.challengeRegistry.add({
+      id: "totp",
+      resolve: async () => {
+        arrived += 1;
+        if (arrived === 2) release();
+        await bothArrived;
+        return { ok: true };
+      },
+    });
+    const withStrict = { ...deps, spentChallenges: strict };
+    const pendingToken = await mint({ userId: "u1", challengeId: "totp" });
+    const answer = () =>
+      handleChallengeResolve(
+        makeRequest({ pendingToken, response: { code: "123456" } }),
+        withStrict
+      );
+
+    const statuses = (await Promise.all([answer(), answer()])).map(
+      res => res.status
+    );
+
+    expect(statuses.sort()).toEqual([200, 401]);
+    expect(deps.sessionRows.committed).toHaveLength(1);
+  });
+});
+
+describe("a rolling upgrade on a shared store of the earlier contract", () => {
+  /** What an instance of the earlier release does with a flow, in that store. */
+  function earlierRelease(store: SlidingWindowMemoryStore, flow: string) {
+    const limiter = authRateLimiter(store);
+    const key = `u1:totp:${flow}`;
+    return {
+      // It settles a flow by taking this mark, then filling the budget.
+      settle: async () => {
+        await limiter.check(`${key}:settled`, 1, 300_000);
+        for (let i = 0; i < 5; i++) await limiter.check(key, 5, 300_000);
+      },
+      // And refuses an answer when its budget is spent, or its mark taken.
+      wouldRefuse: async () =>
+        !(await limiter.check(key, 5, 300_000)).allowed ||
+        !(await limiter.check(`${key}:settled`, 1, 300_000)).allowed,
+    };
+  }
+
+  it("refuses, before the resolver, a flow an instance of the earlier release settled", async () => {
+    const store = new SlidingWindowMemoryStore();
+    const deps = { ...makeDeps(), authRateLimit: { store } };
+    const resolve = vi.spyOn(deps.challengeRegistry, "resolve");
+    const flow = randomUUID();
+    await earlierRelease(store, flow).settle();
+    const pendingToken = await mint({
+      userId: "u1",
+      challengeId: "totp",
+      flow,
+    });
+
+    const res = await handleChallengeResolve(
+      makeRequest({ pendingToken, response: { code: "123456" } }),
+      deps
+    );
+
+    expect(res.status).toBe(401);
+    expect(resolve).not.toHaveBeenCalled();
+    expect(deps.sessionRows.committed).toHaveLength(0);
+  });
+
+  it("leaves a flow it settled refused by an instance of the earlier release", async () => {
+    const store = new SlidingWindowMemoryStore();
+    const deps = { ...makeDeps(), authRateLimit: { store } };
+    const flow = randomUUID();
+    const pendingToken = await mint({
+      userId: "u1",
+      challengeId: "totp",
+      flow,
+    });
+
+    const res = await handleChallengeResolve(
+      makeRequest({ pendingToken, response: { code: "123456" } }),
+      deps
+    );
+
+    expect(res.status).toBe(200);
+    expect(await earlierRelease(store, flow).wouldRefuse()).toBe(true);
+  });
+});
+
+describe("deps assembled without the database's marks, over a store with no consume", () => {
+  it("refuses a replay before the resolver runs again", async () => {
+    // The earlier contract's required methods only: it cannot be read
+    // without recording, so the mark cannot be peeked at.
+    const counts = new Map<string, number>();
+    const store = {
+      increment: async (key: string, windowMs: number) => {
+        const count = (counts.get(key) ?? 0) + 1;
+        counts.set(key, count);
+        return { count, resetTime: Date.now() + windowMs };
+      },
+      reset: async (key: string) => {
+        counts.delete(key);
+      },
+    };
+    const { spentChallenges: _unused, ...rest } = makeDeps();
+    const deps = { ...rest, authRateLimit: { store } };
+    const resolve = vi.spyOn(deps.challengeRegistry, "resolve");
+    const pendingToken = await mint({ userId: "u1", challengeId: "totp" });
+
+    const first = await handleChallengeResolve(
+      makeRequest({ pendingToken, response: { code: "123456" } }),
+      deps
+    );
+    const replay = await handleChallengeResolve(
+      makeRequest({ pendingToken, response: { code: "123456" } }),
+      deps
+    );
+
+    expect(first.status).toBe(200);
+    expect(replay.status).toBe(401);
+    expect(resolve).toHaveBeenCalledTimes(1);
+    expect(deps.sessionRows.committed).toHaveLength(1);
   });
 });
 
@@ -1444,10 +1641,9 @@ describe("a cookie-mode flow that can no longer succeed", () => {
   it("reports the flow over when an injected counter says its budget is spent", async () => {
     const deps = makeDeps();
     deps.countChallengeAttempt = async () => ({ allowed: false });
-    // The budget full and no settle mark taken: the refusal still cannot
-    // know whether a correct answer is about to take it.
-    deps.peekChallengeAttempts = async key =>
-      key.endsWith(":settled") ? 0 : 5;
+    // The budget full and no flow settled: the refusal still cannot know
+    // whether a correct answer is about to settle it.
+    deps.peekChallengeAttempts = async () => 5;
     const token = await mint({ userId: "u1", challengeId: "totp" });
 
     const res = await handleChallengeResolve(
@@ -1480,7 +1676,7 @@ describe("a cookie-mode flow that can no longer succeed", () => {
   });
 
   it("clears the cookie when the session is refused after the flow settled", async () => {
-    // The answer was right and settled the flow, spending its budget; the
+    // The answer was right and settled the flow, marking it answered; the
     // password was set again since the sign-in proved it, so the session is
     // refused. Nothing the token presents can succeed after that.
     const deps = makeDeps();

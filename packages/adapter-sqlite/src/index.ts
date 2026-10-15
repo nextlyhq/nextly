@@ -34,7 +34,7 @@
  * @packageDocumentation
  */
 
-import { AsyncLocalStorage } from "node:async_hooks";
+import { AsyncLocalStorage, AsyncResource } from "node:async_hooks";
 
 import { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 // F17: connect-time DB version check shared across all adapters.
@@ -568,7 +568,7 @@ export class SqliteAdapter extends DrizzleAdapter {
     const root = outermost(scope);
     if (!root.finished) {
       root.held.push({
-        effect,
+        effect: this.inRegisteringContext(effect),
         onDeferredFailure,
         scope,
         writesBefore: scope.writesAfterClosing,
@@ -576,6 +576,24 @@ export class SqliteAdapter extends DrizzleAdapter {
       return;
     }
     if (!undone(scope, scope.writesAfterClosing)) await effect();
+  }
+
+  /**
+   * `effect`, bound to the async context it is registered from.
+   *
+   * A held effect runs after the outermost COMMIT, from the code that ran the
+   * outermost transaction, so without this it sees that code's context rather
+   * than its own: whatever its caller pinned around the write is gone. That
+   * includes who is calling. A scope pinned for a scoped API key lost there
+   * leaves a hook's nested call judged by the key's owner instead of the key,
+   * and a person's frame lost there leaves the hook told of nobody.
+   *
+   * The adapter's own transaction scope is the one store it leaves: the
+   * effect runs once that transaction has finished, outside it, as an effect
+   * held to the outermost commit always has.
+   */
+  private inRegisteringContext(effect: () => unknown): () => unknown {
+    return AsyncResource.bind(() => this.transactionScope.exit(effect));
   }
 
   /**

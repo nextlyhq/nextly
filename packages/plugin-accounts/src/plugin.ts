@@ -3,7 +3,8 @@ import { definePlugin, type PluginContext } from "@nextlyhq/plugin-sdk";
 import { version as PLUGIN_VERSION } from "../package.json";
 
 import { ADMIN_PAGES, adminPageHref } from "./admin-contract";
-import { readAccountsCore } from "./core/adapter";
+import { assertLimitsShared, readAccountsCore } from "./core/adapter";
+import { accountsLimitRules } from "./core/limit-rules";
 import type { AccountsCore } from "./core/ports";
 import { accountsError } from "./errors";
 import { ACCOUNTS_EVENTS } from "./flows/deps";
@@ -36,6 +37,9 @@ import { flowDepsFor, sendQueuedEmail, sweepAll } from "./wiring/runtime";
  *
  * @experimental
  * @throws `ACCOUNTS_INVALID_OPTIONS` for an option outside its bounds
+ * @throws at start, `ACCOUNTS_CORE_MISSING` on a core that does not lend
+ *   every helper the plugin is built on, and in production
+ *   `ACCOUNTS_LIMITS_NOT_SHARED` on limit counts each instance keeps apart
  */
 export function accounts(options: AccountsOptions) {
   return buildAccounts(options, readAccountsCore);
@@ -50,7 +54,9 @@ export function buildAccounts(
   options: AccountsOptions,
   coreFor: (ctx: PluginContext) => AccountsCore,
   /** How the started plugin reaches its database: its own `ctx.db`, or a view of it the stand-ins watch. */
-  databaseFor: (ctx: PluginContext) => PluginContext["db"] = ctx => ctx.db
+  databaseFor: (ctx: PluginContext) => PluginContext["db"] = ctx => ctx.db,
+  /** Whether the site runs in production, as core judges it. */
+  production: () => boolean = () => process.env.NODE_ENV === "production"
 ) {
   // Checked when the site's configuration is read, so a site never boots on
   // a number it did not choose.
@@ -86,6 +92,9 @@ export function buildAccounts(
     schemaVersion: SCHEMA_VERSION,
     contributes: {
       schema: accountsSchema,
+      // The limit rules every flow reserves on, from the site's settings;
+      // core checks each against its bounds at start.
+      limits: accountsLimitRules(settings),
       principals: [accountKind(deps)],
       routes: [...accountsRoutes(deps), ...staffRoutes(deps)],
       permissions: STAFF_PERMISSIONS,
@@ -119,6 +128,12 @@ export function buildAccounts(
       ],
     },
     init: ctx => {
+      // Refuses to start, before any route or job can run, on a core that
+      // does not lend every helper the plugin is built on, and in
+      // production on limit counts each instance keeps apart, which would
+      // multiply every limit by the number of instances.
+      const core = coreFor(ctx);
+      assertLimitsShared(core.limits, production());
       context = ctx;
       rememberInstalled(deps);
     },

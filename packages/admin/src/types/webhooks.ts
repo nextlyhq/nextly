@@ -218,13 +218,17 @@ export interface RunDrainResult {
   /**
    * Rows retention removed on this pass. `events` and `deliveries` are the
    * webhook ledger; `activity` and `auth` are the audit trails, which the drain
-   * prunes on their own windows. Reported separately rather than summed — they
-   * are different tables answering different questions.
+   * prunes on their own windows; `emailDeliveries` is the email delivery log
+   * and `oneTimeSecrets` plugins' expired one-purpose secrets. Reported
+   * separately rather than summed — they are different tables answering
+   * different questions.
    */
   pruned: {
     events: number;
     deliveries: number;
     activity: number;
     auth: number;
+    emailDeliveries: number;
+    oneTimeSecrets: number;
   };
 }

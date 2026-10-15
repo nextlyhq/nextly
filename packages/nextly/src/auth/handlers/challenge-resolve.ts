@@ -1,6 +1,10 @@
 import { readOrGenerateRequestId } from "../../api/request-id";
 import type { AuditLogWriter } from "../../domains/audit/audit-log-writer";
 import { auditReason } from "../../domains/audit/audit-reasons";
+import {
+  limitStoreUnavailableReason,
+  type LimitStore,
+} from "../../domains/limits/limit-store";
 import { NextlyError } from "../../errors/nextly-error";
 import type { RateLimitStore } from "../../middleware/rate-limit";
 import type { AuthUser } from "../../types/auth";
@@ -11,11 +15,20 @@ import {
 } from "../cookies/pending-cookie";
 import type { ChallengeRegistry } from "../pipeline/challenge";
 import {
+  challengeFlowKeys,
+  type ChallengeFlow,
+} from "../pipeline/challenge-keys";
+import {
   mintPendingToken,
   verifyPendingToken,
   MUST_CHANGE_PASSWORD_CHALLENGE,
 } from "../pipeline/pending-token";
+import {
+  SPENT_MARK_GRACE_MS,
+  type SpentChallenges,
+} from "../pipeline/spent-challenges";
 
+import { limitStoreChallengeBudget } from "./challenge-budget";
 import {
   jsonResponse,
   stallResponse,
@@ -68,16 +81,25 @@ export interface ChallengeResolveDeps extends IssueSessionDeps {
     windowMs: number
   ) => Promise<number | undefined>;
   /**
-   * Where the attempt window lives, when one is configured.
-   *
-   * The same store the rest of auth rate-limits against, for the same reason:
-   * absent, the window is this process's memory, so every worker enforces its
-   * own copy of the budget and the real cap is `maxChallengeAttempts` times
-   * the instance count. That is the multi-worker and serverless case — exactly
-   * where an operator has configured a shared store and is entitled to think
-   * the MFA cap holds.
+   * An app's own store of the earlier `RateLimitStore` contract, when it
+   * configured one: it keeps serving the attempt budget, as it serves the rest
+   * of auth's limits.
    */
   authRateLimit?: { store?: RateLimitStore };
+  /**
+   * The limit store the site selected (`rateLimit.store`: memory, or the
+   * database every instance shares), where the attempt budget is counted
+   * when no store of the earlier contract is configured.
+   */
+  limitStore?: LimitStore;
+  /**
+   * The flows a correct answer has settled, kept in the database so a
+   * challenge is answered once on every instance, whatever the limit store.
+   * Core always supplies it. Absent, from deps assembled by hand, the marks
+   * are kept in the rate-limit store as they used to be, so single use holds
+   * across instances only where that store is shared.
+   */
+  spentChallenges?: SpentChallenges;
   allowedOrigins: string[];
   loginStallTimeMs: number;
   auditLog: AuditLogWriter;
@@ -219,66 +241,105 @@ async function passwordChangeRequired(
  * The count is held server-side because the token's own number is attacker
  * supplied. That number is still carried forward, for a client showing
  * progress, but it is not what enforces anything.
+ *
+ * A store that cannot be reached, or does not answer in time, refuses the
+ * answer with one to try again shortly, before anything is examined: an
+ * attempt that could not be counted is never examined uncounted.
  */
 async function spendChallengeAttempt(
   deps: AttemptCounterDeps,
   pending: PendingFlow
 ): Promise<void> {
-  const verdict = await attemptCounter(deps)(
-    challengeFlowKey(pending),
-    deps.maxChallengeAttempts,
-    deps.challengeTokenTTL * 1000
-  );
+  let verdict: { allowed: boolean };
+  try {
+    verdict = await attemptCounter(deps, pending)(
+      challengeFlowKeys(deps.secret, pending).budget,
+      deps.maxChallengeAttempts,
+      deps.challengeTokenTTL * 1000
+    );
+  } catch (error) {
+    // The store's own answer that it could not count, and any failure that
+    // is not an application error, are both an uncounted attempt.
+    const storeDown =
+      limitStoreUnavailableReason(error) !== undefined ||
+      !NextlyError.is(error);
+    throw storeDown ? budgetUnavailable(error) : error;
+  }
   if (!verdict.allowed) {
-    // Its own reason, and not a terminal one. The budget is full both when
-    // the flow can no longer succeed and when a correct answer settled it,
-    // and the second may be a request still in flight that is about to hand
-    // the browser a cookie for the next step, so this refusal leaves the
-    // cookie alone. `/auth/pending` reports a spent budget as over, which is
-    // what releases the login page.
+    // Its own reason, and not a terminal one: a spent budget may be the
+    // loser's view of a correct answer still on its way to setting the
+    // cookie for the next step, so this refusal leaves the cookie alone.
+    // `/auth/pending` reports a spent budget as over, which is what
+    // releases the login page.
     throw NextlyError.invalidCredentials({
       logContext: { reason: auditReason("challenge-budget-spent") },
     });
   }
 }
 
+/** The refusal owed when the budget's store could not answer. */
+function budgetUnavailable(error: unknown): NextlyError {
+  return NextlyError.serviceUnavailable({
+    publicMessage: "Please try again shortly.",
+    logMessage:
+      "A two-factor answer was refused: its attempt budget could not be counted.",
+    cause: error instanceof Error ? error : undefined,
+  });
+}
+
 /** What counting against a challenge flow's budget needs. */
 type AttemptCounterDeps = Pick<
   ChallengeResolveDeps,
+  | "secret"
   | "challengeTokenTTL"
   | "maxChallengeAttempts"
   | "countChallengeAttempt"
   | "peekChallengeAttempts"
   | "authRateLimit"
+  | "limitStore"
 >;
 
-/** The claims that identify one interrupted login. */
-interface PendingFlow {
-  userId: string;
-  challengeId: string;
-  flow?: string;
+/** The claims that identify one interrupted login, and when it ends. */
+interface PendingFlow extends ChallengeFlow {
+  /** When the flow stops being answerable, in seconds since the epoch. */
+  flowExpiresAt?: number;
+}
+
+/**
+ * How long `pending` has left to live, in ms: how long its budget is kept.
+ * At least a second, so a flow answered at its very end is still counted.
+ */
+function flowRemainingMs(pending: PendingFlow, fallbackMs: number): number {
+  if (pending.flowExpiresAt === undefined) return fallbackMs;
+  return Math.max(1000, pending.flowExpiresAt * 1000 - Date.now());
 }
 
 /**
  * The counter a challenge flow's budget is kept in.
  *
- * The CONFIGURED store, not the module-level default. `authRateLimiter()`
- * with no argument returns the process-memory limiter whatever the install
- * configured, so each worker counted its own five attempts and the cap was
- * effectively multiplied by the instance count — in the deployments that
- * have a shared store precisely because they run more than one process.
+ * An app's own store of the earlier `RateLimitStore` contract keeps serving
+ * it, as it serves core's other limits. Otherwise the limit store the site
+ * selected: memory, or the database, which every instance shares. Never the
+ * module-level default limiter when a store is configured: that is this
+ * process's memory whatever the install configured, and on several instances
+ * the cap was multiplied by their number.
  */
 function attemptCounter(
-  deps: AttemptCounterDeps
+  deps: AttemptCounterDeps,
+  pending: PendingFlow
 ): NonNullable<ChallengeResolveDeps["countChallengeAttempt"]> {
-  const store = deps.authRateLimit?.store;
-  return (
-    deps.countChallengeAttempt ??
-    (async (key: string, limit: number, windowMs: number) => {
-      const { authRateLimiter } = await import("../middleware/rate-limiter");
-      return authRateLimiter(store).check(key, limit, windowMs);
-    })
-  );
+  if (deps.countChallengeAttempt) return deps.countChallengeAttempt;
+  const legacy = deps.authRateLimit?.store;
+  const selected = deps.limitStore;
+  if (legacy === undefined && selected !== undefined) {
+    const budget = limitStoreChallengeBudget(selected);
+    return (key, limit, windowMs) =>
+      budget.spend(key, limit, flowRemainingMs(pending, windowMs));
+  }
+  return async (key: string, limit: number, windowMs: number) => {
+    const { authRateLimiter } = await import("../middleware/rate-limiter");
+    return authRateLimiter(legacy).check(key, limit, windowMs);
+  };
 }
 
 /**
@@ -300,80 +361,206 @@ async function peekAttempts(
       return await deps.peekChallengeAttempts(key, windowMs);
     }
     if (deps.countChallengeAttempt) return undefined;
+    const legacy = deps.authRateLimit?.store;
+    if (legacy === undefined && deps.limitStore !== undefined) {
+      return await limitStoreChallengeBudget(deps.limitStore).spent(key);
+    }
     const { authRateLimiter } = await import("../middleware/rate-limiter");
-    return await authRateLimiter(deps.authRateLimit?.store).peek(key, windowMs);
+    return await authRateLimiter(legacy).peek(key, windowMs);
   } catch {
     return undefined;
   }
 }
 
+/** What reaching the marks needs, whether core supplied them or not. */
+type SpentChallengesDeps = Pick<
+  ChallengeResolveDeps,
+  | "spentChallenges"
+  | "authRateLimit"
+  | "challengeTokenTTL"
+  | "maxChallengeAttempts"
+>;
+
 /**
- * Whether a flow's attempt budget is spent, so no answer it presents can be
- * examined again. Unknown reads as not spent.
+ * Whether the earlier release's mark is kept as well: in the rate-limit
+ * store, under the key that release used.
+ *
+ * Where an app's own store of the earlier contract is configured, instances
+ * still on the earlier release read and write that mark there during a
+ * rolling upgrade, so this release takes and reads it too, and each refuses a
+ * flow the other settled. Deps assembled without the database's marks keep it
+ * as their only mark, as they did.
  */
-export async function challengeBudgetSpent(
-  deps: AttemptCounterDeps,
-  pending: PendingFlow
-): Promise<boolean> {
-  const count = await peekAttempts(deps, challengeFlowKey(pending));
-  return count !== undefined && count >= deps.maxChallengeAttempts;
+function keepsEarlierMark(deps: SpentChallengesDeps): boolean {
+  return (
+    deps.authRateLimit?.store !== undefined ||
+    deps.spentChallenges === undefined
+  );
 }
 
 /**
- * The key one interrupted login's budget is counted under.
- *
- * Keyed by USER, challenge, and FLOW. `challengeId` names the challenge
- * DEFINITION — "totp" — so keying on it alone pooled every account's wrong
- * answers into one budget: a handful of failures by anyone locked out every
- * user of that challenge until the window expired.
- *
- * The FLOW narrows it to one interrupted login, which is what the cap
- * actually bounds. Without it every login the account started — including
- * the ones that SUCCEEDED — drew on one counter, so five completed logins
- * inside the window refused the sixth before it was attempted. A replayed
- * token cannot escape its own flow: the id is signed into the token, and
- * every re-issue carries it forward. A token from before the claim existed
- * shares one budget, exactly as every token did then.
+ * The key the earlier release counts a flow's budget under; its settled mark
+ * is this with `:settled`. It names the account, as it always did in an
+ * app's own store.
  */
-function challengeFlowKey(pending: PendingFlow): string {
+function earlierFlowKey(pending: PendingFlow): string {
   return `${pending.userId}:${pending.challengeId}:${pending.flow ?? "0"}`;
+}
+
+/** The limiter over the store the earlier mark lives in. */
+async function earlierLimiter(deps: SpentChallengesDeps) {
+  const { authRateLimiter } = await import("../middleware/rate-limiter");
+  return authRateLimiter(deps.authRateLimit?.store);
+}
+
+/**
+ * Whether the earlier mark says the flow is settled, or its budget is full,
+ * as the earlier release leaves it once a flow settles. False where the store
+ * cannot tell without recording; such a flow is refused when its budget is
+ * spent instead, which settling fills.
+ */
+async function earlierMarkTaken(
+  deps: SpentChallengesDeps,
+  pending: PendingFlow
+): Promise<boolean> {
+  if (!keepsEarlierMark(deps)) return false;
+  const limiter = await earlierLimiter(deps);
+  const key = earlierFlowKey(pending);
+  const windowMs = deps.challengeTokenTTL * 1000;
+  const [mark, budget] = await Promise.all([
+    limiter.peek(`${key}:settled`, windowMs),
+    limiter.peek(key, windowMs),
+  ]);
+  return (mark ?? 0) >= 1 || (budget ?? 0) >= deps.maxChallengeAttempts;
+}
+
+/**
+ * Take the earlier mark, as the earlier release did: true for the first
+ * caller, false once taken. Then fill the flow's budgets, its earlier one and
+ * this release's, so either release refuses a later answer before examining
+ * it, even where its store cannot be read without recording.
+ */
+async function takeEarlierMark(
+  deps: SpentChallengesDeps & AttemptCounterDeps,
+  pending: PendingFlow
+): Promise<boolean> {
+  if (!keepsEarlierMark(deps)) return true;
+  const limiter = await earlierLimiter(deps);
+  const key = earlierFlowKey(pending);
+  const windowMs = deps.challengeTokenTTL * 1000;
+  if (!(await limiter.check(`${key}:settled`, 1, windowMs)).allowed) {
+    return false;
+  }
+  const count = attemptCounter(deps, pending);
+  const budget = challengeFlowKeys(deps.secret, pending).budget;
+  // Bounded by the budget: each call records one attempt, so each budget is
+  // full after at most `maxChallengeAttempts` of them. Best effort: the mark
+  // is what refuses, and a store that fails here has already taken it.
+  try {
+    for (let i = 0; i < deps.maxChallengeAttempts; i++) {
+      const earlier = await limiter.check(
+        key,
+        deps.maxChallengeAttempts,
+        windowMs
+      );
+      const current = await count(budget, deps.maxChallengeAttempts, windowMs);
+      if (!earlier.allowed && !current.allowed) break;
+    }
+  } catch {
+    // The flow is settled whatever the budgets say.
+  }
+  return true;
+}
+
+/**
+ * Whether a correct answer already settled the flow: its mark in the
+ * database, or the earlier mark wherever that is kept. The one question the
+ * resolve path and `/auth/pending` both ask.
+ */
+async function flowSettled(
+  deps: Pick<ChallengeResolveDeps, "secret"> & SpentChallengesDeps,
+  pending: PendingFlow
+): Promise<boolean> {
+  if (deps.spentChallenges) {
+    const { mark } = challengeFlowKeys(deps.secret, pending);
+    if (await deps.spentChallenges.isSpent(mark)) return true;
+  }
+  return earlierMarkTaken(deps, pending);
+}
+
+/**
+ * Whether a flow is over before any answer it presents is examined: its
+ * attempt budget is spent, or a correct answer already settled it. Unknown
+ * reads as not over: the answer only advises the login page, and the resolve
+ * path asks again before it examines anything.
+ */
+export async function challengeFlowOver(
+  deps: AttemptCounterDeps & SpentChallengesDeps,
+  pending: PendingFlow
+): Promise<boolean> {
+  const keys = challengeFlowKeys(deps.secret, pending);
+  const count = await peekAttempts(deps, keys.budget);
+  if (count !== undefined && count >= deps.maxChallengeAttempts) return true;
+  try {
+    return await flowSettled(deps, pending);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Refuse a flow a correct answer has already settled, before its budget is
+ * spent or its answer examined.
+ *
+ * The mark is in the database, so a token answered on one instance is
+ * refused here on any other, and a replay never reaches the resolver, which
+ * is plugin code that may act on what it is given.
+ */
+async function refuseIfFlowSettled(
+  deps: Pick<ChallengeResolveDeps, "secret"> & SpentChallengesDeps,
+  pending: PendingFlow
+): Promise<void> {
+  if (await flowSettled(deps, pending)) {
+    throw NextlyError.invalidCredentials({
+      logContext: { reason: auditReason("challenge-flow-settled") },
+    });
+  }
 }
 
 /**
  * Settle a flow whose challenge was answered correctly, so its pending token
  * cannot be spent again.
  *
- * The token is a JWT that stays valid until it expires, and after a success
- * the flow's budget still had attempts left: replaying the same token with
- * the same answer minted a second session. Two parts, both in the store the
- * budget already lives in:
- *
- *  - A one-shot mark, taken atomically. Of two presentations that both
- *    answered correctly at the same moment, only the first continues.
- *  - The rest of the budget, spent. A later presentation is then refused by
- *    `spendChallengeAttempt`, which runs before the resolver — so a replay
- *    never reaches plugin code that may act on it.
+ * The token is a JWT that stays valid until it expires: without this, the
+ * same token and answer would mint a second session. The mark is one row in
+ * the database, written in a transaction of its own and committed before any
+ * session is issued. Its key is unique, so of two answers that are both
+ * correct at the same moment, on any instances, exactly one writes it and
+ * continues; the other is refused here. Where the earlier mark is kept, it is
+ * taken too, and an answer that loses either is refused.
  */
 async function settleChallengeFlow(
-  deps: AttemptCounterDeps,
-  pending: PendingFlow
+  deps: Pick<ChallengeResolveDeps, "secret" | "maxChallengeAttempts"> &
+    SpentChallengesDeps &
+    AttemptCounterDeps,
+  pending: PendingFlow & { attempts: number }
 ): Promise<void> {
-  const count = attemptCounter(deps);
-  const key = challengeFlowKey(pending);
-  const windowMs = deps.challengeTokenTTL * 1000;
-
-  const mark = await count(`${key}:settled`, 1, windowMs);
-  if (!mark.allowed) {
-    throw NextlyError.invalidCredentials({
+  // The flow's lifetime again, now that the resolver has run: an answer let
+  // through just before the end may only reach this after it, and a flow
+  // past its end never settles, whatever its answer.
+  refuseIfFlowExhausted(pending, deps);
+  const settled = () =>
+    NextlyError.invalidCredentials({
       logContext: { reason: auditReason("challenge-flow-settled") },
     });
+  if (deps.spentChallenges) {
+    const { mark } = challengeFlowKeys(deps.secret, pending);
+    // A grace past the token's end: an answer let through before the end
+    // may reach its mark after it, and must still meet this one.
+    const keepUntil = (pending.flowExpiresAt ?? 0) * 1000 + SPENT_MARK_GRACE_MS;
+    if (!(await deps.spentChallenges.spend(mark, keepUntil))) throw settled();
   }
-  // Bounded by the budget itself: each call records one attempt, so the
-  // budget is full after at most `maxChallengeAttempts` of them.
-  for (let i = 0; i < deps.maxChallengeAttempts; i++) {
-    const spent = await count(key, deps.maxChallengeAttempts, windowMs);
-    if (!spent.allowed) break;
-  }
+  if (!(await takeEarlierMark(deps, pending))) throw settled();
 }
 
 /**
@@ -386,7 +573,7 @@ async function settleChallengeFlow(
  *
  *  - this request settled it and was refused afterwards — by the session
  *    gate, or by a password set since the sign-in — or failed outright: the
- *    settle spent what was left of the budget, so no retry can succeed;
+ *    flow's mark is written, so no retry can succeed;
  *  - the token's own count or lifetime says so (`terminalChallengeFailure`).
  *
  * Anything else keeps the cookie: a wrong answer replaces it with its retry
@@ -503,8 +690,7 @@ export async function handleChallengeResolve(
   // still has to say which method the attempt belonged to.
   let strategy: string | undefined;
   // Whether this request settled the flow: a refusal raised after the settle
-  // ends the flow for good, since the settle spent what was left of its
-  // budget.
+  // ends the flow for good, since its mark refuses every later answer.
   let settledHere = false;
 
   try {
@@ -547,6 +733,11 @@ export async function handleChallengeResolve(
     // behind, or an account reactivated while the token still lives finds
     // its budget already burned by refusals it never answered.
     await gateAccountForSession(deps, pending.userId, pending.strategy);
+
+    // A flow already answered goes no further, on whichever instance it was
+    // answered: before its budget is spent or its answer reaches the
+    // resolver.
+    await refuseIfFlowSettled(deps, pending);
 
     // BEFORE the answer is examined. Spending the budget only on a wrong
     // answer left a correct one free, and a replayed token could therefore

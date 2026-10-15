@@ -17,7 +17,7 @@ import {
 } from "../pipeline/pending-token";
 
 import {
-  challengeBudgetSpent,
+  challengeFlowOver,
   type ChallengeResolveDeps,
 } from "./challenge-resolve";
 
@@ -29,6 +29,8 @@ export interface PendingHandlerDeps
     | "countChallengeAttempt"
     | "peekChallengeAttempts"
     | "authRateLimit"
+    | "limitStore"
+    | "spentChallenges"
   > {
   secret: string;
 }
@@ -68,13 +70,14 @@ export async function handlePending(
       pending.flowExpiresAt === undefined
         ? pending.challengeId !== MUST_CHANGE_PASSWORD_CHALLENGE
         : Date.now() / 1000 >= pending.flowExpiresAt;
-    // And its attempt budget, which the resolve path checks before it looks
-    // at an answer: a flow whose budget is spent refuses every answer it
-    // could still be given. The must-change step has no budget to spend.
+    // And what the resolve path checks before it looks at an answer: a flow
+    // whose budget is spent, or that a correct answer already settled,
+    // refuses every answer it could still be given. The must-change step has
+    // no budget to spend.
     if (
       expired ||
       (pending.challengeId !== MUST_CHANGE_PASSWORD_CHALLENGE &&
-        (await challengeBudgetSpent(deps, pending)))
+        (await challengeFlowOver(deps, pending)))
     ) {
       return new Response(null, {
         status: 204,
