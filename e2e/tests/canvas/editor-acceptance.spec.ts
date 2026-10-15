@@ -194,13 +194,24 @@ const SCENARIOS: Readonly<Record<number, (page: Page) => Promise<void>>> = {
       "ea-third",
     ]);
 
+    // Mod-click takes ONE block out and leaves the rest of the run as it was:
+    // the whole set is compared, so a toggle that also loses part of the run
+    // fails. The first block left becomes primary, the leader having gone.
     await clickBlock(page, "ea-first", ["ControlOrMeta"]);
-    const toggledOff = await selection(page);
-    expect(toggledOff).not.toContain("ea-first");
-    expect(toggledOff).toContain("ea-third");
+    expect(await selection(page)).toEqual([
+      "ea-second",
+      "ea-section",
+      "ea-third",
+    ]);
 
+    // And puts it back as the leader, the block the author just pointed at.
     await clickBlock(page, "ea-first", ["ControlOrMeta"]);
-    expect(await selection(page)).toContain("ea-first");
+    expect(await selection(page)).toEqual([
+      "ea-first",
+      "ea-second",
+      "ea-section",
+      "ea-third",
+    ]);
   },
   3: async page => {
     await clickBlock(page, "ea-first");
