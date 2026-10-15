@@ -122,6 +122,15 @@ describe("a declared widget's starting query, once content is synced", () => {
     });
   });
 
+  it("starts, with no warning, over an existing collection the database alone holds", async () => {
+    // The database's content is warned about only when the query cannot run
+    // against it, not because the code does not define it.
+    await expect(check(listing("acme/a", "notes", "title"))).resolves.toBe(
+      undefined
+    );
+    expect(warn).not.toHaveBeenCalled();
+  });
+
   it("warns, and starts, over a collection that is in neither", async () => {
     // Not defined in code, so its absence is a fact about the database: it may
     // have been made in the Schema Builder and since deleted.
