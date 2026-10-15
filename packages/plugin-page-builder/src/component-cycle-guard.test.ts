@@ -215,7 +215,7 @@ function api(rows: {
     if (rows.unreadable?.includes(id) === true) {
       throw new Error("this row could not be read");
     }
-    // What the real Direct API does for a row that is not there: it THROWS
+    // What the store's by-id read does for a row that is not there: it THROWS
     // NOT_FOUND unless errors are disabled, rather than answering null.
     if (rows.deleted?.includes(id) === true) {
       throw NextlyError.notFound({ message: `no component ${id}` });
@@ -429,11 +429,11 @@ describe("saving a component that would reference itself", () => {
 
   it("treats a component the store no longer holds as absent, not as unreadable", async () => {
     /*
-     * The Direct API THROWS `NOT_FOUND` for a missing row rather than answering
-     * null. Caught as a failure, a saved reference to a component somebody
-     * deleted made the graph unknown — so every subsequent save of that
-     * component was refused until the reference was taken out by hand, for a
-     * state the renderer draws as a missing-component placeholder.
+     * A row that is not there is ABSENCE, not a failed read. Read as a failure,
+     * a saved reference to a component somebody deleted would make the graph
+     * unknown — so every later save of that component would be refused until
+     * the reference was taken out by hand, for a state the renderer draws as a
+     * missing-component placeholder.
      */
     const c = context();
     const { nextly } = api({ stored: { b: ["gone"] }, deleted: ["gone"] });
@@ -1323,10 +1323,10 @@ describe("saving a component that would reference itself", () => {
      * Completeness is not required to believe an id that was FOUND. A truncated
      * survey makes an ABSENT id uncertain and a present one no less present.
      *
-     * Asserted with NO Direct API, because that is the only configuration where
-     * the two behaviours differ. Demanding completeness made this document read
-     * as not naming itself, and the decline for a missing Direct API was then the
-     * next thing to run — so the write was permitted.
+     * Asserted over an EMPTY library, because that is where the two behaviours
+     * differ: demanding completeness made this document read as not naming
+     * itself, and nothing else in the library could then show the loop — so the
+     * write was permitted.
      *
      * With the id believed, the composition is consulted and cannot get through
      * the subject's OWN forest under this bound. That refuses — and it is a
@@ -1349,9 +1349,8 @@ describe("saving a component that would reference itself", () => {
 
   it("refuses a self-naming VARIANT among many others, reading nothing else", async () => {
     /*
-     * The self check runs ahead of the decline for a missing Direct API, so a
-     * document naming itself through a variant must be caught here or the write
-     * is simply permitted.
+     * The self check runs before the library is read, so a document naming
+     * itself through a variant is caught from the document alone.
      *
      * Sixty-five harmless variants are declared before the one that closes the
      * loop. Every selection is composed, so it is found wherever it sits.
@@ -1530,8 +1529,8 @@ describe("saving a component that would reference itself", () => {
      * reports nothing, and a scan of what it WRITES has to model the resolver to
      * get it right. Composing every selection needs neither.
      *
-     * Asserted with no Direct API, because that is where a miss is a persisted
-     * cycle rather than a deferred question.
+     * Asserted over an empty library, because there a miss is a persisted cycle
+     * with nothing else in the library to show it.
      */
     const c = context();
 
@@ -1612,13 +1611,9 @@ describe("saving a component that would reference itself", () => {
 
   it("refuses a self-reference before reading anything else", async () => {
     /*
-     * The decline above is for the graph READS. This question needs none: the
-     * submitted document names the id it is being stored under, so the loop is
-     * closed by the document alone and no row in the library can reopen it.
-     *
-     * Left to the decline, an internal or early-runtime write — any path that
-     * shapes its context without a Direct API — could persist `a → a` while the
-     * guard is registered and reports nothing.
+     * This question needs no read: the submitted document names the id it is
+     * being stored under, so the loop is closed by the document alone and no
+     * row in the library can reopen it.
      */
     const c = context();
 
