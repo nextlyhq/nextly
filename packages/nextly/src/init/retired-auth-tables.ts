@@ -34,8 +34,9 @@ import { z } from "zod";
 
 import { introspectLiveSnapshot } from "../domains/schema/pipeline/diff/introspect-live";
 
-/** The tables this release stops creating. */
-export const RETIRED_AUTH_TABLES: readonly string[] = ["accounts", "sessions"];
+import { RETIRED_AUTH_TABLES } from "./retired-auth-table-names";
+
+export { RETIRED_AUTH_TABLES };
 
 /**
  * The columns that make a table one of OURS rather than a table that merely
