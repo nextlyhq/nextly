@@ -3,6 +3,8 @@ title: Plugin Author Guide
 description: Build a Nextly plugin — the lifecycle, the plugin context, and the scaffold → dev → test → publish loop.
 ---
 
+> **Parts of this page need the release after 0.0.2-alpha.66:** the typed `ctx.db` (on 0.0.2-alpha.66 it is the Drizzle instance itself), `ctx.db.raw`, `ctx.dialect` and `ctx.config` as a `PluginConfig`.
+
 > **Alpha (`0.x`) — pin your versions.**
 >
 > The plugin API surface is now **stable and semver-protected** (see [API stability](/docs/plugins/stability)); the packages themselves are still `0.x` alpha. Build against `@nextlyhq/plugin-sdk` — it is the stability boundary — and pin your `nextly` / `@nextlyhq/plugin-sdk` versions.
