@@ -218,6 +218,9 @@ const SCENARIOS: Readonly<Record<number, (page: Page) => Promise<void>>> = {
     expect(await selection(page)).toEqual(["ea-first"]);
     await page.keyboard.press("Escape");
     expect(await selection(page)).toEqual([]);
+    // Cleared, not removed: a handler that deleted the block would empty the
+    // selection the same way.
+    expect(await structure(page)).toEqual(SEEDED);
   },
   4: async page => {
     await openLayers(page);
@@ -324,7 +327,15 @@ const SCENARIOS: Readonly<Record<number, (page: Page) => Promise<void>>> = {
     await page.keyboard.type("Renamed heading");
     await page.keyboard.press("Enter");
     await expect(field).not.toHaveAttribute("contenteditable", /.+/);
-    await expect(field).toHaveText("Renamed heading");
+    // Exactly the words, read raw and from the stored value: the text matchers
+    // fold whitespace, so a commit that kept the Enter as a line break would
+    // pass them.
+    await expect(page.getByLabel("Text", { exact: true })).toHaveValue(
+      "Renamed heading"
+    );
+    expect(await field.evaluate(element => element.textContent)).toBe(
+      "Renamed heading"
+    );
     // Through the store, not left in the DOM: undo brings the old words back.
     await page.keyboard.press("ControlOrMeta+z");
     await expect(field).toHaveText(HEADING);
@@ -336,6 +347,11 @@ const SCENARIOS: Readonly<Record<number, (page: Page) => Promise<void>>> = {
     await expect(field).toHaveText("Discard me");
     await page.keyboard.press("Escape");
     await expect(field).not.toHaveAttribute("contenteditable", /.+/);
+    await expect(field).toHaveText(HEADING);
+    // Cancelling wrote nothing: an undo now has nothing of this edit to bring
+    // back, where a cancel that wrote the words and then wrote the old ones
+    // over them would surface "Discard me" here.
+    await page.keyboard.press("ControlOrMeta+z");
     await expect(field).toHaveText(HEADING);
   },
   11: async page => {
@@ -398,6 +414,10 @@ const SCENARIOS: Readonly<Record<number, (page: Page) => Promise<void>>> = {
     await expect(field).toContainText("zzz");
     await page.keyboard.press("Escape");
     await expect(field).not.toHaveAttribute("contenteditable", /.+/);
+    await expect(field).not.toContainText("zzz");
+    expect(await field.innerHTML()).toBe(before);
+    // And left no history behind, as for plain text.
+    await page.keyboard.press("ControlOrMeta+z");
     await expect(field).not.toContainText("zzz");
     expect(await field.innerHTML()).toBe(before);
   },
