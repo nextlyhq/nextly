@@ -32,6 +32,14 @@ export const passwordResetTokens = mysqlTable(
   {
     id: int("id").autoincrement().primaryKey(),
     identifier: varchar("identifier", { length: 255 }).notNull(),
+    // The account the token was issued for. A token is redeemed only for this
+    // account, and only while it still holds `identifier`; deleting the
+    // account deletes the token with it. Null only on a token issued before
+    // the column existed, until the upgrade binds or removes it
+    // (`domains/auth/services/token-account-binding`).
+    userId: varchar("user_id", { length: 191 }).references(() => users.id, {
+      onDelete: "cascade",
+    }),
     tokenHash: varchar("token_hash", { length: 255 }).notNull(),
     expires: datetime("expires").notNull(),
     usedAt: datetime("used_at"),
@@ -49,6 +57,7 @@ export const passwordResetTokens = mysqlTable(
       t.identifier,
       t.tokenHash
     ),
+    index("prt_user_id_idx").on(t.userId),
     index("prt_expires_idx").on(t.expires),
     index("prt_used_at_idx").on(t.usedAt),
   ]
@@ -91,6 +100,10 @@ export const emailVerificationTokens = mysqlTable(
   {
     id: int("id").autoincrement().primaryKey(),
     identifier: varchar("identifier", { length: 255 }).notNull(),
+    // As on password_reset_tokens: the account the token was issued for.
+    userId: varchar("user_id", { length: 191 }).references(() => users.id, {
+      onDelete: "cascade",
+    }),
     tokenHash: varchar("token_hash", { length: 255 }).notNull(),
     expires: datetime("expires").notNull(),
     createdAt: datetime("created_at")
@@ -102,6 +115,7 @@ export const emailVerificationTokens = mysqlTable(
       t.identifier,
       t.tokenHash
     ),
+    index("evt_user_id_idx").on(t.userId),
     index("evt_expires_idx").on(t.expires),
   ]
 );

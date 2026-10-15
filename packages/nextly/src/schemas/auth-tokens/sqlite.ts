@@ -29,6 +29,14 @@ export const passwordResetTokens = sqliteTable(
   {
     id: integer("id").primaryKey({ autoIncrement: true }),
     identifier: text("identifier").notNull(),
+    // The account the token was issued for. A token is redeemed only for this
+    // account, and only while it still holds `identifier`; deleting the
+    // account deletes the token with it. Null only on a token issued before
+    // the column existed, until the upgrade binds or removes it
+    // (`domains/auth/services/token-account-binding`).
+    userId: text("user_id").references(() => users.id, {
+      onDelete: "cascade",
+    }),
     tokenHash: text("token_hash").notNull(),
     expires: integer("expires", { mode: "timestamp" }).notNull(),
     usedAt: integer("used_at", { mode: "timestamp" }),
@@ -41,6 +49,7 @@ export const passwordResetTokens = sqliteTable(
       t.identifier,
       t.tokenHash
     ),
+    index("prt_user_id_idx").on(t.userId),
     index("prt_expires_idx").on(t.expires),
     index("prt_used_at_idx").on(t.usedAt),
   ]
@@ -81,6 +90,10 @@ export const emailVerificationTokens = sqliteTable(
   {
     id: integer("id").primaryKey({ autoIncrement: true }),
     identifier: text("identifier").notNull(),
+    // As on password_reset_tokens: the account the token was issued for.
+    userId: text("user_id").references(() => users.id, {
+      onDelete: "cascade",
+    }),
     tokenHash: text("token_hash").notNull(),
     expires: integer("expires", { mode: "timestamp" }).notNull(),
     createdAt: integer("created_at", { mode: "timestamp" })
@@ -92,6 +105,7 @@ export const emailVerificationTokens = sqliteTable(
       t.identifier,
       t.tokenHash
     ),
+    index("evt_user_id_idx").on(t.userId),
     index("evt_expires_idx").on(t.expires),
   ]
 );

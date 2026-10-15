@@ -81,6 +81,7 @@ import {
   generateInviteTokenValue,
 } from "../../auth/lib/invite-token";
 import { affectedRowCount } from "../../auth/services/auth-service";
+import { revokeAccountTokens } from "../../auth/services/token-account-binding";
 import { deliveriesTableFor } from "../../email/deliveries-table";
 import { eraseRecipientDeliveries } from "../../email/erase-recipient";
 import { revalidateMedia } from "../../media/revalidate-media";
@@ -1902,6 +1903,20 @@ export class UserMutationService extends BaseService {
               .set(updateData)
               .where(eq(users.id, currentUser.id));
           }
+          // A link sent to the address the account is leaving must not reset
+          // or verify it, now or after it returns to that address. After the
+          // write above, which holds the account's row: a link being issued
+          // for the old address either committed first and is removed here,
+          // or finds the account no longer there.
+          if (updateData.email !== undefined) {
+            await revokeAccountTokens(txDb, this.tables, {
+              userId: String(currentUser.id),
+              addresses:
+                typeof currentUser.email === "string"
+                  ? [currentUser.email]
+                  : [],
+            });
+          }
           if (requestedRoleIds && services) {
             hasRoleUpdates = await services.userRoles.replaceUserRoles(
               String(currentUser.id),
@@ -2709,6 +2724,19 @@ export class UserMutationService extends BaseService {
         await this.scrubPluginSettingsActor(txDb, userId, settingsExist);
 
         await this.eraseRetiredAccountRows(txDb, userId, retiredTables);
+
+        // Every reset and verification link of the account, whatever address
+        // it was sent to, and any from before links recorded their account
+        // that went to the address it holds. The bound ones would also go
+        // with the row through their foreign key; this says so where the
+        // deletion is read, and reaches the unbound ones the key cannot.
+        // Under the preimage's row lock, so a link being issued for the
+        // account now either lands first and is removed here, or finds the
+        // account gone.
+        await revokeAccountTokens(txDb, this.tables, {
+          userId: String(userId),
+          addresses: typeof preimage.email === "string" ? [preimage.email] : [],
+        });
 
         if (mediaExists) {
           // Read before writing: the event carries a before and an after, and
