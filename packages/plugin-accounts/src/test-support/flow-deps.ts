@@ -5,6 +5,7 @@ import type { FlowDeps } from "../flows/deps";
 import { resolveAccountsSettings, type AccountsOptions } from "../settings";
 import { fakeAccountsCore, type FakeAccountsCore } from "../testing/fake-core";
 import { FakeAccountsMail } from "../testing/fake-mail";
+import { accountPrincipals } from "../wiring/runtime";
 
 import { TEST_ORIGIN } from "./boot";
 
@@ -41,6 +42,8 @@ export function flowDeps(
     settings,
     mail,
     events: { emit: (name, payload) => void emitted.push({ name, payload }) },
+    // Core's own record of the plugin's people, as a site's flows report to.
+    principals: accountPrincipals(ctx),
     pacer: {
       verify: (password, hash) => {
         pacing.checks += 1;

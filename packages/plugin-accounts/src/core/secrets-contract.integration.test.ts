@@ -80,8 +80,9 @@ async function transcript(
   log.push(await secrets.consumeCode({ ...code, code: first.code }));
   const earlier = await secrets.mintCode({ ...code, maxWrongTries: 5 });
   const later = await secrets.mintCode({ ...code, maxWrongTries: 5 });
-  if (earlier.code !== later.code)
-    log.push(await secrets.consumeCode({ ...code, code: earlier.code }));
+  // A new code never repeats the one it replaced, so the earlier code is
+  // always a wrong try against the later one.
+  log.push(await secrets.consumeCode({ ...code, code: earlier.code }));
   log.push(await secrets.consumeCode({ ...code, code: later.code }));
 
   let rolledBack = "";

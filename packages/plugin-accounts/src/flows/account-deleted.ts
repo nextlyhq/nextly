@@ -1,3 +1,5 @@
+import type { AccountsDb } from "../storage/accounts";
+
 import type { FlowDeps } from "./deps";
 
 /**
@@ -13,4 +15,17 @@ export function accountDeleted(
   accountId: string
 ): void {
   deps.events.emit("nextlyhq-plugin-accounts.account.deleted", { accountId });
+}
+
+/**
+ * Reports the account deleted to core, inside the transaction that deletes
+ * it, so core erases it from the audit trail with the deletion. Every path
+ * that deletes an account calls it.
+ */
+export async function reportAccountDeleted(
+  deps: Pick<FlowDeps, "principals">,
+  tx: AccountsDb,
+  accountId: string
+): Promise<void> {
+  await deps.principals.reportDeleted(accountId, tx);
 }

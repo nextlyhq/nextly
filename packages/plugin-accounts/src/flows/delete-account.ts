@@ -1,6 +1,6 @@
 import { deleteAccount, writeAtVersion } from "../storage/accounts";
 
-import { accountDeleted } from "./account-deleted";
+import { accountDeleted, reportAccountDeleted } from "./account-deleted";
 import type { FlowDeps } from "./deps";
 import { provenHolder } from "./holder";
 import { queueNotice } from "./mail";
@@ -46,6 +46,7 @@ export async function deleteOwnAccount(
         throw new VersionMoved();
       await deps.core.secrets.voidFor({ subject: account.id }, { tx });
       await deleteAccount(tx, account.id);
+      await reportAccountDeleted(deps, tx, account.id);
     });
   } catch (error) {
     if (error instanceof VersionMoved)

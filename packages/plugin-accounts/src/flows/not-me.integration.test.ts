@@ -14,6 +14,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { AccountsOptions } from "../settings";
 import { accountByAddress, writeAtVersion } from "../storage/accounts";
 import { bootAccounts } from "../test-support/boot";
+import { auditRowAbout, auditRowsAbout } from "../test-support/audit";
 import { flowDeps } from "../test-support/flow-deps";
 
 import { removeUnverifiedAccount } from "./not-me";
@@ -70,7 +71,13 @@ describe.each(getConfiguredTestDialects())(
           notMe: tokenOf(email.notMeLink),
         };
       };
-      return { db: booted.ctx.db, ...made, signUpAs };
+      return {
+        ctx: booted.ctx,
+        nextly: booted.nextly,
+        db: booted.ctx.db,
+        ...made,
+        signUpAs,
+      };
     }
 
     it("removes the account by its owner's link, voiding its links, tells other plugins, and spends the link once", async () => {
@@ -139,6 +146,26 @@ describe.each(getConfiguredTestDialects())(
       ).toMatchObject({ status: "refused" });
       expect(await accountByAddress(db, "dana@example.com")).not.toBeNull();
       expect(deletedIds(emitted)).toEqual([]);
+    });
+
+    it("reports an account removed by the link or the sweep to core, which erases it from the audit rows about it", async () => {
+      const { ctx, nextly, db, deps, core, signUpAs } = await boot({
+        unverifiedKeptDays: 1,
+      });
+      const { notMe } = await signUpAs("dana@example.com");
+      const dana = (await accountByAddress(db, "dana@example.com"))?.id ?? "";
+      await signUpAs("lee@example.com");
+      const lee = (await accountByAddress(db, "lee@example.com"))?.id ?? "";
+      await auditRowAbout(ctx, dana);
+      await auditRowAbout(ctx, lee);
+
+      await removeUnverifiedAccount(deps, { token: notMe });
+      expect(await auditRowsAbout(nextly, dana)).toEqual({ naming: 0, all: 2 });
+      expect((await auditRowsAbout(nextly, lee)).naming).toBe(1);
+
+      core.clock.advance(2 * DAY);
+      expect(await sweepUnverifiedAccounts(deps)).toBe(1);
+      expect(await auditRowsAbout(nextly, lee)).toEqual({ naming: 0, all: 2 });
     });
 
     it("never removes an account verified since", async () => {

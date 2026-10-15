@@ -248,6 +248,77 @@ describe("the fake limiter's guards", () => {
     });
   });
 
+  it("refuses a release reserve did not admit even while the store does not answer, as core does", async () => {
+    const core = limiter();
+    const reservation = admitted(
+      await core.limits.reserve([{ rule: "tries", key: "a" }])
+    );
+    core.limits.available = false;
+
+    await expect(
+      core.limits.release({ ...reservation, at: Number.NaN })
+    ).rejects.toThrow(/reserve did not admit/);
+    await expect(core.limits.release(reservation)).resolves.toEqual({
+      status: "unavailable",
+    });
+  });
+
+  it("gives a count taken before a reset back to nothing, so the new run keeps its counts, as core does", async () => {
+    const core = limiter();
+    const before = admitted(
+      await core.limits.reserve([{ rule: "tries", key: "a" }])
+    );
+    await core.limits.reset({ rule: "tries", key: "a" });
+    for (let n = 0; n < 2; n += 1)
+      admitted(await core.limits.reserve([{ rule: "tries", key: "a" }]));
+
+    await core.limits.release(before);
+    expect(
+      (await core.limits.reserve([{ rule: "tries", key: "a" }])).status
+    ).toBe("refused");
+  });
+
+  it("names, per entry, the run it was counted in, and refuses a release whose runs do not line up", async () => {
+    const core = limiter();
+    const reservation = admitted(
+      await core.limits.reserve([
+        { rule: "tries", key: "a" },
+        { rule: "client", key: "c", enforce: false, count: "unanimous" },
+        { rule: "client", key: "d", enforce: false },
+      ])
+    );
+    admitted(
+      await core.limits.reserve([
+        { rule: "client", key: "d", enforce: false, count: "always" },
+      ])
+    );
+
+    expect(reservation.epochs).toHaveLength(3);
+    expect(reservation.epochs.map(epoch => epoch !== "")).toEqual(
+      reservation.entries.map(entry => entry.counted)
+    );
+    await expect(
+      core.limits.release({ ...reservation, epochs: [] })
+    ).rejects.toThrow(/reserve did not admit/);
+  });
+
+  it("gives back in the run the caller's reservation names, so stale runs of the right length give nothing back, as core does", async () => {
+    const core = limiter();
+    const reservation = admitted(
+      await core.limits.reserve([{ rule: "tries", key: "a" }])
+    );
+    admitted(await core.limits.reserve([{ rule: "tries", key: "a" }]));
+
+    await core.limits.release({ ...reservation, epochs: ["a-stale-run"] });
+    expect(
+      (await core.limits.reserve([{ rule: "tries", key: "a" }])).status
+    ).toBe("refused");
+    await core.limits.release(reservation);
+    expect(
+      (await core.limits.reserve([{ rule: "tries", key: "a" }])).status
+    ).toBe("admitted");
+  });
+
   it("reads a client's key in core's forms", () => {
     const { limits } = limiter();
     const from = (address?: string) =>

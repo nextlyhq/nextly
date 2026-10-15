@@ -31,7 +31,7 @@ import { startSession } from "../storage/sessions";
 import { TEST_ORIGIN } from "../test-support/boot";
 
 import { SEND_EMAIL_JOB, sendEmailJob, SWEEP_JOB } from "./jobs";
-import { sendQueuedEmail, sweepAll } from "./runtime";
+import { accountPrincipals, sendQueuedEmail, sweepAll } from "./runtime";
 import { accountsServices } from "../server/installed";
 import { bootAccounts } from "../test-support/boot";
 import { fakeAccountsCore } from "../testing";
@@ -200,7 +200,8 @@ describe.each(getConfiguredTestDialects())(
     });
 
     it("sweeps what has run out in one pass, and keeps everything live", async () => {
-      const { db } = await boot();
+      const ctx = await boot();
+      const { db } = ctx;
       const settings = resolveAccountsSettings({
         origin: TEST_ORIGIN,
         unverifiedKeptDays: 7,
@@ -262,6 +263,7 @@ describe.each(getConfiguredTestDialects())(
           settings,
           now: () => now,
           events: { emit: (_name, payload) => void deleted.push(payload) },
+          principals: accountPrincipals(ctx),
         },
         now
       );

@@ -1,3 +1,5 @@
+import type { PluginPrincipalsApi } from "@nextlyhq/plugin-sdk";
+
 import { accountsError } from "../errors";
 
 import type {
@@ -133,6 +135,30 @@ export function assertLimitsShared(
   throw accountsError("ACCOUNTS_LIMITS_NOT_SHARED", {
     fix: "Set rateLimit.store to a shared store, or rateLimit.singleInstance to true.",
   });
+}
+
+/**
+ * Core's record of the plugin's people, where it reports an account
+ * deleted: `ctx.principals`, lent to a plugin that contributes a kind.
+ *
+ * @throws `ACCOUNTS_CORE_MISSING` when the running core does not lend it
+ */
+export function readAccountPrincipals(
+  context: object
+): Pick<PluginPrincipalsApi, "reportDeleted"> {
+  const principals = member(context, "principals");
+  const missing: string[] = [];
+  if (
+    !lends<Pick<PluginPrincipalsApi, "reportDeleted">>(
+      principals,
+      "principals",
+      ["reportDeleted"],
+      missing
+    )
+  )
+    throw accountsError("ACCOUNTS_CORE_MISSING", { missing });
+
+  return principals;
 }
 
 /** A member of an object, or undefined for anything that is not one. */

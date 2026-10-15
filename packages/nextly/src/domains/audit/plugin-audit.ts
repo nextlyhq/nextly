@@ -18,6 +18,7 @@
  */
 import { getNextlyLogger } from "../../observability/logger";
 import { principalRefOf } from "../../plugins/principals/ref";
+import { getPrincipalKind } from "../../plugins/principals/registry";
 import type { PrincipalRef } from "../../plugins/principals/types";
 import { resolutionError } from "../../plugins/resolution-error";
 import { auditLog as postgresAuditLog } from "../../schemas/audit/postgres";
@@ -320,9 +321,19 @@ function projectPeople(
 function personInRole(
   value: unknown,
   userId: string | null | undefined
-): PrincipalRef | null | "not-a-person" | "names-a-user-too" {
+):
+  | PrincipalRef
+  | null
+  | "not-a-person"
+  | "kind-not-registered"
+  | "names-a-user-too" {
   if (value === undefined || value === null) return null;
   const ref = principalRefOf(value);
   if (!ref) return "not-a-person";
+  // A kind no running plugin registers, a misspelling most likely, is one no
+  // deletion report can name: `reportDeleted` takes only the reporting
+  // plugin's own kinds. A row kept under it would outlive the person it is
+  // about, so the event is dropped as one naming nobody is.
+  if (!getPrincipalKind(ref.kind)) return "kind-not-registered";
   return userId === undefined || userId === null ? ref : "names-a-user-too";
 }

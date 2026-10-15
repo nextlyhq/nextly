@@ -4,12 +4,15 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
+import { auditLog as mysqlAuditLog } from "../../schemas/audit/mysql";
+import { auditLog as postgresAuditLog } from "../../schemas/audit/postgres";
 import type { PluginDefinition } from "../plugin-context";
 import { resolvePlugins } from "../resolve";
 
 import {
   collectPrincipalKinds,
   getPrincipalKind,
+  PRINCIPAL_KIND_MAX_LENGTH,
   publishPrincipalKinds,
 } from "./registry";
 import type { PrincipalKindDefinition } from "./types";
@@ -99,6 +102,39 @@ describe("collectPrincipalKinds", () => {
     expect(reasonFor([plugin("accounts", [kind({ name })])])).toBe(
       "not refused"
     );
+  });
+
+  it("refuses a kind whose full name is longer than the audit columns hold", () => {
+    // The full name is stored in bounded varchar columns on PostgreSQL and
+    // MySQL. A longer one fails every audit write naming such a person, and
+    // audit writes are fail-safe, so the record would be lost in silence.
+    const max = PRINCIPAL_KIND_MAX_LENGTH;
+    const pluginName = "a".repeat(max - ":account".length + 1);
+    expect(`${pluginName}:account`.length).toBe(max + 1);
+    expect(reasonFor([plugin(pluginName, [kind()])])).toBe(
+      "PLUGIN_RESOLUTION_ERROR:principal-kind-invalid"
+    );
+  });
+
+  it("accepts a kind whose full name is exactly as long as the audit columns", () => {
+    // The control: an off-by-one at the bound would refuse the last legal name.
+    const max = PRINCIPAL_KIND_MAX_LENGTH;
+    const pluginName = "a".repeat(max - ":account".length);
+    expect(reasonFor([plugin(pluginName, [kind()])])).toBe("not refused");
+  });
+
+  it("reads its bound from the narrowest column that stores a kind", () => {
+    // Derived, not restated: a column narrowed later tightens the bound.
+    const widths = [
+      postgresAuditLog.actorKind,
+      postgresAuditLog.actorPrincipalKind,
+      postgresAuditLog.targetPrincipalKind,
+      mysqlAuditLog.actorKind,
+      mysqlAuditLog.actorPrincipalKind,
+      mysqlAuditLog.targetPrincipalKind,
+    ].map(column => (column as { length?: number }).length);
+    expect(widths.every(width => typeof width === "number")).toBe(true);
+    expect(PRINCIPAL_KIND_MAX_LENGTH).toBe(Math.min(...(widths as number[])));
   });
 
   it("refuses a kind with no resolver", () => {

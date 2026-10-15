@@ -3,12 +3,17 @@ import { definePlugin, type PluginContext } from "@nextlyhq/plugin-sdk";
 import { version as PLUGIN_VERSION } from "../package.json";
 
 import { ADMIN_PAGES, adminPageHref } from "./admin-contract";
-import { assertLimitsShared, readAccountsCore } from "./core/adapter";
+import {
+  assertLimitsShared,
+  readAccountPrincipals,
+  readAccountsCore,
+} from "./core/adapter";
 import { accountsLimitRules } from "./core/limit-rules";
 import type { AccountsCore } from "./core/ports";
 import { accountsError } from "./errors";
 import { ACCOUNTS_EVENTS } from "./flows/deps";
 import { primedPasswordPacer, type PasswordPacer } from "./flows/pacer";
+import { reportEveryAccountDeleted } from "./flows/uninstall";
 import { accountKind } from "./http/principal";
 import { accountsRoutes } from "./http/routes";
 import {
@@ -28,7 +33,12 @@ import { accountsService } from "./server/service";
 import { resolveAccountsSettings, type AccountsOptions } from "./settings";
 import { accountsEmailTemplates } from "./wiring/emails";
 import { sendEmailJob, sweepJob } from "./wiring/jobs";
-import { flowDepsFor, sendQueuedEmail, sweepAll } from "./wiring/runtime";
+import {
+  accountPrincipals,
+  flowDepsFor,
+  sendQueuedEmail,
+  sweepAll,
+} from "./wiring/runtime";
 
 /**
  * Site accounts for a Nextly site: its own tables, its email templates,
@@ -133,6 +143,7 @@ export function buildAccounts(
       // production on limit counts each instance keeps apart, which would
       // multiply every limit by the number of instances.
       const core = coreFor(ctx);
+      readAccountPrincipals(ctx);
       assertLimitsShared(core.limits, production());
       context = ctx;
       rememberInstalled(deps);
@@ -141,6 +152,19 @@ export function buildAccounts(
       forgetInstalled(deps);
       context = null;
       pacer = null;
+    },
+    // An uninstall that drops the plugin's tables deletes every account:
+    // each is reported to core first, while the tables are still readable,
+    // so none stays named in the audit trail. Kept data deletes nothing.
+    onUninstall: async (ctx, { keepData }) => {
+      if (keepData) return;
+      await reportEveryAccountDeleted({
+        db: databaseFor(ctx),
+        events: {
+          emit: (name, payload) => ctx.events.emit(name, payload),
+        },
+        principals: accountPrincipals(ctx),
+      });
     },
   });
 }

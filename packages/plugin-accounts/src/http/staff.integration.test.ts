@@ -74,6 +74,8 @@ interface AuditRow {
   kind: string;
   actorUserId: string | null;
   targetUserId: string | null;
+  targetPrincipalKind: string | null;
+  targetPrincipalId: string | null;
   metadata: unknown;
 }
 
@@ -338,16 +340,28 @@ describe.each(getConfiguredTestDialects())(
         expect((await act(action, id, key)).status).toBe(200);
         const rows = await auditRows(adapter, kinds[action]);
         expect(rows).toHaveLength(1);
+        // The account is the row's target person, never a staff user, and
+        // the row carries nothing of it in metadata.
         expect(rows[0]).toMatchObject({
           actorUserId: ownerId,
           targetUserId: null,
+          targetPrincipalKind: "nextlyhq-plugin-accounts:account",
         });
-        expect(metadataOf(rows[0])).toEqual({
-          accountKind: "nextlyhq-plugin-accounts:account",
-          accountId: id,
-        });
+        expect(metadataOf(rows[0])).toEqual({});
         expect(JSON.stringify(rows[0])).not.toContain(ADDRESS);
+        // Deleted, the account is reported to core, which writes its row
+        // already erased: the target is a digest, never the id again.
+        expect(rows[0]?.targetPrincipalId === id).toBe(action !== "delete");
       }
+
+      // Every row about the account stays, and none names it any more.
+      const all = await Promise.all(
+        order.map(action => auditRows(adapter, kinds[action]))
+      );
+      expect(all.flat()).toHaveLength(order.length);
+      expect(all.flat().filter(row => row.targetPrincipalId === id)).toEqual(
+        []
+      );
     });
 
     it("records nothing for an action that does not apply or an account that is not there", async () => {
