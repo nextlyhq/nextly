@@ -217,3 +217,36 @@ export const settings = {
       options: choices(options.options),
     }),
 };
+
+/**
+ * The setting types of the controls core has no definition type for yet, and
+ * the ones among them that depend on a Collection setting.
+ *
+ * Every other built setting is one of core's own definitions (`text`,
+ * `number`, `checkbox`, `select`), judged by registration's reader. These four
+ * are judged by `fitsNewSetting`, the one rule startup and a card's reading of
+ * its stored values both ask.
+ */
+export const NEW_SETTING_TYPES: ReadonlySet<string> = new Set([
+  "collection",
+  "filter",
+  "sort",
+  "groupBy",
+]);
+export const DEPENDENT_SETTING_TYPES: ReadonlySet<string> = new Set([
+  "filter",
+  "sort",
+  "groupBy",
+]);
+
+/**
+ * Whether a value is one a control of this type can hold: a filter is a plain
+ * object of conditions; a collection, a sort and a grouping each name a
+ * non-empty string.
+ */
+export function fitsNewSetting(type: string, value: unknown): boolean {
+  if (type === "filter") {
+    return typeof value === "object" && value !== null && !Array.isArray(value);
+  }
+  return typeof value === "string" && value.trim() !== "";
+}

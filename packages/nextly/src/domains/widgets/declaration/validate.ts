@@ -26,6 +26,11 @@ import {
   displayDataProblem,
   type CoreDisplay,
 } from "./displays";
+import {
+  DEPENDENT_SETTING_TYPES,
+  fitsNewSetting,
+  NEW_SETTING_TYPES,
+} from "./setting-builders";
 
 /** One thing wrong with one declaration, said where an author reads it. */
 export interface WidgetDeclarationFault {
@@ -62,10 +67,6 @@ const MAX_DESCRIPTION = 80;
  * for code-defined access rules, and a sentence names no permission at all.
  */
 const PERMISSION_NAME = /^[a-z][a-z0-9_]*-[a-z0-9][a-z0-9_-]*$/;
-
-/** The setting types core has a control for, beyond the ones declared below. */
-const DEPENDENT_SETTING_TYPES = new Set(["filter", "sort", "groupBy"]);
-const NEW_SETTING_TYPES = new Set(["collection", ...DEPENDENT_SETTING_TYPES]);
 
 /** The fields a declaration may carry. Anything else is named as a mistake. */
 const FIELDS = new Set([
@@ -347,9 +348,7 @@ function newSettingProblem(
   }
   const fallback = setting.defaultValue;
   if (fallback === undefined) return undefined;
-  const fits =
-    type === "filter" ? isRecord(fallback) : typeof fallback === "string";
-  return fits
+  return fitsNewSetting(type, fallback)
     ? undefined
     : `setting "${name}": its starting value ${quote(fallback)} is not a ${type === "filter" ? "filter" : "string"}`;
 }
