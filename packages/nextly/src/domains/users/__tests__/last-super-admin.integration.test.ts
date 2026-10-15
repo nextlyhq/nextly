@@ -549,7 +549,7 @@ describe.each(getConfiguredTestDialects())(
       });
     });
 
-    describe("a super-admin by inheritance", () => {
+    describe("a super-admin only through a role built on it", () => {
       /** A role built on `super-admin`, as creating a role with a base role writes it. */
       async function ownerRole(install: Install): Promise<string> {
         const owner = await direct().roles.create({
@@ -567,28 +567,26 @@ describe.each(getConfiguredTestDialects())(
         return owner.item.id;
       }
 
-      it("counts as the super-admin who remains", async () => {
+      // Such a role's inheritance can be edited away and the role deleted,
+      // neither a write to an account, so it cannot be what keeps the install
+      // administrable: the last holder of `super-admin` itself stays.
+      it("does not stand in for the last holder of the role itself", async () => {
         const install = await boot(on);
         const heir = await makeUser("heir@example.com");
         await grant(heir, await ownerRole(install));
+        // The premise: the request-time check makes the heir a super-admin.
         expect(await activeSuperAdmin(heir)).toBe(true);
-        await direct().users.delete({ id: install.first });
-        expect(await activeSuperAdmin(heir)).toBe(true);
+        await expectDirectRefused(direct().users.delete({ id: install.first }));
+        expect(await activeSuperAdmin(install.first)).toBe(true);
       });
 
-      it("is protected when it is the last one", async () => {
+      it("can be removed while a holder of the role itself remains", async () => {
         const install = await boot(on);
         const heir = await makeUser("heir@example.com");
         await grant(heir, await ownerRole(install));
-        // The first account steps down, leaving the inherited one alone.
-        await direct().users.update({
-          id: install.first,
-          data: { roles: [install.editorRole] },
-        });
-        expect(await activeSuperAdmin(install.first)).toBe(false);
-        expect(await activeSuperAdmin(heir)).toBe(true);
-        await expectDirectRefused(direct().users.delete({ id: heir }));
-        expect(await activeSuperAdmin(heir)).toBe(true);
+        await direct().users.delete({ id: heir });
+        expect(await activeSuperAdmin(heir)).toBe(false);
+        expect(await activeSuperAdmin(install.first)).toBe(true);
       });
     });
 
