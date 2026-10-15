@@ -53,6 +53,20 @@ export interface AccountState {
    * than reading as "never set" and refusing, or admitting, every session.
    */
   passwordUpdatedAt: Date | null;
+  /**
+   * The identity a session is signed with: read with the state the gate
+   * judged, so the session names the account that was checked rather than
+   * whatever user object a login hook handed back.
+   */
+  email: string;
+  name: string | null;
+  image: string | null;
+  /**
+   * The account's session epoch, zero until its sessions are first ended. A
+   * session signed now carries it, so the session check can refuse every
+   * token signed before the next change (`auth/session/session-standing`).
+   */
+  sessionEpoch: number;
 }
 
 export interface AccountGateOptions {

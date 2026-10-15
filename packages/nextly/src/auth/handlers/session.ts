@@ -278,6 +278,8 @@ async function attemptDevAutoLogin(
     name: user.name,
     image: user.image,
     roleIds,
+    // Null on a row from before the column existed: epoch zero.
+    sessionEpoch: user.sessionEpoch ?? 0,
     customFields,
   });
 

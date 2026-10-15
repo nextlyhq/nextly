@@ -225,22 +225,31 @@ interface StandingSelect {
 }
 
 /**
- * Read one account's standing from the database: one primary-key read of the
- * two columns the check needs.
+ * The adapter the standing is read through, starting the services first when
+ * none is registered and something can start them.
  *
  * Throws, rather than answering, when no database can be reached, because a
  * question nobody could answer is not a yes.
  */
-export async function readSessionStanding(
-  userId: string
-): Promise<SessionStanding | null> {
+async function standingAdapter(): Promise<DrizzleAdapter> {
   if (!adapterIsRegistered() && boot) await boot();
   if (!adapterIsRegistered()) {
     throw NextlyError.internal({
-      logContext: { reason: "session-standing-unreadable", userId },
+      logContext: { reason: "session-standing-unreadable" },
     });
   }
-  const adapter = container.get<DrizzleAdapter>("adapter");
+  return container.get<DrizzleAdapter>("adapter");
+}
+
+/**
+ * Read one account's standing from the database: one primary-key read of the
+ * two columns the check needs.
+ */
+export async function readSessionStanding(
+  userId: string,
+  through?: DrizzleAdapter
+): Promise<SessionStanding | null> {
+  const adapter = through ?? (await standingAdapter());
   const { users } = getDialectTables(adapter.getCapabilities().dialect);
   const db = adapter.getDrizzle() as StandingSelect;
   const rows = await db
@@ -257,7 +266,30 @@ export async function readSessionStanding(
   };
 }
 
-let cache = createSessionStandingCache({ read: readSessionStanding });
+/**
+ * The process's cache, and the adapter whose database its answers came from.
+ *
+ * An answer belongs to the database that gave it. When the registered
+ * adapter is replaced — services registered again after a configuration
+ * change, or another database entirely — every answer held is about rows that
+ * may not exist there, so the cache starts again empty.
+ */
+let held: { cache: SessionStandingCache; adapter: DrizzleAdapter } | null =
+  null;
+let cacheClock: (() => number) | undefined;
+
+function cacheFor(adapter: DrizzleAdapter): SessionStandingCache {
+  if (held?.adapter !== adapter) {
+    held = {
+      cache: createSessionStandingCache({
+        read: userId => readSessionStanding(userId, adapter),
+        ...(cacheClock ? { now: cacheClock } : {}),
+      }),
+      adapter,
+    };
+  }
+  return held.cache;
+}
 
 /**
  * Whether the account a verified session token names may still use it.
@@ -270,7 +302,8 @@ export async function sessionTokenIsCurrent(
 ): Promise<boolean> {
   const userId = claims.sub;
   if (typeof userId !== "string" || userId === "") return false;
-  return standingAdmits(await cache.standing(userId), claims);
+  const standing = await cacheFor(await standingAdapter()).standing(userId);
+  return standingAdmits(standing, claims);
 }
 
 /**
@@ -279,7 +312,7 @@ export async function sessionTokenIsCurrent(
  * without waiting out the cache.
  */
 export function forgetSessionStanding(userId: string | number): void {
-  cache.forget(String(userId));
+  held?.cache.forget(String(userId));
 }
 
 /**
@@ -289,8 +322,6 @@ export function forgetSessionStanding(userId: string | number): void {
 export function resetSessionStandingForTests(options?: {
   now?: () => number;
 }): void {
-  cache = createSessionStandingCache({
-    read: readSessionStanding,
-    ...(options?.now ? { now: options.now } : {}),
-  });
+  held = null;
+  cacheClock = options?.now;
 }

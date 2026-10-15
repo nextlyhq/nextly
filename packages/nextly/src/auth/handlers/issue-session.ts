@@ -264,12 +264,17 @@ export async function mintSession(
   ]);
   const { roleIds } = sessionRoles;
 
+  // The identity comes from the row the gate just judged, not from `user`:
+  // that is whatever the login hooks returned, and a hook that rewrote an
+  // email, name or image would otherwise sign the session readers trust as
+  // the signed-in person with details the checked account does not have.
   let claims = buildClaims({
     userId: user.id,
-    email: user.email,
-    name: user.name ?? "",
-    image: user.image ?? null,
+    email: gated.email,
+    name: gated.name ?? "",
+    image: gated.image ?? null,
     roleIds,
+    sessionEpoch: gated.sessionEpoch,
     customFields,
   });
   // customizeClaims (D71) — add/rename claims. No-op when no hooks registered.
@@ -342,11 +347,13 @@ export async function mintSession(
   return {
     cookies,
     body: {
+      // The same checked identity the token carries, so the body never
+      // names someone the session does not.
       user: {
         id: user.id,
-        email: user.email,
-        name: user.name ?? null,
-        image: user.image ?? null,
+        email: gated.email,
+        name: gated.name ?? null,
+        image: gated.image ?? null,
         roleIds,
       },
       accessToken,

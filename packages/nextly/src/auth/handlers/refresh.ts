@@ -184,7 +184,13 @@ export async function handleRefresh(
     ]);
     const { roleIds } = sessionRoles;
 
-    const claims = await refreshedClaims(deps, user, roleIds, customFields);
+    const claims = await refreshedClaims(
+      deps,
+      user,
+      roleIds,
+      accountState.sessionEpoch,
+      customFields
+    );
     // Ending no later than the first of its roles lapses, and reporting the
     // expiry the token actually carries rather than a second reading of it.
     const { token: accessToken, expiresAt: accessTokenExpiresAt } =
@@ -252,6 +258,7 @@ async function refreshedClaims(
   deps: RefreshHandlerDeps,
   user: { id: string; email: string; name: string; image: string | null },
   roleIds: string[],
+  sessionEpoch: number,
   customFields: Record<string, unknown>
 ): Promise<ReturnType<typeof buildClaims>> {
   const claims = buildClaims({
@@ -260,6 +267,10 @@ async function refreshedClaims(
     name: user.name,
     image: user.image,
     roleIds,
+    // The epoch the gate read with the account's state. Were the sessions
+    // ended after that read, the refresh row's write refuses this rotation,
+    // and a token already signed at the old epoch is refused where read.
+    sessionEpoch,
     customFields,
   });
   if (!deps.authHooks || !deps.pluginCtx) return claims;

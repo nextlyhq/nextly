@@ -191,6 +191,8 @@ export async function handleSetup(
     name: user.name,
     image: null,
     roleIds,
+    // The account was created just now, so no change has ended its sessions.
+    sessionEpoch: 0,
   });
   const { token: accessToken, expiresAt: accessTokenExpiresAt } =
     // Capped as every session's token is, by the first of its roles to lapse.

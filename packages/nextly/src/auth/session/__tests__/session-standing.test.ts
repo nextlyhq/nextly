@@ -15,6 +15,7 @@ import {
   createSessionStandingCache,
   readSessionStanding,
   resetSessionStandingForTests,
+  sessionTokenIsCurrent,
   setSessionStandingBoot,
   standingAdmits,
   type SessionStanding,
@@ -224,6 +225,46 @@ describe("standingAdmits", () => {
   );
 });
 
+/** An adapter whose users table holds one row, `standing`, for every id. */
+function adapterHolding(standing: SessionStanding) {
+  return {
+    getCapabilities: () => ({ dialect: "sqlite" }),
+    getDrizzle: () => ({
+      select: () => ({
+        from: () => ({
+          where: () => ({
+            limit: async () => [standing],
+          }),
+        }),
+      }),
+    }),
+  };
+}
+
+describe("sessionTokenIsCurrent across a change of database", () => {
+  afterEach(() => {
+    resetSessionStandingForTests();
+    container.clear();
+  });
+
+  it("keeps no answer from the database it no longer reads", async () => {
+    // Services registered again, after a configuration change or in a test
+    // booting a fresh database, bring another adapter. An answer the old one
+    // gave is about a row the new one may not hold, and served from the
+    // cache it would decide this database's sessions for the whole lifetime.
+    const claims = { sub: "u1", sev: 0 };
+    container.registerSingleton("adapter", () => adapterHolding(ACTIVE));
+    expect(await sessionTokenIsCurrent(claims)).toBe(true);
+
+    container.clear();
+    container.registerSingleton("adapter", () =>
+      adapterHolding({ isActive: true, sessionEpoch: 1 })
+    );
+
+    expect(await sessionTokenIsCurrent(claims)).toBe(false);
+  });
+});
+
 describe("readSessionStanding before services are registered", () => {
   afterEach(() => {
     setSessionStandingBoot(undefined);
@@ -236,18 +277,7 @@ describe("readSessionStanding before services are registered", () => {
     // token whose signature already verified may start it: the request was
     // about to anyway, and without the database nothing can say whether
     // the account may still use the token.
-    const adapter = {
-      getCapabilities: () => ({ dialect: "sqlite" }),
-      getDrizzle: () => ({
-        select: () => ({
-          from: () => ({
-            where: () => ({
-              limit: async () => [{ isActive: true, sessionEpoch: 4 }],
-            }),
-          }),
-        }),
-      }),
-    };
+    const adapter = adapterHolding({ isActive: true, sessionEpoch: 4 });
     const boot = vi.fn(async () => {
       container.registerSingleton("adapter", () => adapter);
     });
