@@ -58,9 +58,18 @@ function makeDeps(o: Overrides = {}): CompleteLoginDeps {
     lockedUntil: null,
     emailVerified: new Date("2026-01-01T00:00:00Z"),
   };
+  // The identity a session is signed with comes from the account read, so
+  // both reads answer the fixture user's.
+  const identity = {
+    email: user?.email ?? "a@b.c",
+    name: user?.name ?? null,
+    image: user?.image ?? null,
+    sessionEpoch: 0,
+  };
   const sessionRows = fakeSessionRows(async userId => ({
     userId,
     passwordUpdatedAt: null,
+    ...identity,
     ...state,
   }));
   return {
@@ -76,6 +85,7 @@ function makeDeps(o: Overrides = {}): CompleteLoginDeps {
     fetchAccountState: vi.fn(async (userId: string) => ({
       userId,
       passwordUpdatedAt: null,
+      ...identity,
       ...state,
     })),
     fetchSessionRoles: vi.fn(async () => ({
