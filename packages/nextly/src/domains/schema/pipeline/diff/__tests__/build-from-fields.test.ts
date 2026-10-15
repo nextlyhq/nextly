@@ -717,3 +717,49 @@ describe("buildDesiredTableFromComponentFields - the discriminator column", () =
     });
   });
 });
+
+describe.each(["postgresql", "mysql", "sqlite"] as const)(
+  "buildDesiredTableFromComponentFields - many-to-many on %s",
+  dialect => {
+    // A component has no junction table, so its many-to-many keeps the ids on its own row. The
+    // desired table must carry that column with the same shape a plain single relationship gets,
+    // which is the shape the component DDL and the runtime table already emit for it.
+    const relation = { type: "relationship", options: { target: "tags" } };
+    const manyToMany = {
+      ...relation,
+      options: { target: "tags", relationType: "manyToMany" },
+    };
+    const columnNamed = (
+      columns: readonly ColumnSpec[],
+      name: string
+    ): ColumnSpec | undefined => columns.find(c => c.name === name);
+
+    it("gives the component table a column for the many-to-many", () => {
+      const table = buildDesiredTableFromComponentFields(
+        "comp_hero",
+        [{ name: "tags", ...manyToMany }] as never,
+        dialect,
+        { builtBy: "codeFirst" }
+      );
+      expect(columnNamed(table.columns, "tags")).toBeDefined();
+    });
+
+    it("gives it the same column a plain single relationship gets", () => {
+      const withManyToMany = buildDesiredTableFromComponentFields(
+        "comp_hero",
+        [{ name: "tags", ...manyToMany }] as never,
+        dialect,
+        { builtBy: "codeFirst" }
+      );
+      const plain = buildDesiredTableFromComponentFields(
+        "comp_hero",
+        [{ name: "tags", ...relation }] as never,
+        dialect,
+        { builtBy: "codeFirst" }
+      );
+      expect(columnNamed(withManyToMany.columns, "tags")).toEqual(
+        columnNamed(plain.columns, "tags")
+      );
+    });
+  }
+);
