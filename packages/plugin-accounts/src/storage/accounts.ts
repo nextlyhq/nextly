@@ -3,6 +3,7 @@ import {
   and,
   asc,
   eq,
+  gt,
   inArray,
   isNotNull,
   isNull,
@@ -367,4 +368,21 @@ export async function claimResetRequiredEmail(
       .update(accounts, { resetRequiredEmailedAt: now })
       .where(claim)) === 1
   );
+}
+
+/**
+ * The ids of up to `limit` accounts after `after`, in id order: one page of
+ * every account there is, read a page at a time.
+ */
+export async function accountIdsAfter(
+  db: AccountsDb,
+  after: string | null,
+  limit: number
+): Promise<string[]> {
+  const columns = db.table(accounts);
+  const select = db.select(accounts);
+  const page = after === null ? select : select.where(gt(columns.id, after));
+  const rows = await page.orderBy(asc(columns.id)).limit(limit).all();
+
+  return rows.map(row => row.id);
 }

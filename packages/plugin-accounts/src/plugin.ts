@@ -13,6 +13,7 @@ import type { AccountsCore } from "./core/ports";
 import { accountsError } from "./errors";
 import { ACCOUNTS_EVENTS } from "./flows/deps";
 import { primedPasswordPacer, type PasswordPacer } from "./flows/pacer";
+import { reportEveryAccountDeleted } from "./flows/uninstall";
 import { accountKind } from "./http/principal";
 import { accountsRoutes } from "./http/routes";
 import {
@@ -32,7 +33,12 @@ import { accountsService } from "./server/service";
 import { resolveAccountsSettings, type AccountsOptions } from "./settings";
 import { accountsEmailTemplates } from "./wiring/emails";
 import { sendEmailJob, sweepJob } from "./wiring/jobs";
-import { flowDepsFor, sendQueuedEmail, sweepAll } from "./wiring/runtime";
+import {
+  accountPrincipals,
+  flowDepsFor,
+  sendQueuedEmail,
+  sweepAll,
+} from "./wiring/runtime";
 
 /**
  * Site accounts for a Nextly site: its own tables, its email templates,
@@ -146,6 +152,19 @@ export function buildAccounts(
       forgetInstalled(deps);
       context = null;
       pacer = null;
+    },
+    // An uninstall that drops the plugin's tables deletes every account:
+    // each is reported to core first, while the tables are still readable,
+    // so none stays named in the audit trail. Kept data deletes nothing.
+    onUninstall: async (ctx, { keepData }) => {
+      if (keepData) return;
+      await reportEveryAccountDeleted({
+        db: databaseFor(ctx),
+        events: {
+          emit: (name, payload) => ctx.events.emit(name, payload),
+        },
+        principals: accountPrincipals(ctx),
+      });
     },
   });
 }
