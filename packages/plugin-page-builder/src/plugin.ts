@@ -868,6 +868,12 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) => {
         // ones, a save would refuse a page the renderer draws, or pass one it
         // cuts short.
         limits: opts.limits ?? DEFAULT_LIMITS,
+        // Off where the host turned component readiness off, which is the
+        // setting for a renderer drawing components from its own
+        // `resolveComponents` source: no collection stands for that source, so
+        // a document composed against this store would be judged by
+        // definitions it is not drawn with.
+        composesDocuments: opts.componentReadiness !== false,
         hostsOf: indexHostFinder({
           nextly: () => requireInstalled().nextly(),
           indexCollection: componentIndex,
@@ -885,6 +891,12 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) => {
                 : String(unjudged.count)
             } of the documents that place it: ${unjudged.reasons.join("; ")}`,
             { componentId: unjudged.componentId }
+          ),
+        // The refusal names no document, so the operator is told which.
+        onHostsBroken: broken =>
+          ctx.logger.warn(
+            `[page-builder] a component save was refused because it would break ${String(broken.hosts.length)} of the documents that place it`,
+            { componentId: broken.componentId, hosts: broken.hosts }
           ),
       };
 

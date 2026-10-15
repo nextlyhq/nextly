@@ -295,7 +295,7 @@ describe.each(getConfiguredTestDialects())(
       expect(codesOf(refused)).toContain("not-allowed-in-slot");
     });
 
-    it("refuses deepening a component a page places at the depth limit, naming the page", async () => {
+    it("refuses deepening a component a page places at the depth limit", async () => {
       const t = await boot();
       const deep = await component(t, "deep", [box("d1", [text("d2")])]);
       await t.nextly.update({
@@ -326,7 +326,10 @@ describe.each(getConfiguredTestDialects())(
       );
 
       expect(codesOf(refused)).toEqual(["COMPONENT_HOST_BROKEN"]);
-      expect(issuesOf(refused)[0]!.message).toContain(String(home.item.id));
+      // How many and which rule; the page itself is named only to the server
+      // log, since it was found and read as the system.
+      expect(issuesOf(refused)[0]!.message).toContain("break 1 document");
+      expect(issuesOf(refused)[0]!.message).not.toContain(String(home.item.id));
     });
 
     function page(t: TestNextly, nodes: Node[]) {

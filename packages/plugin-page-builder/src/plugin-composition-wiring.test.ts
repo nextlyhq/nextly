@@ -14,15 +14,17 @@
  * @module plugin-composition-wiring.test
  */
 import {
+  clearBlocks,
   COMPONENT_INSTANCE_TYPE,
   DOCUMENT_FORMAT_VERSION,
+  registerBlocks,
 } from "@nextlyhq/blocks-engine";
 import type {
   PluginFieldType,
   PluginFieldValidateArgs,
   PluginFieldWrite,
 } from "@nextlyhq/plugin-sdk";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { COMPONENTS_SLUG } from "./collections/components";
 import { pageBuilder } from "./plugin";
@@ -68,6 +70,7 @@ function savingA(collection: string, field: string): PluginFieldValidateArgs {
     kind: "collection",
     slug: collection,
     id: "a",
+    inTransaction: false,
     readStored: async target =>
       target.collection === collection && target.id === "b"
         ? { kind: "value", value: places("a") }
@@ -134,6 +137,83 @@ describe("the plugin's blocks field judges composition once installed", () => {
 
     expect(
       await codesOf(blocksType(plugin), savingA("site_components", "blocks"))
+    ).toEqual(["COMPONENT_CYCLE"]);
+  });
+
+  afterEach(() => {
+    clearBlocks();
+  });
+
+  it("does not compose pages against its store when component readiness is off", async () => {
+    const base = {
+      version: 1,
+      description: "A block.",
+      example: { props: {} },
+      render: () => null,
+    };
+    registerBlocks(
+      [
+        { ...base, name: "acme/columns" },
+        { ...base, name: "acme/column", parent: ["acme/columns"] },
+      ] as never,
+      { source: "acme" }
+    );
+    // Off is the setting for a renderer drawing components from its own
+    // source. Composed against the store, this page would be refused: its
+    // component's root is a column, which may only sit inside columns.
+    const page: PluginFieldValidateArgs = {
+      data: {
+        content: {
+          formatVersion: DOCUMENT_FORMAT_VERSION,
+          kind: "page",
+          nodes: [
+            {
+              id: "i1",
+              type: COMPONENT_INSTANCE_TYPE,
+              version: 1,
+              props: { componentId: "cols" },
+            },
+          ],
+        },
+      },
+      req: {},
+      field: { name: "content", type: "blocks" },
+      path: "content",
+      mode: "update",
+      write: {
+        kind: "collection",
+        slug: "pages",
+        id: "p1",
+        inTransaction: false,
+        readStored: async target =>
+          target.id === "cols"
+            ? {
+                kind: "value",
+                value: {
+                  formatVersion: DOCUMENT_FORMAT_VERSION,
+                  kind: "component",
+                  nodes: [
+                    { id: "c", type: "acme/column", version: 1, props: {} },
+                  ],
+                },
+              }
+            : { kind: "absent" },
+      },
+    };
+
+    // CONTROL: with readiness on, the same page is refused.
+    const judging = pageBuilder();
+    await judging.init?.(initContext() as never);
+    expect(await codesOf(blocksType(judging), page)).toEqual([
+      "restricted-at-root",
+    ]);
+
+    const off = pageBuilder({ componentReadiness: false });
+    await off.init?.(initContext() as never);
+    expect(await codesOf(blocksType(off), page)).toEqual([]);
+    // A save to the store itself is still judged for a loop.
+    expect(
+      await codesOf(blocksType(off), savingA(COMPONENTS_SLUG, "content"))
     ).toEqual(["COMPONENT_CYCLE"]);
   });
 

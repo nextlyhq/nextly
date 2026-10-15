@@ -126,6 +126,30 @@ export interface CompositionSetup {
   readonly hostsOf?: HostFinder;
   /** Told about hosts a component save could not judge. */
   readonly onUnjudged?: (unjudged: UnjudgedHosts) => void;
+  /**
+   * Told which hosts a refused component save would have broken. The refusal
+   * itself names none of them: the hosts were found and read as the system,
+   * and the author saving the component may not be allowed to see them.
+   */
+  readonly onHostsBroken?: (broken: BrokenHosts) => void;
+  /**
+   * Whether documents are composed against this store at all. `false` where
+   * the renderer draws components from somewhere no collection can stand for
+   * (a route's own `resolveComponents`): composing against this store would
+   * judge a page by definitions it is not drawn with. A component saved to the
+   * store is still refused for containing itself.
+   */
+  readonly composesDocuments: boolean;
+}
+
+/** The hosts a refused component save would have broken, for the server log. */
+export interface BrokenHosts {
+  readonly componentId: string;
+  readonly hosts: readonly {
+    readonly slug: string;
+    readonly id: string;
+    readonly messages: readonly string[];
+  }[];
 }
 
 /**
@@ -173,8 +197,10 @@ export async function compositionIssues(
     }
   }
 
+  if (!setup.composesDocuments) return report.issues;
+
   const work: WorkAllowance = { left: MOST_COMPOSED_NODES };
-  const tally = unjudgedTally(self ?? "", setup);
+  const tally = hostTally(self ?? "", setup);
   for (const draft of formsChangedBy(nextStatus)) {
     const read = documentReader(source, draft);
     await judgeOwnComposition({ document, self, read, setup, work, report });
@@ -188,12 +214,11 @@ export async function compositionIssues(
         write,
         setup,
         work,
-        report,
         tally,
       });
     }
   }
-  tally.flush();
+  tally.flush(report);
   return report.issues;
 }
 
@@ -203,8 +228,9 @@ function componentSaved(
   path: string,
   store: ComponentStoreAddress
 ): string | undefined {
-  // A create mints its id in the write itself, so nothing can reference it
-  // yet: there is no loop it can close and no host it can break.
+  // A create whose id the write mints has nothing referencing it yet: no loop
+  // it can close and no host it can break. A create under a caller's own id
+  // carries it, and is judged like an update.
   if (write.kind !== "collection" || write.id === undefined) return undefined;
   if (write.slug !== store.collection || path !== store.field) return undefined;
   return write.id;
@@ -293,25 +319,41 @@ async function judgeHosts(args: {
   write: PluginFieldWrite;
   setup: CompositionSetup;
   work: WorkAllowance;
-  report: Report;
   tally: Tally;
 }): Promise<void> {
-  const { self, document, draft, source, read, write, setup, work, report } =
+  const { self, document, draft, source, read, write, setup, work, tally } =
     args;
-  const tally = args.tally;
   const before = await source(self, draft);
-  // Not stored in this form yet, so nothing composes it there.
-  if (before.kind !== "document" || !isForest(before.document)) return;
-  const was = await footprintOf(
-    self,
-    before.document as BlockDocument,
-    read,
-    setup,
-    work
-  );
+  // Not stored in this form yet: a create under a caller's own id, which pages
+  // may already place. Nothing to compare against, so every host is judged.
+  const was =
+    before.kind === "document" && isForest(before.document)
+      ? await footprintOf(
+          self,
+          before.document as BlockDocument,
+          read,
+          setup,
+          work
+        )
+      : undefined;
   const now = await footprintOf(self, document, read, setup, work);
-  if (!mayWorsen(was, now)) return;
+  if (was !== undefined && !mayWorsen(was, now)) return;
 
+  // The index is read through the Direct API, on a connection of its own. Inside
+  // a transaction that read can wait on the connection the transaction holds,
+  // and the rows the batch wrote are not in it anyway.
+  if (write.inTransaction) {
+    tally.incomplete(
+      "it was saved inside a transaction, where the usage index is not read"
+    );
+    return;
+  }
+  // Said whenever hosts are looked for, because it is true of every lookup: the
+  // index records the components a document names, not one a placement's
+  // override chooses inside the component it places.
+  tally.incomplete(
+    "a document that reaches it only through a placement's override is not in the usage index"
+  );
   const listed = await everyHost(self, setup);
   if (listed === null) {
     tally.incomplete(
@@ -334,45 +376,111 @@ async function judgeHosts(args: {
       write,
       setup,
       work,
-      report,
-      unjudged: reason => tally.host(host, reason),
+      tally,
     });
   }
 }
 
-type Tally = ReturnType<typeof unjudgedTally>;
+type Tally = ReturnType<typeof hostTally>;
 
 /**
- * The hosts one save could not judge, told once, with how many and why.
+ * What one save found about the documents placing it, told once.
  *
- * One report per save rather than one per host, so a component on a thousand
- * unreadable pages is one warning an operator can read rather than a thousand.
+ * One report per save rather than per host or per form, so a component on a
+ * thousand unreadable pages is one warning an operator can read, and a host a
+ * publish breaks in both forms is one host.
  */
-function unjudgedTally(componentId: string, setup: CompositionSetup) {
-  // Hosts, not attempts: a publish judges two forms, and one host unjudged in
-  // both is one host.
-  const hosts = new Set<string>();
+function hostTally(componentId: string, setup: CompositionSetup) {
+  const unjudged = new Set<string>();
   let listIncomplete = false;
   const reasons = new Set<string>();
+  const broken = new Map<
+    string,
+    { host: HostRef; faults: CompositionFault[] }
+  >();
   return {
     host(host: HostRef, reason: string): void {
-      hosts.add(`${host.slug}\u0000${host.id}\u0000${host.field}`);
+      unjudged.add(hostKey(host));
       reasons.add(reason);
     },
     incomplete(reason: string): void {
       listIncomplete = true;
       reasons.add(reason);
     },
-    flush(): void {
-      if (hosts.size === 0 && !listIncomplete) return;
+    broke(host: HostRef, fault: CompositionFault): void {
+      const entry = broken.get(hostKey(host)) ?? { host, faults: [] };
+      // Once per placement and rule: a publish judges both forms, and they
+      // usually agree.
+      const same = (f: CompositionFault) =>
+        f.code === fault.code && f.instanceId === fault.instanceId;
+      if (!entry.faults.some(same)) entry.faults.push(fault);
+      broken.set(hostKey(host), entry);
+    },
+    flush(report: Report): void {
+      if (broken.size > 0) {
+        report.add(
+          "COMPONENT_HOST_BROKEN",
+          brokenMessage([...broken.values()], setup)
+        );
+        setup.onHostsBroken?.({
+          componentId,
+          hosts: [...broken.values()].map(({ host, faults }) => ({
+            slug: host.slug,
+            id: host.id,
+            messages: faults.map(f => f.message),
+          })),
+        });
+      }
+      if (unjudged.size === 0 && !listIncomplete) return;
       setup.onUnjudged?.({
         componentId,
-        count: hosts.size,
+        count: unjudged.size,
         listIncomplete,
         reasons: [...reasons],
       });
     },
   };
+}
+
+function hostKey(host: HostRef): string {
+  return `${host.slug}\u0000${host.id}\u0000${host.field}`;
+}
+
+/**
+ * The refusal for a save that would break documents placing it.
+ *
+ * Says HOW MANY and WHICH RULE, and names none of them: the documents were
+ * found and read as the system, and naming them would hand an author who may
+ * update components the ids of pages they may not open. The ids go to the
+ * server log instead ({@link CompositionSetup.onHostsBroken}).
+ */
+function brokenMessage(
+  broken: readonly { faults: readonly CompositionFault[] }[],
+  setup: CompositionSetup
+): string {
+  const rules = new Set<string>();
+  for (const { faults } of broken) {
+    for (const fault of faults) rules.add(ruleBroken(fault.code, setup));
+  }
+  const count = broken.length;
+  return (
+    `Saving this component would break ${String(count)} document${count === 1 ? "" : "s"} ` +
+    `that place${count === 1 ? "s" : ""} it: ${[...rules].join("; ")}. ` +
+    `Make the change in a new component, or ask someone who can open those documents to adjust them first.`
+  );
+}
+
+/** One rule, said without naming any document or component. */
+function ruleBroken(code: string, setup: CompositionSetup): string {
+  switch (code) {
+    case "depth-exceeded":
+    case "node-depth":
+      return `content would be nested deeper than the maximum of ${String(setup.limits.maxDepth)} levels`;
+    case "composed-depth":
+      return "components would be nested inside one another too deeply";
+    default:
+      return "a block would sit where it is not allowed to";
+  }
 }
 
 /**
@@ -446,16 +554,14 @@ async function judgeOneHost(args: {
   write: PluginFieldWrite;
   setup: CompositionSetup;
   work: WorkAllowance;
-  report: Report;
-  unjudged: (reason: string) => void;
+  tally: Tally;
 }): Promise<void> {
-  const { host, self, document, draft, read, write, setup, work, report } =
-    args;
+  const { host, self, document, draft, read, write, setup, work, tally } = args;
   // A localized field holds a document per language, and the read is refused
   // for one, so its placements cannot be composed here.
   const stored = host.localized ? null : await hostDocument(host, draft, write);
   if (stored === null) {
-    args.unjudged(`${describeHost(host)} could not be read`);
+    tally.host(host, `${describeHost(host)} could not be read`);
     return;
   }
   if (stored === undefined) return;
@@ -471,7 +577,8 @@ async function judgeOneHost(args: {
   const before = await compose(undefined);
   const after = await compose(new Map([[self, document]]));
   if (read.exhausted() || work.left <= 0) {
-    args.unjudged(
+    tally.host(
+      host,
       `${describeHost(host)} composes more than one save can check`
     );
     return;
@@ -483,10 +590,7 @@ async function judgeOneHost(args: {
   );
   for (const fault of faultsIn(stored, after.composition, setup)) {
     if (had.has(`${fault.code}\u0000${fault.instanceId}`)) continue;
-    report.add(
-      "COMPONENT_HOST_BROKEN",
-      `Saving this component would break ${describeHost(host)}: ${fault.message}`
-    );
+    tally.broke(host, fault);
   }
 }
 
@@ -514,26 +618,35 @@ async function hostDocument(
   }
 }
 
-/** A host as an author can find it: its entry id in its collection. */
+/** A host as an operator finds it in the log: its entry id in its collection. */
 function describeHost(host: HostRef): string {
   return `"${host.id}" in "${host.slug}"`;
 }
 
 /**
- * What a host's composition can see of a component: what its placement draws
- * at the top, how deep it is, how deeply it nests other components, and where
- * the content a placement supplies lands.
+ * What a host's composition can see of a component: for EACH selection a
+ * placement can make, what it draws at the top, how deep it is and how deeply
+ * it nests other components; and where the content a placement supplies lands.
+ *
+ * Per selection, because a host picks one: a change that makes the default
+ * shallower and a variant deeper leaves the maximum unchanged while breaking
+ * every page that picks the variant.
  */
 interface Footprint {
   readonly complete: boolean;
-  readonly rootTypes: ReadonlySet<string>;
-  readonly depth: number;
-  readonly componentDepth: number;
+  /** Keyed by variant name; the default selection under "". */
+  readonly selections: ReadonlyMap<string, SelectionFootprint>;
   /** Each exposed slot, as the holder type, its slot and its depth. */
   readonly slots: ReadonlyMap<string, string>;
 }
 
-/** The footprint of `document` stored as `self`, across every selection. */
+interface SelectionFootprint {
+  readonly rootTypes: ReadonlySet<string>;
+  readonly depth: number;
+  readonly componentDepth: number;
+}
+
+/** The footprint of `document` stored as `self`, selection by selection. */
 async function footprintOf(
   self: string,
   document: BlockDocument,
@@ -542,8 +655,7 @@ async function footprintOf(
   work: WorkAllowance
 ): Promise<Footprint> {
   const library = heldLibrary(new Map([[self, document]]));
-  const rootTypes = new Set<string>();
-  let depth = 0;
+  const selections = new Map<string, SelectionFootprint>();
   let complete = true;
   for (const variant of [undefined, ...(variantNamesIn(document) ?? [])]) {
     const composed = await composeWithReads({
@@ -554,20 +666,14 @@ async function footprintOf(
       work,
     });
     if (composed.incomplete) complete = false;
-    for (const root of composed.composition.document.nodes)
-      rootTypes.add(root.type);
-    depth = Math.max(
-      depth,
-      deepest(composed.composition.document.nodes, setup)
-    );
+    const nodes = composed.composition.document.nodes;
+    selections.set(variant ?? "", {
+      rootTypes: new Set(nodes.map(root => root.type)),
+      depth: deepest(nodes, setup),
+      componentDepth: componentDepthOf(self, variant, library.held, setup),
+    });
   }
-  return {
-    complete,
-    rootTypes,
-    depth,
-    componentDepth: componentDepthOf(self, library.held, setup),
-    slots: exposedSlots(document, setup),
-  };
+  return { complete, selections, slots: exposedSlots(document, setup) };
 }
 
 /** The deepest node of a composed forest, counted from its own top. */
@@ -592,6 +698,7 @@ function deepest(nodes: readonly BlockNode[], setup: CompositionSetup): number {
  */
 function componentDepthOf(
   self: string,
+  variant: string | undefined,
   held: ReadonlyMap<string, unknown>,
   setup: CompositionSetup
 ): number {
@@ -601,7 +708,7 @@ function componentDepthOf(
   };
   for (let cap = 1; cap <= MAX_COMPOSED_DEPTH; cap += 1) {
     const { unresolved } = resolveComponentInstances(
-      hostPlacing(self),
+      hostPlacing(self, variant),
       lookup,
       {
         limits: setup.limits,
@@ -649,18 +756,31 @@ function exposedSlots(
  * Whether a host could be judged differently after the change.
  *
  * Conservative in one direction only: a footprint that could not be worked out
- * may worsen, and so does any new root type, any extra depth, and any slot that
- * moved. A slot removed or a root type dropped cannot make a host break a rule
- * it kept before.
+ * may worsen, and so does, in any one selection, a new root type, extra depth
+ * or extra component depth, as does a selection that did not exist before and
+ * any slot that moved. A slot removed or a root type dropped cannot make a host
+ * break a rule it kept before.
  */
 function mayWorsen(was: Footprint, now: Footprint): boolean {
   if (!was.complete || !now.complete) return true;
-  if (now.depth > was.depth || now.componentDepth > was.componentDepth) {
-    return true;
+  for (const [name, after] of now.selections) {
+    const before = was.selections.get(name);
+    if (before === undefined || selectionWorsens(before, after)) return true;
   }
-  for (const type of now.rootTypes) if (!was.rootTypes.has(type)) return true;
   for (const [id, where] of now.slots) {
     if (was.slots.get(id) !== where) return true;
+  }
+  return false;
+}
+
+function selectionWorsens(
+  before: SelectionFootprint,
+  after: SelectionFootprint
+): boolean {
+  if (after.depth > before.depth) return true;
+  if (after.componentDepth > before.componentDepth) return true;
+  for (const type of after.rootTypes) {
+    if (!before.rootTypes.has(type)) return true;
   }
   return false;
 }

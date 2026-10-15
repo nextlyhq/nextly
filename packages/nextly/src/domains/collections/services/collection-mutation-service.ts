@@ -1365,7 +1365,12 @@ export class CollectionMutationService extends BaseService {
         mode: args.mode,
         req: args.user ? { user: args.user } : {},
         ...args.localeCtx,
-        write: this.validationWrite(args.collectionName, args.id, args.tx),
+        write: this.validationWrite(
+          args.collectionName,
+          args.id ??
+            suppliedCreateId(args.mode, args.collectionName, args.data),
+          args.tx
+        ),
       }
     );
     if (issues.length > 0) {
@@ -10587,4 +10592,25 @@ export class CollectionMutationService extends BaseService {
       })
     );
   }
+}
+
+/**
+ * The id a create will be stored under, where the CALLER chose it.
+ *
+ * A collection that accepts client ids (`db.allowIdOnCreate`) stores the one
+ * supplied, so a validator judging the new entry against rows that already name
+ * that id — a component a page places before it exists — has to know it. Any
+ * other create mints its id in the write, and nothing can name it yet. The
+ * shape of a supplied id is the insert's own check (`resolveEntryId`).
+ */
+function suppliedCreateId(
+  mode: "create" | "update",
+  collectionName: string,
+  data: Record<string, unknown>
+): string | undefined {
+  if (mode !== "create") return undefined;
+  if (collectionDbOptions(collectionName).allowIdOnCreate !== true) {
+    return undefined;
+  }
+  return typeof data.id === "string" && data.id !== "" ? data.id : undefined;
 }

@@ -30,10 +30,14 @@ afterEach(async () => {
   await current?.destroy();
   current = undefined;
   seen.length = 0;
+  judgedIds.length = 0;
 });
 
 /** What the probe validator read through its write, in the order it read. */
 const seen: PluginStoredValue[] = [];
+
+/** The entry id each probe validation was told it is judging. */
+const judgedIds: (string | undefined)[] = [];
 
 /** A json-backed type whose validator reads the entry a value names. */
 const probe = {
@@ -44,6 +48,7 @@ const probe = {
     value: unknown,
     args: {
       write?: {
+        id?: string;
         readStored(target: {
           collection: string;
           id: string;
@@ -53,6 +58,7 @@ const probe = {
       };
     }
   ) {
+    judgedIds.push(args.write?.id);
     const peek = (value as { peek?: unknown } | null)?.peek;
     if (typeof peek === "string" && args.write !== undefined) {
       seen.push(
@@ -90,6 +96,11 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
             { name: "body", type: "probe" },
             { name: "extra", type: "other" },
           ],
+        } as unknown as CollectionConfig,
+        {
+          slug: "chosen",
+          db: { allowIdOnCreate: true },
+          fields: [{ name: "body", type: "probe" }],
         } as unknown as CollectionConfig,
         {
           slug: "drafted",
@@ -235,6 +246,28 @@ describe.each(getConfiguredTestDialects())("on %s", (dialect: TestDialect) => {
       ).rejects.toThrow(
         /"nowhere\.body" cannot be read here: it names no collection/
       );
+    });
+  });
+
+  describe("the entry a validator is told it is judging", () => {
+    it("is the caller's own id on a create where the collection accepts one", async () => {
+      const t = await boot(dialect);
+      const chosen = "3f0f7a52-2b1e-4c3a-9d55-5f7e9b0c1a2d";
+
+      await t.nextly.create({
+        collection: "chosen",
+        data: { id: chosen, body: { v: 1 } },
+        overrideAccess: true,
+      });
+      await t.nextly.create({
+        collection: "plain",
+        data: { id: chosen, title: "x", body: { v: 1 } },
+        overrideAccess: true,
+      });
+
+      // Where ids are minted by the write, a supplied one is not the identity
+      // the row is stored under, so nothing is handed.
+      expect(judgedIds).toEqual([chosen, undefined]);
     });
   });
 

@@ -82,6 +82,8 @@ export function entryWriteContext(args: {
     kind: args.kind,
     slug: args.slug,
     ...(args.id === undefined ? {} : { id: args.id }),
+    // The executor is the transaction's own, and it is handed only for one.
+    inTransaction: args.connection.executor !== undefined,
     readStored: (allowedType, target) =>
       readStoredField(args.connection, allowedType, target),
   };
@@ -114,6 +116,9 @@ export async function readStoredField(
   const rows = await connection.db.select<Record<string, unknown>>(
     entity.tableName,
     {
+      // The one column asked for: a row can hold other large values, and a
+      // composition reads up to a hundred definitions in one save.
+      columns: [target.field],
       where: { and: [{ column: "id", op: "=", value: target.id }] },
       limit: 1,
     }

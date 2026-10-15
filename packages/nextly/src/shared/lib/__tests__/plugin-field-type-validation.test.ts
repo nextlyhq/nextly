@@ -530,6 +530,7 @@ describe("the write a plugin field type is validated for", () => {
       kind: "collection",
       slug: "articles",
       id: "entry-1",
+      inTransaction: true,
       readStored: async allowedType => {
         scopedTo.push(allowedType);
         return { kind: "value", value: { from: allowedType } };
@@ -562,6 +563,7 @@ describe("the write a plugin field type is validated for", () => {
     expect(seen?.kind).toBe("collection");
     expect(seen?.slug).toBe("articles");
     expect(seen?.id).toBe("entry-1");
+    expect(seen?.inTransaction).toBe(true);
     // The scope is the RUNNING validator's type, bound by core; the validator
     // names only what to read, never what it is allowed to read.
     expect(scopedTo).toEqual(["document"]);

@@ -133,6 +133,7 @@ export interface EntryWriteContext {
   readonly kind: PluginFieldWrite["kind"];
   readonly slug: string;
   readonly id?: string;
+  readonly inTransaction: boolean;
   readStored(
     allowedType: string,
     target: PluginStoredValueTarget
@@ -148,6 +149,7 @@ function fieldWriteFor(
     kind: write.kind,
     slug: write.slug,
     ...(write.id === undefined ? {} : { id: write.id }),
+    inTransaction: write.inTransaction,
     readStored: target => write.readStored(type, target),
   };
 }

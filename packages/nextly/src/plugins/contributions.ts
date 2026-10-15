@@ -450,13 +450,20 @@ export interface PluginFieldWrite {
   /** The collection's or single's slug, as it is registered. */
   readonly slug: string;
   /**
-   * The stored entry's id on an update of a collection entry.
+   * The id the entry is, or will be, stored under: the stored id on an update,
+   * and on a create the caller's own id where the collection accepts one
+   * (`db.allowIdOnCreate`).
    *
-   * Absent on a create, because the id is minted by the write itself — a
-   * client-supplied one is not the identity a row is stored under — and absent
-   * for a single, which has no entry id.
+   * Absent on any other create, because the id is minted by the write itself,
+   * and for a single, which has no entry id.
    */
   readonly id?: string;
+  /**
+   * Whether the write runs inside a transaction — a batch, an import, or a
+   * caller's own. `readStored` sees what it has written; a read on any other
+   * connection does not, and can wait on the connection the transaction holds.
+   */
+  readonly inTransaction: boolean;
   /**
    * Read one stored value of THIS validator's own field type.
    *
