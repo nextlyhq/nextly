@@ -55,7 +55,7 @@ function usableState(overrides: Partial<AccountState> = {}): AccountState {
     emailVerified: new Date("2026-01-01T00:00:00Z"),
     passwordUpdatedAt: null,
     email: PLUGIN_USER.email,
-    name: PLUGIN_USER.name,
+    name: PLUGIN_USER.name ?? null,
     image: null,
     sessionEpoch: 0,
     ...overrides,
