@@ -9,7 +9,7 @@
 
 "use client";
 
-import { Alert, AlertDescription, AlertTitle, Button } from "@nextlyhq/ui";
+import { Alert, AlertDescription, Button } from "@nextlyhq/ui";
 import type React from "react";
 
 import { WelcomeHeader } from "@admin/components/features/dashboard/WelcomeHeader";
@@ -28,7 +28,17 @@ const DashboardErrorFallback = (
     <div className="flex min-h-[400px] items-center justify-center">
       <Alert variant="destructive" className="max-w-2xl">
         <AlertCircle className="h-4 w-4" />
-        <AlertTitle>Dashboard Error</AlertTitle>
+        {/* The fallback replaces the whole page, welcome heading included, so
+            its title is the page's one level-one heading: a person jumping by
+            heading lands on what went wrong. It names the problem rather than
+            sitting beside a second "Dashboard" heading, and keeps the alert
+            title's look (AlertTitle itself is an h5). */}
+        <h1
+          data-slot="alert-title"
+          className="mb-1 text-sm font-semibold leading-tight tracking-tight"
+        >
+          The dashboard couldn&apos;t load
+        </h1>
         <AlertDescription className="mt-2 space-y-3">
           <p>
             An unexpected error occurred while loading the dashboard. This could

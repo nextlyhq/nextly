@@ -33,7 +33,9 @@ The dashboard keeps its main heading, and offers sample content only to someone 
 
 The dashboard now has exactly one level-one heading in every state. It no longer
 disappears while the sample-content offer is open, or while the signed-in user is
-still loading, so jumping by heading always lands on the page title.
+still loading, so jumping by heading always lands on the page title. If the
+dashboard fails to load, its error screen's title ("The dashboard couldn't load")
+is that heading.
 
 The sample-content offer now appears only when the sample-content route lets the
 signed-in person load it. A refusal (401 or 403), any other failure, or no answer
