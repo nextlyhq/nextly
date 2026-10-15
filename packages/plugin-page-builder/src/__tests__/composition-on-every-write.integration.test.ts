@@ -232,9 +232,11 @@ describe.each(getConfiguredTestDialects())(
       };
       const table = (await registry.getCollectionBySlug(COMPONENTS_SLUG))!
         .tableName;
+      const planted = document("component", [placing("n2", a)]);
       await t.adapter.update(
         table,
-        { content: document("component", [placing("n2", a)]) },
+        // SQLite stores a JSON column as text; the others take the value.
+        { content: dialect === "sqlite" ? JSON.stringify(planted) : planted },
         { and: [{ column: "id", op: "=", value: b }] }
       );
 
@@ -254,13 +256,16 @@ describe.each(getConfiguredTestDialects())(
       const t = await boot();
       const deep = await component(t, "deep", [box("d1", [text("d2")])]);
 
-      // Three deep where the page places it, two inside: four is the limit.
-      const atLimit = page(t, [box("p1", [box("p2", [placing("i1", deep)])])]);
-      expect(codesOf(await refusalOf(atLimit))).toEqual(["depth-exceeded"]);
+      // Placed four deep and two deep inside: five, past the limit of four,
+      // while the page alone is four and the component alone two.
+      const pastLimit = page(t, [
+        box("p1", [box("p2", [box("p3", [placing("i1", deep)])])]),
+      ]);
+      expect(codesOf(await refusalOf(pastLimit))).toEqual(["depth-exceeded"]);
 
-      // CONTROL: one level higher fits.
+      // CONTROL: one level higher ends exactly at the limit, which fits.
       await expect(
-        page(t, [box("p1", [placing("i1", deep)])])
+        page(t, [box("p1", [box("p2", [placing("i1", deep)])])])
       ).resolves.toBeDefined();
     });
 
@@ -299,7 +304,10 @@ describe.each(getConfiguredTestDialects())(
         data: { status: "published" },
         overrideAccess: true,
       });
-      const home = await page(t, [box("p1", [placing("i1", deep)])]);
+      // Placed three deep and two deep inside: exactly the limit of four.
+      const home = await page(t, [
+        box("p1", [box("p2", [placing("i1", deep)])]),
+      ]);
       // The usage index is maintained once the page's write commits.
       await t.events.settle();
 
