@@ -5,7 +5,7 @@
  * rotation, keys stored only hashed, a count made while another request's
  * transaction is open, and an outage.
  */
-import { randomUUID } from "node:crypto";
+import { createHash, createHmac, randomUUID } from "node:crypto";
 
 import { afterAll, afterEach, beforeAll, expect, it } from "vitest";
 
@@ -23,7 +23,7 @@ import {
   createDatabaseLimitStore,
   type DatabaseLimitStore,
 } from "../database-limit-store";
-import type { LimitStore } from "../limit-store";
+import { limitStoreUnavailable, type LimitStore } from "../limit-store";
 import type { LimitRule } from "../limit-rules";
 import { createPluginLimiter, type PluginLimiter } from "../plugin-limiter";
 
@@ -258,6 +258,131 @@ describeEachDialect("the plugin limiter on the database store", dialect => {
       admitted += 1;
     }
     expect(admitted).toBe(61);
+  });
+
+  it("gives back nothing more when a release whose answer was lost is retried from another instance after 60 other releases", async () => {
+    const generation = randomUUID().slice(0, 8);
+    const rules: Record<string, LimitRule> = {
+      r: { type: "window", windows: [{ max: 200, perMs: HOUR }] },
+    };
+    const durable = createDatabaseLimitStore({
+      adapter: current.adapter,
+      generation,
+      sweepIntervalMs: false,
+    });
+    opened.push(durable);
+    // The store commits, then the answer is lost, once.
+    let loseNextAnswer = false;
+    const losing: LimitStore = {
+      shared: true,
+      update: async (keys, apply) => {
+        const result = await durable.update(keys, apply);
+        if (loseNextAnswer) {
+          loseNextAnswer = false;
+          throw limitStoreUnavailable("timeout");
+        }
+        return result;
+      },
+      read: keys => durable.read(keys),
+      sweep: () => durable.sweep(),
+    };
+    const first = limiterOn(current.adapter, { store: losing, rules });
+    const second = limiterOn(other, { generation, rules });
+    const admitted = [];
+    for (let attempt = 0; attempt < 70; attempt += 1) {
+      const reservation = await first.reserve([{ rule: "r", key: "k" }]);
+      if (reservation.status !== "admitted") throw new Error("not admitted");
+      admitted.push(reservation.reservation);
+    }
+
+    loseNextAnswer = true;
+    expect(await first.release(admitted[0])).toEqual({ status: "unavailable" });
+    for (const reservation of admitted.slice(1, 61)) {
+      await first.release(reservation);
+    }
+    await second.release(admitted[0]);
+
+    let room = 0;
+    while (
+      (await second.reserve([{ rule: "r", key: "k" }])).status === "admitted"
+    ) {
+      room += 1;
+    }
+    expect(room).toBe(191);
+  });
+
+  it("gives back nothing from a count made before a reset, whenever the reset came", async () => {
+    const generation = randomUUID().slice(0, 8);
+    const rules: Record<string, LimitRule> = {
+      r: { type: "window", windows: [{ max: 1, perMs: HOUR }] },
+    };
+    const limits = limiterOn(current.adapter, { generation, rules });
+    const before = await limits.reserve([{ rule: "r", key: "k" }]);
+    if (before.status !== "admitted") throw new Error("not admitted");
+    await limits.reset({ rule: "r", key: "k" });
+    expect((await limits.reserve([{ rule: "r", key: "k" }])).status).toBe(
+      "admitted"
+    );
+
+    await limits.release(before.reservation);
+
+    expect((await limits.reserve([{ rule: "r", key: "k" }])).status).toBe(
+      "refused"
+    );
+  });
+
+  it("gives back a count on a key whose entry the previous release wrote", async () => {
+    const generation = randomUUID().slice(0, 8);
+    const rules: Record<string, LimitRule> = {
+      r: { type: "window", windows: [{ max: 1, perMs: HOUR }] },
+    };
+    const store = createDatabaseLimitStore({
+      adapter: current.adapter,
+      generation,
+      sweepIntervalMs: false,
+    });
+    opened.push(store);
+    // The key the limiter stores `k` under, and an entry in the previous
+    // release's shape there: its rule's fingerprint, `since`, no epoch.
+    const hashKey = createHmac("sha256", "install secret")
+      .update("nextly plugin limit keys")
+      .digest();
+    const storeKey = [
+      "@test/limits",
+      "r",
+      createHmac("sha256", hashKey).update("k", "utf8").digest("base64url"),
+    ].join("\u001f");
+    const fingerprint = createHash("sha256")
+      .update(JSON.stringify(["window", [[1, HOUR]]]))
+      .digest("base64url")
+      .slice(0, 16);
+    await store.update([storeKey], (_current, now) => ({
+      write: new Map([
+        [
+          storeKey,
+          {
+            value: {
+              kind: "window",
+              rule: fingerprint,
+              since: now,
+              released: [],
+              windows: [{ base: 0, buckets: [] }],
+            },
+            expiresAt: now + HOUR,
+          },
+        ],
+      ]),
+      result: undefined,
+    }));
+    const limits = limiterOn(current.adapter, { generation, rules });
+
+    const reservation = await limits.reserve([{ rule: "r", key: "k" }]);
+    if (reservation.status !== "admitted") throw new Error("not admitted");
+    await limits.release(reservation.reservation);
+
+    expect((await limits.reserve([{ rule: "r", key: "k" }])).status).toBe(
+      "admitted"
+    );
   });
 
   it("removes an entry's row once its only count is given back", async () => {

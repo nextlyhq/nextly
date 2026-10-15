@@ -585,14 +585,16 @@ export function createDatabaseLimitStore(
   /**
    * Move the occupied count by `added`, refusing with the unavailable answer
    * when that takes it past the bound. `final` says no sweep will follow, so
-   * that refusal is the one logged.
+   * that refusal is the one logged. Answers the count it wrote, or undefined
+   * when it wrote none, for the caller to report once the transaction has
+   * committed: a count that rolls back must move no warning.
    */
   const countOccupied = async (
     db: StoreDb,
     added: number,
     final: boolean
-  ): Promise<void> => {
-    if (added === 0) return;
+  ): Promise<number | undefined> => {
+    if (added === 0) return undefined;
     // Taken after the keys' rows, as every update and sweep takes it.
     const occupied = await readCounter(db);
     const next = Math.max(0, occupied + added);
@@ -606,12 +608,13 @@ export function createDatabaseLimitStore(
       .update(table)
       .set({ value: String(next) })
       .where(eq(table.id, counterId));
-    watch.observe(next);
+    return next;
   };
 
   /**
    * One update, in one transaction. Throws the unavailable answer for want of
-   * room, which rolls the whole update back.
+   * room, which rolls the whole update back. Answers the update's result,
+   * and the occupied count it committed, if it moved it.
    */
   const attemptUpdate = <T>(
     keys: string[],
@@ -621,7 +624,7 @@ export function createDatabaseLimitStore(
     ) => LimitUpdate<T>,
     final: boolean,
     applyFailure: { error?: unknown }
-  ): Promise<T> => {
+  ): Promise<{ result: T; occupied: number | undefined }> => {
     // In sorted order, the order every update and sweep takes rows in.
     const keyOf = new Map(
       keys
@@ -640,9 +643,59 @@ export function createDatabaseLimitStore(
       }
       const changes = serialiseLimitWrite(keys, decided.write);
       const after = await writeChanges(db, keyOf, byId, changes, clock);
-      await countOccupied(db, after - occupied, final);
-      return decided.result;
+      return {
+        result: decided.result,
+        occupied: await countOccupied(db, after - occupied, final),
+      };
     });
+  };
+
+  /** The occupied count as committed now: a plain read, taking no lock. */
+  const readCommittedOccupied = async (): Promise<number> => {
+    const [row] = await adapter
+      .getDrizzle<StoreDb>()
+      .select<{ value: string | null }>({ value: table.value })
+      .from(table)
+      .where(eq(table.id, counterId));
+    const occupied = Number(row?.value ?? 0);
+    return Number.isFinite(occupied) && occupied > 0 ? occupied : 0;
+  };
+
+  /**
+   * Report the committed occupied count to the watch, read afresh once the
+   * caller's update has committed. One read at a time on this instance, and a
+   * caller arriving during one waits for the next, which starts after its
+   * commit: the watch sees counts in the order they were committed, never a
+   * transaction's own count acknowledged after a later one. Logging only, so
+   * a failed read is let go: the update it follows has committed.
+   */
+  let observing: Promise<void> | undefined;
+  let observeAgain = false;
+  const observeCommitted = (): Promise<void> => {
+    if (observing !== undefined) {
+      observeAgain = true;
+      return observing;
+    }
+    observing = (async () => {
+      do {
+        observeAgain = false;
+        watch.observe(await readCommittedOccupied());
+      } while (observeAgain);
+    })()
+      .catch(() => undefined)
+      .finally(() => {
+        observing = undefined;
+      });
+    return observing;
+  };
+
+  /** An update's result, once the count it committed has reached the watch. */
+  const committed = async <T>(done: {
+    result: T;
+    occupied: number | undefined;
+  }): Promise<T> => {
+    if (done.occupied !== undefined) await observeCommitted();
+    return done.result;
   };
 
   /**
@@ -669,14 +722,18 @@ export function createDatabaseLimitStore(
       try {
         await ensureReady();
         try {
-          return await attemptUpdate(named, apply, false, applyFailure);
+          return await committed(
+            await attemptUpdate(named, apply, false, applyFailure)
+          );
         } catch (error) {
           if (limitStoreUnavailableReason(error) !== "full") throw error;
           if (!(await makeRoom())) {
             watch.refused(maxEntries);
             throw error;
           }
-          return await attemptUpdate(named, apply, true, applyFailure);
+          return await committed(
+            await attemptUpdate(named, apply, true, applyFailure)
+          );
         }
       } catch (error) {
         throw answerFor(error, applyFailure);

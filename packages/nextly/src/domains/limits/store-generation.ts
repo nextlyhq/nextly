@@ -15,6 +15,8 @@
  */
 import { createHmac } from "node:crypto";
 
+import type { SecretGeneration } from "../../shared/lib/secret-generations";
+
 /** The generation of an install with no secret, which keys nothing. */
 const UNKEYED_GENERATION = "unkeyed";
 
@@ -22,10 +24,15 @@ const UNKEYED_GENERATION = "unkeyed";
  * A short name for the generation `secret` writes under: an HMAC of a fixed
  * label, keyed by the secret, so the name reveals nothing of it.
  *
+ * Judged as the install's other secret-derived values judge it
+ * (`shared/lib/secret-generations`): only `undefined` is the unkeyed
+ * generation, and an empty string is a secret like any other, so an install
+ * that moves from none to an empty one starts its counts again.
+ *
  * @param secret - The install's current secret, or undefined when none is set
  */
-export function limitStoreGeneration(secret: string | undefined): string {
-  if (secret === undefined || secret === "") return UNKEYED_GENERATION;
+export function limitStoreGeneration(secret: SecretGeneration): string {
+  if (secret === undefined) return UNKEYED_GENERATION;
   return createHmac("sha256", secret)
     .update("nextly limit store generation")
     .digest("hex")

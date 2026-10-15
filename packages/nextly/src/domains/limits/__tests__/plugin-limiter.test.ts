@@ -3,6 +3,8 @@
  * several entries, the counting modes, giving back, and what it answers when
  * the store cannot.
  */
+import { createHash } from "node:crypto";
+
 import { afterEach, describe, expect, it } from "vitest";
 
 import { setNextlyLogger } from "../../../observability/logger";
@@ -12,7 +14,11 @@ import {
   type LimitStore,
   type StoredLimit,
 } from "../limit-store";
-import { limitRuleProblem, type LimitRule } from "../limit-rules";
+import {
+  limitRuleProblem,
+  readRuleState,
+  type LimitRule,
+} from "../limit-rules";
 import { createMemoryLimitStore } from "../memory-limit-store";
 import {
   createPluginLimiter,
@@ -363,6 +369,20 @@ describe("a reservation", () => {
     ).rejects.toMatchObject({
       code: "INTERNAL_ERROR",
     });
+  });
+
+  it("refuses a key holding a lone surrogate, which would hash like another, and accepts a pair", async () => {
+    const { limits } = setup();
+    // "\ud800" and "\ud801" both encode to U+FFFD: two keys that would
+    // count as one.
+    for (const key of ["\ud800", "a\udc00b"]) {
+      await expect(
+        limits.reserve([{ rule: "window", key }])
+      ).rejects.toMatchObject({ code: "INTERNAL_ERROR" });
+    }
+    expect(
+      (await limits.reserve([{ rule: "window", key: "\ud83d\ude00" }])).status
+    ).toBe("admitted");
   });
 
   it("refuses with each rule kind's own time", async () => {
@@ -871,6 +891,140 @@ describe("giving back however many reservations are outstanding", () => {
   });
 });
 
+describe("giving back once, however long after", () => {
+  it("gives back nothing more when a release whose answer was lost is retried after 60 other releases", async () => {
+    const time = clock();
+    const memory = createMemoryLimitStore({ clock: time.now });
+    let loseNextAnswer = false;
+    const store: LimitStore = {
+      shared: true,
+      update: async (keys, apply) => {
+        const result = await memory.update(keys, apply);
+        if (loseNextAnswer) {
+          loseNextAnswer = false;
+          throw limitStoreUnavailable("timeout");
+        }
+        return result;
+      },
+      read: keys => memory.read(keys),
+      sweep: () => memory.sweep(),
+    };
+    const { limiter } = setup({ store });
+    const rules: Record<string, LimitRule> = {
+      r: { type: "window", windows: [{ max: 200, perMs: HOUR }] },
+    };
+    const first = limiter("@test/limits", rules);
+    const other = limiter("@test/limits", rules);
+    const admitted = [];
+    for (let attempt = 0; attempt < 70; attempt += 1) {
+      const reservation = await first.reserve([{ rule: "r", key: "k" }]);
+      if (reservation.status !== "admitted") throw new Error("not admitted");
+      admitted.push(reservation.reservation);
+      time.advance(SECOND);
+    }
+
+    loseNextAnswer = true;
+    expect(await first.release(admitted[0])).toEqual({ status: "unavailable" });
+    for (const reservation of admitted.slice(1, 61)) {
+      await first.release(reservation);
+    }
+    // The retry, from another instance that never saw the first answer.
+    await other.release(admitted[0]);
+
+    // 70 counted, 61 given back once each: 9 stand, so 191 more fit.
+    let room = 0;
+    while (
+      (await first.reserve([{ rule: "r", key: "k" }])).status === "admitted"
+    ) {
+      room += 1;
+    }
+    expect(room).toBe(191);
+  });
+
+  it("keeps the largest entry within the store's 4 KB: four windows' buckets full, and its release markers", async () => {
+    const { limiter, time } = setup();
+    const limits = limiter("@test/limits", {
+      r: {
+        type: "window",
+        windows: [32, 64, 96, 128].map(seconds => ({
+          max: 10_000,
+          perMs: seconds * SECOND,
+        })),
+      },
+    });
+    const admitted = [];
+    // A count every second for two minutes: every window's 32 buckets hold
+    // something.
+    for (let second = 0; second < 128; second += 1) {
+      const reservation = await limits.reserve([{ rule: "r", key: "k" }]);
+      if (reservation.status !== "admitted") throw new Error("not admitted");
+      admitted.push(reservation.reservation);
+      time.advance(SECOND);
+    }
+
+    // More releases than the markers kept: each still writes the entry.
+    for (const reservation of admitted.slice(64)) {
+      expect(await limits.release(reservation)).toEqual({ status: "done" });
+    }
+    expect((await limits.reserve([{ rule: "r", key: "k" }])).status).toBe(
+      "admitted"
+    );
+  });
+
+  it("gives back nothing from a count made before a reset in the same millisecond", async () => {
+    // The memory store's clock stands still here, so the reset and the
+    // counts on either side of it share one millisecond.
+    const { limiter } = setup();
+    const limits = limiter("@test/limits", {
+      r: { type: "window", windows: [{ max: 1, perMs: HOUR }] },
+    });
+    const before = await limits.reserve([{ rule: "r", key: "k" }]);
+    if (before.status !== "admitted") throw new Error("not admitted");
+    await limits.reset({ rule: "r", key: "k" });
+    expect((await limits.reserve([{ rule: "r", key: "k" }])).status).toBe(
+      "admitted"
+    );
+
+    await limits.release(before.reservation);
+
+    // The count made after the reset still stands.
+    expect((await limits.reserve([{ rule: "r", key: "k" }])).status).toBe(
+      "refused"
+    );
+  });
+});
+
+describe("an entry written by the previous release", () => {
+  it("starts again in a run of its own, rather than being read without one", () => {
+    const rule: LimitRule = {
+      type: "window",
+      windows: [{ max: 3, perMs: HOUR }],
+    };
+    const now = 1_700_000_000_000;
+    // The previous release's shape, under the fingerprint it wrote: its
+    // rule's alone, with `since` and no epoch.
+    const fingerprint = createHash("sha256")
+      .update(JSON.stringify(["window", [[3, HOUR]]]))
+      .digest("base64url")
+      .slice(0, 16);
+    const earlier = {
+      kind: "window",
+      rule: fingerprint,
+      since: now - 1000,
+      released: [],
+      windows: [{ base: Math.floor(now / 112_500), buckets: [[0, 3]] }],
+    };
+
+    const state = readRuleState(rule, earlier, now);
+
+    expect(state).toMatchObject({ kind: "window", releasedThrough: 0 });
+    expect((state as { epoch?: unknown }).epoch).toEqual(expect.any(String));
+    expect(
+      (state as { windows: { buckets: unknown[] }[] }).windows[0]?.buckets
+    ).toEqual([]);
+  });
+});
+
 describe("the time a counted refusal says to wait", () => {
   it("counts a window's refused attempt in the time it says, so a retry then is admitted", async () => {
     const { limiter, time } = setup();
@@ -1031,6 +1185,7 @@ describe("when the store cannot answer", () => {
       id: "r",
       at: 0,
       entries: [{ rule: "window", key: "k", hadRoom: true, counted: true }],
+      epochs: ["e"],
     };
 
     expect(await limits.reserve([{ rule: "window", key: "k" }])).toEqual({

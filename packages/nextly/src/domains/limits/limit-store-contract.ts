@@ -14,9 +14,13 @@
  * }
  * ```
  *
- * `first` and `second` are two handles on one store, as two instances of the
- * site would hold them; for a store kept in one process, the same store
- * twice. Every case uses keys of its own, so the cases can share one store.
+ * `first` and `second` are the handles two instances of the site hold. For a
+ * store every instance shares (`shared: true`), they reach one store; for a
+ * store kept in one process, the same store twice. For a store that is not
+ * shared, pass each instance's own: a case marked `acrossInstances` then runs
+ * on the first alone, since such a store promises nothing across instances,
+ * and what the case holds within one store is still required. Every case uses
+ * keys of its own, so the cases can share one store.
  *
  * @experimental
  * @module domains/limits/limit-store-contract
@@ -34,6 +38,11 @@ export interface LimitStorePair {
 /** One case of the contract. */
 export interface LimitStoreContractCase {
   name: string;
+  /**
+   * Whether the case reads across the two instances. For a store with
+   * `shared: false` it runs on the first handle alone.
+   */
+  acrossInstances: boolean;
   run(pair: LimitStorePair): Promise<void>;
 }
 
@@ -104,6 +113,13 @@ function put(
   }));
 }
 
+/**
+ * How many further sweeps the sweep case allows before one must find
+ * nothing: room for a store that bounds each sweep's work, and for entries of
+ * other cases that expire meanwhile.
+ */
+const SWEEPS_TO_DRAIN = 20;
+
 /** Wait `ms` of real time. */
 function pause(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -132,10 +148,19 @@ function concurrently(
   );
 }
 
-/** The cases every limit store must pass. */
-export const limitStoreContract: readonly LimitStoreContractCase[] = [
+/**
+ * The handles a case spanning instances runs on: as given for a store every
+ * instance shares, and the first twice for one that is not.
+ */
+function acrossInstances(pair: LimitStorePair): LimitStorePair {
+  return pair.first.shared ? pair : { first: pair.first, second: pair.first };
+}
+
+/** The cases, before each spanning instances is given the handles it runs on. */
+const cases: readonly LimitStoreContractCase[] = [
   {
     name: "a new key reads as absent, and an update writes it for the other instance to read",
+    acrossInstances: true,
     async run({ first, second }) {
       const key = freshKey("new");
       expectThat(
@@ -153,6 +178,7 @@ export const limitStoreContract: readonly LimitStoreContractCase[] = [
   },
   {
     name: "a value comes back as written, and changing what was read changes nothing stored",
+    acrossInstances: false,
     async run({ first }) {
       const key = freshKey("value");
       const value = { list: [1, "two", { three: true }], text: "é ✓" };
@@ -174,6 +200,7 @@ export const limitStoreContract: readonly LimitStoreContractCase[] = [
   },
   {
     name: "writing null deletes an entry",
+    acrossInstances: true,
     async run({ first, second }) {
       const key = freshKey("delete");
       await put(first, key, { n: 1 }, 60_000);
@@ -189,6 +216,7 @@ export const limitStoreContract: readonly LimitStoreContractCase[] = [
   },
   {
     name: "an entry past its expiry reads as absent, to a read and to an update",
+    acrossInstances: true,
     async run({ first, second }) {
       const key = freshKey("expiry");
       await put(first, key, { n: 1 }, 100);
@@ -203,6 +231,7 @@ export const limitStoreContract: readonly LimitStoreContractCase[] = [
   },
   {
     name: "an entry written already expired is not stored",
+    acrossInstances: false,
     async run({ first }) {
       const key = freshKey("written-expired");
       await first.update([key], (_current, now) => ({
@@ -217,6 +246,7 @@ export const limitStoreContract: readonly LimitStoreContractCase[] = [
   },
   {
     name: "an update writing a key it did not name is refused, and writes nothing",
+    acrossInstances: false,
     async run({ first }) {
       const named = freshKey("named");
       const other = freshKey("not-named");
@@ -241,6 +271,7 @@ export const limitStoreContract: readonly LimitStoreContractCase[] = [
   },
   {
     name: "an update whose apply throws writes nothing and rejects with that error",
+    acrossInstances: false,
     async run({ first }) {
       const key = freshKey("apply-throws");
       const thrown = new LimitStoreContractViolation("thrown by apply");
@@ -258,6 +289,7 @@ export const limitStoreContract: readonly LimitStoreContractCase[] = [
   },
   {
     name: "50 updates of one new key over two instances lose none",
+    acrossInstances: true,
     async run(pair) {
       const key = freshKey("burst-new");
       const seen = (await concurrently(pair, 50, [key])).map(found => found[0]);
@@ -274,6 +306,7 @@ export const limitStoreContract: readonly LimitStoreContractCase[] = [
   },
   {
     name: "50 updates of one existing key over two instances lose none",
+    acrossInstances: true,
     async run(pair) {
       const key = freshKey("burst-existing");
       await pair.first.update([key], increment([key]));
@@ -287,6 +320,7 @@ export const limitStoreContract: readonly LimitStoreContractCase[] = [
   },
   {
     name: "50 updates of a pair of keys over two instances never see half of another's write",
+    acrossInstances: true,
     async run(pair) {
       const keys = [freshKey("pair-a"), freshKey("pair-b")];
       const seen = await concurrently(pair, 50, keys);
@@ -303,6 +337,7 @@ export const limitStoreContract: readonly LimitStoreContractCase[] = [
   },
   {
     name: "first updates naming the same new keys in opposite orders all complete",
+    acrossInstances: true,
     async run({ first, second }) {
       for (let round = 0; round < 10; round += 1) {
         const keys = [
@@ -323,7 +358,8 @@ export const limitStoreContract: readonly LimitStoreContractCase[] = [
     },
   },
   {
-    name: "a sweep removes expired entries and says how many went",
+    name: "a sweep removes expired entries and says how many went, and sweeping again comes to none",
+    acrossInstances: true,
     async run({ first, second }) {
       const keys = [
         freshKey("sweep-a"),
@@ -341,6 +377,29 @@ export const limitStoreContract: readonly LimitStoreContractCase[] = [
         (await first.read(keys)).size === 0,
         "a swept entry still reads"
       );
+      // Removed, not only counted: a store that reported the expired entries
+      // and kept them would report them on every sweep, while one that only
+      // bounds each sweep's work comes to a sweep that finds nothing.
+      let sweeps = 0;
+      while ((await second.sweep()) > 0) {
+        sweeps += 1;
+        expectThat(
+          sweeps < SWEEPS_TO_DRAIN,
+          `${SWEEPS_TO_DRAIN} more sweeps still found expired entries the first said it removed`
+        );
+      }
     },
   },
 ];
+
+/** The cases every limit store must pass. */
+export const limitStoreContract: readonly LimitStoreContractCase[] = cases.map(
+  contractCase =>
+    contractCase.acrossInstances
+      ? {
+          ...contractCase,
+          run: (pair: LimitStorePair) =>
+            contractCase.run(acrossInstances(pair)),
+        }
+      : contractCase
+);

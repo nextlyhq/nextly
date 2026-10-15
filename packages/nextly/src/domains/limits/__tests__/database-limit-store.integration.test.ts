@@ -6,6 +6,7 @@
  */
 import { randomUUID } from "node:crypto";
 
+import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import { and, count, eq, notLike } from "drizzle-orm";
 import {
   afterAll,
@@ -212,6 +213,115 @@ describeEachDialect("the database limit store", dialect => {
       "limit-store-filling",
       "limit-store-full",
     ]);
+  });
+
+  it("tells its watch only what committed: an update that would fill it and rolls back warns of nothing", async () => {
+    const lines = captureLog();
+    const generation = freshGeneration();
+    // The adapter, but its next transaction fails once its work has run: a
+    // failed commit, as far as the store can tell.
+    let failNext = false;
+    const failing = new Proxy(current.adapter, {
+      get(target, property, receiver) {
+        if (property === "transaction") {
+          return (work: (context: TransactionContext) => Promise<unknown>) =>
+            target.transaction(async (context: TransactionContext) => {
+              const result = await work(context);
+              if (failNext) {
+                failNext = false;
+                throw new Error("the commit failed");
+              }
+              return result;
+            });
+        }
+        const value: unknown = Reflect.get(target, property, receiver);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    const store = open(failing, generation, 10);
+    for (let index = 0; index < 7; index += 1) {
+      await store.update([`commit-${index}`], count1(`commit-${index}`));
+    }
+
+    // The eighth entry would reach the warning threshold, but rolls back.
+    failNext = true;
+    await rejectionOf(store.update(["commit-7"], count1("commit-7")));
+    expect(
+      lines.filter(line => line.kind === "limit-store-filling")
+    ).toHaveLength(0);
+
+    // Committed this time: the warning comes now, once.
+    await store.update(["commit-7"], count1("commit-7"));
+    expect(
+      lines.filter(line => line.kind === "limit-store-filling")
+    ).toHaveLength(1);
+  });
+
+  it("tells its watch counts in the order they committed, though acknowledged out of it", async () => {
+    const lines = captureLog();
+    const generation = freshGeneration();
+    // The adapter, but its next transaction's answer is held once it has
+    // committed, until the case lets it go.
+    let holdNext = false;
+    let committedHeld: () => void = () => undefined;
+    const heldCommitted = new Promise<void>(resolve => {
+      committedHeld = resolve;
+    });
+    let release: () => void = () => undefined;
+    const released = new Promise<void>(resolve => {
+      release = resolve;
+    });
+    const holding = new Proxy(current.adapter, {
+      get(target, property, receiver) {
+        if (property === "transaction") {
+          return async (
+            work: (context: TransactionContext) => Promise<unknown>
+          ) => {
+            const hold = holdNext;
+            holdNext = false;
+            const result = await target.transaction(work);
+            if (hold) {
+              committedHeld();
+              await released;
+            }
+            return result;
+          };
+        }
+        const value: unknown = Reflect.get(target, property, receiver);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    const store = open(holding, generation, 10);
+    for (let index = 0; index < 7; index += 1) {
+      await store.update([`order-${index}`], count1(`order-${index}`));
+    }
+
+    // The eighth entry commits at the threshold, its answer held back...
+    holdNext = true;
+    const insertion = store.update(["order-7"], count1("order-7"));
+    await heldCommitted;
+    // ...while two entries go, leaving six: under the recovery share.
+    await store.update(["order-0", "order-1"], () => ({
+      write: new Map([
+        ["order-0", null],
+        ["order-1", null],
+      ]),
+      result: undefined,
+    }));
+    release();
+    await insertion;
+
+    // The insertion's own count of eight is no longer the store's.
+    expect(
+      lines.filter(line => line.kind === "limit-store-filling")
+    ).toHaveLength(0);
+
+    // Growth back to eight warns, the watch not latched by a stale count.
+    await store.update(["order-8"], count1("order-8"));
+    await store.update(["order-9"], count1("order-9"));
+    expect(
+      lines.filter(line => line.kind === "limit-store-filling")
+    ).toHaveLength(1);
   });
 
   it("holds the bound against a burst of new keys on two instances", async () => {

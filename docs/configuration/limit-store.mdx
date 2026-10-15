@@ -117,3 +117,5 @@ for (const contractCase of limitStoreContract) {
 ```
 
 A case that fails throws `LimitStoreContractViolation` saying what broke.
+
+A store with `shared: false`, kept by each instance for itself, promises nothing across instances: pass each instance's own store as `first` and `second`. The cases marked `acrossInstances` then run on `first` alone, and still require what holds within one store, such as no update lost to another. The sweep case also sweeps again until a sweep finds nothing, within 20 more sweeps, so a store must remove what it says it swept, not only count it; one that bounds each sweep's work passes.
