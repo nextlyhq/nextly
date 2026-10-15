@@ -37,10 +37,12 @@ import { generateInviteTokenValue, hashInviteToken } from "../lib/invite-token";
 
 import {
   AUTH_TOKEN_LIFETIME_MS,
+  heldBy,
   lockAccount,
   mayBindToAccount,
   tokenTable,
   type AuthTokenKind,
+  type BindingAccount,
   type TokenBindingDb,
 } from "./token-account-binding";
 
@@ -225,6 +227,36 @@ export class AuthService extends BaseService {
       issued = { id: account.id, email: account.email, name: account.name };
     });
     return issued;
+  }
+
+  /**
+   * The account a token being redeemed may act on, holding its row for the
+   * rest of the transaction `tx` belongs to, or undefined when there is none.
+   *
+   * The account the token was issued for, while it still holds the token's
+   * address. A token from before tokens recorded their account acts on the
+   * account holding its address only when the binding rule says it was issued
+   * for it (`mayBindToAccount`).
+   */
+  private async redeemingAccount(
+    tx: TokenTransaction,
+    kind: AuthTokenKind,
+    token: {
+      identifier: string;
+      userId: string | null;
+      expires: Date;
+      createdAt: Date;
+    }
+  ): Promise<BindingAccount | undefined> {
+    const account = await lockAccount(tx, this.tables, this.dialect, {
+      email: token.identifier,
+      userId: token.userId ?? undefined,
+    });
+    if (!account) return undefined;
+    if (token.userId === null && !mayBindToAccount(kind, token, account)) {
+      return undefined;
+    }
+    return account;
   }
 
   /** The one public error an unusable reset link returns. */
@@ -718,15 +750,12 @@ export class AuthService extends BaseService {
       // commits first, and the link is refused, or waits for the reset.
       await this.withTransaction(async txRaw => {
         const tx = txRaw as TokenTransaction;
-        const account = await lockAccount(tx, this.tables, this.dialect, {
-          email,
-          userId: boundTo,
-        });
-        if (
-          !account ||
-          (boundTo === undefined &&
-            !mayBindToAccount("password-reset", resetToken, account))
-        ) {
+        const account = await this.redeemingAccount(
+          tx,
+          "password-reset",
+          resetToken
+        );
+        if (!account) {
           throw this.invalidResetLinkError({
             reason: "reset-token-account-changed",
             tokenId: resetToken.id,
@@ -745,9 +774,7 @@ export class AuthService extends BaseService {
               eq(passwordResetTokens.id, resetToken.id),
               isNull(passwordResetTokens.usedAt),
               gt(passwordResetTokens.expires, new Date()),
-              boundTo === undefined
-                ? isNull(passwordResetTokens.userId)
-                : eq(passwordResetTokens.userId, account.id)
+              heldBy(passwordResetTokens, resetToken, account)
             )
           );
         if (affectedRowCount(spent, this.dialect) !== 1) {
@@ -988,9 +1015,6 @@ export class AuthService extends BaseService {
     }
 
     const email = verificationToken.identifier;
-    // As for a reset link: the account it was issued for, or none on a token
-    // from before tokens recorded one.
-    const boundTo = verificationToken.userId ?? undefined;
     const { emailVerificationTokens, users } = this.tables;
 
     try {
@@ -999,15 +1023,12 @@ export class AuthService extends BaseService {
       // ordered against it.
       await this.withTransaction(async txRaw => {
         const tx = txRaw as TokenTransaction;
-        const account = await lockAccount(tx, this.tables, this.dialect, {
-          email,
-          userId: boundTo,
-        });
-        if (
-          !account ||
-          (boundTo === undefined &&
-            !mayBindToAccount("email-verification", verificationToken, account))
-        ) {
+        const account = await this.redeemingAccount(
+          tx,
+          "email-verification",
+          verificationToken
+        );
+        if (!account) {
           throw this.invalidVerificationLinkError({
             reason: "verification-token-account-changed",
             tokenId: verificationToken.id,
@@ -1022,9 +1043,7 @@ export class AuthService extends BaseService {
           .where(
             and(
               eq(emailVerificationTokens.id, verificationToken.id),
-              boundTo === undefined
-                ? isNull(emailVerificationTokens.userId)
-                : eq(emailVerificationTokens.userId, account.id)
+              heldBy(emailVerificationTokens, verificationToken, account)
             )
           );
         if (affectedRowCount(spent, this.dialect) !== 1) {

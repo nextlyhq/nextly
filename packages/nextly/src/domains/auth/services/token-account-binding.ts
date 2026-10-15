@@ -195,6 +195,21 @@ export function mayBindToAccount(
   );
 }
 
+/**
+ * The condition that a token row is still the one a redemption read: bound to
+ * `account`, or, read with no account, still unbound. A row revoked or
+ * rebound in between matches nothing.
+ */
+export function heldBy(
+  table: TokenTable,
+  token: { userId: string | null },
+  account: Pick<BindingAccount, "id">
+): SQL {
+  return token.userId === null
+    ? isNull(table.userId)
+    : eq(table.userId, account.id);
+}
+
 /** A token table, of either kind. */
 export type TokenTable = ReturnType<typeof tokenTable>;
 
@@ -298,20 +313,7 @@ export async function bindIssuedTokens(
       tokens.map(token => token.identifier)
     );
 
-    const bindTo = new Map<string, number[]>();
-    const remove: number[] = [];
-    for (const token of tokens) {
-      const account = accounts.get(token.identifier);
-      if (
-        token.expires > now &&
-        account &&
-        mayBindToAccount(kind, token, account)
-      ) {
-        bindTo.set(account.id, [...(bindTo.get(account.id) ?? []), token.id]);
-      } else {
-        remove.push(token.id);
-      }
-    }
+    const { bindTo, remove } = planBinding(kind, tokens, accounts, now);
 
     for (const [userId, ids] of bindTo) {
       try {
@@ -347,6 +349,34 @@ export async function bindIssuedTokens(
   }
 
   return result;
+}
+
+/**
+ * Which unbound tokens to bind to which account, and which to remove: a live
+ * token the binding rule ties to the account holding its address is bound to
+ * it; every other is removed.
+ */
+function planBinding(
+  kind: AuthTokenKind,
+  tokens: readonly (UnboundToken & { id: number })[],
+  accounts: ReadonlyMap<string, BindingAccount>,
+  now: Date
+): { bindTo: Map<string, number[]>; remove: number[] } {
+  const bindTo = new Map<string, number[]>();
+  const remove: number[] = [];
+  for (const token of tokens) {
+    const account = accounts.get(token.identifier);
+    if (
+      token.expires > now &&
+      account &&
+      mayBindToAccount(kind, token, account)
+    ) {
+      bindTo.set(account.id, [...(bindTo.get(account.id) ?? []), token.id]);
+    } else {
+      remove.push(token.id);
+    }
+  }
+  return { bindTo, remove };
 }
 
 /** The accounts holding any of `emails`, by address. */
