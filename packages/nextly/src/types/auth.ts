@@ -60,19 +60,11 @@ export type MinimalUser = {
   [key: string]: unknown;
 };
 
-export type UserAccount = {
-  id: number | string;
-  userId: number | string;
-  provider: string;
-  providerAccountId: string;
-  type: string;
-};
-
-// Structural type for dialect-agnostic table bundles used in services
+// Structural type for dialect-agnostic table bundles used in services. It
+// names no `accounts` or `sessions` table: both are retired, and no service
+// reads or writes them through this bundle.
 export interface AuthTables {
   users: unknown;
-  accounts: unknown;
-  sessions: unknown;
   passwordResetTokens: unknown;
   emailVerificationTokens?: unknown;
 }

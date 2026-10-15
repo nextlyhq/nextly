@@ -31,13 +31,9 @@ export type {
   UserMutationResponse,
 } from "./services/user-mutation-service";
 
-// ── UserAccountService Types ────────────────────────────────────────────────
-// PasswordOperationResponse removed in PR 4: updatePasswordHash now
-// returns void and throws NextlyError on failure.
-export type {
-  GetAccountsResponse,
-  UnlinkAccountResult,
-} from "./services/user-account-service";
+// UserAccountService has no result types to list here: its methods return
+// data or throw NextlyError, and the linked-account results went with the
+// retired linked-account endpoints.
 
 // ── UserFieldDefinitionService Types ────────────────────────────────────────
 export type {

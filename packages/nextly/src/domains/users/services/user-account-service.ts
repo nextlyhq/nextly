@@ -1,8 +1,9 @@
 /**
  * UserAccountService - Profile, Account, and Password operations
  *
- * Handles current user profile updates, OAuth account management,
- * and password-related operations.
+ * Handles current user profile updates and password-related operations.
+ * Linked external accounts are not managed here: their listing and
+ * unlinking endpoints are retired.
  *
  * @example
  * ```typescript
@@ -10,14 +11,13 @@
  *
  * const profile = await accountService.getCurrentUser(userId);
  * await accountService.updateCurrentUser(userId, { name: 'New Name' });
- * const accounts = await accountService.getAccounts(userId);
  * ```
  */
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { eq } from "drizzle-orm";
 
-import type { MinimalUser, UserAccount } from "@nextly/types/auth";
+import type { MinimalUser } from "@nextly/types/auth";
 
 // PR 4 of unified-error-system migration: ServiceError result-shapes →
 // NextlyError throws. Methods now return data directly or throw.
@@ -41,21 +41,6 @@ import { UserQueryService } from "./user-query-service";
  * `.success`/`.data`); failures throw NextlyError.
  */
 export type GetUserResponse = MinimalUser;
-
-/**
- * Response type for account list operations.
- * Post-migration: an empty array is returned when no accounts are linked,
- * and DB failures throw NextlyError. The 404-when-empty behavior was an
- * envelope quirk and not a real precondition violation.
- */
-export type GetAccountsResponse = UserAccount[];
-
-/**
- * Response type for unlink account operation
- */
-export type UnlinkAccountResult =
-  | { ok: true }
-  | { ok: false; status: number; error: string };
 
 export class UserAccountService extends BaseService {
   private queryService: UserQueryService;

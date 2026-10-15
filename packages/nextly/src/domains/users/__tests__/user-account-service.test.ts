@@ -2,7 +2,9 @@
  * UserAccountService Tests
  *
  * Tests for user account management operations: profile updates, password
- * management, OAuth account listing/unlinking, and safety checks.
+ * management, and safety checks. The service no longer lists or unlinks
+ * linked external accounts: those endpoints are retired, and their tests
+ * went with them.
  *
  * Covers:
  * - getCurrentUser delegates to UserQueryService.getUserById
@@ -17,14 +19,6 @@
  * - hasPassword returns false for empty password string
  * - getUserPasswordHashById returns hash
  * - getUserPasswordHashById returns null when no hash
- * - getAccounts returns linked accounts
- * - getAccounts returns 404 when no accounts
- * - deleteUserAccount removes account and returns count
- * - deleteUserAccount returns 0 when account not found
- * - unlinkAccountForUser success
- * - unlinkAccountForUser blocks last auth method removal
- * - unlinkAccountForUser returns 404 when account not found
- * - unlinkAccountForUser allows unlink when password is set
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
@@ -532,10 +526,4 @@ describe("UserAccountService", () => {
       expect(result).toBeNull();
     });
   });
-
-  // ── getAccounts ──────────────────────────────────────────────────────
-
-  // ── deleteUserAccount ────────────────────────────────────────────────
-
-  // ── unlinkAccountForUser ─────────────────────────────────────────────
 });
