@@ -63,10 +63,14 @@ for (const entry of TEMPLATE_STORE_DIALECTS) {
       async function seedAsBeforeTheUpgrade(): Promise<void> {
         const seeding = store.newService();
         for (const template of BUILT_IN_TEMPLATES) {
+          // One reworded; one renamed and sent without the layout, which
+          // are the site's settings and leave its wording as core's.
           const edited =
             template.slug === "email-verification"
               ? { subject: "Please confirm your address for {{appName}}" }
-              : {};
+              : template.slug === "password-reset"
+                ? { name: "Admin password reset", useLayout: false }
+                : {};
           await seeding.createTemplate({ ...template, ...edited });
         }
         // As the old insert-if-absent seeding stored them.
@@ -135,6 +139,15 @@ for (const entry of TEMPLATE_STORE_DIALECTS) {
           expect(template.overridden).toBe(false);
           expect(versionOf(template)).toEqual(versionOf(builtIn(slug)));
         }
+      });
+
+      it("keeps the site's name and layout choice on a built-in whose wording it left alone", async () => {
+        const template = await get("password-reset");
+        expect(template.overridden).toBe(false);
+        expect(template).toMatchObject({
+          name: "Admin password reset",
+          useLayout: false,
+        });
       });
 
       it("keeps an edited core template as an override based on core's version", async () => {

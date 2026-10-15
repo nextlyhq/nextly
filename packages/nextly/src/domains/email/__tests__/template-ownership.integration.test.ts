@@ -83,6 +83,18 @@ for (const entry of TEMPLATE_STORE_DIALECTS) {
       return service;
     }
 
+    /** A boot with the orders plugin shipping `template`. */
+    async function bootShipping(
+      template: PluginEmailTemplate
+    ): Promise<EmailTemplateService> {
+      const service = store.newService();
+      service.configureOwnership({
+        plugins: [{ name: ORDERS, templates: [template] }],
+      });
+      await service.ensureBuiltInTemplates();
+      return service;
+    }
+
     async function shippedTemplate(service: EmailTemplateService) {
       const template = await service.getTemplateBySlug("orders-shipped");
       if (!template) throw new Error("orders-shipped is missing");
@@ -250,6 +262,20 @@ for (const entry of TEMPLATE_STORE_DIALECTS) {
         // Rebased: the same changes are not offered again.
         expect((await service.compareTemplate(id)).changes).toEqual([]);
 
+        // An undo meant for that state is refused once the template moved on.
+        const edited = await service.updateTemplate(
+          id,
+          { subject: "Shipped!" },
+          ACTOR
+        );
+        await expect(
+          service.undoOwnerUpdate(id, undo, ACTOR)
+        ).rejects.toMatchObject({ code: "CONFLICT" });
+        expect((await shippedTemplate(service)).htmlContent).toBe(
+          edited.htmlContent
+        );
+        await service.updateTemplate(id, { subject: template.subject }, ACTOR);
+
         const undone = await service.undoOwnerUpdate(id, undo, ACTOR);
         expect(undone.htmlContent).toBe(mine);
         expect(undone.ownerChanged).toBe(true);
@@ -288,6 +314,98 @@ for (const entry of TEMPLATE_STORE_DIALECTS) {
             metadata: expect.objectContaining({ operation: "override" }),
           }),
         ]);
+      });
+    });
+
+    describe("what the owner says, and what the site sets", () => {
+      it("keeps the site's name and layout choice when the owner's version moves", async () => {
+        const first = await boot(V1);
+        const id = (await shippedTemplate(first)).id;
+        await first.updateTemplate(
+          id,
+          { name: "Shipping notice", useLayout: false },
+          ACTOR
+        );
+        expect((await shippedTemplate(first)).overridden).toBe(false);
+
+        const template = await shippedTemplate(await boot(V2));
+        expect(template.htmlContent).toBe(V2);
+        expect(template).toMatchObject({
+          name: "Shipping notice",
+          useLayout: false,
+          overridden: false,
+        });
+      });
+
+      it("follows the owner's description and variables on an override, removals included, until the site changes them", async () => {
+        const declared = [{ name: "number", description: "Order number" }];
+        const first = await bootShipping({
+          ...shipped(V1),
+          variables: declared,
+        });
+        const id = (await shippedTemplate(first)).id;
+        await first.overrideTemplate(id, undefined, ACTOR);
+
+        // The owner drops both: an override the site left alone drops them too.
+        const { description: _gone, ...bare } = shipped(V1);
+        const dropped = await shippedTemplate(await bootShipping(bare));
+        expect(dropped).toMatchObject({
+          overridden: true,
+          description: null,
+          variables: null,
+        });
+
+        // Once the site has its own description, the owner's no longer replaces it.
+        await first.updateTemplate(
+          id,
+          { description: "Our shipping email" },
+          ACTOR
+        );
+        const kept = await shippedTemplate(
+          await bootShipping({
+            ...shipped(V1),
+            description: "Owner's new text",
+          })
+        );
+        expect(kept.description).toBe("Our shipping email");
+      });
+
+      it("overrides a template whose declared variables the site changes, and keeps them", async () => {
+        const first = await boot(V1);
+        const id = (await shippedTemplate(first)).id;
+        const mine = [{ name: "carrier", description: "Who delivers it" }];
+        await first.updateTemplate(id, { variables: mine }, ACTOR);
+        expect((await shippedTemplate(first)).overridden).toBe(true);
+
+        const later = await bootShipping({
+          ...shipped(V1),
+          variables: [{ name: "number" }],
+        });
+        expect((await shippedTemplate(later)).variables).toEqual(mine);
+      });
+
+      it("reads ownership from the registered config on a boot that did not configure it", async () => {
+        container.register("config", () => ({
+          plugins: [
+            { name: ORDERS, contributes: { emailTemplates: [shipped(V1)] } },
+          ],
+        }));
+        const service = store.newService();
+        await service.ensureBuiltInTemplates();
+        expect((await shippedTemplate(service)).owner).toEqual({
+          kind: "plugin",
+          name: ORDERS,
+          installed: true,
+        });
+      });
+
+      it("is the control: with no config to read, a boot only creates core's missing templates", async () => {
+        const service = store.newService();
+        await service.ensureBuiltInTemplates();
+        expect(await service.getTemplateBySlug("orders-shipped")).toBeNull();
+        expect(
+          await service.getTemplateBySlug("password-reset")
+        ).not.toBeNull();
       });
     });
 

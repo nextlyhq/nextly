@@ -35,6 +35,13 @@ export const applyOwnerUpdateSchema = z
 /** `PATCH /email-templates/:id/undo-update`: what the apply returned. */
 export const undoOwnerUpdateSchema = z
   .object({
-    undo: z.object({ version: versionSchema, base: versionSchema }).strict(),
+    undo: z
+      .object({
+        version: versionSchema,
+        base: versionSchema,
+        applied: z.string().min(1),
+        appliedBase: z.string().min(1),
+      })
+      .strict(),
   })
   .strict();

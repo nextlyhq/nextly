@@ -26,6 +26,7 @@ import { and, eq, desc, isNull } from "drizzle-orm";
 
 import type { RequestActor } from "../../../auth/request-actor";
 import { toDbError } from "../../../database/errors";
+import { getService } from "../../../di";
 import { NextlyError } from "../../../errors";
 import { maskingServiceLogger } from "../../../observability/mask-emails";
 import type { PluginEmailTemplate } from "../../../plugins/contributions";
@@ -55,13 +56,16 @@ import {
 import {
   absentPluginFor,
   buildTemplateOwnerRegistry,
+  detailsOf,
   isProtectedOwner,
   ownerOf,
+  ownershipFromConfig,
   sameStoredValue,
   sameVersion,
   storedOwner,
   versionDigest,
   versionOf,
+  type KeptBase,
   type OwnedTemplate,
   type RegistryInput,
   type TemplateOwnerRegistry,
@@ -95,6 +99,14 @@ const VERSION_FIELDS = [
   "plainTextContent",
   "preheader",
 ] as const;
+
+/** What an owner says about a template beside its version (see OwnerDetails). */
+const DETAIL_FIELDS = ["description", "variables"] as const;
+
+/** The owner's current version and details, kept as an override's base. */
+function keptBase(entry: OwnedTemplate): KeptBase {
+  return { ...entry.version, details: detailsOf(entry.defaults) };
+}
 
 // ============================================================
 // Input Types
@@ -161,6 +173,14 @@ export interface OwnerUpdateUndo {
   version: EmailTemplateVersion;
   /** The owner's version the override was based on before. */
   base: EmailTemplateVersion;
+  /**
+   * Digests of the version the review produced and of the owner's version it
+   * was rebased on. Undo only puts the old version back while the template
+   * still holds exactly these, so a later edit, review or owner update is
+   * never overwritten by an undo that was meant for an earlier state.
+   */
+  applied: string;
+  appliedBase: string;
 }
 
 /** A stored row: the record's columns, with ownership as stored. */
@@ -172,7 +192,7 @@ type StoredTemplateRow = Omit<
   ownerName: string | null;
   overridden: boolean | null;
   baseDigest: string | null;
-  baseVersion: EmailTemplateVersion | null;
+  baseVersion: KeptBase | null;
 };
 
 // ============================================================
@@ -564,20 +584,24 @@ export class EmailTemplateService extends BaseService {
     if (data.description !== undefined)
       updateData.description = data.description;
 
-    const changesVersion = VERSION_FIELDS.some(
+    // An edit to what the owner sets (its version, or what it says about the
+    // template) makes the template the site's: the next boot would otherwise
+    // put the owner's back. Name, layout use and the other settings are the
+    // site's anyway and change nothing here.
+    const changesOwned = [...VERSION_FIELDS, ...DETAIL_FIELDS].some(
       field =>
         updateData[field] !== undefined &&
-        (updateData[field] ?? null) !== (existing[field] ?? null)
+        !sameStoredValue(updateData[field] ?? null, existing[field] ?? null)
     );
     const overriding =
-      changesVersion &&
+      changesOwned &&
       isProtectedOwner(record.owner) &&
       !record.overridden &&
       this.registry.owned.has(record.slug);
     if (overriding) {
       const entry = this.ownedEntry(record);
       updateData.overridden = true;
-      updateData.baseVersion = entry.version;
+      updateData.baseVersion = keptBase(entry);
       updateData.baseDigest = entry.digest;
     }
 
@@ -714,7 +738,7 @@ export class EmailTemplateService extends BaseService {
       .set({
         ...start,
         overridden: true,
-        baseVersion: entry.version,
+        baseVersion: keptBase(entry),
         baseDigest: entry.digest,
         updatedAt: new Date(),
       })
@@ -750,6 +774,8 @@ export class EmailTemplateService extends BaseService {
     const entry = this.ownedEntry(record);
     if (!record.overridden) return record;
 
+    // The owner's version and details; the site's settings (name, layout use,
+    // provider, From, Reply-To, attachments, active) stay as they are.
     const restored = this.ownerColumns(entry);
     await this.db
       .update(this.emailTemplates)
@@ -786,7 +812,7 @@ export class EmailTemplateService extends BaseService {
     const record = this.toRecord(row);
     const entry = this.ownedEntry(record);
     this.assertOverridden(record);
-    const base = row.baseVersion ?? entry.version;
+    const base = versionOf(row.baseVersion ?? entry.version);
     const mine = versionOf(row);
     return {
       base,
@@ -812,7 +838,7 @@ export class EmailTemplateService extends BaseService {
     const entry = this.ownedEntry(record);
     this.assertOverridden(record);
 
-    const base = row.baseVersion ?? entry.version;
+    const base = versionOf(row.baseVersion ?? entry.version);
     const mine = versionOf(row);
     const merged = applyOwnerChoices(base, entry.version, mine, choices);
     this.assertLayoutMarker(row.kind, merged.htmlContent);
@@ -821,7 +847,12 @@ export class EmailTemplateService extends BaseService {
       .update(this.emailTemplates)
       .set({
         ...merged,
-        baseVersion: entry.version,
+        // Rebased on the owner's version; the details the site's copy is
+        // compared against are a separate matter and carry over.
+        baseVersion: {
+          ...entry.version,
+          details: row.baseVersion?.details ?? detailsOf(entry.defaults),
+        },
         baseDigest: entry.digest,
         updatedAt: new Date(),
       })
@@ -838,7 +869,12 @@ export class EmailTemplateService extends BaseService {
     });
     return {
       template: await this.getTemplate(id),
-      undo: { version: mine, base },
+      undo: {
+        version: mine,
+        base,
+        applied: versionDigest(merged),
+        appliedBase: entry.digest,
+      },
     };
   }
 
@@ -855,6 +891,17 @@ export class EmailTemplateService extends BaseService {
     const record = this.toRecord(row);
     this.ownedEntry(record);
     this.assertOverridden(record);
+    if (
+      versionDigest(versionOf(row)) !== undo.applied ||
+      row.baseDigest !== undo.appliedBase
+    ) {
+      throw new NextlyError({
+        code: "CONFLICT",
+        publicMessage:
+          "This template changed after the update was applied, so it can't be undone. Review it again instead.",
+        logContext: { id, slug: record.slug },
+      });
+    }
     const version = versionOf(undo.version);
     const base = versionOf(undo.base);
     this.assertLayoutMarker(row.kind, version.htmlContent);
@@ -863,7 +910,7 @@ export class EmailTemplateService extends BaseService {
       .update(this.emailTemplates)
       .set({
         ...version,
-        baseVersion: base,
+        baseVersion: { ...base, details: row.baseVersion?.details },
         baseDigest: versionDigest(base),
         updatedAt: new Date(),
       })
@@ -946,14 +993,16 @@ export class EmailTemplateService extends BaseService {
    * at every boot.
    *
    * First folds any legacy `_email-header` / `_email-footer` rows into the
-   * unified default layout. Then, once `configureOwnership` has said which
-   * plugins run and what the site's code sets, every owned template is
-   * reconciled (see `reconcileOwnedRow`) and every other template is given its
-   * owner. Without that (a boot path that has not read the plugins), only
-   * missing built-ins are created and stored rows are left exactly as they
-   * are: a row cannot be judged against owners nobody has listed.
+   * unified default layout. Then, once the running plugins and what the site's
+   * code sets are known, every owned template is reconciled (see
+   * `reconcileOwnedRow`) and every other template is given its owner. A boot
+   * path that has not called `configureOwnership` reads them from the
+   * registered config here; with no config to read, only missing built-ins are
+   * created and stored rows are left exactly as they are: a row cannot be
+   * judged against owners nobody has listed.
    */
   async ensureBuiltInTemplates(): Promise<void> {
+    if (!this.registry.complete) this.configureOwnershipFromConfig();
     await this.migrateLegacyLayout();
 
     // The `kind` column is added to existing tables as nullable; rows that
@@ -996,16 +1045,33 @@ export class EmailTemplateService extends BaseService {
     }
   }
 
-  /** The columns an owner sets: its version, and what it says about the template. */
+  /**
+   * Read ownership from the registered config, for a boot path that seeds
+   * templates without calling `configureOwnership` first (a cold boot through
+   * the request handlers). Leaves the registry incomplete when there is no
+   * config to read, as in a bare service.
+   */
+  private configureOwnershipFromConfig(): void {
+    let config: Parameters<typeof ownershipFromConfig>[0];
+    try {
+      config = getService("config");
+    } catch {
+      return;
+    }
+    this.configureOwnership(ownershipFromConfig(config));
+  }
+
+  /**
+   * The columns an owner sets on a template it already has: its version and
+   * kind, and what it says about the template. The name and whether a layout
+   * wraps it are the site's settings once the template exists, as the
+   * provider, From and the rest are.
+   */
   private ownerColumns(entry: OwnedTemplate) {
-    const t = entry.defaults;
     return {
       ...entry.version,
-      name: t.name,
-      kind: t.kind ?? "template",
-      variables: t.variables ?? null,
-      useLayout: t.useLayout ?? true,
-      description: t.description ?? null,
+      kind: entry.defaults.kind ?? "template",
+      ...detailsOf(entry.defaults),
     };
   }
 
@@ -1017,6 +1083,8 @@ export class EmailTemplateService extends BaseService {
       await this.db.insert(this.emailTemplates).values({
         id: randomUUID(),
         slug: t.slug,
+        name: t.name,
+        useLayout: t.useLayout ?? true,
         ...this.ownerColumns(entry),
         layoutId: t.layoutId ?? null,
         fromOverride: t.fromOverride ?? null,
@@ -1042,96 +1110,130 @@ export class EmailTemplateService extends BaseService {
   }
 
   /**
-   * Reconcile one stored owned template with its owner's current version.
+   * Reconcile one stored owned template with its owner. The name, layout use
+   * and other settings are the site's and never change here.
    *
-   * - **Not reconciled before**, or now owned by someone else (a plugin's
-   *   template whose plugin is running again): it takes the owner. A row that
-   *   says something different from the owner's version keeps saying it, as
-   *   an override based on the owner's version, so no earlier edit is lost.
-   *   So does one the site's code sets on an install that predates
-   *   ownership, which keeps sending the stored template it sent until Reset.
-   * - **Overridden**: the site's version stays. Only what the owner says
-   *   about the template (its description and declared variables) follows
-   *   the owner; whether the owner's version moved is read from the kept
-   *   digest.
-   * - **Following its owner**: rewritten whenever the owner's version moved.
+   * - **Not reconciled before**, or now owned by someone else: see
+   *   `adoptOwner`.
+   * - **Overridden**: the site's version stays; see `followOwnerDetails`.
+   * - **Following its owner**: its version, kind and details are rewritten
+   *   whenever the owner's move.
    */
   private async reconcileOwnedRow(
     row: StoredTemplateRow,
     entry: OwnedTemplate
   ): Promise<void> {
     const owner = storedOwner(entry.owner);
-    const sameOwner =
-      row.ownerKind === owner.ownerKind && row.ownerName === owner.ownerName;
-    const now = new Date();
+    if (
+      row.ownerKind !== owner.ownerKind ||
+      row.ownerName !== owner.ownerName
+    ) {
+      await this.adoptOwner(row, entry);
+    } else if (row.overridden === true) {
+      await this.followOwnerDetails(row, entry);
+    } else {
+      await this.followOwner(row, entry);
+    }
+  }
+
+  /**
+   * A template the owner takes for the first time (an install that predates
+   * ownership), or again (a plugin's template whose plugin runs again).
+   *
+   * A row that says something different from the owner's version keeps
+   * saying it, as an override based on the owner's version, so no earlier
+   * edit is lost. So does one the site's code sets on an install that
+   * predates ownership, which keeps sending the stored template it sent until
+   * Reset. Either way the owner's details are taken: stored declarations on an
+   * install that predates ownership are mostly an older release's, and
+   * neither declarations nor a description change what a send renders.
+   */
+  private async adoptOwner(
+    row: StoredTemplateRow,
+    entry: OwnedTemplate
+  ): Promise<void> {
+    const firstTime = row.ownerKind === null;
+    const keepSitesVersion =
+      !sameVersion(versionOf(row), entry.version) ||
+      (firstTime && this.registry.setInCode.has(row.slug)) ||
+      row.overridden === true;
+    const owner = storedOwner(entry.owner);
     const where = eq(this.emailTemplates.id, row.id);
-
-    if (!sameOwner) {
-      const firstTime = row.ownerKind === null;
-      const keepSitesVersion =
-        !sameVersion(versionOf(row), entry.version) ||
-        (firstTime && this.registry.setInCode.has(row.slug)) ||
-        row.overridden === true;
-      if (keepSitesVersion) {
-        await this.db
-          .update(this.emailTemplates)
-          .set({
-            ...owner,
-            overridden: true,
-            baseVersion: row.baseVersion ?? entry.version,
-            baseDigest: row.baseDigest ?? entry.digest,
-            variables: entry.defaults.variables ?? row.variables,
-            description: entry.defaults.description ?? row.description ?? null,
-          })
-          .where(where);
-      } else {
-        await this.db
-          .update(this.emailTemplates)
-          .set({
-            ...owner,
-            ...this.ownerColumns(entry),
-            overridden: false,
-            baseVersion: null,
-            baseDigest: null,
-          })
-          .where(where);
-      }
+    if (keepSitesVersion) {
+      await this.db
+        .update(this.emailTemplates)
+        .set({
+          ...owner,
+          ...detailsOf(entry.defaults),
+          overridden: true,
+          baseVersion: {
+            ...(row.baseVersion ?? entry.version),
+            details: detailsOf(entry.defaults),
+          },
+          baseDigest: row.baseDigest ?? entry.digest,
+        })
+        .where(where);
       return;
     }
+    await this.db
+      .update(this.emailTemplates)
+      .set({
+        ...owner,
+        ...this.ownerColumns(entry),
+        overridden: false,
+        baseVersion: null,
+        baseDigest: null,
+      })
+      .where(where);
+  }
 
-    if (row.overridden === true) {
-      const description = entry.defaults.description ?? row.description ?? null;
-      const variables = entry.defaults.variables ?? row.variables;
-      if (
-        description !== row.description ||
-        !sameStoredValue(variables, row.variables)
-      ) {
-        await this.db
-          .update(this.emailTemplates)
-          .set({ description, variables })
-          .where(where);
-      }
-      return;
-    }
+  /**
+   * An overridden template keeps the site's version; whether the owner's
+   * moved is read from the kept digest. Its details follow the owner while
+   * the site's still equal the owner's as of the site's copy, removals
+   * included; once the site has changed them, the site's stay.
+   */
+  private async followOwnerDetails(
+    row: StoredTemplateRow,
+    entry: OwnedTemplate
+  ): Promise<void> {
+    const owners = detailsOf(entry.defaults);
+    const kept = row.baseVersion?.details;
+    // The site changed them: they stay.
+    if (kept && !sameStoredValue(detailsOf(row), kept)) return;
+    // Already the owner's, and recorded as such.
+    if (kept && sameStoredValue(kept, owners)) return;
+    await this.db
+      .update(this.emailTemplates)
+      .set({
+        ...owners,
+        baseVersion: {
+          ...versionOf(row.baseVersion ?? entry.version),
+          details: owners,
+        },
+      })
+      .where(eq(this.emailTemplates.id, row.id));
+  }
 
+  /** A template following its owner: rewritten whenever the owner's version, kind or details move. */
+  private async followOwner(
+    row: StoredTemplateRow,
+    entry: OwnedTemplate
+  ): Promise<void> {
     const wanted = this.ownerColumns(entry);
     const current = {
       ...versionOf(row),
-      name: row.name,
       kind: row.kind ?? "template",
-      variables: row.variables,
-      useLayout: row.useLayout,
-      description: row.description ?? null,
+      ...detailsOf(row),
     };
-    if (!sameStoredValue(current, { ...current, ...wanted })) {
-      await this.db
-        .update(this.emailTemplates)
-        .set({ ...wanted, updatedAt: now })
-        .where(where);
-      this.logger.info(
-        `Updated email template to its owner's version: ${row.slug}`
-      );
-    }
+    if (sameStoredValue(current, wanted)) return;
+    await this.db
+      .update(this.emailTemplates)
+      .set({ ...wanted, updatedAt: new Date() })
+      .where(eq(this.emailTemplates.id, row.id));
+    this.logger.info(
+      `Updated email template to its owner's version: ${row.slug}`
+    );
   }
 
   // ============================================================

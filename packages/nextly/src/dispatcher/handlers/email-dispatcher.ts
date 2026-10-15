@@ -288,8 +288,8 @@ const EMAIL_TEMPLATE_METHODS: Record<
         choices,
         readAuthenticatedActor(p)
       );
-      return respondData({
-        message: "Owner's update applied.",
+      // A non-CRUD write with a result beside the item: Undo needs it.
+      return respondAction("Owner's update applied.", {
         item: template,
         undo,
       });

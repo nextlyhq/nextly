@@ -201,6 +201,63 @@ function pluginDefaults(template: PluginEmailTemplate): EmailTemplateInsert {
   };
 }
 
+/**
+ * What an owner says about a template beside its version: when it is sent,
+ * and the data its code supplies. Neither changes what a send renders.
+ */
+export interface OwnerDetails {
+  description: string | null;
+  variables: EmailTemplateVariable[] | null;
+}
+
+export function detailsOf(template: {
+  description?: string | null;
+  variables?: unknown;
+}): OwnerDetails {
+  return {
+    description: template.description ?? null,
+    variables: (template.variables ?? null) as EmailTemplateVariable[] | null,
+  };
+}
+
+/**
+ * The owner's version an override is based on, as kept. `details` is what the
+ * owner said about the template as of the site's copy: while the site's
+ * details still equal it, the owner's later details replace them; once the
+ * site has changed them, the site's stay. Absent on an override kept before
+ * details were tracked, which then follows the owner's details.
+ */
+export type KeptBase = EmailTemplateVersion & { details?: OwnerDetails };
+
+/** The configuration ownership is read from: the plugins and `email.templates`. */
+export interface OwnershipConfig {
+  plugins?: ReadonlyArray<{
+    name: string;
+    enabled?: boolean;
+    contributes?: { emailTemplates?: ReadonlyArray<PluginEmailTemplate> };
+  }>;
+  email?: { templates?: EmailConfig["templates"] };
+}
+
+/**
+ * The owners a configuration declares: each enabled plugin with the templates
+ * it contributes, and the templates the site's code sets. Every boot path
+ * reads ownership through this, so they cannot disagree.
+ */
+export function ownershipFromConfig(
+  config: OwnershipConfig
+): Pick<RegistryInput, "plugins" | "codeTemplates"> {
+  return {
+    plugins: (config.plugins ?? [])
+      .filter(plugin => plugin.enabled !== false)
+      .map(plugin => ({
+        name: plugin.name,
+        templates: plugin.contributes?.emailTemplates ?? [],
+      })),
+    codeTemplates: config.email?.templates,
+  };
+}
+
 export interface RegistryInput {
   /** Core's built-in templates and layouts. */
   builtIns: ReadonlyArray<EmailTemplateInsert>;
@@ -294,11 +351,17 @@ export function ownerOf(
   registry: TemplateOwnerRegistry
 ): EmailTemplateOwner {
   const registered = registry.owned.get(slug)?.owner ?? null;
-  const kind = stored.ownerKind ?? registered?.kind ?? absentKind(slug);
+  // Once the running owners are known, a registered owner decides: the stored
+  // one can lag behind (a plugin just installed that contributes this slug)
+  // until the boot's reconciliation writes it, and reading the stale one would
+  // let a running plugin's template be deleted.
+  const current =
+    registry.complete && registered ? storedOwner(registered) : stored;
+  const kind = current.ownerKind ?? registered?.kind ?? absentKind(slug);
   if (kind === "core") return { kind: "core" };
   if (kind === "plugin") {
     const name =
-      stored.ownerName ??
+      current.ownerName ??
       (registered?.kind === "plugin" ? registered.name : null) ??
       absentPluginFor(slug) ??
       "unknown";

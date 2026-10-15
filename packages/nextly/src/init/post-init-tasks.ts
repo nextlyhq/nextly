@@ -15,6 +15,7 @@ import {
 import { getService } from "../di/register";
 import { warnAboutUnusableProviders } from "../domains/email/boot-check";
 import { getEmailProviderRegistry } from "../domains/email/services/email-provider-registry";
+import { ownershipFromConfig } from "../domains/email/template-ownership";
 import { provisionUserFieldStorage } from "../domains/users/services/provision-user-field-storage";
 
 /**
@@ -38,16 +39,9 @@ export async function runPostInitTasks(): Promise<void> {
   // made before ownership existed is kept as an override. Idempotent.
   try {
     const emailTemplateService = getService("emailTemplateService");
-    const config = getService("config");
-    emailTemplateService.configureOwnership({
-      plugins: (config.plugins ?? [])
-        .filter(plugin => plugin.enabled !== false)
-        .map(plugin => ({
-          name: plugin.name,
-          templates: plugin.contributes?.emailTemplates ?? [],
-        })),
-      codeTemplates: config.email?.templates,
-    });
+    emailTemplateService.configureOwnership(
+      ownershipFromConfig(getService("config"))
+    );
     await emailTemplateService.ensureBuiltInTemplates();
   } catch {
     // Silently skip — email services may not be registered,

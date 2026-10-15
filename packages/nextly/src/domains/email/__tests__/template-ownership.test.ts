@@ -164,6 +164,36 @@ describe("the owner registry", () => {
     expect(isProtectedOwner(owner)).toBe(true);
   });
 
+  it("reads a running plugin as the owner of a slug stored as the site's or another plugin's, before reconciliation", () => {
+    const { registry } = buildTemplateOwnerRegistry({
+      builtIns: BUILT_IN_TEMPLATES,
+      plugins: [plugin],
+      complete: true,
+    });
+    const installed = {
+      kind: "plugin",
+      name: "@acme/plugin-orders",
+      installed: true,
+    };
+    for (const stored of [
+      { ownerKind: "site", ownerName: null },
+      { ownerKind: "plugin", ownerName: "@other/plugin-shop" },
+    ]) {
+      const owner = ownerOf("orders-paid", stored, registry);
+      expect(owner).toEqual(installed);
+      expect(isProtectedOwner(owner)).toBe(true);
+    }
+    // The control: with the running plugins unknown, the stored owner stands.
+    const { registry: early } = buildTemplateOwnerRegistry({
+      builtIns: BUILT_IN_TEMPLATES,
+      plugins: [plugin],
+      complete: false,
+    });
+    expect(
+      ownerOf("orders-paid", { ownerKind: "site", ownerName: null }, early)
+    ).toEqual({ kind: "site" });
+  });
+
   it("recognises a first-party plugin's leftover template by its slug", () => {
     expect(absentPluginFor("accounts-verify-address")).toBe(
       "@nextlyhq/plugin-accounts"
