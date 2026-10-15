@@ -7,8 +7,11 @@
  * @packageDocumentation
  */
 
+import type { OwnerUpdateUndo } from "../../domains/email/services/email-template-service";
+import type { OwnerChangeChoice } from "../../domains/email/template-merge";
 import type { EmailAttachmentInput } from "../../domains/email/types";
 import type { EmailProviderType } from "../../schemas/email-providers/types";
+import type { EmailTemplateVersion } from "../../schemas/email-templates/types";
 
 import type { DirectAPIConfig } from "./shared";
 
@@ -189,6 +192,11 @@ export interface CreateEmailTemplateArgs extends DirectAPIConfig {
      * attachments at send time; per-send wins on mediaId conflict.
      */
     attachments?: EmailAttachmentInput[];
+    /**
+     * @experimental When the template is sent, in a sentence the admin shows
+     * beside it.
+     */
+    description?: string;
   };
 }
 
@@ -208,6 +216,61 @@ export interface UpdateEmailTemplateArgs extends DirectAPIConfig {
 export interface DeleteEmailTemplateArgs extends DirectAPIConfig {
   /** Template ID (required) */
   id: string;
+}
+
+/**
+ * @experimental Arguments for overriding a core or plugin template, so it
+ * holds the site's version from now on.
+ */
+export interface OverrideEmailTemplateArgs extends DirectAPIConfig {
+  /** Template ID (required) */
+  id: string;
+  /**
+   * Where the site's version starts. Omitted fields start from the owner's
+   * current version.
+   */
+  version?: Partial<EmailTemplateVersion>;
+}
+
+/**
+ * @experimental Arguments for returning an overridden template to its
+ * owner's current version.
+ */
+export interface ResetEmailTemplateArgs extends DirectAPIConfig {
+  /** Template ID (required) */
+  id: string;
+}
+
+/**
+ * @experimental Arguments for comparing an overridden template with its
+ * owner's current version.
+ */
+export interface CompareEmailTemplateArgs extends DirectAPIConfig {
+  /** Template ID (required) */
+  id: string;
+}
+
+/**
+ * @experimental Arguments for applying a review of an owner's update.
+ */
+export interface ApplyEmailTemplateUpdateArgs extends DirectAPIConfig {
+  /** Template ID (required) */
+  id: string;
+  /**
+   * A choice for every change `compare` offered, by its `id`: keep the
+   * site's lines, use the owner's, or use text the person wrote.
+   */
+  choices: Record<string, OwnerChangeChoice>;
+}
+
+/**
+ * @experimental Arguments for undoing an applied review.
+ */
+export interface UndoEmailTemplateUpdateArgs extends DirectAPIConfig {
+  /** Template ID (required) */
+  id: string;
+  /** What `applyUpdate` returned as `undo`. */
+  undo: OwnerUpdateUndo;
 }
 
 /**

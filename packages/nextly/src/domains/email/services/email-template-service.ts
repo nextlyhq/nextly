@@ -2,12 +2,18 @@
  * Email Template Service
  *
  * CRUD operations for managing email templates stored in the
- * `email_templates` table. Supports template variable interpolation,
- * built-in template bootstrapping, and layout composition.
+ * `email_templates` table, built-in template bootstrapping, layout
+ * composition, and who owns each template.
  *
  * A layout is a first-class row with `kind = 'layout'` whose
  * `htmlContent` holds a `{{content}}` placeholder where a template
  * body is injected at send time.
+ *
+ * Every template has an owner: core, a plugin, or the site. An owner's
+ * template follows the owner's current version until the site overrides it;
+ * an override keeps the site's version and a copy of the owner's version it
+ * started from, so the owner's later changes can be reviewed one by one, and
+ * Reset returns it to the owner (`../template-ownership.ts`).
  *
  * @module services/email/email-template-service
  * @since 1.0.0
@@ -30,6 +36,7 @@ import type {
   EmailTemplateInsert,
   EmailTemplateRecord,
   EmailTemplateVariable,
+  EmailTemplateVersion,
 } from "../../../schemas/email-templates/types";
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
@@ -39,7 +46,26 @@ import {
   recordTemplateActivity,
   type EmailTemplateActivityInput,
 } from "../template-activity";
-import type { EmailAttachmentInput } from "../types";
+import {
+  applyOwnerChoices,
+  ownerChanges,
+  type OwnerChange,
+  type OwnerChangeChoice,
+} from "../template-merge";
+import {
+  absentPluginFor,
+  buildTemplateOwnerRegistry,
+  isProtectedOwner,
+  ownerOf,
+  sameVersion,
+  storedOwner,
+  versionDigest,
+  versionOf,
+  type OwnedTemplate,
+  type RegistryInput,
+  type TemplateOwnerRegistry,
+} from "../template-ownership";
+import type { EmailAttachmentInput, EmailConfig } from "../types";
 
 import {
   DEFAULT_APP_NAME,
@@ -60,6 +86,14 @@ import {
 /** Legacy reserved slugs migrated into the unified layout row on boot. */
 const LEGACY_HEADER_SLUG = "_email-header";
 const LEGACY_FOOTER_SLUG = "_email-footer";
+
+/** The fields an owner versions and an override replaces. */
+const VERSION_FIELDS = [
+  "subject",
+  "htmlContent",
+  "plainTextContent",
+  "preheader",
+] as const;
 
 // ============================================================
 // Input Types
@@ -90,7 +124,55 @@ export interface UpdateEmailTemplateInput {
   isActive?: boolean;
   providerId?: string | null;
   attachments?: EmailAttachmentInput[] | null;
+  description?: string | null;
 }
+
+/** What the running site contributes to ownership: its plugins and its code. */
+export interface TemplateOwnershipInput {
+  /** Each running plugin, by name, with the templates it contributes. */
+  plugins: ReadonlyArray<{
+    name: string;
+    templates: ReadonlyArray<PluginEmailTemplate>;
+  }>;
+  /** `email.templates` from `defineConfig()`. */
+  codeTemplates?: EmailConfig["templates"];
+}
+
+/**
+ * An overridden template beside its owner's current version. A type alias
+ * rather than an interface so it carries an implicit index signature and can
+ * be handed to the response helpers as it is.
+ */
+export type EmailTemplateComparison = {
+  /** The owner's version the override started from. */
+  base: EmailTemplateVersion;
+  /** The owner's version now. */
+  theirs: EmailTemplateVersion;
+  /** The site's version now. */
+  mine: EmailTemplateVersion;
+  /** Each change the owner made since `base`, to review one by one. */
+  changes: OwnerChange[];
+};
+
+/** What an applied review replaced, so it can be undone. */
+export interface OwnerUpdateUndo {
+  /** The site's version before the review was applied. */
+  version: EmailTemplateVersion;
+  /** The owner's version the override was based on before. */
+  base: EmailTemplateVersion;
+}
+
+/** A stored row: the record's columns, with ownership as stored. */
+type StoredTemplateRow = Omit<
+  EmailTemplateRecord,
+  "owner" | "overridden" | "ownerChanged" | "setInCode"
+> & {
+  ownerKind: string | null;
+  ownerName: string | null;
+  overridden: boolean | null;
+  baseDigest: string | null;
+  baseVersion: EmailTemplateVersion | null;
+};
 
 // ============================================================
 // Email Template Service
@@ -114,6 +196,14 @@ export class EmailTemplateService extends BaseService {
    */
   private readonly appName: string;
 
+  /**
+   * Who owns what. Core's templates are known from the start; the running
+   * plugins and the site's code are added by `configureOwnership`, which the
+   * boot calls before seeding. Until then the registry is incomplete and the
+   * boot reconciliation does not run (see `ensureBuiltInTemplates`).
+   */
+  private registry: TemplateOwnerRegistry;
+
   constructor(adapter: DrizzleAdapter, logger: Logger, appName?: string) {
     // Masked here whatever logger an app supplied: what this service logs,
     // a provider error quoting a recipient included, never carries a full
@@ -121,6 +211,11 @@ export class EmailTemplateService extends BaseService {
     super(adapter, maskingServiceLogger(logger));
 
     this.appName = appName ?? DEFAULT_APP_NAME;
+    this.registry = buildTemplateOwnerRegistry({
+      builtIns: BUILT_IN_TEMPLATES,
+      plugins: [],
+      complete: false,
+    }).registry;
 
     switch (this.dialect) {
       case "postgresql":
@@ -137,6 +232,78 @@ export class EmailTemplateService extends BaseService {
         // String() coercion satisfies @typescript-eslint/restrict-template-expressions.
         throw new Error(`Unsupported dialect: ${String(this.dialect)}`);
     }
+  }
+
+  // ============================================================
+  // Ownership
+  // ============================================================
+
+  /**
+   * Register the running plugins' templates and the site's code templates.
+   *
+   * Core registers first, so a plugin cannot take over one of core's slugs;
+   * between two plugins contributing one slug, the first keeps it. Each
+   * ignored contribution is logged with both owners named.
+   */
+  configureOwnership(input: TemplateOwnershipInput): void {
+    const built: RegistryInput = {
+      builtIns: BUILT_IN_TEMPLATES,
+      plugins: input.plugins,
+      codeTemplates: input.codeTemplates,
+      complete: true,
+    };
+    const { registry, conflicts } = buildTemplateOwnerRegistry(built);
+    this.registry = registry;
+    for (const conflict of conflicts) {
+      this.logger.warn(
+        "Ignored a plugin's email template: another owner already has its slug",
+        {
+          slug: conflict.slug,
+          keptBy: conflict.kept.kind === "plugin" ? conflict.kept.name : "core",
+          ignoredFrom: conflict.ignored,
+        }
+      );
+    }
+  }
+
+  /** A stored row as callers see it, with its owner and override state. */
+  private toRecord(row: StoredTemplateRow): EmailTemplateRecord {
+    const {
+      ownerKind,
+      ownerName,
+      overridden: storedOverridden,
+      baseDigest,
+      baseVersion: _baseVersion,
+      ...columns
+    } = row;
+    const owner = ownerOf(row.slug, { ownerKind, ownerName }, this.registry);
+    const overridden = owner.kind !== "site" && storedOverridden === true;
+    const entry = this.registry.owned.get(row.slug);
+    return {
+      ...columns,
+      kind: columns.kind ?? "template",
+      description: columns.description ?? null,
+      owner,
+      overridden,
+      ownerChanged: overridden && !!entry && baseDigest !== entry.digest,
+      setInCode: this.registry.setInCode.has(row.slug),
+    };
+  }
+
+  /** The registry entry an owned template follows, or a refusal naming why there is none. */
+  private ownedEntry(record: EmailTemplateRecord): OwnedTemplate {
+    const entry = this.registry.owned.get(record.slug);
+    if (!entry || !isProtectedOwner(record.owner)) {
+      throw new NextlyError({
+        code: "BUSINESS_RULE_VIOLATION",
+        publicMessage:
+          record.owner.kind === "site"
+            ? "This template is your site's own, so it has no owner's version."
+            : "This template's owner isn't running, so it has no current version.",
+        logContext: { slug: record.slug, owner: record.owner },
+      });
+    }
+    return entry;
   }
 
   // ============================================================
@@ -195,7 +362,7 @@ export class EmailTemplateService extends BaseService {
   }
 
   /**
-   * Create a new email template.
+   * Create a new email template. A template created here is the site's own.
    *
    * @throws NextlyError BUSINESS_RULE_VIOLATION if slug is reserved
    * @throws NextlyError DUPLICATE if slug already exists
@@ -225,6 +392,9 @@ export class EmailTemplateService extends BaseService {
       isActive: data.isActive ?? true,
       providerId: data.providerId ?? null,
       attachments: data.attachments ?? null,
+      description: data.description ?? null,
+      ...storedOwner({ kind: "site" }),
+      overridden: false,
       createdAt: now,
       updatedAt: now,
     };
@@ -258,12 +428,8 @@ export class EmailTemplateService extends BaseService {
     return created;
   }
 
-  /**
-   * Get a single email template by ID.
-   *
-   * @throws NextlyError NOT_FOUND if template doesn't exist
-   */
-  async getTemplate(id: string): Promise<EmailTemplateRecord> {
+  /** The stored row by id. */
+  private async getRow(id: string): Promise<StoredTemplateRow> {
     const results = await this.db
       .select()
       .from(this.emailTemplates)
@@ -276,7 +442,26 @@ export class EmailTemplateService extends BaseService {
       throw NextlyError.notFound({ logContext: { id } });
     }
 
-    return results[0] as EmailTemplateRecord;
+    return results[0] as StoredTemplateRow;
+  }
+
+  /** The stored row by slug, or null. */
+  private async getRowBySlug(slug: string): Promise<StoredTemplateRow | null> {
+    const results = await this.db
+      .select()
+      .from(this.emailTemplates)
+      .where(eq(this.emailTemplates.slug, slug))
+      .limit(1);
+    return (results[0] as StoredTemplateRow | undefined) ?? null;
+  }
+
+  /**
+   * Get a single email template by ID.
+   *
+   * @throws NextlyError NOT_FOUND if template doesn't exist
+   */
+  async getTemplate(id: string): Promise<EmailTemplateRecord> {
+    return this.toRecord(await this.getRow(id));
   }
 
   /**
@@ -285,14 +470,31 @@ export class EmailTemplateService extends BaseService {
    * Returns `null` if no template matches the slug.
    */
   async getTemplateBySlug(slug: string): Promise<EmailTemplateRecord | null> {
-    const results = await this.db
-      .select()
-      .from(this.emailTemplates)
-      .where(eq(this.emailTemplates.slug, slug))
-      .limit(1);
+    const row = await this.getRowBySlug(slug);
+    return row ? this.toRecord(row) : null;
+  }
 
-    if (results.length === 0) return null;
-    return results[0] as EmailTemplateRecord;
+  /**
+   * The template a send by slug should render, and whether the site's code
+   * version (`email.templates`) takes its place.
+   *
+   * The order is the site's override, then the site's code, then the owner's
+   * default. A stored row that is not overridden holds the owner's default, so
+   * the code version wins over it; an override wins over the code. A row the
+   * boot reconciliation has not reached yet is treated as it was before
+   * ownership existed, when a stored row always won, so an existing site sends
+   * what it sent until the reconciliation decides.
+   */
+  async resolveForSend(slug: string): Promise<{
+    template: EmailTemplateRecord | null;
+    preferCode: boolean;
+  }> {
+    const row = await this.getRowBySlug(slug);
+    if (!row) return { template: null, preferCode: true };
+    return {
+      template: this.toRecord(row),
+      preferCode: row.ownerKind !== null && row.overridden !== true,
+    };
   }
 
   /**
@@ -307,13 +509,17 @@ export class EmailTemplateService extends BaseService {
       .from(this.emailTemplates)
       .orderBy(desc(this.emailTemplates.createdAt));
 
-    return results as EmailTemplateRecord[];
+    return (results as StoredTemplateRow[]).map(row => this.toRecord(row));
   }
 
   /**
    * Update an existing email template.
    *
-   * Template `slug` cannot be changed after creation.
+   * Template `slug` cannot be changed after creation. Changing what an owned
+   * template says (its subject, preheader, HTML or plain text) overrides it,
+   * as the explicit Override does: the change is the site's, and the owner's
+   * later versions wait for review rather than overwriting it at the next
+   * boot.
    *
    * @throws NextlyError NOT_FOUND if template doesn't exist
    */
@@ -322,7 +528,8 @@ export class EmailTemplateService extends BaseService {
     data: UpdateEmailTemplateInput,
     actor?: RequestActor | null
   ): Promise<EmailTemplateRecord> {
-    const existing = await this.getTemplate(id);
+    const existing = await this.getRow(id);
+    const record = this.toRecord(existing);
 
     // Validate the effective post-update row (a layout must keep exactly one
     // `{{content}}` marker). Kind is immutable on update, so use the existing
@@ -353,6 +560,25 @@ export class EmailTemplateService extends BaseService {
     if (data.providerId !== undefined) updateData.providerId = data.providerId;
     if (data.attachments !== undefined)
       updateData.attachments = data.attachments;
+    if (data.description !== undefined)
+      updateData.description = data.description;
+
+    const changesVersion = VERSION_FIELDS.some(
+      field =>
+        updateData[field] !== undefined &&
+        (updateData[field] ?? null) !== (existing[field] ?? null)
+    );
+    const overriding =
+      changesVersion &&
+      isProtectedOwner(record.owner) &&
+      !record.overridden &&
+      this.registry.owned.has(record.slug);
+    if (overriding) {
+      const entry = this.ownedEntry(record);
+      updateData.overridden = true;
+      updateData.baseVersion = entry.version;
+      updateData.baseDigest = entry.digest;
+    }
 
     try {
       await this.db
@@ -371,14 +597,21 @@ export class EmailTemplateService extends BaseService {
     // Compared against the row as it was, so an update that submitted every
     // field but moved none produces no entry. `updatedAt` is excluded: it moves
     // on every write by definition and would make every no-op look like a
-    // change.
-    const { updatedAt: _ignored, ...touched } = updateData;
+    // change. The kept base copy is internal bookkeeping, named by
+    // `overridden` alone.
+    const {
+      updatedAt: _ignored,
+      baseVersion: _base,
+      baseDigest: _digest,
+      ...touched
+    } = updateData;
     await this.recordActivity({
       action: "update",
       templateId: updated.id,
       templateName: updated.name,
       templateKind: updated.kind,
       changedFields: changedTemplateFields({ ...existing }, touched),
+      operation: overriding ? "override" : undefined,
       actor,
     });
     return updated;
@@ -387,12 +620,15 @@ export class EmailTemplateService extends BaseService {
   /**
    * Delete an email template.
    *
-   * The default layout is undeletable (it is the fallback wrapper).
-   * Custom layouts may be deleted — templates referencing them fall
-   * back to the default via the `layoutId` set-null FK. Idempotent —
+   * Core's templates and an installed plugin's cannot be deleted: their owner
+   * would recreate them at the next boot, so a delete would quietly mean
+   * Reset. The site's own templates, and those of a plugin that is no longer
+   * installed, can be, and are not recreated. Custom layouts may be deleted —
+   * templates referencing them fall back to the default layout. Idempotent —
    * returns successfully if the template doesn't exist.
    *
-   * @throws NextlyError BUSINESS_RULE_VIOLATION if deleting the default layout
+   * @throws NextlyError BUSINESS_RULE_VIOLATION if the template is owned by
+   *   core or an installed plugin
    */
   async deleteTemplate(id: string, actor?: RequestActor | null): Promise<void> {
     let template: EmailTemplateRecord | null = null;
@@ -411,12 +647,18 @@ export class EmailTemplateService extends BaseService {
       throw error;
     }
 
-    if (template.slug === DEFAULT_LAYOUT_SLUG) {
+    if (
+      isProtectedOwner(template.owner) ||
+      template.slug === DEFAULT_LAYOUT_SLUG
+    ) {
       // Spec §13.8: identifiers are operator-only. Public sentence is generic.
       throw new NextlyError({
         code: "BUSINESS_RULE_VIOLATION",
-        publicMessage: "Cannot delete the default layout.",
-        logContext: { id, slug: template.slug },
+        publicMessage:
+          template.kind === "layout"
+            ? "This layout belongs to its owner and can't be deleted. Reset it to the owner's version instead."
+            : "This template belongs to its owner and can't be deleted. Reset it to the owner's version instead.",
+        logContext: { id, slug: template.slug, owner: template.owner },
       });
     }
 
@@ -433,6 +675,221 @@ export class EmailTemplateService extends BaseService {
       templateName: template.name,
       templateKind: template.kind,
       actor,
+    });
+  }
+
+  // ============================================================
+  // Override, Reset and the owner's updates
+  // ============================================================
+
+  /**
+   * Override an owned template: from now on it holds the site's version.
+   *
+   * The site's version starts from the owner's current one, or from
+   * `options.version` where the caller supplies the starting text (an
+   * override of a template set in code starts from what the code produced).
+   * The owner's current version is kept, so its later changes can be reviewed
+   * against it. Overriding a template that is already overridden changes
+   * nothing.
+   */
+  async overrideTemplate(
+    id: string,
+    options?: { version?: Partial<EmailTemplateVersion> },
+    actor?: RequestActor | null
+  ): Promise<EmailTemplateRecord> {
+    const row = await this.getRow(id);
+    const record = this.toRecord(row);
+    const entry = this.ownedEntry(record);
+    if (record.overridden) return record;
+
+    const start: EmailTemplateVersion = {
+      ...versionOf(row),
+      ...(options?.version ?? {}),
+    };
+    this.assertLayoutMarker(row.kind, start.htmlContent);
+
+    await this.db
+      .update(this.emailTemplates)
+      .set({
+        ...start,
+        overridden: true,
+        baseVersion: entry.version,
+        baseDigest: entry.digest,
+        updatedAt: new Date(),
+      })
+      .where(eq(this.emailTemplates.id, id));
+
+    await this.recordActivity({
+      action: "update",
+      templateId: id,
+      templateName: record.name,
+      templateKind: record.kind,
+      changedFields: [
+        "overridden",
+        ...changedTemplateFields({ ...versionOf(row) }, { ...start }),
+      ],
+      operation: "override",
+      actor,
+    });
+    return this.getTemplate(id);
+  }
+
+  /**
+   * Return an overridden template to its owner's current version and end the
+   * override. For a template set in code, the code's version is what sends
+   * once the override ends. Resetting one that is not overridden changes
+   * nothing.
+   */
+  async resetTemplate(
+    id: string,
+    actor?: RequestActor | null
+  ): Promise<EmailTemplateRecord> {
+    const row = await this.getRow(id);
+    const record = this.toRecord(row);
+    const entry = this.ownedEntry(record);
+    if (!record.overridden) return record;
+
+    const restored = this.ownerColumns(entry);
+    await this.db
+      .update(this.emailTemplates)
+      .set({
+        ...restored,
+        overridden: false,
+        baseVersion: null,
+        baseDigest: null,
+        updatedAt: new Date(),
+      })
+      .where(eq(this.emailTemplates.id, id));
+
+    await this.recordActivity({
+      action: "update",
+      templateId: id,
+      templateName: entry.defaults.name,
+      templateKind: record.kind,
+      changedFields: [
+        "overridden",
+        ...changedTemplateFields({ ...row }, { ...restored }),
+      ],
+      operation: "reset",
+      actor,
+    });
+    return this.getTemplate(id);
+  }
+
+  /**
+   * An overridden template beside its owner's current version, with each
+   * change the owner made since the override started.
+   */
+  async compareTemplate(id: string): Promise<EmailTemplateComparison> {
+    const row = await this.getRow(id);
+    const record = this.toRecord(row);
+    const entry = this.ownedEntry(record);
+    this.assertOverridden(record);
+    const base = row.baseVersion ?? entry.version;
+    const mine = versionOf(row);
+    return {
+      base,
+      theirs: entry.version,
+      mine,
+      changes: ownerChanges(base, entry.version, mine),
+    };
+  }
+
+  /**
+   * Apply a review of the owner's update: each change keeps the site's
+   * version, takes the owner's, or takes text the person wrote, all at once.
+   * The override stays, now based on the owner's current version, so the same
+   * changes are not offered again. Returns what it replaced, for Undo.
+   */
+  async applyOwnerUpdate(
+    id: string,
+    choices: Readonly<Record<string, OwnerChangeChoice>>,
+    actor?: RequestActor | null
+  ): Promise<{ template: EmailTemplateRecord; undo: OwnerUpdateUndo }> {
+    const row = await this.getRow(id);
+    const record = this.toRecord(row);
+    const entry = this.ownedEntry(record);
+    this.assertOverridden(record);
+
+    const base = row.baseVersion ?? entry.version;
+    const mine = versionOf(row);
+    const merged = applyOwnerChoices(base, entry.version, mine, choices);
+    this.assertLayoutMarker(row.kind, merged.htmlContent);
+
+    await this.db
+      .update(this.emailTemplates)
+      .set({
+        ...merged,
+        baseVersion: entry.version,
+        baseDigest: entry.digest,
+        updatedAt: new Date(),
+      })
+      .where(eq(this.emailTemplates.id, id));
+
+    await this.recordActivity({
+      action: "update",
+      templateId: id,
+      templateName: record.name,
+      templateKind: record.kind,
+      changedFields: changedTemplateFields({ ...mine }, { ...merged }),
+      operation: "apply-owner-update",
+      actor,
+    });
+    return {
+      template: await this.getTemplate(id),
+      undo: { version: mine, base },
+    };
+  }
+
+  /**
+   * Undo an applied review: put back the site's version and the base it had,
+   * so the owner's update is offered again.
+   */
+  async undoOwnerUpdate(
+    id: string,
+    undo: OwnerUpdateUndo,
+    actor?: RequestActor | null
+  ): Promise<EmailTemplateRecord> {
+    const row = await this.getRow(id);
+    const record = this.toRecord(row);
+    this.ownedEntry(record);
+    this.assertOverridden(record);
+    const version = versionOf(undo.version);
+    const base = versionOf(undo.base);
+    this.assertLayoutMarker(row.kind, version.htmlContent);
+
+    await this.db
+      .update(this.emailTemplates)
+      .set({
+        ...version,
+        baseVersion: base,
+        baseDigest: versionDigest(base),
+        updatedAt: new Date(),
+      })
+      .where(eq(this.emailTemplates.id, id));
+
+    await this.recordActivity({
+      action: "update",
+      templateId: id,
+      templateName: record.name,
+      templateKind: record.kind,
+      changedFields: changedTemplateFields(
+        { ...versionOf(row) },
+        { ...version }
+      ),
+      operation: "undo-owner-update",
+      actor,
+    });
+    return this.getTemplate(id);
+  }
+
+  private assertOverridden(record: EmailTemplateRecord): void {
+    if (record.overridden) return;
+    throw new NextlyError({
+      code: "BUSINESS_RULE_VIOLATION",
+      publicMessage:
+        "This template isn't overridden, so it already follows its owner's version.",
+      logContext: { slug: record.slug },
     });
   }
 
@@ -480,16 +937,20 @@ export class EmailTemplateService extends BaseService {
   }
 
   // ============================================================
-  // Built-in Template Bootstrap
+  // Built-in Template Bootstrap and ownership reconciliation
   // ============================================================
 
   /**
-   * Ensure built-in templates exist in the database.
+   * Bring the stored templates in line with their owners. Idempotent, and run
+   * at every boot.
    *
-   * First folds any legacy `_email-header` / `_email-footer` rows into
-   * the unified default layout, then auto-creates the default layout,
-   * welcome, password-reset, and email-verification templates if they
-   * don't already exist. Idempotent — skips templates that already exist.
+   * First folds any legacy `_email-header` / `_email-footer` rows into the
+   * unified default layout. Then, once `configureOwnership` has said which
+   * plugins run and what the site's code sets, every owned template is
+   * reconciled (see `reconcileOwnedRow`) and every other template is given its
+   * owner. Without that (a boot path that has not read the plugins), only
+   * missing built-ins are created and stored rows are left exactly as they
+   * are: a row cannot be judged against owners nobody has listed.
    */
   async ensureBuiltInTemplates(): Promise<void> {
     await this.migrateLegacyLayout();
@@ -502,92 +963,173 @@ export class EmailTemplateService extends BaseService {
       .set({ kind: "template" })
       .where(isNull(this.emailTemplates.kind));
 
-    for (const template of BUILT_IN_TEMPLATES) {
-      const existing = await this.getTemplateBySlug(template.slug);
-      if (existing) continue;
+    const rows = (await this.db
+      .select()
+      .from(this.emailTemplates)) as StoredTemplateRow[];
+    const bySlug = new Map(rows.map(row => [row.slug, row]));
 
-      const id = randomUUID();
-      const now = new Date();
-
-      const values = {
-        id,
-        name: template.name,
-        slug: template.slug,
-        kind: template.kind ?? "template",
-        subject: template.subject,
-        htmlContent: template.htmlContent,
-        plainTextContent: template.plainTextContent ?? null,
-        preheader: template.preheader ?? null,
-        layoutId: template.layoutId ?? null,
-        fromOverride: template.fromOverride ?? null,
-        replyTo: template.replyTo ?? null,
-        variables: template.variables ?? null,
-        useLayout: template.useLayout ?? true,
-        isActive: template.isActive ?? true,
-        providerId: template.providerId ?? null,
-        createdAt: now,
-        updatedAt: now,
-      };
-
-      await this.seedTemplate(values, "built-in");
-    }
-  }
-
-  /**
-   * Write one seeded template. Two first starts seed at once (several
-   * instances, or a dev server beside a build), and the one that loses the
-   * race hits the unique slug: the row it wanted is there, so that is logged
-   * at debug. Any other failure is warned of, and seeding goes on.
-   */
-  private async seedTemplate(
-    values: { slug: string } & Record<string, unknown>,
-    origin: "built-in" | "plugin"
-  ): Promise<void> {
-    try {
-      await this.db.insert(this.emailTemplates).values(values);
-      this.logger.info(`Created ${origin} email template: ${values.slug}`);
-    } catch (error) {
-      if (isUniqueViolation(error)) {
-        this.logger.debug(
-          `${origin} email template "${values.slug}" was created by another process`
-        );
-        return;
+    for (const entry of this.registry.owned.values()) {
+      const row = bySlug.get(entry.slug);
+      if (!row) {
+        await this.insertOwned(entry);
+      } else if (this.registry.complete) {
+        await this.reconcileOwnedRow(row, entry);
       }
-      this.logger.warn(`Failed to create ${origin} template "${values.slug}"`, {
-        error,
+    }
+
+    if (!this.registry.complete) return;
+    for (const row of rows) {
+      if (row.ownerKind !== null || this.registry.owned.has(row.slug)) continue;
+      // Not owned by anything running: a known plugin's leftover, or the
+      // site's own.
+      const plugin = absentPluginFor(row.slug);
+      await this.db
+        .update(this.emailTemplates)
+        .set({
+          ...storedOwner(
+            plugin ? { kind: "plugin", name: plugin } : { kind: "site" }
+          ),
+          overridden: false,
+        })
+        .where(eq(this.emailTemplates.id, row.id));
+    }
+  }
+
+  /** The columns an owner sets: its version, and what it says about the template. */
+  private ownerColumns(entry: OwnedTemplate) {
+    const t = entry.defaults;
+    return {
+      ...entry.version,
+      name: t.name,
+      kind: t.kind ?? "template",
+      variables: t.variables ?? null,
+      useLayout: t.useLayout ?? true,
+      description: t.description ?? null,
+    };
+  }
+
+  /** Create an owned template that has no row. */
+  private async insertOwned(entry: OwnedTemplate): Promise<void> {
+    const now = new Date();
+    const t = entry.defaults;
+    try {
+      await this.db.insert(this.emailTemplates).values({
+        id: randomUUID(),
+        slug: t.slug,
+        ...this.ownerColumns(entry),
+        layoutId: t.layoutId ?? null,
+        fromOverride: t.fromOverride ?? null,
+        replyTo: t.replyTo ?? null,
+        isActive: t.isActive ?? true,
+        providerId: t.providerId ?? null,
+        attachments: t.attachments ?? null,
+        ...storedOwner(entry.owner),
+        overridden: false,
+        baseVersion: null,
+        baseDigest: null,
+        createdAt: now,
+        updatedAt: now,
       });
+      this.logger.info(`Created email template: ${t.slug}`);
+    } catch (error) {
+      // Two boots racing to create the same template: the other one won.
+      this.logger.warn(
+        `Failed to create email template "${t.slug}" — may already exist`,
+        { error }
+      );
     }
   }
 
   /**
-   * Seed plugin-contributed email templates (C2/D65). Idempotent by slug — a
-   * template whose slug already exists is skipped, so an admin's edits to it (or
-   * a built-in) are never clobbered.
+   * Reconcile one stored owned template with its owner's current version.
+   *
+   * - **Not reconciled before**, or now owned by someone else (a plugin's
+   *   template whose plugin is running again): it takes the owner. A row that
+   *   says something different from the owner's version keeps saying it, as
+   *   an override based on the owner's version, so no earlier edit is lost.
+   *   So does one the site's code sets on an install that predates
+   *   ownership, which keeps sending the stored template it sent until Reset.
+   * - **Overridden**: the site's version stays. Only what the owner says
+   *   about the template (its description and declared variables) follows
+   *   the owner; whether the owner's version moved is read from the kept
+   *   digest.
+   * - **Following its owner**: rewritten whenever the owner's version moved.
    */
-  async ensurePluginTemplates(templates: PluginEmailTemplate[]): Promise<void> {
-    for (const template of templates) {
-      const existing = await this.getTemplateBySlug(template.slug);
-      if (existing) continue;
+  private async reconcileOwnedRow(
+    row: StoredTemplateRow,
+    entry: OwnedTemplate
+  ): Promise<void> {
+    const owner = storedOwner(entry.owner);
+    const sameOwner =
+      row.ownerKind === owner.ownerKind && row.ownerName === owner.ownerName;
+    const now = new Date();
+    const where = eq(this.emailTemplates.id, row.id);
 
-      const now = new Date();
-      const values = {
-        id: randomUUID(),
-        name: template.name,
-        slug: template.slug,
-        subject: template.subject,
-        htmlContent: template.htmlContent,
-        plainTextContent: template.plainTextContent ?? null,
-        variables: (template.variables ?? null) as
-          | EmailTemplateVariable[]
-          | null,
-        useLayout: template.useLayout ?? true,
-        isActive: true,
-        providerId: null,
-        createdAt: now,
-        updatedAt: now,
-      };
+    if (!sameOwner) {
+      const firstTime = row.ownerKind === null;
+      const keepSitesVersion =
+        !sameVersion(versionOf(row), entry.version) ||
+        (firstTime && this.registry.setInCode.has(row.slug)) ||
+        row.overridden === true;
+      if (keepSitesVersion) {
+        await this.db
+          .update(this.emailTemplates)
+          .set({
+            ...owner,
+            overridden: true,
+            baseVersion: row.baseVersion ?? entry.version,
+            baseDigest: row.baseDigest ?? entry.digest,
+            variables: entry.defaults.variables ?? row.variables,
+            description: entry.defaults.description ?? row.description ?? null,
+          })
+          .where(where);
+      } else {
+        await this.db
+          .update(this.emailTemplates)
+          .set({
+            ...owner,
+            ...this.ownerColumns(entry),
+            overridden: false,
+            baseVersion: null,
+            baseDigest: null,
+          })
+          .where(where);
+      }
+      return;
+    }
 
-      await this.seedTemplate(values, "plugin");
+    if (row.overridden === true) {
+      const description = entry.defaults.description ?? row.description ?? null;
+      const variables = entry.defaults.variables ?? row.variables;
+      if (
+        description !== row.description ||
+        JSON.stringify(variables) !== JSON.stringify(row.variables)
+      ) {
+        await this.db
+          .update(this.emailTemplates)
+          .set({ description, variables })
+          .where(where);
+      }
+      return;
+    }
+
+    const wanted = this.ownerColumns(entry);
+    const current = {
+      ...versionOf(row),
+      name: row.name,
+      kind: row.kind ?? "template",
+      variables: row.variables,
+      useLayout: row.useLayout,
+      description: row.description ?? null,
+    };
+    if (JSON.stringify(current) !== JSON.stringify({ ...current, ...wanted })) {
+      await this.db
+        .update(this.emailTemplates)
+        .set({ ...wanted, updatedAt: now })
+        .where(where);
+      this.logger.info(
+        `Updated email template to its owner's version: ${row.slug}`
+      );
     }
   }
 
@@ -605,7 +1147,7 @@ export class EmailTemplateService extends BaseService {
       .where(eq(this.emailTemplates.kind, "layout"))
       .orderBy(desc(this.emailTemplates.createdAt));
 
-    return results as EmailTemplateRecord[];
+    return (results as StoredTemplateRow[]).map(row => this.toRecord(row));
   }
 
   /**
@@ -629,7 +1171,8 @@ export class EmailTemplateService extends BaseService {
       )
       .limit(1);
 
-    return (rows[0] as EmailTemplateRecord | undefined) ?? null;
+    const row = rows[0] as StoredTemplateRow | undefined;
+    return row ? this.toRecord(row) : null;
   }
 
   /**
@@ -666,8 +1209,8 @@ export class EmailTemplateService extends BaseService {
     if (existingLayout) return;
 
     const [header, footer] = await Promise.all([
-      this.getTemplateBySlug(LEGACY_HEADER_SLUG),
-      this.getTemplateBySlug(LEGACY_FOOTER_SLUG),
+      this.getRowBySlug(LEGACY_HEADER_SLUG),
+      this.getRowBySlug(LEGACY_FOOTER_SLUG),
     ]);
     if (!header && !footer) return;
 
@@ -679,7 +1222,9 @@ export class EmailTemplateService extends BaseService {
     // BEFORE removing the legacy rows, so a failure can never delete the legacy
     // content without a replacement layout in place. A single atomic transaction
     // isn't used because SQLite requires a synchronous transaction callback,
-    // which is incompatible with these async queries across dialects.
+    // which is incompatible with these async queries across dialects. The row
+    // is left unowned: the reconciliation compares it with core's layout and,
+    // since it holds the site's header and footer, keeps it as an override.
     const existing = await this.getDefaultLayout();
     if (!existing) {
       await this.db.insert(this.emailTemplates).values({

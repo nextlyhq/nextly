@@ -18,8 +18,10 @@ import { drizzle } from "drizzle-orm/better-sqlite3";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 import { NextlyError } from "../../../errors";
+import { getDrizzleKitForDialect } from "../../../database/drizzle-kit-lazy";
 import { emailTemplatesSqlite } from "../../../schemas/email-templates/sqlite";
 import type { Logger } from "../../../shared/types";
+import { splitStatements } from "../../schema/pipeline/sql-statement-utils";
 import { EmailTemplateService } from "../services/email-template-service";
 import { BUILT_IN_TEMPLATES } from "../services/templates";
 
@@ -56,31 +58,19 @@ const logger: Logger = {
   debug: vi.fn(),
 };
 
-function createInMemoryDb() {
+/**
+ * The production table, generated from its Drizzle definition, so the fixture
+ * has every column and constraint the service relies on (the slug's
+ * uniqueness among them) and cannot drift from the schema it tests.
+ */
+async function createInMemoryDb() {
   const sqlite = new Database(":memory:");
-  sqlite.exec(`
-    CREATE TABLE IF NOT EXISTS email_templates (
-      id TEXT PRIMARY KEY,
-      name TEXT NOT NULL,
-      slug TEXT NOT NULL UNIQUE,
-      subject TEXT NOT NULL,
-      html_content TEXT NOT NULL,
-      plain_text_content TEXT,
-      preheader TEXT,
-      kind TEXT NOT NULL DEFAULT 'template',
-      layout_id TEXT,
-      variables TEXT,
-      use_layout INTEGER NOT NULL DEFAULT 1,
-      is_active INTEGER NOT NULL DEFAULT 1,
-      provider_id TEXT,
-      from_override TEXT,
-      reply_to TEXT,
-      attachments TEXT,
-      created_at INTEGER NOT NULL DEFAULT (strftime('%s','now') * 1000),
-      updated_at INTEGER NOT NULL DEFAULT (strftime('%s','now') * 1000)
-    );
-    CREATE UNIQUE INDEX IF NOT EXISTS et_slug_unique ON email_templates(slug);
-  `);
+  const kit = await getDrizzleKitForDialect("sqlite");
+  const statements = await kit.generateMigration(
+    await kit.generateDrizzleJson({}),
+    await kit.generateDrizzleJson({ emailTemplatesSqlite })
+  );
+  for (const statement of splitStatements(statements)) sqlite.exec(statement);
   const db = drizzle({ client: sqlite, schema: { emailTemplatesSqlite } });
   return { sqlite, db };
 }
@@ -91,9 +81,9 @@ describe("EmailTemplateService", () => {
   let sqlite: Database.Database;
   let service: EmailTemplateService;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
-    const { sqlite: s, db } = createInMemoryDb();
+    const { sqlite: s, db } = await createInMemoryDb();
     sqlite = s;
     service = new EmailTemplateService(
       makeAdapter(db) as unknown as DrizzleAdapter,
