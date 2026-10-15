@@ -26,6 +26,7 @@
 "@nextlyhq/tsconfig": patch
 "@nextlyhq/builder": patch
 "@nextlyhq/module-specifiers": patch
+"@nextlyhq/plugin-accounts": patch
 ---
 
 `nextly` and `nextly/schemas` no longer export `DeleteUserAccountSchema`,
