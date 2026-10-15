@@ -35,6 +35,14 @@ vi.mock("../auth/middleware", async importOriginal => {
     authMethod: "session",
   };
   const refused = { statusCode: 403, error: "Forbidden" };
+  const one = async (action: string, resource: string) =>
+    granted.has(`${action}-${resource}`) ? admitted : refused;
+  const any = async (list: Array<{ action: string; resource: string }>) =>
+    list.some(({ action, resource }) => granted.has(`${action}-${resource}`))
+      ? admitted
+      : refused;
+  // Both forms of each check answer alike, whether the gate hands them the
+  // request or the caller it already authenticated.
   return {
     ...actual,
     requireAuthentication: vi.fn(async () =>
@@ -44,18 +52,23 @@ vi.mock("../auth/middleware", async importOriginal => {
     ),
     requirePermission: vi.fn(
       async (_req: Request, action: string, resource: string) =>
-        granted.has(`${action}-${resource}`) ? admitted : refused
+        one(action, resource)
+    ),
+    authorizeCaller: vi.fn(
+      async (_caller: unknown, action: string, resource: string) =>
+        one(action, resource)
     ),
     requireAnyPermission: vi.fn(
       async (
         _req: Request,
         list: Array<{ action: string; resource: string }>
-      ) =>
-        list.some(({ action, resource }) =>
-          granted.has(`${action}-${resource}`)
-        )
-          ? admitted
-          : refused
+      ) => any(list)
+    ),
+    authorizeCallerForAny: vi.fn(
+      async (
+        _caller: unknown,
+        list: Array<{ action: string; resource: string }>
+      ) => any(list)
     ),
   };
 });

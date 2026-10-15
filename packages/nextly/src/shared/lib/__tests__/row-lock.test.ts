@@ -35,4 +35,16 @@ describe("rowLockStrength", () => {
     // it only orders concurrent sign-ins of one account.
     expect(rowLockStrength(server, "session")).toBe(strength);
   });
+
+  it.each([
+    ["PostgreSQL", "update", { dialect: "postgresql" } as RowLockServer],
+    ["MySQL 8", "update", MYSQL_8],
+    ["MariaDB or TiDB", "update", MARIADB],
+    ["a MySQL server not yet known", "update", MYSQL_UNKNOWN],
+    ["SQLite", null, { dialect: "sqlite" } as RowLockServer],
+  ] as const)("an exclusive use on %s takes %s", (_, strength, server) => {
+    // Exclusive wherever there are row locks: it must keep every shared
+    // existence-check reader of the row waiting until it commits.
+    expect(rowLockStrength(server, "exclusive")).toBe(strength);
+  });
 });

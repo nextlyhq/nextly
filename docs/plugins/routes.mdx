@@ -140,12 +140,20 @@ Return a standard web `Response`. A thrown error is isolated into a JSON error r
 
 A write the session cookie authenticates is also checked for cross-site forgery. Left
 unset, `csrf` checks only the request's origin, which a same-origin write passes;
-`csrf: true` also requires a CSRF token. A route your admin page writes to through
+`csrf: true` also requires a CSRF token of such a write. A route your admin page writes to through
 `usePluginRouteMutation` works either way, because that hook sends the token on every
 write. A page that writes with its own `fetch` leaves `csrf` unset, or fetches
-`/admin/api/auth/csrf` and sends the token as `x-csrf-token`. See
-[Route protections](/docs/plugins/security#route-protections) for `csrf: false` and
-the other options.
+`/admin/api/auth/csrf` and sends the token as `x-csrf-token`.
+
+On a public route, `csrf: true` also checks the origin of a write no session
+authenticates, without asking it for a token; only such a write that sends an
+`Authorization: Bearer` token is exempt. A write a session authenticates is
+checked as the session's, whatever header it carries. Set it on a public route that browsers
+write to, above all one that keeps its own cookie for anonymous visitors, such as
+a guest cart. A route for webhooks or other server callers leaves `csrf` unset.
+See [Which callers each `csrf` setting checks](/docs/plugins/security#which-callers-each-csrf-setting-checks)
+for the full table, and [Route protections](/docs/plugins/security#route-protections)
+for `csrf: false` and the other options.
 
 ### Gating on one of your OWN collections
 

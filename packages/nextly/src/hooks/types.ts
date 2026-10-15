@@ -30,6 +30,7 @@
  */
 
 import type { Nextly } from "../direct-api/nextly";
+import type { Principal } from "../plugins/principals/types";
 
 /**
  * Available hook types for database lifecycle events.
@@ -246,6 +247,13 @@ export interface HookContext<T = any> {
   };
 
   /**
+   * @experimental The plugin-defined signed-in person the operation is made
+   * as. Present only for a call made as one, and then `user` is absent: a
+   * person is never a staff user.
+   */
+  principal?: Principal;
+
+  /**
    * Shared context object for passing data between hooks
    *
    * This allows `before*` hooks to communicate with `after*` hooks
@@ -424,6 +432,9 @@ export interface FieldHookContext<T = unknown> {
 
   /** The authenticated caller, when there is one. */
   user?: Record<string, unknown>;
+
+  /** @experimental As {@link HookContext.principal}. */
+  principal?: Principal;
 }
 
 /**
@@ -578,6 +589,9 @@ export interface BeforeOperationContext<T = any> {
    * This is `undefined` if the operation is performed without authentication.
    */
   user?: HookContext["user"];
+
+  /** @experimental As {@link HookContext.principal}. */
+  principal?: HookContext["principal"];
 
   /**
    * Request metadata and API access (optional)

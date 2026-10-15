@@ -67,6 +67,8 @@ const visiblePosts = await nextly.find({
 
 `overrideAccess`, `user`, and `context` flow through every hook the operation triggers. Anything you put in `context` is accessible inside hooks via `req.context`.
 
+To run a collection or Single operation as a plugin-defined signed-in person, pass the person as `principal` (`@experimental`). Access rules always apply, so `overrideAccess` is not needed; the call is refused if it also sets `overrideAccess: true`, `trusted` or `frameworkFilter`, or names a `user` or an API key. A person is named per call: `new Nextly({ principal })` and `requireNextly({ principal })` are refused. See [Signed-in people of your own kind](/docs/plugins/signed-in-people#let-a-person-read-and-write-your-collections).
+
 ## Collections
 
 These methods hang off the `nextly` root and operate on collection entries. The shapes shown below match the canonical Phase 4 envelopes (`ListResult<T>`, `MutationResult<T>`, etc.) — verify against [`packages/nextly/src/direct-api/types/shared.ts`](https://github.com/nextlyhq/nextly/blob/main/packages/nextly/src/direct-api/types/shared.ts) if you need the exact TypeScript definitions.

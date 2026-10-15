@@ -13,6 +13,7 @@
 import { createHmac, createHash } from "crypto";
 
 import { env } from "../../lib/env";
+import type { PrincipalRef } from "../../plugins/principals/types";
 import {
   secretGenerations,
   type SecretGeneration,
@@ -486,4 +487,11 @@ export interface EmailDeliveryInput {
   messageId?: string | null;
   /** Why it failed. Redacted and bounded before storage. */
   error?: string | null;
+  /**
+   * The plugin-defined person this recipient is, by kind and id, when the
+   * plugin's send named one. Stored apart from the address, which a staff
+   * user may share; a row naming a person reported deleted is written with
+   * no address digest, naming them by the keyed digest of kind and id.
+   */
+  person?: PrincipalRef | null;
 }

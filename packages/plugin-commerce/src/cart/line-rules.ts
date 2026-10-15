@@ -20,7 +20,7 @@ export const MAX_LINE_QUANTITY = 999;
  * otherwise. A counted item is not held to its stock here: refusing a
  * quantity the stock cannot meet is checkout's, which holds the stock.
  */
-export function maxLineQuantity(item: CatalogueItem): number {
+export function maxLineQuantity(item: Pick<CatalogueItem, "stock">): number {
   switch (item.stock.kind) {
     case "one-off":
       return 1;
@@ -43,7 +43,7 @@ export function maxLineQuantity(item: CatalogueItem): number {
  */
 export function allowLine(
   reference: string,
-  item: CatalogueItem | undefined,
+  item: Pick<CatalogueItem, "price" | "stock"> | undefined,
   quantity: number
 ): Money {
   if (!item) throw commerceError("COMMERCE_ITEM_NOT_FOUND", { reference });

@@ -182,6 +182,15 @@ export const emailDeliveriesPg = pgTable(
      * production history.
      */
     retentionClass: varchar("retention_class", { length: 50 }).notNull(),
+    /**
+     * The plugin-defined person a plugin's email went to, by kind and id, on
+     * the rows of its `to` recipients. Names no staff user: an address can
+     * belong to a person and a staff user at once, and a person's deletion
+     * erases only the rows that name them. Once the person is reported
+     * deleted, the id is replaced by the keyed digest of kind and id.
+     */
+    principalKind: varchar("principal_kind", { length: 191 }),
+    principalId: varchar("principal_id", { length: 191 }),
 
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
@@ -204,6 +213,8 @@ export const emailDeliveriesPg = pgTable(
     // The shape a retention pass needs: one class at a time, oldest first.
     // Present with the column and unused for the same reason.
     index("email_deliveries_retention_idx").on(t.retentionClass, t.createdAt),
+    // Erasure finds a person's rows by kind and id.
+    index("email_deliveries_principal_idx").on(t.principalKind, t.principalId),
   ]
 );
 

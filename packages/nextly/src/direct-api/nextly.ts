@@ -82,6 +82,7 @@ import { installLegacyFieldGroupsNamespaceGuard } from "./legacy-field-groups-na
 import * as authNs from "./namespaces/auth";
 import * as collectionsNs from "./namespaces/collections";
 import type { NextlyContext } from "./namespaces/context";
+import { runAsCaller } from "./namespaces/helpers";
 import {
   createAccessNamespace,
   createApiKeysNamespace,
@@ -113,6 +114,7 @@ import {
   type UsersNamespace,
 } from "./namespaces/index";
 import * as singlesNs from "./namespaces/singles";
+import { guardPrincipalOperations } from "./principal-boundary";
 import type {
   AuthResult,
   BulkDeleteArgs,
@@ -274,6 +276,7 @@ export class Nextly implements NextlyContext {
    * @param config - Default configuration for all operations
    */
   constructor(config: DirectAPIConfig = {}) {
+    refusePrincipalDefault(config);
     this.defaultConfig = {
       overrideAccess: true,
       ...config,
@@ -294,6 +297,12 @@ export class Nextly implements NextlyContext {
     this.jobs = createJobsNamespace();
     this.releases = createReleasesNamespace(this);
     this.principals = createNextlyPrincipals();
+
+    // The instance its callers reach: only the collection and Single
+    // operations may be made as a plugin-defined person, and every other
+    // method and namespace refuses `principal` rather than ignore it and run
+    // as the server.
+    return guardPrincipalOperations(this);
   }
 
   /**
@@ -504,7 +513,9 @@ export class Nextly implements NextlyContext {
   find<TSlug extends CollectionSlug>(
     args: FindArgs<TSlug>
   ): Promise<ListResult<RowFromCollectionSlug<TSlug>>> {
-    return collectionsNs.find(this, args);
+    return runAsCaller(this.defaultConfig, args, callArgs =>
+      collectionsNs.find(this, callArgs)
+    );
   }
 
   /**
@@ -514,7 +525,9 @@ export class Nextly implements NextlyContext {
   findByID<TSlug extends CollectionSlug>(
     args: FindByIDArgs<TSlug>
   ): Promise<RowFromCollectionSlug<TSlug> | null> {
-    return collectionsNs.findByID(this, args);
+    return runAsCaller(this.defaultConfig, args, callArgs =>
+      collectionsNs.findByID(this, callArgs)
+    );
   }
 
   /**
@@ -525,7 +538,9 @@ export class Nextly implements NextlyContext {
   create<TSlug extends CollectionSlug>(
     args: CreateArgs<TSlug>
   ): Promise<MutationResult<RowFromCollectionSlug<TSlug>>> {
-    return collectionsNs.create(this, args);
+    return runAsCaller(this.defaultConfig, args, callArgs =>
+      collectionsNs.create(this, callArgs)
+    );
   }
 
   /**
@@ -536,7 +551,9 @@ export class Nextly implements NextlyContext {
   update<TSlug extends CollectionSlug>(
     args: UpdateArgs<TSlug>
   ): Promise<MutationResult<RowFromCollectionSlug<TSlug>>> {
-    return collectionsNs.update(this, args);
+    return runAsCaller(this.defaultConfig, args, callArgs =>
+      collectionsNs.update(this, callArgs)
+    );
   }
 
   /**
@@ -549,7 +566,9 @@ export class Nextly implements NextlyContext {
   delete<TSlug extends CollectionSlug = CollectionSlug>(
     args: DeleteArgs<TSlug>
   ): Promise<MutationResult<{ id: string }> | DeleteResult> {
-    return collectionsNs.deleteEntry(this, args);
+    return runAsCaller(this.defaultConfig, args, callArgs =>
+      collectionsNs.deleteEntry(this, callArgs)
+    );
   }
 
   /**
@@ -557,7 +576,9 @@ export class Nextly implements NextlyContext {
    *
    */
   count(args: CountArgs): Promise<CountResult> {
-    return collectionsNs.count(this, args);
+    return runAsCaller(this.defaultConfig, args, callArgs =>
+      collectionsNs.count(this, callArgs)
+    );
   }
 
   /**
@@ -567,17 +588,23 @@ export class Nextly implements NextlyContext {
    * counted, because both resolve that row set through one pipeline.
    */
   group(args: GroupArgs): Promise<GroupResult> {
-    return collectionsNs.group(this, args);
+    return runAsCaller(this.defaultConfig, args, callArgs =>
+      collectionsNs.group(this, callArgs)
+    );
   }
 
   /** How many documents fall in each interval of a recent window. */
   timeseries(args: TimeseriesArgs): Promise<TimeseriesResult> {
-    return collectionsNs.timeseries(this, args);
+    return runAsCaller(this.defaultConfig, args, callArgs =>
+      collectionsNs.timeseries(this, callArgs)
+    );
   }
 
   /** Bulk-delete multiple documents by IDs (partial success pattern). */
   bulkDelete(args: BulkDeleteArgs): Promise<BulkOperationResult> {
-    return collectionsNs.bulkDelete(this, args);
+    return runAsCaller(this.defaultConfig, args, callArgs =>
+      collectionsNs.bulkDelete(this, callArgs)
+    );
   }
 
   /**
@@ -588,14 +615,18 @@ export class Nextly implements NextlyContext {
   duplicate<TSlug extends CollectionSlug>(
     args: DuplicateArgs<TSlug>
   ): Promise<MutationResult<RowFromCollectionSlug<TSlug>>> {
-    return collectionsNs.duplicate(this, args);
+    return runAsCaller(this.defaultConfig, args, callArgs =>
+      collectionsNs.duplicate(this, callArgs)
+    );
   }
 
   /** Get a Single (global) document by slug. */
   findSingle<TSlug extends SingleSlug>(
     args: FindSingleArgs<TSlug>
   ): Promise<RowFromSingleSlug<TSlug>> {
-    return singlesNs.findSingle(this, args);
+    return runAsCaller(this.defaultConfig, args, callArgs =>
+      singlesNs.findSingle(this, callArgs)
+    );
   }
 
   /**
@@ -608,12 +639,16 @@ export class Nextly implements NextlyContext {
   updateSingle<TSlug extends SingleSlug>(
     args: UpdateSingleArgs<TSlug>
   ): Promise<MutationResult<RowFromSingleSlug<TSlug>>> {
-    return singlesNs.updateSingle(this, args);
+    return runAsCaller(this.defaultConfig, args, callArgs =>
+      singlesNs.updateSingle(this, callArgs)
+    );
   }
 
   /** Fetch the content of every registered Single. */
   findSingles(args: FindSinglesArgs = {}): Promise<SingleListResult> {
-    return singlesNs.findSingles(this, args);
+    return runAsCaller(this.defaultConfig, args, callArgs =>
+      singlesNs.findSingles(this, callArgs)
+    );
   }
 
   /** Verify credentials and return a signed session token. */
@@ -718,7 +753,29 @@ const globalForDirectApi = globalThis as unknown as {
  * result.meta.total;  // number
  * ```
  */
+/**
+ * Refuse a person named as a Direct API default. A person is named per call:
+ * each operation reads `principal` off its own arguments only, so a default
+ * one would be ignored, and every call would run as the server under the
+ * instance's `overrideAccess: true`.
+ */
+function refusePrincipalDefault(config: DirectAPIConfig | undefined): void {
+  if (
+    (config as { principal?: unknown } | undefined)?.principal === undefined
+  ) {
+    return;
+  }
+  throw NextlyError.invalidInput({
+    message:
+      "principal cannot be a Direct API default: pass it on each collection or Single operation made as the person.",
+    logContext: { reason: "principal-default-refused" },
+  });
+}
+
 export function requireNextly(config?: DirectAPIConfig): Nextly {
+  // Before the singleton is reused, whose construction would otherwise be
+  // the only place a default person is refused.
+  refusePrincipalDefault(config);
   // Registered is not the same as allowed to serve: a process whose boot
   // migrations refused must not serve, and a boot still migrating has not
   // answered yet. This getter is synchronous, so it cannot wait for that
@@ -850,6 +907,8 @@ export const nextly = {
   principals: {
     fromRequest: (request: Request, kind: string) =>
       requireNextly().principals.fromRequest(request, kind),
+    byId: (kind: string, id: string) =>
+      requireNextly().principals.byId(kind, id),
   },
 
   releases: {

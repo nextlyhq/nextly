@@ -10,6 +10,7 @@ import type { AuthorableFieldConfig } from "../collections/fields/types/plugin-f
 import type { GeneratedTypes } from "../direct-api/types/shared";
 import type { RegisteredEmailProvider } from "../domains/email/provider-definition";
 import type { JobDefinition } from "../domains/jobs/job-registry";
+import type { LimitRule } from "../domains/limits/limit-rules";
 import type { SchemaHook } from "../domains/schema/extension/draft";
 import type { TableDefinition } from "../domains/schema/extension/dsl";
 import type { PluginMigration } from "../domains/schema/migrate/plugin/plugin-migration";
@@ -726,6 +727,17 @@ export interface PluginContributions {
    * plugin's kind already holds.
    */
   principals?: PrincipalKindContribution[];
+
+  /**
+   * @experimental Named limit rules this plugin's `ctx.limits` reserves on:
+   * rolling windows, or a growing wait after attempts in a row.
+   *
+   * A rule is named here and used by name, so two calls can never count one
+   * key under different numbers. The app refuses to start on a rule outside
+   * the documented bounds, naming the plugin and the rule. Keys are the
+   * plugin's own: no other plugin can name, read or spend them.
+   */
+  limits?: Record<string, LimitRule>;
 }
 
 /** @experimental `contributes.audit`: the kinds a plugin writes. */

@@ -1402,10 +1402,38 @@ async function runReload(opts?: {
   }
 }
 
+/**
+ * Apply one reload, with the plugin-defined kinds of signed-in person it
+ * publishes held until it commits.
+ *
+ * Reading the new config publishes its kinds, and requests are served while
+ * the reload runs, so without the hold a route could recognise a person
+ * through a resolver from a config the reload then refuses. `commitReload`
+ * installs the staged kinds; every other way out drops them here, which a
+ * commit has already made a no-op.
+ */
 async function applyReload(opts?: {
   resolver?: ServiceResolver;
   dispatcher?: PromptDispatcher;
 }): Promise<void> {
+  const { stagePrincipalKinds } = await import(
+    "../plugins/principals/registry"
+  );
+  const principalKinds = stagePrincipalKinds();
+  try {
+    await applyReloadHolding(principalKinds, opts);
+  } finally {
+    principalKinds.abandon();
+  }
+}
+
+async function applyReloadHolding(
+  principalKinds: { commit: () => void },
+  opts?: {
+    resolver?: ServiceResolver;
+    dispatcher?: PromptDispatcher;
+  }
+): Promise<void> {
   const resolverArg = opts?.resolver;
   const resolve = (name: string): unknown =>
     resolverArg ? resolverArg(name) : defaultResolver(name);
@@ -1497,16 +1525,6 @@ async function applyReload(opts?: {
         registerFieldType(fieldType);
       }
     });
-    // The same for plugin-defined kinds of signed-in person: resolving the
-    // new config's plugins publishes their kinds, and a reload that is then
-    // refused keeps the previous config's routes, which ask for the previous
-    // kinds. Left in place, a route could reach a refused config's resolver,
-    // or find its kind gone and answer 500.
-    const { publishedPrincipalKinds, publishPrincipalKinds } = await import(
-      "../plugins/principals/registry"
-    );
-    const previousPrincipalKinds = publishedPrincipalKinds();
-    reloadUndo.push(() => publishPrincipalKinds(previousPrincipalKinds));
     clearConfigCache();
     const result = await loadConfig();
     newConfig = (
@@ -1639,6 +1657,9 @@ async function applyReload(opts?: {
     if (committed) return;
     committed = true;
     commitConfigHooks();
+    // The kinds of signed-in person the reloaded config registers, installed
+    // with the rest of the reload and not before (see `applyReload`).
+    principalKinds.commit();
     commitFieldFunctions?.();
     // The plugins each plugin may reach through `ctx.db`, as the reloaded
     // config declares them; a context built at `init` reads them from here.

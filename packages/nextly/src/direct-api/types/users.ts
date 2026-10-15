@@ -114,8 +114,15 @@ export interface FindOneUserArgs extends DirectAPIConfig {
  * content collections, and the users namespace forwards neither, so exposing
  * either here would advertise an option that is silently ignored.
  */
+/**
+ * `principal` is left out of every users argument: a user operation cannot be
+ * made as a plugin-defined person, and the instance refuses it at runtime, so
+ * a type that accepted it would advertise a call that always fails.
+ */
+type NotForUsers = "collection" | "principal";
+
 export interface FindUserByIDArgs
-  extends Omit<FindByIDArgs, "collection" | "draft" | "status"> {
+  extends Omit<FindByIDArgs, NotForUsers | "draft" | "status"> {
   /** User collection slug (defaults to 'users') */
   collection?: string;
 }
@@ -123,7 +130,7 @@ export interface FindUserByIDArgs
 /**
  * Arguments for creating a user.
  */
-export interface CreateUserArgs extends Omit<CreateArgs, "collection"> {
+export interface CreateUserArgs extends Omit<CreateArgs, NotForUsers> {
   /** User collection slug (defaults to 'users') */
   collection?: string;
 
@@ -137,7 +144,7 @@ export interface CreateUserArgs extends Omit<CreateArgs, "collection"> {
 /**
  * Arguments for updating a user.
  */
-export interface UpdateUserArgs extends Omit<UpdateArgs, "collection"> {
+export interface UpdateUserArgs extends Omit<UpdateArgs, NotForUsers> {
   /** User collection slug (defaults to 'users') */
   collection?: string;
 }
@@ -145,7 +152,7 @@ export interface UpdateUserArgs extends Omit<UpdateArgs, "collection"> {
 /**
  * Arguments for deleting a user.
  */
-export interface DeleteUserArgs extends Omit<DeleteArgs, "collection"> {
+export interface DeleteUserArgs extends Omit<DeleteArgs, NotForUsers> {
   /** User collection slug (defaults to 'users') */
   collection?: string;
 }

@@ -155,6 +155,21 @@ describe("a provider's declaration", () => {
       assertPaymentProvider(declaring({ currencies: ["USD", "JPY"] }))
     ).not.toThrow();
   });
+
+  it("takes an account only as a string of 1 to 255 characters", () => {
+    const { provider } = createTestPaymentProvider();
+    for (const account of ["", "a".repeat(256), 42]) {
+      expect(
+        codeOf(() => assertPaymentProvider({ ...provider, account })),
+        JSON.stringify(account)
+      ).toBe("COMMERCE_PROVIDER_CONTRACT");
+    }
+    expect(() =>
+      assertPaymentProvider({ ...provider, account: "a".repeat(255) })
+    ).not.toThrow();
+    // Left out, the provider is taken to have one account.
+    expect(() => assertPaymentProvider(provider)).not.toThrow();
+  });
 });
 
 describe("a provider's answer", () => {

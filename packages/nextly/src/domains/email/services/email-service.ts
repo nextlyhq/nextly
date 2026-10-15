@@ -22,6 +22,9 @@ import {
   type EmailAfterSendValue,
 } from "../../../filters";
 import { getBaseUrl } from "../../../lib/get-base-url";
+import { principalRefOf } from "../../../plugins/principals/ref";
+import { getPrincipalKind } from "../../../plugins/principals/registry";
+import type { PrincipalRef } from "../../../plugins/principals/types";
 import type { EmailTemplateRecord } from "../../../schemas/email-templates/types";
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
@@ -214,6 +217,11 @@ export class EmailService extends BaseService {
       cc?: string[];
       bcc?: string[];
       attachments?: EmailAttachmentInput[];
+      /**
+       * @experimental The plugin-defined person `to` is, by kind and id, so
+       * the delivery record names them and their deletion report erases it.
+       */
+      person?: PrincipalRef;
     }
   ): Promise<{ success: boolean; messageId?: string }> {
     // Whitespace-only overrides must not shadow the template/provider
@@ -284,6 +292,7 @@ export class EmailService extends BaseService {
         // password reset, verification and welcome message -- the entire
         // reason the log exists -- records no template at all.
         templateSlug,
+        person: options?.person,
         cc: options?.cc,
         bcc: options?.bcc,
         attachments:
@@ -322,6 +331,7 @@ export class EmailService extends BaseService {
         html: result.html,
         providerId: options?.providerId,
         templateSlug,
+        person: options?.person,
         // Forward cc/bcc/from/replyTo here too — the DB-template path already
         // does, and omitting them on this branch silently dropped them for
         // code-first templates.
@@ -377,7 +387,17 @@ export class EmailService extends BaseService {
      * most likely to interpolate one.
      */
     templateSlug?: string;
+    /**
+     * @experimental The plugin-defined person `to` is, by kind and id, so the
+     * delivery record names them and their deletion report erases it. Names
+     * the `to` rows only: a copied address is someone else.
+     */
+    person?: PrincipalRef;
   }): Promise<{ success: boolean; messageId?: string }> {
+    // A precondition, before anything is resolved or sent: a person that
+    // cannot be read would leave the record unable to be erased with them.
+    const person = personToRecord(options.person);
+
     // Resolve attachments BEFORE the provider try/catch so that
     // NextlyError (validation for caller-fixable failures, internal for
     // storage I/O — see attachment-resolver) propagates to the caller
@@ -550,6 +570,7 @@ export class EmailService extends BaseService {
           const delivered = result.success && !wasRefused;
           return {
             ...recipient,
+            person: recipient.recipientKind === "to" ? person : null,
             providerId: resolvedProviderId ?? null,
             providerType,
             templateSlug: options.templateSlug ?? null,
@@ -655,6 +676,7 @@ export class EmailService extends BaseService {
       await this.deliveries?.recordAll(
         deliveryRecipients(filtered).map(recipient => ({
           ...recipient,
+          person: recipient.recipientKind === "to" ? person : null,
           providerId: resolvedProviderId ?? null,
           providerType,
           templateSlug: options.templateSlug ?? null,
@@ -1077,4 +1099,29 @@ export class EmailService extends BaseService {
     if (name) return `${name} <${email}>`;
     return email;
   }
+}
+
+/**
+ * The person a send names, by kind and id, or null for none. Refused when it
+ * is given and cannot name a person: recorded as it is, it could never be
+ * matched by the report that erases the person's records.
+ */
+function personToRecord(value: unknown): PrincipalRef | null {
+  if (value === undefined || value === null) return null;
+  const ref = principalRefOf(value);
+  // Of a kind a running plugin registers, too: a misspelled kind is one no
+  // deletion report can name, so a record kept under it would outlive the
+  // person it names.
+  if (ref && getPrincipalKind(ref.kind)) return ref;
+  throw NextlyError.validation({
+    errors: [
+      {
+        path: "person",
+        code: "INVALID",
+        message:
+          "`person` must name a plugin-defined person by the full name of a registered kind and an id of 1 to 128 characters.",
+      },
+    ],
+    logContext: { operation: "email.send" },
+  });
 }

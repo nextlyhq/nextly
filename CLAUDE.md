@@ -1,4 +1,4 @@
-<!-- Generated from AGENTS.md by `pnpm instructions:sync` (eb065ed05b16c11d). Edit that file, never this one. -->
+<!-- Generated from AGENTS.md by `pnpm instructions:sync` (c3c8b3670aff36f4). Edit that file, never this one. -->
 
 # Nextly Monorepo: Agent Guide
 
@@ -178,7 +178,7 @@ budget, the overrides and each operating system's caveats: the
   Allowed PR scopes are package-based (`nextly`, `admin`, `admin-css`, `ui`,
   `adapter-postgres`, `adapter-mysql`, `adapter-sqlite`, `adapter-drizzle`,
   `storage-s3`, `storage-vercel-blob`, `storage-uploadthing`,
-  `plugin-commerce`, `plugin-form-builder`, `plugin-mcp`, `plugin-page-builder`,
+  `plugin-accounts`, `plugin-commerce`, `plugin-form-builder`, `plugin-mcp`, `plugin-page-builder`,
   `plugin-seo`,
   `plugin-sdk`,
   `blocks-engine`, `blocks-react`, `builder`,

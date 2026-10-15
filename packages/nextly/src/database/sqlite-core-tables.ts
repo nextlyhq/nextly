@@ -1,5 +1,7 @@
+import { LIMIT_STORE_TABLE } from "../schemas/limit-store/table-name";
 import { RBAC_EPOCH_TABLE } from "../schemas/rbac-epoch/table-name";
 import { SCHEMA_OWNERS_TABLE } from "../schemas/schema-owners/table-name";
+import { SPENT_CHALLENGES_TABLE } from "../schemas/spent-challenges/table-name";
 import { STORAGE_FORMAT } from "../schemas/storage-format";
 
 // Raw CREATE TABLE IF NOT EXISTS DDL for all Nextly core SQLite tables.
@@ -528,6 +530,55 @@ export function generateSqliteCoreTableStatements(): string[] {
       "updated_by" TEXT,
       PRIMARY KEY ("owner", "key")
     )`,
+    `CREATE TABLE IF NOT EXISTS "nextly_one_time_secrets" (
+      "id" TEXT PRIMARY KEY NOT NULL,
+      "owner" TEXT NOT NULL,
+      "purpose" TEXT NOT NULL,
+      "subject" TEXT NOT NULL,
+      "subject_key" TEXT NOT NULL,
+      "kind" TEXT NOT NULL,
+      "secret_hash" TEXT NOT NULL,
+      "live_key" TEXT,
+      "issue_seq" INTEGER,
+      "data" TEXT,
+      "expires_at" INTEGER NOT NULL,
+      "spent_at" INTEGER,
+      "voided_at" INTEGER,
+      "wrong_tries" INTEGER NOT NULL DEFAULT 0,
+      "max_wrong_tries" INTEGER,
+      "created_at" INTEGER NOT NULL
+    )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS "nextly_one_time_secrets_live_key_unique"
+      ON "nextly_one_time_secrets" ("live_key")`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS "nextly_one_time_secrets_issue_unique"
+      ON "nextly_one_time_secrets" ("subject_key", "purpose", "kind", "issue_seq")`,
+    `CREATE INDEX IF NOT EXISTS "nextly_one_time_secrets_hash_idx"
+      ON "nextly_one_time_secrets" ("secret_hash")`,
+    `CREATE INDEX IF NOT EXISTS "nextly_one_time_secrets_subject_key_idx"
+      ON "nextly_one_time_secrets" ("subject_key")`,
+    `CREATE INDEX IF NOT EXISTS "nextly_one_time_secrets_expires_idx"
+      ON "nextly_one_time_secrets" ("expires_at")`,
+    // The database limit store's counts, used when a site selects it. An
+    // integer of milliseconds for the expiry, as the Drizzle bundle declares.
+    `CREATE TABLE IF NOT EXISTS "${LIMIT_STORE_TABLE}" (
+      "id" TEXT PRIMARY KEY NOT NULL,
+      "value" TEXT,
+      "expires_at" INTEGER NOT NULL,
+      "generation" TEXT NOT NULL
+    )`,
+    `CREATE INDEX IF NOT EXISTS "nls_expires_at_idx"
+      ON "${LIMIT_STORE_TABLE}" ("expires_at")`,
+    `CREATE INDEX IF NOT EXISTS "nls_generation_idx"
+      ON "${LIMIT_STORE_TABLE}" ("generation")`,
+    // The two-factor challenges already answered, so an answer is accepted
+    // once on every instance. An integer of milliseconds for the expiry, as
+    // the Drizzle bundle declares.
+    `CREATE TABLE IF NOT EXISTS "${SPENT_CHALLENGES_TABLE}" (
+      "id" TEXT PRIMARY KEY NOT NULL,
+      "expires_at" INTEGER NOT NULL
+    )`,
+    `CREATE INDEX IF NOT EXISTS "nsc_expires_at_idx"
+      ON "${SPENT_CHALLENGES_TABLE}" ("expires_at")`,
     `CREATE TABLE IF NOT EXISTS "nextly_widget_layout" (
       "id" TEXT PRIMARY KEY NOT NULL,
       "scope_kind" TEXT NOT NULL,
@@ -554,6 +605,8 @@ export function generateSqliteCoreTableStatements(): string[] {
       "error" TEXT,
       "message_id" TEXT,
       "retention_class" TEXT NOT NULL,
+      "principal_kind" TEXT,
+      "principal_id" TEXT,
       "created_at" INTEGER NOT NULL
     )`,
     `CREATE INDEX IF NOT EXISTS "email_deliveries_created_idx"
@@ -566,6 +619,8 @@ export function generateSqliteCoreTableStatements(): string[] {
       ON "email_deliveries" ("provider_id", "created_at")`,
     `CREATE INDEX IF NOT EXISTS "email_deliveries_retention_idx"
       ON "email_deliveries" ("retention_class", "created_at")`,
+    `CREATE INDEX IF NOT EXISTS "email_deliveries_principal_idx"
+      ON "email_deliveries" ("principal_kind", "principal_id")`,
   ];
 }
 
