@@ -137,56 +137,74 @@ export function widgetDeclarationFaults(
   return declarationProblems(raw).map(problem => ({ owner, widget, problem }));
 }
 
+/** What one check finds: nothing, one problem, or several. */
+type Found = string | readonly string[] | undefined;
+
+/**
+ * The checks a declaration goes through, in field order.
+ *
+ * A list of small checks rather than one long function, so each rule reads on
+ * its own and a new field adds a line here rather than a branch somewhere in
+ * the middle.
+ */
+const CHECKS: readonly ((d: Record<string, unknown>) => Found)[] = [
+  d =>
+    Object.keys(d)
+      .filter(key => !FIELDS.has(key))
+      .map(key => `${quote(key)} is not a field of a widget declaration`),
+  d => idProblem(d.id),
+  d => requiredTextProblem("title", d.title),
+  d => requiredTextProblem("category", d.category),
+  d => descriptionProblem(d.description),
+  d => widthsProblems(d.widths, d.width),
+  d =>
+    d.permission === undefined || isPermissionName(d.permission)
+      ? undefined
+      : `permission must be a permission name such as "read-orders", got ${quote(d.permission)}`,
+  d =>
+    d.several === undefined || typeof d.several === "boolean"
+      ? undefined
+      : "several must be true or false",
+  d =>
+    d.sketch === undefined || isCoreDisplay(d.sketch)
+      ? undefined
+      : `sketch must name one of core's displays (${CORE_DISPLAYS.join(", ")}), got ${quote(d.sketch)}`,
+  d => settingsProblems(d.settings),
+  d => dataProblem(d.data),
+  d => displayProblem(d.display),
+  d => emptyProblems(d.empty, d.display),
+  d => exampleProblem(d.example, d.display),
+];
+
 /** The problems with a declaration that is at least an object. */
 function declarationProblems(d: Record<string, unknown>): string[] {
-  const problems: string[] = [];
-  const add = (problem: string | undefined): void => {
-    if (problem !== undefined) problems.push(problem);
-  };
+  return CHECKS.flatMap(check => {
+    const found = check(d);
+    if (found === undefined) return [];
+    return typeof found === "string" ? [found] : [...found];
+  });
+}
 
-  for (const key of Object.keys(d)) {
-    if (!FIELDS.has(key))
-      add(`${quote(key)} is not a field of a widget declaration`);
-  }
+function requiredTextProblem(
+  field: string,
+  value: unknown
+): string | undefined {
+  if (value === undefined) return `${field} is required`;
+  return nonBlank.safeParse(value).success
+    ? undefined
+    : `${field} must be a non-empty string`;
+}
 
-  add(idProblem(d.id));
-  for (const field of ["title", "category"] as const) {
-    if (d[field] === undefined) add(`${field} is required`);
-    else if (!nonBlank.safeParse(d[field]).success) {
-      add(`${field} must be a non-empty string`);
-    }
-  }
-  add(descriptionProblem(d.description));
-  const widths = widthsChecked(d.widths, add);
-  add(widthProblem(d.width, widths));
-
-  if (d.permission !== undefined && !isPermissionName(d.permission)) {
-    add(
-      `permission must be a permission name such as "read-orders", got ${quote(d.permission)}`
-    );
-  }
-  if (d.several !== undefined && typeof d.several !== "boolean") {
-    add("several must be true or false");
-  }
-  if (d.sketch !== undefined && !isCoreDisplay(d.sketch)) {
-    add(
-      `sketch must name one of core's displays (${CORE_DISPLAYS.join(", ")}), got ${quote(d.sketch)}`
-    );
-  }
-
-  for (const problem of settingsProblems(d.settings)) add(problem);
-  add(dataProblem(d.data));
-  add(displayProblem(d.display));
-  for (const problem of emptyProblems(d.empty, d.display)) add(problem);
-  if (d.example !== undefined && isCoreDisplay(d.display)) {
-    const mismatch = displayDataProblem(d.display, d.example);
-    if (mismatch !== undefined) {
-      add(
-        `example does not have the shape the "${d.display}" display draws (${mismatch})`
-      );
-    }
-  }
-  return problems;
+/** A core display's example must have the shape that display draws. */
+function exampleProblem(
+  example: unknown,
+  display: unknown
+): string | undefined {
+  if (example === undefined || !isCoreDisplay(display)) return undefined;
+  const mismatch = displayDataProblem(display, example);
+  return mismatch === undefined
+    ? undefined
+    : `example does not have the shape the "${display}" display draws (${mismatch})`;
 }
 
 function idProblem(id: unknown): string | undefined {
@@ -214,27 +232,34 @@ function descriptionProblem(description: unknown): string | undefined {
 }
 
 /**
- * The widths a declaration allows, once checked, or `undefined` when they
- * cannot be read: the starting width is then not judged against them, since
- * that would report the same mistake twice.
+ * Every problem with the widths a declaration allows and its starting width.
+ *
+ * The starting width is judged against the allowed widths only when those
+ * could be read; otherwise the same mistake would be reported twice.
  */
-function widthsChecked(
-  widths: unknown,
-  add: (problem: string) => void
-): readonly string[] | undefined {
+function widthsProblems(widths: unknown, width: unknown): string[] {
   const named = `(${WIDTHS.join(", ")})`;
   if (!Array.isArray(widths) || widths.length === 0) {
-    add(`widths must list at least one of the widths a card may take ${named}`);
-    return undefined;
+    return [
+      `widths must list at least one of the widths a card may take ${named}`,
+      ...optional(widthProblem(width, undefined)),
+    ];
   }
   const strange = widths.filter(
-    width => !(WIDTHS as readonly unknown[]).includes(width)
+    entry => !(WIDTHS as readonly unknown[]).includes(entry)
   );
-  for (const width of strange) {
-    add(`widths holds ${quote(width)}, which is not a width ${named}`);
-  }
-  return strange.length > 0 ? undefined : (widths as string[]);
+  const allowed = strange.length === 0 ? (widths as string[]) : undefined;
+  return [
+    ...strange.map(
+      entry => `widths holds ${quote(entry)}, which is not a width ${named}`
+    ),
+    ...optional(widthProblem(width, allowed)),
+  ];
 }
+
+/** A problem as a list of none or one, to spread into a longer list. */
+const optional = (problem: string | undefined): string[] =>
+  problem === undefined ? [] : [problem];
 
 function widthProblem(
   width: unknown,
@@ -287,21 +312,26 @@ function settingsProblems(settings: unknown): string[] {
       .map(([name]) => name)
   );
   for (const [name, setting] of entries) {
-    if (!isRecord(setting)) {
-      problems.push(`setting "${name}" must be a setting declaration`);
-      continue;
-    }
-    const type = setting.type;
-    if (typeof type === "string" && NEW_SETTING_TYPES.has(type)) {
-      const problem = newSettingProblem(name, setting, collections);
-      if (problem !== undefined) problems.push(problem);
-      continue;
-    }
-    const canonical = widgetSettingsProblem([{ ...setting, name }]);
-    if (canonical !== undefined)
-      problems.push(`setting "${name}": ${canonical}`);
+    problems.push(...optional(settingProblem(name, setting, collections)));
   }
   return problems;
+}
+
+/** What is wrong with one setting, if anything. */
+function settingProblem(
+  name: string,
+  setting: unknown,
+  collections: ReadonlySet<string>
+): string | undefined {
+  if (!isRecord(setting))
+    return `setting "${name}" must be a setting declaration`;
+  if (typeof setting.type === "string" && NEW_SETTING_TYPES.has(setting.type)) {
+    return newSettingProblem(name, setting, collections);
+  }
+  const canonical = widgetSettingsProblem([{ ...setting, name }]);
+  return canonical === undefined
+    ? undefined
+    : `setting "${name}": ${canonical}`;
 }
 
 function newSettingProblem(
@@ -350,47 +380,51 @@ function displayProblem(display: unknown): string | undefined {
 function emptyProblems(empty: unknown, display: unknown): string[] {
   if (empty === undefined) return [];
   if (!isRecord(empty)) return ["empty must be an object"];
-  const problems: string[] = [];
-  if (empty.when !== undefined && !isFunction(empty.when)) {
-    problems.push("empty.when must be a function of the widget's data");
-  } else if (empty.when === undefined && !isCoreDisplay(display)) {
-    // A core display has its own rule for when its data is empty; a component
-    // has none, so its message and action could never be shown.
-    problems.push(
-      "empty.when is required for a widget drawn by its own component: core cannot tell when its data is empty"
-    );
+  return [
+    ...optional(emptyWhenProblem(empty.when, display)),
+    ...optional(emptyMessageProblem(empty.message)),
+    ...emptyActionProblems(empty.action),
+  ];
+}
+
+function emptyWhenProblem(when: unknown, display: unknown): string | undefined {
+  if (when !== undefined) {
+    return isFunction(when)
+      ? undefined
+      : "empty.when must be a function of the widget's data";
   }
-  if (
-    empty.message !== undefined &&
-    !(
-      typeof empty.message === "string" &&
-      oneLine(empty.message) &&
-      empty.message.trim() !== ""
-    )
-  ) {
-    problems.push("empty.message must be one line of text");
+  // A core display has its own rule for when its data is empty; a component
+  // has none, so its message and action could never be shown.
+  return isCoreDisplay(display)
+    ? undefined
+    : "empty.when is required for a widget drawn by its own component: core cannot tell when its data is empty";
+}
+
+function emptyMessageProblem(message: unknown): string | undefined {
+  if (message === undefined) return undefined;
+  const parsed = nonBlank.safeParse(message);
+  return parsed.success && oneLine(parsed.data)
+    ? undefined
+    : "empty.message must be one line of text";
+}
+
+function emptyActionProblems(action: unknown): string[] {
+  if (action === undefined) return [];
+  if (!isRecord(action) || !nonBlank.safeParse(action.label).success) {
+    return ["empty.action must have a label"];
   }
-  if (empty.action !== undefined) {
-    const action = empty.action;
-    if (!isRecord(action) || !nonBlank.safeParse(action.label).success) {
-      problems.push("empty.action must have a label");
-    } else {
-      if (!isAdminRelative(action.link)) {
-        problems.push(
-          `empty.action.link must be a path relative to the admin, such as "collections/orders", got ${quote(action.link)}`
-        );
-      }
-      if (
-        action.permission !== undefined &&
-        !isPermissionName(action.permission)
-      ) {
-        problems.push(
-          `empty.action.permission must be a permission name such as "create-orders", got ${quote(action.permission)}`
-        );
-      }
-    }
-  }
-  return problems;
+  return [
+    ...optional(
+      isAdminRelative(action.link)
+        ? undefined
+        : `empty.action.link must be a path relative to the admin, such as "collections/orders", got ${quote(action.link)}`
+    ),
+    ...optional(
+      action.permission === undefined || isPermissionName(action.permission)
+        ? undefined
+        : `empty.action.permission must be a permission name such as "create-orders", got ${quote(action.permission)}`
+    ),
+  ];
 }
 
 /**
