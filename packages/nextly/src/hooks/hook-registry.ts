@@ -8,6 +8,7 @@
  * @since 1.0.0
  */
 
+import { withCurrentPrincipal } from "../auth/principal-scope";
 import { NextlyError } from "../errors/nextly-error";
 
 import { normalizeHookError } from "./normalize-hook-error";
@@ -787,7 +788,9 @@ export class HookRegistry {
     for (const handler of allHandlers) {
       try {
         // Pass current data to hook
-        const result = await handler({ ...context, data });
+        const result = await handler(
+          withCurrentPrincipal({ ...context, data })
+        );
 
         // If hook returns data (including null), use it for next hook
         // If hook returns undefined, keep current data unchanged
@@ -927,7 +930,9 @@ export class HookRegistry {
     for (const handler of allHandlers) {
       try {
         // Pass current args to hook
-        const result = await handler({ ...context, args });
+        const result = await handler(
+          withCurrentPrincipal({ ...context, args })
+        );
 
         // If hook returns args, use it for next hook
         // If hook returns undefined/void, keep current args unchanged

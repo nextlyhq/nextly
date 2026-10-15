@@ -14,10 +14,6 @@
  * Runs on every dialect with a database in this run, since the push that adds
  * the column is a different implementation per dialect.
  */
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-
 import { eq } from "drizzle-orm";
 import { afterAll, describe, expect, it } from "vitest";
 
@@ -26,8 +22,10 @@ import {
   withFreshDatabase,
   type FreshDatabase,
 } from "../../../../__tests__/helpers/fresh-database";
-import { migrateCore } from "../../../../cli/commands/migrate";
-import { getSchemaEventsDdl } from "../../events/schema-events-ddl";
+import {
+  migrateFresh as migrate,
+  noMigrationsDir,
+} from "../../../../__tests__/helpers/migrate-core";
 
 interface Db {
   select: () => {
@@ -36,62 +34,6 @@ interface Db {
     };
   };
   insert: (table: unknown) => { values: (v: unknown) => Promise<unknown> };
-}
-
-/** A logger for `migrateCore` that prints nothing. */
-const silent = {
-  header: () => {},
-  info: () => {},
-  success: () => {},
-  warn: () => {},
-  error: () => {},
-  debug: () => {},
-  keyValue: () => {},
-  divider: () => {},
-  newline: () => {},
-  item: () => {},
-  table: () => {},
-  spinner: () => ({ stop: () => {} }),
-  setOptions: () => {},
-  getOptions: () => ({}),
-} as unknown as Parameters<typeof migrateCore>[0]["logger"];
-
-/**
- * `nextly migrate` without its command-line shell: the same `migrateCore` the
- * CLI and both boot paths call, under its lock, with an app that has no
- * migration files of its own. Reports whether the core phase changed anything.
- */
-async function migrate(
-  fresh: FreshDatabase,
-  migrationsDir: string
-): Promise<boolean> {
-  const { coreChanged } = await migrateCore({
-    // A config that declares no schema hooks: the run is core-only.
-    extensionSchema: undefined,
-    dialect: fresh.dialect,
-    db: fresh.db,
-    // The shape the dev boot path hands over: a wrapper carrying the one
-    // raw-statement method the core needs.
-    adapter: {
-      dialect: fresh.dialect,
-      connect: () => Promise.resolve(),
-      disconnect: () => Promise.resolve(),
-      isConnected: () => true,
-      getCapabilities: () => ({ dialect: fresh.dialect }),
-      executeQuery: (statement: string) => fresh.exec(statement),
-    } as unknown as Parameters<typeof migrateCore>[0]["adapter"],
-    migrationsDir,
-    logger: silent,
-    lockMode: "fail-fast",
-    // How the CLI bootstraps the ledger: only when it is absent.
-    ensureLedger: async () => {
-      if ((await fresh.columnsOf("nextly_schema_events")).length > 0) return;
-      for (const statement of getSchemaEventsDdl(fresh.dialect)) {
-        await fresh.exec(statement);
-      }
-    },
-  });
-  return coreChanged;
 }
 
 /** A timestamp literal each dialect's column takes. */
@@ -124,8 +66,8 @@ async function via(fresh: FreshDatabase, id: string): Promise<unknown> {
 }
 
 /** An app with no migration files, so only the core phase has work to do. */
-const NO_MIGRATIONS = mkdtempSync(join(tmpdir(), "nextly-evv-"));
-afterAll(() => rmSync(NO_MIGRATIONS, { recursive: true, force: true }));
+const { dir: NO_MIGRATIONS, remove } = noMigrationsDir("nextly-evv-");
+afterAll(remove);
 
 describe.each(availableDialects())(
   "email_verified_via through nextly migrate (%s)",

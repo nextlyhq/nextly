@@ -186,6 +186,9 @@ describe("the SQLite bootstrap DDL", () => {
     "site_settings",
     "api_keys",
     "audit_log",
+    // The deleted-people record guards audit_log's rows, and this fallback
+    // builds no audit_log, so it has nothing to guard here.
+    "nextly_deleted_principals",
     "email_providers",
     "email_templates",
     "image_sizes",

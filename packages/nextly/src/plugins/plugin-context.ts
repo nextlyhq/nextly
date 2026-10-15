@@ -9,7 +9,10 @@
  * @since 1.0.0
  */
 
-import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
+import type {
+  SupportedDialect,
+  TransactionContext,
+} from "@nextlyhq/adapter-drizzle/types";
 import { getTableName, type AnyRelations, type Table } from "drizzle-orm";
 
 import type { PluginAuthApi } from "../auth/plugin-auth-api";
@@ -19,6 +22,7 @@ import {
   createJobsNamespace,
   type JobsNamespace,
 } from "../direct-api/namespaces/jobs";
+import type { PluginLimiter } from "../domains/limits/plugin-limiter";
 import { getActiveExtensionSchema } from "../domains/schema/extension/build-extension-schema";
 import type {
   ExtensionColumn,
@@ -48,6 +52,7 @@ import {
   type AfterCommitAdapter,
   runAdapterTransaction,
 } from "../shared/lib/run-adapter-transaction";
+import { secretGenerations } from "../shared/lib/secret-generations";
 import type { DatabaseInstance } from "../types/database-operations";
 
 import type { AdminPlacement } from "./admin-placement";
@@ -65,6 +70,7 @@ import type {
   HookPointValue,
 } from "./hook-point-payloads";
 import { createPayloadChecker, getDeclaredHookPoints } from "./hook-points";
+import { createPluginLimits } from "./limits/plugin-limits";
 import { createPluginAudit } from "./plugin-audit-provider";
 import { getPluginAuthApi, getPluginAuthApiFor } from "./plugin-auth-provider";
 import type { PluginCategory } from "./plugin-categories";
@@ -77,7 +83,20 @@ import { wrapSinglesForPlugin } from "./plugin-singles";
 import type { PluginSinglesService } from "./plugin-singles";
 import { isInPluginNamespace } from "./plugin-slug";
 import { createPluginPrincipals } from "./principals/api";
-import type { PluginPrincipalsApi } from "./principals/types";
+import type { PluginPrincipalsApi, PrincipalRef } from "./principals/types";
+import {
+  createOneTimeSecrets,
+  type OneTimeSecrets,
+  type SecretsAdapter,
+} from "./security/one-time-secrets";
+import {
+  createOpaqueSecrets,
+  type OpaqueSecrets,
+} from "./security/opaque-secrets";
+import {
+  createPasswordHelper,
+  type PasswordHelper,
+} from "./security/password-helper";
 import type { PluginSelf } from "./self";
 import { resolvePluginSelf } from "./self";
 import { methodFacade } from "./service-facade";
@@ -579,6 +598,15 @@ export interface PluginContext {
   auth: PluginAuthApi;
 
   /**
+   * @experimental Core's security helpers, lent to the plugin for the people
+   * it signs in itself: `passwords` hashes, verifies and checks passwords.
+   *
+   * Independent of the staff path's hashing and of an app's
+   * `passwordHasher`: a plugin's people never share a format with staff.
+   */
+  security: PluginSecurityApi;
+
+  /**
    * @experimental This plugin's stored configuration.
    *
    * Present only when the plugin declares `contributes.settings`. Values are
@@ -623,6 +651,27 @@ export interface PluginContext {
    * `auth.currentUser` gives it no user.
    */
   principals?: PluginPrincipalsApi;
+
+  /**
+   * @experimental This plugin's limiter: reserve an attempt on keys the
+   * plugin chooses, before the work it guards runs, under the rules it
+   * declared in `contributes.limits`.
+   *
+   * Present only when the plugin declares a rule. Reserve before opening a
+   * transaction: `reserve`, `release` and `reset` throw inside one, since a
+   * count must never roll back with the work it guarded.
+   */
+  limits?: PluginLimiter;
+}
+
+/** @experimental Core's security helpers on `ctx.security`. */
+export interface PluginSecurityApi {
+  /** Hashing, verifying and checking passwords. */
+  readonly passwords: PasswordHelper;
+  /** Random secrets for the plugin's own records, with a stable hash. */
+  readonly opaque: OpaqueSecrets;
+  /** One-purpose links and codes, spent once. */
+  readonly secrets: OneTimeSecrets;
 }
 
 /** @experimental Writing one plugin's declared audit events. */
@@ -638,6 +687,21 @@ export interface PluginAuditApi {
      * look the same, and neither may keep data about them.
      */
     targetUserId?: string | null;
+    /**
+     * @experimental A plugin-defined signed-in person who acted, by kind and
+     * id (a `Principal` will do). Never pass a person's id as `actorUserId`:
+     * that column names staff users, and an id naming none is stored as an
+     * erased account's. A row naming a person keeps its address, client and
+     * metadata until their plugin reports them deleted; one written after
+     * that is stored already erased. Not with `actorUserId`.
+     */
+    actorPrincipal?: PrincipalRef | null;
+    /**
+     * @experimental A plugin-defined signed-in person the event is about, as
+     * `actorPrincipal` names one. Never pass a person's id as
+     * `targetUserId`. Not with `targetUserId`.
+     */
+    targetPrincipal?: PrincipalRef | null;
     request?: Request;
     metadata?: Record<string, string | number | boolean>;
   }): Promise<void>;
@@ -1343,6 +1407,7 @@ function buildPluginDatabase(
           get relationalDb() {
             return tx.drizzleWithRelations(relations());
           },
+          adapterTx: asTransactionContext(tx),
         });
       const transactions = adapter();
       return runAdapterTransaction(
@@ -1394,6 +1459,55 @@ export interface AdapterTransactions extends AfterCommitAdapter {
 export interface AdapterTransactionHandles {
   getDrizzle: <D = unknown>() => D;
   drizzleWithRelations: <D = unknown>(relations: AnyRelations) => D;
+}
+
+/**
+ * The transaction's full adapter context when the adapter handed one, which
+ * every adapter core ships does; undefined for one that supplies only the two
+ * Drizzle handles this resolver's contract asks for. Core code a plugin passes
+ * its transaction to writes through it (`plugin-transaction-link`), and with
+ * none it refuses rather than writes outside the transaction.
+ */
+function asTransactionContext(
+  tx: AdapterTransactionHandles
+): TransactionContext | undefined {
+  const candidate = tx as Partial<TransactionContext>;
+  return typeof candidate.insert === "function" &&
+    typeof candidate.select === "function" &&
+    typeof candidate.updateCount === "function" &&
+    typeof candidate.delete === "function"
+    ? (tx as TransactionContext)
+    : undefined;
+}
+
+/** Whether `value` has every method the one-purpose secrets helper calls. */
+function isSecretsAdapter(value: unknown): value is SecretsAdapter {
+  if (typeof value !== "object" || value === null) return false;
+  const methods: readonly (keyof SecretsAdapter)[] = [
+    "transaction",
+    "select",
+    "transactionOpenInFlow",
+  ];
+  return methods.every(
+    name => typeof (value as Record<string, unknown>)[name] === "function"
+  );
+}
+
+/**
+ * The adapter as the one-purpose secrets helper uses it. The resolver's
+ * contract names only the transaction methods, and every adapter core ships
+ * has the rest; one that does not is refused with a clear error, rather than
+ * failing on a missing method partway through a secret's write.
+ */
+function asSecretsAdapter(adapter: AdapterTransactions): SecretsAdapter {
+  if (isSecretsAdapter(adapter)) return adapter;
+  throw new NextlyError({
+    code: "INTERNAL_ERROR",
+    publicMessage: "An unexpected error occurred.",
+    logMessage:
+      "The adapter this plugin context resolves has no select or transactionOpenInFlow, which one-purpose secrets need.",
+    logContext: { reason: "secrets-adapter-incomplete" },
+  });
 }
 
 /**
@@ -1864,6 +1978,7 @@ export function createPluginContext(
   // allowlist, and nothing about it changes between requests.
   const pluginFetch = plugin ? createPluginFetchFor(plugin) : undefined;
   const pluginPrincipals = plugin ? createPluginPrincipals(plugin) : undefined;
+  const pluginLimits = plugin ? createPluginLimits(plugin) : undefined;
 
   const filterRegistry = getFilterRegistry();
   filterRegistry.setLogger(logger);
@@ -1966,6 +2081,29 @@ export function createPluginContext(
     // Bound to the plugin, so `completeLogin` answers to its manifest; a
     // context built for no plugin is core's own and gets the shared one.
     auth: plugin ? getPluginAuthApiFor(plugin) : getPluginAuthApi(),
+    // Built once here and kept as a plain property, like `auth`: it holds no
+    // per-request state, so the copy every route spreads is the same helper.
+    security: {
+      passwords: createPasswordHelper({
+        breachedPasswords: config.security?.breachedPasswords,
+        logger,
+      }),
+      opaque: createOpaqueSecrets(),
+      // Kept within this plugin's name. The adapter is read per call, as the
+      // context can be built before the database connects, and through this
+      // context's own resolver rather than the global container: a context
+      // outlives a container being cleared, as on a reload while old plugins
+      // finish tearing down. The install's secrets are read per call so a
+      // rotation applies at once.
+      secrets: createOneTimeSecrets({
+        owner: plugin?.name ?? "nextly",
+        adapter: () => asSecretsAdapter(getServiceFn("adapter")),
+        // Every generation, the unkeyed one included: a secret minted before
+        // NEXTLY_SECRET was set stays readable while '[null]' keeps it.
+        secrets: () =>
+          secretGenerations(env.NEXTLY_SECRET, env.NEXTLY_SECRET_PREVIOUS),
+      }),
+    },
     // Present only when the plugin declared a settings schema: without one
     // there is nothing to validate a write against, and an untyped bag is
     // exactly what this store exists to replace.
@@ -1994,5 +2132,6 @@ export function createPluginContext(
     // own to recognise has no use for it, as one with no settings has none
     // for `settings`.
     ...(pluginPrincipals ? { principals: pluginPrincipals } : {}),
+    ...(pluginLimits ? { limits: pluginLimits } : {}),
   };
 }

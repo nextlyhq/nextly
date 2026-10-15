@@ -186,19 +186,44 @@ function withoutBody(request: Request): Request {
   });
 }
 
-/** Call the kind's resolver once, and check what it answers. */
-async function resolveOnce(
+/** Which of a kind's functions answered. Both are checked the same way. */
+type AnswerSource = "resolver" | "lookup";
+
+/** Log why a kind's answer was taken for nobody. */
+function warnInvalidAnswer(
   registered: RegisteredPrincipalKind,
-  request: Request
+  source: AnswerSource,
+  problem: string
+): void {
+  getNextlyLogger().warn({
+    kind: "principal-answer-invalid",
+    source,
+    principalKind: registered.kind,
+    plugin: registered.plugin,
+    problem,
+  });
+}
+
+/**
+ * Ask one of a kind's functions who someone is, and check the answer.
+ *
+ * One path for the resolver and the lookup, so a person found by id is held
+ * to exactly the bounds of one found on a request: an answer either could
+ * give, the other cannot get past.
+ */
+async function askKind(
+  registered: RegisteredPrincipalKind,
+  source: AnswerSource,
+  ask: () => Promise<unknown>
 ): Answer {
   let answer: unknown;
   try {
-    answer = await registered.definition.resolve(withoutBody(request));
+    answer = await ask();
   } catch (error) {
     // The error's name only. Its message may quote the token or cookie the
-    // resolver failed to read, and the log is no place for a credential.
+    // plugin failed to read, and the log is no place for a credential.
     getNextlyLogger().warn({
-      kind: "principal-resolver-failed",
+      kind: `principal-${source}-failed`,
       principalKind: registered.kind,
       plugin: registered.plugin,
       errorName: error instanceof Error ? error.name : typeof error,
@@ -215,15 +240,20 @@ async function resolveOnce(
     checked = `reading the answer threw ${error instanceof Error ? error.name : typeof error}`;
   }
   if (typeof checked === "string") {
-    getNextlyLogger().warn({
-      kind: "principal-answer-invalid",
-      principalKind: registered.kind,
-      plugin: registered.plugin,
-      problem: checked,
-    });
+    warnInvalidAnswer(registered, source, checked);
     return null;
   }
   return checked;
+}
+
+/** Call the kind's resolver once, and check what it answers. */
+function resolveOnce(
+  registered: RegisteredPrincipalKind,
+  request: Request
+): Answer {
+  return askKind(registered, "resolver", () =>
+    registered.definition.resolve(withoutBody(request))
+  );
 }
 
 /**
@@ -259,6 +289,44 @@ export function recognisePrincipal(request: Request, kind: string): Answer {
   const answer = resolveOnce(registered, request);
   answers.set(key, answer);
   return answer;
+}
+
+/**
+ * The person of `kind` with this id, found through the kind's `lookup`, or
+ * `null` when the plugin returns nobody for it.
+ *
+ * For running as a person without a request. A kind with no lookup cannot be
+ * asked, and that is refused rather than answered with nobody: the caller
+ * would read it as a person who does not exist. An id no person can have is
+ * nobody without asking the plugin, and an answer naming someone other than
+ * the person asked for is taken for nobody, as a resolver's bad answer is.
+ */
+export async function lookupPrincipal(
+  kind: string,
+  id: string
+): Promise<Principal | null> {
+  const registered = requirePrincipalKind(kind);
+  const { definition } = registered;
+  if (typeof definition.lookup !== "function") {
+    throw NextlyError.invalidInput({
+      message: `The kind of signed-in person ${JSON.stringify(kind)} has no lookup, so no person of it can be found by id.`,
+      logContext: { principalKind: kind },
+    });
+  }
+  if (!isPrincipalId(id)) return null;
+  // Called as a method, so a class-based kind keeps its `this`.
+  const principal = await askKind(registered, "lookup", async () =>
+    definition.lookup ? definition.lookup(id) : null
+  );
+  if (principal !== null && principal.id !== id) {
+    warnInvalidAnswer(
+      registered,
+      "lookup",
+      "the lookup answered for a different id from the one asked for"
+    );
+    return null;
+  }
+  return principal;
 }
 
 /**

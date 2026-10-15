@@ -30,8 +30,14 @@ import {
   type RetentionGateStore,
   AUDIT_RETENTION_DRAIN_GATE_KEY,
   EMAIL_RETENTION_DRAIN_GATE_KEY,
+  ONE_TIME_SECRETS_RETENTION_DRAIN_GATE_KEY,
   WEBHOOK_RETENTION_GATE_KEY,
 } from "../../domains/retention/gate";
+import { warnQuietly } from "../../domains/retention/safe-log";
+import {
+  ONE_TIME_SECRETS_SWEEP_INTERVAL_MS,
+  pruneOneTimeSecrets,
+} from "../../plugins/security/one-time-secrets-prune";
 
 /** Hard cap on rounds so a persistently-retrying backlog can't loop unbounded. */
 const DEFAULT_MAX_ROUNDS = 100;
@@ -76,6 +82,13 @@ export interface RunDrainDeps {
      * nothing else does.
      */
     emailPolicy?: ResolvedEmailRetentionConfig;
+    /**
+     * Sweep plugins' one-purpose secrets past their expiry. Here for the
+     * delivery log's reason: an install that only mints secrets, or goes quiet
+     * after minting them, may make no write that offers the sweep, and the rows
+     * keep a subject and data in clear.
+     */
+    oneTimeSecrets?: boolean;
     prune: PruneDeps;
     gate: RetentionGateStore;
   };
@@ -104,6 +117,8 @@ export interface RunDrainResult {
     auth: number;
     /** Rows removed from the email delivery log on this call. */
     emailDeliveries: number;
+    /** Plugins' one-purpose secrets removed on this call. */
+    oneTimeSecrets: number;
   };
 }
 
@@ -165,6 +180,7 @@ export async function runDrain(deps: RunDrainDeps): Promise<RunDrainResult> {
       activity: 0,
       auth: 0,
       emailDeliveries: 0,
+      oneTimeSecrets: 0,
     },
   };
 
@@ -264,6 +280,19 @@ export async function runDrain(deps: RunDrainDeps): Promise<RunDrainResult> {
           : false;
       if (emailTurn) heldTurns.add(EMAIL_RETENTION_DRAIN_GATE_KEY);
 
+      // Claimed with the others, before any sweep runs, so the shares below
+      // count it: run last with nothing reserved, a sustained backlog in the
+      // other passes would leave it no time on every drain.
+      const secretsTurn =
+        retention.oneTimeSecrets === true && !deadlineSpent()
+          ? await claimRetentionPass(
+              retention.gate,
+              ONE_TIME_SECRETS_RETENTION_DRAIN_GATE_KEY,
+              ONE_TIME_SECRETS_SWEEP_INTERVAL_MS
+            )
+          : false;
+      if (secretsTurn) heldTurns.add(ONE_TIME_SECRETS_RETENTION_DRAIN_GATE_KEY);
+
       // How many passes still have to fit in the time that remains, counted from
       // the turns already CLAIMED rather than from the policies configured — a
       // reserve set aside for a pass that will not run leaves that share unusable
@@ -275,10 +304,12 @@ export async function runDrain(deps: RunDrainDeps): Promise<RunDrainResult> {
       const passesLeftAfter = (done: {
         webhook?: boolean;
         audit?: boolean;
+        email?: boolean;
       }): number =>
         (done.webhook ? 0 : 1) +
         (auditTurn && !done.audit ? 1 : 0) +
-        (emailTurn ? 1 : 0);
+        (emailTurn && !done.email ? 1 : 0) +
+        (secretsTurn ? 1 : 0);
 
       const webhookPolicy = retention.policy;
       if (webhookPolicy && !deadlineSpent()) {
@@ -396,7 +427,12 @@ export async function runDrain(deps: RunDrainDeps): Promise<RunDrainResult> {
               // carries the invocation over the platform's limit -- losing the
               // drain's delivery work, which is the one thing that was waited on.
               now,
-              deadline,
+              // A share when the secrets sweep follows, the remainder when not.
+              deadline: shareOfRemaining(
+                deadline,
+                now,
+                passesLeftAfter({ webhook: true, audit: true })
+              ),
             },
             emailPolicy!
           );
@@ -409,6 +445,33 @@ export async function runDrain(deps: RunDrainDeps): Promise<RunDrainResult> {
           // work. `deliveries === 0` cannot distinguish the two, because that
           // is also what a healthy sweep of an empty table returns.
           if (swept.started) heldTurns.delete(EMAIL_RETENTION_DRAIN_GATE_KEY);
+        }
+      }
+
+      // Plugins' one-purpose secrets, last and with what remains. The sweep
+      // stops between batches at the deadline, and the turn is kept only if a
+      // batch was attempted, for the reason the delivery log's is.
+      if (secretsTurn && !deadlineSpent()) {
+        const swept = await pruneOneTimeSecrets(
+          retention.prune.adapter,
+          now(),
+          {
+            deadline: deadline?.getTime(),
+            clock: () => now().getTime(),
+          }
+        ).catch((error: unknown) => {
+          // Quietly: an app-supplied logger that throws here would reject a
+          // drain whose deliveries already succeeded.
+          warnQuietly(
+            retention.prune.logger,
+            "One-purpose secrets retention pass failed",
+            { error: error instanceof Error ? error.message : "unknown error" }
+          );
+          return { removed: 0, started: true };
+        });
+        result.pruned.oneTimeSecrets = swept.removed;
+        if (swept.started) {
+          heldTurns.delete(ONE_TIME_SECRETS_RETENTION_DRAIN_GATE_KEY);
         }
       }
     } finally {

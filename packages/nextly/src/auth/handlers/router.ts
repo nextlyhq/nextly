@@ -1,4 +1,5 @@
 import type { AuditLogWriter } from "../../domains/audit/audit-log-writer";
+import type { LimitStore } from "../../domains/limits/limit-store";
 import type { RateLimitStore } from "../../middleware/rate-limit";
 import type { PluginContext } from "../../plugins/plugin-context";
 import { getTrustedClientIp } from "../../utils/get-trusted-client-ip";
@@ -6,6 +7,7 @@ import type { CredentialUserRow } from "../credentials/verify-credentials";
 import { authRateLimiter } from "../middleware/rate-limiter";
 import type { ChallengeRegistry } from "../pipeline/challenge";
 import type { AuthHookRegistry } from "../pipeline/hooks";
+import type { SpentChallenges } from "../pipeline/spent-challenges";
 import type { AuthStrategy } from "../pipeline/types";
 import type { AccountState } from "../session/account-state";
 import type { SessionRoles } from "../session/session-roles";
@@ -112,6 +114,18 @@ export interface AuthRouterDeps {
      */
     store?: RateLimitStore;
   };
+  /**
+   * The limit store the site selected, where the two-factor attempt budget
+   * is counted when no store of the earlier contract is configured.
+   */
+  limitStore?: LimitStore;
+  /**
+   * The two-factor flows a correct answer has settled, kept in the database.
+   * Core always supplies it (`databaseSpentChallenges`). Absent, the marks
+   * are kept in the rate-limit store as they used to be, so single use holds
+   * across instances only where that store is shared.
+   */
+  spentChallenges?: SpentChallenges;
   /**
    * Writer for security-sensitive auth events. Handlers call
    * `auditLog.write(...)` on failed CSRF, failed login, password change,

@@ -185,6 +185,26 @@ export const AuthRateLimitConfigSchema = z.object({
   windowMs: z.number().int().positive().optional(),
 });
 
+/**
+ * The site's breached-password source (`security.breachedPasswords`), the
+ * same shape as `BreachedPasswordsConfig`. Bounds the check cannot honour (a
+ * non-https `url`, a `timeoutMs` outside 1 to 60000) are not refused here:
+ * boot names them, and the check sends nothing or uses the default.
+ */
+export const BreachedPasswordsConfigSchema = z.object({
+  source: z.union([
+    z.literal("pwned-passwords"),
+    z.object({ url: z.string() }),
+    z.object({
+      range: z.custom<(prefix: string) => Promise<readonly string[]>>(
+        value => typeof value === "function",
+        { message: "range must be a function" }
+      ),
+    }),
+  ]),
+  timeoutMs: z.number().optional(),
+});
+
 export const SecurityConfigSchema = z.object({
   headers: SecurityHeadersConfigSchema.optional(),
   cors: CorsConfigSchema.optional(),
@@ -208,6 +228,8 @@ export const SecurityConfigSchema = z.object({
    * @default false
    */
   trustProxy: z.boolean().optional(),
+  /** Where a plugin's breached-password check asks; see the schema above. */
+  breachedPasswords: BreachedPasswordsConfigSchema.optional(),
 });
 
 export type SecurityConfigInput = z.infer<typeof SecurityConfigSchema>;

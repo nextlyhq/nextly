@@ -449,6 +449,23 @@ export async function requirePermission(
     return authResult;
   }
 
+  return authorizeCaller(authResult, action, resource);
+}
+
+/**
+ * `requirePermission`'s decision, for a caller a gate has already
+ * authenticated.
+ *
+ * Authenticating a request again is not free: each authentication of an API
+ * key spends a slot of the key's rate limit. A gate that must authenticate
+ * before it can know which permission to ask for judges the caller it already
+ * holds here, so the request is counted once.
+ */
+export async function authorizeCaller(
+  authResult: AuthContext,
+  action: string,
+  resource: string
+): Promise<AuthContext | ErrorResponse> {
   // API key auth: use pre-resolved permissions instead of DB lookup.
   // The permissions were already resolved by resolveApiKeyPermissions()
   // based on the key's token type (read-only → only read-* slugs, etc.).
@@ -508,6 +525,17 @@ export async function requireAnyPermission(
     return authResult;
   }
 
+  return authorizeCallerForAny(authResult, permissions);
+}
+
+/**
+ * `requireAnyPermission`'s decision, for a caller a gate has already
+ * authenticated, so the request is counted once (see `authorizeCaller`).
+ */
+export async function authorizeCallerForAny(
+  authResult: AuthContext,
+  permissions: Array<{ action: string; resource: string }>
+): Promise<AuthContext | ErrorResponse> {
   // API key auth: check against pre-resolved permissions
   if (authResult.authMethod === "api-key") {
     const hasAny = permissions.some(({ action, resource }) =>

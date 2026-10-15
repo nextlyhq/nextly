@@ -232,9 +232,12 @@ send `Origin` (or `Referer`) on cross-site writes, so a forged request is
 refused, while a same-origin write passes without sending a token. This is
 the origin half of what core's `/auth/*` routes check. Declare
 `csrf: true` to require a double-submit CSRF token as well, the protection
-core's `/auth/*` routes take. Only **cookie**-authenticated callers are
-checked: a browser cannot attach an API key cross-site, so there is no
-cross-site request to forge, and API-key and webhook callers need no opt-out.
+core's `/auth/*` routes take. A request with an API key (`Authorization:
+Bearer`) is not checked unless a session also authenticates it: a browser
+cannot attach the key cross-site, so there is no cross-site request to forge,
+and an API-key caller needs no opt-out. A request that carries both a key and
+a session cookie that authenticates is checked as the session's. On
+a public route, `csrf: true` checks anonymous callers too (below).
 `csrf: false` makes a route refuse every unsafe request the session cookie
 authenticates, from any origin, so it takes writes only from callers with
 another credential. A refusal answers
@@ -253,24 +256,32 @@ when the page writes through `usePluginRouteMutation` (from
 from the `nextly_csrf` cookie or fetched once from `/admin/api/auth/csrf`. A
 page that writes with its own `fetch` either leaves `csrf` unset, or fetches
 `/admin/api/auth/csrf` and sends the token as `x-csrf-token` (or as
-`csrfToken` in a JSON body); with `csrf: true` and no token, every save
-answers 403.
+`csrfToken` in a JSON body); with `csrf: true` and no token, every save a
+signed-in user makes answers 403. Only a caller the session cookie
+authenticates is asked for the token: an anonymous write to a public
+`csrf: true` route is checked for its origin alone (see the table below), so
+a route that must have a token from such callers checks one in its handler
+with `ctx.auth.verifyCsrf`.
 
-A public route skips the default check — it authenticated no one, and a cookie
-on the request says nothing about what admitted it. A public handler that
-resolves the session user through `ctx.auth.currentUser` is checked there
-instead: a POST, PUT, PATCH or DELETE whose origin is not your site or an
-allowed one, or that names no origin, gets no user (`null`). When that
-request carried the session cookie, it is recorded as a `csrf-failed` audit
-event naming your plugin and the route, once per request however often the
-handler asks, just as an authenticated route records the cross-site write it
-refuses. Declare
-`csrf: true` to require the token as well; only callers carrying the session
-cookie are asked for it, so webhook callers and browsers with only unrelated
-cookies stay free. `csrf: false` cannot be combined with `public: true`: boot refuses
-such a route, naming the plugin and the route.
-`ctx.auth.verifyCsrf` remains the tool when the check must stay conditional
-inside the handler instead.
+A public route that leaves `csrf` unset skips the default check: it
+authenticated no one, and it takes cross-origin writes, as a webhook receiver
+must. A public handler that resolves the session user through
+`ctx.auth.currentUser` is checked there instead: a POST, PUT, PATCH or DELETE
+whose origin is not your site or an allowed one, or that names no origin, gets
+no user (`null`). When that request carried the session cookie, it is recorded
+as a `csrf-failed` audit event naming your plugin and the route, once per
+request however often the handler asks, just as an authenticated route records
+the cross-site write it refuses.
+
+Declare `csrf: true` on a public route that browsers write to, and always on
+one that keeps its own cookie for anonymous visitors, such as a guest cart's
+id: a browser sends that cookie on a cross-site form post just as it sends the
+session cookie. Such a route checks every unsafe request, anonymous ones
+included, before the handler runs, except one carrying a `Bearer` token that
+no session authenticates. `csrf: false`
+cannot be combined with `public: true`: boot refuses such a route, naming the
+plugin and the route. `ctx.auth.verifyCsrf` remains the tool when the check
+must stay conditional inside the handler instead.
 
 A route never sees the refresh cookie. A request carrying it, which a browser
 sends only to `/admin/api/auth/*`, reaches auth hooks, strategies and plugin
@@ -278,6 +289,118 @@ routes as a copy without that cookie. The copy reads at most 64 KiB of the
 body, the same cap the `csrf` option reads under, before the request is
 authenticated or rate limited; a larger body is refused with
 `VALIDATION_ERROR` (field code `too_large`).
+
+### Which callers each `csrf` setting checks
+
+For a POST, PUT, PATCH or DELETE; a GET is never checked.
+
+| Caller                                                   | `csrf` unset                                                                          | `csrf: true`     | `csrf: false` |
+| -------------------------------------------------------- | ------------------------------------------------------------------------------------- | ---------------- | ------------- |
+| The session cookie authenticates it                      | origin; on a public route nothing here, and `ctx.auth.currentUser` checks the origin | origin and token | refused       |
+| It sends `Authorization: Bearer …`, and no session does | nothing                                                                               | nothing          | nothing       |
+| Anonymous: no session and no `Bearer` token              | nothing                                                                               | origin, no token | nothing       |
+
+- **Origin** means the request's `Origin`, or without one its `Referer`, names
+  your site or an origin in `NEXTLY_ALLOWED_ORIGINS`. A write that names no
+  origin is refused.
+- **Anonymous** callers reach only a public route, or one whose `principal` is
+  not `required` when nobody of that kind is signed in; any other route
+  answers them 401 first. A session cookie that is expired or malformed
+  authenticates nobody, so its caller is anonymous, and is not asked for a
+  token either.
+- **Only `Bearer`** exempts a caller no session authenticates, matched in
+  any case (`bearer` too), and
+  whether or not the token is a valid key. Any other `Authorization` scheme
+  (Basic, Digest, Negotiate, NTLM, or one of your own) does not: a browser
+  attaches the HTTP authentication schemes by itself, cross-site included,
+  but never a `Bearer` token.
+
+A route for webhooks or other server callers leaves `csrf` unset: those
+callers carry no cookie a forged request could ride on, and many send no
+`Origin`. A server client that calls a `csrf: true` route without a `Bearer`
+token must send `Origin` with your site's origin or an allowed one.
+
+## Limits
+
+> **Experimental.** `contributes.limits` and `ctx.limits` may still change. The rule kinds and what they mean, `enforce` and the three `count` modes, the per-entry verdicts, the atomic reservation, the three results, `release`, `reset`, `check`, `clientKey`'s forms and `store.shared` are meant to become stable.
+
+A plugin that checks something guessable, such as a password or a code, limits the attempts. It declares named rules in `contributes.limits`, and reserves an attempt on keys it chooses with `ctx.limits` **before** the work runs.
+
+```ts
+import { definePlugin, type PluginLimiter } from "@nextlyhq/plugin-sdk";
+
+const DAY = 24 * 60 * 60 * 1000;
+let limits: PluginLimiter | undefined;
+
+export default definePlugin({
+  name: "@acme/accounts",
+  version: "1.0.0",
+  nextly: ">=0.0.2-alpha.66",
+  contributes: {
+    limits: {
+      // 5 code tries per address in any 24 hours, across every code sent to it.
+      codeTries: { type: "window", windows: [{ max: 5, perMs: DAY }] },
+      // 5 sign-ins in a row freely, then a growing wait between tries.
+      signIn: {
+        type: "backoff",
+        free: 5,
+        waitsMs: [1000, 2000, 4000, 60_000],
+        forgetAfterMs: DAY,
+      },
+    },
+  },
+  init(ctx) {
+    limits = ctx.limits;
+  },
+});
+
+export async function signIn(
+  request: Request,
+  address: string,
+  passwordIsRight: () => Promise<boolean>
+): Promise<string> {
+  if (!limits) return "not started";
+  const client = limits.clientKey(request);
+  const reserved = await limits.reserve([
+    { rule: "signIn", key: address, count: "unanimous" },
+    ...(client ? [{ rule: "signIn", key: client, count: "always" as const }] : []),
+  ]);
+  if (reserved.status === "unavailable") return "try again shortly";
+  if (reserved.status === "refused") return `wait ${reserved.retryAfterMs} ms`;
+
+  const right = await passwordIsRight();
+  if (right) await limits.reset({ rule: "signIn", key: address });
+  return right ? "signed in" : "wrong password";
+}
+```
+
+**Rules.** A rule is one of two kinds:
+- `window`: 1 to 4 rolling windows, each `max` attempts (1 to 10,000) per `perMs` (1 second to 30 days). An attempt is admitted only while every window has room. A window's edge is exact to 1/32 of its span, never past its `max`: at worst it refuses a little early.
+- `backoff`: `free` attempts in a row (1 to 1000) admitted with no wait. Then each attempt that brings the count to `free` or more sets a wait: `waitsMs[count - free]`, the last one repeating. Waits never shorten, and each is 1 ms to 24 hours. With no waits listed, there's no room once the count reaches `free`. The count is forgotten after `forgetAfterMs` (1 minute to 30 days) with nothing counted, never while a wait is in force.
+
+The app refuses to start on a rule outside these bounds, naming the plugin and the rule (`limit-rule-invalid`). Changing a rule starts its counts again: what an entry holds is read only under the rule it was written under.
+
+**Reserving.** `reserve` takes 1 to 16 entries, each a rule and a key, and decides and counts them in one atomic step on the [limit store](/docs/configuration/limit-store). So concurrent attempts, on every instance sharing the store, are admitted no more than the rules allow. A key is any non-empty string of at most 512 characters. It's stored only as a keyed hash, namespaced to your plugin and the rule: no other plugin can name, read or spend it. Each entry says:
+- `enforce` (default `true`): whether its lack of room refuses the reservation. `false` lets the attempt through while still reporting the entry's verdict.
+- `count`, when the entry is counted:
+  - `"admitted"` (default): when the reservation is admitted and this entry's rule has room;
+  - `"unanimous"`: only when every entry's rule has room, enforced or not;
+  - `"always"`: whatever happens.
+
+  An entry whose rule has no room is never counted unless `"always"`. Counting it then never moves a wait in force; it only makes the next wait longer.
+
+The answer is one of:
+- `admitted`, with each entry's verdict (`hadRoom`, `counted`) and an id to give the attempt back with;
+- `refused`, with `retryAfterMs`, the rules that refused, and each entry's verdict. A refused attempt never starts.
+- `unavailable`: the store didn't answer. The attempt is **not admitted**. It may still have been counted, if the store failed after committing.
+
+**Reserve outside any transaction.** `reserve`, `release` and `reset` throw when your code calls them inside a transaction it has open. A count must never roll back with the work it guarded: a failed attempt that rolls back would otherwise go uncounted. Another request's open transaction doesn't count; on SQLite your call just waits for it.
+
+**Giving back.** `release(reservation, { rules })` gives back an admitted reservation's count, on every entry or on the rules named, at most once per entry, however often it's called and however many other attempts were counted since. A backoff count given back also lifts the wait it set, while that wait is still the one in force. So a sign-in counted `"always"` and released on success leaves no wait behind. A later attempt counted during that wait keeps it, while its own count stands. One known limitation: a wait set by an attempt that is later released stays while a later count from the same entry still stands, even if that count is also released afterwards. That costs the client one extra wait and never admits past a rule. `reset({ rule, key })` forgets a key's count. `check(targets)` reads without counting; it only advises, and `reserve` decides.
+
+**Clients.** `clientKey(request)` is the IPv4 address, an IPv6 address's /64, or the IPv4 address inside an IPv4-mapped one. It's `null` when the address can't be resolved, as always with `security.trustProxy` unset, so key by what you do know (the address, the account) rather than share one bucket among unknown clients. An empty key is refused.
+
+**Which store.** `ctx.limits.store.shared` says whether every instance counts in one store, and `store.singleInstance` whether the site says it runs one instance. With the default memory store, each instance counts on its own.
 
 ## Secrets
 

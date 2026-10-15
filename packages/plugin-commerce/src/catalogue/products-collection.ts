@@ -84,10 +84,14 @@ function wholeNumber(value: unknown): string | true {
  */
 export function productsCollection(slug = "products"): ContributedCollection {
   const fields: FieldConfig[] = [
-    text({ name: "name", label: "Name", required: true }),
+    // The catalogue contract's bound, so a name or SKU too long to sell is
+    // refused as it is saved rather than whenever the catalogue is read. A
+    // validation rule only: it leaves the column as it is.
+    text({ name: "name", label: "Name", required: true, maxLength: 255 }),
     text({
       name: "sku",
       label: "SKU",
+      maxLength: 255,
       admin: { description: "The store's own code for the product." },
     }),
     {

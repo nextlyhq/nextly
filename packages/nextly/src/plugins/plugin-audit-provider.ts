@@ -78,6 +78,8 @@ async function writeProjected(projected: PluginAuditEvent): Promise<void> {
     kind: projected.kind as never,
     actorUserId: projected.actorUserId ?? undefined,
     targetUserId: projected.targetUserId ?? undefined,
+    actorPrincipal: projected.actorPrincipal ?? undefined,
+    targetPrincipal: projected.targetPrincipal ?? undefined,
     metadata: projected.metadata,
     ...(request ? requestDetails(request) : {}),
   });

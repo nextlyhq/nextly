@@ -100,19 +100,39 @@ function cardViolations(table: Table): string[] {
 // A catalogue reference is compared exactly by the contract, and by MySQL's
 // default collation without regard to case or accents, so an index over the
 // reference itself would join two items into one on MySQL alone. Indexes go
-// over its key instead (`referenceKey`).
+// over its key instead (`referenceKey`). A payment provider's own reference
+// is an outside identifier in the same way.
 //
-// A payment's `reference` is not a catalogue's: commerce mints it as `pay_`
-// and lower-case hex, which every collation compares exactly, so it is
-// indexed as it is.
-const OWN_REFERENCES = new Set(["payments"]);
+// A payment's `reference` is not an outside one: commerce mints it as `pay_`
+// and lower-case hex, which every collation compares exactly, so that one
+// column is indexed as it is.
+const OWN_REFERENCE_TABLES = new Set(["payments"]);
+
+// And each key column is what keeps its identifier unique: a key no unique
+// index covers keeps nothing apart.
+const KEY_COLUMNS = ["reference_key", "provider_reference_key"];
+
+function keyIndexViolations(table: Table): string[] {
+  return KEY_COLUMNS.filter(column =>
+    table.columns.some(c => c.name === column)
+  )
+    .filter(
+      column =>
+        !table.indexes.some(
+          index => index.unique && index.columns.includes(column)
+        )
+    )
+    .map(column => `${table.name} keeps ${column} in no unique index`);
+}
 
 function referenceIndexViolations(table: Table): string[] {
-  if (OWN_REFERENCES.has(table.name)) return [];
+  const outside = OWN_REFERENCE_TABLES.has(table.name)
+    ? ["provider_reference"]
+    : ["reference", "provider_reference"];
   return table.indexes.flatMap(index =>
-    index.columns.includes("reference")
-      ? [`${table.name} indexes reference, not reference_key`]
-      : []
+    outside
+      .filter(column => index.columns.includes(column))
+      .map(column => `${table.name} indexes ${column}, not ${column}_key`)
   );
 }
 
@@ -128,8 +148,53 @@ describe("the reference rule", () => {
     ]);
   });
 
+  it("finds an index over a provider's reference itself, on the payments table too", () => {
+    const broken = defineTable(
+      "payments",
+      {
+        id: col.id(),
+        reference: col.varchar(64),
+        provider: col.varchar(64),
+        providerReference: col.varchar(255),
+      },
+      {
+        indexes: [
+          { columns: ["reference"], unique: true },
+          { columns: ["provider", "providerReference"], unique: true },
+        ],
+      }
+    );
+    // Its own reference is commerce's, and passes; the provider's is not.
+    expect(referenceIndexViolations(broken)).toEqual([
+      "payments indexes provider_reference, not provider_reference_key",
+    ]);
+  });
+
+  it("finds a key column no unique index covers", () => {
+    const broken = defineTable(
+      "payments",
+      {
+        id: col.id(),
+        provider: col.varchar(64),
+        providerReferenceKey: col.char(64, { nullable: true }),
+      },
+      { indexes: [{ columns: ["provider", "providerReferenceKey"] }] }
+    );
+    expect(keyIndexViolations(broken)).toEqual([
+      "payments keeps provider_reference_key in no unique index",
+    ]);
+  });
+
   it("holds for every commerce table", () => {
     expect(COMMERCE_TABLES.flatMap(referenceIndexViolations)).toEqual([]);
+    expect(COMMERCE_TABLES.flatMap(keyIndexViolations)).toEqual([]);
+    // Both kinds of key are there to check.
+    for (const column of KEY_COLUMNS) {
+      expect(
+        COMMERCE_TABLES.some(t => t.columns.some(c => c.name === column)),
+        column
+      ).toBe(true);
+    }
     // The rule has something to check: the cart's lines are indexed by key.
     expect(
       COMMERCE_TABLES.flatMap(t => t.indexes).some(i =>

@@ -11,6 +11,7 @@
  *
  * @module plugins/principals/types
  */
+import type { PluginTransaction } from "../database/plugin-database";
 
 /** @experimental The type an attribute of a kind may declare. */
 export type PrincipalAttributeType = "boolean" | "string" | "number";
@@ -29,9 +30,14 @@ export type PrincipalAttributes = Record<string, PrincipalAttributeValue>;
  * `interface` has no index signature and is never assignable to a record:
  * `interface Account { verified: boolean }` would otherwise be refused as a
  * kind's attributes although every one of them is allowed.
+ *
+ * Every key is REQUIRED here (`-?`), so an optional attribute such as
+ * `plan?: string` does not satisfy it: a declared attribute always has a
+ * value or `null`, and an optional one would let a resolver leave it out
+ * while the person's type still claimed it.
  */
 export type PrincipalAttributesOf<A> = {
-  [K in keyof A]: PrincipalAttributeValue;
+  [K in keyof A]-?: PrincipalAttributeValue;
 };
 
 /**
@@ -173,6 +179,13 @@ export interface NextlyPrincipals {
    * resolver at most once per request, whoever asks.
    */
   fromRequest(request: Request, kind: string): Promise<Principal | null>;
+  /**
+   * The person of `kind` with this id, through the kind's `lookup`, for
+   * running as them without a request; `null` when the plugin returns
+   * nobody for the id. Throws when the kind has no lookup. The answer is
+   * checked as a resolver's is.
+   */
+  byId(kind: string, id: string): Promise<Principal | null>;
 }
 
 /**
@@ -186,4 +199,39 @@ export interface PluginPrincipalsApi {
    * the same kind.
    */
   fromRequest(request: Request, name: string): Promise<Principal | null>;
+  /**
+   * The person of the plugin's kind `name` with this id, through the kind's
+   * `lookup`, or `null`. Throws when the kind has no lookup.
+   */
+  byId(name: string, id: string): Promise<Principal | null>;
+  /**
+   * Report a person of one of the plugin's own kinds deleted, by full kind
+   * and id (a `Principal` will do).
+   *
+   * In one transaction, core erases the address and client on every audit
+   * row the person acted on and the plugin metadata on every plugin row
+   * naming them, keeps the rows, and names the person on them by a keyed
+   * digest of kind and id in place of the id. It keeps that digest and when,
+   * never the id, so every audit row written for the person afterwards is
+   * written already erased. Rows naming anyone else, a staff user with the
+   * same id among them, stay as they were. Reporting a person twice is
+   * harmless.
+   *
+   * Pass `tx`, the handle your `ctx.db.transaction` callback received, to
+   * commit the report with your own deletion. Without one, the report runs in
+   * a transaction of its own, and is refused when made inside an open
+   * transaction, rather than joining it or racing it.
+   */
+  reportDeleted(
+    person: PrincipalRef,
+    options?: PrincipalReportOptions
+  ): Promise<void>;
+}
+
+/**
+ * @experimental Options for `ctx.principals.reportDeleted`.
+ */
+export interface PrincipalReportOptions {
+  /** The handle a plugin's `ctx.db.transaction` callback received. */
+  tx?: PluginTransaction;
 }

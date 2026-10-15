@@ -44,8 +44,17 @@
  * @module plugins/entity-transforms
  * @since 1.0.0
  */
+import { ALL_FIELD_TYPES } from "../collections/fields/types";
 import { NextlyError } from "../errors/nextly-error";
 import { copyPlainValues } from "../shared/lib/plain-copy";
+
+import {
+  assertMayTransform,
+  openLedger,
+  settleTransform,
+  type OwnershipLedger,
+  type TransformingPlugin,
+} from "./entity-transform-ownership";
 
 export type EntityKind = "collection" | "single" | "component";
 
@@ -64,6 +73,14 @@ export interface EntityTransform {
 export interface TransformContribution {
   /** `plugin:<name>`, for attribution when one throws. */
   source: string;
+  /** The plugin's name, which what its transforms add is recorded under. */
+  name: string;
+  /**
+   * The plugins it declares in `dependsOn`: the owners whose entities it may
+   * transform, and the contributors whose rules it may replace. See
+   * `entity-transform-ownership`.
+   */
+  dependsOn?: readonly string[];
   transforms: readonly EntityTransform[];
   /**
    * The contributing plugin is disabled: its transforms keep their storage
@@ -76,6 +93,10 @@ export interface TransformableEntity {
   slug: string;
   kind: EntityKind;
   definition: Record<string, unknown>;
+  /** The plugin that declared the entity; absent for the app's own. */
+  owner?: string;
+  /** Top-level field name → the plugin that added it with `extend`. */
+  extendedBy?: ReadonlyMap<string, string>;
 }
 
 function targets(transform: EntityTransform): string[] {
@@ -101,11 +122,16 @@ export function runEntityTransforms(
       { ...entity },
     ])
   );
+  // Who put each part of each entity there, carried from one transform to
+  // the next so a later transform is judged by what earlier ones added.
+  const ledgers = new Map(
+    [...bySlug].map(([key, entity]) => [key, openLedger(entity)])
+  );
 
   for (const contribution of contributions) {
     for (const [position, transform] of contribution.transforms.entries()) {
       for (const slug of targets(transform)) {
-        applyOne(bySlug, contribution, transform, slug, position);
+        applyOne(bySlug, ledgers, contribution, transform, slug, position);
       }
     }
   }
@@ -252,13 +278,27 @@ function assertSlugKept(
   });
 }
 
+/** The contributing plugin, as the ownership ledger judges it. */
+function transformingPlugin(
+  contribution: TransformContribution,
+  position: number
+): TransformingPlugin {
+  return {
+    name: contribution.name,
+    dependsOn: new Set(contribution.dependsOn ?? []),
+    path: `${contribution.source}.transform[${String(position)}]`,
+  };
+}
+
 function applyOne(
   bySlug: Map<string, TransformableEntity>,
+  ledgers: Map<string, OwnershipLedger>,
   contribution: TransformContribution,
   transform: EntityTransform,
   slug: string,
   position: number
 ): void {
+  const plugin = transformingPlugin(contribution, position);
   for (const [key, entity] of matchesFor(
     bySlug,
     contribution,
@@ -266,6 +306,10 @@ function applyOne(
     slug,
     position
   )) {
+    const ledger = ledgers.get(key) ?? openLedger(entity);
+    // Before the transform runs: a plugin without the dependency has no
+    // business running code over the entity at all.
+    assertMayTransform(entity.slug, ledger, plugin);
     const transformed = transformOne(
       entity,
       contribution,
@@ -273,13 +317,17 @@ function applyOne(
       slug,
       position
     );
-    bySlug.set(key, {
-      ...entity,
-      definition:
-        contribution.disabled === true
-          ? withBehaviourOf(entity.definition, transformed)
-          : transformed,
-    });
+    const definition =
+      contribution.disabled === true
+        ? withBehaviourOf(entity.definition, transformed)
+        : transformed;
+    // Judged on what will be registered, so a disabled plugin's result is
+    // judged after its behaviour has been put back.
+    ledgers.set(
+      key,
+      settleTransform(entity, ledger, entity.definition, definition, plugin)
+    );
+    bySlug.set(key, { ...entity, definition });
   }
 }
 
@@ -327,7 +375,12 @@ function withBehaviourOf(
   before: Record<string, unknown>,
   after: Record<string, unknown>
 ): Record<string, unknown> {
-  const merged = mergeBehaviour(before, after, "node");
+  const merged = mergeBehaviour(
+    before,
+    after,
+    "schema",
+    namedSchemaNodes(before)
+  );
   return isRecord(merged) ? merged : before;
 }
 
@@ -342,26 +395,109 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * Where a value sits in the entity's schema: `node` is the entity or one of
- * its fields, where `access` is an access rule; `nodes` is a `fields` or
- * `blocks` list of them; `data` is anything else, where a key named
- * `access` is ordinary data, such as a JSON default's.
+ * Where a value sits in the entity: `schema` is the definition itself, where
+ * a key named `access` is an access rule; `data` is a value the definition
+ * carries for its author, where `access` is ordinary data, such as a JSON
+ * default's.
  */
-type SchemaPosition = "node" | "nodes" | "data";
+type SchemaPosition = "schema" | "data";
 
-/** The keys under a schema node that hold more schema nodes. */
-const NODE_LIST_KEYS: ReadonlySet<string> = new Set(["fields", "blocks"]);
+/**
+ * The keys whose value is free-form data rather than schema, where a key
+ * named `access` is the author's: a field's default, the settings a plugin or
+ * the app hangs on an entity or field, a JSON field's schema, a relationship's
+ * or upload's static filter query and its sort per collection, and a field's
+ * inline styles. Everything
+ * else is schema, so a nesting key added later keeps its access rules
+ * restored without being listed here: a free-form key missing from this list
+ * loses an `access` entry, where a schema key missing from an allowlist would
+ * let a transform set an access rule.
+ */
+const DATA_KEYS: ReadonlySet<string> = new Set([
+  "defaultValue",
+  "custom",
+  "pluginOptions",
+  "jsonSchema",
+  "filterOptions",
+  "sortOptions",
+  "style",
+]);
+
+/** Marks a field name more than one field of the entity carries. */
+const AMBIGUOUS = Symbol("ambiguous");
+
+/**
+ * Every named field of an entity's schema, wherever it sits, by name: how a
+ * field the transform moved to another group or tab finds what it was. A
+ * name two fields share finds neither.
+ */
+type NamedNodes = ReadonlyMap<
+  string,
+  Record<string, unknown> | typeof AMBIGUOUS
+>;
+
+function namedSchemaNodes(value: unknown): NamedNodes {
+  const into = new Map<string, Record<string, unknown> | typeof AMBIGUOUS>();
+  collectNamed(value, into);
+  return into;
+}
+
+/** Adds the named fields under `value` to `into`. */
+function collectNamed(
+  value: unknown,
+  into: Map<string, Record<string, unknown> | typeof AMBIGUOUS>
+): void {
+  for (const child of schemaChildren(value)) {
+    if (
+      Array.isArray(value) &&
+      isRecord(child) &&
+      typeof child.name === "string"
+    ) {
+      into.set(child.name, into.has(child.name) ? AMBIGUOUS : child);
+    }
+    collectNamed(child, into);
+  }
+}
+
+/**
+ * The values directly under `value` that are schema: an array's elements, and
+ * a record's values outside the data keys. A plugin field's are its data.
+ */
+function schemaChildren(value: unknown): readonly unknown[] {
+  if (Array.isArray(value)) return value;
+  if (!isRecord(value) || isPluginField(value)) return [];
+  return Object.entries(value)
+    .filter(([key]) => !DATA_KEYS.has(key))
+    .map(([, child]) => child);
+}
+
+/** The field types core defines; any other a field names is a plugin's. */
+const CORE_FIELD_TYPES: ReadonlySet<string> = new Set(ALL_FIELD_TYPES);
+
+/**
+ * A field whose type a plugin contributes. It may carry options of its own
+ * directly on the field (`PluginFieldInput`), whose content is the plugin's
+ * data, so only the field's own `access` is an access rule there.
+ */
+function isPluginField(value: Record<string, unknown>): boolean {
+  return (
+    typeof value.name === "string" &&
+    typeof value.type === "string" &&
+    !CORE_FIELD_TYPES.has(value.type)
+  );
+}
 
 function mergeBehaviour(
   before: unknown,
   after: unknown,
-  at: SchemaPosition
+  at: SchemaPosition,
+  named: NamedNodes
 ): unknown {
   const decided = behaviourVerdict(before, after);
   if (decided !== UNDECIDED) return decided;
-  if (Array.isArray(after)) return mergeArray(before, after, at);
+  if (Array.isArray(after)) return mergeArray(before, after, at, named);
   if (!isContainer(after)) return after;
-  return mergeRecord(isRecord(before) ? before : {}, after, at);
+  return mergeRecord(isRecord(before) ? before : {}, after, at, named);
 }
 
 /** `behaviourVerdict` found no behaviour to decide on: the values merge. */
@@ -406,38 +542,59 @@ function replacesBehaviourWhole(before: unknown, after: unknown): boolean {
 function mergeArray(
   before: unknown,
   after: readonly unknown[],
-  at: SchemaPosition
+  at: SchemaPosition,
+  named: NamedNodes
 ): unknown[] {
   const previous = Array.isArray(before) ? before : [];
-  const element: SchemaPosition = at === "nodes" ? "node" : "data";
   return after
     .map((item, index) =>
-      mergeBehaviour(counterpart(previous, item, index), item, element)
+      mergeBehaviour(
+        counterpart(previous, item, index, at, named),
+        item,
+        at,
+        named
+      )
     )
     .filter(item => item !== DROP);
 }
 
 /**
- * `after`'s keys merged with `previous`'s. On a schema node, `access` is
- * taken from `previous`; anywhere else it merges like any other key.
+ * `after`'s keys merged with `previous`'s. In the schema, `access` is taken
+ * from `previous`; in data it merges like any other key.
  */
 function mergeRecord(
   previous: Record<string, unknown>,
   after: Record<string, unknown>,
-  at: SchemaPosition
+  at: SchemaPosition,
+  named: NamedNodes
 ): Record<string, unknown> {
-  const rules = at === "node";
+  const rules = at === "schema";
   const out: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(after)) {
     if (rules && key === "access") continue;
-    const child: SchemaPosition =
-      rules && NODE_LIST_KEYS.has(key) ? "nodes" : "data";
-    const merged = mergeBehaviour(previous[key], value, child);
+    const child = positionUnder(after, key, at);
+    const merged = mergeBehaviour(previous[key], value, child, named);
     if (merged !== DROP) out[key] = merged;
   }
   if (rules && previous.access !== undefined) out.access = previous.access;
   restoreRemovedBehaviour(previous, out);
   return out;
+}
+
+/**
+ * Where the value under `key` of `record`, itself at `at`, sits: schema below
+ * schema, except under a data key and anywhere under a plugin field, whose
+ * options are its own data.
+ */
+function positionUnder(
+  record: Record<string, unknown>,
+  key: string,
+  at: SchemaPosition
+): SchemaPosition {
+  if (at !== "schema" || DATA_KEYS.has(key) || isPluginField(record)) {
+    return "data";
+  }
+  return "schema";
 }
 
 /**
@@ -456,17 +613,63 @@ function restoreRemovedBehaviour(
   }
 }
 
-/** The element of `previous` that `item` replaced, by name or by position. */
+/**
+ * The element of `previous` that `item` replaced, or undefined for one it
+ * added. By `name`, among its siblings and then, in the schema, anywhere in
+ * the entity (`namedSchemaNodes`); in the schema, an element without one by
+ * `slug`, and
+ * then by the field names it holds: a tab or row has no name, and paired by
+ * position, a tab inserted before it would make its fields read as new and
+ * their access rules as added, and so stripped. By position otherwise.
+ */
 function counterpart(
   previous: readonly unknown[],
   item: unknown,
-  index: number
+  index: number,
+  at: SchemaPosition,
+  named: NamedNodes
 ): unknown {
-  const name = isRecord(item) ? item.name : undefined;
-  if (typeof name === "string") {
+  if (!isRecord(item)) return previous[index];
+  if (typeof item.name === "string") {
+    const sibling = previous.find(
+      candidate => isRecord(candidate) && candidate.name === item.name
+    );
+    if (sibling !== undefined || at !== "schema") return sibling;
+    // Moved from another group or tab: found by name in the whole entity.
+    const moved = named.get(item.name);
+    return moved === AMBIGUOUS ? undefined : moved;
+  }
+  if (at !== "schema") return previous[index];
+  if (typeof item.slug === "string") {
     return previous.find(
-      candidate => isRecord(candidate) && candidate.name === name
+      candidate => isRecord(candidate) && candidate.slug === item.slug
     );
   }
-  return previous[index];
+  const held = fieldNamesIn(item);
+  if (held.size === 0) return previous[index];
+  return sharingMostNames(previous, held);
+}
+
+/** The names of the fields nested in `value` (`namedSchemaNodes`). */
+function fieldNamesIn(value: unknown): ReadonlySet<string> {
+  return new Set(namedSchemaNodes(value).keys());
+}
+
+/** The element of `previous` holding the most of `names`, if any holds one. */
+function sharingMostNames(
+  previous: readonly unknown[],
+  names: ReadonlySet<string>
+): unknown {
+  let best: unknown;
+  let most = 0;
+  for (const candidate of previous) {
+    const shared = [...fieldNamesIn(candidate)].filter(name =>
+      names.has(name)
+    ).length;
+    if (shared > most) {
+      best = candidate;
+      most = shared;
+    }
+  }
+  return best;
 }

@@ -173,10 +173,14 @@ export type {
  * Kinds of signed-in person a plugin defines: a shop's customers, a site's
  * members, anyone who signs in without being staff.
  * @experimental `PrincipalKindDefinition` and `PrincipalKindContribution`
- *   (`contributes.principals`) with their attribute and record types; `PluginRoutePrincipal` (a route's
- *   `principal`); `Principal`, the person core hands to `ctx.principal`;
+ *   (`contributes.principals`) with their attribute and record types;
+ *   `PluginRoutePrincipal` (a route's `principal`); `Principal`, the person
+ *   core hands to `ctx.principal`;
  *   `PrincipalRef`, a person named by kind and id; `PluginPrincipalsApi`
- *   (`ctx.principals`) and `NextlyPrincipals` (`nextly.principals`). Meant to
+ *   (`ctx.principals`) and `NextlyPrincipals` (`nextly.principals`), with
+ *   their `byId`; `reportDeleted` and its `PrincipalReportOptions`, and
+ *   `actorPrincipal` and `targetPrincipal` on `ctx.audit.write`; `RunAsPrincipal`, the `principal` option a collection or
+ *   Single operation and a `ctx.services` call run as. Meant to
  *   become stable once the feature is complete (see STABILITY.md).
  */
 export type {
@@ -195,6 +199,52 @@ export type {
   PrincipalKindDefinition,
   PrincipalRecord,
   PrincipalRef,
+  PrincipalReportOptions,
+  RunAsPrincipal,
+} from "nextly";
+
+/**
+ * Limits a plugin counts on keys it chooses, before the work they guard runs.
+ * @experimental `LimitRule` (`contributes.limits`), `PluginLimiter`
+ *   (`ctx.limits`) and its entry, reservation, outcome and check types. The
+ *   rule kinds and their meaning, `enforce` and the three `count` modes, the
+ *   per-entry verdicts, the atomic reservation, the three results with
+ *   `unavailable` distinct, `release`, `reset`, `check`, `clientKey`'s forms
+ *   and `store.shared` are meant to become stable (see STABILITY.md).
+ */
+export type {
+  AdmittedReservation,
+  EntryVerdict,
+  LimitCheck,
+  LimitEntry,
+  LimitOutcome,
+  LimitReservation,
+  LimitRule,
+  LimitTarget,
+  PluginLimiter,
+} from "nextly";
+
+/**
+ * Core's security helpers, lent to a plugin for the people it signs in itself.
+ * @experimental `PluginSecurityApi` (`ctx.security`); `PasswordHelper`
+ *   (`ctx.security.passwords`) with `PasswordRules`, `PasswordCheck` and
+ *   `PasswordTooLongError`; `BreachedPasswordsConfig`, the site's
+ *   `security.breachedPasswords`; `OpaqueSecrets` (`ctx.security.opaque`); and
+ *   `OneTimeSecrets` (`ctx.security.secrets`) with `SecretData` and
+ *   `TxOption`. Held experimental until a first-party plugin signs people in
+ *   with them (see STABILITY.md).
+ */
+export { PasswordTooLongError } from "nextly";
+export type {
+  PluginSecurityApi,
+  PasswordHelper,
+  PasswordRules,
+  PasswordCheck,
+  BreachedPasswordsConfig,
+  OpaqueSecrets,
+  OneTimeSecrets,
+  SecretData,
+  TxOption,
 } from "nextly";
 
 /**

@@ -126,6 +126,20 @@ export interface RateLimitStore {
 }
 
 /**
+ * Whether `value` keeps the {@link RateLimitStore} contract, as far as its
+ * shape shows: an app's store of this contract keeps serving core's own
+ * limits when `rateLimit.store` also accepts the newer limit store contract.
+ */
+export function isRateLimitStore(value: unknown): value is RateLimitStore {
+  if (typeof value !== "object" || value === null) return false;
+  const candidate = value as Record<string, unknown>;
+  return (
+    typeof candidate.increment === "function" &&
+    typeof candidate.reset === "function"
+  );
+}
+
+/**
  * Record returned by store increment operation.
  */
 export interface RateLimitRecord {

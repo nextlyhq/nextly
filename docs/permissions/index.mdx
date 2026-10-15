@@ -50,6 +50,12 @@ context and decides.
 A collection whose `access` says nothing about an operation falls back to grants: a
 signed-in user needs `read-posts` to read `posts`.
 
+A plugin-defined signed-in person, such as a shop's customer, is different: they
+hold no grants, so a rule is the only way in. A rule sees them as `principal`
+beside a `null` `user`; a collection with no rule for the operation refuses them,
+and a rule set to `true` admits them as it admits any visitor. See
+[Signed-in people of your own kind](/docs/plugins/signed-in-people#let-a-person-read-and-write-your-collections).
+
 ## Related rows
 
 A populated relationship is read with the same check as reading the related collection

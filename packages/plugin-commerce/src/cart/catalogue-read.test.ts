@@ -83,6 +83,9 @@ describe("reading items from a catalogue source", () => {
       [{ ...drill, reference: "never-asked" }],
       [drill, drill],
       [{ ...drill, price: { kind: "listed", unitPrice: money(1, "EUR") } }],
+      // Longer than every dialect stores an order's snapshot of whole.
+      [{ ...drill, name: "n".repeat(256) }],
+      [{ ...drill, sku: "s".repeat(256) }],
     ]) {
       expect(
         await codeOf(() => findItems(answering(answer), "USD", ["drill"]))
