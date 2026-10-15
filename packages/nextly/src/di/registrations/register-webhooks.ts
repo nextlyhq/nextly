@@ -141,30 +141,28 @@ export function registerWebhookServices(ctx: RegistrationContext): void {
       // hand is what left the delivery log with no full-budget pass: it was
       // swept only by writes, so an install that went quiet never swept again.
       (() => {
-        const policies = retentionPoliciesFrom(ctx.config);
-        // Built whenever ANY policy has something to prune. Keying it on the
-        // webhook policy alone made the audit trails' only full-budget trigger
-        // disappear the moment an operator switched webhook retention off,
-        // which is an unrelated decision: every remaining audit trigger is a
-        // request path capped at a batch, so the configured budget became
-        // unreachable and a busy trail could grow indefinitely. The delivery
-        // log is in the same position, and worse — writes are its ONLY other
-        // trigger.
-        if (
-          !policies.webhookPolicy &&
-          !policies.auditPolicy &&
-          !policies.emailPolicy
-        ) {
+        // Every policy but the webhook's is carried under its own name, by
+        // spreading rather than naming each: a domain that gains retention in
+        // `retentionPoliciesFrom` reaches the drain without an edit here, and
+        // the drain's input type refuses a domain it does not handle (pinned
+        // in drain-sweeps-one-time-secrets.test.ts).
+        const { webhookPolicy, ...others } = retentionPoliciesFrom(ctx.config);
+        // Built whenever ANY policy has something to prune. Keying it on one
+        // policy made the others' only full-budget trigger disappear the
+        // moment an operator switched that one off: the audit trails, the
+        // delivery log and plugins' one-purpose secrets each have a write path
+        // that sweeps only while writes continue, and an install that goes
+        // quiet has the drain alone.
+        if (!webhookPolicy && !Object.values(others).some(Boolean)) {
           return undefined;
         }
         return {
-          policy: policies.webhookPolicy ?? undefined,
+          policy: webhookPolicy ?? undefined,
           // Carried whenever a policy exists rather than only when it prunes
           // today: whether it prunes is decided when the pass runs, so a hot
           // reload that widens an entirely-`false` policy reaches this
           // dependency instead of needing a restart.
-          auditPolicy: policies.auditPolicy,
-          emailPolicy: policies.emailPolicy,
+          ...others,
           prune: { adapter, logger },
           gate: new MetaRetentionGate(adapter),
         };

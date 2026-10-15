@@ -1,6 +1,6 @@
 ---
 title: Security helpers
-description: Core's helpers for the people a plugin signs in itself — hashing, verifying and checking passwords — with their guarantees and bounds.
+description: Core's helpers for the people a plugin signs in itself — passwords, opaque secrets, and one-purpose links and codes — with their guarantees and bounds.
 ---
 
 # Security helpers
@@ -12,9 +12,9 @@ description: Core's helpers for the people a plugin signs in itself — hashing,
 
 A plugin that signs in people of its own, such as a shop's customers, needs the
 same care with their secrets that core takes with staff. These helpers lend it
-core's implementation, so a plugin never writes its own password hashing. They
-are on the plugin's context as `ctx.security`, and their types come from
-`@nextlyhq/plugin-sdk`.
+core's implementation, so a plugin never writes its own password hashing,
+session tokens or reset links. They are on the plugin's context as
+`ctx.security`, and their types come from `@nextlyhq/plugin-sdk`.
 
 They serve a plugin's own people only. Staff passwords keep core's own
 hashing, and an app's `passwordHasher` option is never used by these helpers:
@@ -164,7 +164,168 @@ does not answer within `timeoutMs` (1 to 60,000 ms; another value is named at bo
 nor pretends to have checked. Decide what your plugin does with an unchecked
 password; asking again on the next sign-in is a reasonable choice.
 
-### Building a context by hand
+## Opaque secrets
+
+`ctx.security.opaque` makes random secrets a plugin stores only as a hash,
+such as its own session tokens or API keys.
+
+```ts
+import type { OpaqueSecrets } from "@nextlyhq/plugin-sdk";
+
+/** Start a session: the browser gets the secret, the database its hash. */
+function newSession(opaque: OpaqueSecrets) {
+  const { secret, hash } = opaque.create();
+  return { cookieValue: secret, storedHash: hash };
+}
+
+/** Find the session a cookie names, by the hash of what it presents. */
+function sessionKey(opaque: OpaqueSecrets, cookieValue: string) {
+  return opaque.hash(cookieValue);
+}
+```
+
+- `create()` returns 32 random bytes as base64url, with their SHA-256 in hex.
+  Pass `{ bytes }` for a longer secret, at most 1024. Any other size, under 32, over 1024 or not a whole number, is refused with a validation error and nothing is
+  issued.
+- `hash(secret)` gives the hash `create` gave, every time. It has no key, so it
+  stays the same across restarts and when the install's secret rotates: your
+  stored hashes never go stale. A key would add nothing to 256 random bits,
+  which cannot be found by trying values.
+- `equal(a, b)` compares two values in time that depends only on their lengths,
+  for when you hold both rather than looking one up by its hash.
+
+## One-purpose secrets
+
+`ctx.security.secrets` mints and spends secrets that do one thing once: a long
+token for a link, such as a password reset, or a short code a person types,
+such as a sign-in code. Each has a `purpose` and a `subject`, such as an
+account id, and only the plugin that minted it can read or spend it.
+
+### A link: password reset
+
+```ts
+import type { PluginContext } from "@nextlyhq/plugin-sdk";
+
+const HOUR = 60 * 60 * 1000;
+
+/** Forgot password: a link that works once, for an hour. */
+async function resetLink(ctx: PluginContext, accountId: string) {
+  const { token } = await ctx.security.secrets.mintToken({
+    purpose: "password-reset",
+    subject: accountId,
+    expiresInMs: HOUR,
+    voidEarlier: true, // an earlier link stops working
+  });
+  return `https://shop.example/reset?token=${encodeURIComponent(token)}`;
+}
+
+/** Reset: spend the link and change the password in one transaction. */
+async function resetPassword(ctx: PluginContext, token: string) {
+  return ctx.db.transaction(async tx => {
+    const spent = await ctx.security.secrets.consumeToken(
+      { purpose: "password-reset", token },
+      { tx }
+    );
+    if (!spent.ok) return { error: spent.reason };
+    // Store the new hash for spent.subject here, through tx. If anything in
+    // this transaction fails, the spend rolls back too and the link still works.
+    return { accountId: spent.subject };
+  });
+}
+```
+
+`peekToken` reads a token without spending it, for a page that shows what a
+link will do before the person confirms. Both answer `invalid`, `expired` or
+`spent` when they refuse, and never say whether the subject exists. Inside
+your own transaction, pass it `{ tx }` too, so it reads what that transaction
+wrote; without one it is refused while a transaction is open, as a write is,
+so a read answers the same on every database.
+
+### A code: sign in by email
+
+```ts
+import type { PluginContext } from "@nextlyhq/plugin-sdk";
+
+/** Send a 6-digit code, good for 10 minutes and 5 wrong tries. */
+async function sendCode(ctx: PluginContext, email: string) {
+  const { code } = await ctx.security.secrets.mintCode({
+    purpose: "sign-in",
+    subject: email,
+    expiresInMs: 10 * 60 * 1000,
+    maxWrongTries: 5,
+  });
+  return code; // mail it; a new code voids the earlier one
+}
+
+/** Check the code first, then do what it allows. */
+async function signInWithCode(ctx: PluginContext, email: string, code: string) {
+  const answer = await ctx.security.secrets.consumeCode({
+    purpose: "sign-in",
+    subject: email,
+    code,
+  });
+  if (!answer.ok) {
+    return answer.reason === "wrong"
+      ? { error: "wrong", triesLeft: answer.triesLeft }
+      : { error: answer.reason }; // "none", "expired" or "spent"
+  }
+  return ctx.db.transaction(async () => {
+    // Create the session here. If this transaction fails, the code stays
+    // spent: ask the person to request a new one.
+    return { signedIn: email };
+  });
+}
+```
+
+Spend a code first, then open the transaction that applies its effect.
+`consumeCode` takes no transaction, and throws when the calling flow has one
+open: a wrong code's charge must stand even if a later step rolls back, or a
+visitor could guess without limit by making each attempt fail. The cost is that
+a code whose effect fails stays spent, and the person asks for a new one.
+
+### What they guarantee
+
+- **Stored only as a keyed hash.** A token or code is kept as an HMAC under a
+  key derived from the install's secret for this use alone, so a copy of the
+  database cannot recover even a 6-digit code by trying every value. When the
+  install's secret rotates, a secret minted under the previous one still works
+  while that secret is configured for reading.
+- **Spent once, on every instance.** Spending is one conditional write in the
+  database, so of two spends at once, on one server or two, exactly one
+  succeeds. A code's wrong tries are counted the same way, so a burst of
+  guesses across instances never gets more than the code's budget.
+- **One live code.** A new code for a purpose and subject voids the earlier
+  one, and if two are minted at once, exactly one is live afterwards. Tokens
+  are voided only when you pass `voidEarlier`, or call `voidFor`; two replacing
+  mints at once also leave exactly one token live.
+- **Writes in a transaction.** Pass `{ tx }`, the handle `ctx.db.transaction`
+  gives its callback, and a mint, spend or void commits or rolls back with your
+  work. Without it the write runs in a transaction of its own, and is refused
+  with an error if the calling flow already has a transaction open, rather than
+  silently joining it.
+- **Swept after expiry.** The retention runner removes a secret a day after it
+  expires, spent or not. Writes offer the sweep and so does the scheduled drain,
+  so an install that only mints secrets, or goes quiet, still sweeps them and the
+  table does not grow without bound. Until then an expired secret still answers
+  `expired`.
+
+### Bounds
+
+| Input | Bound |
+| --- | --- |
+| `purpose` | a lowercase letter, then up to 63 lowercase letters, digits, dots or hyphens |
+| `subject` | 1 to 255 characters of well-formed Unicode, with no NUL character; compared exactly, case and spaces included, on every database |
+| a token's `expiresInMs` | 1 minute to 30 days |
+| a code's `expiresInMs` | 1 to 60 minutes |
+| `digits` | 6 (the default), 7 or 8 |
+| `maxWrongTries` | 1 to 10 |
+| `data` | a plain object (not a `Date` or class instance) holding strings, finite numbers, booleans and nulls, at most 1 KB as JSON, stored in clear |
+
+A value outside its bound is refused with a validation error before anything
+is written. Keep secrets out of `data`: it is stored as given and returned to
+whoever spends the secret.
+
+## Building a context by hand
 
 `ctx.security` is a required member of `PluginContext`. A context from
 `createTestNextly` (`@nextlyhq/plugin-sdk/testing`) has the real helpers; a

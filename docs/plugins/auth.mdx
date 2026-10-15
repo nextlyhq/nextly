@@ -257,6 +257,35 @@ export const twoFactor = definePlugin({
    re-issues a pending token until the cap is hit; the last refusal ends the
    flow and the page says so.
 
+### Single use and the attempt budget
+
+A challenge is answered once, on every instance. The first correct answer marks
+its sign-in answered in the database, in a write only one caller can win,
+committed before the session is issued. Any later answer to the same pending
+token is refused on whichever instance it reaches, before your `resolve` runs,
+and two correct answers sent at once mint one session. This holds whatever
+`rateLimit.store` is set to.
+
+That's the router core builds. An app that assembles `AuthRouterDeps` itself
+for `routeAuthRequest` gets it by passing `spentChallenges:
+databaseSpentChallenges(adapter)` (both from `nextly/auth`). Without it, the mark
+is kept in the rate-limit store, so the challenge is not single-use across
+instances unless that store is shared.
+
+Each pending sign-in has a budget of 5 attempts, spent before an answer is
+examined, right or wrong. It's counted in the selected limit store, or in an
+app's own store of the earlier `RateLimitStore` contract when one is set. With
+`rateLimit.store: "database"` every instance spends from one budget. With the
+default memory store each instance counts its own, so on several instances the
+cap is multiplied by their number, and the server says so at boot unless
+`rateLimit.singleInstance` is set. The budget's keys name an account, so they're
+stored only as keyed hashes. If the store can't be reached, or doesn't answer in
+time, the answer is refused with "Please try again shortly." (`503`) and no
+session is minted. See [the limit store](/docs/configuration/limit-store).
+
+On SQLite, the mark waits for any transaction open on the instance before it
+commits, so a long transaction delays a two-factor answer.
+
 The pending token authorizes **nothing** except resolving the challenge — it can never
 establish a session (the access guard rejects it). One challenge pauses a
 login at a time: the first an `afterAuthenticate` hook returns is the one asked,

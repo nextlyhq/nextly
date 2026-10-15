@@ -66,6 +66,10 @@ function makeCtx(
       }),
     getDrizzle: (rel?: unknown) =>
       rel === undefined ? db : relationalHandle("pool", rel),
+    // Answers "open" so a write the secrets helper starts is refused at its
+    // first question, which shows which adapter it asked.
+    transactionOpenInFlow: vi.fn(() => true),
+    select: vi.fn(async () => []),
   };
   const services: Record<string, () => unknown> = {
     collectionService: () => collections,
@@ -100,8 +104,26 @@ function makeCtx(
     plugin as never,
     grants
   );
-  return { ctx, db, logger, collections, email, built };
+  return { ctx, db, logger, collections, email, built, adapter };
 }
+
+describe("ctx.security.secrets", () => {
+  it("reaches the database through the context's own services, not the global container", async () => {
+    // A context outlives a container being cleared, as on a reload while old
+    // plugins finish tearing down: it must keep the adapter it was built for.
+    const { ctx, adapter } = makeCtx();
+    const refused = await ctx.security.secrets
+      .voidFor({ subject: "account-1" })
+      .then(
+        () => undefined,
+        (error: unknown) => error
+      );
+    expect(adapter.transactionOpenInFlow).toHaveBeenCalled();
+    expect(refused).toMatchObject({
+      logMessage: expect.stringContaining("secrets.voidFor"),
+    });
+  });
+});
 
 describe("createPluginContext (P1 reshape)", () => {
   it("exposes db and logger at the top level", () => {

@@ -60,6 +60,10 @@ import { LIMIT_STORE_TABLE, limitStoreTables } from "./limit-store";
 import { mediaTables } from "./media";
 import { nextlyI18nArchiveTables } from "./nextly-i18n-archive";
 import { nextlyMetaTables } from "./nextly-meta";
+import {
+  ONE_TIME_SECRETS_TABLE,
+  oneTimeSecretsTables,
+} from "./one-time-secrets";
 import { PLUGIN_SETTINGS_TABLE, pluginSettingsTables } from "./plugin-settings";
 import { rbacTables } from "./rbac";
 import { RBAC_EPOCH_TABLE, rbacEpochTables } from "./rbac-epoch";
@@ -69,6 +73,10 @@ import { SCHEMA_OWNERS_TABLE, schemaOwnersTables } from "./schema-owners";
 import { siteSettingsMysql } from "./site-settings/mysql";
 import { siteSettingsPg } from "./site-settings/postgres";
 import { siteSettingsSqlite } from "./site-settings/sqlite";
+import {
+  SPENT_CHALLENGES_TABLE,
+  spentChallengesTables,
+} from "./spent-challenges";
 import { STORAGE_FORMAT } from "./storage-format";
 import { userFieldDefinitionsMysql } from "./user-field-definitions/mysql";
 import { userFieldDefinitionsPg } from "./user-field-definitions/postgres";
@@ -199,11 +207,20 @@ export function getCoreSchema(
     // same reason as its neighbours: a table outside this set is never created
     // on a real installation, however completely its own module declares it.
     ...Object.values(pluginSettingsTables(dialect)),
+    // `nextly_one_time_secrets` — the one-purpose links and codes plugins
+    // mint, each stored only as a keyed hash. Declared here for the same
+    // reason as its neighbours.
+    ...Object.values(oneTimeSecretsTables(dialect)),
     // `nextly_limit_store` — the counts of the database limit store, used only
     // when a site selects it. Declared here for the same reason as its
     // neighbours: a table outside this set is never created on a real
     // installation, however completely its own module declares it.
     ...Object.values(limitStoreTables(dialect)),
+    // `nextly_spent_challenges` — the two-factor challenges already answered,
+    // so an answer is accepted once on every instance. Declared here for the
+    // same reason as its neighbours: a table outside this set is never created
+    // on a real installation, however completely its own module declares it.
+    ...Object.values(spentChallengesTables(dialect)),
     // `nextly_schema_owners` — which owner each table belongs to, and which
     // migration stream carries it. A table with no row here is never dropped
     // by any path, so absence is the safe answer rather than an invitation.
@@ -329,7 +346,9 @@ export const CORE_TABLE_NAMES: readonly string[] = [
   RBAC_EPOCH_TABLE,
   DELETED_PRINCIPALS_TABLE,
   PLUGIN_SETTINGS_TABLE,
+  ONE_TIME_SECRETS_TABLE,
   LIMIT_STORE_TABLE,
+  SPENT_CHALLENGES_TABLE,
   SCHEMA_OWNERS_TABLE,
   "nextly_widget_layout",
   "dynamic_collections",

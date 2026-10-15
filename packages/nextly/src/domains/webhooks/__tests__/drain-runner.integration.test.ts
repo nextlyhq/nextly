@@ -268,6 +268,7 @@ describe("runWebhookDrain (real SQLite)", () => {
       activity: 0,
       auth: 0,
       emailDeliveries: 0,
+      oneTimeSecrets: 0,
     });
   });
 
@@ -289,6 +290,7 @@ describe("runWebhookDrain (real SQLite)", () => {
       activity: 0,
       auth: 0,
       emailDeliveries: 0,
+      oneTimeSecrets: 0,
     });
   });
 

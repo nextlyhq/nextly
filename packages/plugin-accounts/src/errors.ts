@@ -20,10 +20,14 @@ const CODES = {
     500,
     "The accounts plugin cannot start on this version of Nextly.",
   ],
-  /** In production, the limiter's counts are kept by one instance alone and the site has not said it runs only one. */
+  /**
+   * In production, the limiter's counts are kept by one instance alone and
+   * the site has not said it runs only one. Raised only at start, so only
+   * an operator reads it, and it names the fix.
+   */
   ACCOUNTS_LIMITS_NOT_SHARED: [
     500,
-    "The accounts plugin is not configured correctly.",
+    "The accounts plugin needs limit counts every instance shares: set rateLimit.store to a shared store, or rateLimit.singleInstance to true.",
   ],
   /** Work the plugin runs (a job) reached it before the plugin started. */
   ACCOUNTS_NOT_STARTED: [500, "The accounts plugin has not started."],

@@ -39,6 +39,10 @@ import type { WhereClause } from "@nextlyhq/adapter-drizzle/types";
  */
 export const WEBHOOK_RETENTION_GATE_KEY = "webhooks.retention.lastPassAt";
 
+/** Plugins' one-purpose secrets past their expiry; its own key, as each pass has. */
+export const ONE_TIME_SECRETS_RETENTION_GATE_KEY =
+  "secrets.retention.lastPassAt";
+
 /**
  * The audit trails are gated twice, because two triggers with different jobs
  * offer them.
@@ -211,3 +215,12 @@ export async function claimRetentionPass(
     return false;
   }
 }
+
+/**
+ * The scheduled drain's own marker for the one-purpose secrets sweep. A
+ * secret-only install may make no other write that offers the sweep, and one
+ * that goes quiet makes none at all, so the drain is the trigger that keeps
+ * running; its own key stops a write's capped pass from taking its turn.
+ */
+export const ONE_TIME_SECRETS_RETENTION_DRAIN_GATE_KEY =
+  "secrets.retention.lastDrainPassAt";

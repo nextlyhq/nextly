@@ -11,6 +11,11 @@
  * @since 1.0.0
  */
 
+import {
+  ONE_TIME_SECRETS_SWEEP_INTERVAL_MS,
+  pruneOneTimeSecrets,
+  type OneTimeSecretsPruneAdapter,
+} from "../../plugins/security/one-time-secrets-prune";
 import type { Logger } from "../../shared/types";
 import { pruneAuditDataSafely, type AuditPruneAdapter } from "../audit/prune";
 import {
@@ -30,13 +35,18 @@ import type { ResolvedWebhookRetentionConfig } from "../webhooks/retention-confi
 import {
   AUDIT_RETENTION_GATE_KEY,
   EMAIL_RETENTION_GATE_KEY,
+  ONE_TIME_SECRETS_RETENTION_GATE_KEY,
   WEBHOOK_RETENTION_GATE_KEY,
   type RetentionGateStore,
 } from "./gate";
 import { RetentionRunner, type RetentionPass } from "./runner";
+import { warnQuietly } from "./safe-log";
 
 export interface RetentionPassInput {
-  adapter: AuditPruneAdapter & PruneDeps["adapter"] & EmailPruneAdapter;
+  adapter: AuditPruneAdapter &
+    PruneDeps["adapter"] &
+    EmailPruneAdapter &
+    OneTimeSecretsPruneAdapter;
   webhookPolicy?: ResolvedWebhookRetentionConfig | null;
   auditPolicy?: ResolvedAuditRetentionConfig;
   /**
@@ -45,6 +55,8 @@ export interface RetentionPassInput {
    * without the email services has no table to sweep.
    */
   emailPolicy?: ResolvedEmailRetentionConfig;
+  /** Sweep plugins' one-purpose secrets past their expiry. */
+  oneTimeSecrets?: boolean;
   gate: RetentionGateStore;
   now?: () => Date;
   logger?: Logger;
@@ -128,6 +140,35 @@ export function buildRetentionPasses(
     });
   }
 
+  // On for every configuration that reached the call site: a one-purpose
+  // secret past its expiry answers nothing, so there is no policy to set, only
+  // the fixed day of grace the helper documents. A failure is logged and never
+  // reaches the write that offered the pass.
+  if (input.oneTimeSecrets)
+    passes.push({
+      key: ONE_TIME_SECRETS_RETENTION_GATE_KEY,
+      intervalMs: () => ONE_TIME_SECRETS_SWEEP_INTERVAL_MS,
+      run: async maxBatches => {
+        try {
+          await pruneOneTimeSecrets(
+            input.adapter,
+            (input.now ?? (() => new Date()))(),
+            { maxBatches }
+          );
+        } catch (error) {
+          // Quietly, for the reason the runner reports its own failures so:
+          // a logger throwing here would reach the write that offered the pass.
+          warnQuietly(
+            input.logger,
+            "One-purpose secrets retention pass failed",
+            {
+              error: error instanceof Error ? error.message : "unknown error",
+            }
+          );
+        }
+      },
+    });
+
   return passes;
 }
 
@@ -152,13 +193,18 @@ export function retentionPoliciesFrom(
         email?: { retention?: EmailConfig["retention"] };
       }
     | undefined
-): Pick<RetentionPassInput, "webhookPolicy" | "auditPolicy" | "emailPolicy"> {
+): Pick<
+  RetentionPassInput,
+  "webhookPolicy" | "auditPolicy" | "emailPolicy" | "oneTimeSecrets"
+> {
   // `undefined` is "no configuration reached this call site", which is not the
   // same as "a configuration that asked for nothing" and must not gain passes.
   if (!config) return {};
 
   return {
     webhookPolicy: config.webhookRetention,
+    // Every install has the table, and its sweep has nothing to configure.
+    oneTimeSecrets: true,
     auditPolicy: config.auditRetention,
     // Flattened `emailRetention` when initialization produced one, and
     // otherwise resolved from the NESTED block by the same call the sanitizer

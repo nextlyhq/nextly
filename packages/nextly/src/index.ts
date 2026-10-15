@@ -482,12 +482,17 @@ export {
   type PluginCategory,
   type PluginAuditApi,
   type PluginAuditDeclaration,
-  // The password helper a plugin receives as `ctx.security.passwords`.
+  // The helpers a plugin receives on `ctx.security`: passwords, opaque
+  // secrets and one-purpose secrets.
   type PluginSecurityApi,
   PasswordTooLongError,
   type PasswordCheck,
   type PasswordHelper,
   type PasswordRules,
+  type OpaqueSecrets,
+  type OneTimeSecrets,
+  type SecretData,
+  type TxOption,
   type PluginAuthApi,
   type PluginCapabilities,
   type CompleteLoginOptions,

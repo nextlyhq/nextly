@@ -2,6 +2,8 @@
 // the outermost one commits, and drops it when the change it describes is
 // rolled back: a subscriber must never hear about a write that was undone.
 
+import { AsyncLocalStorage } from "node:async_hooks";
+
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { createSqliteAdapter } from "../index";
@@ -54,6 +56,43 @@ describe("SQLite afterCommit()", () => {
       seen.push(id);
     });
   };
+
+  it("runs a held effect in the context it was registered from", async () => {
+    // A write pins who is calling around itself, inside an enclosing
+    // transaction; its effect is held to the outer commit and must still see
+    // that caller, not the code that ran the outer transaction.
+    const caller = new AsyncLocalStorage<string>();
+    let heard: string | undefined;
+    await caller.run("outer", () =>
+      adapter.transaction(async () => {
+        await caller.run("the key that wrote", async () => {
+          await adapter.transaction(async () => {
+            await insert("scoped");
+          });
+          await adapter.afterCommit(() => {
+            heard = caller.getStore();
+          });
+        });
+        // Held, not run: the outer transaction has not committed.
+        expect(heard).toBeUndefined();
+      })
+    );
+    expect(heard).toBe("the key that wrote");
+  });
+
+  it("runs a held effect outside the finished transaction", async () => {
+    // Bound to its registering context, the effect must still not think it is
+    // inside the transaction that held it: a write it makes commits on its own.
+    await adapter.transaction(async () => {
+      await insert("first");
+      await adapter.afterCommit(async () => {
+        await adapter.transaction(async () => {
+          await insert("from-effect");
+        });
+      });
+    });
+    expect(await count()).toBe(2);
+  });
 
   it("runs the effect now outside any transaction", async () => {
     await serviceWrite("alone");

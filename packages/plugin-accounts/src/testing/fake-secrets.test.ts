@@ -65,9 +65,10 @@ describe("the fake one-purpose tokens", () => {
       expiresInMs: MINUTE,
     });
 
+    // A voided token is no token at all, as core answers it.
     expect(
       await secrets.consumeToken({ purpose: "verify", token: first.token })
-    ).toEqual({ ok: false, reason: "spent" });
+    ).toEqual({ ok: false, reason: "invalid" });
     expect(await secrets.voidFor({ subject })).toEqual({ voided: 2 });
     expect(
       await secrets.consumeToken({ purpose: "verify", token: second.token })
@@ -79,7 +80,7 @@ describe("the fake one-purpose tokens", () => {
 });
 
 describe("the fake codes", () => {
-  it("counts wrong tries down to a void code, and spends a right one once", async () => {
+  it("counts wrong tries down to a void code, then answers none, and spends a right one once", async () => {
     const { secrets } = fakeAccountsCore();
     const { code } = await secrets.mintCode({
       purpose: "verify",
@@ -120,8 +121,10 @@ describe("the fake codes", () => {
         code: again.code,
       })
     ).toEqual({
+      // Its tries run out, the code is void and there is none to try, as
+      // core answers it.
       ok: false,
-      reason: "spent",
+      reason: "none",
     });
   });
 

@@ -121,6 +121,8 @@ describe.each(getConfiguredTestDialects())(
       ).toEqual({
         status: "sign-in-needed",
       });
+      // The verification voided the code, so there is no code to try, as
+      // core answers it.
       expect(
         await core.secrets.consumeCode({
           purpose: PURPOSES.verifyCode,
@@ -129,7 +131,7 @@ describe.each(getConfiguredTestDialects())(
         })
       ).toEqual({
         ok: false,
-        reason: "spent",
+        reason: "none",
       });
     });
 

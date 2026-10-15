@@ -129,7 +129,8 @@ export class FakeLimiter implements PluginLimiter {
 
     return {
       status: "admitted",
-      reservation: { id, entries: entryVerdicts },
+      // When it was counted, on the store's clock, as core records it.
+      reservation: { id, at: now, entries: entryVerdicts },
     };
   }
 
@@ -140,6 +141,12 @@ export class FakeLimiter implements PluginLimiter {
     await roundTrip();
     this.#transactions.assertNone("limits.release");
     if (!this.available) return { status: "unavailable" };
+    // Core refuses a reservation `reserve` did not admit, which carries no
+    // time it was counted at.
+    if (!Number.isFinite(reservation.at))
+      throw new FakeCoreMisuse(
+        "limits.release was given a reservation that reserve did not admit"
+      );
     for (const counted of this.#reservations.get(reservation.id) ?? []) {
       const named = options.rules?.includes(counted.target.rule) ?? true;
       if (!counted.released && named) this.#giveBack(counted);
