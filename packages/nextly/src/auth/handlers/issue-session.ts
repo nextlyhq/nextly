@@ -20,6 +20,7 @@ import {
 import { sanitizeAdminPath } from "../redirect/sanitize-admin-path";
 import {
   assertAccountUsable,
+  assertSessionIdentity,
   type AccountGateOptions,
   type AccountState,
 } from "../session/account-state";
@@ -264,6 +265,7 @@ export async function mintSession(
   // strategy reaches a session through here, so this is the one place that can
   // refuse an account no matter which path authenticated it.
   const gated = await gateAccountForSession(deps, user.id, opts?.strategy);
+  assertSessionIdentity(gated);
 
   const [sessionRoles, customFields] = await Promise.all([
     deps.fetchSessionRoles(user.id),

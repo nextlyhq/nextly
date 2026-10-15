@@ -50,14 +50,17 @@ Because a session read now checks the database, `getSession` and
 your own route, call `await getNextly({ config })` before reading the
 session, or initialise Nextly in `instrumentation.ts` with
 `createRegister(config)`. Nextly's own routes start it themselves. A session
-read in a process where Nextly has not been initialised throws a
-configuration error that names this fix. The blog template's seed routes do
-this now.
+read in a process where Nextly has not been initialised fails with an
+internal error, and the server log names this fix. The blog template's seed
+routes do this now.
 
 `buildClaims` takes an optional `sessionEpoch`. Left out, it is zero, so a
 token built that way works until the account's sessions are first ended.
 `AccountState` now carries the account's `email`, `name`, `image` and
-`sessionEpoch`.
+`sessionEpoch`. If you assemble `AuthRouterDeps` yourself, your
+`fetchAccountState` and the session-row `lockAccountState` must return those
+fields from the user row. Until they do, no session is issued, and when
+`fetchAccountState` lacks them the log names the missing fields.
 
 A session's `email`, `name` and `image` claims now come from the account the
 sign-in checked, not from the user an `afterAuthenticate` hook returned.

@@ -22,6 +22,7 @@ import { signAccessTokenWithExpiry } from "../jwt/sign";
 import type { AuthHookRegistry } from "../pipeline/hooks";
 import {
   accountMayHoldSession,
+  assertSessionIdentity,
   type AccountGateOptions,
   type AccountState,
 } from "../session/account-state";
@@ -178,6 +179,8 @@ export async function handleRefresh(
     if (!accountState || !accountMayHoldSession(accountState, gate)) {
       return refuseAccount(deps, tokenRecord.id);
     }
+    // Before anything is signed: the rotated token carries this read's epoch.
+    assertSessionIdentity(accountState);
     const [sessionRoles, customFields] = await Promise.all([
       deps.fetchSessionRoles(user.id),
       deps.fetchCustomFields(user.id),

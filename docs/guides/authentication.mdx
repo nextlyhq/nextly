@@ -31,8 +31,8 @@ initialised in the process first. Nextly's own routes start it themselves. In
 your own route, call `await getNextly({ config })` before `getSession` or
 `requireAuth`, or initialise Nextly at startup in `instrumentation.ts` with
 `createRegister(config)`. A session read in a process where Nextly has not
-been initialised throws a configuration error that says so, rather than
-answering without the check.
+been initialised fails with an internal error, and the server log names this
+fix, rather than answering without the check.
 
 ```typescript
 // app/api/my-route/route.ts
@@ -118,9 +118,12 @@ before the change is refused wherever a session is read: `getSession` and
 `requireAuth`, `GET /auth/session`, a plugin's `ctx.auth.currentUser`, and the
 admin API. That includes a token from the Direct API's `nextly.login()`,
 which is otherwise valid for 30 days. The account's refresh tokens are
-deleted in the same change, so the next refresh also clears the cookies
-rather than leaving them to be retried. Reactivating the account restores
-none of these sessions; its owner signs in again.
+deleted in the same change, so its next refresh is refused with
+`REFRESH_FAILED`. That answer clears no cookies: a missing refresh row is
+answered the same way as one another tab has just rotated, whose fresh
+cookies must survive. A client treats `REFRESH_FAILED` as signed out and
+sends the person to sign in again, as the admin does. Reactivating the
+account restores none of these sessions; its owner signs in again.
 
 The same applies when people change or reset their own password: their other
 sessions end with the old password.

@@ -132,30 +132,40 @@ export function createSessionStandingCache(options: {
 }): SessionStandingCache {
   const ttlMs = options.ttlMs ?? SESSION_STANDING_TTL_MS;
   const maxEntries = options.maxEntries ?? MAX_ENTRIES;
-  const now = options.now ?? Date.now;
+  // A monotonic clock, so setting the wall clock back cannot stretch an
+  // answer's lifetime past the bound.
+  const now = options.now ?? (() => performance.now());
   const held = new Map<string, { standing: SessionStanding; readAt: number }>();
   const reading = new Map<string, Reading>();
 
-  function keep(userId: string, standing: SessionStanding): void {
+  function keep(
+    userId: string,
+    standing: SessionStanding,
+    readAt: number
+  ): void {
     held.delete(userId);
     if (held.size >= maxEntries) {
       // A Map iterates in insertion order, so the first key is the oldest.
       const oldest = held.keys().next();
       if (!oldest.done) held.delete(oldest.value);
     }
-    held.set(userId, { standing, readAt: now() });
+    held.set(userId, { standing, readAt });
   }
 
   function readRow(userId: string): Promise<SessionStanding | null> {
     const running = reading.get(userId);
     if (running) return running.promise;
+    // Aged from when the query was sent, not from when it came back: the row
+    // it answers with may be from before a change made while it was slow, and
+    // the bound is counted from that change.
+    const startedAt = now();
     const entry: Reading = {
       superseded: false,
       promise: options
         .read(userId)
         .then(standing => {
           if (!entry.superseded && standing?.isActive === true) {
-            keep(userId, standing);
+            keep(userId, standing, startedAt);
           }
           return standing;
         })
@@ -170,9 +180,13 @@ export function createSessionStandingCache(options: {
   return {
     standing(userId, tokenEpoch) {
       const entry = held.get(userId);
+      // A negative age is a clock that moved backward, which says nothing
+      // about how old the answer is, so it is read again.
+      const age = entry ? now() - entry.readAt : -1;
       if (
         entry &&
-        now() - entry.readAt < ttlMs &&
+        age >= 0 &&
+        age < ttlMs &&
         entry.standing.sessionEpoch >= tokenEpoch
       ) {
         return Promise.resolve(entry.standing);
@@ -277,8 +291,8 @@ interface StandingSelect {
  * Throws, rather than answering, when no database can be reached, because a
  * question nobody could answer is not a yes. That is a process where Nextly
  * has not been initialised and no Nextly route has been loaded to start it,
- * such as an app's own route running in a function of its own, so the error
- * names the one line that fixes it, as `getCachedNextly()` does.
+ * such as an app's own route running in a function of its own, so the log
+ * names the one line that fixes it.
  */
 async function standingAdapter(): Promise<DrizzleAdapter> {
   // Ready only once registration has finished, not as soon as the adapter is
@@ -294,17 +308,16 @@ async function standingAdapter(): Promise<DrizzleAdapter> {
   // confirmed.
   await awaitBootMigrations();
   if (!isServicesRegistered() || !adapterIsRegistered()) {
-    throw new NextlyError({
-      code: "CONFIGURATION_ERROR",
-      statusCode: 500,
-      publicMessage: "Server configuration error.",
-      logMessage:
-        "A session was read before Nextly was initialised in this process, " +
-        "so whether its account may still use it cannot be checked. Call " +
-        "`await getNextly({ config })` before `getSession` or `requireAuth`, " +
-        "or initialise Nextly in `instrumentation.ts` with " +
-        "`createRegister(config)`.",
-      logContext: { reason: "session-standing-unreadable" },
+    throw NextlyError.internal({
+      logContext: {
+        reason: "session-read-before-nextly-initialised",
+        remedy:
+          "A session was read before Nextly was initialised in this " +
+          "process, so whether its account may still use it cannot be " +
+          "checked. Call `await getNextly({ config })` before `getSession` " +
+          "or `requireAuth`, or initialise Nextly in `instrumentation.ts` " +
+          "with `createRegister(config)`.",
+      },
     });
   }
   return container.get<DrizzleAdapter>("adapter");

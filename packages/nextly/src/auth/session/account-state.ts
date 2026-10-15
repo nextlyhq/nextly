@@ -155,6 +155,36 @@ export function assertAccountUsable(
 }
 
 /**
+ * Throw unless `state` carries the identity and session epoch a session is
+ * signed with.
+ *
+ * Core's account read always does. A caller that assembles the auth deps
+ * itself may still return the shape from before these fields, and a session
+ * signed from it would carry no email and epoch zero, which every check after
+ * the account's first change refuses. Refused here instead, with the log
+ * naming what the read must return, rather than as an account-state refusal
+ * that would send the operator looking at the account.
+ */
+export function assertSessionIdentity(state: AccountState): void {
+  if (
+    typeof state.email === "string" &&
+    Number.isSafeInteger(state.sessionEpoch) &&
+    state.sessionEpoch >= 0
+  ) {
+    return;
+  }
+  throw NextlyError.internal({
+    logContext: {
+      userId: state.userId,
+      reason: "account-state-without-session-identity",
+      remedy:
+        "fetchAccountState and lockAccountState must return the user row's " +
+        "email, name, image and sessionEpoch with its state",
+    },
+  });
+}
+
+/**
  * The gate as a question rather than an error: whether an account may hold a
  * session, for a caller that refuses in its own way rather than by throwing —
  * a refresh ending the session it was asked to renew, a session check
