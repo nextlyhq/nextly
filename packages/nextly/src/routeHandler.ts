@@ -124,6 +124,7 @@ import {
   logFlattenedErrors,
   withSideEffectWarnings,
 } from "./hooks/side-effect-warnings";
+import { awaitBootSeeding } from "./init/seed-permissions";
 import {
   SKIP_TIMEZONE_FORMAT_HEADER,
   withTimezoneFormatting,
@@ -942,6 +943,13 @@ async function resolveAuthorization(
     // authenticating the request again: each authentication of an API key
     // spends a slot of its rate limit, so a second one counted every settings
     // request twice and refused a key with one request left.
+    //
+    // So the caller is read once the grants it carries are settled. A boot
+    // already in flight may still be seeding the plugin's permission and
+    // granting it as it goes, and a key's grants read before it finished lack
+    // what the boot gave them. This waits only for a boot another request
+    // started, and never starts one itself.
+    await awaitBootSeeding();
     const caller = await requireAuthentication(req);
     if (isErrorResponse(caller)) return caller;
     await ensureServicesInitialized();
