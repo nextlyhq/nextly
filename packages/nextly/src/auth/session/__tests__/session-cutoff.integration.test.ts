@@ -81,9 +81,18 @@ describe.each(getConfiguredTestDialects())(
           await current.adapter.executeQuery(statement);
         }
       }
-      const created = await new ServiceContainer(
-        current.adapter
-      ).users.createLocalUser({
+      const users = new ServiceContainer(current.adapter).users;
+      // The install's first account is made its super-admin, and the last
+      // active super-admin may not be deactivated. So an owner comes first,
+      // and the account these cases change is a second, ordinary one.
+      await users.createLocalUser({
+        email: "owner@example.com",
+        name: "Owner",
+        password: PASSWORD,
+        isActive: true,
+        emailVerification: "admin-vouched",
+      });
+      const created = await users.createLocalUser({
         email: EMAIL,
         name: "Cutoff",
         password: PASSWORD,
