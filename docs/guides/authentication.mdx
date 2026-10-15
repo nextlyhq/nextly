@@ -142,6 +142,7 @@ A few things to note:
 - Setup is a one-shot. Once any user exists, `POST /api/auth/setup` returns `403 SETUP_COMPLETE`.
 - Passwords are validated for strength (length, character classes) before hashing -- see `validatePasswordStrength` for the exact rules.
 - `Super Admin` is a system role that bypasses every permission check. Hand it out sparingly.
+- The last active super-admin can't be removed. Deleting them, deactivating them, or taking the role from them is refused with `409 CONFLICT` ("Make another user super-admin first"), whether the request comes from the admin, the REST API, the Direct API or a plugin. A role that inherits `Super Admin` counts, and a deactivated account doesn't. To remove that person, first make another user super-admin. Two removals sent at once can't remove both of the last two.
 - For programmatic / test seeding, `seedSuperAdmin(adapter, { email, password, name? })` exists, but the recommended path is the setup wizard. It ships **no** default credentials -- `email` and `password` are required, and it throws a `VALIDATION_ERROR` if either is missing, so a known-weak default admin can never be created by accident. Pass throwaway values in tests and real, secret values anywhere else.
 
 ## Roles

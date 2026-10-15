@@ -65,7 +65,6 @@ vi.mock("../services/lib/permissions", async importOriginal => ({
   ...(await importOriginal<typeof import("../services/lib/permissions")>()),
   isSuperAdmin: vi.fn().mockResolvedValue(false),
   containsSuperAdminRole: vi.fn().mockResolvedValue(false),
-  hasSuperAdminExcluding: vi.fn().mockResolvedValue(false),
   resolveRoleSlugs: vi.fn().mockResolvedValue([]),
 }));
 

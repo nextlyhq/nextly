@@ -9,6 +9,7 @@ import type {
 } from "@nextly/types/rbac-operations";
 
 import { getDialectTables } from "../../../database";
+import { NextlyError } from "../../../errors";
 import { BaseService } from "../../../services/base-service";
 import { invalidatePermissionCache } from "../../../services/lib/permissions";
 import {
@@ -18,6 +19,10 @@ import {
 import type { Logger } from "../../../services/shared";
 import { requireFilterValue } from "../../../shared/lib/require-filter-value";
 import { serializeOnSqlite } from "../../../shared/lib/run-adapter-transaction";
+import {
+  refuseRemovingLastSuperAdmin,
+  type LastSuperAdminTx,
+} from "../../users/services/last-super-admin";
 
 import { invalidateApiKeyPermissionsCache } from "./api-key-service";
 
@@ -197,19 +202,28 @@ export class UserRoleService extends BaseService {
         };
       }
 
-      // Through the adapter on SQLite: a plain delete made while another
-      // request's transaction is open runs inside it, and that transaction's
-      // rollback would hand the user back the role just taken away.
-      await serializeOnSqlite(this.adapter, () =>
-        (this.db as RBACDatabaseInstance)
+      // In a transaction of its own, which on SQLite goes through the adapter:
+      // a plain delete made while another request's transaction is open runs
+      // inside it, and that transaction's rollback would hand the user back
+      // the role just taken away. The last active super-admin keeps the role,
+      // asked under the lock every removal of one takes, before the delete.
+      await this.withTransaction(async tx => {
+        await refuseRemovingLastSuperAdmin(
+          tx as LastSuperAdminTx,
+          this.tables,
+          this.dialect,
+          userId,
+          { kind: "unassignRole", roleId }
+        );
+        await (tx as RBACDatabaseInstance)
           .delete(this.tables.userRoles)
           .where(
             and(
               eq(this.tables.userRoles.userId, userId),
               eq(this.tables.userRoles.roleId, roleId)
             )
-          )
-      );
+          );
+      });
 
       await this.invalidateRoleCaches(userId);
 
@@ -219,6 +233,9 @@ export class UserRoleService extends BaseService {
         message: "Role unassigned successfully",
       };
     } catch (error) {
+      // A refusal keeps its own status and message: reported as a failed
+      // result, the dispatcher would answer it as a success.
+      if (NextlyError.is(error)) throw error;
       return {
         success: false,
         statusCode: 500,
