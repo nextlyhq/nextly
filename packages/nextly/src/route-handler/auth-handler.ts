@@ -9,6 +9,7 @@ import { ServiceDispatcher } from "@nextly/services/dispatcher";
 
 import { buildAuthRouterDeps } from "../auth/handlers/deps-bridge";
 import { routeAuthRequest } from "../auth/handlers/router";
+import { setSessionStandingBoot } from "../auth/session/session-standing";
 import type { SanitizedNextlyConfig } from "../collections/config/define-config";
 import {
   isServicesRegistered,
@@ -405,6 +406,13 @@ export async function ensureServicesInitialized(): Promise<void> {
 
 // The in-flight recovery/registration pass concurrent callers await.
 let _initInFlight: Promise<void> | null = null;
+
+// A session read needs the database to say whether the account may still use
+// its token, and some routes authenticate before anything has booted. The
+// check starts the services through this boot, and only for a token whose
+// signature has already verified, so a request without one still boots
+// nothing (`auth/session/session-standing`).
+setSessionStandingBoot(ensureServicesInitialized);
 
 async function initializeServicesOnce(): Promise<void> {
   // Dev-only staleness recovery: services register ONCE per process, but

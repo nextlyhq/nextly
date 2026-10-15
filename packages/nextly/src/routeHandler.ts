@@ -933,8 +933,9 @@ async function resolveAuthorization(
     // The caller is authenticated first. A request this gate refuses for want
     // of a session or key must not make the process boot, run its startup
     // migrations or start plugins, which is why the dispatch path keeps
-    // authorization ahead of boot too. Authentication itself needs no booted
-    // service; only the permission it is then judged by does.
+    // authorization ahead of boot too. Authentication boots only for a session
+    // token whose signature verified, to read whether its account may still
+    // use it; anything else is refused without a booted service.
     const caller = await requireAuthentication(req);
     if (isErrorResponse(caller)) return caller;
     await ensureServicesInitialized();

@@ -96,11 +96,26 @@ only. A refresh is not a password attempt, and neither is an external sign-in â€
 otherwise anyone who knew an address could lock its owner out of their provider
 by typing five wrong passwords.
 
-An account deactivated mid-session loses it at the next token refresh, which
-also deletes the refresh token and clears the cookies rather than leaving them
-to be retried. An access token already issued stays valid until it expires,
-within fifteen minutes; a token from the Direct API's `nextly.login()` is
-valid for 30 days and is not ended early.
+Deactivating an account, or an administrator setting its password, ends the
+sessions it already holds within ten seconds. Every access token issued to it
+before the change is refused wherever a session is read: `getSession` and
+`requireAuth`, `GET /auth/session`, a plugin's `ctx.auth.currentUser`, and the
+admin API. That includes a token from the Direct API's `nextly.login()`,
+which is otherwise valid for 30 days. The account's refresh tokens are
+deleted in the same change, so the next refresh also clears the cookies
+rather than leaving them to be retried. Reactivating the account restores
+none of these sessions; its owner signs in again.
+
+The same applies when people change or reset their own password: their other
+sessions end with the old password.
+
+Each token carries a number the account's row also holds, and the change
+raises it, so the check compares the two rather than times. A server reads the
+row at most once every five seconds per account, so the instance that made
+the change refuses at once, and every other instance within the ten seconds.
+If the database cannot be read, the request fails rather than being answered
+as signed in or signed out. An installation upgrading to this release adds the
+column with `nextly migrate`, as for any new core column.
 
 A deactivation also outlasts the account's own links. While an administrator
 has an account switched off, following its verification link verifies the

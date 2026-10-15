@@ -14,10 +14,8 @@
 process.env.NEXTLY_SECRET = "test-secret-must-be-at-least-32-characters-long!!";
 
 import { eq } from "drizzle-orm";
-import type { NextRequest } from "next/server";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { GET as authStateGET } from "../../../api/auth-state";
 import { getDialectTables } from "../../../database/index";
 import { generateSqliteCoreTableStatements } from "../../../database/sqlite-core-tables";
 import { NextlyError } from "../../../errors/nextly-error";
@@ -143,7 +141,10 @@ describe.each(getConfiguredTestDialects())(
 
     /**
      * Every place a request's session is read, each answering whether the
-     * token was taken as a signed-in person.
+     * token was taken as a signed-in person. `GET /api/auth/state` asks the
+     * same check before its own account read, which reaches the database
+     * through `getCachedNextly()` rather than this harness's instance; its
+     * refusal is covered by `api/__tests__/auth-state-session-ended.test.ts`.
      */
     const PLACES: Record<
       string,
@@ -171,12 +172,6 @@ describe.each(getConfiguredTestDialects())(
         (await createPluginAuthApi(() => deps).currentUser(
           carrying(token, "/admin/api/plugins/p/x")
         )) !== null,
-      "GET /api/auth/state": async token =>
-        (
-          await authStateGET(
-            carrying(token, "/admin/api/auth/state") as unknown as NextRequest
-          )
-        ).status === 200,
     };
 
     /** Which places took the token, by name, so a failure names the place. */
