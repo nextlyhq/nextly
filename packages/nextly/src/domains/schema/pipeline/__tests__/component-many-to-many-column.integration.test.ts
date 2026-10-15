@@ -105,6 +105,11 @@ describe("component with a many-to-many converges (sqlite)", () => {
     });
     expect(applied.success).toBe(true);
 
+    const live = await introspectLiveSnapshot(db, "sqlite", [tableName]);
+    expect(
+      live.tables.find(t => t.name === tableName)?.columns.map(c => c.name)
+    ).toContain("tags");
+
     const preview = await previewDesiredSchema({
       desired,
       db,
@@ -194,6 +199,11 @@ describe.skipIf(!MYSQL_URL)(
         uiTargetKind: "component",
       });
       expect(applied.success).toBe(true);
+
+      const live = await introspectLiveSnapshot(db, "mysql", [tableName]);
+      expect(
+        live.tables.find(t => t.name === tableName)?.columns.map(c => c.name)
+      ).toContain("tags");
 
       const preview = await previewDesiredSchema({
         desired,
