@@ -16,7 +16,7 @@ import { createPasswordStrategy } from "../../pipeline/password-strategy";
 import { verifyPendingToken } from "../../pipeline/pending-token";
 import { handleLogin, type LoginHandlerDeps } from "../login";
 
-import { fakeSessionRows } from "./session-row-fake";
+import { fakeSessionRows, fixtureIdentity } from "./session-row-fake";
 
 const SECRET = "test-secret-that-is-at-least-32-characters-long!!";
 const ORIGIN = "http://localhost:3000";
@@ -57,6 +57,7 @@ async function loginDeps(gateReads: Date, hooks = new AuthHookRegistry()) {
     lockedUntil: null,
     emailVerified: PROVEN,
     passwordUpdatedAt: gateReads,
+    ...fixtureIdentity,
   });
   const rows = fakeSessionRows(state);
   const deps = {

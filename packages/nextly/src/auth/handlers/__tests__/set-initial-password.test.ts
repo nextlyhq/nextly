@@ -7,7 +7,7 @@ import {
 } from "../../pipeline/pending-token";
 import { handleSetInitialPassword } from "../set-initial-password";
 
-import { fakeSessionRows } from "./session-row-fake";
+import { fakeSessionRows, fixtureIdentity } from "./session-row-fake";
 
 const SECRET = "test-secret-that-is-at-least-32-characters-long!!";
 
@@ -16,6 +16,7 @@ function makeDeps(state: { isActive: boolean; emailVerified: Date | null }) {
     userId,
     lockedUntil: null,
     passwordUpdatedAt: null,
+    ...fixtureIdentity,
     ...state,
   }));
   return {
@@ -41,6 +42,7 @@ function makeDeps(state: { isActive: boolean; emailVerified: Date | null }) {
       userId: "u1",
       lockedUntil: null,
       passwordUpdatedAt: null,
+      ...fixtureIdentity,
       ...state,
     }),
     setInitialPassword: vi

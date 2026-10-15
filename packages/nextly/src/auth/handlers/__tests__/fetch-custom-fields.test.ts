@@ -68,6 +68,7 @@ async function sessionClaims(
     name: user.name ?? "",
     image: null,
     roleIds: [],
+    sessionEpoch: 0,
     customFields: await deps.fetchCustomFields(user.id),
   });
   return hooks.runCustomizeClaims(claims, user, {} as never);

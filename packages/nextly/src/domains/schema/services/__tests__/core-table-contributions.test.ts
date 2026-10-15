@@ -156,6 +156,7 @@ describe("the extendable core table factories", () => {
           "password_updated_at",
           "deactivated_at",
           "must_change_password",
+          "session_epoch",
         ])
       );
       expect(
@@ -182,6 +183,7 @@ describe("the static core tables built from the factories", () => {
       isActive: boolean;
       deactivatedAt: Date | null;
       mustChangePassword: boolean | null;
+      sessionEpoch: number | null;
       failedLoginAttempts: number;
       lockedUntil: Date | null;
       createdAt: Date;

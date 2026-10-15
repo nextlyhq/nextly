@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { handleRefresh, type RefreshHandlerDeps } from "../refresh";
 
-import { fakeSessionRows } from "./session-row-fake";
+import { fakeSessionRows, fixtureIdentity } from "./session-row-fake";
 
 const SECRET = "test-secret-that-is-at-least-32-characters-long!!";
 
@@ -27,6 +27,7 @@ function makeDeps(
     async userId => ({
       userId,
       passwordUpdatedAt: null,
+      ...fixtureIdentity,
       ...(opts.lockedState ?? state),
     }),
     () => opts.consumes ?? true
@@ -56,7 +57,9 @@ function makeDeps(
       image: null,
       isActive: state.isActive,
     }),
-    fetchAccountState: vi.fn().mockResolvedValue({ userId: "u1", ...state }),
+    fetchAccountState: vi
+      .fn()
+      .mockResolvedValue({ userId: "u1", ...fixtureIdentity, ...state }),
     fetchSessionRoles: vi
       .fn()
       .mockResolvedValue({ roleIds: ["editor"], validUntil: undefined }),
