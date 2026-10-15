@@ -94,6 +94,49 @@ describe("createSessionStandingCache", () => {
     });
   });
 
+  it("ages an answer from when its read began, not when it returned", async () => {
+    // A read that queried before another instance's change and came back
+    // late would otherwise start a fresh lifetime after the change, and hold
+    // the old answer past the bound.
+    const c = clock();
+    let release: (value: SessionStanding) => void = () => {};
+    const read = vi
+      .fn<(userId: string) => Promise<SessionStanding | null>>()
+      .mockImplementationOnce(
+        () =>
+          new Promise<SessionStanding>(resolve => {
+            release = resolve;
+          })
+      )
+      .mockResolvedValue({ isActive: false, sessionEpoch: 1 });
+    const cache = createSessionStandingCache({ read, now: c.now });
+
+    const slow = cache.standing("u1", 0);
+    c.advance(SESSION_STANDING_TTL_MS);
+    release(ACTIVE);
+    await slow;
+
+    expect(await cache.standing("u1", 0)).toEqual({
+      isActive: false,
+      sessionEpoch: 1,
+    });
+    expect(read).toHaveBeenCalledTimes(2);
+  });
+
+  it("reads again when the clock has moved backward", async () => {
+    // A negative age is not a fresh answer: a clock set back would
+    // otherwise keep the held answer for as long as it took to catch up.
+    const { read } = table({ u1: ACTIVE });
+    const c = clock();
+    const cache = createSessionStandingCache({ read, now: c.now });
+
+    await cache.standing("u1", 0);
+    c.advance(-60_000);
+    await cache.standing("u1", 0);
+
+    expect(read).toHaveBeenCalledTimes(2);
+  });
+
   it("shares one read among callers that arrive while it runs", async () => {
     let release: (value: SessionStanding) => void = () => {};
     const read = vi.fn(
@@ -418,7 +461,9 @@ describe("readSessionStanding before services are registered", () => {
       (error: unknown) => error
     );
 
-    expect(refusal).toMatchObject({ code: "CONFIGURATION_ERROR" });
-    expect((refusal as NextlyError).logMessage).toContain("getNextly");
+    expect(refusal).toMatchObject({ code: "INTERNAL_ERROR" });
+    expect(String((refusal as NextlyError).logContext?.remedy ?? "")).toContain(
+      "getNextly"
+    );
   });
 });

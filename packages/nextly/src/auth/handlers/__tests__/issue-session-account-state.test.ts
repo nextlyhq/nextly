@@ -219,6 +219,31 @@ describe("mintSession's identity claims", () => {
   });
 });
 
+describe("mintSession and an account read without the session identity", () => {
+  it("refuses, rather than signing a session with no identity or epoch", async () => {
+    // A caller assembling the auth deps may still return the older account
+    // shape. Signed anyway, the session would carry no email and epoch zero,
+    // and every check after the account's first change would refuse it.
+    const d = deps({
+      isActive: true,
+      lockedUntil: null,
+      emailVerified: new Date(),
+    });
+    d.fetchAccountState = vi.fn(async (userId: string) => ({
+      userId,
+      isActive: true,
+      lockedUntil: null,
+      emailVerified: new Date(),
+      passwordUpdatedAt: null,
+    })) as never;
+
+    await expect(
+      mintSession(user, d, req, { strategy: "test" })
+    ).rejects.toMatchObject({ code: "INTERNAL_ERROR" });
+    expect(d.rows.insertRefreshToken).not.toHaveBeenCalled();
+  });
+});
+
 describe("mintSession against a revocation during the mint", () => {
   const usable = {
     isActive: true,
