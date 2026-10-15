@@ -11,6 +11,7 @@
 "@nextlyhq/eslint-config": patch
 "@nextlyhq/eslint-plugin": patch
 "@nextlyhq/module-specifiers": patch
+"@nextlyhq/plugin-accounts": patch
 "@nextlyhq/plugin-commerce": patch
 "@nextlyhq/plugin-form-builder": patch
 "@nextlyhq/plugin-mcp": patch
