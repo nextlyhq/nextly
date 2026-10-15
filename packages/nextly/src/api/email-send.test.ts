@@ -41,9 +41,7 @@ beforeEach(() => {
 describe("POST /api/email/send", () => {
   it("emits respondAction with messageId and success spread onto the body", async () => {
     (container.get as ReturnType<typeof vi.fn>).mockReturnValue({
-      send: vi
-        .fn()
-        .mockResolvedValue({ success: true, messageId: "msg-123" }),
+      send: vi.fn().mockResolvedValue({ success: true, messageId: "msg-123" }),
     });
 
     const res = await POST(
@@ -60,7 +58,7 @@ describe("POST /api/email/send", () => {
     expect(res.status).toBe(200);
     const json = (await res.json()) as Record<string, unknown>;
     expect(json).not.toHaveProperty("data");
-    expect(json.message).toMatch(/queued/i);
+    expect(json.message).toBe("Email sent.");
     expect(json.messageId).toBe("msg-123");
     expect(json.success).toBe(true);
   });
@@ -84,7 +82,7 @@ describe("POST /api/email/send", () => {
     expect(res.status).toBe(200);
     const json = (await res.json()) as Record<string, unknown>;
     expect(json).not.toHaveProperty("data");
-    expect(json.message).toMatch(/queued/i);
+    expect(json.message).toBe("Email could not be sent.");
     expect(json.success).toBe(false);
   });
 });

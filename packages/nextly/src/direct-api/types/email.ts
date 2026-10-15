@@ -310,7 +310,11 @@ export interface ReorderUserFieldsArgs extends DirectAPIConfig {
  * Arguments for sending a raw email.
  */
 export interface SendEmailArgs extends DirectAPIConfig {
-  /** Recipient email address(es) */
+  /**
+   * Recipient email address, or several. Every one receives the email: in one
+   * message through a provider that takes several `to` addresses, else in one
+   * message each, with `cc` and `bcc` on the first.
+   */
   to: string | string[];
   /** Email subject line (required) */
   subject: string;
@@ -320,6 +324,8 @@ export interface SendEmailArgs extends DirectAPIConfig {
   text?: string;
   /** Override the "from" address */
   from?: string;
+  /** @experimental The Reply-To address. */
+  replyTo?: string;
   /** CC recipients (carbon copy). */
   cc?: string[];
   /** BCC recipients (blind carbon copy). */
@@ -338,7 +344,11 @@ export interface SendEmailArgs extends DirectAPIConfig {
  * Arguments for sending an email using a database template.
  */
 export interface SendTemplateEmailArgs extends DirectAPIConfig {
-  /** Recipient email address(es) */
+  /**
+   * Recipient email address, or several. Every one receives the email: in one
+   * message through a provider that takes several `to` addresses, else in one
+   * message each, with `cc` and `bcc` on the first.
+   */
   to: string | string[];
   /** Template slug (required) */
   template: string;
@@ -346,6 +356,8 @@ export interface SendTemplateEmailArgs extends DirectAPIConfig {
   variables?: Record<string, string>;
   /** Override the "from" address */
   from?: string;
+  /** @experimental The Reply-To address. */
+  replyTo?: string;
   /** CC recipients (carbon copy). */
   cc?: string[];
   /** BCC recipients (blind carbon copy). */

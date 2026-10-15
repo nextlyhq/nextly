@@ -392,14 +392,37 @@ export interface ResolvedAttachment {
  */
 export interface EmailProviderAdapter {
   /**
+   * @experimental The most `to` addresses this adapter sends in one message.
+   *
+   * Declared by an adapter whose provider addresses one message to several
+   * people. Such an adapter receives every `to` address of the message in
+   * `toList`, and a send with more `to` addresses than this is refused before
+   * any provider is contacted, naming the limit, rather than cut short.
+   *
+   * Absent, or 1, means the adapter takes one `to` per message, as every
+   * adapter written before this field did: a send to several people then
+   * reaches it as one message per `to` address, with `cc` and `bcc` on the
+   * first message only, so each copied address receives the email once.
+   */
+  maxToPerMessage?: number;
+  /**
    * Send an email through this provider.
    *
    * @param options - Email sending options
    * @returns Result with success status and optional message ID
    */
   send(options: {
-    /** Recipient email address. */
+    /** Recipient email address: the only one, or the first of `toList`. */
     to: string;
+    /**
+     * @experimental Every `to` address of this message, in order, `to` first.
+     *
+     * Present only when the message has more than one `to` address, which
+     * happens only for an adapter that declares `maxToPerMessage` above 1. A
+     * one-recipient message reaches every adapter exactly as before, with
+     * `to` alone, so read it as `toList ?? [to]`.
+     */
+    toList?: string[];
     /** Sender email address (e.g., 'App <noreply@example.com>'). */
     from: string;
     /** Email subject line. */

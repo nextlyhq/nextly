@@ -23,6 +23,15 @@ interface SendLayerProviderConfig {
 }
 
 /**
+ * The most `to` addresses SendLayer accepts on one message.
+ *
+ * SendLayer's rate-limit reference caps every account at 10 `To` addresses per
+ * request (and 10 `CC`, 5 `BCC`). Declared so a longer list is refused before
+ * the request with the limit named, instead of failing at SendLayer.
+ */
+export const SENDLAYER_MAX_TO = 10;
+
+/**
  * Parse a "from" address string into name and email parts.
  *
  * Handles formats:
@@ -61,12 +70,17 @@ export function createSendLayerProvider(
   config: SendLayerProviderConfig
 ): EmailProviderAdapter {
   return {
+    maxToPerMessage: SENDLAYER_MAX_TO,
     async send(options) {
       const from = parseFromAddress(options.from);
 
       const body: Record<string, unknown> = {
         From: from,
-        To: [{ name: "", email: options.to }],
+        // Every `to` address when there is more than one, else the one.
+        To: (options.toList ?? [options.to]).map(email => ({
+          name: "",
+          email,
+        })),
         Subject: options.subject,
         ContentType: "HTML",
         HTMLContent: options.html,
