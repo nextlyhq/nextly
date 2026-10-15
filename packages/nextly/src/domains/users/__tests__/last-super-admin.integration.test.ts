@@ -11,9 +11,11 @@
  *
  * The races are what a read-then-check guard cannot hold: two requests that
  * each remove one of the last two super-admins both see the other still
- * there. The first is held open inside its transaction until the database
- * shows the second WAITING on a lock (PostgreSQL and MySQL), so the outcome is
- * decided by the lock rather than by which request happened to run first.
+ * there. The first is held open inside its transaction the moment its guard
+ * has decided, before it writes anything, until the database shows the second
+ * WAITING on a lock (PostgreSQL and MySQL). Without the lock the second's
+ * guard would then decide too, on the same rows, and the two writes would
+ * deadlock or both land; with it the second is refused once the first commits.
  * SQLite serializes write transactions, so there the second simply queues.
  *
  * Run on every configured dialect: the lock and the locking reads are
@@ -28,30 +30,29 @@ process.env.NEXTLY_SECRET =
 import { eq, inArray } from "drizzle-orm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-/** Run once, inside the next `user.deleted` record, then cleared. */
-const insideDeletion = vi.hoisted(() => ({
+/** Run once, when the next guard has decided to let a removal through. */
+const afterGuard = vi.hoisted(() => ({
   run: undefined as (() => Promise<void>) | undefined,
 }));
 
-// The deletion's event is recorded inside its transaction, after every guard
-// and every row lock it takes, so pausing here holds that transaction open
-// with all of them.
-vi.mock("../../webhooks/record-mutation-event", async importOriginal => {
+// The guard runs first in each removal's transaction. Pausing once it has let
+// the removal through holds that transaction open with the guard's locks and
+// none of the write's, which is the moment a second removal's guard would
+// otherwise read the same rows and decide the same way.
+vi.mock("../services/last-super-admin", async importOriginal => {
   const real =
-    await importOriginal<
-      typeof import("../../webhooks/record-mutation-event")
-    >();
+    await importOriginal<typeof import("../services/last-super-admin")>();
   return {
     ...real,
-    recordMutationEventInTx: async (
-      ...args: Parameters<typeof real.recordMutationEventInTx>
+    refuseRemovingLastSuperAdmin: async (
+      ...args: Parameters<typeof real.refuseRemovingLastSuperAdmin>
     ) => {
-      const hook = args[2].type === "user.deleted" ? insideDeletion.run : null;
+      await real.refuseRemovingLastSuperAdmin(...args);
+      const hook = afterGuard.run;
       if (hook) {
-        insideDeletion.run = undefined;
+        afterGuard.run = undefined;
         await hook();
       }
-      return real.recordMutationEventInTx(...args);
     },
   };
 });
@@ -101,7 +102,7 @@ let handle: TestNextly | undefined;
 let dialect: TestDialect = "sqlite";
 
 afterEach(async () => {
-  insideDeletion.run = undefined;
+  afterGuard.run = undefined;
   await handle?.destroy();
   handle = undefined;
 });
@@ -340,10 +341,10 @@ async function untilAnotherWaitsOnALock(timeoutMs = 5000): Promise<boolean> {
 }
 
 /**
- * Runs `first`, a deletion, and holds its transaction open once it has done
- * everything but commit; starts `second` meanwhile, and lets the first commit
- * only once the second waits on a lock (or the wait times out, in which case
- * nothing excluded the two and the outcome below says so).
+ * Runs `first` and holds its transaction open once its guard has let it
+ * through, before it writes; starts `second` meanwhile, and lets the first go
+ * on only once the second waits on a lock (or the wait times out, in which
+ * case nothing excluded the two and the outcome below says so).
  */
 async function race(
   first: () => Promise<unknown>,
@@ -356,7 +357,7 @@ async function race(
   const released = new Promise<void>(resolve => (release = resolve));
   let paused!: () => void;
   const isPaused = new Promise<void>(resolve => (paused = resolve));
-  insideDeletion.run = async () => {
+  afterGuard.run = async () => {
     paused();
     await released;
   };
