@@ -1926,6 +1926,57 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
+   * The document a publish puts live when no working draft is promoted into
+   * it: the stored row, the write locale's translations, and the caller's
+   * fields on top, in the logical shape the validator reads.
+   *
+   * A status-only publish carries just `{ status }`, so validating the patch
+   * alone judges nothing that goes live. What goes live is the row as stored,
+   * and a value stored while the document was a draft was judged as a draft:
+   * a rule that depends on the lifecycle — a field type that composes against
+   * the published library, say — has never judged it as published.
+   *
+   * The status is set to the one being written, because a per-locale status
+   * write carries it in the companion rather than the patch. Component
+   * subtrees and many-to-many values are not read: the caller's own were
+   * judged as its patch, and the stored ones do not sit on this row. Password
+   * values are left out, since a stored one is a hash and the caller's was
+   * judged before it was hashed.
+   */
+  private async storedDocumentGoingLive(args: {
+    row: Record<string, unknown>;
+    patch: Record<string, unknown>;
+    fields: FieldDefinition[];
+    collectionName: string;
+    entryId: string;
+    /** The write locale, whose translations sit beside the row. */
+    locale: string | undefined;
+    /** The connection the write runs on: the pool, or its transaction. */
+    connection: { getDrizzle<T = unknown>(): T };
+  }): Promise<Record<string, unknown>> {
+    const translations =
+      args.locale === undefined
+        ? {}
+        : await this.readCompanionLocalizedValues(
+            args.connection,
+            args.collectionName,
+            args.entryId,
+            args.locale
+          );
+    const document = this.deserializeJsonFieldsForSnapshot(
+      {
+        ...convertTimestampsToCamelCase({ ...args.row }),
+        ...translations,
+        ...args.patch,
+        status: "published",
+      },
+      args.fields
+    );
+    stripPasswordFieldValues(document, args.fields);
+    return document;
+  }
+
+  /**
    * Read the entry's component subtrees + many-to-many id arrays for a version
    * snapshot, using the WRITE TRANSACTION's connection (read-your-writes, #226)
    * so the components and junction rows just written in the same transaction are
@@ -6383,6 +6434,7 @@ export class CollectionMutationService extends BaseService {
       // pool — and validate the SAME merged shape the in-transaction fold
       // persists (`buildRestorePayload` output with the caller's fields on top).
       // The fold below stays authoritative for the write; this only gates it.
+      let promotesDraft = false;
       if (promotePossible && promoteRestoreCtx) {
         const advisoryDraft = await new VersionsRepository(
           this.adapter
@@ -6395,6 +6447,7 @@ export class CollectionMutationService extends BaseService {
           draftLocaleKey
         );
         if (advisoryDraft) {
+          promotesDraft = true;
           const { payload: draftInput } = buildRestorePayload(
             advisoryDraft.snapshot,
             fields as unknown as FieldConfig[],
@@ -6447,6 +6500,53 @@ export class CollectionMutationService extends BaseService {
             id: params.entryId,
           });
         }
+      }
+
+      // A publish that promotes no draft puts the STORED row live, with the
+      // caller's fields on top: a first publication, or a republish after an
+      // unpublish. The caller validation above saw only the patch, which for a
+      // publish by status alone is `{ status }`, so validate the document as it
+      // goes live, as the promotion above does with its draft. Advisory, off the
+      // row lock, for the same reason as that one.
+      //
+      // Only on a move TO published. A row already published was judged as
+      // published, and re-sending the status changes nothing that goes live. A
+      // per-locale status lives in the companion, which this does not read
+      // here, so such a write is always judged.
+      const alreadyPublished =
+        localizedUpdate?.hasStatus !== true &&
+        (existingEntry as { status?: unknown }).status === "published";
+      if (
+        collectionHasStatus &&
+        !promotesDraft &&
+        transitionNextStatus === "published" &&
+        !alreadyPublished
+      ) {
+        await this.assertEntryValid({
+          data: await this.storedDocumentGoingLive({
+            row: existingEntry as Record<string, unknown>,
+            // The locale split moved the caller's translatable values out of
+            // `finalData`; they are part of what goes live.
+            patch: {
+              ...finalData,
+              ...(localizedUpdate?.localizedFieldValues ?? {}),
+            },
+            fields,
+            collectionName: params.collectionName,
+            entryId: params.entryId,
+            locale: localizedUpdate?.writeLocale,
+            connection: { getDrizzle: <T = unknown>() => this.db as T },
+          }),
+          fields,
+          collectionName: params.collectionName,
+          mode: "update",
+          user: params.user,
+          localeCtx: await this.localizedRequiredContext(
+            params.collectionName,
+            params.locale
+          ),
+          id: params.entryId,
+        });
       }
 
       // Retry the whole content+capture transaction on a version_no allocation
@@ -9338,6 +9438,36 @@ export class CollectionMutationService extends BaseService {
       {
         await this.assertEntryValid({
           data: finalData,
+          fields,
+          collectionName: params.collectionName,
+          mode: "update",
+          user: params.user,
+          id: entryId,
+          tx,
+        });
+      }
+
+      // A publish here writes the caller's fields onto the stored row, and
+      // promotes no working draft, so the stored row is what goes live. Judged
+      // as it goes live on a move to published, as the single-entry update
+      // does, and here under the row lock taken above. No locale is named on
+      // this path, so the translations beside the row are the default
+      // language's, which is also where its status lives.
+      if (
+        (collection as { status?: boolean }).status === true &&
+        finalData.status === "published" &&
+        existingEntry.status !== "published"
+      ) {
+        await this.assertEntryValid({
+          data: await this.storedDocumentGoingLive({
+            row: existingEntry,
+            patch: finalData,
+            fields,
+            collectionName: params.collectionName,
+            entryId,
+            locale: this.localization?.defaultLocale,
+            connection: tx,
+          }),
           fields,
           collectionName: params.collectionName,
           mode: "update",

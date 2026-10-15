@@ -38,8 +38,25 @@ path — the editor, the API, a batch, and an import that skips hooks:
   nest deeper than the depth limit counted from the top of the document, is
   refused, naming the placement;
 - a component change that would break a page, Layout or component placing it
-  is refused, naming that document. Documents the usage index cannot vouch for
-  are reported in the server log as unjudged.
+  is refused, saying how many documents it would break and which rule. The
+  documents themselves are named only in the server log, since they were found
+  and read as the system. Documents the usage index cannot vouch for are
+  reported in the server log as unjudged.
+
+Publishing judges the document as it goes live. A status-only publish of a
+collection entry or a Single with nothing pending (a first publication, a
+republish after an unpublish, or a Single that keeps no drafts) validates the
+stored document with the patch on top, as a publish that promotes a pending
+draft already did; this holds for the Direct API, REST, bulk updates and
+`updateMany`. `publishAllLocales` judges every language it puts live, and judges
+each as published. So a page whose components are deeper when published than in
+their drafts is refused at publish, on its field.
+
+Compatibility: this applies to every collection and Single with a draft/publish
+lifecycle, not only page builder ones. A stored value that a rule tightened
+since it was saved no longer accepts now stops a status-only publish, with a
+validation error on that field; fix the field, then publish. Re-sending
+`published` to a document already live is not re-judged.
 
 Plugin field types gain an experimental `write` argument on `validate`: which
 entry the write is for, and `readStored`, a read of stored values of the

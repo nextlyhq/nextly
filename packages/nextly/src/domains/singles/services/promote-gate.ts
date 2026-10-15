@@ -27,6 +27,8 @@
  * @module domains/singles/services/promote-gate
  */
 
+import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
+
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import type { FieldConfig } from "../../../collections/fields/types";
 import { NextlyError } from "../../../errors";
@@ -44,6 +46,7 @@ import {
   type CallerGrants,
 } from "../../../shared/lib/field-level-registry";
 import { relationshipValidationView } from "../../../shared/lib/field-transform";
+import { entryWriteContext } from "../../collections/services/stored-field-read";
 
 /** One language's pending change, as the versions repository stores it. */
 export interface PromotableDraft {
@@ -51,6 +54,52 @@ export interface PromotableDraft {
   locale: string | null;
   /** The stored snapshot, in write shape. */
   snapshot: unknown;
+}
+
+/**
+ * Who a Single's promotion is judged for, and the write it is part of, on the
+ * promoting transaction. One builder for both publish paths, so the update and
+ * `publishAllLocales` cannot come to judge one caller differently.
+ */
+export function promoteCallerFor(args: {
+  tx: TransactionContext;
+  slug: string;
+  defaultLocale: string | null;
+  fields: FieldConfig[];
+  options: {
+    user?: Record<string, unknown>;
+    overrideAccess?: boolean;
+    authenticatedScope?: AuthenticatedScope;
+  };
+  grants?: () => Promise<CallerGrants>;
+}): Pick<
+  PromoteGateContext,
+  | "slug"
+  | "write"
+  | "fields"
+  | "user"
+  | "overrideAccess"
+  | "authenticatedScope"
+  | "grants"
+> {
+  return {
+    slug: args.slug,
+    write: entryWriteContext({
+      kind: "single",
+      slug: args.slug,
+      connection: {
+        db: args.tx,
+        executor: args.tx.getDrizzle(),
+        defaultLocale: args.defaultLocale,
+      },
+    }),
+    fields: args.fields,
+    user: args.options.user,
+    overrideAccess: args.options.overrideAccess,
+    authenticatedScope: args.options.authenticatedScope,
+    // Resolved on the pooled connection before the transaction opened.
+    grants: args.grants,
+  };
 }
 
 /** What judging a promotion needs from the service that performs it. */
@@ -111,6 +160,12 @@ export interface PromoteGateContext {
    * document that gets written is the draft with this on top.
    */
   callerData?: Record<string, unknown>;
+  /**
+   * The status the promoted document is written with. A snapshot keeps the
+   * status it was saved under, which for a pending draft is a draft's, while
+   * the write publishes it; a rule that depends on the lifecycle reads this one.
+   */
+  status: "published";
   localizedFieldNames: Set<string>;
   enforceLocalizedRequired: boolean;
 }
@@ -267,7 +322,7 @@ async function assertSchemaStillAccepts(
   ctx: PromoteGateContext
 ): Promise<void> {
   const issues = await validateEntryData(
-    relationshipValidationView(promoted, ctx.fields),
+    relationshipValidationView({ ...promoted, status: ctx.status }, ctx.fields),
     attachFieldValidators("single", ctx.slug, ctx.fields),
     {
       mode: "create",

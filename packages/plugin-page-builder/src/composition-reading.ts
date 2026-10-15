@@ -173,8 +173,13 @@ export const STOPPED_SHORT: readonly string[] = [
 export interface ReadComposition {
   /** The last composition, with every placement the reads could supply expanded. */
   readonly composition: ResolvedComposition;
-  /** Whether a reference loop closed in any round. */
-  readonly loopClosed: boolean;
+  /**
+   * The components at which a reference loop closed, over every round. Empty
+   * when none did. By component rather than one answer for the composition, so
+   * a caller comparing two compositions can tell a new loop from one that was
+   * already there.
+   */
+  readonly loopsClosed: ReadonlySet<string>;
   /** Whether a limit ended the descent somewhere. */
   readonly stoppedShort: boolean;
   /**
@@ -209,11 +214,15 @@ export async function composeWithReads(args: {
     has: (id: string) => library.held.has(id),
     get: (id: string) => library.held.get(id) as BlockDocument | undefined,
   };
-  const seen = { loopClosed: false, stoppedShort: false, incomplete: false };
+  const seen = {
+    loopsClosed: new Set<string>(),
+    stoppedShort: false,
+    incomplete: false,
+  };
   let composition = resolveComponentInstances(host, lookup, { limits, work });
   for (let round = 0; ; round += 1) {
     noteRound(composition, seen);
-    if (seen.loopClosed && args.stopAtLoop === true) break;
+    if (seen.loopsClosed.size > 0 && args.stopAtLoop === true) break;
 
     const wanted = stillWanted(composition, library);
     // Nothing further to supply: every placement this document reaches was
@@ -241,9 +250,9 @@ export async function composeWithReads(args: {
  */
 function noteRound(
   composition: ResolvedComposition,
-  seen: { loopClosed: boolean; stoppedShort: boolean }
+  seen: { loopsClosed: Set<string>; stoppedShort: boolean }
 ): void {
-  if (composition.loopsClosed.length > 0) seen.loopClosed = true;
+  for (const id of composition.loopsClosed) seen.loopsClosed.add(id);
   if (composition.unresolved.some(one => STOPPED_SHORT.includes(one.reason))) {
     seen.stoppedShort = true;
   }

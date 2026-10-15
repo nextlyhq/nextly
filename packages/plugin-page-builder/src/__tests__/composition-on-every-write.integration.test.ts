@@ -66,11 +66,15 @@ const document = (
 });
 
 /** The validation issues a refused write carries. */
-function issuesOf(error: unknown): Array<{ code: string; message: string }> {
+function issuesOf(
+  error: unknown
+): Array<{ path: string; code: string; message: string }> {
   return (
     (
       error as {
-        publicData?: { errors?: Array<{ code: string; message: string }> };
+        publicData?: {
+          errors?: Array<{ path: string; code: string; message: string }>;
+        };
       }
     ).publicData?.errors ?? []
   );
@@ -332,13 +336,104 @@ describe.each(getConfiguredTestDialects())(
       expect(issuesOf(refused)[0]!.message).not.toContain(String(home.item.id));
     });
 
-    function page(t: TestNextly, nodes: Node[]) {
+    /**
+     * A component whose two forms disagree on depth: published three deep, its
+     * pending draft one deep. A page placing it three deep fits the limit of
+     * four against the draft and is past it against what is published.
+     */
+    async function componentDeeperWhenPublished(t: TestNextly) {
+      const id = await component(t, "split", [
+        box("d1", [box("d2", [text("d3")])]),
+      ]);
+      await t.nextly.update({
+        collection: COMPONENTS_SLUG,
+        id,
+        data: { status: "published" },
+        overrideAccess: true,
+      });
+      // No status named: stored as the working draft, the live row untouched.
+      await t.nextly.update({
+        collection: COMPONENTS_SLUG,
+        id,
+        data: { content: document("component", [text("d1")]) },
+        overrideAccess: true,
+      });
+      return id;
+    }
+
+    function publish(t: TestNextly, id: string) {
+      return t.nextly.update({
+        collection: "pages",
+        id,
+        data: { status: "published" },
+        overrideAccess: true,
+      });
+    }
+
+    it("refuses a status-only first publication the published forms put past the limit", async () => {
+      const t = await boot();
+      const split = await componentDeeperWhenPublished(t);
+      // A draft page is judged against the forms a preview shows: the draft.
+      const home = await page(
+        t,
+        [box("p1", [box("p2", [placing("i1", split)])])],
+        "draft"
+      );
+
+      // The page has no working draft of its own: its row is what goes live.
+      const refused = await refusalOf(publish(t, String(home.item.id)));
+
+      // Named on the field, so the editor can show it where the content is.
+      expect(issuesOf(refused)).toEqual([
+        expect.objectContaining({ path: "content", code: "depth-exceeded" }),
+      ]);
+    });
+
+    it("refuses a status-only republish after an unpublish the published forms put past the limit", async () => {
+      const t = await boot();
+      const split = await componentDeeperWhenPublished(t);
+      // CONTROL: placed at the top, the published form fits too, so the page
+      // publishes; this also shows the publish path itself goes through.
+      const home = await page(t, [placing("i1", split)], "draft");
+      const id = String(home.item.id);
+      await expect(publish(t, id)).resolves.toBeDefined();
+      await t.nextly.update({
+        collection: "pages",
+        id,
+        data: { status: "draft" },
+        overrideAccess: true,
+      });
+      // Deepened while unpublished, which a draft is judged on the draft forms for.
+      await t.nextly.update({
+        collection: "pages",
+        id,
+        data: {
+          content: document("page", [
+            box("p1", [box("p2", [placing("i1", split)])]),
+          ]),
+        },
+        overrideAccess: true,
+      });
+
+      const refused = await refusalOf(publish(t, id));
+
+      expect(issuesOf(refused)).toEqual([
+        expect.objectContaining({ path: "content", code: "depth-exceeded" }),
+      ]);
+    });
+
+    function page(
+      t: TestNextly,
+      nodes: Node[],
+      status?: "draft" | "published"
+    ) {
       return t.nextly.create({
         collection: "pages",
         data: {
           title: "Home",
           slug: `home-${String(Math.random()).slice(2, 8)}`,
           content: document("page", nodes),
+          ...(status === undefined ? {} : { status }),
         },
         overrideAccess: true,
       });

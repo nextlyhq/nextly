@@ -37,7 +37,6 @@ import {
   type CallerGrants,
 } from "../../../shared/lib/field-level-registry";
 import type { Logger } from "../../../shared/types";
-import { entryWriteContext } from "../../collections/services/stored-field-read";
 import { readComponentSubtrees } from "../../field-groups/read-component-subtrees";
 import { readCompanionLocaleStatusAll } from "../../i18n/companion-join";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
@@ -75,7 +74,7 @@ import {
   writeCompanionValues,
 } from "./apply-pending-change";
 import { resolveSingleForRequest } from "./ensure-runtime-table";
-import { assertDraftsMayBePromoted } from "./promote-gate";
+import { assertDraftsMayBePromoted, promoteCallerFor } from "./promote-gate";
 import {
   checkSingleAccess,
   type SingleQueryService,
@@ -523,6 +522,7 @@ export class SinglePublishAllService extends BaseService {
       plan,
       publishNow,
       options,
+      { mainStatus: lockedRow.status, companion: priorCompanionStatuses },
       promoteGrants
     );
 
@@ -574,6 +574,8 @@ export class SinglePublishAllService extends BaseService {
     options: PublishAllSingleLocalesOptions,
     promoteGrants?: () => Promise<CallerGrants>
   ): Promise<void> {
+    // Nothing goes live that was not live already: nothing to judge.
+    if (pending.length === 0) return;
     const { slug, singleMeta, existingDoc, companion, fieldConfigs } = plan;
     const reader = this.queryService;
     // Constructed without a reader only by a caller that built this service
@@ -591,22 +593,15 @@ export class SinglePublishAllService extends BaseService {
     }
 
     await assertDraftsMayBePromoted(pending, {
-      slug,
-      entryId: existingDoc.id,
-      write: entryWriteContext({
-        kind: "single",
+      ...promoteCallerFor({
+        tx,
         slug,
-        connection: {
-          db: tx,
-          executor: tx.getDrizzle(),
-          defaultLocale: this.localization?.defaultLocale ?? null,
-        },
+        defaultLocale: this.localization?.defaultLocale ?? null,
+        fields: fieldConfigs,
+        options,
+        grants: promoteGrants,
       }),
-      fields: fieldConfigs,
-      user: options.user,
-      overrideAccess: options.overrideAccess,
-      authenticatedScope: options.authenticatedScope,
-      grants: promoteGrants,
+      entryId: existingDoc.id,
       toLogical: doc =>
         reader.deserializeJsonFields(
           { id: existingDoc.id, updatedAt: existingDoc.updatedAt, ...doc },
@@ -629,6 +624,8 @@ export class SinglePublishAllService extends BaseService {
               )),
             }
           : existingDoc,
+      // A language whose draft was saved as a draft still goes live here.
+      status: "published",
       localizedFieldNames: new Set(
         (companion?.localizedFields ?? []).map(f => f.name)
       ),
@@ -650,10 +647,11 @@ export class SinglePublishAllService extends BaseService {
     plan: PublishPlan,
     publishNow: Date,
     options: PublishAllSingleLocalesOptions,
+    priorStatuses: PriorStatuses,
     promoteGrants?: () => Promise<CallerGrants>
   ): Promise<void> {
     const { slug, singleMeta, existingDoc, companion } = plan;
-    if (singleMeta.versions?.drafts?.enabled !== true) return;
+    const draftsEnabled = singleMeta.versions?.drafts?.enabled === true;
 
     const repo = new VersionsRepository(tx);
     const ref = {
@@ -661,22 +659,25 @@ export class SinglePublishAllService extends BaseService {
       scopeSlug: slug,
       entryId: existingDoc.id,
     };
-    const pending = await repo.findAllWorkingDrafts(ref);
-    if (pending.length === 0) return;
-
-    // Judged here, on the drafts this transaction has read under its lock, and
-    // as ONE outcome: the loop below applies every language's snapshot to the
-    // same main row, so the shared values that survive are the last writer's.
-    // Judged one at a time, each draft can pass against its own shared values
-    // while the document that actually lands holds another language's.
+    const pending = draftsEnabled ? await repo.findAllWorkingDrafts(ref) : [];
+    // A language with nothing pending goes live as it is stored, judged when it
+    // was saved as a draft and never as published. It is judged as a promotion
+    // of an empty change, in the same one outcome as the pending ones.
     await this.assertPendingChangesMayBePromoted(
       tx,
       plan,
-      pending,
+      [...pending, ...languagesGoingLiveAsStored(plan, pending, priorStatuses)],
       options,
       promoteGrants
     );
+    if (pending.length === 0) return;
 
+    // Judged above, on the drafts this transaction has read under its lock,
+    // and as ONE outcome: the loop below applies every language's snapshot to
+    // the same main row, so the shared values that survive are the last
+    // writer's. Judged one at a time, each draft can pass against its own
+    // shared values while the document that actually lands holds another
+    // language's.
     for (const draft of pending) {
       // The pending change carries no lifecycle of its own; the statuses this
       // publish writes are the ones that count.
@@ -1119,4 +1120,34 @@ export class SinglePublishAllService extends BaseService {
     }
     return recorded;
   }
+}
+
+/** Each language's status as committed before this publish moved it. */
+interface PriorStatuses {
+  /** The main row's, which is the whole document's for an unlocalized Single. */
+  readonly mainStatus: unknown;
+  /** Each stored translation's `_status`, keyed by locale. */
+  readonly companion: ReadonlyMap<string, string | null>;
+}
+
+/**
+ * The languages this publish puts live from their stored rows alone: none of
+ * the pending changes is theirs, and they were not live already. A language
+ * that was live was judged as published when it went live, and a pending
+ * change is judged on its own account.
+ */
+function languagesGoingLiveAsStored(
+  plan: PublishPlan,
+  pending: ReadonlyArray<{ locale: string | null }>,
+  prior: PriorStatuses
+): { locale: string | null; snapshot: Record<string, never> }[] {
+  if (plan.companion && plan.companionPublishable) {
+    const held = new Set(pending.map(change => change.locale));
+    return [...prior.companion]
+      .filter(([locale, status]) => status !== "published" && !held.has(locale))
+      .map(([locale]) => ({ locale, snapshot: {} }));
+  }
+  // One document: a pending change, where there is one, is all of it.
+  if (!plan.hasMainStatus || prior.mainStatus === "published") return [];
+  return pending.length > 0 ? [] : [{ locale: null, snapshot: {} }];
 }
