@@ -72,6 +72,7 @@ import {
   stripServerOnlyColumns,
 } from "../../../shared/lib/password-fields";
 import type { Logger } from "../../../shared/types";
+import { entryWriteContext } from "../../collections/services/stored-field-read";
 import { readComponentSubtrees } from "../../field-groups/read-component-subtrees";
 import { extractFieldGroupReferences } from "../../field-groups/storage/field-group-field-type";
 import { readFieldGroupType } from "../../field-groups/storage/field-group-type-key";
@@ -645,6 +646,16 @@ export class SingleMutationService extends BaseService {
             req: options.user ? { user: options.user } : {},
             localizedFieldNames,
             enforceLocalizedRequired,
+            // Before the transaction opens, so on the pool.
+            write: entryWriteContext({
+              kind: "single",
+              slug,
+              connection: {
+                db: this.adapter,
+                executor: undefined,
+                defaultLocale: this.localization?.defaultLocale ?? null,
+              },
+            }),
           }
         );
         if (validationIssues.length > 0) {
@@ -1373,6 +1384,15 @@ export class SingleMutationService extends BaseService {
                   {
                     slug,
                     entryId: promotedInto.id,
+                    write: entryWriteContext({
+                      kind: "single",
+                      slug,
+                      connection: {
+                        db: tx,
+                        executor: tx.getDrizzle(),
+                        defaultLocale: this.localization?.defaultLocale ?? null,
+                      },
+                    }),
                     fields: fieldConfigs,
                     user: options.user,
                     overrideAccess: options.overrideAccess,
