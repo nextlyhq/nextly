@@ -149,6 +149,14 @@ describe("assertUsableAppTableName", () => {
       refusal(() => assertUsableAppTableName("sessions", ["users"], []))
     ).toMatch(/"sessions" is a retired auth table/);
   });
+
+  // MySQL with lower_case_table_names resolves `Accounts` to the same table
+  // as `accounts`, so a different casing must be refused too.
+  it("refuses a retired name in another casing", () => {
+    expect(
+      refusal(() => assertUsableAppTableName("Accounts", ["users"], []))
+    ).toMatch(/"Accounts" is a retired auth table/);
+  });
 });
 
 describe("judgeIndex", () => {
