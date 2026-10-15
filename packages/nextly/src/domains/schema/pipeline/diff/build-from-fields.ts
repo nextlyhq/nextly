@@ -36,6 +36,7 @@ import {
 } from "../../extension/naming";
 import {
   getColumnDescriptor,
+  getComponentRowColumnDescriptor,
   type ColumnOrigin,
   kindAndSizes,
   systemColumnsForFields,
@@ -688,7 +689,7 @@ export function buildDesiredTableFromComponentFields(
   // User-defined fields.
   for (const field of fields) {
     if (localizedNames.has(field.name)) continue; // lives in the companion table
-    const desc = getColumnDescriptor(
+    const desc = getComponentRowColumnDescriptor(
       field as unknown as Parameters<typeof getColumnDescriptor>[0],
       dialect,
       options.builtBy
@@ -786,7 +787,7 @@ export function buildDesiredTableFromComponentFields(
       hasCreatedAtColumn: columns.some(c => c.name === "created_at"),
       localizedNames,
       columnNameFor: field =>
-        getColumnDescriptor(
+        getComponentRowColumnDescriptor(
           field as unknown as Parameters<typeof getColumnDescriptor>[0],
           dialect,
           options.builtBy
