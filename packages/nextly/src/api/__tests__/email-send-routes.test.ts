@@ -98,6 +98,22 @@ describe("POST /api/email/send", () => {
     expect(res.status).toBe(400);
     expect(send).not.toHaveBeenCalled();
   });
+  it.each(["from", "replyTo"])(
+    "refuses a %s that is not an email address, before the service",
+    async field => {
+      const res = await postSend(
+        post({
+          to: "a@example.com",
+          subject: "Hi",
+          html: "<p>x</p>",
+          [field]: "not-an-address",
+        })
+      );
+
+      expect(res.status).toBe(400);
+      expect(send).not.toHaveBeenCalled();
+    }
+  );
 });
 
 describe("POST /api/email/send-with-template", () => {

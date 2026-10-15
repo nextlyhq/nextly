@@ -72,36 +72,29 @@ export type SendMessage = SendEnvelope;
 /**
  * The `to` list an `email.beforeSend` filter returned.
  *
- * A handler may change `to`, which every handler written before `toList`
- * existed does, or `toList`. A changed `to` wins; otherwise a changed `toList`
- * is used; otherwise the list given to the filter stands. Compared by value, so
- * a handler that rebuilds the payload with the same recipients changes none,
- * and a key the handler left out is not a change: the message still goes to the
- * recipients it was given, as it did before this list was checked.
+ * `to` is the one field a handler changes recipients through, so a chain of
+ * handlers always reads the recipients the one before it left. A key the
+ * handler left out is not a change: the message still goes to the recipients
+ * it was given, as it did before this list was checked.
  */
 export function filteredToList(
-  given: Pick<EmailPayloadFilterValue, "to" | "toList">,
-  returned: Partial<Pick<EmailPayloadFilterValue, "to" | "toList">>
+  given: Pick<EmailPayloadFilterValue, "to">,
+  returned: Partial<Pick<EmailPayloadFilterValue, "to">>
 ): unknown[] {
-  if ("to" in returned && !sameRecipients(given.to, returned.to)) {
-    return Array.isArray(returned.to) ? [...returned.to] : [returned.to];
-  }
-  if ("toList" in returned && !sameRecipients(given.toList, returned.toList)) {
-    return Array.isArray(returned.toList)
-      ? [...returned.toList]
-      : [returned.toList];
-  }
-  return Array.isArray(given.to) ? [...given.to] : [given.to];
+  const to = "to" in returned ? returned.to : given.to;
+  return Array.isArray(to) ? [...to] : [to];
 }
 
-function sameRecipients(a: unknown, b: unknown): boolean {
-  const left: unknown[] = Array.isArray(a) ? a : [a];
-  const right: unknown[] = Array.isArray(b) ? b : [b];
-  return (
-    left.length === right.length &&
-    left.every((value, index) => value === right[index])
-  );
-}
+/**
+ * The most `to` addresses one send may have, whatever the provider.
+ *
+ * A send through a provider that takes one `to` per message becomes one
+ * provider call per address, so without a ceiling one request could fan out
+ * into thousands of calls, delivery records and actions. Bulk sending is not
+ * what this method is for; 100 is the number of recipients RFC 5321 requires
+ * every SMTP server to accept for one message.
+ */
+export const MAX_TO_PER_SEND = 100;
 
 /**
  * Refuse an envelope that cannot be sent as asked, before any provider is
@@ -171,6 +164,14 @@ export function assertSendable(
     }
   }
 
+  if (to.length > MAX_TO_PER_SEND) {
+    refuse(
+      "to",
+      "TOO_MANY",
+      `An email can have at most ${MAX_TO_PER_SEND} \`to\` addresses; the send has ${to.length}.`
+    );
+  }
+
   const max = rules.maxToPerMessage;
   if (max !== undefined && max > 1 && to.length > max) {
     refuse(
@@ -204,7 +205,8 @@ export function declaredMaxTo(adapter: {
  * One message to every `to` address for an adapter that declares it takes
  * several. Otherwise one message per `to` address, each recipient seeing only
  * themselves, with `cc` and `bcc` on the first message only so each copied
- * address receives the email once.
+ * address receives the email once. A copied address that is also a `to`
+ * address is left off the copies, since it has a message of its own.
  */
 export function messagesFor(
   envelope: SendEnvelope,
@@ -213,10 +215,21 @@ export function messagesFor(
   if (envelope.to.length <= 1 || (maxToPerMessage ?? 1) > 1) {
     return [envelope];
   }
+  const addressed = new Set(
+    envelope.to.map(address => mailboxOf(address).toLowerCase())
+  );
+  const copies = (list: string[] | undefined): string[] | undefined => {
+    if (list === undefined) return undefined;
+    return list.filter(
+      address => !addressed.has(mailboxOf(address).toLowerCase())
+    );
+  };
+  const cc = copies(envelope.cc);
+  const bcc = copies(envelope.bcc);
   return envelope.to.map((address, index) => ({
     ...envelope,
     to: [address],
-    cc: index === 0 ? envelope.cc : undefined,
-    bcc: index === 0 ? envelope.bcc : undefined,
+    cc: index === 0 ? cc : undefined,
+    bcc: index === 0 ? bcc : undefined,
   }));
 }

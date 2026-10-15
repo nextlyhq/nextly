@@ -1266,13 +1266,15 @@ describe("the whole envelope reaches email.beforeSend, and what it returns is ch
     expect(seen).toEqual([
       expect.objectContaining({
         to: ["a@b.com", "c@d.com"],
-        toList: ["a@b.com", "c@d.com"],
         from: "no-reply@test.local",
         replyTo: "help@b.com",
         cc: ["cc@b.com"],
         bcc: ["bcc@b.com"],
       }),
     ]);
+    // One recipient field: a second, writable copy would go stale between
+    // handlers in a chain.
+    expect(seen[0]).not.toHaveProperty("toList");
   });
 
   it("sends the replyTo a filter changed", async () => {
@@ -1338,22 +1340,34 @@ describe("the whole envelope reaches email.beforeSend, and what it returns is ch
     expect(adapterSend.mock.calls[0][0]).not.toHaveProperty("toList");
   });
 
-  it("sends to the list a filter set through toList", async () => {
+  it("gives the next filter in a chain the recipients the one before left", async () => {
+    // `to` is the one field recipients change through, so a second handler
+    // never reads a stale copy of a list the first one changed.
+    const seenBySecond: unknown[] = [];
     getFilterRegistry().addFilter(
       FilterSeams.EmailBeforeSend,
-      (payload: { toList?: string[] }) => ({
+      (payload: { to: string | string[] }) => ({
         ...payload,
-        toList: [...(payload.toList ?? []), "added@b.com"],
+        to: [payload.to, "added@b.com"].flat(),
       })
+    );
+    getFilterRegistry().addFilter(
+      FilterSeams.EmailBeforeSend,
+      (payload: { to: string | string[] }) => {
+        seenBySecond.push(payload.to);
+        return { ...payload, to: [payload.to, "last@b.com"].flat() };
+      }
     );
     const { service, adapterSend } = buildSend();
 
     await service.send({ to: "a@b.com", subject: "Hello", html: "<p>x</p>" });
 
-    // The test adapter takes one `to` per message, so two messages.
+    expect(seenBySecond).toEqual([["a@b.com", "added@b.com"]]);
+    // The test adapter takes one `to` per message, so three messages.
     expect(adapterSend.mock.calls.map(([options]) => options.to)).toEqual([
       "a@b.com",
       "added@b.com",
+      "last@b.com",
     ]);
   });
 

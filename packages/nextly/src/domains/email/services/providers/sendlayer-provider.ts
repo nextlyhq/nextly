@@ -76,11 +76,13 @@ export function createSendLayerProvider(
 
       const body: Record<string, unknown> = {
         From: from,
-        // Every `to` address when there is more than one, else the one.
-        To: (options.toList ?? [options.to]).map(email => ({
-          name: "",
-          email,
-        })),
+        // Every `to` address when there is more than one, else the one. Each
+        // address is split into SendLayer's name and email fields, so a
+        // display-name form (`Name <user@example.com>`) is sent to the mailbox
+        // it names rather than refused as an invalid email.
+        To: (options.toList ?? [options.to]).map(address =>
+          parseFromAddress(address)
+        ),
         Subject: options.subject,
         ContentType: "HTML",
         HTMLContent: options.html,
@@ -98,11 +100,11 @@ export function createSendLayerProvider(
       }
 
       if (options.cc && options.cc.length > 0) {
-        body.CC = options.cc.map(email => ({ name: "", email }));
+        body.CC = options.cc.map(address => parseFromAddress(address));
       }
 
       if (options.bcc && options.bcc.length > 0) {
-        body.BCC = options.bcc.map(email => ({ name: "", email }));
+        body.BCC = options.bcc.map(address => parseFromAddress(address));
       }
 
       if (options.attachments && options.attachments.length > 0) {

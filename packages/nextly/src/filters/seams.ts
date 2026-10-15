@@ -19,17 +19,13 @@
 export interface EmailPayloadFilterValue {
   /**
    * The recipient as one string when the send has one `to` address, which is
-   * every send a handler written before `toList` existed has seen; a list when
-   * it has several.
+   * every send a handler has seen so far; a list when it has several.
+   *
+   * The one field recipients change through, so each handler in a chain reads
+   * the recipients the one before it left. Leaving it out of a returned value
+   * keeps the recipients as they were.
    */
   to: string | string[];
-  /**
-   * @experimental Every `to` address, as a list whatever shape `to` has.
-   *
-   * Change either `to` or `toList` to change the recipients. When a handler
-   * changes `to`, `to` is used; otherwise a changed `toList` is.
-   */
-  toList?: string[];
   from: string;
   /** @experimental The Reply-To address, when the send has one. */
   replyTo?: string;

@@ -26,6 +26,7 @@ import { isErrorResponse, requireAuthentication } from "../auth/middleware";
 import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
 import { container } from "../di";
 import { sendOutcomeMessage } from "../domains/email/send-outcome";
+import { isSendableAddress } from "../domains/email/services/recipients";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
 import type { EmailService } from "../services/email/email-service";
@@ -55,9 +56,17 @@ const sendTemplateSchema = z.object({
   template: z.string().min(1, "template slug is required"),
   variables: z.record(z.string(), z.unknown()).optional(),
   // The send's own sender and Reply-To. Either may carry a display name
-  // (`Name <user@example.com>`), so neither is held to the bare-address rule.
-  from: z.string().trim().min(1).optional(),
-  replyTo: z.string().trim().min(1).optional(),
+  // (`Name <user@example.com>`), so the mailbox inside it is what is checked.
+  from: z
+    .string()
+    .trim()
+    .refine(isSendableAddress, "from must be an email address")
+    .optional(),
+  replyTo: z
+    .string()
+    .trim()
+    .refine(isSendableAddress, "replyTo must be an email address")
+    .optional(),
   cc: z.array(z.string().email()).optional(),
   bcc: z.array(z.string().email()).optional(),
   providerId: z.string().optional(),

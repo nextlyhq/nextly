@@ -22,7 +22,11 @@ import {
 } from "vitest";
 
 import { NextlyError } from "../../../errors";
-import { resetFilterRegistry } from "../../../filters";
+import {
+  FilterSeams,
+  getFilterRegistry,
+  resetFilterRegistry,
+} from "../../../filters";
 import { methodFacade } from "../../../plugins/service-facade";
 import type { EmailTemplateRecord } from "../../../schemas/email-templates/types";
 import type { Logger } from "../../../shared/types";
@@ -335,6 +339,64 @@ describe("several `to` addresses reach the provider", () => {
     expect(send.mock.calls[0][0]).not.toHaveProperty("toList");
   });
 
+  it("sends a copied address that is also a `to` only its own message, when split", async () => {
+    const { adapter, send } = mockAdapter();
+    const { service, recorded } = build(adapter);
+
+    await service.send({
+      to: [A, B],
+      subject: "Hi",
+      html: "<p>x</p>",
+      cc: [B, "cc@example.com"],
+    });
+
+    const calls = send.mock.calls.map(([options]) => options);
+    expect(calls.map(options => [options.to, options.cc])).toEqual([
+      [A, ["cc@example.com"]],
+      [B, undefined],
+    ]);
+    expect(recorded.filter(row => row.to === B)).toHaveLength(1);
+  });
+
+  it("hands every split message to the provider before any after-send action runs", async () => {
+    // An action that never settles. Awaited per message, it would keep every
+    // recipient after the first from being sent to.
+    getFilterRegistry().addAction(
+      FilterSeams.EmailAfterSend,
+      () => new Promise<void>(() => {})
+    );
+    const { adapter, send } = mockAdapter();
+    const { service } = build(adapter);
+
+    void service.send({ to: [A, B, C], subject: "Hi", html: "<p>x</p>" });
+
+    await vi.waitFor(() => expect(send).toHaveBeenCalledTimes(3));
+  });
+
+  it("refuses more than 100 `to` addresses through any provider", async () => {
+    // The adapter takes one `to` per message, so without the ceiling this
+    // would be 101 provider calls from one request.
+    const { adapter, send } = mockAdapter();
+    const { service } = build(adapter);
+    const to = Array.from({ length: 101 }, (_, i) => `r${i}@example.com`);
+
+    const error = await service
+      .send({ to, subject: "Hi", html: "<p>x</p>" })
+      .catch((thrown: unknown) => thrown);
+
+    expect(JSON.stringify((error as NextlyError).publicData)).toContain(
+      "at most 100"
+    );
+    expect(send).not.toHaveBeenCalled();
+    // The control: 100 is sent.
+    await service.send({
+      to: to.slice(0, 100),
+      subject: "Hi",
+      html: "<p>x</p>",
+    });
+    expect(send).toHaveBeenCalledTimes(100);
+  });
+
   it("sends the same address once when it is listed twice", async () => {
     const { adapter, send } = mockAdapter();
     const { service } = build(adapter);
@@ -551,6 +613,32 @@ describe("each built-in adapter's `to` limit", () => {
       expect(fetchMock).not.toHaveBeenCalled();
     }
   );
+
+  it("SendLayer: sends a display-name recipient as its name and mailbox", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      statusText: "OK",
+      json: async () => ({ MessageID: "msg_1" }),
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    const { service } = build(createSendLayerProvider({ apiKey: "sl_test" }));
+
+    await service.send({
+      to: ["Ann Lee <ann@example.com>", B],
+      cc: ["Ops <ops@example.com>"],
+      subject: "Hi",
+      html: "<p>x</p>",
+    });
+
+    const init = fetchMock.mock.calls[0][1] as RequestInit;
+    const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+    expect(body.To).toEqual([
+      { name: "Ann Lee", email: "ann@example.com" },
+      { name: "", email: B },
+    ]);
+    expect(body.CC).toEqual([{ name: "Ops", email: "ops@example.com" }]);
+  });
 
   const smtp = () =>
     createSmtpProvider({

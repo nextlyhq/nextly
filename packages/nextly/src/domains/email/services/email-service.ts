@@ -455,11 +455,12 @@ export class EmailService extends BaseService {
 
     //
     // `to` stays one string for a one-recipient send, which is every send a
-    // handler written before `toList` has seen. `replyTo` is part of the
-    // envelope too, so a filter sees and can change everything that is sent.
+    // handler has seen so far, and is a list for several. It is the one field
+    // recipients change through, so each handler in a chain reads what the
+    // one before it left. `replyTo` is part of the envelope too, so a filter
+    // sees and can change everything that is sent.
     const givenTo = {
       to: requestedTo.length === 1 ? requestedTo[0] : [...requestedTo],
-      toList: [...requestedTo],
     };
     const filtered = await registry.applyFilters<
       EmailPayloadFilterValue,
@@ -467,10 +468,9 @@ export class EmailService extends BaseService {
     >(
       FilterSeams.EmailBeforeSend,
       {
-        // Copies, so a handler that edits the lists in place is still seen to
-        // have changed them when its result is compared with `givenTo`.
+        // A copy, so a handler that edits the list in place does not edit
+        // the precondition's view of what the caller asked for.
         to: Array.isArray(givenTo.to) ? [...givenTo.to] : givenTo.to,
-        toList: [...givenTo.toList],
         from,
         ...(options.replyTo !== undefined ? { replyTo: options.replyTo } : {}),
         subject: options.subject,
@@ -505,8 +505,27 @@ export class EmailService extends BaseService {
       bcc: filtered.bcc,
     };
 
+    const messages = messagesFor(envelope, maxToPerMessage);
+    const runAfterSend = (value: EmailAfterSendValue) =>
+      registry.runActions<EmailAfterSendValue, EmailFilterContext>(
+        FilterSeams.EmailAfterSend,
+        value,
+        { providerId: options.providerId }
+      );
+    // A split send hands every message to the provider before any after-send
+    // action runs. Actions are awaited, and one that never settles would
+    // otherwise keep every later recipient from being sent to. A single
+    // message runs its actions where it always has.
+    const deferred: EmailAfterSendValue[] = [];
+    const afterSend =
+      messages.length === 1
+        ? runAfterSend
+        : async (value: EmailAfterSendValue) => {
+            deferred.push(value);
+          };
+
     const outcomes: Array<{ success: boolean; messageId?: string }> = [];
-    for (const message of messagesFor(envelope, maxToPerMessage)) {
+    for (const message of messages) {
       // In turn rather than at once: a provider that takes one `to` per
       // message is usually one that rate-limits, and the delivery records of
       // each message are written before the next is sent.
@@ -519,9 +538,11 @@ export class EmailService extends BaseService {
           templateSlug: options.templateSlug,
           person,
           resolvedAttachments,
+          afterSend,
         })
       );
     }
+    for (const value of deferred) await runAfterSend(value);
 
     // One message is today's send, and its result is returned as it is.
     if (outcomes.length === 1) return outcomes[0];
@@ -541,8 +562,8 @@ export class EmailService extends BaseService {
    * Hand one message to the provider, and record what it answered.
    *
    * Never throws for a provider failure: the outcome is returned, recorded
-   * per recipient, and passed to the `email.afterSend` actions, once for each
-   * message.
+   * per recipient, and handed to `afterSend` for the `email.afterSend`
+   * actions, once for each message.
    */
   private async dispatchMessage(
     message: SendMessage,
@@ -554,6 +575,8 @@ export class EmailService extends BaseService {
       templateSlug?: string;
       person: PrincipalRef | null;
       resolvedAttachments?: ResolvedAttachment[];
+      /** Runs, or queues, the `email.afterSend` actions for this message. */
+      afterSend: (value: EmailAfterSendValue) => Promise<void>;
     }
   ): Promise<{ success: boolean; messageId?: string }> {
     const {
@@ -563,7 +586,6 @@ export class EmailService extends BaseService {
       person,
       resolvedAttachments,
     } = context;
-    const registry = getFilterRegistry();
     // `to` as one string for a one-recipient message, as the after-send
     // actions have always received it, and as a list otherwise. Never `cc` or
     // `bcc`: a blind copy a filter added is not the actions' to see, and an
@@ -716,16 +738,12 @@ export class EmailService extends BaseService {
       );
 
       // D63 action seam: ordered, isolated side-effects after a send attempt.
-      await registry.runActions<EmailAfterSendValue, EmailFilterContext>(
-        FilterSeams.EmailAfterSend,
-        {
-          ...afterSendTo,
-          subject: message.subject,
-          success: deliveredToCaller,
-          messageId: safeMessageId ?? undefined,
-        },
-        { providerId: context.providerId }
-      );
+      await context.afterSend({
+        ...afterSendTo,
+        subject: message.subject,
+        success: deliveredToCaller,
+        messageId: safeMessageId ?? undefined,
+      });
 
       const durationMs = Date.now() - startedAt;
       if (deliveredToCaller) {
@@ -829,16 +847,12 @@ export class EmailService extends BaseService {
       );
 
       // D63 action seam: ordered, isolated side-effects after a send attempt.
-      await registry.runActions<EmailAfterSendValue, EmailFilterContext>(
-        FilterSeams.EmailAfterSend,
-        {
-          ...afterSendTo,
-          subject: message.subject,
-          success: false,
-          messageId: undefined,
-        },
-        { providerId: context.providerId }
-      );
+      await context.afterSend({
+        ...afterSendTo,
+        subject: message.subject,
+        success: false,
+        messageId: undefined,
+      });
 
       this.logger.error("email.failed", {
         event: "email.failed",
