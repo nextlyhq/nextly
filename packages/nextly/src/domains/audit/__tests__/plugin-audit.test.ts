@@ -363,3 +363,79 @@ describe("collectPluginAuditKinds: one kind declared once", () => {
     ).not.toThrow();
   });
 });
+
+describe("projectPluginAuditEvent: a plugin-defined person", () => {
+  const event = (extra: Record<string, unknown>) =>
+    projectPluginAuditEvent(
+      { kind: `${SLUG}.identity-linked`, ...extra } as never,
+      kinds(),
+      "@acme/auth"
+    );
+
+  it("keeps a person's kind and id, and nothing else of them", () => {
+    const projected = event({
+      actorPrincipal: {
+        type: "principal",
+        kind: "acme-accounts:account",
+        id: "acc_1",
+        attributes: { email: "a@example.com" },
+      },
+      targetPrincipal: { kind: "acme-accounts:account", id: "acc_2" },
+    });
+    expect(projected?.actorPrincipal).toEqual({
+      kind: "acme-accounts:account",
+      id: "acc_1",
+    });
+    expect(projected?.targetPrincipal).toEqual({
+      kind: "acme-accounts:account",
+      id: "acc_2",
+    });
+  });
+
+  it.each([
+    ["a kind without its plugin prefix", { kind: "staff", id: "acc_1" }],
+    ["an empty id", { kind: "acme-accounts:account", id: "" }],
+    [
+      "an id over 128 characters",
+      { kind: "acme-accounts:account", id: "x".repeat(129) },
+    ],
+    ["a bare string", "acc_1"],
+  ])("drops an event naming %s", (_label, actorPrincipal) => {
+    expect(event({ actorPrincipal })).toBeNull();
+  });
+
+  it.each([
+    [
+      "actor",
+      {
+        actorUserId: "u1",
+        actorPrincipal: { kind: "acme-accounts:account", id: "acc_1" },
+      },
+    ],
+    [
+      "target",
+      {
+        targetUserId: "u1",
+        targetPrincipal: { kind: "acme-accounts:account", id: "acc_1" },
+      },
+    ],
+  ])(
+    "drops an event naming both a user and a person as %s",
+    (_role, parties) => {
+      expect(event(parties)).toBeNull();
+    }
+  );
+
+  it("keeps a user as actor beside a person as target", () => {
+    // The control for the refusal above: the two may name different roles.
+    expect(
+      event({
+        actorUserId: "u1",
+        targetPrincipal: { kind: "acme-accounts:account", id: "acc_1" },
+      })
+    ).toMatchObject({
+      actorUserId: "u1",
+      targetPrincipal: { kind: "acme-accounts:account", id: "acc_1" },
+    });
+  });
+});

@@ -83,7 +83,7 @@ import { wrapSinglesForPlugin } from "./plugin-singles";
 import type { PluginSinglesService } from "./plugin-singles";
 import { isInPluginNamespace } from "./plugin-slug";
 import { createPluginPrincipals } from "./principals/api";
-import type { PluginPrincipalsApi } from "./principals/types";
+import type { PluginPrincipalsApi, PrincipalRef } from "./principals/types";
 import {
   createOneTimeSecrets,
   type OneTimeSecrets,
@@ -685,6 +685,21 @@ export interface PluginAuditApi {
      * look the same, and neither may keep data about them.
      */
     targetUserId?: string | null;
+    /**
+     * @experimental A plugin-defined signed-in person who acted, by kind and
+     * id (a `Principal` will do). Never pass a person's id as `actorUserId`:
+     * that column names staff users, and an id naming none is stored as an
+     * erased account's. A row naming a person keeps its address, client and
+     * metadata until their plugin reports them deleted; one written after
+     * that is stored already erased. Not with `actorUserId`.
+     */
+    actorPrincipal?: PrincipalRef | null;
+    /**
+     * @experimental A plugin-defined signed-in person the event is about, as
+     * `actorPrincipal` names one. Never pass a person's id as
+     * `targetUserId`. Not with `targetUserId`.
+     */
+    targetPrincipal?: PrincipalRef | null;
     request?: Request;
     metadata?: Record<string, string | number | boolean>;
   }): Promise<void>;

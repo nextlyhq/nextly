@@ -36,13 +36,22 @@ import { randomUUID } from "crypto";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { getColumns } from "drizzle-orm";
 
+import type { RequestActor } from "../../auth/request-actor";
 import { getDialectTables } from "../../database/index";
 import { NEXTLY_ERROR_STATUS } from "../../errors/error-codes";
 import { NextlyError } from "../../errors/nextly-error";
+import { env } from "../../lib/env";
 import { getNextlyLogger } from "../../observability/logger";
+import { pluginTransactionInFlow } from "../../plugins/database/plugin-transaction-in-flow";
+import { linkedTransaction } from "../../plugins/database/plugin-transaction-link";
+import type { PrincipalRef } from "../../plugins/principals/types";
 import type { RowLockServer } from "../../shared/lib/row-lock";
-import { serializeOnSqlite } from "../../shared/lib/run-adapter-transaction";
+import {
+  serializeOnSqlite,
+  type SerializingAdapter,
+} from "../../shared/lib/run-adapter-transaction";
 import { isValidUUID } from "../auth/services/role/utils";
+import { pluginSettingsSecrets } from "../plugins/settings-service";
 
 import { isAuditReason } from "./audit-reasons";
 import {
@@ -50,7 +59,14 @@ import {
   insertErasureAware,
   type ErasureAwareDb,
   type ErasureAwareInsert,
+  type ErasureAwareOutcome,
 } from "./erasure-aware-insert";
+import {
+  holdsDeletionLock,
+  readPrincipalDigests,
+  type PrincipalDigestDb,
+  type PrincipalDigestTables,
+} from "./principal-digest";
 
 export type AuditEventKind =
   | "csrf-failed"
@@ -318,12 +334,55 @@ export function auditFailureMetadata(
   };
 }
 
+/**
+ * Which kind of caller acted, as an audit row records it: a staff user, an
+ * API key, core itself, nobody identified, or a plugin's kind of signed-in
+ * person (`<plugin>:<name>`, which no other value can be, as it alone holds a
+ * colon).
+ */
+export type AuditActorKind =
+  | "staff"
+  | "apiKey"
+  | "core"
+  | "anonymous"
+  | `${string}:${string}`;
+
+/** The kind of caller a request actor is, as an audit row records it. */
+export function auditActorKindOf(actor: RequestActor): AuditActorKind {
+  switch (actor.type) {
+    case "user":
+      return "staff";
+    case "apiKey":
+      return "apiKey";
+    case "system":
+      return "core";
+    case "principal":
+      // Always carried by a `principal` actor; one without names nobody.
+      return actor.principal
+        ? (actor.principal.kind as AuditActorKind)
+        : "anonymous";
+  }
+}
+
 export interface AuditEvent {
   kind: AuditEventKind;
+  /**
+   * Which kind of caller acted. Defaults from the parties named: the
+   * person's kind for `actorPrincipal`, `staff` for `actorUserId`, and
+   * `anonymous` for neither.
+   */
+  actorKind?: AuditActorKind;
   /** The user performing the action; null when unauthenticated (failed login, failed CSRF). */
   actorUserId?: string | null;
   /** The user being acted on; null when not account-scoped. */
   targetUserId?: string | null;
+  /**
+   * A plugin-defined person performing the action. Never in `actorUserId`:
+   * a person's id there would be read as a staff user's.
+   */
+  actorPrincipal?: PrincipalRef | null;
+  /** A plugin-defined person acted on. Never in `targetUserId`. */
+  targetPrincipal?: PrincipalRef | null;
   ipAddress?: string | null;
   userAgent?: string | null;
   /** JSON-serialisable details. Goes into the dialect's JSON column. */
@@ -373,7 +432,7 @@ function isSupportedDialect(value: unknown): value is SupportedDialect {
   );
 }
 
-function adapterDialect(adapter: unknown): SupportedDialect | undefined {
+export function adapterDialect(adapter: unknown): SupportedDialect | undefined {
   const candidate = adapter as {
     dialect?: unknown;
     getCapabilities?: () => { dialect?: unknown } | undefined;
@@ -391,7 +450,7 @@ function adapterDialect(adapter: unknown): SupportedDialect | undefined {
  * its server takes a shared row lock; one that does not say is left unknown,
  * and gets the lock every server accepts.
  */
-function rowLockServer(
+export function rowLockServer(
   adapter: unknown,
   dialect: SupportedDialect
 ): RowLockServer {
@@ -501,14 +560,23 @@ function auditRowInput(
   const pluginRow = event.kind.includes(".");
   const actorUserId = event.actorUserId ?? null;
   const targetUserId = event.targetUserId ?? null;
+  const actorPrincipal = event.actorPrincipal ?? NO_PERSON;
+  const targetPrincipal = event.targetPrincipal ?? NO_PERSON;
   return {
     table: table as ErasureAwareInsert["table"],
     users: usersTable as ErasureAwareInsert["users"],
     row: {
       id: randomUUID(),
       kind: event.kind,
+      actorKind: actorKindOf(event),
       actorUserId,
       targetUserId,
+      // The person's own columns, apart from the staff ones, so a person is
+      // never read as a staff user, nor one who is not as an erased account.
+      actorPrincipalKind: actorPrincipal.kind,
+      actorPrincipalId: actorPrincipal.id,
+      targetPrincipalKind: targetPrincipal.kind,
+      targetPrincipalId: targetPrincipal.id,
       ...(pluginRow ? {} : { metadata }),
       createdAt: new Date(),
     },
@@ -520,6 +588,16 @@ function auditRowInput(
     actorUserId,
     targetUserId,
   };
+}
+
+/** The person columns of a row that names no person in a role. */
+const NO_PERSON = { kind: null, id: null } as const;
+
+/** The kind of caller recorded on a row: as given, or from its parties. */
+function actorKindOf(event: AuditEvent): AuditActorKind {
+  if (event.actorPrincipal) return event.actorPrincipal.kind as AuditActorKind;
+  if (event.actorKind) return event.actorKind;
+  return event.actorUserId ? "staff" : "anonymous";
 }
 
 /**
@@ -550,15 +628,135 @@ function reportTargetAbsent(event: AuditEvent): void {
   });
 }
 
+/** One row's write, on whichever executor it is handed. */
+type RowWrite = (executor: ErasureAwareDb) => Promise<ErasureAwareOutcome>;
+
+/**
+ * Run a row's write in the transaction its decision needs.
+ *
+ * The lock the decision rests on is only worth anything inside a
+ * transaction, and this writer owns none. On SQLite the write goes through the
+ * adapter's transaction instead: the adapter queues it behind another
+ * request's open transaction rather than letting it run inside one, whose
+ * rollback would erase the audit entry, and its `BEGIN IMMEDIATE` holds the
+ * write lock across the decision and the insert. A write made inside the
+ * caller's own transaction nests in it.
+ *
+ * A row naming a person takes the deleted-people lock as well. When the flow
+ * is inside a plugin transaction that took that lock to report a deletion, the
+ * row is written in that transaction: one of its own would wait for the
+ * plugin's commit while the plugin waits for the write.
+ */
+async function runRowWrite(
+  adapter: SerializingAdapter,
+  db: unknown,
+  dialect: SupportedDialect,
+  write: RowWrite,
+  needs: { namesPerson: boolean; needsLock: boolean }
+): Promise<ErasureAwareOutcome> {
+  if (dialect === "sqlite") {
+    return serializeOnSqlite(adapter, () => write(db as ErasureAwareDb));
+  }
+  const reporting = needs.namesPerson ? reportingTransaction() : undefined;
+  if (reporting) {
+    return linkedTransaction(reporting, "audit write").run(tx =>
+      write(tx.getDrizzle<ErasureAwareDb>())
+    );
+  }
+  if (needs.namesPerson || needs.needsLock) {
+    return (db as TransactionalErasureDb).transaction(tx => write(tx));
+  }
+  return write(db as ErasureAwareDb);
+}
+
+/**
+ * The plugin transaction the calling flow is inside, when it holds the
+ * deleted-people lock; undefined otherwise.
+ */
+function reportingTransaction(): object | undefined {
+  const handle = pluginTransactionInFlow();
+  return handle !== undefined && holdsDeletionLock(handle) ? handle : undefined;
+}
+
+/** The deleted-people key and record, from the dialect's tables. */
+function principalDigestTables(schema: unknown): PrincipalDigestTables {
+  const tables = schema as {
+    nextlyMeta?: PrincipalDigestTables["meta"];
+    nextlyDeletedPrincipals?: PrincipalDigestTables["deleted"];
+  };
+  if (!tables.nextlyMeta || !tables.nextlyDeletedPrincipals) {
+    // Thrown into the writer's own catch, which logs it: a row naming a
+    // person is not written where whether they were deleted cannot be read.
+    throw NextlyError.internal({
+      logContext: { reason: "no deleted-people tables in this schema" },
+    });
+  }
+  return { meta: tables.nextlyMeta, deleted: tables.nextlyDeletedPrincipals };
+}
+
+/**
+ * Write a row naming a plugin-defined person: read under the shared
+ * deleted-people lock whether each person it names was reported deleted, and
+ * write the row already erased for one who was, naming them by digest.
+ */
+async function writeNamingPerson(
+  db: ErasureAwareDb & PrincipalDigestDb,
+  server: RowLockServer,
+  tables: PrincipalDigestTables,
+  event: AuditEvent,
+  input: ErasureAwareInsert,
+  secrets: readonly string[]
+): Promise<ErasureAwareOutcome> {
+  const digests = await readPrincipalDigests(
+    db,
+    server,
+    tables,
+    "shared",
+    secrets
+  );
+  const { actorPrincipal, targetPrincipal } = event;
+  const actorGone = actorPrincipal
+    ? await digests.isDeleted(actorPrincipal)
+    : false;
+  const targetGone = targetPrincipal
+    ? await digests.isDeleted(targetPrincipal)
+    : false;
+  return insertErasureAware(db, server, {
+    ...input,
+    row: {
+      ...input.row,
+      // A deleted person is named by digest only: no table keeps their id.
+      ...(actorGone && actorPrincipal
+        ? { actorPrincipalId: digests.digest(actorPrincipal) }
+        : {}),
+      ...(targetGone && targetPrincipal
+        ? { targetPrincipalId: digests.digest(targetPrincipal) }
+        : {}),
+    },
+    reportedGone: { actor: actorGone, target: targetGone },
+  });
+}
+
 /** The write surface plus the transaction the lock has to be held inside. */
 interface TransactionalErasureDb extends ErasureAwareDb {
   transaction<T>(work: (tx: ErasureAwareDb) => Promise<T>): Promise<T>;
 }
 
+/** What a writer reads besides the container. */
+export interface AuditLogWriterOptions {
+  /**
+   * The install's secrets, current first, that seal the key naming deleted
+   * people. Defaults to `NEXTLY_SECRET` and `NEXTLY_SECRET_PREVIOUS`.
+   */
+  secrets?: () => readonly string[];
+}
+
 export function buildAuditLogWriter(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  getService: (name: string) => any
+  getService: (name: string) => any,
+  options: AuditLogWriterOptions = {}
 ): AuditLogWriter {
+  const secrets = options.secrets ?? (() => pluginSettingsSecrets(env));
   return {
     async write(event: AuditEvent): Promise<void> {
       try {
@@ -594,26 +792,24 @@ export function buildAuditLogWriter(
         }
         const input = auditRowInput(event, table, usersTable);
         const server = rowLockServer(adapter, dialect);
-        const write = (executor: ErasureAwareDb) =>
-          insertErasureAware(executor, server, input);
-
-        // The lock the decision rests on is only worth anything inside a
-        // transaction, and this writer owns none. On SQLite the write goes
-        // through the adapter's transaction instead: the adapter queues it
-        // behind another request's open transaction rather than letting it run
-        // inside one, whose rollback would erase the audit entry, and its
-        // `BEGIN IMMEDIATE` holds the write lock across the decision and the
-        // insert. A write made inside the caller's own transaction nests in it.
-        const outcome =
-          dialect === "sqlite"
-            ? await serializeOnSqlite(adapter, () =>
-                write(db as ErasureAwareDb)
+        const namesPerson = Boolean(
+          event.actorPrincipal || event.targetPrincipal
+        );
+        const write: RowWrite = namesPerson
+          ? executor =>
+              writeNamingPerson(
+                executor as ErasureAwareDb & PrincipalDigestDb,
+                server,
+                principalDigestTables(schema),
+                event,
+                input,
+                secrets()
               )
-            : erasureNeedsLock(input)
-              ? await (db as TransactionalErasureDb).transaction(tx =>
-                  write(tx)
-                )
-              : await write(db as ErasureAwareDb);
+          : executor => insertErasureAware(executor, server, input);
+        const outcome = await runRowWrite(adapter, db, dialect, write, {
+          namesPerson,
+          needsLock: erasureNeedsLock(input),
+        });
         if (outcome.targetAbsent) reportTargetAbsent(event);
 
         // Offer a retention pass, for the same reason content writes do: there

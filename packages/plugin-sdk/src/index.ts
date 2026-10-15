@@ -178,7 +178,8 @@ export type {
  *   core hands to `ctx.principal`;
  *   `PrincipalRef`, a person named by kind and id; `PluginPrincipalsApi`
  *   (`ctx.principals`) and `NextlyPrincipals` (`nextly.principals`), with
- *   their `byId`; `RunAsPrincipal`, the `principal` option a collection or
+ *   their `byId`; `reportDeleted` and its `PrincipalReportOptions`, and
+ *   `actorPrincipal` and `targetPrincipal` on `ctx.audit.write`; `RunAsPrincipal`, the `principal` option a collection or
  *   Single operation and a `ctx.services` call run as. Meant to
  *   become stable once the feature is complete (see STABILITY.md).
  */
@@ -198,6 +199,7 @@ export type {
   PrincipalKindDefinition,
   PrincipalRecord,
   PrincipalRef,
+  PrincipalReportOptions,
   RunAsPrincipal,
 } from "nextly";
 

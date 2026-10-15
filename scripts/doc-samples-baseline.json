@@ -1,7 +1,7 @@
 {
   "coverage": {
     "pages": 77,
-    "samples": 445,
+    "samples": 447,
     "compiled": 277
   },
   "samplesPerPage": {
@@ -210,7 +210,7 @@
       "compiled": 1
     },
     "docs/plugins/signed-in-people.mdx": {
-      "samples": 7,
+      "samples": 9,
       "compiled": 4
     },
     "docs/plugins/testing.mdx": {

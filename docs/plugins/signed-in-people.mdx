@@ -201,6 +201,8 @@ defineCollection({
 - A field's rule receives `principal` too, so a field can be kept from members
   with `read: ({ principal }) => principal === null`. A field with no rule
   follows the collection's decision.
+- Related media in a row a person may read reaches them as it reaches an
+  anonymous visitor; a related staff user, role or permission never does.
 - A rule that limits a read to the rows a person owns is not offered yet. Check
   ownership in your own code.
 
@@ -226,13 +228,67 @@ only the Singles the person may read. Hooks for the operation receive the person
 `user`. A document created as a person has no owner, because the owner column
 names staff users; an update made as one leaves the owner as it was.
 
+## Record what a person does
+
+Name a person in your [audit rows](/docs/plugins/api-reference#ctxaudit) with
+`actorPrincipal` and `targetPrincipal`, by kind and id. A `Principal` will do:
+
+```ts
+await ctx.audit?.write({
+  kind: "acme-accounts.signed-in",
+  actorPrincipal: ctx.principal,
+  request: req,
+  metadata: { method: "password" },
+});
+```
+
+The row keeps the person's kind and id in fields of its own, and keeps its
+network address, browser and metadata, as it does for a staff user who exists.
+A person's writes appear in the audit log, not the activity log, which records
+staff users only. Name one party per role: a role named with both a person and
+a user id is dropped, and a warning is logged.
+
+## Report a person deleted
+
+When your plugin deletes a person, report it:
+
+```ts
+await ctx.db.transaction(async tx => {
+  // ...delete the account from your own tables with tx...
+  await ctx.principals?.reportDeleted(
+    { kind: "acme-accounts:account", id: accountId },
+    { tx }
+  );
+});
+```
+
+Core erases the person from the audit trail, in your transaction when you pass
+`tx`, so the deletion and the erasure commit or roll back together:
+
+- the address and browser on every row the person acted on;
+- your metadata on every row of yours naming them.
+
+The rows stay. Core names the person on them by a keyed digest of kind and id
+in place of the id, and keeps that digest and when, never the id. Every row
+written about the person afterwards, even by a request that recognised them
+before the report, is written already erased. Rows about anyone else stay as
+they were, a staff user with the same id included. Reporting a person twice
+is harmless.
+
+Without `tx`, the report runs in a transaction of its own, and is refused when
+made inside an open transaction, rather than joining it or racing it. Only your
+own kinds can be reported. How the digest's key survives a rotation of
+`NEXTLY_SECRET` is in [Audit Log](/docs/audit-log#signed-in-people-a-plugin-defines).
+
 ## A person is not a staff user
 
 A person's id never goes where a staff user's id goes. Do not pass it as a
-`userId`, an `actorUserId`, or to `ctx.auth.completeLogin`: `completeLogin` signs
-in a **staff** account, and a person's id there names whichever staff user happens
-to hold the same id. Keep your people in your own collections, keyed by the
-person's kind and id.
+`userId`, an `actorUserId` or a `targetUserId`, or to `ctx.auth.completeLogin`:
+`completeLogin` signs in a **staff** account, and a person's id there names
+whichever staff user happens to hold the same id. In an audit row, an id that
+names no staff user is stored as an erased account's; use `actorPrincipal` and
+`targetPrincipal` instead. Keep your people in your own collections, keyed by
+the person's kind and id.
 
 ## Stability
 
@@ -240,7 +296,9 @@ Everything here is `@experimental` until the feature is complete. These are mean
 to become stable: a definition's fields and their meaning, the `<plugin>:<name>`
 naming, what `resolve` must answer, the id bounds, a route's `principal` with
 `required`, `ctx.principal`, `fromRequest`, `byId`, `principal` in collection and
-field rules, the `principal` option's refusals, `Principal` and `PrincipalRef`. The
+field rules, the `principal` option's refusals, `Principal`, `PrincipalRef`,
+`actorPrincipal` and `targetPrincipal` on audit rows, and `reportDeleted` with
+what it erases. The
 `contributes.principals` key, where `nextly.principals` hangs, the spelling of a
 route's `principal`, the option's name and where the person sits in a hook's
 context may still change.

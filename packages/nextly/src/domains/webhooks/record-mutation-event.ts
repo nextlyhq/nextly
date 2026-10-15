@@ -17,7 +17,7 @@ import type {
   TransactionContext,
 } from "@nextlyhq/adapter-drizzle/types";
 
-import type { RequestActor } from "../../auth/request-actor";
+import { webhookActorOf, type RequestActor } from "../../auth/request-actor";
 import type {
   ActivityLogAction,
   ActivityWriteDb,
@@ -134,7 +134,7 @@ function prepareMutationEnvelope(args: RecordMutationEventArgs): {
     resource: args.resource,
     data: args.data,
     previous: args.previous ?? null,
-    actor: args.actor ?? null,
+    actor: webhookActorOf(args.actor),
     sensitiveFields: sensitiveFieldPaths(args.fields),
     ...(args.site !== undefined ? { site: args.site } : {}),
     ...(args.statusChange !== undefined
@@ -195,7 +195,7 @@ async function recordActivity(
       : {}),
     data: args.data,
     previous: args.previous ?? null,
-    actor: args.actor ?? null,
+    actor: webhookActorOf(args.actor),
   });
 }
 

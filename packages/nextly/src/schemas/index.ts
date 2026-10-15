@@ -27,6 +27,10 @@ import { drizzleTableToTableSpec } from "./_internal/drizzle-to-tablespec";
 import { apiKeyTables } from "./api-keys";
 import { auditTables } from "./audit";
 import { authTokenTables } from "./auth-tokens";
+import {
+  DELETED_PRINCIPALS_TABLE,
+  deletedPrincipalsTables,
+} from "./deleted-principals";
 import { documentLockTables } from "./document-lock";
 import {
   dynamicCollectionsPg,
@@ -193,6 +197,11 @@ export function getCoreSchema(
     // created on a real installation, however completely its own module
     // declares it.
     ...Object.values(rbacEpochTables(dialect)),
+    // `nextly_deleted_principals` — the plugin-defined people reported
+    // deleted, by a keyed digest. Declared here for the same reason as its
+    // neighbours: a table outside this set is never created on a real
+    // installation.
+    ...Object.values(deletedPrincipalsTables(dialect)),
     // `nextly_plugin_settings` — where a plugin's configuration lives, with
     // the keys it declared as secrets encrypted at rest. Declared here for the
     // same reason as its neighbours: a table outside this set is never created
@@ -335,6 +344,7 @@ export const CORE_TABLE_NAMES: readonly string[] = [
   "nextly_field_group_lock",
   "nextly_document_lock",
   RBAC_EPOCH_TABLE,
+  DELETED_PRINCIPALS_TABLE,
   PLUGIN_SETTINGS_TABLE,
   ONE_TIME_SECRETS_TABLE,
   LIMIT_STORE_TABLE,
