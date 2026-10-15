@@ -42,14 +42,17 @@ export const silentLogger = {
   error: () => {},
 };
 
+/** The parameters the adapter accepts with a statement. */
+type SqlParams = Parameters<DrizzleAdapter["executeQuery"]>[1];
+
 export interface TemplateStore {
   adapter: DrizzleAdapter;
   /** A fresh service, as a new boot would construct it. */
   newService(): EmailTemplateService;
   /** Run one statement, with `?` placeholders on every dialect. */
-  exec(sql: string, params?: unknown[]): Promise<void>;
+  exec(sql: string, params?: SqlParams): Promise<void>;
   /** Read rows, with `?` placeholders on every dialect. */
-  query<T>(sql: string, params?: unknown[]): Promise<T[]>;
+  query<T>(sql: string, params?: SqlParams): Promise<T[]>;
   /** Quote an identifier for this dialect. */
   q(id: string): string;
   /** Remove every template. */
@@ -102,7 +105,7 @@ export async function openTemplateStore(
     exec: async (sql, params) => {
       await adapter.executeQuery(placeholders(sql), params);
     },
-    query: async <T>(sql: string, params?: unknown[]) =>
+    query: async <T>(sql: string, params?: SqlParams) =>
       (await adapter.executeQuery<T>(placeholders(sql), params)) as T[],
     q,
     clear: async () => {

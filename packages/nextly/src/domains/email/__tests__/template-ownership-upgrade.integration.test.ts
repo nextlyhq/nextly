@@ -69,12 +69,18 @@ for (const entry of TEMPLATE_STORE_DIALECTS) {
               : {};
           await seeding.createTemplate({ ...template, ...edited });
         }
+        // As the old insert-if-absent seeding stored them.
+        const [paid, shipped] = ORDERS_TEMPLATES;
         await seeding.createTemplate({
-          ...ORDERS_TEMPLATES[0],
-          kind: "template",
+          name: paid.name,
+          slug: paid.slug,
+          subject: paid.subject,
+          htmlContent: paid.htmlContent,
         });
         await seeding.createTemplate({
-          ...ORDERS_TEMPLATES[1],
+          name: shipped.name,
+          slug: shipped.slug,
+          subject: shipped.subject,
           htmlContent: "<p>Good news: order {{number}} is on its way.</p>",
         });
         // Left behind by the accounts plugin, which this site has since removed.
