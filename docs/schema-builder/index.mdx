@@ -34,7 +34,7 @@ The field palette groups field types into five categories, in this order:
 | Relational | Relationship                                                    |
 | Structured | Repeater, Group, Component                                      |
 
-This is the picker grouping inside the admin UI. The reference docs in [Fields](/docs/configuration/fields) group fields slightly differently (Basic / Selection / Media / Relationship / Layout / Component / Advanced / Virtual) so the prose can talk about families that don't all map to a single picker tab — for example, the `join` field is a code-first virtual field with no picker entry.
+This is the picker grouping inside the admin UI. The reference docs in [Fields](/docs/configuration/fields) group fields slightly differently (Basic / Selection / Media / Relationship / Layout / Component / Advanced) so the prose can talk about families that don't all map to a single picker tab.
 
 ### Field editor
 
@@ -60,6 +60,8 @@ The palette ships every field type Nextly supports through code-first definition
 For the full per-type option reference, see [Fields](/docs/configuration/fields).
 
 ### Relationships and foreign keys
+
+> **Needs the release after 0.0.2-alpha.66.**
 
 A one-to-one or many-to-one Relationship field stores the target's id in a
 column of its own, and that column carries a foreign key to the target

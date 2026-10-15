@@ -3,6 +3,10 @@ title: Plugin security
 description: What a plugin can reach, what it must declare, and where the boundaries actually are.
 ---
 
+<Callout type="warn">
+**Needs the release after 0.0.2-alpha.66.** 0.0.2-alpha.66 has none of the capabilities, route protections or limits this page describes.
+</Callout>
+
 # Plugin security
 
 ## Plugins are trusted code
@@ -32,7 +36,7 @@ import { z } from "zod";
 export default definePlugin({
   name: "@acme/auth",
   version: "1.0.0",
-  nextly: ">=0.0.2-alpha.63",
+  nextly: ">=0.0.2-alpha.67",
   contributes: {
     settings: z.object({
       providers: z
@@ -335,7 +339,7 @@ let limits: PluginLimiter | undefined;
 export default definePlugin({
   name: "@acme/accounts",
   version: "1.0.0",
-  nextly: ">=0.0.2-alpha.66",
+  nextly: ">=0.0.2-alpha.67",
   contributes: {
     limits: {
       // 5 code tries per address in any 24 hours, across every code sent to it.

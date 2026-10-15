@@ -81,9 +81,19 @@ describe.each(getConfiguredTestDialects())(
           await current.adapter.executeQuery(statement);
         }
       }
-      const created = await new ServiceContainer(
-        current.adapter
-      ).users.createLocalUser({
+      const users = new ServiceContainer(current.adapter).users;
+      // The install's first account is made its super-admin, which may not be
+      // deactivated while it is the only one. The account under test is
+      // another, so a deactivation here is the write this file is about. No
+      // place read below depends on the account's role.
+      await users.createLocalUser({
+        email: "owner@example.com",
+        name: "Owner",
+        password: PASSWORD,
+        isActive: true,
+        emailVerification: "admin-vouched",
+      });
+      const created = await users.createLocalUser({
         email: EMAIL,
         name: "Cutoff",
         password: PASSWORD,

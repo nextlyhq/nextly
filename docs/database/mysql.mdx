@@ -212,7 +212,7 @@ pnpm nextly migrate
 pnpm nextly migrate:fresh   # destructive, local-dev only
 ```
 
-> **Forward-only.** There is no `migrate:rollback` or `migrate:down`. Write a new corrective migration to reverse a change. See [production migrations](/docs/guides/production-migrations).
+> **Rolling back.** `nextly migrate:down` rolls back the most recently applied migration using its `-- DOWN` section; there is no `migrate:rollback`. For anything else, write a new corrective migration. See [production migrations](/docs/guides/production-migrations).
 
 ## Local development with Docker
 

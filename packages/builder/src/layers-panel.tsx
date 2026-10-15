@@ -144,7 +144,13 @@ function rowOf(
     label: (
       <span className="nx-layer-row">
         <BlockIconMark icon={icons.get(node.type)} size={14} />
-        <span className="nx-layer-row__label">{node.label}</span>
+        {/* `data-nx-layer` names the block a row stands for. Labels repeat —
+            every paragraph is "Text" — so it is the one stable way to find a
+            given block's row, the Layers counterpart of the canvas's
+            `data-nx-node`. */}
+        <span className="nx-layer-row__label" data-nx-layer={node.id}>
+          {node.label}
+        </span>
         {node.locked ? <Badge icon={<Lock size={12} />} text="Locked" /> : null}
         {node.breakpointHidden ? (
           <Badge

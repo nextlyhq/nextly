@@ -42,7 +42,7 @@ pnpm create nextly-app@alpha my-blog --template blog --approach visual
 The Blog template supports two approaches:
 
 - **`code-first`** (default) -- Collections and singles are defined in TypeScript files under `src/collections/` and `src/singles/`. The CLI copies `configs/codefirst.config.ts` to the project root as `nextly.config.ts`. Best for version control and type safety.
-- **`visual`** -- Collections and singles are created via the Visual Schema Builder in the admin. The CLI copies `configs/visual.config.ts` (an empty config) to the project root as `nextly.config.ts`. After scaffolding, define your schemas through the admin UI; demo data (if selected) seeds the schemas and content on first run.
+- **`visual`** -- Collections and singles are created via the Visual Schema Builder in the admin. The CLI copies `configs/visual.config.ts` (an empty config) to the project root as `nextly.config.ts`. After scaffolding, define your schemas through the admin UI, or seed the demo schemas and content from the **Seed Demo Content** card on the admin dashboard.
 
 ## What it ships
 
@@ -72,15 +72,15 @@ Public-facing routes live under the `src/app/(frontend)/` route group:
 - `/authors/[slug]` -- Author profile page.
 - `/search` -- Client-side search powered by Pagefind.
 
-SEO routes live at the root of `src/app/`:
+SEO routes:
 
-- `/sitemap.xml`, `/robots.txt`, `/feed.xml` (site-wide RSS).
-- Per-category, per-tag, and per-author RSS at `/{categories,tags,authors}/[slug]/feed.xml`.
+- `/sitemap.xml` and `/robots.txt`, at the root of `src/app/`.
+- `/feed.xml` (site-wide RSS), and per-category, per-tag and per-author RSS at `/{categories,tags,authors}/[slug]/feed.xml`, under `src/app/(frontend)/`.
 - Default OG image at `/opengraph-image`, plus per-page OG handlers under each `(frontend)` segment.
 
 ### Components
 
-A set of React components for the frontend lives under `src/components/`, including `PostCard`, `PostGrid`, `FeaturedPost`, `Hero`, `Header`, `Footer`, `CategoryCardGrid`, `CategoryStrip`, `TagCloud`, `Pagination`, `NewsletterCta`, `RichTextRenderer`, `ThemeToggle`, `ReadingProgressBar`, `PostTOC`, `PostShareBar`, `PostPrevNext`, `AuthorCard`, `JsonLd`, and a few smaller helpers.
+A set of React components for the frontend lives under `src/app/(frontend)/components/`, including `PostCard`, `PostGrid`, `FeaturedPost`, `Hero`, `Header`, `Footer`, `CategoryCardGrid`, `CategoryStrip`, `TagCloud`, `Pagination`, `NewsletterCta`, `RichTextRenderer`, `ThemeToggle`, `ReadingProgressBar`, `PostTOC`, `PostShareBar`, `PostPrevNext`, `AuthorCard`, `JsonLd`, and a few smaller helpers.
 
 ### Access control
 
@@ -91,11 +91,11 @@ RBAC policies under `src/access/` gate each CRUD operation:
 - `is-admin` -- the `admin` role.
 - `is-author-or-editor` -- `admin`, `editor`, or `author`.
 
-Three roles (`admin`, `editor`, `author`) are seeded on first run alongside the demo content.
+The demo-content seed creates three roles (`admin`, `editor`, `author`).
 
 ### Demo data
 
-Selecting "Seed demo content" populates 15 posts, 3 authors, 4 categories, and 8 tags. Seeding runs through the **Seed Demo Content** card on the admin dashboard (rendered by `SeedDemoContentCard`) -- click it to start the seed, watch progress, and confirm completion. The seed is idempotent and uses placeholder gradient SVGs that you can replace later.
+The demo content is 16 posts, 3 authors, 4 categories, and 8 tags. The CLI does not ask about it: seeding runs through the **Seed Demo Content** card on the admin dashboard (rendered by `SeedDemoContentCard`) -- click it to start the seed, watch progress, and confirm completion. The seed is idempotent and uses placeholder gradient SVGs that you can replace later.
 
 ### Newsletter form
 
@@ -105,21 +105,17 @@ The homepage and footer newsletter forms submit through the form-builder plugin.
 
 ```
 my-blog/
-├── configs/
-│   ├── codefirst.config.ts        # Code-first config (default)
-│   └── visual.config.ts           # Empty config for the visual approach
+├── migrations/                    # The blog schema, prebuilt for each dialect
 ├── scripts/
 │   └── build-search-index.mjs     # Pagefind index builder
 ├── src/
 │   ├── access/                    # RBAC access functions
 │   ├── actions/                   # Server actions (newsletter)
 │   ├── app/
-│   │   ├── (frontend)/            # Public-facing pages and OG handlers
-│   │   ├── admin/                 # Generated admin route + seed endpoints
-│   │   ├── authors/[slug]/feed.xml/
-│   │   ├── categories/[slug]/feed.xml/
-│   │   ├── tags/[slug]/feed.xml/
-│   │   ├── feed.xml/route.ts
+│   │   ├── (frontend)/            # Public pages, their components, RSS feeds and OG handlers
+│   │   │   └── components/        # Frontend React components
+│   │   ├── admin/                 # Admin route, its API, and the seed endpoints
+│   │   ├── api/                   # Health and media routes
 │   │   ├── opengraph-image.tsx
 │   │   ├── robots.ts
 │   │   ├── sitemap.ts
@@ -129,14 +125,15 @@ my-blog/
 │   │   ├── Categories.ts
 │   │   ├── Posts/
 │   │   └── Tags.ts
-│   ├── components/                # Frontend React components
 │   ├── endpoints/seed/            # Demo-content seed phases and media
 │   ├── singles/
 │   │   ├── Homepage/
 │   │   ├── Navigation/
 │   │   └── SiteSettings/
 │   ├── hooks/                     # Shared collection hooks (auto-slug, etc.)
-│   └── lib/                       # Cached query helpers, RSS builder, OG layout
+│   ├── lib/                       # Cached query helpers, RSS builder, OG layout
+│   └── instrumentation.ts         # Registers Next.js cache revalidation
+├── nextly.config.ts               # The config for the approach you chose
 ├── .env.example
 ├── next.config.ts
 ├── package.json
