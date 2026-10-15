@@ -1535,6 +1535,26 @@ describe("a password set while the second factor is outstanding", () => {
     return deps;
   }
 
+  it("refuses a resumed sign-in whose token proves a password but carries no epoch", async () => {
+    // A pending token minted before the epoch existed: its proof cannot be
+    // judged against the epoch it was made at, and a later read could be a
+    // same-second reset's. The person signs in again.
+    const deps = depsWithPasswordSetAt(JAN);
+    const pendingToken = await mint({
+      userId: "u1",
+      challengeId: "totp",
+      passwordUpdatedAt: JAN.getTime(),
+    });
+
+    const res = await handleChallengeResolve(
+      makeRequest({ pendingToken, response: { code: "123456" } }),
+      deps
+    );
+
+    expect(res.status).toBe(401);
+    expect(deps.sessionRows.committed).toHaveLength(0);
+  });
+
   it("refuses the session when the sessions were ended in the second the sign-in proved it", async () => {
     // A reset within the same second leaves the stored password time
     // unchanged on MySQL and SQLite; the epoch the token carries from the
@@ -1587,6 +1607,7 @@ describe("a password set while the second factor is outstanding", () => {
       userId: "u1",
       challengeId: "totp",
       passwordUpdatedAt: JAN.getTime(),
+      sessionEpoch: 0,
     });
 
     const res = await handleChallengeResolve(
@@ -1605,6 +1626,7 @@ describe("a password set while the second factor is outstanding", () => {
       userId: "u1",
       challengeId: "totp",
       passwordUpdatedAt: JAN.getTime(),
+      sessionEpoch: 0,
     });
 
     const res = await handleChallengeResolve(
@@ -1622,6 +1644,7 @@ describe("a password set while the second factor is outstanding", () => {
       userId: "u1",
       challengeId: "totp",
       passwordUpdatedAt: JAN.getTime(),
+      sessionEpoch: 0,
     });
 
     const res = await handleChallengeResolve(
@@ -1744,6 +1767,7 @@ describe("a cookie-mode flow that can no longer succeed", () => {
       userId: "u1",
       challengeId: "totp",
       passwordUpdatedAt: JAN.getTime(),
+      sessionEpoch: 0,
     });
 
     const res = await handleChallengeResolve(

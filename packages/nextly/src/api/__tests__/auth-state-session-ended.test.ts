@@ -92,7 +92,7 @@ describe("GET /api/auth/state and an account's ended sessions", () => {
     const body = (await res.json()) as { error?: { code?: string } };
     expect(body.error?.code).toBe("AUTH_REQUIRED");
     expect(sessionTokenIsCurrent).toHaveBeenCalledWith(
-      expect.objectContaining({ sub: "u1", sev: 0 })
+      expect.objectContaining({ sub: "u1", nx_sev: 0 })
     );
     // Refused before the route's own account read.
     expect(getCachedNextly).not.toHaveBeenCalled();

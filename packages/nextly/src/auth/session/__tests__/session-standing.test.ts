@@ -347,13 +347,13 @@ describe("standingAdmits", () => {
     [
       "a token at the account's current epoch",
       { isActive: true, sessionEpoch: 3 },
-      { sev: 3 },
+      { nx_sev: 3 },
       true,
     ],
     [
       "a token from before the account's last change",
       { isActive: true, sessionEpoch: 3 },
-      { sev: 2 },
+      { nx_sev: 2 },
       false,
     ],
     ["an inactive account", { isActive: false, sessionEpoch: 0 }, {}, false],
@@ -365,14 +365,22 @@ describe("standingAdmits", () => {
     expect(standingAdmits(standing, claims)).toBe(admitted);
   });
 
+  it("reads a token carrying an app's own `sev` claim as one from before the epoch", () => {
+    // Tokens signed before the upgrade may carry a custom claim of that name;
+    // it says nothing about the epoch, so such a token reads as epoch zero.
+    expect(
+      standingAdmits({ isActive: true, sessionEpoch: 0 }, { sev: "gold" })
+    ).toBe(true);
+  });
+
   it.each([["3"], [-1], [1.5], [null]])(
     "refuses a token whose epoch claim is %j",
     sev => {
       // Only core signs the claim, so a malformed one is not a token core
       // issued; reading it as epoch zero would admit it.
-      expect(standingAdmits({ isActive: true, sessionEpoch: 0 }, { sev })).toBe(
-        false
-      );
+      expect(
+        standingAdmits({ isActive: true, sessionEpoch: 0 }, { nx_sev: sev })
+      ).toBe(false);
     }
   );
 });
@@ -405,7 +413,7 @@ describe("sessionTokenIsCurrent across a change of database", () => {
     // booting a fresh database, bring another adapter. An answer the old one
     // gave is about a row the new one may not hold, and served from the
     // cache it would decide this database's sessions for the whole lifetime.
-    const claims = { sub: "u1", sev: 0 };
+    const claims = { sub: "u1", nx_sev: 0 };
     ready.registered = true;
     container.registerSingleton("adapter", () => adapterHolding(ACTIVE));
     expect(await sessionTokenIsCurrent(claims)).toBe(true);

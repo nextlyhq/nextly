@@ -82,12 +82,12 @@ describe("AuthHookRegistry", () => {
         roleIds: ["super-admin"],
         email: "x@evil.test",
         typ: "pending-auth",
-        sev: 99,
+        nx_sev: 99,
         tenant: "acme",
       }),
     });
     const out = await reg.runCustomizeClaims(
-      { sub: "u1", email: "a@b.c", roleIds: ["editor"], sev: 2 },
+      { sub: "u1", email: "a@b.c", roleIds: ["editor"], nx_sev: 2 },
       user,
       {} as never
     );
@@ -97,7 +97,7 @@ describe("AuthHookRegistry", () => {
       sub: "u1",
       email: "a@b.c",
       roleIds: ["editor"],
-      sev: 2,
+      nx_sev: 2,
       tenant: "acme",
     });
   });
