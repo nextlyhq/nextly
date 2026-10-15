@@ -1360,9 +1360,9 @@ describe("the whole envelope reaches email.beforeSend, and what it returns is ch
   it("refuses a filter that adds a second `to` to a send naming a person", async () => {
     getFilterRegistry().addFilter(
       FilterSeams.EmailBeforeSend,
-      (payload: { to: string }) => ({
+      (payload: { to: string | string[] }) => ({
         ...payload,
-        to: [payload.to, "other@b.com"],
+        to: [payload.to, "other@b.com"].flat(),
       })
     );
     const { service, adapterSend } = buildSend();
@@ -1421,9 +1421,9 @@ describe("the whole envelope reaches email.beforeSend, and what it returns is ch
   it("refuses a filter that adds an address that is not one", async () => {
     getFilterRegistry().addFilter(
       FilterSeams.EmailBeforeSend,
-      (payload: { to: string }) => ({
+      (payload: { to: string | string[] }) => ({
         ...payload,
-        to: [payload.to, "not-an-address"],
+        to: [payload.to, "not-an-address"].flat(),
       })
     );
     const { service, adapterSend } = buildSend();
@@ -1439,9 +1439,9 @@ describe("the whole envelope reaches email.beforeSend, and what it returns is ch
   it("refuses a filter that takes the list past the adapter's limit", async () => {
     getFilterRegistry().addFilter(
       FilterSeams.EmailBeforeSend,
-      (payload: { to: string }) => ({
+      (payload: { to: string | string[] }) => ({
         ...payload,
-        to: [payload.to, "b@b.com", "c@b.com"],
+        to: [payload.to, "b@b.com", "c@b.com"].flat(),
       })
     );
     const { service, adapterSend } = buildSend();

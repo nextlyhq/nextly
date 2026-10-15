@@ -117,6 +117,11 @@ const TEMPLATE = {
   isActive: true,
   providerId: null,
   attachments: null,
+  preheader: null,
+  kind: "template",
+  layoutId: null,
+  fromOverride: null,
+  replyTo: null,
   createdAt: new Date(),
   updatedAt: new Date(),
 } satisfies EmailTemplateRecord;
@@ -367,7 +372,10 @@ describe("several `to` addresses reach the provider", () => {
 });
 
 describe("a send that cannot be delivered whole is refused before the provider", () => {
-  const surfaces = (adapter: EmailProviderAdapter) => {
+  type Refusal = { path: string; code: string };
+  const surfaces = (
+    adapter: EmailProviderAdapter
+  ): Record<string, (to: unknown) => Promise<Refusal>> => {
     const { plugin, direct } = build(adapter);
     return {
       "ctx.services.email.send": (to: unknown) =>
@@ -403,7 +411,7 @@ describe("a send that cannot be delivered whole is refused before the provider",
 
   it.each(surfaceNames)("with no `to` address, on %s", async name => {
     const { adapter, send } = mockAdapter(10);
-    const entry = await surfaces(adapter)[name as never]([]);
+    const entry = await surfaces(adapter)[name]([]);
     expect(entry.path).toBe("to");
     expect(send).not.toHaveBeenCalled();
   });
@@ -412,10 +420,7 @@ describe("a send that cannot be delivered whole is refused before the provider",
     "with an address that is not one, naming which, on %s",
     async name => {
       const { adapter, send } = mockAdapter(10);
-      const entry = await surfaces(adapter)[name as never]([
-        A,
-        "not-an-address",
-      ]);
+      const entry = await surfaces(adapter)[name]([A, "not-an-address"]);
       expect(entry.path).toBe("to.1");
       expect(send).not.toHaveBeenCalled();
     }
@@ -425,7 +430,7 @@ describe("a send that cannot be delivered whole is refused before the provider",
     "with more `to` addresses than the adapter takes, on %s",
     async name => {
       const { adapter, send } = mockAdapter(2);
-      const entry = await surfaces(adapter)[name as never]([A, B, C]);
+      const entry = await surfaces(adapter)[name]([A, B, C]);
       expect(entry).toMatchObject({ path: "to", code: "TOO_MANY" });
       expect(send).not.toHaveBeenCalled();
     }
