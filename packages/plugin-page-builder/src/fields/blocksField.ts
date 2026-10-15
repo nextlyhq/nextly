@@ -26,6 +26,7 @@ import type {
 
 import { siteBreakpoints } from "../site-style";
 
+import { compositionIssues, type CompositionSetup } from "./blocks-composition";
 import { emptyBlockDocument } from "./blocks-document";
 import type { BlocksFieldOptions } from "./blocks-options";
 import { blocksOptionsOf } from "./blocks-options";
@@ -59,7 +60,15 @@ function policyOf(field: PluginFieldInstance): BlocksFieldOptions {
  * Handing the set in here is what lets a write be judged against the same
  * breakpoints the canvas draws with.
  */
-export function blocksFieldType(breakpoints?: BreakpointSet): PluginFieldType {
+export function blocksFieldType(
+  breakpoints?: BreakpointSet,
+  /**
+   * How the composed document is judged: where components live, the caps, and
+   * how a component's hosts are found. A getter, because the plugin knows its
+   * store only once it is installed; absent, only the document's own rules run.
+   */
+  composition?: () => CompositionSetup | undefined
+): PluginFieldType {
   return {
     type: BLOCKS_TYPE,
     storage: "json",
@@ -88,7 +97,19 @@ export function blocksFieldType(breakpoints?: BreakpointSet): PluginFieldType {
         // the engine treats permissively (a breakpoint reference warns).
         breakpoints ?? siteBreakpoints()
       );
-      return issues.length === 0 ? true : issues;
+      if (issues.length > 0) return issues;
+      // Composed only once the document is well formed: the composition walks
+      // the tree the rules above vouched for, and a malformed one would report
+      // the shape problem a second time in the composition's words.
+      //
+      // Answered synchronously wherever there is nothing to compose — no store
+      // installed, or no entry write to read the library through — so a caller
+      // judging a value on its own gets the answer it always got.
+      const setup = composition?.();
+      if (setup === undefined || args.write === undefined) return true;
+      return compositionIssues(value, args, setup).then(composed =>
+        composed.length === 0 ? true : composed
+      );
     },
 
     /**
