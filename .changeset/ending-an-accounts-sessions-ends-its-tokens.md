@@ -37,9 +37,11 @@ thirty-day token from the Direct API's `nextly.login()`. Before, a token
 stayed valid until it expired. A person changing or resetting their own
 password ends their other sessions the same way.
 
-Each access token carries the account's session epoch, a new nullable
-`users.session_epoch` column that the write ending the account's sessions
-raises. Each read checks the token against the row, which is cached for five
+Each access token carries the account's session epoch, in a new reserved
+`nx_sev` claim, from a new nullable `users.session_epoch` column that the
+write ending the account's sessions raises. A custom user field or
+`customizeClaims` claim of that exact name is not kept; any other name,
+plain `sev` included, is untouched. Each read checks the token against the row, which is cached for five
 seconds per account per process. A token for an account that no longer
 exists, or is not active, is refused too. Run `nextly migrate` to add the
 column to an existing database; no row is rewritten. Tokens issued before
@@ -60,10 +62,13 @@ token built that way works until the account's sessions are first ended.
 `sessionEpoch`. If you assemble `AuthRouterDeps` yourself, your
 `fetchAccountState` and the session-row `lockAccountState` must return those
 fields from the user row, and `setInitialPassword` must return the
-`sessionEpoch` its write left beside `passwordUpdatedAt`. Until they do, no
-session is issued from them, and the log names what is missing. A
-`findUserByEmail` that does not return `sessionEpoch` keeps working: the
-sign-in then judges against the epoch its own account read finds.
+`sessionEpoch` its write left beside `passwordUpdatedAt`, and
+`findUserByEmail` must return the row's `sessionEpoch` with its
+`passwordHash`. Until they do, no session is issued from them, and the log
+names what is missing. A sign-in is judged against the epoch its proof was
+made at, and a later read cannot stand in for it. A second-factor sign-in
+paused before the upgrade is refused when answered, and the person signs in
+again.
 
 A session's `email`, `name` and `image` claims now come from the account the
 sign-in checked, not from the user an `afterAuthenticate` hook returned.

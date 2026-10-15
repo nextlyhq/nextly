@@ -23,12 +23,8 @@ export interface VerifiedUser {
    * been set again by the time its refresh row is written.
    */
   passwordUpdatedAt: Date | null;
-  /**
-   * The account's session epoch, read with the hash the password matched;
-   * absent when the lookup did not read it, in which case the sign-in judges
-   * against the epoch its own account read finds.
-   */
-  sessionEpoch?: number;
+  /** The account's session epoch, read with the hash the password matched. */
+  sessionEpoch: number;
 }
 
 /**
@@ -57,11 +53,40 @@ export interface CredentialUserRow {
   /** When the password was last set; null when it never has been. */
   passwordUpdatedAt: Date | null;
   /**
-   * How many times the account's sessions have been ended. Null on a row
-   * from before the column existed, which is epoch zero. Absent from a lookup
-   * that does not read it, which says nothing about the epoch.
+   * How many times the account's sessions have been ended; null on a row
+   * from before the column existed, which is epoch zero. Required, and read
+   * with the hash: a sign-in is judged against the epoch its proof was made
+   * at, and no later read can stand in for it.
    */
-  sessionEpoch?: number | null;
+  sessionEpoch: number | null;
+}
+
+/**
+ * The session epoch read with the hash the password matched.
+ *
+ * A lookup that did not read the column gives no epoch to judge the proof
+ * against. Zero would refuse every sign-in of an account whose sessions had
+ * ever been ended; a later read could hold the epoch of a reset made in the
+ * same second as the proof, which would pass and sign in the old password's
+ * holder. Neither is safe, so the sign-in is refused, with the log naming
+ * what the lookup must return. The password was checked first, so this says
+ * nothing about the account to whoever typed it.
+ */
+function provenEpoch(user: CredentialUserRow): number {
+  const read: unknown = user.sessionEpoch;
+  if (read === null) return 0;
+  if (typeof read === "number" && Number.isSafeInteger(read) && read >= 0) {
+    return read;
+  }
+  throw NextlyError.internal({
+    logContext: {
+      userId: user.id,
+      reason: "credential-lookup-without-session-epoch",
+      remedy:
+        "findUserByEmail must return the user row's sessionEpoch with its " +
+        "passwordHash",
+    },
+  });
 }
 
 /** What a password sign-in needs from the database, and its limits. */
@@ -195,10 +220,6 @@ export async function verifyCredentials(
     isActive: user.isActive,
     mustChangePassword: user.mustChangePassword ?? false,
     passwordUpdatedAt: user.passwordUpdatedAt,
-    // Unread is not zero: read as zero, every password sign-in of an account
-    // whose sessions had ever been ended would be refused.
-    ...(user.sessionEpoch === undefined
-      ? {}
-      : { sessionEpoch: Number(user.sessionEpoch ?? 0) }),
+    sessionEpoch: provenEpoch(user),
   };
 }

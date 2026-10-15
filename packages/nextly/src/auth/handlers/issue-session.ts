@@ -454,6 +454,21 @@ export async function finishResumedSignIn(
   >,
   startTime: number
 ): Promise<Response> {
+  // A token that proved a password but carries no epoch was minted before the
+  // epoch existed. Its proof cannot be judged against the epoch it was made
+  // at, and a later read could be a same-second reset's, so the person signs
+  // in again rather than resuming it.
+  if (
+    pending.passwordUpdatedAt !== undefined &&
+    pending.sessionEpoch === undefined
+  ) {
+    throw NextlyError.invalidCredentials({
+      logContext: {
+        userId: String(user.id),
+        reason: auditReason("pending-token-invalid"),
+      },
+    });
+  }
   const response = await issueSession(user, deps, request, requestId, {
     strategy: pending.strategy,
     next: pending.next,

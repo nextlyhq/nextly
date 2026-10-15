@@ -13,7 +13,7 @@
  *
  * A number on the user row that rises whenever the account's sessions are
  * ended (`updateUserEndingSessions`), and that every access token carries as
- * its `sev` claim. A token signed before the change carries the old number and
+ * its `nx_sev` claim. A token signed before the change carries the old number and
  * is refused; one signed after carries the new number. Comparing numbers
  * rather than times means no clock is involved: a token issued in the same
  * second as the change, or on an instance whose clock runs ahead, is judged
