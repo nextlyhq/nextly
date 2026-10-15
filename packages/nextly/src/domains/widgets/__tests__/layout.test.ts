@@ -467,6 +467,25 @@ describe("retired widgets", () => {
     expect(merged).toEqual([card("mid"), existing]);
   });
 
+  it("merges into the first of several matching successor cards, leaving the others", () => {
+    // A widget may be placed more than once with other settings: two Count
+    // cards for Posts already stand, and a retired Posts health card joins the
+    // first of them in the order. The second is not touched.
+    const first = card("first", "core/count", {
+      removed: true,
+      config: { ...of("posts"), filter: "drafts" },
+    });
+    const second = card("second", "core/count", {
+      removed: true,
+      config: { ...of("posts"), filter: "published" },
+    });
+    const merged = applyRetirements(
+      [first, second, card("health", "gen/health", { config: of("posts") })],
+      retirements
+    );
+    expect(merged).toEqual([{ ...first, removed: false }, second]);
+  });
+
   it("removes a merged card only when every card merged into it was removed", () => {
     const merge = (cols: boolean, sing: boolean, existing?: boolean) =>
       applyRetirements(
@@ -505,7 +524,7 @@ describe("retired widgets", () => {
   it("follows a chain of retirements to the widget that exists now", () => {
     // Retired in one release, its successor retired again in a later one: a
     // row nobody saved in between still reaches the current widget, once.
-    const chain: WidgetRetirements = new Map([
+    const chain: WidgetRetirements = new Map<string, WidgetRetirement>([
       ["core/old", { successor: "core/replacement" }],
       [
         "core/replacement",
@@ -529,7 +548,7 @@ describe("retired widgets", () => {
   });
 
   it("stops at a cycle in the map rather than looping", () => {
-    const cycle: WidgetRetirements = new Map([
+    const cycle: WidgetRetirements = new Map<string, WidgetRetirement>([
       ["core/a", { successor: "core/b" }],
       ["core/b", { successor: "core/a" }],
     ]);

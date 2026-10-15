@@ -676,7 +676,10 @@ export function applyRetirements(
     const group = groups.get(card.key) ?? [];
     if (!group.some(member => member.retired)) return [card.placement];
     const merged = keptBy.get(card);
-    return merged ? [merged.placement] : [];
+    if (merged) return [merged.placement];
+    // Only RETIRED cards go into a merge. A successor card the layout already
+    // held, other than the one that takes the merge, stays as it was.
+    return card.retired ? [] : [card.placement];
   });
 }
 
