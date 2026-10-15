@@ -3,7 +3,12 @@ import { describe, expect, it } from "vitest";
 
 import { fakeAccountsCore } from "../testing";
 
-import { assertLimitsShared, coreOnContext, readAccountsCore } from "./adapter";
+import {
+  assertLimitsShared,
+  coreOnContext,
+  readAccountPrincipals,
+  readAccountsCore,
+} from "./adapter";
 
 /** The refusal's code and the members it names, or undefined when read. */
 function refusalOf(
@@ -87,5 +92,28 @@ describe("assertLimitsShared", () => {
     expect(() => assertLimitsShared(store(true, false), true)).not.toThrow();
     expect(() => assertLimitsShared(store(false, true), true)).not.toThrow();
     expect(() => assertLimitsShared(store(false, false), false)).not.toThrow();
+  });
+});
+
+describe("readAccountPrincipals", () => {
+  it("finds where core lends the plugin's record of its people", async () => {
+    const reported: unknown[] = [];
+    const principals = {
+      reportDeleted: async (person: unknown) => void reported.push(person),
+    };
+
+    await readAccountPrincipals({ principals }).reportDeleted({
+      kind: "k",
+      id: "a",
+    });
+    expect(reported).toEqual([{ kind: "k", id: "a" }]);
+  });
+
+  it("refuses a core that does not lend it, or lends it without reportDeleted", () => {
+    for (const context of [{}, { principals: {} }]) {
+      expect(() => readAccountPrincipals(context)).toThrow(
+        expect.objectContaining({ code: "ACCOUNTS_CORE_MISSING" })
+      );
+    }
   });
 });

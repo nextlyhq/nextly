@@ -63,11 +63,12 @@ const AUDIT_KINDS: Record<StaffAction, string> = {
 };
 
 /**
- * What a staff action's audit row carries beside the staff member: the
- * account, by its kind and id alone, never its address or its name, so a
- * row keeps nothing personal about the account once it is deleted.
+ * What a staff action's audit row carries in metadata beside the staff
+ * member: nothing. The account is named as the row's target person, by its
+ * kind and id, never its address or its name, so core erases it from the
+ * row when the account is reported deleted.
  */
-const AUDIT_METADATA_KEYS = ["accountKind", "accountId"];
+const AUDIT_METADATA_KEYS: string[] = [];
 
 export const STAFF_AUDIT: PluginAuditDeclaration = {
   kinds: STAFF_ACTIONS.map(action => ({
@@ -206,7 +207,9 @@ async function actionEndpoint(
     kind: AUDIT_KINDS[action],
     actorUserId: ctx.user?.id ?? null,
     request,
-    metadata: { accountKind: ACCOUNT_PRINCIPAL, accountId },
+    // Named as the person it is, not in metadata, so core erases it from the
+    // row when the account is reported deleted.
+    targetPrincipal: { kind: ACCOUNT_PRINCIPAL, id: accountId },
   });
 
   return respondAction(DONE[action], { accountId });

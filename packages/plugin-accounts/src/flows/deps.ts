@@ -1,4 +1,8 @@
-import type { PluginContext, PluginDatabase } from "@nextlyhq/plugin-sdk";
+import type {
+  PluginContext,
+  PluginDatabase,
+  PluginTransaction,
+} from "@nextlyhq/plugin-sdk";
 
 import type { AccountsCore } from "../core/ports";
 import type { AccountsSettings } from "../settings";
@@ -16,6 +20,8 @@ export interface FlowDeps {
   readonly mail: AccountsMail;
   /** What the flows tell other plugins, best-effort, after their work commits. */
   readonly events: AccountsEvents;
+  /** Core's record of the plugin's people, told of each account deleted. */
+  readonly principals: AccountPrincipals;
   /** Password checks, timed, and waits as long as one takes. */
   readonly pacer: PasswordPacer;
   readonly logger: {
@@ -64,4 +70,13 @@ export function sessionLimits(
     absoluteMs: settings.session.absoluteDays * DAY,
     perAccount: settings.session.perAccount,
   };
+}
+
+/**
+ * Core's record of the plugin's people. An account deleted is reported in
+ * the transaction that deletes it, so core erases it from the audit trail
+ * with the deletion: both commit, or neither.
+ */
+export interface AccountPrincipals {
+  reportDeleted(accountId: string, tx: PluginTransaction): Promise<void>;
 }

@@ -14,6 +14,7 @@ import { knownBrowsers, sessions } from "../schema/tables";
 import { accountById } from "../storage/accounts";
 import { makeAccount, TEST_PASSWORD } from "../test-support/accounts";
 import { bootAccounts } from "../test-support/boot";
+import { auditRowAbout, auditRowsAbout } from "../test-support/audit";
 import { flowDeps } from "../test-support/flow-deps";
 
 import { deleteOwnAccount } from "./delete-account";
@@ -43,6 +44,8 @@ describe.each(getConfiguredTestDialects())(
       if (signedIn.status !== "signed-in")
         throw new Error("expected a sign-in");
       return {
+        ctx: booted.ctx,
+        nextly: booted.nextly,
         db: booted.ctx.db,
         ...made,
         id,
@@ -71,6 +74,20 @@ describe.each(getConfiguredTestDialects())(
       expect(warnings).toEqual([
         "[accounts] the notice of a committed change was not queued",
       ]);
+    });
+
+    it("reports the account deleted to core, which erases it from every audit row about it", async () => {
+      const { ctx, nextly, deps, id, session } = await boot();
+      await auditRowAbout(ctx, id);
+
+      expect(
+        await deleteOwnAccount(deps, {
+          sessionToken: session,
+          currentPassword: TEST_PASSWORD,
+          client: null,
+        })
+      ).toEqual({ status: "deleted" });
+      expect(await auditRowsAbout(nextly, id)).toEqual({ naming: 0, all: 1 });
     });
 
     it("deletes the account and everything of it, voids its links, tells other plugins and emails the address", async () => {

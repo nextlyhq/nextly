@@ -3,7 +3,11 @@ import { definePlugin, type PluginContext } from "@nextlyhq/plugin-sdk";
 import { version as PLUGIN_VERSION } from "../package.json";
 
 import { ADMIN_PAGES, adminPageHref } from "./admin-contract";
-import { assertLimitsShared, readAccountsCore } from "./core/adapter";
+import {
+  assertLimitsShared,
+  readAccountPrincipals,
+  readAccountsCore,
+} from "./core/adapter";
 import { accountsLimitRules } from "./core/limit-rules";
 import type { AccountsCore } from "./core/ports";
 import { accountsError } from "./errors";
@@ -133,6 +137,7 @@ export function buildAccounts(
       // production on limit counts each instance keeps apart, which would
       // multiply every limit by the number of instances.
       const core = coreFor(ctx);
+      readAccountPrincipals(ctx);
       assertLimitsShared(core.limits, production());
       context = ctx;
       rememberInstalled(deps);

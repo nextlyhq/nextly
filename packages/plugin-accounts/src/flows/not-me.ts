@@ -1,6 +1,6 @@
 import { accountById, deleteUnverifiedAccount } from "../storage/accounts";
 
-import { accountDeleted } from "./account-deleted";
+import { accountDeleted, reportAccountDeleted } from "./account-deleted";
 import type { FlowDeps } from "./deps";
 import { PURPOSES } from "./purposes";
 
@@ -44,6 +44,7 @@ export async function removeUnverifiedAccount(
       // after the read above keeps the account, and the link is refused.
       if (!(await deleteUnverifiedAccount(tx, account.id)))
         throw new Refusal("spent");
+      await reportAccountDeleted(deps, tx, account.id);
       return account.id;
     });
   } catch (error) {

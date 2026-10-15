@@ -1,10 +1,12 @@
 import type { PluginContext } from "@nextlyhq/plugin-sdk";
 
+import { readAccountPrincipals } from "../core/adapter";
 import type { AccountsCore } from "../core/ports";
-import type { FlowDeps } from "../flows/deps";
+import type { AccountPrincipals, FlowDeps } from "../flows/deps";
 import type { AccountsEmail } from "../flows/mail";
 import type { PasswordPacer } from "../flows/pacer";
 import { sweepUnverifiedAccounts } from "../flows/sweep-unverified";
+import { ACCOUNT_PRINCIPAL } from "../http/routes";
 import type { AccountsSettings } from "../settings";
 import { sweepKnownBrowsers } from "../storage/known-browsers";
 import { sweepPendingChanges } from "../storage/pending-changes";
@@ -44,6 +46,7 @@ export function flowDepsFor(
       },
     },
     events: { emit: (name, payload) => ctx.events.emit(name, payload) },
+    principals: accountPrincipals(ctx),
     pacer,
     logger: { warn: (message, context) => ctx.logger.warn(message, context) },
     now: () => new Date(),
@@ -56,6 +59,21 @@ export type EmailContext = Pick<PluginContext, "db" | "dialect"> & {
     email: Pick<PluginContext["services"]["email"], "sendWithTemplate">;
   };
 };
+
+/**
+ * Core's record of the plugin's people, as the flows report to it: an
+ * account by its id, under the plugin's own kind.
+ */
+export function accountPrincipals(ctx: PluginContext): AccountPrincipals {
+  return {
+    reportDeleted: async (accountId, tx) => {
+      await readAccountPrincipals(ctx).reportDeleted(
+        { kind: ACCOUNT_PRINCIPAL, id: accountId },
+        { tx }
+      );
+    },
+  };
+}
 
 /**
  * Sends a queued email through core's email service, with its kind's
@@ -85,7 +103,7 @@ const SENT_KEPT_MS = 7 * 24 * 60 * 60 * 1000;
 
 /** One pass of every sweep the plugin's tables need. */
 export async function sweepAll(
-  deps: Pick<FlowDeps, "db" | "settings" | "now" | "events">,
+  deps: Pick<FlowDeps, "db" | "settings" | "now" | "events" | "principals">,
   now: Date
 ): Promise<void> {
   await sweepSessions(deps.db, now);

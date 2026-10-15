@@ -8,6 +8,7 @@ import {
   type AccountRow,
 } from "../storage/accounts";
 
+import { reportAccountDeleted } from "./account-deleted";
 import { HOUR, type FlowDeps } from "./deps";
 import {
   EMAIL_REQUESTS,
@@ -149,7 +150,8 @@ async function createAndMint(
 async function undoSignUp(deps: FlowDeps, accountId: string): Promise<void> {
   await deps.db.transaction(async tx => {
     await deps.core.secrets.voidFor({ subject: accountId }, { tx });
-    await deleteUnverifiedAccount(tx, accountId);
+    if (await deleteUnverifiedAccount(tx, accountId))
+      await reportAccountDeleted(deps, tx, accountId);
   });
 }
 

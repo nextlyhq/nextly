@@ -9,7 +9,7 @@ import {
 } from "../storage/accounts";
 import { endAccountSessions } from "../storage/sessions";
 
-import { accountDeleted } from "./account-deleted";
+import { accountDeleted, reportAccountDeleted } from "./account-deleted";
 import type { FlowDeps } from "./deps";
 import { queueNotice } from "./mail";
 import { mintResetLink, queueResetLink } from "./reset-request";
@@ -207,7 +207,9 @@ async function deleteAccountByStaff(
       if (!(await writeAtVersion(tx, account, {}, { endsSessions: true })))
         return false;
       await deps.core.secrets.voidFor({ subject: account.id }, { tx });
-      return deleteAccount(tx, account.id);
+      if (!(await deleteAccount(tx, account.id))) return false;
+      await reportAccountDeleted(deps, tx, account.id);
+      return true;
     }
   );
   if (result.status !== "done") return result;
