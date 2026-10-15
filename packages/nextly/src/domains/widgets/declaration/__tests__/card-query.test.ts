@@ -73,6 +73,10 @@ describe("the query core runs for a card", () => {
     expect(after).not.toEqual(before);
   });
 
+  it("is not built for a card whose collection is not chosen yet", () => {
+    expect(buildCardQuery(recentEntries, { items: 3 })).toBeUndefined();
+  });
+
   it("is not built for a widget whose data is a data function", () => {
     const fn = defineWidget({
       id: "test/fn",

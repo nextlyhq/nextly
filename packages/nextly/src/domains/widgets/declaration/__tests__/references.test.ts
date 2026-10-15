@@ -1,0 +1,155 @@
+/**
+ * A declared widget's starting query is checked against the site's content
+ * once boot has synced it: refused when what it names is fixed by the code,
+ * warned about when it is the database's.
+ *
+ * The two registry reads are stubbed and the collections registered directly,
+ * so what is under test is the rule, not how the registry is read.
+ */
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("../../collection-sources", async importOriginal => ({
+  ...(await importOriginal<typeof import("../../collection-sources")>()),
+  refreshCollectionSources: vi.fn(async () => {}),
+}));
+vi.mock("../../single-sources", async importOriginal => ({
+  ...(await importOriginal<typeof import("../../single-sources")>()),
+  refreshSingleSources: vi.fn(async () => {}),
+}));
+
+import { NextlyError } from "../../../../errors/nextly-error";
+import * as loggerModule from "../../../../observability/logger";
+import { registerBuiltInSources } from "../../built-in-sources";
+import { clearWidgets } from "../../registry";
+import { clearSources } from "../../sources";
+import {
+  clearDeclaredWidgets,
+  registerWidgetDeclarations,
+} from "../declared-widgets";
+import { defineWidget } from "../define-widget";
+import { checkDeclaredWidgetReferences } from "../references";
+import { settings } from "../setting-builders";
+
+/** A widget whose starting query lists one collection, sorted by one field. */
+function listing(id: string, collection: string | undefined, sort: string) {
+  return defineWidget({
+    id,
+    title: "Listing",
+    description: "Entries of one collection",
+    category: "Test",
+    widths: ["full"],
+    width: "full",
+    settings: {
+      collection: {
+        ...settings.collection(),
+        ...(collection === undefined ? {} : { defaultValue: collection }),
+      },
+    },
+    data: {
+      query: ({ settings }) => ({
+        collection: settings.collection,
+        op: "list",
+        sort,
+      }),
+    },
+    display: "list",
+  });
+}
+
+const CODE = { collections: new Set(["orders"]), singles: new Set<string>() };
+const SHOP = 'plugin "@acme/shop"';
+
+let warn: ReturnType<typeof vi.fn>;
+
+beforeEach(() => {
+  clearWidgets();
+  clearSources();
+  clearDeclaredWidgets();
+  // `orders` is defined in code; `notes` was made in the Schema Builder.
+  registerBuiltInSources([
+    { slug: "orders", fields: [{ name: "state", type: "text" }] },
+    { slug: "notes", fields: [{ name: "title", type: "text" }] },
+  ]);
+  warn = vi.fn();
+  vi.spyOn(loggerModule, "getNextlyLogger").mockReturnValue({
+    warn,
+    info: vi.fn(),
+    error: vi.fn(),
+    debug: vi.fn(),
+  } as unknown as ReturnType<typeof loggerModule.getNextlyLogger>);
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+async function check(...widgets: ReturnType<typeof listing>[]) {
+  registerWidgetDeclarations([{ owner: SHOP, declarations: widgets }]);
+  await checkDeclaredWidgetReferences(CODE);
+}
+
+describe("a declared widget's starting query, once content is synced", () => {
+  it("passes when everything it names exists", async () => {
+    await expect(check(listing("acme/a", "orders", "state"))).resolves.toBe(
+      undefined
+    );
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("refuses startup over a field missing from a collection the code defines", async () => {
+    let refused: unknown;
+    try {
+      await check(listing("acme/a", "orders", "missing"));
+    } catch (error) {
+      refused = error;
+    }
+    expect(refused).toBeInstanceOf(NextlyError);
+    expect((refused as NextlyError).logMessage).toContain(
+      `${SHOP}, widget "acme/a": its query, built from its starting settings, cannot run`
+    );
+    expect((refused as NextlyError).logMessage).toContain("missing");
+  });
+
+  it("warns, and starts, over a field missing from a collection the database holds", async () => {
+    await expect(check(listing("acme/a", "notes", "missing"))).resolves.toBe(
+      undefined
+    );
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0]?.[0]).toMatchObject({
+      kind: "widget-query-names-missing-content",
+      widget: "acme/a",
+      source: "collection:notes",
+    });
+  });
+
+  it("warns, and starts, over a collection that is in neither", async () => {
+    // Not defined in code, so its absence is a fact about the database: it may
+    // have been made in the Schema Builder and since deleted.
+    await expect(check(listing("acme/a", "gone", "title"))).resolves.toBe(
+      undefined
+    );
+    expect(warn).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips a query whose collection is chosen only when a card is placed", async () => {
+    await expect(check(listing("acme/a", undefined, "missing"))).resolves.toBe(
+      undefined
+    );
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("reports every refused widget at once", async () => {
+    let refused: unknown;
+    try {
+      await check(
+        listing("acme/a", "orders", "missing"),
+        listing("acme/b", "orders", "nope")
+      );
+    } catch (error) {
+      refused = error;
+    }
+    const message = (refused as NextlyError).logMessage ?? "";
+    expect(message).toContain('widget "acme/a"');
+    expect(message).toContain('widget "acme/b"');
+  });
+});

@@ -223,6 +223,11 @@ export function registerWidgetDeclarations(
   }
 }
 
+/** Every declared widget, in the order startup kept them. */
+export function listDeclaredWidgets(): DeclaredWidget[] {
+  return [...store().values()];
+}
+
 /** The declared widget with this id, or `undefined`. */
 export function declaredWidget(id: string): DeclaredWidget | undefined {
   return store().get(id);

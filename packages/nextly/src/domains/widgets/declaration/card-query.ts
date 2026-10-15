@@ -95,8 +95,9 @@ export function resolveCardSettings(
 }
 
 /**
- * The query core runs for one card, or `undefined` for a widget whose data is
- * not a query written from its settings.
+ * The query core runs for one card, or `undefined` when there is none: a
+ * widget whose data is not a query written from its settings, or a card whose
+ * query names no collection yet.
  *
  * The declaration's query function is handed the card's resolved values, and
  * the collection it names becomes core's `collection:<slug>` source. Nothing is
@@ -111,6 +112,10 @@ export function buildCardQuery(
   if (!isQuerySource(data)) return undefined;
   const settings = resolveCardSettings(declaration.settings, stored);
   const { collection, ...rest } = data.query({ settings });
+  // No query yet for a card whose collection is not chosen: the Collection
+  // setting has no starting value, and a card is given one when it is placed.
+  if (typeof collection !== "string" || collection.trim() === "")
+    return undefined;
   return { ...rest, source: `collection:${collection}` };
 }
 
