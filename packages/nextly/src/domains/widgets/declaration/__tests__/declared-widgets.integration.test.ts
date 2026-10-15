@@ -85,9 +85,8 @@ function card(id: string, config: Record<string, unknown>): WidgetPlacement {
   return {
     id,
     widgetId: "acme/recent-orders",
-    column: 0,
-    order: id === "untouched" ? 0 : 10,
-    hidden: false,
+    width: "full",
+    removed: false,
     config,
   };
 }
