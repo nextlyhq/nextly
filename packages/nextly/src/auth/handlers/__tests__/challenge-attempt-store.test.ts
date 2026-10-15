@@ -9,7 +9,11 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { ChallengeRegistry } from "../../pipeline/challenge";
 import { AuthHookRegistry } from "../../pipeline/hooks";
 import { mintPendingToken } from "../../pipeline/pending-token";
+import { createMemoryLimitStore } from "../../../domains/limits/memory-limit-store";
+import type { LimitStore } from "../../../domains/limits/limit-store";
 import { handleChallengeResolve } from "../challenge-resolve";
+
+import { fakeSpentChallenges } from "./spent-challenges-fake";
 
 // Typed with its PARAMETER, so the store argument is part of the recorded
 // call rather than dropped by an inferred zero-argument signature — which is
@@ -27,7 +31,10 @@ const SECRET = "test-secret-that-is-at-least-32-characters-long!!";
 /** A store object with nothing on it: identity is the whole assertion. */
 const CONFIGURED_STORE = { marker: "configured" } as never;
 
-function makeDeps(authRateLimit?: { store?: unknown }) {
+function makeDeps(
+  authRateLimit?: { store?: unknown },
+  limitStore?: LimitStore
+) {
   const challengeRegistry = new ChallengeRegistry();
   challengeRegistry.add({
     id: "totp",
@@ -68,7 +75,9 @@ function makeDeps(authRateLimit?: { store?: unknown }) {
       lockedUntil: null,
       emailVerified: new Date("2026-01-01T00:00:00Z"),
     }),
+    spentChallenges: fakeSpentChallenges(),
     ...(authRateLimit ? { authRateLimit } : {}),
+    ...(limitStore ? { limitStore } : {}),
   };
 }
 
@@ -131,5 +140,32 @@ describe("the challenge-attempt cap counts against the CONFIGURED store", () => 
 
     expect(authRateLimiter).toHaveBeenCalled();
     expect(authRateLimiter.mock.calls[0][0]).toBeUndefined();
+  });
+
+  it("counts in the selected limit store when no store of the earlier contract is configured", async () => {
+    const selected = createMemoryLimitStore();
+    const keys: string[] = [];
+    const watched: LimitStore = {
+      shared: selected.shared,
+      update: (updated, apply) => {
+        keys.push(...updated);
+        return selected.update(updated, apply);
+      },
+      read: read => selected.read(read),
+      sweep: () => selected.sweep(),
+    };
+
+    await resolveOnce(makeDeps(undefined, watched));
+
+    expect(authRateLimiter).not.toHaveBeenCalled();
+    expect(keys).toHaveLength(1);
+  });
+
+  it("keeps an app's store of the earlier contract serving the budget, over the selected limit store", async () => {
+    const selected = createMemoryLimitStore();
+
+    await resolveOnce(makeDeps({ store: CONFIGURED_STORE }, selected));
+
+    expect(authRateLimiter.mock.calls[0][0]).toBe(CONFIGURED_STORE);
   });
 });

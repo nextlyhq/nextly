@@ -121,7 +121,9 @@ export async function paymentProviderContract(
   }
 
   // An answer about a payment must be about that payment: a structurally valid
-  // answer for another one would corrupt the record commerce keeps of it.
+  // answer for another one would corrupt the record commerce keeps of it. Every
+  // answer naming a payment is held to it: confirm, capture, cancel, read and
+  // the lookup by commerce's reference.
   function expectAnswerFor(answer: ProviderPayment, started: ProviderPayment) {
     expectContract(
       answer.providerReference === started.providerReference &&
@@ -142,6 +144,46 @@ export async function paymentProviderContract(
     expectContract(
       read.amountCaptured.amount === amount.amount,
       `the amount was captured once (${read.amountCaptured.amount} captured of ${amount.amount})`
+    );
+  }
+
+  // A used key with a different request must be refused as a reuse.
+  async function expectKeyReuseRefused(
+    attempt: () => Promise<unknown>,
+    operation: string
+  ) {
+    const error = await expectRefusal(
+      attempt,
+      `a ${operation} key reused for a different request is refused`
+    );
+    expectContract(
+      NextlyError.isCode(error, "COMMERCE_OPERATION_KEY_REUSED"),
+      `the refusal is COMMERCE_OPERATION_KEY_REUSED, not ${describeError(error)}`
+    );
+  }
+
+  // The payment a refused request named, read back as it was before: a
+  // provider that performs the request and only then refuses it fails here.
+  async function expectUnchanged(p: PaymentProvider, before: ProviderPayment) {
+    const after = asPayment(
+      await p.read({ providerReference: before.providerReference })
+    );
+    expectContract(
+      after.status === before.status &&
+        after.amountCaptured.amount === before.amountCaptured.amount &&
+        after.amountRefunded.amount === before.amountRefunded.amount,
+      `the refused request changed nothing (before: ${state(before)}; after: ${state(after)})`
+    );
+  }
+
+  async function heldPayment(p: PaymentProvider) {
+    const { started } = await startPayment(p, "later");
+    return asPayment(
+      await p.confirm({
+        operationId: unique("op"),
+        providerReference: started.providerReference,
+        paymentMethod: options.paymentMethods.succeeds,
+      })
     );
   }
 
@@ -193,19 +235,13 @@ export async function paymentProviderContract(
       const read = asPayment(
         await p.read({ providerReference: started.providerReference })
       );
-      expectContract(
-        read.providerReference === started.providerReference,
-        "read returns the payment asked for"
-      );
+      expectAnswerFor(read, started);
       const found = await p.findByReference({ reference });
       expectContract(
         found !== null,
         "a payment is found by commerce's reference"
       );
-      expectContract(
-        asPayment(found).providerReference === started.providerReference,
-        "the payment found by reference is the one started"
-      );
+      expectAnswerFor(asPayment(found), started);
       expectContract(
         (await p.findByReference({ reference: unique("unknown") })) === null,
         "an unknown reference finds nothing"
@@ -254,12 +290,14 @@ export async function paymentProviderContract(
       capture: "now",
     });
     const reference = unique("pay");
+    // Half the amount, not more: a request differing by an added amount would
+    // leave the money domain at the largest even amount the options allow.
     const error = await expectRefusal(
       () =>
         p.start({
           operationId,
           reference,
-          amount: money(options.amount + 2, options.currency),
+          amount: money(options.amount / 2, options.currency),
           capture: "now",
         }),
       "a key reused for a different request is refused"
@@ -317,6 +355,25 @@ export async function paymentProviderContract(
   });
 
   add(
+    "refuses a confirm key reused for a different request, and changes nothing",
+    async () => {
+      const { p } = await setUp();
+      const first = (await startPayment(p)).started;
+      const second = (await startPayment(p)).started;
+      const operationId = unique("op");
+      const confirmWithKey = (payment: ProviderPayment) =>
+        p.confirm({
+          operationId,
+          providerReference: payment.providerReference,
+          paymentMethod: options.paymentMethods.succeeds,
+        });
+      await confirmWithKey(first);
+      await expectKeyReuseRefused(() => confirmWithKey(second), "confirm");
+      await expectUnchanged(p, second);
+    }
+  );
+
+  add(
     "verifies a signed webhook, and refuses a tampered or unsigned one",
     async () => {
       const { p, signWebhook } = await setUp();
@@ -330,15 +387,21 @@ export async function paymentProviderContract(
         event.providerReference === started.providerReference,
         "the verified event names the payment"
       );
+      expectContract(
+        event.type === "payment.updated",
+        `the verified event is the type signed, payment.updated, not ${event.type}`
+      );
       const again = asEvent(await p.verifyWebhook(signed));
       expectContract(
         again.eventId === event.eventId,
         "the same delivery has the same event id"
       );
+      // Another type than the first, so a provider answering every event with
+      // one fixed type is caught whichever type it picked.
       const other = asEvent(
         await p.verifyWebhook(
           await signWebhook({
-            type: "payment.updated",
+            type: "refund.updated",
             providerReference: started.providerReference,
           })
         )
@@ -346,6 +409,10 @@ export async function paymentProviderContract(
       expectContract(
         other.eventId !== event.eventId,
         "another event has another id, so commerce does not drop it as a repeat"
+      );
+      expectContract(
+        other.type === "refund.updated",
+        `the verified event is the type signed, refund.updated, not ${other.type}`
       );
 
       const tampered = await expectRefusal(
@@ -455,6 +522,7 @@ export async function paymentProviderContract(
             paymentMethod: options.paymentMethods.succeeds,
           })
         );
+        expectAnswerFor(held, started);
         expectContract(
           held.status === "authorised",
           `held money is authorised, not ${held.status}`
@@ -469,6 +537,7 @@ export async function paymentProviderContract(
         };
         await call(p, "capture", request); // the answer is lost
         const captured = asPayment(await call(p, "capture", request));
+        expectAnswerFor(captured, started);
         expectContract(
           captured.status === "paid",
           `a captured payment is paid, not ${captured.status}`
@@ -488,6 +557,7 @@ export async function paymentProviderContract(
         };
         await call(p, "cancel", request); // the answer is lost
         const cancelled = asPayment(await call(p, "cancel", request));
+        expectAnswerFor(cancelled, started);
         expectContract(
           cancelled.status === "cancelled",
           `the payment is cancelled, not ${cancelled.status}`
@@ -495,6 +565,7 @@ export async function paymentProviderContract(
         const read = asPayment(
           await p.read({ providerReference: started.providerReference })
         );
+        expectAnswerFor(read, started);
         expectContract(read.status === "cancelled", "the cancellation stays");
       }
     );
@@ -514,8 +585,14 @@ export async function paymentProviderContract(
           reference,
           amount: refundAmount,
         };
-        await call(p, "refund", request); // the answer is lost
+        // The answer commerce never saw is kept, so the repeat can be held to
+        // the refund the first call made.
+        const lost = asRefund(await call(p, "refund", request));
         const repeated = asRefund(await call(p, "refund", request));
+        expectContract(
+          repeated.providerRefundReference === lost.providerRefundReference,
+          "the repeated refund returns the first refund, not a second one"
+        );
         expectContract(
           repeated.reference === reference &&
             repeated.providerReference === payment.providerReference,
@@ -526,13 +603,21 @@ export async function paymentProviderContract(
             repeated.amount.currency === refundAmount.currency,
           `the refund is for the amount asked (${repeated.amount.amount} answered, ${refundAmount.amount} asked)`
         );
-        const read = asPayment(
-          await p.read({ providerReference: payment.providerReference })
-        );
         expectContract(
-          read.amountRefunded.amount === refundAmount.amount,
-          `the refund happened once (${read.amountRefunded.amount} refunded, ${refundAmount.amount} asked)`
+          repeated.status === "succeeded" || repeated.status === "pending",
+          `a refund asked for is succeeded or pending, not ${repeated.status}`
         );
+        // A pending refund settles later, so only a succeeded one is in the
+        // payment's refunded amount already.
+        if (repeated.status === "succeeded") {
+          const read = asPayment(
+            await p.read({ providerReference: payment.providerReference })
+          );
+          expectContract(
+            read.amountRefunded.amount === refundAmount.amount,
+            `the refund happened once (${read.amountRefunded.amount} refunded, ${refundAmount.amount} asked)`
+          );
+        }
         const found = await call(p, "findRefundByReference", { reference });
         expectContract(
           found !== null,
@@ -542,6 +627,70 @@ export async function paymentProviderContract(
           asRefund(found).providerRefundReference ===
             repeated.providerRefundReference,
           "the refund found is the one made"
+        );
+      }
+    );
+
+    addIf(
+      supportsPaymentOperation(declared, "capture"),
+      "refuses a capture key reused for a different request, and changes nothing",
+      async p => {
+        const [first, second] = [await heldPayment(p), await heldPayment(p)];
+        const operationId = unique("op");
+        const captureWithKey = (payment: ProviderPayment) =>
+          call(p, "capture", {
+            operationId,
+            providerReference: payment.providerReference,
+          });
+        await captureWithKey(first);
+        await expectKeyReuseRefused(() => captureWithKey(second), "capture");
+        await expectUnchanged(p, second);
+      }
+    );
+
+    addIf(
+      supportsPaymentOperation(declared, "cancel"),
+      "refuses a cancel key reused for a different request, and changes nothing",
+      async p => {
+        const first = (await startPayment(p)).started;
+        const second = (await startPayment(p)).started;
+        const operationId = unique("op");
+        const cancelWithKey = (payment: ProviderPayment) =>
+          call(p, "cancel", {
+            operationId,
+            providerReference: payment.providerReference,
+          });
+        await cancelWithKey(first);
+        await expectKeyReuseRefused(() => cancelWithKey(second), "cancel");
+        await expectUnchanged(p, second);
+      }
+    );
+
+    addIf(
+      supportsPaymentOperation(declared, "refund"),
+      "refuses a refund key reused for a different request, and changes nothing",
+      async p => {
+        const first = (await paidPayment(p)).payment;
+        const second = (await paidPayment(p)).payment;
+        const operationId = unique("op");
+        const refundWithKey = (payment: ProviderPayment, reference: string) =>
+          call(p, "refund", {
+            operationId,
+            providerReference: payment.providerReference,
+            reference,
+            amount,
+          });
+        await refundWithKey(first, unique("refund"));
+        const refused = unique("refund");
+        await expectKeyReuseRefused(
+          () => refundWithKey(second, refused),
+          "refund"
+        );
+        await expectUnchanged(p, second);
+        expectContract(
+          (await call(p, "findRefundByReference", { reference: refused })) ===
+            null,
+          "a refused refund leaves nothing at the provider"
         );
       }
     );
@@ -557,22 +706,27 @@ export async function paymentProviderContract(
           reference: unique("refund"),
           amount: money(options.amount / 2, options.currency),
         });
+        const before = asPayment(
+          await p.read({ providerReference: payment.providerReference })
+        );
+        const refused = unique("refund");
         await expectRefusal(
           () =>
             call(p, "refund", {
               operationId: unique("op"),
               providerReference: payment.providerReference,
-              reference: unique("refund"),
+              reference: refused,
               amount,
             }),
           "a refund beyond what is left to refund is refused"
         );
-        const read = asPayment(
-          await p.read({ providerReference: payment.providerReference })
-        );
+        // Compared with the payment as it was, not with half the amount: the
+        // first refund may still be pending, and so not yet refunded.
+        await expectUnchanged(p, before);
         expectContract(
-          read.amountRefunded.amount === options.amount / 2,
-          "the refused refund changed nothing"
+          (await call(p, "findRefundByReference", { reference: refused })) ===
+            null,
+          "a refused refund leaves nothing at the provider"
         );
       }
     );
@@ -671,6 +825,11 @@ function tamperHeaders(
       return [name, `${value.slice(0, -1)}${swapped}`];
     })
   );
+}
+
+/** A payment's status and money, as a refused request must leave them. */
+function state(payment: ProviderPayment): string {
+  return `${payment.status}, ${payment.amountCaptured.amount} captured, ${payment.amountRefunded.amount} refunded`;
 }
 
 function issues(

@@ -29,6 +29,7 @@ export {
   type PluginAdminConfig,
   type PluginActionRegistry,
   type PluginAuditApi,
+  type PluginSecurityApi,
   type PluginCapabilities,
   type PluginConfig,
   type PluginContext,
@@ -47,6 +48,18 @@ export {
   type PluginHookRegistry,
   type PluginSettingsApi,
 } from "./plugin-context";
+export {
+  PasswordTooLongError,
+  type PasswordCheck,
+  type PasswordHelper,
+  type PasswordRules,
+} from "./security/password-helper";
+export type {
+  OneTimeSecrets,
+  SecretData,
+  TxOption,
+} from "./security/one-time-secrets";
+export type { OpaqueSecrets } from "./security/opaque-secrets";
 
 // What each hook point carries, by name; a plugin augments the map.
 export type {
@@ -114,3 +127,24 @@ export type {
   Middleware,
   RouteMethod,
 } from "./routes/route-types";
+
+// Plugin-defined kinds of signed-in person: `contributes.principals`, a
+// route's `principal`, `ctx.principals` and `nextly.principals`.
+export type {
+  NextlyPrincipals,
+  PluginPrincipalsApi,
+  PluginRoutePrincipal,
+  Principal,
+  PrincipalAnswer,
+  PrincipalAttributeDescriptors,
+  PrincipalAttributes,
+  PrincipalAttributesOf,
+  PrincipalAttributeType,
+  PrincipalAttributeTypeOf,
+  PrincipalAttributeValue,
+  PrincipalKindContribution,
+  PrincipalKindDefinition,
+  PrincipalRecord,
+  PrincipalRef,
+  PrincipalReportOptions,
+} from "./principals/types";

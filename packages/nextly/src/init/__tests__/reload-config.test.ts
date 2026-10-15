@@ -14,7 +14,7 @@ import { readFileSync } from "node:fs";
 import { getColumns } from "drizzle-orm";
 
 import { buildDesiredTableFromFields } from "../../domains/schema/pipeline/diff/build-from-fields";
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createLockingAdapter } from "../../domains/field-groups/migration/__tests__/helpers/locking-adapter";
 import {
@@ -50,6 +50,11 @@ import {
 } from "../../domains/collections/services/collection-id";
 import { setInitializedPlugins } from "../../plugins/initialized-plugins";
 import { createPluginContext } from "../../plugins/plugin-context";
+import {
+  collectPrincipalKinds,
+  getPrincipalKind,
+  publishPrincipalKinds,
+} from "../../plugins/principals/registry";
 import {
   clearPluginDependencies,
   currentDependencies,
@@ -1621,6 +1626,96 @@ describe("reloadNextlyConfig", () => {
     await reloadNextlyConfig({ resolver: buildResolver() });
 
     expect(pipelineApplySpy).not.toHaveBeenCalled();
+  });
+
+  describe("plugin-defined kinds of signed-in person", () => {
+    /** A plugin registering one kind under `name`. */
+    const accounts = (name: string) =>
+      ({
+        name: "accounts",
+        version: "1.0.0",
+        nextly: "*",
+        contributes: {
+          principals: [{ name, attributes: {}, resolve: async () => null }],
+        },
+      }) as never;
+
+    const postsUnchanged = () => {
+      introspectSpy.mockResolvedValue(
+        liveSnapshot("dc_posts", [
+          ...reservedColumns("dc_posts"),
+          { name: "body", type: "text", nullable: true },
+        ])
+      );
+    };
+
+    beforeEach(() => {
+      publishPrincipalKinds(collectPrincipalKinds([accounts("account")]));
+      // The real loader resolves the new config's plugins, which publishes
+      // their kinds as it reads them; the mock does the same.
+      loadConfigSpy.mockImplementation(async () => {
+        publishPrincipalKinds(collectPrincipalKinds([accounts("member")]));
+        return {
+          config: {
+            collections: [
+              {
+                slug: "posts",
+                tableName: "dc_posts",
+                fields: [{ name: "body", type: "text" }],
+              },
+            ],
+          },
+        };
+      });
+    });
+
+    afterEach(() => {
+      publishPrincipalKinds(new Map());
+    });
+
+    it("puts the previous kinds back when the reload does not land", async () => {
+      const { reloadNextlyConfig } = await import("../reload-config");
+      await reloadNextlyConfig({
+        resolver: buildResolver({ withAdapter: false }),
+      });
+
+      expect(getPrincipalKind("accounts:account")).toBeDefined();
+      expect(getPrincipalKind("accounts:member")).toBeUndefined();
+    });
+
+    it("keeps the previous kinds while the reload is still running", async () => {
+      // Requests are served while a reload runs. Seen from inside it, after
+      // the new config has been read, the kinds in force are still the old
+      // ones: no route reaches a resolver the reload has not committed.
+      let midReload: { account: boolean; member: boolean } | undefined;
+      introspectSpy.mockImplementation(async () => {
+        midReload = {
+          account: getPrincipalKind("accounts:account") !== undefined,
+          member: getPrincipalKind("accounts:member") !== undefined,
+        };
+        return liveSnapshot("dc_posts", [
+          ...reservedColumns("dc_posts"),
+          { name: "body", type: "text", nullable: true },
+        ]);
+      });
+      const { reloadNextlyConfig } = await import("../reload-config");
+      await reloadNextlyConfig({ resolver: buildResolver() });
+
+      expect(midReload).toEqual({ account: true, member: false });
+      // The control: the same reload installs the new kinds once it lands.
+      expect(getPrincipalKind("accounts:member")).toBeDefined();
+    });
+
+    it("keeps the new kinds when the reload lands", async () => {
+      // The control: a restore that ran on every reload would pass the case
+      // above as well.
+      postsUnchanged();
+      const { reloadNextlyConfig } = await import("../reload-config");
+      await reloadNextlyConfig({ resolver: buildResolver() });
+
+      expect(getPrincipalKind("accounts:member")).toBeDefined();
+      expect(getPrincipalKind("accounts:account")).toBeUndefined();
+    });
   });
 
   /**

@@ -155,6 +155,21 @@ describe("a provider's declaration", () => {
       assertPaymentProvider(declaring({ currencies: ["USD", "JPY"] }))
     ).not.toThrow();
   });
+
+  it("takes an account only as a string of 1 to 255 characters", () => {
+    const { provider } = createTestPaymentProvider();
+    for (const account of ["", "a".repeat(256), 42]) {
+      expect(
+        codeOf(() => assertPaymentProvider({ ...provider, account })),
+        JSON.stringify(account)
+      ).toBe("COMMERCE_PROVIDER_CONTRACT");
+    }
+    expect(() =>
+      assertPaymentProvider({ ...provider, account: "a".repeat(255) })
+    ).not.toThrow();
+    // Left out, the provider is taken to have one account.
+    expect(() => assertPaymentProvider(provider)).not.toThrow();
+  });
 });
 
 describe("a provider's answer", () => {
@@ -174,6 +189,13 @@ describe("a provider's answer", () => {
         operation: "read",
       }).amountCaptured.amount
     ).toBe(1000);
+    expect(
+      parseProviderAnswer(
+        providerPaymentSchema,
+        { ...valid, providerReference: "p".repeat(255) },
+        { provider: "x", operation: "read" }
+      ).providerReference
+    ).toHaveLength(255);
     const nothingCaptured = { amount: 0, currency: "USD" };
     for (const status of ["pending", "authorised", "failed"] as const) {
       expect(
@@ -205,6 +227,9 @@ describe("a provider's answer", () => {
           "cancelled",
         ] as const
       ).map(status => ({ ...valid, status })),
+      // Identifiers longer than commerce's columns hold on every dialect.
+      { ...valid, providerReference: "p".repeat(256) },
+      { ...valid, failureCode: "f".repeat(256) },
       // A payment is for a positive amount; no provider holds one for nothing.
       {
         ...valid,
@@ -336,5 +361,43 @@ describe("starting a payment through commerce", () => {
     expect(await asyncCodeOf(() => startProviderPayment(spy, start(100)))).toBe(
       "COMMERCE_PROVIDER_CONTRACT"
     );
+  });
+
+  it("refuses a provider's answer for another payment: another reference, amount or currency", async () => {
+    // Each answer is well formed, so only comparing it with the request can
+    // refuse it; the unchanged answer is the control that the comparison, not
+    // the shape, is what refuses the others.
+    const answering =
+      (changes: Record<string, unknown>) =>
+      async (input: StartPaymentInput) => ({
+        providerReference: "pay_1",
+        reference: input.reference,
+        status: "pending",
+        amount: input.amount,
+        amountCaptured: money(0, input.amount.currency),
+        amountRefunded: money(0, input.amount.currency),
+        ...changes,
+      });
+    const exact = counted({}, answering({}));
+    await expect(
+      startProviderPayment(exact.spy, start(100))
+    ).resolves.toMatchObject({
+      reference: "p-1",
+    });
+    for (const changes of [
+      { reference: "p-elsewhere" },
+      { amount: money(101, "USD") },
+      {
+        amount: money(100, "EUR"),
+        amountCaptured: money(0, "EUR"),
+        amountRefunded: money(0, "EUR"),
+      },
+    ]) {
+      const { spy } = counted({}, answering(changes));
+      expect(
+        await asyncCodeOf(() => startProviderPayment(spy, start(100))),
+        JSON.stringify(changes)
+      ).toBe("COMMERCE_PROVIDER_CONTRACT");
+    }
   });
 });

@@ -1,6 +1,10 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { NextlyError } from "../../../errors/nextly-error";
+import {
+  collectPrincipalKinds,
+  publishPrincipalKinds,
+} from "../../../plugins/principals/registry";
 import { auditLog as postgresAuditLog } from "../../../schemas/audit/postgres";
 import {
   collectPluginAuditKinds,
@@ -361,5 +365,115 @@ describe("collectPluginAuditKinds: one kind declared once", () => {
         "@acme/auth"
       )
     ).not.toThrow();
+  });
+});
+
+describe("projectPluginAuditEvent: a plugin-defined person", () => {
+  // The kind the events below name, registered as a running plugin would.
+  beforeEach(() =>
+    publishPrincipalKinds(
+      collectPrincipalKinds([
+        {
+          name: "@acme/accounts",
+          version: "1.0.0",
+          nextly: "*",
+          contributes: {
+            principals: [
+              { name: "account", attributes: {}, resolve: async () => null },
+            ],
+          },
+        },
+      ])
+    )
+  );
+  afterEach(() => publishPrincipalKinds(new Map()));
+
+  const event = (extra: Record<string, unknown>) =>
+    projectPluginAuditEvent(
+      { kind: `${SLUG}.identity-linked`, ...extra } as never,
+      kinds(),
+      "@acme/auth"
+    );
+
+  it("keeps a person's kind and id, and nothing else of them", () => {
+    const projected = event({
+      actorPrincipal: {
+        type: "principal",
+        kind: "acme-accounts:account",
+        id: "acc_1",
+        attributes: { email: "a@example.com" },
+      },
+      targetPrincipal: { kind: "acme-accounts:account", id: "acc_2" },
+    });
+    expect(projected?.actorPrincipal).toEqual({
+      kind: "acme-accounts:account",
+      id: "acc_1",
+    });
+    expect(projected?.targetPrincipal).toEqual({
+      kind: "acme-accounts:account",
+      id: "acc_2",
+    });
+  });
+
+  it.each([
+    ["a kind without its plugin prefix", { kind: "staff", id: "acc_1" }],
+    ["an empty id", { kind: "acme-accounts:account", id: "" }],
+    [
+      "an id over 128 characters",
+      { kind: "acme-accounts:account", id: "x".repeat(129) },
+    ],
+    ["a bare string", "acc_1"],
+  ])("drops an event naming %s", (_label, actorPrincipal) => {
+    expect(event({ actorPrincipal })).toBeNull();
+  });
+
+  it.each([
+    ["actor", "actorPrincipal"],
+    ["target", "targetPrincipal"],
+  ])(
+    "drops an event naming, as %s, a person of a kind no plugin registered",
+    (_role, field) => {
+      // Well formed but misspelled: no plugin declares it, so no deletion
+      // report could ever reach the row, and what it keeps would outlive the
+      // person. The registered spelling, kept above, is the control.
+      expect(
+        event({ [field]: { kind: "acme-account:account", id: "acc_1" } })
+      ).toBeNull();
+    }
+  );
+
+  it.each([
+    [
+      "actor",
+      {
+        actorUserId: "u1",
+        actorPrincipal: { kind: "acme-accounts:account", id: "acc_1" },
+      },
+    ],
+    [
+      "target",
+      {
+        targetUserId: "u1",
+        targetPrincipal: { kind: "acme-accounts:account", id: "acc_1" },
+      },
+    ],
+  ])(
+    "drops an event naming both a user and a person as %s",
+    (_role, parties) => {
+      expect(event(parties)).toBeNull();
+    }
+  );
+
+  it("keeps a user as actor beside a person as target", () => {
+    // The control for the refusal above: the two may name different roles.
+    expect(
+      event({
+        actorUserId: "u1",
+        targetPrincipal: { kind: "acme-accounts:account", id: "acc_1" },
+      })
+    ).toMatchObject({
+      actorUserId: "u1",
+      targetPrincipal: { kind: "acme-accounts:account", id: "acc_1" },
+    });
   });
 });

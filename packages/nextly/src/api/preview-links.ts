@@ -979,6 +979,9 @@ export const revokePreviewLinks = withErrorHandler(async (req: Request) => {
    */
   await auditWriter().write({
     kind: "preview-links-revoked",
+    // The credential that acted: a key, when the request carried one, with
+    // its owner still in `actorUserId`.
+    actorKind: auth.authMethod === "api-key" ? "apiKey" : "staff",
     actorUserId: auth.userId,
     metadata: {
       generation,

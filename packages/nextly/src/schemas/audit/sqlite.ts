@@ -48,6 +48,13 @@ export function auditLogColumns() {
     // removed or was never recorded — which is the evidence an erasure
     // request needs.
     identityErasedAt: integer("identity_erased_at", { mode: "timestamp" }),
+    // Who acted, and a plugin-defined person in columns of their own: see
+    // the PostgreSQL definition.
+    actorKind: text("actor_kind"),
+    actorPrincipalKind: text("actor_principal_kind"),
+    actorPrincipalId: text("actor_principal_id"),
+    targetPrincipalKind: text("target_principal_kind"),
+    targetPrincipalId: text("target_principal_id"),
   };
 }
 

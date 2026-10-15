@@ -274,6 +274,7 @@ function isSystemFailure(err: unknown): boolean {
 const consultationScope = new AsyncLocalStorage<{
   consulted: boolean;
   crossSiteRefused: boolean;
+  staffHidden: boolean;
 }>();
 
 /**
@@ -287,13 +288,21 @@ const consultationScope = new AsyncLocalStorage<{
  * `crossSiteRefused` says the invocation was answered "no user" for a write
  * another site posted with a session cookie. The dispatcher, which knows the
  * route, records that once however often the handler asked.
+ *
+ * `staffHidden` is set for a route that asks for a plugin's kind of signed-in
+ * person. Its handler sees that person or nobody, never staff, so
+ * `currentUser` answers no user there whatever session the browser holds.
  */
-export function beginSessionConsultation(): {
+export function beginSessionConsultation(options?: { staffHidden?: boolean }): {
   run: <T>(fn: () => Promise<T>) => Promise<T>;
   consulted: () => boolean;
   crossSiteRefused: () => boolean;
 } {
-  const box = { consulted: false, crossSiteRefused: false };
+  const box = {
+    consulted: false,
+    crossSiteRefused: false,
+    staffHidden: options?.staffHidden === true,
+  };
   return {
     run: fn => consultationScope.run(box, fn),
     consulted: () => box.consulted,
@@ -312,6 +321,17 @@ export function beginSessionConsultation(): {
 export function markSessionConsulted(): void {
   const box = consultationScope.getStore();
   if (box) box.consulted = true;
+}
+
+/**
+ * Record that the invocation answered nobody for a write another site posted
+ * with a signed-in browser's cookie, so the dispatcher records the attempt.
+ * Shared by `currentUser` and a plugin's kind of signed-in person, so both
+ * refusals reach the one record.
+ */
+export function markCrossSiteRefused(): void {
+  const box = consultationScope.getStore();
+  if (box) box.crossSiteRefused = true;
 }
 
 export function createPluginAuthApi(
@@ -450,6 +470,10 @@ export function createPluginAuthApi(
     },
 
     async currentUser(request) {
+      // A route asking for a plugin's kind of signed-in person reads no staff
+      // session, so its handler cannot act as staff on a request a person
+      // made from a browser that holds both sessions.
+      if (consultationScope.getStore()?.staffHidden === true) return null;
       const deps = getDeps();
       // Recorded even when nobody is signed in: the ANSWER differs between
       // an anonymous and a signed-in caller either way, and the cache
@@ -468,10 +492,7 @@ export function createPluginAuthApi(
         // kept from acting on, and the operator should see the attempt, as
         // they do when an authenticated route refuses one. Without one it
         // forges nobody's request: a provider's webhook posts cross-site.
-        if (readAccessTokenCookie(request) !== null) {
-          const box = consultationScope.getStore();
-          if (box) box.crossSiteRefused = true;
-        }
+        if (readAccessTokenCookie(request) !== null) markCrossSiteRefused();
         return null;
       }
       const result = await getSession(request, deps.secret);

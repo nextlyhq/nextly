@@ -150,6 +150,14 @@ export function pluginRouteBootDecision(
   const route = selected.candidate.route;
   if (route.public === true || request.hasCredential) return BOOT;
 
+  // A route asking for a plugin's kind of signed-in person is reached with
+  // the plugin's own session, which `hasCredential` cannot see: it reads only
+  // core's cookie and header, and the person's cookie is named by the plugin.
+  // Only the kind's resolver can say whether anyone is signed in, and it runs
+  // on a booted app, so refusing here would refuse every person on a cold
+  // worker and serve them once it was warm.
+  if (route.principal !== undefined) return BOOT;
+
   // A permission resolver names one of the plugin's own collections, so it can
   // only be computed against a booted `ctx.self`. Warm dispatch runs it BEFORE
   // authenticating and fail-closes to 403 when it throws; refusing 401 from

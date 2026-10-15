@@ -53,6 +53,9 @@ export const emailDeliveriesSqlite = sqliteTable(
 
     /** Swept by `domains/email/prune.ts`. See the PostgreSQL definition. */
     retentionClass: text("retention_class").notNull(),
+    // The person a plugin's email went to: see the PostgreSQL definition.
+    principalKind: text("principal_kind"),
+    principalId: text("principal_id"),
 
     /**
      * `timestamp_ms`, not `timestamp`.
@@ -77,6 +80,8 @@ export const emailDeliveriesSqlite = sqliteTable(
     index("email_deliveries_status_created_idx").on(t.status, t.createdAt),
     index("email_deliveries_provider_idx").on(t.providerId, t.createdAt),
     index("email_deliveries_retention_idx").on(t.retentionClass, t.createdAt),
+    // Erasure finds a person's rows by kind and id.
+    index("email_deliveries_principal_idx").on(t.principalKind, t.principalId),
   ]
 );
 

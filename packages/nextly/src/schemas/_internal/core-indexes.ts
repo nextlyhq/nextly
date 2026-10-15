@@ -74,6 +74,16 @@ export const AUDIT_LOG_INDEXES = [
   { name: "audit_log_actor_user_id_idx", columns: ["actorUserId"] },
   { name: "audit_log_target_user_id_idx", columns: ["targetUserId"] },
   { name: "audit_log_created_at_idx", columns: ["createdAt"] },
+  // The two scans a person's deletion makes: rows they acted on, and rows
+  // naming them as the subject.
+  {
+    name: "audit_log_actor_principal_idx",
+    columns: ["actorPrincipalKind", "actorPrincipalId"],
+  },
+  {
+    name: "audit_log_target_principal_idx",
+    columns: ["targetPrincipalKind", "targetPrincipalId"],
+  },
 ] as const satisfies readonly CoreIndex<string>[];
 
 export const ACTIVITY_LOG_INDEXES = [

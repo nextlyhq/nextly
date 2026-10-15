@@ -10,6 +10,7 @@ import type { AuthorableFieldConfig } from "../collections/fields/types/plugin-f
 import type { GeneratedTypes } from "../direct-api/types/shared";
 import type { RegisteredEmailProvider } from "../domains/email/provider-definition";
 import type { JobDefinition } from "../domains/jobs/job-registry";
+import type { LimitRule } from "../domains/limits/limit-rules";
 import type { SchemaHook } from "../domains/schema/extension/draft";
 import type { TableDefinition } from "../domains/schema/extension/dsl";
 import type { PluginMigration } from "../domains/schema/migrate/plugin/plugin-migration";
@@ -23,6 +24,7 @@ import type {
 import type { PluginAuthContributions } from "./auth-contributions";
 import type { EntityTransform } from "./entity-transforms";
 import type { PluginContext } from "./plugin-context";
+import type { PrincipalKindContribution } from "./principals/types";
 import type { PluginRoute } from "./routes/route-types";
 import type { PluginWidgetSource } from "./widgets/collect-widget-sources";
 
@@ -710,6 +712,32 @@ export interface PluginContributions {
    * VETO, and is the only one that fails closed — see `ctx.filters.decide`.
    */
   hookPoints?: PluginHookPointDeclaration[];
+
+  /**
+   * @experimental Kinds of signed-in person this plugin defines: a shop's
+   * customers, a site's members, anyone who signs in without being staff.
+   *
+   * Each is named `<plugin>:<name>`, where `<plugin>` is this plugin's admin
+   * slug. Core calls a kind's resolver only where an entry point asks for
+   * that kind: a route declaring `principal`, `ctx.principals.fromRequest`
+   * or `nextly.principals.fromRequest`. No staff path ever does, so such a
+   * person never reaches the admin, holds no role and no permission, and is
+   * never taken for a staff user. The app refuses to start on a kind whose
+   * name, attributes or resolver cannot be used, or whose full name another
+   * plugin's kind already holds.
+   */
+  principals?: PrincipalKindContribution[];
+
+  /**
+   * @experimental Named limit rules this plugin's `ctx.limits` reserves on:
+   * rolling windows, or a growing wait after attempts in a row.
+   *
+   * A rule is named here and used by name, so two calls can never count one
+   * key under different numbers. The app refuses to start on a rule outside
+   * the documented bounds, naming the plugin and the rule. Keys are the
+   * plugin's own: no other plugin can name, read or spend them.
+   */
+  limits?: Record<string, LimitRule>;
 }
 
 /** @experimental `contributes.audit`: the kinds a plugin writes. */

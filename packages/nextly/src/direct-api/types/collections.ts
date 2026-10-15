@@ -13,6 +13,7 @@ import type {
   CollectionSlug,
   DirectAPIConfig,
   PopulateOptions,
+  RunAsPrincipal,
   WhereFilter,
 } from "./shared";
 
@@ -38,7 +39,8 @@ import type {
  * ```
  */
 export interface FindArgs<TSlug extends CollectionSlug = CollectionSlug>
-  extends DirectAPIConfig {
+  extends DirectAPIConfig,
+    RunAsPrincipal {
   /** Collection slug (required) */
   collection: TSlug;
 
@@ -161,7 +163,8 @@ export interface FindArgs<TSlug extends CollectionSlug = CollectionSlug>
  * ```
  */
 export interface FindByIDArgs<TSlug extends CollectionSlug = CollectionSlug>
-  extends DirectAPIConfig {
+  extends DirectAPIConfig,
+    RunAsPrincipal {
   /** Collection slug (required) */
   collection: TSlug;
 
@@ -222,7 +225,8 @@ export interface FindByIDArgs<TSlug extends CollectionSlug = CollectionSlug>
  * ```
  */
 export interface CreateArgs<TSlug extends CollectionSlug = CollectionSlug>
-  extends DirectAPIConfig {
+  extends DirectAPIConfig,
+    RunAsPrincipal {
   /** Collection slug (required) */
   collection: TSlug;
 
@@ -289,7 +293,8 @@ export interface CreateArgs<TSlug extends CollectionSlug = CollectionSlug>
  * ```
  */
 export interface UpdateArgs<TSlug extends CollectionSlug = CollectionSlug>
-  extends DirectAPIConfig {
+  extends DirectAPIConfig,
+    RunAsPrincipal {
   /** Collection slug (required) */
   collection: TSlug;
 
@@ -356,7 +361,8 @@ export interface UpdateArgs<TSlug extends CollectionSlug = CollectionSlug>
  * ```
  */
 export interface DeleteArgs<TSlug extends CollectionSlug = CollectionSlug>
-  extends DirectAPIConfig {
+  extends DirectAPIConfig,
+    RunAsPrincipal {
   /** Collection slug (required) */
   collection: TSlug;
 
@@ -395,7 +401,8 @@ export interface DeleteArgs<TSlug extends CollectionSlug = CollectionSlug>
  * ```
  */
 export interface CountArgs<TSlug extends CollectionSlug = CollectionSlug>
-  extends DirectAPIConfig {
+  extends DirectAPIConfig,
+    RunAsPrincipal {
   /** Collection slug (required) */
   collection: TSlug;
 
@@ -554,7 +561,8 @@ export interface TimeseriesResult {
  * ```
  */
 export interface BulkDeleteArgs<TSlug extends CollectionSlug = CollectionSlug>
-  extends DirectAPIConfig {
+  extends DirectAPIConfig,
+    RunAsPrincipal {
   /** Collection slug (required) */
   collection: TSlug;
 
@@ -583,7 +591,8 @@ export interface BulkDeleteArgs<TSlug extends CollectionSlug = CollectionSlug>
  * ```
  */
 export interface DuplicateArgs<TSlug extends CollectionSlug = CollectionSlug>
-  extends DirectAPIConfig {
+  extends DirectAPIConfig,
+    RunAsPrincipal {
   /** Collection slug (required) */
   collection: TSlug;
 

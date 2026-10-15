@@ -19,6 +19,7 @@
  * @module cli/commands/plugin-lifecycle
  */
 
+import { tablesLeftInPlace } from "../../domains/schema/ownership/drop-guard";
 import { assertDependenciesInstalled } from "../../domains/schema/ownership/install-plan";
 import { createOwnerRegistry } from "../../domains/schema/ownership/owner-registry";
 import { SchemaOwnersRepository } from "../../domains/schema/ownership/schema-owners-repository";
@@ -355,6 +356,7 @@ async function decideUninstall(
       ? await deps.prepareDowns(plugin, plan.downModules)
       : [];
 
+  assertDownsDropTables(plugin, plan, downs, deps.dialect);
   if (!opts.yes) assertNothingLostUnconfirmed(plugin, plan, downs, deps);
 
   return { plugin, plan, downs, recorded: recordedRows.length > 0 };
@@ -459,6 +461,7 @@ async function executeUninstall(
   await deps.runLifecycleHook(plugin, "onUninstall", {
     keepData: opts.keepData,
   });
+  await assertHookLeftTables(plugin, plan, deps);
 
   // `runDown` names a module whose DOWN runs outside a transaction before
   // it runs, as `migrate:down` does, through the same executor.
@@ -481,10 +484,106 @@ async function executeUninstall(
 }
 
 /**
+ * Refuse, before anything runs, a full uninstall whose DOWNs leave one of the
+ * plugin's tables in place: a DOWN that drops one of the two tables its UP
+ * created runs without error. Read from the statements, in the order they
+ * run, following each table through renames (`tablesLeftInPlace`): a table a
+ * rebuild drops and puts back, or one renamed away and kept, counts as left.
+ *
+ * Before, not only after: once a DOWN has run, its module is recorded rolled
+ * back, and a refusal then leaves a ledger that no longer says what the
+ * plugin's schema is.
+ */
+function assertDownsDropTables(
+  plugin: LifecyclePlugin,
+  plan: UninstallPlan,
+  downs: readonly PreparedModuleDown[],
+  dialect: PluginLifecycleDeps["dialect"]
+): void {
+  if (plan.finalState !== "uninstalled") return;
+  const statements = downs.flatMap(down => down.statements);
+  // The statements are read lower-cased. On SQLite, whose names ignore
+  // case, that is how the database reads them. PostgreSQL keeps a quoted
+  // name's case, and MySQL can, so there a table whose stored name is not
+  // lower-case may not be the one a lower-cased drop reaches: it counts as
+  // left. So do two owned tables whose names differ only in case, which the
+  // statements cannot tell apart.
+  const caseKept =
+    dialect === "sqlite"
+      ? []
+      : plan.tablesDropped.filter(table => table !== table.toLowerCase());
+  const byLowered = new Map<string, string[]>();
+  for (const table of plan.tablesDropped) {
+    if (caseKept.includes(table)) continue;
+    const key = table.toLowerCase();
+    byLowered.set(key, [...(byLowered.get(key) ?? []), table]);
+  }
+  const ambiguous = [...byLowered.values()].filter(names => names.length > 1);
+  const readable = [...byLowered.entries()].filter(
+    ([, names]) => names.length === 1
+  );
+  const leftReadable = new Set(
+    tablesLeftInPlace(
+      statements,
+      dialect,
+      readable.map(([key]) => key)
+    )
+  );
+  const left = [
+    ...caseKept,
+    ...ambiguous.flat(),
+    ...readable
+      .filter(([key]) => leftReadable.has(key))
+      .flatMap(([, names]) => names),
+  ];
+  if (left.length === 0) return;
+  throw new NextlyError({
+    code: "PLUGIN_UNINSTALL_IRREVERSIBLE",
+    publicMessage: `${plugin.name}'s DOWN migrations do not drop ${left.join(", ")}, which it owns. Nothing was changed. Fix the plugin's DOWN, or use --keep-data to leave its tables in place.`,
+    logContext: {
+      plugin: plugin.name,
+      reason: "down-leaves-tables",
+      tables: left,
+    },
+  });
+}
+
+/**
+ * Refuse to run the DOWNs of a full uninstall once `onUninstall` has dropped
+ * or renamed a table they were judged to drop.
+ *
+ * The DOWNs were judged against the tables as they stood before the hook
+ * (`assertDownsDropTables`). A hook can change them, through the raw SQL its
+ * context may be granted: a table it renamed away keeps its rows under a name
+ * the DOWNs do not drop, and the check after them reads only the old name.
+ * Refused before the first DOWN, so every module is still recorded applied.
+ */
+async function assertHookLeftTables(
+  plugin: LifecyclePlugin,
+  plan: UninstallPlan,
+  deps: Pick<PluginLifecycleDeps, "liveTables">
+): Promise<void> {
+  if (plan.finalState !== "uninstalled") return;
+  const live = await deps.liveTables(plan.tablesDropped);
+  const gone = plan.tablesDropped.filter(table => !live.has(table));
+  if (gone.length === 0) return;
+  throw new NextlyError({
+    code: "PLUGIN_UNINSTALL_IRREVERSIBLE",
+    publicMessage: `${plugin.name}'s onUninstall dropped or renamed ${gone.join(", ")}, which its DOWN migrations were to drop, so none of them was run. Put ${gone.length === 1 ? "that table" : "those tables"} back under ${gone.length === 1 ? "its name" : "their names"}, then run the uninstall again.`,
+    logContext: {
+      plugin: plugin.name,
+      reason: "tables-changed-by-hook",
+      tables: gone,
+    },
+  });
+}
+
+/**
  * Refuse to record a full uninstall while a table it was to drop still
- * exists: a DOWN that dropped one of the two tables its UP created ran
- * without error, and recording the plugin uninstalled would leave the other,
- * and its data, under a plugin the boot then treats as gone.
+ * exists. The statements were judged before they ran (`assertDownsDropTables`),
+ * so this is the backstop for a DOWN that did something its text does not
+ * say. Its modules are recorded rolled back by then: dropping the table and
+ * running the uninstall again records the plugin uninstalled.
  */
 async function assertTablesDropped(
   plugin: LifecyclePlugin,
@@ -496,7 +595,7 @@ async function assertTablesDropped(
   if (left.length === 0) return;
   throw new NextlyError({
     code: "PLUGIN_UNINSTALL_IRREVERSIBLE",
-    publicMessage: `${plugin.name}'s DOWN migrations ran but left ${left.join(", ")} in place, so it was not recorded as uninstalled. Drop ${left.length === 1 ? "that table" : "those tables"} with a migration, or fix the plugin's DOWN.`,
+    publicMessage: `${plugin.name}'s DOWN migrations ran but left ${left.join(", ")} in place, so it was not recorded as uninstalled. Drop ${left.length === 1 ? "that table" : "those tables"}, then run the uninstall again to record it.`,
     logContext: {
       plugin: plugin.name,
       reason: "tables-left-by-down",

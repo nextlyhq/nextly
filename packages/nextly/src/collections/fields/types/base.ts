@@ -14,6 +14,8 @@ import type React from "react";
 
 import type { FieldHookHandler } from "@nextly/hooks/types";
 
+import type { Principal } from "../../../plugins/principals/types";
+
 // ============================================================
 // Field Type Union
 // ============================================================
@@ -173,6 +175,13 @@ export type AccessFunction = (args: {
   permissions: string[];
   /** The caller's role slugs, including roles inherited from other roles. */
   roles: string[];
+  /**
+   * @experimental The plugin-defined signed-in person the operation is made
+   * as, or `null` for any other caller. For a person, `req.user` is
+   * absent and `permissions` and `roles` are empty: a person is never
+   * staff and holds neither.
+   */
+  principal: Principal | null;
 }) => boolean | Promise<boolean>;
 
 /**

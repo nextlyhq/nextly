@@ -18,10 +18,14 @@ export { users } from "../users/mysql";
 export { nextlyFieldGroupLock } from "../field-group-lock/mysql";
 export { nextlyDocumentLock } from "../document-lock/mysql";
 export { nextlyRbacEpoch } from "../rbac-epoch/mysql";
+export { nextlyDeletedPrincipals } from "../deleted-principals/mysql";
 // Where a plugin's configuration lives. In the bundle as well as in
 // CORE_TABLE_NAMES: the manifest decides what is EXPECTED, this decides what
 // is CREATED, and a table in one but not the other is never made.
 export { nextlyPluginSettings } from "../plugin-settings/mysql";
+export { nextlyOneTimeSecrets } from "../one-time-secrets/mysql";
+export { nextlyLimitStore } from "../limit-store/mysql";
+export { nextlySpentChallenges } from "../spent-challenges/mysql";
 export { nextlySchemaOwners } from "../schema-owners/mysql";
 export { nextlyWidgetLayout } from "../widget-layout/mysql";
 

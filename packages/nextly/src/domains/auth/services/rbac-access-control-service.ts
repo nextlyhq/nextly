@@ -39,6 +39,7 @@
  * ```
  */
 
+import type { Principal } from "../../../plugins/principals/types";
 import type { AccessOperation } from "../../../services/access/types";
 import {
   hasPermission,
@@ -221,6 +222,53 @@ export class RBACAccessControlService {
     resource: string;
     codeAccess?: CollectionAccessControl | SingleAccessControl;
   }): Promise<boolean | undefined> {
+    return this.codeRuleVerdict(params, null);
+  }
+
+  /**
+   * A collection's or Single's code-defined rule, judged for a call made as a
+   * plugin-defined person.
+   *
+   * The rule is the whole decision. A person holds no role and no permission
+   * and is never a super-admin, so nothing `checkAccess` resolves from a user
+   * id applies; and where an anonymous caller with no rule falls through to
+   * the public default, a person is refused. A collection admits a person only
+   * where its author wrote a rule that does, or one set to `true`, which
+   * admits everyone.
+   *
+   * Publishing is refused whatever the rule says, as it is for an anonymous
+   * caller: it moves a document into a privileged published state, and a
+   * person has no staff identity to stamp on it.
+   *
+   * The one decision for a person, asked by the collection gate, the Single
+   * gate and relationship expansion alike.
+   */
+  async checkPrincipalCodeAccess(params: {
+    operation: AccessOperation;
+    resource: string;
+    principal: Principal;
+    codeAccess?: CollectionAccessControl | SingleAccessControl;
+  }): Promise<boolean> {
+    if (params.operation === "publish" || params.operation === "unpublish") {
+      return false;
+    }
+    return (await this.codeRuleVerdict(params, params.principal)) === true;
+  }
+
+  /**
+   * The rule's own verdict for a caller with no staff user: `undefined` when
+   * no rule governs the operation, else the boolean it gives. One evaluation
+   * for the anonymous caller and the person, so the two differ only in who
+   * the rule is told is asking and in what each does with no rule at all.
+   */
+  private async codeRuleVerdict(
+    params: {
+      operation: AccessOperation;
+      resource: string;
+      codeAccess?: CollectionAccessControl | SingleAccessControl;
+    },
+    principal: Principal | null
+  ): Promise<boolean | undefined> {
     const { operation, resource } = params;
     const codeAccess = params.codeAccess ?? this.getRegisteredAccess(resource);
     const rule =
@@ -237,6 +285,7 @@ export class RBACAccessControlService {
         user: null,
         roles: [],
         permissions: [],
+        principal,
         operation,
         collection: resource,
       });
@@ -268,6 +317,8 @@ export class RBACAccessControlService {
       user: { id: userId },
       roles: roleSlugs,
       permissions,
+      // A staff user is never a plugin-defined person.
+      principal: null,
       operation,
       collection: resource,
     };

@@ -21,6 +21,8 @@ export type CataloguePrice =
  * - `one-off`: a single unit (a used machine); `available` is 0 or 1.
  * - `counted`: a number of units on hand.
  * - `untracked`: the source does not count it; commerce's own stock applies.
+ * - `to-order`: made to order or on backorder. Nothing is held for it, and a
+ *   line may ask for at most `maxPerLine`, the source's own limit.
  *
  * Commerce adds its own holds on top of what a source reports, so this is the
  * source's figure, not the buyable one.
@@ -29,7 +31,8 @@ export type CataloguePrice =
  */
 export type CatalogueStock =
   | { readonly kind: "one-off" | "counted"; readonly available: number }
-  | { readonly kind: "untracked" };
+  | { readonly kind: "untracked" }
+  | { readonly kind: "to-order"; readonly maxPerLine: number };
 
 /** @experimental */
 export interface CatalogueItem {
@@ -161,13 +164,20 @@ const stockSchema = z.discriminatedUnion("kind", [
     available: z.number().int().nonnegative(),
   }),
   z.strictObject({ kind: z.literal("untracked") }),
+  z.strictObject({
+    kind: z.literal("to-order"),
+    maxPerLine: z.number().int().positive(),
+  }),
 ]);
 
 /** @experimental */
 export const catalogueItemSchema = z.strictObject({
   reference: z.string().min(1).max(255),
-  name: z.string().min(1),
-  sku: z.string().min(1).optional(),
+  // Bounded so every dialect stores an order's snapshot of them whole: past
+  // 255 characters is a broken answer everywhere, not a failed order on one
+  // database alone.
+  name: z.string().min(1).max(255),
+  sku: z.string().min(1).max(255).optional(),
   price: priceSchema,
   stock: stockSchema,
 });

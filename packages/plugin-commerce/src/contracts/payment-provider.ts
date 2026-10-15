@@ -196,6 +196,15 @@ export interface RefundPaymentInput {
 export interface PaymentProvider {
   /** A short, stable key for the provider, such as "stripe". */
   readonly id: string;
+  /**
+   * Which account at the provider this instance acts for, for a provider a
+   * store can point at more than one: a stable identifier that is not a
+   * secret, such as an account's own id. Commerce records it with each
+   * payment and never sends a payment's later steps to another account,
+   * since an operation key one account issued means nothing to the next.
+   * Left out, the provider is taken to have one account.
+   */
+  readonly account?: string;
   readonly capabilities: PaymentProviderCapabilities;
   /** Create the provider's payment for commerce's reference and amount. */
   start(input: StartPaymentInput): Promise<ProviderPayment>;
@@ -339,6 +348,48 @@ export function paymentAmountRefusal(
 }
 
 /**
+ * Whether a payment can be started for `amount`: a payment is a positive
+ * amount. The start's own input is held to this, and checkout asks it before
+ * an order is placed, so an order that could never start its payment is
+ * never made.
+ *
+ * @experimental
+ */
+export function isPayableAmount(amount: Money): boolean {
+  return amount.amount > 0;
+}
+
+/**
+ * Whether `provider` is the one a payment was begun with: the same provider,
+ * acting for the same account. Only that one knows the payment's operation
+ * keys and can answer for it.
+ */
+export function isRecordedProvider(
+  payment: {
+    readonly provider: string;
+    readonly providerAccount: string;
+  },
+  provider: Pick<PaymentProvider, "id" | "account">
+): boolean {
+  return (
+    payment.provider === provider.id &&
+    payment.providerAccount === storedAccount(provider)
+  );
+}
+
+/**
+ * A provider's account as a payment records it: the account it names, or
+ * the empty string for a provider that names none, which an account never
+ * is. Never null, so a unique index over it keeps one account's references
+ * apart from another's and still holds for a provider with one account.
+ */
+export function storedAccount(
+  provider: Pick<PaymentProvider, "account">
+): string {
+  return provider.account ?? "";
+}
+
+/**
  * Refuse a payment the provider cannot take, before anything is sent.
  *
  * @experimental
@@ -372,7 +423,8 @@ export function requirePaymentAmount(
  * the contract (a zero amount, a malformed operation key) or a payment the
  * provider cannot take (a currency it does not charge in, more than it
  * accepts, a hold it cannot capture) creates nothing at the provider; its
- * answer is then held to the contract before anything reads it.
+ * answer is then held to the contract before anything reads it, including
+ * being the payment asked for: commerce's reference and the amount requested.
  *
  * @experimental
  */
@@ -383,14 +435,25 @@ export async function startProviderPayment(
   const input = parseStartPaymentInput(request);
   if (input.capture === "later") requirePaymentOperation(provider, "capture");
   requirePaymentAmount(provider, input.amount);
-  return parseProviderAnswer(
+  const context = { provider: provider.id, operation: "start" as const };
+  const started = parseProviderAnswer(
     providerPaymentSchema,
     await provider.start(input),
-    {
-      provider: provider.id,
-      operation: "start",
-    }
+    context
   );
+  // A well-formed answer for another payment would have commerce record the
+  // wrong reference or amount against this order.
+  if (
+    started.reference !== input.reference ||
+    started.amount.amount !== input.amount.amount ||
+    started.amount.currency !== input.amount.currency
+  ) {
+    throw commerceError("COMMERCE_PROVIDER_CONTRACT", {
+      ...context,
+      reason: "the answer is for another payment",
+    });
+  }
+  return started;
 }
 
 /** @experimental */
@@ -436,6 +499,17 @@ export function assertPaymentProvider(
       reason: "id is not a lower-case slug",
     });
   }
+  if (
+    candidate.account !== undefined &&
+    (typeof candidate.account !== "string" ||
+      candidate.account.length === 0 ||
+      candidate.account.length > 255)
+  ) {
+    throw commerceError("COMMERCE_PROVIDER_CONTRACT", {
+      provider: candidate.id,
+      reason: "account is not a string of 1 to 255 characters",
+    });
+  }
   const capabilities = paymentProviderCapabilitiesSchema.safeParse(
     candidate.capabilities
   );
@@ -472,6 +546,13 @@ const statusSchema = z.enum([
 ]);
 
 /**
+ * A provider's own identifier or code, as commerce stores it: at most 255
+ * characters, the most its columns hold on every dialect. Longer is refused
+ * here, as a broken answer, rather than by one database alone.
+ */
+const providerStringSchema = z.string().min(1).max(255);
+
+/**
  * A provider's payment as commerce accepts it: every amount valid and in one
  * currency, nothing refunded beyond what was captured, nor captured beyond
  * the amount, and money captured exactly when the payment is paid.
@@ -480,14 +561,14 @@ const statusSchema = z.enum([
  */
 export const providerPaymentSchema = z
   .strictObject({
-    providerReference: z.string().min(1),
+    providerReference: providerStringSchema,
     reference: z.string().min(1),
     status: statusSchema,
     amount: moneySchema,
     amountCaptured: moneySchema,
     amountRefunded: moneySchema,
     clientData: z.record(z.string(), z.string()).optional(),
-    failureCode: z.string().optional(),
+    failureCode: z.string().max(255).optional(),
   })
   .refine(
     p =>
@@ -512,8 +593,8 @@ export const providerPaymentSchema = z
 
 /** @experimental */
 export const providerRefundSchema = z.strictObject({
-  providerRefundReference: z.string().min(1),
-  providerReference: z.string().min(1),
+  providerRefundReference: providerStringSchema,
+  providerReference: providerStringSchema,
   reference: z.string().min(1),
   amount: moneySchema.refine(m => m.amount > 0, {
     message: "a refund is a positive amount",
@@ -530,7 +611,7 @@ export const providerWebhookEventSchema = z.strictObject({
     "dispute.updated",
     "other",
   ]),
-  providerReference: z.string().min(1).nullable(),
+  providerReference: providerStringSchema.nullable(),
   occurredAt: z.iso.datetime({ offset: true }),
 });
 
@@ -565,7 +646,7 @@ export function parseProviderAnswer<S extends z.ZodType>(
 export const startPaymentInputSchema = z.strictObject({
   operationId: operationIdSchema,
   reference: z.string().min(1).max(255),
-  amount: moneySchema.refine(m => m.amount > 0, {
+  amount: moneySchema.refine(isPayableAmount, {
     message: "a payment is a positive amount",
   }),
   capture: z.enum(["now", "later"]),

@@ -1,15 +1,46 @@
 /**
  * `@nextlyhq/plugin-commerce`: commerce for Nextly.
  *
- * This first slice is the foundation every later part builds on: money held
- * exactly, and the catalogue-source and payment-provider contracts that
- * provider plugins implement. Their test suites, a test payment provider and an
- * in-memory catalogue source are at `@nextlyhq/plugin-commerce/testing`.
+ * The plugin, `commerce()`, with its own tables, a built-in products
+ * catalogue, the server-side cart and the storefront's routes and typed
+ * functions; and beneath it money held exactly, and the catalogue-source and
+ * payment-provider contracts that provider plugins implement. Their test
+ * suites, a test payment provider and an in-memory catalogue source are at
+ * `@nextlyhq/plugin-commerce/testing`.
  *
  * Everything here is `@experimental` until the plugin graduates.
  *
  * @module index
  */
+export { commerce, type CommerceOptions } from "./plugin";
+export {
+  commerceServer,
+  commerceServices,
+  type CommerceServer,
+} from "./storefront/server";
+export type {
+  CartCookieAction,
+  CartResult,
+  CartService,
+} from "./cart/cart-service";
+export type { CartLineAvailability, CartLineView, CartView } from "./cart/view";
+export {
+  cartCookieHeader,
+  cartCookieName,
+  clearCartCookieHeader,
+  readCartToken,
+} from "./cart/token";
+export type {
+  CatalogueItemView,
+  CataloguePageView,
+  CatalogueService,
+} from "./storefront/catalogue-service";
+export { productsCollection } from "./catalogue/products-collection";
+export {
+  createProductsSource,
+  type ProductsSourceOptions,
+} from "./catalogue/products-source";
+
 export { commerceError, type CommerceErrorCode } from "./errors";
 
 export { assertCurrency, isCurrencyCode, minorUnits } from "./money/currency";
