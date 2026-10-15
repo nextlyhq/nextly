@@ -10,6 +10,9 @@
  * @module domains/widgets/declaration/displays
  */
 
+import { z } from "zod";
+
+import { TIMESERIES_INTERVALS } from "../../collections/query/timeseries-interval";
 import {
   type ARCHETYPE_OPS,
   DATA_ARCHETYPES,
@@ -90,3 +93,57 @@ export interface ComponentDisplay {
 
 /** How a widget is displayed. */
 export type WidgetDisplay = CoreDisplay | ComponentDisplay;
+
+/**
+ * The data each core display draws, as a check that runs.
+ *
+ * The types above say this to a TypeScript author. These say it to everything
+ * else: a declaration written in plain JavaScript, whose example startup checks,
+ * and a data function's answer, which the card checks before drawing it. `zod`,
+ * because both are outside input at the point they are read.
+ *
+ * Loose about extra keys, as the types are: a query's answer carries `op`, and
+ * an answer may carry what the display does not draw.
+ */
+const ROW = z.record(z.string(), z.unknown());
+
+const DISPLAY_DATA_SCHEMAS: Record<CoreDisplay, z.ZodType> = {
+  metric: z.looseObject({
+    total: z.number().finite(),
+    atLeast: z.boolean().optional(),
+  }),
+  list: z.looseObject({ items: z.array(ROW) }),
+  table: z.looseObject({ items: z.array(ROW) }),
+  bars: z.looseObject({
+    buckets: z.array(
+      z.looseObject({
+        value: z.string().nullable(),
+        count: z.number().finite(),
+      })
+    ),
+    truncated: z.boolean().optional(),
+  }),
+  timeseries: z.looseObject({
+    points: z.array(
+      z.looseObject({ start: z.string(), count: z.number().finite() })
+    ),
+    interval: z.enum(TIMESERIES_INTERVALS),
+  }),
+};
+
+/**
+ * Why `value` is not data the display draws, or `undefined` when it is.
+ *
+ * Names the first place the shape differs, as a path, so the message says
+ * where to look: `buckets.0.count: expected a number`.
+ */
+export function displayDataProblem(
+  display: CoreDisplay,
+  value: unknown
+): string | undefined {
+  const parsed = DISPLAY_DATA_SCHEMAS[display].safeParse(value);
+  if (parsed.success) return undefined;
+  const issue = parsed.error.issues[0];
+  const where = issue.path.length > 0 ? `${issue.path.join(".")}: ` : "";
+  return `${where}${issue.message}`;
+}
