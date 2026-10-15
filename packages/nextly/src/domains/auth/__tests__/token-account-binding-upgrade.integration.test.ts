@@ -221,22 +221,29 @@ describe.each(getConfiguredTestDialects())(
       /** One link of each kind, stored as the previous release stored it. */
       async function links(
         email: string,
-        issuedAt: Date
+        issuedAt: Date,
+        stamped: { lifetimeHours?: number; createdAt?: Date } = {}
       ): Promise<{ reset: string; verification: string }> {
         const raw = {
           reset: randomBytes(32).toString("hex"),
           verification: randomBytes(32).toString("hex"),
         };
-        const expires = at(dialect, new Date(issuedAt.getTime() + 24 * HOUR));
-        const created = at(dialect, issuedAt);
-        for (const [table, value] of [
-          ["password_reset_tokens", raw.reset],
-          ["email_verification_tokens", raw.verification],
+        const expires = at(
+          dialect,
+          new Date(issuedAt.getTime() + (stamped.lifetimeHours ?? 24) * HOUR)
+        );
+        const created = at(dialect, stamped.createdAt ?? issuedAt);
+        // A verification link always lasted a day; only a reset link could
+        // be given another lifetime.
+        const dayLater = at(dialect, new Date(issuedAt.getTime() + 24 * HOUR));
+        for (const [table, value, until] of [
+          ["password_reset_tokens", raw.reset, expires],
+          ["email_verification_tokens", raw.verification, dayLater],
         ] as const) {
           const hash = createHash("sha256").update(value).digest("hex");
           await t.adapter.executeQuery(
             `INSERT INTO ${table} (identifier, token_hash, expires, created_at) ` +
-              `VALUES ('${email}', '${hash}', ${expires}, ${created})`
+              `VALUES ('${email}', '${hash}', ${until}, ${created})`
           );
         }
         return raw;
@@ -258,6 +265,20 @@ describe.each(getConfiguredTestDialects())(
       // Expired before the upgrade.
       await account("expired", ago(40));
       const expired = await links("expired@example.com", ago(30));
+      // Created in the same instant its links were issued: not before them.
+      await account("same-instant", ago(1));
+      const sameInstant = await links("same-instant@example.com", ago(1));
+      // A reset link given a week's lifetime, so its expiry does not say when
+      // it was issued.
+      await account("long-lived", ago(5));
+      const longLived = await links("long-lived@example.com", ago(1), {
+        lifetimeHours: 24 * 7,
+      });
+      // Stamped by a database five hours ahead of the application.
+      await account("other-zone", ago(10));
+      const otherZone = await links("other-zone@example.com", ago(1), {
+        createdAt: ago(-4),
+      });
 
       expect(await migrate(t, dialect)).toBe(true);
 
@@ -283,10 +304,22 @@ describe.each(getConfiguredTestDialects())(
       expect(await boundTo(keeps.verification)).toEqual(["keeps"]);
       expect(await boundTo(moves.reset)).toEqual(["moves"]);
       expect(await boundTo(moves.verification)).toEqual(["moves"]);
-      for (const removed of [reassigned, changed, orphan, expired]) {
+      for (const removed of [
+        reassigned,
+        changed,
+        orphan,
+        expired,
+        sameInstant,
+      ]) {
         expect(await boundTo(removed.reset)).toEqual([]);
         expect(await boundTo(removed.verification)).toEqual([]);
       }
+      // A reset link whose issue time is not known is removed; a verification
+      // link always lasts a day, so its expiry says when it was issued, and it
+      // is bound whatever its created_at says.
+      expect(await boundTo(longLived.reset)).toEqual([]);
+      expect(await boundTo(otherZone.reset)).toEqual([]);
+      expect(await boundTo(otherZone.verification)).toEqual(["other-zone"]);
 
       // Nothing left unbound, so a second run changes nothing.
       expect(await migrate(t, dialect)).toBe(false);

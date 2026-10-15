@@ -47,6 +47,9 @@ transaction, so two redemptions of one reset link cannot both set a password.
 `nextly migrate` adds the column, then ties each outstanding link to the
 account holding its address when that account was created and last changed
 before the link was issued, so those links keep working. A link whose account
-was created or changed after it was issued is removed, since it may have been
-sent to an earlier holder of the address; so are expired links and links to an
-address no account holds. Their owners request a new link.
+was created or changed after it was issued, or in the same second, is removed,
+since it may have been sent to an earlier holder of the address. So is a reset
+link whose issue time cannot be read reliably (a lifetime other than the
+default, or a database clock or time zone that differs from the
+application's), and so are expired links and links to an address no account
+holds. Their owners request a new link.

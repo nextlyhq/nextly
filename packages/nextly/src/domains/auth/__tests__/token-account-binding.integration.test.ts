@@ -522,19 +522,12 @@ describe.each(getConfiguredTestDialects())("on %s", (dialect: TestDialect) => {
         return raw;
       }
 
-      it("works for an account that held the address before it was issued", async () => {
-        const email = address("unbound-works");
+      it("is refused until the upgrade binds it, even for the account that held the address", async () => {
+        // Only a bound link is redeemed; the core reconcile binds or removes
+        // an unbound one the next time it runs.
+        const email = address("unbound-refused");
         const id = await account(email, new Date(Date.now() - 3 * 3600_000));
         const raw = await unbound(email, new Date(Date.now() - 3600_000));
-
-        await kind.redeem(auth, raw);
-        expect(kind.applied(await userRow(id))).toBe(true);
-      });
-
-      it("is refused for an account created after it was issued", async () => {
-        const email = address("unbound-newer");
-        const raw = await unbound(email, new Date(Date.now() - 3600_000));
-        const id = await account(email, new Date(Date.now() - 600_000));
 
         await expect(kind.redeem(auth, raw)).rejects.toMatchObject({
           code: "VALIDATION_ERROR",

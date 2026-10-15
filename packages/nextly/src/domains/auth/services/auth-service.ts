@@ -37,9 +37,7 @@ import { generateInviteTokenValue, hashInviteToken } from "../lib/invite-token";
 
 import {
   AUTH_TOKEN_LIFETIME_MS,
-  heldBy,
   lockAccount,
-  mayBindToAccount,
   tokenTable,
   type AuthTokenKind,
   type BindingAccount,
@@ -230,33 +228,24 @@ export class AuthService extends BaseService {
   }
 
   /**
-   * The account a token being redeemed may act on, holding its row for the
-   * rest of the transaction `tx` belongs to, or undefined when there is none.
+   * The account a token being redeemed acts on, holding its row for the rest
+   * of the transaction `tx` belongs to, or undefined when there is none: the
+   * account it was issued for, while it still holds the token's address.
    *
-   * The account the token was issued for, while it still holds the token's
-   * address. A token from before tokens recorded their account acts on the
-   * account holding its address only when the binding rule says it was issued
-   * for it (`mayBindToAccount`).
+   * A token from before tokens recorded their account acts on none. The core
+   * reconcile binds it to its account, or removes it, the next time it runs;
+   * judging it here as well would be a second, later reading of a rule the
+   * upgrade applies once.
    */
   private async redeemingAccount(
     tx: TokenTransaction,
-    kind: AuthTokenKind,
-    token: {
-      identifier: string;
-      userId: string | null;
-      expires: Date;
-      createdAt: Date;
-    }
+    token: { identifier: string; userId: string | null }
   ): Promise<BindingAccount | undefined> {
-    const account = await lockAccount(tx, this.tables, this.dialect, {
+    if (token.userId === null) return undefined;
+    return lockAccount(tx, this.tables, this.dialect, {
       email: token.identifier,
-      userId: token.userId ?? undefined,
+      userId: token.userId,
     });
-    if (!account) return undefined;
-    if (token.userId === null && !mayBindToAccount(kind, token, account)) {
-      return undefined;
-    }
-    return account;
   }
 
   /** The one public error an unusable reset link returns. */
@@ -693,8 +682,7 @@ export class AuthService extends BaseService {
 
     const email = resetToken.identifier;
     // The account the token was issued for. A token from before tokens
-    // recorded one names none, and is judged against whoever holds its
-    // address, by the binding rule, in the transaction below.
+    // recorded one names none, and is refused in the transaction below.
     const boundTo = resetToken.userId ?? undefined;
 
     const targetUser = await this.db.query.users.findFirst({
@@ -750,11 +738,7 @@ export class AuthService extends BaseService {
       // commits first, and the link is refused, or waits for the reset.
       await this.withTransaction(async txRaw => {
         const tx = txRaw as TokenTransaction;
-        const account = await this.redeemingAccount(
-          tx,
-          "password-reset",
-          resetToken
-        );
+        const account = await this.redeemingAccount(tx, resetToken);
         if (!account) {
           throw this.invalidResetLinkError({
             reason: "reset-token-account-changed",
@@ -774,7 +758,7 @@ export class AuthService extends BaseService {
               eq(passwordResetTokens.id, resetToken.id),
               isNull(passwordResetTokens.usedAt),
               gt(passwordResetTokens.expires, new Date()),
-              heldBy(passwordResetTokens, resetToken, account)
+              eq(passwordResetTokens.userId, account.id)
             )
           );
         if (affectedRowCount(spent, this.dialect) !== 1) {
@@ -1023,11 +1007,7 @@ export class AuthService extends BaseService {
       // ordered against it.
       await this.withTransaction(async txRaw => {
         const tx = txRaw as TokenTransaction;
-        const account = await this.redeemingAccount(
-          tx,
-          "email-verification",
-          verificationToken
-        );
+        const account = await this.redeemingAccount(tx, verificationToken);
         if (!account) {
           throw this.invalidVerificationLinkError({
             reason: "verification-token-account-changed",
@@ -1043,7 +1023,7 @@ export class AuthService extends BaseService {
           .where(
             and(
               eq(emailVerificationTokens.id, verificationToken.id),
-              heldBy(emailVerificationTokens, verificationToken, account)
+              eq(emailVerificationTokens.userId, account.id)
             )
           );
         if (affectedRowCount(spent, this.dialect) !== 1) {

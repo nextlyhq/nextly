@@ -23,7 +23,9 @@
  *   its address only when that account was created and last changed before
  *   the token was issued (`mayBindToAccount`): such an account is the one it
  *   was issued for. Any other is removed (`bindIssuedTokens`), since it may
- *   have been issued to an earlier holder of the address.
+ *   have been issued to an earlier holder of the address, and so is one whose
+ *   issue time cannot be established. Until then an unbound token is
+ *   refused: only a bound one is redeemed.
  *
  * @module domains/auth/services/token-account-binding
  */
@@ -151,36 +153,52 @@ export async function lockAccount(
 }
 
 /**
- * The earliest the token can have been issued, on the clock that stamps the
- * account's `created_at` and `updated_at`.
- *
- * Its expiry is stamped by the same clock, so a verification link, which
- * always lasts `AUTH_TOKEN_LIFETIME_MS`, was issued exactly that long before
- * it expires. A reset link may have been given a longer lifetime, which would
- * put that estimate after the real issue, so its own `created_at` bounds it
- * too. That column is stamped by the database, whose clock or time zone may
- * differ from the application's; taking the earlier of the two can only make
- * the rule refuse more.
+ * How far apart the application's and the database's clocks may be for a
+ * reset link's two timestamps to count as agreeing. Time zone offsets come in
+ * steps of at least fifteen minutes, so agreement within this rules out a
+ * database stamping in another zone.
  */
-export function earliestIssue(kind: AuthTokenKind, token: UnboundToken): Date {
-  const byLifetime = new Date(token.expires.getTime() - AUTH_TOKEN_LIFETIME_MS);
-  if (kind === "email-verification") return byLifetime;
-  return token.createdAt < byLifetime ? token.createdAt : byLifetime;
+export const CLOCK_AGREEMENT_MS = 5 * 60 * 1000;
+
+/**
+ * A time no later than the token was issued, on the clock that stamps the
+ * account's `created_at` and `updated_at`, or null when none can be
+ * established.
+ *
+ * Its expiry is stamped by the same clock. A verification link always lasts
+ * `AUTH_TOKEN_LIFETIME_MS`, so it was issued exactly that long before it
+ * expires.
+ *
+ * A reset link may have been given another lifetime by its caller, so its
+ * expiry alone does not say when it was issued. Its `created_at` does, but the
+ * database stamps it, and nothing pins the database's clock or time zone to
+ * the application's. So the two readings are used only when they agree: the
+ * link had the default lifetime and the clocks are close. The earlier of the
+ * two, less the agreement margin, is then no later than the issue. When they
+ * disagree the issue time is not known, and the answer is null.
+ */
+export function issuedNoLaterThan(
+  kind: AuthTokenKind,
+  token: UnboundToken
+): Date | null {
+  const byLifetime = token.expires.getTime() - AUTH_TOKEN_LIFETIME_MS;
+  if (kind === "email-verification") return new Date(byLifetime);
+  const byDatabase = token.createdAt.getTime();
+  if (Math.abs(byLifetime - byDatabase) > CLOCK_AGREEMENT_MS) return null;
+  return new Date(Math.min(byLifetime, byDatabase) - CLOCK_AGREEMENT_MS);
 }
 
 /**
  * Whether a token issued before `user_id` existed was issued for `account`.
  *
  * It was when the account holds the token's address and was created and last
- * changed no later than the token was issued: the account held the address
- * when the token was issued, and addresses are unique. An account created or
- * changed afterwards may have taken the address from whoever the token was
- * issued to.
+ * changed before the token was issued: the account held the address when the
+ * token was issued, and addresses are unique. An account created or changed
+ * afterwards may have taken the address from whoever the token was issued to.
  *
- * "No later than" includes the same instant. MySQL and SQLite keep these
- * columns to the second, and an account registered and sent its verification
- * link within one second must keep that link; the cost is that a change in the
- * same second as the issue cannot be told from one before it.
+ * Strictly before. MySQL and SQLite keep these columns to the second, so a
+ * change in the same second as the issue cannot be told from one after it,
+ * and is treated as one. So is a token whose issue time is not known.
  */
 export function mayBindToAccount(
   kind: AuthTokenKind,
@@ -188,26 +206,12 @@ export function mayBindToAccount(
   account: Pick<BindingAccount, "email" | "createdAt" | "updatedAt">
 ): boolean {
   if (account.email !== token.identifier) return false;
-  const issued = earliestIssue(kind, token).getTime();
+  const issued = issuedNoLaterThan(kind, token);
+  if (issued === null) return false;
   return (
-    account.createdAt.getTime() <= issued &&
-    account.updatedAt.getTime() <= issued
+    account.createdAt.getTime() < issued.getTime() &&
+    account.updatedAt.getTime() < issued.getTime()
   );
-}
-
-/**
- * The condition that a token row is still the one a redemption read: bound to
- * `account`, or, read with no account, still unbound. A row revoked or
- * rebound in between matches nothing.
- */
-export function heldBy(
-  table: TokenTable,
-  token: { userId: string | null },
-  account: Pick<BindingAccount, "id">
-): SQL {
-  return token.userId === null
-    ? isNull(table.userId)
-    : eq(table.userId, account.id);
 }
 
 /** A token table, of either kind. */

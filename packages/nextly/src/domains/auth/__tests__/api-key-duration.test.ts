@@ -25,7 +25,7 @@ function createTestAdapter(db: unknown) {
   return {
     getDrizzle: () => db,
     getCapabilities: () => ({ dialect: "sqlite" as const }),
-  } as any;  
+  } as any;
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
