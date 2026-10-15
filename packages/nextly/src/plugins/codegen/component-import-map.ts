@@ -133,6 +133,10 @@ function collectCollectionViewPaths(
     ]) {
       if (slot) paths.push(slot);
     }
+    // Each document view is a screen the admin resolves by this string too.
+    for (const documentView of view.documentViews ?? []) {
+      paths.push(documentView.component);
+    }
   }
   return paths;
 }

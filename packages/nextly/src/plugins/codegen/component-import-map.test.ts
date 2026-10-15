@@ -50,6 +50,25 @@ describe("buildComponentImportMap", () => {
     expect(code).not.toContain('"/x"');
   });
 
+  it("registers each document view's component, so the admin can load it", () => {
+    const p = plugin({
+      views: {
+        pages: {
+          documentViews: [
+            { path: "builder", component: "@acme/x/admin#Builder" },
+            { path: "preview", component: "@acme/x/admin#Preview" },
+          ],
+        },
+      },
+    });
+
+    const code = buildComponentImportMap([p]);
+    // The admin resolves a view by this string; one missing from the map is a
+    // route that draws nothing.
+    expect(code).toContain('"@acme/x/admin#Builder": _p0.Builder,');
+    expect(code).toContain('"@acme/x/admin#Preview": _p0.Preview,');
+  });
+
   it("dedupes repeated paths and maps a default export (no #) to .default", () => {
     const p = plugin({
       pages: [
