@@ -26,6 +26,8 @@ import {
 
 import { users } from "../users/postgres";
 
+import { accountTokenIndexes } from "./account-token-indexes";
+
 /**
  * The columns a password-reset and an email-verification token share, with a
  * kind's own columns (`extra`) placed before `created_at`. One definition, so
@@ -54,31 +56,16 @@ function accountTokenColumns<E extends Record<string, ColumnBuilderBase>>(
   };
 }
 
-/** A column an index can be built on. */
-type IndexColumn = Parameters<ReturnType<typeof index>["on"]>[0];
-
-/** The indexes both token tables carry, named with the table's prefix. */
-function accountTokenIndexes(
-  prefix: "prt" | "evt",
-  t: Record<"identifier" | "tokenHash" | "userId" | "expires", IndexColumn>
-) {
-  return [
-    uniqueIndex(`${prefix}_identifier_token_hash_unique`).on(
-      t.identifier,
-      t.tokenHash
-    ),
-    index(`${prefix}_user_id_idx`).on(t.userId),
-    index(`${prefix}_expires_idx`).on(t.expires),
-  ];
-}
-
 // Password reset tokens (custom table)
 export const passwordResetTokens = pgTable(
   "password_reset_tokens",
   accountTokenColumns({
     usedAt: timestamp("used_at", { withTimezone: false }),
   }),
-  t => [...accountTokenIndexes("prt", t), index("prt_used_at_idx").on(t.usedAt)]
+  t => [
+    ...accountTokenIndexes({ index, uniqueIndex }, "prt", t),
+    index("prt_used_at_idx").on(t.usedAt),
+  ]
 );
 
 // User invite tokens — the single-use set-password link an admin hands to a
@@ -114,7 +101,7 @@ export const userInviteTokens = pgTable(
 export const emailVerificationTokens = pgTable(
   "email_verification_tokens",
   accountTokenColumns({}),
-  t => accountTokenIndexes("evt", t)
+  t => accountTokenIndexes({ index, uniqueIndex }, "evt", t)
 );
 
 // Refresh tokens for custom auth session management
