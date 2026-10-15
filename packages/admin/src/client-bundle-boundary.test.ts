@@ -510,15 +510,23 @@ export function readClientEntries(configSource: string): string[] {
         continue;
       }
       const list = declaration.initializer;
-      if (
-        list !== undefined &&
-        ts.isArrayLiteralExpression(list) &&
-        list.elements.every(ts.isStringLiteral)
-      ) {
-        return list.elements.map(element => element.text);
+      if (list === undefined || !ts.isArrayLiteralExpression(list))
+        return refuseClientEntries();
+      const paths: string[] = [];
+      for (const element of list.elements) {
+        // Narrowed one element at a time: a spread, a variable or a template is a list this
+        // cannot read as written, and is refused below like a missing one.
+        if (!ts.isStringLiteral(element)) return refuseClientEntries();
+        paths.push(element.text);
       }
+      return paths;
     }
   }
+  return refuseClientEntries();
+}
+
+/** The one refusal, whichever way the list could not be read. */
+function refuseClientEntries(): never {
   throw new Error(
     "tsup.config.js must declare `clientEntries` as an array of path strings"
   );
