@@ -61,8 +61,8 @@ export type MinimalUser = {
 };
 
 // Structural type for dialect-agnostic table bundles used in services. It
-// names no `accounts` or `sessions` table: both are retired, and no service
-// reads or writes them through this bundle.
+// names no `accounts` or `sessions` table: no service reads or writes either
+// through this bundle, since the features that used them are retired.
 export interface AuthTables {
   users: unknown;
   passwordResetTokens: unknown;
