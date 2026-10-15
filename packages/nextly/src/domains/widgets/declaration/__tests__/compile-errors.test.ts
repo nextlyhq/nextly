@@ -458,6 +458,25 @@ export const dashboard: DashboardContribution<
     code: 2322,
     message: `Type '"acme/revenue"' is not assignable to type`,
   },
+  {
+    name: "where a plugin's widgets are known, it may offer only its own as an alternative",
+    ...pair(
+      id => `import type { DashboardContribution } from "../dashboard";
+import { ordersByState, recentOrders } from "./plugin/widgets";
+
+export const dashboard: DashboardContribution<
+  typeof ordersByState | typeof recentOrders
+> = {
+  widgets: [ordersByState, recentOrders],
+  alternatives: { "${id}": "core/recently-edited" }, ${MARK}
+};
+`,
+      "acme/revenue",
+      "acme/recent-orders"
+    ),
+    code: 2353,
+    message: "'\"acme/revenue\"' does not exist in type",
+  },
 ];
 
 /** Where each case's two forms are compiled, as if they sat in this folder. */
