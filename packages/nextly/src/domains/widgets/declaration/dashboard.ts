@@ -10,26 +10,17 @@
  * @module domains/widgets/declaration/dashboard
  */
 
+import type { CoreWidgetId } from "../core-widgets";
+
 import type { AnyWidget, WidgetDataInput, WidgetWidth } from "./define-widget";
 
 /**
- * The ids of core's own widgets.
- *
- * A closed set, so a plugin offering an alternative to a built-in, or a site
- * hiding one, is told of a misspelt id when it compiles. Today's ids; the set
- * follows core's widgets as they change.
+ * The ids of core's own widgets, read from core's widget list, so a plugin
+ * offering an alternative to a built-in, or a site hiding one, is told of a
+ * misspelt id when it compiles, and the set follows core's widgets with no
+ * second edit.
  */
-export type CoreWidgetId =
-  | "core/seed-demo-content"
-  | "core/onboarding-checklist"
-  | "core/collections"
-  | "core/singles"
-  | "core/quick-create"
-  | "core/team"
-  | "core/pending-edits"
-  | "core/recently-edited"
-  | "core/upcoming-releases"
-  | "core/recent-activity";
+export type { CoreWidgetId } from "../core-widgets";
 
 /**
  * A count for the Needs attention card: a whole number, or one marked as a

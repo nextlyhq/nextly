@@ -106,6 +106,15 @@ export interface WidgetQuerySource<Values, Op extends WidgetOp> {
 declare const widgetData: unique symbol;
 
 /**
+ * Marks a value made by `defineWidget`.
+ *
+ * Required, not optional, so a hand-written `{ id, display }` is not a widget:
+ * only a declaration that went through every check above can be contributed,
+ * put in the site config or given a component. Carried by the type alone.
+ */
+declare const declared: unique symbol;
+
+/**
  * What a widget declares.
  *
  * - `Data` is a data function's answer, inferred from what it returns.
@@ -144,9 +153,9 @@ export interface WidgetDeclarationInput<
   sketch?: CoreDisplay;
   settings?: S;
   data:
-    | WidgetDataFunction<SettingValues<S>, DataFor<Display, Data>>
+    | WidgetDataFunction<SettingValues<S>, FunctionAnswer<Display, Data>>
     | WidgetQuerySource<SettingValues<S>, OpFor<Display, Op>>;
-  display: Display;
+  display: Display & OneDisplay<Display>;
   /**
    * When the card has nothing to show, and what the frame says then.
    *
@@ -210,6 +219,43 @@ type EmptyRequires<Display> = Display extends CoreDisplay
 type DataFor<Display, Own> = Display extends CoreDisplay
   ? DisplayData<Display>
   : Own;
+
+/** True when `T` is a union of more than one member. */
+type IsUnion<T, Whole = T> = T extends unknown
+  ? [Whole] extends [T]
+    ? false
+    : true
+  : never;
+
+/**
+ * Refuses a display typed as a choice of several.
+ *
+ * A `display` read from a variable typed `CoreDisplay` is a union, and the
+ * pairing below distributes over it: data that one member draws satisfies the
+ * union, while the display the widget gets at run time may be another. The
+ * error names the fault in words.
+ */
+type OneDisplay<Display> =
+  true extends IsUnion<Display>
+    ? {
+        "display must be exactly one display, not a choice of several": Display;
+      }
+    : unknown;
+
+/**
+ * What a data function must answer: its display's shape AND its own inferred
+ * type, for a core display; its own type, for a component.
+ *
+ * 🔴 `& Data` on the core branch. Without it a core display's shape was the
+ * whole contextual type of the answer, nothing was inferred into `Data`, and
+ * the transport bound on `Data` had nothing to check: a `metric` answering a
+ * `bigint` beside its total, or `list` rows holding a `Date`, compiled. With
+ * it, the answer is inferred as `Data` and checked twice: against the display
+ * and against what JSON carries.
+ */
+type FunctionAnswer<Display, Data> = Display extends CoreDisplay
+  ? DisplayData<Display> & Data
+  : Data;
 
 /** The op a widget's query may have: its display's, or any for a component. */
 type OpFor<Display, Own extends WidgetOp> = Display extends CoreDisplay
@@ -287,6 +333,7 @@ export type WidgetDeclaration<
   Example = never,
 > = WidgetDeclarationInput<Id, Widths, S, Display, Data, Op, Example> & {
   readonly [widgetData]?: DataFor<Display, Data | QueryAnswer<Op>>;
+  readonly [declared]: true;
 };
 
 /**
@@ -313,15 +360,18 @@ export function defineWidget<
   declaration: WidgetDeclarationInput<Id, Widths, S, Display, Data, Op, Example>
 ): CheckedDeclaration<Id, Widths, S, Display, Data, Op, Example>;
 // The implementation hands the declaration back as it came: every type above
-// is the compiler's reading of it, and nothing at run time changes.
-export function defineWidget(declaration: AnyWidget): AnyWidget {
+// is the compiler's reading of it, and nothing at run time changes. `object`,
+// because the declaration as written does not carry the `declared` mark the
+// overload's result does; only the overload is what callers see.
+export function defineWidget(declaration: object): object {
   return declaration;
 }
 
-/** Any declared widget. */
+/** Any widget made by `defineWidget`. */
 export interface AnyWidget {
   readonly id: string;
   readonly display: WidgetDisplay;
+  readonly [declared]: true;
 }
 
 /** The settings a widget's readers are handed. */
@@ -399,5 +449,25 @@ type ComponentPathOf<W> = W extends {
  * ```
  */
 export type WidgetComponentMap<W extends AnyWidget> = {
-  [K in W as ComponentPathOf<K>]: (props: WidgetProps<K>) => unknown;
+  [Path in ComponentPathOf<W>]: (
+    props: PropsOfEach<WidgetsAt<W, Path>>
+  ) => unknown;
 };
+
+/** The widgets among `W` that name this component path. */
+type WidgetsAt<W, Path> = W extends unknown
+  ? Path extends ComponentPathOf<W>
+    ? W
+    : never
+  : never;
+
+/**
+ * The props of each widget, as a union of whole prop objects.
+ *
+ * 🔴 Distributed, so two widgets sharing one component path ask for a
+ * component taking EITHER widget's props, each whole. Keyed by widget instead,
+ * the shared key merged into a union of component types, and a component
+ * written for one of the two satisfied it while the host would call it with
+ * the other's data.
+ */
+type PropsOfEach<W> = W extends AnyWidget ? WidgetProps<W> : never;

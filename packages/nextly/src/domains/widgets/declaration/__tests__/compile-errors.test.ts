@@ -247,6 +247,31 @@ export function Card({ data }: WidgetProps<typeof revenue>) {
     })
   ),
 
+  {
+    name: "a core display's data function may not answer a bigint beside its shape",
+    ...pair(
+      extra =>
+        widget(`  data: async () => ({ total: 3, extra: ${extra} }), ${MARK}
+  display: "metric",`),
+      "BigInt(1)",
+      `"one"`
+    ),
+    code: 2322,
+    message: "is not assignable to type 'never'",
+  },
+  {
+    name: "a core display's rows may not hold a date object",
+    ...pair(
+      at =>
+        widget(`  data: async () => ({ items: [{ title: "First", at: ${at} }] }), ${MARK}
+  display: "list",`),
+      `new Date("2026-10-01")`,
+      `"2026-10-01"`
+    ),
+    code: 2322,
+    message: "is not assignable to type 'never'",
+  },
+
   // ---- An example is of the widget's own data type.
   {
     name: "a core display refuses an example of another shape, at the example",
@@ -381,6 +406,88 @@ export const components = {
     ),
     code: 2322,
     message: "Property 'when' is missing",
+  },
+
+  {
+    name: "a widget's display is one display, not a choice of several",
+    ...pair(
+      type => `${imports}import type { CoreDisplay } from "../displays";
+
+declare const chosen: ${type};
+
+export const w = defineWidget({
+  id: "test/w",
+  title: "W",
+  description: "A widget under test",
+  category: "Test",
+  widths: ["full"],
+  width: "full",
+  data: async () => ({ total: 3 }),
+  display: chosen, ${MARK}
+});
+`,
+      "CoreDisplay",
+      `"metric"`
+    ),
+    code: 2322,
+    message: "display must be exactly one display, not a choice of several",
+  },
+  {
+    name: "a hand-written object is not a widget a plugin can contribute",
+    ...pair(
+      entry => `import type { DashboardContribution } from "../dashboard";
+import { recentOrders } from "./plugin/widgets";
+
+const fake = { id: "acme/fake", display: "metric" } as const;
+
+export const dashboard: DashboardContribution = {
+  widgets: [${entry}], ${MARK}
+};
+`,
+      "fake",
+      "recentOrders"
+    ),
+    code: 2741,
+    message: "but required in type 'AnyWidget'",
+  },
+  {
+    name: "a component at a path two widgets share must take both widgets' props",
+    ...pair(
+      props => `${imports}import type { WidgetComponentMap, WidgetProps } from "../define-widget";
+
+const one = defineWidget({
+  id: "test/one",
+  title: "One",
+  description: "The first widget at the shared path",
+  category: "Test",
+  widths: ["full"],
+  width: "full",
+  data: async () => ({ one: 1 }),
+  display: { component: "@test/w/admin#Shared" },
+});
+
+const two = defineWidget({
+  id: "test/two",
+  title: "Two",
+  description: "The second widget at the shared path",
+  category: "Test",
+  widths: ["full"],
+  width: "full",
+  data: async () => ({ two: "2" }),
+  display: { component: "@test/w/admin#Shared" },
+});
+
+declare function Shared(props: ${props}): string;
+
+export const components = {
+  "@test/w/admin#Shared": Shared, ${MARK}
+} satisfies WidgetComponentMap<typeof one | typeof two>;
+`,
+      "WidgetProps<typeof one>",
+      "WidgetProps<typeof one> | WidgetProps<typeof two>"
+    ),
+    code: 2322,
+    message: "is not assignable to type '(props:",
   },
 
   // ---- What else the declaration checks where it is written.
