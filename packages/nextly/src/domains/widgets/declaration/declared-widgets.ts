@@ -5,9 +5,12 @@
  * Every declaration is checked before any is kept (`validate.ts`), all owners
  * together, so a duplicate id is found across doors and every fault is
  * reported at once. Each declaration is then kept here whole, its server code
- * included, for the server's own use, and published to the widget registry as
- * a definition holding data only: the registry is what the admin reads, and
- * nothing in a declaration that runs on the server may reach the browser.
+ * included, for the server's own use.
+ *
+ * 🔴 None is published to the widget registry the admin reads yet. A declared
+ * widget's data is built on the server, and nothing runs it for a card until
+ * the dashboard's data path does; offered before then, it would be placed on
+ * dashboards and draw only an error. It is published when it can be drawn.
  *
  * Widgets declared in today's shape (`contributes.admin.widgets`) are drawn as
  * today, through their own path. They take part here only in the id rules: two
@@ -18,14 +21,9 @@
  */
 
 import { getNextlyLogger } from "../../../observability/logger";
-import type { WidgetDefinition, WidgetSize } from "../definition";
 import type { WidgetQuery } from "../query";
-import { registerWidget } from "../registry";
-import type { WidgetSetting } from "../settings";
 
 import { buildCardQuery } from "./card-query";
-import type { WidgetWidth } from "./define-widget";
-import { NEW_SETTING_TYPES } from "./setting-builders";
 import {
   collectWidgetDeclarationFaults,
   widgetDeclarationsRefused,
@@ -42,15 +40,8 @@ export interface DeclaredWidget {
 /** The fields of a declaration this module reads, checked at startup. */
 interface DeclaredWidgetShape {
   readonly id: string;
-  readonly title: string;
-  readonly description: string;
-  readonly category: string;
-  readonly widths: readonly WidgetWidth[];
-  readonly width: WidgetWidth;
-  readonly permission?: string;
   readonly settings?: Readonly<Record<string, Record<string, unknown>>>;
   readonly data: unknown;
-  readonly display: string | { readonly component: string };
 }
 
 /** The ids one owner declares in today's shape. */
@@ -72,65 +63,6 @@ function store(): Map<string, DeclaredWidget> {
   >;
   holder[STORE_KEY] ??= new Map();
   return holder[STORE_KEY];
-}
-
-/**
- * The registry's column-span step for each declared width, at the large
- * breakpoint the steps are measured at: a quarter, a third, a half, two
- * thirds, and the whole row are 3, 4, 6, 8 and 12 of its 12 columns.
- */
-const SIZE_OF_WIDTH: Record<WidgetWidth, WidgetSize> = {
-  "1/4": "sm",
-  "1/3": "md",
-  "1/2": "lg",
-  "2/3": "xl",
-  full: "full",
-};
-const WIDTH_ORDER: readonly WidgetWidth[] = [
-  "1/4",
-  "1/3",
-  "1/2",
-  "2/3",
-  "full",
-];
-
-/**
- * A declaration as the registry publishes it: data only.
- *
- * The data function, the query function and the empty test stay on the
- * server. `serverData` tells the registry, and the admin after it, that core
- * builds this card's data from the declaration, so the definition carries no
- * query. Only the settings of a type core defines are published; a control
- * core has no definition type for yet stays in the declaration, where the
- * server reads it.
- */
-function toDefinition(declaration: DeclaredWidgetShape): WidgetDefinition {
-  const widths = [...declaration.widths].sort(
-    (a, b) => WIDTH_ORDER.indexOf(a) - WIDTH_ORDER.indexOf(b)
-  );
-  const display = declaration.display;
-  const settings: WidgetSetting[] = Object.entries(declaration.settings ?? {})
-    .filter(([, setting]) => !NEW_SETTING_TYPES.has(String(setting.type)))
-    // A cast, because each was checked at startup by the reader a
-    // `WidgetSetting` passes (`widgetSettingsProblem`).
-    .map(([name, setting]) => ({ ...setting, name }) as WidgetSetting);
-  return {
-    id: declaration.id,
-    title: declaration.title,
-    description: declaration.description,
-    category: declaration.category,
-    ...(typeof display === "string"
-      ? { archetype: display as WidgetDefinition["archetype"] }
-      : { archetype: "custom" as const, component: display.component }),
-    ...(settings.length > 0 ? { settings } : {}),
-    defaultSize: SIZE_OF_WIDTH[declaration.width],
-    minSize: SIZE_OF_WIDTH[widths[0]],
-    maxSize: SIZE_OF_WIDTH[widths[widths.length - 1]],
-    ...(declaration.permission === undefined
-      ? {}
-      : { requiredPermission: declaration.permission }),
-    serverData: true,
-  };
 }
 
 /**
@@ -197,8 +129,8 @@ function warnSharedLegacyIds(legacy: readonly LegacyWidgetIds[]): void {
 }
 
 /**
- * Checks every declaration, then keeps and publishes them all, or refuses
- * startup naming every fault and keeps none.
+ * Checks every declaration, then keeps them all, or refuses startup naming
+ * every fault and keeps none.
  *
  * `legacy` is the ids each plugin declares in today's shape.
  */
@@ -218,7 +150,6 @@ export function registerWidgetDeclarations(
     for (const raw of declarations as readonly unknown[]) {
       const declaration = raw as DeclaredWidgetShape;
       store().set(declaration.id, { owner, declaration });
-      registerWidget(toDefinition(declaration), { source: owner });
     }
   }
 }

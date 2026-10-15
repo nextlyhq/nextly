@@ -60,13 +60,13 @@ beforeEach(() => {
 });
 
 describe("startup with plugins that declare widgets", () => {
-  it("registers each enabled plugin's declared widgets beside core's", () => {
+  it("keeps each enabled plugin's declared widgets, and offers none to the admin yet", () => {
     resetWidgetRegistries([plugin("@acme/shop", { dashboard })]);
-    expect(getWidget("acme/orders-by-state")).toMatchObject({
-      serverData: true,
-    });
     expect(declaredWidget("acme/revenue")?.owner).toBe('plugin "@acme/shop"');
-    // Core's own cards are still there: the declarations land after them.
+    expect(declaredWidget("acme/orders-by-state")).toBeDefined();
+    // Nothing runs a declared widget's data for a card yet, so the registry
+    // the admin reads holds none of them, and core's own cards as before.
+    expect(getWidget("acme/orders-by-state")).toBeUndefined();
     expect(getWidget("core/recently-edited")).toBeDefined();
   });
 

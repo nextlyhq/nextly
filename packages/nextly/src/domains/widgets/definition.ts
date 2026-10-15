@@ -388,21 +388,13 @@ export interface WidgetDefinition {
    */
   requiredPermission?: string | readonly string[];
   /**
-   * Required for every data archetype unless `serverData` is set; forbidden
-   * for `text` and `actions`.
+   * Required for every data archetype; forbidden for `text` and `actions`.
    *
    * Typed as {@link WidgetQuerySpec} so a declaration pairing `groupBy` with an
    * op that ignores it, or a `groupBy` op carrying no key, fails to compile
    * rather than booting and failing on every request the card makes.
    */
   query?: WidgetQuerySpec;
-  /**
-   * The card's data is built on the server from the widget's declaration (a
-   * data function, or a query written from its settings), so the definition
-   * carries no query of its own and the browser never holds the code that
-   * builds one. Set by core when it publishes a declared widget, never by hand.
-   */
-  serverData?: true;
   /** Required for `custom`; forbidden otherwise. */
   component?: string;
   /** Required for `actions`; forbidden otherwise. */
@@ -1341,22 +1333,9 @@ export function archetypeResultProblem(
   );
 }
 
-/**
- * A definition whose data is built on the server carries exactly the marker
- * and no query: a declared widget's data comes from its declaration, and a
- * query beside it would leave two answers to what the card shows.
- */
-function validateServerData(d: Partial<WidgetDefinition>): void {
-  if (d.serverData === undefined) return;
-  if (d.serverData !== true) fail(`${d.id}: serverData may only be true`);
-  if (d.query !== undefined) {
-    fail(`${d.id}: a widget whose data is built on the server takes no query`);
-  }
-}
-
 function validateQuery(d: Partial<WidgetDefinition>): void {
   const archetype = d.archetype as WidgetArchetype;
-  if (DATA_ARCHETYPE_SET.has(archetype) && !d.query && d.serverData !== true) {
+  if (DATA_ARCHETYPE_SET.has(archetype) && !d.query) {
     fail(`${d.id}: archetype "${d.archetype}" requires a query`);
   }
   // Refused with its OWN reason rather than the queryless one, which would say
@@ -1392,7 +1371,6 @@ export function validateWidgetDefinition(
   validateComponent(d);
   validateActions(d);
   validateText(d);
-  validateServerData(d);
   validateQuery(d);
   validateCells(d);
   validateDefaultOrder(d);

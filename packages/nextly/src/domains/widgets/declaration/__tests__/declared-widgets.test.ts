@@ -1,13 +1,13 @@
 /**
- * The declared widgets core knows at startup: checked all together, published
- * to the registry the admin reads, and looked up by id when a card's query is
- * built.
+ * The declared widgets core knows at startup: checked all together, kept for
+ * the server and not yet offered to the admin, and looked up by id when a
+ * card's query is built.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { NextlyError } from "../../../../errors/nextly-error";
 import * as loggerModule from "../../../../observability/logger";
-import { clearWidgets, getWidget, widgetSource } from "../../registry";
+import { clearWidgets, getWidget } from "../../registry";
 import {
   cardQueryFor,
   clearDeclaredWidgets,
@@ -39,39 +39,16 @@ afterEach(() => {
 });
 
 describe("registering declared widgets", () => {
-  it("publishes a core-display widget as a definition the admin can read, with no server code", () => {
+  it("offers none to the admin yet: nothing runs a declared widget's data for a card", () => {
     registerWidgetDeclarations([
-      { owner: SHOP, declarations: [ordersByState] },
+      { owner: SHOP, declarations: [ordersByState, revenue] },
     ]);
-
-    const definition = getWidget("acme/orders-by-state");
-    expect(definition).toMatchObject({
-      id: "acme/orders-by-state",
-      title: "Orders by state",
-      description: "How many orders sit in each state",
-      category: "Shop",
-      archetype: "bars",
-      serverData: true,
-      requiredPermission: "read-orders",
-      // Its widths, 1/3 to 2/3, starting at 1/2, as the registry's steps.
-      defaultSize: "lg",
-      minSize: "md",
-      maxSize: "xl",
-    });
-    expect(widgetSource("acme/orders-by-state")).toBe(SHOP);
-    // 🔴 The definition reaches the browser, so it must hold data only: it
-    // survives a JSON round trip unchanged, which a function would not.
-    expect(JSON.parse(JSON.stringify(definition))).toEqual(definition);
-    expect(definition).not.toHaveProperty("data");
-  });
-
-  it("publishes a component widget as a custom card naming its component", () => {
-    registerWidgetDeclarations([{ owner: SHOP, declarations: [revenue] }]);
-    expect(getWidget("acme/revenue")).toMatchObject({
-      archetype: "custom",
-      component: "@acme/nextly-plugin-shop/admin#RevenueCard",
-      serverData: true,
-    });
+    // Kept for the server, and absent from the registry the admin reads, so
+    // no dashboard places a card that could draw only an error.
+    expect(declaredWidget("acme/orders-by-state")).toBeDefined();
+    expect(declaredWidget("acme/revenue")).toBeDefined();
+    expect(getWidget("acme/orders-by-state")).toBeUndefined();
+    expect(getWidget("acme/revenue")).toBeUndefined();
   });
 
   it("keeps each declaration, with its server code, for the server's own use", () => {
@@ -104,7 +81,6 @@ describe("registering declared widgets", () => {
     );
     // All or nothing: the valid declaration beside the faulty one is not left
     // half-registered for a boot that is about to stop.
-    expect(getWidget("acme/orders-by-state")).toBeUndefined();
     expect(declaredWidget("acme/orders-by-state")).toBeUndefined();
   });
 });

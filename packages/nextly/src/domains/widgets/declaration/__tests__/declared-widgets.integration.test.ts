@@ -1,7 +1,7 @@
 /**
- * Declared widgets through a real instance, on each database: what the admin
- * receives, what a saved card's settings become when a starting value changes
- * in code, and startup refusing a declaration that cannot work.
+ * Declared widgets through a real instance, on each database: what a saved
+ * card's settings become when a starting value changes in code, and startup
+ * refusing a declaration that cannot work.
  *
  * Booted with `createTestNextly`, so startup is the real boot path: the
  * plugin's `contributes.dashboard` is read by the same reset production runs.
@@ -23,9 +23,7 @@ import {
   createTestNextly,
   type TestNextly,
 } from "../../../../plugins/test-nextly";
-import { createDynamicHandlers } from "../../../../routeHandler";
 import { WidgetLayoutService } from "../../../../services/widgets/widget-layout-service";
-import { sanitizeConfig } from "../../../../shared/types/config";
 import type { WidgetPlacement } from "../../layout";
 import { resolveCardSettings } from "../card-query";
 import { declaredWidget } from "../declared-widgets";
@@ -83,87 +81,6 @@ const silentLogger = {
   error: () => {},
 };
 
-/** A key holding exactly `read-orders`, minted by the instance's first user. */
-async function readOrdersKey(handle: TestNextly): Promise<string> {
-  const nextly = handle.nextly as unknown as {
-    users: {
-      create: (a: { data: Record<string, unknown> }) => Promise<{
-        item: { id: string };
-      }>;
-    };
-    permissions: {
-      find: (a: { limit: number }) => Promise<{
-        items: { id: string; slug: string }[];
-      }>;
-    };
-    roles: {
-      create: (a: { data: Record<string, unknown> }) => Promise<{
-        item: { id: string };
-      }>;
-    };
-  };
-  const owner = await nextly.users.create({
-    data: {
-      email: "owner@example.com",
-      password: "Password123!",
-      name: "Owner",
-      isActive: true,
-    },
-  });
-  const permissions = await nextly.permissions.find({ limit: 300 });
-  const read = permissions.items.find(p => p.slug === `read-${ORDERS}`);
-  expect(
-    read,
-    "the plugin's collection seeds its read permission"
-  ).toBeDefined();
-  const role = await nextly.roles.create({
-    data: {
-      name: "Order readers",
-      slug: "order-readers",
-      permissionIds: [read!.id],
-    },
-  });
-  const apiKeys = handle.getService("apiKeyService") as unknown as {
-    createApiKey: (
-      userId: string,
-      input: {
-        name: string;
-        tokenType: string;
-        roleId?: string;
-        expiresIn: string;
-      }
-    ) => Promise<{ key: string }>;
-  };
-  const { key } = await apiKeys.createApiKey(owner.item.id, {
-    name: "order reader",
-    tokenType: "role-based",
-    roleId: role.item.id,
-    expiresIn: "never",
-  });
-  return key;
-}
-
-interface WorkspaceWidget {
-  id: string;
-  [field: string]: unknown;
-}
-
-async function workspaceWidgets(key: string): Promise<WorkspaceWidget[]> {
-  const handlers = createDynamicHandlers({
-    config: sanitizeConfig({ collections: [], plugins: [shop(5)] }),
-  });
-  const res = await handlers.GET(
-    new Request("http://localhost/api/admin-meta/workspace", {
-      method: "GET",
-      headers: { authorization: `Bearer ${key}` },
-    }),
-    { params: Promise.resolve({ params: ["admin-meta", "workspace"] }) }
-  );
-  expect(res.status).toBe(200);
-  const body = (await res.json()) as { widgets?: WorkspaceWidget[] };
-  return body.widgets ?? [];
-}
-
 function card(id: string, config: Record<string, unknown>): WidgetPlacement {
   return {
     id,
@@ -192,26 +109,6 @@ function declaredWidgetSuite(
     afterEach(async () => {
       await handle?.destroy();
       handle = undefined;
-    });
-
-    it("reach the admin through the plugin door as data, behind their permission", async () => {
-      handle = await boot(5);
-      const widgets = await workspaceWidgets(await readOrdersKey(handle));
-      const published = widgets.find(
-        widget => widget.id === "acme/recent-orders"
-      );
-      expect(published).toMatchObject({
-        title: "Recent orders",
-        description: "The newest orders",
-        archetype: "list",
-        serverData: true,
-        requiredPermission: `read-${ORDERS}`,
-        defaultSize: "full",
-      });
-      // The query function never left the server: what the admin received
-      // holds no query and no data, only what JSON carries.
-      expect(published).not.toHaveProperty("query");
-      expect(published).not.toHaveProperty("data");
     });
 
     it("hand a saved card a new starting value, and leave a value its person chose", async () => {
