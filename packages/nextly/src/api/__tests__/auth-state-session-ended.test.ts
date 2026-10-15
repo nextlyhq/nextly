@@ -91,8 +91,11 @@ describe("GET /api/auth/state and an account's ended sessions", () => {
     expect(res.status).toBe(401);
     const body = (await res.json()) as { error?: { code?: string } };
     expect(body.error?.code).toBe("AUTH_REQUIRED");
+    // Judged on its epoch, not on whether the account is active: this route
+    // is where an inactive account's token reports `disabled: true`.
     expect(sessionTokenIsCurrent).toHaveBeenCalledWith(
-      expect.objectContaining({ sub: "u1", nx_sev: 0 })
+      expect.objectContaining({ sub: "u1", nx_sev: 0 }),
+      { activeOnly: false }
     );
     // Refused before the route's own account read.
     expect(getCachedNextly).not.toHaveBeenCalled();
