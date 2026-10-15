@@ -156,18 +156,27 @@ export class FakeLimiter implements PluginLimiter {
     assertAdmitted(reservation, options.rules);
     this.#transactions.assertNone("limits.release");
     if (!this.available) return { status: "unavailable" };
-    for (const counted of this.#reservations.get(reservation.id) ?? []) {
+    // As core: each count is given back in the run the caller's reservation
+    // names for it, so a copy carrying stale runs gives nothing back.
+    const supplied = reservation.epochs.filter(
+      (_, index) => reservation.entries[index]?.counted === true
+    );
+    const counts = this.#reservations.get(reservation.id) ?? [];
+    counts.forEach((counted, index) => {
       const named = options.rules?.includes(counted.target.rule) ?? true;
-      if (!counted.released && named) this.#giveBack(counted);
-    }
+      if (!counted.released && named)
+        this.#giveBack(counted, supplied[index] ?? "");
+    });
 
     return { status: "done" };
   }
 
   /** Takes one counted entry's count back, once, and only in the run it was counted in. */
-  #giveBack(counted: Counted): void {
+  #giveBack(counted: Counted, epoch: string): void {
+    // A count named by a stale run is not this one's to give back, and stays
+    // to be given back by the reservation that holds its real run.
+    if (this.#epochs.get(slot(counted.target)) !== epoch) return;
     counted.released = true;
-    if (this.#epochs.get(slot(counted.target)) !== counted.epoch) return;
     if (counted.at !== undefined) {
       const times = this.#windows.get(slot(counted.target)) ?? [];
       const index = times.indexOf(counted.at);
