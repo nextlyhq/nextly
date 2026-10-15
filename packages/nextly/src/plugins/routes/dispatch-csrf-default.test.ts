@@ -143,11 +143,21 @@ describe("a public route that declares csrf: true", () => {
     expect(handlerCalls).toBe(1);
   });
 
-  it("demands the token from a caller carrying the session cookie", async () => {
+  it("demands the token from a caller the session cookie authenticates", async () => {
     // The control: a classifier that never saw a session would pass the case
-    // above while leaving the session-carrying caller unchecked.
+    // above while leaving the signed-in caller unchecked. Signed with the
+    // secret the dispatcher verifies with; a cookie that authenticates nobody
+    // is an anonymous caller's, checked for its origin alone
+    // (`dispatch-csrf-anonymous.test.ts`).
+    const token = await signAccessToken(
+      { sub: "u1", email: "u1@x.com" },
+      process.env.NEXTLY_SECRET ?? ""
+    );
     const res = await runPluginRoute(
-      write(ADMIN_COOKIES, "http://localhost:3000"),
+      write(
+        `nextly_session=${token}; nextly_csrf=tok`,
+        "http://localhost:3000"
+      ),
       match({ public: true, csrf: true })
     );
     expect(res.status).toBe(403);

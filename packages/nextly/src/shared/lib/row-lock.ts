@@ -9,14 +9,14 @@
  * in, so the query must run inside one.
  *
  * - **PostgreSQL** takes `FOR SHARE`. Concurrent readers of the row share it;
- *   only writers wait.
+ *   only writers wait. An exclusive use takes `FOR UPDATE`.
  * - **MySQL** takes `FOR SHARE` for an existence check where the server
  *   accepts it (MySQL 8, Aurora, Vitess), so concurrent writes naming one
  *   account do not queue on its row. MariaDB and TiDB reject `FOR SHARE` as a
  *   syntax error and take `FOR UPDATE`, as does a server whose variant is not
  *   known: a lock that cannot fail to execute, at the cost that concurrent
- *   lockers of one row take turns. A session-row write takes `FOR UPDATE` on
- *   every MySQL server.
+ *   lockers of one row take turns. A session-row write and an exclusive use
+ *   take `FOR UPDATE` on every MySQL server.
  * - **SQLite** reads without a lock: it has no row locks, and the caller's
  *   transaction already holds the database's write lock from its
  *   `BEGIN IMMEDIATE`, which serialises it against every writer.
@@ -37,8 +37,11 @@ export type RowLockStrength = "share" | "update";
  * - `existence-check`: the audit and activity writes that check the account
  *   they name still exists. Shared wherever the server accepts it, because
  *   every content write by an author takes one.
+ * - `exclusive`: a write that must keep every `existence-check` reader of the
+ *   row waiting until it commits, such as a deletion report. Exclusive on
+ *   PostgreSQL and MySQL alike.
  */
-export type RowLockUse = "session" | "existence-check";
+export type RowLockUse = "session" | "existence-check" | "exclusive";
 
 /** The server facts the strength depends on: the adapter's capabilities. */
 export type RowLockServer = Pick<
@@ -61,7 +64,7 @@ export function rowLockStrength(
 ): RowLockStrength | null {
   switch (server.dialect) {
     case "postgresql":
-      return "share";
+      return use === "exclusive" ? "update" : "share";
     case "mysql":
       // `sharedRowLock` is unset until the adapter has read the server's
       // version: only an explicit yes asks for a lock some servers reject.

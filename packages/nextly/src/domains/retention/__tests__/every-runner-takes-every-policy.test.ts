@@ -167,6 +167,7 @@ describe("the derived policy list", () => {
     expect(keys).toEqual([
       "audit.retention.lastPassAt",
       "email.retention.lastPassAt",
+      "secrets.retention.lastPassAt",
       "webhooks.retention.lastPassAt",
     ]);
   });

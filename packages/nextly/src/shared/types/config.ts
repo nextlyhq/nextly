@@ -27,6 +27,11 @@ import type {
   SanitizedLocalizationConfig,
 } from "../../domains/i18n/config/types";
 import type { JobDefinition } from "../../domains/jobs/job-registry";
+import {
+  resolveStoreSetting,
+  type LimitStoreSelection,
+  type RateLimitStoreSetting,
+} from "../../domains/limits/limit-store-setting";
 import type { PreviewConfig } from "../../domains/preview/route-config";
 import type { DrizzleSchemaHook } from "../../domains/schema/extension/after-drizzle";
 import type { SchemaHook } from "../../domains/schema/extension/draft";
@@ -35,6 +40,7 @@ import type {
   ResolvedWebhookRetentionConfig,
   WebhookRetentionConfig,
 } from "../../domains/webhooks/retention-config";
+import { NextlyError } from "../../errors/nextly-error";
 import type { FieldGroupConfig } from "../../field-groups/config/types";
 import type { CorsConfig } from "../../middleware/cors";
 import type { RateLimitStore } from "../../middleware/rate-limit";
@@ -209,10 +215,11 @@ export interface DatabaseConfig {
  */
 export interface RateLimitingConfig {
   /**
-   * Enable rate limiting.
+   * Enable rate limiting. Optional, as its default says: only `false` turns
+   * it off, so a block that sets only the store keeps limiting.
    * @default true
    */
-  enabled: boolean;
+  enabled?: boolean;
 
   /**
    * Maximum requests per window for read operations (GET).
@@ -233,12 +240,38 @@ export interface RateLimitingConfig {
   windowMs?: number;
 
   /**
-   * Custom store for rate limit state.
-   * Defaults to in-memory store if not provided.
+   * Where limits keep their counts.
    *
-   * For production with multiple instances, use a Redis-backed store.
+   * - `"memory"` (the default): in each process, so on several instances each
+   *   budget is multiplied by their number.
+   * - `"database"`: in the site's database, shared by every instance.
+   * - An app's own store implementing the limit store contract
+   *   (`@experimental`).
+   * - An app's store of the earlier `RateLimitStore` contract, which keeps
+   *   serving core's own limits; limits built on the newer contract then
+   *   count in memory.
+   *
+   * @default "memory"
    */
-  store?: RateLimitStore;
+  store?: RateLimitStoreSetting;
+
+  /**
+   * Says the site runs one instance, so limits counting in memory are not a
+   * gap. Silences the production warning about it.
+   *
+   * @default false
+   */
+  singleInstance?: boolean;
+
+  /**
+   * The most live entries the selected store holds: 100,000 for memory,
+   * 1,000,000 for the database by default. Once full, a store answers a new
+   * key as unavailable rather than dropping a live count, and warns before
+   * that.
+   *
+   * @experimental
+   */
+  maxEntries?: number;
 
   /**
    * Function to generate a unique key for rate limiting.
@@ -285,8 +318,20 @@ export interface SanitizedRateLimitingConfig {
   writeLimit: number;
   /** Time window in milliseconds */
   windowMs: number;
-  /** Custom store for rate limit state (optional) */
+  /**
+   * An app's store of the earlier `RateLimitStore` contract, which core's own
+   * limits keep counting in. Absent for any other `rateLimit.store`.
+   */
   store?: RateLimitStore;
+  /**
+   * The store limits on the newer contract count in. Optional, so a block
+   * built by hand without it still holds: absent means memory.
+   */
+  limitStore?: LimitStoreSelection;
+  /** Whether the site says it runs one instance; absent means not. */
+  singleInstance?: boolean;
+  /** The most live entries the selected store holds; its default when absent. */
+  maxEntries?: number;
   /** Function to generate a unique key for rate limiting (optional) */
   keyGenerator?: (request: Request) => string;
   /** Function to skip rate limiting for certain requests (optional) */
@@ -434,6 +479,47 @@ export interface SecurityConfig {
    * @default false
    */
   trustProxy?: boolean;
+
+  /**
+   * @experimental Where a plugin's password check asks whether a password
+   * has appeared in a breach, when the plugin asks for that check.
+   *
+   * Unset, the check uses `"pwned-passwords"`. Only the first 5 hex digits of
+   * the password's SHA-1 (20 bits) ever leave the process.
+   */
+  breachedPasswords?: BreachedPasswordsConfig;
+}
+
+/**
+ * @experimental The site's breached-password source.
+ *
+ * A range service is asked for every known hash that starts with a 5-digit
+ * prefix, and answers with their suffixes; the password's own hash never
+ * leaves the process.
+ */
+export interface BreachedPasswordsConfig {
+  /**
+   * - `"pwned-passwords"`: Have I Been Pwned's range service at its public
+   *   address.
+   * - `{ url }`: a range service at this address, asked at `<url>/<prefix>`.
+   *   Must be `https`: any other address is sent nothing, every check answers
+   *   that it went unchecked, and boot warns.
+   * - `{ range }`: a list the site holds, read in the process. It receives the
+   *   5-digit prefix and answers with the known suffixes; the site answers
+   *   for its transport.
+   */
+  source:
+    | "pwned-passwords"
+    | { url: string }
+    | { range(prefix: string): Promise<readonly string[]> };
+  /**
+   * How long a check waits for the source before it answers that the
+   * password went unchecked: a whole number of milliseconds from 1 to 60000.
+   * Any other value is named at boot and replaced by the default.
+   *
+   * @default 2000
+   */
+  timeoutMs?: number;
 }
 
 // ============================================================
@@ -975,6 +1061,36 @@ export const DEFAULT_API_KEYS_CONFIG = {
  * @returns Sanitized configuration with defaults applied
  * @throws Error if `apiKeys.rateLimit` values are invalid
  */
+/**
+ * The stores `rateLimit.store` selects: the earlier contract's for core's own
+ * limits, under the key it always had, and the newer contract's selection.
+ */
+function rateLimitStores(
+  setting: unknown
+): Pick<SanitizedRateLimitingConfig, "store" | "limitStore"> {
+  const { selection, legacy } = resolveStoreSetting(setting);
+  return { store: legacy, limitStore: selection };
+}
+
+/**
+ * `rateLimit.maxEntries`, checked: a positive whole number, or absent.
+ *
+ * @throws {NextlyError} `VALIDATION_ERROR` naming the setting otherwise
+ */
+function rateLimitMaxEntries(value: number | undefined): number | undefined {
+  if (value === undefined) return undefined;
+  if (Number.isSafeInteger(value) && value > 0) return value;
+  throw NextlyError.validation({
+    errors: [
+      {
+        path: "rateLimit.maxEntries",
+        code: "INVALID_VALUE",
+        message: "Must be a positive whole number.",
+      },
+    ],
+  });
+}
+
 export function sanitizeConfig(config: NextlyConfig): SanitizedNextlyConfig {
   // Validate apiKeys.rateLimit bounds — these are runtime-critical.
   if (config.apiKeys?.rateLimit?.requestsPerHour !== undefined) {
@@ -1010,7 +1126,9 @@ export function sanitizeConfig(config: NextlyConfig): SanitizedNextlyConfig {
     writeLimit:
       config.rateLimit?.writeLimit ?? DEFAULT_RATE_LIMIT_CONFIG.writeLimit,
     windowMs: config.rateLimit?.windowMs ?? DEFAULT_RATE_LIMIT_CONFIG.windowMs,
-    store: config.rateLimit?.store,
+    ...rateLimitStores(config.rateLimit?.store),
+    singleInstance: config.rateLimit?.singleInstance === true,
+    maxEntries: rateLimitMaxEntries(config.rateLimit?.maxEntries),
     keyGenerator: config.rateLimit?.keyGenerator,
     skip: config.rateLimit?.skip,
     collections: config.rateLimit?.collections,

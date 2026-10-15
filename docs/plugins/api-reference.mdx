@@ -515,7 +515,8 @@ any of lowercase letters, digits, `.`, `_` and `-`; a kind outside that, longer
 than the audit column, or declared twice fails boot. Undeclared kinds and keys
 are dropped rather than stored. `targetUserId` must name an existing user; a
 row naming one that does not exist is stored without its metadata, and a
-warning is logged.
+warning is logged. A [person your plugin signs in](/docs/plugins/signed-in-people#record-what-a-person-does)
+goes in `actorPrincipal` or `targetPrincipal`, never in the user ids.
 
 ### `ctx.auth`
 

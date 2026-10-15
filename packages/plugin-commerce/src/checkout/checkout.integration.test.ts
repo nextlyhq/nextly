@@ -832,7 +832,10 @@ describe.each(getConfiguredTestDialects())(
       const expiring = await shopper(cart, [["bolt", 1]]);
       const expiringInput = await input(expiring);
       stall = 31 * 24 * 60 * MINUTE;
-      expect(await codeOf(() => checkout().complete(expiringInput))).toBe(
+      // Jobs allowed to go that long without a run, so the cart's deadline
+      // is what refuses the order here, not the jobs check after it.
+      const patient = checkout({ jobsStaleAfterMs: 40 * 24 * 60 * MINUTE });
+      expect(await codeOf(() => patient.complete(expiringInput))).toBe(
         "COMMERCE_CART_EMPTY"
       );
       expect(await ctx.db.select(orders).all()).toHaveLength(1);
@@ -1005,14 +1008,14 @@ describe.each(getConfiguredTestDialects())(
       expect(offline.payment.clientData).toBeNull();
     });
 
-    it("keeps a long catalogue name and SKU whole in the order, on every dialect", async () => {
+    it("keeps a catalogue name and SKU of the most the contract allows whole in the order, on every dialect", async () => {
       const long = createInMemoryCatalogueSource({
         currency: "USD",
         items: [
           {
             reference: "rig",
-            name: "Rig ".repeat(100),
-            sku: "SKU-".repeat(100),
+            name: "R".repeat(255),
+            sku: "S".repeat(255),
             price: { kind: "listed", unitPrice: money(1_000, "USD") },
             stock: { kind: "untracked" },
           },
@@ -1026,9 +1029,9 @@ describe.each(getConfiguredTestDialects())(
         email: "ada@example.com",
         addresses: ADDRESSES,
       });
-      expect(done.order.lines[0]?.name).toBe("Rig ".repeat(100));
+      expect(done.order.lines[0]?.name).toBe("R".repeat(255));
       const [line] = await ctx.db.select(orderLines).all();
-      expect(line?.sku).toBe("SKU-".repeat(100));
+      expect(line?.sku).toBe("S".repeat(255));
     });
 
     it("refuses an argument it cannot parse as a validation error, before any work", async () => {
@@ -1054,6 +1057,250 @@ describe.each(getConfiguredTestDialects())(
         ).toBe("VALIDATION_ERROR");
       }
       expect(await ctx.db.select(orders).all()).toEqual([]);
+    });
+
+    it("refuses to retry a payment's start with a provider other than the one it began with", async () => {
+      const test = createTestPaymentProvider();
+      const flaky: PaymentProvider = {
+        ...test.provider,
+        start: async () => {
+          throw new Error("connect ECONNREFUSED");
+        },
+      };
+      const { ctx, checkout, cart, clock, memory } = await setup({
+        provider: flaky,
+      });
+      const token = await shopper(cart, [["bolt", 1]]);
+      await checkout().complete({
+        token,
+        quoteKey: (await checkout().quote({ token })).quoteKey,
+        email: "ada@example.com",
+        addresses: ADDRESSES,
+      });
+
+      // The store's provider changes while the start waits to be retried.
+      const other = createTestPaymentProvider({ id: "other" });
+      clock.now = new Date(clock.now.getTime() + MINUTE);
+      await runDueWork({
+        db: ctx.db,
+        handlers: checkoutWorkHandlers({
+          db: ctx.db,
+          provider: other.provider,
+          source: memory.source,
+          now: () => clock.now,
+        }),
+        alerts: { abandoned: () => undefined },
+        now: () => clock.now,
+      });
+      expect(other.control.payments()).toEqual([]);
+      expect(await ctx.db.select(work).all()).toMatchObject([
+        {
+          state: "pending",
+          attempts: 2,
+          lastError: "COMMERCE_PAYMENTS_NOT_CONFIGURED",
+        },
+      ]);
+    });
+
+    it("refuses to retry a payment's start with another account at the same provider", async () => {
+      // The same provider, pointed at another account while a start waits.
+      const first = createTestPaymentProvider({ account: "acct_first" });
+      const flaky: PaymentProvider = {
+        ...first.provider,
+        start: async () => {
+          throw new Error("connect ECONNREFUSED");
+        },
+      };
+      const { ctx, checkout, cart, clock, memory } = await setup({
+        provider: flaky,
+      });
+      const token = await shopper(cart, [["bolt", 1]]);
+      await checkout().complete({
+        token,
+        quoteKey: (await checkout().quote({ token })).quoteKey,
+        email: "ada@example.com",
+        addresses: ADDRESSES,
+      });
+      expect(await ctx.db.select(payments).all()).toMatchObject([
+        { provider: "test", providerAccount: "acct_first" },
+      ]);
+
+      const second = createTestPaymentProvider({ account: "acct_second" });
+      clock.now = new Date(clock.now.getTime() + MINUTE);
+      await runDueWork({
+        db: ctx.db,
+        handlers: checkoutWorkHandlers({
+          db: ctx.db,
+          provider: second.provider,
+          source: memory.source,
+          now: () => clock.now,
+        }),
+        alerts: { abandoned: () => undefined },
+        now: () => clock.now,
+      });
+      expect(second.control.payments()).toEqual([]);
+      expect(await ctx.db.select(work).all()).toMatchObject([
+        { attempts: 2, lastError: "COMMERCE_PAYMENTS_NOT_CONFIGURED" },
+      ]);
+
+      // The account it began with still finishes it.
+      await runDueWork({
+        db: ctx.db,
+        handlers: checkoutWorkHandlers({
+          db: ctx.db,
+          provider: first.provider,
+          source: memory.source,
+          now: () => new Date(clock.now.getTime() + 10 * MINUTE),
+        }),
+        alerts: { abandoned: () => undefined },
+        now: () => new Date(clock.now.getTime() + 10 * MINUTE),
+      });
+      expect(first.control.payments()).toHaveLength(1);
+    });
+
+    it("keeps a provider reference unique within its account, exactly: two accounts may share one, one account may not", async () => {
+      // Each account answers every start with the same account-local id.
+      const sharing = (account?: string): PaymentProvider => {
+        const { provider } = createTestPaymentProvider(
+          account === undefined ? {} : { account }
+        );
+        return {
+          ...provider,
+          start: async input => ({
+            ...(await provider.start(input)),
+            providerReference: "pi_same",
+          }),
+        };
+      };
+      const first = sharing("acct_first");
+      // Another account whose id differs only in case, as a provider's may.
+      const second = sharing("acct_First");
+      const { ctx, checkout, cart } = await setup({ provider: first });
+      const place = async (payments: PaymentProvider) => {
+        const token = await shopper(cart, [["bolt", 1]]);
+        const service = checkout({ payments });
+        await service.complete({
+          token,
+          quoteKey: (await service.quote({ token })).quoteKey,
+          email: "ada@example.com",
+          addresses: ADDRESSES,
+        });
+      };
+      await place(first);
+      await place(second);
+      // The same account handing out the same id again is one payment too many.
+      await place(first);
+      const rows = await ctx.db.select(payments).all();
+      expect(
+        rows.map(row => [row.providerAccount, row.providerReference]).sort()
+      ).toEqual([
+        ["acct_First", "pi_same"],
+        ["acct_first", null],
+        ["acct_first", "pi_same"],
+      ]);
+    });
+
+    it("refuses at checkout a line past the per-line limit the source gives now", async () => {
+      let cap = 9;
+      const memory = createInMemoryCatalogueSource({
+        currency: "USD",
+        items: [
+          {
+            reference: "bench",
+            name: "Bench",
+            price: { kind: "listed", unitPrice: money(45_000, "USD") },
+            stock: { kind: "to-order", maxPerLine: 9 },
+          },
+        ],
+      }).source;
+      const find = memory.find.bind(memory);
+      const price = memory.price.bind(memory);
+      // The source's limit as it stands when asked.
+      const source: CatalogueSource = {
+        ...memory,
+        find: async input =>
+          (await find(input)).map(item =>
+            item.stock.kind === "to-order"
+              ? { ...item, stock: { ...item.stock, maxPerLine: cap } }
+              : item
+          ),
+        price: async input =>
+          (await price(input)).map(line =>
+            line.found && line.stock.kind === "to-order"
+              ? { ...line, stock: { ...line.stock, maxPerLine: cap } }
+              : line
+          ),
+      };
+      const { ctx, checkout, cart } = await setup({ source });
+      const token = await shopper(cart, [["bench", 4]]);
+      const { quoteKey } = await checkout().quote({ token });
+      cap = 2;
+      expect(
+        await codeOf(() =>
+          checkout().complete({
+            token,
+            quoteKey,
+            email: "ada@example.com",
+            addresses: ADDRESSES,
+          })
+        )
+      ).toBe("COMMERCE_QUANTITY_NOT_ALLOWED");
+      expect(await ctx.db.select(orders).all()).toEqual([]);
+    });
+
+    it("refuses an order when the jobs go stale while the source is read", async () => {
+      const clock = { now: new Date("2026-10-14T05:00:00.000Z") };
+      let stall = 0;
+      const source = stallingSource(() => {
+        clock.now = new Date(clock.now.getTime() + stall);
+      });
+      const { ctx, checkout, cart, alerts } = await setup({ source, clock });
+      const token = await shopper(cart, [["bolt", 1]]);
+      const { quoteKey } = await checkout().quote({ token });
+      // Fresh when completion begins; stale by the time the source answers.
+      stall = 16 * MINUTE;
+      expect(
+        await codeOf(() =>
+          checkout().complete({
+            token,
+            quoteKey,
+            email: "ada@example.com",
+            addresses: ADDRESSES,
+          })
+        )
+      ).toBe("COMMERCE_JOBS_NOT_RUNNING");
+      expect(alerts.jobsRefused).toBe(1);
+      expect(await ctx.db.select(orders).all()).toEqual([]);
+    });
+
+    it("records two provider references that differ only in case, on every dialect", async () => {
+      const test = createTestPaymentProvider();
+      const references = ["pi_Case", "pi_case"];
+      let started = 0;
+      const casey: PaymentProvider = {
+        ...test.provider,
+        start: async input => {
+          const answer = await test.provider.start(input);
+          const providerReference = references[started] ?? "pi_more";
+          started += 1;
+          return { ...answer, providerReference };
+        },
+      };
+      const { ctx, checkout, cart } = await setup({ provider: casey });
+      for (let i = 0; i < 2; i++) {
+        const token = await shopper(cart, [["bolt", 1]]);
+        await checkout().complete({
+          token,
+          quoteKey: (await checkout().quote({ token })).quoteKey,
+          email: "ada@example.com",
+          addresses: ADDRESSES,
+        });
+      }
+      const rows = await ctx.db.select(payments).all();
+      expect(rows.map(row => row.providerReference).sort()).toEqual([
+        "pi_Case",
+        "pi_case",
+      ]);
     });
   }
 );

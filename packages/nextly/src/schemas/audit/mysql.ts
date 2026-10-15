@@ -80,6 +80,13 @@ export function auditLogColumns() {
     // explicit_defaults_for_timestamp mode, which can rewrite the column and
     // leave the live schema disagreeing with the desired one forever.
     identityErasedAt: datetime("identity_erased_at"),
+    // Who acted, and a plugin-defined person in columns of their own: see
+    // the PostgreSQL definition.
+    actorKind: varchar("actor_kind", { length: 191 }),
+    actorPrincipalKind: varchar("actor_principal_kind", { length: 191 }),
+    actorPrincipalId: varchar("actor_principal_id", { length: 191 }),
+    targetPrincipalKind: varchar("target_principal_kind", { length: 191 }),
+    targetPrincipalId: varchar("target_principal_id", { length: 191 }),
   };
 }
 

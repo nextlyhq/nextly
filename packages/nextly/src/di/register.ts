@@ -44,6 +44,7 @@ import { createAdapterFromEnv, validateDatabaseEnv } from "../database/factory";
 import { resolveRelations } from "../database/resolve-relations";
 import type { SchemaRegistry } from "../database/schema-registry";
 import { requireNextly } from "../direct-api/nextly";
+import { resealPrincipalDigestKeyAtBoot } from "../domains/audit/erase-principal";
 import type { ResolvedAuditRetentionConfig } from "../domains/audit/retention-config";
 import type { ApiKeyService } from "../domains/auth/services/api-key-service";
 import type { AuthService } from "../domains/auth/services/auth-service";
@@ -66,7 +67,10 @@ import {
 } from "../domains/field-groups/storage/resolve-storage-names";
 import type { SanitizedLocalizationConfig } from "../domains/i18n/config/types";
 import type { JobDefinition } from "../domains/jobs/job-registry";
+import type { LimitStore } from "../domains/limits/limit-store";
+import { selectLimitStore } from "../domains/limits/select-limit-store";
 import type { MetaService } from "../domains/meta";
+import { pluginSettingsSecrets } from "../domains/plugins/settings-service";
 import type { PreviewConfig } from "../domains/preview/route-config";
 import { resolvePreviewRoute } from "../domains/preview/route-config";
 import type { ReleasesService } from "../domains/releases/services/releases-service";
@@ -132,6 +136,7 @@ import {
 import { assertBootMigrationsNotRefused } from "../init/boot-migrations-gate";
 import type { RunProdMigrationsArgs } from "../init/prod-migrations";
 import { unwrittenSlugs } from "../init/sync-outcome";
+import { env } from "../lib/env";
 import type { PluginPermission, PluginRole } from "../plugins/contributions";
 import { getCoreVersion } from "../plugins/core-version";
 import { warnUndescribedPlugins } from "../plugins/describe-check";
@@ -185,6 +190,7 @@ import {
   validateCrossPluginRelations,
 } from "../plugins/schema/validate-relations";
 import { extendTargetUnknownError } from "../plugins/schema-error";
+import { breachedPasswordsWarnings } from "../plugins/security/breached-passwords";
 import {
   clearPluginServices,
   registerPluginService,
@@ -523,6 +529,11 @@ export interface ServiceMap {
   // Registered by registerCollectionServices but previously untyped here, so
   // consumers had to reach past getService() to use it.
   collectionsHandler: CollectionsHandler;
+  /**
+   * Where limits on the limit store contract count, as `rateLimit.store`
+   * selects it. @experimental
+   */
+  limitStore: LimitStore;
 }
 
 // ============================================================
@@ -532,6 +543,11 @@ export interface ServiceMap {
 // Stored on globalThis to survive ESM module duplication in Next.js/Turbopack.
 const globalForReg = globalThis as unknown as {
   __nextly_isRegistered?: boolean;
+  /**
+   * Stops the selected limit store's own sweeping, once it has been built.
+   * Called when the services are released, so no timer outlives them.
+   */
+  __nextly_closeLimitStore?: () => Promise<void>;
   /** The registration currently running, so a concurrent caller waits on it. */
   __nextly_registrationInFlight?: Promise<void>;
   /** Resolved plugins + their contexts, for reverse-order destroy on shutdown (D4). */
@@ -890,6 +906,21 @@ async function registerServicesOnce(
     "config",
     () => transformedConfig
   );
+  // Where limits on the limit store contract count: memory by default, the
+  // database, or an app's own store, as `rateLimit.store` selects. Built on
+  // first use; what it runs on its own stops when the services are released.
+  container.registerSingleton<LimitStore>("limitStore", () => {
+    const selected = selectLimitStore(
+      transformedConfig.rateLimit?.limitStore ?? "memory",
+      {
+        adapter,
+        secret: env.NEXTLY_SECRET,
+        maxEntries: transformedConfig.rateLimit?.maxEntries,
+      }
+    );
+    globalForReg.__nextly_closeLimitStore = selected.close;
+    return selected.store;
+  });
   // Beside the config rather than in it: what the boot granted, decided once
   // when the plugin list was resolved. The auth router builds its plugin
   // contexts from this entry, as `initializePlugins` does from the same value.
@@ -943,6 +974,12 @@ async function registerServicesOnce(
   await checkForeignKeysToCodeFirstTables(adapter, bootExtensionSchema);
 
   assertBootRelationsResolve(schemaRegistry, resolvedLogger);
+
+  // Before any plugin starts, as stored plugin secrets are: the key naming
+  // deleted plugin-defined people, sealed under a secret since rotated, is
+  // sealed again under the current one, so the retired secret can go once
+  // the app has started with both.
+  await resealPrincipalDigestKeyAtBoot(adapter, pluginSettingsSecrets(env));
 
   // ----------------------------------------
   // Layer 7: Initialize Plugins
@@ -2382,6 +2419,15 @@ export async function resolveBootPlugins(config: NextlyServiceConfig): Promise<{
     config,
     await applyPluginConfigTransformers(resolvedConfig)
   );
+  // A breached-password configuration the check cannot honour says so here,
+  // once, rather than leaving every plugin's check to answer "unchecked" in
+  // silence. Read from the transformed config, which is the one the plugin
+  // contexts receive: a `setup` transformer may have set it.
+  for (const warning of breachedPasswordsWarnings(
+    setupConfig.security?.breachedPasswords
+  )) {
+    (config.logger ?? consoleLogger).warn(warning);
+  }
 
   // RE-RESOLVED in full, not merely re-checked. A `setup` transformer may
   // add, rename or replace entries in `plugins`, and the rest of the boot
@@ -4448,6 +4494,17 @@ export async function destroyRegisteredPlugins(): Promise<void> {
   }
 }
 
+/**
+ * Stop what the selected limit store runs on its own, such as the database
+ * store's sweep, so no timer outlives the services. The store keeps
+ * answering calls a teardown still makes.
+ */
+function stopLimitStore(): Promise<void> {
+  const close = globalForReg.__nextly_closeLimitStore;
+  globalForReg.__nextly_closeLimitStore = undefined;
+  return close?.() ?? Promise.resolve();
+}
+
 export async function shutdownServices(): Promise<void> {
   if (!globalForReg.__nextly_isRegistered) {
     return;
@@ -4466,6 +4523,8 @@ async function releaseServices(opts: {
 }): Promise<void> {
   // Before the adapter disconnects, so destroy can still use db.
   await destroyRegisteredPlugins();
+  // Before the adapter disconnects, so a sweep under way finishes with it.
+  await stopLimitStore();
 
   try {
     if (opts.disconnectAdapter && container.has("adapter")) {
@@ -4532,6 +4591,8 @@ export function clearServices(): void {
       inTeardown.restored = container.restore(inTeardown.cleared);
     }
   }
+  // Synchronous here: the sweep stops, and one under way finishes on its own.
+  void stopLimitStore();
   // Clear the process-global recording policy alongside the container so a
   // re-initialization does not inherit a prior config's opt-outs.
   resetWebhookRecordingPolicy();

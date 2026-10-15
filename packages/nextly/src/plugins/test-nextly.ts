@@ -27,6 +27,7 @@ import {
 import {
   clearServices,
   getService,
+  type NextlyServiceConfig,
   registerServices,
   shutdownServices,
 } from "../di/register";
@@ -55,6 +56,7 @@ import {
 } from "../init/schema-snapshot-cache";
 import type { Logger } from "../services/shared";
 import { _resetEnvCache } from "../shared/lib/env";
+import type { SecurityConfig } from "../shared/types/config";
 import type { SingleConfig } from "../singles/config/types";
 import { getImageProcessor } from "../storage/image-processor";
 
@@ -290,6 +292,10 @@ export interface CreateTestNextlyOptions {
   adapter?: TestAdapter;
   /** Override the logger (defaults to a near-silent test logger). */
   logger?: Logger;
+  /** The app's `security` block, as `nextly.config.ts` would give it. */
+  security?: SecurityConfig;
+  /** An app's password hasher, as `getNextly()` takes it. */
+  passwordHasher?: NextlyServiceConfig["passwordHasher"];
 }
 
 export interface TestNextly {
@@ -723,6 +729,8 @@ async function bootServices(
       localization: opts.localization
         ? normalizeLocalization(opts.localization)
         : undefined,
+      security: opts.security,
+      passwordHasher: opts.passwordHasher,
       // Record every event by default so machinery tests are independent of
       // webhook endpoint setup; suites that exercise the endpoint gate turn this
       // off. Passed through the config (not set after) so it is published before

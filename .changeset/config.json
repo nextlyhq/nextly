@@ -23,6 +23,7 @@
       "@nextlyhq/storage-s3",
       "@nextlyhq/storage-uploadthing",
       "@nextlyhq/storage-vercel-blob",
+      "@nextlyhq/plugin-accounts",
       "@nextlyhq/plugin-commerce",
       "@nextlyhq/plugin-form-builder",
       "@nextlyhq/plugin-mcp",

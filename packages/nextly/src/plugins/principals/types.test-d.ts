@@ -6,6 +6,13 @@
  */
 import { expectTypeOf } from "vitest";
 
+import type { FindArgs } from "../../direct-api/types/collections";
+import type {
+  CreateUserArgs,
+  DeleteUserArgs,
+  FindUserByIDArgs,
+  UpdateUserArgs,
+} from "../../direct-api/types/users";
 import { definePlugin } from "../plugin-context";
 import type { PluginRouteContext } from "../routes/route-types";
 
@@ -68,6 +75,16 @@ const account: PrincipalKindDefinition<Account> = {
   resolve: () => Promise.resolve(null),
 };
 
+// An optional attribute is refused: a declared attribute always has a value
+// or `null`, so a resolver may not leave one out.
+expectTypeOf<{ plan?: string }>().not.toExtend<
+  PrincipalAttributesOf<{ plan?: string }>
+>();
+// The control: the same attribute, required and nullable, is accepted.
+expectTypeOf<{ plan: string | null }>().toExtend<
+  PrincipalAttributesOf<{ plan: string | null }>
+>();
+
 // An attribute of a type no attribute may hold is still refused.
 expectTypeOf<{ joined: Date }>().not.toExtend<
   PrincipalAttributesOf<{ joined: Date }>
@@ -99,3 +116,11 @@ definePlugin({
     ],
   },
 });
+
+// A collection operation takes `principal`; a users operation, which the
+// instance refuses to run as a person, does not offer it.
+expectTypeOf<FindArgs>().toHaveProperty("principal");
+expectTypeOf<FindUserByIDArgs>().not.toHaveProperty("principal");
+expectTypeOf<CreateUserArgs>().not.toHaveProperty("principal");
+expectTypeOf<UpdateUserArgs>().not.toHaveProperty("principal");
+expectTypeOf<DeleteUserArgs>().not.toHaveProperty("principal");

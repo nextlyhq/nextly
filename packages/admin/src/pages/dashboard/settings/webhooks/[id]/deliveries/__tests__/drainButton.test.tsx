@@ -67,7 +67,14 @@ describe("Deliveries page — Process queue now", () => {
         retried: 1,
         failed: 0,
         abandoned: 0,
-        pruned: { events: 0, deliveries: 0, activity: 0, auth: 0 },
+        pruned: {
+          events: 0,
+          deliveries: 0,
+          activity: 0,
+          auth: 0,
+          emailDeliveries: 0,
+          oneTimeSecrets: 0,
+        },
       });
     });
 

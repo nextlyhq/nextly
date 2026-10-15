@@ -17,6 +17,9 @@
  * @since 1.0.0
  */
 import { getNextlyLogger } from "../../observability/logger";
+import { principalRefOf } from "../../plugins/principals/ref";
+import { getPrincipalKind } from "../../plugins/principals/registry";
+import type { PrincipalRef } from "../../plugins/principals/types";
 import { resolutionError } from "../../plugins/resolution-error";
 import { auditLog as postgresAuditLog } from "../../schemas/audit/postgres";
 
@@ -31,6 +34,10 @@ export interface PluginAuditEvent {
   kind: string;
   actorUserId?: string | null;
   targetUserId?: string | null;
+  /** A plugin-defined person who acted, never in `actorUserId`. */
+  actorPrincipal?: PrincipalRef | null;
+  /** A plugin-defined person the event is about, never in `targetUserId`. */
+  targetPrincipal?: PrincipalRef | null;
   request?: Request;
   metadata?: Record<string, string | number | boolean>;
 }
@@ -252,6 +259,9 @@ export function projectPluginAuditEvent(
     return null;
   }
 
+  const people = projectPeople(event, pluginName);
+  if (!people) return null;
+
   const metadata: Record<string, string | number | boolean> = {};
   for (const [key, value] of Object.entries(event.metadata ?? {})) {
     if (!allowedKeys.has(key)) continue;
@@ -267,7 +277,63 @@ export function projectPluginAuditEvent(
     kind: event.kind,
     actorUserId: event.actorUserId ?? null,
     targetUserId: event.targetUserId ?? null,
+    actorPrincipal: people.actor,
+    targetPrincipal: people.target,
     request: event.request,
     metadata,
   };
+}
+
+/**
+ * The people an event names, by kind and id only, or null to drop the event.
+ *
+ * Dropped rather than written without them: a row that lost the person it
+ * names is a record about nobody, and one naming both a staff user and a
+ * person in one role says two different things about who acted. Logged, as an
+ * undeclared kind is, since the write is a side effect of what the plugin was
+ * really doing.
+ */
+function projectPeople(
+  event: PluginAuditEvent,
+  pluginName: string
+): { actor: PrincipalRef | null; target: PrincipalRef | null } | null {
+  const refuse = (role: "actor" | "target", reason: string): null => {
+    getNextlyLogger().warn({
+      kind: "plugin-audit-person-refused",
+      plugin: pluginName,
+      auditKind: event.kind,
+      role,
+      reason,
+    });
+    return null;
+  };
+  const actor = personInRole(event.actorPrincipal, event.actorUserId);
+  if (typeof actor === "string") return refuse("actor", actor);
+  const target = personInRole(event.targetPrincipal, event.targetUserId);
+  if (typeof target === "string") return refuse("target", target);
+  return { actor, target };
+}
+
+/**
+ * The person one role names: their kind and id, null for none, or why the
+ * value cannot stand there.
+ */
+function personInRole(
+  value: unknown,
+  userId: string | null | undefined
+):
+  | PrincipalRef
+  | null
+  | "not-a-person"
+  | "kind-not-registered"
+  | "names-a-user-too" {
+  if (value === undefined || value === null) return null;
+  const ref = principalRefOf(value);
+  if (!ref) return "not-a-person";
+  // A kind no running plugin registers, a misspelling most likely, is one no
+  // deletion report can name: `reportDeleted` takes only the reporting
+  // plugin's own kinds. A row kept under it would outlive the person it is
+  // about, so the event is dropped as one naming nobody is.
+  if (!getPrincipalKind(ref.kind)) return "kind-not-registered";
+  return userId === undefined || userId === null ? ref : "names-a-user-too";
 }

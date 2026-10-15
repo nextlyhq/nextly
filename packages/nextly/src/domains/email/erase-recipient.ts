@@ -22,7 +22,7 @@
  * @module domains/email/erase-recipient
  */
 
-import { inArray, type Column, type Table } from "drizzle-orm";
+import { and, eq, inArray, type Column, type Table } from "drizzle-orm";
 
 import { ERASED_RECIPIENT_HASH, recipientDigests } from "./delivery-record";
 
@@ -107,4 +107,35 @@ export async function eraseRecipientDeliveries(
     .update(deliveries)
     .set({ recipientHash: ERASED_RECIPIENT_HASH })
     .where(inArray(deliveries.recipientHash, recipientDigests(address)));
+}
+
+/** The delivery table's columns a person's erasure reads and writes. */
+export type PersonDeliveriesTable = ErasableDeliveriesTable & {
+  principalKind: Column;
+  principalId: Column;
+};
+
+/**
+ * Erase the address digest of every delivery recorded for a plugin-defined
+ * person, and name them on those rows by `digest` in place of their id.
+ *
+ * Keyed on the person's own columns, never on the address: a staff user, or
+ * anyone else, sharing the address keeps every row of theirs. Runs inside the
+ * deletion report's transaction, with its audit erasure.
+ */
+export async function erasePrincipalDeliveries(
+  db: RecipientErasureCapableDb,
+  deliveries: PersonDeliveriesTable,
+  person: { kind: string; id: string },
+  digest: string
+): Promise<void> {
+  await db
+    .update(deliveries)
+    .set({ recipientHash: ERASED_RECIPIENT_HASH, principalId: digest })
+    .where(
+      and(
+        eq(deliveries.principalKind, person.kind),
+        eq(deliveries.principalId, person.id)
+      )
+    );
 }

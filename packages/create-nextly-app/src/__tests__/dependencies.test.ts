@@ -92,3 +92,39 @@ describe("installDependencies (existing project)", () => {
     expect(execa.mock.calls.filter(([cmd]) => cmd === "yalc")).toHaveLength(0);
   });
 });
+
+describe("installDependencies (fresh plugin scaffold)", () => {
+  beforeEach(() => {
+    execa.mockClear();
+  });
+
+  // The plugin imports @nextlyhq/plugin-sdk directly. Linking the rest of the
+  // family from yalc but not the SDK pairs local packages with the published
+  // SDK, so an unpublished SDK change cannot be tried in the scaffold.
+  it("links @nextlyhq/plugin-sdk from yalc", async () => {
+    await installDependencies(
+      "/tmp/plugin",
+      projectInfo,
+      database,
+      /* useYalc */ true,
+      /* isFreshProject */ true,
+      "plugin"
+    );
+
+    expect(linkedViaYalc()).toContain("@nextlyhq/plugin-sdk");
+    expect(linkedViaYalc()).toContain("nextly");
+  });
+
+  it("leaves the app scaffold's yalc set unchanged", async () => {
+    await installDependencies(
+      "/tmp/app",
+      projectInfo,
+      database,
+      true,
+      true,
+      "blank"
+    );
+
+    expect(linkedViaYalc()).not.toContain("@nextlyhq/plugin-sdk");
+  });
+});

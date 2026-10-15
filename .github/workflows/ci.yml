@@ -1600,6 +1600,28 @@ jobs:
           npm exec --yes --package="$tarball" -- create-nextly-app smoke-app --template blank --skip-install --yes
           test -f smoke-app/package.json && echo "scaffold ok"
 
+      # The plugin template takes its own path through the CLI: the flag has to
+      # accept it, the app detector has to be skipped (a plugin keeps its Next.js
+      # app in dev/, not src/app), and the copy comes from the template bundled
+      # in the tarball. Each of those once failed while the blank smoke passed.
+      # The dev/.env check proves the playground gets the env it boots on.
+      - name: Scaffold plugin template from tarball
+        shell: bash
+        run: |
+          release=$(node -p "require('./packages/create-nextly-app/package.json').version")
+          cd /tmp/scaffold-test
+          tarball=$(ls /tmp/nextly-pack/*.tgz | head -1)
+          npm exec --yes --package="$tarball" -- create-nextly-app smoke-plugin --template plugin --skip-install --yes
+          test -f smoke-plugin/package.json
+          test -f smoke-plugin/src/plugin.ts
+          test -f smoke-plugin/dev/.env
+          # Next.js runs the start-up hook only from beside app/, under src/.
+          test -f smoke-plugin/dev/src/instrumentation.ts
+          # The bundled template installs the packages released with this CLI.
+          pinned=$(node -p "require('./smoke-plugin/package.json').devDependencies.nextly")
+          test "$pinned" = "$release" || { echo "nextly is $pinned, expected $release"; exit 1; }
+          echo "plugin scaffold ok"
+
       # The generated scripts and the CLI's command set live in two different
       # packages, and nothing compared them: every project shipped a
       # `db:migrate:reset` calling a command `nextly` has never registered, which

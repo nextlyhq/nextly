@@ -12,10 +12,16 @@
  * @module auth/request-actor
  */
 
-import type { AuthContext } from "./middleware";
+import type { PrincipalRef } from "../plugins/principals/types";
 
-/** What kind of caller performed a write. */
-export type RequestActorType = "user" | "apiKey" | "system";
+import type { AuthContext } from "./middleware";
+import { currentPrincipal } from "./principal-scope";
+
+/**
+ * What kind of caller performed a write. `principal` is a plugin-defined
+ * signed-in person, never a staff user.
+ */
+export type RequestActorType = "user" | "apiKey" | "system" | "principal";
 
 /**
  * The acting identity for one write.
@@ -24,10 +30,23 @@ export type RequestActorType = "user" | "apiKey" | "system";
  * id: the key is the actor, and its owner is an attribute of the key that stays
  * recoverable from the keys table. `type` already distinguishes the two, so the
  * single id slot carries the most precise identity available.
+ *
+ * A `principal` actor carries the person in `principal`, by kind and id, and
+ * no `id`: the id slot names a staff user or a key, and a person's id there
+ * would be read as one. Every trail keyed on `id` (the activity log among
+ * them) therefore records no row for a person.
  */
 export interface RequestActor {
   type: RequestActorType;
   id?: string;
+  /** The person, for a `principal` actor only. */
+  principal?: PrincipalRef;
+}
+
+/** The actor for a write made as a plugin-defined person. */
+export function principalActor(person: PrincipalRef): RequestActor {
+  // Kind and id only: the person's attributes are not who acted.
+  return { type: "principal", principal: { kind: person.kind, id: person.id } };
 }
 
 /**
@@ -58,6 +77,9 @@ export function actorForWrite(
 ): RequestActor {
   if (actor) return actor;
   if (user?.id) return { type: "user", id: user.id };
+  // A write made as a person names no user: the person is who acted.
+  const person = currentPrincipal();
+  if (person) return principalActor(person);
   return SYSTEM_ACTOR;
 }
 
@@ -66,4 +88,21 @@ export function actorFromAuthContext(context: AuthContext): RequestActor {
     return { type: "apiKey", id: context.apiKeyId ?? context.userId };
   }
   return { type: "user", id: context.userId };
+}
+
+/**
+ * The actor a webhook envelope carries for `actor`: who acted, without a
+ * plugin-defined person. A person's write is delivered as one no staff user
+ * or key made, `system`, as it was before people could act: a delivery and
+ * its stored event are outside the trail a person's deletion erases, so
+ * their kind and id never go in one.
+ */
+export function webhookActorOf(
+  actor: RequestActor | null | undefined
+): { type: Exclude<RequestActorType, "principal">; id?: string } | null {
+  if (!actor) return null;
+  if (actor.type === "principal") return { type: "system" };
+  return actor.id === undefined
+    ? { type: actor.type }
+    : { type: actor.type, id: actor.id };
 }
