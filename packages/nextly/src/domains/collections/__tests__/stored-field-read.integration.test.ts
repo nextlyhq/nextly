@@ -15,6 +15,8 @@ import { definePlugin } from "../../../plugins/plugin-context";
 import type { PluginStoredValue } from "../../../plugins/contributions";
 import {
   createTestNextly,
+  getConfiguredTestDialects,
+  type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import type { VersionsDbApi } from "../../versions/db-api";
@@ -73,7 +75,7 @@ const other = {
   component: "@test/other/admin#Other",
 } as const;
 
-async function boot(): Promise<TestNextly> {
+async function boot(dialect: TestDialect): Promise<TestNextly> {
   const plugin = definePlugin({
     name: "@test/stored-read",
     version: "1.0.0",
@@ -101,7 +103,7 @@ async function boot(): Promise<TestNextly> {
       ],
     },
   });
-  current = await createTestNextly({ plugins: [plugin] });
+  current = await createTestNextly({ dialect, plugins: [plugin] });
   return current;
 }
 
@@ -134,133 +136,143 @@ async function created(
   return String((result.item as { id: unknown }).id);
 }
 
-describe("reading stored values of a validator's own field type", () => {
-  it("reads the value as stored, and answers absent for an entry that is not there", async () => {
-    const t = await boot();
-    const id = await created(t, "plain", { title: "a", body: { v: 1 } });
-    const read = poolReader(t, "probe");
+describe.each(getConfiguredTestDialects())("on %s", (dialect: TestDialect) => {
+  describe("reading stored values of a validator's own field type", () => {
+    it("reads the value as stored, and answers absent for an entry that is not there", async () => {
+      const t = await boot(dialect);
+      const id = await created(t, "plain", { title: "a", body: { v: 1 } });
+      const read = poolReader(t, "probe");
 
-    expect(
-      await read({ collection: "plain", id, field: "body", form: "published" })
-    ).toEqual({ kind: "value", value: { v: 1 } });
-    expect(
-      await read({
-        collection: "plain",
-        id: "nope",
-        field: "body",
-        form: "published",
-      })
-    ).toEqual({ kind: "absent" });
-  });
-
-  it("reads the pending working draft as `draft`, and the live row as `published`", async () => {
-    const t = await boot();
-    const id = await created(t, "drafted", {
-      title: "a",
-      body: { v: "live" },
-      status: "published",
+      expect(
+        await read({
+          collection: "plain",
+          id,
+          field: "body",
+          form: "published",
+        })
+      ).toEqual({ kind: "value", value: { v: 1 } });
+      expect(
+        await read({
+          collection: "plain",
+          id: "nope",
+          field: "body",
+          form: "published",
+        })
+      ).toEqual({ kind: "absent" });
     });
-    // A status-less save of a published entry is held as a working draft.
-    await t.nextly.update({
-      collection: "drafted",
-      id,
-      data: { body: { v: "pending" } },
-      overrideAccess: true,
-    });
-    const read = poolReader(t, "probe");
 
-    expect(
-      await read({
+    it("reads the pending working draft as `draft`, and the live row as `published`", async () => {
+      const t = await boot(dialect);
+      const id = await created(t, "drafted", {
+        title: "a",
+        body: { v: "live" },
+        status: "published",
+      });
+      // A status-less save of a published entry is held as a working draft.
+      await t.nextly.update({
         collection: "drafted",
         id,
-        field: "body",
-        form: "published",
-      })
-    ).toEqual({ kind: "value", value: { v: "live" } });
-    expect(
-      await read({ collection: "drafted", id, field: "body", form: "draft" })
-    ).toEqual({ kind: "value", value: { v: "pending" } });
-  });
+        data: { body: { v: "pending" } },
+        overrideAccess: true,
+      });
+      const read = poolReader(t, "probe");
 
-  it("refuses, by name, a field of another type, or one of its own collection's other fields", async () => {
-    const t = await boot();
-    const id = await created(t, "plain", {
-      title: "a",
-      body: { v: 1 },
-      extra: { x: 1 },
+      expect(
+        await read({
+          collection: "drafted",
+          id,
+          field: "body",
+          form: "published",
+        })
+      ).toEqual({ kind: "value", value: { v: "live" } });
+      expect(
+        await read({ collection: "drafted", id, field: "body", form: "draft" })
+      ).toEqual({ kind: "value", value: { v: "pending" } });
     });
 
-    await expect(
-      poolReader(
-        t,
-        "probe"
-      )({ collection: "plain", id, field: "title", form: "published" })
-    ).rejects.toThrow(/"plain\.title" cannot be read here/);
-    await expect(
-      poolReader(
-        t,
-        "probe"
-      )({ collection: "plain", id, field: "extra", form: "published" })
-    ).rejects.toThrow(/"plain\.extra" cannot be read here/);
+    it("refuses, by name, a field of another type, or one of its own collection's other fields", async () => {
+      const t = await boot(dialect);
+      const id = await created(t, "plain", {
+        title: "a",
+        body: { v: 1 },
+        extra: { x: 1 },
+      });
+
+      await expect(
+        poolReader(
+          t,
+          "probe"
+        )({ collection: "plain", id, field: "title", form: "published" })
+      ).rejects.toThrow(/"plain\.title" cannot be read here/);
+      await expect(
+        poolReader(
+          t,
+          "probe"
+        )({ collection: "plain", id, field: "extra", form: "published" })
+      ).rejects.toThrow(/"plain\.extra" cannot be read here/);
+    });
+
+    it("refuses another type's validator the values of this type", async () => {
+      const t = await boot(dialect);
+      const id = await created(t, "plain", { title: "a", body: { v: 1 } });
+
+      await expect(
+        poolReader(
+          t,
+          "other"
+        )({ collection: "plain", id, field: "body", form: "published" })
+      ).rejects.toThrow(/Only top-level "other" fields/);
+    });
+
+    it("refuses a collection that does not exist, by name", async () => {
+      const t = await boot(dialect);
+
+      await expect(
+        poolReader(
+          t,
+          "probe"
+        )({ collection: "nowhere", id: "1", field: "body", form: "published" })
+      ).rejects.toThrow(
+        /"nowhere\.body" cannot be read here: it names no collection/
+      );
+    });
   });
 
-  it("refuses another type's validator the values of this type", async () => {
-    const t = await boot();
-    const id = await created(t, "plain", { title: "a", body: { v: 1 } });
+  describe("the read a validator is handed on a batch write", () => {
+    it("sees a row an earlier entry of the same batch wrote", async () => {
+      // Read on any other connection, the second entry would see `x` as it was
+      // before the batch began, because the batch has not committed.
+      const t = await boot(dialect);
+      const x = await created(t, "plain", {
+        title: "x",
+        body: { v: "before" },
+      });
+      const y = await created(t, "plain", { title: "y", body: { v: 0 } });
+      const entries = (
+        t.getService("collectionsHandler") as unknown as {
+          getEntryService(): {
+            updateEntries(
+              params: { collectionName: string; overrideAccess?: boolean },
+              entries: { id: string; data: Record<string, unknown> }[],
+              options?: { skipHooks?: boolean }
+            ): Promise<{ failed: number }>;
+          };
+        }
+      ).getEntryService();
 
-    await expect(
-      poolReader(
-        t,
-        "other"
-      )({ collection: "plain", id, field: "body", form: "published" })
-    ).rejects.toThrow(/Only top-level "other" fields/);
-  });
+      const result = await entries.updateEntries(
+        { collectionName: "plain", overrideAccess: true },
+        [
+          { id: x, data: { body: { v: "written in the batch" } } },
+          { id: y, data: { body: { peek: x } } },
+        ],
+        { skipHooks: true }
+      );
 
-  it("refuses a collection that does not exist, by name", async () => {
-    const t = await boot();
-
-    await expect(
-      poolReader(
-        t,
-        "probe"
-      )({ collection: "nowhere", id: "1", field: "body", form: "published" })
-    ).rejects.toThrow(
-      /"nowhere\.body" cannot be read here: it names no collection/
-    );
-  });
-});
-
-describe("the read a validator is handed on a batch write", () => {
-  it("sees a row an earlier entry of the same batch wrote", async () => {
-    // Read on any other connection, the second entry would see `x` as it was
-    // before the batch began, because the batch has not committed.
-    const t = await boot();
-    const x = await created(t, "plain", { title: "x", body: { v: "before" } });
-    const y = await created(t, "plain", { title: "y", body: { v: 0 } });
-    const entries = (
-      t.getService("collectionsHandler") as unknown as {
-        getEntryService(): {
-          updateEntries(
-            params: { collectionName: string; overrideAccess?: boolean },
-            entries: { id: string; data: Record<string, unknown> }[],
-            options?: { skipHooks?: boolean }
-          ): Promise<{ failed: number }>;
-        };
-      }
-    ).getEntryService();
-
-    const result = await entries.updateEntries(
-      { collectionName: "plain", overrideAccess: true },
-      [
-        { id: x, data: { body: { v: "written in the batch" } } },
-        { id: y, data: { body: { peek: x } } },
-      ],
-      { skipHooks: true }
-    );
-
-    expect(result.failed).toBe(0);
-    expect(seen).toEqual([
-      { kind: "value", value: { v: "written in the batch" } },
-    ]);
+      expect(result.failed).toBe(0);
+      expect(seen).toEqual([
+        { kind: "value", value: { v: "written in the batch" } },
+      ]);
+    });
   });
 });
