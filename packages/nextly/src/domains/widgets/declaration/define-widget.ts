@@ -157,7 +157,8 @@ export interface WidgetDeclarationInput<
    * data. A core display already knows (no rows, no groups, no points); a
    * widget drawn by its own component is never empty unless `when` says so.
    */
-  empty?: WidgetEmpty<DataFor<Display, Data | QueryAnswer<Op>>>;
+  empty?: WidgetEmpty<DataFor<Display, Data | QueryAnswer<Op>>> &
+    EmptyRequires<Display>;
   /**
    * Data the preview page and the scaffold draw the ready state from, of the
    * widget's own data type, so an example that drifts from the data it stands
@@ -169,7 +170,11 @@ export interface WidgetDeclarationInput<
 
 /** How a widget says it is empty, and what its empty state offers. */
 export interface WidgetEmpty<Data> {
-  /** Whether this data is empty. A core display's own rule when absent. */
+  /**
+   * Whether this data is empty. Run on the server with the answer, so only
+   * the verdict reaches the browser. A core display's own rule when absent;
+   * required for a widget drawn by its own component.
+   */
   when?: (data: Data) => boolean;
   /** One line saying why there is nothing, in place of the frame's own. */
   message?: string;
@@ -180,6 +185,23 @@ export interface WidgetEmpty<Data> {
    */
   action?: { label: string; link: string; permission?: string };
 }
+
+/**
+ * What a widget's `empty` must hold beyond `WidgetEmpty`: nothing for a core
+ * display, which has a rule of its own to fall back to; the test, for a widget
+ * drawn by its own component, whose message and action could otherwise never
+ * be shown.
+ *
+ * 🔴 Depends on the display ONLY, and adds `when: unknown` rather than the
+ * test's own type. Intersected with `WidgetEmpty<Data>`, that makes `when`
+ * required while leaving it one signature, typed by the data. Any version of
+ * this that mentioned the data type made the compiler settle that type when it
+ * typed the test's parameter, before the data function was read, as `never`;
+ * and an intersection of two signatures leaves the parameter untyped.
+ */
+type EmptyRequires<Display> = Display extends CoreDisplay
+  ? unknown
+  : { when: unknown };
 
 /**
  * The data a widget draws: its display's shape for a core display, or its own

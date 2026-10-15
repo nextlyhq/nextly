@@ -369,6 +369,20 @@ export const components = {
     message: "@acme/nextly-plugin-shop/admin#UnpaidCard",
   },
 
+  {
+    name: "a component widget declares an empty state with no test for it",
+    ...pair(
+      when =>
+        widget(`  data: async () => ({ days: ["7d"] }),
+  display: { component: "@test/w/admin#Card" },
+  empty: { ${when}message: "Nothing in this range" }, ${MARK}`),
+      "",
+      "when: data => data.days.length === 0, "
+    ),
+    code: 2322,
+    message: "Property 'when' is missing",
+  },
+
   // ---- What else the declaration checks where it is written.
   {
     name: "a dependent setting names no Collection setting of the widget's",
