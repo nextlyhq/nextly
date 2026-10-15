@@ -3,7 +3,11 @@ title: Media Upload Security
 description: How Nextly validates and sanitizes uploaded media — MIME allowlist, SVG sanitization, polyglot defenses, and per-adapter Content-Disposition trade-offs.
 ---
 
-Every uploaded file passes through a unified validation pipeline at `services/upload-validation/`. This page explains what gets checked, what gets stripped, and how to tune the policy for your deployment.
+Every file uploaded through Nextly's server passes through a unified validation pipeline at `services/upload-validation/`.
+
+> **Direct uploads are not checked.** A collection with `clientUploads: true` hands the browser a pre-signed URL, and the browser sends the file straight to the storage provider. Those bytes never reach this pipeline: only the claimed content type is bound to the URL, so none of the checks below (extension, size, magic bytes, SVG sanitization) applies to them. Leave `clientUploads` off for any collection whose uploads must be validated.
+
+This page explains what gets checked, what gets stripped, and how to tune the policy for your deployment.
 
 ## The validation pipeline
 

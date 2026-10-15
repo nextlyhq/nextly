@@ -126,7 +126,7 @@ Environment variables for database connection and authentication. The CLI genera
 | Variable | Required | Purpose |
 | --- | --- | --- |
 | `DB_DIALECT` | Yes | Database type (`postgresql`, `mysql`, `sqlite`) |
-| `DATABASE_URL` | Yes | Database connection string. For SQLite, a file URL such as `file:./data/nextly.db`; the CLI's database commands need it on every dialect |
+| `DATABASE_URL` | Yes for PostgreSQL and MySQL; for SQLite, for the CLI's database commands | Database connection string. For SQLite, a file URL such as `file:./data/nextly.db`; the CLI's database commands need it on every dialect |
 | `NEXTLY_SECRET` | Yes (production) | Secret for JWT signing and session encryption. Min 32 chars; the CLI auto-generates a base64 value |
 | `NEXT_PUBLIC_APP_URL` | Yes (production) | Public URL of your app, used by metadata and the admin |
 
@@ -153,7 +153,7 @@ Default media store when no storage adapter is configured in `nextly.config.ts`.
 
 ### `src/types/generated/`
 
-Generated TypeScript types for your content schema. The output path is configured in `nextly.config.ts` under `typescript.outputFile`. Saving `nextly.config.ts` in development syncs the database but does not rewrite this file: regenerate it after each schema change, in the same change:
+Generated TypeScript types for your content schema. The output path is configured in `nextly.config.ts` under `typescript.outputFile`. Saving `nextly.config.ts` in development syncs the database but does not rewrite this file: regenerate it after each code-first schema change, in the same change. `generate:types` reads only `nextly.config.ts`, so it does not cover collections built in the Visual Schema Builder until they are moved into code (below):
 
 ```bash
 pnpm types:generate
