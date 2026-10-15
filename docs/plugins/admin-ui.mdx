@@ -189,10 +189,9 @@ A widget is drawn one of two ways, and you pick by what you declare.
 Declare an `archetype` and the `query` it is drawn from, and ship no UI code. The host
 runs the query for the signed-in user and renders the card.
 
-> **What the host draws today: `metric`, `list`, `table` and `actions`.**
-> `text` is accepted by the contract but has no renderer yet, so a widget
-> declaring it shows "the text archetype is not rendered yet" in its card unless
-> it also ships a `component` to draw the body itself.
+> **What the host draws: `metric`, `list`, `table`, `stats`, `bars`, `timeseries`,
+> `actions` and `text`.** A `text` widget is drawn from the markdown `content` it
+> declares.
 >
 > A `list` widget draws one row per result. Its query's `select` decides what each
 > row shows, in order: the first field is the row's label and the second, if there
@@ -237,7 +236,7 @@ contributes: {
       {
         id: "reports-summary",
         title: "Published reports",
-        archetype: "metric",                 // metric | table | list | text | actions
+        archetype: "metric",                 // metric | list | table | stats | bars | timeseries | actions | text
         defaultSize: "sm",                   // sm | md | lg | xl | full
         query: { source: "collection:reports", op: "count" },
         requiredPermission: "read-reports",  // client-gated
@@ -248,9 +247,11 @@ contributes: {
 }
 ```
 
-`text` and `actions` are drawn without data, so they take no `query` — declaring one is
-a type error. Every other archetype requires it. (`actions` is drawn by the host; `text`
-is not yet — see the note above.)
+`text`, `actions` and `stats` take no top-level `query` — declaring one is a type error,
+and boot refuses it. Every other archetype requires it. A `text` widget declares its
+prose as `content` (markdown) instead. A `stats` widget declares `cells`, one per number,
+each with its own count query and an optional link:
+`cells: [{ key: "open", label: "Open", query: { source: "collection:reports", op: "count" } }]`.
 
 ### Where a card sits
 
@@ -405,7 +406,11 @@ can use the constant, and does so below.
 ## Host overrides (D49)
 
 An integrator can override a plugin's placement without forking it, via
-`defineConfig({ admin: { pluginOverrides } })` — keyed by plugin name:
+`defineConfig({ admin: { pluginOverrides } })` — keyed by the plugin's admin slug: its
+package name lower-cased, with every run of other characters turned into one dash and
+leading and trailing dashes dropped (`@acme/nextly-plugin-reports` →
+`acme-nextly-plugin-reports`). A key written as the package name is never looked up, and
+the override is ignored without an error:
 
 ```ts
 // nextly.config.ts
@@ -416,7 +421,7 @@ export default defineConfig({
   plugins: [reports()],
   admin: {
     pluginOverrides: {
-      "@acme/nextly-plugin-reports": {
+      "acme-nextly-plugin-reports": {
         placement: AdminPlacement.SETTINGS, // move it
         order: 5,
         after: "users",

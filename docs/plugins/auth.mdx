@@ -3,6 +3,8 @@ title: Auth extensibility
 description: Extend authentication from a plugin — custom strategies, external sign-in (OAuth/SSO), auth-flow hooks, and first-class multi-step challenges (2FA) — without forking core.
 ---
 
+> **Parts of this page need the release after 0.0.2-alpha.66:** `ctx.auth.completeLogin` and `capabilities.auth.login`, the resume cookie, `ChallengeViewProps` and the view's resolve result, and the limits on what `afterAuthenticate` and `customizeClaims` may change.
+
 > **Alpha (`0.x`) — `@experimental`.** The auth-extensibility surface (D71/D57) is
 > new and ships `@experimental`: it works and is integration-tested, but stays
 > experimental until a first-party plugin exercises it in production (D55). Pin
@@ -45,6 +47,8 @@ plugin is installed). Strategies don't — that's deliberate (secure-by-default)
 
 ## Worked example: signing in with an external provider
 
+> **Needs the release after 0.0.2-alpha.66.**
+
 A provider whose sign-in starts with a redirect does not fit the strategy chain,
 which runs against a request that already carries a credential. Such a plugin
 mounts its own routes and finishes the login with `ctx.auth.completeLogin`.
@@ -55,7 +59,7 @@ import { definePlugin } from "@nextlyhq/plugin-sdk";
 export const googleAuth = definePlugin({
   name: "@acme/google-auth",
   version: "1.0.0",
-  nextly: ">=0.0.2-alpha.63",
+  nextly: ">=0.0.2-alpha.67",
   // Finishing a login signs in whichever account the plugin names, so it is
   // declared where an operator reviews the plugin.
   capabilities: { auth: { login: true } },
@@ -258,6 +262,8 @@ export const twoFactor = definePlugin({
    flow and the page says so.
 
 ### Single use and the attempt budget
+
+> **Needs the release after 0.0.2-alpha.66.**
 
 A challenge is answered once, on every instance. The first correct answer marks
 its sign-in answered in the database, in a write only one caller can win,

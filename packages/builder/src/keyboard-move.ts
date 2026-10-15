@@ -61,7 +61,12 @@
  *
  * @module keyboard-move
  */
-import { locateNode, type BlockNode } from "@nextlyhq/blocks-engine";
+import {
+  DEFAULT_SLOT,
+  getBlock,
+  locateNode,
+  type BlockNode,
+} from "@nextlyhq/blocks-engine";
 
 import type { OpPosition, SlotAddress } from "./ops";
 
@@ -73,9 +78,6 @@ import type { OpPosition, SlotAddress } from "./ops";
  * property the whole design rests on.
  */
 export type MoveDirection = "up" | "down" | "indent" | "outdent";
-
-/** The default slot a block enters when it is indented into a container. */
-const DEFAULT_SLOT = "default";
 
 /**
  * What a move does, beyond where it lands.
@@ -151,6 +153,32 @@ function positionIn(
 }
 
 /**
+ * The slot a block indented into `container` enters, or `null` when no single
+ * slot can be named.
+ *
+ * Read from the container's DEFINITION, because a slot the definition does not
+ * declare is one the container never renders: a block filed there is stored
+ * and invisible, selected in the inspector and gone from the canvas.
+ *
+ * - One declared slot: that one, whatever it is called, so a plugin container
+ *   rendering `items` or `default` receives the block where it draws children.
+ * - Several: the engine's default slot when it is among them, the region a
+ *   keyboard author reaches without choosing between regions they cannot see;
+ *   otherwise `null`.
+ * - None, or no definition at all: the engine's default slot. Whether the
+ *   target may hold children is the nesting rules' question, not this one's,
+ *   and they refuse the move for a block that cannot.
+ */
+function indentSlot(container: BlockNode): string | null {
+  const declared = Object.keys(getBlock(container.type)?.slots ?? {});
+  if (declared.length === 1) return declared[0] ?? DEFAULT_SLOT;
+  if (declared.length === 0 || declared.includes(DEFAULT_SLOT)) {
+    return DEFAULT_SLOT;
+  }
+  return null;
+}
+
+/**
  * Where the selected block lands if the author moves it one step.
  *
  * @param nodes - the document's top-level blocks
@@ -158,7 +186,8 @@ function positionIn(
  * @param direction - which move they asked for
  * @returns the position to move it to, or `null` when that move is not
  * available — the id is not in the document, the block is already at the end of
- * its container, there is no sibling above it to indent into, or it is already
+ * its container, there is no sibling above it to indent into, that sibling has
+ * several slots and none is the default (see `indentSlot`), or it is already
  * at the top level and cannot outdent further.
  *
  * @remarks
@@ -223,15 +252,16 @@ export function keyboardMovePosition(
   // container has no parent-to-be that would not be itself.
   if (above === undefined) return null;
 
-  // The block lands in the default slot. A container that already uses a
-  // different slot name keeps it for the children it has; this one addresses
-  // the slot a keyboard author can reach without choosing between regions they
-  // cannot see.
-  const into = above.slots?.[DEFAULT_SLOT];
+  const slot = indentSlot(above);
+  // A container with several regions and none of them the default: which one
+  // the author meant is not something a single key press can say, so the move
+  // is not offered rather than guessed.
+  if (slot === null) return null;
+  const into = above.slots?.[slot];
   return {
     to: {
       parentId: above.id,
-      slot: DEFAULT_SLOT,
+      slot,
       index: into?.length ?? 0,
     },
     effect: "indent",

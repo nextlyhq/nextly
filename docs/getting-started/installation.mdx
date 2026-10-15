@@ -87,27 +87,31 @@ Out of the box, Nextly uses your project's `./public/uploads/` directory as the 
 
 ### 1. Install Packages
 
-Install the runtime, admin panel, and database adapter:
+Install the runtime, the admin panel and what it expects from your project, and `esbuild`, which the CLI and the dev server use to load `nextly.config.ts`:
 
 <Tabs items={["pnpm", "npm", "yarn", "bun"]}>
 <Tab value="pnpm">
 ```bash
-pnpm add nextly @nextlyhq/admin
+pnpm add nextly @nextlyhq/admin @nextlyhq/ui @tanstack/react-query lucide-react
+pnpm add -D esbuild
 ```
 </Tab>
 <Tab value="npm">
 ```bash
-npm install nextly @nextlyhq/admin
+npm install nextly @nextlyhq/admin @nextlyhq/ui @tanstack/react-query lucide-react
+npm install -D esbuild
 ```
 </Tab>
 <Tab value="yarn">
 ```bash
-yarn add nextly @nextlyhq/admin
+yarn add nextly @nextlyhq/admin @nextlyhq/ui @tanstack/react-query lucide-react
+yarn add -D esbuild
 ```
 </Tab>
 <Tab value="bun">
 ```bash
-bun add nextly @nextlyhq/admin
+bun add nextly @nextlyhq/admin @nextlyhq/ui @tanstack/react-query lucide-react
+bun add -d esbuild
 ```
 </Tab>
 </Tabs>
@@ -131,6 +135,21 @@ pnpm add @nextlyhq/adapter-sqlite better-sqlite3
 ```
 </Tab>
 </Tabs>
+
+On pnpm 10 or later, allow the native packages to run their build scripts, or `better-sqlite3` has no compiled binding and the app fails at boot. On pnpm 10.6 or later, add to `pnpm-workspace.yaml` (create it with `packages: []` if you have none):
+
+```yaml title="pnpm-workspace.yaml"
+allowBuilds:
+  better-sqlite3: true
+  esbuild: true
+  sharp: true
+onlyBuiltDependencies:
+  - better-sqlite3
+  - esbuild
+  - sharp
+```
+
+pnpm 11 reads `allowBuilds`, pnpm 10.6+ reads `onlyBuiltDependencies`. On pnpm 10.0 to 10.5, put the same list in `package.json` instead, as `"pnpm": { "onlyBuiltDependencies": ["better-sqlite3", "esbuild", "sharp"] }`, or upgrade pnpm. npm, yarn and bun need none of this.
 
 Cloud storage is optional -- Nextly's default is local disk under `./public/uploads/`. Install a storage adapter only if you need one:
 
@@ -250,7 +269,6 @@ export default function AdminLayout({
 Create the admin API catch-all route:
 
 ```typescript title="src/app/admin/api/[[...params]]/route.ts"
-import { getNextly } from "nextly";
 import { createDynamicHandlers } from "nextly/runtime";
 
 import nextlyConfig from "../../../../../nextly.config";
@@ -263,6 +281,29 @@ export const PUT = handlers.PUT;
 export const PATCH = handlers.PATCH;
 export const DELETE = handlers.DELETE;
 export const OPTIONS = handlers.OPTIONS;
+```
+
+The admin's media library talks to its own route, which the catch-all above does not serve. Without it, uploads fail:
+
+```typescript title="src/app/admin/api/media/[[...path]]/route.ts"
+import { createMediaHandlers } from "nextly/api/media-handlers";
+
+import nextlyConfig from "../../../../../../nextly.config";
+
+// Checked against the caller's media permissions, except the raw bytes of a
+// publicly servable file (a web font), which a browser fetches without a session.
+const handlers = createMediaHandlers({ config: nextlyConfig, requireAuth: true });
+
+export const GET = handlers.GET;
+export const POST = handlers.POST;
+export const PATCH = handlers.PATCH;
+export const DELETE = handlers.DELETE;
+```
+
+Optionally, add a health check for your load balancer or uptime monitor:
+
+```typescript title="src/app/api/health/route.ts"
+export { GET, HEAD } from "nextly/api/health";
 ```
 
 ### 5. Set Up Environment Variables
@@ -346,7 +387,7 @@ Open [http://localhost:3000/admin/setup](http://localhost:3000/admin/setup) to c
 
 | Requirement | Version |
 | --- | --- |
-| Node.js | 20 or later |
+| Node.js | `^20.19.0 \|\| ^22.12.0 \|\| >=24.0.0` (not Node 23) |
 | Next.js | 16+ (App Router required) |
 | React | 19+ |
 | TypeScript | 5+ |

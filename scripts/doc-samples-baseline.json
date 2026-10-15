@@ -1,8 +1,8 @@
 {
   "coverage": {
     "pages": 77,
-    "samples": 449,
-    "compiled": 278
+    "samples": 446,
+    "compiled": 279
   },
   "samplesPerPage": {
     "docs/admin/branding.mdx": {
@@ -38,7 +38,7 @@
       "compiled": 6
     },
     "docs/configuration/fields.mdx": {
-      "samples": 44,
+      "samples": 42,
       "compiled": 3
     },
     "docs/configuration/index.mdx": {
@@ -86,8 +86,8 @@
       "compiled": 2
     },
     "docs/getting-started/installation.mdx": {
-      "samples": 5,
-      "compiled": 5
+      "samples": 7,
+      "compiled": 7
     },
     "docs/getting-started/project-structure.mdx": {
       "samples": 2,
@@ -118,8 +118,8 @@
       "compiled": 5
     },
     "docs/guides/media-storage.mdx": {
-      "samples": 14,
-      "compiled": 9
+      "samples": 13,
+      "compiled": 8
     },
     "docs/guides/production-migrations.mdx": {
       "samples": 1,
@@ -170,8 +170,8 @@
       "compiled": 1
     },
     "docs/plugins/form-builder.mdx": {
-      "samples": 23,
-      "compiled": 18
+      "samples": 21,
+      "compiled": 17
     },
     "docs/plugins/index.mdx": {
       "samples": 6,
@@ -219,7 +219,7 @@
     },
     "docs/preview/index.mdx": {
       "samples": 5,
-      "compiled": 4
+      "compiled": 5
     },
     "docs/versions/index.mdx": {
       "samples": 1,
@@ -316,7 +316,6 @@
   },
   "pages": {
     "docs/getting-started/quick-start.mdx": 1,
-    "docs/guides/media-storage.mdx": 1,
     "docs/guides/routing-and-seo.mdx": 3,
     "docs/plugins/admin-ui.mdx": 1,
     "docs/plugins/auth.mdx": 2,
@@ -338,17 +337,9 @@
       "suppressed #2 error TS2322: Type 'unknown' is not assignable to type 'ReactNode'.": 1,
       "suppressed #2 error TS2322: Type 'unknown' is not assignable to type 'string | TrustedHTML'.": 1,
       "suppressed #4 error TS2322: Type 'unknown' is not assignable to type 'ReactNode'.": 2,
-      "suppressed #3 error TS2322: Type 'unknown' is not assignable to type 'ReactNode'.": 1,
-      "suppressed #3 error TS2322: Type 'unknown' is not assignable to type 'string | TrustedHTML'.": 1
-    },
-    "docs/guides/authentication.mdx": {
-      "reader-file #0 error TS2307: Cannot find module '../../../nextly.config' or its corresponding type declarations.": 1,
       "reader-file #1 error TS2307: Cannot find module '../../../nextly.config' or its corresponding type declarations.": 1,
-      "reader-file #2 error TS2307: Cannot find module '../../../nextly.config' or its corresponding type declarations.": 1
-    },
-    "docs/guides/media-storage.mdx": {
-      "#10 error TS2353: Object literal may only specify known properties, and 'media' does not exist in type 'NextlyConfig'.": 1,
-      "reader-file #12 error TS2307: Cannot find module '../../../nextly.config' or its corresponding type declarations.": 1
+      "reader-file #2 error TS2307: Cannot find module '../../../../nextly.config' or its corresponding type declarations.": 1,
+      "reader-file #4 error TS2307: Cannot find module '../../../nextly.config' or its corresponding type declarations.": 1
     },
     "docs/guides/routing-and-seo.mdx": {
       "#7 error TS2304: Cannot find name 'getPostBySlug'.": 1,
@@ -405,6 +396,7 @@
     },
     "docs/guides/isr-caching.mdx": {
       "#4 error TS18004: No value exists in scope for the shorthand property 'data'. Either declare one or provide an initializer.": 1,
+      "reader-file #1 error TS2307: Cannot find module '../../../../../nextly.config' or its corresponding type declarations.": 1,
       "reader-file #2 error TS2307: Cannot find module '../../../../nextly.config' or its corresponding type declarations.": 1
     },
     "docs/plugins/services.mdx": {
@@ -422,7 +414,8 @@
     },
     "docs/getting-started/index.mdx": {
       "suppressed #1 error TS2322: Type 'unknown' is not assignable to type 'Key | null | undefined'.": 1,
-      "suppressed #1 error TS2322: Type 'unknown' is not assignable to type 'ReactNode'.": 1
+      "suppressed #1 error TS2322: Type 'unknown' is not assignable to type 'ReactNode'.": 1,
+      "reader-file #1 error TS2307: Cannot find module '../../../nextly.config' or its corresponding type declarations.": 1
     },
     "docs/plugins/index.mdx": {
       "suppressed #3 error TS2339: Property 'id' does not exist on type '{}'.": 1,
@@ -492,7 +485,16 @@
     },
     "docs/getting-started/installation.mdx": {
       "reader-file #3 error TS2307: Cannot find module '../../../../nextly.config' or its corresponding type declarations.": 1,
-      "reader-file #4 error TS2307: Cannot find module '../../../../../nextly.config' or its corresponding type declarations.": 1
+      "reader-file #4 error TS2307: Cannot find module '../../../../../nextly.config' or its corresponding type declarations.": 1,
+      "reader-file #5 error TS2307: Cannot find module '../../../../../../nextly.config' or its corresponding type declarations.": 1
+    },
+    "docs/guides/authentication.mdx": {
+      "reader-file #0 error TS2307: Cannot find module '../../../nextly.config' or its corresponding type declarations.": 1,
+      "reader-file #1 error TS2307: Cannot find module '../../../nextly.config' or its corresponding type declarations.": 1,
+      "reader-file #2 error TS2307: Cannot find module '../../../nextly.config' or its corresponding type declarations.": 1
+    },
+    "docs/guides/media-storage.mdx": {
+      "reader-file #11 error TS2307: Cannot find module '../../../nextly.config' or its corresponding type declarations.": 1
     },
     "docs/jobs/index.mdx": {
       "reader-file #1 error TS2307: Cannot find module './jobs/send-digest' or its corresponding type declarations.": 1
@@ -502,6 +504,9 @@
     },
     "docs/plugins/testing.mdx": {
       "reader-file #0 error TS2307: Cannot find module '../src' or its corresponding type declarations.": 1
+    },
+    "docs/preview/index.mdx": {
+      "reader-file #2 error TS2307: Cannot find module '../../../nextly.config' or its corresponding type declarations.": 1
     },
     "packages/admin/README.md": {
       "reader-file #1 error TS2307: Cannot find module '../../../../nextly.config' or its corresponding type declarations.": 1
@@ -513,9 +518,9 @@
       "reader-name #0 error TS2304: Cannot find name 'Posts'.": 1,
       "reader-name #0 error TS2304: Cannot find name 'Users'.": 1,
       "reader-name #0 error TS2304: Cannot find name 'Media'.": 1,
-      "reader-name #20 error TS2304: Cannot find name 'Posts'.": 1,
-      "reader-name #20 error TS2304: Cannot find name 'Users'.": 1,
-      "reader-name #20 error TS2304: Cannot find name 'Media'.": 1
+      "reader-name #18 error TS2304: Cannot find name 'Posts'.": 1,
+      "reader-name #18 error TS2304: Cannot find name 'Users'.": 1,
+      "reader-name #18 error TS2304: Cannot find name 'Media'.": 1
     }
   }
 }
