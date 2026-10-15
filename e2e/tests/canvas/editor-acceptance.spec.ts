@@ -14,13 +14,11 @@
  * editor working.
  *
  * Properties and their status live in `editor-manifest.ts`. Each covered one
- * has a test titled by `editorTitleFor`, which the first test checks.
+ * has a scenario in `SCENARIOS`, registered as a test titled by
+ * `editorTitleFor`; the first test checks the two agree.
  *
  * @module tests/canvas/editor-acceptance
  */
-
-import { readFile } from "node:fs/promises";
-import { fileURLToPath } from "node:url";
 
 import { expect, test, type Page } from "@playwright/test";
 
@@ -45,13 +43,6 @@ import {
   EDITOR_PROPERTIES,
   editorTitleFor,
 } from "./editor-manifest";
-
-/** A covered property's test title, looked up by number. */
-function title(n: number): string {
-  const property = EDITOR_COVERED.find(p => p.n === n);
-  if (property === undefined) throw new Error(`E${n} is not covered`);
-  return editorTitleFor(property);
-}
 
 function text(id: string, words: string) {
   return { id, type: "core/text", version: 1, props: { text: words } };
@@ -164,45 +155,17 @@ async function editField(
 
 test.use({ storageState: STORAGE_STATE });
 
-test.describe("the editor acceptance suite", () => {
-  test("the suite covers what its manifest claims", async () => {
-    // Reads THIS FILE and checks a test exists for every covered property, so
-    // a rename that loses one turns red rather than shrinking the count.
-    const source = await readFile(fileURLToPath(import.meta.url), "utf8");
-    const missing = EDITOR_COVERED.filter(
-      p => !source.includes(`test(title(${p.n}),`)
-    );
-    expect(
-      missing.map(p => `E${p.n}`),
-      "manifest says covered, no test found in this file"
-    ).toEqual([]);
-    expect(EDITOR_COVERED.length + EDITOR_DEFERRED.length).toBe(
-      EDITOR_PROPERTIES.length
-    );
-    expect(new Set(EDITOR_PROPERTIES.map(p => p.n)).size).toBe(
-      EDITOR_PROPERTIES.length
-    );
-  });
-
-  test("the deferred properties are reported, not hidden", async () => {
-    for (const p of EDITOR_DEFERRED) {
-      expect(p.reason, `E${p.n} defers without a reason`).toBeTruthy();
-      // eslint-disable-next-line no-console -- the deferred set is reported on purpose
-      console.log(`DEFERRED E${p.n}: ${p.property} — ${p.reason}`);
-    }
-  });
-});
-
-test.describe("the editor, driven as an author drives it", () => {
-  test.beforeEach(async ({ page }) => {
-    await openEditorWith(page, NODES, "ea-heading");
-    // The fixture as seeded, so every test starts from a known tree and a
-    // failure to seed reads as that rather than as the property under test.
-    expect(await structure(page)).toEqual(SEEDED);
-    await clearSelection(page);
-  });
-
-  test(title(1), async ({ page }) => {
+/**
+ * What each covered property does, by its number.
+ *
+ * The tests are REGISTERED from the manifest through this map rather than
+ * written one by one, so a covered property cannot lose its test to a rename,
+ * a comment or a string that only looks like one: the manifest check compares
+ * this map's keys with the covered set, and the loop below registers exactly
+ * one test per covered property.
+ */
+const SCENARIOS: Readonly<Record<number, (page: Page) => Promise<void>>> = {
+  1: async page => {
     await openLayers(page);
     expect(await selection(page)).not.toContain("ea-second");
     await clickBlock(page, "ea-second");
@@ -215,15 +178,20 @@ test.describe("the editor, driven as an author drives it", () => {
       "aria-selected",
       "true"
     );
-  });
-
-  test(title(2), async ({ page }) => {
+  },
+  2: async page => {
     await clickBlock(page, "ea-first");
     await clickBlock(page, "ea-third", ["Shift"]);
-    const extended = await selection(page);
-    // A plain click would REPLACE the selection with the third block alone.
-    expect(extended).toContain("ea-first");
-    expect(extended).toContain("ea-third");
+    // The whole run from the anchor, anchor first: a plain click would leave
+    // the third block alone, and a toggle would add it to the first and skip
+    // what lies between. Nested blocks are not listed, since their container
+    // is selected.
+    expect(await selection(page)).toEqual([
+      "ea-first",
+      "ea-second",
+      "ea-section",
+      "ea-third",
+    ]);
 
     await clickBlock(page, "ea-first", ["ControlOrMeta"]);
     const toggledOff = await selection(page);
@@ -232,24 +200,21 @@ test.describe("the editor, driven as an author drives it", () => {
 
     await clickBlock(page, "ea-first", ["ControlOrMeta"]);
     expect(await selection(page)).toContain("ea-first");
-  });
-
-  test(title(3), async ({ page }) => {
+  },
+  3: async page => {
     await clickBlock(page, "ea-first");
     expect(await selection(page)).toEqual(["ea-first"]);
     await page.keyboard.press("Escape");
     expect(await selection(page)).toEqual([]);
-  });
-
-  test(title(4), async ({ page }) => {
+  },
+  4: async page => {
     await openLayers(page);
     await layerRow(page, "ea-third").click();
     expect(await selection(page)).toEqual(["ea-third"]);
     await layerRow(page, "ea-heading").click();
     expect(await selection(page)).toEqual(["ea-heading"]);
-  });
-
-  test(title(5), async ({ page }) => {
+  },
+  5: async page => {
     await clickBlock(page, "ea-second");
     await page.keyboard.press("Alt+ArrowUp");
     await expect
@@ -261,9 +226,8 @@ test.describe("the editor, driven as an author drives it", () => {
 
     await page.keyboard.press("Alt+ArrowDown");
     await expect.poll(() => structure(page)).toEqual(SEEDED);
-  });
-
-  test(title(6), async ({ page }) => {
+  },
+  6: async page => {
     await clickBlock(page, "ea-third");
     await page.keyboard.press("Alt+ArrowRight");
     await expect
@@ -286,9 +250,8 @@ test.describe("the editor, driven as an author drives it", () => {
     await expect(announcer(page)).toHaveText(
       "Block moved out of its container"
     );
-  });
-
-  test(title(7), async ({ page }) => {
+  },
+  7: async page => {
     await clickBlock(page, "ea-second");
     await page.keyboard.press("Alt+ArrowUp");
     await expect.poll(() => structure(page)).not.toEqual(SEEDED);
@@ -300,9 +263,8 @@ test.describe("the editor, driven as an author drives it", () => {
     await expect
       .poll(() => structure(page))
       .toEqual(["ea-heading", "ea-second", "ea-first", ...SEEDED.slice(3)]);
-  });
-
-  test(title(8), async ({ page }) => {
+  },
+  8: async page => {
     const from = await boxOf(page, "ea-third");
     const onto = await boxOf(page, "ea-heading");
     await page.mouse.move(from.x + 6, from.y + from.height / 2);
@@ -332,9 +294,8 @@ test.describe("the editor, driven as an author drives it", () => {
       ]);
     await page.keyboard.press("ControlOrMeta+z");
     await expect.poll(() => structure(page)).toEqual(SEEDED);
-  });
-
-  test(title(9), async ({ page }) => {
+  },
+  9: async page => {
     const field = await fieldOf(page, "ea-heading", "text");
     await editField(page, "ea-heading", "text");
     await expect(field).toHaveAttribute("data-nx-editing", "text");
@@ -346,9 +307,8 @@ test.describe("the editor, driven as an author drives it", () => {
     // Through the store, not left in the DOM: undo brings the old words back.
     await page.keyboard.press("ControlOrMeta+z");
     await expect(field).toHaveText(HEADING);
-  });
-
-  test(title(10), async ({ page }) => {
+  },
+  10: async page => {
     const field = await fieldOf(page, "ea-heading", "text");
     await editField(page, "ea-heading", "text");
     await page.keyboard.type("Discard me");
@@ -356,9 +316,8 @@ test.describe("the editor, driven as an author drives it", () => {
     await page.keyboard.press("Escape");
     await expect(field).not.toHaveAttribute("contenteditable", /.+/);
     await expect(field).toHaveText(HEADING);
-  });
-
-  test(title(11), async ({ page }) => {
+  },
+  11: async page => {
     const field = await fieldOf(page, "ea-first", "text");
     await editField(page, "ea-first", "text");
     await page.keyboard.press("End");
@@ -366,14 +325,22 @@ test.describe("the editor, driven as an author drives it", () => {
     await page.keyboard.type("Line two");
     // Enter belonged to the value: the field is still being edited.
     await expect(field).toHaveAttribute("data-nx-editing", "text");
-    // Pressing another block moves focus away, which commits.
-    await clickBlock(page, "ea-third");
+    // Pressing the inspector's field moves focus out of the canvas, which
+    // commits, and keeps this block selected so the inspector shows its value.
+    const stored = page.getByLabel("Text", { exact: true });
+    await stored.click();
     await expect(field).not.toHaveAttribute("contenteditable", /.+/);
-    await expect(field).toContainText("First paragraph");
-    await expect(field).toContainText("Line two");
-  });
-
-  test(title(12), async ({ page }) => {
+    // The STORED value, line break included: text that only looks right on the
+    // canvas — a swallowed Enter, or words left in an element nobody wrote back
+    // — does not get here.
+    await expect(stored).toHaveValue("First paragraph\nLine two");
+    // And it was one write: a single undo, pressed on the canvas rather than
+    // in the inspector's own field, restores the words as they were.
+    await clickBlock(page, "ea-third");
+    await page.keyboard.press("ControlOrMeta+z");
+    await expect(field).toHaveText("First paragraph");
+  },
+  12: async page => {
     const field = await fieldOf(page, "ea-passage", "content");
     await editField(page, "ea-passage", "content");
     await page.keyboard.press("End");
@@ -401,9 +368,8 @@ test.describe("the editor, driven as an author drives it", () => {
     await page.keyboard.press("ControlOrMeta+z");
     await expect(field.locator("strong")).toHaveCount(0);
     await expect(field).toHaveText(PASSAGE);
-  });
-
-  test(title(13), async ({ page }) => {
+  },
+  13: async page => {
     const field = await fieldOf(page, "ea-passage", "content");
     const before = await field.innerHTML();
     await editField(page, "ea-passage", "content");
@@ -413,5 +379,51 @@ test.describe("the editor, driven as an author drives it", () => {
     await expect(field).not.toHaveAttribute("contenteditable", /.+/);
     await expect(field).not.toContainText("zzz");
     expect(await field.innerHTML()).toBe(before);
+  },
+};
+
+test.describe("the editor acceptance suite", () => {
+  test("the suite covers what its manifest claims", () => {
+    // Every covered property has a scenario and every scenario a covered
+    // property, compared as sets of numbers: a scenario commented out, or one
+    // left behind after its property was deferred, turns this red.
+    const byNumber = (a: number, b: number) => a - b;
+    expect(Object.keys(SCENARIOS).map(Number).sort(byNumber)).toEqual(
+      EDITOR_COVERED.map(p => p.n).sort(byNumber)
+    );
+    expect(EDITOR_COVERED.length + EDITOR_DEFERRED.length).toBe(
+      EDITOR_PROPERTIES.length
+    );
+    expect(new Set(EDITOR_PROPERTIES.map(p => p.n)).size).toBe(
+      EDITOR_PROPERTIES.length
+    );
   });
+
+  test("the deferred properties are reported, not hidden", async () => {
+    for (const p of EDITOR_DEFERRED) {
+      expect(p.reason, `E${p.n} defers without a reason`).toBeTruthy();
+      // eslint-disable-next-line no-console -- the deferred set is reported on purpose
+      console.log(`DEFERRED E${p.n}: ${p.property} — ${p.reason}`);
+    }
+  });
+});
+
+test.describe("the editor, driven as an author drives it", () => {
+  test.beforeEach(async ({ page }) => {
+    await openEditorWith(page, NODES, "ea-heading");
+    // The fixture as seeded, so every test starts from a known tree and a
+    // failure to seed reads as that rather than as the property under test.
+    expect(await structure(page)).toEqual(SEEDED);
+    await clearSelection(page);
+  });
+
+  for (const property of EDITOR_COVERED) {
+    test(editorTitleFor(property), async ({ page }) => {
+      const scenario = SCENARIOS[property.n];
+      if (scenario === undefined) {
+        throw new Error(`E${property.n} is covered and has no scenario`);
+      }
+      await scenario(page);
+    });
+  }
 });
