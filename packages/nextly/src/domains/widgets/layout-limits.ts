@@ -13,18 +13,28 @@
  */
 
 /**
- * How many columns a dashboard has when nobody has chosen.
+ * How many columns a dashboard had when nobody had chosen.
  *
- * Three rather than two or four: it is the widest count that still leaves a
- * card readable at the admin's content width, and folding 3 -> 2 -> 1 by
- * breakpoint keeps a placement's column derivable at every width.
+ * @deprecated The dashboard is one ordered list of cards at widths, with no
+ * page-wide column count, and nothing reads this any more. It stays exported
+ * so code built against it keeps compiling, and is removed in a later release
+ * with a release note.
  */
 export const DEFAULT_COLUMN_COUNT = 3;
 
-/** The column counts a dashboard may have. */
+/**
+ * The column counts a dashboard could have.
+ *
+ * @deprecated As {@link DEFAULT_COLUMN_COUNT}: no longer read, removed in a
+ * later release with a release note.
+ */
 export const COLUMN_COUNTS = [2, 3, 4] as const;
 
-/** One of the column counts a dashboard may have. */
+/**
+ * One of the column counts a dashboard could have.
+ *
+ * @deprecated As {@link DEFAULT_COLUMN_COUNT}.
+ */
 export type ColumnCount = (typeof COLUMN_COUNTS)[number];
 
 /**
