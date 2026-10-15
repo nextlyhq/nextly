@@ -114,6 +114,7 @@ export type {
   PluginAdminQuerylessWidget,
   DeclarativeWidgetArchetype,
   PluginCollectionView,
+  PluginDocumentView,
   PluginMenuItem,
   PluginNavSection,
 } from "./admin-contributions";

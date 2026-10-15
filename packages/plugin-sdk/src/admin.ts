@@ -622,5 +622,6 @@ export type {
   PluginAdminContributions,
   PluginAdminPage,
   PluginCollectionView,
+  PluginDocumentView,
   PluginMenuItem,
 } from "nextly";
