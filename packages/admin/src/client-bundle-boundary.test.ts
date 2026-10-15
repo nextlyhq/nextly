@@ -1,5 +1,11 @@
 /**
- * Nothing a browser loads may be able to reach a database driver.
+ * Nothing a browser loads may be able to reach server-only code.
+ *
+ * Server-only code is three kinds, and each is refused wherever a browser bundle starts: a Node
+ * built-in, a database package, and a module marked with the `server-only` package. A bundle starts
+ * at two kinds of place: every admin module carrying `"use client"`, and every entry `nextly` lists
+ * as client-safe in its `tsup.config.js` (`nextly/config` among them, which a site's config file and
+ * the admin's browser code both import).
  *
  * The admin is a hybrid package: most of it renders on the server and may import anything, while a
  * `"use client"` module is compiled into a browser bundle. `nextly` publishes both kinds of entry —
@@ -41,6 +47,7 @@
  */
 
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { builtinModules } from "node:module";
 import { posix, resolve as resolveNative } from "node:path";
 
 import {
@@ -57,7 +64,21 @@ import { describe, expect, it } from "vitest";
 const { dirname, join } = posix;
 const REPO_ROOT = resolveNative(__dirname, "../../..").replaceAll("\\", "/");
 const ADMIN_SRC = join(REPO_ROOT, "packages/admin/src");
+const NEXTLY_ROOT = join(REPO_ROOT, "packages/nextly");
 const PACKAGES = join(REPO_ROOT, "packages");
+
+/**
+ * The path aliases a module may import through, by the package it lives in.
+ *
+ * `@admin/` in the admin and `@nextly/` in core both map onto their package's `src`; core's
+ * tsconfig spells each `@nextly/x` as `src/x`, which `resolveSourceFile` completes to a file or an
+ * `index.ts`. An alias left out here is an unresolved import, which fails the run below rather than
+ * passing an unwalked subtree.
+ */
+const ALIASES: ReadonlyMap<string, string> = new Map([
+  ["@admin/", ADMIN_SRC],
+  ["@nextly/", join(NEXTLY_ROOT, "src")],
+]);
 
 /**
  * Packages that mean "this can talk to a database".
@@ -69,6 +90,30 @@ const PACKAGES = join(REPO_ROOT, "packages");
  */
 const DATABASE_PACKAGE =
   /^(?:drizzle-orm(?:\/|$)|@nextlyhq\/adapter-|(?:pg|postgres|mysql2|better-sqlite3)(?:\/|$))/;
+
+const NODE_BUILTINS: ReadonlySet<string> = new Set(builtinModules);
+
+/**
+ * What kind of server-only code a specifier names, or `null` when it names none.
+ *
+ * - A Node built-in, spelled `node:x` or bare (`fs`, and `fs/promises` through its first segment),
+ *   read from Node's own list rather than recalled.
+ * - A database package, as `DATABASE_PACKAGE` anchors it.
+ * - The `server-only` package itself: importing it is how a module marks itself, as
+ *   `packages/nextly/src/services/lib/permissions.ts` does, so reaching the import is reaching the
+ *   module that carries it.
+ */
+export function serverOnlyKind(specifier: string): string | null {
+  if (DATABASE_PACKAGE.test(specifier)) return "database package";
+  if (
+    specifier.startsWith("node:") ||
+    NODE_BUILTINS.has(specifier.split("/")[0])
+  ) {
+    return "Node built-in";
+  }
+  if (specifier === "server-only") return "server-only module";
+  return null;
+}
 
 const SOURCE_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts"];
 
@@ -197,7 +242,7 @@ function resolveWorkspaceSubpath(
 }
 
 export function makeResolver(
-  adminSrc: string,
+  aliases: ReadonlyMap<string, string>,
   workspace: Map<string, WorkspacePackage>,
   io: Io
 ) {
@@ -211,12 +256,14 @@ export function makeResolver(
         specifier
       );
     }
-    if (specifier.startsWith("@admin/")) {
-      const base = join(adminSrc, specifier.slice("@admin/".length));
-      return asFile(resolveSourceFile(base, io), specifier);
+    for (const [prefix, dir] of aliases) {
+      if (specifier.startsWith(prefix)) {
+        const base = join(dir, specifier.slice(prefix.length));
+        return asFile(resolveSourceFile(base, io), specifier);
+      }
     }
-    // A database package is the answer wherever it lives; walking into it adds nothing.
-    if (DATABASE_PACKAGE.test(specifier))
+    // Server-only code is the answer wherever it lives; walking into it adds nothing.
+    if (serverOnlyKind(specifier) !== null)
       return { kind: "external", name: specifier };
 
     const owner = ownerOf(specifier, workspace);
@@ -227,14 +274,14 @@ export function makeResolver(
 
 export interface ClosureResult {
   readonly visited: Set<string>;
-  readonly violations: { package: string; chain: string[] }[];
+  readonly violations: { package: string; kind: string; chain: string[] }[];
   readonly unresolved: { from: string; specifier: string }[];
 }
 
 /**
  * Walk everything a set of client entries pulls into a browser bundle.
  *
- * Returns the chain that reached each database package, because "something in the admin reaches
+ * Returns the chain that reached each piece of server-only code, because "something in the admin reaches
  * drizzle" is not actionable and "this file, through these seven, does" is.
  */
 export function walkClientClosure(
@@ -245,7 +292,7 @@ export function walkClientClosure(
   const parent = new Map<string, string | undefined>();
   const visited = new Set<string>();
   const unresolved: { from: string; specifier: string }[] = [];
-  const violations: { package: string; chain: string[] }[] = [];
+  const violations: { package: string; kind: string; chain: string[] }[] = [];
 
   const chainTo = (file: string): string[] => {
     const chain: string[] = [];
@@ -268,8 +315,9 @@ export function walkClientClosure(
       return null;
     }
     if (next.kind === "external") {
-      if (DATABASE_PACKAGE.test(next.name)) {
-        violations.push({ package: next.name, chain: chainTo(file) });
+      const kind = serverOnlyKind(next.name);
+      if (kind !== null) {
+        violations.push({ package: next.name, kind, chain: chainTo(file) });
       }
       return null;
     }
@@ -358,7 +406,7 @@ const describeChain = (chain: string[]): string =>
 
 describe("what a browser bundle can reach", () => {
   const workspace = readWorkspace(PACKAGES, realIo);
-  const resolveSpecifier = makeResolver(ADMIN_SRC, workspace, realIo);
+  const resolveSpecifier = makeResolver(ALIASES, workspace, realIo);
   const entries = sourceFilesUnder(ADMIN_SRC).filter(file =>
     declaresUseClient(realIo.read(file), file)
   );
@@ -409,19 +457,109 @@ describe("what a browser bundle can reach", () => {
     ).toEqual([]);
   });
 
-  it("reaches no database package", () => {
-    const shortest = new Map<string, string[]>();
-    for (const violation of result.violations) {
-      const existing = shortest.get(violation.package);
-      if (existing === undefined || violation.chain.length < existing.length) {
-        shortest.set(violation.package, violation.chain);
-      }
+  it("reaches no server-only code", () => {
+    expect(describeViolations(result)).toEqual([]);
+  });
+});
+
+/**
+ * Each piece of server-only code reached, with the shortest chain to it, read from the reaching
+ * module back to the entry: the entry and the import path are what the person fixing it needs.
+ */
+function describeViolations(result: ClosureResult): string[] {
+  const shortest = new Map<string, { kind: string; chain: string[] }>();
+  for (const violation of result.violations) {
+    const existing = shortest.get(violation.package);
+    if (
+      existing === undefined ||
+      violation.chain.length < existing.chain.length
+    ) {
+      shortest.set(violation.package, violation);
     }
+  }
+  return [...shortest.entries()].map(
+    ([name, { kind, chain }]) =>
+      `${name} (${kind})\n    ${describeChain(chain)}`
+  );
+}
+
+/**
+ * The entries `nextly` publishes as safe for a browser, read from its build config.
+ *
+ * 🔴 Read from the file, not restated: a copy of the list here would pass while an entry added
+ * there went unchecked. Parsed rather than imported, because importing the config loads `tsup`
+ * and with it esbuild, which refuses to start under this package's browser-like test environment.
+ * The parse accepts exactly one shape, `const clientEntries = ["…", …]`, and throws on any other,
+ * so a list it cannot read fails the run instead of being read as empty.
+ */
+export function readClientEntries(configSource: string): string[] {
+  const parsed = ts.createSourceFile(
+    "tsup.config.js",
+    configSource,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.JS
+  );
+  for (const statement of parsed.statements) {
+    if (!ts.isVariableStatement(statement)) continue;
+    for (const declaration of statement.declarationList.declarations) {
+      if (
+        !ts.isIdentifier(declaration.name) ||
+        declaration.name.text !== "clientEntries"
+      ) {
+        continue;
+      }
+      const list = declaration.initializer;
+      if (list === undefined || !ts.isArrayLiteralExpression(list))
+        return refuseClientEntries();
+      const paths: string[] = [];
+      for (const element of list.elements) {
+        // Narrowed one element at a time: a spread, a variable or a template is a list this
+        // cannot read as written, and is refused below like a missing one.
+        if (!ts.isStringLiteral(element)) return refuseClientEntries();
+        paths.push(element.text);
+      }
+      return paths;
+    }
+  }
+  return refuseClientEntries();
+}
+
+/** The one refusal, whichever way the list could not be read. */
+function refuseClientEntries(): never {
+  throw new Error(
+    "tsup.config.js must declare `clientEntries` as an array of path strings"
+  );
+}
+
+describe("what nextly's client-safe entries can reach", () => {
+  const workspace = readWorkspace(PACKAGES, realIo);
+  const resolveSpecifier = makeResolver(ALIASES, workspace, realIo);
+  const entries = readClientEntries(
+    realIo.read(join(NEXTLY_ROOT, "tsup.config.js"))
+  ).map(entry => join(NEXTLY_ROOT, entry));
+  const result = walkClientClosure(entries, resolveSpecifier, realIo);
+
+  it("reads the list the build declares, nextly/config among it", () => {
+    // If this shrinks to nothing, every assertion below passes on an empty walk.
+    expect(entries).toContain(join(NEXTLY_ROOT, "src/config.ts"));
+    expect(entries.length).toBeGreaterThan(10);
+    for (const entry of entries) {
+      expect(realIo.exists(entry), `${fromRepo(entry)} must exist`).toBe(true);
+    }
+    expect(result.visited.size).toBeGreaterThan(entries.length);
+  });
+
+  it("resolves every runtime import it meets", () => {
     expect(
-      [...shortest.entries()].map(
-        ([name, chain]) => `${name}\n    ${describeChain(chain)}`
+      result.unresolved.map(
+        item => `${fromRepo(item.from)} -> ${item.specifier}`
       )
     ).toEqual([]);
+  });
+
+  it("reaches no server-only code", () => {
+    expect(describeViolations(result)).toEqual([]);
   });
 });
 
@@ -451,7 +589,14 @@ describe("the rule can fail", () => {
     ]);
     return {
       io,
-      resolve: makeResolver("/repo/packages/admin/src", workspace, io),
+      resolve: makeResolver(
+        new Map([
+          ["@admin/", "/repo/packages/admin/src"],
+          ["@nextly/", "/repo/packages/nextly/src"],
+        ]),
+        workspace,
+        io
+      ),
     };
   };
 
@@ -477,6 +622,97 @@ describe("the rule can fail", () => {
       "/repo/packages/admin/src/helper.ts",
       "/repo/packages/admin/src/Entry.tsx",
     ]);
+  });
+
+  it.each([
+    [
+      "a Node built-in, with its prefix",
+      'import { createHash } from "node:crypto";',
+      "node:crypto",
+      "Node built-in",
+    ],
+    [
+      "a Node built-in, bare",
+      'import { readFileSync } from "fs";',
+      "fs",
+      "Node built-in",
+    ],
+    [
+      "a Node built-in's subpath",
+      'import { readFile } from "fs/promises";',
+      "fs/promises",
+      "Node built-in",
+    ],
+    [
+      "a module marked server-only",
+      'import "server-only";\nexport const secret = 1;',
+      "server-only",
+      "server-only module",
+    ],
+    [
+      "a database package",
+      'import { sql } from "drizzle-orm";',
+      "drizzle-orm",
+      "database package",
+    ],
+  ])(
+    "fails on %s, naming the entry and the path to it",
+    (_label, planted, name, kind) => {
+      // A client-safe entry two hops from the planted import, through the core alias, as
+      // `nextly/config` reaches `layout.ts`.
+      const { io, resolve } = build({
+        "/repo/packages/nextly/src/config.ts":
+          'export { LIMIT } from "@nextly/domains/limits";',
+        "/repo/packages/nextly/src/domains/limits.ts": `${planted}\nexport const LIMIT = 1;`,
+      });
+      const result = walkClientClosure(
+        ["/repo/packages/nextly/src/config.ts"],
+        resolve,
+        io
+      );
+      expect(result.unresolved).toEqual([]);
+      expect(result.violations).toEqual([
+        {
+          package: name,
+          kind,
+          chain: [
+            "/repo/packages/nextly/src/domains/limits.ts",
+            "/repo/packages/nextly/src/config.ts",
+          ],
+        },
+      ]);
+    }
+  );
+
+  it("reads the entry list as written, and refuses a shape it cannot read", () => {
+    expect(
+      readClientEntries(
+        'const other = ["x"];\nconst clientEntries = [\n  // a note\n  "src/a.ts",\n  "src/b.ts",\n];'
+      )
+    ).toEqual(["src/a.ts", "src/b.ts"]);
+    expect(() =>
+      readClientEntries('const clientEntries = [...base, "src/a.ts"];')
+    ).toThrow(/array of path strings/);
+    expect(() => readClientEntries("const entries = [];")).toThrow(
+      /array of path strings/
+    );
+  });
+
+  it("passes an entry whose closure is all import-free leaves", () => {
+    // The other direction: the fix this rule asks for, a value moved to a module with no
+    // imports, must satisfy it.
+    const { io, resolve } = build({
+      "/repo/packages/nextly/src/config.ts":
+        'export { LIMIT } from "./limits";',
+      "/repo/packages/nextly/src/limits.ts": "export const LIMIT = 1;",
+    });
+    const result = walkClientClosure(
+      ["/repo/packages/nextly/src/config.ts"],
+      resolve,
+      io
+    );
+    expect(result.violations).toEqual([]);
+    expect(result.unresolved).toEqual([]);
   });
 
   it("fails on a CommonJS load", () => {
@@ -587,8 +823,13 @@ describe("the rule can fail", () => {
     ).toBe("./d.mjs");
   });
 
-  it.each(["pg-boss", "postgres-array", "react", "nextly/config"])(
-    "leaves %s alone",
-    name => expect(DATABASE_PACKAGE.test(name)).toBe(false)
-  );
+  it.each([
+    "pg-boss",
+    "postgres-array",
+    "react",
+    "nextly/config",
+    "@scope/fs",
+    "fs-extra-like",
+    "server-only-ish",
+  ])("leaves %s alone", name => expect(serverOnlyKind(name)).toBe(null));
 });

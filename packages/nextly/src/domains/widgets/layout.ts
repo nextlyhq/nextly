@@ -50,6 +50,13 @@ import { createHash } from "node:crypto";
 
 import { NextlyError } from "../../errors/nextly-error";
 
+import {
+  COLUMN_COUNTS,
+  DEFAULT_COLUMN_COUNT,
+  MAX_PLACEMENTS,
+  type ColumnCount,
+} from "./layout-limits";
+
 /**
  * The shape this core writes and understands.
  *
@@ -61,20 +68,14 @@ import { NextlyError } from "../../errors/nextly-error";
  */
 export const LAYOUT_SCHEMA_VERSION = 2;
 
-/**
- * How many columns a dashboard has when nobody has chosen.
- *
- * Three rather than two or four: it is the widest count that still leaves a
- * card readable at the admin's content width, and folding 3 -> 2 -> 1 by
- * breakpoint keeps a placement's column derivable at every width.
- */
-export const DEFAULT_COLUMN_COUNT = 3;
-
-/** The column counts a dashboard may have. */
-export const COLUMN_COUNTS = [2, 3, 4] as const;
-
-/** One of the column counts a dashboard may have. */
-export type ColumnCount = (typeof COLUMN_COUNTS)[number];
+// The column counts live in an import-free module (`layout-limits.ts`) so the
+// browser-safe `nextly/config` can publish them without reaching this file's
+// `node:crypto`. Re-exported here so every server reader keeps its import.
+export {
+  COLUMN_COUNTS,
+  DEFAULT_COLUMN_COUNT,
+  type ColumnCount,
+} from "./layout-limits";
 
 /**
  * One card, at one position, for one reader.
@@ -819,8 +820,11 @@ export function mergePreservingHidden(
  * there is nothing here to measure except the bytes actually stored. 32 KiB is
  * half MySQL's limit, which leaves room for multi-byte characters to expand
  * without any caller ever meeting the dialect's own edge.
+ *
+ * `MAX_PLACEMENTS` itself is declared in `layout-limits.ts`, with no imports,
+ * because the browser-safe `nextly/config` publishes it.
  */
-export const MAX_PLACEMENTS = 200;
+export { MAX_PLACEMENTS } from "./layout-limits";
 
 /**
  * The ceiling on the row as STORED, carried placements included.
