@@ -3,11 +3,11 @@ title: Media Upload Security
 description: How Nextly validates and sanitizes uploaded media — MIME allowlist, SVG sanitization, polyglot defenses, and per-adapter Content-Disposition trade-offs.
 ---
 
-Every file uploaded through `/api/media` or `/admin/api/collections/[slug]/uploads` passes through a unified validation pipeline at `services/upload-validation/`. This page explains what gets checked, what gets stripped, and how to tune the policy for your deployment.
+Every uploaded file passes through a unified validation pipeline at `services/upload-validation/`. This page explains what gets checked, what gets stripped, and how to tune the policy for your deployment.
 
 ## The validation pipeline
 
-Each upload runs through six checks, in order. The first failure short-circuits the request with a `NextlyError.validation` carrying a stable machine code.
+Each upload runs through the checks below, in order. The first failure short-circuits the request with a `NextlyError.validation` carrying a stable machine code.
 
 | Step | Code on failure           | Notes                                                                                         |
 | ---- | ------------------------- | --------------------------------------------------------------------------------------------- |

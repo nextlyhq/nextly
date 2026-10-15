@@ -42,7 +42,7 @@ Global flags inherited from the root `nextly` command: `--config <path>` (custom
 - `nextly migrate:resolve` -- exactly one of `--applied <file>`, `--rolled-back <file>`, `--failed-cleanup <file>`; `--skip-verify` (with `--applied`, skip the live-vs-snapshot check; a file with no snapshot is recorded without it when it is marked `-- nextly:no-transaction`, or on MySQL when its newest attempt failed or never finished).
 - `nextly migrate:fresh` -- `-f, --force` (skip confirmation), `--seed` (run seeders after migrations).
 - `nextly migrate:down` -- `--step <n>` (roll back the last N migrations), `--allow-data-loss` (required when the DOWN drops a table or column), `--yes` (required in production), `--dry-run` (show targets + DOWN SQL without executing), `--plugin <name>` (roll back that plugin's modules instead of the app's files), `--force-unlock`.
-- `nextly users:clear-plaintext-passwords` -- `--apply` (clear the values and end those accounts' sessions, an access token already issued lasting until it expires; without it the command only counts them), `--confirm-default-hasher` (required with `--apply`: your statement that no stored password was written by a custom `passwordHasher`, now or earlier).
+- `nextly users:clear-plaintext-passwords` -- `--apply` (clear the values and end those accounts' sessions, an access token already issued being refused within about ten seconds; without it the command only counts them), `--confirm-default-hasher` (required with `--apply`: your statement that no stored password was written by a custom `passwordHasher`, now or earlier).
 
 ---
 
@@ -656,8 +656,9 @@ nextly users:clear-plaintext-passwords --apply --confirm-default-hasher
 Without `--confirm-default-hasher`, `--apply` changes nothing and exits with an error.
 
 For each such account it removes the stored value and ends its sessions: none of them can
-be renewed, and an access token already issued stays valid until it expires, within
-fifteen minutes by default. It prints only counts, never an address or a value, and a second run finds nothing
+be renewed, and an access token already issued is refused within about ten seconds, as
+[a session's account is checked](/docs/guides/authentication#when-an-account-may-hold-a-session).
+It prints only counts, never an address or a value, and a second run finds nothing
 left to change. Accounts with a proper password, and accounts without one, are left as
 they are.
 

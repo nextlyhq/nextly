@@ -40,6 +40,8 @@ export default defineConfig({
 });
 ```
 
+`jobs` takes untyped definitions, so a job written with a type argument, `defineJob<{ ... }>`, is a type error there and fails `next build`. Leave the type argument off and check `input` at the top of the handler, as the samples below do. The payload comes from whoever queued the job, so checking it is worth doing anyway.
+
 <Callout type="warn">
 A job that is defined but not listed in `jobs` is absent from the registry. Rows queued for
 its slug sit there with no handler to pick them up.
@@ -91,7 +93,7 @@ set decides where to look:
 | | A value under 32 characters |
 |---|---|
 | `NEXTLY_DRAIN_SECRET` | **The app refuses to boot.** The environment schema requires 32, so this fails validation before any request reaches the route |
-| `CRON_SECRET` | The app starts, prints a warning at boot, and the route refuses the call with a 403 |
+| `CRON_SECRET` | The app starts and prints a warning at boot. The route refuses a `GET` (how Vercel Cron calls it) with a 403; a `POST` falls through to the permission check and gets a 401 |
 
 `CRON_SECRET` is Vercel Cron's convention, which is why it is accepted at all and why it is
 tolerated rather than rejected.
@@ -143,9 +145,15 @@ attempt at it. It is the key to hand anything the database cannot take back:
 ```ts
 import { defineJob } from "nextly";
 
-export const chargeInvoice = defineJob<{ invoiceId: string; cents: number }>({
+export const chargeInvoice = defineJob({
   slug: "charge-invoice",
-  async handler({ invoiceId, cents }, { jobId }) {
+  async handler(input, { jobId }) {
+    const invoiceId = typeof input?.invoiceId === "string" ? input.invoiceId : null;
+    const cents = typeof input?.cents === "number" ? input.cents : null;
+    if (invoiceId === null || cents === null) {
+      throw new Error("charge-invoice needs { invoiceId: string, cents: number }");
+    }
+
     // The provider de-duplicates on this key, so a second run of the same job
     // returns the first charge instead of making a second one.
     const response = await fetch("https://api.payments.example/charges", {
@@ -190,9 +198,12 @@ operation:
 ```ts
 import { defineJob } from "nextly";
 
-export const settleInvoice = defineJob<{ invoiceId: string }>({
+export const settleInvoice = defineJob({
   slug: "settle-invoice",
-  async handler({ invoiceId }, { jobId }) {
+  async handler(input, { jobId }) {
+    const invoiceId = typeof input?.invoiceId === "string" ? input.invoiceId : null;
+    if (invoiceId === null) throw new Error("settle-invoice needs { invoiceId: string }");
+
     await charge(`${jobId}:charge`, invoiceId);
     await postToLedger(`${jobId}:ledger`, invoiceId);
   },

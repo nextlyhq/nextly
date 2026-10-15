@@ -64,7 +64,7 @@ If you hit a variant-specific bug, please file an issue with your variant + vers
 
 ## Production-migrations rules
 
-- **Forward-only.** No `migrate:rollback` or `migrate:down` exists. To undo a deployed change, write a NEW migration that reverses it.
+- **Forward by default.** `nextly migrate:down` rolls back the most recently applied migration using its `-- DOWN` section; there is no `migrate:rollback`. To undo a deployed change, prefer a NEW migration that reverses it.
 - **Schema lives in your repo.** `nextly migrate:create --name=...` scaffolds an empty migration; you commit it; CI applies it before deploy.
 - **The deployed app never touches the schema.** `migrate:fresh` is destructive and CLI-only -- it is rejected if imported from runtime code.
 

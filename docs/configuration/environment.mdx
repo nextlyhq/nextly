@@ -51,8 +51,7 @@ Source: `packages/nextly/src/shared/lib/env.ts`.
 | Variable | Required | Default | Description |
 |---|---|---|---|
 | `DB_DIALECT` | Yes | `postgresql` | Database dialect: `postgresql`, `mysql`, or `sqlite`. |
-| `DATABASE_URL` | Yes (PostgreSQL/MySQL) | — | Full database connection URL. Required for `postgresql` and `mysql`; optional for `sqlite` (paired with `SQLITE_PATH`). Validated as a URL. |
-| `SQLITE_PATH` | Optional (SQLite only) | `file:./data/nextly.db` (factory default) | SQLite file path; alternative to `DATABASE_URL` for the `sqlite` dialect. |
+| `DATABASE_URL` | Yes | — | Full database connection URL; for `sqlite`, a `file:` URL. The running app falls back to `file:./data/nextly.db` on SQLite, but the CLI requires it on every dialect. Validated as a URL. |
 | `DB_POOL_MAX` | No | `20` | Max connections in the pool. Min: 1. |
 | `DB_POOL_MIN` | No | `2` | Min connections in the pool. Min: 0. |
 | `DB_POOL_IDLE_TIMEOUT` | No | `30000` | Idle connection timeout in milliseconds. Min: 1000. |
@@ -71,8 +70,6 @@ DATABASE_URL=mysql://root:root@localhost:3306/nextly_dev
 
 # SQLite (development / single-instance only)
 DATABASE_URL=file:./dev.db
-# or
-SQLITE_PATH=./dev.db
 ```
 
 ---

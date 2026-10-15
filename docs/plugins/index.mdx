@@ -69,7 +69,7 @@ import { definePlugin } from "@nextlyhq/plugin-sdk";
 export const myPlugin = definePlugin({
   name: "@acme/nextly-plugin-example",
   version: "1.0.0",
-  nextly: "^1.0.0",
+  nextly: ">=0.0.2-alpha.66",
   contributes: {
     collections: [MyCollection], // merged automatically by the pipeline
   },
@@ -95,7 +95,7 @@ import { definePlugin } from "@nextlyhq/plugin-sdk";
 export const auditPlugin = definePlugin({
   name: "audit-log",
   version: "1.0.0",
-  nextly: "^1.0.0",
+  nextly: ">=0.0.2-alpha.66",
 
   async init(ctx) {
     ctx.hooks.on("afterCreate", "*", async context => {
