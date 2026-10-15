@@ -420,7 +420,90 @@ export interface PluginFieldValidateArgs {
   path: string;
   /** `create` requires absent values; `update` treats them as untouched. */
   mode: "create" | "update";
+  /**
+   * @experimental The entry write this value belongs to, and a read of stored
+   * values on that write's own connection.
+   *
+   * A value can be well formed and still wrong for the rows around it — a
+   * document that places another document placing it back. Judging that needs
+   * to know which entry is being written and to read its neighbours as THIS
+   * write sees them: inside a batch's transaction, a read on another
+   * connection cannot see the rows the batch wrote before this one, and on a
+   * single-connection database it would queue behind the transaction it is
+   * part of.
+   *
+   * Absent where no entry write is behind the validation: a default value
+   * being judged, or a caller of `validateFieldValues`. A validator that needs
+   * it decides for itself what its absence means.
+   */
+  write?: PluginFieldWrite;
 }
+
+/**
+ * @experimental The entry write a field value is validated for: which entry,
+ * and a read that joins the write's own connection, narrowed to the values of
+ * the validator's own type.
+ */
+export interface PluginFieldWrite {
+  /** What is being written: a collection entry, or a single. */
+  readonly kind: "collection" | "single";
+  /** The collection's or single's slug, as it is registered. */
+  readonly slug: string;
+  /**
+   * The id the entry is, or will be, stored under: the stored id on an update,
+   * and on a create the caller's own id where the collection accepts one
+   * (`db.allowIdOnCreate`).
+   *
+   * Absent on any other create, because the id is minted by the write itself,
+   * and for a single, which has no entry id.
+   */
+  readonly id?: string;
+  /**
+   * Whether the write runs inside a transaction — a batch, an import, or a
+   * caller's own. `readStored` sees what it has written; a read on any other
+   * connection does not, and can wait on the connection the transaction holds.
+   */
+  readonly inTransaction: boolean;
+  /**
+   * Read one stored value of THIS validator's own field type.
+   *
+   * On the connection the validation runs on: the write's transaction when it
+   * has one, so rows the same transaction wrote are seen. As the system: no
+   * read hooks and no access rules shape it, because a value a hook hides from
+   * a reader is still stored, and still what that reader's page is built from.
+   *
+   * Scoped to fields of the validator's own type, and refused otherwise: a
+   * type may read the values of its own kind wherever they are stored, and
+   * nothing else. Only top-level fields of a collection are readable.
+   */
+  readStored(target: PluginStoredValueTarget): Promise<PluginStoredValue>;
+}
+
+/** @experimental Which stored value {@link PluginFieldWrite.readStored} reads. */
+export interface PluginStoredValueTarget {
+  /** The collection's slug. */
+  readonly collection: string;
+  /** The entry's id. */
+  readonly id: string;
+  /** A top-level field of the validator's own type. */
+  readonly field: string;
+  /**
+   * `published` reads the live row. `draft` reads what an editor's preview
+   * reads: the pending working draft where one is shown, else the live row.
+   */
+  readonly form: "published" | "draft";
+}
+
+/**
+ * @experimental One stored value, or the fact that there is no such entry.
+ *
+ * A discriminated result because the value is `unknown`: a union with
+ * `unknown` collapses to `unknown`, so a sentinel beside it would compare
+ * equal to anything.
+ */
+export type PluginStoredValue =
+  | { readonly kind: "value"; readonly value: unknown }
+  | { readonly kind: "absent" };
 
 /**
  * A field as the validation pass sees it.
