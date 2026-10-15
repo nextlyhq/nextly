@@ -7,6 +7,10 @@
  * permission spent two slots per request, and a key with one slot left was
  * refused with a 429 a request it could afford.
  *
+ * Judging the caller it already holds, the gate must hold one whose grants are
+ * settled: a boot in flight may still be seeding the permission the key is
+ * judged by.
+ *
  * A real request goes through the real handler, the real auth middleware and
  * the real in-memory limiter. Only what sits outside them is replaced: the
  * key service and the config, registered in the real container; the session
@@ -20,7 +24,16 @@ const LIMIT = 3;
 const WINDOW_MS = 3_600_000;
 const KEY_ID = "settings-key";
 
+/** The settings permission, as the key holds it once it has been granted. */
+const PAY_GRANT = {
+  slug: "update-pay-settings",
+  action: "update",
+  resource: "pay-settings",
+};
+
 const services = vi.hoisted(() => ({
+  /** What the key's grants resolve to when they are read. */
+  grants: [] as Array<{ slug: string; action: string; resource: string }>,
   apiKeyService: {
     authenticateApiKey: async () => ({
       id: "settings-key",
@@ -28,13 +41,7 @@ const services = vi.hoisted(() => ({
       tokenType: "full-access",
       roleId: null,
     }),
-    resolveApiKeyGrants: async () => [
-      {
-        slug: "update-pay-settings",
-        action: "update",
-        resource: "pay-settings",
-      },
-    ],
+    resolveApiKeyGrants: async () => services.grants,
     resolveApiKeyRoles: async () => [],
   },
   config: {} as Record<string, unknown>,
@@ -62,6 +69,7 @@ vi.mock("../route-handler", async importOriginal => ({
 
 import { rateLimiter } from "../auth/middleware/rate-limiter";
 import { container } from "../di/container";
+import { holdBootSeeding } from "../init/seed-permissions";
 import { createDynamicHandlers } from "../routeHandler";
 import { sanitizeConfig } from "../shared/types/config";
 
@@ -128,6 +136,7 @@ async function spend(count: number): Promise<void> {
 beforeEach(async () => {
   await rateLimiter.clear(KEY_ID);
   dispatched.length = 0;
+  services.grants = [PAY_GRANT];
   services.config = {
     plugins,
     apiKeys: { rateLimit: { requestsPerHour: LIMIT, windowMs: WINDOW_MS } },
@@ -166,6 +175,23 @@ describe.each(["GET", "PATCH"] as const)(
 
       expect(response.status).toBe(429);
       expect(dispatched).toEqual([]);
+    });
+
+    it("is judged on the grants a boot in flight leaves it", async () => {
+      // A boot seeding the plugin's permission grants it to the key's owner
+      // as it goes. Read before that seeding finished, the key's grants lack
+      // it, and the request was refused a permission the boot had given it.
+      services.grants = [];
+      const release = holdBootSeeding();
+      const response = send(httpMethod);
+      // Let the request run as far as it will before the boot completes.
+      await new Promise(resolve => setTimeout(resolve, 50));
+
+      services.grants = [PAY_GRANT];
+      release();
+
+      expect((await response).status).toBe(200);
+      expect(dispatched).toEqual([{ service: "pluginSettings", method }]);
     });
   }
 );
