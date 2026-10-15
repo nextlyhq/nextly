@@ -125,6 +125,8 @@ interface Install {
   superAdminRole: string;
   /** A role that is not super-admin, for a role replacement to move to. */
   editorRole: string;
+  /** A permission to build roles from: a role must grant at least one. */
+  readUsers: string;
   /** A full-access key of an account that manages users but is no super-admin. */
   operatorKey: string;
 }
@@ -185,7 +187,7 @@ async function boot(on: TestDialect): Promise<Install> {
     },
   });
   const editor = await direct().roles.create({
-    data: { name: "Editor", slug: "editor", permissionIds: [] },
+    data: { name: "Editor", slug: "editor", permissionIds: [userGrants[0]] },
   });
   const operator = await makeUser("operator@example.com");
   await grant(operator, userAdmin.item.id);
@@ -205,6 +207,7 @@ async function boot(on: TestDialect): Promise<Install> {
     first,
     superAdminRole,
     editorRole: editor.item.id,
+    readUsers: userGrants[0],
     operatorKey: key,
   };
 }
@@ -518,7 +521,11 @@ describe.each(getConfiguredTestDialects())(
       /** A role built on `super-admin`, as creating a role with a base role writes it. */
       async function ownerRole(install: Install): Promise<string> {
         const owner = await direct().roles.create({
-          data: { name: "Owner", slug: "owner", permissionIds: [] },
+          data: {
+            name: "Owner",
+            slug: "owner",
+            permissionIds: [install.readUsers],
+          },
         });
         await raw().insert(getDialectTables().roleInherits).values({
           id: `owner-inherits-super-admin`,
