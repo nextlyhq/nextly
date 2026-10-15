@@ -1348,7 +1348,11 @@ export class CollectionMutationService extends BaseService {
     collectionName: string;
     mode: "create" | "update";
     user: UserContext | undefined;
-    localeCtx?: Awaited<ReturnType<typeof this.localizedRequiredContext>>;
+    /** What {@link localizedRequiredContext} resolved for a localized write. */
+    localeCtx?: {
+      localizedFieldNames: ReadonlySet<string>;
+      enforceLocalizedRequired: boolean;
+    };
     /** The stored entry's id, on an update. */
     id?: string;
     /** The write's own transaction, where it runs inside one. */
