@@ -61,7 +61,11 @@
  *
  * @module keyboard-move
  */
-import { locateNode, type BlockNode } from "@nextlyhq/blocks-engine";
+import {
+  DEFAULT_SLOT,
+  locateNode,
+  type BlockNode,
+} from "@nextlyhq/blocks-engine";
 
 import type { OpPosition, SlotAddress } from "./ops";
 
@@ -73,9 +77,6 @@ import type { OpPosition, SlotAddress } from "./ops";
  * property the whole design rests on.
  */
 export type MoveDirection = "up" | "down" | "indent" | "outdent";
-
-/** The default slot a block enters when it is indented into a container. */
-const DEFAULT_SLOT = "default";
 
 /**
  * What a move does, beyond where it lands.
@@ -226,7 +227,10 @@ export function keyboardMovePosition(
   // The block lands in the default slot. A container that already uses a
   // different slot name keeps it for the children it has; this one addresses
   // the slot a keyboard author can reach without choosing between regions they
-  // cannot see.
+  // cannot see. It is the ENGINE's default slot, the one every core container
+  // declares and renders, and not a name of this module's own: a slot no
+  // container renders stores the block where the canvas never draws it, so
+  // the author watches it vanish.
   const into = above.slots?.[DEFAULT_SLOT];
   return {
     to: {
