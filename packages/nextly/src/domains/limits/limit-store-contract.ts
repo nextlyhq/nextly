@@ -113,6 +113,13 @@ function put(
   }));
 }
 
+/**
+ * How many further sweeps the sweep case allows before one must find
+ * nothing: room for a store that bounds each sweep's work, and for entries of
+ * other cases that expire meanwhile.
+ */
+const SWEEPS_TO_DRAIN = 20;
+
 /** Wait `ms` of real time. */
 function pause(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -351,7 +358,7 @@ const cases: readonly LimitStoreContractCase[] = [
     },
   },
   {
-    name: "a sweep removes expired entries and says how many went, and a second finds none",
+    name: "a sweep removes expired entries and says how many went, and sweeping again comes to none",
     acrossInstances: true,
     async run({ first, second }) {
       const keys = [
@@ -371,11 +378,16 @@ const cases: readonly LimitStoreContractCase[] = [
         "a swept entry still reads"
       );
       // Removed, not only counted: a store that reported the expired entries
-      // and kept them would report them again.
-      expectThat(
-        (await second.sweep()) === 0,
-        "a second sweep found expired entries the first said it removed"
-      );
+      // and kept them would report them on every sweep, while one that only
+      // bounds each sweep's work comes to a sweep that finds nothing.
+      let sweeps = 0;
+      while ((await second.sweep()) > 0) {
+        sweeps += 1;
+        expectThat(
+          sweeps < SWEEPS_TO_DRAIN,
+          `${SWEEPS_TO_DRAIN} more sweeps still found expired entries the first said it removed`
+        );
+      }
     },
   },
 ];

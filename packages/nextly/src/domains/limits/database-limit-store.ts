@@ -650,12 +650,51 @@ export function createDatabaseLimitStore(
     });
   };
 
-  /** An update's result, once its committed count has reached the watch. */
-  const committed = <T>(done: {
+  /** The occupied count as committed now: a plain read, taking no lock. */
+  const readCommittedOccupied = async (): Promise<number> => {
+    const [row] = await adapter
+      .getDrizzle<StoreDb>()
+      .select<{ value: string | null }>({ value: table.value })
+      .from(table)
+      .where(eq(table.id, counterId));
+    const occupied = Number(row?.value ?? 0);
+    return Number.isFinite(occupied) && occupied > 0 ? occupied : 0;
+  };
+
+  /**
+   * Report the committed occupied count to the watch, read afresh once the
+   * caller's update has committed. One read at a time on this instance, and a
+   * caller arriving during one waits for the next, which starts after its
+   * commit: the watch sees counts in the order they were committed, never a
+   * transaction's own count acknowledged after a later one. Logging only, so
+   * a failed read is let go: the update it follows has committed.
+   */
+  let observing: Promise<void> | undefined;
+  let observeAgain = false;
+  const observeCommitted = (): Promise<void> => {
+    if (observing !== undefined) {
+      observeAgain = true;
+      return observing;
+    }
+    observing = (async () => {
+      do {
+        observeAgain = false;
+        watch.observe(await readCommittedOccupied());
+      } while (observeAgain);
+    })()
+      .catch(() => undefined)
+      .finally(() => {
+        observing = undefined;
+      });
+    return observing;
+  };
+
+  /** An update's result, once the count it committed has reached the watch. */
+  const committed = async <T>(done: {
     result: T;
     occupied: number | undefined;
-  }): T => {
-    if (done.occupied !== undefined) watch.observe(done.occupied);
+  }): Promise<T> => {
+    if (done.occupied !== undefined) await observeCommitted();
     return done.result;
   };
 
@@ -683,7 +722,7 @@ export function createDatabaseLimitStore(
       try {
         await ensureReady();
         try {
-          return committed(
+          return await committed(
             await attemptUpdate(named, apply, false, applyFailure)
           );
         } catch (error) {
@@ -692,7 +731,7 @@ export function createDatabaseLimitStore(
             watch.refused(maxEntries);
             throw error;
           }
-          return committed(
+          return await committed(
             await attemptUpdate(named, apply, true, applyFailure)
           );
         }

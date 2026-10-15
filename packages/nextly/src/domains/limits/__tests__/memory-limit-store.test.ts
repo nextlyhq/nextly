@@ -67,6 +67,65 @@ describe("the contract, for a store each instance holds its own of", () => {
 });
 
 describe("the contract's sweep case", () => {
+  it("passes a store that bounds each sweep, with expired entries of others left for later sweeps", async () => {
+    // A minimal store whose every sweep removes at most three entries.
+    const entries = new Map<string, StoredLimit>();
+    const bounded: LimitStore = {
+      shared: false,
+      update: async (keys, apply) => {
+        const now = Date.now();
+        const current = new Map(
+          keys.flatMap(key => {
+            const entry = entries.get(key);
+            return entry && entry.expiresAt > now
+              ? [[key, entry] as const]
+              : [];
+          })
+        );
+        const { write, result } = apply(current, now);
+        for (const [key, entry] of write) {
+          if (entry === null || entry.expiresAt <= now) entries.delete(key);
+          else entries.set(key, entry);
+        }
+        return result;
+      },
+      read: async keys => {
+        const now = Date.now();
+        return new Map(
+          keys.flatMap(key => {
+            const entry = entries.get(key);
+            return entry && entry.expiresAt > now
+              ? [[key, entry] as const]
+              : [];
+          })
+        );
+      },
+      sweep: async () => {
+        const now = Date.now();
+        let removed = 0;
+        for (const [key, entry] of entries) {
+          if (removed === 3) break;
+          if (entry.expiresAt <= now) {
+            entries.delete(key);
+            removed += 1;
+          }
+        }
+        return removed;
+      },
+    };
+    // Two expired entries of others, ahead of the case's own.
+    for (const key of ["other-a", "other-b"]) {
+      entries.set(key, { value: { n: 1 }, expiresAt: Date.now() + 50 });
+    }
+    const sweepCase = limitStoreContract.find(contractCase =>
+      contractCase.name.startsWith("a sweep removes")
+    );
+
+    await expect(
+      sweepCase?.run({ first: bounded, second: bounded })
+    ).resolves.toBeUndefined();
+  });
+
   it("fails a store that reports what expired but removes none of it", async () => {
     const memory = createMemoryLimitStore();
     // Says how many entries have expired, and leaves every one in place.

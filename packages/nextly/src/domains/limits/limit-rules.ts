@@ -221,10 +221,15 @@ const bucketWidth = (perMs: number) =>
 
 /**
  * The shape an entry's state is written in. Part of every fingerprint, so a
- * state written in an earlier shape, by an earlier release, reads as empty
- * and starts again, as a state written under another rule does, rather than
- * being read without the fields this one relies on. Raised whenever the
- * state's shape changes.
+ * state in another shape reads as empty and starts again, as a state written
+ * under another rule does, rather than being read without the fields this one
+ * relies on. Shape 2 is the first any release writes.
+ *
+ * A later release changing the shape must not simply raise this: during a
+ * rolling deployment, instances of both releases update the same entries, and
+ * each would read the other's as empty, so counts would keep starting again
+ * for as long as both run. It must read the earlier shape as well, and write
+ * the new one.
  */
 const STATE_FORMAT = 2;
 
