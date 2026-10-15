@@ -1,6 +1,9 @@
 import { container } from "@nextly/di/container";
 import type { NextlyServiceConfig } from "@nextly/di/register";
-import type { ApiKeyService } from "@nextly/domains/auth/services/api-key-service";
+import type {
+  ApiKeyService,
+  ApiKeyTokenType,
+} from "@nextly/domains/auth/services/api-key-service";
 import type { RBACAccessControlService } from "@nextly/domains/auth/services/rbac-access-control-service";
 import { env } from "@nextly/lib/env";
 import { permissionSlug } from "@nextly/schemas/_zod/rbac";
@@ -172,6 +175,13 @@ export interface AuthContext {
    */
   apiKeyId?: string;
   /**
+   * What the key's grants and roles are resolved from, present only for
+   * `api-key` requests. Carried so they can be read again for the caller
+   * already authenticated (`withCurrentGrants`) without authenticating the
+   * key a second time.
+   */
+  apiKeyGrantSource?: { tokenType: ApiKeyTokenType; roleId: string | null };
+  /**
    * Verified non-canonical claims from the caller's token.
    *
    * A stored `custom` access rule may decide on a claim this framework knows
@@ -254,13 +264,11 @@ async function apiKeyRateLimitRefusal(
  * ```
  */
 export async function requireApiKeyAuth(req: Request): Promise<
-  | {
+  | ({
       userId: string;
-      permissions: string[];
-      grants: readonly GrantedPermission[];
-      roles: string[];
       apiKeyId: string;
-    }
+      apiKeyGrantSource: NonNullable<AuthContext["apiKeyGrantSource"]>;
+    } & KeyGrants)
   | ErrorResponse
   | null
 > {
@@ -304,28 +312,84 @@ export async function requireApiKeyAuth(req: Request): Promise<
   if (overLimit) return overLimit;
 
   // 5. Resolve effective permissions and roles for this token type
-  const [grants, roles] = await Promise.all([
-    apiKeyService.resolveApiKeyGrants(
-      keyAuth.tokenType,
-      keyAuth.roleId,
-      keyAuth.userId,
-      keyAuth.id
-    ),
-    apiKeyService.resolveApiKeyRoles(
-      keyAuth.tokenType,
-      keyAuth.roleId,
-      keyAuth.userId
-    ),
-  ]);
+  const grantSource = { tokenType: keyAuth.tokenType, roleId: keyAuth.roleId };
 
   // The key's own id travels with the result so a write can be attributed to
   // the specific key, not just to the user that owns it.
   return {
     userId: keyAuth.userId,
-    permissions: grants.map(grant => grant.slug),
-    grants,
-    roles,
     apiKeyId: keyAuth.id,
+    apiKeyGrantSource: grantSource,
+    ...(await resolveKeyGrants(
+      apiKeyService,
+      keyAuth.id,
+      keyAuth.userId,
+      grantSource
+    )),
+  };
+}
+
+/** A key's grants and roles, as an authenticated caller carries them. */
+interface KeyGrants {
+  permissions: string[];
+  grants: readonly GrantedPermission[];
+  roles: string[];
+}
+
+/**
+ * Resolve what an API key may do. The one reading of a key's grants, shared
+ * by authentication and by {@link withCurrentGrants}, so the two cannot
+ * disagree about what a key holds.
+ */
+async function resolveKeyGrants(
+  apiKeyService: ApiKeyService,
+  keyId: string,
+  userId: string,
+  source: NonNullable<AuthContext["apiKeyGrantSource"]>
+): Promise<KeyGrants> {
+  const [grants, roles] = await Promise.all([
+    apiKeyService.resolveApiKeyGrants(
+      source.tokenType,
+      source.roleId,
+      userId,
+      keyId
+    ),
+    apiKeyService.resolveApiKeyRoles(source.tokenType, source.roleId, userId),
+  ]);
+  return { permissions: grants.map(grant => grant.slug), grants, roles };
+}
+
+/**
+ * An authenticated caller with an API key's grants and roles read again, for
+ * a gate that authenticated it before something could change them.
+ *
+ * Nothing is authenticated: the key is not looked up again and spends no slot
+ * of its rate limit. Only what the key holds is re-read, so a boot that seeded
+ * and granted a permission after authentication is seen. Grants are cached
+ * per key until a permission change retires them, so a re-read with nothing
+ * changed is answered from that cache. A session caller is returned as it is:
+ * its permissions are read from the database when it is judged.
+ */
+export async function withCurrentGrants(
+  caller: AuthContext
+): Promise<AuthContext> {
+  const apiKeyService = getApiKeyService();
+  if (
+    caller.authMethod !== "api-key" ||
+    caller.apiKeyId === undefined ||
+    caller.apiKeyGrantSource === undefined ||
+    apiKeyService === undefined
+  ) {
+    return caller;
+  }
+  return {
+    ...caller,
+    ...(await resolveKeyGrants(
+      apiKeyService,
+      caller.apiKeyId,
+      caller.userId,
+      caller.apiKeyGrantSource
+    )),
   };
 }
 
@@ -423,6 +487,7 @@ export async function requireAuthentication(
     roles: apiKeyResult.roles,
     authMethod: "api-key",
     apiKeyId: apiKeyResult.apiKeyId,
+    apiKeyGrantSource: apiKeyResult.apiKeyGrantSource,
   };
 }
 
