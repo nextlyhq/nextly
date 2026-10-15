@@ -59,8 +59,11 @@ token built that way works until the account's sessions are first ended.
 `AccountState` now carries the account's `email`, `name`, `image` and
 `sessionEpoch`. If you assemble `AuthRouterDeps` yourself, your
 `fetchAccountState` and the session-row `lockAccountState` must return those
-fields from the user row. Until they do, no session is issued, and when
-`fetchAccountState` lacks them the log names the missing fields.
+fields from the user row, and `setInitialPassword` must return the
+`sessionEpoch` its write left beside `passwordUpdatedAt`. Until they do, no
+session is issued from them, and the log names what is missing. A
+`findUserByEmail` that does not return `sessionEpoch` keeps working: the
+sign-in then judges against the epoch its own account read finds.
 
 A session's `email`, `name` and `image` claims now come from the account the
 sign-in checked, not from the user an `afterAuthenticate` hook returned.

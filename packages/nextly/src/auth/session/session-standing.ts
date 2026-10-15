@@ -164,6 +164,18 @@ export function createSessionStandingCache(options: {
       promise: options
         .read(userId)
         .then(standing => {
+          // Older than the lifetime before it arrived: the row it answers
+          // with may be from before a change that has since passed the
+          // bound, so neither the waiting requests nor the cache take it. A
+          // read that slow is the database failing to answer in time, and is
+          // treated as a failed read.
+          if (now() - startedAt >= ttlMs) {
+            throw NextlyError.serviceUnavailable({
+              logMessage:
+                "session check: the account read took longer than the " +
+                "standing cache's lifetime, so its answer was not used",
+            });
+          }
           if (!entry.superseded && standing?.isActive === true) {
             keep(userId, standing, startedAt);
           }

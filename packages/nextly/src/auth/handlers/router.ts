@@ -251,7 +251,7 @@ export interface AuthRouterDeps {
   ) => Promise<{
     userId: string;
     passwordUpdatedAt: Date | null;
-    sessionEpoch?: number;
+    sessionEpoch: number;
   }>;
   changePassword: (
     userId: string,
