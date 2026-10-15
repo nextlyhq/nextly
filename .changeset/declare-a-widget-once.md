@@ -41,8 +41,8 @@ site's content is synced, it also checks each widget's starting query:
 startup stops over a field missing from a collection the code defines,
 and warns, without stopping, over content the database alone holds.
 
-A declared widget reaches the admin as data only: its data code and its
-query stay on the server, and a card's query is built there from the
-card's stored settings. Widgets contributed in today's shape keep
-working as before; two plugins sharing an id now log a warning, and an
-id shared with a declared widget stops startup.
+Declared widgets are not yet offered on the dashboard: they are checked
+and kept on the server, and appear once core can draw them. Widgets
+contributed in today's shape keep working as before; two plugins sharing
+an id now log a warning, and an id shared with a declared widget stops
+startup.
