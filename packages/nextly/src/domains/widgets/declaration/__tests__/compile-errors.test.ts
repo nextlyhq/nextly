@@ -285,7 +285,7 @@ export const contributed: AnyWidget = w; ${MARK}
       "7d"
     ),
     code: 2739,
-    message: "ExampleDoesNotMatchTheWidgetData",
+    message: "This widget's example is not of the type its data has",
   },
 
   {
@@ -315,6 +315,21 @@ export function Card(props: WidgetProps<typeof w>) { ${MARK}
     ),
     code: 2344,
     message: "does not satisfy the constraint 'AnyWidget'",
+  },
+
+  {
+    name: "a widget's empty test reads its data as the wrong type",
+    ...pair(
+      t =>
+        widget(`  settings: { range: settings.dateRange() },
+  data: async ({ settings }) => ({ days: [settings.range] }),
+  display: { component: "@test/w/admin#Card" },
+  empty: { when: data => { const days: ${t} = data.days; return days.length === 0; } }, ${MARK}`),
+      "string",
+      "readonly string[]"
+    ),
+    code: 2322,
+    message: `Type '("7d" | "30d" | "90d" | "12m")[]' is not assignable to type 'string'`,
   },
 
   // ---- What else the declaration checks where it is written.

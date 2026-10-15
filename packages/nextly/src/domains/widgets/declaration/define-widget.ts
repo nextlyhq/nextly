@@ -148,12 +148,33 @@ export interface WidgetDeclarationInput<
     | WidgetQuerySource<SettingValues<S>, OpFor<Display, Op>>;
   display: Display;
   /**
+   * When the card has nothing to show, and what the frame says then.
+   *
+   * The frame draws every state but ready (loading, empty, no permission,
+   * error), so a card looks the same as every other in each of them; the
+   * component draws only the ready state. "Empty" is the one of those only
+   * the widget can judge from its data, so it says so here, typed by its own
+   * data. A core display already knows (no rows, no groups, no points); a
+   * widget drawn by its own component is never empty unless `when` says so.
+   */
+  empty?: WidgetEmpty<DataFor<Display, Data | QueryAnswer<Op>>>;
+  /**
    * Data the preview page and the scaffold draw the ready state from, of the
    * widget's own data type, so an example that drifts from the data it stands
    * in for fails to compile. How that is checked depends on the display
    * (`ExampleFor`, `CheckedDeclaration`).
    */
   example?: ExampleFor<Display, Example>;
+}
+
+/** How a widget says it is empty, and what its empty state offers. */
+export interface WidgetEmpty<Data> {
+  /** Whether this data is empty. A core display's own rule when absent. */
+  when?: (data: Data) => boolean;
+  /** One line saying why there is nothing, in place of the frame's own. */
+  message?: string;
+  /** The empty state's single action, such as "Add a product". */
+  action?: { label: string; link: string };
 }
 
 /**
@@ -193,17 +214,6 @@ type ReadonlyDeep<T> = T extends object
   : T;
 
 /**
- * Stands in for a component widget whose example is not of its data type.
- *
- * Not assignable to `AnyWidget`, so the widget cannot be contributed, put in
- * the site config or read by `WidgetProps`, and each of those errors names
- * this type, which names the fault.
- */
-export interface ExampleDoesNotMatchTheWidgetData<Example, Data> {
-  readonly exampleDoesNotMatchTheWidgetData: { example: Example; data: Data };
-}
-
-/**
  * The declaration, once its example has been checked against its data.
  *
  * 🔴 Checked HERE, in the return type, for a component widget. Its data type
@@ -213,7 +223,7 @@ export interface ExampleDoesNotMatchTheWidgetData<Example, Data> {
  * compiler settle the data type before the function was read, as `never`.
  * The return type is worked out once everything is inferred, so the check sees
  * the real data type; the cost is that the error appears where the widget is
- * used rather than at the example.
+ * used rather than at the example, so the error is made to say what is wrong.
  */
 type CheckedDeclaration<
   Id extends string,
@@ -227,7 +237,18 @@ type CheckedDeclaration<
   ? WidgetDeclaration<Id, Widths, S, Display, Data, Op, Example>
   : [Example] extends [ReadonlyDeep<Data | QueryAnswer<Op>>]
     ? WidgetDeclaration<Id, Widths, S, Display, Data, Op, Example>
-    : ExampleDoesNotMatchTheWidgetData<Example, Data | QueryAnswer<Op>>;
+    : {
+        // Stands in for the declaration, so the widget cannot be contributed,
+        // put in the site config or given a component. Written inline, with
+        // the fault as its one key: the compiler prints an anonymous type by
+        // its shape, so the error where the widget is used opens with the
+        // fault in words and the two types to compare. A named type would
+        // print as its name and type arguments, to be looked up.
+        readonly "This widget's example is not of the type its data has": {
+          example: Example;
+          expected: Data | QueryAnswer<Op>;
+        };
+      };
 
 /** A declared widget, carrying the types its readers need. */
 export type WidgetDeclaration<

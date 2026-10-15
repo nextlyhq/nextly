@@ -135,6 +135,11 @@ expectTypeOf<Parameters<typeof RevenueCard>[0]>().toEqualTypeOf<
   WidgetProps<typeof revenue>
 >();
 
+// The frame's empty test reads the same data the component draws.
+expectTypeOf<
+  Parameters<NonNullable<NonNullable<(typeof revenue)["empty"]>["when"]>>[0]
+>().toEqualTypeOf<WidgetData<typeof revenue>>();
+
 // A component over a query core runs is handed that query's answer, the wire
 // shape for its op.
 expectTypeOf<WidgetData<typeof unpaidCount>>().toEqualTypeOf<

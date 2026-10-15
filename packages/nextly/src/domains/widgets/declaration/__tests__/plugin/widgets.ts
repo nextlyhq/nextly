@@ -83,6 +83,11 @@ export const revenue = defineWidget({
     points: [{ day: "2026-10-01", total: settings.net ? 90 : 100 }],
   }),
   display: { component: "@acme/nextly-plugin-shop/admin#RevenueCard" },
+  empty: {
+    when: data => data.points.length === 0,
+    message: "No takings in this range",
+    action: { label: "Add a product", link: "collections/products/create" },
+  },
   example: { currency: "eur", points: [{ day: "2026-10-01", total: 12 }] },
 });
 
