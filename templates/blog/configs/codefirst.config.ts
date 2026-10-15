@@ -4,7 +4,8 @@
 //
 // Imports are relative (`./src/...`) rather than using the `@/*` alias:
 // Nextly's CLI loads this file through plain Node.js module resolution
-// when running `nextly dev`, and Node does not honor tsconfig path
+// when running `nextly migrate`, `nextly db:sync` or `nextly generate:types`,
+// and Node does not honor tsconfig path
 // aliases. Using `./src/...` works because the CLI copies this file
 // to `nextly.config.ts` at the scaffolded project root - `src/` lives
 // right next to it there.
