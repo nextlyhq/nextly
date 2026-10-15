@@ -50,14 +50,14 @@ bun add @nextlyhq/adapter-sqlite better-sqlite3
 
 ## Configuration
 
-Set `DB_DIALECT=sqlite` and `DATABASE_URL` with a `file:` prefix. The CLI (`nextly migrate`, `nextly db:sync`, `nextly generate:types`) refuses to run without `DATABASE_URL`, on SQLite too.
+Set `DB_DIALECT=sqlite` and `DATABASE_URL` with a `file:` prefix. The CLI commands that use the database (`nextly migrate`, `nextly db:sync` and the other `migrate:*` commands) refuse to run without `DATABASE_URL`, on SQLite too.
 
 ```bash title=".env"
 DB_DIALECT=sqlite
 DATABASE_URL=file:./data/nextly.db
 ```
 
-If `DATABASE_URL` is unset, the running app falls back to `file:./data/nextly.db` and logs a warning in development, but the CLI does not, so set it. The adapter creates the file automatically if it does not exist.
+If `DATABASE_URL` is unset, the running app falls back to `file:./data/nextly.db` and logs a warning in development, but those CLI commands do not, so set it. The adapter creates the file automatically if it does not exist.
 
 ### Programmatic usage
 

@@ -236,7 +236,7 @@ contributes: {
       {
         id: "reports-summary",
         title: "Published reports",
-        archetype: "metric",                 // metric | table | list | text | actions
+        archetype: "metric",                 // metric | list | table | stats | bars | timeseries | actions | text
         defaultSize: "sm",                   // sm | md | lg | xl | full
         query: { source: "collection:reports", op: "count" },
         requiredPermission: "read-reports",  // client-gated
@@ -247,9 +247,11 @@ contributes: {
 }
 ```
 
-`text` and `actions` are drawn without data, so they take no `query` — declaring one is
-a type error. Every other archetype requires it. A `text` widget declares its prose as
-`content` (markdown) instead.
+`text`, `actions` and `stats` take no top-level `query` — declaring one is a type error,
+and boot refuses it. Every other archetype requires it. A `text` widget declares its
+prose as `content` (markdown) instead. A `stats` widget declares `cells`, one per number,
+each with its own count query and an optional link:
+`cells: [{ key: "open", label: "Open", query: { source: "collection:reports", op: "count" } }]`.
 
 ### Where a card sits
 

@@ -17,8 +17,8 @@ Next-only and lives in `nextly/runtime`. Nothing here forces `next` onto a
 headless or admin-only deployment — every `next` import is type-only and
 `next/navigation` is resolved lazily.
 
-**Which Nextly they read through.** Every helper on this page takes a `nextly`
-option. Without it, a helper uses the instance already started in this process
+**Which Nextly they read through.** `resolveContent`, `createContentRoute` and
+`createPublicContentRoute` read content, and take a `nextly` option. Without it, they use the instance already started in this process
 and throws "Nextly services not initialized" if there is none, which is the case
 on a new project's first public request. Pass the instance from
 `await getNextly({ config })` (`getNextly` from `nextly`, `config` from your

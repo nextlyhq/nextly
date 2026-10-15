@@ -136,7 +136,7 @@ pnpm add @nextlyhq/adapter-sqlite better-sqlite3
 </Tab>
 </Tabs>
 
-On pnpm 10 or later, allow the native packages to run their build scripts, or `better-sqlite3` has no compiled binding and the app fails at boot. Add to `pnpm-workspace.yaml` (create it with `packages: []` if you have none):
+On pnpm 10 or later, allow the native packages to run their build scripts, or `better-sqlite3` has no compiled binding and the app fails at boot. On pnpm 10.6 or later, add to `pnpm-workspace.yaml` (create it with `packages: []` if you have none):
 
 ```yaml title="pnpm-workspace.yaml"
 allowBuilds:
@@ -149,7 +149,7 @@ onlyBuiltDependencies:
   - sharp
 ```
 
-pnpm 11 reads `allowBuilds`, pnpm 10.6+ reads `onlyBuiltDependencies`; npm, yarn and bun need neither.
+pnpm 11 reads `allowBuilds`, pnpm 10.6+ reads `onlyBuiltDependencies`. On pnpm 10.0 to 10.5, put the same list in `package.json` instead, as `"pnpm": { "onlyBuiltDependencies": ["better-sqlite3", "esbuild", "sharp"] }`, or upgrade pnpm. npm, yarn and bun need none of this.
 
 Cloud storage is optional -- Nextly's default is local disk under `./public/uploads/`. Install a storage adapter only if you need one:
 
