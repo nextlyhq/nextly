@@ -302,6 +302,23 @@ describe("the fake limiter's guards", () => {
     ).rejects.toThrow(/reserve did not admit/);
   });
 
+  it("gives back in the run the caller's reservation names, so stale runs of the right length give nothing back, as core does", async () => {
+    const core = limiter();
+    const reservation = admitted(
+      await core.limits.reserve([{ rule: "tries", key: "a" }])
+    );
+    admitted(await core.limits.reserve([{ rule: "tries", key: "a" }]));
+
+    await core.limits.release({ ...reservation, epochs: ["a-stale-run"] });
+    expect(
+      (await core.limits.reserve([{ rule: "tries", key: "a" }])).status
+    ).toBe("refused");
+    await core.limits.release(reservation);
+    expect(
+      (await core.limits.reserve([{ rule: "tries", key: "a" }])).status
+    ).toBe("admitted");
+  });
+
   it("reads a client's key in core's forms", () => {
     const { limits } = limiter();
     const from = (address?: string) =>
