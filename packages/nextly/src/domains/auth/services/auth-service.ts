@@ -82,11 +82,16 @@ interface AcceptInviteResult {
  */
 interface TransactionLike extends PasswordWriteTx {
   insert(table: unknown): { values(data: unknown): Promise<unknown> };
-  // Only the password-version read back after a forced change selects.
-  select(fields: { passwordUpdatedAt: unknown }): {
+  // Only the read-back after a forced change selects: the password version
+  // and the session epoch the write left.
+  select(fields: { passwordUpdatedAt: unknown; sessionEpoch: unknown }): {
     from(table: unknown): {
       where(condition: unknown): {
-        limit(count: number): Promise<{ passwordUpdatedAt: Date | null }[]>;
+        limit(
+          count: number
+        ): Promise<
+          { passwordUpdatedAt: Date | null; sessionEpoch: number | null }[]
+        >;
       };
     };
   };
