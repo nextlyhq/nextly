@@ -36,6 +36,8 @@ interface BackoffState {
 /** What one counted entry added, so a release can take it back once. */
 interface Counted {
   readonly target: LimitTarget;
+  /** The run of the entry it was counted in; a release gives back to that run only. */
+  readonly epoch: string;
   /** The window's timestamp it added; absent for a backoff rule. */
   readonly at?: number;
   /**
@@ -59,7 +61,14 @@ export class FakeLimiter implements PluginLimiter {
   readonly #windows = new Map<string, number[]>();
   readonly #backoffs = new Map<string, BackoffState>();
   readonly #reservations = new Map<string, Counted[]>();
+  /**
+   * Each entry's current run, as core keeps it: a reset, or a backoff
+   * forgotten once idle, starts a new one, and a count taken in an earlier
+   * run is never given back to it.
+   */
+  readonly #epochs = new Map<string, string>();
   #nextId = 1;
+  #nextEpoch = 1;
   readonly store: { shared: boolean; singleInstance: boolean };
   /** False: the store does not answer, and every call says `unavailable`. */
   available = true;
@@ -109,6 +118,11 @@ export class FakeLimiter implements PluginLimiter {
 
       return { rule: entry.rule, key: entry.key, hadRoom, counted: isCounted };
     });
+    // Per entry, the run it was counted in, empty where it was not counted.
+    const countedEpochs = [...counted];
+    const epochs = entryVerdicts.map(verdict =>
+      verdict.counted ? (countedEpochs.shift()?.epoch ?? "") : ""
+    );
 
     if (!admitted) {
       const refusing = entries.filter(
@@ -130,7 +144,7 @@ export class FakeLimiter implements PluginLimiter {
     return {
       status: "admitted",
       // When it was counted, on the store's clock, as core records it.
-      reservation: { id, at: now, entries: entryVerdicts },
+      reservation: { id, at: now, entries: entryVerdicts, epochs },
     };
   }
 
@@ -139,14 +153,9 @@ export class FakeLimiter implements PluginLimiter {
     options: { rules?: readonly string[] } = {}
   ): Promise<LimitOutcome> {
     await roundTrip();
+    assertAdmitted(reservation, options.rules);
     this.#transactions.assertNone("limits.release");
     if (!this.available) return { status: "unavailable" };
-    // Core refuses a reservation `reserve` did not admit, which carries no
-    // time it was counted at.
-    if (!Number.isFinite(reservation.at))
-      throw new FakeCoreMisuse(
-        "limits.release was given a reservation that reserve did not admit"
-      );
     for (const counted of this.#reservations.get(reservation.id) ?? []) {
       const named = options.rules?.includes(counted.target.rule) ?? true;
       if (!counted.released && named) this.#giveBack(counted);
@@ -155,9 +164,10 @@ export class FakeLimiter implements PluginLimiter {
     return { status: "done" };
   }
 
-  /** Takes one counted entry's count back, once. */
+  /** Takes one counted entry's count back, once, and only in the run it was counted in. */
   #giveBack(counted: Counted): void {
     counted.released = true;
+    if (this.#epochs.get(slot(counted.target)) !== counted.epoch) return;
     if (counted.at !== undefined) {
       const times = this.#windows.get(slot(counted.target)) ?? [];
       const index = times.indexOf(counted.at);
@@ -187,6 +197,7 @@ export class FakeLimiter implements PluginLimiter {
     if (!this.available) return { status: "unavailable" };
     this.#windows.delete(slot(target));
     this.#backoffs.delete(slot(target));
+    this.#epochs.delete(slot(target));
 
     return { status: "done" };
   }
@@ -274,12 +285,14 @@ export class FakeLimiter implements PluginLimiter {
 
   #count(target: LimitTarget, hadRoom: boolean, now: number): Counted {
     const rule = this.#rule(target);
+    const epoch = this.#epoch(target, rule, now);
     if (rule.type === "window") {
       const times = this.#windows.get(slot(target)) ?? [];
       times.push(now);
       this.#windows.set(slot(target), times);
       return {
         target: { rule: target.rule, key: target.key },
+        epoch,
         at: now,
         released: false,
       };
@@ -304,9 +317,25 @@ export class FakeLimiter implements PluginLimiter {
 
     return {
       target: { rule: target.rule, key: target.key },
+      epoch,
       ...(setWait === undefined ? {} : { setWait }),
       released: false,
     };
+  }
+
+  /**
+   * The entry's current run, begun anew where it has none: after a reset,
+   * or once a backoff is forgotten. Read before the count, so a count that
+   * finds its backoff forgotten counts in the new run.
+   */
+  #epoch(target: LimitTarget, rule: LimitRule, now: number): string {
+    if (rule.type === "backoff") this.#backoff(target, rule, now);
+    const known = this.#epochs.get(slot(target));
+    if (known !== undefined) return known;
+    const begun = `fake-epoch-${this.#nextEpoch++}`;
+    this.#epochs.set(slot(target), begun);
+
+    return begun;
   }
 
   /** A backoff key's state, forgotten once idle past `forgetAfterMs` with no wait in force. */
@@ -318,11 +347,36 @@ export class FakeLimiter implements PluginLimiter {
       (state.waitUntil === Infinity || now >= state.waitUntil);
     if (state === undefined || forgotten) {
       this.#backoffs.delete(slot(target));
+      if (forgotten) this.#epochs.delete(slot(target));
       return { count: 0, waitUntil: 0, lastCountedAt: now, counted: 0 };
     }
 
     return state;
   }
+}
+
+/**
+ * Refuses, as core does before it asks the store anything, a reservation
+ * `reserve` did not admit: one without a run per entry, or, when it has a
+ * count to give back, without the time it was counted at. A store that does
+ * not answer never hides the misuse.
+ */
+function assertAdmitted(
+  reservation: AdmittedReservation,
+  rules: readonly string[] | undefined
+): void {
+  const misuse = new FakeCoreMisuse(
+    "limits.release was given a reservation that reserve did not admit"
+  );
+  if (
+    !Array.isArray(reservation.epochs) ||
+    reservation.epochs.length !== reservation.entries.length
+  )
+    throw misuse;
+  const giving = reservation.entries.some(
+    entry => entry.counted && (rules?.includes(entry.rule) ?? true)
+  );
+  if (giving && !Number.isFinite(reservation.at)) throw misuse;
 }
 
 function slot(target: LimitTarget): string {
