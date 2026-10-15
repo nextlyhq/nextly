@@ -46,13 +46,30 @@ const elementOwners: OwnerRecord[] = [
     elementKind: "column",
     elementName: "status",
   }),
+  // An index and a foreign key the plugin contributed to the app's table.
+  record({
+    tableName: "app_notes",
+    elementKind: "index",
+    elementName: "idx_status",
+  }),
+  record({
+    tableName: "app_notes",
+    elementKind: "fk",
+    elementName: "fk_owner",
+  }),
+  record({
+    tableName: "app_notes",
+    elementKind: "check",
+    elementName: "chk_status",
+  }),
 ];
 
 function guard(
   statements: string[],
   stream: string,
   dialect: SupportedDialect = "postgresql",
-  ownedElements?: Record<string, ContributedElements>
+  ownedElements?: Record<string, ContributedElements>,
+  columnOverrides?: Array<{ table: string; column: string }>
 ): void {
   assertNoForeignDrops({
     statements,
@@ -63,6 +80,7 @@ function guard(
     dialect,
     source: "0010_under_test",
     liveTables: new Set([...owners.keys(), "users"]),
+    columnOverrides,
   });
 }
 
@@ -130,5 +148,81 @@ describe("an in-place change to a column another owner holds", () => {
       )
     );
     expect(log).toMatchObject({ table: "fx__notes", belongsTo: "plugin:fx" });
+  });
+});
+
+describe("an in-place change to an index or constraint another owner holds", () => {
+  it.each<[SupportedDialect, string]>([
+    [
+      "postgresql",
+      "ALTER TABLE app_notes ALTER CONSTRAINT fk_owner DEFERRABLE",
+    ],
+    ["postgresql", "ALTER INDEX idx_status SET TABLESPACE other"],
+    ["postgresql", "ALTER INDEX IF EXISTS idx_status SET (fillfactor = 70)"],
+    ["mysql", "ALTER TABLE app_notes ALTER INDEX idx_status INVISIBLE"],
+    ["mysql", "ALTER TABLE app_notes ALTER CHECK chk_status NOT ENFORCED"],
+  ])("is refused to the app's migration on %s: %s", (dialect, statement) => {
+    expect(refusal(() => guard([statement], "app", dialect))).toMatchObject({
+      belongsTo: "plugin:fx",
+    });
+  });
+
+  it.each<[SupportedDialect, string]>([
+    [
+      "postgresql",
+      "ALTER TABLE app_notes ALTER CONSTRAINT fk_owner DEFERRABLE",
+    ],
+    ["postgresql", "ALTER INDEX idx_status SET TABLESPACE other"],
+    ["mysql", "ALTER TABLE app_notes ALTER INDEX idx_status INVISIBLE"],
+  ])("is the contributing plugin's to change on %s: %s", (dialect, sql) => {
+    expect(() => guard([sql], "plugin:fx", dialect)).not.toThrow();
+  });
+
+  it.each<[SupportedDialect, string]>([
+    ["postgresql", "ALTER INDEX app_idx SET TABLESPACE other"],
+    ["mysql", "ALTER TABLE app_notes ALTER INDEX app_idx INVISIBLE"],
+  ])("leaves the app's own index alone on %s: %s", (dialect, sql) => {
+    expect(() => guard([sql], "app", dialect)).not.toThrow();
+  });
+});
+
+describe("the app's override of a plugin column's storage", () => {
+  const override = [{ table: "app_notes", column: "status" }];
+
+  it("lets the app change the overridden column in place", () => {
+    expect(() =>
+      guard(
+        ["ALTER TABLE app_notes ALTER COLUMN status TYPE varchar(40)"],
+        "app",
+        "postgresql",
+        undefined,
+        override
+      )
+    ).not.toThrow();
+  });
+
+  it("still refuses a drop of the overridden column", () => {
+    expect(() =>
+      guard(
+        ["ALTER TABLE app_notes DROP COLUMN status"],
+        "app",
+        "postgresql",
+        undefined,
+        override
+      )
+    ).toThrow();
+  });
+
+  it("still refuses an in-place change to a column the override does not name", () => {
+    const log = refusal(() =>
+      guard(
+        ["ALTER TABLE fx__notes ALTER COLUMN body TYPE int"],
+        "app",
+        "postgresql",
+        undefined,
+        override
+      )
+    );
+    expect(log).toMatchObject({ table: "fx__notes", column: "body" });
   });
 });
