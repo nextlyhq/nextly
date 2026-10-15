@@ -29,6 +29,11 @@ function makeDeps() {
     isActive: true,
     lockedUntil: null,
     emailVerified: new Date("2026-01-01T00:00:00Z"),
+    // The identity the session is signed with comes from this read.
+    email: "a@b.c",
+    name: null,
+    image: null,
+    sessionEpoch: 0,
   });
   // The locked re-read answers what the plain read answers, including what a
   // case installs on it.

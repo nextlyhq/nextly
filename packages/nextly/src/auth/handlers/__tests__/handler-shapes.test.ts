@@ -24,6 +24,15 @@
 import { jwtVerify } from "jose";
 import { describe, expect, it, vi } from "vitest";
 
+// These tests read a session with no database behind it. Whether the account
+// may still use its token is the session check's own question, covered by
+// `auth/session/__tests__/session-standing.test.ts` and, on each dialect,
+// `session-cutoff.integration.test.ts`; here every account may.
+vi.mock("../../session/session-standing", async importOriginal => ({
+  ...(await importOriginal<typeof import("../../session/session-standing")>()),
+  sessionTokenIsCurrent: async () => true,
+}));
+
 import { hashPassword } from "../../password";
 import { signAccessToken } from "../../jwt/sign";
 import { setCsrfCookie } from "../../csrf/csrf-cookie";
@@ -63,6 +72,13 @@ const usableAccount = async (userId: string) => ({
   isActive: true,
   lockedUntil: null,
   emailVerified: new Date("2026-01-01T00:00:00Z"),
+  passwordUpdatedAt: null,
+  // The identity the session is signed with comes from this read, so it is
+  // the fixture user's.
+  email: "a@example.com",
+  name: "A",
+  image: null,
+  sessionEpoch: 0,
 });
 const usableAccountGate = {
   requireEmailVerification: true,
