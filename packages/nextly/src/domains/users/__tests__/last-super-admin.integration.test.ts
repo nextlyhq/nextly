@@ -56,18 +56,43 @@ vi.mock("../../webhooks/record-mutation-event", async importOriginal => {
   };
 });
 
-import { getDialectTables } from "../../../database/index";
-import { seedPermissions } from "../../../database/seeders";
 import {
-  createTestNextly,
   getConfiguredTestDialects,
   type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
-import { createDynamicHandlers } from "../../../routeHandler";
-import { isSuperAdminOrThrow } from "../../../services/lib/permissions";
-import { resetEpochForTests } from "../../../services/lib/rbac-epoch";
-import { sanitizeConfig } from "../../../shared/types/config";
+
+/**
+ * The modules a case drives, imported afresh for each instance.
+ *
+ * The REST dispatcher is cached at module level for the life of a process and
+ * keeps the adapter it was first built on, which `destroy()` disconnects: a
+ * later instance reached through REST would find that adapter closed. A fresh
+ * module graph per instance gives each its own dispatcher, as each process has
+ * its own. Everything below that touches the instance comes from here, so no
+ * case mixes one graph's tables or caches with another's.
+ */
+async function loadModules() {
+  vi.resetModules();
+  const harness = await import("../../../plugins/test-nextly");
+  const routes = await import("../../../routeHandler");
+  const database = await import("../../../database/index");
+  const seeders = await import("../../../database/seeders");
+  const permissions = await import("../../../services/lib/permissions");
+  const epoch = await import("../../../services/lib/rbac-epoch");
+  const config = await import("../../../shared/types/config");
+  return {
+    createTestNextly: harness.createTestNextly,
+    createDynamicHandlers: routes.createDynamicHandlers,
+    getDialectTables: database.getDialectTables,
+    seedPermissions: seeders.seedPermissions,
+    isSuperAdminOrThrow: permissions.isSuperAdminOrThrow,
+    resetEpochForTests: epoch.resetEpochForTests,
+    sanitizeConfig: config.sanitizeConfig,
+  };
+}
+
+let m: Awaited<ReturnType<typeof loadModules>>;
 
 const PASSWORD = "Str0ng-P@ssw0rd!";
 const REFUSAL = /make another user super-admin first/i;
@@ -140,7 +165,7 @@ async function makeUser(email: string): Promise<string> {
 
 async function grant(userId: string, roleId: string): Promise<void> {
   await raw()
-    .insert(getDialectTables().userRoles)
+    .insert(m.getDialectTables().userRoles)
     .values({
       id: `${userId}-${roleId}`,
       userId,
@@ -151,10 +176,11 @@ async function grant(userId: string, roleId: string): Promise<void> {
 }
 
 async function boot(on: TestDialect): Promise<Install> {
-  resetEpochForTests();
+  m = await loadModules();
+  m.resetEpochForTests();
   dialect = on;
-  handle = await createTestNextly(on === "sqlite" ? {} : { dialect: on });
-  const tables = getDialectTables();
+  handle = await m.createTestNextly(on === "sqlite" ? {} : { dialect: on });
+  const tables = m.getDialectTables();
 
   const first = await makeUser("first@example.com");
   const [superAdmin] = await raw()
@@ -168,7 +194,7 @@ async function boot(on: TestDialect): Promise<Install> {
   // super-admin itself, so it is never one of the accounts being counted.
   // The core permissions are seeded by first-run setup, which this instance
   // never ran, so they are seeded here as setup seeds them.
-  await seedPermissions(handle.adapter, { silent: true });
+  await m.seedPermissions(handle.adapter, { silent: true });
   const slugs = ["read-users", "update-users", "delete-users"];
   const seeded = await raw()
     .select({ id: tables.permissions.id, slug: tables.permissions.slug })
@@ -231,8 +257,8 @@ async function rest(
   path: string[],
   body?: Record<string, unknown>
 ): Promise<Response> {
-  const handlers = createDynamicHandlers({
-    config: sanitizeConfig({ collections: [] }),
+  const handlers = m.createDynamicHandlers({
+    config: m.sanitizeConfig({ collections: [] }),
   });
   const req = new Request(`http://localhost/api/${path.join("/")}`, {
     method,
@@ -271,13 +297,13 @@ async function expectDirectRefused(work: Promise<unknown>): Promise<void> {
 
 /** Whether the account exists, is active, and is a super-admin, read fresh. */
 async function activeSuperAdmin(userId: string): Promise<boolean> {
-  const { users } = getDialectTables();
+  const { users } = m.getDialectTables();
   const [row] = await raw()
     .select({ isActive: users.isActive })
     .from(users)
     .where(eq(users.id, userId));
   if (!row || !row.isActive) return false;
-  return isSuperAdminOrThrow(userId, handle!.adapter.getDrizzle());
+  return m.isSuperAdminOrThrow(userId, handle!.adapter.getDrizzle());
 }
 
 /**
@@ -527,7 +553,7 @@ describe.each(getConfiguredTestDialects())(
             permissionIds: [install.readUsers],
           },
         });
-        await raw().insert(getDialectTables().roleInherits).values({
+        await raw().insert(m.getDialectTables().roleInherits).values({
           id: `owner-inherits-super-admin`,
           parentRoleId: owner.item.id,
           childRoleId: install.superAdminRole,
