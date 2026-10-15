@@ -141,7 +141,7 @@ The admin panel lives here as a standard Next.js route. The catch-all `[[...para
 - **`page.tsx`** -- Renders the admin panel UI. This is a client component that imports `RootLayout`, `QueryProvider`, and `ErrorBoundary` from `@nextlyhq/admin`.
 - **`layout.tsx`** -- Reads `admin.branding` from `nextly.config.ts` and injects the generated CSS so logos and colors apply on every admin page.
 - **`api/[[...params]]/route.ts`** -- The admin API. Handles all CRUD operations for collections, singles, users, roles and permissions.
-- **`api/media/[[...path]]/route.ts`** -- The media library's API. Every operation is checked against the caller's media permissions.
+- **`api/media/[[...path]]/route.ts`** -- The media library's API. Every operation is checked against the caller's media permissions, except fetching the raw bytes of a publicly servable file such as a web font, which a browser does without a session.
 
 ### `src/app/api/`
 
@@ -161,14 +161,14 @@ pnpm types:generate
 
 ### Schema files (Visual Schema Builder)
 
-Collections you create through the Visual Schema Builder are stored in the database, not as files in your project. To move one into code, run `nextly db:sync --promote <slug>`. Code-first collections live in `nextly.config.ts` (or wherever you import them from); the two approaches coexist freely.
+Collections you create through the Visual Schema Builder are stored in the database, and no TypeScript file is generated for them. In development the admin also writes every change to `ui-schema.json` (the file `db.uiSchemaFile` names), which `nextly migrate:create` reads: commit it with the migration (see [Production migrations](/docs/guides/production-migrations#commit-ui-schemajson)). To move a collection into code, run `nextly db:sync --promote <slug>`. Code-first collections live in `nextly.config.ts` (or wherever you import them from); the two approaches coexist freely.
 
 ## Code-First vs Visual Schema Builder: Where Content Is Defined
 
 | Approach | Where collections are defined | Schema location |
 | --- | --- | --- |
 | **Code-First** | `nextly.config.ts` (or files you import from it) | Auto-synced on save in development; in production, a migration you create with `nextly migrate:create` and apply with `nextly migrate` |
-| **Visual Schema Builder** | Admin panel at `/admin/builder/collections` | Stored in the database |
+| **Visual Schema Builder** | Admin panel at `/admin/builder/collections` | Stored in the database, and written to `ui-schema.json` in development for `migrate:create` |
 
 Both approaches produce the same result: database tables, admin UI, REST endpoints, and Direct API access. You can mix them -- define some collections in config and create others through the Visual Schema Builder.
 
