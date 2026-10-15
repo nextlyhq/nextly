@@ -115,6 +115,45 @@ export function serverOnlyKind(specifier: string): string | null {
   return null;
 }
 
+/**
+ * The third-party packages nextly's client-safe entries may reach, each reviewed as safe in a
+ * browser.
+ *
+ * 🔴 The walk stops at a third-party package: it cannot read what a published package imports in
+ * turn, and walking into `node_modules` would read the Node build where a bundler takes the
+ * `browser` one. So the boundary for those entries is this list. A package reached that is not on
+ * it fails the run until someone reviews it and adds it with the reason; a package on it that is
+ * no longer reached fails too, so the list never vouches for more than is used. Reviewed
+ * 2026-10-15 against the installed versions:
+ */
+const REVIEWED_BROWSER_PACKAGES: readonly string[] = [
+  // 2.3.1, reached through `@nextlyhq/blocks-engine` as `css-tree/parser` and `css-tree/walker`.
+  // Those subpaths import no package and do not reach `lib/data.js` or `lib/version.js`, the only
+  // files that use Node's `module`, which its `browser` field swaps for prebuilt `dist/` files.
+  "css-tree",
+  // 4.0.5, reached through `@nextlyhq/blocks-engine`. It imports no Node built-in; it reads
+  // `process.platform` only behind a `typeof process` guard.
+  "picomatch",
+  // Validation with no runtime dependencies, written to run in browsers.
+  "zod",
+];
+
+/**
+ * How the packages a walk reached differ from a reviewed list: reached but not listed, and listed
+ * but not reached.
+ */
+export function packagesOffList(
+  result: ClosureResult,
+  reviewed: readonly string[]
+): { unreviewed: string[]; unused: string[] } {
+  return {
+    unreviewed: [...result.packages]
+      .filter(name => !reviewed.includes(name))
+      .sort(),
+    unused: reviewed.filter(name => !result.packages.has(name)),
+  };
+}
+
 const SOURCE_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts"];
 
 interface Io {
@@ -276,6 +315,20 @@ export interface ClosureResult {
   readonly visited: Set<string>;
   readonly violations: { package: string; kind: string; chain: string[] }[];
   readonly unresolved: { from: string; specifier: string }[];
+  /**
+   * The third-party packages reached, by name. The walk stops at each one, so what a package
+   * imports in turn is not seen here; a walk that must vouch for those holds this set to a list
+   * of packages reviewed as safe for its kind of bundle.
+   */
+  readonly packages: Set<string>;
+}
+
+/** The package a bare specifier belongs to: `@scope/name` or `name`, without a subpath. */
+export function packageNameOf(specifier: string): string {
+  const segments = specifier.split("/");
+  return specifier.startsWith("@")
+    ? segments.slice(0, 2).join("/")
+    : segments[0];
 }
 
 /**
@@ -293,6 +346,7 @@ export function walkClientClosure(
   const visited = new Set<string>();
   const unresolved: { from: string; specifier: string }[] = [];
   const violations: { package: string; kind: string; chain: string[] }[] = [];
+  const packages = new Set<string>();
 
   const chainTo = (file: string): string[] => {
     const chain: string[] = [];
@@ -318,6 +372,8 @@ export function walkClientClosure(
       const kind = serverOnlyKind(next.name);
       if (kind !== null) {
         violations.push({ package: next.name, kind, chain: chainTo(file) });
+      } else {
+        packages.add(packageNameOf(next.name));
       }
       return null;
     }
@@ -348,7 +404,7 @@ export function walkClientClosure(
     walk(entry);
   }
 
-  return { visited, violations, unresolved };
+  return { visited, violations, unresolved, packages };
 }
 
 /**
@@ -561,6 +617,13 @@ describe("what nextly's client-safe entries can reach", () => {
   it("reaches no server-only code", () => {
     expect(describeViolations(result)).toEqual([]);
   });
+
+  it("reaches only third-party packages reviewed as safe for a browser", () => {
+    expect(packagesOffList(result, REVIEWED_BROWSER_PACKAGES)).toEqual({
+      unreviewed: [],
+      unused: [],
+    });
+  });
 });
 
 /**
@@ -696,6 +759,33 @@ describe("the rule can fail", () => {
     expect(() => readClientEntries("const entries = [];")).toThrow(
       /array of path strings/
     );
+  });
+
+  it("names a third-party package no one has reviewed, and a listed one no longer reached", () => {
+    // The case the list exists for: a package whose own imports the walk cannot see.
+    const { io, resolve } = build({
+      "/repo/packages/nextly/src/config.ts":
+        'import { pick } from "leaky-lib/sub";\nimport { z } from "zod";\nexport { pick, z };',
+    });
+    const result = walkClientClosure(
+      ["/repo/packages/nextly/src/config.ts"],
+      resolve,
+      io
+    );
+    expect(result.violations).toEqual([]);
+    expect(packagesOffList(result, ["zod", "gone"])).toEqual({
+      unreviewed: ["leaky-lib"],
+      unused: ["gone"],
+    });
+    expect(packagesOffList(result, ["zod", "leaky-lib"])).toEqual({
+      unreviewed: [],
+      unused: [],
+    });
+  });
+
+  it("names a scoped package without its subpath", () => {
+    expect(packageNameOf("@scope/pkg/deep/path")).toBe("@scope/pkg");
+    expect(packageNameOf("pkg/deep")).toBe("pkg");
   });
 
   it("passes an entry whose closure is all import-free leaves", () => {
