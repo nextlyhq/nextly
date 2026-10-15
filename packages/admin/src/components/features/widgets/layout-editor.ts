@@ -397,6 +397,34 @@ function comparable(
 }
 
 /**
+ * The arrangement a save may carry: as it is while it fits the endpoint's
+ * submission limit, otherwise less its REMOVED cards, latest first, until it
+ * does.
+ *
+ * A stored arrangement can hold more cards than one save may carry: cards
+ * kept while a reader could not see them come back when access returns.
+ * Remove keeps a card (its width and settings, for Undo and for adding it
+ * back), so without this such a reader could never save again. Only cards
+ * the reader has taken off the dashboard are shed, so nothing they can see is
+ * lost; if the cards still on the dashboard are themselves too many, the list
+ * is sent as it is and the server says why.
+ */
+export function withinSubmissionLimit(
+  placements: readonly WidgetPlacement[]
+): readonly WidgetPlacement[] {
+  let surplus = placements.length - MAX_PLACEMENTS;
+  if (surplus <= 0) return placements;
+  const shed = new Set<WidgetPlacement>();
+  for (let i = placements.length - 1; i >= 0 && surplus > 0; i -= 1) {
+    if (placements[i].removed) {
+      shed.add(placements[i]);
+      surplus -= 1;
+    }
+  }
+  return placements.filter(placement => !shed.has(placement));
+}
+
+/**
  * Whether the reader has changed anything worth saving.
  *
  * Compared in ORDER, field by field — not by reference, because every editor

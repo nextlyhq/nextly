@@ -519,6 +519,43 @@ function mergeKey(
   return `${successor}\u0000${identity?.(placement) ?? ""}`;
 }
 
+/** A card in the form one retirement turns it into. */
+function retired(
+  placement: WidgetPlacement,
+  retirement: WidgetRetirement
+): WidgetPlacement {
+  const config = retirement.settings
+    ? retirement.settings(placement)
+    : placement.config;
+  const { config: _replaced, ...rest } = placement;
+  return {
+    ...rest,
+    widgetId: retirement.successor,
+    ...(config === undefined ? {} : { config }),
+  };
+}
+
+/**
+ * The retirements a widget goes through, in order, to reach one that is not
+ * retired: more than one when its successor was itself retired later. Stops at
+ * a widget it has already passed, so a map that loops cannot loop the read.
+ */
+function retirementChain(
+  widgetId: string,
+  retirements: WidgetRetirements
+): WidgetRetirement[] {
+  const chain: WidgetRetirement[] = [];
+  const passed = new Set<string>([widgetId]);
+  let next = retirements.get(widgetId);
+  while (next !== undefined) {
+    chain.push(next);
+    if (passed.has(next.successor)) break;
+    passed.add(next.successor);
+    next = retirements.get(next.successor);
+  }
+  return chain;
+}
+
 /** Each card, retired cards in their successor form, with its merge group. */
 function retiringCards(
   placements: readonly WidgetPlacement[],
@@ -531,24 +568,17 @@ function retiringCards(
     identityOf.set(retirement.successor, retirement.identity);
   }
   return placements.map(placement => {
-    const retirement = retirements.get(placement.widgetId);
-    if (retirement !== undefined) {
-      const config = retirement.settings
-        ? retirement.settings(placement)
-        : placement.config;
-      const { config: _dropped, ...rest } = placement;
-      const converted: WidgetPlacement = {
-        ...rest,
-        widgetId: retirement.successor,
-        ...(config === undefined ? {} : { config }),
-      };
+    const chain = retirementChain(placement.widgetId, retirements);
+    if (chain.length > 0) {
+      // Each step in turn, so a widget retired again since reaches the widget
+      // that exists now, with every step's settings mapping applied.
+      const converted = chain.reduce(retired, placement);
+      const last = chain[chain.length - 1];
       return {
         placement: converted,
-        key: mergeKey(retirement.successor, retirement.identity, converted),
+        key: mergeKey(last.successor, last.identity, converted),
         retired: true,
-        ...(retirement.allowedWidths
-          ? { allowedWidths: retirement.allowedWidths }
-          : {}),
+        ...(last.allowedWidths ? { allowedWidths: last.allowedWidths } : {}),
       };
     }
     if (identityOf.has(placement.widgetId)) {

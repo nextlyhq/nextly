@@ -11,6 +11,7 @@ import { describe, expect, it } from "vitest";
 import type { WidgetPlacement } from "@admin/types/dashboard/widgets";
 
 import {
+  withinSubmissionLimit,
   addPlacement,
   drawnPosition,
   hasChanges,
@@ -393,5 +394,50 @@ describe("recording what a reader chose for one card", () => {
     const list = placements("a");
     setPlacementConfig(list, "a", { x: 1 });
     expect(list[0].config).toBeUndefined();
+  });
+});
+
+describe("a save over the submission limit", () => {
+  const at = (i: number, removed = false): WidgetPlacement => ({
+    id: `p${i}`,
+    widgetId: `w/${i}`,
+    width: "full",
+    removed,
+  });
+
+  it("is left alone while it fits", () => {
+    const placements = [at(0), at(1, true)];
+    expect(withinSubmissionLimit(placements)).toBe(placements);
+  });
+
+  it("sheds removed cards, latest first, until it fits", () => {
+    // A row can hold more than one save may carry, when a reader regains
+    // access to cards that accumulated while they could not see them. The
+    // only cards that can go are ones the reader has removed.
+    const placements = Array.from({ length: MAX_PLACEMENTS + 3 }, (_, i) =>
+      at(i, i % 2 === 0)
+    );
+    const kept = withinSubmissionLimit(placements);
+    expect(kept).toHaveLength(MAX_PLACEMENTS);
+    // Every card still on the dashboard is kept, in order.
+    expect(kept.filter(p => !p.removed)).toEqual(
+      placements.filter(p => !p.removed)
+    );
+    // The removed cards that went are the last three of them.
+    const dropped = placements.filter(p => !kept.includes(p)).map(p => p.id);
+    expect(dropped).toEqual([
+      `p${MAX_PLACEMENTS - 2}`,
+      `p${MAX_PLACEMENTS}`,
+      `p${MAX_PLACEMENTS + 2}`,
+    ]);
+  });
+
+  it("keeps every card on the dashboard even when that is still too many", () => {
+    // Nothing removed to shed: the server says why, rather than this
+    // dropping a card the reader can see.
+    const placements = Array.from({ length: MAX_PLACEMENTS + 1 }, (_, i) =>
+      at(i)
+    );
+    expect(withinSubmissionLimit(placements)).toEqual(placements);
   });
 });

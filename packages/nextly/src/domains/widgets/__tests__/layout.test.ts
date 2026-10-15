@@ -502,6 +502,42 @@ describe("retired widgets", () => {
     expect(singFirst.map(p => p.id)).toEqual(["sing"]);
   });
 
+  it("follows a chain of retirements to the widget that exists now", () => {
+    // Retired in one release, its successor retired again in a later one: a
+    // row nobody saved in between still reaches the current widget, once.
+    const chain: WidgetRetirements = new Map([
+      ["core/old", { successor: "core/replacement" }],
+      [
+        "core/replacement",
+        {
+          successor: "core/current",
+          settings: placement => ({ ...placement.config, migrated: true }),
+        },
+      ],
+    ]);
+    const read = readStoredLayout(
+      serializeLayout([card("x", "core/old", { config: { k: 1 } })]),
+      chain
+    );
+    expect(read.placements).toEqual([
+      card("x", "core/current", { config: { k: 1, migrated: true } }),
+    ]);
+    // Reading the result again changes nothing.
+    expect(
+      readStoredLayout(serializeLayout(read.placements), chain).placements
+    ).toEqual(read.placements);
+  });
+
+  it("stops at a cycle in the map rather than looping", () => {
+    const cycle: WidgetRetirements = new Map([
+      ["core/a", { successor: "core/b" }],
+      ["core/b", { successor: "core/a" }],
+    ]);
+    const mapped = applyRetirements([card("x", "core/a")], cycle);
+    expect(mapped).toHaveLength(1);
+    expect(["core/a", "core/b"]).toContain(mapped[0]?.widgetId);
+  });
+
   it("maps the same row the same way every time, and a mapped row maps to itself", () => {
     const raw = columnsRow([
       { id: "a", widgetId: "core/singles", column: 1, order: 0, hidden: true },
