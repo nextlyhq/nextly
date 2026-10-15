@@ -54,16 +54,29 @@ describe("seedApi", () => {
       });
     });
 
-    it("treats 401 as 'endpoint exists' so the card can render auth hint", async () => {
+    // "Available" means THIS person may load sample content, so every answer
+    // but a success fails closed. Each refusal here carries the template
+    // headers a success carries, although the blog template's route sends them
+    // only with a 200: without them, a probe that offered on the headers rather
+    // than on the status would pass these too.
+    it.each([
+      [401, "no session"],
+      [403, "a person the route refuses"],
+      [404, "no sample-content route in this project"],
+      [500, "the route failing"],
+      [503, "the server still starting"],
+    ])("returns { available: false } on %i (%s)", async status => {
       global.fetch = vi.fn(
         async () =>
           new Response(null, {
-            status: 401,
-            headers: { "x-nextly-seed-template": "blog" },
+            status,
+            headers: {
+              "x-nextly-seed-template": "blog",
+              "x-nextly-seed-template-label": "Blog",
+            },
           })
       ) as unknown as typeof fetch;
-      const result = await seedApi.probe();
-      expect(result.available).toBe(true);
+      expect(await seedApi.probe()).toEqual({ available: false });
     });
 
     it("falls back to 'unknown'/'Template' if headers missing", async () => {
