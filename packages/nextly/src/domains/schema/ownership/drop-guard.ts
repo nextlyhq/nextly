@@ -381,6 +381,13 @@ const NOT_COLUMN_ALTERS = new Set([
   "PARTITION",
 ]);
 
+/** The element an `ALTER <word>` clause changes in place, by its word. */
+const ALTERED_ELEMENT_KINDS = new Map<string, TakenElementKind>([
+  ["CONSTRAINT", "constraint"],
+  ["CHECK", "check"],
+  ["INDEX", "index"],
+]);
+
 /**
  * The word after a column's name in an in-place change: `TYPE`, `SET`,
  * `DROP`, `ADD` or `RESTART`, the forms `ALTER COLUMN` takes. A name followed
@@ -679,6 +686,8 @@ class DropReader {
    * name. Judged as a drop or rename is, except that the act is a change.
    */
   readonly alteredColumns: TakenColumn[] = [];
+  /** Indexes and constraints this list changes in place (`changeElement`). */
+  readonly alteredElements: TakenElement[] = [];
   /**
    * Indexes and constraints this list drops or renames away, with the table
    * named by the name it had before the list renamed it.
@@ -832,6 +841,27 @@ class DropReader {
     this.alteredColumns.push({
       table: this.renamedFrom.get(table.name) ?? table.name,
       column,
+    });
+  }
+
+  /**
+   * Records an index or constraint this list changes in place: its deferral,
+   * its enforcement, its visibility or its tablespace. One on a table this
+   * list created is its own, and is not recorded.
+   */
+  changeElement(
+    table: TableRef | undefined,
+    name: string,
+    kind: TakenElementKind
+  ): void {
+    if (table?.local && this.created.has(table.name)) return;
+    this.alteredElements.push({
+      table:
+        table === undefined
+          ? undefined
+          : (this.renamedFrom.get(table.name) ?? table.name),
+      name,
+      kind,
     });
   }
 
@@ -1559,6 +1589,7 @@ class StatementWalk {
       this.readColumnClause(table, clause);
       this.readColumnChangeClause(table, clause);
       this.readElementClause(table, clause);
+      this.readElementChangeClause(table, clause);
       this.readPartitionClause(table, clause);
     }
   }
@@ -1709,6 +1740,14 @@ class StatementWalk {
     if (this.word(at + 1) !== "INDEX") return;
     const index = this.qualifiedName(this.skipIfExists(at + 2));
     if (index === undefined) return;
+    // PostgreSQL's `ALTER INDEX i SET|RESET|ALTER ...` changes it in place.
+    if (
+      this.reader.isPostgres &&
+      ["SET", "RESET", "ALTER"].includes(this.word(index.next) ?? "")
+    ) {
+      this.reader.changeElement(undefined, index.name, "index");
+      return;
+    }
     if (
       this.word(index.next) !== "RENAME" ||
       this.word(index.next + 1) !== "TO"
@@ -1733,6 +1772,25 @@ class StatementWalk {
       );
     }
     this.reader.takeElement(table, element.name, element.kind);
+  }
+
+  /**
+   * One ALTER TABLE clause starting at `at`, for an index or constraint it
+   * changes in place: PostgreSQL's `ALTER CONSTRAINT c`, and MySQL's
+   * `ALTER INDEX|KEY i` (visibility) and `ALTER CHECK c` (enforcement).
+   */
+  private readElementChangeClause(
+    table: TableRef | undefined,
+    at: number
+  ): void {
+    if (this.word(at) !== "ALTER") return;
+    const kind = ALTERED_ELEMENT_KINDS.get(this.word(at + 1) ?? "");
+    if (kind === undefined) return;
+    const element = this.elementNamedAt(at + 2, kind);
+    if (element === null || table === undefined) {
+      this.refuse("an index or constraint change whose names cannot be read");
+    }
+    this.reader.changeElement(table, element.name, element.kind);
   }
 
   /**
@@ -4045,6 +4103,13 @@ export function assertNoForeignDrops(args: {
    * record claims.
    */
   liveIndexTables?: ReadonlyMap<string, string>;
+  /**
+   * Columns whose storage the app overrides (R-20): the app may change these
+   * in place. Only the app's stream is let through, and only for an in-place
+   * change, never a drop or a rename. The caller decides the value family the
+   * change must stay within; this guard does not read the column types.
+   */
+  columnOverrides?: ReadonlyArray<{ table: string; column: string }>;
 }): void {
   const read = readOrRefuse(args);
   const holders = new OwnershipView(args);
@@ -4060,10 +4125,20 @@ export function assertNoForeignDrops(args: {
     });
   }
   for (const { table, column } of read.alteredColumns) {
+    if (overridden(args, table, column)) continue;
     refuseUnlessHeld(holders.column(table, column), {
       ...args,
       table,
       column,
+      act: "change in place",
+    });
+  }
+  for (const element of read.alteredElements) {
+    const table = element.table ?? args.liveIndexTables?.get(element.name);
+    refuseUnlessHeld(holders.element(element, table, args.liveIndexTables), {
+      ...args,
+      table,
+      element: element.name,
       act: "change in place",
     });
   }
@@ -4399,6 +4474,24 @@ function knownNames(
     Object.entries(names).filter(
       (entry): entry is [string, string] => entry[1] !== undefined
     )
+  );
+}
+
+/** Whether the app has recorded its override of this column's storage. */
+function overridden(
+  args: {
+    stream: MigrationStream;
+    columnOverrides?: ReadonlyArray<{ table: string; column: string }>;
+  },
+  table: string,
+  column: string
+): boolean {
+  if (args.stream !== APP_STREAM || args.columnOverrides === undefined) {
+    return false;
+  }
+  const key = columnKey(table, column);
+  return args.columnOverrides.some(
+    override => columnKey(override.table, override.column) === key
   );
 }
 
