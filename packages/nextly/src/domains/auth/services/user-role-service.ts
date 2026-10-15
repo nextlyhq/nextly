@@ -9,6 +9,7 @@ import type {
 } from "@nextly/types/rbac-operations";
 
 import { getDialectTables } from "../../../database";
+import { toDbError } from "../../../database/errors";
 import { NextlyError } from "../../../errors";
 import { BaseService } from "../../../services/base-service";
 import { invalidatePermissionCache } from "../../../services/lib/permissions";
@@ -233,17 +234,13 @@ export class UserRoleService extends BaseService {
         message: "Role unassigned successfully",
       };
     } catch (error) {
-      // A refusal keeps its own status and message: reported as a failed
-      // result, the dispatcher would answer it as a success.
+      // Thrown, not reported as a failed result: the dispatcher answers any
+      // result as a success, so a refusal, or a failed read that rolled the
+      // removal back, would tell the caller the role was taken when it was
+      // not. A refusal keeps its own status and message; a database failure
+      // gets the typed error every other write reports.
       if (NextlyError.is(error)) throw error;
-      return {
-        success: false,
-        statusCode: 500,
-        message:
-          error instanceof Error
-            ? error.message
-            : "Failed to unassign role from user",
-      };
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
     }
   }
 

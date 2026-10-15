@@ -40,8 +40,10 @@ another user super-admin first.
 The refusal is decided inside the removal's own transaction, under a lock
 every removal takes, so two requests sent at once to remove the last two
 super-admins leave one: the admin's bulk delete sends exactly such requests.
-A super-admin is whoever the permission check makes one, so a role that
-inherits `super-admin` counts; a deactivated account does not.
+What is kept is an active account holding the `super-admin` role itself. A
+role built on `super-admin` grants the same authority, but its inheritance can
+be edited away and the role deleted, so an account that is a super-admin only
+through it does not count; nor does a deactivated account.
 
 The refusal of a role removal changes shape: it was `400` with a bare
 `{ "error": "..." }` body, and is now `409` in the standard error envelope.

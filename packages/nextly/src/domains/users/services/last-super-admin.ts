@@ -18,7 +18,7 @@
  * @module domains/users/services/last-super-admin
  */
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
-import { and, eq, inArray, ne, type Column, type SQL } from "drizzle-orm";
+import { and, eq, ne, type Column, type SQL } from "drizzle-orm";
 
 import { NextlyError } from "../../../errors";
 import { roleAssignmentInForce } from "../../../services/lib/role-assignments";
@@ -73,7 +73,6 @@ export interface LastSuperAdminTables {
   users: { id: Column; isActive: Column };
   roles: { id: Column; slug: Column };
   userRoles: { userId: Column; roleId: Column; expiresAt: Column };
-  roleInherits: { parentRoleId: Column; childRoleId: Column };
 }
 
 /**
@@ -93,11 +92,16 @@ export interface LastSuperAdminTables {
  * MySQL's repeatable read a plain read would answer from a snapshot that
  * could predate the first removal's commit.
  *
- * A super-admin is whoever the request-time check makes one: an account
- * holding, in force, `super-admin` or a role built on it. Only an active
- * account counts, since a deactivated one cannot sign in to administer
- * anything. An account that is not an active super-admin, or stays one after
- * the write, is never refused. A failed read refuses, by throwing.
+ * What is kept is an active account holding the `super-admin` role itself, in
+ * force. Not a role built on it: that role's inheritance can be edited away
+ * and the role deleted, neither of which is a write to an account, so nothing
+ * here would be asked. The `super-admin` role is a system role, which can be
+ * neither edited nor deleted, so an account holding it directly stays a
+ * super-admin until a write to that account says otherwise, and every such
+ * write asks this guard. Only an active account counts, since a deactivated
+ * one cannot sign in to administer anything. An account that is not one, or
+ * stays one after the write, is never refused. A failed read refuses, by
+ * throwing.
  *
  * @throws NextlyError(CONFLICT) when the account is the last active
  *   super-admin and the write would remove it.
@@ -109,7 +113,7 @@ export async function refuseRemovingLastSuperAdmin(
   userId: string | number,
   removal: SuperAdminRemoval
 ): Promise<void> {
-  const { roles, roleInherits, users, userRoles } = tables;
+  const { roles, users, userRoles } = tables;
   const target = String(userId);
 
   const roleRow = tx
@@ -125,14 +129,9 @@ export async function refuseRemovingLastSuperAdmin(
         );
   // No role, no super-admin to protect.
   if (!superAdmin) return;
+  const superAdminRoleId = String(superAdmin.id);
 
-  const carriers = await rolesCarryingSuperAdmin(
-    tx,
-    roleInherits,
-    String(superAdmin.id)
-  );
-
-  // The active accounts holding, in force, a role that makes them super-admin.
+  // The active accounts holding, in force, the `super-admin` role itself.
   const now = new Date();
   const holders = (who: SQL) =>
     tx
@@ -142,7 +141,7 @@ export async function refuseRemovingLastSuperAdmin(
       .where(
         and(
           who,
-          inArray(userRoles.roleId, carriers),
+          eq(userRoles.roleId, superAdminRoleId),
           roleAssignmentInForce(userRoles, now),
           eq(users.isActive, true)
         )
@@ -152,7 +151,7 @@ export async function refuseRemovingLastSuperAdmin(
 
   const held = await latest(holders(eq(userRoles.userId, target)));
   if (held.length === 0) return;
-  if (staysSuperAdmin(removal, held, carriers)) return;
+  if (keepsTheRole(removal, superAdminRoleId)) return;
 
   const others = await latest(holders(ne(userRoles.userId, target)).limit(1));
   if (others.length > 0) return;
@@ -169,13 +168,11 @@ export async function refuseRemovingLastSuperAdmin(
 }
 
 /**
- * Whether the account is still a super-admin once the write lands, given the
- * super-admin roles it holds now (`held`).
+ * Whether the account still holds the `super-admin` role once the write lands.
  */
-function staysSuperAdmin(
+function keepsTheRole(
   removal: SuperAdminRemoval,
-  held: Rows,
-  carriers: readonly string[]
+  superAdminRoleId: string
 ): boolean {
   switch (removal.kind) {
     case "delete":
@@ -183,41 +180,8 @@ function staysSuperAdmin(
       return false;
     case "replaceRoles":
       // The replacement assigns exactly these, without an expiry.
-      return removal.roleIds.some(id => carriers.includes(String(id)));
+      return removal.roleIds.some(id => String(id) === superAdminRoleId);
     case "unassignRole":
-      return held.some(row => String(row.roleId) !== removal.roleId);
+      return removal.roleId !== superAdminRoleId;
   }
-}
-
-/**
- * `super-admin` and every role built on it, at any depth.
- *
- * The inverse of the request-time resolution, which follows a held role to
- * the roles it inherits from — recorded as its children, so a role created
- * with base role B writes `role_inherits(parentRoleId = it, childRoleId = B)`.
- * A role makes its holder super-admin when `super-admin` is among those, so
- * the roles that do are found by walking from `super-admin` to its parents.
- */
-async function rolesCarryingSuperAdmin(
-  tx: LastSuperAdminTx,
-  roleInherits: LastSuperAdminTables["roleInherits"],
-  superAdminRoleId: string
-): Promise<string[]> {
-  const carriers = new Set<string>([superAdminRoleId]);
-  let frontier = [superAdminRoleId];
-  while (frontier.length > 0) {
-    const parents = await tx
-      .select({ parentRoleId: roleInherits.parentRoleId })
-      .from(roleInherits)
-      .where(inArray(roleInherits.childRoleId, frontier));
-    frontier = [];
-    for (const row of parents) {
-      const id = String(row.parentRoleId);
-      if (!carriers.has(id)) {
-        carriers.add(id);
-        frontier.push(id);
-      }
-    }
-  }
-  return [...carriers];
 }
