@@ -13,6 +13,7 @@
 "@nextlyhq/eslint-plugin": patch
 "@nextlyhq/module-specifiers": patch
 "nextly": patch
+"@nextlyhq/plugin-accounts": patch
 "@nextlyhq/plugin-commerce": patch
 "@nextlyhq/plugin-form-builder": patch
 "@nextlyhq/plugin-mcp": patch
@@ -31,6 +32,13 @@
 Every plugin now has a recorded install state, a production boot refuses a
 configured plugin that was never installed, and an uninstall that stopped
 part way is finished by running it again.
+
+## Compatibility
+
+Upgrading a production deployment needs one step first: run
+`nextly plugins install <name>` once for each configured plugin on that
+database, before the new version boots. Until then a production boot refuses
+the plugin.
 
 ## Changes in behaviour
 
