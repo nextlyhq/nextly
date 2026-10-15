@@ -366,6 +366,34 @@ const NOT_COLUMN_DROPS = new Set([
  * and `DETACH`, MySQL's `DROP`, `TRUNCATE`, `EXCHANGE`, `DISCARD` and
  * `IMPORT`. Those that reorganise rows without losing them are not here.
  */
+/**
+ * What an `ALTER` clause names when it alters something other than a column:
+ * a constraint, an index, a key, a check or a partition, the first word after
+ * `ALTER` in those spellings.
+ */
+const NOT_COLUMN_ALTERS = new Set([
+  "CONSTRAINT",
+  "INDEX",
+  "KEY",
+  "CHECK",
+  "PRIMARY",
+  "FOREIGN",
+  "PARTITION",
+]);
+
+/**
+ * The word after a column's name in an in-place change: `TYPE`, `SET`,
+ * `DROP`, `ADD` or `RESTART`, the forms `ALTER COLUMN` takes. A name followed
+ * by anything else is not changed in place.
+ */
+const IN_PLACE_CHANGE_WORDS = new Set([
+  "TYPE",
+  "SET",
+  "DROP",
+  "ADD",
+  "RESTART",
+]);
+
 const PARTITION_CHANGES = new Set([
   "ATTACH",
   "DETACH",
@@ -646,6 +674,12 @@ class DropReader {
    */
   readonly columns: TakenColumn[] = [];
   /**
+   * Columns this list changes in place without renaming or dropping them: a
+   * type, a nullability, a default, or a MySQL redefinition under the same
+   * name. Judged as a drop or rename is, except that the act is a change.
+   */
+  readonly alteredColumns: TakenColumn[] = [];
+  /**
    * Indexes and constraints this list drops or renames away, with the table
    * named by the name it had before the list renamed it.
    */
@@ -787,6 +821,15 @@ class DropReader {
   takeColumn(table: TableRef, column: string): void {
     if (table.local && this.created.has(table.name)) return;
     this.columns.push({
+      table: this.renamedFrom.get(table.name) ?? table.name,
+      column,
+    });
+  }
+
+  /** Records a column an ALTER changes in place (`alteredColumns`). */
+  changeColumn(table: TableRef, column: string): void {
+    if (table.local && this.created.has(table.name)) return;
+    this.alteredColumns.push({
       table: this.renamedFrom.get(table.name) ?? table.name,
       column,
     });
@@ -1514,6 +1557,7 @@ class StatementWalk {
     const clausesAt = this.pastDescendants(table?.next ?? tableAt + 1);
     for (const clause of this.clauseStarts(clausesAt)) {
       this.readColumnClause(table, clause);
+      this.readColumnChangeClause(table, clause);
       this.readElementClause(table, clause);
       this.readPartitionClause(table, clause);
     }
@@ -1768,6 +1812,71 @@ class StatementWalk {
       else if (char === "," && depth === 0) starts.push(k + 1);
     }
     return starts;
+  }
+
+  /**
+   * One ALTER TABLE clause starting at `at`, for a column it changes in place:
+   * its type, nullability or default, or a MySQL redefinition under the same
+   * name. A drop, a rename or a clause that names no column is read elsewhere.
+   */
+  private readColumnChangeClause(
+    table: TableRef | undefined,
+    at: number
+  ): void {
+    const column = this.changedInPlaceColumnAt(at);
+    if (column === undefined) return;
+    if (column === null || table === undefined) {
+      this.refuse("a column change whose names cannot be read");
+    }
+    this.reader.changeColumn(table, column);
+  }
+
+  /**
+   * The column a clause changes in place, `undefined` when the clause changes
+   * none, or `null` when it does and the name cannot be read.
+   *
+   * - `ALTER [COLUMN] c TYPE|SET|DROP|ADD ...` in PostgreSQL, and MySQL's
+   *   `ALTER [COLUMN] c SET|DROP DEFAULT`.
+   * - MySQL's `MODIFY [COLUMN] c ...`.
+   * - MySQL's `CHANGE [COLUMN] c c ...`, a redefinition under the same name.
+   */
+  private changedInPlaceColumnAt(at: number): string | null | undefined {
+    switch (this.word(at)) {
+      case "ALTER":
+        return this.alteredColumnAt(at + 1);
+      case "MODIFY":
+        if (!this.reader.isMysql) return undefined;
+        return this.word(at + 1) === "COLUMN"
+          ? (this.nameAt(at + 2) ?? null)
+          : (this.nameAt(at + 1) ?? null);
+      case "CHANGE":
+        return this.reader.isMysql ? this.redefinedColumnAt(at + 1) : undefined;
+      default:
+        return undefined;
+    }
+  }
+
+  /** The column an `ALTER` clause changes in place, from past `ALTER`. */
+  private alteredColumnAt(at: number): string | null | undefined {
+    const named = this.word(at) === "COLUMN" ? at + 1 : at;
+    if (named === at && NOT_COLUMN_ALTERS.has(this.word(at) ?? "")) {
+      return undefined;
+    }
+    const column = this.nameAt(named);
+    if (column === undefined) {
+      return named === at ? undefined : null;
+    }
+    return IN_PLACE_CHANGE_WORDS.has(this.word(named + 1) ?? "")
+      ? column
+      : undefined;
+  }
+
+  /** MySQL's `CHANGE [COLUMN] c c`: the same name, so no rename. */
+  private redefinedColumnAt(at: number): string | undefined {
+    const k = this.word(at) === "COLUMN" ? at + 1 : at;
+    const from = this.nameAt(k);
+    const to = this.nameAt(k + 1);
+    return from !== undefined && from === to ? from : undefined;
   }
 
   /** One ALTER TABLE clause starting at `at`, for a column it takes away. */
@@ -3948,6 +4057,14 @@ export function assertNoForeignDrops(args: {
       table,
       column,
       act: "drop or rename",
+    });
+  }
+  for (const { table, column } of read.alteredColumns) {
+    refuseUnlessHeld(holders.column(table, column), {
+      ...args,
+      table,
+      column,
+      act: "change in place",
     });
   }
   for (const element of [
