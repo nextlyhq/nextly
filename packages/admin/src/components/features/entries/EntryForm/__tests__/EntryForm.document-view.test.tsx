@@ -12,7 +12,12 @@ import { QueryClientProvider } from "@tanstack/react-query";
 // shortcut owner that listens.
 import { fireEvent, render } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { ComponentProps, ReactElement, ReactNode } from "react";
+import {
+  useEffect,
+  type ComponentProps,
+  type ReactElement,
+  type ReactNode,
+} from "react";
 import { useFormContext } from "react-hook-form";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -82,6 +87,7 @@ const entry = { id: "e1", title: "Hello" } as never;
 const bob = { ownerId: "u2", ownerLabel: "Bob", expiresInSeconds: 90 };
 
 const received = vi.fn();
+const mounted = vi.fn();
 
 /**
  * A view with the shapes a real one has: a field written through the
@@ -89,6 +95,7 @@ const received = vi.fn();
  */
 function BuilderView(props: DocumentViewProps): ReactElement {
   received(props);
+  useEffect(() => mounted(), []);
   const { register } = useFormContext();
   return (
     <div data-testid="builder-view">
@@ -257,6 +264,25 @@ describe("EntryForm with a document view", () => {
       screen.getByText(/you have unsaved changes from/i)
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Restore" })).toBeInTheDocument();
+  });
+
+  it("draws the view afresh when recovered work is restored", async () => {
+    // A restore replaces the form's values from outside the view, and a view
+    // may keep a working copy read once at mount, as the Page Builder does. So
+    // the restore must reach the recovery AND give the view a new mount.
+    const restore = vi.fn();
+    recovery.current = {
+      ...recovery.current,
+      offer: { savedAt: new Date(), snapshot: { title: "Recovered" } },
+      restore,
+    };
+    renderView();
+    expect(mounted).toHaveBeenCalledTimes(1);
+
+    await userEvent.click(screen.getByRole("button", { name: "Restore" }));
+
+    expect(restore).toHaveBeenCalledTimes(1);
+    expect(mounted).toHaveBeenCalledTimes(2);
   });
 
   it("leaves through the page's exit with unsaved work, without the leave warning", async () => {
