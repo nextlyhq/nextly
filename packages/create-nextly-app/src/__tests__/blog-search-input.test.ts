@@ -19,11 +19,11 @@ import { afterEach, describe, expect, it } from "vitest";
 import { SearchInput } from "../../../../templates/blog/src/app/(frontend)/components/SearchInput";
 import { pending } from "./stubs/pagefind";
 
-/** Answer the search for `query` once the box has asked for it. */
-async function answer(query: string) {
+/** Answer the search for `query` once the box has asked for it; `false` finds nothing. */
+async function answer(query: string, finds = true) {
   await waitFor(() => expect(pending.has(query)).toBe(true));
   await act(async () => {
-    pending.get(query)?.();
+    pending.get(query)?.(finds);
   });
 }
 
@@ -61,5 +61,32 @@ describe("the blog's search box", () => {
 
     await answer("beta");
     expect(await screen.findByText("Post about beta")).toBeTruthy();
+  });
+
+  it("never shows an old search that answers after the box is cleared", async () => {
+    render(createElement(SearchInput));
+    fireEvent.change(box(), { target: { value: "alpha" } });
+    await waitFor(() => expect(pending.has("alpha")).toBe(true));
+
+    // Cleared and retyped while the old search is still running.
+    fireEvent.change(box(), { target: { value: "" } });
+    fireEvent.change(box(), { target: { value: "beta" } });
+    await answer("alpha");
+
+    expect(screen.queryByText("Post about alpha")).toBeNull();
+    await answer("beta");
+    expect(await screen.findByText("Post about beta")).toBeTruthy();
+    expect(screen.queryByText("Post about alpha")).toBeNull();
+  });
+
+  it('says "No results" once a search answers with nothing', async () => {
+    render(createElement(SearchInput));
+    fireEvent.change(box(), { target: { value: "nothing" } });
+    await waitFor(() => expect(pending.has("nothing")).toBe(true));
+    expect(screen.queryByText(/No results/)).toBeNull();
+
+    await answer("nothing", false);
+
+    expect(await screen.findByText(/No results for "nothing"/)).toBeTruthy();
   });
 });

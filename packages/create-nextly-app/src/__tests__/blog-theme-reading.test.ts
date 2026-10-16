@@ -32,13 +32,24 @@ const layout = readFileSync(
 );
 const initScript = /const themeInitScript = `([\s\S]*?)`;/.exec(layout)?.[1];
 
+/**
+ * A system setting's answer to a media query, as a browser gives it: dark
+ * matches only the dark-scheme query, so a reader asking any other query
+ * gets no match and paints light where the setting is dark.
+ */
+const systemAnswer = (prefersDark: boolean) => (query: string) => ({
+  matches: prefersDark && query === "(prefers-color-scheme: dark)",
+  addEventListener: () => {},
+  removeEventListener: () => {},
+});
+
 /** A browser whose storage holds `stored` under the blog's key, and nothing else. */
 function browser(stored: string | null, prefersDark: boolean) {
   return {
     localStorage: {
       getItem: (key: string) => (key === "nextly-theme" ? stored : null),
     },
-    window: { matchMedia: () => ({ matches: prefersDark }) },
+    window: { matchMedia: systemAnswer(prefersDark) },
     document: { documentElement: { dataset: {} as { theme?: string } } },
   };
 }
@@ -55,12 +66,8 @@ function preparePage(stored: string | null, prefersDark: boolean) {
   localStorage.clear();
   if (stored !== null) localStorage.setItem("nextly-theme", stored);
   delete document.documentElement.dataset.theme;
-  // jsdom has no matchMedia; this answers the one query the toggle asks.
-  vi.stubGlobal("matchMedia", () => ({
-    matches: prefersDark,
-    addEventListener: () => {},
-    removeEventListener: () => {},
-  }));
+  // jsdom has no matchMedia; this answers as a browser with that setting.
+  vi.stubGlobal("matchMedia", systemAnswer(prefersDark));
 }
 
 /** The theme the toggle paints once it has rendered. */
