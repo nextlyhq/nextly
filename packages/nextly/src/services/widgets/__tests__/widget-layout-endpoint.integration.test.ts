@@ -371,6 +371,31 @@ describe.each(getConfiguredTestDialects())(
       });
     });
 
+    it("after a saved reset, brings later changes to the default to the reader", async () => {
+      // The reset removes the row rather than storing today's default, so the
+      // reader follows the default again: a widget declared afterwards
+      // reaches them, as it reaches someone who never arranged anything.
+      const seen = await read(editor);
+      const arranged = [...ours(seen.placements)].reverse();
+      expect((await save(editor, seen, arranged)).status).toBe(200);
+
+      const before = await read(editor);
+      const reset = await call(editor, "DELETE", {
+        query: { version: String(before.version), scope: before.scope },
+      });
+      expect(reset.status).toBe(200);
+
+      testWidget("declared-later", 1015);
+      const after = await read(editor);
+      expect(after.source).toBe("default");
+      expect(after.version).toBe(0);
+      expect(ours(after.placements).map(p => p.widgetId)).toEqual([
+        "test/first",
+        "test/declared-later",
+        "test/last",
+      ]);
+    });
+
     it("refuses a reset staged in a stale tab, keeping the newer arrangement", async () => {
       const first = await read(editor);
       expect((await save(editor, first, first.placements)).status).toBe(200);
