@@ -72,18 +72,41 @@ export async function storeDraftSave(
   });
   if (sameContent(input.snapshot, input.replaces)) return { versionNo: null };
 
+  // A restore held as a draft replaces the working draft, not the live row, so
+  // what it replaces is the undo point: recorded first, under the name every
+  // restore's undo point carries, so it takes the number just below the
+  // restore's own, which retention keeps. No retention runs here; the restore's
+  // capture below trims once, with that protection in place.
+  if (typeof input.sourceVersionNo === "number") {
+    await capture.capture(tx, {
+      ref: input.ref,
+      status: "draft",
+      snapshot: withoutStatus(input.replaces),
+      createdBy: input.createdBy,
+      locale: input.locale,
+      label: "Before restore",
+    });
+  }
+
   const { versionNo } = await capture.capture(tx, {
     ref: input.ref,
     status: "draft",
-    snapshot: Object.fromEntries(
-      Object.entries(input.snapshot).filter(([key]) => key !== "status")
-    ),
+    snapshot: withoutStatus(input.snapshot),
     createdBy: input.createdBy,
     locale: input.locale,
     sourceVersionNo: input.sourceVersionNo ?? null,
     maxPerDoc: input.maxPerDoc,
   });
   return { versionNo };
+}
+
+/** A snapshot without the live status a held draft is built on. */
+function withoutStatus(
+  snapshot: Record<string, unknown>
+): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(snapshot).filter(([key]) => key !== "status")
+  );
 }
 
 /**

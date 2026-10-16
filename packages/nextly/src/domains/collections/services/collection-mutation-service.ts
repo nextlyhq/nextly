@@ -5706,6 +5706,13 @@ export class CollectionMutationService extends BaseService {
        * restore is an ordinary write that happens to reproduce an earlier state.
        */
       sourceVersionNo?: number;
+      /**
+       * Set when this write restores a recorded save of a working draft: its
+       * content was never live, so on a published document it must be held as
+       * the working draft. Where the document can no longer hold one, the
+       * write is refused rather than applied to the live row.
+       */
+      requireHeldDraft?: boolean;
       // The caller's authenticated scope. For a scoped API-key REST write the
       // publish/unpublish transition gate judges the key's OWN grants, since the
       // route only authorized `update` against the key's scope.
@@ -6674,6 +6681,9 @@ export class CollectionMutationService extends BaseService {
           // compares like with like. Relations are read here, before they are
           // rewritten, so a component or m2m edit is visible in the diff.
           let previousDocument: Record<string, unknown> | null = null;
+          // Run once the write is known not to be held: a held restore replaces
+          // the working draft, whose undo point the draft save records.
+          let captureBeforeRestore: (() => Promise<void>) | undefined;
           if (preUpdateRow) {
             // The main row holds no translatable values and, for a per-locale
             // status, no current status either — both live in the companion.
@@ -6746,52 +6756,54 @@ export class CollectionMutationService extends BaseService {
             // dropping the version being restored FROM); the restore's own
             // capture below trims once, with those protections.
             if (params.sourceVersionNo != null && versionsConfig?.enabled) {
-              const previousHoldsLocaleState =
-                Object.keys(previousLocalizedValues).length > 0 ||
-                Object.keys(previousComponents ?? {}).length > 0 ||
-                previousCompanionStatus !== null;
-              // For a per-locale restore into a locale whose companion row is
-              // absent (a locale disabled then re-enabled), the prior per-locale
-              // state is draft — an absent per-locale row starts as draft — not
-              // the main row's status. Recording the main row's "published" here
-              // would make undoing the restore recreate and PUBLISH an empty
-              // translation instead of returning the locale to its prior
-              // absent/draft state. Scoped to this snapshot, so the `previous`
-              // event above is unaffected.
-              const perLocaleAbsentRestore =
-                !!localizedUpdate?.hasStatus &&
-                localizedUpdate.writeLocale !==
-                  this.localization?.defaultLocale &&
-                previousCompanionStatus === null;
-              const preRestoreParent = perLocaleAbsentRestore
-                ? { ...previousParent, status: "draft" }
-                : previousParent;
-              await captureInTx(tx, this.versionCapture, {
-                ref: {
-                  scopeKind: "collection",
-                  scopeSlug: params.collectionName,
-                  entryId: params.entryId,
-                },
-                contentStatus: (preRestoreParent as { status?: unknown })
-                  .status,
-                parts: await this.snapshotPartsFor(
-                  {
-                    parentRow: preRestoreParent,
-                    components: previousComponents,
-                    manyToMany: previousM2M,
+              captureBeforeRestore = async () => {
+                const previousHoldsLocaleState =
+                  Object.keys(previousLocalizedValues).length > 0 ||
+                  Object.keys(previousComponents ?? {}).length > 0 ||
+                  previousCompanionStatus !== null;
+                // For a per-locale restore into a locale whose companion row is
+                // absent (a locale disabled then re-enabled), the prior per-locale
+                // state is draft — an absent per-locale row starts as draft — not
+                // the main row's status. Recording the main row's "published" here
+                // would make undoing the restore recreate and PUBLISH an empty
+                // translation instead of returning the locale to its prior
+                // absent/draft state. Scoped to this snapshot, so the `previous`
+                // event above is unaffected.
+                const perLocaleAbsentRestore =
+                  !!localizedUpdate?.hasStatus &&
+                  localizedUpdate.writeLocale !==
+                    this.localization?.defaultLocale &&
+                  previousCompanionStatus === null;
+                const preRestoreParent = perLocaleAbsentRestore
+                  ? { ...previousParent, status: "draft" }
+                  : previousParent;
+                await captureInTx(tx, this.versionCapture, {
+                  ref: {
+                    scopeKind: "collection",
+                    scopeSlug: params.collectionName,
+                    entryId: params.entryId,
                   },
-                  fields,
-                  tx
-                ),
-                createdBy: params.user?.id ?? null,
-                // Labelled with a locale only when the prior state actually held
-                // locale-specific values — see the post-write capture below.
-                locale: previousHoldsLocaleState
-                  ? (localizedUpdate?.writeLocale ??
-                    this.componentSnapshotLocale(params.locale))
-                  : null,
-                label: "Before restore",
-              });
+                  contentStatus: (preRestoreParent as { status?: unknown })
+                    .status,
+                  parts: await this.snapshotPartsFor(
+                    {
+                      parentRow: preRestoreParent,
+                      components: previousComponents,
+                      manyToMany: previousM2M,
+                    },
+                    fields,
+                    tx
+                  ),
+                  createdBy: params.user?.id ?? null,
+                  // Labelled with a locale only when the prior state actually held
+                  // locale-specific values — see the post-write capture below.
+                  locale: previousHoldsLocaleState
+                    ? (localizedUpdate?.writeLocale ??
+                      this.componentSnapshotLocale(params.locale))
+                    : null,
+                  label: "Before restore",
+                });
+              };
             }
           }
 
@@ -6821,6 +6833,30 @@ export class CollectionMutationService extends BaseService {
             requestLocale: params.locale ?? null,
             defaultLocale: this.localization?.defaultLocale ?? null,
           }).hold;
+
+          // A recorded draft save restored onto a published document must stay
+          // pending. A document that can no longer hold a draft would take it
+          // on its live row and publish it, so the restore is refused instead.
+          if (
+            params.requireHeldDraft === true &&
+            !storeAsWorkingDraft &&
+            draftLiveStatus === "published"
+          ) {
+            throw NextlyError.conflict({
+              reason: "state",
+              message:
+                "This version is a saved draft, and this document can no longer hold a draft, so restoring it would publish it. Turn drafts back on for this collection, or restore a published version.",
+              logContext: {
+                reason: "restore-saved-draft-unholdable",
+                collection: params.collectionName,
+                entryId: params.entryId,
+                sourceVersionNo: params.sourceVersionNo,
+              },
+            });
+          }
+          // A restore that writes the live row snapshots it first; a held one
+          // records the draft it replaces instead.
+          if (!storeAsWorkingDraft) await captureBeforeRestore?.();
 
           // TOCTOU-safe authorization: classify the transition against the
           // status just read UNDER THE ROW LOCK (`preUpdateRow` /

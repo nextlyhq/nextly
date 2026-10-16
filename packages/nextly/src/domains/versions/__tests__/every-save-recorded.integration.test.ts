@@ -325,6 +325,149 @@ describe.each(getConfiguredTestDialects())(
       );
     });
 
+    it("keeps the draft a restore replaces as its undo point, not the live row", async () => {
+      current = await createTestNextly({ dialect, collections: [posts()] });
+      const handler = current.getService("collectionsHandler");
+      const created = await handler.createEntry(
+        { collectionName: "posts", overrideAccess: true },
+        { title: "Live", status: "published" }
+      );
+      const id = (created.data as { id: string }).id;
+      const save = (title: string) =>
+        handler.updateEntry(
+          { collectionName: "posts", entryId: id, overrideAccess: true },
+          { title }
+        );
+      await save("Pending A");
+      await save("Pending B");
+      const pendingA = (await versionsFor(current, "posts")).find(
+        v => parsed(v.snapshot).title === "Pending A"
+      );
+
+      await restoreVersion({
+        scopeKind: "collection",
+        slug: "posts",
+        entryId: id,
+        versionNo: pendingA!.versionNo!,
+        user: superAdmin,
+      });
+
+      const undo = (await rowsFor(current, "posts")).filter(
+        r => (r as { label?: string | null }).label === "Before restore"
+      );
+      // One undo point, holding the draft that was overwritten; the live row,
+      // which the restore never touched, is not recorded again.
+      expect(undo).toHaveLength(1);
+      expect(parsed(undo[0].snapshot).title).toBe("Pending B");
+      expect(undo[0].status).toBe("draft");
+    });
+
+    it("keeps the draft a restore replaces as its undo point, for a Single", async () => {
+      current = await createTestNextly({
+        dialect,
+        singles: [
+          defineSingle({
+            slug: "branding",
+            status: true,
+            versions: true,
+            fields: [text({ name: "heading" })],
+          }),
+        ],
+      });
+      const singles = current.getService("singleEntryService");
+      await singles.update(
+        "branding",
+        { heading: "Live", status: "published" },
+        { overrideAccess: true }
+      );
+      await singles.update(
+        "branding",
+        { heading: "Pending A" },
+        { overrideAccess: true }
+      );
+      await singles.update(
+        "branding",
+        { heading: "Pending B" },
+        { overrideAccess: true }
+      );
+      const versions = await versionsFor(current, "branding");
+      const pendingA = versions.find(
+        v => parsed(v.snapshot).heading === "Pending A"
+      );
+
+      await restoreVersion({
+        scopeKind: "single",
+        slug: "branding",
+        entryId: pendingA!.entryId,
+        versionNo: pendingA!.versionNo!,
+        user: superAdmin,
+      });
+
+      const undo = (await rowsFor(current, "branding")).filter(
+        r => (r as { label?: string | null }).label === "Before restore"
+      );
+      expect(undo).toHaveLength(1);
+      expect(parsed(undo[0].snapshot).heading).toBe("Pending B");
+    });
+
+    it("refuses to restore a saved draft where the document can no longer hold one", async () => {
+      // History-only: a save writes the live row, so restoring a saved draft
+      // here would publish content that was never live.
+      current = await createTestNextly({
+        dialect,
+        collections: [
+          defineCollection({
+            slug: "notes",
+            status: true,
+            versions: { drafts: false },
+            fields: [text({ name: "title" })],
+          }),
+        ],
+      });
+      const handler = current.getService("collectionsHandler");
+      const created = await handler.createEntry(
+        { collectionName: "notes", overrideAccess: true },
+        { title: "Live", status: "published" }
+      );
+      const id = (created.data as { id: string }).id;
+      const repo = new VersionsRepository(
+        current.adapter as unknown as ConstructorParameters<
+          typeof VersionsRepository
+        >[0]
+      );
+      const before = await versionsFor(current, "notes");
+      // A save recorded while drafts were on: draft status, no snapshot status.
+      await repo.insertVersion({
+        ref: { scopeKind: "collection", scopeSlug: "notes", entryId: id },
+        versionNo: before.length + 1,
+        status: "draft",
+        isAutosave: false,
+        snapshot: { title: "Pending" },
+      });
+
+      const error = await restoreVersion({
+        scopeKind: "collection",
+        slug: "notes",
+        entryId: id,
+        versionNo: before.length + 1,
+        user: superAdmin,
+      }).then(
+        () => undefined,
+        (err: unknown) => err
+      );
+
+      expect(error).toBeDefined();
+      expect(String((error as { code?: string }).code)).toBe("CONFLICT");
+      const [live] = (
+        await current.adapter.select<{
+          id: string;
+          title: string;
+          status: string;
+        }>("dc_notes")
+      ).filter(r => r.id === id);
+      expect(live).toMatchObject({ title: "Live", status: "published" });
+    });
+
     it("shows no status change when a recorded save is compared with what is published", async () => {
       current = await createTestNextly({ dialect, collections: [posts()] });
       const handler = current.getService("collectionsHandler");

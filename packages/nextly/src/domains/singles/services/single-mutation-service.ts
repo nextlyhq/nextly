@@ -1339,6 +1339,26 @@ export class SingleMutationService extends BaseService {
                 defaultLocale: this.localization?.defaultLocale ?? null,
               });
 
+            // A recorded draft save restored onto a published Single must stay
+            // pending. A Single that can no longer hold a draft would take it on
+            // its live row and publish it, so the restore is refused instead.
+            if (
+              options.requireHeldDraft === true &&
+              !holdEdit &&
+              singleLiveStatus === "published"
+            ) {
+              throw NextlyError.conflict({
+                reason: "state",
+                message:
+                  "This version is a saved draft, and this Single can no longer hold a draft, so restoring it would publish it. Turn drafts back on for this Single, or restore a published version.",
+                logContext: {
+                  reason: "restore-saved-draft-unholdable",
+                  single: slug,
+                  sourceVersionNo: options.sourceVersionNo,
+                },
+              });
+            }
+
             // Publishing folds this language's pending change into the write.
             // Merged BEFORE the payload is re-split: the split moves translated
             // values out of the document and into the companion payload, so
