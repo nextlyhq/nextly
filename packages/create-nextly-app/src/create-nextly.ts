@@ -522,7 +522,7 @@ export async function createNextly(
     try {
       if (!isFreshProject) {
         // Existing project: generate Nextly config files
-        await generateConfig(cwd, projectType);
+        await generateConfig(cwd, projectType, projectInfo);
         await generateRoutes(cwd, projectInfo);
         await generateAdminPage(cwd, projectInfo);
         await generateMediaRoutes(cwd, projectInfo);

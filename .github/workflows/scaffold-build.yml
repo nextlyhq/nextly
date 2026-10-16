@@ -655,7 +655,12 @@ jobs:
           fi
           schemas=$(find src -name '*.zod.ts' | wc -l | tr -d ' ')
           echo "generated Zod schemas: $schemas"
-          [ "$schemas" -gt 0 ] || { echo "generate:types wrote no Zod schema"; exit 1; }
+          # The visual approach declares no collections in code (its schema lives
+          # in the database), so generation has nothing to write a schema for and
+          # the compile above is the whole check. Every other leg must write some.
+          if [ "${{ matrix.approach }}" != visual ]; then
+            [ "$schemas" -gt 0 ] || { echo "generate:types wrote no Zod schema"; exit 1; }
+          fi
 
       - name: Build the scaffolded project
         shell: bash

@@ -47,6 +47,9 @@ into, whichever package manager installed it.
   `types/generated/` and `db/schemas/collections/zod/` rather than into a new
   `src/` folder, while `typescript.outputFile` and `db.schemasDir` are left at
   their defaults. A path you set is used as written.
+- `create-nextly-app`, adding Nextly to an existing app without `src/`, now
+  writes `typescript.outputFile` as `./types/generated/nextly-types.ts` instead
+  of a `./src/...` path, so the types land beside the rest of the app.
 
 An app made with an earlier release: run `nextly generate:types` again. In an
 app without `src/`, the files previously written under `src/` can be deleted.

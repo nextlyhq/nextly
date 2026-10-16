@@ -63,14 +63,15 @@ jobs:
           SCOPE_TITLE: Generated code scope
           # Every path is inert EXCEPT the ones that shape what `generate:types`
           # writes or how it resolves in an app: the type and Zod generators, the
-          # paths they write to, the shared types writer, the code plugins
+          # paths they write to and the config defaults those paths start from,
+          # the shared types writer, the code plugins
           # contribute to generated files, the command, the `nextly/zod` entry,
           # nextly's manifest and build entries (its exports and its zod range),
           # the templates a project starts from, and this workflow. Unlike `ci.yml`
           # this is an inclusion list, deliberately: the check is about one
           # pipeline, and running it for every change would hold three runners for
           # nothing. A file added to that pipeline belongs here too.
-          INERT_PATHS: '^(?!(packages/nextly/src/domains/schema/services/(type|zod)-generator\.ts|packages/nextly/src/shared/lib/generated-output-paths\.ts|packages/nextly/src/cli/utils/write-generated-types\.ts|packages/nextly/src/cli/commands/generate-types\.ts|packages/nextly/src/plugins/codegen/|packages/nextly/src/zod\.ts|packages/nextly/package\.json|packages/nextly/tsup\.config\.js|templates/|\.github/workflows/generated-code-compiles\.yml))'
+          INERT_PATHS: '^(?!(packages/nextly/src/domains/schema/services/(type|zod)-generator\.ts|packages/nextly/src/shared/lib/generated-output-paths\.ts|packages/nextly/src/shared/types/config\.ts|packages/nextly/src/cli/utils/write-generated-types\.ts|packages/nextly/src/cli/commands/generate-types\.ts|packages/nextly/src/plugins/codegen/|packages/nextly/src/zod\.ts|packages/nextly/package\.json|packages/nextly/tsup\.config\.js|templates/|\.github/workflows/generated-code-compiles\.yml))'
         run: node scripts/change-scope.mjs
 
   compiles:
@@ -138,6 +139,26 @@ jobs:
             (cd "packages/$dir" && pnpm pack --pack-destination /tmp/packs)
           done
           ls /tmp/packs
+
+      # Generated schemas and app code share ONE Zod only if the published entry
+      # re-exports the Zod nextly depends on. A build that bundled its own copy
+      # would still type-check below, so this reads the packed file itself:
+      # `$constructor("$ZodType"` is where Zod's core defines its base schema,
+      # and it appears in a build only when Zod was copied into it.
+      - name: The packed nextly/zod re-exports nextly's Zod, with no copy of its own
+        shell: bash
+        run: |
+          set -euo pipefail
+          pack=$(ls /tmp/packs/nextly-[0-9]*.tgz)
+          mkdir -p /tmp/nextly-pack && tar -xzf "$pack" -C /tmp/nextly-pack
+          cat /tmp/nextly-pack/package/dist/zod.mjs
+          grep -Eq 'from "zod"' /tmp/nextly-pack/package/dist/zod.mjs \
+            || { echo "dist/zod.mjs does not import the zod package"; exit 1; }
+          if grep -rlF '$constructor("$ZodType"' /tmp/nextly-pack/package/dist; then
+            echo "the files above carry a copy of Zod: nextly/zod would not be the Zod nextly uses"
+            exit 1
+          fi
+          echo "nextly/zod re-exports the zod package, and the build carries no copy of it"
 
       - name: Make a project that depends on nextly and not on zod
         shell: bash
