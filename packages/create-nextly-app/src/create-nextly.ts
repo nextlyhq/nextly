@@ -7,6 +7,12 @@ import fs from "fs-extra";
 import pc from "picocolors";
 
 import { generateAdminPage } from "./generators/admin";
+import {
+  type BundledSkill,
+  describeWrittenSkills,
+  readBundledSkills,
+  writeAgentSkills,
+} from "./generators/agent-skills";
 import { generateConfig } from "./generators/config";
 import { generateEnv } from "./generators/env";
 import type { GeneratedFiles } from "./generators/generated-files";
@@ -376,6 +382,37 @@ export async function createNextly(
     databaseUrl = url?.trim() || database.connectionUrl;
   }
 
+  // --- Step 7: Skills for coding agents ---
+  //
+  // Asked for an app, new or existing; a plugin is a library and the skills
+  // are about building an app. Read now, before anything is installed or
+  // written, so a broken bundle stops the run while the project is untouched.
+
+  let agentSkills: BundledSkill[] = [];
+  if (projectType !== "plugin" && options.skills !== false) {
+    let addSkills = true;
+    if (!defaults) {
+      const answer = await p.confirm({
+        message:
+          "Add Nextly skills for coding agents (Claude Code, Codex, Cursor)?",
+        initialValue: true,
+      });
+      if (p.isCancel(answer)) {
+        p.cancel("Cancelled.");
+        return;
+      }
+      addSkills = answer;
+    }
+    if (addSkills) {
+      try {
+        agentSkills = await readBundledSkills();
+      } catch (error) {
+        p.cancel((error as Error).message);
+        process.exit(1);
+      }
+    }
+  }
+
   // --- Scaffold project from template ---
 
   // A new project's package manager, settled here before any file is written
@@ -550,6 +587,8 @@ export async function createNextly(
     let nextConfigPatch: NextConfigPatch | null = null;
     // What the existing-app generators did that the developer should know about.
     const reported: GeneratedFiles[] = [];
+    // Its written folders are said in one line, below, rather than one each.
+    let skillsReport: GeneratedFiles | null = null;
     try {
       if (!isFreshProject) {
         // Existing project: generate Nextly config files
@@ -570,9 +609,19 @@ export async function createNextly(
           : database;
         await generateEnv(cwd, envDatabase);
       }
+      if (agentSkills.length > 0) {
+        skillsReport = await writeAgentSkills(
+          cwd,
+          agentSkills,
+          packageVersion()
+        );
+        reported.push({ ...skillsReport, written: [] });
+      }
       s.stop("Environment configured");
       // After the spinner stops, so the line is not drawn over.
       if (nextConfigPatch) printNextConfigPatch(nextConfigPatch);
+      const skillsLine = skillsReport && describeWrittenSkills(skillsReport);
+      if (skillsLine) p.log.info(skillsLine);
       for (const files of reported) {
         for (const written of files.written) p.log.info(`Wrote ${written}`);
         for (const { path: changed, added } of files.changed)
