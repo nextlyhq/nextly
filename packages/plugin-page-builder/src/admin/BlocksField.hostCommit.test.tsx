@@ -383,3 +383,101 @@ describe("leaving", () => {
     expect(heldAtExit).toEqual([EDITED]);
   });
 });
+
+describe("a colleague taking the document over", () => {
+  /** Every distinct value the field took, so a commit can be counted. */
+  const values: unknown[] = [];
+
+  function Commits({ control }: { control: Control<FieldValues> }): null {
+    const value = useWatch({ control, name: "body" });
+    React.useEffect(() => {
+      if (value !== undefined) values.push(value);
+    }, [value]);
+    return null;
+  }
+
+  /** The view, with the lock's read-only state as the host would hand it. */
+  function TakeoverHost({
+    readOnly,
+    showView = true,
+  }: {
+    readOnly: boolean;
+    showView?: boolean;
+  }): React.JSX.Element {
+    const { control, getValues } = useEntryForm();
+    return (
+      <>
+        {showView ? (
+          <PageBuilderView
+            control={control}
+            field={BODY_FIELD}
+            readOnly={readOnly}
+            exit={() => {
+              heldAtExit.push(getValues("body"));
+            }}
+          />
+        ) : null}
+        <Saved control={control} />
+        <Commits control={control} />
+      </>
+    );
+  }
+
+  beforeEach(() => {
+    values.length = 0;
+  });
+
+  it("keeps the author's edits in the form when the view goes read-only", () => {
+    const { rerender } = render(<TakeoverHost readOnly={false} />);
+    editDocument();
+
+    rerender(<TakeoverHost readOnly />);
+
+    // The banner says the unsaved changes are still here: the editor that
+    // held them is gone, so the form now does.
+    expect(saved).toEqual(EDITED);
+    // Into this browser\'s form only. Nothing left the editor through its
+    // exit, and nothing here saves.
+    expect(heldAtExit).toEqual([]);
+  });
+
+  it("commits nothing when nothing was edited", () => {
+    const { rerender } = render(<TakeoverHost readOnly={false} />);
+    rerender(<TakeoverHost readOnly />);
+    expect(saved).toBeUndefined();
+    expect(values).toEqual([]);
+  });
+
+  it("commits once, and not again when the editor comes back and goes", () => {
+    const { rerender } = render(<TakeoverHost readOnly={false} />);
+    editDocument();
+    rerender(<TakeoverHost readOnly />);
+    // Taken back: the editor reopens from the form, which holds the edit, and
+    // has nothing of its own to commit when it goes again.
+    rerender(<TakeoverHost readOnly={false} />);
+    rerender(<TakeoverHost readOnly />);
+    expect(values).toHaveLength(1);
+    expect(saved).toEqual(EDITED);
+  });
+
+  it("commits once when the author leaves and the view then goes", () => {
+    // The exit already handed the document over; the unmount that follows
+    // it, when the admin returns to the form, has nothing left to hand.
+    const { rerender } = render(<TakeoverHost readOnly={false} />);
+    editDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Leave editor" }));
+    rerender(<TakeoverHost readOnly={false} showView={false} />);
+    expect(values).toHaveLength(1);
+  });
+
+  it("asks for no recovery write of its own when the page goes away", () => {
+    const { rerender } = render(<TakeoverHost readOnly={false} />);
+    editDocument();
+    const before = scheduled;
+    rerender(<TakeoverHost readOnly={false} showView={false} />);
+    // Leaving discards what the author chose to discard: the commit lands in
+    // a form that persists nothing, and asks the server for nothing.
+    expect(scheduled).toBe(before);
+    expect(heldAtExit).toEqual([]);
+  });
+});
