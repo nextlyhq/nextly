@@ -11,7 +11,11 @@
 import { eq } from "drizzle-orm";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { hashPassword, isPasswordHash } from "../../../auth/password/index";
+import {
+  hashPassword,
+  isPasswordHash,
+  verifyPassword,
+} from "../../../auth/password/index";
 import { getDialectTables } from "../../../database/index";
 import { seedPermissions } from "../../../database/seeders/permissions";
 import { seedSuperAdmin } from "../../../database/seeders/super-admin";
@@ -278,6 +282,135 @@ describe.each(getConfiguredTestDialects())(
       expect(await stored(t, "founder@example.com")).toBe(PASSPHRASE);
 
       expect(await signsIn(t, "founder@example.com", PASSPHRASE)).toBe(false);
+    });
+  }
+);
+
+/**
+ * Spaces at either end count as the symbol a password needs, and its trimmed
+ * form passes the rule as well, so a path that trimmed before hashing would
+ * store a different password without saying so.
+ */
+const EDGED = " Passw0rd-Edge ";
+
+/** Signs in with exactly what was typed, and not with the trimmed form. */
+async function expectStoredAsTyped(t: TestNextly, email: string) {
+  expect(await signsIn(t, email, EDGED)).toBe(true);
+  expect(await signsIn(t, email, EDGED.trim())).toBe(false);
+}
+
+describe.each(getConfiguredTestDialects())(
+  "a password is stored as typed, spaces at its ends included (%s)",
+  (dialect: TestDialect) => {
+    it("keeps it at self-registration", async () => {
+      const t = await boot(dialect);
+      await seedFounder(t);
+      await auth(t).registerUser({
+        email: "self@example.com",
+        name: "Self",
+        password: EDGED,
+      });
+      await expectStoredAsTyped(t, "self@example.com");
+    });
+
+    it("keeps it when an administrator creates an account", async () => {
+      const t = await boot(dialect);
+      const adminId = await seedFounder(t);
+      await dispatchUser(
+        services(t),
+        "createLocalUser",
+        { _authenticatedActorType: "user", _authenticatedActorId: adminId },
+        { email: "routed@example.com", name: "Routed", password: EDGED }
+      );
+      await expectStoredAsTyped(t, "routed@example.com");
+    });
+
+    it("keeps it when an administrator sets a password", async () => {
+      const t = await boot(dialect);
+      const id = await seedFounder(t);
+      await services(t).users.updateUser(id, { password: EDGED });
+      await expectStoredAsTyped(t, "founder@example.com");
+    });
+
+    it("keeps it when the Direct API sets a password", async () => {
+      const t = await boot(dialect);
+      const id = await seedFounder(t);
+      await (t.getService("userService") as UserService).update(
+        id,
+        { password: EDGED },
+        {}
+      );
+      await expectStoredAsTyped(t, "founder@example.com");
+    });
+
+    it("keeps it when a person changes their own password", async () => {
+      const t = await boot(dialect);
+      const id = await seedFounder(t);
+      await auth(t).changePassword(id, OTHER, EDGED);
+      await expectStoredAsTyped(t, "founder@example.com");
+    });
+
+    it("keeps it when the Direct API changes a person's own password", async () => {
+      // This write hashes with the app's configured hasher, so the instance
+      // is given one: core's own, which sign-in verifies.
+      current = await createTestNextly({
+        ...(dialect === "sqlite" ? {} : { dialect }),
+        passwordHasher: { hash: hashPassword, verify: verifyPassword },
+      });
+      const t = current;
+      if (dialect === "sqlite") {
+        for (const statement of generateSqliteCoreTableStatements()) {
+          await t.adapter.executeQuery(statement);
+        }
+      }
+      const id = await seedFounder(t);
+      await (t.getService("userService") as UserService).changePassword(
+        id,
+        OTHER,
+        EDGED
+      );
+      await expectStoredAsTyped(t, "founder@example.com");
+    });
+
+    it("keeps it when a password is reset with a token", async () => {
+      const t = await boot(dialect);
+      await seedFounder(t);
+      const { token } = await auth(t).generatePasswordResetToken(
+        "founder@example.com",
+        { disableEmail: true }
+      );
+      await auth(t).resetPasswordWithToken(token as string, EDGED);
+      await expectStoredAsTyped(t, "founder@example.com");
+    });
+
+    it("keeps it when an invite is accepted", async () => {
+      const t = await boot(dialect);
+      await seedFounder(t);
+      const created = await services(t).users.createLocalUser({
+        email: "invited@example.com",
+        name: "Invited",
+        emailVerification: "admin-vouched",
+      });
+      const token = new URL(created.invite?.link as string).searchParams.get(
+        "token"
+      );
+      await auth(t).acceptInvite(token as string, EDGED);
+      await expectStoredAsTyped(t, "invited@example.com");
+    });
+
+    it("keeps it when a person replaces an admin-set password at first sign-in", async () => {
+      const t = await boot(dialect);
+      await seedFounder(t);
+      const created = await services(t).users.createLocalUser({
+        email: "flagged@example.com",
+        name: "Flagged",
+        password: OTHER,
+        isActive: true,
+        emailVerification: "admin-vouched",
+        mustChangePassword: true,
+      });
+      await auth(t).setInitialPassword(String(created.id), EDGED);
+      await expectStoredAsTyped(t, "flagged@example.com");
     });
   }
 );

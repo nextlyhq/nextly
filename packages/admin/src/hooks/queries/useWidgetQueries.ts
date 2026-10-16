@@ -286,30 +286,83 @@ function asResultFields(value: unknown): WidgetResultField[] | undefined {
 
   const described: WidgetResultField[] = [];
   for (const raw of value) {
-    if (!isObject(raw)) return undefined;
-    const field = raw as { name?: unknown; label?: unknown; type?: unknown };
-    if (typeof field.name !== "string" || field.name === "") return undefined;
-    if (field.label !== undefined && typeof field.label !== "string") {
-      return undefined;
-    }
-    /*
-     * An unrecognised kind is DROPPED, not refused. `label` above rejects the
-     * whole list on a wrong shape because a non-string label is a server that
-     * is broken; a type this admin does not know is a server that is NEWER, and
-     * blanking the card over it would make every future type a breaking change.
-     * Falling back to plain text is what the renderer did before types existed.
-     */
-    const type = KNOWN_FIELD_TYPES.has(field.type as string)
-      ? (field.type as WidgetResultField["type"])
-      : undefined;
-    described.push({
-      name: field.name,
-      ...(field.label !== undefined && { label: field.label }),
-      ...(type !== undefined && { type }),
-    });
+    const field = asResultField(raw);
+    if (field === undefined) return undefined;
+    described.push(field);
   }
 
   return described.length > 0 ? described : undefined;
+}
+
+/**
+ * One field description, or `undefined` when it is not one.
+ *
+ * Shared by a list's columns and a grouped result's `field`, so both are read by one set of
+ * rules.
+ */
+function asResultField(raw: unknown): WidgetResultField | undefined {
+  if (!isObject(raw)) return undefined;
+  const field = raw as {
+    name?: unknown;
+    label?: unknown;
+    type?: unknown;
+    choices?: unknown;
+  };
+  if (typeof field.name !== "string" || field.name === "") return undefined;
+  if (field.label !== undefined && typeof field.label !== "string") {
+    return undefined;
+  }
+  /*
+   * An unrecognised kind is DROPPED, not refused. `label` above rejects the
+   * whole list on a wrong shape because a non-string label is a server that
+   * is broken; a type this admin does not know is a server that is NEWER, and
+   * blanking the card over it would make every future type a breaking change.
+   * Falling back to plain text is what the renderer did before types existed.
+   */
+  const type = KNOWN_FIELD_TYPES.has(field.type as string)
+    ? (field.type as WidgetResultField["type"])
+    : undefined;
+  const choices = asChoices(field.choices);
+  return {
+    name: field.name,
+    ...(field.label !== undefined && { label: field.label }),
+    ...(type !== undefined && { type }),
+    ...(choices !== undefined && { choices }),
+  };
+}
+
+/**
+ * A column's value labels, or `undefined`.
+ *
+ * DROPPED rather than refused when malformed, for the reason an unknown kind is: the labels are
+ * presentation, and without them a cell shows the stored value, as it did before labels were
+ * carried. A malformed entry costs the whole list, because a partial list would label some values
+ * and print others raw in one column.
+ */
+function asChoices(
+  value: unknown
+): { value: string; label: string }[] | undefined {
+  if (!Array.isArray(value) || value.length === 0) return undefined;
+  const choices: { value: string; label: string }[] = [];
+  for (const raw of value) {
+    if (!isObject(raw)) return undefined;
+    const { value: stored, label } = raw as {
+      value?: unknown;
+      label?: unknown;
+    };
+    // A blank label is malformed too: the cell or bar would show nothing where the value belongs,
+    // which is why a source registering one is refused. A resolver's answer reaches here without
+    // passing that check, so it is repeated at this boundary.
+    if (
+      typeof stored !== "string" ||
+      typeof label !== "string" ||
+      label.trim() === ""
+    ) {
+      return undefined;
+    }
+    choices.push({ value: stored, label });
+  }
+  return choices;
 }
 
 /**
@@ -400,14 +453,19 @@ function asBuckets(
  */
 function asGrouped(
   buckets: unknown,
-  truncated: unknown
+  truncated: unknown,
+  field: unknown
 ): WidgetResult | undefined {
   const read = asBuckets(buckets);
   if (!read) return undefined;
+  // The grouped field's label and value labels, for the chart's heading and bars. A malformed
+  // one is dropped, like a column's: the buckets are the answer, the names are presentation.
+  const described = field === undefined ? undefined : asResultField(field);
   return {
     op: "groupBy",
     buckets: read,
     ...(truncated === true ? { truncated: true } : {}),
+    ...(described !== undefined && { field: described }),
   };
 }
 
@@ -491,6 +549,7 @@ function asResult(value: unknown): WidgetResult | undefined {
     fields?: unknown;
     buckets?: unknown;
     truncated?: unknown;
+    field?: unknown;
     points?: unknown;
     interval?: unknown;
   };
@@ -509,7 +568,7 @@ function asResult(value: unknown): WidgetResult | undefined {
   }
 
   if (result.op === "groupBy") {
-    return asGrouped(result.buckets, result.truncated);
+    return asGrouped(result.buckets, result.truncated, result.field);
   }
 
   if (result.op === "timeseries") {

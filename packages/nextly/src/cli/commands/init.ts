@@ -31,6 +31,7 @@ import type { Command } from "commander";
 import pc from "picocolors";
 
 import { describeError } from "../../errors/index";
+import { projectUsesSrcLayout } from "../../shared/lib/generated-output-paths";
 import {
   createContext,
   type CommandContext,
@@ -71,10 +72,33 @@ interface InitAnswers {
   createExampleCollection: boolean;
 }
 
-const DEFAULTS: InitAnswers = {
-  collectionsDir: "./src/collections",
-  createExampleCollection: true,
-};
+/**
+ * Every path init writes, under one base: `./src` when the app keeps its code
+ * there, `.` when it has a root app/ (the Next.js rule generation follows too,
+ * so what init names is where generation writes).
+ */
+interface InitPaths {
+  base: string;
+  collectionsDir: string;
+  schemasDir: string;
+  zodDir: string;
+  migrationsDir: string;
+  typesDir: string;
+  libDir: string;
+}
+
+function initPaths(cwd: string): InitPaths {
+  const base = projectUsesSrcLayout(cwd) ? "./src" : ".";
+  return {
+    base,
+    collectionsDir: `${base}/collections`,
+    schemasDir: `${base}/db/schemas/collections`,
+    zodDir: `${base}/db/schemas/zod`,
+    migrationsDir: `${base}/db/migrations`,
+    typesDir: `${base}/types/generated`,
+    libDir: `${base}/lib`,
+  };
+}
 
 /**
  * Execute the init command
@@ -98,16 +122,21 @@ export async function runInit(
     process.exit(1);
   }
 
+  const paths = initPaths(cwd);
+  const defaults: InitAnswers = {
+    collectionsDir: paths.collectionsDir,
+    createExampleCollection: true,
+  };
   let answers: InitAnswers;
 
   if (options.yes) {
-    answers = { ...DEFAULTS };
+    answers = { ...defaults };
     logger.info("Using default configuration...");
   } else {
     logger.info("Answer a few questions to set up your project.\n");
 
     try {
-      answers = await promptUser();
+      answers = await promptUser(defaults);
     } catch (error) {
       // User cancelled (Ctrl+C)
       if (
@@ -125,15 +154,15 @@ export async function runInit(
   logger.info("Initializing Nextly...");
   logger.newline();
 
-  await createDirectories(cwd, answers, context);
+  await createDirectories(cwd, answers, paths, context);
 
-  await createConfigFile(cwd, answers, context);
+  await createConfigFile(cwd, answers, paths, context);
 
   if (answers.createExampleCollection) {
-    await createExampleCollection(cwd, answers, context);
+    await createExampleCollection(cwd, answers, paths, context);
   }
 
-  await createGitkeepFiles(cwd, context);
+  await createGitkeepFiles(cwd, paths, context);
 
   logger.newline();
   logger.divider();
@@ -143,10 +172,10 @@ export async function runInit(
   showNextSteps(cwd, context);
 }
 
-async function promptUser(): Promise<InitAnswers> {
+async function promptUser(defaults: InitAnswers): Promise<InitAnswers> {
   const collectionsDir = await input({
     message: "Collections directory:",
-    default: DEFAULTS.collectionsDir,
+    default: defaults.collectionsDir,
   });
 
   const createExampleCollection = await confirm({
@@ -163,16 +192,17 @@ async function promptUser(): Promise<InitAnswers> {
 async function createDirectories(
   cwd: string,
   answers: InitAnswers,
+  paths: InitPaths,
   context: CommandContext
 ): Promise<string[]> {
   const { logger } = context;
 
   const dirs = [
     answers.collectionsDir,
-    "./src/db/schemas/collections",
-    "./src/db/schemas/zod",
-    "./src/db/migrations",
-    "./src/types/generated",
+    paths.schemasDir,
+    paths.zodDir,
+    paths.migrationsDir,
+    paths.typesDir,
   ];
 
   for (const dir of dirs) {
@@ -187,18 +217,22 @@ async function createDirectories(
 async function createConfigFile(
   cwd: string,
   answers: InitAnswers,
+  paths: InitPaths,
   context: CommandContext
 ): Promise<void> {
   const { logger } = context;
 
-  const content = generateConfigTemplate(answers);
+  const content = generateConfigTemplate(answers, paths);
   const configPath = join(cwd, "nextly.config.ts");
 
   await writeFile(configPath, content, "utf-8");
   logger.success("Created nextly.config.ts");
 }
 
-function generateConfigTemplate(answers: InitAnswers): string {
+function generateConfigTemplate(
+  answers: InitAnswers,
+  paths: InitPaths
+): string {
   const collectionsImport = answers.createExampleCollection
     ? `import Posts from "${answers.collectionsDir.replace(/^\.\//, "./")}${answers.collectionsDir.endsWith("/") ? "" : "/"}posts";\n`
     : "";
@@ -214,11 +248,11 @@ export default defineConfig({
     ${collectionsArray}
   ],
   typescript: {
-    outputFile: "./src/types/generated/nextly-types.ts",
+    outputFile: "${paths.typesDir}/nextly-types.ts",
   },
   db: {
-    schemasDir: "./src/db/schemas/collections",
-    migrationsDir: "./src/db/migrations",
+    schemasDir: "${paths.schemasDir}",
+    migrationsDir: "${paths.migrationsDir}",
   },
 });
 `;
@@ -227,6 +261,7 @@ export default defineConfig({
 async function createExampleCollection(
   cwd: string,
   answers: InitAnswers,
+  paths: InitPaths,
   context: CommandContext
 ): Promise<void> {
   const { logger } = context;
@@ -244,7 +279,7 @@ async function createExampleCollection(
   await writeFile(indexPath, indexContent, "utf-8");
   logger.success(`Created ${answers.collectionsDir}/index.ts`);
 
-  await createNextlyHelper(cwd, context);
+  await createNextlyHelper(cwd, paths, context);
 }
 
 function generateCollectionsIndexTemplate(): string {
@@ -263,18 +298,23 @@ export { default as Posts } from "./posts";
 
 async function createNextlyHelper(
   cwd: string,
+  paths: InitPaths,
   context: CommandContext
 ): Promise<void> {
   const { logger } = context;
 
-  const libDir = join(cwd, "src/lib");
+  const libDir = join(cwd, paths.libDir);
   await mkdir(libDir, { recursive: true });
 
-  const content = generateNextlyHelperTemplate();
+  // The config sits at the project root: two levels up from src/lib/, one
+  // from a root lib/.
+  const content = generateNextlyHelperTemplate(
+    paths.base === "./src" ? "../../nextly.config" : "../nextly.config"
+  );
   const helperPath = join(libDir, "nextly.ts");
 
   await writeFile(helperPath, content, "utf-8");
-  logger.success("Created src/lib/nextly.ts");
+  logger.success(`Created ${paths.libDir}/nextly.ts`);
 }
 
 /**
@@ -285,7 +325,9 @@ async function createNextlyHelper(
  * startup paths it defines have to agree about booting, about passing the
  * config, and about when initialization is complete.
  */
-export function generateNextlyHelperTemplate(): string {
+export function generateNextlyHelperTemplate(
+  configImport = "../../nextly.config"
+): string {
   return `/**
  * Nextly Instance Helper
  *
@@ -305,7 +347,7 @@ export function generateNextlyHelperTemplate(): string {
  */
 
 import { getNextly, type Nextly } from "nextly";
-import nextlyConfig from "../../nextly.config";
+import nextlyConfig from "${configImport}";
 
 // Track initialization state
 let initialized = false;
@@ -548,13 +590,14 @@ export default defineCollection({
 
 async function createGitkeepFiles(
   cwd: string,
+  paths: InitPaths,
   context: CommandContext
 ): Promise<void> {
   const { logger } = context;
 
   const gitkeepPaths = [
-    "./src/types/generated/.gitkeep",
-    "./src/db/migrations/.gitkeep",
+    `${paths.typesDir}/.gitkeep`,
+    `${paths.migrationsDir}/.gitkeep`,
   ];
 
   for (const gitkeepPath of gitkeepPaths) {

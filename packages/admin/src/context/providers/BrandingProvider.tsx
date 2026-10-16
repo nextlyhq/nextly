@@ -11,6 +11,7 @@ import {
 } from "@admin/hooks/useSchemaUpdateInvalidation";
 
 import { useAuthSession } from "../../hooks/queries/useAuthSession";
+import { useFaviconInjection } from "../../hooks/useFaviconInjection";
 import { enableDevReload } from "../../lib/api/fetcher";
 import { protectedApi } from "../../lib/api/protectedApi";
 import { publicApi } from "../../lib/api/publicApi";
@@ -193,33 +194,6 @@ function useColorInjection(colors: ResolvedBrandingColors | undefined) {
 const DEFAULT_FAVICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${DEFAULT_MARK_VIEWBOX}"><style>path{fill:#000}@media (prefers-color-scheme: dark){path{fill:#fff}}</style>${DEFAULT_MARK_PATHS.map(d => `<path d="${d}"/>`).join("")}</svg>`;
 const DEFAULT_FAVICON_DATA_URL = `data:image/svg+xml;utf8,${encodeURIComponent(DEFAULT_FAVICON_SVG)}`;
 
-/**
- * Updates page favicon links.
- * Config value wins; otherwise falls back to the inline SVG default.
- *
- * Removes any existing icon links (including Next.js's auto-generated
- * favicon.ico link with stale `sizes`/`type` attributes) and appends a
- * fresh `<link>` so the browser reliably picks up the new icon.
- */
-function useFaviconInjection(favicon: string | undefined) {
-  useEffect(() => {
-    const resolvedFavicon = favicon?.trim() || DEFAULT_FAVICON_DATA_URL;
-    const isSvg = resolvedFavicon.startsWith("data:image/svg+xml");
-
-    document
-      .querySelectorAll<HTMLLinkElement>(
-        'link[rel="icon"], link[rel="shortcut icon"], link[rel="apple-touch-icon"]'
-      )
-      .forEach(link => link.remove());
-
-    const link = document.createElement("link");
-    link.rel = "icon";
-    if (isSvg) link.type = "image/svg+xml";
-    link.href = resolvedFavicon;
-    document.head.appendChild(link);
-  }, [favicon]);
-}
-
 // ============================================================================
 // Provider
 // ============================================================================
@@ -287,7 +261,9 @@ export function BrandingProvider({ children }: BrandingProviderProps) {
   });
 
   useColorInjection(brandingData?.colors);
-  useFaviconInjection(brandingData?.favicon);
+  useFaviconInjection(
+    brandingData?.favicon?.trim() || DEFAULT_FAVICON_DATA_URL
+  );
 
   // The dev-reload subscription is the SERVER's call, not the bundle's. The
   // workspace half carries the running server's answer (`devReload`, computed

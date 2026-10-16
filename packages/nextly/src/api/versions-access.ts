@@ -33,6 +33,7 @@ import { resolveComparisonPair } from "../domains/versions/comparison-baselines"
 import { computeVersionDiff } from "../domains/versions/diff";
 import type { VersionDiff } from "../domains/versions/diff";
 import { hydrateDiffReferences } from "../domains/versions/diff-references";
+import { readPartIsLive } from "../domains/versions/part-liveness";
 import { hydrateSnapshotReferences } from "../domains/versions/snapshot-references";
 import {
   resolveComponentFieldMap,
@@ -723,6 +724,8 @@ export async function compareDocumentVersions(args: {
         locale: query.locale,
         userId: isPerson ? (args.user?.id ?? null) : null,
         workingDraftParts,
+        partIsLive: part =>
+          partIsLiveNow(args.scopeKind, args.slug, args.entryId, part),
       },
       partVersions
     );
@@ -742,6 +745,31 @@ export async function compareDocumentVersions(args: {
     authenticatedScope: args.authenticatedScope,
   });
   return baseline ? { ...diff, baseline } : diff;
+}
+
+/**
+ * Whether a part of the document is served now, read from the document's own
+ * rows. A document whose entity is gone is not served at all.
+ */
+async function partIsLiveNow(
+  scopeKind: VersionScopeKind,
+  slug: string,
+  entryId: string,
+  part: string | null
+): Promise<boolean> {
+  const entity =
+    scopeKind === "single"
+      ? await getService("singleRegistryService").getSingleBySlug(slug)
+      : await getService("collectionRegistryService").getCollectionBySlug(slug);
+  if (!entity) return false;
+  return readPartIsLive({
+    adapter: getService("adapter"),
+    scopeKind,
+    entity,
+    entryId,
+    part,
+    defaultLocale: getService("config").localization?.defaultLocale ?? null,
+  });
 }
 
 /**

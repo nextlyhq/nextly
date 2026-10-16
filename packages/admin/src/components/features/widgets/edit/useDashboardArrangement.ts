@@ -40,6 +40,7 @@ import { WIDTH_NAMES, widthFromDeclaredSize } from "../sizes";
 import type { ArrangementAnnouncer } from "./useArrangementAnnouncer";
 import type { DashboardFocus } from "./useDashboardFocus";
 import { useLayoutEditor, type LayoutEditor } from "./useLayoutEditor";
+import type { SaveOptions, SaveOutcome } from "./useLayoutLifecycle";
 
 /** One card to draw: which placement put it there, and how wide it is. */
 export interface ArrangedWidget {
@@ -93,6 +94,16 @@ export interface DashboardArrangement {
   setCardWidth: (placementId: string, width: WidgetWidth) => void;
   /** Put the default dashboard in the draft, saying nothing is saved yet. */
   stageReset: () => void;
+  /** Open customise mode, with focus on its bar, saying what it means. */
+  begin: () => void;
+  /** Leave customise mode unsaved, with focus back on Customize, saying so. */
+  cancel: () => void;
+  /**
+   * Save the draft and say how that went; focus goes back to Customize once
+   * it has landed. A refused or failed save keeps the draft, and focus stays
+   * where the reader left it.
+   */
+  save: (options?: SaveOptions) => Promise<SaveOutcome>;
 }
 
 /**
@@ -131,6 +142,55 @@ function arrangedRows(
     });
   }
   return rows;
+}
+
+/**
+ * Entering, leaving and saving customise mode, each saying what happened and
+ * sending focus where the reader goes next.
+ *
+ * Its own hook beside the arrangement's, because these act on the MODE rather
+ * than on a card.
+ */
+function useCustomiseLifecycle(
+  editor: LayoutEditor,
+  announce: ArrangementAnnouncer,
+  focus: Pick<DashboardFocus, "request">
+): Pick<DashboardArrangement, "begin" | "cancel" | "save"> {
+  const begin = useCallback(() => {
+    editor.begin();
+    announce.entered();
+    focus.request({ kind: "bar" });
+  }, [editor, announce, focus]);
+
+  const cancel = useCallback(() => {
+    editor.cancel();
+    announce.discarded();
+    focus.request({ kind: "customize" });
+  }, [editor, announce, focus]);
+
+  const save = useCallback(
+    async (options?: SaveOptions): Promise<SaveOutcome> => {
+      const outcome = await editor.save(options);
+      announceSaveOutcome(announce, outcome);
+      // Only a save that landed ends the mode; a refused or failed one leaves
+      // the reader where they were, with their draft.
+      if (outcome === "saved") focus.request({ kind: "customize" });
+      return outcome;
+    },
+    [editor, announce, focus]
+  );
+
+  return { begin, cancel, save };
+}
+
+/** Say how a save went: each outcome has its own sentence. */
+function announceSaveOutcome(
+  announce: ArrangementAnnouncer,
+  outcome: SaveOutcome
+): void {
+  if (outcome === "saved") announce.saved();
+  else if (outcome === "refused") announce.refused();
+  else announce.saveFailed();
 }
 
 export function useDashboardArrangement(
@@ -218,6 +278,12 @@ export function useDashboardArrangement(
     announce.reset();
   }, [editor, announce]);
 
+  const { begin, cancel, save } = useCustomiseLifecycle(
+    editor,
+    announce,
+    focus
+  );
+
   // The sensors alone are shared with every other sortable surface.
   const sensors = useSortableSensors();
 
@@ -264,5 +330,8 @@ export function useDashboardArrangement(
     moveCard,
     setCardWidth,
     stageReset,
+    begin,
+    cancel,
+    save,
   };
 }

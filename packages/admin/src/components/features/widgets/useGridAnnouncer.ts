@@ -5,7 +5,8 @@
  *
  * Its own hook because announcing is a subject rather than a step: it decides
  * when silence is right, it dedupes a repeated sentence, and it is shared by
- * two very different events — a batch settling, and a reader moving a card.
+ * very different events — a batch settling, a reader moving a card, and
+ * customise mode opening, closing or saving.
  * Left inline it was four more pieces of state and branching in a component the
  * complexity gate was already objecting to.
  *
@@ -55,6 +56,21 @@ export interface GridAnnouncer {
    * sounded final would have a reader leave without saving it.
    */
   announceReset: () => void;
+  /**
+   * Say that customise mode opened, and that nothing in it is stored yet.
+   *
+   * Entering moves focus to the bar, which a screen reader announces by its
+   * name; what the name cannot say is that every change waits for Save.
+   */
+  announceEntered: () => void;
+  /** Say that Cancel threw the draft away. */
+  announceDiscarded: () => void;
+  /** Say that a save landed. */
+  announceSaved: () => void;
+  /** Say that a save was refused because the dashboard moved elsewhere. */
+  announceRefused: () => void;
+  /** Say that a save failed, and that the draft is still on screen. */
+  announceSaveFailed: () => void;
 }
 
 /**
@@ -148,6 +164,27 @@ export function useGridAnnouncer(
     [say]
   );
 
+  const announceEntered = useCallback(
+    () =>
+      say("Customizing your dashboard. Nothing is saved until you press Save."),
+    [say]
+  );
+
+  const announceDiscarded = useCallback(() => say("Changes discarded."), [say]);
+
+  const announceSaved = useCallback(() => say("Dashboard saved."), [say]);
+
+  const announceRefused = useCallback(
+    () => say("Your dashboard changed elsewhere, so nothing was saved."),
+    [say]
+  );
+
+  const announceSaveFailed = useCallback(
+    () =>
+      say("Your dashboard could not be saved. Your changes are still here."),
+    [say]
+  );
+
   return {
     announcement,
     announceMoved,
@@ -155,5 +192,10 @@ export function useGridAnnouncer(
     announceRemoved,
     announceRestored,
     announceReset,
+    announceEntered,
+    announceDiscarded,
+    announceSaved,
+    announceRefused,
+    announceSaveFailed,
   };
 }

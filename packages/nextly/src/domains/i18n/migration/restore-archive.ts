@@ -18,9 +18,11 @@
  * @module domains/i18n/migration/restore-archive
  */
 
-import { and, eq, lte } from "drizzle-orm";
+import { and, asc, eq, lte } from "drizzle-orm";
 
+import { NextlyError } from "../../../errors/nextly-error";
 import { nextlyI18nArchiveTables } from "../../../schemas/nextly-i18n-archive";
+import { toSnakeCase } from "../../schema/services/field-column-descriptor";
 import { COMPANION_UPDATED_AT_COLUMN } from "../companion-columns";
 import type { CompanionIntrospectAdapter } from "../runtime/companion-io";
 import {
@@ -35,7 +37,11 @@ import {
  */
 interface ArchiveReadWriteDb {
   select(columns: Record<string, unknown>): {
-    from(table: unknown): { where(condition: unknown): Promise<unknown> };
+    from(table: unknown): {
+      where(condition: unknown): {
+        orderBy(...columns: unknown[]): Promise<unknown>;
+      };
+    };
   };
   delete(table: unknown): { where(condition: unknown): Promise<unknown> };
 }
@@ -53,6 +59,12 @@ export interface RestoreArchiveArgs {
   companionTableName: string;
   /** Restrict the replay to one language. Omit to restore every archived language. */
   locale?: string;
+  /**
+   * Restrict the replay to one field's archived values, by its name (`subTitle`) or its column
+   * name (`sub_title`). A field archived when it stopped being translated is restored this way
+   * once it is translated again.
+   */
+  field?: string;
   /**
    * Delete the replayed rows from the archive once they are written. Default `false` — the
    * archive is kept so a restore can be re-run and so the audit trail survives. Callers that
@@ -91,19 +103,49 @@ interface ArchiveRow {
  * column is handed back to the driver as a string and relies on the parameter being coerced to
  * the target column type.
  */
+/**
+ * Every archived field needs a translated column to come back to. One the entity no longer
+ * translates has none, and replaying it would fail part-way, after other languages had already
+ * been written; so the replay is refused before it starts, naming the fields.
+ */
+async function refuseFieldsNotTranslatedNow(
+  adapter: RestoreArchiveArgs["adapter"],
+  collection: string,
+  companionTableName: string,
+  archivedFields: readonly string[]
+): Promise<void> {
+  const missing: string[] = [];
+  for (const name of new Set(archivedFields)) {
+    if (!(await companionHasColumn(adapter, companionTableName, name))) {
+      missing.push(name);
+    }
+  }
+  if (missing.length === 0) return;
+  const one = missing.length === 1;
+  throw NextlyError.conflict({
+    reason: "state",
+    message:
+      `${missing.map(name => `"${name}"`).join(", ")} ${one ? "is" : "are"} not translated now, ` +
+      `so the archived values have nowhere to go. Make ${one ? "it" : "them"} translated again, then restore.`,
+    logContext: { collection, companionTableName, missing },
+  });
+}
+
 export async function restoreI18nArchive(
   args: RestoreArchiveArgs
 ): Promise<RestoreArchiveResult> {
   const { adapter, collection, companionTableName, locale } = args;
+  // The archive keeps a field's values under its column name. The conversion is the column
+  // descriptor's, and a column name passes through it unchanged.
+  const field = args.field !== undefined ? toSnakeCase(args.field) : undefined;
   const db = adapter.getDrizzle<ArchiveReadWriteDb>();
   const { nextlyI18nArchive } = nextlyI18nArchiveTables(adapter.dialect);
 
-  const where = locale
-    ? and(
-        eq(nextlyI18nArchive.collection, collection),
-        eq(nextlyI18nArchive.locale, locale)
-      )
-    : eq(nextlyI18nArchive.collection, collection);
+  const where = and(
+    eq(nextlyI18nArchive.collection, collection),
+    ...(locale !== undefined ? [eq(nextlyI18nArchive.locale, locale)] : []),
+    ...(field !== undefined ? [eq(nextlyI18nArchive.field, field)] : [])
+  );
 
   const rows = (await db
     .select({
@@ -114,11 +156,22 @@ export async function restoreI18nArchive(
       value: nextlyI18nArchive.value,
     })
     .from(nextlyI18nArchive)
-    .where(where)) as ArchiveRow[];
+    .where(where)
+    // Oldest first, so that when a value was archived more than once (a field made shared,
+    // translated again, then made shared again) the newest row is the one assigned last below
+    // and is what comes back. The id is the database's own insertion order on every dialect.
+    .orderBy(asc(nextlyI18nArchive.id))) as ArchiveRow[];
 
   if (rows.length === 0) {
     return { rowsRead: 0, rowsRestored: 0, locales: [] };
   }
+
+  await refuseFieldsNotTranslatedNow(
+    adapter,
+    collection,
+    companionTableName,
+    rows.map(r => r.field)
+  );
 
   // Collapse the per-field archive rows back into one companion row per (entry, locale) so each
   // language is written in a single upsert rather than once per field.

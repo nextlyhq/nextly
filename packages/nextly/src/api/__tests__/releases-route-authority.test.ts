@@ -579,6 +579,65 @@ describe("release route paging and body validation", () => {
     expect(api.releases.create).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["an unknown kind on the list", "listReleases", "?kind=singles", undefined],
+    [
+      "an unknown kind on a new release",
+      "createRelease",
+      "",
+      { title: "Launch", kind: "singles" },
+    ],
+    [
+      "an explicit null kind on a new release",
+      "createRelease",
+      "",
+      { title: "Launch", kind: null },
+    ],
+  ])("refuses %s rather than ignoring it", async (_, op, query, body) => {
+    // Ignored, `kind=singles` would list every release, and a new release
+    // would be made ordinary when the caller asked for something else.
+    const res = await handleReleaseRequest(
+      new Request(`https://example.test/api/releases${query}`, {
+        method: body === undefined ? "GET" : "POST",
+        ...(body === undefined
+          ? {}
+          : {
+              body: JSON.stringify(body),
+              headers: { "Content-Type": "application/json" },
+            }),
+      }),
+      op as "listReleases" | "createRelease",
+      {}
+    );
+    expect(res.status).toBe(400);
+    expect(api.releases.find).not.toHaveBeenCalled();
+    expect(api.releases.create).not.toHaveBeenCalled();
+  });
+
+  it("passes a recognised kind through to the list and to a new release", async () => {
+    // The control on the case above.
+    await handleReleaseRequest(
+      new Request("https://example.test/api/releases?kind=release"),
+      "listReleases",
+      {}
+    );
+    expect(api.releases.find).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "release" })
+    );
+    await handleReleaseRequest(
+      new Request("https://example.test/api/releases", {
+        method: "POST",
+        body: JSON.stringify({ title: "Launch post", kind: "single" }),
+        headers: { "Content-Type": "application/json" },
+      }),
+      "createRelease",
+      {}
+    );
+    expect(api.releases.create).toHaveBeenCalledWith(
+      expect.objectContaining({ title: "Launch post", kind: "single" })
+    );
+  });
+
   it("forwards the authenticated roles, which code-defined rules evaluate", async () => {
     requireAnyPermission.mockResolvedValueOnce({
       userId: "u1",

@@ -77,8 +77,10 @@ export const createSlugSchema = () => {
 
 /**
  * Client-side mirror of the server's PasswordSchema in
- * @nextly/schemas/validation. Keep these rules in sync — the server is
- * authoritative, but mirroring lets the user see failures before submit.
+ * packages/nextly/src/schemas/_zod/validation.ts, used by every admin form
+ * that sets a password. The server is authoritative; mirroring lets the user
+ * see failures before submit, and src/types/userform-password.test.ts holds
+ * the two to the same verdicts.
  *
  * One regex per rule means each unmet requirement surfaces as its own
  * FormMessage instead of a single combined error.

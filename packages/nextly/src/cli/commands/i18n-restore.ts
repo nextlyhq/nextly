@@ -11,6 +11,10 @@
  *      recreates the companion and seeds the DEFAULT locale from the main table.
  *   2. `nextly i18n:restore --collection <slug>` — brings the other languages back.
  *
+ * A single field that stopped being translated archives its other languages the same way.
+ * Make the field translated again, then `nextly i18n:restore --collection <slug> --field <name>`
+ * brings back just that field's values.
+ *
  * The restore itself is idempotent, so re-running is safe. The archive is kept unless `--purge`
  * is passed, so a restore can be repeated and the audit trail survives.
  *
@@ -33,6 +37,8 @@ export interface I18nRestoreCommandOptions {
   collection?: string;
   /** Restore only this language. Omit to restore every archived language. */
   locale?: string;
+  /** Restore only this field's archived values, by its name or its column name. */
+  field?: string;
   /** Delete the replayed rows from the archive once written. */
   purge?: boolean;
   config?: string;
@@ -96,6 +102,7 @@ export async function runI18nRestore(
   logger.keyValue("Entity", `${slug} (${entity.kind})`);
   logger.keyValue("Companion", companionTableName);
   if (options.locale) logger.keyValue("Locale", options.locale);
+  if (options.field) logger.keyValue("Field", options.field);
 
   await withAdapter(
     async adapter => {
@@ -104,12 +111,13 @@ export async function runI18nRestore(
         collection: slug,
         companionTableName,
         locale: options.locale,
+        field: options.field,
         purge: options.purge,
       });
 
       if (result.rowsRead === 0) {
         logger.warn(
-          `Nothing archived for "${slug}"${options.locale ? ` in ${options.locale}` : ""} — nothing to restore.`
+          `Nothing archived for "${slug}"${options.field ? ` field ${options.field}` : ""}${options.locale ? ` in ${options.locale}` : ""} — nothing to restore.`
         );
         return;
       }
@@ -142,6 +150,10 @@ export function registerI18nRestoreCommand(program: Command): void {
     .option(
       "--locale <code>",
       "Restore only this language (default: every archived language)"
+    )
+    .option(
+      "--field <name>",
+      "Restore only this field's archived values (default: every archived field)"
     )
     .option(
       "--purge",
