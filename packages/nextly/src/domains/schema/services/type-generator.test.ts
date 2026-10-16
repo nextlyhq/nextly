@@ -215,6 +215,23 @@ describe("TypeGenerator — a field pointing at a built-in collection names a ty
     expect(code).toContain("export interface MediaFile {");
   });
 
+  it("aliases the import for an interface generated on its own that is itself MediaFile", () => {
+    // A `media-file` collection generates `interface MediaFile`; referencing
+    // the built-in media row from it needs the alias even without a file.
+    const iface = new TypeGenerator().generateInterface(
+      collection(
+        [{ name: "source", type: "upload", relationTo: "media" }],
+        "media-file"
+      )
+    );
+
+    expect(iface.code).toContain("export interface MediaFile {");
+    expect(iface.code).toContain("source?: string | NextlyMediaFile | null;");
+    expect(iface.imports).toContain(
+      'import type { MediaFile as NextlyMediaFile } from "nextly";'
+    );
+  });
+
   it("returns the MediaFile import with an interface generated on its own", () => {
     // `generateInterface` hands back the imports its code relies on, for a
     // caller assembling a file from interfaces.

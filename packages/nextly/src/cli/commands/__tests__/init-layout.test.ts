@@ -59,7 +59,11 @@ describe("nextly init follows the app's layout", () => {
     expect(configured(cwd, "schemasDir")).toBe("./db/schemas/collections");
     expect(configured(cwd, "migrationsDir")).toBe("./db/migrations");
     expect(existsSync(join(cwd, "collections", "posts.ts"))).toBe(true);
-    expect(existsSync(join(cwd, "lib", "nextly.ts"))).toBe(true);
+    // From a root lib/, the config is one level up; the src/ spelling
+    // (../../) would resolve outside the project.
+    expect(readFileSync(join(cwd, "lib", "nextly.ts"), "utf8")).toContain(
+      'import nextlyConfig from "../nextly.config";'
+    );
   });
 
   it("keeps everything under src/ in an app that uses src/", async () => {
@@ -70,7 +74,9 @@ describe("nextly init follows the app's layout", () => {
     );
     expect(configured(cwd, "schemasDir")).toBe("./src/db/schemas/collections");
     expect(existsSync(join(cwd, "src", "collections", "posts.ts"))).toBe(true);
-    expect(existsSync(join(cwd, "src", "lib", "nextly.ts"))).toBe(true);
+    expect(
+      readFileSync(join(cwd, "src", "lib", "nextly.ts"), "utf8")
+    ).toContain('import nextlyConfig from "../../nextly.config";');
   });
 
   it("names the paths generation then writes to, in either layout", async () => {

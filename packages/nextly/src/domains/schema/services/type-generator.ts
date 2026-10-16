@@ -293,6 +293,12 @@ export class TypeGenerator {
    */
   private builtInMediaName = "MediaFile";
 
+  /**
+   * Whether a whole types file is being generated, whose names decide the
+   * built-in media row's name for every interface in it.
+   */
+  private inTypesFile = false;
+
   constructor(options: TypeGeneratorOptions = {}) {
     this.includeComments = options.includeComments ?? true;
     this.generateInputTypes = options.generateInputTypes ?? true;
@@ -355,6 +361,7 @@ export class TypeGenerator {
       "MediaFile",
       this.declaredInterfaceNames(collections, singles, components)
     );
+    this.inTypesFile = true;
 
     // Generate interfaces for each component (before collections/singles since they may reference components)
     for (const component of components) {
@@ -488,8 +495,9 @@ export class TypeGenerator {
       )
     );
     if (imports.length > 0) lines.splice(importSlot, 0, ...imports, "");
-    // An interface generated on its own afterwards has no file to collide with.
+    // An interface generated on its own afterwards picks its own name.
     this.builtInMediaName = "MediaFile";
+    this.inTypesFile = false;
 
     return {
       code: lines.join("\n"),
@@ -510,8 +518,8 @@ export class TypeGenerator {
     allCollections: DynamicCollectionRecord[] = [],
     allComponents: DynamicFieldGroupRecord[] = []
   ): GeneratedTypeInterface {
-    const outerExpressions = this.beginOwnExpressions();
     const interfaceName = this.toPascalCase(collection.slug);
+    const outerExpressions = this.beginOwnExpressions(interfaceName);
     const lines: string[] = [];
 
     // Interface JSDoc comment
@@ -598,8 +606,8 @@ export class TypeGenerator {
     allCollections: DynamicCollectionRecord[] = [],
     allComponents: DynamicFieldGroupRecord[] = []
   ): GeneratedSingleTypeInterface {
-    const outerExpressions = this.beginOwnExpressions();
     const interfaceName = this.toPascalCase(single.slug);
+    const outerExpressions = this.beginOwnExpressions(interfaceName);
     const lines: string[] = [];
 
     // Interface JSDoc comment
@@ -684,8 +692,8 @@ export class TypeGenerator {
     allComponents: DynamicFieldGroupRecord[] = [],
     allCollections: DynamicCollectionRecord[] = []
   ): GeneratedComponentTypeInterface {
-    const outerExpressions = this.beginOwnExpressions();
     const interfaceName = this.toComponentInterfaceName(component.slug);
+    const outerExpressions = this.beginOwnExpressions(interfaceName);
     const lines: string[] = [];
 
     // Interface JSDoc comment
@@ -768,7 +776,7 @@ export class TypeGenerator {
   generateUserInterface(
     userFields: UserFieldDefinitionRecord[] = []
   ): GeneratedUserInterface {
-    const outerExpressions = this.beginOwnExpressions();
+    const outerExpressions = this.beginOwnExpressions("User");
     const lines: string[] = [];
 
     if (this.includeComments) {
@@ -1601,18 +1609,25 @@ ${properties}
    * an interface twice, and two interfaces can share a field object, either of
    * which makes "what was added since" report nothing for the later call.
    */
-  private beginOwnExpressions(): {
+  private beginOwnExpressions(declares: string): {
     expressions: Map<object, string>;
     emissions: Array<{ expression: string; imported: ReadonlySet<string> }>;
     referencesBuiltInMedia: boolean;
+    builtInMediaName: string;
   } {
     const outer = {
       expressions: this.pluginExpressions,
       emissions: this.pluginEmissions,
       referencesBuiltInMedia: this.interfaceReferencesBuiltInMedia,
+      builtInMediaName: this.builtInMediaName,
     };
     this.pluginExpressions = new Map();
     this.interfaceReferencesBuiltInMedia = false;
+    // Generated on its own, an interface has only its own name to collide
+    // with; inside a types file the file's choice already accounts for it.
+    if (!this.inTypesFile) {
+      this.builtInMediaName = this.freeName("MediaFile", new Set([declares]));
+    }
     // Scoped with them: this interface reserves against what IT wrote, so
     // emissions from an earlier call would make it credit the generator with
     // text that is not in this body and under-reserve.
@@ -1635,6 +1650,7 @@ ${properties}
       expressions: Map<object, string>;
       emissions: Array<{ expression: string; imported: ReadonlySet<string> }>;
       referencesBuiltInMedia: boolean;
+      builtInMediaName: string;
     },
     declares: string,
     body: string
@@ -1664,6 +1680,7 @@ ${properties}
       imports.unshift(this.builtInMediaImport());
     }
     this.interfaceReferencesBuiltInMedia = outer.referencesBuiltInMedia;
+    this.builtInMediaName = outer.builtInMediaName;
     return imports;
   }
 
