@@ -1,6 +1,8 @@
 ---
 name: running-the-fallow-gate
 description: Use before a commit, a push or a pull request handoff in the Nextly monorepo, when the fallow audit verdict is fail or its output looks empty, when reading the Code Hygiene CI report, or before deleting an export, file or dependency that fallow calls unused.
+metadata:
+  internal: true
 ---
 
 # The fallow gate

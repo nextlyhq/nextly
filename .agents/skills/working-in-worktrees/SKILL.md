@@ -1,6 +1,8 @@
 ---
 name: working-in-worktrees
 description: Use before creating, working in or removing a git worktree of the Nextly monorepo, when picking ports or a test database for a second checkout, when pnpm worktree reports a RESERVED slot, or when several sessions share one clone.
+metadata:
+  internal: true
 ---
 
 # Working in several checkouts at once
