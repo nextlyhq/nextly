@@ -13,6 +13,7 @@
 import { mysqlTable, varchar, datetime, json } from "drizzle-orm/mysql-core";
 
 import { NOTICES_INDEXES, mysqlIndexes } from "../_internal/core-indexes";
+import { users } from "../users/mysql";
 
 import { NOTICES_TABLE } from "./table-name";
 
@@ -20,8 +21,12 @@ export const nextlyNoticesMysql = mysqlTable(
   NOTICES_TABLE,
   {
     id: varchar("id", { length: 36 }).primaryKey(),
+    // The person it is for: deleted with them by the database, so a notice
+    // written while their account is being deleted cannot outlive it.
     // As wide as `users.id`, whose key it holds.
-    userId: varchar("user_id", { length: 191 }).notNull(),
+    userId: varchar("user_id", { length: 191 })
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
     kind: varchar("kind", { length: 64 }).notNull(),
     subjectType: varchar("subject_type", { length: 64 }).notNull(),
     subjectId: varchar("subject_id", { length: 191 }).notNull(),

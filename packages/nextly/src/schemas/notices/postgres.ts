@@ -20,6 +20,7 @@
 import { pgTable, text, timestamp, jsonb } from "drizzle-orm/pg-core";
 
 import { NOTICES_INDEXES, pgIndexes } from "../_internal/core-indexes";
+import { users } from "../users/postgres";
 
 import { NOTICES_TABLE } from "./table-name";
 
@@ -27,7 +28,11 @@ export const nextlyNoticesPg = pgTable(
   NOTICES_TABLE,
   {
     id: text("id").primaryKey(),
-    userId: text("user_id").notNull(),
+    // The person it is for: deleted with them by the database, so a notice
+    // written while their account is being deleted cannot outlive it.
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
     kind: text("kind").notNull(),
     subjectType: text("subject_type").notNull(),
     subjectId: text("subject_id").notNull(),

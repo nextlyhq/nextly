@@ -1,0 +1,99 @@
+/**
+ * The scheduled drain sweeps notices past the activity log's window.
+ *
+ * Write paths offer the notices pass capped, and an install that stops
+ * writing offers it never; the drain is the trigger that keeps running, so it
+ * sweeps notices on a marker of its own, and hands the turn back when its time
+ * is already spent.
+ */
+import { describe, expect, it, vi } from "vitest";
+
+import { resolveAuditRetentionConfig } from "../../audit/retention-config";
+import { NOTICES_RETENTION_DRAIN_GATE_KEY } from "../../retention/gate";
+import { runDrain } from "../run-drain";
+
+/** A database with no events and no deliveries due, so only retention runs. */
+function idleDb(): never {
+  return {
+    select: async () => [],
+    update: async () => [],
+    insert: async () => [],
+    delete: async () => 0,
+    transaction: async (fn: (tx: unknown) => Promise<unknown>) => fn(undefined),
+  } as never;
+}
+
+/** An adapter whose notices table holds one notice past its window. */
+function oneOldNotice() {
+  let left = 1;
+  const tables: string[] = [];
+  const remove = vi.fn(async (table: string) => {
+    tables.push(`delete:${table}`);
+    const removed = table === "nextly_notices" ? left : 0;
+    if (table === "nextly_notices") left = 0;
+    return removed;
+  });
+  return {
+    tables,
+    adapter: {
+      select: async (table: string) => {
+        tables.push(table);
+        return table === "nextly_notices" && left > 0 ? [{ id: "old" }] : [];
+      },
+      delete: remove,
+      transaction: async (
+        fn: (tx: { delete: typeof remove }) => Promise<unknown>
+      ) => fn({ delete: remove }),
+    },
+  };
+}
+
+function drain(
+  retention: Parameters<typeof runDrain>[0]["retention"],
+  maxDurationMs?: number
+) {
+  return runDrain({
+    fanOut: { db: idleDb(), loadEndpoints: async () => [] } as never,
+    deliver: { db: idleDb(), now: () => new Date(0) } as never,
+    maxDurationMs,
+    retention,
+  });
+}
+
+describe("the scheduled drain and notices", () => {
+  it("sweeps notices on its own marker, under the activity log's window", async () => {
+    const claimed: string[] = [];
+    const store = oneOldNotice();
+    const result = await drain({
+      auditPolicy: resolveAuditRetentionConfig({ activityMaxAgeMs: 1000 }),
+      prune: { adapter: store.adapter } as never,
+      gate: {
+        claim: async (key: string) => {
+          claimed.push(key);
+          return true;
+        },
+        release: async () => undefined,
+      },
+    });
+    expect(claimed).toContain(NOTICES_RETENTION_DRAIN_GATE_KEY);
+    expect(store.tables).toContain("delete:nextly_notices");
+    expect(result.pruned.notices).toBe(1);
+  });
+
+  it("leaves notices alone when the activity log keeps everything", async () => {
+    const claimed: string[] = [];
+    const result = await drain({
+      auditPolicy: resolveAuditRetentionConfig({ activityMaxAgeMs: false }),
+      prune: { adapter: oneOldNotice().adapter } as never,
+      gate: {
+        claim: async (key: string) => {
+          claimed.push(key);
+          return true;
+        },
+        release: async () => undefined,
+      },
+    });
+    expect(claimed).not.toContain(NOTICES_RETENTION_DRAIN_GATE_KEY);
+    expect(result.pruned.notices).toBe(0);
+  });
+});

@@ -585,7 +585,7 @@ export function generateSqliteCoreTableStatements(): string[] {
     // gains it.
     `CREATE TABLE IF NOT EXISTS "${NOTICES_TABLE}" (
       "id" TEXT PRIMARY KEY NOT NULL,
-      "user_id" TEXT NOT NULL,
+      "user_id" TEXT NOT NULL REFERENCES "users"("id") ON DELETE CASCADE,
       "kind" TEXT NOT NULL,
       "subject_type" TEXT NOT NULL,
       "subject_id" TEXT NOT NULL,
@@ -599,6 +599,8 @@ export function generateSqliteCoreTableStatements(): string[] {
       ON "${NOTICES_TABLE}" ("dedupe_key")`,
     `CREATE INDEX IF NOT EXISTS "nextly_notices_user_idx"
       ON "${NOTICES_TABLE}" ("user_id", "read_at", "created_at")`,
+    `CREATE INDEX IF NOT EXISTS "nextly_notices_inbox_idx"
+      ON "${NOTICES_TABLE}" ("user_id", "created_at", "id")`,
     `CREATE INDEX IF NOT EXISTS "nextly_notices_subject_idx"
       ON "${NOTICES_TABLE}" ("subject_type", "subject_id")`,
     `CREATE INDEX IF NOT EXISTS "nextly_notices_created_idx"

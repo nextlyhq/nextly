@@ -63,17 +63,25 @@ describe.each(availableDialects())(
             COLUMNS
           );
 
+          const at =
+            fresh.dialect === "sqlite" ? "1767225600" : "'2026-01-01 00:00:00'";
+          // A notice belongs to an account: the person it is for exists.
+          await fresh.exec(
+            "INSERT INTO users (id, email, is_active, failed_login_attempts, created_at, updated_at) " +
+              `VALUES ('u1', 'u1@example.com', ${fresh.dialect === "sqlite" ? 1 : "true"}, 0, ${at}, ${at})`
+          );
+          const row = (id: string, userId = "u1", digest = "same-digest") =>
+            "INSERT INTO nextly_notices (id, user_id, kind, subject_type, subject_id, occurrence, dedupe_key, created_at) " +
+            `VALUES ('${id}', '${userId}', 'test.kind', 'thing', 't1', '1', '${digest}', ${at})`;
           // The digest is unique on the upgraded table too: a second row with
           // the same digest is refused by the database itself.
-          const row = (id: string) =>
-            "INSERT INTO nextly_notices (id, user_id, kind, subject_type, subject_id, occurrence, dedupe_key, created_at) " +
-            `VALUES ('${id}', 'u1', 'test.kind', 'thing', 't1', '1', 'same-digest', ${
-              fresh.dialect === "sqlite"
-                ? "1767225600"
-                : "'2026-01-01 00:00:00'"
-            })`;
           await fresh.exec(row("a"));
           await expect(fresh.exec(row("b"))).rejects.toThrow();
+          // And the person is held to an account: a notice for nobody is
+          // refused, so the upgrade brought the foreign key with the table.
+          await expect(
+            fresh.exec(row("c", "nobody", "another-digest"))
+          ).rejects.toThrow();
 
           expect(await migrateFresh(fresh, NO_MIGRATIONS)).toBe(false);
         }

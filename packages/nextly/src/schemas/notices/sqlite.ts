@@ -14,6 +14,7 @@
 import { sqliteTable, text, integer } from "drizzle-orm/sqlite-core";
 
 import { NOTICES_INDEXES, sqliteIndexes } from "../_internal/core-indexes";
+import { users } from "../users/sqlite";
 
 import { NOTICES_TABLE } from "./table-name";
 
@@ -21,7 +22,11 @@ export const nextlyNoticesSqlite = sqliteTable(
   NOTICES_TABLE,
   {
     id: text("id").primaryKey().notNull(),
-    userId: text("user_id").notNull(),
+    // The person it is for: deleted with them by the database, so a notice
+    // written while their account is being deleted cannot outlive it.
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
     kind: text("kind").notNull(),
     subjectType: text("subject_type").notNull(),
     subjectId: text("subject_id").notNull(),

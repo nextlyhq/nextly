@@ -68,8 +68,35 @@ beforeEach(() => {
   registerNoticeKind(plain);
 });
 
+/** The people these notices are for. A notice belongs to a real account. */
+const PEOPLE = ["alice", "bob", "carol"];
+
 async function boot(dialect: TestDialect): Promise<NoticesService> {
   current = await createTestNextly({ dialect, collections: [] });
+  // Through the adapter's typed insert, with the ids the cases name: a notice's
+  // person is held to `users.id`, so each must be an account that exists.
+  const adapter = current.adapter as unknown as {
+    insert(
+      table: string,
+      row: Record<string, unknown>,
+      options: { returning: string[] }
+    ): Promise<unknown>;
+  };
+  for (const id of PEOPLE) {
+    const at = new Date();
+    await adapter.insert(
+      "users",
+      {
+        id,
+        email: `${id}@example.com`,
+        isActive: true,
+        failedLoginAttempts: 0,
+        createdAt: at,
+        updatedAt: at,
+      },
+      { returning: [] }
+    );
+  }
   return current.getService("noticesService") as NoticesService;
 }
 
@@ -201,14 +228,25 @@ describe.each(getConfiguredTestDialects())("notices (%s)", dialect => {
       data: z.object({ n: z.bigint() }),
       render: () => ({ title: "counted" }),
     });
+    const empty = defineNoticeKind({
+      key: "test.empty",
+      subjectType: "thing",
+      data: z.undefined(),
+      render: () => ({ title: "empty" }),
+    });
     registerNoticeKind(dated);
     registerNoticeKind(counted);
+    registerNoticeKind(empty);
     const base = { userId: "alice", subjectId: "t1", occurrence: "1" };
     await expect(
       notices.record({ ...base, kind: dated, data: { at: new Date() } })
     ).rejects.toMatchObject({ code: "INTERNAL_ERROR" });
     await expect(
       notices.record({ ...base, kind: counted, data: { n: 1n } })
+    ).rejects.toMatchObject({ code: "INTERNAL_ERROR" });
+    // `undefined` has no JSON form at all.
+    await expect(
+      notices.record({ ...base, kind: empty, data: undefined })
     ).rejects.toMatchObject({ code: "INTERNAL_ERROR" });
     expect(await notices.count({ userId: "alice" })).toBe(0);
   });

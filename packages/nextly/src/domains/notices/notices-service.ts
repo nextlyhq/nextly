@@ -470,7 +470,10 @@ function jsonSnapshot(
 ): unknown {
   let stored: unknown;
   try {
-    stored = data === undefined ? undefined : JSON.parse(JSON.stringify(data));
+    // `undefined` (and a function) has no JSON form at all: stringify
+    // answers undefined, which is as unstorable as a bigint.
+    const text: string | undefined = JSON.stringify(data);
+    stored = text === undefined ? UNSTORABLE : JSON.parse(text);
   } catch {
     stored = UNSTORABLE;
   }
@@ -493,8 +496,22 @@ function jsonSnapshot(
  * service's whole surface. `tableExists`, when offered, lets a database from
  * before notices be passed over quietly.
  */
-export type NoticesPruneDb = Pick<NoticesDb, "select" | "delete"> &
-  Partial<Pick<NoticesDb, "tableExists">>;
+export interface NoticesPruneDb {
+  select<T = unknown>(
+    table: string,
+    options: {
+      columns: string[];
+      where: { and: VersionsWhereCondition[] };
+      orderBy: { column: string; direction: "asc" | "desc" }[];
+      limit: number;
+    }
+  ): Promise<T[]>;
+  delete(
+    table: string,
+    where: { and: VersionsWhereCondition[] }
+  ): Promise<number>;
+  tableExists?(table: string): Promise<boolean>;
+}
 
 /** Remove up to `limit` notices created before `before`, oldest first. */
 export async function deleteNoticesOlderThan(

@@ -95,10 +95,15 @@ export const ACTIVITY_LOG_INDEXES = [
 export const NOTICES_INDEXES = [
   // Once per occurrence: the digest of person, kind, subject and occurrence.
   { name: "nextly_notices_dedupe_uidx", columns: ["dedupeKey"], unique: true },
-  // A person's list and unread count, newest first.
+  // A person's unread list and count, newest first.
   {
     name: "nextly_notices_user_idx",
     columns: ["userId", "readAt", "createdAt"],
+  },
+  // A person's whole list, in the order it pages: newest first, ties by id.
+  {
+    name: "nextly_notices_inbox_idx",
+    columns: ["userId", "createdAt", "id"],
   },
   // Which notices are about a subject, so a deleted subject reads as gone.
   {
