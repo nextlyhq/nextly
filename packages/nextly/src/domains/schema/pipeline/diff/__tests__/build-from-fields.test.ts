@@ -788,3 +788,24 @@ describe.each(["postgresql", "mysql", "sqlite"] as const)(
     });
   }
 );
+
+describe("buildDesiredTableFromComponentFields - many-to-many index", () => {
+  // The component creator indexes a relationship only when it has a string `relationTo`, and a
+  // Builder-authored many-to-many has none. Declaring an index here would make the next preview
+  // propose adding one to a component the creator just made without it.
+  it("declares no index for a many-to-many, which the creator never indexes", () => {
+    const table = buildDesiredTableFromComponentFields(
+      "comp_hero",
+      [
+        {
+          name: "tags",
+          type: "relationship",
+          options: { target: "tags", relationType: "manyToMany" },
+        },
+      ] as never,
+      "postgresql",
+      { builtBy: "codeFirst" }
+    );
+    expect(table.indexes?.map(i => i.name)).not.toContain("idx_comp_hero_tags");
+  });
+});
