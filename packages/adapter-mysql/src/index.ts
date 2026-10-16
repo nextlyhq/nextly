@@ -835,24 +835,15 @@ export class MySqlAdapter extends DrizzleAdapter {
       // A conflict key holding NULL never conflicts: a unique index admits any
       // number of NULLs. It is a plain insert, read back by its primary key.
       if (values.some(value => value === null)) {
-        await db.insert(tableObj).values(data as never);
-        return (await this.byPrimaryKey<T>(db, tableObj, data)) ?? (data as T);
+        return ((await this.insertRow(db, tableObj, data)) ?? data) as T;
       }
-
-      try {
-        await db.insert(tableObj).values(data as never);
-      } catch (error) {
-        if (!isDuplicateKey(error)) throw error;
-        if ((await this.lockedRow(db, tableObj, where)) === undefined) {
-          // The collision was on another unique key, not the target.
-          throw error;
-        }
-        const update = this.updateValues(data, options);
-        if (Object.keys(update).length > 0) {
-          await db.update(tableObj).set(update).where(where);
-        }
-      }
-      return (await this.lockedRow(db, tableObj, where)) as T;
+      return (await this.insertOrResolve(
+        db,
+        tableObj,
+        data,
+        options,
+        where
+      )) as T;
     } catch (error) {
       throw this.handleQueryError(error, "upsert", table);
     }
@@ -923,24 +914,76 @@ export class MySqlAdapter extends DrizzleAdapter {
     return rows[0];
   }
 
-  /** The row just inserted, by its primary key when the data names it. */
-  private async byPrimaryKey<T>(
+  /**
+   * Insert the row, or resolve a duplicate on the target key. The insert is
+   * read back by the primary key it reports, not by the conflict key: a
+   * BEFORE INSERT trigger may have rewritten the conflict value, and the row
+   * stored is the one to return.
+   *
+   * A duplicate is resolved when a row holds the TARGET key, whichever unique
+   * key MySQL names in its error. PostgreSQL checks the target's index before
+   * any other, so a row colliding on the target and on another key resolves
+   * on the target there too; refusing it here because MySQL happened to check
+   * the other index first would answer that case differently. A target row
+   * committed by another transaction after this insert failed is the order in
+   * which that transaction ran first, where PostgreSQL also resolves on it.
+   */
+  private async insertOrResolve(
+    db: MySql2Database<AnyRelations>,
+    tableObj: MySqlTable,
+    data: Record<string, unknown>,
+    options: UpsertOptions,
+    where: SQL | undefined
+  ): Promise<unknown> {
+    let failure: unknown;
+    try {
+      const stored = await this.insertRow(db, tableObj, data);
+      return stored ?? (await this.lockedRow(db, tableObj, where));
+    } catch (error) {
+      if (!isDuplicateKey(error)) throw error;
+      failure = error;
+    }
+    const existing = await this.lockedRow(db, tableObj, where);
+    // No row holds the target key: the collision was on another unique key,
+    // refused as `ON CONFLICT (target)` refuses it. The driver's own error is
+    // thrown so it is classified as the unique violation it is, not as
+    // Drizzle's unnumbered wrapper.
+    if (existing === undefined) throw driverError(failure);
+    const update = this.updateValues(data, options);
+    if (Object.keys(update).length === 0) return existing;
+    await db.update(tableObj).set(update).where(where);
+    return this.lockedRow(db, tableObj, where);
+  }
+
+  /**
+   * Insert a row and read it back by the primary key the insert reports —
+   * the value given, or the one MySQL generated. Undefined when the table has
+   * no column-level primary key to report.
+   */
+  private async insertRow(
     db: MySql2Database<AnyRelations>,
     tableObj: MySqlTable,
     data: Record<string, unknown>
-  ): Promise<T | undefined> {
+  ): Promise<unknown> {
+    const [ids] = (await db
+      .insert(tableObj)
+      .values(data as never)
+      .$returningId()) as Record<string, unknown>[];
     const record = tableObj as unknown as Record<string, Column | undefined>;
-    const primary = Object.keys(data).filter(
-      name => record[name]?.primary === true
+    const primary = Object.entries(ids ?? {}).filter(
+      ([name, value]) =>
+        record[name] !== undefined && value !== undefined && value !== null
     );
     if (primary.length === 0) return undefined;
-    return (await this.lockedRow(
+    return this.lockedRow(
       db,
       tableObj,
       and(
-        ...primary.map(name => eq(record[name] as Column, data[name] as never))
+        ...primary.map(([name, value]) =>
+          eq(record[name] as Column, value as never)
+        )
       )
-    )) as T | undefined;
+    );
   }
 
   /** A table-level `primaryKey({ columns })`, read through the MySQL table config. */
@@ -1217,20 +1260,27 @@ export class MySqlAdapter extends DrizzleAdapter {
 }
 
 /**
- * Whether a failed write was a duplicate key, read from the driver's error
- * number on the error or on its cause: Drizzle wraps the driver's error in its
- * own query error, which carries no number of its own.
+ * The driver's own error behind a failed write: Drizzle wraps it in a query
+ * error of its own that carries no error number, so the driver's is the one
+ * that says what failed.
  */
-function isDuplicateKey(error: unknown): boolean {
-  const errnoOf = (value: unknown) =>
-    typeof value === "object" && value !== null && "errno" in value
-      ? (value as { errno?: number }).errno
-      : undefined;
+function driverError(error: unknown): unknown {
   const cause =
     typeof error === "object" && error !== null && "cause" in error
       ? (error as { cause?: unknown }).cause
       : undefined;
-  const errno = errnoOf(error) ?? errnoOf(cause);
+  return typeof cause === "object" && cause !== null && "errno" in cause
+    ? cause
+    : error;
+}
+
+/** Whether a failed write was a duplicate key, by the driver's error number. */
+function isDuplicateKey(error: unknown): boolean {
+  const driver = driverError(error);
+  const errno =
+    typeof driver === "object" && driver !== null && "errno" in driver
+      ? (driver as { errno?: number }).errno
+      : undefined;
   return errno !== undefined && MYSQL_ERROR_CODES[errno] === "unique_violation";
 }
 

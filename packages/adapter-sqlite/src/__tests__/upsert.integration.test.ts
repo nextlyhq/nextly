@@ -182,6 +182,33 @@ describe("SQLite upsert", () => {
     expect(await rows()).toEqual([{ id: "a", key: "k1", label: "first" }]);
   });
 
+  it("resolves on the target when the row collides on another key as well", async () => {
+    // PostgreSQL checks the target's index before any other unique index, so
+    // a proposed row colliding with one row on the target and with another
+    // row elsewhere updates the target row. Every dialect answers the same,
+    // whichever index its engine happens to check first.
+    await adapter.upsert(
+      TABLE,
+      { id: "a", key: "k1", slug: "s1", label: "first" },
+      { conflictColumns: ["slug"] }
+    );
+    await adapter.upsert(
+      TABLE,
+      { id: "b", key: "k2", slug: "s2", label: "second" },
+      { conflictColumns: ["slug"] }
+    );
+    const stored = await adapter.upsert<Row>(
+      TABLE,
+      { id: "c", key: "k2", slug: "s1", label: "renamed" },
+      { conflictColumns: ["slug"], updateColumns: ["label"] }
+    );
+    expect(stored).toMatchObject({ id: "a", label: "renamed" });
+    expect(await rows()).toEqual([
+      { id: "a", key: "k1", label: "renamed" },
+      { id: "b", key: "k2", label: "second" },
+    ]);
+  });
+
   it("reads back the row matching every column of a composite key", async () => {
     // Two rows share the key's first column, so a read-back by that column
     // alone could return the wrong one.

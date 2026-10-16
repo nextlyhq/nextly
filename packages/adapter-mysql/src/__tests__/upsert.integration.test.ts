@@ -180,6 +180,68 @@ describe.skipIf(!TEST_DB_URL)("MySQL upsert", () => {
     expect(await rows()).toEqual([{ id: "a", key: "k1", label: "first" }]);
   });
 
+  it("resolves on the target when the row collides on another key as well", async () => {
+    // PostgreSQL checks the target's index before any other unique index, so
+    // a proposed row colliding with one row on the target and with another
+    // row elsewhere updates the target row. Every dialect answers the same,
+    // whichever index its engine happens to check first.
+    await adapter.upsert(
+      TABLE,
+      { id: "a", key: "k1", slug: "s1", label: "first" },
+      { conflictColumns: ["slug"] }
+    );
+    await adapter.upsert(
+      TABLE,
+      { id: "b", key: "k2", slug: "s2", label: "second" },
+      { conflictColumns: ["slug"] }
+    );
+    const stored = await adapter.upsert<Row>(
+      TABLE,
+      { id: "c", key: "k2", slug: "s1", label: "renamed" },
+      { conflictColumns: ["slug"], updateColumns: ["label"] }
+    );
+    expect(stored).toMatchObject({ id: "a", label: "renamed" });
+    expect(await rows()).toEqual([
+      { id: "a", key: "k1", label: "renamed" },
+      { id: "b", key: "k2", label: "second" },
+    ]);
+  });
+
+  it("reports a refused collision as a unique violation", async () => {
+    // The typed error contract: a caller handles a refused collision by its
+    // kind, which must survive Drizzle wrapping the driver's error.
+    await adapter.upsert(
+      TABLE,
+      { id: "a", key: "k1", slug: "s1", label: "first" },
+      { conflictColumns: ["key"] }
+    );
+    await expect(
+      adapter.upsert(
+        TABLE,
+        { id: "b", key: "k2", slug: "s1", label: "second" },
+        { conflictColumns: ["key"] }
+      )
+    ).rejects.toMatchObject({ kind: "unique_violation" });
+  });
+
+  it("returns the stored row when an insert trigger rewrites the conflict key", async () => {
+    // PostgreSQL's RETURNING gives the row as stored. A read-back by the
+    // caller's conflict value would find nothing once a trigger changed it.
+    await adapter.executeQuery(
+      `CREATE TRIGGER int_upsert_prefix BEFORE INSERT ON ${TABLE} FOR EACH ROW SET NEW.\`key\` = CONCAT('t-', NEW.\`key\`)`
+    );
+    try {
+      const stored = await adapter.upsert<Row>(
+        TABLE,
+        { id: "a", key: "k1", label: "first" },
+        { conflictColumns: ["key"] }
+      );
+      expect(stored).toMatchObject({ id: "a", key: "t-k1", label: "first" });
+    } finally {
+      await adapter.executeQuery("DROP TRIGGER IF EXISTS int_upsert_prefix");
+    }
+  });
+
   it("reads back the row matching every column of a composite key", async () => {
     // Two rows share the key's first column, so a read-back by that column
     // alone could return the wrong one.
