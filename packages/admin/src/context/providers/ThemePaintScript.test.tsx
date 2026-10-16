@@ -247,6 +247,31 @@ describe("the admin's theme", () => {
     expect(theme?.themes).toEqual(["light", "dark"]);
   });
 
+  it("defaults to light, not the system's setting, when system mode is off", () => {
+    systemSetting(true);
+    let theme: UseThemeProps | undefined;
+    function Capture() {
+      theme = useTheme();
+      return null;
+    }
+    render(
+      <ThemeProvider enableSystem={false}>
+        <Capture />
+      </ThemeProvider>
+    );
+
+    expect(theme?.theme).toBe("light");
+    expect(theme?.resolvedTheme).toBe("light");
+  });
+
+  it("is exported from the package, for hosts that compose the provider themselves", async () => {
+    const admin = await import("../../index");
+
+    expect(admin.ThemePaintScript).toBe(ThemePaintScript);
+    expect(admin.ThemeProvider).toBe(ThemeProvider);
+    // The package entry loads the whole admin, which takes several seconds.
+  }, 30_000);
+
   it("lets an enclosing provider's settings hold inside a nested one", () => {
     systemSetting(false);
     localStorage.setItem("host-theme", "dark");

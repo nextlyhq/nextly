@@ -2,7 +2,7 @@
   "coverage": {
     "pages": 80,
     "samples": 452,
-    "compiled": 283
+    "compiled": 284
   },
   "samplesPerPage": {
     "docs/admin/branding.mdx": {
@@ -26,7 +26,7 @@
       "compiled": 2
     },
     "docs/configuration/collections.mdx": {
-      "samples": 9,
+      "samples": 8,
       "compiled": 3
     },
     "docs/configuration/environment.mdx": {
@@ -90,8 +90,8 @@
       "compiled": 2
     },
     "docs/getting-started/installation.mdx": {
-      "samples": 7,
-      "compiled": 7
+      "samples": 8,
+      "compiled": 8
     },
     "docs/getting-started/project-structure.mdx": {
       "samples": 3,
@@ -362,6 +362,9 @@
       "reader-name #4 error TS2304: Cannot find name 'Page'.": 1,
       "reader-name #6 error TS2304: Cannot find name 'Page'.": 1
     },
+    "docs/notices/index.mdx": {
+      "reader-file #0 error TS2307: Cannot find module '../../nextly.config' or its corresponding type declarations.": 1
+    },
     "docs/plugins/admin-ui.mdx": {
       "#11 error TS2304: Cannot find name 'Skeleton'.": 1,
       "uninstalled #13 error TS2307: Cannot find module '@acme/nextly-plugin-reports' or its corresponding type declarations.": 1,
@@ -468,7 +471,7 @@
       "uninstalled #0 error TS2307: Cannot find module '{{pluginName}}' or its corresponding type declarations.": 1
     },
     "docs/api-reference/rest-api.mdx": {
-      "reader-file #0 error TS2307: Cannot find module '../../../nextly.config' or its corresponding type declarations.": 1
+      "reader-file #0 error TS2307: Cannot find module '../../../../../nextly.config' or its corresponding type declarations.": 1
     },
     "docs/configuration/collections.mdx": {
       "reader-file #1 error TS2307: Cannot find module './src/collections/posts' or its corresponding type declarations.": 1
@@ -498,7 +501,8 @@
     "docs/getting-started/installation.mdx": {
       "reader-file #3 error TS2307: Cannot find module '../../../../nextly.config' or its corresponding type declarations.": 1,
       "reader-file #4 error TS2307: Cannot find module '../../../../../nextly.config' or its corresponding type declarations.": 1,
-      "reader-file #5 error TS2307: Cannot find module '../../../../../../nextly.config' or its corresponding type declarations.": 1
+      "reader-file #5 error TS2307: Cannot find module '../../../../../../nextly.config' or its corresponding type declarations.": 1,
+      "reader-file #7 error TS2307: Cannot find module '../nextly.config' or its corresponding type declarations.": 1
     },
     "docs/getting-started/project-structure.mdx": {
       "reader-file #2 error TS2307: Cannot find module '../db/schemas/collections/zod' or its corresponding type declarations.": 1
@@ -513,9 +517,6 @@
     },
     "docs/jobs/index.mdx": {
       "reader-file #1 error TS2307: Cannot find module './jobs/send-digest' or its corresponding type declarations.": 1
-    },
-    "docs/notices/index.mdx": {
-      "reader-file #0 error TS2307: Cannot find module '../../nextly.config' or its corresponding type declarations.": 1
     },
     "docs/page-builder/index.mdx": {
       "reader-file #1 error TS2307: Cannot find module '../../../nextly.config' or its corresponding type declarations.": 1

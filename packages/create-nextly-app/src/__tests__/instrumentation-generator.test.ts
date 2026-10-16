@@ -15,6 +15,8 @@ import ts from "typescript";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { generateInstrumentation } from "../generators/instrumentation";
+import { patchNextConfig } from "../generators/next-config";
+import type { DatabaseConfig } from "../types";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const blankHook = path.resolve(
@@ -258,5 +260,23 @@ describe("generateInstrumentation", () => {
     const result = await generateInstrumentation(cwd, { srcDir: true });
 
     expect(result.written).toEqual(["src/instrumentation.ts"]);
+  });
+
+  it("names the same config as the Next config step when a Next.js 14 app has none, so following both makes one file", async () => {
+    const cwd = await app("14.2.3");
+    const sqlite: DatabaseConfig = {
+      type: "sqlite",
+      adapter: "@nextlyhq/adapter-sqlite",
+      databaseDriver: "better-sqlite3",
+      connectionUrl: "file:./data/nextly.db",
+      envExample: "file:./data/nextly.db",
+    };
+
+    // The order the scaffolder runs them in.
+    const hook = await generateInstrumentation(cwd, { srcDir: true });
+    const patch = await patchNextConfig(cwd, sqlite);
+
+    expect(patch.kind).toBe("manual");
+    expect(hook.skipped.map(entry => entry.path)).toEqual([patch.file]);
   });
 });
