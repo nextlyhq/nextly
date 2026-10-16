@@ -689,7 +689,9 @@ function previewPendingFile(
   )) {
     logger.info(`    ✖ a real run would refuse it: ${refusal.message}`);
   }
-  logger.info(m.upSql.trim());
+  // The file's own UP section. A run that finds the schema already at the file's target adopts it
+  // without running these, and one that finds it at neither end refuses it for drift.
+  logger.info(`    UP, as written in the file:\n${m.upSql.trim()}`);
 }
 
 /** Clear a stale migrate lock when `--force-unlock` was passed (else no-op). */

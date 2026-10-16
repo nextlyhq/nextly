@@ -24,6 +24,7 @@ import { castText, ddlType, exactText, lit, q } from "./ddl-types";
 import {
   buildDefaultLocaleRestoreStatements,
   buildFieldLeavesTranslationArchiveStatement,
+  restoreTargetType,
 } from "./generate-down";
 import type { CompanionMigrationSpec, LocalizedColumnSpec } from "./types";
 
@@ -84,7 +85,22 @@ export function planFieldLeavesTranslationMigration(
     "SELECT 1",
   ];
 
+  // A main column narrower than what the companion column can hold is widened before the copy,
+  // by the rule the whole-entity disable uses (`restoreTargetType`): on MySQL a `longText`
+  // companion column created before the renderer emitted TEXT is physically LONGTEXT, and copying
+  // it into TEXT truncates, silently on a non-strict server, just before its source is dropped.
+  const widen = spec.columns
+    .filter(
+      column =>
+        dialect === "mysql" &&
+        restoreTargetType(column, dialect) !== ddlType(column, dialect)
+    )
+    .map(
+      column =>
+        `ALTER TABLE ${main} MODIFY COLUMN ${q(column.name, dialect)} ${restoreTargetType(column, dialect)}`
+    );
   const sharedUp = [
+    ...widen,
     ...buildDefaultLocaleRestoreStatements(ref, names),
     ...names.map(name => `ALTER TABLE ${comp} DROP COLUMN ${q(name, dialect)}`),
   ];

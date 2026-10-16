@@ -41,8 +41,11 @@ translated field back, every language included, and every file is safe to
 run again.
 
 The same rule as the Schema Builder refuses, at `migrate:create`, a field
-marked `required` or `unique` that stops being translated, and names the
-steps that work.
+that stops being translated while it is `required`, `unique` or covered by
+a unique index, or while it also changes type, and names the steps that
+work. The type it is stored in now is read from the migration history,
+which records each translated column; a field no migration file describes
+is reported instead.
 
 `nextly migrate --dry-run` now prints the SQL each pending file would run,
 as `migrate:down --dry-run` already does for a rollback.

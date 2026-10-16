@@ -16,6 +16,7 @@ import type { ColumnOrigin } from "../../schema/services/field-column-descriptor
 
 import { fieldToLocalizedColumnSpec } from "./field-to-column-spec";
 import type { CompanionFieldLike } from "./reconcile-companion";
+import type { LocalizedColumnSpec } from "./types";
 
 /** A field as a schema change describes it, with the flags the rules read. */
 export type LeavingFieldLike = CompanionFieldLike & {
@@ -45,12 +46,12 @@ function constraintsOf(field: LeavingFieldLike): ("required" | "unique")[] {
  *
  * - A field whose storage changes in the same change: its type, or its bounds (length,
  *   precision, scale). Its values would be copied as they are into a column of another shape,
- *   without the conversion and confirmation such a change goes through on its own. Judged only
- *   when `oldFields` describes the column the values sit in now; a caller that cannot know it
- *   omits them.
- * - A required or unique field. Its shared column is created, and its constraints checked, before
- *   the default language's values are copied into it, so at that moment every existing row holds
- *   the same placeholder or none.
+ *   without the conversion and confirmation such a change goes through on its own. Judged against
+ *   the column the values sit in now, described by `oldFields` or, where the caller has no old
+ *   definition, by `previousColumns`; a field neither describes is not judged.
+ * - A required or unique field, or one a unique index covers (`uniqueIndexed`). Its shared column
+ *   is created, and its constraints checked, before the default language's values are copied into
+ *   it, so at that moment every existing row holds the same placeholder or none.
  *
  * @param surface - Whose steps the message names: the Schema Builder's settings and saves, or
  *   the config's flags and `nextly migrate:create`
@@ -59,24 +60,35 @@ export function refusalsForFieldsLeavingTranslation(args: {
   leaving: ReadonlySet<string>;
   newFields: readonly LeavingFieldLike[];
   oldFields?: readonly LeavingFieldLike[];
+  /** The companion columns as they are now, by column name, for a caller with no old fields. */
+  previousColumns?: ReadonlyMap<string, LocalizedColumnSpec>;
+  /** Fields a unique index covers, beside their own `unique` flag. */
+  uniqueIndexed?: ReadonlySet<string>;
   dialect: SupportedDialect;
   /** Which builder made the entity's table, which decides a column's bounds. */
   builtBy: ColumnOrigin;
   surface: "builder" | "code";
 }): LeavingTranslationRefusal[] {
   const refusals: LeavingTranslationRefusal[] = [];
-  const shapeOf = (field: LeavingFieldLike) => {
-    const spec = fieldToLocalizedColumnSpec(field, args.dialect, args.builtBy);
-    return spec
+  const columnOf = (field: LeavingFieldLike) =>
+    fieldToLocalizedColumnSpec(field, args.dialect, args.builtBy);
+  const shape = (spec: LocalizedColumnSpec | null | undefined) =>
+    spec
       ? [spec.kind, spec.length, spec.precision, spec.scale].join("|")
       : undefined;
-  };
   const before = new Map((args.oldFields ?? []).map(f => [f.name, f]));
+  /** The column the field's values sit in now, when anything describes it. */
+  const previousColumnOf = (field: LeavingFieldLike) => {
+    const previous = before.get(field.name);
+    if (previous !== undefined) return columnOf(previous);
+    const name = columnOf(field)?.name;
+    return name === undefined ? undefined : args.previousColumns?.get(name);
+  };
 
   for (const field of args.newFields) {
     if (!args.leaving.has(field.name)) continue;
-    const previous = before.get(field.name);
-    if (previous !== undefined && shapeOf(previous) !== shapeOf(field)) {
+    const previous = previousColumnOf(field);
+    if (previous !== undefined && shape(previous) !== shape(columnOf(field))) {
       refusals.push({
         path: `fields.${field.name}`,
         code: "RESHAPED_FIELD_LEAVES_TRANSLATION",
@@ -87,6 +99,12 @@ export function refusalsForFieldsLeavingTranslation(args: {
       continue;
     }
     const constraints = constraintsOf(field);
+    if (
+      args.uniqueIndexed?.has(field.name) &&
+      !constraints.includes("unique")
+    ) {
+      constraints.push("unique");
+    }
     if (constraints.length === 0) continue;
     refusals.push({
       path: `fields.${field.name}`,

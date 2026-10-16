@@ -27,6 +27,10 @@ import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { NextlyError } from "../../../errors/nextly-error";
 import { isFieldLocalized } from "../../i18n/classify-fields";
+import {
+  companionHistoryKey,
+  readCompanionColumnHistory,
+} from "../../i18n/migration/companion-history";
 import { deriveCompanionSpec } from "../../i18n/migration/derive-companion-spec";
 import { refusalsForFieldsLeavingTranslation } from "../../i18n/migration/field-leaves-translation-rules";
 import { fieldToLocalizedColumnSpec } from "../../i18n/migration/field-to-column-spec";
@@ -162,6 +166,11 @@ export interface GenerateArgs {
    */
   defaultLocale?: string;
   /**
+   * Where to say what this run could not check, for the operator to act on. A warning never stops
+   * the run; a refusal throws.
+   */
+  onWarning?: (message: string) => void;
+  /**
    * The extension schema the APP's stream owns: the tables it declares through
    * `db.schema.extend`, and the elements it contributes to tables another owner
    * declares.
@@ -275,7 +284,9 @@ export async function generateMigration(
     ],
     previousSnapshot,
     args.dialect,
-    args.defaultLocale ?? "en"
+    args.defaultLocale ?? "en",
+    await readCompanionColumnHistory(args.migrationsDir),
+    args.onWarning ?? (() => {})
   );
 
   const hasCompanions =
@@ -667,40 +678,25 @@ function planFieldsLeavingTranslation(
   entities: TaggedConfigEntity[],
   previousSnapshot: NextlySchemaSnapshot,
   dialect: SupportedDialect,
-  defaultLocale: string
+  defaultLocale: string,
+  companionHistory: ReadonlyMap<
+    string,
+    ReadonlyMap<string, LocalizedColumnSpec>
+  >,
+  warn: (message: string) => void
 ): FieldLeavesEntry[] {
   const entries: FieldLeavesEntry[] = [];
   for (const { entity: c, kind } of entities) {
-    if (c.localized !== true) continue;
-    const prevMain = previousSnapshot.tables.find(t => t.name === c.tableName);
-    const recorded =
-      prevMain?.localized === true ? prevMain.localizedColumns : undefined;
-    if (!recorded || recorded.length === 0) continue;
-
-    const leaving = c.fields.flatMap(field => {
-      if (isFieldLocalized(field, true)) return [];
-      const column = fieldToLocalizedColumnSpec(field, dialect, "codeFirst");
-      return column && recorded.includes(column.name)
-        ? [{ field, column }]
-        : [];
-    });
+    const leaving = fieldsLeavingTranslationIn(c, previousSnapshot, dialect);
     if (leaving.length === 0) continue;
 
-    const refusals = refusalsForFieldsLeavingTranslation({
-      leaving: new Set(leaving.map(l => l.field.name)),
-      newFields: c.fields,
-      dialect,
-      builtBy: "codeFirst",
-      surface: "code",
-    });
-    if (refusals.length > 0) {
-      throw new NextlyError({
-        code: "VALIDATION_ERROR",
-        publicMessage: refusals.map(r => r.message).join(" "),
-        publicData: { errors: refusals },
-        logContext: { entity: c.slug, fields: refusals.map(r => r.path) },
-      });
-    }
+    // The companion's columns as the migration files left them: the only record of the shape a
+    // translated field's values sit in, which the snapshot does not keep.
+    const previousColumns = companionHistory.get(
+      companionHistoryKey(kind, c.slug)
+    );
+    warnOfUnknownShapes(c.slug, leaving, previousColumns, warn);
+    assertFieldsMayLeaveTranslation(c, leaving, previousColumns, dialect);
 
     entries.push({
       entity: kind,
@@ -716,6 +712,85 @@ function planFieldsLeavingTranslation(
     });
   }
   return entries;
+}
+
+/** A field leaving translation, with the companion column it leaves. */
+interface LeavingField {
+  field: MinimalConfigField;
+  column: LocalizedColumnSpec;
+}
+
+/**
+ * The fields of a translated entity that the previous snapshot recorded among its translated
+ * columns and the config now declares shared. Empty for an entity not translated now, or whose
+ * previous snapshot carries no record of its translated columns.
+ */
+function fieldsLeavingTranslationIn(
+  c: MinimalConfigEntity,
+  previousSnapshot: NextlySchemaSnapshot,
+  dialect: SupportedDialect
+): LeavingField[] {
+  if (c.localized !== true) return [];
+  const prevMain = previousSnapshot.tables.find(t => t.name === c.tableName);
+  const recorded =
+    prevMain?.localized === true ? prevMain.localizedColumns : undefined;
+  if (!recorded || recorded.length === 0) return [];
+  return c.fields.flatMap(field => {
+    if (isFieldLocalized(field, true)) return [];
+    const column = fieldToLocalizedColumnSpec(field, dialect, "codeFirst");
+    return column && recorded.includes(column.name) ? [{ field, column }] : [];
+  });
+}
+
+/** Says which leaving fields no migration file describes, so their storage is not checked. */
+function warnOfUnknownShapes(
+  slug: string,
+  leaving: readonly LeavingField[],
+  previousColumns: ReadonlyMap<string, LocalizedColumnSpec> | undefined,
+  warn: (message: string) => void
+): void {
+  const unknown = leaving.filter(l => !previousColumns?.has(l.column.name));
+  if (unknown.length === 0) return;
+  const one = unknown.length === 1;
+  warn(
+    `No migration file describes how ${unknown.map(l => `"${l.field.name}"`).join(", ")} ` +
+      `${one ? "is" : "are"} stored in "${slug}"'s translations, so this migration cannot ` +
+      `check that ${one ? "its" : "their"} type stays the same as ${one ? "it stops" : "they stop"} ` +
+      `being translated. If one also changed type, change the type and make it shared in ` +
+      `separate migrations.`
+  );
+}
+
+/**
+ * Refuses the run when a leaving field cannot leave translation in one migration
+ * (`refusalsForFieldsLeavingTranslation`), naming the steps that work, before any file is written.
+ */
+function assertFieldsMayLeaveTranslation(
+  c: MinimalConfigEntity,
+  leaving: readonly LeavingField[],
+  previousColumns: ReadonlyMap<string, LocalizedColumnSpec> | undefined,
+  dialect: SupportedDialect
+): void {
+  const refusals = refusalsForFieldsLeavingTranslation({
+    leaving: new Set(leaving.map(l => l.field.name)),
+    newFields: c.fields,
+    ...(previousColumns ? { previousColumns } : {}),
+    uniqueIndexed: new Set(
+      (c.indexes ?? [])
+        .filter(index => index.unique === true)
+        .flatMap(index => index.fields)
+    ),
+    dialect,
+    builtBy: "codeFirst",
+    surface: "code",
+  });
+  if (refusals.length === 0) return;
+  throw new NextlyError({
+    code: "VALIDATION_ERROR",
+    publicMessage: refusals.map(r => r.message).join(" "),
+    publicData: { errors: refusals },
+    logContext: { entity: c.slug, fields: refusals.map(r => r.path) },
+  });
 }
 
 /**

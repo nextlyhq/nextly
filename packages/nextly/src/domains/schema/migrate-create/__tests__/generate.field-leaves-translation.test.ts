@@ -13,7 +13,7 @@
  *      the column back and refills it, from main for the default language and from the archive
  *      for the others.
  */
-import { mkdtemp, readFile, readdir } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -40,10 +40,18 @@ const SHARED: MinimalConfigEntity = {
   ],
 };
 
-/** Run `migrate:create` twice and return the files the second run wrote, in name order. */
+/**
+ * Run `migrate:create` twice and return the files the second run wrote, in name order.
+ * `beforeSecond` runs between the two, on the migrations directory.
+ */
 async function secondRun(
   dialect: SupportedDialect,
-  next: MinimalConfigEntity
+  next: MinimalConfigEntity,
+  options: {
+    first?: MinimalConfigEntity;
+    onWarning?: (message: string) => void;
+    beforeSecond?: (dir: string) => Promise<void>;
+  } = {}
 ): Promise<{ name: string; sql: string }[]> {
   const dir = await mkdtemp(join(tmpdir(), "nextly-field-leaves-"));
   const run = (entity: MinimalConfigEntity, name: string, at: string) =>
@@ -57,8 +65,10 @@ async function secondRun(
       components: [],
       nonInteractive: true,
       now: new Date(at),
+      ...(options.onWarning ? { onWarning: options.onWarning } : {}),
     });
-  await run(TRANSLATED, "one", "2026-10-16T10:00:00.000Z");
+  await run(options.first ?? TRANSLATED, "one", "2026-10-16T10:00:00.000Z");
+  await options.beforeSecond?.(dir);
   const before = new Set(await readdir(dir));
   await run(next, "two", "2026-10-16T11:00:00.000Z");
   const written = (await readdir(dir))
@@ -115,6 +125,71 @@ describe.each(["sqlite", "postgresql", "mysql"] as const)(
       );
       expect(shared.down).toContain(q("nextly_i18n_archive"));
     });
+
+    it("refuses a field that changes type as it leaves, read from the migration history", async () => {
+      // The snapshot records only the translated columns' names; the companion file the first run
+      // wrote records that `body` is text.
+      await expect(
+        secondRun(dialect, {
+          ...SHARED,
+          fields: [
+            { name: "body", type: "number", localized: false },
+            { name: "price", type: "number" },
+          ],
+        })
+      ).rejects.toThrow(/"body" changes how it is stored/);
+    });
+
+    it("refuses a field a unique index covers, naming it", async () => {
+      await expect(
+        secondRun(dialect, {
+          ...SHARED,
+          indexes: [{ fields: ["body"], unique: true }],
+        })
+      ).rejects.toThrow(/"body" is unique/);
+    });
+
+    it("warns when no migration file says how the field is stored", async () => {
+      const warnings: string[] = [];
+      // The companion file the first run wrote, gone: nothing describes `body`'s column now.
+      const files = await secondRun(dialect, SHARED, {
+        onWarning: message => warnings.push(message),
+        beforeSecond: async dir => {
+          for (const name of await readdir(dir)) {
+            if (name.includes("_localization_")) await rm(resolve(dir, name));
+          }
+        },
+      });
+
+      expect(files.length).toBe(3);
+      expect(warnings).toEqual([
+        expect.stringMatching(
+          /No migration file describes how "body" is stored/
+        ),
+      ]);
+    });
+
+    if (dialect === "mysql") {
+      it("widens the shared column to LONGTEXT before copying a long text field", async () => {
+        const long = (localized: boolean) => ({
+          ...TRANSLATED,
+          fields: [
+            { name: "body", type: "textarea", localized },
+            { name: "price", type: "number" },
+          ],
+        });
+        const files = await secondRun(dialect, long(false), {
+          first: long(true),
+        });
+
+        const shared = sections(files[2]?.sql ?? "");
+        const widen = shared.up.indexOf(
+          `ALTER TABLE ${q("dc_docs")} MODIFY COLUMN ${q("body")} LONGTEXT`
+        );
+        expect(widen).toBeGreaterThan(-1);
+        expect(widen).toBeLessThan(shared.up.indexOf("UPDATE"));
+      });
+    }
 
     it("refuses a required field leaving translation, naming it", async () => {
       await expect(
