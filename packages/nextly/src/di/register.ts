@@ -267,6 +267,7 @@ import {
   registerDashboardServices,
   registerEmailServices,
   registerJobServices,
+  registerNoticeServices,
   registerReleaseServices,
   registerMediaServices,
   registerMetaServices,
@@ -645,6 +646,8 @@ export function registerDomainServices(ctx: RegistrationContext): void {
   // what this service schedules. Order is not load-bearing — both resolve their
   // dependencies from the container — but keeping them adjacent means a reader
   // meets the two halves of releases together.
+  // Before releases, which writes notices when a release stops or is late.
+  registerNoticeServices(ctx);
   registerReleaseServices(ctx);
 }
 

@@ -1,4 +1,5 @@
 import { LIMIT_STORE_TABLE } from "../schemas/limit-store/table-name";
+import { NOTICES_TABLE } from "../schemas/notices/table-name";
 import { RBAC_EPOCH_TABLE } from "../schemas/rbac-epoch/table-name";
 import { SCHEMA_OWNERS_TABLE } from "../schemas/schema-owners/table-name";
 import { SPENT_CHALLENGES_TABLE } from "../schemas/spent-challenges/table-name";
@@ -579,6 +580,29 @@ export function generateSqliteCoreTableStatements(): string[] {
     )`,
     `CREATE INDEX IF NOT EXISTS "nsc_expires_at_idx"
       ON "${SPENT_CHALLENGES_TABLE}" ("expires_at")`,
+    // Each person's own notices. Columns match schemas/notices/sqlite.ts; each
+    // index is its own statement so a database built by an earlier boot still
+    // gains it.
+    `CREATE TABLE IF NOT EXISTS "${NOTICES_TABLE}" (
+      "id" TEXT PRIMARY KEY NOT NULL,
+      "user_id" TEXT NOT NULL,
+      "kind" TEXT NOT NULL,
+      "subject_type" TEXT NOT NULL,
+      "subject_id" TEXT NOT NULL,
+      "occurrence" TEXT NOT NULL,
+      "dedupe_key" TEXT NOT NULL,
+      "data" TEXT,
+      "created_at" INTEGER NOT NULL,
+      "read_at" INTEGER
+    )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS "nextly_notices_dedupe_uidx"
+      ON "${NOTICES_TABLE}" ("dedupe_key")`,
+    `CREATE INDEX IF NOT EXISTS "nextly_notices_user_idx"
+      ON "${NOTICES_TABLE}" ("user_id", "read_at", "created_at")`,
+    `CREATE INDEX IF NOT EXISTS "nextly_notices_subject_idx"
+      ON "${NOTICES_TABLE}" ("subject_type", "subject_id")`,
+    `CREATE INDEX IF NOT EXISTS "nextly_notices_created_idx"
+      ON "${NOTICES_TABLE}" ("created_at")`,
     `CREATE TABLE IF NOT EXISTS "nextly_widget_layout" (
       "id" TEXT PRIMARY KEY NOT NULL,
       "scope_kind" TEXT NOT NULL,

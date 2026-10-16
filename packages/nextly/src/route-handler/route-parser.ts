@@ -2378,6 +2378,32 @@ function parseWebhookRoutes(
 // ============================================================================
 
 /**
+ * Parse the notices routes: the signed-in person's own notices.
+ *
+ *   GET  /api/notices        → getNotices
+ *   GET  /api/notices/count  → getNoticeCount
+ *   POST /api/notices/read   → markNoticesRead
+ *
+ * The handler owns its own auth: the person is always the signed-in user, so
+ * no route carries a user.
+ */
+function parseNoticeRoutes(
+  id: string | undefined,
+  httpMethod: string,
+  routeParams: Record<string, string>
+): ParsedRoute | null {
+  const routes: Record<string, { operation: OperationType; method: string }> = {
+    "GET ": { operation: "list", method: "getNotices" },
+    "GET count": { operation: "count", method: "getNoticeCount" },
+    "POST read": { operation: "update", method: "markNoticesRead" },
+  };
+  const route = routes[`${httpMethod} ${id ?? ""}`];
+  return route === undefined
+    ? null
+    : { service: "notices", ...route, routeParams };
+}
+
+/**
  * Parse the translation worklist route.
  *
  *   GET /api/translations → getTranslationWorklist
@@ -2888,6 +2914,12 @@ export function parseRestRoute(
   // Handle the background job trigger
   if (resource === "jobs") {
     const result = parseJobRoutes(id, subresource, httpMethod, routeParams);
+    if (result) return result;
+  }
+
+  // Handle the signed-in person's notices
+  if (resource === "notices") {
+    const result = parseNoticeRoutes(id, httpMethod, routeParams);
     if (result) return result;
   }
 

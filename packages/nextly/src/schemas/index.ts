@@ -60,6 +60,7 @@ import { LIMIT_STORE_TABLE, limitStoreTables } from "./limit-store";
 import { mediaTables } from "./media";
 import { nextlyI18nArchiveTables } from "./nextly-i18n-archive";
 import { nextlyMetaTables } from "./nextly-meta";
+import { noticesTables } from "./notices";
 import {
   ONE_TIME_SECRETS_TABLE,
   oneTimeSecretsTables,
@@ -257,6 +258,9 @@ export function getCoreSchema(
     // never created on a real installation however completely its own module
     // declares it.
     ...Object.values(widgetLayoutTables(dialect)),
+    // `nextly_notices` — each person's own notices. In the snapshot for the
+    // reason every table above is: it is the set `nextly migrate` creates.
+    ...Object.values(noticesTables(dialect)),
   ];
 
   const fieldGroupRegistry = fieldGroupRegistryFor(dialect, options);
@@ -368,6 +372,7 @@ export const CORE_TABLE_NAMES: readonly string[] = [
   "nextly_events",
   "nextly_webhooks",
   "nextly_webhook_deliveries",
+  "nextly_notices",
 ] as const;
 
 /**

@@ -66,6 +66,7 @@ import {
 } from "./api/image-sizes";
 import { listJobsRoute } from "./api/jobs-list-route";
 import { runJobsRoute } from "./api/jobs-run-route";
+import { getNoticeCount, getNotices, markNoticesRead } from "./api/notices";
 import { mintPreviewLink, revokePreviewLinks } from "./api/preview-links";
 import { resolveEntryPreviewUrl } from "./api/preview-url";
 import { handleReleaseRequest } from "./api/releases";
@@ -578,6 +579,26 @@ async function handleDocumentLockRequest(
  * read (a per-language count, say) lands beside it instead of growing another
  * dispatch branch above.
  */
+/** The signed-in person's notices. */
+async function handleNoticesRequest(
+  req: Request,
+  method: string
+): Promise<Response> {
+  switch (method) {
+    case "getNotices":
+      return getNotices(req);
+    case "getNoticeCount":
+      return getNoticeCount(req);
+    case "markNoticesRead":
+      return markNoticesRead(req);
+    default:
+      return new Response(
+        JSON.stringify({ error: "Unknown notices operation" }),
+        { status: 400, headers: { "Content-Type": "application/json" } }
+      );
+  }
+}
+
 async function handleTranslationsRequest(
   req: Request,
   method: string
@@ -1362,6 +1383,13 @@ async function handleServiceRequest(
   // has no body for.
   if (service === "translations") {
     return handleTranslationsRequest(req, method);
+  }
+
+  // ==================== NOTICES DIRECT DISPATCH ====================
+  // Owns its auth (requireAuthentication, refusing API keys) and reads its own
+  // body, so it intercepts before `req.text()` for the reason dashboard does.
+  if (service === "notices") {
+    return handleNoticesRequest(req, method);
   }
 
   // ==================== SCHEMA DIRECT DISPATCH (F10 PR 4) ====================
