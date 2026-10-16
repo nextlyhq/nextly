@@ -750,6 +750,12 @@ export class ReleasesRepository {
    * With a `tab`, the tab's own conditions and order (`release-tabs`); without
    * one, the filters alone, in scheduled order. The filters narrow either.
    *
+   * The rows and the total are two reads, as on every paged list here, not
+   * one snapshot: a release that changes state between them (the drain
+   * publishing one) can leave them one apart for that response. Holding a
+   * transaction open across both to close that would cost every listing for
+   * a gap the next request closes by itself.
+   *
    * @experimental
    */
   async findReleasePage(query: ReleasePageQuery): Promise<ReleasePage> {

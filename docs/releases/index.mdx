@@ -86,7 +86,9 @@ without a tab come latest first.
 | `scheduledAfter`, `scheduledBefore` | A window on the scheduled time, as ISO 8601 instants                       |
 
 The answer is the standard list envelope. `meta.total` is the number of releases matching,
-across all pages:
+across all pages. The page and the total are read one after the other, as on every paged list. A
+release that changes tab between the two reads (a scheduled release the drain publishes, say) can
+leave the page and the total one apart for that one response. The next request reads both again.
 
 ```json
 {
