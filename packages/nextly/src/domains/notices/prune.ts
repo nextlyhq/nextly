@@ -26,13 +26,18 @@ const NOTICE_PRUNE_BATCH = 500;
  * @returns how many notices were removed.
  */
 export async function pruneNoticesSafely(
-  deps: { db: NoticesPruneDb; now?: () => Date; logger?: Logger },
+  deps: {
+    db: NoticesPruneDb;
+    now?: () => Date;
+    logger?: Logger;
+    /** Stop between batches once this passes: the drain's wall-clock promise. */
+    deadline?: Date;
+  },
   maxAgeMs: number,
   maxBatches: number
 ): Promise<number> {
-  const before = new Date(
-    (deps.now ?? (() => new Date()))().getTime() - maxAgeMs
-  );
+  const now = deps.now ?? (() => new Date());
+  const before = new Date(now().getTime() - maxAgeMs);
   let removed = 0;
   try {
     // A database from before notices has nothing to prune; passed over
@@ -41,6 +46,7 @@ export async function pruneNoticesSafely(
       return 0;
     }
     for (let batch = 0; batch < maxBatches; batch += 1) {
+      if (deps.deadline !== undefined && now() >= deps.deadline) break;
       const count = await deleteNoticesOlderThan(
         deps.db,
         before,

@@ -240,8 +240,14 @@ export class NoticesService {
       row,
       { conflictColumns: ["dedupeKey"], updateColumns: [] }
     );
-    const id = stored?.id ?? row.id;
-    return { created: id === row.id, id };
+    // Created only when the row that stands is the one just made. No row at all
+    // means a kept row vanished between the conflict and its read-back (its
+    // person deleted, or retention ran): nothing was created, and answering
+    // with the id generated here would claim a notice that was never stored.
+    if (stored === null || stored === undefined) {
+      return { created: false, id: null };
+    }
+    return { created: stored.id === row.id, id: stored.id ?? null };
   }
 
   /** A page of this person's notices, newest first. */

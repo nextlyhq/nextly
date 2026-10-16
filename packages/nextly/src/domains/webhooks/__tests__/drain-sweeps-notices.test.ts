@@ -80,6 +80,40 @@ describe("the scheduled drain and notices", () => {
     expect(result.pruned.notices).toBe(1);
   });
 
+  it("stops pruning a backlog between batches once the drain's time is spent", async () => {
+    // A backlog that fills every batch, and a clock that moves a second per
+    // reading: the pass must stop at the drain's deadline, not run every batch
+    // it was allowed.
+    let clock = 0;
+    const deletes = vi.fn(async () => 500);
+    const result = await runDrain({
+      fanOut: { db: idleDb(), loadEndpoints: async () => [] } as never,
+      deliver: {
+        db: idleDb(),
+        now: () => new Date((clock += 1000)),
+      } as never,
+      maxDurationMs: 10_000,
+      retention: {
+        auditPolicy: resolveAuditRetentionConfig({
+          activityMaxAgeMs: 1000,
+          maxBatchesPerRun: 50,
+        }),
+        prune: {
+          adapter: {
+            select: async (table: string) =>
+              table === "nextly_notices"
+                ? Array.from({ length: 500 }, (_, i) => ({ id: `n${i}` }))
+                : [],
+            delete: deletes,
+          },
+        } as never,
+        gate: { claim: async () => true, release: async () => undefined },
+      },
+    });
+    expect(deletes.mock.calls.length).toBeLessThan(50);
+    expect(result.pruned.notices).toBe(deletes.mock.calls.length * 500);
+  });
+
   it("leaves notices alone when the activity log keeps everything", async () => {
     const claimed: string[] = [];
     const result = await drain({

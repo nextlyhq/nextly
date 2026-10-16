@@ -649,7 +649,8 @@ export function registerDomainServices(ctx: RegistrationContext): void {
   // what this service schedules. Order is not load-bearing — both resolve their
   // dependencies from the container — but keeping them adjacent means a reader
   // meets the two halves of releases together.
-  // Before releases, which writes notices when a release stops or is late.
+  // Before releases, so a feature that records notices (releases will, for a
+  // release that stops or runs late) can register its kinds against it.
   registerNoticeServices(ctx);
   registerReleaseServices(ctx);
 }

@@ -480,6 +480,14 @@ export async function runDrain(deps: RunDrainDeps): Promise<RunDrainResult> {
             now,
             maxAgeMs: noticesMaxAgeMs,
             maxBatches: auditPolicy!.maxBatchesPerRun,
+            // A share when the secrets sweep follows, the remainder when not,
+            // checked between batches so a backlog cannot carry the drain
+            // past its wall-clock promise.
+            deadline: shareOfRemaining(
+              deadline,
+              now,
+              passesLeftAfter({ webhook: true, audit: true, email: true })
+            ),
           }
         );
       }
@@ -531,7 +539,12 @@ async function drainNotices(
   retention: NonNullable<RunDrainDeps["retention"]>,
   heldTurns: Set<string>,
   deadlineSpent: () => boolean,
-  pass: { now: () => Date; maxAgeMs: number; maxBatches: number }
+  pass: {
+    now: () => Date;
+    maxAgeMs: number;
+    maxBatches: number;
+    deadline: Date | undefined;
+  }
 ): Promise<number> {
   if (deadlineSpent()) {
     await releaseRetentionPass(
@@ -546,6 +559,7 @@ async function drainNotices(
       db: retention.prune.adapter,
       now: pass.now,
       logger: retention.prune.logger,
+      deadline: pass.deadline,
     },
     pass.maxAgeMs,
     pass.maxBatches
