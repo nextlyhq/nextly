@@ -364,7 +364,10 @@ function fieldConditions(
         code: "FILTER_GEO_NOT_HERE",
         message: `"${operator}" can only filter a list of entries, which applies it to the rows it reads. It cannot narrow a count or a grouping.`,
       });
-    } else if (!excludesNothing(operator, operatorValue)) {
+    } else {
+      // An empty `not_in` is kept rather than dropped, although it excludes
+      // nothing: the condition builder still has to resolve its field, or a
+      // misspelt one would pass as an unfiltered read. It renders as true.
       conditions.push(
         buildCondition(field, operator as QueryOperator, operatorValue)
       );
@@ -373,7 +376,10 @@ function fieldConditions(
   return conditions;
 }
 
-/** An empty `not_in` excludes nothing, so it is no condition at all. */
+/**
+ * An empty `not_in` excludes nothing. A component condition with one is left
+ * out, because the component builder has no "true" to render it as.
+ */
 function excludesNothing(operator: string, operand: unknown): boolean {
   return (
     operator === "not_in" && Array.isArray(operand) && operand.length === 0
@@ -387,7 +393,9 @@ function excludesNothing(operator: string, operand: unknown): boolean {
  * @returns True if the operator is valid
  */
 export function isValidOperator(operator: string): operator is QueryOperator {
-  return operator in OPERATOR_MAP;
+  // An own key, not `in`: `in` reaches Object.prototype, so `toString` or
+  // `constructor` would pass here while the filter shape check refused them.
+  return Object.prototype.hasOwnProperty.call(OPERATOR_MAP, operator);
 }
 
 /**

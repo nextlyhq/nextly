@@ -158,6 +158,9 @@ export function buildLocalizedWhereExists(
           sql`, `
         );
         valueCondition = sql`${t}.${col} NOT IN (${notInList})`;
+      } else if (Array.isArray(value)) {
+        // An empty list excludes nothing, whatever the companion holds.
+        return sql`1 = 1`;
       }
       break;
     default:
@@ -315,6 +318,10 @@ export function buildDrizzleCondition(
         if (Array.isArray(value) && value.length > 0) {
           return notInArray(schemaColumn, value);
         }
+        // An empty list excludes nothing. Rendered as true rather than left
+        // out, so it reaches here and its column is resolved first, and so an
+        // `or` holding it is true as written.
+        if (Array.isArray(value)) return sql`1 = 1`;
         return refuseKey(
           column,
           "FILTER_INVALID_OPERAND",

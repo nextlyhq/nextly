@@ -175,10 +175,8 @@ const OPERAND_RULES: Readonly<Record<string, OperandRule>> = {
     parseNearQuery,
     '"longitude,latitude,maxDistance[,minDistance][,unit]"'
   ),
-  within: geo(
-    parseWithinQuery,
-    '"minLng,minLat,maxLng,maxLat" or a polygon of longitude,latitude pairs'
-  ),
+  // A circle is the one region the parser reads.
+  within: geo(parseWithinQuery, '"longitude,latitude,radius[,unit]"'),
 };
 
 /** Every operator a filter may use, SQL and geo alike. */

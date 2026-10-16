@@ -22,6 +22,7 @@ import {
   extractGeoFilters,
   GEO_OPERATORS,
   getSupportedOperators,
+  isValidOperator,
   type WhereFilter,
 } from "../query-operators";
 
@@ -86,6 +87,17 @@ describe("the operators the shape check accepts", () => {
     expect([...FILTER_OPERATORS].sort()).toEqual(
       [...getSupportedOperators(), ...GEO_OPERATORS].sort()
     );
+  });
+
+  it("are the only names isValidOperator accepts", () => {
+    // An `in` check reaches Object.prototype, so `toString` passed the
+    // operator check other callers use while the shape check refused it.
+    for (const inherited of ["toString", "constructor", "hasOwnProperty"]) {
+      expect(isValidOperator(inherited), inherited).toBe(false);
+    }
+    for (const operator of getSupportedOperators()) {
+      expect(isValidOperator(operator), operator).toBe(true);
+    }
   });
 });
 
@@ -208,7 +220,13 @@ describe("empty lists keep their meaning", () => {
   });
 
   it("an empty not_in excludes nothing", () => {
-    expect(render({ title: { not_in: [] } })).toBeUndefined();
+    expect(render({ title: { not_in: [] } })).toBe("1 = 1");
+  });
+
+  it("an or holding an empty not_in matches every entry", () => {
+    expect(
+      render({ or: [{ title: { not_in: [] } }, { title: { equals: "a" } }] })
+    ).toContain("1 = 1");
   });
 
   it("an or with an empty member matches every entry", () => {
@@ -252,6 +270,17 @@ describe("the condition builder refuses a key it cannot resolve", () => {
   it("refuses a dot path into a relationship", () => {
     // `author.name` used to compare the `author` column itself with "Ada".
     expect(refusalCodes(build({ "author.name": { equals: "Ada" } }))).toContain(
+      "FILTER_UNFILTERABLE_PATH"
+    );
+  });
+
+  it("refuses an unknown field whose only condition is an empty not_in", () => {
+    // The condition excludes nothing, and dropping it before the field was
+    // resolved let a misspelt field through as an unfiltered read.
+    expect(refusalCodes(build({ titel: { not_in: [] } }))).toContain(
+      "FILTER_UNKNOWN_FIELD"
+    );
+    expect(refusalCodes(build({ "author.name": { not_in: [] } }))).toContain(
       "FILTER_UNFILTERABLE_PATH"
     );
   });
@@ -313,6 +342,21 @@ describe("component fields refuse the same malformed conditions", () => {
 });
 
 describe("geo conditions refuse what they cannot apply", () => {
+  it("tells a caller the within format the parser reads", () => {
+    // The parser reads a circle only; describing a box or polygon would send
+    // a caller following the message straight into a second refusal.
+    let message = "";
+    try {
+      extractGeoFilters({
+        location: { within: "a,b" },
+      } as unknown as WhereFilter);
+    } catch (error) {
+      message = JSON.stringify((error as NextlyError).publicData);
+    }
+    expect(message).toContain("longitude,latitude,radius");
+    expect(message).not.toContain("polygon");
+  });
+
   it("refuses an unparseable near", () => {
     expect(
       refusalCodes(() =>
