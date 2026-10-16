@@ -181,6 +181,16 @@ export class SinglePublishAllService extends BaseService {
         options.authenticatedScope
       );
 
+      // Every component type's readiness, resolved before the transaction:
+      // the drafts' component values are written inside it, where a verdict
+      // can only be read, and an unknown one reads as unavailable. The payload
+      // is empty, so this warms and refuses nothing.
+      await this.fieldGroupDataService?.assertLocalizedFieldGroupsWritable({
+        fields: plan.fieldConfigs,
+        data: {},
+        locale: undefined,
+      });
+
       const outcome = await withVersionConflictRetry(() =>
         this.adapter.transaction(tx =>
           this.commitPublish(tx, plan, options, promoteGrants)

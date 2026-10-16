@@ -985,6 +985,12 @@ export class SingleMutationService extends BaseService {
         // race; the re-run re-reads the max. The single UPDATE is deterministic.
         updatedRows = await withVersionConflictRetry(() =>
           this.adapter.transaction(async tx => {
+            // This attempt's component values. A publish merges the held
+            // draft's into them, and a retry after a lost race must start again
+            // from the caller's own values: the draft may have moved on since.
+            const attemptComponentFields: Record<string, unknown> = {
+              ...componentFieldData,
+            };
             // True only when THIS transaction inserted the row AND seeded the
             // default-locale companion with the localized defaults. The version
             // snapshot overlay below is gated on it, not on `autoCreated`: two
@@ -1476,14 +1482,14 @@ export class SingleMutationService extends BaseService {
                 // sub-field by sub-field, as its row values win over the draft's.
                 const promotedComponents = mergeComponentPatches(
                   promoted.components,
-                  componentFieldData,
+                  attemptComponentFields,
                   fieldConfigs,
                   singleComponentSchemas
                 );
                 for (const [name, value] of Object.entries(
                   promotedComponents
                 )) {
-                  componentFieldData[name] = value;
+                  attemptComponentFields[name] = value;
                 }
                 // A non-default language's lifecycle lives on its companion
                 // `_status`; the main row must not be clobbered by it.
@@ -1690,8 +1696,8 @@ export class SingleMutationService extends BaseService {
             const dataLocaleStatus = writtenStatus ?? previousLocaleStatus;
 
             // Whether this write genuinely stored per-locale component data.
-            // Derived from the write INPUT (`componentFieldData`), not the read-
-            // back doc: a scalar-only edit persists no component data, so it is
+            // Derived from the write INPUT (`attemptComponentFields`), not the
+            // read-back doc: a scalar-only edit persists no component data, so it is
             // not mistaken for a localized component write. A non-localized
             // component written at a locale is the narrower edge this shares
             // with the version-capture gate.
@@ -1708,9 +1714,9 @@ export class SingleMutationService extends BaseService {
               snapshotLocale !== undefined &&
               this.fieldGroupDataService &&
               this.localization !== undefined &&
-              Object.keys(componentFieldData).length > 0
+              Object.keys(attemptComponentFields).length > 0
             ) {
-              for (const writtenName of Object.keys(componentFieldData)) {
+              for (const writtenName of Object.keys(attemptComponentFields)) {
                 const fieldConfig = fieldConfigs.find(
                   f => "name" in f && f.name === writtenName
                 );
@@ -1720,7 +1726,7 @@ export class SingleMutationService extends BaseService {
                 // `_componentType` block (only the blocks the write used).
                 const instances = writtenComponentInstances(
                   fieldConfig,
-                  componentFieldData[writtenName]
+                  attemptComponentFields[writtenName]
                 );
                 let anyLocalizedWrite = false;
                 for (const { slug, data } of instances) {
@@ -1928,7 +1934,9 @@ export class SingleMutationService extends BaseService {
             // in place (hashing passwords, assigning ids), so a conflict retry
             // must start from the user's original values, and the snapshot below
             // uses this post-save copy (ids populated) rather than the raw input.
-            const attemptComponentData = structuredClone(componentFieldData);
+            const attemptComponentData = structuredClone(
+              attemptComponentFields
+            );
 
             // 9.5. Save component field data to separate comp_{slug} tables. The
             // write locale is threaded so an embedded localized component stores
@@ -2230,11 +2238,11 @@ export class SingleMutationService extends BaseService {
               // merged sub-field by sub-field: a save carries only the
               // sub-fields it changed. Without this the edit was never stored
               // anywhere while held, and the publish shipped the old values.
-              if (Object.keys(componentFieldData).length > 0) {
+              if (Object.keys(attemptComponentFields).length > 0) {
                 pending = mergeComponentPatches(
                   pending,
                   tagComponentTypes(
-                    componentFieldData,
+                    attemptComponentFields,
                     fieldConfigs,
                     componentResolver
                   ),

@@ -68,9 +68,12 @@ export function splitPendingChange(
   const draft = (snapshot ?? {}) as Record<string, unknown>;
   const components = draftComponentValues(draft, fields as FieldConfig[]);
   // The component values leave the row-shaped halves: neither row has a
-  // column for them.
+  // column for them. Own keys only, so a field named like an Object.prototype
+  // member stays with the row.
   const rowValues = Object.fromEntries(
-    Object.entries(draft).filter(([key]) => !(key in components))
+    Object.entries(draft).filter(
+      ([key]) => !Object.prototype.hasOwnProperty.call(components, key)
+    )
   );
   // A draft holds JSON-backed fields parsed, as reads do; the row stores them
   // encoded, as an ordinary write encodes them. Encoding is idempotent, so a

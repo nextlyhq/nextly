@@ -7,7 +7,7 @@
  * carry them in the draft, in the same shape a collection's draft holds them,
  * and the publish must write them from it.
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   defineCollection,
@@ -22,10 +22,15 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import { forgetCompanionReadiness } from "../../i18n/runtime/companion-readiness";
+import { VersionCaptureService } from "../../versions/version-capture-service";
+import { VersionConflictError } from "../../versions/version-conflict";
+import { VersionsRepository } from "../../versions/versions-repository";
 
 let current: TestNextly | undefined;
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await current?.destroy();
   current = undefined;
 });
@@ -253,6 +258,124 @@ describe.each(getConfiguredTestDialects())(
       expect(res.success).toBe(true);
       expect(contentOf((await liveHome(current)).hero)).toMatchObject({
         heading: "Pending",
+      });
+    });
+
+    it("publishes a held translated component edit after a restart", async () => {
+      current = await createTestNextly({
+        dialect,
+        fieldGroups: [
+          defineFieldGroup({
+            slug: "banner",
+            localized: true,
+            fields: [text({ name: "heading" })],
+          }),
+        ],
+        singles: [
+          defineSingle({
+            slug: "home",
+            localized: true,
+            status: true,
+            versions: true,
+            fields: [
+              text({ name: "title", localized: true }),
+              fieldGroup({ name: "banner", component: "banner" }),
+            ],
+          }),
+        ],
+        localization: { locales: ["en", "de"], defaultLocale: "en" },
+      });
+      const singles = current.getService("singleEntryService");
+      for (const locale of ["en", "de"]) {
+        await singles.update(
+          "home",
+          {
+            title: `T ${locale}`,
+            banner: { heading: `Live ${locale}` },
+            status: "published",
+          },
+          { locale, overrideAccess: true }
+        );
+      }
+      await singles.update(
+        "home",
+        { banner: { heading: "Pending de" } },
+        { locale: "de", overrideAccess: true }
+      );
+      // A restart: no readiness verdict is remembered for any companion.
+      forgetCompanionReadiness(current.adapter);
+
+      const res = await singles.publishAllLocales("home", {
+        overrideAccess: true,
+      });
+      expect(res.success).toBe(true);
+      const de = await singles.get("home", {
+        locale: "de",
+        overrideAccess: true,
+      });
+      expect(
+        contentOf((de.data as Record<string, unknown>).banner)
+      ).toMatchObject({ heading: "Pending de" });
+    });
+
+    it("publishes the draft as it stands when the publish retries after a lost race", async () => {
+      const singles = await bootSingle(dialect);
+      await singles.update(
+        "home",
+        { hero: { heading: "First", subheading: "Live sub" } },
+        { overrideAccess: true }
+      );
+      const handle = current!;
+      const repo = new VersionsRepository(
+        handle.adapter as unknown as ConstructorParameters<
+          typeof VersionsRepository
+        >[0]
+      );
+      const held = (
+        await handle.adapter.select<Row & { entryId: string }>(
+          "nextly_versions"
+        )
+      ).find(r => r.scopeSlug === "home" && r.versionNo === null)!;
+      const ref = {
+        scopeKind: "single" as const,
+        scopeSlug: "home",
+        entryId: held.entryId,
+      };
+
+      // The first attempt loses the version-number race and rolls back; before
+      // the retry, another save moves the draft on. The retry must publish the
+      // draft as it now stands, not the one the lost attempt read.
+      vi.spyOn(
+        VersionCaptureService.prototype,
+        "capture"
+      ).mockImplementationOnce(() => {
+        throw new VersionConflictError();
+      });
+      const transaction = handle.adapter.transaction.bind(handle.adapter);
+      let attempts = 0;
+      vi.spyOn(handle.adapter, "transaction").mockImplementation((async (
+        ...args: Parameters<typeof transaction>
+      ) => {
+        attempts += 1;
+        if (attempts === 2) {
+          const draft = parsed(
+            (await repo.findWorkingDraft(ref, null))!.snapshot
+          );
+          (draft.hero as Record<string, unknown>).heading = "Second";
+          await repo.upsertWorkingDraft({ ref, locale: null, snapshot: draft });
+        }
+        return transaction(...args);
+      }) as typeof handle.adapter.transaction);
+
+      await singles.update(
+        "home",
+        { status: "published" },
+        { overrideAccess: true }
+      );
+      expect(attempts).toBeGreaterThanOrEqual(2);
+      vi.restoreAllMocks();
+      expect(contentOf((await liveHome(handle)).hero)).toMatchObject({
+        heading: "Second",
       });
     });
 
