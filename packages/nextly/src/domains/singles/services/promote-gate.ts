@@ -227,6 +227,10 @@ export async function assertDraftsMayBePromoted(
       if (ctx.localizedFieldNames.has(key)) promoted[key] = value;
     }
     Object.assign(promoted, ctx.callerData ?? {});
+    // Written with the status it publishes, whatever its snapshot was saved
+    // under. Set before the field rules run as well as before validation, so a
+    // rule reading the document's status judges the one that goes live.
+    promoted.status = ctx.status;
 
     // The document the write will persist, with every field this publisher may
     // not write held at its live value. Validated as THAT document rather than
@@ -322,7 +326,7 @@ async function assertSchemaStillAccepts(
   ctx: PromoteGateContext
 ): Promise<void> {
   const issues = await validateEntryData(
-    relationshipValidationView({ ...promoted, status: ctx.status }, ctx.fields),
+    relationshipValidationView(promoted, ctx.fields),
     attachFieldValidators("single", ctx.slug, ctx.fields),
     {
       mode: "create",

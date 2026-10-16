@@ -1352,9 +1352,11 @@ export class SingleMutationService extends BaseService {
             // sets a field is saying something about that field now.
             // What the promotion gate judges with, for a pending change and
             // for a publish with none pending alike.
-            // Narrowed once for the gate's closures; the fold below already
-            // runs under the same non-null condition.
-            const promotedInto = existingDoc;
+            // The row as THIS transaction read it, so the gate judges the row
+            // the write lands on, not one a writer committing in between has
+            // since replaced. Narrowed once for the gate's closures.
+            const promotedInto =
+              (preRow as SingleDocument | undefined) ?? existingDoc;
             const promoteGate: PromoteGateContext = {
               ...promoteCallerFor({
                 tx,

@@ -139,6 +139,30 @@ function batchOf(t: TestNextly): BatchEntries {
   return handler.getEntryService();
 }
 
+/**
+ * Write a component's live content straight to its row, past every check, as
+ * an older writer could have left it.
+ */
+async function plant(
+  t: TestNextly,
+  dialect: TestDialect,
+  id: string,
+  nodes: Node[]
+): Promise<void> {
+  const registry = t.getService("collectionRegistryService") as unknown as {
+    getCollectionBySlug(slug: string): Promise<{ tableName: string } | null>;
+  };
+  const table = (await registry.getCollectionBySlug(COMPONENTS_SLUG))!
+    .tableName;
+  const planted = document("component", nodes);
+  await t.adapter.update(
+    table,
+    // SQLite stores a JSON column as text; the others take the value.
+    { content: dialect === "sqlite" ? JSON.stringify(planted) : planted },
+    { and: [{ column: "id", op: "=", value: id }] }
+  );
+}
+
 describe.each(getConfiguredTestDialects())(
   "composition judged on every write path (%s)",
   (dialect: TestDialect) => {
@@ -256,20 +280,7 @@ describe.each(getConfiguredTestDialects())(
         data: { content: document("component", [placing("n1", b)]) },
         overrideAccess: true,
       });
-      const registry = t.getService("collectionRegistryService") as unknown as {
-        getCollectionBySlug(
-          slug: string
-        ): Promise<{ tableName: string } | null>;
-      };
-      const table = (await registry.getCollectionBySlug(COMPONENTS_SLUG))!
-        .tableName;
-      const planted = document("component", [placing("n2", a)]);
-      await t.adapter.update(
-        table,
-        // SQLite stores a JSON column as text; the others take the value.
-        { content: dialect === "sqlite" ? JSON.stringify(planted) : planted },
-        { and: [{ column: "id", op: "=", value: b }] }
-      );
+      await plant(t, dialect, b, [placing("n2", a)]);
 
       const refused = await refusalOf(
         t.nextly.update({
@@ -450,28 +461,8 @@ describe.each(getConfiguredTestDialects())(
     });
 
     it("refuses publishing every language of a translated page when one language composes past the limit as published", async () => {
-      current = await createTestNextly({
-        dialect,
-        plugins: [pageBuilder({ limits: { ...DEFAULT_LIMITS, maxDepth: 4 } })],
-        collections: [
-          {
-            slug: "articles",
-            status: true,
-            localized: true,
-            fields: [
-              { name: "title", type: "text", localized: true },
-              { name: "content", type: BLOCKS_TYPE, localized: true },
-            ],
-          } as never,
-        ],
-        localization: { locales: ["en", "de"], defaultLocale: "en" },
-      });
-      const t = current;
-      const entries = (
-        t.getService("collectionsHandler") as unknown as {
-          getEntryService(): TranslatedEntries;
-        }
-      ).getEntryService();
+      const t = await bootTranslated();
+      const entries = translatedEntries(t);
       const split = await componentDeeperWhenPublished(t);
       // English places the component at the top, which fits in both forms.
       const created = await entries.createEntry(
@@ -513,6 +504,82 @@ describe.each(getConfiguredTestDialects())(
       expect(JSON.stringify(result)).toContain("depth-exceeded");
       expect(JSON.stringify(result)).toContain('"path":"content"');
     });
+
+    it("does not re-judge a translation already live when its status is sent again", async () => {
+      const t = await bootTranslated();
+      const entries = translatedEntries(t);
+      const shallow = await component(t, "shallow", [text("s1")]);
+      await t.nextly.update({
+        collection: COMPONENTS_SLUG,
+        id: shallow,
+        data: { status: "published" },
+        overrideAccess: true,
+      });
+      const created = await entries.createEntry(
+        { collectionName: "articles", overrideAccess: true, locale: "en" },
+        { title: "Home", content: document("page", []), status: "draft" }
+      );
+      const id = String((created.data as { id: unknown }).id);
+      // German goes live placing the component three deep, which fits.
+      const deepGerman = document("page", [
+        box("p1", [box("p2", [placing("i1", shallow)])]),
+      ]);
+      const live = await entries.updateEntry(
+        {
+          collectionName: "articles",
+          entryId: id,
+          locale: "de",
+          overrideAccess: true,
+        },
+        { title: "Start", content: deepGerman, status: "published" }
+      );
+      expect(live.success, JSON.stringify(live)).toBe(true);
+      // The component deepens in storage, as an older writer could have left
+      // it, so German as stored would now be refused if it were judged.
+      await plant(t, dialect, shallow, [box("d1", [box("d2", [text("d3")])])]);
+
+      const again = await entries.updateEntry(
+        {
+          collectionName: "articles",
+          entryId: id,
+          locale: "de",
+          overrideAccess: true,
+        },
+        { status: "published" }
+      );
+
+      // Nothing goes live that was not live already, so nothing is judged.
+      expect(again.success, JSON.stringify(again)).toBe(true);
+    });
+
+    /** A translated collection holding a blocks field, per language. */
+    async function bootTranslated(): Promise<TestNextly> {
+      current = await createTestNextly({
+        dialect,
+        plugins: [pageBuilder({ limits: { ...DEFAULT_LIMITS, maxDepth: 4 } })],
+        collections: [
+          {
+            slug: "articles",
+            status: true,
+            localized: true,
+            fields: [
+              { name: "title", type: "text", localized: true },
+              { name: "content", type: BLOCKS_TYPE, localized: true },
+            ],
+          } as never,
+        ],
+        localization: { locales: ["en", "de"], defaultLocale: "en" },
+      });
+      return current;
+    }
+
+    function translatedEntries(t: TestNextly): TranslatedEntries {
+      return (
+        t.getService("collectionsHandler") as unknown as {
+          getEntryService(): TranslatedEntries;
+        }
+      ).getEntryService();
+    }
 
     function page(
       t: TestNextly,

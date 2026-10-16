@@ -102,8 +102,14 @@ describe.each(getConfiguredTestDialects())(
       current = undefined;
     });
 
-    /** A localized Single with drafts, and a small depth limit. */
-    async function boot(): Promise<{ t: TestNextly; singles: Singles }> {
+    /**
+     * A localized Single with drafts, and a small depth limit. Its blocks are
+     * translated unless `sharedContent`, which keeps one document for every
+     * language on the main row.
+     */
+    async function boot(
+      sharedContent = false
+    ): Promise<{ t: TestNextly; singles: Singles }> {
       current = await createTestNextly({
         dialect,
         plugins: [pageBuilder({ limits: { ...DEFAULT_LIMITS, maxDepth: 4 } })],
@@ -113,7 +119,14 @@ describe.each(getConfiguredTestDialects())(
             localized: true,
             status: true,
             versions: { drafts: true },
-            fields: [{ name: "content", type: BLOCKS_TYPE, localized: true }],
+            fields: [
+              { name: "title", type: "text", localized: true },
+              {
+                name: "content",
+                type: BLOCKS_TYPE,
+                localized: !sharedContent,
+              },
+            ],
           } as never,
         ],
         localization: { locales: ["en", "de"], defaultLocale: "en" },
@@ -209,6 +222,33 @@ describe.each(getConfiguredTestDialects())(
         { locale: "en", overrideAccess: true }
       );
       expect(draft.success, JSON.stringify(draft)).toBe(true);
+
+      const issues = await refusalOf(
+        singles.publishAllLocales(SLUG, { overrideAccess: true })
+      );
+
+      expect(issues).toEqual([
+        expect.objectContaining({ path: "content", code: "depth-exceeded" }),
+      ]);
+    });
+
+    it("refuses publishing every language when only shared content was edited and it composes past the limit as published", async () => {
+      // No language was written, so no translation row exists: the shared
+      // blocks live on the main row alone, which goes live with its status.
+      const { t, singles } = await boot(true);
+      const split = await componentDeeperWhenPublished(t);
+      const shared = await singles.update(
+        SLUG,
+        { content: threeDeep(split) },
+        { overrideAccess: true }
+      );
+      expect(shared.success, JSON.stringify(shared)).toBe(true);
+      // A Single created with no translated defaults has no translation row
+      // at all; the write above may have left the default language's, so the
+      // state is made exact here.
+      await t.adapter.delete(`single_${SLUG}_locales`, {
+        and: [{ column: "_locale", op: "IS NOT NULL" }],
+      });
 
       const issues = await refusalOf(
         singles.publishAllLocales(SLUG, { overrideAccess: true })

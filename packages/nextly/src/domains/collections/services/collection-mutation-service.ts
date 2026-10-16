@@ -1930,11 +1930,12 @@ export class CollectionMutationService extends BaseService {
    * as it goes live.
    *
    * One language for an ordinary publish: the write locale, unless it was live
-   * already, since a row already published was judged as published and
+   * already, since a language already published was judged as published and
    * re-sending the status changes nothing that goes live. Every stored
    * translation not yet live for a publish of every language, each judged as
    * its own publish would judge it: its values on the row, the default
-   * language's `required` rules where it is the default.
+   * language's `required` rules where it is the default. A language whose
+   * pending draft the promotion has just judged is not judged twice.
    */
   private async assertLanguagesGoLiveValid(args: {
     collectionName: string;
@@ -1943,16 +1944,21 @@ export class CollectionMutationService extends BaseService {
     patch: Record<string, unknown>;
     writeLocale: string | undefined;
     writeLocaleValues: Record<string, unknown>;
-    writeLocaleLive: boolean;
+    /** Whether each language keeps its own status, in the companion. */
+    perLocaleStatus: boolean;
     everyLanguage: boolean;
+    /**
+     * Whether the write locale's document goes live by promoting its pending
+     * draft, which the promotion has already judged as it goes live.
+     */
+    writeLocalePromoted: boolean;
     fields: FieldDefinition[];
     user: UserContext | undefined;
   }): Promise<void> {
     const pool = { getDrizzle: <T = unknown>() => this.db as T };
-    const swept = args.everyLanguage
-      ? await this.languagesNotYetLive(args.collectionName, args.entryId)
-      : null;
-    const languages = swept ?? (args.writeLocaleLive ? [] : [args.writeLocale]);
+    const languages = (await this.languagesGoingLive(args)).filter(
+      locale => !(args.writeLocalePromoted && locale === args.writeLocale)
+    );
     for (const locale of languages) {
       await this.assertEntryValid({
         data: await this.storedDocumentGoingLive({
@@ -1981,27 +1987,52 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
-   * The stored translations of an entry whose own status is not published, or
-   * `null` where the collection keeps no per-language status to read, and the
-   * document's one status decides as it does for any other publish.
+   * Which languages a publish moves from not live to live, as the stored
+   * statuses say. A language keeping its own status answers from its companion
+   * row, where a language with no row starts as a draft; otherwise the
+   * document's one status answers for it.
    */
-  private async languagesNotYetLive(
+  private async languagesGoingLive(args: {
+    collectionName: string;
+    entryId: string;
+    row: Record<string, unknown>;
+    writeLocale: string | undefined;
+    perLocaleStatus: boolean;
+    everyLanguage: boolean;
+  }): Promise<(string | undefined)[]> {
+    const statuses =
+      args.perLocaleStatus || args.everyLanguage
+        ? await this.storedLanguageStatuses(args.collectionName, args.entryId)
+        : null;
+    if (args.everyLanguage && statuses !== null && statuses.size > 0) {
+      return [...statuses]
+        .filter(([, status]) => status !== "published")
+        .map(([locale]) => locale);
+    }
+    const live =
+      args.perLocaleStatus && args.writeLocale !== undefined
+        ? statuses?.get(args.writeLocale) === "published"
+        : args.row.status === "published";
+    return live ? [] : [args.writeLocale];
+  }
+
+  /**
+   * Each stored translation's own status, keyed by locale, or `null` where the
+   * collection keeps no companion to read it from.
+   */
+  private async storedLanguageStatuses(
     collectionName: string,
     entryId: string
-  ): Promise<string[] | null> {
+  ): Promise<Map<string, string | null> | null> {
     const companion =
       await this.fileManager.loadCompanionSchema(collectionName);
     if (!companion) return null;
-    const statuses = await readCompanionLocaleStatusAll(
+    return readCompanionLocaleStatusAll(
       this.db as Parameters<typeof readCompanionLocaleStatusAll>[0],
       companion.table,
       entryId,
       cachedCompanionReadiness(this.adapter, companion.companionTableName)
     );
-    if (statuses.size === 0) return null;
-    return [...statuses]
-      .filter(([, status]) => status !== "published")
-      .map(([locale]) => locale);
   }
 
   /**
@@ -4579,8 +4610,9 @@ export class CollectionMutationService extends BaseService {
           patch: {},
           writeLocale: undefined,
           writeLocaleValues: {},
-          writeLocaleLive: previousStatus === "published",
+          perLocaleStatus: false,
           everyLanguage: true,
+          writeLocalePromoted: false,
           fields,
           user: params.user,
         });
@@ -6610,8 +6642,8 @@ export class CollectionMutationService extends BaseService {
       // that one.
       if (
         collectionHasStatus &&
-        !promotesDraft &&
-        transitionNextStatus === "published"
+        transitionNextStatus === "published" &&
+        (!promotesDraft || sweepAllLocales)
       ) {
         await this.assertLanguagesGoLiveValid({
           collectionName: params.collectionName,
@@ -6622,12 +6654,10 @@ export class CollectionMutationService extends BaseService {
           // The locale split moved the caller's translatable values out of
           // `finalData`; they are part of what goes live in the write locale.
           writeLocaleValues: localizedUpdate?.localizedFieldValues ?? {},
-          // A per-locale status lives in the companion, which this does not
-          // read for a one-language write, so such a write is always judged.
-          writeLocaleLive:
-            localizedUpdate?.hasStatus !== true &&
-            (existingEntry as { status?: unknown }).status === "published",
+          perLocaleStatus: localizedUpdate?.hasStatus === true,
           everyLanguage: sweepAllLocales,
+          // The promotion above judged this language's draft as it goes live.
+          writeLocalePromoted: promotesDraft,
           fields,
           user: params.user,
         });
