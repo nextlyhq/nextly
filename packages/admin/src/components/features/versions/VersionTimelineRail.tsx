@@ -15,6 +15,7 @@ import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 import { formatDateTime } from "@admin/lib/dates/format";
 import type { VersionMeta, VersionScope } from "@admin/services/versionApi";
 
+import { versionAuthorLabel } from "./version-author";
 import { predecessorOf, type Predecessor } from "./version-pairing";
 import { VersionLocaleBadge } from "./VersionLocaleBadge";
 import { VersionSummaryLine } from "./VersionSummaryLine";
@@ -198,7 +199,7 @@ function TimelineRow({
             <span className="text-xs text-muted-foreground">{unpairable}</span>
           )}
           <span className="text-xs text-muted-foreground">
-            {version.author?.name ?? "Unknown author"} &middot;{" "}
+            {versionAuthorLabel(version)} &middot;{" "}
             {formatDateTime(version.createdAt)}
           </span>
           {versionNo === null ? null : (
