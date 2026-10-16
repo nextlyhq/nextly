@@ -92,6 +92,9 @@ const BARE_VISUAL_BUILDER = /(?<!schema )(?<!page )\bvisual builder\b/gi;
  * A curated list, like `FORBIDDEN_PHRASES` above and for the same reason: no code can ask
  * whether a sentence is true. A sentence that must quote one of these to correct it is
  * allowlisted by its file and its text, with the reason, never by weakening the phrase here.
+ * Its text is the passage the phrase spans: the line it starts on, and for a phrase that wraps,
+ * each line beneath up to the one it ends on, digested as `digestLine` of those lines joined
+ * by newlines. Editing any of them ends the exemption.
  *
  * `word: true` matches only where no letter or digit touches either end, so `SSO` never
  * matches inside "also" and "in 5 minutes" never matches inside "within 5 minutes". Every other
@@ -2020,7 +2023,10 @@ function continuedText(next, quoted) {
   return OPENS_BLOCK.test(below) ? null : plainLine(below);
 }
 
-/** The lines beneath line `i` that continue its sentence, as far as any phrase can reach. */
+/**
+ * The lines beneath line `i` that continue its sentence, as far as any phrase can reach, each as
+ * a reader sees it.
+ */
 function continuation(lines, i) {
   const quoted = QUOTE_MARKER.test(lines[i]);
   const rest = [];
@@ -2029,17 +2035,44 @@ function continuation(lines, i) {
     if (text === null) break;
     rest.push(text);
   }
-  return rest.join(" ");
+  return rest;
 }
 
 /**
  * The refused phrases that START on line `i`, read together with the lines beneath that
- * continue the sentence.
+ * continue the sentence, and the source passage they span: line `i` and every line beneath
+ * that one of them reaches into.
+ *
+ * The passage is what an exemption is held against. Held against line `i` alone, an exemption
+ * for a phrase that wraps would survive any edit to the lines that finish it, so the words that
+ * make the claim could be rewritten under a standing permission. A phrase that ends on its own
+ * line spans that one line, so its passage, and an exemption's digest of it, are unchanged.
  */
 function refusedOnLine(lines, i, wraps) {
   const own = plainLine(lines[i]);
-  const rest = wraps ? continuation(lines, i) : "";
-  return refusedClaimsIn(`${own} ${rest}`).filter(hit => hit.index < own.length);
+  const { text, starts } = joinedLines([own, ...(wraps ? continuation(lines, i) : [])]);
+  const hits = refusedClaimsIn(text).filter(hit => hit.index < own.length);
+  const end = Math.max(0, ...hits.map(hit => hit.index + hit.text.length));
+  // Line `i` starts at 0 and is always in the passage; each continued line is in it when the
+  // furthest phrase reaches past where that line starts.
+  const reached = starts.slice(1).filter(start => start < end).length;
+  return { hits, passage: lines.slice(i, i + 1 + reached).join("\n") };
+}
+
+/**
+ * Lines read as one sentence, joined by a space, with where each starts in the joined text.
+ * Built together, so the offsets a phrase is measured against are those of the text it was
+ * found in.
+ */
+function joinedLines(parts) {
+  const starts = [];
+  let text = "";
+  for (const part of parts) {
+    if (starts.length > 0) text += " ";
+    starts.push(text.length);
+    text += part;
+  }
+  return { text, starts };
 }
 
 function pushRefused(findings, isExempt, { file, line, source, hits }) {
@@ -2065,8 +2098,8 @@ function refusedInFile(repoRoot, file, findings, isExempt) {
   const lines = text.split("\n");
   const wraps = !file.endsWith(".json");
   for (let i = 0; i < lines.length; i++) {
-    const hits = refusedOnLine(lines, i, wraps);
-    pushRefused(findings, isExempt, { file, line: i + 1, source: lines[i], hits });
+    const { hits, passage } = refusedOnLine(lines, i, wraps);
+    pushRefused(findings, isExempt, { file, line: i + 1, source: passage, hits });
   }
 }
 

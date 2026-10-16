@@ -193,6 +193,16 @@ See the [database support docs](https://nextlyhq.com/docs/database/support) for 
 - [**Plugin development**](https://nextlyhq.com/docs/plugins): build your own integrations
 - [**Deployment**](https://nextlyhq.com/docs/guides/deployment): Vercel, Docker, and more
 
+### With a coding agent
+
+Skills that teach Claude Code, Codex, Cursor and other agents to install
+Nextly, define collections, set up authentication and deploy live in
+[`skills/`](./skills). Add them to your project with:
+
+```bash
+npx skills add nextlyhq/nextly
+```
+
 ## Examples
 
 - [**Blog template**](./templates/blog): production-quality blog with seeded content, RSS, sitemap, search

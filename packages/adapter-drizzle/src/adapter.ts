@@ -24,6 +24,11 @@ import {
 import { buildDrizzleOrderBy } from "./drizzle-order";
 import { buildDrizzleWhere } from "./drizzle-where";
 import {
+  pinTransactions,
+  type DrizzleTransactor,
+  type PinnedConnection,
+} from "./pinned-transaction";
+import {
   createTransactionForwarders,
   transactionDrizzleHandles,
   type TransactionCrudForwarders,
@@ -66,17 +71,6 @@ interface FlowTransaction {
   open: boolean;
   /** The transaction the flow that opened this one was itself inside. */
   enclosing: FlowTransaction | undefined;
-}
-
-/**
- * Drizzle's database handle, as far as running a transaction goes.
- *
- * The callback takes `unknown` and the options `never`, so every dialect's
- * handle fits, whose callback receives its own transaction type and whose
- * options are its own.
- */
-interface DrizzleTransactor {
-  transaction<T>(work: (tx: unknown) => Promise<T>, config?: never): Promise<T>;
 }
 
 /**
@@ -492,6 +486,27 @@ export abstract class DrizzleAdapter {
         scope.open = false;
       }
     });
+  }
+
+  /**
+   * Run each of a pool-bound Drizzle handle's transactions on a connection
+   * `checkout` hands it, and return that connection as the adapter's own
+   * `transaction()` does: closed rather than pooled when no ROLLBACK can be
+   * confirmed on it, and never leaked by a failed BEGIN (`pinTransactions`).
+   *
+   * For PostgreSQL's and MySQL's handles. Apply it before
+   * {@link trackFlowTransactions}, which wraps whatever `transaction` the
+   * handle has at that point.
+   *
+   * @param db - A Drizzle handle on this adapter's pool
+   * @param checkout - Checks out a connection for one transaction
+   * @returns The same handle, its `transaction` replaced
+   */
+  protected pinDrizzleTransactions<D extends DrizzleTransactor>(
+    db: D,
+    checkout: () => Promise<PinnedConnection>
+  ): D {
+    return pinTransactions(db, checkout);
   }
 
   /**

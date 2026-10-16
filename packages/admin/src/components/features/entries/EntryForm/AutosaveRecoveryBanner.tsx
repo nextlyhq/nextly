@@ -16,6 +16,8 @@
 import { Button } from "@nextlyhq/ui";
 import { RotateCcw, X } from "lucide-react";
 
+import type { ViewedVersion } from "@admin/components/features/versions/document-history-context";
+import type { UseAutosaveRecoveryResult } from "@admin/hooks/useAutosaveRecovery";
 import { cn } from "@admin/lib/utils";
 
 export interface AutosaveRecoveryBannerProps {
@@ -84,5 +86,38 @@ export function AutosaveRecoveryBanner({
         </Button>
       </div>
     </div>
+  );
+}
+
+export interface LiveDocumentRecoveryOfferProps {
+  /** The editor's recovery state, from `useAutosaveRecovery`. */
+  recovery: UseAutosaveRecoveryResult;
+  /** The past version on screen, or null while the live document is. */
+  viewingVersion: ViewedVersion | null;
+  className?: string;
+}
+
+/**
+ * The recovery offer, on the one condition every editor surface shows it.
+ *
+ * Restoring writes into the LIVE form, so the offer is withheld while a past
+ * version is on screen — restoring values nobody can see is deciding without
+ * seeing — and returns when the live document does. Every surface that hosts
+ * a document renders this rather than restating the condition, so the entry
+ * editor, the Single editor and a plugin's document view cannot disagree.
+ */
+export function LiveDocumentRecoveryOffer({
+  recovery,
+  viewingVersion,
+  className,
+}: LiveDocumentRecoveryOfferProps) {
+  if (viewingVersion !== null || recovery.offer === null) return null;
+  return (
+    <AutosaveRecoveryBanner
+      savedAt={recovery.offer.savedAt}
+      onRestore={recovery.restore}
+      onDismiss={recovery.dismiss}
+      className={className}
+    />
   );
 }

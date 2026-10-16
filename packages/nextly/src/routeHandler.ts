@@ -147,6 +147,7 @@ import { pluginRouteBootDecision } from "./plugins/routes/should-register";
 import { settingsWritePermission } from "./plugins/settings-permission";
 import { assertAdminWidgets } from "./plugins/validate-admin-widgets";
 import { assertClientConfigs } from "./plugins/validate-client-config";
+import { assertDocumentViews } from "./plugins/validate-document-views";
 import {
   parseRestRoute,
   getActionFromMethod,
@@ -2192,6 +2193,9 @@ export function createDynamicHandlers(options?: {
     // the whole authenticated workspace payload down for every admin -- a
     // wider failure than a bad `clientConfig`, reached the same way.
     assertAdminWidgets(options.config.plugins ?? []);
+    // And the document views: two screens claiming one address on one
+    // document would leave the admin drawing whichever it reached first.
+    assertDocumentViews(options.config.plugins ?? []);
     setHandlerConfig(options.config);
   }
 

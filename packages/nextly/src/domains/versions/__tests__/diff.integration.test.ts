@@ -144,6 +144,67 @@ describe("version diff (integration)", () => {
     expect(names).not.toContain("body");
   });
 
+  it("names a field the reader may not read as hidden, and sends nothing of it", async () => {
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: "posts",
+          versions: true,
+          fields: [
+            text({ name: "title", label: "Title" }),
+            text({
+              name: "codename",
+              label: "Codename",
+              access: { read: () => false },
+            }),
+          ],
+        }),
+      ],
+    });
+    const handler =
+      current.getService<CollectionsHandler>("collectionsHandler");
+    const created = await handler.createEntry(
+      { collectionName: "posts", overrideAccess: true },
+      { title: "First", codename: "falcon" }
+    );
+    const id = (created.data as { id: string }).id;
+    await handler.updateEntry(
+      { collectionName: "posts", entryId: id, overrideAccess: true },
+      { title: "Second", codename: "osprey" }
+    );
+
+    const diff = await getVersionDiffForDocument({
+      scopeKind: "collection",
+      slug: "posts",
+      entryId: id,
+      user: SUPER_ADMIN,
+      from: 1,
+      to: 2,
+    });
+
+    expect(nodeByName(diff.fields, "title")).toMatchObject({
+      status: "changed",
+      declaredLabel: "Title",
+      path: [],
+    });
+    expect(nodeByName(diff.fields, "codename")).toEqual({
+      kind: "hidden",
+      reason: "no-access",
+      name: "codename",
+      label: "Codename",
+      declaredLabel: "Codename",
+      type: "text",
+      status: "unchanged",
+      path: [],
+    });
+    // The comparison says it left something out.
+    expect(diff.incomplete).toBe(true);
+    // Neither value reaches the reader, anywhere in the result.
+    const wire = JSON.stringify(diff);
+    expect(wire).not.toContain("falcon");
+    expect(wire).not.toContain("osprey");
+  });
+
   it("refuses to compare a version with itself", async () => {
     current = await createTestNextly({
       collections: [

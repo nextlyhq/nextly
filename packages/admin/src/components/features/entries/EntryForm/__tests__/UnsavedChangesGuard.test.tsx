@@ -8,7 +8,11 @@
 import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
-import { render, screen } from "@admin/__tests__/utils";
+import { act, render, screen } from "@admin/__tests__/utils";
+import {
+  clearDocumentViews,
+  registerDocumentViews,
+} from "@admin/lib/plugins/document-view-registry";
 
 import {
   UnsavedChangesGuard,
@@ -288,6 +292,133 @@ describe("UnsavedChangesGuard", () => {
     await userEvent.click(screen.getByRole("button", { name: "go" }));
     expect(window.location.pathname).toBe("/admin/somewhere-else");
     expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+});
+
+describe("moving between a document and its own views", () => {
+  // A view is an address the admin registered, not any third segment: the
+  // registry answers which paths are views, as it does for the router.
+  beforeEach(() => {
+    registerDocumentViews([
+      { fieldType: "blocks", path: "builder", component: "@acme/pb#View" },
+    ]);
+  });
+  afterEach(() => {
+    clearDocumentViews();
+  });
+
+  /** Starts dirty at `from`, moves to `to`, and says whether it was asked. */
+  async function moveDirty(from: string, to: string): Promise<boolean> {
+    window.history.pushState(null, "", from);
+    render(
+      <UnsavedChangesGuard isDirty>
+        <GoTo path={to} label="move" />
+      </UnsavedChangesGuard>
+    );
+    await userEvent.click(screen.getByRole("button", { name: "move" }));
+    return screen.queryByRole("alertdialog") !== null;
+  }
+
+  it.each([
+    [
+      "an entry into its view",
+      "/admin/collections/pages/1",
+      "/admin/collections/pages/1/builder?field=body",
+    ],
+    [
+      "a view back to its entry",
+      "/admin/collections/pages/1/builder",
+      "/admin/collections/pages/1",
+    ],
+    [
+      "a Single into its view",
+      "/admin/singles/home",
+      "/admin/singles/home/builder",
+    ],
+    [
+      "one field of a view to another",
+      "/admin/collections/pages/1/builder?field=hero",
+      "/admin/collections/pages/1/builder?field=body",
+    ],
+  ])("stays, without asking, from %s", async (_case, from, to) => {
+    // The same page answers both addresses and keeps the same form mounted,
+    // so nothing unsaved is left behind.
+    expect(await moveDirty(from, to)).toBe(false);
+    expect(`${window.location.pathname}${window.location.search}`).toBe(to);
+  });
+
+  it.each([
+    [
+      "another entry's view",
+      "/admin/collections/pages/1",
+      "/admin/collections/pages/2/builder",
+    ],
+    [
+      "another collection's view",
+      "/admin/collections/pages/1",
+      "/admin/collections/posts/1/builder",
+    ],
+    [
+      "the document's history, which is another page",
+      "/admin/collections/pages/1",
+      "/admin/collections/pages/1/versions",
+    ],
+    [
+      "a view in another language",
+      "/admin/collections/pages/1/builder",
+      "/admin/collections/pages/1/builder?locale=de",
+    ],
+    [
+      // Nothing answers it, so the page that does unmounts the form.
+      "a mistyped view",
+      "/admin/collections/pages/1",
+      "/admin/collections/pages/1/buidler",
+    ],
+  ])("still asks before moving to %s", async (_case, from, to) => {
+    expect(await moveDirty(from, to)).toBe(true);
+    expect(window.location.pathname).toBe(from.split("?")[0]);
+  });
+
+  /**
+   * Arrives at `to` by way of `from`, dirty, then presses Back, and says
+   * whether it was asked.
+   */
+  async function backDirty(from: string, to: string): Promise<boolean> {
+    window.history.pushState(null, "", from);
+    window.history.pushState(null, "", to);
+    render(
+      <UnsavedChangesGuard isDirty>
+        <span />
+      </UnsavedChangesGuard>
+    );
+    await act(async () => {
+      window.history.back();
+      await new Promise(resolve =>
+        window.addEventListener("popstate", resolve, { once: true })
+      );
+    });
+    return screen.queryByRole("alertdialog") !== null;
+  }
+
+  it("stays, without asking, on Back from a view to its own document", async () => {
+    expect(
+      await backDirty(
+        "/admin/collections/pages/1",
+        "/admin/collections/pages/1/builder"
+      )
+    ).toBe(false);
+    expect(window.location.pathname).toBe("/admin/collections/pages/1");
+  });
+
+  it("still asks on Back to another document", async () => {
+    // The control: an exemption that let every Back through passes the case
+    // above.
+    expect(
+      await backDirty(
+        "/admin/collections/pages/2",
+        "/admin/collections/pages/1/builder"
+      )
+    ).toBe(true);
   });
 });
 

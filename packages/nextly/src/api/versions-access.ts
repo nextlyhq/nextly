@@ -339,15 +339,21 @@ function interpretReadResult(success: boolean, statusCode: number): boolean {
  * before a field gained an access rule) is left alone rather than throwing —
  * the surrounding gate has already established the caller may read the
  * document, and redaction is a narrowing pass on top of that.
+ *
+ * Returns the top-level keys the read rules removed, so a comparison can say a
+ * field is hidden from this reader rather than leave it out unexplained.
+ * Password values are stripped too, but are not reported: a comparison never
+ * shows a password field at all.
  */
 export async function redactSnapshotForUser(
   snapshot: unknown,
   scopeKind: VersionScopeKind,
   slug: string,
   user: UserContext
-): Promise<void> {
-  if (typeof snapshot !== "object" || snapshot === null) return;
-  if (scopeKind !== "collection" && scopeKind !== "single") return;
+): Promise<ReadonlySet<string>> {
+  const withheld = new Set<string>();
+  if (typeof snapshot !== "object" || snapshot === null) return withheld;
+  if (scopeKind !== "collection" && scopeKind !== "single") return withheld;
 
   const entry = snapshot as Record<string, unknown>;
 
@@ -394,6 +400,7 @@ export async function redactSnapshotForUser(
     );
   }
 
+  const readable = new Set(Object.keys(entry));
   await applyFieldReadAccess({
     kind: scopeKind,
     slug,
@@ -401,6 +408,10 @@ export async function redactSnapshotForUser(
     user,
     overrideAccess: false,
   });
+  for (const key of readable) {
+    if (!(key in entry)) withheld.add(key);
+  }
+  return withheld;
 }
 
 /**
@@ -630,14 +641,15 @@ export async function diffDocumentVersions(args: {
   }
 
   // Redact each snapshot for the caller BEFORE diffing, so the diff can never
-  // surface a field the caller may not read.
-  await redactSnapshotForUser(
+  // surface a field the caller may not read. What either side withheld is
+  // named to the engine, which reports it as hidden in its place.
+  const withheldFrom = await redactSnapshotForUser(
     fromRow.snapshot,
     args.scopeKind,
     args.slug,
     args.user
   );
-  await redactSnapshotForUser(
+  const withheldTo = await redactSnapshotForUser(
     toRow.snapshot,
     args.scopeKind,
     args.slug,
@@ -653,7 +665,11 @@ export async function diffDocumentVersions(args: {
     snapshotObject(fromRow.snapshot),
     snapshotObject(toRow.snapshot),
     fields,
-    { modifiedOnly: args.modifiedOnly }
+    {
+      modifiedOnly: args.modifiedOnly,
+      withheld: new Set([...withheldFrom, ...withheldTo]),
+      entity: lookupKind,
+    }
   );
 
   // Resolve relationship and upload ids in the diff to display labels through
@@ -674,6 +690,7 @@ export async function diffDocumentVersions(args: {
     to: args.to,
     locale: fromRow.locale,
     hasChanges: body.hasChanges,
+    incomplete: body.incomplete,
     fields: body.fields,
   };
 }

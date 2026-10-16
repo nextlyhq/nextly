@@ -5,6 +5,8 @@ description: >-
   landed on main: whether a squash carried every commit, whether main is
   healthy afterwards, whether a red run is flake, or when a package stops
   resolving after a rebase.
+metadata:
+  internal: true
 ---
 
 ## The decisions in this file are also code

@@ -6,6 +6,8 @@ description: >-
   and what counts as the intended failure, compile-time contract tests and the
   @ts-expect-error trap, naming the property that separates a correct
   implementation from a plausible broken one, and when removing a test is right.
+metadata:
+  internal: true
 ---
 
 # What makes a test evidence in the Nextly monorepo
