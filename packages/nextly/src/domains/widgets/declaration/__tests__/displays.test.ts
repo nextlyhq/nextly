@@ -52,6 +52,22 @@ describe("the data core's displays draw, checked at run time", () => {
     }
   );
 
+  it.each(["list", "table"] as const)(
+    "%s: refuses each property of a column given the wrong kind",
+    display => {
+      const column = SAMPLES[display].fields[0];
+      for (const key of Object.keys(column)) {
+        expect(
+          displayDataProblem(display, {
+            ...SAMPLES[display],
+            fields: [{ ...column, [key]: WRONG_KIND }],
+          }),
+          `${display}.fields.0.${key}`
+        ).toContain(`fields.0.${key}`);
+      }
+    }
+  );
+
   it("refuses a list's column that names no field", () => {
     expect(
       displayDataProblem("list", { items: [], fields: [{ label: "Title" }] })

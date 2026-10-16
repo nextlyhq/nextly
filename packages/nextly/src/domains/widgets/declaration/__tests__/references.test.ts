@@ -250,6 +250,24 @@ describe("a declared widget's starting query, once content is synced", () => {
     );
   });
 
+  it("starts a site that defines no collections or Singles in code, whatever the registry", async () => {
+    // With nothing code-defined, boot's syncs have no table to find missing,
+    // so they cannot say the database is fresh; and there is nothing the
+    // refusal protects: every content query is the database's, warned about.
+    vi.mocked(refreshCollectionSources).mockResolvedValueOnce(false);
+    clearSources();
+    registerWidgetDeclarations([
+      { owner: SHOP, declarations: [listing("acme/a", "notes", "title")] },
+    ]);
+    await expect(
+      checkDeclaredWidgetReferences({
+        collections: new Set(),
+        singles: new Set(),
+        databaseNotSetUp: false,
+      })
+    ).resolves.toBe(undefined);
+  });
+
   it("waits when the registry cannot be read because the database is not set up", async () => {
     vi.mocked(refreshCollectionSources).mockResolvedValueOnce(false);
     clearSources();

@@ -172,6 +172,17 @@ const registriesUnreadable = (): NextlyError =>
       "widgets it has not checked; start again once the database answers.",
   });
 
+/**
+ * Whether the code defines any collection or Single.
+ *
+ * Only then can a registry that was not read let a widget pass unchecked: the
+ * check refuses over code-defined content alone. And only then can boot tell
+ * a fresh database apart, since its syncs find the registries missing by
+ * writing to them; with nothing to write they report nothing.
+ */
+const definesContent = (content: CodeDefinedContent): boolean =>
+  content.collections.size > 0 || content.singles.size > 0;
+
 /** Whether a source is a collection or a Single, which boot syncs. */
 const isContentSource = (source: string): boolean =>
   source.startsWith(COLLECTION_SOURCE) || source.startsWith(SINGLE_SOURCE);
@@ -215,8 +226,12 @@ export async function checkDeclaredWidgetReferences(
   // as if its table had not been made yet, so each widget over one would pass
   // unchecked. Startup stops instead, and is tried again. On a fresh database
   // the read fails for the reason boot already tolerates, and the content
-  // queries wait for a start where the content exists.
-  if (!read && !content.databaseNotSetUp) throw registriesUnreadable();
+  // queries wait for a start where the content exists. With no code-defined
+  // content there is nothing to pass unchecked, and nothing for boot to have
+  // found missing, so it starts.
+  if (!read && !content.databaseNotSetUp && definesContent(content)) {
+    throw registriesUnreadable();
+  }
 
   const faults: WidgetDeclarationFault[] = declared.flatMap(declared => {
     const problem = startingQueryFault(declared, content);
