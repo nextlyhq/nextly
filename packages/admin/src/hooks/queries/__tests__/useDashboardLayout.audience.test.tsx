@@ -45,10 +45,11 @@ function client() {
 function layout(audience: string) {
   return {
     placements: [],
+    widgets: {},
     available: [],
+    defaultPlacements: [],
     version: 1,
     source: "default",
-    columnCount: 3,
     scope: "scope",
     audience,
   };

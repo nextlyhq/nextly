@@ -5,8 +5,8 @@
  *
  * ## Why a card carries its own control rather than borrowing edit mode's
  *
- * Hiding any card is already possible from `WidgetEditControls`, and that is
- * the wrong route for the cards this control is for. A first-run card addresses
+ * Removing any card is already possible from its menu in customise mode, and
+ * that is the wrong route for the cards this control is for. A first-run card addresses
  * a reader who has just arrived and has no reason to know the dashboard can be
  * edited, so routing "I am done with this" through a mode they must discover
  * first means the card stays until they finish the work it describes. Shopify's
@@ -28,16 +28,22 @@
  * ## Offered only where the way back is
  *
  * 🔴 `md` and up, the SAME breakpoint `DashboardEditBar` uses for the control
- * that begins editing. Editing is the only route to un-hiding a card, so on a
- * narrower screen this button's own promise — bring it back by editing the
- * dashboard — is one the product cannot keep, and a reader would be left
- * having permanently hidden a card with no way to reach it. A control that can
- * act but cannot be undone is worse than no control.
+ * that begins customising. Customise mode is the lasting route to putting a
+ * removed card back, so on a narrower screen this button's own promise — bring
+ * it back from Customize — is one the product cannot keep once the Undo notice
+ * is gone. A control that can act but cannot be undone is worse than none.
+ *
+ * ## Unavailable, with the reason, while the stored layout is unreadable
+ *
+ * The server refuses every single-card write to a stored arrangement it could
+ * not read. The control stays on the card and says why it cannot act, rather
+ * than vanishing and leaving the reader to wonder where it went.
  *
  * @module components/features/widgets/edit/DismissWidgetButton
  */
 
 import { Button } from "@nextlyhq/ui";
+import { useId } from "react";
 
 import * as Icons from "@admin/components/icons";
 import { cn } from "@admin/lib/utils";
@@ -55,53 +61,79 @@ export interface DismissWidgetButtonProps {
    */
   isDismissing: boolean;
   /**
+   * Why the control cannot act right now, or absent when it can.
+   *
+   * Present, the button stays focusable and announces the reason instead of
+   * acting: `aria-disabled` rather than `disabled`, because a disabled button
+   * leaves the Tab order and its reason with it.
+   */
+  unavailableReason?: string;
+  /**
    * Whether the cell positions this control itself.
    *
    * A framed card places it in its own header, where space is reserved. An
    * unframed one has no header to place it in, so the cell floats it in the
-   * corner the drag handle leaves free while not editing.
+   * corner the drag handle leaves free while not customising.
    */
   floating?: boolean;
+  /** Registers the button, so focus can return here after an Undo. */
+  buttonRef?: (element: HTMLElement | null) => void;
   onDismiss: () => void;
 }
 
 export function DismissWidgetButton({
   title,
   isDismissing,
+  unavailableReason,
   floating = false,
+  buttonRef,
   onDismiss,
 }: DismissWidgetButtonProps) {
+  const reasonId = useId();
+  const unavailable = unavailableReason !== undefined;
   return (
-    <Button
-      type="button"
-      variant="ghost"
-      size="icon"
-      className={cn(
-        "size-7 text-muted-foreground hover:text-foreground",
-        // Hidden below `md`, where nothing can bring the card back. `hidden`
-        // rather than `disabled`: a control that is present and refuses says
-        // the capability exists and is unavailable, and here it simply does
-        // not apply at that width.
-        "hidden md:inline-flex",
-        // Floated only where no header reserved space for it. Top RIGHT is
-        // free by construction while not editing: the drag handle takes the
-        // left and renders only while editing.
-        floating && "absolute right-2 top-2 z-10"
-      )}
-      disabled={isDismissing}
-      onClick={onDismiss}
-      // Names the CARD and what dismissing costs. Several cards can carry this
-      // control, so "Dismiss" alone is the same label repeated down a column --
-      // and a reader deciding whether to press it needs to know the card is
-      // recoverable rather than gone.
-      aria-label={`Dismiss ${title}. You can bring it back by editing the dashboard.`}
-      // Marks this as the cell's own chrome rather than the widget's body, so
-      // a cell holding nothing else still collapses. The cell's class names the
-      // attribute; renaming it here alone would reinstate the blank row.
-      data-widget-chrome=""
-      data-testid="widget-dismiss"
-    >
-      <Icons.X aria-hidden className="size-4" />
-    </Button>
+    <>
+      <Button
+        ref={buttonRef}
+        type="button"
+        variant="ghost"
+        size="icon"
+        className={cn(
+          "size-7 text-muted-foreground hover:text-foreground",
+          // Hidden below `md`, where nothing lasting can bring the card back.
+          // `hidden` rather than `disabled`: a control that is present and
+          // refuses says the capability exists and is unavailable, and here it
+          // simply does not apply at that width.
+          "hidden md:inline-flex",
+          unavailable && "cursor-not-allowed opacity-50",
+          // Floated only where no header reserved space for it. Top RIGHT is
+          // free by construction while not customising: the drag handle takes
+          // the left and renders only while customising.
+          floating && "absolute right-2 top-2 z-10"
+        )}
+        disabled={isDismissing}
+        aria-disabled={unavailable || undefined}
+        aria-describedby={unavailable ? reasonId : undefined}
+        title={unavailableReason}
+        onClick={unavailable ? undefined : onDismiss}
+        // Names the CARD and what dismissing costs. Several cards can carry
+        // this control, so "Dismiss" alone is the same label repeated down the
+        // page -- and a reader deciding whether to press it needs to know the
+        // card is recoverable rather than gone.
+        aria-label={`Dismiss ${title}. You can bring it back from Customize.`}
+        // Marks this as the cell's own chrome rather than the widget's body, so
+        // a cell holding nothing else still collapses. The cell's class names
+        // the attribute; renaming it here alone would reinstate the blank row.
+        data-widget-chrome=""
+        data-testid="widget-dismiss"
+      >
+        <Icons.X aria-hidden className="size-4" />
+      </Button>
+      {unavailable ? (
+        <span id={reasonId} className="sr-only">
+          {unavailableReason}
+        </span>
+      ) : null}
+    </>
   );
 }

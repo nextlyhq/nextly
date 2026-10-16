@@ -8,6 +8,7 @@ import {
   allWidgets,
   canonicalWidgets,
   declaredWidgets,
+  widthFacts,
   type CanonicalWidget,
 } from "../canonical";
 import { setGeneratedWidgets } from "../collection-widgets";
@@ -373,5 +374,77 @@ describe("generated cards in the canonical set", () => {
     const merged = canonicalWidgets([]);
     expect(merged).toHaveLength(1);
     expect(merged[0].defaultOrder).toBe(7);
+  });
+});
+
+describe("a widget's widths", () => {
+  it("are derived from the declared sizes when no width terms are stated", () => {
+    expect(
+      widthFacts({
+        id: "w/a",
+        defaultSize: "lg",
+        minSize: "md",
+        maxSize: "xl",
+      })
+    ).toEqual({
+      allowedWidths: ["third", "half", "twoThirds"],
+      defaultWidth: "half",
+      allowsSeveral: false,
+    });
+  });
+
+  it("allow every width and start full for a widget that declares nothing", () => {
+    expect(widthFacts({ id: "w/a" })).toEqual({
+      allowedWidths: ["quarter", "third", "half", "twoThirds", "full"],
+      defaultWidth: "full",
+      allowsSeveral: false,
+    });
+  });
+
+  it("take explicit width terms over the declared sizes", () => {
+    expect(
+      widthFacts({
+        id: "w/a",
+        defaultSize: "full",
+        minSize: "sm",
+        allowedWidths: ["half", "full"],
+        defaultWidth: "half",
+        allowsSeveral: true,
+      })
+    ).toEqual({
+      allowedWidths: ["half", "full"],
+      defaultWidth: "half",
+      allowsSeveral: true,
+    });
+  });
+
+  it("read an empty allowed list as no statement, never as no width at all", () => {
+    expect(
+      widthFacts({ id: "w/a", allowedWidths: [], maxSize: "md" }).allowedWidths
+    ).toEqual(["quarter", "third"]);
+  });
+
+  it("carry a registration's size range into the canonical summary", () => {
+    registerWidget(
+      registered({ id: "core/a", defaultSize: "lg", minSize: "md" })
+    );
+    const [summary] = allWidgets();
+    expect(widthFacts(summary as CanonicalWidget).allowedWidths).toEqual([
+      "third",
+      "half",
+      "twoThirds",
+      "full",
+    ]);
+  });
+
+  it("keep a contribution's width terms where the registration states none", () => {
+    registerWidget(registered({ id: "dup/one" }));
+    const [merged] = canonicalWidgets([
+      { id: "dup/one", allowedWidths: ["half"], allowsSeveral: true },
+    ]);
+    expect(merged).toMatchObject({
+      allowedWidths: ["half"],
+      allowsSeveral: true,
+    });
   });
 });

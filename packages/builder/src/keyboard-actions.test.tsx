@@ -510,6 +510,52 @@ describe("useBlockKeyboardActions", () => {
     expect(said).toMatch(/has to sit inside a container/i);
   });
 
+  it("indents into a component instance through the slot its component exposes, given the definitions", () => {
+    // Through the keyboard actions rather than the position rule alone: the
+    // definitions have to REACH the rule, and a host that dropped them would
+    // file the block under a slot the instance never draws.
+    const card: ComponentLookup = new Map([
+      [
+        "card",
+        {
+          formatVersion: DOCUMENT_FORMAT_VERSION,
+          kind: "component" as const,
+          nodes: [{ id: "d1", type: "acme/text", version: 1, props: {} }],
+          slots: { default: { label: "Body", nodeId: "d1", slot: "default" } },
+        } as unknown as BlockDocument,
+      ],
+    ]);
+    const page = documentOf([
+      {
+        id: "inst",
+        type: COMPONENT_INSTANCE_TYPE,
+        version: 1,
+        props: { componentId: "card" },
+      },
+      { id: "b", type: "acme/text", version: 1, props: {} },
+    ]);
+    const editor = editorSpy(page, "b");
+    render(
+      <ShortcutProvider>
+        <BlockKeyboardActions
+          onSaveAsPattern={() => undefined}
+          editor={editor}
+          definitions={card}
+        />
+      </ShortcutProvider>
+    );
+
+    press("ArrowRight", { altKey: true });
+
+    expect(editor.apply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "move",
+        id: "b",
+        to: { parentId: "inst", slot: "default", index: 0 },
+      })
+    );
+  });
+
   it("moves the same instance when no definitions are given, judged by its own type", () => {
     // The control: the refusal above comes from the definitions, not from the
     // instance type. A host whose library never loaded resolves nothing, and a

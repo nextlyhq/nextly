@@ -84,6 +84,8 @@ const CORE_WIDGET_LITERALS = [
     archetype: "custom",
     chrome: "none",
     defaultSize: "full",
+    // The narrowest width it still draws at: its offer is laid out across the row.
+    minSize: "full",
     defaultOrder: 0,
     component: "core#SeedDemoContentCard",
     /*
@@ -117,6 +119,8 @@ const CORE_WIDGET_LITERALS = [
     archetype: "custom",
     chrome: "none",
     defaultSize: "full",
+    // The narrowest width it still draws at: its steps are laid out across the row.
+    minSize: "full",
     // Between the seed offer and the first content card. Both are transient and
     // both address a reader who has just arrived, so they sit together rather
     // than with the cards that stay.
@@ -145,6 +149,8 @@ const CORE_WIDGET_LITERALS = [
     archetype: "custom",
     chrome: "none",
     defaultSize: "full",
+    // The narrowest width it still draws at: a grid of collection cards, which needs at least half the row.
+    minSize: "lg",
     defaultOrder: 10,
     component: "core#CollectionQuickLinks",
     /*
@@ -165,6 +171,8 @@ const CORE_WIDGET_LITERALS = [
     archetype: "custom",
     chrome: "none",
     defaultSize: "full",
+    // The narrowest width it still draws at: a grid of Single cards, which needs at least half the row.
+    minSize: "lg",
     defaultOrder: 20,
     component: "core#SinglesQuickLinks",
     /*
@@ -184,6 +192,8 @@ const CORE_WIDGET_LITERALS = [
       "One click to an empty entry form, for the collections this reader may create in.",
     archetype: "custom",
     defaultSize: "full",
+    // The narrowest width it still draws at: a row of create buttons, which wraps from a third.
+    minSize: "md",
     defaultOrder: 15,
     component: "core#QuickCreate",
   },
@@ -194,6 +204,8 @@ const CORE_WIDGET_LITERALS = [
     archetype: "custom",
     chrome: "none",
     defaultSize: "full",
+    // The narrowest width it still draws at: two counters side by side, which need at least a third.
+    minSize: "md",
     defaultOrder: 30,
     component: "core#TeamSummary",
   },
@@ -213,6 +225,8 @@ const CORE_WIDGET_LITERALS = [
       "The documents most recently left with unpublished edits, newest first.",
     archetype: "list",
     defaultSize: "md",
+    // The narrowest width it still draws at: a list whose rows need at least a third.
+    minSize: "md",
     defaultOrder: 35,
     /*
      * Two fields, because the `list` archetype draws the first two and silently
@@ -249,6 +263,8 @@ const CORE_WIDGET_LITERALS = [
     description: "Scheduled releases that have not shipped yet, soonest first.",
     archetype: "list",
     defaultSize: "md",
+    // The narrowest width it still draws at: a list whose rows need at least a third.
+    minSize: "md",
     defaultOrder: 40,
     /*
      * 🔴 The ONLY core card with a gate, and the asymmetry is deliberate rather
@@ -310,6 +326,8 @@ const CORE_WIDGET_LITERALS = [
     archetype: "custom",
     chrome: "none",
     defaultSize: "full",
+    // The narrowest width it still draws at: a feed whose rows need at least a third.
+    minSize: "md",
     defaultOrder: 45,
     component: "core#RecentActivity",
   },

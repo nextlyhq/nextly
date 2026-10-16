@@ -566,10 +566,13 @@ export function useBlockKeyboardActions({
         return;
       }
 
+      // The component definitions go with it so an indent into a component
+      // instance enters a slot the component exposes.
       const move = keyboardMovePosition(
         editorNow.document.nodes,
         selectedId,
-        direction
+        direction,
+        definitions
       );
       // `null` is an ordinary answer: the first block cannot move up, and a
       // top-level block cannot outdent. Refusing quietly is right — a block
