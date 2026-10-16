@@ -108,7 +108,11 @@ async function approveForPnpm(
   return approveInWorkspaceFile(root, formsFor(version));
 }
 
-/** The closest directory from `start` upwards that `isRoot` accepts. */
+/**
+ * The closest directory from `start` upwards that `isRoot` accepts, up to the
+ * repository's root (the directory holding `.git`), so a workspace somewhere
+ * above the repository is never taken for the app's.
+ */
 async function findUp(
   start: string,
   isRoot: (dir: string) => Promise<boolean>
@@ -117,7 +121,9 @@ async function findUp(
   for (;;) {
     if (await isRoot(dir)) return dir;
     const parent = path.dirname(dir);
-    if (parent === dir) return undefined;
+    if (parent === dir || (await fs.pathExists(path.join(dir, ".git")))) {
+      return undefined;
+    }
     dir = parent;
   }
 }
@@ -212,8 +218,16 @@ function decisionIn(
     if (key !== dep && !key.startsWith(`${dep}@`)) continue;
     const decided = decisionOf(pair.value);
     if (decided === undefined) continue;
-    if (key !== dep)
-      return `Kept the project's own ${key} decision in ${section}.`;
+    if (key !== dep) {
+      // Its other versions stay unapproved: a bare key here would widen what
+      // the project chose to trust, and no exact version is known before the
+      // install resolves one.
+      return (
+        `Kept the project's own ${key} decision in ${section}. Other versions of ${dep} ` +
+        "stay unapproved: if the install stops with ERR_PNPM_IGNORED_BUILDS, approve the " +
+        "version it names."
+      );
+    }
     return decided
       ? ""
       : `Left ${dep} denied in ${section}, as the project set it.`;

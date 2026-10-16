@@ -119,6 +119,34 @@ describe("detectPackageManager", () => {
     expect(await detectPackageManager("/test/project")).toBe("bun");
   });
 
+  // An app inside a monorepo has no lockfile of its own: the workspace keeps
+  // one at its root. Falling back to the launcher there ran `npm install` in a
+  // pnpm workspace.
+  it("finds the workspace root's lockfile above an app in a monorepo", async () => {
+    process.env.npm_config_user_agent = "npm/11.19.0 node/v24.21.0";
+    mockPathExists.mockImplementation(async path => {
+      return posix(path) === "/repo/pnpm-lock.yaml";
+    });
+    expect(await detectPackageManager("/repo/apps/web")).toBe("pnpm");
+  });
+
+  it("knows a pnpm workspace by its workspace file before any lockfile exists", async () => {
+    process.env.npm_config_user_agent = "npm/11.19.0 node/v24.21.0";
+    mockPathExists.mockImplementation(async path => {
+      return posix(path) === "/repo/pnpm-workspace.yaml";
+    });
+    expect(await detectPackageManager("/repo/apps/web")).toBe("pnpm");
+  });
+
+  it("stops at the repository's root, so a lockfile above it is not the app's", async () => {
+    process.env.npm_config_user_agent = "npm/11.19.0 node/v24.21.0";
+    mockPathExists.mockImplementation(async path => {
+      const p = posix(path);
+      return p === "/home/me/projects/app/.git" || p === "/home/me/yarn.lock";
+    });
+    expect(await detectPackageManager("/home/me/projects/app")).toBe("npm");
+  });
+
   it("uses npm_config_user_agent when the directory has no lockfile", async () => {
     process.env.npm_config_user_agent = "yarn/1.22.22 npm/? node/v22.10.0";
     expect(await detectPackageManager("/test/project")).toBe("yarn");
