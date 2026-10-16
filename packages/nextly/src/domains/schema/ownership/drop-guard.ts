@@ -1645,7 +1645,10 @@ class StatementWalk {
     const tableAt = this.alteredTableAt(at);
     if (tableAt === undefined) return;
     const table = this.qualifiedName(tableAt);
-    if (table !== undefined) this.reader.targetAltered(table.name);
+    // PostgreSQL's ALTER TABLE can name an index; MySQL's cannot.
+    if (table !== undefined && this.reader.isPostgres) {
+      this.reader.targetAltered(table.name);
+    }
     const clausesAt = this.pastDescendants(table?.next ?? tableAt + 1);
     for (const clause of this.clauseStarts(clausesAt)) {
       this.readAddedClause(table, clause);
