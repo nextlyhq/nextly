@@ -15,7 +15,11 @@ import { PluginPageRegistrar } from "../components/shared/plugin-page-registrar"
 import { Toaster } from "../components/ui/toaster";
 import { BrandingProvider } from "../context/providers/BrandingProvider";
 import { GeneralSettingsSync } from "../context/providers/GeneralSettingsSyncProvider";
-import { ThemeProvider, useTheme } from "../context/providers/ThemeProvider";
+import {
+  ThemePaintScript,
+  ThemeProvider,
+  useTheme,
+} from "../context/providers/ThemeProvider";
 import { RestartProvider } from "../context/RestartContext";
 import { fieldGroupKeys } from "../hooks/queries";
 import { useRouter } from "../hooks/useRouter";
@@ -62,7 +66,20 @@ function AdminAppContent() {
   // Render an empty themed container so the layout doesn't flash a mismatched
   // background during the cold-load gap.
   if (!isHydrated || !route) {
-    return <div className="min-h-screen bg-background nextly-admin" />;
+    // The server renders this placeholder, so it is what the browser paints
+    // first. The script inside applies the saved theme to it before that
+    // paint, which is why its class may differ from what hydration expects.
+    return (
+      <div
+        className={cn(
+          "min-h-screen bg-background nextly-admin",
+          isDark && "dark"
+        )}
+        suppressHydrationWarning
+      >
+        <ThemePaintScript />
+      </div>
+    );
   }
 
   const {
