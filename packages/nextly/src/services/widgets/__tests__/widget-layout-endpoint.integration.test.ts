@@ -27,7 +27,8 @@ import {
 import { buildClaims } from "../../../auth/jwt/claims";
 import { signAccessToken } from "../../../auth/jwt/sign";
 import {
-  clearWidgets,
+  deregisterWidget,
+  listWidgets,
   registerWidget,
 } from "../../../domains/widgets/registry";
 import {
@@ -227,10 +228,12 @@ describe.each(getConfiguredTestDialects())(
     // pushes the whole schema, which on a networked server is most of a test's
     // time budget. Each test still starts clean: a fresh editor account (so no
     // row of an earlier test can be read), the admin's row removed, and this
-    // test's widgets registered anew.
+    // test's widgets registered anew, beside the widgets the boot registered.
     let accounts = 0;
+    let bootWidgets: string[] = [];
     beforeAll(async () => {
       handle = await createTestNextly({ dialect });
+      bootWidgets = listWidgets().map(w => w.id);
       // The first account of an instance is its super admin.
       admin = await account("admin@example.com");
     }, 120_000);
@@ -240,6 +243,9 @@ describe.each(getConfiguredTestDialects())(
     });
 
     beforeEach(async () => {
+      // Every test reads the registry a real boot leaves, whichever ran
+      // before it: an earlier test's clean-up must not take core's widgets.
+      expect(listWidgets().map(w => w.id)).toEqual(bootWidgets);
       accounts += 1;
       editor = await account(`editor-${accounts}@example.com`);
       const stored = await service().getLayout("user", admin);
@@ -251,8 +257,12 @@ describe.each(getConfiguredTestDialects())(
       testWidget("last", 1020, { defaultSize: "sm" });
     });
 
+    // Only this suite's widgets: the instance outlives the test, and so must
+    // the widgets its boot registered.
     afterEach(() => {
-      clearWidgets();
+      for (const { id } of listWidgets()) {
+        if (id.startsWith("test/")) deregisterWidget(id);
+      }
     });
 
     it("gives two people with no arrangement the same default, less what one may not see", async () => {
