@@ -28,7 +28,11 @@
  * @module @nextlyhq/plugin-page-builder/admin/BlocksField
  */
 
-import { navigateTo, useDocumentIdentity } from "@nextlyhq/plugin-sdk/admin";
+import {
+  navigateTo,
+  useDocumentIdentity,
+  useDocumentLocale,
+} from "@nextlyhq/plugin-sdk/admin";
 import { useMemo } from "react";
 import {
   useController,
@@ -137,7 +141,11 @@ export function BlocksField<TFieldValues extends FieldValues = FieldValues>({
    * inside this form, so nothing it draws can submit the form, and it can move
    * between pages without being tied to the one that mounted it.
    */
-  const address = builderAddress(useDocumentIdentity(), name);
+  const address = builderAddress(
+    useDocumentIdentity(),
+    name,
+    useDocumentLocale()
+  );
 
   // What an empty document has to be for THIS field, asked of its declaration
   // as the editor's view asks it, so the card and the editor read one answer.
@@ -186,8 +194,10 @@ export function BlocksField<TFieldValues extends FieldValues = FieldValues>({
       href={"href" in address ? address.href : undefined}
       onNavigate={navigateTo}
       {...("unavailable" in address
-        ? { unavailableReason: address.unavailable }
-        : {})}
+        ? { note: address.unavailable }
+        : address.note === undefined
+          ? {}
+          : { note: address.note })}
     />
   );
 }

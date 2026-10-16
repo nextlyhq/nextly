@@ -70,6 +70,12 @@ test("opens, reloads and saves the default language only", async ({ page }) => {
   // Arriving from the Spanish edit screen still opens the default language:
   // the builder's address names no language.
   await gotoAdmin(page, `/collections/translated-pages/${id}?locale=es`);
+  // Said beside the way in, since the preview above it shows the Spanish page.
+  await expect(
+    page.getByText(
+      "Opens the default language, the one the Page Builder edits."
+    )
+  ).toBeVisible();
   await page.getByRole("link", { name: OPEN_BUILDER_ACTION }).click();
   await expect(page).toHaveURL(
     new RegExp(

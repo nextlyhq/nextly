@@ -141,8 +141,11 @@ export interface PageBuilderCardProps {
   href: string | undefined;
   /** Moves to `href` within the admin, keeping the form mounted. */
   onNavigate: (href: string) => void;
-  /** Why there is no `href`, said beside the disabled action. */
-  unavailableReason?: string;
+  /**
+   * The sentence beneath the way in: why there is no `href`, beside the
+   * disabled action, or where an enabled one leads.
+   */
+  note?: string;
 }
 
 /**
@@ -160,6 +163,9 @@ function isPlainClick(event: React.MouseEvent): boolean {
   );
 }
 
+/** Why a page never saved has no way in yet: it has no address. */
+const SAVE_FIRST = "Save this page to open the Page Builder.";
+
 /**
  * The way in: a real link to the builder's address, handled within the admin
  * on a plain click so the form and its unsaved work stay mounted. Disabled,
@@ -169,36 +175,38 @@ function OpenBuilder({
   href,
   label,
   onNavigate,
-  unavailableReason = "Save this page to open the Page Builder.",
+  note,
 }: {
   href: string | undefined;
   label: string;
   onNavigate: (href: string) => void;
-  unavailableReason?: string;
+  note?: string;
 }): React.JSX.Element {
-  if (href === undefined) {
-    return (
-      <div className="flex flex-col items-end gap-1">
+  const said = note ?? (href === undefined ? SAVE_FIRST : undefined);
+  return (
+    <div className="flex flex-col items-end gap-1">
+      {href === undefined ? (
         <Button type="button" disabled>
           {label}
         </Button>
-        <p className="text-xs text-muted-foreground">{unavailableReason}</p>
-      </div>
-    );
-  }
-  return (
-    <Button asChild>
-      <a
-        href={href}
-        onClick={event => {
-          if (!isPlainClick(event)) return;
-          event.preventDefault();
-          onNavigate(href);
-        }}
-      >
-        {label}
-      </a>
-    </Button>
+      ) : (
+        <Button asChild>
+          <a
+            href={href}
+            onClick={event => {
+              if (!isPlainClick(event)) return;
+              event.preventDefault();
+              onNavigate(href);
+            }}
+          >
+            {label}
+          </a>
+        </Button>
+      )}
+      {said === undefined ? null : (
+        <p className="text-xs text-muted-foreground">{said}</p>
+      )}
+    </div>
   );
 }
 
@@ -298,7 +306,7 @@ export function PageBuilderCard({
   canEdit,
   href,
   onNavigate,
-  unavailableReason,
+  note,
 }: PageBuilderCardProps) {
   const total = useMemo(
     // Counted under the SITE's cap rather than an unbounded read, so the number
@@ -346,7 +354,7 @@ export function PageBuilderCard({
             href={href}
             label={empty ? BUILD_PAGE_LABEL : OPEN_BUILDER_LABEL}
             onNavigate={onNavigate}
-            {...(unavailableReason === undefined ? {} : { unavailableReason })}
+            {...(note === undefined ? {} : { note })}
           />
         ) : null}
       </div>

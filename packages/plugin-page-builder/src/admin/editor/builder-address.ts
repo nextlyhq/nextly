@@ -5,12 +5,28 @@
  *
  * @module @nextlyhq/plugin-page-builder/admin/editor/builder-address
  */
-import type { DocumentIdentity } from "@nextlyhq/plugin-sdk/admin";
+import type {
+  DocumentIdentity,
+  DocumentLocale,
+} from "@nextlyhq/plugin-sdk/admin";
 
 import { BUILDER_VIEW_PATH } from "../../builder-view";
 
-/** The builder's address, or why this field has none. */
-export type BuilderAddress = { href: string } | { unavailable: string };
+/**
+ * The builder's address, with what to say about where it leads, or why this
+ * field has none.
+ */
+export type BuilderAddress =
+  | { href: string; note?: string }
+  | { unavailable: string };
+
+/**
+ * Said beside the way in while another language is on screen. The builder
+ * edits the default language only, so the link opens that one whatever the
+ * edit screen shows, and the card's preview is showing the other language.
+ */
+const DEFAULT_LANGUAGE_NOTE =
+  "Opens the default language, the one the Page Builder edits.";
 
 /**
  * The builder's address for `fieldName` on the document the form holds.
@@ -21,8 +37,13 @@ export type BuilderAddress = { href: string } | { unavailable: string };
  */
 export function builderAddress(
   identity: DocumentIdentity | null,
-  fieldName: string
+  fieldName: string,
+  locale?: Pick<DocumentLocale, "documentLocalized" | "isDefaultLocale"> | null
 ): BuilderAddress {
+  const elsewhere =
+    locale?.documentLocalized === true && !locale.isDefaultLocale
+      ? { note: DEFAULT_LANGUAGE_NOTE }
+      : {};
   if (identity === null) {
     return { unavailable: "The Page Builder opens from a saved page." };
   }
@@ -35,7 +56,10 @@ export function builderAddress(
   const query = `?field=${encodeURIComponent(fieldName)}`;
   const slug = encodeURIComponent(identity.slug);
   if (identity.kind === "single") {
-    return { href: `/admin/singles/${slug}/${BUILDER_VIEW_PATH}${query}` };
+    return {
+      href: `/admin/singles/${slug}/${BUILDER_VIEW_PATH}${query}`,
+      ...elsewhere,
+    };
   }
   if (identity.documentId === undefined) {
     return { unavailable: "Save this page to open the Page Builder." };
@@ -43,5 +67,6 @@ export function builderAddress(
   const id = encodeURIComponent(identity.documentId);
   return {
     href: `/admin/collections/${slug}/${id}/${BUILDER_VIEW_PATH}${query}`,
+    ...elsewhere,
   };
 }

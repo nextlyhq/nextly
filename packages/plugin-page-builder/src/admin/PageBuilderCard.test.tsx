@@ -299,6 +299,24 @@ describe("PageBuilderCard", () => {
     expect(onNavigate).not.toHaveBeenCalled();
   });
 
+  it("says where an enabled way in leads, when it has a note", () => {
+    render(
+      <PageBuilderCard
+        {...base}
+        document={doc(2)}
+        note="Opens the default language, the one the Page Builder edits."
+      />
+    );
+    expect(
+      screen.getByRole("link", { name: /open page builder/i })
+    ).toBeTruthy();
+    expect(
+      screen.queryByText(
+        "Opens the default language, the one the Page Builder edits."
+      )
+    ).not.toBeNull();
+  });
+
   it("offers the way in only once the page has been saved, and says why", () => {
     // A page with no id has no address for the builder to open at.
     render(<PageBuilderCard {...base} document={doc(2)} href={undefined} />);

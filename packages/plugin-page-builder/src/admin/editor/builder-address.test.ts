@@ -36,6 +36,37 @@ describe("builderAddress", () => {
     });
   });
 
+  it("says it opens the default language when another one is on screen", () => {
+    // The builder edits the default language only, so a link followed from the
+    // Spanish edit screen opens the default one, and the card has to say so
+    // beside a preview that is showing the Spanish page.
+    expect(
+      builderAddress(
+        { kind: "collection", slug: "pages", documentId: "p1" },
+        "body",
+        { documentLocalized: true, isDefaultLocale: false }
+      )
+    ).toEqual({
+      href: "/admin/collections/pages/p1/builder?field=body",
+      note: "Opens the default language, the one the Page Builder edits.",
+    });
+  });
+
+  it.each([
+    [
+      "the default language",
+      { documentLocalized: true, isDefaultLocale: true },
+    ],
+    [
+      "a document that is not localized",
+      { documentLocalized: false, isDefaultLocale: false },
+    ],
+  ])("says nothing about language on %s", (_case, locale) => {
+    expect(
+      builderAddress({ kind: "single", slug: "homepage" }, "layout", locale)
+    ).toEqual({ href: "/admin/singles/homepage/builder?field=layout" });
+  });
+
   it("is withheld outside a document", () => {
     expect(builderAddress(null, "body")).toEqual({
       unavailable: "The Page Builder opens from a saved page.",
