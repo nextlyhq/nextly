@@ -17,6 +17,7 @@ import SingleVersionsPage from "@admin/pages/dashboard/singles/[slug]/versions";
 import {
   clearDocumentViews,
   documentViewApplies,
+  documentViewMissing,
   matchDocumentView,
   registerDocumentViews,
   routedDocumentView,
@@ -98,6 +99,18 @@ describe("a view scoped to a field type", () => {
 
   it("applies a slug-scoped view to its document whatever its fields", () => {
     expect(documentViewApplies(builder, [])).toBe(true);
+  });
+
+  it("is missing on a document without the field, and present where it has one", () => {
+    registerDocumentViews([blocksBuilder]);
+    expect(
+      documentViewMissing("posts", "page-builder", [{ type: "text" }])
+    ).toBe(true);
+    expect(
+      documentViewMissing("pages", "page-builder", [{ type: "blocks" }])
+    ).toBe(false);
+    // An address naming no view at all is the resolver's to refuse, not this.
+    expect(documentViewMissing("pages", "other", [])).toBe(false);
   });
 
   it("is forgotten on clear", () => {

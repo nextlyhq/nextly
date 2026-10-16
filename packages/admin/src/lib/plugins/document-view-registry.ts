@@ -102,3 +102,18 @@ export function routedDocumentView(
   if (typeof slug !== "string" || typeof view !== "string") return undefined;
   return matchDocumentView(slug, view);
 }
+
+/**
+ * Whether a route's params name a view that does not apply to this document:
+ * one offered on a field type the document has no top-level field of. Such an
+ * address names nothing, exactly as an undeclared view does. One call for the
+ * pages, so the decision is made here and not spelled out in each.
+ */
+export function documentViewMissing(
+  slug: string | string[] | undefined,
+  view: string | string[] | undefined,
+  fields: readonly object[] | undefined
+): boolean {
+  const routed = routedDocumentView(slug, view);
+  return routed !== undefined && !documentViewApplies(routed, fields);
+}

@@ -289,6 +289,54 @@ describe("a routed document view", () => {
     expect(window.location.pathname).toBe("/admin/collections/posts/42");
   });
 
+  it("opens a field-type view on a collection with a top-level field of its type", () => {
+    registerDocumentViews([
+      { fieldType: "blocks", path: "builder", component: VIEW },
+    ]);
+    collectionSchema = {
+      ...collectionSchema,
+      fields: [
+        { name: "title", type: "text" },
+        { name: "body", type: "blocks" },
+      ],
+    };
+
+    renderWithProviders(
+      <EditEntryPage params={{ slug: "posts", id: "42", view: "builder" }} />
+    );
+
+    expect(screen.getByText("default entry form")).toBeInTheDocument();
+    expect(
+      (entryFormProps?.documentView as { component: string } | undefined)
+        ?.component
+    ).toBe(VIEW);
+  });
+
+  it("answers not found for a field-type view on a collection without the field", () => {
+    registerDocumentViews([
+      { fieldType: "blocks", path: "builder", component: VIEW },
+    ]);
+    // Only nested inside a group, which does not count.
+    collectionSchema = {
+      ...collectionSchema,
+      fields: [
+        { name: "title", type: "text" },
+        {
+          name: "extra",
+          type: "group",
+          fields: [{ name: "body", type: "blocks" }],
+        },
+      ],
+    };
+
+    renderWithProviders(
+      <EditEntryPage params={{ slug: "posts", id: "42", view: "builder" }} />
+    );
+
+    expect(screen.queryByText("default entry form")).toBeNull();
+    expect(screen.getByText(/This page doesn.t exist/)).toBeInTheDocument();
+  });
+
   it("hands the form no view on the plain edit address", () => {
     // The control: the same registry, the address without the segment.
     registerDocumentViews([

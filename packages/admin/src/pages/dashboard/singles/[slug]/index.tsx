@@ -20,6 +20,7 @@ import { Alert, AlertDescription, Button, Skeleton } from "@nextlyhq/ui";
 import type React from "react";
 
 import type { DocumentViewMount } from "@admin/components/features/entries/EntryForm";
+import { DocumentViewGate } from "@admin/components/features/entries/EntryForm/DocumentViewGate";
 import { useAddToReleaseAction } from "@admin/components/features/releases/AddToReleaseAction";
 import { ScheduledReleaseBanner } from "@admin/components/features/releases/ScheduledReleaseBanner";
 import {
@@ -30,7 +31,6 @@ import { CONTENT_PAGE_MEASURE } from "@admin/components/layout/content-measure";
 import { MeasuredPageFrame } from "@admin/components/layout/MeasuredPageFrame";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
-import { NotFoundPage } from "@admin/components/shared/not-found-page";
 import { QueryErrorBoundary } from "@admin/components/shared/query-error-boundary";
 import { toast } from "@admin/components/ui";
 import { Link } from "@admin/components/ui/link";
@@ -45,7 +45,7 @@ import { useLocalization } from "@admin/hooks/useLocalization";
 import { useTranslationMode } from "@admin/hooks/useTranslationMode";
 import { navigateTo } from "@admin/lib/navigation";
 import {
-  documentViewApplies,
+  documentViewMissing,
   routedDocumentView,
 } from "@admin/lib/plugins/document-view-registry";
 
@@ -330,16 +330,6 @@ export default function SingleEditPage({
     );
   }
 
-  // A view offered on a field type is at this address only when the Single
-  // has that field at its top level; anywhere else the address names nothing.
-  const routedView = routedDocumentView(slug, params?.view);
-  if (
-    routedView !== undefined &&
-    !documentViewApplies(routedView, schema.fields)
-  ) {
-    return <NotFoundPage />;
-  }
-
   // Document not found (should auto-create, but handle edge case)
   if (!document) {
     return (
@@ -379,59 +369,65 @@ export default function SingleEditPage({
   };
 
   return (
-    <QueryErrorBoundary fallback={<PageErrorFallback />}>
-      {/* Through the shared frame rather than a bare container: translation
+    <DocumentViewGate
+      missing={documentViewMissing(slug, params?.view, schema.fields)}
+    >
+      <QueryErrorBoundary fallback={<PageErrorFallback />}>
+        {/* Through the shared frame rather than a bare container: translation
           mode asks to suppress `pageFrame` from inside the form, and only this
           component reacts to that. A page that declared its own measure here
           would keep the two-pane translation surface inside the content
           measure while the entry editor beside it took the whole panel. */}
-      <MeasuredPageFrame>
-        {/* Full width and first, for the reason the entry editor gives. */}
-        <ScheduledReleaseBanner
-          document={
-            slug
-              ? { scopeKind: "single", scopeSlug: slug, entryId: document.id }
-              : undefined
-          }
-          onDefaultLocale={!isNonDefaultLocale}
-        />
-        {release.dialog}
-        <SingleForm
-          // ApiSingle.fields is SchemaField[] (loose `type: string`); SingleSchema
-          // expects FieldConfig[] (discriminated). The runtime payload is the
-          // same; widening here until the schema layer unifies on FieldConfig.
-          schema={schema as unknown as SingleSchema}
-          document={document}
-          /* A Single is a release member exactly as a collection entry is — the
+        <MeasuredPageFrame>
+          {/* Full width and first, for the reason the entry editor gives. */}
+          <ScheduledReleaseBanner
+            document={
+              slug
+                ? { scopeKind: "single", scopeSlug: slug, entryId: document.id }
+                : undefined
+            }
+            onDefaultLocale={!isNonDefaultLocale}
+          />
+          {release.dialog}
+          <SingleForm
+            // ApiSingle.fields is SchemaField[] (loose `type: string`); SingleSchema
+            // expects FieldConfig[] (discriminated). The runtime payload is the
+            // same; widening here until the schema layer unifies on FieldConfig.
+            schema={schema as unknown as SingleSchema}
+            document={document}
+            /* A Single is a release member exactly as a collection entry is — the
              engine models both and the release detail page links to both — so
              omitting this control here would leave the Single half reachable
              only through the API. With the form's own actions, matching the
              collection editor. */
-          documentActions={
-            release.contributed === null ? [] : [release.contributed]
-          }
-          onSubmit={handleSubmit}
-          isSubmitting={isUpdating}
-          onCancel={handleCancel}
-          // i18n: active language + switcher + inline source values for translatable fields.
-          locale={locale}
-          onLocaleChange={changeLocale}
-          {...(seedFromLocale === undefined ? {} : { seedFromLocale })}
-          onSeedHandled={clearSeed}
-          sourceValues={isNonDefaultLocale ? sourceDoc : undefined}
-          translation={{
-            from: translateFrom,
-            sourceDocument: sourceDoc,
-            onEnter: enterTranslationMode,
-            onExit: exitTranslationMode,
-          }}
-          // collections, so the page route owns navigation. Breadcrumbs and
-          // DocumentTabs (Edit / API) are removed; the API view is reachable
-          // via the consolidated dropdown in the system header.
-          onViewApi={() => navigateTo(buildRoute(ROUTES.SINGLE_API, { slug }))}
-          documentView={singleDocumentView(params)}
-        />
-      </MeasuredPageFrame>
-    </QueryErrorBoundary>
+            documentActions={
+              release.contributed === null ? [] : [release.contributed]
+            }
+            onSubmit={handleSubmit}
+            isSubmitting={isUpdating}
+            onCancel={handleCancel}
+            // i18n: active language + switcher + inline source values for translatable fields.
+            locale={locale}
+            onLocaleChange={changeLocale}
+            {...(seedFromLocale === undefined ? {} : { seedFromLocale })}
+            onSeedHandled={clearSeed}
+            sourceValues={isNonDefaultLocale ? sourceDoc : undefined}
+            translation={{
+              from: translateFrom,
+              sourceDocument: sourceDoc,
+              onEnter: enterTranslationMode,
+              onExit: exitTranslationMode,
+            }}
+            // collections, so the page route owns navigation. Breadcrumbs and
+            // DocumentTabs (Edit / API) are removed; the API view is reachable
+            // via the consolidated dropdown in the system header.
+            onViewApi={() =>
+              navigateTo(buildRoute(ROUTES.SINGLE_API, { slug }))
+            }
+            documentView={singleDocumentView(params)}
+          />
+        </MeasuredPageFrame>
+      </QueryErrorBoundary>
+    </DocumentViewGate>
   );
 }

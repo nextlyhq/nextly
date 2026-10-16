@@ -23,6 +23,7 @@ import {
   type DocumentViewMount,
   type EntryFormCollection,
 } from "@admin/components/features/entries/EntryForm";
+import { DocumentViewGate } from "@admin/components/features/entries/EntryForm/DocumentViewGate";
 import { useAddToReleaseAction } from "@admin/components/features/releases/AddToReleaseAction";
 import { ScheduledReleaseBanner } from "@admin/components/features/releases/ScheduledReleaseBanner";
 import {
@@ -33,7 +34,6 @@ import { MeasuredPageFrame } from "@admin/components/layout/MeasuredPageFrame";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { Breadcrumbs } from "@admin/components/shared";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
-import { NotFoundPage } from "@admin/components/shared/not-found-page";
 import { PluginSlot } from "@admin/components/shared/plugin-slot";
 import { QueryErrorBoundary } from "@admin/components/shared/query-error-boundary";
 import { Link } from "@admin/components/ui/link";
@@ -50,7 +50,7 @@ import {
   type CustomEditViewProps,
 } from "@admin/lib/plugins/component-registry";
 import {
-  documentViewApplies,
+  documentViewMissing,
   routedDocumentView,
 } from "@admin/lib/plugins/document-view-registry";
 import { getCollectionFields } from "@admin/types/collection";
@@ -532,17 +532,6 @@ export default function EditEntryPage({
     );
   }
 
-  // A view offered on a field type is at this address only when the
-  // collection has that field at its top level; anywhere else the address
-  // names nothing, exactly as an undeclared view does.
-  const routedView = routedDocumentView(slug, params?.view);
-  if (
-    routedView !== undefined &&
-    !documentViewApplies(routedView, getCollectionFields(collection))
-  ) {
-    return <NotFoundPage />;
-  }
-
   const collectionLabel = collection.label || collection.name || slug;
   // Cast entry to Record<string, unknown> for getEntryTitle helper
   const entryData = entry as unknown as Record<string, unknown>;
@@ -643,86 +632,94 @@ export default function EditEntryPage({
   };
 
   return (
-    <QueryErrorBoundary fallback={<PageErrorFallback />}>
-      <MeasuredPageFrame contentCarriesMeasure>
-        {/* Each injection slot gets a box of its own. Under the measured
+    <DocumentViewGate
+      missing={documentViewMissing(
+        slug,
+        params?.view,
+        getCollectionFields(collection)
+      )}
+    >
+      <QueryErrorBoundary fallback={<PageErrorFallback />}>
+        <MeasuredPageFrame contentCarriesMeasure>
+          {/* Each injection slot gets a box of its own. Under the measured
             frame these are direct children of a CSS grid, and the rule that
             puts a child in the content column can only place a generated
             element box: a plugin whose root is bare text, or an element with
             `display: contents`, produces none and is auto-placed into a gutter
             instead. The registry imposes no root-element contract on a plugin,
             so the page provides the box rather than trusting it to. */}
-        {beforeEditPath && (
-          <div
-            // Bounded here rather than inheriting the page, which no longer
-            // caps: the frame gives the panel to the form-and-rail row, and a
-            // slot outside that row would otherwise stretch the whole width.
-            // Plugin content keeps the measure it had before the row took the
-            // panel, so nothing a plugin renders changes shape.
-            className="mx-auto w-full"
-            style={{ maxWidth: CONTENT_MEASURE_LENGTH }}
-          >
-            <PluginSlot path={beforeEditPath} props={editInjectionProps} />
-          </div>
-        )}
-        {/* FULL WIDTH and first, matching the historical-version banner: this
+          {beforeEditPath && (
+            <div
+              // Bounded here rather than inheriting the page, which no longer
+              // caps: the frame gives the panel to the form-and-rail row, and a
+              // slot outside that row would otherwise stretch the whole width.
+              // Plugin content keeps the measure it had before the row took the
+              // panel, so nothing a plugin renders changes shape.
+              className="mx-auto w-full"
+              style={{ maxWidth: CONTENT_MEASURE_LENGTH }}
+            >
+              <PluginSlot path={beforeEditPath} props={editInjectionProps} />
+            </div>
+          )}
+          {/* FULL WIDTH and first, matching the historical-version banner: this
             is a standing fact about the whole document, and a bar constrained
             to the content measure reads as a note about the fields under it.
             It does not touch the per-language staleness markers in the language
             panel — those answer a different question, and a stale translation
             inside a scheduled release is exactly where an editor needs both. */}
-        <ScheduledReleaseBanner
-          document={{ scopeKind: "collection", scopeSlug: slug, entryId: id }}
-          onDefaultLocale={!isNonDefaultLocale}
-        />
-        {release.dialog}
-        <EntryForm
-          collection={collection as unknown as EntryFormCollection}
-          entry={entry}
-          mode="edit"
-          /* The same destination the entry list already sends people to, and
+          <ScheduledReleaseBanner
+            document={{ scopeKind: "collection", scopeSlug: slug, entryId: id }}
+            onDefaultLocale={!isNonDefaultLocale}
+          />
+          {release.dialog}
+          <EntryForm
+            collection={collection as unknown as EntryFormCollection}
+            entry={entry}
+            mode="edit"
+            /* The same destination the entry list already sends people to, and
              the replacement the header's menu now names where `Show JSON` used
              to be. The route knows how to navigate; the form does not. */
-          onViewApi={() =>
-            navigateTo(buildRoute(ROUTES.COLLECTION_ENTRY_API, { slug }))
-          }
-          /* Contributed to the editor's action model, which places it in the
+            onViewApi={() =>
+              navigateTo(buildRoute(ROUTES.COLLECTION_ENTRY_API, { slug }))
+            }
+            /* Contributed to the editor's action model, which places it in the
              overflow menu beside Duplicate: scheduling a release is a
              document-management act rather than a leading one, and the toolbar
              is reserved for the verbs an author reaches for while writing. */
-          documentActions={
-            release.contributed === null ? [] : [release.contributed]
-          }
-          locale={locale}
-          onLocaleChange={changeLocale}
-          {...(seedFromLocale === undefined ? {} : { seedFromLocale })}
-          onSeedHandled={clearSeed}
-          sourceValues={sourceEntry}
-          translation={{
-            from: translateFrom,
-            sourceDocument: sourceEntry,
-            onEnter: enterTranslationMode,
-            onExit: exitTranslationMode,
-          }}
-          onSuccess={handleSuccess}
-          onDelete={handleDelete}
-          onCancel={handleCancel}
-          documentView={documentView}
-        />
-        {afterEditPath && (
-          <div
-            // Bounded here rather than inheriting the page, which no longer
-            // caps: the frame gives the panel to the form-and-rail row, and a
-            // slot outside that row would otherwise stretch the whole width.
-            // Plugin content keeps the measure it had before the row took the
-            // panel, so nothing a plugin renders changes shape.
-            className="mx-auto w-full"
-            style={{ maxWidth: CONTENT_MEASURE_LENGTH }}
-          >
-            <PluginSlot path={afterEditPath} props={editInjectionProps} />
-          </div>
-        )}
-      </MeasuredPageFrame>
-    </QueryErrorBoundary>
+            documentActions={
+              release.contributed === null ? [] : [release.contributed]
+            }
+            locale={locale}
+            onLocaleChange={changeLocale}
+            {...(seedFromLocale === undefined ? {} : { seedFromLocale })}
+            onSeedHandled={clearSeed}
+            sourceValues={sourceEntry}
+            translation={{
+              from: translateFrom,
+              sourceDocument: sourceEntry,
+              onEnter: enterTranslationMode,
+              onExit: exitTranslationMode,
+            }}
+            onSuccess={handleSuccess}
+            onDelete={handleDelete}
+            onCancel={handleCancel}
+            documentView={documentView}
+          />
+          {afterEditPath && (
+            <div
+              // Bounded here rather than inheriting the page, which no longer
+              // caps: the frame gives the panel to the form-and-rail row, and a
+              // slot outside that row would otherwise stretch the whole width.
+              // Plugin content keeps the measure it had before the row took the
+              // panel, so nothing a plugin renders changes shape.
+              className="mx-auto w-full"
+              style={{ maxWidth: CONTENT_MEASURE_LENGTH }}
+            >
+              <PluginSlot path={afterEditPath} props={editInjectionProps} />
+            </div>
+          )}
+        </MeasuredPageFrame>
+      </QueryErrorBoundary>
+    </DocumentViewGate>
   );
 }
