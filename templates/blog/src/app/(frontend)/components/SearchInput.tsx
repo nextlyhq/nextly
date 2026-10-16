@@ -27,7 +27,7 @@ type PagefindModule = typeof import("/pagefind/pagefind.js");
 
 export function SearchInput() {
   const [query, setQuery] = useState("");
-  const [results, setResults] = useState<PagefindDocument[]>([]);
+  const [found, setFound] = useState<PagefindDocument[]>([]);
   const [pagefind, setPagefind] = useState<PagefindModule | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
 
@@ -78,10 +78,7 @@ export function SearchInput() {
   const debouncedQuery = useDebounce(query, 150);
 
   useEffect(() => {
-    if (!pagefind || !debouncedQuery) {
-      setResults([]);
-      return;
-    }
+    if (!pagefind || !debouncedQuery) return;
     let cancelled = false;
     (async () => {
       try {
@@ -89,7 +86,7 @@ export function SearchInput() {
         const docs = await Promise.all(
           search.results.slice(0, 10).map(r => r.data())
         );
-        if (!cancelled) setResults(docs);
+        if (!cancelled) setFound(docs);
       } catch (err) {
         console.debug("[search] query failed:", err);
       }
@@ -98,6 +95,10 @@ export function SearchInput() {
       cancelled = true;
     };
   }, [debouncedQuery, pagefind]);
+
+  // Derived rather than cleared from the effect: a cleared box, or no index
+  // yet, shows nothing, and the last answer stays up while a newer one loads.
+  const results = pagefind && debouncedQuery ? found : [];
 
   return (
     <div className="max-w-2xl mx-auto">

@@ -24,6 +24,7 @@ import type {
 } from "@admin/types/dashboard/widgets";
 
 import { coreDraws, resolveWidgetOutcome, type WidgetOutcome } from "./outcome";
+import { useCardRetries } from "./useCardRetries";
 
 /**
  * One card in the batch: which placement asked, and what it is asking.
@@ -53,6 +54,13 @@ export interface WidgetBatch {
   counted: number;
   failed: number;
   settling: boolean;
+  /**
+   * Reload one card: its question is asked again on its own, so Retry sends that card's query
+   * and no other card's. Until the batch next refreshes, the card shows this answer.
+   */
+  retry: (placementId: string) => void;
+  /** When the answer one card shows arrived: its own retry's, or the batch's. */
+  updatedAtFor: (placementId: string) => Date | null;
 }
 
 /**
@@ -150,8 +158,14 @@ export function useWidgetBatch(cards: BatchCard[]): WidgetBatch {
     [cards]
   );
 
-  const { slots, cellSlots, isFetching, fetchingPlacementIds, updatedAt } =
-    useWidgetQueries(requests);
+  const batch = useWidgetQueries(requests);
+  const { isFetching, fetchingPlacementIds, updatedAt } = batch;
+
+  // Retry for one card at a time, over the batch's answers; see `useCardRetries`.
+  const { slots, cellSlots, retry, updatedAtFor } = useCardRetries(
+    requests,
+    batch
+  );
 
   // Which cards are actually IN the batch, taken from the requests that were
   // sent rather than re-derived from `widget.query`.
@@ -189,7 +203,12 @@ export function useWidgetBatch(cards: BatchCard[]): WidgetBatch {
             cellSlots[card.placementId]
           )
         )
-        .filter(outcome => outcome.state !== "self-drawn"),
+        // An unavailable card is neither updated nor failed, so it is left out of the
+        // announcement rather than counted as "updated" beside a card that says otherwise.
+        .filter(
+          outcome =>
+            outcome.state !== "self-drawn" && outcome.state !== "unavailable"
+        ),
     [cards, slots, cellSlots]
   );
 
@@ -203,5 +222,7 @@ export function useWidgetBatch(cards: BatchCard[]): WidgetBatch {
     counted: outcomes.length,
     failed: outcomes.filter(outcome => outcome.state === "failed").length,
     settling: outcomes.some(outcome => outcome.state === "loading"),
+    retry,
+    updatedAtFor,
   };
 }

@@ -18,6 +18,8 @@
 
 import { formatGlobalDateTime } from "@admin/lib/dates/format";
 
+import { cardNumber } from "../frame/format";
+
 import { ChartFrame } from "./chart-frame";
 import { areaPath, linePath, linePoints, type ChartBox } from "./chart-scale";
 import type { ArchetypeAccepts, ArchetypeBody } from "./types";
@@ -83,13 +85,14 @@ export const timeseriesBody: ArchetypeBody = (result, definition) => {
   }));
 
   if (rows.length === 0) {
+    // The frame's one empty state, worded for a chart over time. Source-neutral: the card may read any
+    // collection's, system's or plugin's data, so it names no kind of row it cannot know.
     return {
       ok: true,
-      node: (
-        <p className="text-sm text-muted-foreground">
-          Nothing to plot yet — this window has no intervals.
-        </p>
-      ),
+      empty: {
+        title: "Nothing to plot yet",
+        detail: "Points appear here once there is activity in this period.",
+      },
     };
   }
 
@@ -110,7 +113,7 @@ export const timeseriesBody: ArchetypeBody = (result, definition) => {
 
   // Composed ONCE and handed to both the frame and the graphic, so the table's
   // caption and the chart's own description cannot describe different data.
-  const description = `${rows.length} ${result.interval} intervals, ${total.toLocaleString()} in total. Busiest: ${busiest.label}, ${busiest.count.toLocaleString()}.`;
+  const description = `${rows.length} ${result.interval} intervals, ${cardNumber(total).label} in total. Busiest: ${busiest.label}, ${cardNumber(busiest.count).label}.`;
 
   return {
     ok: true,

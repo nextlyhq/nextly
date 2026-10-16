@@ -72,11 +72,14 @@ describe.each(renderers)("a count drawn by %s", (_name, draw) => {
     // Asserted separately because they are two renderings of one claim and
     // each can be lost on its own: `+` is punctuation a screen reader may not
     // voice, and the words are invisible.
-    expect(container.textContent).toContain("2,000");
+    // The drawn form carries the "+"; the heard form says "or more" in words, with the full
+    // value -- both from the one card formatter.
     expect(container.querySelector('[aria-hidden="true"]')?.textContent).toBe(
-      "+"
+      "2,000+"
     );
-    expect(container.querySelector(".sr-only")?.textContent).toBe(" or more");
+    expect(container.querySelector(".sr-only")?.textContent).toBe(
+      "2,000 or more"
+    );
   });
 
   it("says nothing extra when the count IS the whole figure", () => {

@@ -56,6 +56,16 @@
         "default": "./dist/color.cjs"
       }
     },
+    "./format": {
+      "import": {
+        "types": "./dist/format.d.ts",
+        "default": "./dist/format.mjs"
+      },
+      "require": {
+        "types": "./dist/format.d.cts",
+        "default": "./dist/format.cjs"
+      }
+    },
     "./theme.css": "./dist/theme.css",
     "./styles.css": "./dist/styles.css",
     "./styles.scoped.css": "./dist/styles.scoped.css"

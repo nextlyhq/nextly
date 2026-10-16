@@ -1,12 +1,15 @@
 "use client";
 
-import { Card, CardContent, Skeleton } from "@nextlyhq/ui";
-import { AlertCircle, ShieldCheck, Users as UsersIcon } from "lucide-react";
+import { Card, CardContent } from "@nextlyhq/ui";
+import { ShieldCheck, Users as UsersIcon } from "lucide-react";
 import type React from "react";
 
 import { Link } from "@admin/components/ui/link";
 import { ROUTES } from "@admin/constants/routes";
 import { useDashboardStats } from "@admin/hooks/queries";
+
+import { CardFigure } from "../widgets/frame/figure";
+import { CardError, CardSkeleton } from "../widgets/frame/states";
 
 /**
  * Compact "Team" summary on the dashboard. Two cards: total Users + total
@@ -34,12 +37,14 @@ function TeamCard({ label, count, href, Icon }: TeamCardProps) {
         <CardContent className="p-5 relative z-10">
           <div className="flex items-start justify-between">
             <div className="space-y-1">
-              <span className="text-2xl font-bold tabular-nums tracking-tight text-foreground leading-none transition-colors">
-                {count}
+              {/* The card type ramp's big number, through the one card formatter. */}
+              <span className="text-2xl font-semibold tabular-nums tracking-tight text-foreground leading-none transition-colors">
+                <CardFigure value={count} />
               </span>
-              <h5 className="font-semibold text-xs tracking-tight transition-colors leading-tight text-muted-foreground group-hover:text-foreground pt-1">
+              {/* A label, not a heading: the frame's title is the card's one heading. */}
+              <span className="block font-medium text-xs tracking-tight transition-colors leading-tight text-muted-foreground group-hover:text-foreground pt-1">
                 {label}
-              </h5>
+              </span>
             </div>
             <div className="text-muted-foreground group-hover:text-foreground transition-colors pt-1">
               <Icon className="h-5 w-5 shrink-0" />
@@ -51,60 +56,35 @@ function TeamCard({ label, count, href, Icon }: TeamCardProps) {
   );
 }
 
-function LoadingSkeleton() {
+export const TeamSummary: React.FC = () => {
+  const { data, isLoading, error, refetch } = useDashboardStats();
+
+  // The card's frame draws its title, so this is only its body: the two counts, or the
+  // frame's own skeleton and error while they are not there.
+  if (isLoading) return <CardSkeleton shape="figure" />;
+  if (error) {
+    return (
+      <CardError
+        title="Team"
+        message="The team summary couldn't be loaded."
+        onRetry={() => void refetch()}
+      />
+    );
+  }
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-      {Array.from({ length: 2 }, (_, i) => (
-        <Skeleton
-          key={i}
-          className="h-24 rounded-lg bg-muted/30 border border-border"
-        />
-      ))}
+      <TeamCard
+        label="Users"
+        count={data?.users ?? 0}
+        href={ROUTES.USERS}
+        Icon={UsersIcon}
+      />
+      <TeamCard
+        label="Roles"
+        count={data?.roles ?? 0}
+        href={ROUTES.SECURITY_ROLES}
+        Icon={ShieldCheck}
+      />
     </div>
-  );
-}
-
-export const TeamSummary: React.FC = () => {
-  const { data, isLoading, error } = useDashboardStats();
-
-  return (
-    <section aria-labelledby="dashboard-team-heading" className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-4 flex-1">
-          <h4
-            id="dashboard-team-heading"
-            className="text-sm font-semibold tracking-tight text-foreground whitespace-nowrap"
-          >
-            Team
-          </h4>
-          <div className="h-px flex-1 bg-border" />
-        </div>
-      </div>
-
-      {isLoading ? (
-        <LoadingSkeleton />
-      ) : error ? (
-        // Full-strength destructive border so the boundary is perceivable at the 3:1 UI minimum.
-        <div className="flex items-center gap-2 py-6 text-sm text-destructive justify-center bg-destructive/5 border border-destructive rounded-md">
-          <AlertCircle className="h-4 w-4" />
-          <span>Couldn&apos;t load team summary.</span>
-        </div>
-      ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <TeamCard
-            label="Users"
-            count={data?.users ?? 0}
-            href={ROUTES.USERS}
-            Icon={UsersIcon}
-          />
-          <TeamCard
-            label="Roles"
-            count={data?.roles ?? 0}
-            href={ROUTES.SECURITY_ROLES}
-            Icon={ShieldCheck}
-          />
-        </div>
-      )}
-    </section>
   );
 };

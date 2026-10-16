@@ -300,8 +300,9 @@ describe("the command, run against another checkout", () => {
       put(".github/review-prompt.md", "Review.\n");
       put("CONTRIBUTING.md", "Contributing.\n");
       put("package.json", "{}\n");
-      put(".agents/skills/a/SKILL.md", "---\nname: a\ndescription: when a applies\n---\n");
-      put(".claude/skills/a/SKILL.md", "---\nname: a\ndescription: edited in the copy by hand\n---\n");
+      put(".agents/skills/a/SKILL.md", "---\nname: a\ndescription: when a applies\nmetadata:\n  internal: true\n---\n");
+      put("skills/nextly-install/SKILL.md", "---\nname: nextly-install\ndescription: when installing Nextly\n---\n\nInstall Nextly.\n");
+      put(".claude/skills/a/SKILL.md", "---\nname: a\ndescription: edited in the copy by hand\nmetadata:\n  internal: true\n---\n");
       execFileSync("git", ["init", "-q"], { cwd: base });
       execFileSync("git", ["add", "-A"], { cwd: base });
       const run = () => spawnSync(process.execPath, [CHECK, "--root", base], { encoding: "utf8" });
@@ -346,7 +347,8 @@ describe("the command, run against another checkout", () => {
     put(".github/review-prompt.md", "Review.\n");
     put("CONTRIBUTING.md", "Contributing.\n");
     put("package.json", "{}\n");
-    put(".agents/skills/a/SKILL.md", "---\nname: a\ndescription: when a applies\n---\n");
+    put(".agents/skills/a/SKILL.md", "---\nname: a\ndescription: when a applies\nmetadata:\n  internal: true\n---\n");
+      put("skills/nextly-install/SKILL.md", "---\nname: nextly-install\ndescription: when installing Nextly\n---\n\nInstall Nextly.\n");
     syncSkillCopy(base);
     execFileSync("git", ["init", "-q"], { cwd: base });
     return { base, put, copy, check, rules };
@@ -486,8 +488,11 @@ describe("reporting the skills themselves", () => {
   it("reports a Claude Code copy out of step, naming the fix, and a skill no harness would load", () => {
     const base = mkdtempSync(join(tmpdir(), "agent-contract-skills-"));
     try {
+      execFileSync("git", ["init", "-q"], { cwd: base });
+      mkdirSync(join(base, "skills/nextly-install"), { recursive: true });
+      writeFileSync(join(base, "skills/nextly-install/SKILL.md"), "---\nname: nextly-install\ndescription: when installing Nextly\n---\n\nInstall Nextly.\n");
       mkdirSync(join(base, ".agents/skills/a"), { recursive: true });
-      writeFileSync(join(base, ".agents/skills/a/SKILL.md"), "---\ndescription: nameless\n---\n");
+      writeFileSync(join(base, ".agents/skills/a/SKILL.md"), "---\ndescription: nameless\nmetadata:\n  internal: true\n---\n");
       expect(skillFindings(base)).toEqual([
         { file: ".claude/skills/a/SKILL.md", kind: "skills copy", claim: "is missing from the Claude Code copy", fix: "run pnpm skills:sync" },
         { file: ".agents/skills/a/SKILL.md", kind: "skill", claim: "has no name in its frontmatter" },
@@ -502,8 +507,11 @@ describe("reporting the skills themselves", () => {
   it.runIf(process.platform !== "win32")("names real files as the fix for a link on the skills' own side", () => {
     const base = mkdtempSync(join(tmpdir(), "agent-contract-skills-"));
     try {
+      execFileSync("git", ["init", "-q"], { cwd: base });
+      mkdirSync(join(base, "skills/nextly-install"), { recursive: true });
+      writeFileSync(join(base, "skills/nextly-install/SKILL.md"), "---\nname: nextly-install\ndescription: when installing Nextly\n---\n\nInstall Nextly.\n");
       mkdirSync(join(base, "elsewhere"), { recursive: true });
-      writeFileSync(join(base, "elsewhere/SKILL.md"), "---\nname: a\ndescription: linked in\n---\n");
+      writeFileSync(join(base, "elsewhere/SKILL.md"), "---\nname: a\ndescription: linked in\nmetadata:\n  internal: true\n---\n");
       mkdirSync(join(base, ".agents/skills/a"), { recursive: true });
       symlinkSync(join(base, "elsewhere/SKILL.md"), join(base, ".agents/skills/a/SKILL.md"));
       syncSkillCopy(base);

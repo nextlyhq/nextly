@@ -135,6 +135,41 @@ interface GenerationResult {
 // ============================================================================
 
 /**
+ * Write the admin component import map (D60) beside the types file when any
+ * plugin contributes admin components, or remove a previous one when none
+ * does. Importing the generated module from the app self-registers those
+ * components, with no manual host imports, and sidesteps the dynamic
+ * auto-registration race.
+ *
+ * Removal is how "nothing to register" is expressed. A map left behind is worse
+ * than a stale data file: the app IMPORTS it, so it keeps importing a package
+ * that is no longer installed and breaks the next build.
+ *
+ * @returns the map's path when one was written
+ */
+async function settleImportMap(
+  plugins: Parameters<typeof buildImportMapArtifact>[0],
+  typesOutputPath: string,
+  cwd: string
+): Promise<string | undefined> {
+  const importMap = buildImportMapArtifact(plugins, typesOutputPath);
+  if (importMap === null || importMap === undefined) {
+    await rm(
+      resolve(
+        cwd,
+        join(dirname(typesOutputPath), COMPONENT_IMPORT_MAP_FILENAME)
+      ),
+      { force: true }
+    );
+    return undefined;
+  }
+  const importMapPath = resolve(cwd, importMap.path);
+  await ensureDir(dirname(importMapPath));
+  await writeFile(importMapPath, importMap.code, "utf-8");
+  return importMapPath;
+}
+
+/**
  * Execute the generate:types command
  *
  * @param options - Combined global and command options
@@ -205,6 +240,20 @@ export async function runGenerateTypes(
   if (writtenManifestPath) {
     logger.debug(`Written block manifest to: ${writtenManifestPath}`);
   }
+  // The plugin component import map, settled before the same return and for
+  // the same reason: an app whose schema is all made in the Schema Builder
+  // declares nothing in code, yet still renders plugin admin components — its
+  // plugins' pages and settings, and a document view offered on a field type.
+  // Without the map a bundled admin cannot resolve them and draws an empty
+  // slot.
+  const writtenImportMapPath = await settleImportMap(
+    configResult.config.plugins ?? [],
+    options.output ?? configResult.config.typescript.outputFile,
+    options.cwd ?? process.cwd()
+  );
+  if (writtenImportMapPath) {
+    logger.debug(`Written plugin admin import map to: ${writtenImportMapPath}`);
+  }
 
   if (
     collectionCount === 0 &&
@@ -228,6 +277,7 @@ export async function runGenerateTypes(
     // Reported here because the manifest is settled earlier, before the
     // empty-schema return, while this object is built by the call above.
     result.blockManifestFile = writtenManifestPath;
+    result.componentImportMapFile = writtenImportMapPath;
 
     // Step 3: Display results
     displayResults(result, options, context);
@@ -319,34 +369,6 @@ async function generateTypes(
 
   result.typesFile = typesFilePath;
   logger.debug(`Written types to: ${typesFilePath}`);
-
-  // Write the admin component import map (D60), alongside the types file, when
-  // any plugin contributes admin components. Importing this generated module
-  // from the app self-registers those components (no manual host imports), and
-  // sidesteps the dynamic auto-registration race. No-op when there are none.
-  const importMap = buildImportMapArtifact(
-    config.plugins ?? [],
-    typesOutputPath
-  );
-  if (importMap) {
-    const importMapPath = resolve(cwd, importMap.path);
-    await ensureDir(dirname(importMapPath));
-    await writeFile(importMapPath, importMap.code, "utf-8");
-    result.componentImportMapFile = importMapPath;
-    logger.debug(`Written plugin admin import map to: ${importMapPath}`);
-  } else {
-    // Nothing to register, which has to be expressed by removing any previous
-    // map. This one is worse than a stale data file: the generated module is
-    // IMPORTED by the app, so leaving it behind keeps importing a package that
-    // is no longer installed and breaks the next build.
-    await rm(
-      resolve(
-        cwd,
-        join(dirname(typesOutputPath), COMPONENT_IMPORT_MAP_FILENAME)
-      ),
-      { force: true }
-    );
-  }
 
   // Generate Zod schemas if enabled
   if (options.zod !== false) {

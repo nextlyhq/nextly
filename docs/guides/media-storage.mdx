@@ -345,13 +345,13 @@ Go to **Settings -> Image Sizes** in the admin panel to add, edit and remove siz
 
 | Method | Path                                | Description                                  |
 |--------|-------------------------------------|----------------------------------------------|
-| GET    | `/api/image-sizes`                  | List configured sizes (read).                |
-| POST   | `/api/image-sizes`                  | Create a new size (UI-managed).              |
-| GET    | `/api/image-sizes/:id`              | Get a single size.                           |
-| PATCH  | `/api/image-sizes/:id`              | Update a size.                               |
-| DELETE | `/api/image-sizes/:id`              | Delete a size.                               |
-| GET    | `/api/image-sizes/regeneration-status` | Status of an in-progress regeneration job. |
-| POST   | `/api/image-sizes/regenerate`       | Re-generate variants for existing media.     |
+| GET    | `/admin/api/image-sizes`                  | List configured sizes (read).                |
+| POST   | `/admin/api/image-sizes`                  | Create a new size (UI-managed).              |
+| GET    | `/admin/api/image-sizes/:id`              | Get a single size.                           |
+| PATCH  | `/admin/api/image-sizes/:id`              | Update a size.                               |
+| DELETE | `/admin/api/image-sizes/:id`              | Delete a size.                               |
+| GET    | `/admin/api/image-sizes/regeneration-status` | Status of an in-progress regeneration job. |
+| POST   | `/admin/api/image-sizes/regenerate`       | Re-generate variants for existing media.     |
 
 The list endpoint is permission-gated by `read-settings`; mutation endpoints require `manage-settings`.
 

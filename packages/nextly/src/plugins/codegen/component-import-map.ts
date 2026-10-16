@@ -105,6 +105,8 @@ export function collectAdminComponentPaths(plugin: PluginDefinition): string[] {
   for (const page of admin.pages ?? []) paths.push(page.component);
   if (admin.settings) paths.push(admin.settings.component);
   paths.push(...collectCollectionViewPaths(admin.views));
+  // Views offered wherever one of the plugin's field types is used.
+  paths.push(...(admin.documentViews ?? []).map(view => view.component));
   paths.push(...collectWidgetPaths(admin.widgets));
   paths.push(...collectAdminSlotPaths(admin));
   return paths;
@@ -132,6 +134,10 @@ function collectCollectionViewPaths(
       view.afterEdit,
     ]) {
       if (slot) paths.push(slot);
+    }
+    // Each document view is a screen the admin resolves by this string too.
+    for (const documentView of view.documentViews ?? []) {
+      paths.push(documentView.component);
     }
   }
   return paths;

@@ -20,6 +20,7 @@ vi.mock("../../single-sources", async importOriginal => ({
 import { NextlyError } from "../../../../errors/nextly-error";
 import * as loggerModule from "../../../../observability/logger";
 import { registerBuiltInSources } from "../../built-in-sources";
+import { refreshCollectionSources } from "../../collection-sources";
 import { clearWidgets } from "../../registry";
 import { clearSources } from "../../sources";
 import {
@@ -202,6 +203,48 @@ describe("a declared widget's starting query, once content is synced", () => {
     clearDeclaredWidgets();
     await expect(check(listing("acme/a", "orders", "state"))).resolves.toBe(
       undefined
+    );
+  });
+
+  it("reads no content registry when nothing is declared", async () => {
+    // Boot reads them for nothing else: on a database not set up yet the read
+    // fails, and is logged as an error, for a check that has nothing to check.
+    vi.mocked(refreshCollectionSources).mockClear();
+    await checkDeclaredWidgetReferences(CODE);
+    expect(refreshCollectionSources).not.toHaveBeenCalled();
+    // The control: with one widget declared, the registries are read.
+    await check(listing("acme/a", "orders", "state"));
+    expect(refreshCollectionSources).toHaveBeenCalledTimes(1);
+  });
+
+  it("waits, neither refusing nor warning, while a collection the code defines has not reached the database", async () => {
+    // A fresh install: the code defines `orders`, but no table or registry row
+    // exists until setup runs, so there are no sources to check against.
+    // Refusing here would stop the start that setup needs.
+    clearSources();
+    await expect(check(listing("acme/a", "orders", "missing"))).resolves.toBe(
+      undefined
+    );
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("still refuses an operation a code-defined source cannot answer as unreadable", async () => {
+    // A plain JavaScript query whose operation JSON cannot write: the fault
+    // is reported with the others, not thrown while it is being described.
+    const badOp = {
+      ...listing("acme/a", "orders", "state"),
+      data: { query: () => ({ collection: "orders", op: 1n }) },
+    };
+    registerWidgetDeclarations([{ owner: SHOP, declarations: [badOp] }]);
+    let refused: unknown;
+    try {
+      await checkDeclaredWidgetReferences(CODE);
+    } catch (error) {
+      refused = error;
+    }
+    expect(refused).toBeInstanceOf(NextlyError);
+    expect((refused as NextlyError).logMessage).toContain(
+      `its query's operation 1n is not one the "list" display draws`
     );
   });
 

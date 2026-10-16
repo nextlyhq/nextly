@@ -7,6 +7,7 @@ import { ROUTES } from "../constants/routes";
 import registry, { routeConfig } from "../pages/registry";
 import type { CarriedRouteSection } from "../types/route-section";
 
+import { routedDocumentView } from "./plugins/document-view-registry";
 import { matchPluginPage } from "./plugins/plugin-route-registry";
 import { parseSearchParams } from "./search-params";
 
@@ -149,7 +150,12 @@ function getDynamicRequiredPermission(
   if (pattern === ROUTES.COLLECTION_ENTRY_CREATE) {
     return slug ? `create-${slug}` : undefined;
   }
-  if (pattern === ROUTES.COLLECTION_ENTRY_EDIT) {
+  // A document view is an editor of the document, so it asks what editing
+  // it asks: the same claim, the same save.
+  if (
+    pattern === ROUTES.COLLECTION_ENTRY_EDIT ||
+    pattern === ROUTES.COLLECTION_ENTRY_VIEW
+  ) {
     return slug ? `update-${slug}` : undefined;
   }
   if (pattern === ROUTES.COLLECTION_ENTRY_API) {
@@ -161,7 +167,7 @@ function getDynamicRequiredPermission(
     return slug ? `read-${slug}` : undefined;
   }
 
-  if (pattern === ROUTES.SINGLE_EDIT) {
+  if (pattern === ROUTES.SINGLE_EDIT || pattern === ROUTES.SINGLE_VIEW) {
     return slug ? `update-${slug}` : undefined;
   }
   if (pattern === ROUTES.SINGLE_API) {
@@ -172,6 +178,25 @@ function getDynamicRequiredPermission(
   }
 
   return undefined;
+}
+
+/**
+ * Whether a document-view address names a view nobody declared.
+ *
+ * The view patterns match ANY last segment, because which segments are views
+ * is only known once admin-meta has loaded. An address whose segment no plugin
+ * declared for this slug is therefore a matched pattern with nothing to draw,
+ * and it is answered as not found rather than as an editor showing nothing.
+ */
+function isUndeclaredDocumentView(pattern: string, params: Params): boolean {
+  if (
+    pattern !== ROUTES.COLLECTION_ENTRY_VIEW &&
+    pattern !== ROUTES.SINGLE_VIEW
+  ) {
+    return false;
+  }
+  const kind = pattern === ROUTES.SINGLE_VIEW ? "single" : "collection";
+  return routedDocumentView(kind, params.slug, params.view) === undefined;
 }
 
 // Main route resolution function
@@ -212,7 +237,7 @@ export function resolveRoute(pathname: string, rawSearch: string): RouteResult {
 
   // Dynamic match
   const dynamic = matchDynamicRoute(pathname);
-  if (dynamic) {
+  if (dynamic && !isUndeclaredDocumentView(dynamic.pattern, dynamic.params)) {
     const dynamicPermission = getDynamicRequiredPermission(
       dynamic.pattern,
       dynamic.params

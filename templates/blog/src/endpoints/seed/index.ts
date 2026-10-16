@@ -422,8 +422,8 @@ async function resolveSeedMedia(
     }
     const arrayBuffer = await res.arrayBuffer();
     return { buffer: Buffer.from(arrayBuffer), source: "remote" };
-  } catch (err) {
-    // One network-level retry
+  } catch {
+    // One network-level retry: the first failure's reason is not needed to try again.
     try {
       const res = await attempt();
       if (!res.ok) {

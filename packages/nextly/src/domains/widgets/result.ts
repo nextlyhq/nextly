@@ -141,7 +141,18 @@ export type WidgetResult =
  */
 export type WidgetSlot =
   | { ok: true; result: WidgetResult }
-  | { ok: false; error: string };
+  | {
+      ok: false;
+      error: string;
+      /**
+       * Present when the card's source is not available to this caller: forbidden, no longer
+       * existing, kept off the dashboard, or unable to answer what the card asks. Every one of
+       * them answers with this one code and the same `error`, so the card shows one "not
+       * available" state and nobody learns from it whether a source they cannot see exists.
+       * Absent for every other failure, which the card shows as an error with Retry.
+       */
+      code?: "unavailable";
+    };
 
 /**
  * The dashboard batch response body, positionally matched to the queries asked.

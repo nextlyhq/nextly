@@ -24,9 +24,9 @@
 
 import { NextlyError } from "../../../errors/nextly-error";
 import { getNextlyLogger } from "../../../observability/logger";
-import { refreshCollectionSources } from "../collection-sources";
+import { refreshContentSources } from "../collection-widgets";
 import { validateWidgetQuery, type WidgetQuery } from "../query";
-import { refreshSingleSources } from "../single-sources";
+import { getSource } from "../sources";
 
 import { buildCardQuery } from "./card-query";
 import { type DeclaredWidget, listDeclaredWidgets } from "./declared-widgets";
@@ -116,14 +116,45 @@ function startingQueryFault(
     const mismatch = displayOpProblem(display, query.op);
     if (mismatch !== undefined) return mismatch;
   }
+  return contentFault(declared, query, content);
+}
+
+/**
+ * Whether a starting query can run against the synced content: a fault when
+ * what it names is fixed by the code, a warning when it is the database's.
+ *
+ * 🔴 A collection or Single the code defines that has no source yet has not
+ * reached the database: on a fresh install its table and registry row exist
+ * only once setup runs, and boot tolerates that so `/setup` can be served.
+ * Refusing here would stop the very start setup needs, so the query waits for
+ * a start where the content exists. A misspelt name is not one the code
+ * defines, so it is still judged, as the database's.
+ */
+function contentFault(
+  declared: DeclaredWidget,
+  query: WidgetQuery,
+  content: CodeDefinedContent
+): string | undefined {
+  const codeDefined = fixedByCode(query.source, content);
+  if (
+    codeDefined &&
+    isContentSource(query.source) &&
+    !getSource(query.source)
+  ) {
+    return undefined;
+  }
   const problem = queryProblem(query);
   if (problem === undefined) return undefined;
-  if (fixedByCode(query.source, content)) {
+  if (codeDefined) {
     return `its query, built from its starting settings, cannot run: ${problem}`;
   }
   warnMissingContent(declared, query.source, problem);
   return undefined;
 }
+
+/** Whether a source is a collection or a Single, which boot syncs. */
+const isContentSource = (source: string): boolean =>
+  source.startsWith(COLLECTION_SOURCE) || source.startsWith(SINGLE_SOURCE);
 
 /** The warning for a query over the database's content that cannot run. */
 function warnMissingContent(
@@ -152,17 +183,19 @@ function warnMissingContent(
 export async function checkDeclaredWidgetReferences(
   content: CodeDefinedContent
 ): Promise<void> {
+  const declared = listDeclaredWidgets();
+  // Nothing to check, so nothing to read: boot reads the content registries
+  // for nothing else, and on a database not yet set up the read fails.
+  if (declared.length === 0) return;
   // The sources a query names are derived from the registries, which hold the
   // synced content only now.
-  await Promise.all([refreshCollectionSources(), refreshSingleSources()]);
+  await refreshContentSources();
 
-  const faults: WidgetDeclarationFault[] = listDeclaredWidgets().flatMap(
-    declared => {
-      const problem = startingQueryFault(declared, content);
-      return problem === undefined
-        ? []
-        : [{ owner: declared.owner, widget: declared.declaration.id, problem }];
-    }
-  );
+  const faults: WidgetDeclarationFault[] = declared.flatMap(declared => {
+    const problem = startingQueryFault(declared, content);
+    return problem === undefined
+      ? []
+      : [{ owner: declared.owner, widget: declared.declaration.id, problem }];
+  });
   if (faults.length > 0) throw widgetDeclarationsRefused(faults);
 }

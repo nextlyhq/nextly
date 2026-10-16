@@ -73,6 +73,71 @@ describe("VersionDiffView", () => {
     expect(screen.getByText(/identical/)).toBeInTheDocument();
   });
 
+  it("never calls versions identical when fields were withheld from the reader", () => {
+    useVersionDiffMock.mockReturnValue({
+      data: {
+        from: 1,
+        to: 2,
+        locale: null,
+        hasChanges: false,
+        incomplete: true,
+        fields: [],
+      },
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    render(<VersionDiffView scope={scope} from={1} to={2} />);
+
+    expect(
+      screen.getByText("No changes in the fields you can read.")
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/identical/)).not.toBeInTheDocument();
+  });
+
+  it("names a hidden field and says why, without claiming no change overall", () => {
+    useVersionDiffMock.mockReturnValue({
+      data: {
+        from: 1,
+        to: 2,
+        locale: null,
+        hasChanges: false,
+        incomplete: true,
+        fields: [
+          {
+            kind: "hidden",
+            reason: "no-access",
+            name: "notes",
+            label: "Internal notes",
+            declaredLabel: "Internal notes",
+            type: "textarea",
+            status: "unchanged",
+            path: [],
+          },
+        ],
+      },
+      isLoading: false,
+      isError: false,
+      error: null,
+      refetch: vi.fn(),
+    });
+
+    render(<VersionDiffView scope={scope} from={1} to={2} />);
+
+    expect(screen.getByText("Internal notes")).toBeInTheDocument();
+    expect(
+      screen.getByText("Hidden: you don't have access to this field.")
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("No changes in the fields you can read.")
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText("No changes between these versions.")
+    ).not.toBeInTheDocument();
+  });
+
   it("renders the unchanged fields with a no-change note when filter is off", () => {
     // "Changed only" off returns the unchanged fields even though hasChanges is
     // false; they must render (with a note) rather than showing "identical".
