@@ -9,7 +9,7 @@ The REST API exposes the same operations as the [Direct API](/docs/api-reference
 
 ## Setup
 
-A scaffolded project already has this route. It is a single Next.js catch-all that delegates to Nextly, and its dynamic handlers cover collections, singles, auth, dashboard, schema, email, RBAC, media, API keys, and the rest of the surface. Adding Nextly to an existing app, create it at the same path:
+A scaffolded project already has this route. It is a single Next.js catch-all that delegates to Nextly, and its dynamic handlers cover collections, singles, auth, dashboard, schema, email, RBAC, media, API keys, and the rest of the surface. Adding Nextly to an existing app, create it at `admin/api/[[...params]]/route.ts` in your app directory: `src/app/` as below, or the root `app/` in a project without `src/` (Next.js ignores `src/app` when a root `app` exists), where the config import is one `../` shorter:
 
 ```typescript title="src/app/admin/api/[[...params]]/route.ts"
 import { createDynamicHandlers } from "nextly/runtime";
@@ -26,7 +26,7 @@ The health endpoint and media-streaming endpoint can be exported at their own ro
 export { GET, HEAD } from "nextly/api/health";
 ```
 
-Every endpoint below is served under `/admin/api/`, except the health route at `/api/health`. Keep the handler at `/admin/api`: the admin panel calls it there, and the session cookies are scoped to `/admin`, so a browser session never reaches a handler mounted anywhere else. An API key works on any mount, but the paths on this page assume the scaffold's.
+Every endpoint below is served under `/admin/api/`, except the health route at `/api/health`. Keep the handler at `/admin/api`: the admin panel calls it there, and the session cookies are scoped to `/admin`, so a browser session never reaches a handler mounted anywhere else. An API key works on any mount, but the paths on this page assume the scaffold's. The global [`rateLimit`](/docs/configuration/nextly-config#ratelimit) skips requests under `/admin/api/` by default, so it applies to none of them until you change its `skip`.
 
 ## Authentication
 
