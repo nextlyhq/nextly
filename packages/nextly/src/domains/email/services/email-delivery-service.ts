@@ -31,6 +31,7 @@ import { toDbError } from "../../../database/errors";
 import { getDialectTables } from "../../../database/index";
 import { NextlyError } from "../../../errors";
 import { env } from "../../../lib/env";
+import { maskingServiceLogger } from "../../../observability/mask-emails";
 import type { PrincipalRef } from "../../../plugins/principals/types";
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
@@ -209,7 +210,10 @@ export class EmailDeliveryService extends BaseService {
     retentionPolicy?: () => ResolvedEmailRetentionConfig | undefined,
     digestSecrets: () => readonly string[] = () => pluginSettingsSecrets(env)
   ) {
-    super(adapter, logger);
+    // Masked here whatever logger an app supplied: what this service logs,
+    // a provider error quoting a recipient included, never carries a full
+    // email address outside development and test.
+    super(adapter, maskingServiceLogger(logger));
     this.deliveries = deliveriesTableFor(this.dialect);
     this.retention = retention;
     this.retentionPolicy = retentionPolicy;

@@ -25,7 +25,7 @@ import { defineEmailProvider } from "../../provider-definition";
 import {
   LOG_PROVIDER_TYPE,
   createLogProvider,
-  shouldIncludeBody,
+  logProviderConfigFor,
 } from "./log-provider";
 import {
   NODEMAILER_INSTALL_COMMAND,
@@ -295,7 +295,7 @@ export const logDefinition: RegisteredEmailProvider = defineEmailProvider({
   configFields: [],
   parseConfig: () => ({}),
   createAdapter: () =>
-    createLogProvider({ includeBody: shouldIncludeBody(process.env.NODE_ENV) }),
+    createLogProvider(logProviderConfigFor(process.env.NODE_ENV)),
 });
 
 /** Every provider seeded into a fresh registry. */

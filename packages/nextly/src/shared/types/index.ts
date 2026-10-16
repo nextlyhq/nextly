@@ -10,6 +10,7 @@
  */
 
 import type { AuthenticatedScope } from "../../auth/authenticated-scope";
+import { maskingServiceLogger } from "../../observability/mask-emails";
 
 /**
  * Type alias for Drizzle database instance.
@@ -299,12 +300,15 @@ export interface Logger {
  * });
  * ```
  */
-export const consoleLogger: Logger = {
+export const consoleLogger: Logger = maskingServiceLogger({
+  // Wrapped so that outside development and test every email address in a
+  // message or its fields is masked before it reaches the console: this is
+  // the logger every service falls back to.
   debug: (msg, meta) => console.debug(`[DEBUG] ${msg}`, meta ?? ""),
   info: (msg, meta) => console.info(`[INFO] ${msg}`, meta ?? ""),
   warn: (msg, meta) => console.warn(`[WARN] ${msg}`, meta ?? ""),
   error: (msg, meta) => console.error(`[ERROR] ${msg}`, meta ?? ""),
-};
+});
 
 // Access control types (shared across collections, singles, auth)
 export * from "./access";

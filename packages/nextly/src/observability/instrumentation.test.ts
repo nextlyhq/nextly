@@ -27,7 +27,10 @@ afterEach(() => {
 describe("createNextlyInstrumentation", () => {
   it("registers the provided logger via setNextlyLogger", () => {
     createNextlyInstrumentation({ logger: mockLogger });
-    expect(getNextlyLogger()).toBe(mockLogger);
+    // The getter hands back a masking wrapper, so what is observable is that
+    // a line written through it reaches the provided logger.
+    getNextlyLogger().error({ kind: "probe" });
+    expect(mockLogger.error).toHaveBeenCalledWith({ kind: "probe" });
   });
 
   it("registers the provided onError hook via setGlobalOnError", () => {

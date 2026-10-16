@@ -181,9 +181,11 @@ export async function handleSession(
     const key = (deps.devAutoLogin as { email: string }).email;
     if (!devAutoLoginWarned.has(`prod:${key}`)) {
       devAutoLoginWarned.add(`prod:${key}`);
+      // The configured email stays out: a production log is no place for an
+      // address, and the warning is actionable without it.
       console.warn(
         `[nextly] devAutoLogin ignored: NODE_ENV=production. ` +
-          `Set this only for development. (configured email: ${key})`
+          `Set this only for development.`
       );
     }
   }
