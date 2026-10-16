@@ -98,6 +98,37 @@ describe("the boot sequence in registerServices", () => {
     );
   });
 
+  /**
+   * The gate reads only the ledger and the configuration, so it can run before
+   * any step that writes to the database or the registry. Checked after one of
+   * those, a refused plugin's Builder fields, code-first tables and registry
+   * rows would already have been written.
+   */
+  it("judges install state before any step that writes the schema or the registry", () => {
+    const gate = boot.indexOf("await assertBootPluginInstallStates(");
+    for (const step of [
+      "await reconcileBuilderTargets(",
+      "await syncCodeFirstEntities(",
+      "await runBootMigrations(",
+    ]) {
+      expect(boot.indexOf(step), step).toBeGreaterThan(-1);
+      expect(gate, step).toBeLessThan(boot.indexOf(step));
+    }
+  });
+
+  /**
+   * A lifecycle command's boot exists to run one plugin's hook. A resumed
+   * uninstall is leaving a schema version the plugin declares, and a
+   * development boot must not recreate extension tables the uninstall removed,
+   * so neither check is made in that boot.
+   */
+  it.each(["assertBootPluginSchemaVersions", "prepareExtensionTablesForInit"])(
+    "%s makes no check in a lifecycle command boot",
+    name => {
+      expect(bodyOf(name)).toContain("isLifecycleCommandBoot()");
+    }
+  );
+
   it("runs the boot migrations inside the migration phase", () => {
     expect(bodyOf("runBootMigrations")).toContain(
       "await runProdMigrationsIfEnabled("
