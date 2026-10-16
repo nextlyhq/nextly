@@ -44,6 +44,7 @@ import {
   assertWellFormedFilter,
   isPlainObject,
   refuseFilterProblems,
+  snapshotFilter,
   type FilterProblem,
 } from "./filter-shape";
 import type { GeoFilter } from "./geo-utils";
@@ -265,9 +266,11 @@ function buildCondition(
 export function buildWhereClause(
   payload: WhereFilter
 ): WhereClause | undefined {
-  assertWellFormedFilter(payload);
+  // One read of the filter, checked and translated alike.
+  const filter = snapshotFilter(payload);
+  assertWellFormedFilter(filter);
   const geo: FilterProblem[] = [];
-  const clause = buildClause(payload, "where", geo);
+  const clause = buildClause(filter, "where", geo);
   refuseFilterProblems(geo);
   return clause;
 }
@@ -455,13 +458,14 @@ export function extractGeoFilters(
   // Judged whole first, so nothing below has to decide what to do with a
   // member it does not understand: extraction used to drop such a member, and
   // the builder downstream never got to refuse it.
-  assertWellFormedFilter(where, { allowTranslated: true });
+  const filter = snapshotFilter(where);
+  assertWellFormedFilter(filter, { allowTranslated: true });
 
   const out = {
     geoFilters: [] as GeoFilter[],
     misplaced: [] as FilterProblem[],
   };
-  const cleanedWhere = rebuildFilter(where, ROOT_SITE, (field, value, site) =>
+  const cleanedWhere = rebuildFilter(filter, ROOT_SITE, (field, value, site) =>
     liftGeo(field, value, site, out)
   );
   refuseFilterProblems(out.misplaced);
@@ -764,14 +768,15 @@ export function extractComponentFieldConditions(
   // Judged whole first, for the reason `extractGeoFilters` is: a component
   // condition with an unknown operator, or a value with none, used to be
   // dropped here without the builder ever seeing it.
-  assertWellFormedFilter(where, { allowTranslated: true });
+  const filter = snapshotFilter(where);
+  assertWellFormedFilter(filter, { allowTranslated: true });
 
   const out = {
     componentFieldMap: buildComponentFieldMap(fields),
     componentFilters: [] as ComponentFieldFilter[],
     misplaced: [] as FilterProblem[],
   };
-  const cleanedWhere = rebuildFilter(where, ROOT_SITE, (field, value, site) =>
+  const cleanedWhere = rebuildFilter(filter, ROOT_SITE, (field, value, site) =>
     liftComponent(field, value, site, out)
   );
   refuseFilterProblems(out.misplaced);

@@ -33,12 +33,16 @@ export interface FilterProblem {
 /** The reserved key carrying the language filter. */
 export const TRANSLATED_KEY = "_translated";
 
-/** Names that address an object's prototype rather than one of its keys. */
-const PROTOTYPE_NAMES: ReadonlySet<string> = new Set([
-  "__proto__",
-  "constructor",
-  "prototype",
-]);
+/**
+ * The one key no filter may carry. JSON makes `__proto__` an own key, and
+ * assigning it anywhere sets an object's prototype instead of a key, so it
+ * can never be a field. `constructor` and `prototype` are ordinary names a
+ * schema may use, and every walk here reads only own keys.
+ */
+const PROTOTYPE_KEY = "__proto__";
+
+/** How deep a filter may nest before it is refused rather than copied. */
+const MAX_SNAPSHOT_DEPTH = 64;
 
 /** Whether a value is a plain object: not an array, a date, or null. */
 export function isPlainObject(
@@ -208,11 +212,7 @@ function operandIssue(
       message: `"${operator}" has no value (undefined). Give it a value, or leave the condition out.`,
     };
   }
-  if (operand === null) {
-    return invalid(
-      `"${operator}" cannot compare with null. To match an empty field, write { exists: false }.`
-    );
-  }
+  if (operand === null) return invalid(nullAdvice(operator));
   return OPERAND_RULES[operator](operator, operand);
 }
 
@@ -282,10 +282,9 @@ function fieldProblems(
     });
     return;
   }
-  // A prototype name is never a column. JSON makes `__proto__` an own key,
-  // and a walk that rebuilds a filter by assignment would set a prototype with
-  // it and lose the condition, so it is refused before any walk runs.
-  if (PROTOTYPE_NAMES.has(key)) {
+  // Refused before any walk runs: a walk that rebuilds a filter by assignment
+  // would set a prototype with it and lose the condition.
+  if (key === PROTOTYPE_KEY) {
     into.push({
       path,
       code: "FILTER_UNKNOWN_FIELD",
@@ -392,6 +391,69 @@ export function assertWellFormedFilter(
 ): void {
   if (where === undefined) return;
   refuseFilterProblems(filterShapeProblems(where, opts));
+}
+
+/**
+ * What to write instead of comparing with null. SQL's `= NULL` matches no
+ * row, so the caller meant a test for an empty field; which one depends on
+ * the operator, and an ordered comparison has no equivalent to offer.
+ */
+function nullAdvice(operator: string): string {
+  const instead =
+    operator === "equals"
+      ? " To match an empty field, write { exists: false }."
+      : operator === "not_equals"
+        ? " To match a field with a value, write { exists: true }."
+        : "";
+  return `"${operator}" cannot compare with null.${instead}`;
+}
+
+/**
+ * A copy of a filter's own data, read once, for checking and translating.
+ *
+ * Validating one read of a filter and translating another would let a getter
+ * or a proxy answer the check with a restrictive value and the translator
+ * with none. Each property is read exactly once here, and both steps then
+ * work on the copy. Plain objects and lists are copied; every other value,
+ * dates included, is kept as it is for the shape check to judge. A filter
+ * nested past any real need is refused rather than copied without end.
+ */
+export function snapshotFilter<T>(value: T): T {
+  return copyFilterValue(value, 0) as T;
+}
+
+function copyFilterValue(value: unknown, depth: number): unknown {
+  if (depth > MAX_SNAPSHOT_DEPTH) {
+    refuseFilterProblems([
+      {
+        path: "where",
+        code: "FILTER_TOO_DEEP",
+        message: `A filter may not nest more than ${MAX_SNAPSHOT_DEPTH} levels.`,
+      },
+    ]);
+  }
+  if (Array.isArray(value)) {
+    // By index, so a hole is copied as the undefined it reads as and the
+    // shape check refuses it.
+    const list: unknown[] = new Array<unknown>(value.length);
+    for (let i = 0; i < value.length; i++) {
+      list[i] = copyFilterValue(value[i], depth + 1);
+    }
+    return list;
+  }
+  if (!isPlainObject(value)) return value;
+  const copy: Record<string, unknown> = {};
+  for (const key of Object.keys(value)) {
+    // Defined, not assigned, so a `__proto__` key stays a key for the shape
+    // check to refuse.
+    Object.defineProperty(copy, key, {
+      value: copyFilterValue(value[key], depth + 1),
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
+  }
+  return copy;
 }
 
 /** Throw the one refusal for a malformed filter, if there is anything to say. */

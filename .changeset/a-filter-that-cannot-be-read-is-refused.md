@@ -62,9 +62,13 @@ Newly refused, and what to write instead:
 - **An operand of the wrong type** — `FILTER_INVALID_OPERAND`: an object or
   list given to `equals` (use `in` for several values), a value that is not a
   list given to `in` or `not_in` (write `["value"]`), `null` given to any
-  operator or as a field's value (write `{ exists: false }`), a list given as
-  a field's value (write `{ in: [...] }`), `exists` with anything but `true`
-  or `false`, and a `near` or `within` that does not parse.
+  operator or as a field's value (write `{ exists: false }`, or
+  `{ exists: true }` for `not_equals: null`), a list given as a field's value
+  (write `{ in: [...] }`), `exists` with anything but `true` or `false`, and a
+  `near` or `within` that does not parse. A geo operand now parses only in its
+  documented form: an unknown unit (it used to mean metres), parts beyond the
+  last one the format names (they used to be ignored), or a number with
+  trailing text (`5abc` used to read as 5) is refused.
 - **An empty condition** (`{ title: {} }`) — `FILTER_NO_OPERATOR`. Name an
   operator or leave the field out.
 - **A malformed language filter** (`_translated` without a `locale` string
@@ -81,13 +85,13 @@ Newly refused, and what to write instead:
   `FILTER_GIVEN_TWICE`. The bracket conditions used to be ignored. Send one
   form.
 - **A REST bracket key that is not bracketed segments**
-  (`where[title]equals=a`), that names `__proto__`, `constructor` or
-  `prototype`, whose list index is 50 or more (the most conditions a filter
-  may have), that nests under a value another parameter gave, that mixes list
-  indexes and named keys at one level, whose index has leading zeros, or
-  that repeats a condition already given — `FILTER_INVALID_KEY`. A `__proto__`,
-  `constructor` or `prototype` field key in a JSON `where` is refused as an
-  unknown field.
+  (`where[title]equals=a`), that names `__proto__`, whose list index is 50 or
+  more (the most conditions a filter may have), that nests under a value
+  another parameter gave, that mixes list indexes and named keys at one level,
+  whose index has leading zeros, or that repeats a condition already given —
+  `FILTER_INVALID_KEY`. A `__proto__` field key in a JSON `where` is refused
+  as an unknown field. Fields named `constructor` or `prototype` filter as any
+  other field does.
 - **A REST filter on the owner column** (`created_by`, `createdBy`, any
   spelling that resolves to it such as `CreatedBy`, or a dotted form) — `FIELD_NOT_FILTERABLE`. It used to be removed silently, so
   `or: [{ createdBy: … }]` matched every entry. The column is never returned,

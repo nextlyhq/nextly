@@ -95,19 +95,30 @@ describe("bracket filters that cannot be read", () => {
     ).toEqual(["FILTER_INVALID_KEY"]);
   });
 
-  it.each(["__proto__", "constructor", "prototype"])(
-    "refuses a %s segment without touching Object.prototype",
-    segment => {
-      // Assigning through an inherited `__proto__` writes onto
-      // Object.prototype, which every later request would then inherit.
-      expect(
-        refusedErrors(() =>
-          whereOf(`where[${segment}][polluted]=yes&where[title][equals]=a`)
-        ).map(e => e.code)
-      ).toEqual(["FILTER_INVALID_KEY"]);
-      expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+  it("refuses a __proto__ segment without touching Object.prototype", () => {
+    // Assigning through an inherited `__proto__` writes onto
+    // Object.prototype, which every later request would then inherit.
+    expect(
+      refusedErrors(() =>
+        whereOf("where[__proto__][polluted]=yes&where[title][equals]=a")
+      ).map(e => e.code)
+    ).toEqual(["FILTER_INVALID_KEY"]);
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+  });
+
+  it("walks constructor and prototype segments as own keys", () => {
+    // A field may be named `constructor`, so the segment is read as a key of
+    // the filter being built, never as the inherited property.
+    expect(whereOf("where[constructor][equals]=x")).toEqual({
+      constructor: { equals: "x" },
+    });
+    try {
+      whereOf("where[constructor][prototype][polluted]=yes");
+    } catch {
+      // Refused for its unknown operator; what matters is what it touched.
     }
-  );
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+  });
 
   it("refuses a segment that nests under a value already given", () => {
     // Walking into the string "a" and assigning onto it threw a TypeError,

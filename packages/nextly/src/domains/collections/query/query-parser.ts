@@ -251,9 +251,9 @@ function parseBracketPath(key: string): string[] | null {
   }
   const segments = [...key.matchAll(/\[([^[\]]+)\]/g)].map(match => match[1]);
   for (const segment of segments) {
-    // A prototype name would make the object being built write onto a
-    // prototype every other object shares.
-    if (PROTOTYPE_SEGMENTS.has(segment)) {
+    // `__proto__` would make the object being built write onto a prototype
+    // every other object shares. Other names are walked as own keys.
+    if (segment === "__proto__") {
       refuseKey(key, `"${segment}" cannot be a filter segment.`);
     }
     // An index written with leading zeros is not an array index: it would be
@@ -275,9 +275,6 @@ function parseBracketPath(key: string): string[] | null {
   }
   return segments;
 }
-
-/** Segment names that address an object's prototype rather than a key. */
-const PROTOTYPE_SEGMENTS = new Set(["__proto__", "constructor", "prototype"]);
 
 /** Refuse a bracket filter parameter, saying what is wrong with it. */
 function refuseKey(key: string, why: string): never {

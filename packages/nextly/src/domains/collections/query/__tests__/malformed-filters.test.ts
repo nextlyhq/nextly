@@ -368,6 +368,96 @@ describe("component fields refuse the same malformed conditions", () => {
   });
 });
 
+describe("geo operands are read only in their documented form", () => {
+  it.each([
+    ["within", "-74,40,5,kmm"],
+    ["within", "-74,40,5,km,extra"],
+    ["within", "-74,40,5abc"],
+    ["near", "-74,40,1000,0,kmm"],
+    ["near", "-74,40,1000,0,km,extra"],
+    ["near", "-74,40,1000abc"],
+  ])("refuses %s %s", (operator, operand) => {
+    // An unknown unit used to mean metres and extra parts were ignored, so
+    // the read ran a different spatial filter from the one written.
+    expect(
+      refusalCodes(() =>
+        extractGeoFilters({
+          location: { [operator]: operand },
+        } as unknown as WhereFilter)
+      )
+    ).toContain("FILTER_INVALID_OPERAND");
+  });
+
+  it.each([
+    ["within", "-74,40,5"],
+    ["within", "-74,40,5,km"],
+    ["near", "-74,40,1000"],
+    ["near", "-74,40,10,mi"],
+    ["near", "-74,40,10,1"],
+    ["near", "-74,40,10,1,KM"],
+  ])("accepts %s %s", (operator, operand) => {
+    const { geoFilters } = extractGeoFilters({
+      location: { [operator]: operand },
+    } as unknown as WhereFilter);
+    expect(geoFilters).toHaveLength(1);
+  });
+});
+
+describe("a null operand's refusal says what to write instead", () => {
+  it.each([
+    ["equals", "{ exists: false }"],
+    ["not_equals", "{ exists: true }"],
+  ])("%s: null points to %s", (operator, advice) => {
+    let message = "";
+    try {
+      buildWhereClause({ title: { [operator]: null } } as WhereFilter);
+    } catch (error) {
+      message = JSON.stringify((error as NextlyError).publicData);
+    }
+    expect(message).toContain(advice);
+  });
+
+  it("does not offer exists as a replacement for an ordered comparison", () => {
+    let message = "";
+    try {
+      buildWhereClause({ views: { greater_than: null } } as WhereFilter);
+    } catch (error) {
+      message = JSON.stringify((error as NextlyError).publicData);
+    }
+    expect(message).toContain("greater_than");
+    expect(message).not.toContain("exists");
+  });
+});
+
+describe("fields named like prototype properties", () => {
+  it.each(["constructor", "prototype"])(
+    "leaves a field named %s to the condition builder",
+    name => {
+      // A schema may name a field this way, so the shape check must not refuse
+      // it; the builder resolves it as an own column like any other.
+      expect(() =>
+        buildWhereClause({ [name]: { equals: "x" } } as WhereFilter)
+      ).not.toThrow();
+    }
+  );
+});
+
+describe("a filter read once", () => {
+  it("translates the value it validated, not a later read of it", () => {
+    // A getter that answers differently on each read would otherwise pass
+    // the shape check with one value and be translated with another.
+    let reads = 0;
+    const where = {} as Record<string, unknown>;
+    Object.defineProperty(where, "tenant", {
+      enumerable: true,
+      get: () => (reads++ === 0 ? { equals: "acme" } : {}),
+    });
+    expect(buildWhereClause(where as WhereFilter)).toEqual({
+      and: [{ column: "tenant", op: "=", value: "acme" }],
+    });
+  });
+});
+
 describe("geo conditions refuse what they cannot apply", () => {
   it("tells a caller the within format the parser reads", () => {
     // The parser reads a circle only; describing a box or polygon would send
