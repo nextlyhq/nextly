@@ -23,7 +23,9 @@ const NOTICE_PRUNE_BATCH = 500;
  * Never throws: a retention pass is offered by ordinary writes, and a failure
  * here must not reach the write that offered it.
  *
- * @returns how many notices were removed.
+ * @returns how many notices were removed, and whether a batch was started:
+ *   a pass that started none (its time already spent) did no work, and its
+ *   caller should give its turn back.
  */
 export async function pruneNoticesSafely(
   deps: {
@@ -35,18 +37,20 @@ export async function pruneNoticesSafely(
   },
   maxAgeMs: number,
   maxBatches: number
-): Promise<number> {
+): Promise<{ removed: number; started: boolean }> {
   const now = deps.now ?? (() => new Date());
   const before = new Date(now().getTime() - maxAgeMs);
   let removed = 0;
+  let started = false;
   try {
     // A database from before notices has nothing to prune; passed over
     // without a warning on every pass.
     if (deps.db.tableExists && !(await deps.db.tableExists(NOTICES_TABLE))) {
-      return 0;
+      return { removed: 0, started: true };
     }
     for (let batch = 0; batch < maxBatches; batch += 1) {
       if (deps.deadline !== undefined && now() >= deps.deadline) break;
+      started = true;
       const count = await deleteNoticesOlderThan(
         deps.db,
         before,
@@ -56,9 +60,11 @@ export async function pruneNoticesSafely(
       if (count < NOTICE_PRUNE_BATCH) break;
     }
   } catch (error) {
+    // A failure is a pass that ran: retrying at once would fail the same way.
+    started = true;
     warnQuietly(deps.logger, "Notices retention pass failed", {
       error: error instanceof Error ? error.message : "unknown error",
     });
   }
-  return removed;
+  return { removed, started };
 }

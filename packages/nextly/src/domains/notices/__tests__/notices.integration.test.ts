@@ -264,6 +264,25 @@ describe.each(getConfiguredTestDialects())("notices (%s)", dialect => {
     ).rejects.toMatchObject({ code: "INTERNAL_ERROR" });
   });
 
+  it("answers marking read through the Direct API with the mutation envelope", async () => {
+    const notices = await boot(dialect);
+    await notices.record({
+      kind: plain,
+      userId: "alice",
+      subjectId: "t1",
+      occurrence: "1",
+      data: { n: 1 },
+    });
+    const result = await current!.nextly.notices.markRead({
+      userId: "alice",
+      all: true,
+    });
+    expect(result).toMatchObject({
+      message: expect.any(String),
+      item: { marked: 1 },
+    });
+  });
+
   it("marks read only the caller's own notices", async () => {
     const notices = await boot(dialect);
     const mine = await notices.record({
@@ -415,7 +434,7 @@ describe.each(getConfiguredTestDialects())("notices (%s)", dialect => {
         90 * day,
         5
       )
-    ).toBe(2);
+    ).toEqual({ removed: 2, started: true });
     expect(await notices.count({ userId: "alice" })).toBe(0);
 
     // The control: inside the window nothing goes.
@@ -428,7 +447,7 @@ describe.each(getConfiguredTestDialects())("notices (%s)", dialect => {
     });
     expect(
       await pruneNoticesSafely({ db: current!.adapter as never }, 90 * day, 5)
-    ).toBe(0);
+    ).toEqual({ removed: 0, started: true });
     expect(await notices.count({ userId: "alice" })).toBe(1);
   });
 

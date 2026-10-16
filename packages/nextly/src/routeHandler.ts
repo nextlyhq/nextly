@@ -593,10 +593,12 @@ async function handleNoticesRequest(
     case "markNoticesRead":
       return markNoticesRead(req);
     default:
-      return new Response(
-        JSON.stringify({ error: "Unknown notices operation" }),
-        { status: 400, headers: { "Content-Type": "application/json" } }
-      );
+      // Thrown, not answered by hand, so the shared handler supplies the
+      // canonical envelope, request id and status, as for the jobs routes.
+      throw NextlyError.notFound({
+        message: `Unknown notices operation: ${method}`,
+        logContext: { reason: "unknown-notices-operation", method },
+      });
   }
 }
 

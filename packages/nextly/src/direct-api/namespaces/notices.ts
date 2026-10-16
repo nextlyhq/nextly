@@ -19,7 +19,7 @@ import type {
   NoticesService,
   NoticeView,
 } from "../../domains/notices/notices-service";
-import type { ListResult } from "../types/shared";
+import type { ListResult, MutationResult } from "../types/shared";
 
 /** @experimental */
 export interface NoticesNamespace {
@@ -35,7 +35,7 @@ export interface NoticesNamespace {
   /** Mark this person's notices read: the ones named, or all of them. */
   markRead(
     args: { userId: string } & ({ ids: string[] } | { all: true })
-  ): Promise<{ marked: number }>;
+  ): Promise<MutationResult<{ marked: number }>>;
 }
 
 function service(): NoticesService {
@@ -57,6 +57,16 @@ export function createNoticesNamespace(): NoticesNamespace {
       };
     },
     count: args => service().count(args),
-    markRead: async args => ({ marked: await service().markRead(args) }),
+    // The mutation envelope every Direct API write returns.
+    markRead: async args => {
+      const marked = await service().markRead(args);
+      return {
+        message:
+          marked === 1
+            ? "1 notice marked read."
+            : `${marked} notices marked read.`,
+        item: { marked },
+      };
+    },
   };
 }

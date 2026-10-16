@@ -114,6 +114,49 @@ describe("the scheduled drain and notices", () => {
     expect(result.pruned.notices).toBe(deletes.mock.calls.length * 500);
   });
 
+  it("hands back a notices turn whose share was spent before a batch started", async () => {
+    // Earlier passes used the notices pass's share of the time, though not the
+    // drain's whole deadline: no notice is queried, so the turn must be given
+    // back, or the sweep is held off for a whole interval having done nothing.
+    // The clock moves a second per reading; at a 12-second budget the notices
+    // share runs out before its first batch while the drain still has time.
+    let clock = 0;
+    const released: string[] = [];
+    const tables: string[] = [];
+    await runDrain({
+      fanOut: { db: idleDb(), loadEndpoints: async () => [] } as never,
+      deliver: {
+        db: idleDb(),
+        now: () => new Date((clock += 1000)),
+      } as never,
+      maxDurationMs: 12_000,
+      retention: {
+        auditPolicy: resolveAuditRetentionConfig({ activityMaxAgeMs: 1000 }),
+        oneTimeSecrets: true,
+        prune: {
+          adapter: {
+            select: async (table: string) => {
+              tables.push(table);
+              return [];
+            },
+            delete: async () => 0,
+            transaction: async (
+              fn: (tx: { delete: () => Promise<number> }) => Promise<unknown>
+            ) => fn({ delete: async () => 0 }),
+          },
+        } as never,
+        gate: {
+          claim: async () => true,
+          release: async (key: string) => {
+            released.push(key);
+          },
+        },
+      },
+    });
+    expect(tables).not.toContain("nextly_notices");
+    expect(released).toContain(NOTICES_RETENTION_DRAIN_GATE_KEY);
+  });
+
   it("leaves notices alone when the activity log keeps everything", async () => {
     const claimed: string[] = [];
     const result = await drain({

@@ -554,7 +554,7 @@ async function drainNotices(
     heldTurns.delete(NOTICES_RETENTION_DRAIN_GATE_KEY);
     return 0;
   }
-  const removed = await pruneNoticesSafely(
+  const swept = await pruneNoticesSafely(
     {
       db: retention.prune.adapter,
       now: pass.now,
@@ -564,6 +564,9 @@ async function drainNotices(
     pass.maxAgeMs,
     pass.maxBatches
   );
-  heldTurns.delete(NOTICES_RETENTION_DRAIN_GATE_KEY);
-  return removed;
+  // Kept only if a batch was attempted: a pass whose share was already spent
+  // did no work, and keeping the turn would hold the sweep off a whole
+  // interval. Handed back in `finally` with the other unspent turns.
+  if (swept.started) heldTurns.delete(NOTICES_RETENTION_DRAIN_GATE_KEY);
+  return swept.removed;
 }
