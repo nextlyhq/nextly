@@ -48,13 +48,30 @@ const SUPPORTED_INTENT_VERSIONS: ReadonlySet<number> = new Set([
  * old migration against a config that has since gained or dropped fields would have it do work no
  * one ever asked for.
  */
+/**
+ * What a companion migration file does.
+ *
+ * - `enable` relocates existing values into the companion; `create-only` makes a companion for a
+ *   collection that never held them on main; `disable` brings them home and drops the companion.
+ * - `archive` and `shared` are the two halves of fields that stop being translated while the
+ *   entity stays translated (`plan-field-leaves-migration.ts`): `archive` writes their other
+ *   languages to the archive before the main migration, and `shared` copies the default language
+ *   onto main and drops their companion columns after it.
+ */
+export const LOCALIZATION_MIGRATION_KINDS = [
+  "enable",
+  "create-only",
+  "disable",
+  "archive",
+  "shared",
+] as const;
+
+export type LocalizationMigrationKind =
+  (typeof LOCALIZATION_MIGRATION_KINDS)[number];
+
 export interface LocalizationMigrationIntent {
   version: number;
-  /**
-   * `enable` relocates existing values into the companion; `create-only` makes a companion for a
-   * collection that never held them on main; `disable` brings them home and drops the companion.
-   */
-  kind: "enable" | "create-only" | "disable";
+  kind: LocalizationMigrationKind;
   /**
    * Which kind of entity this is, which the transition record is keyed by along with the slug.
    * A collection, a single and a field group may share one slug and only one of them may have
@@ -213,7 +230,9 @@ function isIntentShape(value: unknown): value is LocalizationMigrationIntent {
   if (typeof value !== "object" || value === null) return false;
   const v = value as Record<string, unknown>;
   if (typeof v.version !== "number") return false;
-  if (v.kind !== "enable" && v.kind !== "create-only" && v.kind !== "disable")
+  if (
+    !LOCALIZATION_MIGRATION_KINDS.includes(v.kind as LocalizationMigrationKind)
+  )
     return false;
   if (
     v.entity !== "collection" &&

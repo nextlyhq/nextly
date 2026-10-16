@@ -46,6 +46,7 @@ import {
   parseLocalizationIntent,
   type LocalizationMigrationIntent,
 } from "../../domains/i18n/migration/migration-intent";
+import { sharedFileRecoveryAdvice } from "../../domains/i18n/migration/plan-field-leaves-migration";
 import { assertNoLegacyBookkeeping } from "../../domains/schema/events/legacy-detection";
 import { ensureSchemaEventsTable } from "../../domains/schema/events/schema-events-ddl";
 import { SchemaEventsRepository } from "../../domains/schema/events/schema-events-repository";
@@ -1632,7 +1633,11 @@ export async function runFileMigrations(args: {
         { filename, transaction: m.transaction },
         dialect,
         repo,
-        "rerun"
+        "rerun",
+        // A file moving fields out of translation says exactly how to tell whether it landed.
+        m.localization?.kind === "shared"
+          ? sharedFileRecoveryAdvice(filename, m.localization.spec)
+          : undefined
       );
       const id = await repo.recordStart({
         eventType: "file_apply",
