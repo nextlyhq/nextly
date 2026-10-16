@@ -110,15 +110,17 @@ export default defineConfig(options => [
     tsconfig: "tsconfig.json",
     define: {
       __NEXTLY_ADMIN_VERSION__: JSON.stringify(ADMIN_VERSION),
-      // tsup substitutes `process.env.NODE_ENV` with the ambient value at
-      // build time, and its fallback for an unset NODE_ENV is "development".
-      // Every release build runs with NODE_ENV unset, so every dev-only branch
-      // in src compiled ON in the published dist — most visibly the
-      // `/admin/api/dev-reload` EventSource, which every production admin then
-      // opened (and re-opened: EventSource reconnects) against a route that
-      // only exists in development. An explicit define with a production
-      // default makes the published bundle match how it is consumed; a build
-      // that deliberately wants dev behavior sets NODE_ENV=development itself.
+      // tsup folds `process.env.NODE_ENV` at build time, and its own fallback
+      // for an unset NODE_ENV is "development", so without an explicit value
+      // the published dist is a development build. The outcome that matters:
+      // the error screens' "View technical details" box — the caught error's
+      // message and stack trace — renders under `NODE_ENV === "development"`,
+      // and folding production here is what keeps it out of what production
+      // users are served. An explicit define with a production default keeps
+      // that decision with the repository; a build that deliberately wants
+      // dev behavior sets NODE_ENV=development itself. Whether the
+      // development reload stream opens is the running server's call, not
+      // this define's: the client subscribes only on the server's explicit yes.
       "process.env.NODE_ENV": JSON.stringify(
         process.env.NODE_ENV ?? "production"
       ),
