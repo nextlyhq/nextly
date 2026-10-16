@@ -19,6 +19,11 @@ import { hostname } from "node:os";
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { sql } from "drizzle-orm";
+import { drizzle } from "drizzle-orm/mysql2";
+import type {
+  Connection as CallbackConnection,
+  Pool as CallbackPool,
+} from "mysql2";
 
 import { NextlyError } from "../../../errors";
 
@@ -125,6 +130,76 @@ export async function forceUnlock(
  * `undefined` if wait mode settled without running `fn` (another process applied
  * the migrations while we waited).
  */
+/** A MySQL connection the lock is held on, and how it is given back. */
+interface PinnedMysql {
+  db: PgLike;
+  release: () => void;
+  destroy: () => void;
+}
+
+/**
+ * Takes the connection a MySQL named lock is held on. `GET_LOCK` belongs to the
+ * connection that runs it, and the pool hands out any idle connection, so the
+ * lock and its release must share one connection of their own. A handle with no
+ * pool behind it (a transaction's connection, or a test double) is already a
+ * single connection, and is used as it is.
+ */
+async function pinMysqlConnection(db: unknown): Promise<PinnedMysql> {
+  const client = (db as { $client?: Partial<CallbackPool> }).$client;
+  if (
+    typeof client?.getConnection !== "function" ||
+    typeof client.promise !== "function"
+  ) {
+    return { db: db as PgLike, release: () => {}, destroy: () => {} };
+  }
+  const connection = await client.promise().getConnection();
+  const callback = (connection as unknown as { connection: CallbackConnection })
+    .connection;
+  return {
+    db: drizzle({ client: callback }) as unknown as PgLike,
+    release: () => connection.release(),
+    destroy: () => connection.destroy(),
+  };
+}
+
+/**
+ * Runs `fn` while holding the MySQL named lock, on one connection for the
+ * whole of it. A connection that errs is destroyed rather than released: the
+ * server frees the lock when it sees the connection close, and a pooled
+ * connection that gave the lock back would otherwise keep it.
+ */
+async function withMysqlLock<T>(
+  db: unknown,
+  waitSeconds: number,
+  fn: () => Promise<T>
+): Promise<{ acquired: true; value: T } | { acquired: false }> {
+  const pinned = await pinMysqlConnection(db);
+  try {
+    const acquired = toRows(
+      await pinned.db.execute(
+        sql`SELECT GET_LOCK(${MYSQL_LOCK_NAME}, ${waitSeconds}) AS locked`
+      )
+    );
+    const v = acquired[0]?.locked;
+    if (!(v === 1 || v === true)) {
+      pinned.release();
+      return { acquired: false };
+    }
+    const value = await fn();
+    await pinned.db.execute(sql`SELECT RELEASE_LOCK(${MYSQL_LOCK_NAME})`);
+    pinned.release();
+    return { acquired: true, value };
+  } catch (error) {
+    // Released first, so a handle that is not ours to close does not keep the
+    // lock; a pooled connection is then destroyed, which is what frees it.
+    await pinned.db
+      .execute(sql`SELECT RELEASE_LOCK(${MYSQL_LOCK_NAME})`)
+      .catch(() => undefined);
+    pinned.destroy();
+    throw error;
+  }
+}
+
 /**
  * Whether the guarded body RAN, and its value if it did.
  *
@@ -182,7 +257,6 @@ export async function withMigrateLock<T>(
       }
     }
     case "mysql": {
-      const my = db as PgLike;
       // `GET_LOCK`'s second argument IS the wait: 0 returns immediately, a
       // positive number blocks for that many seconds. Passing 0 unconditionally
       // meant `mode: "wait"` was silently fail-fast on MySQL — it threw
@@ -196,13 +270,8 @@ export async function withMigrateLock<T>(
                 (opts.ttlSeconds ?? DEFAULT_TTL_SECONDS) * 1000) / 1000
             )
           : 0;
-      const acquired = toRows(
-        await my.execute(
-          sql`SELECT GET_LOCK(${MYSQL_LOCK_NAME}, ${waitSeconds}) AS locked`
-        )
-      );
-      const v = acquired[0]?.locked;
-      if (!(v === 1 || v === true)) {
+      const held = await withMysqlLock(db, waitSeconds, fn);
+      if (!held.acquired) {
         // Same split as Postgres: waiting and still not getting it is an
         // OUTCOME the caller decides on; fail-fast is an error.
         if (opts?.mode === "wait") {
@@ -213,11 +282,7 @@ export async function withMigrateLock<T>(
         }
         lockBusy();
       }
-      try {
-        return { ran: true, value: await fn() };
-      } finally {
-        await my.execute(sql`SELECT RELEASE_LOCK(${MYSQL_LOCK_NAME})`);
-      }
+      return { ran: true, value: held.value };
     }
     case "sqlite":
       return { ran: true, value: await fn() };
