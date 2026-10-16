@@ -309,6 +309,29 @@ describe("where Next.js sees the same URL", () => {
 });
 
 describe("a route folder that is a symbolic link", () => {
+  it.runIf(process.platform !== "win32")(
+    "writes nothing when the app folder above it is a link",
+    async () => {
+      const elsewhere = mkdtempSync(join(tmpdir(), "media-routes-elsewhere-"));
+      try {
+        mkdirSync(join(elsewhere, "app"), { recursive: true });
+        symlinkSync(elsewhere, join(cwd, "src"));
+
+        const result = await generateMediaRoutes(cwd, project(true), TEMPLATES);
+
+        expect(readdirSync(join(elsewhere, "app"))).toEqual([]);
+        expect(result.written).toEqual([]);
+        expect(result.skipped.map(entry => entry.path)).toEqual([
+          "src",
+          "src",
+          "src",
+        ]);
+      } finally {
+        rmSync(elsewhere, { recursive: true, force: true });
+      }
+    }
+  );
+
   // Writing through a linked folder would put the route wherever the link
   // points, outside the project; the exclusive write guards only the file.
   it.runIf(process.platform !== "win32")(
@@ -340,6 +363,81 @@ describe("a route folder that is a symbolic link", () => {
       }
     }
   );
+});
+
+describe("what Next.js does and does not route", () => {
+  it("looks through a route group at the end of the URL", async () => {
+    mkdirSync(join(cwd, "src/app/api/health/(ops)"), { recursive: true });
+    writeFileSync(
+      join(cwd, "src/app/api/health/(ops)/route.ts"),
+      "export const GET = () => Response.json({ ok: true });\n"
+    );
+
+    const result = await generateMediaRoutes(cwd, project(true), TEMPLATES);
+
+    expect(result.skipped.map(entry => entry.path)).toEqual([
+      "src/app/api/health/(ops)",
+    ]);
+    expect(() => readFileSync(join(cwd, "src/app", HEALTH))).toThrow();
+  });
+
+  // Private folders, named with a leading underscore, and files in
+  // extensions Next.js does not route by default, answer no URL.
+  it("ignores private folders and files Next.js does not route", async () => {
+    // Under a dynamic child, where a routed handler would clash with the catch-all.
+    mkdirSync(join(cwd, "src/app/api/media/[id]/_fixtures"), {
+      recursive: true,
+    });
+    writeFileSync(
+      join(cwd, "src/app/api/media/[id]/_fixtures/route.ts"),
+      "export const GET = () => new Response();\n"
+    );
+    mkdirSync(join(cwd, "src/app/admin/api/media"), { recursive: true });
+    writeFileSync(
+      join(cwd, "src/app/admin/api/media/route.mjs"),
+      "export const GET = () => new Response();\n"
+    );
+
+    const result = await generateMediaRoutes(cwd, project(true), TEMPLATES);
+
+    expect(result.written).toEqual([
+      `src/app/${ADMIN_MEDIA}`,
+      `src/app/${PUBLIC_MEDIA}`,
+      `src/app/${HEALTH}`,
+    ]);
+    expect(result.skipped).toEqual([]);
+  });
+
+  // A concrete child URL sorts ahead of an optional catch-all, so the two
+  // coexist; a dynamic child at the same level does not.
+  it("writes a catch-all beside a concrete child route, and not beside a dynamic one", async () => {
+    mkdirSync(join(cwd, "src/app/api/media/sign"), { recursive: true });
+    writeFileSync(
+      join(cwd, "src/app/api/media/sign/route.ts"),
+      "export const POST = () => new Response();\n"
+    );
+    mkdirSync(join(cwd, "src/app/admin/api/media/(files)/[id]/thumb"), {
+      recursive: true,
+    });
+    writeFileSync(
+      join(cwd, "src/app/admin/api/media/(files)/[id]/thumb/route.ts"),
+      "export const GET = () => new Response();\n"
+    );
+
+    const result = await generateMediaRoutes(cwd, project(true), TEMPLATES);
+
+    expect(result.written).toEqual([
+      `src/app/${PUBLIC_MEDIA}`,
+      `src/app/${HEALTH}`,
+    ]);
+    // The folder named is the one holding the dynamic child: the route group.
+    expect(result.skipped.map(entry => entry.path)).toEqual([
+      "src/app/admin/api/media/(files)",
+    ]);
+    expect(
+      readFileSync(join(cwd, "src/app/api/media/sign/route.ts"), "utf8")
+    ).toContain("POST");
+  });
 });
 
 describe("a template that no longer imports the config", () => {
