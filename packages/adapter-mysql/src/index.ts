@@ -967,14 +967,12 @@ export class MySqlAdapter extends DrizzleAdapter {
     data: Record<string, unknown>,
     options: UpsertOptions
   ): { where: SQL | undefined; nullKey: boolean } {
+    // MySQL needs every conflict value whether or not it updates: the row is
+    // found by them after a duplicate, so the keep-existing rule applies to
+    // every call here.
+    this.assertUpsertTarget(table, data, options, true);
     const key = this.conflictKey(tableObj, table, options.conflictColumns);
     const values = options.conflictColumns.map(column => data[column]);
-    if (values.some(value => value === undefined)) {
-      throw createDatabaseError({
-        kind: "query",
-        message: `upsert on ${table} needs a value for every conflict column (${options.conflictColumns.join(", ")}).`,
-      });
-    }
     return {
       where: and(...key.map((column, i) => eq(column, values[i] as never))),
       nullKey: values.some(value => value === null),
@@ -998,6 +996,14 @@ export class MySqlAdapter extends DrizzleAdapter {
     const isTarget = (key: readonly string[]) =>
       key.length === names.size && key.every(name => names.has(name));
     const { primary, unique } = keysOf(tableObj);
+    // Every row this upsert returns is read back by its primary key, so a
+    // table without one has no stable way to find the row it wrote.
+    if (primary.length === 0) {
+      throw createDatabaseError({
+        kind: "query",
+        message: `upsert on ${table}: MySQL upserts need a table with a primary key, to read back the row they write.`,
+      });
+    }
     const known = columns.every(column => column !== undefined);
     if (
       !known ||
@@ -1116,7 +1122,14 @@ export class MySqlAdapter extends DrizzleAdapter {
       .insert(tableObj)
       .values(data as never)
       .$returningId()) as Record<string, unknown>[];
-    const identity = this.byIdentity(tableObj, { ...generated, ...data });
+    // A key the caller gave wins; one given as undefined or null does not hide
+    // the value MySQL generated for it.
+    const given = Object.fromEntries(
+      Object.entries(data).filter(
+        ([, value]) => value !== undefined && value !== null
+      )
+    );
+    const identity = this.byIdentity(tableObj, { ...generated, ...given });
     return identity === undefined
       ? undefined
       : this.lockedRow(db, tableObj, identity);
