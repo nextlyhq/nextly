@@ -1,7 +1,9 @@
 import { existsSync } from "fs";
-import { lstat, mkdir, readdir, readFile, writeFile } from "fs/promises";
+import { lstat, mkdir, readdir, readFile, rm, writeFile } from "fs/promises";
 import path from "path";
 import { fileURLToPath } from "url";
+
+import { EXACT_VERSION } from "../utils/template";
 
 import type { GeneratedFiles } from "./generated-files";
 
@@ -107,6 +109,64 @@ export function updateSkillsCommand(version: string): string {
 }
 
 /**
+ * The `nextly` version the project has: the installed package's, or, before
+ * an install, an exact version its package.json names. Null when neither
+ * says, since a range or a dist-tag names no one release.
+ */
+export async function projectNextlyVersion(
+  projectRoot: string
+): Promise<string | null> {
+  const installed = await readJson(
+    path.join(projectRoot, "node_modules", "nextly", "package.json")
+  );
+  if (typeof installed?.version === "string") return installed.version;
+  const manifest = await readJson(path.join(projectRoot, "package.json"));
+  for (const field of ["dependencies", "devDependencies"] as const) {
+    const declared = (manifest?.[field] as Record<string, unknown> | undefined)
+      ?.nextly;
+    if (typeof declared === "string" && EXACT_VERSION.test(declared)) {
+      return declared;
+    }
+  }
+  return null;
+}
+
+/** A JSON file's object, or null when it is missing or not an object. */
+async function readJson(file: string): Promise<Record<string, unknown> | null> {
+  try {
+    const value: unknown = JSON.parse(await readFile(file, "utf8"));
+    return typeof value === "object" && value !== null
+      ? (value as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Why the bundled skills may not be written into a project with `nextly` at
+ * `projectVersion`, or null when they may. They were checked against the
+ * release this CLI belongs to, and a project on another release, or one
+ * whose release cannot be told, could be handed instructions for APIs it does
+ * not have. No install command is given: the right one depends on whether
+ * that release publishes skills at all, which the docs page says.
+ */
+export function skillsVersionMismatch(
+  projectVersion: string | null,
+  skillsVersion: string
+): string | null {
+  if (projectVersion === skillsVersion) return null;
+  const has =
+    projectVersion === null
+      ? "which Nextly release this project uses could not be told"
+      : `this project has nextly ${projectVersion}`;
+  return `No skills for coding agents were added: ${has}, and the skills this create-nextly-app carries were written for ${skillsVersion}. To add skills that match, see ${SKILLS_DOCS}`;
+}
+
+/** The docs page on the skills, which says how to add them for a release. */
+const SKILLS_DOCS = "https://nextlyhq.com/docs/guides/coding-agents";
+
+/**
  * Copies the skills into the project, in both homes. A skill folder the
  * project already has is left exactly as it is, since it may hold the
  * developer's own changes, and the report says how to replace it on purpose.
@@ -135,10 +195,17 @@ export async function writeAgentSkills(
       // Not recursive, so a folder created since the check above is an error
       // here rather than a folder written into.
       await mkdir(target);
-      for (const file of skill.files) {
-        const filePath = path.join(target, file.path);
-        await mkdir(path.dirname(filePath), { recursive: true });
-        await writeFile(filePath, file.content, { flag: "wx" });
+      try {
+        for (const file of skill.files) {
+          const filePath = path.join(target, file.path);
+          await mkdir(path.dirname(filePath), { recursive: true });
+          await writeFile(filePath, file.content, { flag: "wx" });
+        }
+      } catch (error) {
+        // The folder is this run's own, made just above. Left half-written,
+        // a retry would take it for the developer's skill and keep it.
+        await rm(target, { recursive: true, force: true });
+        throw error;
       }
       report.written.push(folder);
     }

@@ -22,9 +22,22 @@ const state = vi.hoisted(() => ({ bundle: "" }));
 const prompts = vi.hoisted(() => ({
   confirm: vi.fn(),
   info: vi.fn(),
+  warn: vi.fn(),
   cancel: vi.fn(),
 }));
-const copyTemplate = vi.hoisted(() => vi.fn(async () => {}));
+// Stands in for the scaffold: a project on this CLI's own release, which is
+// what the skills are written for.
+const copyTemplate = vi.hoisted(() =>
+  vi.fn(async (options: { targetDir: string }) => {
+    const { mkdir, writeFile } = await import("node:fs/promises");
+    const { packageVersion } = await import("../lib/package-version");
+    await mkdir(options.targetDir, { recursive: true });
+    await writeFile(
+      `${options.targetDir}/package.json`,
+      JSON.stringify({ dependencies: { nextly: packageVersion() } })
+    );
+  })
+);
 
 vi.mock("@clack/prompts", () => ({
   intro: vi.fn(),
@@ -35,7 +48,7 @@ vi.mock("@clack/prompts", () => ({
   spinner: () => ({ start: vi.fn(), stop: vi.fn(), message: vi.fn() }),
   log: {
     success: vi.fn(),
-    warn: vi.fn(),
+    warn: prompts.warn,
     info: prompts.info,
     error: vi.fn(),
     message: vi.fn(),
@@ -49,7 +62,10 @@ vi.mock("@nextlyhq/telemetry", () => ({
   capture: vi.fn(),
   classifyError: () => "unknown",
 }));
-vi.mock("../utils/template", () => ({ copyTemplate }));
+vi.mock("../utils/template", async importOriginal => ({
+  ...(await importOriginal<typeof import("../utils/template")>()),
+  copyTemplate,
+}));
 vi.mock("../installers/dependencies", () => ({
   installDependencies: vi.fn(async () => []),
 }));
@@ -96,6 +112,7 @@ vi.mock("../generators/agent-skills", async importOriginal => {
 });
 
 import { createNextly } from "../create-nextly";
+import { packageVersion } from "../lib/package-version";
 
 const SKILL_TEXT = "---\nname: nextly-install\n---\nInstall Nextly.\n";
 
@@ -227,7 +244,9 @@ describe("createNextly and the skills for coding agents", () => {
     );
     await writeFile(
       path.join(app, "package.json"),
-      JSON.stringify({ dependencies: { next: "16.0.0" } })
+      JSON.stringify({
+        dependencies: { next: "16.0.0", nextly: packageVersion() },
+      })
     );
 
     await createNextly({ cwd: app, defaults: true, skipInstall: true });
@@ -252,5 +271,32 @@ describe("createNextly and the skills for coding agents", () => {
 
     expect(copyTemplate).not.toHaveBeenCalled();
     expect(String(prompts.cancel.mock.calls[0]?.[0])).toMatch(/--no-skills/);
+  });
+
+  // A project on another release could be handed instructions for APIs it
+  // does not have, so it gets none, and the run says why and where to look.
+  it("adds none to a project on another Nextly release, and says why", async () => {
+    const app = path.join(dir, "older");
+    await mkdir(path.join(app, "node_modules/nextly"), { recursive: true });
+    await writeFile(
+      path.join(app, "package.json"),
+      JSON.stringify({ dependencies: { next: "16.0.0", nextly: "latest" } })
+    );
+    await writeFile(
+      path.join(app, "node_modules/nextly/package.json"),
+      JSON.stringify({ name: "nextly", version: "0.0.1" })
+    );
+
+    await createNextly({ cwd: app, defaults: true, skipInstall: true });
+
+    expect(await skillsIn(app)).toEqual({});
+    const warned = prompts.warn.mock.calls.map(([message]) => String(message));
+    expect(warned).toContainEqual(
+      expect.stringMatching(
+        new RegExp(
+          `nextly 0\\.0\\.1.*written for ${packageVersion().replace(/\./g, "\\.")}.*nextlyhq\\.com/docs/guides/coding-agents`
+        )
+      )
+    );
   });
 });

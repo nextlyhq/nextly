@@ -22,7 +22,9 @@ import {
   AGENT_SKILL_HOMES,
   type BundledSkill,
   describeWrittenSkills,
+  projectNextlyVersion,
   readBundledSkills,
+  skillsVersionMismatch,
   updateSkillsCommand,
   writeAgentSkills,
 } from "../generators/agent-skills";
@@ -253,5 +255,68 @@ describe("the update command, wherever it is written", () => {
     const text = await readFile(path.join(repository, file), "utf8");
 
     expect(text).toContain(updateSkillsCommand("<version>"));
+  });
+});
+
+describe("projectNextlyVersion", () => {
+  const app = () => path.join(dir, "app");
+  const write = async (file: string, value: unknown) => {
+    await mkdir(path.dirname(path.join(app(), file)), { recursive: true });
+    await writeFile(path.join(app(), file), JSON.stringify(value));
+  };
+
+  it("reads the installed package first", async () => {
+    await write("package.json", { dependencies: { nextly: "1.0.0" } });
+    await write("node_modules/nextly/package.json", { version: "1.2.3" });
+
+    expect(await projectNextlyVersion(app())).toBe("1.2.3");
+  });
+
+  it("reads an exact version the project declares, before an install", async () => {
+    await write("package.json", {
+      devDependencies: { nextly: "0.0.2-alpha.9" },
+    });
+
+    expect(await projectNextlyVersion(app())).toBe("0.0.2-alpha.9");
+  });
+
+  it("names no release for a range, a dist-tag, or nothing at all", async () => {
+    expect(await projectNextlyVersion(app())).toBeNull();
+    await write("package.json", { dependencies: { nextly: "^1.2.3" } });
+    expect(await projectNextlyVersion(app())).toBeNull();
+    await write("package.json", { dependencies: { nextly: "latest" } });
+    expect(await projectNextlyVersion(app())).toBeNull();
+  });
+});
+
+describe("skillsVersionMismatch", () => {
+  it("allows the skills only on their own release", () => {
+    expect(skillsVersionMismatch("1.2.3", "1.2.3")).toBeNull();
+    expect(skillsVersionMismatch("1.2.2", "1.2.3")).toMatch(
+      /nextly 1\.2\.2.*written for 1\.2\.3.*nextlyhq\.com\/docs\/guides\/coding-agents/
+    );
+    expect(skillsVersionMismatch(null, "1.2.3")).toMatch(/could not be told/);
+  });
+});
+
+describe("a skill that cannot be written whole", () => {
+  it("leaves no folder behind for a retry to mistake for the developer's", async () => {
+    const project = path.join(dir, "app");
+    await mkdir(project);
+    // `notes` is written as a file, so `notes/more.md` cannot be.
+    const broken = {
+      name: "nextly-install",
+      files: [
+        { path: "SKILL.md", content: Buffer.from("install") },
+        { path: "notes", content: Buffer.from("a file") },
+        { path: "notes/more.md", content: Buffer.from("more") },
+      ],
+    };
+
+    await expect(
+      writeAgentSkills(project, [broken], "1.2.3")
+    ).rejects.toThrow();
+
+    expect(await readdir(path.join(project, ".agents/skills"))).toEqual([]);
   });
 });

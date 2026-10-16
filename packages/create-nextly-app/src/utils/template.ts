@@ -1303,7 +1303,7 @@ export async function generatePackageJson(
 const CARET_VERSION = /^\^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
 
 /** One complete version, as a package.json `version` holds it: `0.0.2-alpha.66`. */
-const EXACT_VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
+export const EXACT_VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
 
 /**
  * This CLI's version, and whether the scaffold pins to it. See

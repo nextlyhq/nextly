@@ -188,10 +188,10 @@ pin.
 
 ## Skills for Nextly tasks
 
-Unless this project was created with `--no-skills`, `.agents/skills/` holds
-skills for common Nextly tasks, and `.claude/skills/` holds the same files for
-Claude Code. Load the one that matches a task before starting it. They were
-written for the Nextly release this project was created with.
+If this project has `.agents/skills/`, it holds skills for common Nextly
+tasks, and `.claude/skills/` holds the same files for Claude Code. Load the
+one that matches a task before starting it. They were written for the Nextly
+release this project was created with.
 
 To bring them up to the release now installed, or to add them to a project
 without them, run this with the version `{{execCommand}} nextly --version` prints:

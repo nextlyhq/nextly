@@ -10,7 +10,9 @@ import { generateAdminPage } from "./generators/admin";
 import {
   type BundledSkill,
   describeWrittenSkills,
+  projectNextlyVersion,
   readBundledSkills,
+  skillsVersionMismatch,
   writeAgentSkills,
 } from "./generators/agent-skills";
 import { generateConfig } from "./generators/config";
@@ -589,6 +591,7 @@ export async function createNextly(
     const reported: GeneratedFiles[] = [];
     // Its written folders are said in one line, below, rather than one each.
     let skillsReport: GeneratedFiles | null = null;
+    let skillsMismatch: string | null = null;
     try {
       if (!isFreshProject) {
         // Existing project: generate Nextly config files
@@ -610,18 +613,28 @@ export async function createNextly(
         await generateEnv(cwd, envDatabase);
       }
       if (agentSkills.length > 0) {
-        skillsReport = await writeAgentSkills(
-          cwd,
-          agentSkills,
+        // Written only into a project on this CLI's own release, which is
+        // what they were checked against; after the install, so the release
+        // read is the one installed.
+        skillsMismatch = skillsVersionMismatch(
+          await projectNextlyVersion(cwd),
           packageVersion()
         );
-        reported.push({ ...skillsReport, written: [] });
+        if (skillsMismatch === null) {
+          skillsReport = await writeAgentSkills(
+            cwd,
+            agentSkills,
+            packageVersion()
+          );
+          reported.push({ ...skillsReport, written: [] });
+        }
       }
       s.stop("Environment configured");
       // After the spinner stops, so the line is not drawn over.
       if (nextConfigPatch) printNextConfigPatch(nextConfigPatch);
       const skillsLine = skillsReport && describeWrittenSkills(skillsReport);
       if (skillsLine) p.log.info(skillsLine);
+      if (skillsMismatch) p.log.warn(skillsMismatch);
       for (const files of reported) {
         for (const written of files.written) p.log.info(`Wrote ${written}`);
         for (const { path: changed, added } of files.changed)
