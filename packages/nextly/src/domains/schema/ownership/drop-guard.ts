@@ -396,18 +396,6 @@ const MODELLED_CLAUSE_WORDS = new Set([
   "DETACH",
 ]);
 
-/** The words an ADD clause starts with that add no column. */
-const ELEMENT_ADD_WORDS = new Set([
-  "PRIMARY",
-  "FOREIGN",
-  "UNIQUE",
-  "CHECK",
-  "INDEX",
-  "KEY",
-  "PARTITION",
-  "EXCLUDE",
-]);
-
 /** The act a refusal of an unmodelled form takes. */
 const UNMODELLED_ACT = "use a form the guard cannot read";
 
@@ -724,6 +712,8 @@ class DropReader {
    * fails closed on them: a foreign one is refused, naming it.
    */
   readonly unmodelled: string[] = [];
+  /** Every table an ALTER TABLE names, which may be an index's name. */
+  readonly alterTargets: string[] = [];
   /** Columns this list adds to a table, which it may then change. */
   readonly addedColumns: TakenColumn[] = [];
   /** Constraints this list adds to a table, which it may then change. */
@@ -873,6 +863,11 @@ class DropReader {
       table: this.renamedFrom.get(table.name) ?? table.name,
       column,
     });
+  }
+
+  /** Records a table an ALTER TABLE names. */
+  targetAltered(table: string): void {
+    this.alterTargets.push(table);
   }
 
   /** Records a column this list adds to a table. */
@@ -1650,6 +1645,7 @@ class StatementWalk {
     const tableAt = this.alteredTableAt(at);
     if (tableAt === undefined) return;
     const table = this.qualifiedName(tableAt);
+    if (table !== undefined) this.reader.targetAltered(table.name);
     const clausesAt = this.pastDescendants(table?.next ?? tableAt + 1);
     for (const clause of this.clauseStarts(clausesAt)) {
       this.readAddedClause(table, clause);
@@ -1895,21 +1891,19 @@ class StatementWalk {
       if (name !== undefined) this.reader.addElement(table, name, "constraint");
       return;
     }
-    if (ELEMENT_ADD_WORDS.has(first)) return;
+    if (NON_COLUMN_ELEMENTS.has(first)) return;
     const k = first === "COLUMN" ? at + 2 : at + 1;
-    const column = this.addedColumnNameAt(k);
+    // A conditional add may be a no-op on a column that already exists, so
+    // it is not credited to this list.
+    if (
+      this.word(k) === "IF" &&
+      this.word(k + 1) === "NOT" &&
+      this.word(k + 2) === "EXISTS"
+    ) {
+      return;
+    }
+    const column = this.nameAt(k);
     if (column !== undefined) this.reader.addColumn(table, column);
-  }
-
-  /** The column named at `k`, past `IF NOT EXISTS` when it is there. */
-  private addedColumnNameAt(at: number): string | undefined {
-    const k =
-      this.word(at) === "IF" &&
-      this.word(at + 1) === "NOT" &&
-      this.word(at + 2) === "EXISTS"
-        ? at + 3
-        : at;
-    return this.nameAt(k);
   }
 
   /**
@@ -2881,6 +2875,7 @@ type Reading = Pick<
   | "unmodelled"
   | "addedColumns"
   | "addedElements"
+  | "alterTargets"
   | "rebuilt"
   | "relationRenames"
   | "changed"
@@ -3666,9 +3661,12 @@ export function indexesNamedWithoutTable(
   dialect: SupportedDialect
 ): string[] {
   const read = readAsIfNoTableExisted(statements, dialect);
-  return [...(read?.elements ?? []), ...(read?.alteredElements ?? [])]
-    .filter(element => element.table === undefined)
-    .map(element => element.name);
+  return [
+    ...[...(read?.elements ?? []), ...(read?.alteredElements ?? [])]
+      .filter(element => element.table === undefined)
+      .map(element => element.name),
+    ...(read?.alterTargets ?? []),
+  ];
 }
 
 /**
@@ -4724,9 +4722,7 @@ function refuseTablesNamingIndexes(
     liveIndexTables?: ReadonlyMap<string, string>;
   }
 ): void {
-  for (const { table, act } of read.changed) {
-    if (act === "change the storage of") refuseIndexNamed(table, args);
-  }
+  for (const table of read.alterTargets) refuseIndexNamed(table, args);
   for (const table of read.unmodelled) refuseIndexNamed(table, args);
 }
 
