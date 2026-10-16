@@ -14,7 +14,6 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
-import type { SingleEntryService } from "../../singles/services/single-entry-service";
 import {
   registerVersionPinHolder,
   versionPinHolderNames,
@@ -256,7 +255,7 @@ describe.each(getConfiguredTestDialects())(
         }
       );
       await current
-        .getService<SingleEntryService>("singleEntryService")
+        .getService("singleEntryService")
         .update(slug, { heading: "v1" }, { overrideAccess: true });
       const [version] = (
         await current.adapter.select<{ scopeSlug: string; entryId: string }>(
