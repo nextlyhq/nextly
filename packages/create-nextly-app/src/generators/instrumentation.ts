@@ -134,7 +134,8 @@ export async function generateInstrumentation(
     result.skipped.push({
       path: nextConfig?.name ?? "next.config.js",
       why: "Next.js 14 runs instrumentation.ts only when the config opts in, and the config was left as it is",
-      toAdd: "experimental: { instrumentationHook: true },",
+      toAdd:
+        "Add instrumentationHook: true inside the config's experimental object, beside any keys it already has, or add the object when there is none:\n\nexperimental: { instrumentationHook: true },",
     });
   }
 
