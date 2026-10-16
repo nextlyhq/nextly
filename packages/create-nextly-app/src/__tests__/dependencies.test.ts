@@ -8,6 +8,10 @@
  * `@tanstack/react-query`, and neither can come from the yalc store, so a yalc
  * install that only runs `yalc add` leaves those peers unresolved.
  */
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { installDependencies } from "../installers/dependencies";
@@ -146,6 +150,35 @@ describe("installDependencies (existing project, what reading the config needs)"
       expect(devInstall?.[1]).toContain("esbuild@^0.28.1");
     }
   );
+
+  // An app may already require esbuild itself, in dependencies when production
+  // runs migrations on boot. A --save-dev install would move it to
+  // devDependencies, where a production install omits it.
+  it("leaves an esbuild the app already declares as it is", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "nextly-deps-"));
+    try {
+      await writeFile(
+        join(dir, "package.json"),
+        JSON.stringify({ dependencies: { esbuild: "^0.25.0" } }) + "\n"
+      );
+
+      await installDependencies(
+        dir,
+        { packageManager: "npm" } as ProjectInfo,
+        database,
+        false,
+        false
+      );
+
+      expect(
+        execa.mock.calls.some(([, args]: [string, string[]]) =>
+          args.some(arg => arg.startsWith("esbuild"))
+        )
+      ).toBe(false);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
 
   it.each(["pnpm", "bun"] as const)(
     "approves %s's native builds before anything is installed",

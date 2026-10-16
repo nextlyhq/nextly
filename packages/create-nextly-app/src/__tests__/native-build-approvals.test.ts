@@ -8,7 +8,7 @@
  * the file the project ends up with: its own settings, choices and comments
  * must survive, and only Nextly's packages may change.
  */
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -43,7 +43,7 @@ minimumReleaseAgeExclude:
   - next@16.4.2
 `;
 
-describe("approveNativeBuilds on pnpm 11 and later", () => {
+describe("approveNativeBuilds on pnpm 10.26 and later", () => {
   it("adds Nextly's packages to the app's existing allowBuilds map, keeping everything else", async () => {
     await writeFile(workspaceFile(), CREATE_NEXT_APP_WORKSPACE);
 
@@ -63,9 +63,8 @@ describe("approveNativeBuilds on pnpm 11 and later", () => {
       "next@16.4.2",
     ]);
     expect(written).toContain("# project note: keep this");
-    // Only the packages it approved are listed for pnpm 10.6+, never one the
-    // app set to false.
-    expect(yaml.onlyBuiltDependencies).toEqual(["better-sqlite3", "esbuild"]);
+    // pnpm 11 removed onlyBuiltDependencies, so it isn't written for pnpm 12.
+    expect(yaml.onlyBuiltDependencies).toBeUndefined();
     // It says what it changed, and what it left.
     expect(notes.join("\n")).toMatch(/better-sqlite3.*esbuild/);
     expect(notes.join("\n")).toMatch(/sharp/);
@@ -98,6 +97,32 @@ describe("approveNativeBuilds on pnpm 11 and later", () => {
       esbuild: true,
       sharp: true,
     });
+    expect(yaml.onlyBuiltDependencies).toBeUndefined();
+  });
+
+  it("uses allowBuilds from pnpm 10.26, where it was added", async () => {
+    await approveNativeBuilds(dir, "pnpm", "10.26.0");
+
+    const yaml = await readWorkspace();
+    expect(yaml.allowBuilds).toMatchObject({ esbuild: true });
+    expect(yaml.onlyBuiltDependencies).toBeUndefined();
+  });
+
+  // pnpm decides a package's build by its version-scoped key too
+  // (`nx@21.6.4 || 21.6.5: true` in its docs). A bare key added beside an
+  // app's scoped one would widen what the app trusts to every version.
+  it("keeps an app's version-scoped approval and adds no bare key beside it", async () => {
+    await writeFile(workspaceFile(), "allowBuilds:\n  esbuild@0.28.1: true\n");
+
+    const notes = await approveNativeBuilds(dir, "pnpm", "12.5.1");
+
+    const yaml = await readWorkspace();
+    expect(yaml.allowBuilds).toEqual({
+      "esbuild@0.28.1": true,
+      "better-sqlite3": true,
+      sharp: true,
+    });
+    expect(notes.join("\n")).toMatch(/esbuild@0\.28\.1/);
   });
 
   it("changes nothing and says nothing on a second run", async () => {
@@ -112,8 +137,41 @@ describe("approveNativeBuilds on pnpm 11 and later", () => {
   });
 });
 
+// From pnpm 12.11, an entry in `permissions` outranks the package's
+// allowBuilds entry, and pnpm's own approval writes there once the file has
+// the section (pnpm.io/settings/build, read 2026-10-16).
+describe("approveNativeBuilds on pnpm 12.11 and later", () => {
+  it("approves in permissions when the app's file has that section", async () => {
+    await writeFile(
+      workspaceFile(),
+      "permissions:\n  drizzle-kit:\n    skills: true\n  esbuild:\n    build: false\nallowBuilds:\n  sharp: true\n"
+    );
+
+    const notes = await approveNativeBuilds(dir, "pnpm", "12.11.2");
+
+    const yaml = await readWorkspace();
+    expect(yaml.permissions).toEqual({
+      // An entry without a build decision gains one; a denial is kept.
+      "drizzle-kit": { skills: true },
+      esbuild: { build: false },
+      "better-sqlite3": { build: true },
+    });
+    // sharp was decided in allowBuilds and nothing in permissions outranks it.
+    expect(yaml.allowBuilds).toEqual({ sharp: true });
+    expect(notes.join("\n")).toMatch(/Left esbuild/);
+  });
+
+  it("approves in allowBuilds when the file has no permissions section", async () => {
+    await approveNativeBuilds(dir, "pnpm", "12.11.2");
+
+    const yaml = await readWorkspace();
+    expect(yaml.permissions).toBeUndefined();
+    expect(yaml.allowBuilds).toMatchObject({ esbuild: true });
+  });
+});
+
 describe("approveNativeBuilds on pnpm 10", () => {
-  it("lists them in pnpm-workspace.yaml for pnpm 10.6 and later", async () => {
+  it("lists them in onlyBuiltDependencies for pnpm 10.6 to 10.25", async () => {
     await writeFile(
       workspaceFile(),
       "onlyBuiltDependencies:\n  - some-app-native-dep\n"
@@ -128,6 +186,18 @@ describe("approveNativeBuilds on pnpm 10", () => {
       "esbuild",
       "sharp",
     ]);
+    // allowBuilds arrived in pnpm 10.26, so 10.18 would not read it.
+    expect(yaml.allowBuilds).toBeUndefined();
+  });
+
+  it("keeps a package the app's pnpm 10 settings never build", async () => {
+    await writeFile(workspaceFile(), "neverBuiltDependencies:\n  - esbuild\n");
+
+    await approveNativeBuilds(dir, "pnpm", "10.18.3");
+
+    const yaml = await readWorkspace();
+    expect(yaml.onlyBuiltDependencies).toEqual(["better-sqlite3", "sharp"]);
+    expect(yaml.neverBuiltDependencies).toEqual(["esbuild"]);
   });
 
   it("lists them in package.json for pnpm 10.0 to 10.5, which read only that", async () => {
@@ -235,4 +305,52 @@ describe("approveNativeBuilds on npm and Yarn", () => {
       expect(existsSync(workspaceFile())).toBe(false);
     }
   );
+});
+
+// An app inside a monorepo is one package of a workspace whose settings live at
+// its root. A workspace file written into the app's own folder would make it a
+// workspace of its own, cut off from the root's lockfile and workspace: links.
+describe("approveNativeBuilds inside a monorepo", () => {
+  it("edits the pnpm workspace root's file, and writes none in the app", async () => {
+    await writeFile(workspaceFile(), "packages:\n  - apps/*\n");
+    const app = join(dir, "apps", "web");
+    await mkdir(app, { recursive: true });
+
+    await approveNativeBuilds(app, "pnpm", "12.5.1");
+
+    expect(existsSync(join(app, "pnpm-workspace.yaml"))).toBe(false);
+    const yaml = await readWorkspace();
+    expect(yaml.packages).toEqual(["apps/*"]);
+    expect(yaml.allowBuilds).toMatchObject({ esbuild: true });
+  });
+
+  it("adds to the Bun workspace root's trustedDependencies", async () => {
+    await writeFile(
+      join(dir, "package.json"),
+      JSON.stringify(
+        {
+          name: "root",
+          workspaces: ["apps/*"],
+          trustedDependencies: ["sharp"],
+        },
+        null,
+        2
+      ) + "\n"
+    );
+    const app = join(dir, "apps", "web");
+    await mkdir(app, { recursive: true });
+    await writeFile(join(app, "package.json"), '{"name":"web"}\n');
+
+    await approveNativeBuilds(app, "bun", undefined);
+
+    const root = JSON.parse(await readFile(join(dir, "package.json"), "utf8"));
+    expect(root.trustedDependencies).toEqual([
+      "sharp",
+      "better-sqlite3",
+      "esbuild",
+    ]);
+    expect(await readFile(join(app, "package.json"), "utf8")).toBe(
+      '{"name":"web"}\n'
+    );
+  });
 });

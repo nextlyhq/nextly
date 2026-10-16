@@ -1,4 +1,7 @@
+import path from "path";
+
 import { execa } from "execa";
+import fs from "fs-extra";
 
 import type {
   DatabaseConfig,
@@ -210,13 +213,53 @@ async function installIntoExistingApp(
   } else {
     await runInstall(INSTALL_COMMANDS[pm], allPackages, cwd);
   }
-  await runInstall(
-    DEV_INSTALL_COMMANDS[pm],
-    [...CONFIG_TOOLING_DEV_DEPENDENCIES],
-    cwd
-  );
+  const tooling = await notYetDeclared(cwd, CONFIG_TOOLING_DEV_DEPENDENCIES);
+  if (tooling.length > 0) {
+    await runInstall(DEV_INSTALL_COMMANDS[pm], tooling, cwd);
+  }
   return notes;
 }
+
+/**
+ * The specifiers whose package the app's package.json does not declare yet.
+ * One it declares stays as the app wrote it: an app that runs migrations on
+ * boot keeps esbuild in `dependencies`, and a `--save-dev` install would move
+ * it to `devDependencies`, which a production install omits.
+ */
+async function notYetDeclared(
+  cwd: string,
+  specifiers: readonly string[]
+): Promise<string[]> {
+  const declared = new Set<string>();
+  try {
+    const pkg = (await fs.readJson(path.join(cwd, "package.json"))) as Record<
+      string,
+      unknown
+    >;
+    for (const field of DEPENDENCY_FIELDS) {
+      const deps = pkg[field];
+      if (deps && typeof deps === "object") {
+        for (const name of Object.keys(deps)) declared.add(name);
+      }
+    }
+  } catch {
+    // No readable package.json: nothing is declared, so everything is added.
+  }
+  return specifiers.filter(spec => !declared.has(packageName(spec)));
+}
+
+const DEPENDENCY_FIELDS = [
+  "dependencies",
+  "devDependencies",
+  "optionalDependencies",
+  "peerDependencies",
+] as const;
+
+/** `esbuild@^0.28.1` → `esbuild`; `@scope/pkg@1` → `@scope/pkg`. */
+const packageName = (specifier: string): string => {
+  const at = specifier.lastIndexOf("@");
+  return at > 0 ? specifier.slice(0, at) : specifier;
+};
 
 async function installWithYalc(
   cwd: string,
