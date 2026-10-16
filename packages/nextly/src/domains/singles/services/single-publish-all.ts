@@ -37,6 +37,7 @@ import {
   type CallerGrants,
 } from "../../../shared/lib/field-level-registry";
 import type { Logger } from "../../../shared/types";
+import { entryWriteContext } from "../../collections/services/stored-field-read";
 import { readComponentSubtrees } from "../../field-groups/read-component-subtrees";
 import { readCompanionLocaleStatusAll } from "../../i18n/companion-join";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
@@ -592,6 +593,15 @@ export class SinglePublishAllService extends BaseService {
     await assertDraftsMayBePromoted(pending, {
       slug,
       entryId: existingDoc.id,
+      write: entryWriteContext({
+        kind: "single",
+        slug,
+        connection: {
+          db: tx,
+          executor: tx.getDrizzle(),
+          defaultLocale: this.localization?.defaultLocale ?? null,
+        },
+      }),
       fields: fieldConfigs,
       user: options.user,
       overrideAccess: options.overrideAccess,

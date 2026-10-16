@@ -324,29 +324,7 @@ You can also register **multiple plugins** in the `storage` array if different c
 
 ## Named image sizes
 
-Nextly can automatically generate resized image variants for every uploaded image, using `sharp`. Configure them in `nextly.config.ts` (code-first), through the admin Settings page (UI), or both -- the runtime de-dupes by `name` and keeps both sets queryable.
-
-### Code-first configuration
-
-```typescript
-// nextly.config.ts
-import { defineConfig } from "nextly/config";
-
-export default defineConfig({
-  media: {
-    imageSizes: [
-      { name: "thumbnail", width: 150, height: 150, fit: "cover", format: "webp", quality: 80 },
-      { name: "small", width: 480, fit: "inside", format: "auto", quality: 80 },
-      { name: "medium", width: 768, fit: "inside", format: "auto", quality: 80 },
-      { name: "large", width: 1200, fit: "inside", format: "auto", quality: 80 },
-      { name: "og", width: 1200, height: 630, fit: "cover", format: "jpeg", quality: 90 },
-    ],
-  },
-  storage: [
-    // ... your storage config
-  ],
-});
-```
+Nextly can automatically generate resized image variants for every uploaded image, using `sharp`. Manage the sizes in the admin (**Settings -> Image Sizes**) or through the REST endpoints below. `nextly.config.ts` has no option for them: a `media` key there is a type error and is not read.
 
 ### Size options
 
@@ -361,7 +339,7 @@ export default defineConfig({
 
 ### Visual configuration
 
-Go to **Settings -> Image Sizes** in the admin panel to manage sizes through the UI. Code-defined sizes appear as read-only; UI-created sizes are fully editable.
+Go to **Settings -> Image Sizes** in the admin panel to add, edit and remove sizes.
 
 ### REST endpoints
 

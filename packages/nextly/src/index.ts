@@ -526,6 +526,9 @@ export {
   type PluginEmailTemplate,
   type PluginFieldType,
   type PluginFieldValidateArgs,
+  type PluginFieldWrite,
+  type PluginStoredValue,
+  type PluginStoredValueTarget,
   type PluginFieldInstance,
   type PluginFieldIssue,
   type PluginFieldValidationResult,
@@ -597,6 +600,35 @@ export type {
   LimitTarget,
   PluginLimiter,
 } from "./domains/limits/plugin-limiter";
+
+// @experimental Widgets declared once with `defineWidget()`, which a plugin
+// contributes under `contributes.dashboard`: the declaration, its setting
+// builders (as `widgetSettings`, since `settings` alone would read as the
+// site's own settings here), and the types a widget's component is written
+// against. Startup checks every declaration and reports each fault; the data
+// code stays on the server, and the admin is sent data only.
+export {
+  defineWidget,
+  settings as widgetSettings,
+  type AnyWidget,
+  type ComponentDisplay,
+  type ContentQuery,
+  type CoreDisplay,
+  type CoreWidgetId,
+  type DashboardContribution,
+  type DateRange,
+  type ChartStyle,
+  type WidgetComponentMap,
+  type WidgetData,
+  type WidgetDataInput,
+  type WidgetDisplay,
+  type WidgetEmpty,
+  type WidgetFilter,
+  type WidgetProps,
+  type WidgetReadServices,
+  type WidgetRenderSize,
+  type WidgetWidth,
+} from "./domains/widgets/declaration/public";
 
 // The widget domain's public surface: the registry every core and
 // plugin-contributed widget shares, the source registry a query names, and

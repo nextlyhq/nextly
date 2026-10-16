@@ -40,10 +40,10 @@ working on an app.
 
 - **Plugin APIs come from `@nextlyhq/plugin-sdk`; schema APIs come from
   `nextly/config`.** The SDK is the stability boundary for everything a plugin
-  does AS a plugin: `definePlugin`, `registerComponents` and
-  `registerKnownPlugin` from `@nextlyhq/plugin-sdk/admin`, `createTestNextly`
-  from `@nextlyhq/plugin-sdk/testing`, field factories, `pluginField`,
-  `NextlyError`. Collections and singles are defined the same way an app defines
+  does AS a plugin: `definePlugin`, field factories, `pluginField` and
+  `NextlyError` from `@nextlyhq/plugin-sdk`; `registerComponents` and
+  `registerKnownPlugin` from `@nextlyhq/plugin-sdk/admin`; `createTestNextly`
+  from `@nextlyhq/plugin-sdk/testing`. Collections and singles are defined the same way an app defines
   them, with `defineCollection` from `nextly/config` — which is what
   `src/collections/example.ts` does.
 
@@ -73,6 +73,8 @@ in-memory SQLite with your plugin registered, so a test exercises the same
 lifecycle a host would run:
 
 ```ts
+import { createTestNextly } from "@nextlyhq/plugin-sdk/testing";
+
 const t = await createTestNextly({ plugins: [myPlugin()] });
 ```
 

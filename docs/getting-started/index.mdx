@@ -41,10 +41,12 @@ Create and modify collections visually through the admin panel at `/admin`. The 
 
 Regardless of how you create a collection, you query it the same way:
 
-```typescript title="app/blog/page.tsx"
-import { nextly } from "nextly";
+```typescript title="src/app/blog/page.tsx"
+import nextlyConfig from "../../../nextly.config";
+import { getNextly } from "nextly";
 
 export default async function BlogPage() {
+  const nextly = await getNextly({ config: nextlyConfig });
   const { items: posts } = await nextly.find({
     collection: "posts",
     limit: 10,
@@ -81,7 +83,6 @@ Fields define the shape of your content. Nextly ships eighteen field types organ
 - **Layout:** [`repeater`](/docs/configuration/fields#repeater), [`group`](/docs/configuration/fields#group)
 - **Component:** [`component`](/docs/configuration/fields#component)
 - **Advanced:** [`json`](/docs/configuration/fields#json)
-- **Virtual:** [`join`](/docs/configuration/fields#join)
 
 See [Fields](/docs/configuration/fields) for every option per field with examples.
 
@@ -95,7 +96,7 @@ Nextly includes a full admin interface at `/admin` with role-based access contro
 
 ## Prerequisites
 
-- **Node.js 20** or later
+- **Node.js** `^20.19.0 || ^22.12.0 || >=24.0.0` (Node 23 and Node 20 before 20.19 are not supported)
 - **Next.js 16+** (App Router required)
 - **React 19+**
 - **TypeScript 5+**
@@ -105,6 +106,6 @@ Nextly includes a full admin interface at `/admin` with role-based access contro
 ## Next Steps
 
 - [Installation](/docs/getting-started/installation) -- Install Nextly in your project
-- [Quick Start](/docs/getting-started/quick-start) -- Build a blog in 5 minutes
+- [Quick Start](/docs/getting-started/quick-start) -- Build a blog, step by step
 - [Project Structure](/docs/getting-started/project-structure) -- Understand how a Nextly project is organised
 - [Configuration](/docs/configuration) -- Full configuration reference for collections, singles, and fields

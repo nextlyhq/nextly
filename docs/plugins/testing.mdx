@@ -33,6 +33,8 @@ other.
 
 ## A plugin that declares raw SQL
 
+> **Needs the release after 0.0.2-alpha.66.**
+
 An app lists the plugins it allows raw SQL in `db.rawSqlPlugins`, and the boot
 refuses a plugin that declares `capabilities.db.rawSql` without being listed.
 `createTestNextly` has no `nextly.config.ts`, so it takes the listing as its
@@ -45,7 +47,7 @@ import { createTestNextly } from "@nextlyhq/plugin-sdk/testing";
 const reportsPlugin = definePlugin({
   name: "@acme/nextly-reports",
   version: "1.0.0",
-  nextly: ">=0.0.2-alpha.63",
+  nextly: ">=0.0.2-alpha.67",
   capabilities: { db: { rawSql: true } },
 });
 

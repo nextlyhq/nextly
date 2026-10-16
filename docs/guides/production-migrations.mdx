@@ -3,6 +3,8 @@ title: Production migrations
 description: Ship database schema changes to production safely with the Nextly migration CLI. Forward-only model, GitHub Actions, Vercel build step, and other-platform patterns.
 ---
 
+> **Parts of this page need the release after 0.0.2-alpha.66:** `nextly users:clear-plaintext-passwords`, the `--plugin` and `--no-transaction` flags, the `unfinished` state, `REFUSED_STATEMENT`, the retired auth-table variables, and the sections marked below.
+
 Nextly's schema-evolution model splits responsibilities cleanly between development and production:
 
 - **Local development:** `next dev` + Nextly's HMR pipeline auto-applies schema changes as you edit `nextly.config.ts`.
@@ -42,7 +44,7 @@ Global flags inherited from the root `nextly` command: `--config <path>` (custom
 - `nextly migrate:resolve` -- exactly one of `--applied <file>`, `--rolled-back <file>`, `--failed-cleanup <file>`; `--skip-verify` (with `--applied`, skip the live-vs-snapshot check; a file with no snapshot is recorded without it when it is marked `-- nextly:no-transaction`, or on MySQL when its newest attempt failed or never finished).
 - `nextly migrate:fresh` -- `-f, --force` (skip confirmation), `--seed` (run seeders after migrations).
 - `nextly migrate:down` -- `--step <n>` (roll back the last N migrations), `--allow-data-loss` (required when the DOWN drops a table or column), `--yes` (required in production), `--dry-run` (show targets + DOWN SQL without executing), `--plugin <name>` (roll back that plugin's modules instead of the app's files), `--force-unlock`.
-- `nextly users:clear-plaintext-passwords` -- `--apply` (clear the values and end those accounts' sessions, an access token already issued lasting until it expires; without it the command only counts them), `--confirm-default-hasher` (required with `--apply`: your statement that no stored password was written by a custom `passwordHasher`, now or earlier).
+- `nextly users:clear-plaintext-passwords` -- `--apply` (clear the values and end those accounts' sessions, an access token already issued being refused within about ten seconds; without it the command only counts them), `--confirm-default-hasher` (required with `--apply`: your statement that no stored password was written by a custom `passwordHasher`, now or earlier).
 
 ---
 
@@ -295,6 +297,8 @@ Specific examples:
 
 ## What a migration file may contain
 
+> **Needs the release after 0.0.2-alpha.66.**
+
 Every migration file, plugin module and `-- DOWN` section runs as **one
 transaction on one database connection**, which the runner opens and commits
 itself, unless it is [marked to run outside one](#running-a-file-outside-a-transaction).
@@ -428,6 +432,8 @@ refused, because the check cannot read a string as code: write the body with
 `$$ … $$`.
 
 ### Foreign keys on SQLite
+
+> **Needs the release after 0.0.2-alpha.66.**
 
 **On SQLite, foreign-key enforcement is off while a file runs, and checked before
 it commits.** The runner sets `PRAGMA foreign_keys = OFF` before the transaction,
@@ -616,6 +622,8 @@ judged safe. Read the whole list before setting it.
 
 ## Clearing passwords stored as typed
 
+> **Needs the release after 0.0.2-alpha.66.**
+
 Earlier releases stored some passwords as they were typed instead of hashing them: a
 password of 32 characters or more that contained a colon, given when an account was
 created, and any value sent to `PATCH /api/users/:id/password`. Such a value never let
@@ -656,8 +664,9 @@ nextly users:clear-plaintext-passwords --apply --confirm-default-hasher
 Without `--confirm-default-hasher`, `--apply` changes nothing and exits with an error.
 
 For each such account it removes the stored value and ends its sessions: none of them can
-be renewed, and an access token already issued stays valid until it expires, within
-fifteen minutes by default. It prints only counts, never an address or a value, and a second run finds nothing
+be renewed, and an access token already issued is refused within about ten seconds, as
+[a session's account is checked](/docs/guides/authentication#when-an-account-may-hold-a-session).
+It prints only counts, never an address or a value, and a second run finds nothing
 left to change. Accounts with a proper password, and accounts without one, are left as
 they are.
 
@@ -754,6 +763,8 @@ previous one. Examples:
 The audit trail in `nextly_schema_events` keeps both rows, so post-incident review can see exactly what was applied when, and by which CI job.
 
 ## Plugins with tables of their own
+
+> **Needs the release after 0.0.2-alpha.66.**
 
 ### The phase order
 

@@ -34,7 +34,10 @@ import {
   declaredFieldNames,
   resolvePromotedDocument,
 } from "../../../shared/lib/denied-change";
-import { validateEntryData } from "../../../shared/lib/entry-validation";
+import {
+  validateEntryData,
+  type EntryWriteContext,
+} from "../../../shared/lib/entry-validation";
 import {
   applyFieldWriteAccess,
   attachFieldValidators,
@@ -54,6 +57,13 @@ export interface PromotableDraft {
 export interface PromoteGateContext {
   slug: string;
   entryId: string;
+  /**
+   * The write the promotion is part of, for the field types that judge a value
+   * against stored rows. Built on the PROMOTING transaction, for the reason
+   * `grants` is resolved before it: a pooled read issued while the transaction
+   * holds a connection waits for that connection on a small pool.
+   */
+  write?: EntryWriteContext;
   fields: FieldConfig[];
   user?: Record<string, unknown>;
   overrideAccess?: boolean;
@@ -264,6 +274,7 @@ async function assertSchemaStillAccepts(
       req: ctx.user ? { user: ctx.user } : {},
       localizedFieldNames: ctx.localizedFieldNames,
       enforceLocalizedRequired: ctx.enforceLocalizedRequired,
+      ...(ctx.write === undefined ? {} : { write: ctx.write }),
     }
   );
   if (issues.length > 0) {

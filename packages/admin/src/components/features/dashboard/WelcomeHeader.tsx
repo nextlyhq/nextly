@@ -9,6 +9,16 @@ function getFirstName(name: string | undefined | null): string {
 }
 
 /**
+ * The id of the dashboard's level-one heading.
+ *
+ * Exported so the widget grid can send focus here when a notice it showed
+ * closes: the heading is the one landmark every state of the page draws, so a
+ * reader whose focused element just went away lands at the top of what they
+ * were reading rather than on `body`.
+ */
+export const DASHBOARD_HEADING_ID = "dashboard-heading";
+
+/**
  * Top-of-dashboard welcome strip, holding the page's one level-one heading.
  *
  * It renders in every state, from first paint: the heading is where a
@@ -28,8 +38,15 @@ export function WelcomeHeader() {
   return (
     <div className="space-y-1 pb-4">
       <h1
+        id={DASHBOARD_HEADING_ID}
+        // Focusable only PROGRAMMATICALLY (`-1` keeps it out of the Tab
+        // sequence), so focus can be returned here when the element holding it
+        // is taken off the page.
+        tabIndex={-1}
         aria-busy={userLoading || undefined}
-        className="text-xl font-semibold tracking-[-0.04em] text-foreground leading-tight"
+        // No outline when focus is sent here: a heading is a place to land,
+        // not a control, and a ring around it reads as something to press.
+        className="text-xl font-semibold tracking-[-0.04em] text-foreground leading-tight focus:outline-none"
       >
         {userLoading ? (
           <>
