@@ -6,17 +6,14 @@ import type React from "react";
 import { ArrowLeft, LayoutDashboard } from "@admin/components/icons";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { ROUTES } from "@admin/constants/routes";
+import { entryBehindIsAdmin, isAdminPath } from "@admin/lib/admin-history";
 import { navigateTo } from "@admin/lib/navigation";
 
-/** The admin's own address space, matched by whole segment. */
+/** A same-origin URL inside the admin, matched by whole path segment. */
 function isAdminUrl(url: string): boolean {
   try {
     const { origin, pathname } = new URL(url);
-    if (origin !== window.location.origin) return false;
-    return (
-      pathname === ROUTES.DASHBOARD ||
-      pathname.startsWith(`${ROUTES.DASHBOARD}/`)
-    );
+    return origin === window.location.origin && isAdminPath(pathname);
   } catch {
     return false;
   }
@@ -49,9 +46,12 @@ function navigationEntries(): NavigationEntries | undefined {
  * link followed from the site's own pages leaves an entry of this origin that
  * is not the admin, and going back would leave it. The Navigation API lists
  * this origin's entries with their URLs, so the one before is read directly.
- * Without it, only the referrer says where the page was opened from; an
- * in-admin move does not update it, so this then errs towards the dashboard,
- * which never leaves the admin.
+ * Without it, the router's record of the last move decides where it saw one,
+ * because `document.referrer` keeps the page that loaded the document and an
+ * in-admin move never updates it; the referrer answers only for a page the
+ * admin has not moved from since it loaded, or since a jump through history.
+ * Where neither can say, this errs towards the dashboard, which never leaves
+ * the admin.
  */
 function previousPageIsAdmin(): boolean {
   const navigation = navigationEntries();
@@ -60,6 +60,8 @@ function previousPageIsAdmin(): boolean {
     const previous = index > 0 ? navigation.entries()[index - 1] : undefined;
     return typeof previous?.url === "string" && isAdminUrl(previous.url);
   }
+  const recorded = entryBehindIsAdmin();
+  if (recorded !== undefined) return recorded;
   return document.referrer !== "" && isAdminUrl(document.referrer);
 }
 

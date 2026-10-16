@@ -82,6 +82,11 @@ test("Go back returns to the page before", async () => {
   ).toBeVisible();
   await page.getByRole("button", { name: "Go back" }).click();
   await expect(page).toHaveURL(/\/admin\/collections\/posts$/);
+  // Back between two full loads is a navigation of its own. The URL changes
+  // before the page it returns to has loaded, and a test that moves on then
+  // has its next navigation aborted by this one finishing.
+  await page.waitForLoadState("load");
+  await expect(page.locator("main")).toBeVisible();
 });
 
 test("Go to dashboard goes to the dashboard", async () => {

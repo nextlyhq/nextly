@@ -11,6 +11,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
+import { forgetEntryBehind, recordPushFrom } from "@admin/lib/admin-history";
 
 import { PermissionGuard } from "../PermissionGuard";
 
@@ -44,6 +45,7 @@ function Page() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  forgetEntryBehind();
 });
 
 afterEach(() => {
@@ -226,6 +228,21 @@ describe("PermissionGuard", () => {
 
     it("goes to the dashboard when another site's admin sent the user here", () => {
       referredBy("https://elsewhere.example/admin/collections/posts");
+      expect(clickGoBack()).toBe("dashboard");
+    });
+
+    it("goes back after a move inside the admin, though the referrer is the site", () => {
+      // An in-admin move leaves the referrer at whatever loaded the page, so
+      // only the router's own record knows an admin page is behind.
+      referredBy(here("/"));
+      recordPushFrom("/admin/collections/posts");
+      expect(clickGoBack()).toBe("back");
+    });
+
+    it("goes to the dashboard after a move in from the site, though the referrer is the admin", () => {
+      // The record is newer than the referrer, so it decides.
+      referredBy(here("/admin/collections/posts"));
+      recordPushFrom("/");
       expect(clickGoBack()).toBe("dashboard");
     });
 
