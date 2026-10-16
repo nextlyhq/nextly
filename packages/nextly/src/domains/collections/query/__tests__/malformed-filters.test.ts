@@ -401,6 +401,21 @@ describe("geo conditions refuse what they cannot apply", () => {
     ).toContain("FILTER_NOT_IN_OR");
   });
 
+  it("refuses a __proto__ key before an extractor rebuilds the filter", () => {
+    // Rebuilt by assignment, a `__proto__` key would set the new object's
+    // prototype and vanish from the filter, so the shape check refuses it
+    // before either extractor runs.
+    const where = JSON.parse(
+      '{"or":[{"__proto__":{"equals":"x"}},{"title":{"equals":"a"}}]}'
+    ) as WhereFilter;
+    expect(refusalCodes(() => extractGeoFilters(where))).toContain(
+      "FILTER_UNKNOWN_FIELD"
+    );
+    expect(
+      refusalCodes(() => extractComponentFieldConditions(where, []))
+    ).toContain("FILTER_UNKNOWN_FIELD");
+  });
+
   it("keeps a malformed non-geo member for the SQL builder to refuse", () => {
     // Extraction used to DROP a value with no operator, so the builder never
     // saw it. Whatever extraction leaves, the builder must still be able to

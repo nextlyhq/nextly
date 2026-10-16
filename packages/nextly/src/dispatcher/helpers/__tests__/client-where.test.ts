@@ -73,6 +73,20 @@ describe("parseWhereParam", () => {
     ).toEqual(["FILTER_INVALID_OPERAND"]);
   });
 
+  it("refuses a __proto__ field key from JSON", () => {
+    // JSON.parse makes `__proto__` an own key. Accepted, it was later
+    // assigned onto a rebuilt filter, which set the prototype instead of a
+    // key, so the condition vanished and an `or` holding it matched
+    // everything.
+    expect(
+      refusal(() =>
+        parseWhereParam(
+          '{"or":[{"__proto__":{"equals":"x"}},{"title":{"equals":"a"}}]}'
+        )
+      ).codes
+    ).toEqual(["FILTER_UNKNOWN_FIELD"]);
+  });
+
   it("returns a well-formed filter unchanged", () => {
     const where = {
       price: { greater_than: 100 },

@@ -1588,12 +1588,10 @@ const COLLECTIONS_METHODS: Record<
           // The request this operation's hooks are told about.
           request,
           collectionName: p.collectionName,
-          // Strip owner-column conditions from the request body so a caller
-          // cannot target rows by the system owner column via `body.where`
-          // (mirrors parseWhereParam on the query-string path). The service's
-          // own owner constraint is added separately and is unaffected; a where
-          // that was only an owner filter becomes {} and stays bounded by the
-          // collection's access rules.
+          // The body filter is checked as the query-string one is: a malformed
+          // filter, or one naming the owner column, is refused with a 400
+          // before any row is matched. `b.where` was checked to be an object
+          // above, so the check always returns it.
           where: readClientWhere(b.where) ?? {},
           data: b.data,
           actor: readAuthenticatedActor(p),

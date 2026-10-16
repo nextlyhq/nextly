@@ -196,6 +196,10 @@ function setNestedValue(
     // names; this keeps the walk from ever reaching one.
     if (!Object.prototype.hasOwnProperty.call(current, key)) {
       current[key] = isNextArray ? [] : {};
+    } else if (typeof current[key] !== "object" || current[key] === null) {
+      // Another parameter already gave this segment a value, so nothing can
+      // nest under it; assigning onto that value would throw.
+      refuseKey(bracketKey(path), "It nests under a value already given.");
     }
 
     current = current[key] as Record<string, unknown>;
@@ -203,7 +207,17 @@ function setNestedValue(
 
   // Set the final value
   const lastKey = path[path.length - 1];
+  // The same condition given twice is refused rather than overwritten, so the
+  // filter that runs is never one part of what the caller sent.
+  if (Object.prototype.hasOwnProperty.call(current, lastKey)) {
+    refuseKey(bracketKey(path), "It is given more than once.");
+  }
   current[lastKey] = value;
+}
+
+/** A bracket path written back as the parameter name it came from. */
+function bracketKey(path: string[]): string {
+  return `where[${path.join("][")}]`;
 }
 
 /**

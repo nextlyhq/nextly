@@ -511,7 +511,17 @@ function rebuildFilter(
       path: `${site.path}.${field}`,
       underOr: site.underOr,
     });
-    if (kept !== undefined) cleaned[field] = kept;
+    if (kept !== undefined) {
+      // Defined as an own key, not assigned: assigning `__proto__` sets the
+      // prototype and the condition disappears. The shape check refuses that
+      // name first; this keeps the walk from ever losing a key.
+      Object.defineProperty(cleaned, field, {
+        value: kept,
+        enumerable: true,
+        writable: true,
+        configurable: true,
+      });
+    }
   }
   return Object.keys(cleaned).length > 0 ? cleaned : undefined;
 }

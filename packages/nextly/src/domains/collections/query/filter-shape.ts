@@ -33,6 +33,13 @@ export interface FilterProblem {
 /** The reserved key carrying the language filter. */
 export const TRANSLATED_KEY = "_translated";
 
+/** Names that address an object's prototype rather than one of its keys. */
+const PROTOTYPE_NAMES: ReadonlySet<string> = new Set([
+  "__proto__",
+  "constructor",
+  "prototype",
+]);
+
 /** Whether a value is a plain object: not an array, a date, or null. */
 export function isPlainObject(
   value: unknown
@@ -272,6 +279,17 @@ function fieldProblems(
       path,
       code: "FILTER_MISPLACED_KEY",
       message: `"${TRANSLATED_KEY}" filters by language and may only be given at the top level of a filter, as { "${TRANSLATED_KEY}": { "locale": "…", "state": "…" } }.`,
+    });
+    return;
+  }
+  // A prototype name is never a column. JSON makes `__proto__` an own key,
+  // and a walk that rebuilds a filter by assignment would set a prototype with
+  // it and lose the condition, so it is refused before any walk runs.
+  if (PROTOTYPE_NAMES.has(key)) {
+    into.push({
+      path,
+      code: "FILTER_UNKNOWN_FIELD",
+      message: `"${key}" is not a field this collection can be filtered on.`,
     });
     return;
   }

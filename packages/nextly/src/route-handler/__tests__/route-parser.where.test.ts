@@ -109,6 +109,24 @@ describe("bracket filters that cannot be read", () => {
     }
   );
 
+  it("refuses a segment that nests under a value already given", () => {
+    // Walking into the string "a" and assigning onto it threw a TypeError,
+    // which answered 500 instead of naming the problem.
+    expect(
+      refusedErrors(() =>
+        whereOf("where[title][equals]=a&where[title][equals][x]=b")
+      ).map(e => e.code)
+    ).toEqual(["FILTER_INVALID_KEY"]);
+  });
+
+  it("refuses the same condition given twice rather than keeping the last", () => {
+    expect(
+      refusedErrors(() =>
+        whereOf("where[title][equals]=a&where[title][equals]=b")
+      ).map(e => e.code)
+    ).toEqual(["FILTER_INVALID_KEY"]);
+  });
+
   it("refuses a list index past the condition limit before building the list", () => {
     // A list built to this index has a billion slots, and walking them blocks
     // the server; the index has to be refused before any list exists.
