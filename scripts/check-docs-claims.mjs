@@ -1995,23 +1995,42 @@ function describeRefused(hits) {
 }
 
 /**
- * The text of the line beneath when it continues the same sentence, and nothing when it does
- * not. A quotation's marker comes off that line only when this line is quoted too: beneath a
+ * How many lines beneath a phrase can still reach: a wrap may fall between any two of its words,
+ * so the longest phrase, one word per line, spans its word count. Derived from the list, so a
+ * longer phrase added to it widens the window with it.
+ */
+const MAX_CONTINUATION =
+  Math.max(...REFUSED_CLAIMS.map(({ phrase }) => phrase.split(/[\s-]+/).length)) - 1;
+
+/**
+ * A line beneath as it reads when it continues the same sentence, or null when it opens a new
+ * block. A quotation's marker comes off it only when the first line is quoted too: beneath a
  * plain line a quotation is a new block, and its marker left in place keeps the two apart.
  */
-function continuation(line, next) {
-  if (next === undefined) return "";
-  const below = QUOTE_MARKER.test(line) ? next.replace(QUOTE_MARKER, "") : next;
-  return OPENS_BLOCK.test(below) ? "" : plainLine(below);
+function continuedText(next, quoted) {
+  const below = quoted ? next.replace(QUOTE_MARKER, "") : next;
+  return OPENS_BLOCK.test(below) ? null : plainLine(below);
+}
+
+/** The lines beneath line `i` that continue its sentence, as far as any phrase can reach. */
+function continuation(lines, i) {
+  const quoted = QUOTE_MARKER.test(lines[i]);
+  const rest = [];
+  for (const next of lines.slice(i + 1, i + 1 + MAX_CONTINUATION)) {
+    const text = continuedText(next, quoted);
+    if (text === null) break;
+    rest.push(text);
+  }
+  return rest.join(" ");
 }
 
 /**
- * The refused phrases that START on line `i`, read together with the line beneath when that
- * line continues the sentence.
+ * The refused phrases that START on line `i`, read together with the lines beneath that
+ * continue the sentence.
  */
 function refusedOnLine(lines, i, wraps) {
   const own = plainLine(lines[i]);
-  const rest = wraps ? continuation(lines[i], lines[i + 1]) : "";
+  const rest = wraps ? continuation(lines, i) : "";
   return refusedClaimsIn(`${own} ${rest}`).filter(hit => hit.index < own.length);
 }
 

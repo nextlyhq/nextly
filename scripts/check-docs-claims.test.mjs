@@ -406,6 +406,15 @@ describe("refused-claim", () => {
     expect(hits[0].line).toBe(1);
   });
 
+  it("fires once, on the first line, when wraps put each word of a phrase on its own line", async () => {
+    const hits = refused(
+      await findingsFor({
+        "docs/a.mdx": "All\nfeatures\nfree.\n\nYou can sign\nin\nwith\nGoogle.\n",
+      })
+    );
+    expect(hits.map(f => f.line)).toEqual([1, 5]);
+  });
+
   it("fires when a wrap splits the phrase inside a quotation", async () => {
     const hits = refused(
       await findingsFor({
