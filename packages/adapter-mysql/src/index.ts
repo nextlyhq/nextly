@@ -723,22 +723,50 @@ export class MySqlAdapter extends DrizzleAdapter {
       throw new Error("getDrizzle() is server-only");
     }
     const pool = this.ensurePool();
-    // drizzle v1's mysql2 driver accepts the CALLBACK pool — handing it the
-    // mysql2/promise wrapper throws ("Cannot set properties of undefined
-    // (setting 'supportBigNumbers')"), so unwrap to the underlying pool.
-    // The pre-v1 `mode` option no longer exists.
-    const client = (pool as unknown as { pool: CallbackPool }).pool;
     if (!relations) {
-      // Its `transaction` counts for `transactionOpenInFlow`, as the adapter's does.
-      this.drizzleBare ??= this.trackFlowTransactions(drizzle({ client }));
+      this.drizzleBare ??= this.poolDrizzle(pool);
       return this.drizzleBare as T;
     }
     let cached = this.drizzleByRelations.get(relations);
     if (!cached) {
-      cached = this.trackFlowTransactions(drizzle({ client, relations }));
+      cached = this.poolDrizzle(pool, relations);
       this.drizzleByRelations.set(relations, cached);
     }
     return cached as T;
+  }
+
+  /**
+   * A Drizzle handle on the pool, for `getDrizzle`.
+   *
+   * Its `transaction` runs on a connection this adapter checks out and
+   * returns itself (`pinDrizzleTransactions`): destroyed rather than pooled
+   * when no ROLLBACK could be confirmed on it. And it counts for
+   * `transactionOpenInFlow`, as the adapter's does.
+   */
+  private poolDrizzle(pool: Pool, relations?: AnyRelations) {
+    // drizzle v1's mysql2 driver takes the CALLBACK pool and connection,
+    // which the mysql2/promise wrappers expose on `.pool` and `.connection`:
+    // handed a wrapper, it throws ("Cannot set properties of undefined
+    // (setting 'supportBigNumbers')"). The pre-v1 `mode` option is gone.
+    const onClient = (client: CallbackPool | CallbackConnection) =>
+      relations ? drizzle({ client, relations }) : drizzle({ client });
+    const callbackPool = (pool as unknown as { pool: CallbackPool }).pool;
+    return this.trackFlowTransactions(
+      this.pinDrizzleTransactions(onClient(callbackPool), async () => {
+        const connection = await pool.getConnection();
+        return {
+          drizzle: onClient(
+            (connection as unknown as { connection: CallbackConnection })
+              .connection
+          ),
+          rollback: () => connection.query("ROLLBACK"),
+          release: dirty => {
+            if (dirty) connection.destroy();
+            else connection.release();
+          },
+        };
+      })
+    );
   }
 
   /**

@@ -31,7 +31,11 @@
 
 A transaction no longer hands its connection back to the pool in a state that
 can harm the next request. On PostgreSQL and MySQL, a connection whose
-ROLLBACK failed is now closed instead of reused, since it may still be inside
-the abandoned transaction. On MySQL, a transaction run with `timeoutMs` now
-puts the session's own lock wait timeout back when it ends, instead of leaving
-its timeout on the connection for every later query.
+ROLLBACK cannot be confirmed is now closed instead of reused, since it may
+still be inside the abandoned transaction. This now holds for transactions
+opened through `getDrizzle().transaction()` too, as core services open them:
+those also return their connection when BEGIN fails, instead of leaking it,
+and report the work's own error rather than a failed ROLLBACK's. On MySQL, a
+transaction run with `timeoutMs` now puts the session's own lock wait timeout
+back when it ends, instead of leaving its timeout on the connection for every
+later query.

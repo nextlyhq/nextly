@@ -867,18 +867,39 @@ export class PostgresAdapter extends DrizzleAdapter {
     // registry) is what powers db.query in v1; a bare instance serves the
     // select-builder CRUD paths.
     if (!relations) {
-      // Its `transaction` counts for `transactionOpenInFlow`, as the adapter's does.
-      this.drizzleBare ??= this.trackFlowTransactions(
-        drizzle({ client: pool })
-      );
+      this.drizzleBare ??= this.poolDrizzle(pool);
       return this.drizzleBare as T;
     }
     let cached = this.drizzleByRelations.get(relations);
     if (!cached) {
-      cached = this.trackFlowTransactions(drizzle({ client: pool, relations }));
+      cached = this.poolDrizzle(pool, relations);
       this.drizzleByRelations.set(relations, cached);
     }
     return cached as T;
+  }
+
+  /**
+   * A Drizzle handle on the pool, for `getDrizzle`.
+   *
+   * Its `transaction` runs on a client this adapter checks out and returns
+   * itself (`pinDrizzleTransactions`): node-postgres destroys a client
+   * released with `true`, which is what happens when no ROLLBACK could be
+   * confirmed on it. And it counts for `transactionOpenInFlow`, as the
+   * adapter's does.
+   */
+  private poolDrizzle(pool: Pool, relations?: AnyRelations) {
+    const onClient = (client: Pool | PoolClient) =>
+      relations ? drizzle({ client, relations }) : drizzle({ client });
+    return this.trackFlowTransactions(
+      this.pinDrizzleTransactions(onClient(pool), async () => {
+        const client = await pool.connect();
+        return {
+          drizzle: onClient(client),
+          rollback: () => client.query("ROLLBACK"),
+          release: dirty => client.release(dirty),
+        };
+      })
+    );
   }
 
   /**
