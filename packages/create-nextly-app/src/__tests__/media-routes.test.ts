@@ -4,6 +4,7 @@
  * templates, so the files are judged as written, not as a mock recorded them.
  */
 import {
+  chmodSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
@@ -383,18 +384,13 @@ describe("what Next.js does and does not route", () => {
 
   // Private folders, named with a leading underscore, and files in
   // extensions Next.js does not route by default, answer no URL.
-  it("ignores private folders and files Next.js does not route", async () => {
+  it("ignores private folders, which Next.js never routes", async () => {
     // Under a dynamic child, where a routed handler would clash with the catch-all.
     mkdirSync(join(cwd, "src/app/api/media/[id]/_fixtures"), {
       recursive: true,
     });
     writeFileSync(
       join(cwd, "src/app/api/media/[id]/_fixtures/route.ts"),
-      "export const GET = () => new Response();\n"
-    );
-    mkdirSync(join(cwd, "src/app/admin/api/media"), { recursive: true });
-    writeFileSync(
-      join(cwd, "src/app/admin/api/media/route.mjs"),
       "export const GET = () => new Response();\n"
     );
 
@@ -407,6 +403,61 @@ describe("what Next.js does and does not route", () => {
     ]);
     expect(result.skipped).toEqual([]);
   });
+
+  // What cannot be classified for certain is left alone and reported, never
+  // written beside: a route or page file in an extension Next.js routes only
+  // when the app configures it (the app's config is not evaluated), or a
+  // folder that cannot be read.
+  it("writes nothing where a route file's extension or a folder cannot be judged, and reports it", async () => {
+    mkdirSync(join(cwd, "src/app/admin/api/media"), { recursive: true });
+    writeFileSync(
+      join(cwd, "src/app/admin/api/media/route.mjs"),
+      "export const GET = () => new Response();\n"
+    );
+
+    const result = await generateMediaRoutes(cwd, project(true), TEMPLATES);
+
+    expect(result.written).toEqual([
+      `src/app/${PUBLIC_MEDIA}`,
+      `src/app/${HEALTH}`,
+    ]);
+    expect(result.skipped).toEqual([
+      expect.objectContaining({
+        path: "src/app/admin/api/media",
+        why: expect.stringMatching(
+          /^holds route\.mjs, which Next\.js routes only if the app configures that extension; left as it is\. The admin's media library needs Nextly's route at /
+        ),
+        toAdd: expect.stringContaining("requireAuth: true"),
+      }),
+    ]);
+  });
+
+  it.runIf(process.platform !== "win32" && process.getuid?.() !== 0)(
+    "writes nothing beside a folder it cannot read",
+    async () => {
+      const locked = join(cwd, "src/app/api/media");
+      mkdirSync(locked, { recursive: true });
+      chmodSync(locked, 0o000);
+      try {
+        const result = await generateMediaRoutes(cwd, project(true), TEMPLATES);
+
+        expect(result.written).toEqual([
+          `src/app/${ADMIN_MEDIA}`,
+          `src/app/${HEALTH}`,
+        ]);
+        expect(result.skipped).toEqual([
+          expect.objectContaining({
+            path: "src/app/api/media",
+            why: expect.stringMatching(
+              /^cannot be read, so whether it already answers this URL is unknown; left as it is\./
+            ),
+          }),
+        ]);
+      } finally {
+        chmodSync(locked, 0o755);
+      }
+    }
+  );
 
   // A concrete child URL sorts ahead of an optional catch-all, so the two
   // coexist; a dynamic child at the same level does not.

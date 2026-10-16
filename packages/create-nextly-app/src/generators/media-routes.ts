@@ -77,6 +77,28 @@ const THROUGH_A_LINK = "is a symbolic link; nothing was written through it";
 const HANDLER_FILE = /^(route|page)\.(tsx|ts|jsx|js)$/;
 
 /**
+ * A route or page file in some other single extension. Next.js routes it only
+ * when the app adds that extension to `pageExtensions`, which is not read
+ * here (the app's config is never evaluated), so it cannot be ruled out.
+ */
+const MAYBE_HANDLER_FILE = /^(route|page)\.[^.]+$/;
+
+const UNREADABLE =
+  "cannot be read, so whether it already answers this URL is unknown; left as it is";
+
+/** Why a folder is left alone because one of its files might be a route. */
+function unsure(file: string): string {
+  return `holds ${file}, which Next.js routes only if the app configures that extension; left as it is`;
+}
+
+/** A folder that exists but could not be listed: what it holds is unknown. */
+class UnreadableFolder extends Error {
+  constructor(readonly folder: string) {
+    super(`cannot read ${folder}`);
+  }
+}
+
+/**
  * Write the media and health routes into an existing app, from the template
  * in `templatesDir` (the CLI's bundled templates by default).
  *
@@ -180,7 +202,7 @@ async function writeIfUnanswered(
   const answering = await answeringFolder(appRoot, segment, catchAll);
   if (answering !== null) {
     result.skipped.push(
-      skipped(cwd, answering, target, text, role, LEFT_AS_IT_IS)
+      skipped(cwd, answering.folder, target, text, role, answering.reason)
     );
     return;
   }
@@ -226,24 +248,35 @@ function isDynamic(name: string): boolean {
 }
 
 /**
- * The first folder in the app that answers `segment` with a handler, or
- * null. A handler directly in a folder that maps to the URL answers it; for
- * a catch-all, so does a handler anywhere under a dynamic child of such a
- * folder.
+ * The first folder in the app that answers `segment`, or might, with why; or
+ * null when nothing does. A handler directly in a folder that maps to the
+ * URL answers it; for a catch-all, so does a handler anywhere under a dynamic
+ * child of such a folder. Whatever cannot be judged for certain (a route file
+ * in an extension the app might route, a folder that cannot be read) counts
+ * as answering, so the route is never written beside it.
  */
 async function answeringFolder(
   appRoot: string,
   segment: string,
   catchAll: boolean
-): Promise<string | null> {
-  for (const folder of await foldersAt(appRoot, segment)) {
-    if (await holdsHandler(folder)) return folder;
-    if (!catchAll) continue;
-    for (const child of (await subfolders(folder)).filter(isDynamic)) {
-      if (await holdsHandlerWithin(path.join(folder, child))) return folder;
+): Promise<{ folder: string; reason: string } | null> {
+  try {
+    for (const folder of await foldersAt(appRoot, segment)) {
+      const here = await handlerIn(folder);
+      if (here !== null) return { folder, reason: here };
+      if (!catchAll) continue;
+      for (const child of (await subfolders(folder)).filter(isDynamic)) {
+        const within = await handlerWithin(path.join(folder, child));
+        if (within !== null) return { folder, reason: within };
+      }
     }
+    return null;
+  } catch (error) {
+    if (error instanceof UnreadableFolder) {
+      return { folder: error.folder, reason: UNREADABLE };
+    }
+    throw error;
   }
-  return null;
 }
 
 /**
@@ -270,37 +303,52 @@ async function foldersAt(appRoot: string, segment: string): Promise<string[]> {
   return found;
 }
 
+/**
+ * What a folder holds. A folder that does not exist holds nothing; one that
+ * exists but cannot be listed is refused, since what it holds is unknown.
+ */
+async function entriesOf(folder: string): Promise<fs.Dirent[]> {
+  try {
+    return await fs.readdir(folder, { withFileTypes: true });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw new UnreadableFolder(folder);
+  }
+}
+
 /** The routable folders directly inside one, by name, in a stable order: not private, not links. */
 async function subfolders(folder: string): Promise<string[]> {
-  const entries = await fs
-    .readdir(folder, { withFileTypes: true })
-    .catch(() => []);
+  const entries = await entriesOf(folder);
   return entries
     .filter(entry => entry.isDirectory() && !isPrivate(entry.name))
     .map(entry => entry.name)
     .sort();
 }
 
-/** Whether a folder itself holds a file Next.js answers requests through. */
-async function holdsHandler(folder: string): Promise<boolean> {
-  const entries = await fs
-    .readdir(folder, { withFileTypes: true })
-    .catch(() => []);
+/**
+ * Why a folder itself answers requests, or null when it does not: a handler
+ * Next.js routes by default, or a route file it might route.
+ */
+async function handlerIn(folder: string): Promise<string | null> {
   // A linked route file is still a route Next.js serves.
-  return entries.some(
-    entry =>
-      (entry.isFile() || entry.isSymbolicLink()) &&
-      HANDLER_FILE.test(entry.name)
-  );
+  const files = (await entriesOf(folder))
+    .filter(entry => entry.isFile() || entry.isSymbolicLink())
+    .map(entry => entry.name)
+    .sort();
+  if (files.some(name => HANDLER_FILE.test(name))) return LEFT_AS_IT_IS;
+  const maybe = files.find(name => MAYBE_HANDLER_FILE.test(name));
+  return maybe === undefined ? null : unsure(maybe);
 }
 
-/** Whether a folder, or any routable folder inside it, holds a handler. */
-async function holdsHandlerWithin(folder: string): Promise<boolean> {
-  if (await holdsHandler(folder)) return true;
+/** Why a folder, or any routable folder inside it, answers requests, or null. */
+async function handlerWithin(folder: string): Promise<string | null> {
+  const here = await handlerIn(folder);
+  if (here !== null) return here;
   for (const name of await subfolders(folder)) {
-    if (await holdsHandlerWithin(path.join(folder, name))) return true;
+    const deeper = await handlerWithin(path.join(folder, name));
+    if (deeper !== null) return deeper;
   }
-  return false;
+  return null;
 }
 
 /** The report for a folder left alone: for a media route, what Nextly's route does and the text to add. */
