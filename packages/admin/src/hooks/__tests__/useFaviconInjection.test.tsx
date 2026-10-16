@@ -172,4 +172,58 @@ describe("the admin's favicon", () => {
 
     expect(hrefs()).toEqual(["/brand.png"]);
   });
+
+  it("leaves the host's icon off throughout a branding change", async () => {
+    render(<HostIcon href="/favicon.ico" />);
+    const admin = renderHook(({ href }) => useFaviconInjection(href), {
+      initialProps: { href: ADMIN_ICON },
+    });
+    await observed();
+    const hostLink = document.head.querySelector('link[href="/favicon.ico"]');
+    // Every `rel` the host's link is given, even one undone in the same commit:
+    // a browser may fetch the host's icon the moment its `rel` names one.
+    const relsGiven: (string | null)[] = [];
+    const watcher = new MutationObserver(records =>
+      records.forEach(record => relsGiven.push(record.oldValue))
+    );
+    watcher.observe(hostLink as Node, {
+      attributes: true,
+      attributeFilter: ["rel"],
+      attributeOldValue: true,
+    });
+
+    admin.rerender({ href: "/brand.png" });
+    await observed();
+    watcher.disconnect();
+
+    expect(relsGiven).toEqual([]);
+    expect(hrefs()).toEqual(["/brand.png"]);
+  });
+
+  it("shows one admin icon, then the host's again, under Strict Mode", () => {
+    render(<HostIcon href="/favicon.ico" />);
+    // Strict Mode runs every effect's setup and cleanup an extra time in
+    // development, which the icon's effect and its `href` effect must survive.
+    const admin = renderHook(({ href }) => useFaviconInjection(href), {
+      initialProps: { href: ADMIN_ICON },
+      reactStrictMode: true,
+    });
+    expect(hrefs()).toEqual([ADMIN_ICON]);
+
+    admin.rerender({ href: "/brand.png" });
+    expect(hrefs()).toEqual(["/brand.png"]);
+
+    admin.unmount();
+    expect(hrefs()).toEqual(["/favicon.ico"]);
+  });
+
+  it("drops the SVG type when the branding favicon is no longer an SVG", () => {
+    const admin = renderHook(({ href }) => useFaviconInjection(href), {
+      initialProps: { href: ADMIN_ICON },
+    });
+
+    admin.rerender({ href: "/brand.png" });
+
+    expect(activeIcons()[0]?.getAttribute("type")).toBeNull();
+  });
 });

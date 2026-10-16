@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 
 /**
  * Marks an icon an admin provider added. Every admin icon is left alone, so two
@@ -48,22 +48,37 @@ let hostIconChanges: MutationObserver | undefined;
  * original `rel` values are kept here, never written onto its nodes.
  */
 export function useFaviconInjection(href: string): void {
+  const own = useRef<HTMLLinkElement | null>(null);
+
+  // The admin's icon lives as long as the provider, not as long as one
+  // `href`: a branding change that went through a remove and an add would
+  // switch the host's icons on for that moment.
   useEffect(() => {
-    const own = document.createElement("link");
-    own.setAttribute(ADMIN_ICON, "");
-    own.rel = "icon";
-    if (href.startsWith("data:image/svg+xml")) own.type = "image/svg+xml";
-    own.href = href;
+    const icon = document.createElement("link");
+    icon.setAttribute(ADMIN_ICON, "");
+    icon.rel = "icon";
+    own.current = icon;
 
     if (adminIcons.size === 0) hideHostIcons();
-    adminIcons.add(own);
-    document.head.appendChild(own);
+    adminIcons.add(icon);
+    document.head.appendChild(icon);
 
     return () => {
-      own.remove();
-      adminIcons.delete(own);
+      icon.remove();
+      adminIcons.delete(icon);
+      own.current = null;
       if (adminIcons.size === 0) showHostIcons();
     };
+  }, []);
+
+  // Runs after the effect above on mount, so the icon exists; a branding
+  // change only points it somewhere else.
+  useEffect(() => {
+    const icon = own.current;
+    if (!icon) return;
+    if (href.startsWith("data:image/svg+xml")) icon.type = "image/svg+xml";
+    else icon.removeAttribute("type");
+    icon.href = href;
   }, [href]);
 }
 
