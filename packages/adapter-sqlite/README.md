@@ -81,11 +81,11 @@ Most users do not need this.
 
 ## Compatibility
 
-| Tool             | Version |
-| ---------------- | ------- |
-| Node.js          | 20+     |
-| `better-sqlite3` | 11+     |
-| `nextly`         | 0.0.x   |
+| Tool             | Version               |
+| ---------------- | --------------------- |
+| Node.js          | 20.19+, 22.12+ or 24+ |
+| `better-sqlite3` | 11+                   |
+| `nextly`         | 0.0.x                 |
 
 ## Documentation
 

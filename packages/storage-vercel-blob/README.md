@@ -70,11 +70,11 @@ The admin uploader hands the file to the browser-side SDK, which uploads directl
 
 ## Compatibility
 
-| Tool           | Version |
-| -------------- | ------- |
-| Node.js        | 20+     |
-| `@vercel/blob` | peer    |
-| `nextly`       | 0.0.x   |
+| Tool           | Version               |
+| -------------- | --------------------- |
+| Node.js        | 20.19+, 22.12+ or 24+ |
+| `@vercel/blob` | peer                  |
+| `nextly`       | 0.0.x                 |
 
 ## Documentation
 

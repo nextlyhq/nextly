@@ -43,14 +43,14 @@ Developers define the content model in TypeScript, or build it in the admin with
 ## Why Nextly?
 
 - **Model in code, or in the admin.** Define your content types (we call them collections) in TypeScript, or build them in the Visual Schema Builder. Same data model either way.
-- **Compose pages visually.** The Visual Page Builder gives your team a canvas of blocks your developers registered. Pages render on the server and ship no JavaScript unless a block needs it.
+- **Compose pages visually.** The Visual Page Builder gives your team a canvas of blocks your developers registered. Pages render on the server, and the core blocks add no JavaScript of their own.
 - **Run in several languages.** The same site in multiple locales, with a fallback when a translation is missing. Each language has its own draft and published state, so you can publish one language without publishing the rest.
 - **Keep a version history.** Compare any two versions of a document and restore one. Restoring snapshots the current state first, so nothing is destroyed.
 - **Schedule what goes live.** Group entries into a release and publish or unpublish them together, at a time you choose.
 - **Control who can edit what.** Roles and permissions, down to individual fields.
 - **Connect it to the rest of your stack.** Webhooks with signing secrets and retries, background jobs, and dashboard widgets in the admin.
 - **Extend it.** A plugin SDK covering schema, services, routes, admin UI and permissions. The Visual Page Builder is itself a plugin.
-- **Type-safe everywhere.** REST API, Direct API, and the admin UI are typed end-to-end.
+- **Typed from your config.** `nextly generate:types` writes types for the collections, singles and field groups in your config. Those made in the Visual Schema Builder get none.
 - **Your database, your storage.** PostgreSQL, MySQL, or SQLite. Local disk by default; S3 (and R2, MinIO), Vercel Blob, or UploadThing for production.
 - **Self-hosted, MIT-licensed.** Your stack, your data, no vendor lock-in.
 
@@ -132,11 +132,11 @@ Set `DATABASE_URL` (and `DB_DIALECT`) in your `.env`; Nextly picks the dialect a
 
 ### Storage adapters
 
-| Package                           | Description                            |
-| --------------------------------- | -------------------------------------- |
-| **@nextlyhq/storage-s3**          | Amazon S3 (also R2, MinIO, B2, Wasabi) |
-| **@nextlyhq/storage-vercel-blob** | Vercel Blob storage                    |
-| **@nextlyhq/storage-uploadthing** | UploadThing storage                    |
+| Package                           | Description                |
+| --------------------------------- | -------------------------- |
+| **@nextlyhq/storage-s3**          | Amazon S3 (also R2, MinIO) |
+| **@nextlyhq/storage-vercel-blob** | Vercel Blob storage        |
+| **@nextlyhq/storage-uploadthing** | UploadThing storage        |
 
 ### Plugins
 
@@ -202,15 +202,26 @@ See the [database support docs](https://nextlyhq.com/docs/database/support) for 
 
 Nextly draws inspiration from each of these projects. The table compares Nextly against the most common Next.js CMS choices, both self-hosted and SaaS. If you want a fully managed SaaS that you do not run yourself, Sanity is the strongest pick on the right; if you want to own your stack and your data, look at the left.
 
-| Dimension                      | Nextly                  | Payload                   | Strapi v5                       | Sanity                                              |
-| ------------------------------ | ----------------------- | ------------------------- | ------------------------------- | --------------------------------------------------- |
-| License                        | MIT                     | MIT                       | MIT (+ EE)                      | MIT (Studio); proprietary SaaS (Content Lake)       |
-| Self-hostable                  | yes                     | yes                       | yes                             | no (SaaS only)                                      |
-| Hosted in your Next.js app     | yes                     | yes                       | no (separate Node server)       | no (Studio mounts in your app; data is hosted SaaS) |
-| Code-first schema              | yes                     | yes                       | partial (CLI generators)        | yes                                                 |
-| Visual schema builder          | yes                     | no                        | yes                             | no                                                  |
-| Both code-first **and** visual | yes                     | no                        | partial                         | no                                                  |
-| Database / storage             | Postgres, MySQL, SQLite | Postgres, MongoDB, SQLite | Postgres, MySQL/MariaDB, SQLite | Sanity Content Lake (managed)                       |
+Checked on 2026-10-16 against each project's own documentation, linked below.
+
+| Dimension                      | Nextly                                  | Payload                   | Strapi v5                                       | Sanity                                                  |
+| ------------------------------ | --------------------------------------- | ------------------------- | ----------------------------------------------- | ------------------------------------------------------- |
+| License                        | MIT                                     | MIT                       | MIT (+ EE)                                      | MIT (Studio); proprietary SaaS (Content Lake)           |
+| Self-hostable                  | yes                                     | yes                       | yes                                             | no (the Studio can be; the Content Lake is hosted SaaS) |
+| Hosted in your Next.js app     | yes                                     | yes                       | no (separate Node server)                       | no (Studio mounts in your app; data is hosted SaaS)     |
+| Code-first schema              | yes                                     | yes                       | partial (`strapi generate` writes JSON schemas) | yes                                                     |
+| Visual schema builder          | yes                                     | no                        | yes (in development only)                       | no                                                      |
+| Both code-first **and** visual | yes                                     | no                        | partial                                         | no                                                      |
+| Database / storage             | Postgres, MySQL (SQLite for local work) | Postgres, MongoDB, SQLite | Postgres, MySQL/MariaDB, SQLite                 | Sanity Content Lake (managed)                           |
+
+"Partial" for Strapi: a content type is a JSON schema file, written by `strapi generate` or by the admin's Content-type Builder, and the builder works in development only.
+
+Sources:
+
+- **Nextly:** [licence](./LICENSE.md), [installation](https://nextlyhq.com/docs/getting-started/installation), [configuration](https://nextlyhq.com/docs/configuration), [Visual Schema Builder](https://nextlyhq.com/docs/schema-builder), [database support](https://nextlyhq.com/docs/database/support).
+- **Payload:** [licence](https://github.com/payloadcms/payload/blob/main/LICENSE.md), [what Payload is](https://payloadcms.com/docs/getting-started/what-is-payload), [databases](https://payloadcms.com/docs/database/overview).
+- **Strapi:** [licence](https://github.com/strapi/strapi/blob/develop/LICENSE), [installation](https://docs.strapi.io/cms/installation/cli), [CLI](https://docs.strapi.io/cms/cli), [Content-type Builder](https://docs.strapi.io/cms/features/content-type-builder), [databases](https://docs.strapi.io/cms/configurations/database).
+- **Sanity:** [Studio licence](https://github.com/sanity-io/sanity/blob/main/LICENSE), [setup and deployment](https://www.sanity.io/docs/setup-and-deployment), [Studio in Next.js](https://www.sanity.io/docs/nextjs/embedding-sanity-studio-in-nextjs), [Content Lake](https://www.sanity.io/docs/content-lake).
 
 ## Roadmap
 
