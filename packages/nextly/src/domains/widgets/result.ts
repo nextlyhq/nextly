@@ -12,7 +12,7 @@
 
 import type { TimeseriesInterval } from "../collections/query/timeseries-interval";
 
-import type { WidgetSourceFieldType } from "./sources";
+import type { WidgetFieldChoice, WidgetSourceFieldType } from "./sources";
 
 /**
  * One column of a list result, as the admin needs to head it.
@@ -47,6 +47,12 @@ export interface WidgetResultField {
    * in correctness.
    */
   type?: WidgetSourceFieldType;
+  /**
+   * What each stored value of this column is called, for a choice column: the status, a select,
+   * a radio. A row shows the label for the value it holds, so a person reads "Published" rather
+   * than `published`. Absent for every other column, which is presented by its `type`.
+   */
+  choices?: readonly WidgetFieldChoice[];
 }
 
 export type WidgetResult =
@@ -101,6 +107,11 @@ export type WidgetResult =
        * `atLeast` makes for a bounded count. Absent means every bucket is here.
        */
       truncated?: boolean;
+      /**
+       * The grouped field: its label for the chart's axis, and the label of each value a bucket
+       * holds. Absent when the source does not declare the field.
+       */
+      field?: WidgetResultField;
     }
   | {
       op: "timeseries";
@@ -141,7 +152,18 @@ export type WidgetResult =
  */
 export type WidgetSlot =
   | { ok: true; result: WidgetResult }
-  | { ok: false; error: string };
+  | {
+      ok: false;
+      error: string;
+      /**
+       * Present when the card's source is not available to this caller: forbidden, no longer
+       * existing, kept off the dashboard, or unable to answer what the card asks. Every one of
+       * them answers with this one code and the same `error`, so the card shows one "not
+       * available" state and nobody learns from it whether a source they cannot see exists.
+       * Absent for every other failure, which the card shows as an error with Retry.
+       */
+      code?: "unavailable";
+    };
 
 /**
  * The dashboard batch response body, positionally matched to the queries asked.

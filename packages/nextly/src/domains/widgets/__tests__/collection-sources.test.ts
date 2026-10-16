@@ -31,6 +31,8 @@ type Row = {
     label?: string;
     /** A registry row can carry this; the source builder reads it. */
     localized?: boolean;
+    /** A choice field's options, as stored config: read, not trusted, so `unknown`. */
+    options?: unknown;
     fields?: Array<{ name: string; type: string }>;
   }>;
   timestamps?: boolean;
@@ -210,6 +212,69 @@ describe("refreshCollectionSources", () => {
     );
     expect(field).toBeDefined();
     expect(field?.label).toBeUndefined();
+  });
+
+  it("carries a select's option labels onto the source as its value labels", async () => {
+    // A row stores `needs_review`; a person reads "Needs review". The label is the option's
+    // own, the one the entry form shows beside that choice.
+    registryHolds([
+      {
+        slug: "tickets",
+        fields: [
+          {
+            name: "stage",
+            type: "select",
+            label: "Stage",
+            options: [
+              { value: "needs_review", label: "Needs review" },
+              { value: "done", label: "Done" },
+            ],
+          },
+        ],
+      },
+    ]);
+
+    await refreshCollectionSources();
+
+    const field = getSource("collection:tickets")?.fields.find(
+      f => f.name === "stage"
+    );
+    expect(field?.choices).toEqual([
+      { value: "needs_review", label: "Needs review" },
+      { value: "done", label: "Done" },
+    ]);
+  });
+
+  it("keeps only the options it can name, and carries none for a field that is not a choice", async () => {
+    // Stored config is read, not trusted: an option with no string value or no usable label is
+    // left out rather than drawn as a blank bar. A text field with an `options` key is not a
+    // choice field and carries nothing.
+    registryHolds([
+      {
+        slug: "tickets",
+        fields: [
+          {
+            name: "stage",
+            type: "radio",
+            options: [
+              { value: "open", label: "Open" },
+              { value: "closed", label: "  " },
+              { value: 3, label: "Three" },
+              null,
+            ],
+          },
+          { name: "note", type: "text", options: [{ value: "a", label: "A" }] },
+        ],
+      },
+    ]);
+
+    await refreshCollectionSources();
+
+    const fields = getSource("collection:tickets")?.fields ?? [];
+    expect(fields.find(f => f.name === "stage")?.choices).toEqual([
+      { value: "open", label: "Open" },
+    ]);
+    expect(fields.find(f => f.name === "note")?.choices).toBeUndefined();
   });
 
   it("drops the source for a collection that has left the registry", async () => {

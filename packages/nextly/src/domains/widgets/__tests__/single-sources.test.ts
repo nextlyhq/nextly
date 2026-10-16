@@ -127,7 +127,8 @@ describe("what a single executes", () => {
       items: [{ siteName: "Acme", updatedAt: DOCUMENT.updatedAt }],
       fields: [
         { name: "siteName", label: "Site name", type: "string" },
-        { name: "updatedAt", type: "date" },
+        // A system column is labelled by the source, as a person reads it.
+        { name: "updatedAt", label: "Updated", type: "date" },
       ],
     });
   });
