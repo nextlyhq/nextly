@@ -486,6 +486,29 @@ describe("retired widgets", () => {
     expect(merged).toEqual([{ ...first, removed: false }, second]);
   });
 
+  it("takes the removed state from the cards in the merge, not from the matching card left out of it", () => {
+    // 🔴 The separating case. The first Count card and the retired card were
+    // both removed; the second Count card is visible but takes no part in the
+    // merge. Judging "every card removed" across all three would bring the
+    // first card back, an extra card nobody asked for.
+    const first = card("first", "core/count", {
+      removed: true,
+      config: { ...of("posts"), filter: "drafts" },
+    });
+    const second = card("second", "core/count", {
+      config: { ...of("posts"), filter: "published" },
+    });
+    const merged = applyRetirements(
+      [
+        first,
+        second,
+        card("health", "gen/health", { removed: true, config: of("posts") }),
+      ],
+      retirements
+    );
+    expect(merged).toEqual([first, second]);
+  });
+
   it("removes a merged card only when every card merged into it was removed", () => {
     const merge = (cols: boolean, sing: boolean, existing?: boolean) =>
       applyRetirements(

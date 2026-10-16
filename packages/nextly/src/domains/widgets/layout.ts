@@ -48,6 +48,7 @@ import { createHash } from "node:crypto";
 import { NextlyError } from "../../errors/nextly-error";
 
 import { MAX_PLACEMENTS } from "./layout-limits";
+import { LAYOUT_SCHEMA_VERSION } from "./layout-payload";
 import {
   WIDGET_WIDTHS as WIDGET_WIDTH_ORDER,
   isWidgetWidth,
@@ -55,15 +56,15 @@ import {
   type WidgetWidth,
 } from "./widths";
 
-/**
- * The shape this core writes and understands.
- *
- * Bumped only when the payload's structure changes, alongside a conversion that
- * carries the older shape forward. A row naming a version this core does not
- * have was written by a NEWER core, and is refused rather than guessed at,
- * because guessing would silently discard the fields this core cannot see.
- */
-export const LAYOUT_SCHEMA_VERSION = 3;
+// The payload's version, writer and size check live in the import-free
+// `layout-payload.ts`, so the browser asks the endpoint's own question about
+// what fits. Re-exported, so this module's importers are unchanged.
+export {
+  LAYOUT_SCHEMA_VERSION,
+  MAX_LAYOUT_BYTES,
+  layoutSizeProblem,
+  serializeLayout,
+} from "./layout-payload";
 
 /**
  * How many columns the flat first format was dealt across when it was read as
@@ -622,7 +623,12 @@ function widestAllowed(
  */
 function mergedCard(group: readonly RetiringCard[]): RetiringCard {
   const kept = group.find(card => !card.retired) ?? group[0];
-  const removed = group.every(card => card.placement.removed);
+  // Over the cards IN the merge: the kept one and the retired ones. Another
+  // successor card the layout already held stays as it was, so its state is
+  // no part of this card's.
+  const removed = group
+    .filter(card => card === kept || card.retired)
+    .every(card => card.placement.removed);
   if (!kept.retired) {
     return { ...kept, placement: { ...kept.placement, removed } };
   }
@@ -763,23 +769,6 @@ function placementsOfVersion(
         },
       });
   }
-}
-
-/**
- * The payload written into the `layout` column.
- *
- * `arranged` defaults to TRUE: a caller that says nothing is making the
- * ordinary kind of write, a save from customise mode.
- */
-export function serializeLayout(
-  placements: readonly WidgetPlacement[],
-  arranged = true
-): string {
-  return JSON.stringify({
-    schemaVersion: LAYOUT_SCHEMA_VERSION,
-    placements,
-    ...(arranged ? {} : { unarranged: true }),
-  });
 }
 
 /**
@@ -974,13 +963,9 @@ export function mergePreservingHidden(
 const ORPHANED = "\u0000orphaned";
 
 /**
- * How many placements one layout may hold, and how large its payload may be.
- *
- * MySQL's `TEXT` is 65535 BYTES, and the other two dialects are effectively
- * unbounded, so without a cap the same PUT stores cleanly on two dialects and
- * fails or truncates on the third. 32 KiB is half MySQL's limit, leaving room
- * for multi-byte characters. `MAX_PLACEMENTS` itself is declared in
- * `layout-limits.ts`, with no imports, because the browser reads it too.
+ * How many placements one layout may hold. `layout-payload.ts` says why, beside
+ * the byte limit it shares a reason with; it is declared in the import-free
+ * `layout-limits.ts` because the browser reads it too.
  */
 export { MAX_PLACEMENTS } from "./layout-limits";
 
@@ -990,7 +975,6 @@ export { MAX_PLACEMENTS } from "./layout-limits";
  * accumulating cards they lost access to, which is the case being bounded.
  */
 export const MAX_STORED_PLACEMENTS = MAX_PLACEMENTS * 2;
-export const MAX_LAYOUT_BYTES = 32 * 1024;
 
 /**
  * How deep a `config` object may nest. `JSON.parse` accepts a structure
@@ -998,27 +982,6 @@ export const MAX_LAYOUT_BYTES = 32 * 1024;
  * unbounded depth turned a write into an internal error on the way back out.
  */
 export const MAX_CONFIG_DEPTH = 16;
-
-/**
- * Why the caller's OWN submission cannot be stored, or `undefined`.
- *
- * 🔴 Measures only what the caller sent. A budget that also weighed the cards
- * carried back on their behalf would make ACCEPTANCE depend on data they
- * cannot see, and the pass/fail edge would be the oracle.
- */
-export function layoutSizeProblem(
-  placements: readonly WidgetPlacement[]
-): string | undefined {
-  if (placements.length > MAX_PLACEMENTS) {
-    return `a layout may hold at most ${MAX_PLACEMENTS} placements`;
-  }
-  // Byte length, not string length: the column's limit is bytes.
-  const bytes = Buffer.byteLength(serializeLayout(placements), "utf8");
-  if (bytes > MAX_LAYOUT_BYTES) {
-    return `a layout may be at most ${MAX_LAYOUT_BYTES} bytes; this one is ${bytes}`;
-  }
-  return undefined;
-}
 
 /**
  * A short, stable stand-in for "what this caller could see": which widgets,
