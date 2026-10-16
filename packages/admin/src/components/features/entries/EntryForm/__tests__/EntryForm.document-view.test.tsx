@@ -28,6 +28,10 @@ import {
   registerComponent,
   type DocumentViewProps,
 } from "@admin/lib/plugins/component-registry";
+import {
+  clearDocumentViews,
+  registerDocumentViews,
+} from "@admin/lib/plugins/document-view-registry";
 
 const { useDocumentLock, update, recovery } = vi.hoisted(() => ({
   useDocumentLock: vi.fn(),
@@ -258,20 +262,36 @@ describe("EntryForm with a document view", () => {
   it("leaves through the page's exit with unsaved work, without the leave warning", async () => {
     // The page's exit navigates to the edit address, which renders the same
     // page and so keeps this form mounted: the work is not lost, and the
-    // guard's "will be lost" dialog would be untrue.
+    // guard's "will be lost" dialog would be untrue. The guard knows the view
+    // is this document's from the registry, as the router does.
+    registerDocumentViews([
+      { slug: "pages", path: "builder", component: VIEW },
+    ]);
     onExit.mockImplementation(() => {
       window.history.pushState(null, "", "/admin/collections/pages/e1");
     });
     window.history.pushState(null, "", "/admin/collections/pages/e1/builder");
     const user = userEvent.setup();
-    renderView();
+    try {
+      renderView();
 
-    await user.type(screen.getByLabelText("Page heading"), " world");
-    await user.click(screen.getByRole("button", { name: "Done" }));
+      await user.type(screen.getByLabelText("Page heading"), " world");
+      await user.click(screen.getByRole("button", { name: "Done" }));
 
-    expect(onExit).toHaveBeenCalledTimes(1);
-    expect(window.location.pathname).toBe("/admin/collections/pages/e1");
-    expect(screen.queryByText("Unsaved Changes")).toBeNull();
+      expect(onExit).toHaveBeenCalledTimes(1);
+      expect(window.location.pathname).toBe("/admin/collections/pages/e1");
+      expect(screen.queryByText("Unsaved Changes")).toBeNull();
+
+      // The work is still unsaved, so the very next leave is asked about: the
+      // exit switched nothing off on its way out.
+      act(() => {
+        window.history.pushState(null, "", "/admin/collections/pages");
+      });
+      expect(await screen.findByText("Unsaved Changes")).toBeInTheDocument();
+      expect(window.location.pathname).toBe("/admin/collections/pages/e1");
+    } finally {
+      clearDocumentViews();
+    }
   });
 
   it("leaves Escape to the view rather than cancelling to the list", () => {

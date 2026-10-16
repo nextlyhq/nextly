@@ -24,7 +24,7 @@
  */
 
 import type { FieldConfig } from "nextly/config";
-import { useCallback, useEffect } from "react";
+import { useEffect } from "react";
 import { FormProvider, type UseFormReturn } from "react-hook-form";
 
 import type { ViewedVersion } from "@admin/components/features/versions/document-history-context";
@@ -40,7 +40,6 @@ import { LiveDocumentRecoveryOffer } from "./AutosaveRecoveryBanner";
 import { DocumentLockBanner } from "./DocumentLockBanner";
 import { DocumentViewFieldChooser } from "./DocumentViewFieldChooser";
 import { FormErrorSummary } from "./FormErrorSummary";
-import { useLeaveWithoutWarning } from "./UnsavedChangesGuard";
 import type { DocumentLockSurface } from "./useDocumentLockSurface";
 
 /** The view the route names, as the page hands it to the editor. */
@@ -116,17 +115,13 @@ export function DocumentViewBody({
   });
 
   /*
-   * Leaving the view for the edit screen is not leaving the document. Both
+   * Leaving the view for the edit screen is not leaving the document: both
    * addresses render the same page component, so the editor and its form stay
-   * mounted across the move and nothing unsaved is lost; the guard's warning
-   * that it would be is suppressed for this one navigation.
+   * mounted. The guard knows that move stays on the document and lets it
+   * through, so nothing is switched off for it — a suppression would also wave
+   * through whatever navigation came next, with the work still unsaved.
    */
-  const leaveWithoutWarning = useLeaveWithoutWarning();
-  const { onExit } = view;
-  const exit = useCallback(() => {
-    leaveWithoutWarning();
-    onExit();
-  }, [leaveWithoutWarning, onExit]);
+  const exit = view.onExit;
 
   // Which field the view edits, from the address. Read here rather than by
   // the view so the rule the admin applies to the address is the one answer.
