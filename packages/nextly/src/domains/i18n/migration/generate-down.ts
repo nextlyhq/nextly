@@ -164,23 +164,42 @@ function buildArchiveNonDefaultStatement(
 }
 
 /**
+ * The archive half of a field leaving translation on its own: every non-default language's value
+ * of its companion column, written to the localization archive. A caller that writes it before
+ * altering the main table, so that an archive that refuses the write stops the change before
+ * anything else has run, passes `archive: false` to {@link buildFieldLeavesTranslationStatements}
+ * for the rest.
+ */
+export function buildFieldLeavesTranslationArchiveStatement(
+  ref: Pick<CompanionCopyRef, "dialect" | "companionTable" | "defaultLocale">,
+  collection: string,
+  columnName: string
+): string {
+  return buildArchiveNonDefaultStatement(ref, collection, columnName);
+}
+
+/**
  * What a field that stops being translated needs before its companion column is dropped: every
  * non-default language's value archived, then the default language's value copied onto the main
  * table's column of the same name, which the caller has already added.
  *
  * Archive first, because it is the step that keeps what the drop would lose: if it fails, the
  * column has not been touched yet. Both statements are safe to re-run before the drop, so a run
- * stopped part-way loses nothing. The copy picks its row by the same rule as disabling translation
- * for the whole entity (`buildDefaultLocaleRestoreStatements`), so the two cannot disagree on what
- * the shared value becomes.
+ * stopped part-way loses nothing; a value archived twice is restored from its newest row. The copy
+ * picks its row by the same rule as disabling translation for the whole entity
+ * (`buildDefaultLocaleRestoreStatements`), so the two cannot disagree on what the shared value
+ * becomes. `archive: false` leaves out the archive write, for a caller that has made it already.
  */
 export function buildFieldLeavesTranslationStatements(
   ref: CompanionCopyRef,
   collection: string,
-  columnName: string
+  columnName: string,
+  options: { archive?: boolean } = {}
 ): string[] {
   return [
-    buildArchiveNonDefaultStatement(ref, collection, columnName),
+    ...(options.archive === false
+      ? []
+      : [buildArchiveNonDefaultStatement(ref, collection, columnName)]),
     ...buildDefaultLocaleRestoreStatements(ref, [columnName]),
   ];
 }

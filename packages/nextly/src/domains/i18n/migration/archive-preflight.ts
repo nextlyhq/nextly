@@ -19,6 +19,7 @@ import {
 import { isIdempotencyError } from "../../schema/pipeline/sql-statement-utils";
 
 import { lit, q } from "./ddl-types";
+import { fieldToLocalizedColumnSpec } from "./field-to-column-spec";
 import {
   type CompanionFieldLike,
   fieldsLeavingTranslation,
@@ -108,7 +109,11 @@ function constraintsOf(field: LeavingFieldLike): string[] {
  * the change alters anything. It is one call so the collection save, the collection, Single and
  * field-group schema dialogs and the Single save cannot answer it differently.
  *
- * Two things are refused here:
+ * Three things are refused here:
+ * - A field whose stored kind changes in the same edit (text becoming a number, say). Its values
+ *   are copied into the shared column as they are, without the conversion and confirmation a type
+ *   change goes through on its own, so one the new kind cannot hold would fail part-way or be
+ *   coerced.
  * - A required or unique field. Its shared column is created, and its constraints checked, before
  *   the default language's values are copied into it, so at that moment every existing row holds
  *   the same placeholder or none. A required column then has nothing valid to hold (each dialect
@@ -119,8 +124,8 @@ function constraintsOf(field: LeavingFieldLike): string[] {
  * Nothing is asked when no field leaves translation, or when the entity is not translated before
  * and after the change (turning translation off for the whole entity archives by its own path).
  *
- * @throws NextlyError `VALIDATION_ERROR` naming each constrained field and the order that works,
- *   or `NEXTLY_MIGRATION_APPLY_FAILED` from the archive check
+ * @throws NextlyError `VALIDATION_ERROR` naming each retyped or constrained field and the order
+ *   that works, or `NEXTLY_MIGRATION_APPLY_FAILED` from the archive check
  */
 export async function assertFieldsCanLeaveTranslation(args: {
   adapter: DrizzleAdapter;
@@ -136,6 +141,33 @@ export async function assertFieldsCanLeaveTranslation(args: {
     fieldsLeavingTranslation(args.oldFields, args.newFields)
   );
   if (leaving.size === 0) return;
+
+  // The kind of column a field is stored in. Asked as a collection's, because the kind does not
+  // depend on which entity built the table; only a column's bounds do, and a copy keeps those.
+  const dialect = args.adapter.getCapabilities().dialect;
+  const kindOf = (field: LeavingFieldLike) =>
+    fieldToLocalizedColumnSpec(field, dialect, "collection")?.kind;
+  const before = new Map(args.oldFields.map(f => [f.name, f]));
+  const retyped = args.newFields.filter(f => {
+    const previous = before.get(f.name);
+    return (
+      leaving.has(f.name) &&
+      previous !== undefined &&
+      kindOf(previous) !== kindOf(f)
+    );
+  });
+  if (retyped.length > 0) {
+    throw NextlyError.validation({
+      errors: retyped.map(f => ({
+        path: `fields.${f.name}`,
+        code: "RETYPED_FIELD_LEAVES_TRANSLATION",
+        message:
+          `"${f.name}" changes its type in the same change that stops it being translated. ` +
+          `Make it shared and save first, then change its type.`,
+      })),
+      logContext: { entity: args.entity, fields: retyped.map(f => f.name) },
+    });
+  }
 
   const constrained = args.newFields.filter(
     f => leaving.has(f.name) && constraintsOf(f).length > 0

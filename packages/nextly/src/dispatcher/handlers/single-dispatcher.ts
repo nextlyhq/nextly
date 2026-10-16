@@ -1040,25 +1040,6 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         schemaFields = b.fields as unknown as FieldDefinition[];
       }
 
-      // A field leaving translation has preconditions of its own, asked before the schema or the
-      // registry row changes.
-      if (wasLocalized && isLocalized && schemaFields !== undefined) {
-        const adapter = getAdapterFromDI();
-        if (!adapter) {
-          throw NextlyError.internal({
-            logContext: { reason: "database adapter not initialized", slug },
-          });
-        }
-        await assertFieldsCanLeaveTranslation({
-          adapter,
-          entity: slug,
-          oldFields: (existing.fields ?? []) as unknown as FieldDefinition[],
-          newFields: schemaFields,
-          wasLocalized,
-          isLocalized,
-        });
-      }
-
       // The schema change and the registry row are written by one service call, because a lock has
       // to cover both and cannot do that from here: the DDL would already have run by the time a
       // lock taken inside the registry service was acquired.

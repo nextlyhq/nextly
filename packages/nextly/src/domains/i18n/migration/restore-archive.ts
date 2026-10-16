@@ -18,7 +18,7 @@
  * @module domains/i18n/migration/restore-archive
  */
 
-import { and, eq, lte } from "drizzle-orm";
+import { and, asc, eq, lte } from "drizzle-orm";
 
 import { NextlyError } from "../../../errors/nextly-error";
 import { nextlyI18nArchiveTables } from "../../../schemas/nextly-i18n-archive";
@@ -37,7 +37,11 @@ import {
  */
 interface ArchiveReadWriteDb {
   select(columns: Record<string, unknown>): {
-    from(table: unknown): { where(condition: unknown): Promise<unknown> };
+    from(table: unknown): {
+      where(condition: unknown): {
+        orderBy(...columns: unknown[]): Promise<unknown>;
+      };
+    };
   };
   delete(table: unknown): { where(condition: unknown): Promise<unknown> };
 }
@@ -152,7 +156,11 @@ export async function restoreI18nArchive(
       value: nextlyI18nArchive.value,
     })
     .from(nextlyI18nArchive)
-    .where(where)) as ArchiveRow[];
+    .where(where)
+    // Oldest first, so that when a value was archived more than once (a field made shared,
+    // translated again, then made shared again) the newest row is the one assigned last below
+    // and is what comes back. The id is the database's own insertion order on every dialect.
+    .orderBy(asc(nextlyI18nArchive.id))) as ArchiveRow[];
 
   if (rows.length === 0) {
     return { rowsRead: 0, rowsRestored: 0, locales: [] };

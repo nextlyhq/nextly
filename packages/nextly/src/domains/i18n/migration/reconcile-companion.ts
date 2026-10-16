@@ -10,6 +10,7 @@ import { ddlType, lit, q } from "./ddl-types";
 import { deriveCompanionSpec } from "./derive-companion-spec";
 import { fieldToLocalizedColumnSpec } from "./field-to-column-spec";
 import {
+  buildFieldLeavesTranslationArchiveStatement,
   buildFieldLeavesTranslationStatements,
   buildLocalizationDownStatements,
 } from "./generate-down";
@@ -96,6 +97,11 @@ export interface ReconcileCompanionArgs {
    * removed outright is not listed and is dropped as before.
    */
   sharedAfter?: readonly string[];
+  /**
+   * The archive rows of the `sharedAfter` fields were written by the caller before the main table
+   * changed, so only the copy of the default language's value and the drop are emitted here.
+   */
+  sharedAfterArchived?: boolean;
 }
 
 /**
@@ -312,7 +318,8 @@ export function buildCompanionReconcileStatements(
             defaultLocale: args.defaultLocale,
           },
           slug,
-          col.name
+          col.name,
+          { archive: args.sharedAfterArchived !== true }
         )
       );
     }
@@ -452,6 +459,14 @@ export interface CompanionTransitionArgs {
   wasStatus: boolean;
   /** Whether the existing companion physically has `_status` (see ReconcileCompanionArgs). */
   companionHasStatus?: boolean;
+  /**
+   * Return the archive writes of fields leaving translation in `beforeMain`, for a caller that runs
+   * them before it alters the main table, rather than among the companion statements after it.
+   * A migration file needs this: replayed on a database whose archive refuses the write, it must
+   * stop before the main table gains a column, because a step that has run is not undone on a
+   * dialect without transactional DDL.
+   */
+  archiveBeforeMain?: boolean;
 }
 
 /** The plan produced by {@link buildCompanionTransitionStatements}. */
@@ -462,6 +477,11 @@ export interface CompanionTransitionPlan {
   needsArchive: boolean;
   /** true when the companion table no longer exists afterwards (disable) → skip re-registration. */
   companionDropped: boolean;
+  /**
+   * Statements to run before the main table changes: the archive writes of fields leaving
+   * translation, when `archiveBeforeMain` asked for them here. Empty otherwise.
+   */
+  beforeMain?: string[];
 }
 
 /**
@@ -603,7 +623,26 @@ export function buildCompanionTransitionStatements(
     const oldLocalized = oldFields.filter(f => isFieldLocalized(f, true));
     const newLocalized = newFields.filter(f => isFieldLocalized(f, true));
     const sharedAfter = fieldsLeavingTranslation(oldFields, newFields);
+    const archiveFirst = args.archiveBeforeMain === true;
+    const companionTable = `${tableName}_locales`;
+    const beforeMain = archiveFirst
+      ? oldLocalized
+          .filter(f => sharedAfter.includes(f.name))
+          .flatMap(f => {
+            const col = fieldToLocalizedColumnSpec(f, dialect, builtBy);
+            return col
+              ? [
+                  buildFieldLeavesTranslationArchiveStatement(
+                    { dialect, companionTable, defaultLocale },
+                    slug,
+                    col.name
+                  ),
+                ]
+              : [];
+          })
+      : [];
     return {
+      beforeMain,
       statements: buildCompanionReconcileStatements({
         slug,
         tableName,
@@ -619,6 +658,7 @@ export function buildCompanionTransitionStatements(
         // translation keeps its default language's value.
         defaultLocale,
         sharedAfter,
+        sharedAfterArchived: archiveFirst,
       }),
       needsArchive: sharedAfter.length > 0,
       companionDropped: false,
@@ -658,6 +698,8 @@ export function buildCompanionTransitionPlans(
   const local = buildCompanionTransitionStatements(args);
   const same =
     local.statements.length === artefact.statements.length &&
-    local.statements.every((s, i) => s === artefact.statements[i]);
+    local.statements.every((s, i) => s === artefact.statements[i]) &&
+    (local.beforeMain ?? []).join("\n") ===
+      (artefact.beforeMain ?? []).join("\n");
   return same ? { artefact } : { artefact, local };
 }

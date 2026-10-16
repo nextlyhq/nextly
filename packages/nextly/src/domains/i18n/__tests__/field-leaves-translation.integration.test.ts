@@ -21,6 +21,7 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import type { ServiceContainer } from "../../../services";
+import { CollectionFileManager } from "../../../services/collection-file-manager";
 import type { SingleEntryService } from "../../singles/services/single-entry-service";
 import { getI18nArchiveDdl } from "../../../schemas/nextly-i18n-archive/ddl";
 import { restoreI18nArchive } from "../migration/restore-archive";
@@ -462,6 +463,58 @@ describeEachDialect("a field that stops being translated", dialect => {
     }
   );
 
+  it("writes the archive in its migration before the main table changes", async () => {
+    // The save also writes its migration to a file that other databases replay. Replayed where the
+    // archive refuses the write, the file must stop before the main table gains the column, since
+    // a step that has run is not undone on a dialect without transactional DDL.
+    await seedCollection();
+    const saved = vi.spyOn(CollectionFileManager.prototype, "saveMigration");
+
+    const result = await handler().updateCollection(
+      { collectionName: "posts" },
+      { fields: SHARED }
+    );
+    expect(result.success, JSON.stringify(result)).toBe(true);
+
+    const migration = String(saved.mock.calls.at(-1)?.[0] ?? "");
+    const archiveWrite = migration.indexOf(
+      `INSERT INTO ${quote(dialect, "nextly_i18n_archive")}`
+    );
+    const mainChange = migration.indexOf(
+      `ALTER TABLE ${quote(dialect, "dc_posts")} ADD COLUMN`
+    );
+    expect(archiveWrite).toBeGreaterThan(-1);
+    expect(mainChange).toBeGreaterThan(-1);
+    expect(archiveWrite).toBeLessThan(mainChange);
+    saved.mockRestore();
+  });
+
+  it.each(COLLECTION_CHANGES)(
+    "refuses a field that changes its type as it leaves and changes nothing when $path",
+    async ({ change }) => {
+      // Text copied as it is into a number column would fail part-way or be coerced.
+      await seedCodes({ name: "code", type: "text" });
+
+      const refusal = await change([
+        { name: "code", type: "number", localized: false },
+      ]).then(
+        () => undefined,
+        (error: unknown) => error
+      );
+
+      const reported =
+        refusal instanceof Error
+          ? `${refusal.message} ${JSON.stringify((refusal as { publicData?: unknown }).publicData ?? null)}`
+          : String(refusal);
+      expect(reported).toMatch(/RETYPED_FIELD_LEAVES_TRANSLATION/);
+      expect(await columnsOf("dc_posts")).not.toContain("code");
+      const kept = await query<{ code: string }>(
+        `SELECT ${quote(dialect, "code")} AS code FROM ${quote(dialect, "dc_posts_locales")} ORDER BY ${quote(dialect, "code")}`
+      );
+      expect(kept.map(row => row.code)).toEqual(["A-1", "B-2"]);
+    }
+  );
+
   it("brings the archived values back once the field is translated again", async () => {
     const id = await seedCollection();
     const shared = await handler().updateCollection(
@@ -542,5 +595,41 @@ describeEachDialect("a field that stops being translated", dialect => {
         `WHERE ${quote(dialect, "_parent")} = '${id}' AND ${quote(dialect, "_locale")} = 'es'`
     );
     expect(back?.value).toBe(VALUES.es);
+  });
+  it("restores the newest value when a field was archived more than once", async () => {
+    // A field made shared, translated again, edited, and made shared again leaves two archive
+    // rows for the same entry, language and field; the second is the one to bring back.
+    const id = await seedCollection();
+    for (const statement of getI18nArchiveDdl(dialect)) await query(statement);
+    const archive = quote(dialect, "nextly_i18n_archive");
+    const columns = ["id", "collection", "entry_id", "locale", "field", "value"]
+      .map(c => quote(dialect, c))
+      .join(", ");
+    // The newer row (the higher id) is written first, so a read that follows storage order rather
+    // than the id meets the older row last; PostgreSQL returns rows in the order they were stored.
+    for (const [rowId, value] of [
+      [9002, "Newer"],
+      [9001, "Older"],
+    ] as const) {
+      await query(
+        `INSERT INTO ${archive} (${columns}) VALUES (${rowId}, 'posts', '${id}', 'es', 'heading', '${value}')`
+      );
+    }
+
+    await restoreI18nArchive({
+      adapter: current.adapter as unknown as Parameters<
+        typeof restoreI18nArchive
+      >[0]["adapter"],
+      collection: "posts",
+      companionTableName: "dc_posts_locales",
+      field: "heading",
+      locale: "es",
+    });
+
+    const [back] = await query<{ heading: string | null }>(
+      `SELECT ${quote(dialect, "heading")} AS heading FROM ${quote(dialect, "dc_posts_locales")} ` +
+        `WHERE ${quote(dialect, "_parent")} = '${id}' AND ${quote(dialect, "_locale")} = 'es'`
+    );
+    expect(back?.heading).toBe("Newer");
   });
 });

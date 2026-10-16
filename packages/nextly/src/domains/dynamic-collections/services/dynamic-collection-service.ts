@@ -190,16 +190,23 @@ export interface UpdateCollectionInput {
  *
  * A disable re-adds the translatable columns to main (the companion part), so the companion
  * transition runs FIRST, after the archive table is ensured, then the shared ALTER. An enable or a
- * field change runs the shared ALTER first, then seeds and drops or ADD/DROPs the companion; one
- * that archives (a field leaving translation) ensures the archive table between the two.
+ * field change runs the shared ALTER first, then seeds and drops or ADD/DROPs the companion. One
+ * that archives (a field leaving translation) ensures the archive table and writes the archive
+ * rows before the shared ALTER: replayed on a database whose archive refuses them, the migration
+ * stops before the main table has changed.
  */
 function orderLocalizedMigration(
   isLocalized: boolean,
-  parts: { main: string; archive: string; companion: string }
+  parts: {
+    main: string;
+    archive: string;
+    beforeMain: string;
+    companion: string;
+  }
 ): string {
   return (
     isLocalized
-      ? [parts.main, parts.archive, parts.companion]
+      ? [parts.archive, parts.beforeMain, parts.main, parts.companion]
       : [parts.archive, parts.companion, parts.main]
   )
     .filter(sql => sql && sql.trim())
@@ -808,7 +815,7 @@ export class DynamicCollectionService extends BaseService {
     mainSQL: string,
     args: Parameters<DynamicCollectionService["buildCompanionTransitionSQL"]>[0]
   ): Promise<{ sql: string; localSql?: string }> {
-    const { sql, localSql, needsArchive } =
+    const { sql, localSql, beforeMainSql, needsArchive } =
       await this.buildCompanionTransitionSQL(args);
     const archive = needsArchive
       ? this.toBreakpointSql(getI18nArchiveDdl(this.adapter.dialect))
@@ -817,6 +824,7 @@ export class DynamicCollectionService extends BaseService {
       orderLocalizedMigration(args.isLocalized, {
         main: mainSQL,
         archive,
+        beforeMain: beforeMainSql,
         companion,
       });
     return {
@@ -835,7 +843,12 @@ export class DynamicCollectionService extends BaseService {
     status: boolean;
     /** Whether the entity HAD Draft/Published before this save — see `wasStatus` on the args. */
     wasStatus: boolean;
-  }): Promise<{ sql: string; localSql?: string; needsArchive: boolean }> {
+  }): Promise<{
+    sql: string;
+    localSql?: string;
+    beforeMainSql: string;
+    needsArchive: boolean;
+  }> {
     const companionTable = `${args.tableName}_locales`;
     const companionExists = await this.adapter.tableExists(companionTable);
     // Only introspect `_status` for a field change on a still-localized collection (a later
@@ -862,6 +875,9 @@ export class DynamicCollectionService extends BaseService {
       companionExists,
       companionHasStatus,
       wasStatus: args.wasStatus,
+      // This service writes the whole migration, main-table change included, so the archive
+      // writes come back separately to go ahead of it.
+      archiveBeforeMain: true,
     };
 
     // Which translatable columns the main table still carries. A disable must not re-add one that
@@ -886,6 +902,7 @@ export class DynamicCollectionService extends BaseService {
     return {
       sql: this.toBreakpointSql(artefact.statements),
       ...(local ? { localSql: this.toBreakpointSql(local.statements) } : {}),
+      beforeMainSql: this.toBreakpointSql(artefact.beforeMain ?? []),
       needsArchive: artefact.needsArchive,
     };
   }

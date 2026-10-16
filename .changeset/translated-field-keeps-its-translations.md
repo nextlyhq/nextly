@@ -37,8 +37,10 @@ Singles and field groups, through the Schema Builder's save and its schema
 dialog.
 
 The change is refused before anything is altered when the archive cannot be
-written, and when the field is Required or Unique, which its new shared column
-cannot satisfy until the values are copied into it; the message names the
-order that works. `nextly i18n:restore --field <name>` brings one field's
-archived values back once it is translated again, by the field's name or its
-column name.
+written, when the field is Required or Unique, which its new shared column
+cannot satisfy until the values are copied into it, and when the same edit
+changes the field's type; the message names the order that works.
+
+`nextly i18n:restore --field <name>` brings one field's archived values back
+once it is translated again, by the field's name or its column name; a value
+archived more than once comes back from its newest row.
