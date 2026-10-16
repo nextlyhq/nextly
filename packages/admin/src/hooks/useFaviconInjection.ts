@@ -2,9 +2,17 @@
 
 import { useEffect } from "react";
 
-/** The icon links a browser picks a page's favicon from. */
-const ICON_LINKS =
-  'link[rel="icon"], link[rel="shortcut icon"], link[rel="apple-touch-icon"]';
+/**
+ * Marks an icon an admin provider added. Every admin icon is left alone, so two
+ * providers on one page (a host wrapping the admin's root layout in its own)
+ * never switch each other's icon off.
+ */
+const ADMIN_ICON = "data-nextly-admin-icon";
+
+/** The host's icon links: those a browser picks a favicon from, other than the admin's. */
+const ICON_LINKS = ["icon", "shortcut icon", "apple-touch-icon"]
+  .map(rel => `link[rel="${rel}"]:not([${ADMIN_ICON}])`)
+  .join(", ");
 
 /** The `rel` a host icon carries while the admin's icon is shown in its place. */
 const SWITCHED_OFF = "nextly-replaced-icon";
@@ -25,6 +33,7 @@ const SWITCHED_OFF = "nextly-replaced-icon";
 export function useFaviconInjection(href: string): void {
   useEffect(() => {
     const own = document.createElement("link");
+    own.setAttribute(ADMIN_ICON, "");
     own.rel = "icon";
     if (href.startsWith("data:image/svg+xml")) own.type = "image/svg+xml";
     own.href = href;
@@ -32,8 +41,11 @@ export function useFaviconInjection(href: string): void {
     // Each host icon switched off, with the `rel` it had: the latest one, if
     // React changed it while the admin's icon was shown.
     const originals = new Map<HTMLLinkElement, string>();
+    // A link can arrive in several records of one batch (added, then its
+    // `rel` changed); once it is switched off, its `rel` is no longer the
+    // host's, so a second record must not overwrite the saved one.
     const switchOff = (icon: HTMLLinkElement) => {
-      if (icon === own) return;
+      if (icon.rel === SWITCHED_OFF) return;
       originals.set(icon, icon.rel);
       icon.rel = SWITCHED_OFF;
     };

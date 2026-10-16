@@ -124,6 +124,28 @@ describe("the admin's favicon", () => {
     );
   });
 
+  it("restores a link that arrived and changed its relation in one go", async () => {
+    const admin = renderHook(() => useFaviconInjection(ADMIN_ICON));
+    const late = document.createElement("link");
+    late.rel = "icon";
+    late.href = "/late.ico";
+    document.head.appendChild(late);
+    late.rel = "apple-touch-icon";
+    await observed();
+
+    expect(hrefs()).toEqual([ADMIN_ICON]);
+    admin.unmount();
+    expect(late.rel).toBe("apple-touch-icon");
+  });
+
+  it("leaves a second admin provider's icon on", async () => {
+    renderHook(() => useFaviconInjection(ADMIN_ICON));
+    renderHook(() => useFaviconInjection("/second-admin.png"));
+    await observed();
+
+    expect(hrefs().sort()).toEqual(["/second-admin.png", ADMIN_ICON].sort());
+  });
+
   it("keeps a single admin icon when the branding changes it", () => {
     render(<HostIcon href="/favicon.ico" />);
     const admin = renderHook(({ href }) => useFaviconInjection(href), {
