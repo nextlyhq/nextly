@@ -153,19 +153,6 @@ function SingleEditPageSkeleton() {
   );
 }
 
-/** The plugin view this Single's address names, or `undefined` on its edit address. */
-function singleDocumentView(
-  params: SingleEditPageProps["params"]
-): DocumentViewMount | undefined {
-  const slug = params?.slug;
-  return documentViewMount(
-    "single",
-    slug,
-    params?.view,
-    slug === undefined ? undefined : buildRoute(ROUTES.SINGLE_EDIT, { slug })
-  );
-}
-
 // ============================================================================
 // Component
 // ============================================================================
@@ -420,5 +407,18 @@ export default function SingleEditPage({
         </MeasuredPageFrame>
       </QueryErrorBoundary>
     </DocumentViewGate>
+  );
+}
+
+/** The plugin view this Single's address names, or `undefined` on its edit address. */
+function singleDocumentView(
+  params: SingleEditPageProps["params"]
+): DocumentViewMount | undefined {
+  const slug = params?.slug;
+  return documentViewMount(
+    "single",
+    slug,
+    params?.view,
+    slug === undefined ? undefined : buildRoute(ROUTES.SINGLE_EDIT, { slug })
   );
 }

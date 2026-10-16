@@ -217,19 +217,6 @@ function getEntryTitle(
   return entryTitleValue(entry, useAsTitle) ?? `Entry ${id.substring(0, 8)}...`;
 }
 
-/** The plugin view this entry's address names, or `undefined` on its edit address. */
-function entryDocumentView(
-  params: EditEntryPageProps["params"]
-): DocumentViewMount | undefined {
-  const slug = params?.slug;
-  const id = params?.id;
-  const editPath =
-    slug !== undefined && id !== undefined
-      ? buildRoute(ROUTES.COLLECTION_ENTRY_EDIT, { slug, id })
-      : undefined;
-  return documentViewMount("collection", slug, params?.view, editPath);
-}
-
 // ============================================================================
 // Component
 // ============================================================================
@@ -709,4 +696,17 @@ export default function EditEntryPage({
       </QueryErrorBoundary>
     </DocumentViewGate>
   );
+}
+
+/** The plugin view this entry's address names, or `undefined` on its edit address. */
+function entryDocumentView(
+  params: EditEntryPageProps["params"]
+): DocumentViewMount | undefined {
+  const slug = params?.slug;
+  const id = params?.id;
+  const editPath =
+    slug !== undefined && id !== undefined
+      ? buildRoute(ROUTES.COLLECTION_ENTRY_EDIT, { slug, id })
+      : undefined;
+  return documentViewMount("collection", slug, params?.view, editPath);
 }
