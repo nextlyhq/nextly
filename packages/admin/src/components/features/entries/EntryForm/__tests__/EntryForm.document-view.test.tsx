@@ -375,6 +375,28 @@ describe("EntryForm with a document view", () => {
     ).toBeInTheDocument();
   });
 
+  it("says the screen is unavailable, rather than drawing nothing, when its component is missing", () => {
+    // Declared, routed and loaded, but not in this admin's component map: the
+    // first draw of a plugin added without regenerating the map. The control
+    // is the first case in this suite, where the registered view draws.
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      renderView({
+        documentView: { component: "@acme/missing/admin#View", onExit },
+      });
+
+      expect(screen.getByRole("alert").textContent).toContain(
+        "This screen isn't available. Ask your developer."
+      );
+      expect(screen.queryByTestId("builder-view")).toBeNull();
+      expect(error).toHaveBeenCalledWith(
+        expect.stringContaining("@acme/missing/admin#View")
+      );
+    } finally {
+      error.mockRestore();
+    }
+  });
+
   it("keeps the ordinary editor when no view is routed", () => {
     // The control for the first case: the same render without a view does
     // produce the entry form element and its fields.

@@ -40,6 +40,7 @@ import { LiveDocumentRecoveryOffer } from "./AutosaveRecoveryBanner";
 import { DocumentLockBanner } from "./DocumentLockBanner";
 import { DocumentViewFieldChooser } from "./DocumentViewFieldChooser";
 import { FormErrorSummary } from "./FormErrorSummary";
+import { MissingDocumentViewComponent } from "./MissingDocumentViewComponent";
 import type { DocumentLockSurface } from "./useDocumentLockSurface";
 
 /** The view the route names, as the page hands it to the editor. */
@@ -221,6 +222,7 @@ export function DocumentViewBody({
               key={offered.generation}
               path={view.component}
               props={viewProps}
+              fallback={<MissingDocumentViewComponent path={view.component} />}
             />
           )}
         </div>
