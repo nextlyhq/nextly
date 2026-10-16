@@ -472,3 +472,59 @@ describe("the rare forms are refused by design", () => {
     ).not.toThrow();
   });
 });
+
+describe("the review of the same-migration follow-up", () => {
+  it("does not credit a conditional add that may be a no-op on an existing column", () => {
+    expect(
+      refusal(() =>
+        guard(
+          [
+            "ALTER TABLE fx__notes ADD COLUMN IF NOT EXISTS body int",
+            "ALTER TABLE fx__notes ALTER COLUMN body SET NOT NULL",
+          ],
+          "app",
+          "postgresql"
+        )
+      )
+    ).toMatchObject({ table: "fx__notes", column: "body" });
+  });
+
+  it("does not record a MySQL FULLTEXT index as an added column", () => {
+    expect(
+      refusal(() =>
+        guard(
+          [
+            "ALTER TABLE fx__notes ADD FULLTEXT INDEX ft (body)",
+            "ALTER TABLE fx__notes ALTER COLUMN fulltext SET NOT NULL",
+          ],
+          "app",
+          "mysql"
+        )
+      )
+    ).toMatchObject({ table: "fx__notes", column: "fulltext" });
+  });
+
+  it("names an index an ALTER TABLE changes, so production can look it up", () => {
+    expect(
+      indexesNamedWithoutTable(
+        ["ALTER TABLE idx_body SET TABLESPACE other"],
+        "postgresql"
+      )
+    ).toContain("idx_body");
+  });
+
+  it("refuses every ALTER TABLE form that names an index", () => {
+    expect(() =>
+      assertNoForeignDrops({
+        statements: ["ALTER TABLE idx_status RENAME TO other"],
+        stream: "app",
+        owners,
+        elementOwners,
+        dialect: "postgresql",
+        source: "0010_under_test",
+        liveTables: new Set([...owners.keys(), "users"]),
+        liveIndexTables: new Map([["idx_status", "fx__notes"]]),
+      })
+    ).toThrow();
+  });
+});
