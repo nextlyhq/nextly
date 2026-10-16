@@ -83,6 +83,24 @@ experimental.
 
 Secret fields are masked in diffs. A password field's history never shows its values.
 
+### Field read rules in history
+
+Every field-level `access.read` rule applies to history as it applies to reading the
+document: a version, a comparison and a restore show a reader only what the rules let
+them read. That includes rules on fields inside groups and repeaters, and rules declared
+on a component's own fields, which are judged on each instance the version holds, at any
+depth. An API key is judged on its own grants, not its owner's.
+
+- A version read lists what it held back in `withheld`, by field name, or by a dotted
+  path below the top level (`banner.secret`).
+- A comparison shows a held-back field as `hidden` in its place, with neither value.
+- A restore never writes back a field the restorer may not read; it is reported in
+  `droppedFields`.
+
+History fails closed. A rule that throws hides its own field. If the rules cannot be
+evaluated at all, a version read withholds every field that carries one, and a restore is
+refused.
+
 ## Restoring
 
 Restore writes **through the same update path a human edit uses**. Validation runs, hooks

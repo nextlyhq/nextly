@@ -254,7 +254,12 @@ export async function listVersionsForDocument(
 /** One version, including its snapshot, redacted for the caller. */
 export async function getVersionForDocument(
   args: VersionMethodArgs & { versionNo: number }
-): Promise<VersionRow> {
+): Promise<
+  VersionRow & {
+    /** Fields the read rules withheld: top-level keys and dotted paths. */
+    withheld: string[];
+  }
+> {
   if (!Number.isInteger(args.versionNo) || args.versionNo < 1) {
     throw NextlyError.validation({
       errors: [
@@ -285,11 +290,14 @@ export async function getVersionForDocument(
     args.versionNo
   );
 
-  await redactSnapshotForUser(
+  // What the read rules withheld is named beside the snapshot, so a reader is
+  // told a value is held back rather than shown a version that lacks it.
+  const withheld = await redactSnapshotForUser(
     row.snapshot,
     args.scopeKind,
     args.slug,
-    args.user
+    args.user,
+    args.authenticatedScope
   );
 
   // Resolve relationship and upload ids in the snapshot to display labels
@@ -304,7 +312,7 @@ export async function getVersionForDocument(
     row.locale
   );
 
-  return row;
+  return { ...row, withheld: [...withheld] };
 }
 
 /**
@@ -920,7 +928,8 @@ export async function getAutosaveForDocument(
     row.snapshot,
     args.scopeKind,
     args.slug,
-    args.user
+    args.user,
+    args.authenticatedScope
   );
   return row;
 }

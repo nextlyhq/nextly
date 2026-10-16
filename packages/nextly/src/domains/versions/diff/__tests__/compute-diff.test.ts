@@ -781,6 +781,57 @@ describe("computeVersionDiff — round-2 hardening", () => {
     }
   });
 
+  it("compares a component child with a read rule once redaction judged it", () => {
+    const layout = field({
+      name: "layout",
+      type: "component",
+      components: ["card"],
+      repeatable: true,
+      componentSchemas: {
+        card: {
+          fields: [
+            field({ name: "title", type: "text" }),
+            field({
+              name: "secret",
+              type: "text",
+              access: { read: () => false },
+            }),
+          ],
+        },
+      },
+    });
+    const before = {
+      layout: [{ id: "1", _componentType: "card", title: "t", secret: "A" }],
+    };
+    const after = {
+      layout: [{ id: "1", _componentType: "card", title: "t", secret: "B" }],
+    };
+    const itemOf = (diff: ReturnType<typeof computeVersionDiff>) => {
+      const list = diff.fields[0];
+      expect(list.kind).toBe("list");
+      return list.kind === "list" ? list.items[0] : undefined;
+    };
+
+    // A reader the redaction allowed: the change is shown.
+    const shown = itemOf(
+      computeVersionDiff(before, after, [layout], {
+        componentRulesApplied: true,
+      })
+    );
+    expect(shown?.fields.find(n => n.name === "secret")?.status).toBe(
+      "changed"
+    );
+    // A reader it denied: named in its place, with neither value.
+    const hidden = itemOf(
+      computeVersionDiff(before, after, [layout], {
+        componentRulesApplied: true,
+        withheld: new Set(["layout.secret"]),
+      })
+    );
+    expect(hidden?.fields.find(n => n.name === "secret")?.kind).toBe("hidden");
+    expect(JSON.stringify(hidden)).not.toMatch(/"A"|"B"/);
+  });
+
   it("keeps a top-level field declaring a read rule (redaction handles those)", () => {
     const fields = [
       field({ name: "title", type: "text" }),

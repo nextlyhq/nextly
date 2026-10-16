@@ -6,7 +6,10 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const assertReadableSpy = vi.fn();
-const redactSpy = vi.fn();
+// Redaction answers what it withheld; nothing, unless a case says otherwise.
+const redactSpy = vi.fn((..._args: unknown[]) =>
+  Promise.resolve(new Set<string>())
+);
 const resolveSingleIdSpy = vi.fn();
 const listSpy = vi.fn();
 const getSpy = vi.fn();
@@ -183,20 +186,24 @@ describe("getVersionForDocument", () => {
   it("redacts the snapshot before returning it", async () => {
     getSpy.mockResolvedValue({ versionNo: 1, snapshot: { title: "x" } });
 
+    const scope = { actorType: "apiKey" as const, permissions: ["read-posts"] };
     await getVersionForDocument({
       scopeKind: "collection",
       slug: "posts",
       entryId: "e1",
       user,
+      authenticatedScope: scope,
       versionNo: 1,
     });
 
-    // A stored snapshot must never reveal a field the live read would hide.
+    // A stored snapshot must never reveal a field the live read would hide,
+    // judged for a key on the key's own grants.
     expect(redactSpy).toHaveBeenCalledWith(
       { title: "x" },
       "collection",
       "posts",
-      user
+      user,
+      scope
     );
   });
 
