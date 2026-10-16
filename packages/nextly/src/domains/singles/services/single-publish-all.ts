@@ -469,14 +469,12 @@ export class SinglePublishAllService extends BaseService {
     // The components as they stood before the drafts are promoted, for each
     // language an event's previous state is built in: the promotion rewrites
     // the component tables that assembly would otherwise read.
-    const priorComponents = plan.recordingEnabled
-      ? await this.componentsBeforePromotion(
-          tx,
-          plan,
-          pending,
-          priorCompanionStatuses
-        )
-      : new Map<string, Record<string, unknown>>();
+    const priorComponents = await this.componentsBeforePromotion(
+      tx,
+      plan,
+      pending,
+      priorCompanionStatuses
+    );
 
     const written = await this.writePublishedStatuses(
       tx,
@@ -802,8 +800,9 @@ export class SinglePublishAllService extends BaseService {
   /**
    * Each language's component subtrees before the drafts are promoted, keyed
    * by locale ("" for none), for the previous state of this publish's events.
-   * Empty when no pending change holds a component value: nothing is then
-   * rewritten, and the assembly reads the tables as they stand.
+   * Empty when no event is recorded, or when no pending change holds a
+   * component value: nothing is then rewritten, and the assembly reads the
+   * tables as they stand.
    */
   private async componentsBeforePromotion(
     tx: TransactionContext,
@@ -812,6 +811,7 @@ export class SinglePublishAllService extends BaseService {
     priorCompanionStatuses: Map<string, string | null>
   ): Promise<Map<string, Record<string, unknown>>> {
     const prior = new Map<string, Record<string, unknown>>();
+    if (!plan.recordingEnabled) return prior;
     const holdsComponents = pending.some(
       draft =>
         Object.keys(
