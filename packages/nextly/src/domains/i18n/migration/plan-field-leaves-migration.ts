@@ -26,7 +26,6 @@ import { castText, ddlType, exactText, lit, q } from "./ddl-types";
 import {
   buildDefaultLocaleRestoreStatements,
   buildFieldLeavesTranslationArchiveStatement,
-  restoreTargetType,
 } from "./generate-down";
 import type { CompanionMigrationSpec, LocalizedColumnSpec } from "./types";
 
@@ -87,22 +86,12 @@ export function planFieldLeavesTranslationMigration(
     "SELECT 1",
   ];
 
-  // A main column narrower than what the companion column can hold is widened before the copy,
-  // by the rule the whole-entity disable uses (`restoreTargetType`): on MySQL a `longText`
-  // companion column created before the renderer emitted TEXT is physically LONGTEXT, and copying
-  // it into TEXT truncates, silently on a non-strict server, just before its source is dropped.
-  const widen = spec.columns
-    .filter(
-      column =>
-        dialect === "mysql" &&
-        restoreTargetType(column, dialect) !== ddlType(column, dialect)
-    )
-    .map(
-      column =>
-        `ALTER TABLE ${main} MODIFY COLUMN ${q(column.name, dialect)} ${restoreTargetType(column, dialect)}`
-    );
+  // No widening of the main column here, though a `longText` companion column made before the
+  // renderer emitted TEXT is physically LONGTEXT on MySQL: widening it would leave the main column
+  // wider than the snapshot says, which a later migration reads as drift that no `migrate:create`
+  // can repair. A value too long for TEXT is refused by the copy instead (MySQL's strict mode, its
+  // default), and the copy runs before the drop, so the value stays where it was.
   const sharedUp = [
-    ...widen,
     ...buildDefaultLocaleRestoreStatements(ref, names),
     ...names.map(name => `ALTER TABLE ${comp} DROP COLUMN ${q(name, dialect)}`),
   ];
@@ -131,10 +120,9 @@ export function planFieldLeavesTranslationMigration(
     `FROM ${main} WHERE NOT EXISTS (SELECT 1 FROM ${comp} WHERE ${parent} = ${mainId} ` +
     `AND ${locale} = ${lit(defaultLocale)})`;
   const sharedDown = [
-    // Sized as the forward copy sized the main column, so a value it could hold comes back whole.
     ...spec.columns.map(
       column =>
-        `ALTER TABLE ${comp} ADD COLUMN ${q(column.name, dialect)} ${restoreTargetType(column, dialect)}`
+        `ALTER TABLE ${comp} ADD COLUMN ${q(column.name, dialect)} ${ddlType(column, dialect)}`
     ),
     insertMissingDefaultRows,
     ...spec.columns.flatMap(column => {

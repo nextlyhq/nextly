@@ -143,7 +143,7 @@ export function buildDefaultLocaleRestoreStatements(
  * be, which the next schema sync reports as an ordinary type change — visible and recoverable,
  * unlike the truncation it replaces.
  */
-export function restoreTargetType(
+function restoreTargetType(
   column: Parameters<typeof ddlType>[0],
   dialect: Parameters<typeof ddlType>[1]
 ): string {

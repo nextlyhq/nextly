@@ -359,6 +359,30 @@ for (const entry of DIALECTS) {
       }
 
       if (dialect === "mysql") {
+        it("refuses a value too long for the shared column before dropping its source", async () => {
+          // A companion made before the renderer emitted TEXT holds long text as LONGTEXT; the
+          // shared column is TEXT, as the snapshot says. MySQL's strict mode refuses the copy,
+          // which runs before the drop, so the value stays where it was.
+          await migrateCreate(translated);
+          await migrate();
+          await seed();
+          await adapter.executeQuery(
+            `ALTER TABLE ${q(companion)} MODIFY COLUMN ${q("body")} LONGTEXT`
+          );
+          const long = "x".repeat(70_000);
+          await adapter.executeQuery(
+            `UPDATE ${q(companion)} SET ${q("body")} = '${long}' WHERE ${q("_locale")} = 'en'`
+          );
+          await migrateCreate(shared);
+
+          await expect(migrate()).rejects.toThrow();
+
+          const [kept] = await adapter.executeQuery<{ size: number | string }>(
+            `SELECT LENGTH(${q("body")}) AS size FROM ${q(companion)} WHERE ${q("_locale")} = 'en'`
+          );
+          expect(Number(kept?.size)).toBe(70_000);
+        });
+
         it("refuses to run a failed shared file again, naming the file and the column", async () => {
           await failTheSharedFile();
 

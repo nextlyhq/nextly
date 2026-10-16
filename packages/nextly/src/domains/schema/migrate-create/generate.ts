@@ -709,8 +709,14 @@ function planFieldsLeavingTranslation(
         defaultLocale,
         parentIdType: dialect === "mysql" ? "VARCHAR(36)" : "TEXT",
         columns: leaving.map(l => l.column),
-        // A rollback recreates default-language rows with the main row's publishing state.
-        status: c.status === true,
+        // A rollback recreates default-language rows with the main row's publishing state, when
+        // both have one: Draft/Published on before this change, so the companion has `_status`,
+        // and still on after it, so the main table still has `status` when the rollback runs.
+        status:
+          c.status === true &&
+          previousSnapshot.tables
+            .find(t => t.name === c.tableName)
+            ?.columns.some(col => col.name === "status") === true,
       }),
     });
   }

@@ -169,31 +169,24 @@ describe.each(["sqlite", "postgresql", "mysql"] as const)(
       ]);
     });
 
-    if (dialect === "mysql") {
-      it("widens the shared column to LONGTEXT before copying a long text field", async () => {
-        const long = (localized: boolean) => ({
-          ...TRANSLATED,
-          fields: [
-            { name: "body", type: "textarea", localized },
-            { name: "price", type: "number" },
-          ],
-        });
-        const files = await secondRun(dialect, long(false), {
-          first: long(true),
-        });
+    it.each([
+      { before: false, after: true, rollbackWrites: false },
+      { before: true, after: true, rollbackWrites: true },
+    ])(
+      "rolls back with _status only when Draft/Published was on before and stays on (before $before, after $after)",
+      async ({ before, after, rollbackWrites }) => {
+        const files = await secondRun(
+          dialect,
+          { ...SHARED, status: after },
+          { first: { ...TRANSLATED, status: before } }
+        );
 
-        const shared = sections(files[2]?.sql ?? "");
-        const widen = shared.up.indexOf(
-          `ALTER TABLE ${q("dc_docs")} MODIFY COLUMN ${q("body")} LONGTEXT`
+        const shared = sections(
+          files.find(f => f.name.includes("_shared_localization_"))?.sql ?? ""
         );
-        expect(widen).toBeGreaterThan(-1);
-        expect(widen).toBeLessThan(shared.up.indexOf("UPDATE"));
-        // A rollback puts the column back as wide, so a value the shared column held fits.
-        expect(shared.down).toContain(
-          `ALTER TABLE ${q("dc_docs_locales")} ADD COLUMN ${q("body")} LONGTEXT`
-        );
-      });
-    }
+        expect(shared.down.includes(q("_status"))).toBe(rollbackWrites);
+      }
+    );
 
     it("warns when a translated field goes and a shared one arrives in the same change", async () => {
       const warnings: string[] = [];
