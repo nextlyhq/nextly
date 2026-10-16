@@ -1890,23 +1890,29 @@ class StatementWalk {
     if (table === undefined || this.word(at) !== "ADD") return;
     const first = this.word(at + 1) ?? "";
     if (first === "CONSTRAINT") {
-      const name = this.nameAt(at + 2);
-      if (name !== undefined) this.reader.addElement(table, name, "constraint");
+      this.readAddedConstraint(table, at + 2);
       return;
     }
     if (NON_COLUMN_ELEMENTS.has(first)) return;
     const k = first === "COLUMN" ? at + 2 : at + 1;
     // A conditional add may be a no-op on a column that already exists, so
     // it is not credited to this list.
-    if (
-      this.word(k) === "IF" &&
-      this.word(k + 1) === "NOT" &&
-      this.word(k + 2) === "EXISTS"
-    ) {
-      return;
-    }
+    if (this.isConditionalAddAt(k)) return;
     const column = this.nameAt(k);
     if (column !== undefined) this.reader.addColumn(table, column);
+  }
+
+  private readAddedConstraint(table: TableRef, at: number): void {
+    const name = this.nameAt(at);
+    if (name !== undefined) this.reader.addElement(table, name, "constraint");
+  }
+
+  private isConditionalAddAt(at: number): boolean {
+    return (
+      this.word(at) === "IF" &&
+      this.word(at + 1) === "NOT" &&
+      this.word(at + 2) === "EXISTS"
+    );
   }
 
   /**
