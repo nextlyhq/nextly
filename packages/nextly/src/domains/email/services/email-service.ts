@@ -59,6 +59,7 @@ import {
   assertSendable,
   declaredMaxTo,
   filteredToList,
+  recipientsOf,
   messagesFor,
   toAddressList,
   type SendEnvelope,
@@ -455,31 +456,43 @@ export class EmailService extends BaseService {
 
     //
     // `to` stays one string for a one-recipient send, which is every send a
-    // handler has seen so far, and is a list for several. It is the one field
-    // recipients change through, so each handler in a chain reads what the
-    // one before it left. `replyTo` is part of the envelope too, so a filter
-    // sees and can change everything that is sent.
+    // handler has seen so far, and is a list for several. `recipients` lists
+    // every address, copies included, and is derived from `to`, `cc` and
+    // `bcc` again after each handler, so no handler in a chain reads a list
+    // that disagrees with the fields an earlier one changed. `replyTo` is part
+    // of the envelope too, so a filter sees and can change everything sent.
     const givenTo = {
       to: requestedTo.length === 1 ? requestedTo[0] : [...requestedTo],
+    };
+    const initial = {
+      // A copy, so a handler that edits the list in place does not edit the
+      // precondition's view of what the caller asked for.
+      to: Array.isArray(givenTo.to) ? [...givenTo.to] : givenTo.to,
+      from,
+      ...(options.replyTo !== undefined ? { replyTo: options.replyTo } : {}),
+      subject: options.subject,
+      html: options.html,
+      text: plainText,
+      cc: options.cc,
+      bcc: options.bcc,
     };
     const filtered = await registry.applyFilters<
       EmailPayloadFilterValue,
       EmailFilterContext
     >(
       FilterSeams.EmailBeforeSend,
+      { ...initial, recipients: recipientsOf(initial) },
+      { providerId: options.providerId },
       {
-        // A copy, so a handler that edits the list in place does not edit
-        // the precondition's view of what the caller asked for.
-        to: Array.isArray(givenTo.to) ? [...givenTo.to] : givenTo.to,
-        from,
-        ...(options.replyTo !== undefined ? { replyTo: options.replyTo } : {}),
-        subject: options.subject,
-        html: options.html,
-        text: plainText,
-        cc: options.cc,
-        bcc: options.bcc,
-      },
-      { providerId: options.providerId }
+        afterEach: value => ({
+          ...value,
+          recipients: recipientsOf({
+            ...value,
+            // A handler that left `to` out kept the recipients it was given.
+            to: "to" in value ? value.to : givenTo.to,
+          }),
+        }),
+      }
     );
 
     // Every rule again, on what the filters returned: a handler can add a
@@ -588,12 +601,12 @@ export class EmailService extends BaseService {
       resolvedAttachments,
     } = context;
     // `to` as one string for a one-recipient message, as the after-send
-    // actions have always received it, and as a list otherwise. Never `cc` or
-    // `bcc`: a blind copy a filter added is not the actions' to see, and an
-    // action that forwards its argument would disclose it.
+    // actions have always received it, and as a list otherwise, beside every
+    // recipient of the message, copies included, in the same form the filter
+    // was given them.
     const afterSendTo = {
       to: message.to.length === 1 ? message.to[0] : [...message.to],
-      toList: [...message.to],
+      recipients: recipientsOf(message),
     };
 
     const startedAt = Date.now();

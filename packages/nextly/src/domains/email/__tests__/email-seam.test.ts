@@ -472,10 +472,10 @@ describe("a message id that carries a recipient", () => {
   });
 
   it("is withheld from the after-send actions", async () => {
-    // A plugin action is code the install chose to run, but the address still
-    // did not come from it. An action that forwards or persists its argument
-    // — a webhook, an analytics call — carries the hidden BCC to wherever it
-    // sends, which is a disclosure by a route the caller never sees.
+    // The after-send actions are given every recipient, blind copies included,
+    // as `recipients`: that list is theirs by design. The message id is not a
+    // place an address may arrive by, so it is withheld from them as from
+    // every other sink, and the address appears only where it is declared.
     const captured: Array<Record<string, unknown>> = [];
     const service = sendWithIdDerivedFromABccRecipient();
     getFilterRegistry().addAction(
@@ -487,7 +487,14 @@ describe("a message id that carries a recipient", () => {
 
     await service.send({ to: "a@b.com", subject: "Hi", html: "<p>x</p>" });
 
-    expect(JSON.stringify(captured)).not.toContain("hidden-auditor@b.com");
+    expect(captured).toHaveLength(1);
+    expect(captured[0].messageId).toBeUndefined();
+    const { recipients, ...rest } = captured[0];
+    expect(recipients).toEqual([
+      { address: "a@b.com", kind: "to" },
+      { address: "hidden-auditor@b.com", kind: "bcc" },
+    ]);
+    expect(JSON.stringify(rest)).not.toContain("hidden-auditor@b.com");
   });
 
   it("is withheld from the send log", async () => {
@@ -1272,9 +1279,14 @@ describe("the whole envelope reaches email.beforeSend, and what it returns is ch
         bcc: ["bcc@b.com"],
       }),
     ]);
-    // One recipient field: a second, writable copy would go stale between
-    // handlers in a chain.
-    expect(seen[0]).not.toHaveProperty("toList");
+    expect(seen[0]).toMatchObject({
+      recipients: [
+        { address: "a@b.com", kind: "to" },
+        { address: "c@d.com", kind: "to" },
+        { address: "cc@b.com", kind: "cc" },
+        { address: "bcc@b.com", kind: "bcc" },
+      ],
+    });
   });
 
   it("sends the replyTo a filter changed", async () => {
@@ -1500,11 +1512,86 @@ describe("the whole envelope reaches email.beforeSend, and what it returns is ch
     });
 
     expect(captured).toEqual([
-      expect.objectContaining({ to: "a@b.com", toList: ["a@b.com"] }),
+      expect.objectContaining({
+        to: "a@b.com",
+        recipients: [{ address: "a@b.com", kind: "to" }],
+      }),
       expect.objectContaining({
         to: ["a@b.com", "c@d.com"],
-        toList: ["a@b.com", "c@d.com"],
+        recipients: [
+          { address: "a@b.com", kind: "to" },
+          { address: "c@d.com", kind: "to" },
+        ],
       }),
     ]);
+  });
+
+  it("gives email.afterSend the message's copies too", async () => {
+    const captured: Array<Record<string, unknown>> = [];
+    getFilterRegistry().addAction(
+      FilterSeams.EmailAfterSend,
+      (value: Record<string, unknown>) => {
+        captured.push(value);
+      }
+    );
+    const { service } = buildSend();
+
+    await service.send({
+      to: "a@b.com",
+      cc: ["cc@b.com"],
+      bcc: ["bcc@b.com"],
+      subject: "Hi",
+      html: "<p>x</p>",
+    });
+
+    expect(captured[0].recipients).toEqual([
+      { address: "a@b.com", kind: "to" },
+      { address: "cc@b.com", kind: "cc" },
+      { address: "bcc@b.com", kind: "bcc" },
+    ]);
+  });
+
+  it("re-derives recipients after each filter, so the next one reads them as they stand", async () => {
+    const seenBySecond: unknown[] = [];
+    getFilterRegistry().addFilter(
+      FilterSeams.EmailBeforeSend,
+      (payload: { cc?: string[] }) => ({
+        ...payload,
+        cc: [...(payload.cc ?? []), "added@b.com"],
+      })
+    );
+    getFilterRegistry().addFilter(
+      FilterSeams.EmailBeforeSend,
+      (payload: { recipients?: unknown }) => {
+        seenBySecond.push(payload.recipients);
+        return payload;
+      }
+    );
+    const { service } = buildSend();
+
+    await service.send({ to: "a@b.com", subject: "Hi", html: "<p>x</p>" });
+
+    expect(seenBySecond).toEqual([
+      [
+        { address: "a@b.com", kind: "to" },
+        { address: "added@b.com", kind: "cc" },
+      ],
+    ]);
+  });
+
+  it("ignores a change made only to recipients, which is derived", async () => {
+    getFilterRegistry().addFilter(
+      FilterSeams.EmailBeforeSend,
+      (payload: object) => ({
+        ...payload,
+        recipients: [{ address: "other@b.com", kind: "to" }],
+      })
+    );
+    const { service, adapterSend } = buildSend();
+
+    await service.send({ to: "a@b.com", subject: "Hi", html: "<p>x</p>" });
+
+    expect(adapterSend).toHaveBeenCalledTimes(1);
+    expect(adapterSend.mock.calls[0][0].to).toBe("a@b.com");
   });
 });

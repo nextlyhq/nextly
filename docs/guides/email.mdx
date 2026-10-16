@@ -272,20 +272,23 @@ and `Email could not be sent.` when it did not, beside the `success` and
 
 ### Changing a send before it goes out
 
-An `email.beforeSend` filter receives the whole envelope: `to`, `from`, `replyTo`,
-`subject`, `html`, `text`, `cc` and `bcc`. `to` is a single string when the send
-has one recipient, as it always was, and a list when it has several; change it to
-change the recipients, and the next filter sees your change. What the filter
-returns is what is sent, and it is checked again first: a filter that leaves no valid `to`, adds more `to` addresses
-than the provider takes, or changes the recipient of a send that names a person,
-has the send refused.
+An `email.beforeSend` filter receives the whole envelope: `to`, `recipients`,
+`from`, `replyTo`, `subject`, `html`, `text`, `cc` and `bcc`. `to` is a single
+string when the send has one recipient, as it always was, and a list when it has
+several. `recipients` lists every address, `to`, `cc` and `bcc`, each with its
+line (`{ address, kind }`). Change recipients through `to`, `cc` and `bcc`:
+`recipients` is rebuilt from them after every filter, so the next filter reads the
+recipients as they now stand, and a change made only to `recipients` is replaced.
+What the filter returns is what is sent, and it is checked again first: a filter
+that leaves no valid `to`, adds more `to` addresses than the provider takes, or
+changes the recipient of a send that names a person, has the send refused.
 
 An `email.afterSend` action runs once for each message handed to the provider, with
-the message's `to`, a `toList` that is always a list, the outcome and the message
-id. It is not given `cc` or
-`bcc`.
+the message's `to`, its `recipients` (blind copies included), the outcome and the
+message id. An action that forwards its argument elsewhere sends every address of
+the message with it, blind copies too, so forward only what you need.
 
-`toList`, `replyTo`, and `to` as a list are `@experimental`.
+`recipients`, `replyTo`, and `to` as a list are `@experimental`.
 
 ### Email to a person a plugin signs in
 

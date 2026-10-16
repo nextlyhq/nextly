@@ -22,6 +22,30 @@ describe("FilterRegistry", () => {
     expect(await reg.applyFilters("x", 1, {})).toBe(20); // (1+1)*10
   });
 
+  it("runs afterEach on each filter's result before the next filter sees it", async () => {
+    // A value carrying one fact twice: `doubled` must always be 2 * `n`.
+    type V = { n: number; doubled: number };
+    const seen: V[] = [];
+    reg.addFilter<V>("x", v => ({ ...v, n: v.n + 1 }));
+    reg.addFilter<V>("x", v => {
+      seen.push(v);
+      return v;
+    });
+    reg.addFilter<V>("x", () => {
+      throw new Error("boom");
+    });
+
+    const out = await reg.applyFilters<V>(
+      "x",
+      { n: 1, doubled: 2 },
+      {},
+      { afterEach: v => ({ ...v, doubled: v.n * 2 }) }
+    );
+
+    expect(seen).toEqual([{ n: 2, doubled: 4 }]);
+    expect(out).toEqual({ n: 2, doubled: 4 });
+  });
+
   it("passes context to each filter", async () => {
     reg.addFilter<string, { suffix: string }>("x", (v, c) => v + c.suffix);
     expect(await reg.applyFilters("x", "a", { suffix: "!" })).toBe("a!");

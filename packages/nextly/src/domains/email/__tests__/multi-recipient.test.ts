@@ -448,6 +448,51 @@ describe("several `to` addresses reach the provider", () => {
     }
   );
 
+  it.each([
+    "o'brien@example.com",
+    '"Joe,Smith"@example.com',
+    "user@[192.0.2.1]",
+    "Ann <o'brien@example.com>",
+  ])("sends %s, a form RFC 5321 allows", async address => {
+    const { adapter, send } = mockAdapter(10);
+    const { service } = build(adapter);
+
+    await service.send({ to: address, subject: "Hi", html: "<p>x</p>" });
+
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send.mock.calls[0][0].to).toBe(address);
+  });
+
+  it("gives each split message's email.afterSend that message's recipients", async () => {
+    const captured: Array<Record<string, unknown>> = [];
+    getFilterRegistry().addAction(
+      FilterSeams.EmailAfterSend,
+      (value: Record<string, unknown>) => {
+        captured.push(value);
+      }
+    );
+    const { adapter } = mockAdapter();
+    const { service } = build(adapter);
+
+    await service.send({
+      to: [A, B],
+      cc: ["cc@example.com"],
+      subject: "Hi",
+      html: "<p>x</p>",
+    });
+
+    expect(captured.map(value => [value.to, value.recipients])).toEqual([
+      [
+        A,
+        [
+          { address: A, kind: "to" },
+          { address: "cc@example.com", kind: "cc" },
+        ],
+      ],
+      [B, [{ address: B, kind: "to" }]],
+    ]);
+  });
+
   it("sends the same address once when it is listed twice", async () => {
     const { adapter, send } = mockAdapter();
     const { service } = build(adapter);

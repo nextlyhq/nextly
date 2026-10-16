@@ -9,6 +9,14 @@
  */
 
 /**
+ * @experimental One recipient of an email, and the line it is on.
+ */
+export interface EmailRecipient {
+  address: string;
+  kind: "to" | "cc" | "bcc";
+}
+
+/**
  * @experimental Payload threaded through `email.beforeSend` filter handlers (D63).
  *
  * The whole envelope of the send. A value a handler changes is the value sent,
@@ -19,13 +27,18 @@
 export interface EmailPayloadFilterValue {
   /**
    * The recipient as one string when the send has one `to` address, which is
-   * every send a handler has seen so far; a list when it has several.
-   *
-   * The one field recipients change through, so each handler in a chain reads
-   * the recipients the one before it left. Leaving it out of a returned value
-   * keeps the recipients as they were.
+   * every send a handler has seen so far; a list when it has several. Leaving
+   * it out of a returned value keeps the recipients as they were.
    */
   to: string | string[];
+  /**
+   * @experimental Every recipient, `to`, `cc` and `bcc`, in that order.
+   *
+   * Read-only: derived from `to`, `cc` and `bcc` again after every handler, so
+   * the next handler always reads the recipients as they now stand. Change
+   * recipients through `to`, `cc` and `bcc`; a change made here is replaced.
+   */
+  recipients?: EmailRecipient[];
   from: string;
   /** @experimental The Reply-To address, when the send has one. */
   replyTo?: string;
@@ -53,10 +66,11 @@ export interface EmailAfterSendValue {
   /** One string for a message to one `to` address, as before; a list when several. */
   to: string | string[];
   /**
-   * @experimental Every `to` address of the message, as a list. Copied
-   * addresses are deliberately absent: a blind copy is not an action's to see.
+   * @experimental Every recipient of the message, `to`, `cc` and `bcc`, in
+   * that order. Blind copies are included: an action that forwards this value
+   * elsewhere discloses them, so treat it as the message's full address list.
    */
-  toList?: string[];
+  recipients?: EmailRecipient[];
   subject: string;
   success: boolean;
   messageId?: string;

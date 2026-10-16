@@ -109,10 +109,19 @@ export class FilterRegistry {
     if (list.length === 0) this.filters.delete(name);
   }
 
+  /**
+   * Run every filter registered under `name` over `value`, in order.
+   *
+   * `afterEach`, when given, runs on what each filter returned before the next
+   * one sees it. A seam whose value holds one fact in two forms uses it to
+   * re-derive one form from the other, so no handler in the chain is ever
+   * handed the two disagreeing because an earlier handler changed only one.
+   */
   async applyFilters<V = unknown, C = unknown>(
     name: FilterName,
     value: V,
-    context: C
+    context: C,
+    options?: { afterEach?: (value: V) => V }
   ): Promise<V> {
     const list = this.filters.get(name);
     if (!list || list.length === 0) return value;
@@ -124,7 +133,9 @@ export class FilterRegistry {
       } catch (err) {
         this.logError("filter", name, err);
         // keep acc as it was before this throwing filter
+        continue;
       }
+      if (options?.afterEach) acc = options.afterEach(acc);
     }
     return acc;
   }

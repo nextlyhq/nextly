@@ -11,6 +11,7 @@
 
 import { NextlyError } from "../../../errors";
 import type { EmailPayloadFilterValue } from "../../../filters";
+import type { EmailRecipient } from "../../../filters/seams";
 import { mailboxOf } from "../delivery-record";
 
 /**
@@ -38,17 +39,27 @@ export function toAddressList(to: string | readonly unknown[]): unknown[] {
   return list;
 }
 
-/** One `@` between a local part and a domain, neither holding a separator. */
-const MAILBOX = /^[^\s@,;"'<>()[\]\\]+@[^\s@,;"'<>()[\]\\]+$/;
+/**
+ * A local part, `@`, and a domain, the forms RFC 5321 allows for each.
+ *
+ * The local part is either a quoted string (`"Joe,Smith"`), which may hold any
+ * character but an unescaped quote or a line break, or plain text without
+ * whitespace or a separator; an apostrophe is plain text (`o'brien`). The
+ * domain is either an address literal in brackets (`[192.0.2.1]`) or plain
+ * text likewise.
+ */
+const MAILBOX =
+  /^(?:"(?:[^"\\\r\n]|\\.)*"|[^\s@,;"<>()[\]\\]+)@(?:\[[^[\]\s\\]+\]|[^\s@,;"<>()[\]\\]+)$/;
 
 /**
  * Whether a value is an address a message can be sent to.
  *
  * Checked as a mailbox: the part in angle brackets when there is a display
- * name, else the whole value. It must have exactly one `@`, with a local part
- * and a domain, and no whitespace, comma, semicolon, quote or bracket. Not a
- * deliverability check, which stays the provider's: a dotless domain passes,
- * so `dev@localhost` and `Name <user@example.com>` stay sendable.
+ * name, else the whole value. It must have exactly one `@` outside a quoted
+ * local part, a local part and a domain, and no whitespace or separator outside
+ * a quoted local part or an address literal. Not a deliverability check, which
+ * stays the provider's: a dotless domain passes, so `dev@localhost` and
+ * `Name <user@example.com>` stay sendable.
  */
 export function isSendableAddress(value: unknown): value is string {
   if (typeof value !== "string") return false;
@@ -102,6 +113,30 @@ export function filteredToList(
 ): unknown[] {
   const to = "to" in returned ? returned.to : given.to;
   return Array.isArray(to) ? [...to] : [to];
+}
+
+/**
+ * Every recipient of an envelope, `to` then `cc` then `bcc`, as the email
+ * seams give it to handlers.
+ *
+ * The one derivation both seams use, so the list a filter reads and the list
+ * an action reads cannot be built two ways. Entries that are not strings are
+ * left out: a filter's result is plain data until it has been checked.
+ */
+export function recipientsOf(envelope: {
+  to?: unknown;
+  cc?: unknown;
+  bcc?: unknown;
+}): EmailRecipient[] {
+  const list = (value: unknown): string[] =>
+    (Array.isArray(value) ? value : [value]).filter(
+      (address): address is string => typeof address === "string"
+    );
+  return [
+    ...list(envelope.to).map(address => ({ address, kind: "to" as const })),
+    ...list(envelope.cc).map(address => ({ address, kind: "cc" as const })),
+    ...list(envelope.bcc).map(address => ({ address, kind: "bcc" as const })),
+  ];
 }
 
 /**
