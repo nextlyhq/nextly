@@ -2026,8 +2026,19 @@ export class CollectionMutationService extends BaseService {
           )
         : null;
     if (args.everyLanguage && statuses !== null && statuses.size > 0) {
+      // Only the languages the app still configures. A removed language's
+      // row can outlive it, and judged it would be read as the default
+      // language, refusing every publish over content no request can reach
+      // to repair.
+      const configured = new Set(
+        this.localization?.locales.map(locale => locale.code) ?? []
+      );
       const going: (string | undefined)[] = [...statuses]
-        .filter(([, status]) => status !== "published")
+        .filter(
+          ([locale, status]) =>
+            status !== "published" &&
+            (configured.size === 0 || configured.has(locale))
+        )
         .map(([locale]) => locale);
       // The main row goes live with the default language whether or not that
       // language stores a translation row: one holding only shared values has

@@ -442,10 +442,12 @@ export class SinglePublishAllService extends BaseService {
       lockedRow,
       [
         ...pending,
-        ...languagesGoingLiveAsStored(plan, pending, {
-          mainStatus: lockedRow.status,
-          companion: priorCompanionStatuses,
-        }),
+        ...languagesGoingLiveAsStored(
+          plan,
+          pending,
+          { mainStatus: lockedRow.status, companion: priorCompanionStatuses },
+          new Set(this.localization?.locales.map(locale => locale.code) ?? [])
+        ),
       ],
       options,
       promoteGrants
@@ -1153,10 +1155,11 @@ interface PriorStatuses {
 }
 
 /**
- * The languages this publish puts live from their stored rows alone: none of
- * the pending changes is theirs, and they were not live already. A language
- * that was live was judged as published when it went live, and a pending
- * change is judged on its own account.
+ * The languages this publish judges as stored, beside its pending changes:
+ * those it puts live from their stored rows alone, and, when a pending change
+ * may rewrite the shared values beneath them, those already live too. A
+ * language that was live and is not touched was judged as published when it
+ * went live, and a pending change is judged on its own account.
  *
  * The main row is one of them where nothing else carries it: shared content
  * goes live with the main row's status even where no translation is stored,
@@ -1165,14 +1168,27 @@ interface PriorStatuses {
 function languagesGoingLiveAsStored(
   plan: PublishPlan,
   pending: ReadonlyArray<{ locale: string | null }>,
-  prior: PriorStatuses
+  prior: PriorStatuses,
+  /**
+   * The languages the app configures. A removed language's row can outlive
+   * it, and no request can reach it to repair, so it is not judged.
+   */
+  configured: ReadonlySet<string>
 ): { locale: string | null; snapshot: Record<string, never> }[] {
   const held = new Set(pending.map(change => change.locale));
+  // A pending change can write shared values to the main row, which every
+  // language's document reads, so a language already live is changed by it as
+  // surely as one going live: with anything pending, every stored translation
+  // is judged.
+  const changesShared = pending.length > 0;
   const translations =
     plan.companion && plan.companionPublishable
       ? [...prior.companion]
           .filter(
-            ([locale, status]) => status !== "published" && !held.has(locale)
+            ([locale, status]) =>
+              !held.has(locale) &&
+              (configured.size === 0 || configured.has(locale)) &&
+              (changesShared || status !== "published")
           )
           .map(([locale]) => ({ locale, snapshot: {} }))
       : [];

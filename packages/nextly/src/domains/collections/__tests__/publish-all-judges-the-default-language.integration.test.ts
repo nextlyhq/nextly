@@ -103,3 +103,41 @@ describe("publishing every language of an entry", () => {
     expect(JSON.stringify(result)).toContain('"path":"heading"');
   });
 });
+
+describe("publishing every language of an entry, with a language since removed", () => {
+  it("does not judge a removed language's leftover row, which no request can reach to repair", async () => {
+    const { t, entries } = await boot();
+    const created = await entries.createEntry(
+      { collectionName: "notices", overrideAccess: true, locale: "en" },
+      { heading: "Notice", tag: "general", status: "draft" }
+    );
+    const id = String((created.data as { id: unknown }).id);
+    // A German draft whose heading falls back to English, as a translation
+    // may: required is enforced on the default language only.
+    const german = await entries.updateEntry(
+      {
+        collectionName: "notices",
+        entryId: id,
+        locale: "de",
+        overrideAccess: true,
+      },
+      { tag: "general", status: "draft" }
+    );
+    expect(german.success, JSON.stringify(german)).toBe(true);
+    // The row relabelled to a language the app no longer configures, as one
+    // left behind when a locale is removed.
+    await t.adapter.update(
+      "dc_notices_locales",
+      { _locale: "fr" },
+      { and: [{ column: "_locale", op: "=", value: "de" }] }
+    );
+
+    const result = await entries.publishAllLocales({
+      collectionName: "notices",
+      entryId: id,
+      overrideAccess: true,
+    });
+
+    expect(result.success, JSON.stringify(result)).toBe(true);
+  });
+});
