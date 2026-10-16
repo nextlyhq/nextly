@@ -252,4 +252,23 @@ describe("a breakdown names its groups as a person reads them", () => {
       within(table).getByRole("row", { name: /no value stored/ })
     ).toBeInTheDocument();
   });
+
+  it("names an empty stored value by its declared choice, as a list does", () => {
+    // An option that stores "" on purpose ("None") is a choice, not missing data.
+    draw({
+      op: "groupBy",
+      buckets: [{ value: "", count: 4 }],
+      field: {
+        name: "stage",
+        label: "Stage",
+        type: "string",
+        choices: [{ value: "", label: "None" }],
+      },
+    } as WidgetResult);
+
+    const table = screen.getByRole("table");
+    const row = within(table).getByRole("row", { name: /None/ });
+    expect(within(row).getByText("4")).toBeInTheDocument();
+    expect(screen.queryByText("(empty)")).not.toBeInTheDocument();
+  });
 });

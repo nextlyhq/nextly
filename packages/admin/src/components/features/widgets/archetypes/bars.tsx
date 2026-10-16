@@ -55,6 +55,12 @@ function bucketRow(
   if (value === null) {
     return { key: "null", label: "(none)", count, announce: "no value stored" };
   }
+  // Named by the grouped field's own value label ("Needs review", not `needs_review`), keyed by
+  // the stored value, so two values that share a label still draw as two bars. Asked before the
+  // empty-value placeholder: an option that stores "" on purpose ("None") is a choice, and it
+  // reads here as it reads in a list or a table.
+  const named = choiceLabel(value, choices);
+  if (named !== undefined) return { key: `v${value}`, label: named, count };
   if (value === "") {
     return {
       key: "empty",
@@ -63,14 +69,7 @@ function bucketRow(
       announce: "an empty value",
     };
   }
-
-  // Named by the grouped field's own value label ("Needs review", not `needs_review`), keyed by
-  // the stored value, so two values that share a label still draw as two bars.
-  return {
-    key: `v${value}`,
-    label: choiceLabel(value, choices) ?? value,
-    count,
-  };
+  return { key: `v${value}`, label: value, count };
 }
 
 export const barsAccepts: ArchetypeAccepts = definition => {

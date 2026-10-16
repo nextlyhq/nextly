@@ -120,7 +120,8 @@ describe("a collection or Single kept off the dashboard is never counted", () =>
       throw new Error(`unexpected container.get("${name}")`);
     });
 
-    const stats = await makeService().getStats({
+    const adapter = makeAdapter();
+    const stats = await new DashboardService(adapter, makeLogger()).getStats({
       scope: allResources(),
       caller: CALLER,
     });
@@ -129,6 +130,15 @@ describe("a collection or Single kept off the dashboard is never counted", () =>
     expect(stats.singles).toBe(1);
     expect(count).not.toHaveBeenCalledWith(
       expect.objectContaining({ collection: "nx_pb_class_usage" })
+    );
+    // Nor is its activity counted in the recent-changes figure: the activity query leaves out
+    // the same slugs the registry reads above left out.
+    const activity = vi
+      .mocked(adapter.executeQuery)
+      .mock.calls.find(([sql]) => String(sql).includes("activity_log"));
+    expect(String(activity?.[0])).toContain("NOT IN");
+    expect(activity?.[1]).toEqual(
+      expect.arrayContaining(["nx_pb_class_usage", "hidden-single"])
     );
   });
 });

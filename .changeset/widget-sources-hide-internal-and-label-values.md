@@ -44,3 +44,10 @@ with a typed code, and name system fields and choice values the way people read 
 - System columns carry labels (ID, Created, Updated, Status, First published). Status, select and
   radio fields carry their value labels as `choices` on widget sources and on list result fields,
   and a `groupBy` result now describes its grouped field.
+- A widget source whose declared value labels a card could not draw (choices that are not a
+  list, a value that is not a string, an empty label, or one value named twice) is refused when
+  it registers. A select or radio field whose stored options name one value twice keeps the
+  first, as the entry form shows it.
+- The dashboard's "changed in the last 24 hours" figure leaves out content kept off the
+  dashboard, and the Singles card points to the full list, rather than saying there are none,
+  when the first Singles it reads are all kept off the dashboard and more follow.

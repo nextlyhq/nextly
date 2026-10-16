@@ -101,6 +101,18 @@ export const SinglesQuickLinks: React.FC = () => {
   // Nothing to list: the frame's empty state, so the card says what will appear rather than
   // drawing a blank body under its title.
   if (singles.length === 0) {
+    // Only the first page is read, and the Singles it held may all be kept off the dashboard
+    // while later pages hold some that are not. "No Singles yet" would then be false, so the card
+    // says where they are instead.
+    if (singlesData?.meta?.hasNext === true) {
+      return (
+        <CardEmpty
+          title="Your Singles are in the full list"
+          detail="This card shows the first ones, and none of them belong here."
+          action={{ label: "Open Singles", href: ROUTES.SINGLES }}
+        />
+      );
+    }
     return (
       <CardEmpty
         title="No Singles yet"

@@ -368,6 +368,38 @@ function validateFieldAnnotations(
       `${sourceId}: field "${name}" has a bucketable flag that is not a boolean`
     );
   }
+  if (field.choices !== undefined) validateChoices(sourceId, name, field.choices);
+}
+
+/**
+ * Refuses value labels a card could not draw: a list that is not one, a value that is not a
+ * string, a label that is empty (a cell or a bar would show nothing where the stored value
+ * belongs), or one value named twice (which label wins would be an accident of order).
+ */
+function validateChoices(
+  sourceId: string,
+  name: string,
+  choices: unknown
+): void {
+  if (!Array.isArray(choices)) {
+    fail(`${sourceId}: field "${name}" has choices that are not a list`);
+  }
+  const seen = new Set<string>();
+  for (const raw of choices as unknown[]) {
+    const { value, label } = (raw ?? {}) as { value?: unknown; label?: unknown };
+    if (typeof value !== "string") {
+      fail(`${sourceId}: field "${name}" has a choice whose value is not a string`);
+    }
+    if (typeof label !== "string" || label.trim() === "") {
+      fail(
+        `${sourceId}: field "${name}" has a choice whose label is empty or not a string`
+      );
+    }
+    if (seen.has(value)) {
+      fail(`${sourceId}: field "${name}" names the choice "${String(value)}" twice`);
+    }
+    seen.add(value);
+  }
 }
 
 /**

@@ -32,10 +32,13 @@ function listing(
     label?: string;
     admin?: { hidden?: boolean };
   }>,
-  extra: { isLoading?: boolean; error?: Error } = {}
+  extra: { isLoading?: boolean; error?: Error; hasNext?: boolean } = {}
 ): ReturnType<typeof useSingles> {
   return {
-    data: { items, meta: { total: items.length } },
+    data: {
+      items,
+      meta: { total: items.length, hasNext: extra.hasNext ?? false },
+    },
     isLoading: extra.isLoading ?? false,
     error: extra.error ?? null,
   } as unknown as ReturnType<typeof useSingles>;
@@ -88,5 +91,20 @@ describe("the singles card", () => {
 
     expect(screen.getAllByRole("link")).toHaveLength(1);
     expect(screen.queryByText("Flags")).toBeNull();
+  });
+
+  it("does not claim there are no Singles when the hidden ones filled the page read", () => {
+    // Only the first page is read. Every Single on it is kept off the dashboard, and more pages
+    // exist, so "No Singles yet" would be false: the card points at the full list instead.
+    singlesHook.mockReturnValue(
+      listing(
+        [{ id: "1", slug: "nx_pb_flags", label: "Flags", admin: { hidden: true } }],
+        { hasNext: true }
+      )
+    );
+    render(<SinglesQuickLinks />);
+
+    expect(screen.queryByText("No Singles yet")).toBeNull();
+    expect(screen.getByRole("link", { name: "Open Singles" })).toBeInTheDocument();
   });
 });

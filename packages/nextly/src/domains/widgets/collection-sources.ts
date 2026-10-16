@@ -133,8 +133,19 @@ function choicesOf(
   options: unknown
 ): { choices?: WidgetFieldChoice[] } {
   if (!CHOICE_FIELD_TYPES.has(type) || !Array.isArray(options)) return {};
-  const choices = options.flatMap(namedChoice);
+  // The first option for a value wins, as the entry form shows it: a value named twice in stored
+  // config must not make the whole source refuse to register.
+  const choices = firstOfEachValue(options.flatMap(namedChoice));
   return choices.length > 0 ? { choices } : {};
+}
+
+/** The choices with each value kept once, the first time it appears. */
+function firstOfEachValue(choices: WidgetFieldChoice[]): WidgetFieldChoice[] {
+  const byValue = new Map<string, WidgetFieldChoice>();
+  for (const choice of choices) {
+    if (!byValue.has(choice.value)) byValue.set(choice.value, choice);
+  }
+  return [...byValue.values()];
 }
 
 /** One stored option as a choice, or nothing when it has no string value or no usable label. */
@@ -391,8 +402,6 @@ function useAsTitleOf(collection: RegisteredCollection): string | undefined {
 export async function refreshCollectionSources(): Promise<void> {
   const collections = await readRegisteredCollections();
   if (!collections) return;
-  // From this same read, so what is left out here and what the other surfaces leave out agree.
-  recordKeptOffDashboard("collection", collections);
 
   // A collection kept off the dashboard gets no source, so no card is generated for it and a
   // query naming it is refused exactly as an unknown name is -- for a super-admin too.
@@ -423,4 +432,8 @@ export async function refreshCollectionSources(): Promise<void> {
       status: collection.status === true,
     }))
   );
+  // Recorded only once the sources above were replaced, from the same read: a rebuild the
+  // registry refuses keeps the previous sources AND the previous record, so the sources and the
+  // other surfaces that ask this record always describe one snapshot.
+  recordKeptOffDashboard("collection", collections);
 }

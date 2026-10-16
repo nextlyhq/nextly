@@ -86,8 +86,6 @@ function labelOf(single: RegisteredSingle): string | undefined {
 export async function refreshSingleSources(): Promise<void> {
   const singles = await readRegisteredSingles();
   if (!singles) return;
-  // From this same read, so what is left out here and what the other surfaces leave out agree.
-  recordKeptOffDashboard("single", singles);
 
   const deferred = deferredEntities("single");
   const named = singles.filter(
@@ -110,4 +108,8 @@ export async function refreshSingleSources(): Promise<void> {
       status: single.status === true,
     }))
   );
+  // Recorded only once the sources above were replaced, from the same read: a rebuild the
+  // registry refuses keeps the previous sources AND the previous record, so the sources and the
+  // other surfaces that ask this record always describe one snapshot.
+  recordKeptOffDashboard("single", singles);
 }
