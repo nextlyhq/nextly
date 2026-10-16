@@ -11,7 +11,7 @@ export default defineConfig({
     // template code gets the recording stub instead.
     alias: [
       {
-        find: /^nextly(?:\/config|\/database\/seeders)?$/,
+        find: /^nextly(?:\/config|\/runtime|\/database\/seeders)?$/,
         replacement: fileURLToPath(
           new URL("./src/__tests__/stubs/nextly.ts", import.meta.url)
         ),

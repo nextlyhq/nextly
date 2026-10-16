@@ -7,9 +7,52 @@ vi.mock("../database/health", () => ({
   healthCheck: vi.fn(),
 }));
 
+// Whether Nextly has started in this process. Started unless a case says not.
+vi.mock("../di/register", () => ({
+  isServicesRegistered: vi.fn(() => true),
+}));
+
 describe("Health Check Route Handlers", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  describe("before Nextly has started in this process", () => {
+    it("answers 503 with only the generic body, without probing a database it has no adapter for", async () => {
+      const { healthCheck } = await import("../database/health");
+      const { isServicesRegistered } = await import("../di/register");
+      (isServicesRegistered as any).mockReturnValueOnce(false);
+
+      const response = await GET(
+        new Request("http://localhost:3000/api/health")
+      );
+
+      expect(response.status).toBe(503);
+      const json = await response.json();
+      expect(Object.keys(json)).toEqual(["error"]);
+      expect(Object.keys(json.error).sort()).toEqual([
+        "code",
+        "message",
+        "requestId",
+      ]);
+      expect(json.error.code).toBe("SERVICE_UNAVAILABLE");
+      expect(json.error.message).toBe(
+        "Service unavailable. Please try again later."
+      );
+      expect(healthCheck).not.toHaveBeenCalled();
+    });
+
+    it("answers HEAD with 503 too", async () => {
+      const { isServicesRegistered } = await import("../di/register");
+      (isServicesRegistered as any).mockReturnValueOnce(false);
+
+      const response = await HEAD(
+        new Request("http://localhost:3000/api/health")
+      );
+
+      expect(response.status).toBe(503);
+      expect(await response.text()).toBe("");
+    });
   });
 
   describe("GET handler", () => {

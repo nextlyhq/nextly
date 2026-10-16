@@ -1,7 +1,7 @@
 /**
- * Stands in for `nextly`, `nextly/config` and `nextly/database/seeders` when a
- * test runs template code that imports them (vitest.config.ts aliases all
- * three here). create-nextly-app never installs Nextly: it only writes imports
+ * Stands in for `nextly`, `nextly/config`, `nextly/runtime` and
+ * `nextly/database/seeders` when a test runs template code that imports them
+ * (vitest.config.ts aliases all four here). create-nextly-app never installs Nextly: it only writes imports
  * of it into the projects it scaffolds, so the templates' imports have nothing
  * to resolve to beside this suite.
  *
@@ -11,6 +11,9 @@
 
 /** Each call the template made, in order: `boot`, then any `seed`. */
 export const recorded: string[] = [];
+
+/** The config each createRegister call received, in order. */
+export const bootConfigs: unknown[] = [];
 
 /** The options each seedSuperAdmin call received. */
 export const seedOptions: Array<{ email: string; password: string }> = [];
@@ -22,16 +25,22 @@ export const services = { adapter: { stub: "adapter" } };
 export function resetRecord(): void {
   recorded.length = 0;
   seedOptions.length = 0;
+  bootConfigs.length = 0;
 }
 
 export function defineConfig<T>(config: T): T {
   return config;
 }
 
-export function createRegister(_config: unknown): () => Promise<void> {
+export function createRegister(config: unknown): () => Promise<void> {
   return async () => {
+    bootConfigs.push(config);
     recorded.push("boot");
   };
+}
+
+export function registerNextCacheRevalidator(): void {
+  recorded.push("revalidator");
 }
 
 export function getService(name: string): unknown {

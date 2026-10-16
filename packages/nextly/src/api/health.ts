@@ -14,7 +14,9 @@
  */
 
 import { healthCheck } from "../database/health";
+import { isServicesRegistered } from "../di/register";
 import { NextlyError } from "../errors/nextly-error";
+import { getNextlyLogger } from "../observability/logger";
 
 import { readOrGenerateRequestId } from "./request-id";
 import { respondData } from "./response-shapes";
@@ -49,6 +51,44 @@ const HEALTH_CHECK_CACHE_SECONDS =
 const HEALTH_CACHE_CONTROL = `public, max-age=${HEALTH_CHECK_CACHE_SECONDS}, stale-while-revalidate=30`;
 
 /**
+ * What an operator is told when this process answered before Nextly started.
+ *
+ * This route cannot start Nextly: it is handed no config. A server whose
+ * Next.js `instrumentation.ts` starts Nextly in `register()` is never asked
+ * before that finishes; one without it starts Nextly on the first request that
+ * carries the config, and until then can only answer as if it could not serve.
+ */
+const NOT_STARTED =
+  "Nextly has not started in this process, so the health check cannot run. " +
+  "Start it when the server starts: an instrumentation.ts whose register() " +
+  "calls createRegister(config) from 'nextly' (see the installation guide).";
+
+/** Said once per process, so a monitor polling a server that never starts it does not flood the log. */
+let notStartedLogged = false;
+
+/**
+ * The database probe, or `null` when Nextly has not started in this process.
+ *
+ * Asked first rather than left to the probe, which would look the adapter up,
+ * fail, and report a database fault for a server that was never started.
+ */
+async function probe(): Promise<Awaited<
+  ReturnType<typeof healthCheck>
+> | null> {
+  if (!isServicesRegistered()) {
+    if (!notStartedLogged) {
+      notStartedLogged = true;
+      getNextlyLogger().warn({
+        op: "health-not-started",
+        message: NOT_STARTED,
+      });
+    }
+    return null;
+  }
+  return healthCheck();
+}
+
+/**
  * GET handler for health check endpoint.
  *
  * Returns the current database/runtime health as a bare object body via
@@ -75,7 +115,11 @@ const HEALTH_CACHE_CONTROL = `public, max-age=${HEALTH_CHECK_CACHE_SECONDS}, sta
  * ```
  */
 export const GET = withErrorHandler(async (_request: Request) => {
-  const health = await healthCheck();
+  const health = await probe();
+
+  if (health === null) {
+    throw NextlyError.serviceUnavailable({ logMessage: NOT_STARTED });
+  }
 
   if (!health.ok) {
     // healthCheck() reports a soft failure (returned, not thrown). Translate
@@ -128,10 +172,10 @@ export const GET = withErrorHandler(async (_request: Request) => {
  */
 export async function HEAD(request: Request): Promise<Response> {
   const requestId = readOrGenerateRequestId(request);
-  const health = await healthCheck();
+  const health = await probe();
 
   return new Response(null, {
-    status: health.ok ? 200 : 503,
+    status: health?.ok ? 200 : 503,
     headers: {
       "Cache-Control": HEALTH_CACHE_CONTROL,
       "X-Request-Id": requestId,

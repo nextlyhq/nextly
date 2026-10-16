@@ -9,6 +9,8 @@ import pc from "picocolors";
 import { generateAdminPage } from "./generators/admin";
 import { generateConfig } from "./generators/config";
 import { generateEnv } from "./generators/env";
+import type { GeneratedFiles } from "./generators/generated-files";
+import { generateInstrumentation } from "./generators/instrumentation";
 import { generateMediaRoutes } from "./generators/media-routes";
 import { patchNextConfig } from "./generators/next-config";
 import { generateRoutes } from "./generators/routes";
@@ -519,6 +521,8 @@ export async function createNextly(
   {
     const s = p.spinner();
     s.start("Setting up environment...");
+    // What the existing-app generators did that the developer should know about.
+    const reported: GeneratedFiles[] = [];
     try {
       if (!isFreshProject) {
         // Existing project: generate Nextly config files
@@ -526,6 +530,7 @@ export async function createNextly(
         await generateRoutes(cwd, projectInfo);
         await generateAdminPage(cwd, projectInfo);
         await generateMediaRoutes(cwd, projectInfo);
+        reported.push(await generateInstrumentation(cwd, projectInfo));
         await generateTypesDirectory(cwd, projectInfo);
         await patchNextConfig(cwd, database);
       }
@@ -539,6 +544,15 @@ export async function createNextly(
         await generateEnv(cwd, envDatabase);
       }
       s.stop("Environment configured");
+      for (const files of reported) {
+        for (const written of files.written) p.log.info(`Wrote ${written}`);
+        for (const { path: changed, added } of files.changed)
+          p.log.info(`Updated ${changed}: ${added.join(", ")}`);
+        for (const { path: skipped, why, toAdd } of files.skipped) {
+          p.log.warn(`Left ${skipped} as it was: ${why}`);
+          if (toAdd) p.log.message(toAdd);
+        }
+      }
     } catch (error) {
       s.stop("Failed to generate configuration");
       telemetry.capture("scaffold_failed", {
