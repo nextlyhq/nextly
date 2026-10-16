@@ -33,6 +33,7 @@
     "clean": "rimraf dist"
   },
   "dependencies": {
+    "@babel/parser": "^7.29.7",
     "@clack/prompts": "^1.1.0",
     "commander": "^14.0.2",
     "execa": "^9.6.0",
@@ -42,6 +43,7 @@
     "yaml": "^2.8.3"
   },
   "devDependencies": {
+    "@babel/types": "^7.29.7",
     "@nextlyhq/eslint-config": "workspace:*",
     "@nextlyhq/eslint-plugin": "workspace:*",
     "@nextlyhq/telemetry": "workspace:*",

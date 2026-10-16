@@ -21,6 +21,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   componentCycleRefusal,
+  MOST_COMPOSED_NODES,
   type ComponentSource,
 } from "./component-cycle-guard";
 
@@ -58,6 +59,8 @@ function context(limits: DocumentLimits = DEFAULT_LIMITS) {
       nextStatus,
       source,
       limits,
+      // A save's own allowance, as the field validator hands one.
+      work: { left: MOST_COMPOSED_NODES },
     });
     if (refusal !== null) throw NextlyError.conflict({ message: refusal });
     return undefined;

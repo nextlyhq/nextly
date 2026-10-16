@@ -152,6 +152,25 @@ export function documentViewMissing(
   return routed !== undefined && !documentViewApplies(routed, fields);
 }
 
+/**
+ * The view a route's params name that applies to this document: what the page
+ * draws at the address, or `undefined`. A registered view that does not apply
+ * renders not found, exactly as an undeclared one does, so whoever asks
+ * whether an address keeps the document's page asks this rather than whether a
+ * view is registered.
+ */
+export function drawnDocumentView(
+  kind: DocumentKind,
+  slug: string | string[] | undefined,
+  view: string | string[] | undefined,
+  fields: readonly object[] | undefined
+): RegisteredDocumentView | undefined {
+  const routed = routedDocumentView(kind, slug, view);
+  return routed !== undefined && documentViewApplies(routed, fields)
+    ? routed
+    : undefined;
+}
+
 /** A field a view could edit: its name and label for the chooser, and its declaration for the view. */
 export interface ViewFieldCandidate<F extends object = object> {
   name: string;

@@ -86,6 +86,11 @@ describe("patchNextConfig", () => {
     mockReadFile.mockResolvedValue(
       'import type { NextConfig } from "next";\n\nconst nextConfig: NextConfig = {};\n\nexport default nextConfig;\n' as never
     );
+    // The app has Next.js 16 installed, so the top-level option is written.
+    vi.mocked(fs.readJson).mockResolvedValue({
+      name: "next",
+      version: "16.0.1",
+    } as never);
   });
 
   it("should inject only the selected database packages", async () => {

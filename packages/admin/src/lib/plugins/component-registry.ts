@@ -102,6 +102,10 @@ export interface CustomEditViewProps {
  * document, holds its lock, offers recovered work, guards leaving and answers
  * the save shortcut — so these props are the document's facts and the form's
  * state, not a second way to save.
+ *
+ * Restoring recovered work replaces the form's values and mounts the view
+ * afresh, so a view may keep a working copy of the document read when it
+ * mounts.
  */
 export interface DocumentViewProps {
   /** The collection's slug, when the document is an entry. */

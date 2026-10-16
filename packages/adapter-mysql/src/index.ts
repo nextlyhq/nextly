@@ -1072,15 +1072,16 @@ export class MySqlAdapter extends DrizzleAdapter {
       const stored = await this.insertRow(db, tableObj, data);
       return stored ?? (await this.lockedRow(db, tableObj, where));
     } catch (error) {
-      if (!isDuplicateKey(error)) throw error;
+      // Classified as everything else is, through the driver's own error
+      // under Drizzle's wrapper (`classifyError`).
+      if (this.classifyError(error).kind !== "unique_violation") throw error;
       failure = error;
     }
     const existing = await this.lockedRow(db, tableObj, where);
     // No row holds the target key: the collision was on another unique key,
-    // refused as `ON CONFLICT (target)` refuses it. The driver's own error is
-    // thrown so it is classified as the unique violation it is, not as
-    // Drizzle's unnumbered wrapper.
-    if (existing === undefined) throw driverError(failure);
+    // refused as `ON CONFLICT (target)` refuses it, as the unique violation the
+    // classifier reads it to be.
+    if (existing === undefined) throw failure;
     const update = this.updateValues(data, options);
     if (Object.keys(update).length === 0) return existing;
     await db.update(tableObj).set(update).where(where);
@@ -1390,13 +1391,16 @@ export class MySqlAdapter extends DrizzleAdapter {
     // as kind: "unknown".
     if (isDatabaseError(error)) return error;
 
-    const mysqlError = error as {
+    // Classified from mysql2's own error, which Drizzle puts on `cause` when it
+    // wraps a failed query (`driverErrorIn`); it is the one carrying `errno`.
+    const mysqlError = this.driverErrorIn<{
       errno?: number;
       code?: string;
       sqlState?: string;
       message?: string;
       sql?: string;
-    };
+      cause?: unknown;
+    }>(error, candidate => typeof candidate.errno === "number");
 
     // Determine error kind from MySQL error number
     const kind: DatabaseErrorKind =
@@ -1463,31 +1467,6 @@ function keysOf(tableObj: MySqlTable): TableKeys {
   const keys = { primary, unique };
   TABLE_KEYS.set(tableObj, keys);
   return keys;
-}
-
-/**
- * The driver's own error behind a failed write: Drizzle wraps it in a query
- * error of its own that carries no error number, so the driver's is the one
- * that says what failed.
- */
-function driverError(error: unknown): unknown {
-  const cause =
-    typeof error === "object" && error !== null && "cause" in error
-      ? (error as { cause?: unknown }).cause
-      : undefined;
-  return typeof cause === "object" && cause !== null && "errno" in cause
-    ? cause
-    : error;
-}
-
-/** Whether a failed write was a duplicate key, by the driver's error number. */
-function isDuplicateKey(error: unknown): boolean {
-  const driver = driverError(error);
-  const errno =
-    typeof driver === "object" && driver !== null && "errno" in driver
-      ? (driver as { errno?: number }).errno
-      : undefined;
-  return errno !== undefined && MYSQL_ERROR_CODES[errno] === "unique_violation";
 }
 
 /**
