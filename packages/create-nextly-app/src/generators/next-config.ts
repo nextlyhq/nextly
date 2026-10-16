@@ -816,6 +816,17 @@ function versionBlock(
     : null;
 }
 
+/**
+ * The Next config file any advice about the app's config names: the one it
+ * has, or, when it has none, the one to create. `.mjs` is ESM whatever the
+ * package's own "type" says, so that file loads in any project. Every step
+ * that tells the developer to change the config asks here, so two steps never
+ * name two different files.
+ */
+export async function nextConfigFileToChange(cwd: string): Promise<string> {
+  return (await findConfigFile(cwd)) ?? "next.config.mjs";
+}
+
 /** The app's Next config file, by the name Next.js would read first. */
 async function findConfigFile(cwd: string): Promise<string | null> {
   for (const name of CONFIG_FILES) {
@@ -868,7 +879,7 @@ export async function patchNextConfig(
   if (blocked) {
     return {
       kind: "manual",
-      file: file ?? "next.config.js",
+      file: file ?? (await nextConfigFileToChange(cwd)),
       packages: required,
       ...blocked,
     };
