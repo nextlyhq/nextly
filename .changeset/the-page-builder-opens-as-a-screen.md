@@ -39,7 +39,9 @@ longer saves the page as well. If a colleague takes the page over, the author's
 unsaved edits stay in their form until they take it back.
 
 A page that has never been saved has no address yet, so its Page Builder card
-asks the author to save it first.
+asks the author to save it first. The Page Builder edits the default language:
+opened from another language's edit screen, it opens the default one, and the
+card says so.
 
 **Compatibility.** The Page Builder now opens only for a blocks field at the top
 level of a collection or a Single, including one inside an unnamed group.
@@ -47,6 +49,12 @@ level of a collection or a Single, including one inside an unnamed group.
 - **Who is affected:** a site that declares a blocks field inside a named group
   or a repeater. That field's card still shows the page, but offers no way into
   the builder, and startup logs a warning naming the collection and the field.
+  The warning covers fields declared in code; for a collection made in the
+  Schema Builder, the card is what says it.
 - **What to do:** move the field to the top level of its collection or Single
   to edit it visually, or keep it where it is until nested fields are
   supported.
+
+The builder is a document view at the `builder` address on every document
+with a top-level blocks field, so another plugin declaring a document view at
+`builder` is refused at startup, naming both plugins.
