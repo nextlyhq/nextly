@@ -303,16 +303,21 @@ async function mergeInto(
   const known = new Map(
     [...keys.defined].filter(([key]) => !keys.unresolved.has(key))
   );
-  const pair = databasePair(name, keys, values.DB_DIALECT);
+  const pair = databasePair(name, keys, values.DB_DIALECT, kind);
   const added = await appendMissing(file, text, keys, values, kind, [
     ...withheld,
     ...pair.skip,
   ]);
   if (!exists) files.written.push(name);
   else if (added.length > 0) files.changed.push({ path: name, added });
-  return kind === "real"
-    ? [...pair.warnings, ...checkRealValues(name, known)]
-    : checkExampleValues(name, known);
+  // A copied example file has to work as a .env, so its database half is
+  // judged the same way.
+  return [
+    ...pair.warnings,
+    ...(kind === "real"
+      ? checkRealValues(name, known)
+      : checkExampleValues(name, known)),
+  ];
 }
 
 /** Reports a linked env file as skipped, with the lines to add and no values. */
@@ -349,13 +354,16 @@ const DIALECTS: readonly string[] = ["postgresql", "mysql", "sqlite"];
 function databasePair(
   name: string,
   { defined, unresolved }: EnvKeys,
-  chosen: string
+  chosen: string,
+  kind: Kind
 ): { skip: RequiredKey[]; warnings: string[] } {
   const dialect = unresolved.has("DB_DIALECT")
     ? undefined
     : defined.get("DB_DIALECT");
   const warnings = dialectWarnings(name, dialect, chosen);
   if (defined.has("DATABASE_URL") && !defined.has("DB_DIALECT")) {
+    // An example file's URL is a placeholder, so only .env is asked about.
+    if (kind === "example") return { skip: ["DB_DIALECT"], warnings };
     warnings.push(
       `DATABASE_URL in ${name} was already set, so DB_DIALECT was not added: Nextly ` +
         `reads the database from that URL. Make sure it is a ${chosen} URL, the database chosen.`
@@ -479,17 +487,21 @@ function isPlaceholder(value: string): boolean {
 }
 
 function hasRealPassword(url: string | undefined): boolean {
-  if (!url) return false;
+  if (!url || !URL.canParse(url)) return false;
+  const raw = new URL(url).password;
+  // new URL keeps a % that decodeURIComponent refuses, such as `pa%ss`; the
+  // password is no less real for it, so it is judged as written.
+  let password = raw;
   try {
-    const password = decodeURIComponent(new URL(url).password);
-    return (
-      password !== "" &&
-      !isPlaceholder(password) &&
-      !["password", "pass"].includes(password.toLowerCase())
-    );
+    password = decodeURIComponent(raw);
   } catch {
-    return false;
+    // Kept as written.
   }
+  return (
+    password !== "" &&
+    !isPlaceholder(password) &&
+    !["password", "pass"].includes(password.toLowerCase())
+  );
 }
 
 /**

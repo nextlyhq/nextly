@@ -51,7 +51,9 @@ const ASSIGNMENT =
 export function readEnvKeys(text: string): EnvKeys {
   const raw = new Map<string, RawValue>();
   const mentioned = new Set<string>();
-  for (const line of text.split(/\r?\n/)) {
+  // A byte order mark, which some editors write first, is not part of the
+  // first line: dotenv reads that line through it.
+  for (const line of text.replace(/^\uFEFF/, "").split(/\r?\n/)) {
     const match = ASSIGNMENT.exec(line);
     if (!match) continue;
     const [, commented, key, rawValue] = match;

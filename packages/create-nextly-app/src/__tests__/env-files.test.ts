@@ -358,6 +358,20 @@ export SOME_APP_KEY="kept as it is"
     );
   });
 
+  // Some Windows editors start a file with a byte order mark. dotenv reads
+  // the first line through it; missing that line appended a second one,
+  // which then won.
+  it("reads the first line of a file that starts with a byte order mark", async () => {
+    await writeFile(
+      join(dir, ".env"),
+      `\uFEFFNEXTLY_SECRET=${"s".repeat(40)}\nDATABASE_URL=x\n`
+    );
+
+    await generateEnv(dir, sqlite);
+
+    expect((await read(".env")).match(/NEXTLY_SECRET=/g)).toHaveLength(1);
+  });
+
   it("changes nothing and reports nothing on a second run", async () => {
     await writeFile(join(dir, ".env"), existing);
     await generateEnv(dir, sqlite);
@@ -427,6 +441,33 @@ NEXT_PUBLIC_SITE_URL=http://localhost:3000
 
     expect(warnings.join("\n")).toMatch(/\.env\.example.*DATABASE_URL/);
     expect(warnings.join("\n")).not.toContain("S3cr3tPassw0rd");
+  });
+
+  // new URL accepts an unescaped % in a password that decodeURIComponent
+  // then refuses; the password is no less real for it.
+  it("warns about a database password it cannot decode", async () => {
+    await writeFile(
+      join(dir, ".env.example"),
+      "DATABASE_URL=postgresql://app:pa%ss@db.internal:5432/app\n"
+    );
+
+    const { warnings } = await generateEnv(dir, sqlite);
+
+    expect(warnings.join("\n")).toMatch(
+      /\.env\.example holds a database password/
+    );
+  });
+
+  // A copied example file has to work as a .env, so a database half that
+  // doesn't match the chosen database is said there too.
+  it("says when an example file is set up for another database", async () => {
+    await writeFile(join(dir, ".env.example"), "DB_DIALECT=postgresql\n");
+
+    const { warnings } = await generateEnv(dir, sqlite);
+
+    expect(warnings.join("\n")).toMatch(
+      /DB_DIALECT in \.env\.example is postgresql/
+    );
   });
 
   it("does not warn about the generic example values", async () => {
