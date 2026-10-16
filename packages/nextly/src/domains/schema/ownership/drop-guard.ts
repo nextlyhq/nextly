@@ -398,6 +398,7 @@ const IN_PLACE_CHANGE_WORDS = new Set([
   "SET",
   "DROP",
   "ADD",
+  "RESET",
   "RESTART",
 ]);
 
@@ -930,6 +931,7 @@ class DropReader {
  * which a later drop of that table takes with it.
  */
 type TableChange =
+  | "change the storage of"
   | "truncate"
   | "change the partitions of"
   | "attach as a partition"
@@ -1588,6 +1590,7 @@ class StatementWalk {
     for (const clause of this.clauseStarts(clausesAt)) {
       this.readColumnClause(table, clause);
       this.readColumnChangeClause(table, clause);
+      this.readTableStorageClause(table, clause);
       this.readElementClause(table, clause);
       this.readElementChangeClause(table, clause);
       this.readPartitionClause(table, clause);
@@ -1743,7 +1746,9 @@ class StatementWalk {
     // PostgreSQL's `ALTER INDEX i SET|RESET|ALTER ...` changes it in place.
     if (
       this.reader.isPostgres &&
-      ["SET", "RESET", "ALTER"].includes(this.word(index.next) ?? "")
+      ["SET", "RESET", "ALTER", "ATTACH", "DEPENDS", "NO"].includes(
+        this.word(index.next) ?? ""
+      )
     ) {
       this.reader.changeElement(undefined, index.name, "index");
       return;
@@ -1775,6 +1780,29 @@ class StatementWalk {
   }
 
   /**
+   * One ALTER TABLE clause starting at `at`, for a change to the table's
+   * storage: PostgreSQL's `SET ACCESS METHOD` and `SET TABLESPACE`, and
+   * MySQL's `ENGINE`. Such a change rewrites or moves the table's data.
+   */
+  private readTableStorageClause(
+    table: TableRef | undefined,
+    at: number
+  ): void {
+    if (table === undefined || !this.isTableStorageAt(at)) return;
+    this.reader.changeTable(table, "change the storage of");
+  }
+
+  private isTableStorageAt(at: number): boolean {
+    if (this.reader.isPostgres && this.word(at) === "SET") {
+      return (
+        this.word(at + 1) === "TABLESPACE" ||
+        (this.word(at + 1) === "ACCESS" && this.word(at + 2) === "METHOD")
+      );
+    }
+    return this.reader.isMysql && this.word(at) === "ENGINE";
+  }
+
+  /**
    * One ALTER TABLE clause starting at `at`, for an index or constraint it
    * changes in place: PostgreSQL's `ALTER CONSTRAINT c`, and MySQL's
    * `ALTER INDEX|KEY i` (visibility) and `ALTER CHECK c` (enforcement).
@@ -1783,14 +1811,22 @@ class StatementWalk {
     table: TableRef | undefined,
     at: number
   ): void {
-    if (this.word(at) !== "ALTER") return;
-    const kind = ALTERED_ELEMENT_KINDS.get(this.word(at + 1) ?? "");
+    const kind = this.changedElementKindAt(at);
     if (kind === undefined) return;
     const element = this.elementNamedAt(at + 2, kind);
     if (element === null || table === undefined) {
       this.refuse("an index or constraint change whose names cannot be read");
     }
     this.reader.changeElement(table, element.name, element.kind);
+  }
+
+  /** The element kind a clause changes in place, from its first word. */
+  private changedElementKindAt(at: number): TakenElementKind | undefined {
+    if (this.word(at) === "VALIDATE") {
+      return this.word(at + 1) === "CONSTRAINT" ? "constraint" : undefined;
+    }
+    if (this.word(at) !== "ALTER") return undefined;
+    return ALTERED_ELEMENT_KINDS.get(this.word(at + 1) ?? "");
   }
 
   /**
@@ -3475,7 +3511,8 @@ export function indexesNamedWithoutTable(
   statements: readonly string[],
   dialect: SupportedDialect
 ): string[] {
-  return (readAsIfNoTableExisted(statements, dialect)?.elements ?? [])
+  const read = readAsIfNoTableExisted(statements, dialect);
+  return [...(read?.elements ?? []), ...(read?.alteredElements ?? [])]
     .filter(element => element.table === undefined)
     .map(element => element.name);
 }
@@ -4497,6 +4534,15 @@ function overridden(
   );
 }
 
+/** The log field that names who acted: a rename, a change or a drop. */
+function logKey(act: string): string {
+  if (act === "rename") return "renamedBy";
+  if (act === "change in place" || act === "change the storage of") {
+    return "changedBy";
+  }
+  return "droppedBy";
+}
+
 /** Throw the refusal for a table, column or element the stream does not hold. */
 function refuseUnlessHeld(
   claim: Claim,
@@ -4526,7 +4572,7 @@ function refuseUnlessHeld(
         column: args.column,
         element: args.element,
       }),
-      [args.act === "rename" ? "renamedBy" : "droppedBy"]: args.stream,
+      [logKey(args.act)]: args.stream,
       ...(claim.kind === "foreign"
         ? { belongsTo: claim.owner.migratedBy, ownerId: claim.owner.ownerId }
         : { belongsTo: null }),
