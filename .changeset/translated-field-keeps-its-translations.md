@@ -39,7 +39,7 @@ dialog.
 The change is refused before anything is altered when the archive cannot be
 written, when the field is Required or Unique, which its new shared column
 cannot satisfy until the values are copied into it, and when the same edit
-changes the field's type; the message names the order that works.
+changes how the field is stored (its type, length or precision); the message names the order that works.
 
 `nextly i18n:restore --field <name>` brings one field's archived values back
 once it is translated again, by the field's name or its column name; a value

@@ -524,6 +524,8 @@ export const COMPONENTS_METHODS: Record<
           // A field leaving translation has preconditions of its own, asked before the apply
           // alters anything.
           await assertFieldsCanLeaveTranslation({
+            // This builder made the table, which decides the column bounds compared.
+            builtBy: "fieldGroup",
             adapter,
             entity: slug,
             oldFields: (component.fields ?? []) as unknown as FieldDefinition[],

@@ -718,6 +718,8 @@ export class SingleMetadataService {
       });
     }
     await assertFieldsCanLeaveTranslation({
+      // Singles are built by the collection schema service.
+      builtBy: "collection",
       adapter: this.adapter,
       entity: input.slug,
       oldFields: (input.existing.fields ?? []) as unknown as FieldDefinition[],

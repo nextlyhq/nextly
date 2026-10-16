@@ -1152,6 +1152,8 @@ export class DynamicCollectionService extends BaseService {
       // A field leaving translation has preconditions of its own, asked before anything here is
       // written or altered.
       await assertFieldsCanLeaveTranslation({
+        // This service builds Schema Builder collections.
+        builtBy: "collection",
         adapter: this.adapter,
         entity: collectionName,
         oldFields: oldUserFields,

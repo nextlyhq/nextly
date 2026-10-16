@@ -489,15 +489,47 @@ describeEachDialect("a field that stops being translated", dialect => {
     saved.mockRestore();
   });
 
-  it.each(COLLECTION_CHANGES)(
-    "refuses a field that changes its type as it leaves and changes nothing when $path",
-    async ({ change }) => {
-      // Text copied as it is into a number column would fail part-way or be coerced.
-      await seedCodes({ name: "code", type: "text" });
+  it.each(
+    COLLECTION_CHANGES.flatMap(c => [
+      {
+        ...c,
+        reshape: "a text field becoming a number",
+        from: { name: "code", type: "text" },
+        to: { name: "code", type: "number", localized: false },
+      },
+      // The schema dialog's payload has no way to declare a short text field's width (its
+      // `options` is a choice list), so the narrowing is made through the save.
+      ...(c.path === "the builder saves the field alone"
+        ? [
+            {
+              ...c,
+              reshape: "a short text field's maximum length narrowing",
+              from: {
+                name: "code",
+                type: "text",
+                options: { variant: "short" },
+                validation: { maxLength: 64 },
+              },
+              to: {
+                name: "code",
+                type: "text",
+                options: { variant: "short" },
+                validation: { maxLength: 2 },
+                localized: false,
+              },
+            },
+          ]
+        : []),
+    ])
+  )(
+    "refuses $reshape as it leaves and changes nothing when $path",
+    async ({ change, from, to }) => {
+      // The values are copied as they are into a column of another shape: text into a number
+      // column fails part-way or is coerced, and "A-1" into a two-character column is refused or
+      // truncated.
+      await seedCodes(from);
 
-      const refusal = await change([
-        { name: "code", type: "number", localized: false },
-      ]).then(
+      const refusal = await change([to]).then(
         () => undefined,
         (error: unknown) => error
       );
@@ -506,7 +538,7 @@ describeEachDialect("a field that stops being translated", dialect => {
         refusal instanceof Error
           ? `${refusal.message} ${JSON.stringify((refusal as { publicData?: unknown }).publicData ?? null)}`
           : String(refusal);
-      expect(reported).toMatch(/RETYPED_FIELD_LEAVES_TRANSLATION/);
+      expect(reported).toMatch(/RESHAPED_FIELD_LEAVES_TRANSLATION/);
       expect(await columnsOf("dc_posts")).not.toContain("code");
       const kept = await query<{ code: string }>(
         `SELECT ${quote(dialect, "code")} AS code FROM ${quote(dialect, "dc_posts_locales")} ORDER BY ${quote(dialect, "code")}`

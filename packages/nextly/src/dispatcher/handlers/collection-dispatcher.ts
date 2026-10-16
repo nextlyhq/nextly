@@ -868,6 +868,8 @@ const COLLECTIONS_METHODS: Record<
       // A field leaving translation has preconditions of its own, asked before the push alters
       // anything.
       await assertFieldsCanLeaveTranslation({
+        // This builder made the table, which decides the column bounds compared.
+        builtBy: "collection",
         adapter,
         entity: String(p.collectionName),
         oldFields: (collection.fields ?? []) as unknown as FieldDefinition[],

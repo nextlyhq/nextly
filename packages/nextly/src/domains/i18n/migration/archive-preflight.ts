@@ -17,6 +17,7 @@ import {
   getI18nArchiveIndexRepairDdl,
 } from "../../../schemas/nextly-i18n-archive/ddl";
 import { isIdempotencyError } from "../../schema/pipeline/sql-statement-utils";
+import type { ColumnOrigin } from "../../schema/services/field-column-descriptor";
 
 import { lit, q } from "./ddl-types";
 import { fieldToLocalizedColumnSpec } from "./field-to-column-spec";
@@ -110,10 +111,11 @@ function constraintsOf(field: LeavingFieldLike): string[] {
  * field-group schema dialogs and the Single save cannot answer it differently.
  *
  * Three things are refused here:
- * - A field whose stored kind changes in the same edit (text becoming a number, say). Its values
- *   are copied into the shared column as they are, without the conversion and confirmation a type
- *   change goes through on its own, so one the new kind cannot hold would fail part-way or be
- *   coerced.
+ * - A field whose storage changes in the same edit: its type (text becoming a number) or its
+ *   bounds (a shorter maximum length, a smaller precision). Its values are copied into the shared
+ *   column as they are, without the conversion and confirmation such a change goes through on its
+ *   own, so one the new column cannot hold would fail part-way, be truncated, or be kept against
+ *   the field's new rules.
  * - A required or unique field. Its shared column is created, and its constraints checked, before
  *   the default language's values are copied into it, so at that moment every existing row holds
  *   the same placeholder or none. A required column then has nothing valid to hold (each dialect
@@ -124,13 +126,15 @@ function constraintsOf(field: LeavingFieldLike): string[] {
  * Nothing is asked when no field leaves translation, or when the entity is not translated before
  * and after the change (turning translation off for the whole entity archives by its own path).
  *
- * @throws NextlyError `VALIDATION_ERROR` naming each retyped or constrained field and the order
+ * @throws NextlyError `VALIDATION_ERROR` naming each reshaped or constrained field and the order
  *   that works, or `NEXTLY_MIGRATION_APPLY_FAILED` from the archive check
  */
 export async function assertFieldsCanLeaveTranslation(args: {
   adapter: DrizzleAdapter;
   /** The collection, Single or field group being changed. */
   entity: string;
+  /** Which builder made the entity's table, which decides a column's bounds. */
+  builtBy: ColumnOrigin;
   oldFields: readonly LeavingFieldLike[];
   newFields: readonly LeavingFieldLike[];
   wasLocalized: boolean;
@@ -142,30 +146,35 @@ export async function assertFieldsCanLeaveTranslation(args: {
   );
   if (leaving.size === 0) return;
 
-  // The kind of column a field is stored in. Asked as a collection's, because the kind does not
-  // depend on which entity built the table; only a column's bounds do, and a copy keeps those.
+  // The column a field is stored in: its kind and its bounds (length, precision, scale), as the
+  // builder of this entity's table describes them. Any difference means the copy would put values
+  // into a column of another shape than the one they were written to.
   const dialect = args.adapter.getCapabilities().dialect;
-  const kindOf = (field: LeavingFieldLike) =>
-    fieldToLocalizedColumnSpec(field, dialect, "collection")?.kind;
+  const shapeOf = (field: LeavingFieldLike) => {
+    const spec = fieldToLocalizedColumnSpec(field, dialect, args.builtBy);
+    return spec
+      ? [spec.kind, spec.length, spec.precision, spec.scale].join("|")
+      : undefined;
+  };
   const before = new Map(args.oldFields.map(f => [f.name, f]));
-  const retyped = args.newFields.filter(f => {
+  const reshaped = args.newFields.filter(f => {
     const previous = before.get(f.name);
     return (
       leaving.has(f.name) &&
       previous !== undefined &&
-      kindOf(previous) !== kindOf(f)
+      shapeOf(previous) !== shapeOf(f)
     );
   });
-  if (retyped.length > 0) {
+  if (reshaped.length > 0) {
     throw NextlyError.validation({
-      errors: retyped.map(f => ({
+      errors: reshaped.map(f => ({
         path: `fields.${f.name}`,
-        code: "RETYPED_FIELD_LEAVES_TRANSLATION",
+        code: "RESHAPED_FIELD_LEAVES_TRANSLATION",
         message:
-          `"${f.name}" changes its type in the same change that stops it being translated. ` +
-          `Make it shared and save first, then change its type.`,
+          `"${f.name}" changes how it is stored (its type, length or precision) in the same ` +
+          `change that stops it being translated. Make it shared and save first, then change it.`,
       })),
-      logContext: { entity: args.entity, fields: retyped.map(f => f.name) },
+      logContext: { entity: args.entity, fields: reshaped.map(f => f.name) },
     });
   }
 

@@ -1216,6 +1216,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
       // A field leaving translation has preconditions of its own, asked before the push alters
       // anything.
       await assertFieldsCanLeaveTranslation({
+        // This builder made the table, which decides the column bounds compared.
+        builtBy: "collection",
         adapter,
         entity: slug,
         oldFields: single.fields as unknown as FieldDefinition[],
