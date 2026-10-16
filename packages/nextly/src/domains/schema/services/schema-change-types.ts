@@ -10,6 +10,7 @@
 // consume ClassifierEvent[] directly.
 
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
+import type { LeavingTranslationPreview } from "../../i18n/migration/preview-leaving-translation";
 
 // Classification of a single field change
 export type ChangeClassification = "safe" | "destructive" | "interactive";
@@ -73,6 +74,12 @@ export interface SchemaPreviewResult {
   warnings: string[];
   interactiveFields: InteractiveField[];
   ddlPreview: string[]; // SQL statements from Drizzle Kit dry-run
+  /**
+   * Fields that stop being translated in this change: what moves to the archive, by language,
+   * and how to restore it (`previewFieldsLeavingTranslation`). Set by the Builder's preview
+   * endpoints; empty when no field leaves translation.
+   */
+  leavingTranslation?: LeavingTranslationPreview[];
 }
 
 // Request body for the apply endpoint

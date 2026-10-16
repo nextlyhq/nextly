@@ -32,6 +32,10 @@ import {
 import { resolveFieldGroupRegistryName } from "../../domains/field-groups/storage/resolve-storage-names";
 import { assertLocalizationConfigured } from "../../domains/i18n/config/require-app-config";
 import { archiveFieldsLeavingTranslation } from "../../domains/i18n/migration/archive-preflight";
+import {
+  previewFieldsLeavingTranslation,
+  withLeavingTranslation,
+} from "../../domains/i18n/migration/preview-leaving-translation";
 import { translatePipelinePreviewToLegacy } from "../../domains/schema/legacy-preview/translate";
 import { RealClassifier } from "../../domains/schema/pipeline/classifier/classifier";
 import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/database-url";
@@ -377,7 +381,11 @@ export const COMPONENTS_METHODS: Record<
         // i18n: carry the localized flag so the push diff omits translatable columns
         // from the component's main table (they live in comp_<slug>_locales, reconciled
         // out-of-band below) — mirrors the collection/single apply path.
-        localized: (component as { localized?: boolean }).localized === true,
+        // The request's flag wins when the Builder sent one, as in the collection and Single
+        // previews, so a change that also turns translation on or off is diffed as it will apply.
+        localized:
+          readRequestLocalized(body) ??
+          (component as { localized?: boolean }).localized === true,
         // Authored in the Schema Builder: this is the Builder's own save path.
         builderOwned: true,
       };
@@ -401,7 +409,26 @@ export const COMPONENTS_METHODS: Record<
 
       const renamed = pipelinePreview.candidates.map(toRenameCandidateWire);
 
-      const legacyAsRecord = legacyShape as unknown as Record<string, unknown>;
+      // Fields leaving translation: what moves to the archive, by language, and any refusal, so
+      // the builder shows them before Apply.
+      const wasLocalized =
+        (component as { localized?: boolean }).localized === true;
+      const leaving = await previewFieldsLeavingTranslation({
+        db,
+        dialect,
+        slug: slug,
+        tableName,
+        builtBy: "fieldGroup",
+        defaultLocale: getConfigFromDI()?.localization?.defaultLocale ?? "en",
+        oldFields: currentFields,
+        newFields: fields as FieldDefinition[],
+        wasLocalized,
+        isLocalized: readRequestLocalized(body) ?? wasLocalized,
+      });
+      const legacyAsRecord = withLeavingTranslation(
+        legacyShape,
+        leaving
+      ) as unknown as Record<string, unknown>;
       return respondData({
         ...legacyAsRecord,
         renamed,

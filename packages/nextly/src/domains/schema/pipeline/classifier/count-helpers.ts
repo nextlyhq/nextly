@@ -118,3 +118,60 @@ export async function countRows(
   const result = await dbTyped.execute(query);
   return extractCount(result, dialect);
 }
+
+/** One row of a grouped count. */
+interface GroupCountRow {
+  locale: string;
+  count: string | number;
+}
+
+/** Every row of a query, from each dialect's result shape. */
+function extractRows<T>(raw: unknown, dialect: SupportedDialect): T[] {
+  if (dialect === "postgresql") {
+    const rows = (raw as { rows?: T[] }).rows;
+    if (!Array.isArray(rows)) {
+      throw new Error("PG query returned no rows array");
+    }
+    return rows;
+  }
+  if (dialect === "mysql") {
+    if (Array.isArray(raw) && raw.length > 0 && Array.isArray(raw[0])) {
+      return (raw as [T[], unknown])[0];
+    }
+    if (Array.isArray(raw)) return raw as T[];
+    throw new Error("MySQL query returned unrecognized shape");
+  }
+  throw new Error(`unrecognized dialect for extractRows: ${dialect}`);
+}
+
+/**
+ * How many rows of a companion `<table>_locales` hold a value in `column`, for each language
+ * except `excludeLocale`. A language with no value in any row is absent from the answer.
+ *
+ * What a field leaving translation sends to the archive, counted before it happens: every
+ * non-default language's non-null value.
+ */
+export async function countValuesByLocale(
+  db: unknown,
+  dialect: SupportedDialect,
+  companionTable: string,
+  column: string,
+  excludeLocale: string
+): Promise<Record<string, number>> {
+  const tbl = quoteIdent(companionTable, dialect);
+  const col = quoteIdent(column, dialect);
+  const locale = quoteIdent("_locale", dialect);
+  const query = sql`${sql.raw(
+    `SELECT ${locale} AS locale, COUNT(*) AS count FROM ${tbl} WHERE ${col} IS NOT NULL AND ${locale} <> `
+  )}${excludeLocale}${sql.raw(` GROUP BY ${locale}`)}`;
+  const rows =
+    dialect === "sqlite"
+      ? (db as { all(q: unknown): GroupCountRow[] }).all(query)
+      : extractRows<GroupCountRow>(
+          await (db as PgMysqlExecute).execute(query),
+          dialect
+        );
+  const counts: Record<string, number> = {};
+  for (const row of rows) counts[String(row.locale)] = asNumber(row.count);
+  return counts;
+}

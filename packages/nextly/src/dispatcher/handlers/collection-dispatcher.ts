@@ -33,6 +33,10 @@ import {
 } from "../../api/response-shapes";
 import { assertLocalizationConfigured } from "../../domains/i18n/config/require-app-config";
 import { archiveFieldsLeavingTranslation } from "../../domains/i18n/migration/archive-preflight";
+import {
+  previewFieldsLeavingTranslation,
+  withLeavingTranslation,
+} from "../../domains/i18n/migration/preview-leaving-translation";
 import { buildCompanionTransitionStatements } from "../../domains/i18n/migration/reconcile-companion";
 import {
   companionHasStatusColumn,
@@ -624,7 +628,26 @@ const COLLECTIONS_METHODS: Record<
       // Cast through `unknown` because SchemaPreviewResult is a sealed
       // shape with no string index signature; respondData's generic
       // requires a Record<string, unknown> for spread compatibility.
-      const legacyAsRecord = legacyShape as unknown as Record<string, unknown>;
+      // Fields leaving translation: what moves to the archive, by language, and any refusal, so
+      // the builder shows them before Apply.
+      const wasLocalized =
+        (collection as { localized?: boolean }).localized === true;
+      const leaving = await previewFieldsLeavingTranslation({
+        db,
+        dialect,
+        slug: p.collectionName,
+        tableName,
+        builtBy: "collection",
+        defaultLocale: getConfigFromDI()?.localization?.defaultLocale ?? "en",
+        oldFields: currentFields,
+        newFields: fields as FieldDefinition[],
+        wasLocalized,
+        isLocalized: previewLocalized ?? wasLocalized,
+      });
+      const legacyAsRecord = withLeavingTranslation(
+        legacyShape,
+        leaving
+      ) as unknown as Record<string, unknown>;
       return respondData({
         ...legacyAsRecord,
         renamed,

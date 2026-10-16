@@ -38,6 +38,10 @@ import type { FieldConfig } from "../../collections/fields/types";
 import { container } from "../../di/container";
 import { assertLocalizationConfigured } from "../../domains/i18n/config/require-app-config";
 import { archiveFieldsLeavingTranslation } from "../../domains/i18n/migration/archive-preflight";
+import {
+  previewFieldsLeavingTranslation,
+  withLeavingTranslation,
+} from "../../domains/i18n/migration/preview-leaving-translation";
 import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion-registration";
 import { translatePipelinePreviewToLegacy } from "../../domains/schema/legacy-preview/translate";
 import { RealClassifier } from "../../domains/schema/pipeline/classifier/classifier";
@@ -1142,7 +1146,26 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
 
       const renamed = pipelinePreview.candidates.map(toRenameCandidateWire);
 
-      const legacyAsRecord = legacyShape as unknown as Record<string, unknown>;
+      // Fields leaving translation: what moves to the archive, by language, and any refusal, so
+      // the builder shows them before Apply.
+      const wasLocalized =
+        (single as { localized?: boolean }).localized === true;
+      const leaving = await previewFieldsLeavingTranslation({
+        db,
+        dialect,
+        slug: slug,
+        tableName,
+        builtBy: "collection",
+        defaultLocale: getConfigFromDI()?.localization?.defaultLocale ?? "en",
+        oldFields: currentFields,
+        newFields: fields as FieldDefinition[],
+        wasLocalized,
+        isLocalized: readRequestLocalized(body) ?? wasLocalized,
+      });
+      const legacyAsRecord = withLeavingTranslation(
+        legacyShape,
+        leaving
+      ) as unknown as Record<string, unknown>;
       return respondData({
         ...legacyAsRecord,
         renamed,
