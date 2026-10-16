@@ -41,6 +41,7 @@ import type {
   CreateNextlyOptions,
   DatabaseConfig,
   DatabaseType,
+  EnvGenerationResult,
   ProjectApproach,
   ProjectType,
 } from "./types";
@@ -62,6 +63,18 @@ import { copyTemplate } from "./utils/template";
  * scaffolded directory. Also defends against directory names that aren't
  * valid as the `package.json` "name" field (npm forbids uppercase, etc).
  */
+/**
+ * Says what the env generator wrote, extended and left for the person to fix.
+ * File names and key names only: an env value never reaches the terminal.
+ */
+function reportEnvFiles({ files, warnings }: EnvGenerationResult): void {
+  for (const name of files.written) p.log.info(`Wrote ${name}`);
+  for (const { path: name, added } of files.changed) {
+    p.log.info(`Added ${added.join(", ")} to ${name}`);
+  }
+  for (const warning of warnings) p.log.warn(warning);
+}
+
 function cwdProjectName(cwd: string): string {
   const basename = path.basename(cwd);
   if (!/^[a-z0-9][a-z0-9._-]*$/.test(basename)) {
@@ -401,7 +414,6 @@ export async function createNextly(
         projectType,
         targetDir,
         database,
-        databaseUrl,
         useYalc,
         approach,
         templateSource,
@@ -516,6 +528,8 @@ export async function createNextly(
 
   // --- Generate configuration files ---
 
+  let envResult: EnvGenerationResult | undefined;
+
   {
     const s = p.spinner();
     s.start("Setting up environment...");
@@ -532,13 +546,19 @@ export async function createNextly(
 
       // App flows generate a root .env. A plugin is a library — its env lives
       // in the embedded dev/ playground (dev/.env.example), so skip it here.
+      // A URL the person typed goes to .env only; .env.example keeps the
+      // database's generic example, since a project commits that file and a
+      // typed URL carries its password.
       if (projectType !== "plugin") {
         const envDatabase = databaseUrl
-          ? { ...database, connectionUrl: databaseUrl, envExample: databaseUrl }
+          ? { ...database, connectionUrl: databaseUrl }
           : database;
-        await generateEnv(cwd, envDatabase);
+        envResult = await generateEnv(cwd, envDatabase);
       }
       s.stop("Environment configured");
+      // Said after the spinner, so each line stays on screen. Keys and file
+      // names only: nothing here ever carries an env value.
+      if (envResult) reportEnvFiles(envResult);
     } catch (error) {
       s.stop("Failed to generate configuration");
       telemetry.capture("scaffold_failed", {

@@ -858,18 +858,20 @@ export function resolveTemplatePath(localTemplatePath?: string): string {
  */
 function buildPlaceholderMap(options: {
   database?: DatabaseConfig;
-  databaseUrl?: string;
   /** Plugin package name → fills `{{pluginName}}` (plugin template, D44). */
   pluginName?: string;
   /** Plugin's `nextly` compat range → fills `{{nextlyRange}}` (D44). */
   nextlyRange?: string;
 }): Record<string, string> {
-  const { database, databaseUrl, pluginName, nextlyRange } = options;
+  const { database, pluginName, nextlyRange } = options;
 
   const map: Record<string, string> = {};
   if (database) {
     map["{{databaseDialect}}"] = database.type;
-    map["{{databaseUrl}}"] = databaseUrl || database.envExample;
+    // The token fills only .env.example, which a project commits, so it is the
+    // database's generic example: a URL typed during setup carries a password
+    // and belongs in .env, which the env generator writes.
+    map["{{databaseUrl}}"] = database.envExample;
   }
   if (pluginName) map["{{pluginName}}"] = pluginName;
   if (nextlyRange) map["{{nextlyRange}}"] = nextlyRange;
@@ -1701,7 +1703,6 @@ export interface CopyTemplateOptions {
   projectType: ProjectType;
   targetDir: string;
   database: DatabaseConfig;
-  databaseUrl?: string;
   useYalc?: boolean;
   /** Schema approach for content templates (code-first, visual) */
   approach?: ProjectApproach;
@@ -1762,7 +1763,6 @@ export async function copyTemplate(
     projectType,
     targetDir,
     database,
-    databaseUrl,
     useYalc = false,
     approach,
     templateSource,
@@ -1958,7 +1958,7 @@ export async function copyTemplate(
   // The placeholder map is built here rather than at step 9 because a merge into a file the
   // developer already had must render the incoming text itself; step 9 then skips what it
   // merged, so their prose is never rewritten.
-  const placeholders = buildPlaceholderMap({ database, databaseUrl });
+  const placeholders = buildPlaceholderMap({ database });
   if (approach) {
     placeholders["{{approach}}"] = approach;
   }
