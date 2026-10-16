@@ -716,25 +716,38 @@ export class SinglePublishAllService extends BaseService {
           values: companionValues,
         });
       }
-      // The draft's component values live in tables of their own, written the
-      // way an ordinary publish writes them. Without this the drafts below are
-      // consumed and a held component edit is lost while the publish succeeds.
-      // Cloned because the save mutates its input (ids, hashed passwords).
-      if (this.fieldGroupDataService && Object.keys(components).length > 0) {
-        await this.fieldGroupDataService.saveComponentDataInTransaction(tx, {
-          parentId: existingDoc.id,
-          parentTable: singleMeta.tableName,
-          fields: plan.fieldConfigs,
-          data: structuredClone(components),
-          locale: draft.locale ?? undefined,
-          req: user ? { user } : {},
-        });
-      }
+      await this.promoteComponents(tx, plan, components, draft.locale, user);
     }
 
     await new VersionsRepository(tx).deleteAllWorkingDrafts(
       this.workingDraftRef(plan)
     );
+  }
+
+  /**
+   * Write a pending change's component values, the way an ordinary publish
+   * writes them. They live in tables of their own, so without this the drafts
+   * are consumed and a held component edit is lost while the publish succeeds.
+   * Cloned because the save mutates its input (ids, hashed passwords).
+   */
+  private async promoteComponents(
+    tx: TransactionContext,
+    plan: PublishPlan,
+    components: Record<string, unknown>,
+    locale: string | null,
+    user: UserContext | undefined
+  ): Promise<void> {
+    if (!this.fieldGroupDataService || Object.keys(components).length === 0) {
+      return;
+    }
+    await this.fieldGroupDataService.saveComponentDataInTransaction(tx, {
+      parentId: plan.existingDoc.id,
+      parentTable: plan.singleMeta.tableName,
+      fields: plan.fieldConfigs,
+      data: structuredClone(components),
+      locale: locale ?? undefined,
+      req: user ? { user } : {},
+    });
   }
 
   /** Every language's pending change, where the Single keeps drafts. */
