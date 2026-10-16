@@ -79,6 +79,128 @@ const FORBIDDEN_PHRASES = [
 const BARE_VISUAL_BUILDER = /(?<!schema )(?<!page )\bvisual builder\b/gi;
 
 /**
+ * Phrases no public description of Nextly may use.
+ *
+ * Three kinds of sentence are refused, and each entry says which:
+ *
+ * - a promise about the future: that a feature stays free, or that no paid or hosted offering
+ *   will exist. Nextly is MIT licensed and self-hosted today, and that is the whole claim.
+ * - a feature that is not offered: single sign-on and the enterprise features around it are
+ *   not part of Nextly, and are not named until they are.
+ * - a claim the code does not support, where the phrase makes nothing but that claim.
+ *
+ * A curated list, like `FORBIDDEN_PHRASES` above and for the same reason: no code can ask
+ * whether a sentence is true. A sentence that must quote one of these to correct it is
+ * allowlisted by its file and its text, with the reason, never by weakening the phrase here.
+ *
+ * `word: true` matches only where no letter or digit touches either end, so `SSO` never
+ * matches inside "also" and "in 5 minutes" never matches inside "within 5 minutes". Every other
+ * entry matches inside longer text, because a promise does not stop being one for a prefix.
+ */
+const FUTURE = "promises the future; say what is true today: MIT licensed, self-hosted";
+const NOT_OFFERED = "names a feature Nextly does not offer";
+const UNSUPPORTED = "claims more than the code does";
+
+const REFUSED_CLAIMS = [
+  { phrase: "free forever", why: FUTURE },
+  { phrase: "forever free", why: FUTURE },
+  { phrase: "always free", why: FUTURE },
+  { phrase: "all features free", why: FUTURE },
+  { phrase: "no paid gates", why: FUTURE },
+  { phrase: "no paid tier", why: FUTURE },
+  { phrase: "no paid plan", why: FUTURE },
+  { phrase: "no paid version", why: FUTURE },
+  { phrase: "never charge", why: FUTURE },
+  { phrase: "no saas", why: FUTURE },
+  { phrase: "no proprietary cloud", why: FUTURE },
+  { phrase: "no hosted offering", why: FUTURE },
+  { phrase: "no hosted version", why: FUTURE },
+  // Any sentence about a Nextly cloud promises one way or the other.
+  { phrase: "nextly cloud", why: FUTURE },
+
+  { phrase: "single sign-on", why: NOT_OFFERED },
+  { phrase: "sso", word: true, why: NOT_OFFERED },
+  { phrase: "saml", word: true, why: NOT_OFFERED },
+  { phrase: "scim", word: true, why: NOT_OFFERED },
+  { phrase: "oidc", word: true, why: NOT_OFFERED },
+  { phrase: "openid connect", why: NOT_OFFERED },
+  { phrase: "enforce sign-on", why: NOT_OFFERED },
+  { phrase: "enforced sign-on", why: NOT_OFFERED },
+  { phrase: "enforces sign-on", why: NOT_OFFERED },
+  { phrase: "enforcing sign-on", why: NOT_OFFERED },
+  { phrase: "compliance report", why: NOT_OFFERED },
+  ...["sign in with", "log in with", "login with"].flatMap(verb =>
+    ["google", "microsoft", "github"].map(provider => ({
+      phrase: `${verb} ${provider}`,
+      why: NOT_OFFERED,
+    }))
+  ),
+
+  { phrase: "production-ready", why: UNSUPPORTED },
+  { phrase: "enterprise-grade", why: UNSUPPORTED },
+  { phrase: "produce the same result", why: UNSUPPORTED },
+  { phrase: "identical results", why: UNSUPPORTED },
+  { phrase: "export to code", why: UNSUPPORTED },
+  { phrase: "row-level security", why: UNSUPPORTED },
+  { phrase: "live preview", why: UNSUPPORTED },
+  { phrase: "prevents conflicting edits", why: UNSUPPORTED },
+  { phrase: "stable and semver-protected", why: UNSUPPORTED },
+  { phrase: "same public api", why: UNSUPPORTED },
+  { phrase: "ai-native", why: UNSUPPORTED },
+  { phrase: "ai-powered", why: UNSUPPORTED },
+  { phrase: "agent-ready", why: UNSUPPORTED },
+  { phrase: "mcp-enabled", why: UNSUPPORTED },
+  { phrase: "no dev required", why: UNSUPPORTED },
+  { phrase: "no code required", why: UNSUPPORTED },
+  { phrase: "backed by vercel", why: UNSUPPORTED },
+  { phrase: "vercel-backed", why: UNSUPPORTED },
+  // How long setup takes depends on the machine and the network, so no copy names a time.
+  { phrase: "in under a minute", word: true, why: UNSUPPORTED },
+  { phrase: "in 5 minutes", word: true, why: UNSUPPORTED },
+  { phrase: "in five minutes", word: true, why: UNSUPPORTED },
+];
+
+const escapeRegExp = text => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/**
+ * One pattern per phrase, built from its words.
+ *
+ * A hyphen may also be written as a space or left out, and a space may be any run of
+ * whitespace or a hyphen, because a reader sees "production ready", "production-ready" and a
+ * line wrap between the two words as the same claim.
+ */
+function refusedPattern({ phrase, word }) {
+  const body = phrase
+    .split(/(-| )/)
+    .map(part => {
+      if (part === "-") return "(?:-|\\s+)?";
+      if (part === " ") return "(?:\\s+|-)";
+      return escapeRegExp(part);
+    })
+    .join("");
+  const source = word ? `(?<![\\p{L}\\p{N}])${body}(?![\\p{L}\\p{N}])` : body;
+  return new RegExp(source, "giu");
+}
+
+const REFUSED_PATTERNS = REFUSED_CLAIMS.map(entry => ({ ...entry, pattern: refusedPattern(entry) }));
+
+/**
+ * Every refused phrase in a text, in the order they appear, each with where it starts and the
+ * words as the text spells them. The offset is what lets a wrapped line, read together with the
+ * next one, keep only the matches that start on it.
+ */
+function refusedClaimsIn(text) {
+  if (typeof text !== "string") return [];
+  const found = [];
+  for (const { why, pattern } of REFUSED_PATTERNS) {
+    for (const match of text.matchAll(pattern)) {
+      found.push({ why, index: match.index, text: match[0] });
+    }
+  }
+  return found.sort((a, b) => a.index - b.index);
+}
+
+/**
  * The files that say what Nextly is.
  *
  * The naming rule above stops one word being overloaded. This stops a retired
@@ -1815,6 +1937,138 @@ function documentedKeyPrefix(
   }
 }
 
+/**
+ * The files that describe Nextly to someone deciding whether to use it: the root README, every
+ * docs page and navigation file, and each published package's README, which npm shows as the
+ * package's page.
+ *
+ * Not every Markdown file. A contributor guide or an agent skill describes the repository, and
+ * says accurate things there that would read as claims about the product: npm's trusted
+ * publishing is OIDC, for one. The published packages come from `publishedPackages`, so a
+ * private package, which has no npm page, is left out by the same answer every other check uses.
+ */
+function refusedClaimSurfaces(repoRoot, tracked, packages) {
+  const readmes = new Set(
+    packages.map(pkg => relative(repoRoot, join(pkg.dir, "README.md")).split(sep).join("/"))
+  );
+  return tracked.filter(
+    rel =>
+      rel === "README.md" ||
+      readmes.has(rel) ||
+      (rel.startsWith("docs/") && /\.(?:md|mdx|json)$/.test(rel))
+  );
+}
+
+/** A line beneath that opens a block of its own, so it is not the sentence above continuing. */
+const OPENS_BLOCK = /^(?:\s*$|\s*#{1,6}\s|\s*[-*+]\s|\s*\d+[.)]\s|\s*\||\s*```|\s*~~~|\s*<|\s*---)/;
+
+/** Emphasis and code-span markers render as nothing, so they cannot hide a phrase. */
+const INLINE_MARKUP = /[*`]/g;
+
+/** A quotation repeats its marker on every line, and the marker is not part of the sentence. */
+const QUOTE_MARKER = /^\s*(?:>\s?)+/;
+
+function describeRefused(hits) {
+  const byReason = new Map();
+  for (const hit of hits) {
+    if (!byReason.has(hit.why)) byReason.set(hit.why, new Set());
+    byReason.get(hit.why).add(`"${hit.text.replace(/\s+/g, " ")}"`);
+  }
+  return [...byReason]
+    .map(([why, texts]) => `${[...texts].join(", ")} — ${why}`)
+    .join("; ");
+}
+
+/**
+ * Refused phrases on the public surfaces, reported on the line where each starts.
+ *
+ * These files are hand-wrapped, so a phrase is read across a wrap: each line is read together
+ * with the one beneath unless that one opens a new block, and only matches STARTING on the
+ * line are reported there. A phrase split by a wrap is therefore reported once, on its first
+ * line, and a phrase wholly on the next line waits for that line's turn. Navigation files are
+ * JSON, where every line is its own value, so they are read a line at a time.
+ *
+ * Raw lines rather than the rendered prose the category check reads: a refused phrase in a
+ * code sample or a page's frontmatter is published as surely as one in a paragraph, and a line
+ * number is what lets an accurate quotation be allowlisted by its file and its text.
+ */
+/**
+ * The text of the line beneath when it continues the same sentence, and nothing when it does
+ * not. A quotation's marker comes off that line only when this line is quoted too: beneath a
+ * plain line a quotation is a new block, and its marker left in place keeps the two apart.
+ */
+function continuation(line, next) {
+  if (next === undefined) return "";
+  const below = QUOTE_MARKER.test(line) ? next.replace(QUOTE_MARKER, "") : next;
+  return OPENS_BLOCK.test(below) ? "" : below.replace(INLINE_MARKUP, "");
+}
+
+/**
+ * The refused phrases that START on line `i`, read together with the line beneath when that
+ * line continues the sentence.
+ */
+function refusedOnLine(lines, i, wraps) {
+  const own = lines[i].replace(INLINE_MARKUP, "");
+  const rest = wraps ? continuation(lines[i], lines[i + 1]) : "";
+  return refusedClaimsIn(`${own} ${rest}`).filter(hit => hit.index < own.length);
+}
+
+function pushRefused(findings, isExempt, { file, line, source, hits }) {
+  if (hits.length === 0 || isExempt(file, source)) return;
+  findings.push({ check: "refused-claim", file, line, message: describeRefused(hits) });
+}
+
+function refusedInFile(repoRoot, file, findings, isExempt) {
+  let text;
+  try {
+    text = readFileSync(join(repoRoot, file), "utf-8");
+  } catch {
+    return;
+  }
+  const lines = text.split("\n");
+  const wraps = !file.endsWith(".json");
+  for (let i = 0; i < lines.length; i++) {
+    const hits = refusedOnLine(lines, i, wraps);
+    pushRefused(findings, isExempt, { file, line: i + 1, source: lines[i], hits });
+  }
+}
+
+/**
+ * npm shows a package's description and keywords beside its README, so they are the same
+ * surface. Keywords are read as npm derives them, not as the manifest spells them.
+ */
+function refusedInManifests(repoRoot, packages, findings, isExempt) {
+  for (const pkg of packages) {
+    const file = relative(repoRoot, join(pkg.dir, "package.json")).split(sep).join("/");
+    for (const source of [pkg.json.description, ...packageKeywords(pkg.json)]) {
+      pushRefused(findings, isExempt, { file, line: null, source, hits: refusedClaimsIn(source) });
+    }
+  }
+}
+
+/**
+ * The population, by identity rather than by count: the root README and the docs are where
+ * nearly every claim is made, so a run that read neither proved nothing about either, and a
+ * rename that took them out of scope would otherwise read as a clean pass.
+ */
+function refusedClaimsUnexamined(surfaces, findings) {
+  const readme = surfaces.includes("README.md");
+  if (readme && surfaces.some(rel => rel.startsWith("docs/"))) return;
+  findings.push({
+    check: "refused-claim-unexamined",
+    file: readme ? "docs/" : "README.md",
+    line: null,
+    message: "the refused-phrase check needs the root README and the docs, and could not read both",
+  });
+}
+
+function refusedClaims(repoRoot, tracked, packages, findings, isExempt) {
+  const surfaces = refusedClaimSurfaces(repoRoot, tracked, packages);
+  for (const file of surfaces) refusedInFile(repoRoot, file, findings, isExempt);
+  refusedInManifests(repoRoot, packages, findings, isExempt);
+  refusedClaimsUnexamined(surfaces, findings);
+}
+
 function readmeSkeleton(repoRoot, packages, findings) {
   for (const pkg of packages) {
     const readme = join(pkg.dir, "README.md");
@@ -2138,6 +2392,7 @@ export async function runChecks({
   await internalLinks(repoRoot, tracked, findings);
   pluginRouteMount(repoRoot, tracked, findings, exemption("plugin-route-mount"));
   metaReachability(repoRoot, tracked, findings);
+  refusedClaims(repoRoot, tracked, packages, findings, exemption("refused-claim"));
 
   return { findings, unverifiable };
 }
