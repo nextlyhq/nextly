@@ -912,6 +912,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         versions: single.versions,
         fields: single.fields,
         slug: (single as { slug?: string }).slug,
+        localized: (single as { localized?: boolean }).localized,
+        entityKind: "single",
       });
 
       // The schema record IS the doc here, so the admin Schema Builder

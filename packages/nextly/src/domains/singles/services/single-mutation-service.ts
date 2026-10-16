@@ -104,7 +104,10 @@ import {
   resolveCompanionReadiness,
 } from "../../i18n/runtime/companion-readiness";
 import { captureInTx } from "../../versions/capture-in-tx";
-import { mergeComponentPatches } from "../../versions/draft-components";
+import {
+  draftComponentValues,
+  mergeComponentPatches,
+} from "../../versions/draft-components";
 import { resolveDraftHold } from "../../versions/draft-hold";
 import { storeDraftSave } from "../../versions/draft-save";
 import { resolveComponentSchemas } from "../../versions/restore-version";
@@ -1342,6 +1345,7 @@ export class SingleMutationService extends BaseService {
                 draftsVersioningEnabled:
                   singleMeta.versions?.drafts?.enabled === true,
                 documentLocalized: singleMeta.localized === true,
+                entityKind: "single",
                 fields: fieldConfigs,
                 componentSchemas: singleComponentSchemas,
                 namedStatus: (updatePayload as Record<string, unknown>).status,
@@ -1449,6 +1453,24 @@ export class SingleMutationService extends BaseService {
                 singleDraftLocale
               );
               if (pendingDraft) {
+                // The component values this publish writes: the draft's, with
+                // the publish's own merged over them sub-field by sub-field,
+                // tagged as a draft holds them. Built once, so the gate judges
+                // exactly the values the component save below persists.
+                const promotedComponents = mergeComponentPatches(
+                  draftComponentValues(
+                    pendingDraft.snapshot as Record<string, unknown>,
+                    fieldConfigs
+                  ),
+                  tagComponentTypes(
+                    attemptComponentFields,
+                    fieldConfigs,
+                    componentSlug =>
+                      singleComponentSchemas?.get(componentSlug)?.fields
+                  ),
+                  fieldConfigs,
+                  singleComponentSchemas
+                );
                 // Judged here, on the draft this transaction has LOCKED, and
                 // after the hooks that decide the status. Before the
                 // transaction the gate could only judge a copy of the world as
@@ -1463,7 +1485,12 @@ export class SingleMutationService extends BaseService {
                       snapshot: pendingDraft.snapshot,
                     },
                   ],
-                  promoteGate
+                  {
+                    ...promoteGate,
+                    // The caller's component values are not in `currentData`,
+                    // which they left for the component save.
+                    callerData: { ...currentData, ...promotedComponents },
+                  }
                 );
                 // The caller's own payload wins over the pending change: a
                 // publish that also sets a field is saying something about that
@@ -1477,15 +1504,8 @@ export class SingleMutationService extends BaseService {
                 );
                 mainPayload = promoted.main;
                 companionData = promoted.companion;
-                // The draft's component values are written by the component
-                // save below. The publish's own component values win, merged
-                // sub-field by sub-field, as its row values win over the draft's.
-                const promotedComponents = mergeComponentPatches(
-                  promoted.components,
-                  attemptComponentFields,
-                  fieldConfigs,
-                  singleComponentSchemas
-                );
+                // The draft's component values, with the publish's own over
+                // them, are written by the component save below.
                 for (const [name, value] of Object.entries(
                   promotedComponents
                 )) {

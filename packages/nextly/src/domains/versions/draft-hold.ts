@@ -25,6 +25,8 @@ export interface DraftHoldInput {
   documentLocalized: boolean;
   fields: FieldConfig[];
   componentSchemas: ComponentSchemas | null;
+  /** The entity's kind, for the eligibility rule only a Single applies. */
+  entityKind?: "collection" | "single";
   /** The status this write names, if any. A write that names one is not held. */
   namedStatus: unknown;
   /** The committed status of the row being written. */
@@ -63,6 +65,8 @@ export function resolveDraftHold(input: DraftHoldInput): DraftHoldDecision {
     draftsVersioningEnabled: input.draftsVersioningEnabled,
     fields: input.fields,
     componentSchemas: input.componentSchemas,
+    entityKind: input.entityKind,
+    documentLocalized: input.documentLocalized,
   });
   const hold =
     eligible &&

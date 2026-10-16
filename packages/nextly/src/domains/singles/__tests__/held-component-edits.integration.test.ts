@@ -319,6 +319,128 @@ describe.each(getConfiguredTestDialects())(
       ).toMatchObject({ heading: "Pending de" });
     });
 
+    it("judges a publish's own component value with the draft it promotes", async () => {
+      // The hero may change only while the title is not locked. The held draft
+      // locks it; the publish carries a hero change of its own. Judged without
+      // that change, the promotion looks harmless and both go live together.
+      current = await createTestNextly({
+        dialect,
+        fieldGroups: [hero()],
+        singles: [
+          defineSingle({
+            slug: "home",
+            status: true,
+            versions: true,
+            access: { read: () => true, update: () => true },
+            fields: [
+              text({ name: "title" }),
+              fieldGroup({
+                name: "hero",
+                component: "hero",
+                access: {
+                  update: ({ data }) =>
+                    (data as { title?: unknown } | undefined)?.title !==
+                    "Locked",
+                },
+              }),
+            ],
+          }),
+        ],
+      });
+      const singles = current.getService("singleEntryService");
+      await singles.update(
+        "home",
+        {
+          title: "Open",
+          hero: { heading: "Live", subheading: "Live sub" },
+          status: "published",
+        },
+        { overrideAccess: true }
+      );
+      await singles.update(
+        "home",
+        { title: "Locked" },
+        { routeAuthorized: true, user: { id: "u1" } }
+      );
+
+      const res = await singles.update(
+        "home",
+        {
+          hero: { heading: "Slipped in", subheading: "Live sub" },
+          status: "published",
+        },
+        { routeAuthorized: true, user: { id: "u1" } }
+      );
+      expect(res.success).toBe(false);
+      expect(contentOf((await liveHome(current)).hero)).toMatchObject({
+        heading: "Live",
+      });
+    });
+
+    it("holds no draft for a Single that is not localized but embeds a localized component", async () => {
+      // The draft would be keyed with no language while the component keeps a
+      // value per language. Such a Single saves live, as it did before drafts
+      // held components, and no language's edit can land in another's.
+      current = await createTestNextly({
+        dialect,
+        fieldGroups: [
+          defineFieldGroup({
+            slug: "banner",
+            localized: true,
+            fields: [text({ name: "heading" })],
+          }),
+        ],
+        singles: [
+          defineSingle({
+            slug: "home",
+            status: true,
+            versions: true,
+            fields: [
+              text({ name: "title" }),
+              fieldGroup({ name: "banner", component: "banner" }),
+            ],
+          }),
+        ],
+        localization: { locales: ["en", "de"], defaultLocale: "en" },
+      });
+      const singles = current.getService("singleEntryService");
+      for (const locale of ["en", "de"]) {
+        await singles.update(
+          "home",
+          {
+            title: "T",
+            banner: { heading: `Live ${locale}` },
+            status: "published",
+          },
+          { locale, overrideAccess: true }
+        );
+      }
+      await singles.update(
+        "home",
+        { banner: { heading: "Edited de" } },
+        { locale: "de", overrideAccess: true }
+      );
+
+      const rows = await current.adapter.select<Row>("nextly_versions");
+      expect(rows.filter(r => r.versionNo === null)).toHaveLength(0);
+
+      const res = await singles.publishAllLocales("home", {
+        overrideAccess: true,
+      });
+      expect(res.success).toBe(true);
+      const heading = async (locale: string) =>
+        (
+          contentOf(
+            (
+              (await singles.get("home", { locale, overrideAccess: true }))
+                .data as Record<string, unknown>
+            ).banner
+          ) as { heading?: unknown }
+        ).heading;
+      expect(await heading("en")).toBe("Live en");
+      expect(await heading("de")).toBe("Edited de");
+    });
+
     it("holds no draft for a Single whose component carries a password", async () => {
       // A draft cannot carry a password safely, so such a Single saves live
       // and its component saver hashes the password, as on any write.
