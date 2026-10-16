@@ -32,8 +32,12 @@
  * and the plugin's JSDoc mention roles in prose, and a check that fires on
  * correct files is one that gets silenced.
  *
+ * Imports are followed whether named or default, and `export default` is
+ * followed to the declaration it names.
+ *
  * ⚠️ What this does not follow: a rule built by a helper from another package,
- * or reached through a re-export. Both are a reason to widen this deliberately.
+ * one reached through a re-export or a namespace import (`import * as`), or one
+ * spread into an access object. Each is a reason to widen this deliberately.
  *
  * Usage:
  *   node scripts/check-access-rule-role-names.mjs
@@ -125,8 +129,18 @@ function readsRole(fn) {
  * its type names it an access rule.
  */
 function declarationsOf(statement, source) {
-  if (ts.isFunctionDeclaration(statement) && statement.name) {
-    return [[statement.name.text, { node: statement, typed: false }]];
+  if (ts.isExportAssignment(statement) && !statement.isExportEquals) {
+    return [["default", { node: statement.expression, typed: false }]];
+  }
+  if (ts.isFunctionDeclaration(statement)) {
+    const entry = { node: statement, typed: false };
+    const isDefault = statement.modifiers?.some(
+      modifier => modifier.kind === ts.SyntaxKind.DefaultKeyword
+    );
+    return [
+      ...(statement.name ? [[statement.name.text, entry]] : []),
+      ...(isDefault ? [["default", entry]] : []),
+    ];
   }
   if (!ts.isVariableStatement(statement)) return [];
   return statement.declarationList.declarations
@@ -150,15 +164,21 @@ function relativeSpecifier(statement) {
     : undefined;
 }
 
-/** A relative named import's bindings, by local name. */
+/** A relative import's default and named bindings, by local name. */
 function relativeImportsOf(statement) {
   const from = relativeSpecifier(statement);
-  const bindings = from && statement.importClause?.namedBindings;
-  if (!bindings || !ts.isNamedImports(bindings)) return [];
-  return bindings.elements.map(element => [
-    element.name.text,
-    { from, name: (element.propertyName ?? element.name).text },
-  ]);
+  const clause = from && statement.importClause;
+  if (!clause) return [];
+  const named =
+    clause.namedBindings && ts.isNamedImports(clause.namedBindings)
+      ? clause.namedBindings.elements.map(element => [
+          element.name.text,
+          { from, name: (element.propertyName ?? element.name).text },
+        ])
+      : [];
+  return clause.name
+    ? [[clause.name.text, { from, name: "default" }], ...named]
+    : named;
 }
 
 /** Top-level declarations by name, and the relative imports by local name. */
@@ -258,6 +278,9 @@ function follow(files, parse, path, identifier, seen = new Set()) {
   seen.add(key);
   const file = parse(path);
   const local = file.declarations.get(identifier)?.node;
+  // `export default access` names another declaration; follow it.
+  if (local && ts.isIdentifier(local))
+    return follow(files, parse, path, local.text, seen);
   if (local) return { path, node: local };
   const imported = file.imports.get(identifier);
   const target =

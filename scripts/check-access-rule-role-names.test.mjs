@@ -90,6 +90,43 @@ describe("check-access-rule-role-names", () => {
     ]);
   });
 
+  it("follows a default-imported access object", () => {
+    const collection = [
+      'import access from "./access";',
+      "export const Posts = defineCollection({ access });",
+    ].join("\n");
+    expect(
+      scan({
+        "templates/t/src/collections/Posts.ts": collection,
+        "templates/t/src/collections/access.ts": [
+          "const access = {",
+          '  update: ({ roles }) => roles.includes("editor"),',
+          "};",
+          "export default access;",
+        ].join("\n"),
+        "templates/u/src/collections/Posts.ts": collection,
+        "templates/u/src/collections/access.ts": [
+          "export default {",
+          '  update: ({ roles }) => roles.includes("editor"),',
+          "};",
+        ].join("\n"),
+      })
+    ).toEqual([
+      "templates/t/src/collections/access.ts:2 update",
+      "templates/u/src/collections/access.ts:2 update",
+    ]);
+    expect(
+      scan({
+        "templates/t/src/collections/Posts.ts": collection,
+        "templates/t/src/collections/access.ts": [
+          "export default {",
+          '  update: ({ permissions }) => permissions.includes("posts:update"),',
+          "};",
+        ].join("\n"),
+      })
+    ).toEqual([]);
+  });
+
   it("passes a rule that decides by permission", () => {
     expect(
       scan({
