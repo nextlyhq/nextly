@@ -7,7 +7,7 @@ interface LogoProps {
   logo?: Media | null;
 }
 
-export function Logo({ siteName, logo }: LogoProps) {
+export function Logo({ siteName }: LogoProps) {
   return (
     <Link
       href="/"

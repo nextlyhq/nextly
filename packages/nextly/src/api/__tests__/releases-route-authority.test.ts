@@ -383,21 +383,6 @@ describe("release route input validation", () => {
     expect(api.releases.addMember).not.toHaveBeenCalled();
   });
 
-  it("refuses a member whose target document is not there", async () => {
-    // Nothing joins a member to a document, so a typo is accepted by the write
-    // path and fails at the scheduled instant instead — holding the release
-    // open and reporting a failure nobody is watching for.
-    api.findByID.mockResolvedValueOnce(null);
-    const res = await post("addReleaseMember", {
-      scopeKind: "collection",
-      scopeSlug: "posts",
-      entryId: "gone",
-      action: "publish",
-    });
-    expect(res.status).toBe(404);
-    expect(api.releases.addMember).not.toHaveBeenCalled();
-  });
-
   it("binds a member removal to the release in the path", async () => {
     await handleReleaseRequest(
       new Request("https://example.test/api/releases/r1/members/m1", {
@@ -475,41 +460,21 @@ describe("release member targets", () => {
     );
   }
 
-  it("looks the target up across ALL lifecycle states", async () => {
-    // The document a release exists to publish is usually a DRAFT. An untrusted
-    // read defaults to `published`, so without this the ordinary
-    // draft-to-launch flow 404s at the moment it is assembled — the one case
-    // this check must not break.
-    await addMember({});
-    expect(api.findByID).toHaveBeenCalledWith(
-      expect.objectContaining({ status: "all" })
-    );
-  });
-
-  it("refuses a target whose SCHEMA declares no lifecycle", async () => {
-    // Read from the schema, not probed on the row. The `status` name is
-    // reserved only when the lifecycle is enabled, so a collection with it
-    // DISABLED may legally define an ordinary field called `status` — and a row
-    // probe would admit it, after which materialisation overwrites that
-    // author's field with "published" and reports the release complete.
-    lifecycleRecord = { status: false };
-    const res = await addMember({});
-    expect(res.status).toBe(400);
-    expect(api.releases.addMember).not.toHaveBeenCalled();
-  });
-
-  it("stores a Single's own id, not the one the caller sent", async () => {
-    // A Single is addressed by slug, so any id is accepted — but release
-    // visibility compares stored decisions against the row's real id, and a
-    // member carrying a stale one is invisible to reads until a drain runs.
+  it("leaves the target checks to the service, so every way in makes them", async () => {
+    // The document's existence, its collection's lifecycle and a Single's own
+    // id are decided by the releases service (`release-targets`), where the
+    // Direct API reaches them too. The route passes the target through as sent
+    // and reads no document itself.
     await addMember({
       scopeKind: "single",
       scopeSlug: "homepage",
-      entryId: "stale",
+      entryId: "as-sent",
     });
     expect(api.releases.addMember).toHaveBeenCalledWith(
-      expect.objectContaining({ entryId: "single-real-id" })
+      expect.objectContaining({ entryId: "as-sent" })
     );
+    expect(api.findSingle).not.toHaveBeenCalled();
+    expect(api.findByID).not.toHaveBeenCalled();
   });
 });
 

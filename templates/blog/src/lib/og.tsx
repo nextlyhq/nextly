@@ -32,7 +32,6 @@ interface RenderOgInput {
  * bundling font files into the edge runtime).
  */
 export function renderOg({
-  variant: _variant,
   siteName,
   primary,
   secondary,

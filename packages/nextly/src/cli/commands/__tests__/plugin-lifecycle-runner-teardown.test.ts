@@ -56,11 +56,18 @@ vi.mock("../../utils/adapter", () => ({
 }));
 
 // An empty ledger and no owner rows: a first install of a plugin with no
-// dependencies, so nothing stands between the command and the hook.
+// dependencies, so nothing stands between the command and the hook. The
+// install's record of the plugin is written, and goes nowhere.
 vi.mock("../../../domains/schema/events/schema-events-repository", () => ({
   SchemaEventsRepository: class {
     listFileApplies() {
       return Promise.resolve([]);
+    }
+    listPluginLifecycle() {
+      return Promise.resolve([]);
+    }
+    insertEvent() {
+      return Promise.resolve("event");
     }
   },
 }));

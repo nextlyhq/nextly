@@ -13,18 +13,52 @@ describe("accessWithDefaults", () => {
   const call = (rule: unknown, args: unknown) =>
     typeof rule === "function" ? (rule as (a: unknown) => boolean)(args) : rule;
 
-  it("requires a signed-in user for update by default", () => {
-    const access = accessWithDefaults(undefined);
-    expect(call(access.update, { user: { id: "u1" } })).toBe(true);
-    expect(call(access.update, { user: undefined })).toBe(false);
+  /** The context a rule is given, for a caller holding `permissions`. */
+  const holding = (
+    permissions: string[],
+    operation: string,
+    collection = "form-submissions"
+  ) => ({
+    user: { id: "u1" },
+    roles: ["admin", "editor", "super-admin"],
+    permissions,
+    principal: null,
+    operation,
+    collection,
   });
 
-  it("requires an administrative role to delete", () => {
+  it("admits update and delete only with the matching permission", () => {
     const access = accessWithDefaults(undefined);
-    expect(call(access.delete, { roles: ["admin"] })).toBe(true);
-    expect(call(access.delete, { roles: ["super-admin"] })).toBe(true);
-    expect(call(access.delete, { roles: ["editor"] })).toBe(false);
-    expect(call(access.delete, { roles: [] })).toBe(false);
+    expect(
+      call(access.update, holding(["form-submissions:update"], "update"))
+    ).toBe(true);
+    expect(
+      call(access.delete, holding(["form-submissions:delete"], "delete"))
+    ).toBe(true);
+    // Role names are no longer read: an `admin` without the permission is refused.
+    expect(
+      call(access.update, holding(["form-submissions:read"], "update"))
+    ).toBe(false);
+    expect(call(access.delete, holding([], "delete"))).toBe(false);
+  });
+
+  it("refuses a visitor, who holds no permission", () => {
+    const access = accessWithDefaults(undefined);
+    const visitor = { ...holding([], "update"), user: null, roles: [] };
+    expect(call(access.update, visitor)).toBe(false);
+  });
+
+  it("judges a renamed collection by its own permissions", () => {
+    const access = accessWithDefaults(undefined);
+    expect(
+      call(
+        access.update,
+        holding(["contact-forms:update"], "update", "contact-forms")
+      )
+    ).toBe(true);
+    expect(
+      call(access.update, holding(["forms:update"], "update", "contact-forms"))
+    ).toBe(false);
   });
 
   it("takes the per-collection read and create defaults", () => {
@@ -34,10 +68,12 @@ describe("accessWithDefaults", () => {
     expect(accessWithDefaults(undefined, { create: true }).create).toBe(true);
   });
 
-  it("defaults the axis a caller does not name to authenticated", () => {
+  it("defaults the axis a caller does not name to the permission", () => {
     const access = accessWithDefaults(undefined, { create: true });
-    expect(call(access.read, { user: { id: "u1" } })).toBe(true);
-    expect(call(access.read, { user: undefined })).toBe(false);
+    expect(call(access.read, holding(["form-submissions:read"], "read"))).toBe(
+      true
+    );
+    expect(call(access.read, holding([], "read"))).toBe(false);
   });
 
   it("lets a host CLOSE an operation, not just widen it", () => {

@@ -69,6 +69,14 @@ function service(over?: {
     canManageReleases: vi.fn(async (_id: string, a: ReleaseAuthority) =>
       held.has(a)
     ),
+    // Every target is there and has a lifecycle; the checks have their own
+    // tests (`release-targets.test.ts`).
+    targets: {
+      readDocument: async (target: { entryId: string }) => ({
+        id: target.entryId,
+      }),
+      declaresLifecycle: async () => true,
+    },
     canActOnDocument: vi.fn(
       async (_params: {
         userId: string;
@@ -703,6 +711,8 @@ describe("ReleasesService.find pages the list", () => {
     ["an unknown kind", { kind: "singles" }],
     ["a search past the limit", { search: "x".repeat(201) }],
     ["page 0", { page: 0 }],
+    ["a null page", { page: null }],
+    ["a null limit", { limit: null }],
     ["a fractional page", { page: 1.5 }],
     ["a page larger than the maximum", { limit: 201 }],
     ["a page past the safe integers", { page: 1e308 }],

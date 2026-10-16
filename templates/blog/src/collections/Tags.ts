@@ -8,7 +8,7 @@ import { defineCollection, text, textarea } from "nextly/config";
 // Relative imports (not `@/*` alias) because Nextly's CLI loads this
 // file via Node.js, not the Next.js resolver. See Posts/index.ts.
 import { anyone } from "../access/anyone";
-import { isAuthorOrEditor } from "../access/is-author-or-editor";
+import { hasPermission } from "../access/has-permission";
 import { autoSlug } from "../hooks/auto-slug";
 
 export const Tags = defineCollection({
@@ -20,12 +20,12 @@ export const Tags = defineCollection({
     textarea({ name: "description" }),
   ],
   admin: { useAsTitle: "name" },
-  // Same policy as Categories: public read, content roles curate.
+  // Same policy as Categories: public read, curating needs the permission.
   access: {
     read: anyone,
-    create: isAuthorOrEditor,
-    update: isAuthorOrEditor,
-    delete: isAuthorOrEditor,
+    create: hasPermission,
+    update: hasPermission,
+    delete: hasPermission,
   },
   hooks: { beforeValidate: [autoSlug] },
 });

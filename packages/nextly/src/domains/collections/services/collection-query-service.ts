@@ -606,6 +606,12 @@ interface FilteredReadParams {
   collectionName: string;
   user?: UserContext;
   /**
+   * The identity field rules are judged for, when it is not `user`: the
+   * redaction basis of a trusted read that still enforces field access. The
+   * total beside a page narrows its search by the same fields the page did.
+   */
+  fieldAccessUser?: UserContext;
+  /**
    * The instant the enclosing read resolved releases against.
    *
    * Set only by `listEntries`, which calls this as its own continuation. A
@@ -1200,6 +1206,11 @@ export class CollectionQueryService extends BaseService {
     overrideAccess?: boolean;
     frameworkFilter?: boolean;
     readHooksAlreadyRan?: boolean;
+    /** Whose field read rules are judged; absent judges an anonymous caller. */
+    user?: UserContext;
+    /** The redaction basis, when it is not `user`; it wins, as it does for rows. */
+    fieldAccessUser?: UserContext;
+    authenticatedScope?: AuthenticatedScope;
   }): Promise<void> {
     // The settled filter a list forwards to its own count already passed this
     // check as the caller's, and what a read hook added to it is trusted
@@ -1213,19 +1224,32 @@ export class CollectionQueryService extends BaseService {
     const opts = {
       overrideAccess: fieldTrustOf(params),
       frameworkFilter: params.frameworkFilter,
+      // The identity the returned rows are redacted for, so a field a query
+      // may use is exactly a field the rows show.
+      caller: {
+        user: (params.fieldAccessUser ?? params.user) as
+          | Record<string, unknown>
+          | undefined,
+        authenticatedScope: params.authenticatedScope,
+      },
     };
     // `params.where` -- what the CALLER sent -- never the hook-settled
     // predicate. A `beforeRead` or `beforeOperation` hook is trusted server
     // code and narrows reads on purpose, sometimes by a protected column (a
     // tenant scope is the ordinary case); judging its output would reject the
     // very reads those hooks exist to make safe.
-    assertFilterableFields(
+    await assertFilterableFields(
       "collection",
       params.collectionName,
       params.where,
       opts
     );
-    assertSortableField("collection", params.collectionName, params.sort, opts);
+    await assertSortableField(
+      "collection",
+      params.collectionName,
+      params.sort,
+      opts
+    );
     // A group key discloses by a third route: the buckets it returns ARE the
     // distinct values of the column, so grouping by a field the caller may not
     // read hands back the value set directly rather than one probe at a time.
@@ -1237,9 +1261,12 @@ export class CollectionQueryService extends BaseService {
     // distinct values of a field its caller may not read — the exemption
     // widening past the thing it was granted for. Trust still exempts, because
     // `overrideAccess` is a claim about the caller rather than about one clause.
-    assertGroupableField("collection", params.collectionName, params.groupBy, {
-      overrideAccess: opts.overrideAccess,
-    });
+    await assertGroupableField(
+      "collection",
+      params.collectionName,
+      params.groupBy,
+      { overrideAccess: opts.overrideAccess, caller: opts.caller }
+    );
   }
 
   /**
@@ -1300,13 +1327,21 @@ export class CollectionQueryService extends BaseService {
     collectionName: string,
     collectionMeta: Record<string, unknown>,
     /** Field trust, as `assertQueryReadable` computes it -- never raw row trust. */
-    fieldTrusted?: boolean
-  ): string[] {
+    fieldTrusted: boolean,
+    /** Whose field read rules decide which searchable fields remain. */
+    caller: { user?: UserContext; authenticatedScope?: AuthenticatedScope }
+  ): Promise<string[]> {
     return filterSearchableFields(
       "collection",
       collectionName,
       getSearchableFields(collectionMeta),
-      { overrideAccess: fieldTrusted }
+      {
+        overrideAccess: fieldTrusted,
+        caller: {
+          user: caller.user as Record<string, unknown> | undefined,
+          authenticatedScope: caller.authenticatedScope,
+        },
+      }
     );
   }
 
@@ -1722,6 +1757,9 @@ export class CollectionQueryService extends BaseService {
     search?: string;
     overrideAccess?: boolean;
     enforceFieldAccess?: boolean;
+    /** Whose field read rules narrow the searched fields. */
+    user?: UserContext;
+    authenticatedScope?: AuthenticatedScope;
     schema: DynamicSchema;
     localizedCtx: LocalizedQueryContext | null;
   }): Promise<ReturnType<typeof and> | undefined> {
@@ -1737,10 +1775,11 @@ export class CollectionQueryService extends BaseService {
     // Narrowed, not refused: the caller never named a column, so dropping the
     // ones they may not read answers what they asked. Leaving them in lets
     // `search=<guess>` probe a hidden value through which rows come back.
-    const searchableFields = this.searchableFieldsFor(
+    const searchableFields = await this.searchableFieldsFor(
       params.collectionName,
       collectionMeta,
-      fieldTrustOf(params)
+      fieldTrustOf(params),
+      params
     );
     if (searchableFields.length === 0) return sql`1 = 0`;
 
@@ -1899,6 +1938,12 @@ export class CollectionQueryService extends BaseService {
     enforceFieldAccess?: boolean;
     /** The user access is judged for — absent when the read is trusted. */
     accessUser?: UserContext;
+    /**
+     * The user field read rules are judged for. Unlike `accessUser`, it is
+     * kept on a trusted read that still enforces field access, whose fields
+     * are hidden from exactly this caller.
+     */
+    user?: UserContext;
     authenticatedScope?: AuthenticatedScope;
     schema: DynamicSchema;
     companion: CompanionSchema | null;
@@ -1982,6 +2027,8 @@ export class CollectionQueryService extends BaseService {
       search: params.search,
       overrideAccess: params.overrideAccess,
       enforceFieldAccess: params.enforceFieldAccess,
+      user: params.user,
+      authenticatedScope: params.authenticatedScope,
       schema,
       localizedCtx,
     });
@@ -2751,6 +2798,7 @@ export class CollectionQueryService extends BaseService {
         overrideAccess: params.overrideAccess,
         enforceFieldAccess: params.enforceFieldAccess,
         accessUser,
+        user: params.fieldAccessUser ?? params.user,
         authenticatedScope: params.authenticatedScope,
         schema,
         companion,
@@ -2879,6 +2927,8 @@ export class CollectionQueryService extends BaseService {
           this.countEntries({
             collectionName: params.collectionName,
             user: params.user,
+            // Its search is narrowed by the same identity the page's was.
+            fieldAccessUser: params.fieldAccessUser,
             search: params.search,
             // This count is part of THIS read, so it resolves releases against
             // the same instant the rows did.
@@ -3521,6 +3571,7 @@ export class CollectionQueryService extends BaseService {
       // this aggregate by the fields it narrowed the rows by.
       enforceFieldAccess: params.enforceFieldAccess,
       accessUser,
+      user: params.fieldAccessUser ?? params.user,
       authenticatedScope: params.authenticatedScope,
       schema,
       companion,

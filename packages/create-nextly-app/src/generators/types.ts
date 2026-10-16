@@ -5,6 +5,16 @@ import fs from "fs-extra";
 import type { ProjectInfo } from "../types";
 
 /**
+ * Where the generated types file goes, relative to the project root: under
+ * src/ when the app keeps its code there, at the root when it does not. The
+ * config names this path and the types step creates it, so both read it here.
+ */
+export function typesOutputFile(projectInfo: ProjectInfo): string {
+  const baseDir = projectInfo.srcDir ? "./src" : ".";
+  return `${baseDir}/types/generated/nextly-types.ts`;
+}
+
+/**
  * Create the types directory structure for generated TypeScript types.
  * This mirrors what `nextly init` does - creates the directory and a placeholder file.
  * The actual types are generated when running `next dev` (which boots Nextly
@@ -14,8 +24,8 @@ export async function generateTypesDirectory(
   cwd: string,
   projectInfo: ProjectInfo
 ): Promise<void> {
-  const baseDir = projectInfo.srcDir ? "src" : ".";
-  const typesDir = path.join(cwd, baseDir, "types", "generated");
+  const typesFile = path.join(cwd, typesOutputFile(projectInfo));
+  const typesDir = path.dirname(typesFile);
 
   // Create the types/generated directory
   await fs.ensureDir(typesDir);
@@ -27,7 +37,7 @@ export async function generateTypesDirectory(
   }
 
   // Create a placeholder types file with instructions
-  const placeholderPath = path.join(typesDir, "nextly-types.ts");
+  const placeholderPath = typesFile;
   if (!(await fs.pathExists(placeholderPath))) {
     const placeholderContent = `/**
  * Nextly Generated Types

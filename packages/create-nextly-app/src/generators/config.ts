@@ -2,7 +2,9 @@ import path from "path";
 
 import fs from "fs-extra";
 
-import type { ProjectType } from "../types";
+import type { ProjectInfo, ProjectType } from "../types";
+
+import { typesOutputFile } from "./types";
 
 // ============================================================
 // Project Type Templates
@@ -33,7 +35,10 @@ const BASE_TEMPLATES: Record<
 /**
  * Build the complete nextly.config.ts content.
  */
-function buildConfigTemplate(projectType: ProjectType): string {
+function buildConfigTemplate(
+  projectType: ProjectType,
+  typesFile: string
+): string {
   const base = BASE_TEMPLATES[projectType] || BASE_TEMPLATES["blank"];
 
   // Extract collection definitions (everything before "collections: [")
@@ -61,7 +66,7 @@ ${singlesLine}
 
   // TypeScript type generation
   typescript: {
-    outputFile: "./src/types/generated/nextly-types.ts",
+    outputFile: "${typesFile}",
   },
 });
 `;
@@ -79,10 +84,12 @@ ${singlesLine}
  *
  * @param cwd - Working directory
  * @param projectType - Selected project type (blank, blog, etc.)
+ * @param projectInfo - The detected project, whose layout places the types file
  */
 export async function generateConfig(
   cwd: string,
-  projectType: ProjectType
+  projectType: ProjectType,
+  projectInfo: ProjectInfo
 ): Promise<void> {
   const configPath = path.join(cwd, "nextly.config.ts");
 
@@ -93,6 +100,9 @@ export async function generateConfig(
     );
   }
 
-  const template = buildConfigTemplate(projectType);
+  const template = buildConfigTemplate(
+    projectType,
+    typesOutputFile(projectInfo)
+  );
   await fs.writeFile(configPath, template, "utf-8");
 }

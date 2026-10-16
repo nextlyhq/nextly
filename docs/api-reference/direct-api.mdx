@@ -303,8 +303,9 @@ buckets you get back are genuinely the largest. `truncated` is `true` when the
 cap left some out; a chart drawn from a capped set is not the whole picture, so
 show that rather than hiding it.
 
-Some fields cannot be grouped, and the refusal names the reason: a field with a
-read rule, any spelling of it, a password field, the owner column, a field
+Some fields cannot be grouped, and the refusal names the reason: a field whose
+read rule does not let the caller read it (or lets them read it only on some
+entries), under any spelling, a password field, the owner column, a field
 transformed by an `afterRead` hook, and anything stored as JSON. Buckets are the
 distinct values of a column, so grouping publishes the whole value set in one
 request where a `where` yields it one probe at a time.

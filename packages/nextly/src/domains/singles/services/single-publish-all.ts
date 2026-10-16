@@ -37,7 +37,6 @@ import {
   type CallerGrants,
 } from "../../../shared/lib/field-level-registry";
 import type { Logger } from "../../../shared/types";
-import { entryWriteContext } from "../../collections/services/stored-field-read";
 import { readComponentSubtrees } from "../../field-groups/read-component-subtrees";
 import { readCompanionLocaleStatusAll } from "../../i18n/companion-join";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
@@ -70,12 +69,15 @@ import type {
 } from "../types";
 
 import {
-  readCompanionValuesInTx,
   splitPendingChange,
   writeCompanionValues,
 } from "./apply-pending-change";
 import { resolveSingleForRequest } from "./ensure-runtime-table";
-import { assertDraftsMayBePromoted } from "./promote-gate";
+import {
+  assertDraftsMayBePromoted,
+  liveStoredDocument,
+  promoteCallerFor,
+} from "./promote-gate";
 import {
   checkSingleAccess,
   type SingleQueryService,
@@ -426,13 +428,37 @@ export class SinglePublishAllService extends BaseService {
           )
         : new Map<string, string | null>();
 
+    // Judged before anything is written, on the row this transaction locked:
+    // the gate is the precondition of the publish, not a check of its result.
+    // As ONE outcome, because the promotion applies every language's snapshot
+    // to the same main row, so the shared values that survive are the last
+    // writer's. A language with nothing pending goes live as it is stored,
+    // judged when it was saved as a draft and never as published, so it is
+    // judged as a promotion of an empty change in the same outcome.
+    const pending = await this.pendingChanges(tx, plan);
+    await this.assertPendingChangesMayBePromoted(
+      tx,
+      plan,
+      lockedRow,
+      [
+        ...pending,
+        ...languagesGoingLiveAsStored(
+          plan,
+          pending,
+          { mainStatus: lockedRow.status, companion: priorCompanionStatuses },
+          new Set(this.localization?.locales.map(locale => locale.code) ?? [])
+        ),
+      ],
+      options,
+      promoteGrants
+    );
+
     const written = await this.writePublishedStatuses(
       tx,
       plan,
       lockedRow,
       priorCompanionStatuses,
-      options,
-      promoteGrants
+      pending
     );
 
     if (singleMeta.versions?.enabled) {
@@ -481,9 +507,8 @@ export class SinglePublishAllService extends BaseService {
     plan: PublishPlan,
     lockedRow: Record<string, unknown>,
     priorCompanionStatuses: Map<string, string | null>,
-    options: PublishAllSingleLocalesOptions,
-    /** Resolved before this transaction opened; see `publishAllLocales`. */
-    promoteGrants?: () => Promise<CallerGrants>
+    /** The pending changes, already judged. */
+    pending: readonly PendingChange[]
   ): Promise<{
     publishedRow: Record<string, unknown>;
     mainRowTransitioned: boolean;
@@ -518,13 +543,7 @@ export class SinglePublishAllService extends BaseService {
     // the statuses would all say published while the content each author was
     // holding stayed unapplied — the document would report itself fully
     // published and show none of the work being published.
-    await this.promotePendingChanges(
-      tx,
-      plan,
-      publishNow,
-      options,
-      promoteGrants
-    );
+    await this.promotePendingChanges(tx, plan, publishNow, pending);
 
     if (companion && plan.companionPublishable) {
       // Every stored translation moves in ONE statement, through the adapter's
@@ -570,11 +589,17 @@ export class SinglePublishAllService extends BaseService {
   private async assertPendingChangesMayBePromoted(
     tx: TransactionContext,
     plan: PublishPlan,
+    /** The main row as this transaction locked it, which the write lands on. */
+    lockedRow: Record<string, unknown>,
     pending: ReadonlyArray<{ locale: string | null; snapshot: unknown }>,
     options: PublishAllSingleLocalesOptions,
     promoteGrants?: () => Promise<CallerGrants>
   ): Promise<void> {
+    // Nothing goes live that was not live already: nothing to judge.
+    if (pending.length === 0) return;
     const { slug, singleMeta, existingDoc, companion, fieldConfigs } = plan;
+    // The row the write lands on, not the one read before the transaction.
+    const live = lockedRow as SingleDocument;
     const reader = this.queryService;
     // Constructed without a reader only by a caller that built this service
     // directly. The gate cannot run blind, and silently skipping it would make
@@ -591,25 +616,18 @@ export class SinglePublishAllService extends BaseService {
     }
 
     await assertDraftsMayBePromoted(pending, {
-      slug,
-      entryId: existingDoc.id,
-      write: entryWriteContext({
-        kind: "single",
+      ...promoteCallerFor({
+        tx,
         slug,
-        connection: {
-          db: tx,
-          executor: tx.getDrizzle(),
-          defaultLocale: this.localization?.defaultLocale ?? null,
-        },
+        defaultLocale: this.localization?.defaultLocale ?? null,
+        fields: fieldConfigs,
+        options,
+        grants: promoteGrants,
       }),
-      fields: fieldConfigs,
-      user: options.user,
-      overrideAccess: options.overrideAccess,
-      authenticatedScope: options.authenticatedScope,
-      grants: promoteGrants,
+      entryId: existingDoc.id,
       toLogical: doc =>
         reader.deserializeJsonFields(
-          { id: existingDoc.id, updatedAt: existingDoc.updatedAt, ...doc },
+          { id: existingDoc.id, updatedAt: live.updatedAt, ...doc },
           singleMeta.fields
         ),
       // The stored row, in the shape a snapshot holds, so an untouched upload
@@ -617,18 +635,21 @@ export class SinglePublishAllService extends BaseService {
       // identifier with the document a read would have expanded it into. And
       // with this language's companion values over it, since a translation
       // lives there and the main row reports every one of them as absent.
-      liveStoredFor: async locale =>
-        companion && locale
-          ? {
-              ...existingDoc,
-              ...(await readCompanionValuesInTx(
-                tx,
-                companion,
-                existingDoc.id,
-                locale
-              )),
-            }
-          : existingDoc,
+      liveStoredFor: locale =>
+        liveStoredDocument({
+          tx,
+          row: live,
+          locale,
+          companion,
+          // The condition this read has always been taken under here.
+          companionExists: companion !== null,
+          fieldGroupDataService: this.fieldGroupDataService,
+          parentTable: singleMeta.tableName,
+          fieldConfigs,
+          slug,
+        }),
+      // A language whose draft was saved as a draft still goes live here.
+      status: "published",
       localizedFieldNames: new Set(
         (companion?.localizedFields ?? []).map(f => f.name)
       ),
@@ -649,33 +670,11 @@ export class SinglePublishAllService extends BaseService {
     tx: TransactionContext,
     plan: PublishPlan,
     publishNow: Date,
-    options: PublishAllSingleLocalesOptions,
-    promoteGrants?: () => Promise<CallerGrants>
+    /** Judged before the statuses moved; see the transaction body. */
+    pending: readonly PendingChange[]
   ): Promise<void> {
-    const { slug, singleMeta, existingDoc, companion } = plan;
-    if (singleMeta.versions?.drafts?.enabled !== true) return;
-
-    const repo = new VersionsRepository(tx);
-    const ref = {
-      scopeKind: "single" as const,
-      scopeSlug: slug,
-      entryId: existingDoc.id,
-    };
-    const pending = await repo.findAllWorkingDrafts(ref);
     if (pending.length === 0) return;
-
-    // Judged here, on the drafts this transaction has read under its lock, and
-    // as ONE outcome: the loop below applies every language's snapshot to the
-    // same main row, so the shared values that survive are the last writer's.
-    // Judged one at a time, each draft can pass against its own shared values
-    // while the document that actually lands holds another language's.
-    await this.assertPendingChangesMayBePromoted(
-      tx,
-      plan,
-      pending,
-      options,
-      promoteGrants
-    );
+    const { singleMeta, existingDoc, companion } = plan;
 
     for (const draft of pending) {
       // The pending change carries no lifecycle of its own; the statuses this
@@ -711,7 +710,28 @@ export class SinglePublishAllService extends BaseService {
       }
     }
 
-    await repo.deleteAllWorkingDrafts(ref);
+    await new VersionsRepository(tx).deleteAllWorkingDrafts(
+      this.workingDraftRef(plan)
+    );
+  }
+
+  /** Every language's pending change, where the Single keeps drafts. */
+  private async pendingChanges(
+    tx: TransactionContext,
+    plan: PublishPlan
+  ): Promise<PendingChange[]> {
+    if (plan.singleMeta.versions?.drafts?.enabled !== true) return [];
+    return new VersionsRepository(tx).findAllWorkingDrafts(
+      this.workingDraftRef(plan)
+    );
+  }
+
+  private workingDraftRef(plan: PublishPlan) {
+    return {
+      scopeKind: "single" as const,
+      scopeSlug: plan.slug,
+      entryId: plan.existingDoc.id,
+    };
   }
 
   /**
@@ -1119,4 +1139,61 @@ export class SinglePublishAllService extends BaseService {
     }
     return recorded;
   }
+}
+
+/** One language's pending change, as the versions store holds it. */
+type PendingChange = Awaited<
+  ReturnType<VersionsRepository["findAllWorkingDrafts"]>
+>[number];
+
+/** Each language's status as committed before this publish moved it. */
+interface PriorStatuses {
+  /** The main row's, which is the whole document's for an unlocalized Single. */
+  readonly mainStatus: unknown;
+  /** Each stored translation's `_status`, keyed by locale. */
+  readonly companion: ReadonlyMap<string, string | null>;
+}
+
+/**
+ * The languages this publish judges as stored, beside its pending changes:
+ * those it puts live from their stored rows alone, and, when a pending change
+ * may rewrite the shared values beneath them, those already live too. A
+ * language that was live and is not touched was judged as published when it
+ * went live, and a pending change is judged on its own account.
+ *
+ * The main row is one of them where nothing else carries it: shared content
+ * goes live with the main row's status even where no translation is stored,
+ * as on a Single whose only edits were shared ones, so it is judged then too.
+ */
+function languagesGoingLiveAsStored(
+  plan: PublishPlan,
+  pending: ReadonlyArray<{ locale: string | null }>,
+  prior: PriorStatuses,
+  /**
+   * The languages the app configures. A removed language's row can outlive
+   * it, and no request can reach it to repair, so it is not judged.
+   */
+  configured: ReadonlySet<string>
+): { locale: string | null; snapshot: Record<string, never> }[] {
+  const held = new Set(pending.map(change => change.locale));
+  // A pending change can write shared values to the main row, which every
+  // language's document reads, so a language already live is changed by it as
+  // surely as one going live: with anything pending, every stored translation
+  // is judged.
+  const changesShared = pending.length > 0;
+  const translations =
+    plan.companion && plan.companionPublishable
+      ? [...prior.companion]
+          .filter(
+            ([locale, status]) =>
+              !held.has(locale) &&
+              (configured.size === 0 || configured.has(locale)) &&
+              (changesShared || status !== "published")
+          )
+          .map(([locale]) => ({ locale, snapshot: {} }))
+      : [];
+  // Each of these is judged on the main row too, so it carries it already.
+  if (translations.length > 0 || pending.length > 0) return translations;
+  if (!plan.hasMainStatus || prior.mainStatus === "published") return [];
+  return [{ locale: null, snapshot: {} }];
 }
