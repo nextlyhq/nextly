@@ -4,6 +4,8 @@ import { Spinner } from "@nextlyhq/ui";
 import type React from "react";
 import { useEffect, useState } from "react";
 
+import { PageContainer } from "@admin/components/layout/page-container";
+import { SectionErrorFallback } from "@admin/components/shared/error-fallbacks";
 import { NoAccessPage } from "@admin/components/shared/no-access-page";
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
 import {
@@ -43,8 +45,13 @@ export function PermissionGuard({
   subject,
   children,
 }: PermissionGuardProps) {
-  const { hasPermission, isLoading: permissionsLoading } =
-    useCurrentUserPermissions();
+  const {
+    hasPermission,
+    isLoading: permissionsLoading,
+    hasAnswer,
+    error,
+    retry,
+  } = useCurrentUserPermissions();
   const [isForceLoading, setIsForceLoading] = useState(false);
   const hasAccess = Array.isArray(requiredPermission)
     ? requiredPermission.some(hasPermission)
@@ -109,6 +116,22 @@ export function PermissionGuard({
           </p>
         </div>
       </div>
+    );
+  }
+
+  // No answer is not a refusal. With the first request failed, the
+  // permissions are empty for everyone, a super-admin included, and saying
+  // "you don't have access" would be a claim nothing supports.
+  if (!hasAnswer && error) {
+    return (
+      <PageContainer className="py-8">
+        <SectionErrorFallback
+          title="Couldn't check your access"
+          description="The admin couldn't load your permissions, so it can't tell whether you can open this page."
+          error={error}
+          reset={retry}
+        />
+      </PageContainer>
     );
   }
 

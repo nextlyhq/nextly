@@ -46,12 +46,10 @@ function navigationEntries(): NavigationEntries | undefined {
  * link followed from the site's own pages leaves an entry of this origin that
  * is not the admin, and going back would leave it. The Navigation API lists
  * this origin's entries with their URLs, so the one before is read directly.
- * Without it, the router's record of the last move decides where it saw one,
- * because `document.referrer` keeps the page that loaded the document and an
- * in-admin move never updates it; the referrer answers only for a page the
- * admin has not moved from since it loaded, or since a jump through history.
- * Where neither can say, this errs towards the dashboard, which never leaves
- * the admin.
+ * Without it, only a move the router itself saw proves an admin page behind:
+ * the referrer names the page a link was followed from, which a new tab
+ * reports too while having no entry behind it at all. Anything not proven
+ * goes to the dashboard, which never leaves the admin.
  */
 function previousPageIsAdmin(): boolean {
   const navigation = navigationEntries();
@@ -60,9 +58,7 @@ function previousPageIsAdmin(): boolean {
     const previous = index > 0 ? navigation.entries()[index - 1] : undefined;
     return typeof previous?.url === "string" && isAdminUrl(previous.url);
   }
-  const recorded = entryBehindIsAdmin();
-  if (recorded !== undefined) return recorded;
-  return document.referrer !== "" && isAdminUrl(document.referrer);
+  return entryBehindIsAdmin() === true;
 }
 
 /**

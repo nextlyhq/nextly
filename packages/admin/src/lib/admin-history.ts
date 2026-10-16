@@ -10,7 +10,7 @@
  *
  * Kept as one value rather than a stack, because a back or forward jump lands
  * on an entry whose own predecessor this never saw. A jump therefore makes it
- * unknown again, and an unknown answer is left to the referrer.
+ * unknown again, and an unknown answer proves nothing to go back to.
  *
  * Imports nothing, so the router and the pages it draws can both reach it
  * without a cycle through the page registry.
