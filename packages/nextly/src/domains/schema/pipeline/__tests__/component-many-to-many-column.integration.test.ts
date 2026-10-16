@@ -45,7 +45,7 @@ const M2M_FIELD = {
 } as never;
 
 /** A component whose fields hold a plain text field and a many-to-many. */
-function componentDesired(tableName: string): DesiredSchema {
+function componentDesired(tableName: string, required = false): DesiredSchema {
   return {
     collections: {},
     singles: {},
@@ -53,7 +53,10 @@ function componentDesired(tableName: string): DesiredSchema {
       hero: {
         slug: "hero",
         tableName,
-        fields: [{ name: "title", type: "text" }, M2M_FIELD] as never,
+        fields: [
+          { name: "title", type: "text" },
+          { ...M2M_FIELD, required },
+        ] as never,
       },
     },
   };
@@ -118,6 +121,32 @@ describe("component with a many-to-many converges (sqlite)", () => {
     expect(columnOperations(preview.operations)).toEqual([]);
     sqlite.close();
   });
+
+  it("previews as unchanged for a required many-to-many", async () => {
+    const sqlite = new Database(":memory:");
+    sqlite.pragma("foreign_keys = ON");
+    const db = drizzleSqlite({ client: sqlite });
+    const desired = componentDesired(`${tableName}_req`, true);
+
+    const applied = await makePipeline("sqlite", db).apply({
+      desired,
+      db,
+      dialect: "sqlite",
+      source: "ui",
+      promptChannel: "browser",
+      uiTargetSlug: "hero",
+      uiTargetKind: "component",
+    });
+    expect(applied.success).toBe(true);
+
+    const preview = await previewDesiredSchema({
+      desired,
+      db,
+      dialect: "sqlite",
+    });
+    expect(columnOperations(preview.operations)).toEqual([]);
+    sqlite.close();
+  });
 });
 
 describe.skipIf(!PG_URL)(
@@ -163,6 +192,31 @@ describe.skipIf(!PG_URL)(
         dialect: "postgresql",
       });
       expect(columnOperations(preview.operations)).toEqual([]);
+    });
+
+    it("previews as unchanged for a required many-to-many", async () => {
+      const requiredTable = `${PG.prefix}_comp_hero_req`;
+      await db.execute(`DROP TABLE IF EXISTS "${requiredTable}"`);
+      const desired = componentDesired(requiredTable, true);
+
+      const applied = await makePipeline("postgresql", db).apply({
+        desired,
+        db,
+        dialect: "postgresql",
+        source: "ui",
+        promptChannel: "browser",
+        uiTargetSlug: "hero",
+        uiTargetKind: "component",
+      });
+      expect(applied.success).toBe(true);
+
+      const preview = await previewDesiredSchema({
+        desired,
+        db,
+        dialect: "postgresql",
+      });
+      expect(columnOperations(preview.operations)).toEqual([]);
+      await db.execute(`DROP TABLE IF EXISTS "${requiredTable}"`);
     });
   }
 );
