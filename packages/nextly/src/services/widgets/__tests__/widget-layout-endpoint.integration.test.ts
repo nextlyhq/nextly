@@ -13,7 +13,16 @@ process.env.NEXTLY_SECRET =
   process.env.NEXTLY_SECRET ??
   "test-secret-must-be-at-least-32-characters-long!!";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 
 import { buildClaims } from "../../../auth/jwt/claims";
 import { signAccessToken } from "../../../auth/jwt/sign";
@@ -36,6 +45,14 @@ const silentLogger = {
   warn: () => {},
   error: () => {},
 };
+
+// Each test makes several real requests through the whole handler, each one a
+// dozen queries. The package's 30 s default fits a local database; set
+// NEXTLY_TEST_SLOW_DB=1 when the database is across a network. CI keeps the
+// default, so a slow query there still fails.
+if (process.env.NEXTLY_TEST_SLOW_DB === "1") {
+  vi.setConfig({ testTimeout: 90_000, hookTimeout: 120_000 });
+}
 
 interface Placement {
   id: string;
@@ -206,18 +223,36 @@ describe.each(getConfiguredTestDialects())(
       };
     }
 
-    beforeEach(async () => {
+    // ONE instance per dialect, booted once: a boot creates a database and
+    // pushes the whole schema, which on a networked server is most of a test's
+    // time budget. Each test still starts clean: a fresh editor account (so no
+    // row of an earlier test can be read), the admin's row removed, and this
+    // test's widgets registered anew.
+    let accounts = 0;
+    beforeAll(async () => {
       handle = await createTestNextly({ dialect });
+      // The first account of an instance is its super admin.
       admin = await account("admin@example.com");
-      editor = await account("editor@example.com");
+    }, 120_000);
+
+    afterAll(async () => {
+      await handle?.destroy();
+    });
+
+    beforeEach(async () => {
+      accounts += 1;
+      editor = await account(`editor-${accounts}@example.com`);
+      const stored = await service().getLayout("user", admin);
+      if (stored.version > 0) {
+        await service().deleteLayout("user", admin, stored.version);
+      }
       testWidget("first", 1000);
       testWidget("gated", 1010, { requiredPermission: "manage-the-vault" });
       testWidget("last", 1020, { defaultSize: "sm" });
     });
 
-    afterEach(async () => {
+    afterEach(() => {
       clearWidgets();
-      await handle.destroy();
     });
 
     it("gives two people with no arrangement the same default, less what one may not see", async () => {
