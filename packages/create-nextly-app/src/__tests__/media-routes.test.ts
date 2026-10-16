@@ -6,8 +6,10 @@
 import {
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -259,6 +261,85 @@ describe("a folder that holds no handler", () => {
     ]);
     expect(() => readFileSync(join(cwd, "src/app", ADMIN_MEDIA))).toThrow();
   });
+});
+
+describe("where Next.js sees the same URL", () => {
+  // Route groups `(name)` and parallel-route slots `@name` are left out of
+  // the URL, so a handler under one serves the same path as the folder the
+  // route would be written to, and Next.js refuses the second at build.
+  it("finds a handler behind a route group or a slot, and writes nothing beside it", async () => {
+    mkdirSync(join(cwd, "src/app/(backend)/api/media"), { recursive: true });
+    writeFileSync(
+      join(cwd, "src/app/(backend)/api/media/route.ts"),
+      "export const GET = () => Response.json([]);\n"
+    );
+    mkdirSync(join(cwd, "src/app/@ops/(checks)/api/health"), {
+      recursive: true,
+    });
+    writeFileSync(
+      join(cwd, "src/app/@ops/(checks)/api/health/route.ts"),
+      "export const GET = () => Response.json({ ok: true });\n"
+    );
+
+    const result = await generateMediaRoutes(cwd, project(true), TEMPLATES);
+
+    expect(result.written).toEqual([`src/app/${ADMIN_MEDIA}`]);
+    expect(result.skipped.map(entry => entry.path)).toEqual([
+      "src/app/(backend)/api/media",
+      "src/app/@ops/(checks)/api/health",
+    ]);
+    expect(() => readFileSync(join(cwd, "src/app", PUBLIC_MEDIA))).toThrow();
+    expect(() => readFileSync(join(cwd, "src/app", HEALTH))).toThrow();
+  });
+
+  // The health check is one URL, not a catch-all: a handler deeper in its
+  // folder serves another URL and leaves /api/health unanswered.
+  it("still writes the health check when only a child of its URL has a handler", async () => {
+    mkdirSync(join(cwd, "src/app/api/health/details"), { recursive: true });
+    writeFileSync(
+      join(cwd, "src/app/api/health/details/route.ts"),
+      "export const GET = () => Response.json({});\n"
+    );
+
+    const result = await generateMediaRoutes(cwd, project(true), TEMPLATES);
+
+    expect(result.written).toContain(`src/app/${HEALTH}`);
+    expect(result.skipped).toEqual([]);
+  });
+});
+
+describe("a route folder that is a symbolic link", () => {
+  // Writing through a linked folder would put the route wherever the link
+  // points, outside the project; the exclusive write guards only the file.
+  it.runIf(process.platform !== "win32")(
+    "writes nothing through it, and reports it",
+    async () => {
+      const elsewhere = mkdtempSync(join(tmpdir(), "media-routes-elsewhere-"));
+      try {
+        mkdirSync(join(cwd, "src/app/api"), { recursive: true });
+        symlinkSync(elsewhere, join(cwd, "src/app/api/media"));
+
+        const result = await generateMediaRoutes(cwd, project(true), TEMPLATES);
+
+        expect(readdirSync(elsewhere)).toEqual([]);
+        expect(result.written).toEqual([
+          `src/app/${ADMIN_MEDIA}`,
+          `src/app/${HEALTH}`,
+        ]);
+        expect(result.skipped).toEqual([
+          expect.objectContaining({
+            path: "src/app/api/media",
+            why: expect.stringMatching(
+              /^is a symbolic link; nothing was written through it\./
+            ),
+          }),
+        ]);
+        expect(result.skipped[0].toAdd).toContain("createMediaHandlers");
+      } finally {
+        rmSync(elsewhere, { recursive: true, force: true });
+      }
+    }
+  );
 });
 
 describe("a template that no longer imports the config", () => {

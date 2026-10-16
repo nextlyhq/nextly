@@ -18,12 +18,14 @@ import type { GeneratedFiles } from "./generated-files";
  * - the public media route, `api/media/...`, which serves reads only;
  * - the health check.
  *
- * `segment` is the folder that owns each route's URLs. Next.js serves a
- * `route.js` as readily as a `route.ts`, and an optional catch-all answers
- * its parent URL too, so a handler anywhere in that folder could compete with
- * the one written here: a handler in the folder, not the one file name,
- * decides whether the app already has the route. A folder holding no
- * handler (empty, or only a placeholder) competes with nothing.
+ * `segment` is the URL path each route answers, as the folder that owns it.
+ * Next.js serves a `route.js` as readily as a `route.ts`, and leaves route
+ * groups `(name)` and slots `@name` out of the URL, so a handler in any folder
+ * that maps to that path competes with the one written here; a folder holding
+ * no handler (empty, or only a placeholder) competes with nothing. `nested`
+ * says whether handlers deeper in the folder compete too: they do for an
+ * optional catch-all, which answers every path under its own, and they do not
+ * for the health check, which answers only `/api/health`.
  *
  * `role` says what Nextly's route does there, for a media route the app
  * already has something in place of; the report then carries the route to
@@ -33,6 +35,7 @@ const ROUTES = [
   {
     path: "admin/api/media/[[...path]]/route.ts",
     segment: "admin/api/media",
+    nested: true,
     importsConfig: true,
     role: (file: string) =>
       `The admin's media library needs Nextly's route at ${file}, where it uploads, edits and deletes media for signed-in users with media permissions`,
@@ -40,6 +43,7 @@ const ROUTES = [
   {
     path: "api/media/[[...path]]/route.ts",
     segment: "api/media",
+    nested: true,
     importsConfig: true,
     role: (file: string) =>
       `Nextly's public media route at ${file} serves media files to visitors, read-only`,
@@ -47,6 +51,7 @@ const ROUTES = [
   {
     path: "api/health/route.ts",
     segment: "api/health",
+    nested: false,
     importsConfig: false,
     role: null,
   },
@@ -62,6 +67,8 @@ const CONFIG_IMPORT =
 
 const LEFT_AS_IT_IS = "already holds routes; left as it is";
 
+const THROUGH_A_LINK = "is a symbolic link; nothing was written through it";
+
 /** A file Next.js answers requests through: a route or a page, in any of its source extensions. */
 const HANDLER_FILE = /^(route|page)\.[cm]?[jt]sx?$/;
 
@@ -69,11 +76,12 @@ const HANDLER_FILE = /^(route|page)\.[cm]?[jt]sx?$/;
  * Write the media and health routes into an existing app, from the template
  * in `templatesDir` (the CLI's bundled templates by default).
  *
- * A route whose folder the project already has is never written: the folder
- * is reported as skipped, exactly as it was, and for a media route the report
- * says what Nextly's route does there and carries it to add by hand. Every
- * route is read and prepared before any is written, so a template whose route
- * no longer imports the config is refused with nothing written.
+ * A route whose URL the app already answers is never written: the folder
+ * that answers it is reported as skipped, exactly as it was, and for a media
+ * route the report says what Nextly's route does there and carries it to add
+ * by hand. Nothing is written through a linked folder. Every route is read
+ * and prepared before any is written, so a template whose route no longer
+ * imports the config is refused with nothing written.
  */
 export async function generateMediaRoutes(
   cwd: string,
@@ -85,15 +93,17 @@ export async function generateMediaRoutes(
   );
   const result: GeneratedFiles = { written: [], changed: [], skipped: [] };
   for (const route of prepared) {
-    await writeIfFolderAbsent(cwd, route, result);
+    await writeIfUnanswered(cwd, route, result);
   }
   return result;
 }
 
-/** A route ready to write: its file, the folder that owns its URLs, its text, and what it does. */
+/** A route ready to write: its file, the app folder, the URL it answers, its text, and what it does. */
 interface PreparedRoute {
   target: string;
+  appRoot: string;
   segment: string;
+  nested: boolean;
   text: string;
   role: ((file: string) => string) | null;
 }
@@ -110,7 +120,9 @@ async function prepareRoute(
   const target = path.join(cwd, projectInfo.appDir, route.path);
   return {
     target,
-    segment: path.join(cwd, projectInfo.appDir, route.segment),
+    appRoot: path.join(cwd, projectInfo.appDir),
+    segment: route.segment,
+    nested: route.nested,
     text: route.importsConfig
       ? withRelativeConfigImport(text, cwd, target, route.path)
       : text,
@@ -145,18 +157,27 @@ function withRelativeConfigImport(
 }
 
 /**
- * Write a route only where its folder does not exist yet; otherwise report
- * the folder as skipped. The write itself refuses an existing file too
- * (`wx`), so one that appears between the check and the write is not
- * replaced either.
+ * Write a route only where nothing answers its URL yet, and never through a
+ * linked folder; otherwise report what was left alone. The write itself
+ * refuses an existing file too (`wx`), so one that appears between the check
+ * and the write is not replaced either.
  */
-async function writeIfFolderAbsent(
+async function writeIfUnanswered(
   cwd: string,
-  { target, segment, text, role }: PreparedRoute,
+  route: PreparedRoute,
   result: GeneratedFiles
 ): Promise<void> {
-  if (await holdsHandler(segment)) {
-    result.skipped.push(skipped(cwd, segment, target, text, role));
+  const { target, appRoot, segment, nested, text, role } = route;
+  const link = await linkedFolder(appRoot, target);
+  if (link !== null) {
+    result.skipped.push(skipped(cwd, link, target, text, role, THROUGH_A_LINK));
+    return;
+  }
+  const answering = await answeringFolder(appRoot, segment, nested);
+  if (answering !== null) {
+    result.skipped.push(
+      skipped(cwd, answering, target, text, role, LEFT_AS_IT_IS)
+    );
     return;
   }
   await fs.ensureDir(path.dirname(target));
@@ -164,22 +185,93 @@ async function writeIfFolderAbsent(
   result.written.push(toPosix(path.relative(cwd, target)));
 }
 
-/** Whether a folder, or any folder inside it, holds a file Next.js answers requests through. */
-async function holdsHandler(folder: string): Promise<boolean> {
-  if (!(await fs.pathExists(folder))) return false;
-  const entries = await fs.readdir(folder, { withFileTypes: true });
-  for (const entry of entries) {
-    // A linked route file is still a route Next.js serves.
-    if (
-      (entry.isFile() || entry.isSymbolicLink()) &&
-      HANDLER_FILE.test(entry.name)
+/**
+ * The first existing folder between the app folder and the route's own that
+ * is a symbolic link, or null. Writing through one would put the route
+ * wherever the link points, which may be outside the project.
+ */
+async function linkedFolder(
+  appRoot: string,
+  target: string
+): Promise<string | null> {
+  const parts = path.relative(appRoot, path.dirname(target)).split(path.sep);
+  let folder = appRoot;
+  for (const part of parts) {
+    folder = path.join(folder, part);
+    const stat = await fs.lstat(folder).catch(() => null);
+    if (stat === null) return null;
+    if (stat.isSymbolicLink()) return folder;
+  }
+  return null;
+}
+
+/** A folder name Next.js leaves out of the URL: a route group or a parallel-route slot. */
+function outsideUrl(name: string): boolean {
+  return /^\(.*\)$/.test(name) || name.startsWith("@");
+}
+
+/**
+ * The first folder in the app that answers `segment` and holds a handler, or
+ * null. Every folder whose path, without route groups and slots, is that URL
+ * counts, so the walk descends only while the URL so far is a prefix of it.
+ * Linked folders are not followed.
+ */
+async function answeringFolder(
+  appRoot: string,
+  segment: string,
+  nested: boolean
+): Promise<string | null> {
+  const wanted = segment.split("/");
+  const visit = async (
+    folder: string,
+    url: string[]
+  ): Promise<string | null> => {
+    if (url.length === wanted.length) {
+      return (await holdsHandler(folder, nested)) ? folder : null;
+    }
+    for (const name of await subfolders(folder)) {
+      const next = outsideUrl(name) ? url : [...url, name];
+      if (next.some((part, i) => part !== wanted[i])) continue;
+      const found = await visit(path.join(folder, name), next);
+      if (found !== null) return found;
+    }
+    return null;
+  };
+  return visit(appRoot, []);
+}
+
+/** The folders directly inside one, by name, in a stable order; links are not folders here. */
+async function subfolders(folder: string): Promise<string[]> {
+  const entries = await fs
+    .readdir(folder, { withFileTypes: true })
+    .catch(() => []);
+  return entries
+    .filter(entry => entry.isDirectory())
+    .map(entry => entry.name)
+    .sort();
+}
+
+/**
+ * Whether a folder holds a file Next.js answers requests through; with
+ * `nested`, in any folder inside it too. Linked folders are not followed.
+ */
+async function holdsHandler(folder: string, nested: boolean): Promise<boolean> {
+  const entries = await fs
+    .readdir(folder, { withFileTypes: true })
+    .catch(() => []);
+  // A linked route file is still a route Next.js serves.
+  if (
+    entries.some(
+      entry =>
+        (entry.isFile() || entry.isSymbolicLink()) &&
+        HANDLER_FILE.test(entry.name)
     )
-      return true;
-    if (
-      entry.isDirectory() &&
-      (await holdsHandler(path.join(folder, entry.name)))
-    )
-      return true;
+  ) {
+    return true;
+  }
+  if (!nested) return false;
+  for (const name of await subfolders(folder)) {
+    if (await holdsHandler(path.join(folder, name), true)) return true;
   }
   return false;
 }
@@ -187,17 +279,18 @@ async function holdsHandler(folder: string): Promise<boolean> {
 /** The report for a folder left alone: for a media route, what Nextly's route does and the text to add. */
 function skipped(
   cwd: string,
-  segment: string,
+  left: string,
   target: string,
   text: string,
-  role: PreparedRoute["role"]
+  role: PreparedRoute["role"],
+  reason: string
 ): GeneratedFiles["skipped"][number] {
-  const folder = toPosix(path.relative(cwd, segment));
-  if (role === null) return { path: folder, why: LEFT_AS_IT_IS };
+  const folder = toPosix(path.relative(cwd, left));
+  if (role === null) return { path: folder, why: reason };
   const file = toPosix(path.relative(cwd, target));
   return {
     path: folder,
-    why: `${LEFT_AS_IT_IS}. ${role(file)}: put the content below there, replacing or merging what handles those requests now`,
+    why: `${reason}. ${role(file)}: put the content below there, replacing or merging what handles those requests now`,
     toAdd: text,
   };
 }
