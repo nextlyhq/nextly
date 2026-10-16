@@ -40,6 +40,10 @@ Upgrading a production deployment needs one step first: run
 database, before the new version boots. Until then a production boot refuses
 the plugin.
 
+The schema-event type exported by `nextly/schemas` gains a `plugin_lifecycle`
+value, which records a plugin's install state in the migration ledger. Code
+that switches exhaustively over `eventType` must handle it.
+
 ## Changes in behaviour
 
 - **A production boot refuses a configured plugin until `nextly plugins

@@ -1010,8 +1010,16 @@ async function registerServicesOnce(
   // returns early when the config declares no plugins -- a record written after
   // that return is skipped exactly when the answer is "none", leaving the
   // previous registration's names in place for a reload to believe.
+  // A lifecycle command's boot initialises only its target: see
+  // `pluginsToInitialize`. Every other boot initialises every configured plugin.
+  const { pluginsToInitialize } = await import(
+    "../domains/schema/ownership/plugin-lifecycle-state"
+  );
   globalForReg.__nextly_pluginTeardown = await initializePlugins(
-    transformedConfig,
+    {
+      ...transformedConfig,
+      plugins: pluginsToInitialize(transformedConfig.plugins ?? []),
+    },
     pluginGrants,
     pluginBootContributions,
     adapterDrizzleDb,
