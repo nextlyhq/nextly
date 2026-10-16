@@ -16,6 +16,7 @@ import SingleVersionsPage from "@admin/pages/dashboard/singles/[slug]/versions";
 
 import {
   clearDocumentViews,
+  documentViewApplies,
   matchDocumentView,
   registerDocumentViews,
   routedDocumentView,
@@ -63,6 +64,60 @@ describe("document view registry", () => {
     registerDocumentViews([builder]);
     clearDocumentViews();
     expect(matchDocumentView("pages", "builder")).toBeUndefined();
+  });
+});
+
+/** A view offered wherever a top-level "blocks" field is. */
+const blocksBuilder = {
+  fieldType: "blocks",
+  path: "page-builder",
+  component: "@acme/pb/admin#Builder",
+};
+
+describe("a view scoped to a field type", () => {
+  it("is the candidate at its path on any document", () => {
+    registerDocumentViews([blocksBuilder]);
+    expect(matchDocumentView("pages", "page-builder")).toBe(blocksBuilder);
+    expect(matchDocumentView("homepage", "page-builder")).toBe(blocksBuilder);
+    expect(matchDocumentView("pages", "other")).toBeUndefined();
+  });
+
+  it("applies to a document with a TOP-LEVEL field of its type only", () => {
+    expect(
+      documentViewApplies(blocksBuilder, [{ type: "text" }, { type: "blocks" }])
+    ).toBe(true);
+    // Nested inside a group, the field is not counted.
+    expect(
+      documentViewApplies(blocksBuilder, [
+        { type: "group", fields: [{ type: "blocks" }] },
+      ])
+    ).toBe(false);
+    expect(documentViewApplies(blocksBuilder, [{ type: "text" }])).toBe(false);
+    expect(documentViewApplies(blocksBuilder, undefined)).toBe(false);
+  });
+
+  it("applies a slug-scoped view to its document whatever its fields", () => {
+    expect(documentViewApplies(builder, [])).toBe(true);
+  });
+
+  it("is forgotten on clear", () => {
+    registerDocumentViews([blocksBuilder]);
+    clearDocumentViews();
+    expect(matchDocumentView("pages", "page-builder")).toBeUndefined();
+  });
+
+  it("routes an entry address at its path to the entry page, gated as editing", () => {
+    registerDocumentViews([blocksBuilder]);
+    const resolved = resolveRoute(
+      buildRoute(ROUTES.COLLECTION_ENTRY_VIEW, {
+        slug: "pages",
+        id: "e1",
+        view: "page-builder",
+      }),
+      ""
+    );
+    expect(resolved.Component).toBe(EditEntryPage);
+    expect(resolved.requiredPermission).toBe("update-pages");
   });
 });
 

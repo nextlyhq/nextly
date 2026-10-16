@@ -88,6 +88,7 @@ exports[`plugin-sdk public export surface > \`./admin\` surface is unchanged 1`]
   "PluginAdminPage (type)",
   "PluginCollectionView (type)",
   "PluginDocumentView (type)",
+  "PluginFieldTypeDocumentView (type)",
   "PluginMenuItem (type)",
   "PluginRouteInvalidation (type)",
   "PluginRouteMethod (type)",

@@ -29,6 +29,13 @@ export type RegisteredDocumentView = NonNullable<
 const registry = new Map<string, RegisteredDocumentView>();
 
 /**
+ * Views offered on every document with a top-level field of their type, by
+ * path. Boot holds each such path unique among every view, so one path names
+ * at most one of these and none of the slug-scoped ones.
+ */
+const byFieldType = new Map<string, RegisteredDocumentView>();
+
+/**
  * One key per slug and path. JSON rather than a joined string, because a slug
  * and a path are both free text to this module and a delimiter inside either
  * would make two different pairs one key.
@@ -42,21 +49,40 @@ export function registerDocumentViews(
   views: readonly RegisteredDocumentView[]
 ): void {
   for (const view of views) {
-    registry.set(viewKey(view.slug, view.path), view);
+    if ("slug" in view) registry.set(viewKey(view.slug, view.path), view);
+    else byFieldType.set(view.path, view);
   }
 }
 
-/** The view `slug` declares at `path`, or `undefined` when it declares none. */
+/**
+ * The view at `path` on `slug`: one declared on the slug, else one offered on
+ * a field type — a CANDIDATE, which applies only if the document has that field
+ * (`documentViewApplies`), something only the page holding the schema knows.
+ */
 export function matchDocumentView(
   slug: string,
   path: string
 ): RegisteredDocumentView | undefined {
-  return registry.get(viewKey(slug, path));
+  return registry.get(viewKey(slug, path)) ?? byFieldType.get(path);
+}
+
+/**
+ * Whether a matched view applies to a document with these top-level fields.
+ * A slug-scoped view always does; a field-type view only where a TOP-LEVEL
+ * field has its type. A field inside a group or a repeater does not count.
+ */
+export function documentViewApplies(
+  view: RegisteredDocumentView,
+  fields: readonly { type?: unknown }[] | undefined
+): boolean {
+  if (!("fieldType" in view)) return true;
+  return (fields ?? []).some(field => field.type === view.fieldType);
 }
 
 /** Clear every registered view (rebuild on admin-meta change / tests). */
 export function clearDocumentViews(): void {
   registry.clear();
+  byFieldType.clear();
 }
 
 /**

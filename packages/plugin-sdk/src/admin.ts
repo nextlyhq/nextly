@@ -634,5 +634,6 @@ export type {
   PluginAdminPage,
   PluginCollectionView,
   PluginDocumentView,
+  PluginFieldTypeDocumentView,
   PluginMenuItem,
 } from "nextly";

@@ -30,6 +30,7 @@ import { CONTENT_PAGE_MEASURE } from "@admin/components/layout/content-measure";
 import { MeasuredPageFrame } from "@admin/components/layout/MeasuredPageFrame";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
+import { NotFoundPage } from "@admin/components/shared/not-found-page";
 import { QueryErrorBoundary } from "@admin/components/shared/query-error-boundary";
 import { toast } from "@admin/components/ui";
 import { Link } from "@admin/components/ui/link";
@@ -43,7 +44,10 @@ import { useEditorLocale } from "@admin/hooks/useEditorLocale";
 import { useLocalization } from "@admin/hooks/useLocalization";
 import { useTranslationMode } from "@admin/hooks/useTranslationMode";
 import { navigateTo } from "@admin/lib/navigation";
-import { routedDocumentView } from "@admin/lib/plugins/document-view-registry";
+import {
+  documentViewApplies,
+  routedDocumentView,
+} from "@admin/lib/plugins/document-view-registry";
 
 // ============================================================================
 // Types
@@ -323,6 +327,23 @@ export default function SingleEditPage({
           </Link>
         </div>
       </PageContainer>
+    );
+  }
+
+  // A view offered on a field type is at this address only when the Single
+  // has that field at its top level; anywhere else the address names nothing.
+  const routedView = routedDocumentView(slug, params?.view);
+  if (
+    routedView !== undefined &&
+    !documentViewApplies(routedView, schema.fields)
+  ) {
+    return (
+      <NotFoundPage
+        path={buildRoute(ROUTES.SINGLE_VIEW, {
+          slug: slug ?? "",
+          view: typeof params?.view === "string" ? params.view : "",
+        })}
+      />
     );
   }
 

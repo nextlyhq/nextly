@@ -10,6 +10,12 @@
  * naming both claimants. The same holds for a path the document already uses
  * for its own screens.
  *
+ * A view is declared on named documents (`views[slug].documentViews`) or on
+ * every document that has one of the plugin's own field types
+ * (`documentViews` with a `fieldType`). Which documents carry a field is not
+ * known at boot — the Schema Builder adds collections later — so a field-type
+ * view's path is held unique among every view declared anywhere.
+ *
  * @module plugins/validate-document-views
  */
 import { NextlyError } from "../errors/nextly-error";
@@ -31,16 +37,32 @@ const RESERVED_PATHS: ReadonlySet<string> = new Set(["versions", "api"]);
  */
 const VIEW_PATH = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
-/** One plugin document view, on the slug the admin routes it under. */
-export interface ContributedDocumentView {
-  /** The collection's or Single's slug, after the plugin's rename map. */
-  slug: string;
+/** What every contributed view carries, however it is scoped. */
+interface ContributedViewBase {
   path: string;
   component: ComponentPath;
   label?: string;
   /** The contributing plugin's name, for the admin's diagnostics. */
   plugin: string;
 }
+
+/**
+ * One plugin document view as the admin is given it: on the slug it is
+ * routed under, after the plugin's rename map, or on a field type.
+ */
+export type ContributedDocumentView = ContributedViewBase &
+  ({ slug: string } | { fieldType: string });
+
+/**
+ * A view as the admin receives it, without its owner. Distributed over the
+ * two scopes, so each keeps its own key: an `Omit` over the union would keep
+ * only the keys both share and drop `slug` and `fieldType` from the type.
+ */
+export type PublishedDocumentView = ContributedDocumentView extends infer View
+  ? View extends ContributedDocumentView
+    ? Omit<View, "plugin">
+    : never
+  : never;
 
 function documentViewError(
   pluginName: string,
@@ -55,37 +77,106 @@ function documentViewError(
   });
 }
 
-/** Every view one plugin declares, on its resolved slugs. */
+/** The label, carried only when declared. */
+function labelOf(view: { label?: string }): { label?: string } {
+  return view.label === undefined ? {} : { label: view.label };
+}
+
+/** Every view one plugin declares, slug-scoped then field-type-scoped. */
 function viewsOf(plugin: PluginDefinition): ContributedDocumentView[] {
-  const views = plugin.contributes?.admin?.views ?? {};
-  return Object.entries(views).flatMap(([declared, view]) =>
-    (view.documentViews ?? []).map(documentView => ({
-      slug: plugin.renameMap?.[declared] ?? declared,
-      path: documentView.path,
-      component: documentView.component,
-      ...(documentView.label === undefined
-        ? {}
-        : { label: documentView.label }),
-      plugin: plugin.name,
-    }))
+  const admin = plugin.contributes?.admin;
+  const bySlug = Object.entries(admin?.views ?? {}).flatMap(
+    ([declared, view]) =>
+      (view.documentViews ?? []).map(documentView => ({
+        slug: plugin.renameMap?.[declared] ?? declared,
+        path: documentView.path,
+        component: documentView.component,
+        ...labelOf(documentView),
+        plugin: plugin.name,
+      }))
   );
+  const byFieldType = (admin?.documentViews ?? []).map(documentView => ({
+    fieldType: documentView.fieldType,
+    path: documentView.path,
+    component: documentView.component,
+    ...labelOf(documentView),
+    plugin: plugin.name,
+  }));
+  return [...bySlug, ...byFieldType];
+}
+
+/** Where a view is offered, as an operator reads it. */
+function scopeOf(view: ContributedDocumentView): string {
+  return "slug" in view
+    ? `on "${view.slug}"`
+    : `on every document with a "${view.fieldType}" field`;
 }
 
 /** Why one view cannot be routed on its own, or `undefined` when it can. */
 function unroutableReason(view: ContributedDocumentView): string | undefined {
   if (typeof view.component !== "string" || view.component === "") {
-    return `on "${view.slug}" at "${view.path}" names no component to draw`;
+    return `${scopeOf(view)} at "${view.path}" names no component to draw`;
   }
   if (typeof view.path !== "string" || !VIEW_PATH.test(view.path)) {
     return (
-      `on "${view.slug}" has the path ${JSON.stringify(view.path)}, which is ` +
+      `${scopeOf(view)} has the path ${JSON.stringify(view.path)}, which is ` +
       "not one address segment of lowercase letters, digits and single dashes"
     );
   }
   if (RESERVED_PATHS.has(view.path)) {
-    return `on "${view.slug}" at "${view.path}", which the document already uses`;
+    return `${scopeOf(view)} at "${view.path}", which the document already uses`;
   }
   return undefined;
+}
+
+/**
+ * Why a field-type view's scope is refused, or `undefined` when it is the
+ * plugin's own field type. Scoped to another plugin's type, or a built-in one,
+ * a view would add a screen to documents its author never designed for.
+ */
+function unownedFieldTypeReason(
+  plugin: PluginDefinition,
+  view: ContributedDocumentView
+): string | undefined {
+  if (!("fieldType" in view)) return undefined;
+  const own = (plugin.contributes?.fieldTypes ?? []).map(type => type.type);
+  if (own.includes(view.fieldType)) return undefined;
+  return (
+    `${scopeOf(view)} at "${view.path}", a field type this plugin does not ` +
+    "contribute. A view can be scoped only to one of its own field types"
+  );
+}
+
+/**
+ * Whether two views would answer one address. A field-type view can be on any
+ * document, so it meets every other view of its path; two slug views meet only
+ * on the same document.
+ */
+function meet(a: ContributedDocumentView, b: ContributedDocumentView): boolean {
+  if (a.path !== b.path) return false;
+  if ("slug" in a && "slug" in b) return a.slug === b.slug;
+  return true;
+}
+
+/** The first view already declared that `view` would collide with. */
+function collisionWith(
+  view: ContributedDocumentView,
+  declared: readonly ContributedDocumentView[]
+): ContributedDocumentView | undefined {
+  return declared.find(earlier => meet(earlier, view));
+}
+
+/** One plugin's views checked on their own, before any comparison. */
+function assertOwnViews(plugin: PluginDefinition): ContributedDocumentView[] {
+  const views = viewsOf(plugin);
+  for (const view of views) {
+    const reason =
+      unroutableReason(view) ?? unownedFieldTypeReason(plugin, view);
+    if (reason !== undefined) {
+      throw documentViewError(plugin.name, reason, { path: view.path });
+    }
+  }
+  return views;
 }
 
 /**
@@ -96,34 +187,25 @@ function unroutableReason(view: ContributedDocumentView): string | undefined {
  * one that will not start. So its declarations are judged now.
  */
 export function assertDocumentViews(plugins: PluginDefinition[]): void {
-  const claimed = new Map<string, ContributedDocumentView>();
-  for (const view of plugins.flatMap(viewsOf)) {
-    const reason = unroutableReason(view);
-    if (reason !== undefined) {
-      throw documentViewError(view.plugin, reason, {
-        slug: view.slug,
-        path: view.path,
-      });
-    }
-    const key = `${view.slug}\u0000${view.path}`;
-    const earlier = claimed.get(key);
+  const declared: ContributedDocumentView[] = [];
+  for (const view of plugins.flatMap(assertOwnViews)) {
+    const earlier = collisionWith(view, declared);
     if (earlier !== undefined) {
       throw documentViewError(
         view.plugin,
-        `on "${view.slug}" at "${view.path}", which "${earlier.plugin}" ` +
-          "already declares there. One address can draw one screen: rename " +
-          "one of the two paths",
-        { slug: view.slug, path: view.path, other: earlier.plugin }
+        `${scopeOf(view)} at "${view.path}", where "${earlier.plugin}" ` +
+          `already declares a view ${scopeOf(earlier)}. One address can draw ` +
+          "one screen: rename one of the two paths",
+        { path: view.path, other: earlier.plugin }
       );
     }
-    claimed.set(key, view);
+    declared.push(view);
   }
 }
 
 /**
- * The document views the admin is given: enabled plugins' only, each on the
- * slug it is routed under. Read after `assertDocumentViews` has passed, so
- * every entry here can be routed.
+ * The document views the admin is given: enabled plugins' only. Read after
+ * `assertDocumentViews` has passed, so every entry here can be routed.
  */
 export function contributedDocumentViews(
   plugins: PluginDefinition[]

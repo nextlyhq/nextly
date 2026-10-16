@@ -115,6 +115,7 @@ export type {
   DeclarativeWidgetArchetype,
   PluginCollectionView,
   PluginDocumentView,
+  PluginFieldTypeDocumentView,
   PluginMenuItem,
   PluginNavSection,
 } from "./admin-contributions";

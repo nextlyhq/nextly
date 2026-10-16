@@ -69,6 +69,21 @@ describe("buildComponentImportMap", () => {
     expect(code).toContain('"@acme/x/admin#Preview": _p0.Preview,');
   });
 
+  it("registers a field-type document view's component too", () => {
+    const p = plugin({
+      documentViews: [
+        {
+          path: "builder",
+          fieldType: "blocks",
+          component: "@acme/x/admin#Builder",
+        },
+      ],
+    });
+    expect(buildComponentImportMap([p])).toContain(
+      '"@acme/x/admin#Builder": _p0.Builder,'
+    );
+  });
+
   it("dedupes repeated paths and maps a default export (no #) to .default", () => {
     const p = plugin({
       pages: [

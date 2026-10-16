@@ -33,7 +33,7 @@ import { validatedAdminWidgets } from "./validate-admin-widgets";
 import { validatedClientConfig } from "./validate-client-config";
 import {
   contributedDocumentViews,
-  type ContributedDocumentView,
+  type PublishedDocumentView,
 } from "./validate-document-views";
 import { validatePluginMenus } from "./validate-menus";
 import { validatePluginSlugs } from "./validate-slugs";
@@ -135,9 +135,9 @@ export interface PluginAdminMeta {
   entryFormToolbarSlot?: string;
   /**
    * @experimental Full-screen document views, each on the slug the admin
-   * routes it under — present only for enabled plugins.
+   * routes it under or on a field type — present only for enabled plugins.
    */
-  documentViews?: Array<Omit<ContributedDocumentView, "plugin">>;
+  documentViews?: PublishedDocumentView[];
   /**
    * Custom field types — `type` → admin editor component path (so the admin
    * renders fields of these types) plus the picker presentation (label, hint,

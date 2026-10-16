@@ -137,6 +137,151 @@ describe("assertDocumentViews", () => {
   });
 });
 
+/** A plugin contributing a field type and, optionally, views scoped to types. */
+function fieldTypePlugin(
+  name: string,
+  ownTypes: string[],
+  views: { path: string; fieldType: string; label?: string }[],
+  slugViews: Record<string, { path: string }[]> = {}
+): unknown {
+  return {
+    name,
+    version: "1.0.0",
+    nextly: "*",
+    contributes: {
+      fieldTypes: ownTypes.map(type => ({
+        type,
+        storage: "json",
+        component: `${name}/admin#Field`,
+      })),
+      admin: {
+        documentViews: views.map(view => ({
+          component: `${name}/admin#View`,
+          ...view,
+        })),
+        views: Object.fromEntries(
+          Object.entries(slugViews).map(([slug, list]) => [
+            slug,
+            {
+              documentViews: list.map(view => ({
+                component: `${name}/admin#View`,
+                ...view,
+              })),
+            },
+          ])
+        ),
+      },
+    },
+  };
+}
+
+describe("document views scoped to a field type", () => {
+  it("accepts a view on a field type the plugin contributes itself", () => {
+    expect(() =>
+      assertDocumentViews(
+        asPlugins([
+          fieldTypePlugin(
+            "@acme/builder",
+            ["blocks"],
+            [{ path: "builder", fieldType: "blocks" }]
+          ),
+        ])
+      )
+    ).not.toThrow();
+  });
+
+  it("refuses a view on a field type the plugin does not contribute", () => {
+    // Least privilege: scoped to "text", a plugin would add a screen to every
+    // document that has a title.
+    const error = refusal([
+      fieldTypePlugin(
+        "@acme/builder",
+        ["blocks"],
+        [{ path: "builder", fieldType: "text" }]
+      ),
+    ]);
+    expect(error.code).toBe("NEXTLY_PLUGIN_DOCUMENT_VIEW_INVALID");
+    expect(error.logMessage).toContain("@acme/builder");
+    expect(error.logMessage).toContain('"text"');
+  });
+
+  it("refuses its path when any other view anywhere already uses it, naming both", () => {
+    // Which documents carry the field is not known at boot, so a field-type
+    // view's path has to be unique among every view, on any document.
+    const error = refusal([
+      plugin("@other/review", "posts", [{ path: "builder" }]),
+      fieldTypePlugin(
+        "@acme/builder",
+        ["blocks"],
+        [{ path: "builder", fieldType: "blocks" }]
+      ),
+    ]);
+    expect(error.logMessage).toContain("@acme/builder");
+    expect(error.logMessage).toContain("@other/review");
+  });
+
+  it("refuses two field-type views on one path", () => {
+    const error = refusal([
+      fieldTypePlugin(
+        "@acme/builder",
+        ["blocks"],
+        [{ path: "builder", fieldType: "blocks" }]
+      ),
+      fieldTypePlugin(
+        "@other/canvas",
+        ["canvas"],
+        [{ path: "builder", fieldType: "canvas" }]
+      ),
+    ]);
+    expect(error.logMessage).toContain("@other/canvas");
+  });
+
+  it("refuses a slug view declared after a field-type view on its path", () => {
+    const error = refusal([
+      fieldTypePlugin(
+        "@acme/builder",
+        ["blocks"],
+        [{ path: "builder", fieldType: "blocks" }]
+      ),
+      plugin("@other/review", "posts", [{ path: "builder" }]),
+    ]);
+    expect(error.code).toBe("NEXTLY_PLUGIN_DOCUMENT_VIEW_INVALID");
+  });
+
+  it("applies the path rules to a field-type view as well", () => {
+    const error = refusal([
+      fieldTypePlugin(
+        "@acme/builder",
+        ["blocks"],
+        [{ path: "versions", fieldType: "blocks" }]
+      ),
+    ]);
+    expect(error.logMessage).toContain('"versions"');
+  });
+
+  it("publishes a field-type view by its field type rather than a slug", () => {
+    expect(
+      contributedDocumentViews(
+        asPlugins([
+          fieldTypePlugin(
+            "@acme/builder",
+            ["blocks"],
+            [{ path: "builder", fieldType: "blocks", label: "Page Builder" }]
+          ),
+        ])
+      )
+    ).toEqual([
+      {
+        fieldType: "blocks",
+        path: "builder",
+        component: "@acme/builder/admin#View",
+        label: "Page Builder",
+        plugin: "@acme/builder",
+      },
+    ]);
+  });
+});
+
 describe("contributedDocumentViews", () => {
   it("lists enabled plugins' views by resolved slug, with their owner", () => {
     const views = contributedDocumentViews(

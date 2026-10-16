@@ -202,6 +202,27 @@ views: {
 },
 ```
 
+A plugin that contributes a field type can instead offer a view on every
+collection and Single that has a field of that type. This includes collections
+created in the Schema Builder later:
+
+```ts
+contributes: {
+  fieldTypes: [{ type: "blocks", storage: "json", component: "@acme/x/admin#Blocks" }],
+  admin: {
+    documentViews: [
+      { path: "builder", fieldType: "blocks",
+        component: "@acme/x/admin#Builder", label: "Builder" },
+    ],
+  },
+},
+```
+
+A view can be scoped only to a field type the same plugin contributes. Only a
+top-level field counts: a document whose field sits inside a group or a
+repeater doesn't get the view. A field-type view's `path` must be unique among
+every document view any plugin declares.
+
 The admin keeps the document's own behaviour around your view, so you don't
 build any of it yourself:
 
@@ -228,7 +249,10 @@ Startup is refused, naming the plugins involved, when a view's `path`:
 
 - is not one segment of lowercase letters, digits and single dashes;
 - is `versions` or `api`, which the document already uses;
-- is declared twice on the same collection or Single.
+- is declared twice on the same collection or Single, or is the path of a
+  field-type view and declared anywhere else;
+- belongs to a field-type view scoped to a field type the plugin does not
+  contribute.
 
 ## Dashboard widgets
 

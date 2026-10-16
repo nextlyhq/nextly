@@ -557,6 +557,24 @@ export interface PluginDocumentView {
 }
 
 /**
+ * @experimental A document view offered on every collection and Single that
+ * has a top-level field of one type, wherever that type is used — including
+ * collections created in the Schema Builder after boot, which no list of slugs
+ * could name.
+ *
+ * A plugin may scope a view only to a field type it contributes itself (boot
+ * refuses any other), so no plugin can add a screen to every document that has,
+ * say, a text field. A field inside a group or a repeater does not count.
+ *
+ * Which documents carry the field is not known at boot, so the path must be
+ * unique among every document view any plugin declares.
+ */
+export interface PluginFieldTypeDocumentView extends PluginDocumentView {
+  /** The field type, one of this plugin's own `contributes.fieldTypes`. */
+  fieldType: string;
+}
+
+/**
  * @public Declarative admin-UI contributions. Introspectable
  * by the host without running the plugin.
  *
@@ -580,6 +598,11 @@ export interface PluginAdminContributions {
   widgets?: PluginAdminWidget[];
   /** Per-collection view overrides + injection points, keyed by slug. */
   views?: Record<string, PluginCollectionView>;
+  /**
+   * @experimental Document views offered wherever one of this plugin's own
+   * field types is used — see `PluginFieldTypeDocumentView`.
+   */
+  documentViews?: PluginFieldTypeDocumentView[];
   /**
    * Precompiled, `.nextly-admin`-scoped, token-driven CSS this plugin ships for
    * admin components whose utilities are not in the built-in safelist. A

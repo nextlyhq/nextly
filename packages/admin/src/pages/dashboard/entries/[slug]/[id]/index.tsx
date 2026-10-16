@@ -33,6 +33,7 @@ import { MeasuredPageFrame } from "@admin/components/layout/MeasuredPageFrame";
 import { PageContainer } from "@admin/components/layout/page-container";
 import { Breadcrumbs } from "@admin/components/shared";
 import { PageErrorFallback } from "@admin/components/shared/error-fallbacks";
+import { NotFoundPage } from "@admin/components/shared/not-found-page";
 import { PluginSlot } from "@admin/components/shared/plugin-slot";
 import { QueryErrorBoundary } from "@admin/components/shared/query-error-boundary";
 import { Link } from "@admin/components/ui/link";
@@ -48,7 +49,11 @@ import {
   getComponent,
   type CustomEditViewProps,
 } from "@admin/lib/plugins/component-registry";
-import { routedDocumentView } from "@admin/lib/plugins/document-view-registry";
+import {
+  documentViewApplies,
+  routedDocumentView,
+} from "@admin/lib/plugins/document-view-registry";
+import { getCollectionFields } from "@admin/types/collection";
 import type { ApiCollection } from "@admin/types/entities";
 
 // ============================================================================
@@ -237,6 +242,19 @@ function entryDocumentView(
     onExit: () =>
       navigateTo(buildRoute(ROUTES.COLLECTION_ENTRY_EDIT, { slug, id })),
   };
+}
+
+/** The address of a document view, for the not-found page to name. */
+function pathOfView(
+  slug: string | undefined,
+  id: string | undefined,
+  view: string | string[] | undefined
+): string {
+  return buildRoute(ROUTES.COLLECTION_ENTRY_VIEW, {
+    slug: slug ?? "",
+    id: id ?? "",
+    view: typeof view === "string" ? view : "",
+  });
 }
 
 // ============================================================================
@@ -525,6 +543,17 @@ export default function EditEntryPage({
         </div>
       </PageContainer>
     );
+  }
+
+  // A view offered on a field type is at this address only when the
+  // collection has that field at its top level; anywhere else the address
+  // names nothing, exactly as an undeclared view does.
+  const routedView = routedDocumentView(slug, params?.view);
+  if (
+    routedView !== undefined &&
+    !documentViewApplies(routedView, getCollectionFields(collection))
+  ) {
+    return <NotFoundPage path={pathOfView(slug, id, params?.view)} />;
   }
 
   const collectionLabel = collection.label || collection.name || slug;

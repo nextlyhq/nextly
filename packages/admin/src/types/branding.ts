@@ -227,12 +227,20 @@ export interface PluginMetadata {
    * served at `/admin/collections/<slug>/<id>/<path>` or, for a Single,
    * `/admin/singles/<slug>/<path>`. Present only for enabled plugins.
    */
-  documentViews?: Array<{
-    slug: string;
-    path: string;
-    component: string;
-    label?: string;
-  }>;
+  documentViews?: Array<
+    {
+      path: string;
+      component: string;
+      label?: string;
+    } & (
+      | { slug: string }
+      /**
+       * Offered on every collection and Single with a TOP-LEVEL field of this
+       * type, via `contributes.admin.documentViews`; the document decides.
+       */
+      | { fieldType: string }
+    )
+  >;
   /**
    * Custom field types — `type` → admin editor component path. `layout:
    * "takeover"` marks a type whose visible field collapses the entry-form body
