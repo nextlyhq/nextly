@@ -6,20 +6,10 @@ import { classifyError } from "@nextlyhq/telemetry";
 import fs from "fs-extra";
 import pc from "picocolors";
 
-import { generateAdminPage } from "./generators/admin";
-import { generateConfig } from "./generators/config";
 import { generateEnv } from "./generators/env";
+import { generateIntoExistingApp } from "./generators/existing-app";
 import type { GeneratedFiles } from "./generators/generated-files";
-import { generateInstrumentation } from "./generators/instrumentation";
-import { generateMediaRoutes } from "./generators/media-routes";
-import {
-  nextConfigReport,
-  patchNextConfig,
-  type NextConfigPatch,
-} from "./generators/next-config";
-import { reportEnvFiles } from "./generators/report-env-files";
-import { generateRoutes } from "./generators/routes";
-import { generateTypesDirectory } from "./generators/types";
+import { reportGeneratedFiles } from "./generators/report";
 import { installDependencies } from "./installers/dependencies";
 import {
   resolveTemplateSource,
@@ -77,18 +67,6 @@ function cwdProjectName(cwd: string): string {
     return DEFAULT_PROJECT_NAME;
   }
   return basename;
-}
-
-/**
- * Tell the developer what adding Nextly did to their Next config: the
- * packages it added, or exactly what to add by hand when it could not change
- * the file safely. One place prints it, so the line can move into a combined
- * report without the patch knowing.
- */
-function printNextConfigPatch(patch: NextConfigPatch): void {
-  const report = nextConfigReport(patch);
-  if (report.level === "warn") p.log.warn(report.message);
-  else p.log.info(report.message);
 }
 
 /**
@@ -550,27 +528,21 @@ export async function createNextly(
   {
     const s = p.spinner();
     s.start("Setting up environment...");
-    let nextConfigPatch: NextConfigPatch | null = null;
-    // What the existing-app generators did that the developer should know about.
+    // What the existing-app steps did, for the one report printed below.
     const reported: GeneratedFiles[] = [];
     try {
       if (!isFreshProject) {
-        // Existing project: generate Nextly config files
-        await generateConfig(cwd, projectType, projectInfo);
-        await generateRoutes(cwd, projectInfo);
-        await generateAdminPage(cwd, projectInfo);
-        // The template's own media and health routes, so an app Nextly is
-        // added to gets the admin's media route a new project has.
+        // Existing project: Nextly's files, each written only where nothing
+        // is, and the Next config extended.
         reported.push(
-          await generateMediaRoutes(
+          ...(await generateIntoExistingApp(
             cwd,
+            projectType,
             projectInfo,
+            database,
             resolveTemplatePath(options.localTemplatePath)
-          )
+          ))
         );
-        reported.push(await generateInstrumentation(cwd, projectInfo));
-        await generateTypesDirectory(cwd, projectInfo);
-        nextConfigPatch = await patchNextConfig(cwd, database);
       }
 
       // App flows generate a root .env. A plugin is a library — its env lives
@@ -585,19 +557,13 @@ export async function createNextly(
         envResult = await generateEnv(cwd, envDatabase);
       }
       s.stop("Environment configured");
-      // Said after the spinner, so each line stays on screen. Keys and file
-      // names only: nothing here ever carries an env value.
-      if (nextConfigPatch) printNextConfigPatch(nextConfigPatch);
-      for (const files of reported) {
-        for (const written of files.written) p.log.info(`Wrote ${written}`);
-        for (const { path: changed, added } of files.changed)
-          p.log.info(`Updated ${changed}: ${added.join(", ")}`);
-        for (const { path: skipped, why, toAdd } of files.skipped) {
-          p.log.warn(`Left ${skipped} as it was: ${why}`);
-          if (toAdd) p.log.message(toAdd);
-        }
-      }
-      if (envResult) reportEnvFiles(envResult);
+      // One report for every step, the env files included, after the spinner
+      // stops so its lines are not drawn over. Paths, keys and packages only:
+      // nothing in it ever carries an env value.
+      reportGeneratedFiles(
+        envResult ? [...reported, envResult.files] : reported,
+        envResult?.warnings
+      );
     } catch (error) {
       s.stop("Failed to generate configuration");
       telemetry.capture("scaffold_failed", {

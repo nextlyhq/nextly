@@ -1,8 +1,7 @@
-import path from "path";
-
-import fs from "fs-extra";
-
 import type { ProjectInfo } from "../types";
+
+import type { GeneratedFiles } from "./generated-files";
+import { nothingYet, writeNew } from "./write-new";
 
 const API_ROUTE_TEMPLATE = `// Imported from \`nextly/runtime\` (not the package root) so the
 // Next.js-coupled handler factory stays out of Node-only code paths
@@ -26,23 +25,19 @@ export const OPTIONS = handlers.OPTIONS;
 export async function generateRoutes(
   cwd: string,
   projectInfo: ProjectInfo
-): Promise<void> {
-  const routePath = path.join(
+): Promise<GeneratedFiles> {
+  const files = nothingYet();
+  // A route the app already has there is kept; the admin needs Nextly's, so
+  // its content is given to add by hand.
+  await writeNew(
     cwd,
-    projectInfo.appDir,
-    "admin",
-    "api",
-    "[[...params]]",
-    "route.ts"
+    `${projectInfo.appDir}/admin/api/[[...params]]/route.ts`,
+    API_ROUTE_TEMPLATE,
+    files,
+    {
+      why: "the app already has a route there; the admin's API needs Nextly's, which is",
+      toAdd: API_ROUTE_TEMPLATE,
+    }
   );
-
-  // Check if route already exists
-  if (await fs.pathExists(routePath)) {
-    throw new Error(
-      "API route already exists at admin/api/[[...params]]/route.ts"
-    );
-  }
-
-  await fs.ensureDir(path.dirname(routePath));
-  await fs.writeFile(routePath, API_ROUTE_TEMPLATE, "utf-8");
+  return files;
 }
