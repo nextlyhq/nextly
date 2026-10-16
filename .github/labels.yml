@@ -112,7 +112,7 @@
   description: "Filed automatically when a published release is missing its tag or GitHub Release"
 - name: "run-integration"
   color: "0e8a16"
-  description: "Run the database Integration legs on this pull request (the merge queue runs them regardless)"
+  description: "Run the database Integration legs on this pull request (the merge queue runs them unless the change is docs-only)"
 
 # ── GitHub-native labels ── platform treats these specially in the UI
 - name: "good first issue"
