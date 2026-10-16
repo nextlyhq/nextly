@@ -98,10 +98,20 @@ export function collectAdminComponentPaths(plugin: PluginDefinition): string[] {
     fieldType => fieldType.component
   );
 
-  const admin = plugin.contributes?.admin;
-  if (plugin.enabled === false || !admin) return fieldTypePaths;
+  if (plugin.enabled === false) return fieldTypePaths;
+  return [
+    ...fieldTypePaths,
+    ...collectAdminPaths(plugin.contributes?.admin),
+    ...collectDeclaredWidgetPaths(plugin.contributes?.dashboard),
+  ];
+}
 
-  const paths = [...fieldTypePaths];
+/** Every component an enabled plugin's `contributes.admin` names. */
+function collectAdminPaths(
+  admin: PluginAdminContributions | undefined
+): string[] {
+  if (!admin) return [];
+  const paths: string[] = [];
   for (const page of admin.pages ?? []) paths.push(page.component);
   if (admin.settings) paths.push(admin.settings.component);
   paths.push(...collectCollectionViewPaths(admin.views));
@@ -111,6 +121,32 @@ export function collectAdminComponentPaths(plugin: PluginDefinition): string[] {
   paths.push(...collectAdminSlotPaths(admin));
   return paths;
 }
+
+/**
+ * The component each widget declared under `contributes.dashboard` draws
+ * with, for the same reason as today's shape: the map is the only importer
+ * the admin's registry can rely on. A widget drawn by one of core's displays
+ * ships no component.
+ *
+ * Read as plain JavaScript hands it over, since generation runs before
+ * startup checks anything: an entry that names no component is skipped here
+ * and refused by startup, by name, which is where a declaration's faults are
+ * reported.
+ */
+function collectDeclaredWidgetPaths(dashboard: unknown): string[] {
+  const widgets: unknown = isRecord(dashboard) ? dashboard.widgets : undefined;
+  if (!Array.isArray(widgets)) return [];
+  return widgets.flatMap((widget: unknown) => {
+    const display = isRecord(widget) ? widget.display : undefined;
+    const component = isRecord(display) ? display.component : undefined;
+    return typeof component === "string" && component.trim() !== ""
+      ? [component]
+      : [];
+  });
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
 
 /**
  * Every override and injection point a plugin declares per collection.
@@ -225,30 +261,50 @@ function parsePath(path: string): ParsedPath {
 }
 
 /**
- * Build the generated import-map module source for all plugins' admin
- * components. Deterministic: modules and registry keys are sorted; one
- * `import * as` per unique module; duplicate paths deduped. Returns a valid
- * (no-op) module when there are no admin components.
+ * Every component path the generated map registers, deduplicated and in
+ * registration order: admin contributions, then block editor components.
+ *
+ * The one list both the map's registration and its exported path list are
+ * built from, so a check that reads the list reads exactly what was
+ * registered.
  */
-export function buildComponentImportMap(plugins: PluginDefinition[]): string {
-  const byPath = new Map<string, ParsedPath>();
+export function componentImportMapPaths(
+  plugins: readonly PluginDefinition[]
+): string[] {
+  const paths = new Set<string>();
   for (const plugin of plugins) {
-    for (const path of collectAdminComponentPaths(plugin)) {
-      if (!byPath.has(path)) byPath.set(path, parsePath(path));
-    }
+    for (const path of collectAdminComponentPaths(plugin)) paths.add(path);
   }
   // Block editor components register through the same map, so the editor
   // bundle loads a contributed block's inspector without a hand-written
   // import -- the same guarantee admin contributions already have.
-  for (const path of collectBlockEditorComponentPaths(plugins)) {
-    if (!byPath.has(path)) byPath.set(path, parsePath(path));
+  for (const path of collectBlockEditorComponentPaths(plugins)) paths.add(path);
+  return [...paths].sort((a, b) => a.localeCompare(b));
+}
+
+/**
+ * The generated module's list of the paths it registers.
+ *
+ * Plain strings beside the registration, so what the map holds can be read
+ * without running it: the server cannot import a module of client components.
+ */
+const pathListExport = (paths: readonly string[]): string =>
+  `export const registeredComponentPaths: readonly string[] = ${JSON.stringify(paths)};`;
+
+/**
+ * Build the generated import-map module source for all plugins' admin
+ * components. Deterministic: modules and registry keys are sorted; one
+ * `import * as` per unique module; duplicate paths deduped. Returns a valid
+ * module registering nothing when there are no admin components, still
+ * exporting its (empty) path list.
+ */
+export function buildComponentImportMap(plugins: PluginDefinition[]): string {
+  const paths = componentImportMapPaths(plugins);
+  if (paths.length === 0) {
+    return `${HEADER}\n\n${pathListExport(paths)}\n`;
   }
 
-  if (byPath.size === 0) {
-    return `${HEADER}\n\nexport {};\n`;
-  }
-
-  const parsed = Array.from(byPath.values());
+  const parsed = paths.map(parsePath);
   const modules = Array.from(new Set(parsed.map(p => p.module))).sort();
   const alias = new Map<string, string>();
   modules.forEach((m, i) => alias.set(m, `_p${i}`));
@@ -260,12 +316,14 @@ export function buildComponentImportMap(plugins: PluginDefinition[]): string {
   }
   lines.push("");
   lines.push("registerComponents({");
-  for (const p of parsed.sort((a, b) => a.path.localeCompare(b.path))) {
+  for (const p of parsed) {
     lines.push(
       `  ${JSON.stringify(p.path)}: ${alias.get(p.module)}.${p.member},`
     );
   }
   lines.push("});");
+  lines.push("");
+  lines.push(pathListExport(paths));
   lines.push("");
   return lines.join("\n");
 }
