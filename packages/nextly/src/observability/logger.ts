@@ -7,6 +7,9 @@
  *
  * Full observability design (dev-vs-prod formatting, scrub list, audit log,
  */
+
+import { emailMaskingActive, maskEmails } from "./mask-emails";
+
 export interface NextlyLogger {
   error(payload: object): void;
   warn(payload: object): void;
@@ -45,7 +48,33 @@ export function setNextlyLogger(logger: NextlyLogger | undefined): void {
   currentLogger = logger ?? defaultLogger;
 }
 
-/** The currently registered logger. Used internally by withErrorHandler / withAction / instrumentation. */
+/** A payload as it may be written: masked of addresses outside dev and test. */
+function writable(payload: object): object {
+  return emailMaskingActive() ? maskEmails(payload) : payload;
+}
+
+/**
+ * The one object `getNextlyLogger` hands out. It delegates to whichever logger
+ * is registered at the moment of each call, after masking, so it stays the
+ * same object across `setNextlyLogger` calls, as the registered logger was
+ * before: code holding it, or a test replacing one of its methods, keeps
+ * working.
+ */
+const maskingLogger: NextlyLogger = {
+  error: p => currentLogger.error(writable(p)),
+  warn: p => currentLogger.warn(writable(p)),
+  info: p => currentLogger.info(writable(p)),
+  debug: p => currentLogger.debug(writable(p)),
+};
+
+/**
+ * The currently registered logger. Used internally by withErrorHandler / withAction / instrumentation.
+ *
+ * Every payload is masked of email addresses outside development and test
+ * before it reaches the logger, the default or one an app installed: the line
+ * ends up in the app's logger either way, so masking only the default writer
+ * would leave every app that swapped it unprotected.
+ */
 export function getNextlyLogger(): NextlyLogger {
-  return currentLogger;
+  return maskingLogger;
 }
