@@ -666,6 +666,84 @@ describe("useWidgetQueries", () => {
       });
     });
 
+    it("carries a column's value labels through", async () => {
+      // Rebuilt from checked fields, so labels it did not read would be lost here, and a row
+      // would print `needs_review` where the server said "Needs review".
+      const fields = [
+        {
+          name: "stage",
+          type: "string",
+          choices: [{ value: "needs_review", label: "Needs review" }],
+        },
+      ];
+      expect(
+        await slotFor({
+          ok: true,
+          result: { op: "list", items: [{ stage: "needs_review" }], fields },
+        })
+      ).toEqual({
+        ok: true,
+        result: { op: "list", items: [{ stage: "needs_review" }], fields },
+      });
+    });
+
+    it("drops malformed value labels but keeps the column", async () => {
+      // Presentation, so a broken list costs the labels, not the column or the rows.
+      expect(
+        await slotFor({
+          ok: true,
+          result: {
+            op: "list",
+            items: [{ stage: "done" }],
+            fields: [
+              { name: "stage", label: "Stage", choices: [{ value: 3, label: "Three" }] },
+            ],
+          },
+        })
+      ).toEqual({
+        ok: true,
+        result: {
+          op: "list",
+          items: [{ stage: "done" }],
+          fields: [{ name: "stage", label: "Stage" }],
+        },
+      });
+    });
+
+    it("carries a grouped result's field through", async () => {
+      const field = {
+        name: "stage",
+        label: "Stage",
+        type: "string",
+        choices: [{ value: "done", label: "Done" }],
+      };
+      expect(
+        await slotFor({
+          ok: true,
+          result: { op: "groupBy", buckets: [{ value: "done", count: 2 }], field },
+        })
+      ).toEqual({
+        ok: true,
+        result: { op: "groupBy", buckets: [{ value: "done", count: 2 }], field },
+      });
+    });
+
+    it("keeps the buckets when the grouped field is malformed", async () => {
+      expect(
+        await slotFor({
+          ok: true,
+          result: {
+            op: "groupBy",
+            buckets: [{ value: "done", count: 2 }],
+            field: { label: "no name" },
+          },
+        })
+      ).toEqual({
+        ok: true,
+        result: { op: "groupBy", buckets: [{ value: "done", count: 2 }] },
+      });
+    });
+
     it("drops malformed column descriptions without losing the rows", async () => {
       // A malformed heading costs the columns and nothing more. The rows are
       // the answer, and refusing the whole result over its headings would turn

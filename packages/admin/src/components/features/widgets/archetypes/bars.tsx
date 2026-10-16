@@ -21,6 +21,7 @@
 
 import { cardNumber } from "../frame/format";
 
+import { choiceLabel, type CellColumn } from "./cell-text";
 import { ChartFrame, type ChartRow } from "./chart-frame";
 import { barFractions } from "./chart-scale";
 import type { ArchetypeAccepts, ArchetypeBody } from "./types";
@@ -45,7 +46,11 @@ import type { ArchetypeAccepts, ArchetypeBody } from "./types";
  * arbitrary text — so the placeholder rows are marked and drawn differently
  * instead of relying on their wording to separate them.
  */
-function bucketRow(value: string | null, count: number): ChartRow {
+function bucketRow(
+  value: string | null,
+  count: number,
+  choices: CellColumn["choices"]
+): ChartRow {
   if (value === null) {
     return { key: "null", label: "(none)", count, announce: "no value stored" };
   }
@@ -58,7 +63,13 @@ function bucketRow(value: string | null, count: number): ChartRow {
     };
   }
 
-  return { key: `v${value}`, label: value, count };
+  // Named by the grouped field's own value label ("Needs review", not `needs_review`), keyed by
+  // the stored value, so two values that share a label still draw as two bars.
+  return {
+    key: `v${value}`,
+    label: choiceLabel(value, choices) ?? value,
+    count,
+  };
 }
 
 export const barsAccepts: ArchetypeAccepts = definition => {
@@ -76,7 +87,7 @@ export const barsBody: ArchetypeBody = (result, definition) => {
   }
 
   const rows = result.buckets.map(bucket =>
-    bucketRow(bucket.value, bucket.count)
+    bucketRow(bucket.value, bucket.count, result.field?.choices)
   );
 
   if (rows.length === 0) {
@@ -106,7 +117,9 @@ export const barsBody: ArchetypeBody = (result, definition) => {
         // The shape in words, for a reader who cannot see the lengths. Naming
         // the biggest bucket is what the picture communicates first.
         description={description}
-        labelHeading="Value"
+        // The grouped field's label heads the value column ("Status"), falling back to a
+        // neutral word when the server described no field.
+        labelHeading={result.field?.label ?? "Value"}
         rows={rows}
         note={
           result.truncated

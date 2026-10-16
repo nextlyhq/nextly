@@ -26,7 +26,12 @@ vi.mock("@admin/hooks/queries", () => ({
 const { SinglesQuickLinks } = await import("./SinglesQuickLinks");
 
 function listing(
-  items: Array<{ id: string; slug: string; label?: string }>,
+  items: Array<{
+    id: string;
+    slug: string;
+    label?: string;
+    admin?: { hidden?: boolean };
+  }>,
   extra: { isLoading?: boolean; error?: Error } = {}
 ): ReturnType<typeof useSingles> {
   return {
@@ -65,5 +70,19 @@ describe("the singles card", () => {
     render(<SinglesQuickLinks />);
 
     expect(screen.getAllByRole("link")).toHaveLength(2);
+  });
+
+  it("leaves out a Single kept off the dashboard", () => {
+    // `internal: true` is stored as `admin.hidden`, so a hidden Single stands for both.
+    singlesHook.mockReturnValue(
+      listing([
+        { id: "1", slug: "homepage", label: "Homepage" },
+        { id: "2", slug: "nx_pb_flags", label: "Flags", admin: { hidden: true } },
+      ])
+    );
+    render(<SinglesQuickLinks />);
+
+    expect(screen.getAllByRole("link")).toHaveLength(1);
+    expect(screen.queryByText("Flags")).toBeNull();
   });
 });

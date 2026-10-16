@@ -13,6 +13,8 @@ import type { ApiSingle } from "@admin/types/entities";
 
 import { CardError, CardSkeleton } from "../widgets/frame/states";
 
+import { keptOffDashboard } from "./kept-off-dashboard";
+
 /**
  * Dashboard surface listing all configured Singles. Mirrors the grid +
  * heading style used by CollectionQuickLinks. Each card links to the
@@ -73,7 +75,10 @@ export const SinglesQuickLinks: React.FC = () => {
     refetch,
   } = useSingles({ pagination: { page: 0, pageSize: 100 } });
 
-  const singles = singlesData?.items ?? [];
+  // A Single kept off the dashboard (internal, or hidden from the navigation) is not listed.
+  const singles = (singlesData?.items ?? []).filter(
+    single => !keptOffDashboard(single)
+  );
 
   // Whether this card is offered at all is the HOST's decision, through the
   // `singles:present` condition on its declaration. It used to hide itself
