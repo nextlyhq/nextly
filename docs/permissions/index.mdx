@@ -28,10 +28,11 @@ everything.
 
 ## Collection access
 
-Grants say what a role may do. A collection's `access` rule can only narrow that: the
-permission comes first, and the rule adds a condition of its own. Write the permission
-check into the rule, because when a collection declares a rule for an operation, that rule
-is what a signed-in user is judged by:
+Grants say what a role may do. When a collection declares an `access` rule for an
+operation, that rule is the whole answer for a signed-in user: the grant is not checked
+beside it, so a rule that returns `true` admits someone whose role lacks the grant. Make
+every rule check the permission itself, then add your own condition, so it only ever
+narrows what the Roles screen grants:
 
 ```ts
 import type { AccessControlFunction } from "nextly";

@@ -127,6 +127,30 @@ describe("check-access-rule-role-names", () => {
     ).toEqual([]);
   });
 
+  it("follows an access object through a re-exporting module", () => {
+    expect(
+      scan({
+        "templates/t/src/collections/Posts.ts": [
+          'import { access, other } from "./access";',
+          "export const Posts = defineCollection({ access });",
+          "export const Tags = defineCollection({ access: other });",
+        ].join("\n"),
+        "templates/t/src/collections/access/index.ts": [
+          'export { access } from "./policy";',
+          'import { tags } from "./tags";',
+          "export { tags as other };",
+        ].join("\n"),
+        "templates/t/src/collections/access/policy.ts":
+          'export const access = { update: ({ roles }) => roles.includes("editor") };',
+        "templates/t/src/collections/access/tags.ts":
+          'export const tags = { delete: ({ roles }) => roles.includes("admin") };',
+      })
+    ).toEqual([
+      "templates/t/src/collections/access/policy.ts:1 update",
+      "templates/t/src/collections/access/tags.ts:1 delete",
+    ]);
+  });
+
   it("passes a rule that decides by permission", () => {
     expect(
       scan({

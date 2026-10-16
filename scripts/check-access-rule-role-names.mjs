@@ -36,8 +36,8 @@
  * followed to the declaration it names.
  *
  * ⚠️ What this does not follow: a rule built by a helper from another package,
- * one reached through a re-export or a namespace import (`import * as`), or one
- * spread into an access object. Each is a reason to widen this deliberately.
+ * one reached through `export * from` or a namespace import (`import * as`),
+ * or one spread into an access object. A named re-export is followed. Each is a reason to widen this deliberately.
  *
  * Usage:
  *   node scripts/check-access-rule-role-names.mjs
@@ -181,13 +181,63 @@ function relativeImportsOf(statement) {
     : named;
 }
 
+/** The named elements of an `export { ... }`, or none for any other statement. */
+function exportedElements(statement) {
+  return ts.isExportDeclaration(statement) &&
+    !statement.isTypeOnly &&
+    statement.exportClause &&
+    ts.isNamedExports(statement.exportClause)
+    ? statement.exportClause.elements
+    : [];
+}
+
+/**
+ * What a file passes on under another name. `export { a } from "./b"` reads
+ * as an import of `a` from `./b`; `export { a as b }` as a local `b` naming
+ * `a`, which is followed as `export default a` is.
+ */
+function reExportsOf(statement) {
+  const elements = exportedElements(statement);
+  const specifier = statement.moduleSpecifier;
+  if (specifier && ts.isStringLiteral(specifier)) {
+    return {
+      imports: specifier.text.startsWith(".")
+        ? elements.map(element => [
+            element.name.text,
+            {
+              from: specifier.text,
+              name: (element.propertyName ?? element.name).text,
+            },
+          ])
+        : [],
+      declarations: [],
+    };
+  }
+  return {
+    imports: [],
+    declarations: elements
+      .filter(element => element.propertyName)
+      .map(element => [
+        element.name.text,
+        { node: element.propertyName, typed: false },
+      ]),
+  };
+}
+
 /** Top-level declarations by name, and the relative imports by local name. */
 function indexFile(source) {
+  const reExports = source.statements.map(reExportsOf);
   return {
-    declarations: new Map(
-      source.statements.flatMap(statement => declarationsOf(statement, source))
-    ),
-    imports: new Map(source.statements.flatMap(relativeImportsOf)),
+    declarations: new Map([
+      ...source.statements.flatMap(statement =>
+        declarationsOf(statement, source)
+      ),
+      ...reExports.flatMap(entry => entry.declarations),
+    ]),
+    imports: new Map([
+      ...source.statements.flatMap(relativeImportsOf),
+      ...reExports.flatMap(entry => entry.imports),
+    ]),
   };
 }
 
