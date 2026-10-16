@@ -14,7 +14,7 @@ import { useCallback, type Dispatch, type SetStateAction } from "react";
 
 import type { UseDashboardLayoutResult } from "@admin/hooks/queries/useDashboardLayout";
 
-import { hasChanges } from "../layout-editor";
+import { hasChanges, withinSubmissionLimit } from "../layout-editor";
 
 import type { LayoutDraft } from "./useLayoutEditor";
 
@@ -106,8 +106,10 @@ export function useLayoutLifecycle(
       layout.save.mutate(
         {
           // The whole ordered list, removed cards included: the order IS the
-          // array's, so nothing is renumbered on the way out.
-          placements: draft.placements,
+          // array's, so nothing is renumbered on the way out. Within the
+          // endpoint's limit, shedding removed cards if a regained
+          // arrangement holds more than one save may carry.
+          placements: [...withinSubmissionLimit(draft.placements)],
           version: draft.version,
           scope: draft.scope,
           // The editor is the one route that can reorder, resize or remove

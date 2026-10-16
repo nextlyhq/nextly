@@ -491,7 +491,7 @@ export async function createNextly(
     const installStartedAt = Date.now();
     telemetry.capture("install_started", {});
     try {
-      await installDependencies(
+      const settingsChanged = await installDependencies(
         cwd,
         projectInfo,
         database,
@@ -500,6 +500,9 @@ export async function createNextly(
         projectType
       );
       s.stop("Dependencies installed");
+      // What the install changed in the project's own settings files, said
+      // after the spinner so each line stays on screen.
+      for (const note of settingsChanged) p.log.info(note);
       telemetry.capture("install_completed", {
         duration_ms: Date.now() - installStartedAt,
       });

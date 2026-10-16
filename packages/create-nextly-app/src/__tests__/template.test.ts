@@ -161,7 +161,9 @@ describe("generatePackageJson", () => {
     expect(result.scripts.build).toBe("nextly migrate && next build");
     expect(result.scripts["search:index"]).toBeUndefined();
     expect(result.scripts.start).toBe("next start");
-    expect(result.scripts.lint).toBe("next lint");
+    // Next.js 16 removed `next lint`, so that script fails in every project the generator
+    // makes. `eslint` with the template's flat config is what create-next-app writes itself.
+    expect(result.scripts.lint).toBe("eslint");
   });
 
   it("should include db:* scripts that proxy to the nextly CLI", async () => {

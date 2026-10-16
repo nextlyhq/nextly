@@ -9,7 +9,6 @@ import {
   gte,
   lte,
   like,
-  ilike,
   inArray,
   notInArray,
   isNull,
@@ -174,7 +173,12 @@ function buildCondition(
     case "LIKE":
       return like(col, cond.value as string);
     case "ILIKE":
-      return ilike(col, cond.value as string);
+      // Both sides lower-cased rather than drizzle's `ilike`, which emits the ILIKE keyword that
+      // only PostgreSQL has: on MySQL and SQLite the statement failed to parse. It also keeps
+      // MySQL from comparing under the column's collation, which a bare LIKE inherits and which
+      // can be case-sensitive (`utf8mb4_bin`). The value stays a pattern: its `%` and `_` are
+      // wildcards, as with LIKE.
+      return sql`lower(${col}) like lower(${cond.value as string})`;
     case "IN":
       return inArray(col, cond.value as unknown[]);
     case "NOT IN":
@@ -199,6 +203,11 @@ function buildCondition(
       // `CONTAINS "a%b"` silently widens to "a, anything, b" — and through `delete`, which takes
       // its where clause as a required argument, a widened match is a widened deletion.
       return sql`${col} like ${containsPattern(String(cond.value))} escape '!'`;
+    case "ICONTAINS":
+      // CONTAINS without regard to case, on every dialect and whatever the column's collation:
+      // the same literal pattern and escape, both sides lower-cased. SQLite's `lower()` folds
+      // ASCII letters only, so there "É" and "é" still differ.
+      return sql`lower(${col}) like lower(${containsPattern(String(cond.value))}) escape '!'`;
     default:
       throw new Error(`Unsupported operator: ${cond.op}`);
   }
