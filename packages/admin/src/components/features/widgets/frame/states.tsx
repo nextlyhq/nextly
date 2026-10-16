@@ -154,8 +154,9 @@ export function CardError({
       data-testid="widget-card-error"
     >
       <XCircle className="mb-1 h-5 w-5 text-destructive" aria-hidden="true" />
+      {/* A string expression rather than JSX text, so the apostrophe is written as itself. */}
       <p className="text-sm font-semibold text-foreground">
-        This card couldn't load
+        {"This card couldn't load"}
       </p>
       <p className="text-xs text-muted-foreground">{message}</p>
       {onRetry && (
