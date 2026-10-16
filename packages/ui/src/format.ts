@@ -5,7 +5,11 @@
  * `"use client"` banner: these are pure functions over numbers with `Intl`, no React and no
  * DOM, so a server can format a figure exactly as the admin does.
  *
- * @module lib/format
+ * A top-level file, as every entry the admin's client code imports is, so its source sits where
+ * its published name says (`dist/format.mjs` from `src/format.ts`); the formatter itself lives in
+ * `lib/format`.
+ *
+ * @module format
  */
 
 /**
@@ -17,7 +21,7 @@ export type {
   FormattedChange,
   FormattedNumber,
   SizeTier,
-} from "./number";
+} from "./lib/format/number";
 
 /**
  * @experimental Format a count, total or chart value, and a change against an earlier period.
@@ -26,4 +30,4 @@ export type {
  * gives the full value as the accessible name. `formatChange` carries direction in an arrow
  * and a sign, never in colour alone.
  */
-export { formatChange, formatCount } from "./number";
+export { formatChange, formatCount } from "./lib/format/number";
