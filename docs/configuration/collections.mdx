@@ -5,7 +5,7 @@ description: Define content types with multiple entries using collections.
 
 import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
 
-A collection is a content type that stores multiple entries - blog posts, products, users, media files. Each collection maps to a database table, gets automatic REST endpoints under `/api/[slug]`, and appears in the admin panel with list and edit views.
+A collection is a content type that stores multiple entries - blog posts, products, users, media files. Each collection maps to a database table, gets automatic REST endpoints under `/admin/api/collections/[slug]/entries`, and appears in the admin panel with list and edit views.
 
 > **Source of truth:** the `CollectionConfig` interface and `defineCollection()` helper live in `packages/nextly/src/collections/config/define-collection.ts`. Hooks and access-control types are imported from `packages/nextly/src/shared/types/access.ts` and `packages/nextly/src/hooks/types.ts`.
 
@@ -162,7 +162,7 @@ Only `slug` and `fields` are required.
 | **Type** | `string` |
 | **Required** | Yes |
 
-Unique identifier used as the database table name (unless `dbName` is set), the API endpoint path (`/api/[slug]`), and the internal reference. Must be lowercase, URL-friendly, and not a reserved SQL keyword.
+Unique identifier used as the database table name (unless `dbName` is set), the REST path (`/admin/api/collections/[slug]/entries`), and the internal reference. Must be lowercase, URL-friendly, and not a reserved SQL keyword.
 
 ### `fields`
 
@@ -278,20 +278,7 @@ refused; index fewer, or narrower, fields. An explicit `name` may be at most
 | **Type** | `CustomEndpoint[]` |
 | **Default** | `undefined` |
 
-Additional REST endpoints mounted at `/api/[slug]/[path]`. Each entry is `{ path, method, handler }` where `handler` is a Web-API `(req: Request) => Response | Promise<Response>` function.
-
-```typescript
-endpoints: [
-  {
-    path: "/publish",
-    method: "post",
-    handler: async (req) => {
-      const { id } = await req.json();
-      return Response.json({ success: true });
-    },
-  },
-]
-```
+`defineCollection()` accepts and type-checks `endpoints`, each `{ path, method, handler }`, but no route serves them: neither the REST handler nor any other route calls these handlers, so a request to their path is answered as if they were not there. For logic of your own, add a Next.js route handler in your app and read and write through the [Direct API](/docs/api-reference/direct-api).
 
 ### `custom`
 

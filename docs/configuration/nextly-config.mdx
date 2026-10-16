@@ -137,7 +137,7 @@ The next sections walk through each option.
 collections?: CollectionConfig[];
 ```
 
-Array of collection configurations created with `defineCollection()`. Each collection becomes a database table, an admin panel section, and a set of REST endpoints under `/api/[slug]`.
+Array of collection configurations created with `defineCollection()`. Each collection becomes a database table, an admin panel section, and a set of REST endpoints under `/admin/api/collections/[slug]/entries`.
 
 ```typescript
 import Posts from "./src/collections/posts";
