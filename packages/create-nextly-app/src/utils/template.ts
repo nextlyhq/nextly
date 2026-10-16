@@ -1261,7 +1261,10 @@ export async function generatePackageJson(
         ? { "search:index": "node scripts/build-search-index.mjs" }
         : {}),
       start: "next start",
-      lint: "next lint",
+      // ESLint itself, reading the template's flat `eslint.config.mjs`, as
+      // create-next-app writes it: Next.js 16 removed `next lint`, so that
+      // script failed in every new project.
+      lint: "eslint",
       nextly: "nextly",
       // First-time setup: sync schema + seed system permissions. Demo
       // content is seeded separately from the admin UI (visit /welcome

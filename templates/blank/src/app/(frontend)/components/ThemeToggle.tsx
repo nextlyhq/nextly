@@ -1,36 +1,67 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useSyncExternalStore } from "react";
 
 type Theme = "light" | "dark" | "system";
 
+const STORAGE_KEY = "theme";
+const THEMES: readonly Theme[] = ["light", "dark", "system"];
+const DARK_QUERY = "(prefers-color-scheme: dark)";
+
+/**
+ * Everything showing the theme in this tab. The browser's `storage` event
+ * only reaches other tabs, so a change made here is announced here by hand.
+ */
+const listeners = new Set<() => void>();
+
+function subscribe(listener: () => void) {
+  listeners.add(listener);
+  window.addEventListener("storage", listener);
+  return () => {
+    listeners.delete(listener);
+    window.removeEventListener("storage", listener);
+  };
+}
+
+/** The saved choice, or "system" when there is none or it is not one of the three. */
+function readTheme(): Theme {
+  const saved = localStorage.getItem(STORAGE_KEY);
+  return THEMES.find(theme => theme === saved) ?? "system";
+}
+
+function saveTheme(theme: Theme) {
+  localStorage.setItem(STORAGE_KEY, theme);
+  for (const listener of listeners) listener();
+}
+
+function applyTheme(theme: Theme) {
+  const isDark =
+    theme === "dark" ||
+    (theme === "system" && window.matchMedia(DARK_QUERY).matches);
+  document.documentElement.classList.toggle("dark", isDark);
+}
+
 export function ThemeToggle() {
-  const [theme, setTheme] = useState<Theme>("system");
+  // Read from storage rather than copied into state by an effect. The server
+  // renders "system"; after hydration React swaps in the saved choice.
+  const theme = useSyncExternalStore<Theme>(
+    subscribe,
+    readTheme,
+    () => "system"
+  );
 
+  // Keep the page's colours in step with the choice, and with the system's
+  // setting for as long as "system" is the choice.
   useEffect(() => {
-    const savedTheme = localStorage.getItem("theme") as Theme | null;
-    if (savedTheme) {
-      setTheme(savedTheme);
-      applyTheme(savedTheme);
-    } else {
-      applyTheme("system");
-    }
-  }, []);
+    applyTheme(theme);
+    if (theme !== "system") return;
+    const query = window.matchMedia(DARK_QUERY);
+    const follow = () => applyTheme("system");
+    query.addEventListener("change", follow);
+    return () => query.removeEventListener("change", follow);
+  }, [theme]);
 
-  const applyTheme = (newTheme: Theme) => {
-    const isDark =
-      newTheme === "dark" ||
-      (newTheme === "system" &&
-        window.matchMedia("(prefers-color-scheme: dark)").matches);
-
-    document.documentElement.classList.toggle("dark", isDark);
-  };
-
-  const handleThemeChange = (newTheme: Theme) => {
-    setTheme(newTheme);
-    localStorage.setItem("theme", newTheme);
-    applyTheme(newTheme);
-  };
+  const handleThemeChange = (newTheme: Theme) => saveTheme(newTheme);
 
   return (
     <div className="fixed top-6 right-6 flex items-center border border-foreground/10 bg-background p-1 z-50">
