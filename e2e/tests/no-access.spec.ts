@@ -107,3 +107,22 @@ test("Go back from a link opened in a new tab goes to the dashboard", async () =
     await tab.close();
   }
 });
+
+test("Go back from the site's own page stays in the admin", async () => {
+  // The admin runs inside the site it manages, so the page before is of the
+  // same origin without being the admin. Going back there would leave it.
+  const tab = await limited.context.newPage();
+  try {
+    await tab.goto("/");
+    await gotoAdmin(tab, "/collections/tags");
+    await expect(
+      tab.getByRole("heading", {
+        name: "You don't have access to this collection",
+      })
+    ).toBeVisible();
+    await tab.getByRole("button", { name: "Go back" }).click();
+    await expect(tab).toHaveURL(/\/admin\/?$/);
+  } finally {
+    await tab.close();
+  }
+});

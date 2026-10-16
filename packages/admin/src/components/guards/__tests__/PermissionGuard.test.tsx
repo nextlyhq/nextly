@@ -33,6 +33,9 @@ function holding(slugs: string[], isLoading = false) {
   } as unknown as ReturnType<typeof useCurrentUserPermissions>);
 }
 
+/** A URL on the page's own origin, whatever port the test environment uses. */
+const here = (path: string) => new URL(path, window.location.origin).href;
+
 const pageRendered = vi.fn();
 function Page() {
   pageRendered();
@@ -133,9 +136,12 @@ describe("PermissionGuard", () => {
     expect(mockNavigateTo).toHaveBeenCalledWith("/admin");
   });
 
-  it("goes back through history when there is somewhere to go back to", () => {
+  /**
+   * Click Go back on a refusal and report where it went: through history, or
+   * to the dashboard.
+   */
+  function clickGoBack(): "back" | "dashboard" | "nowhere" {
     holding([]);
-    vi.spyOn(window.history, "length", "get").mockReturnValue(3);
     const back = vi.spyOn(window.history, "back").mockImplementation(() => {});
     render(
       <PermissionGuard requiredPermission="read-posts" subject="collection">
@@ -143,31 +149,31 @@ describe("PermissionGuard", () => {
       </PermissionGuard>
     );
     fireEvent.click(screen.getByRole("button", { name: "Go back" }));
-    expect(back).toHaveBeenCalledOnce();
-    expect(mockNavigateTo).not.toHaveBeenCalled();
-  });
-
-  it("goes to the dashboard from a link opened in a fresh tab", () => {
-    // A fresh tab has one history entry, so `back()` would do nothing and the
-    // button would look broken.
-    holding([]);
-    vi.spyOn(window.history, "length", "get").mockReturnValue(1);
-    const back = vi.spyOn(window.history, "back").mockImplementation(() => {});
-    render(
-      <PermissionGuard requiredPermission="read-posts" subject="collection">
-        <Page />
-      </PermissionGuard>
-    );
-    fireEvent.click(screen.getByRole("button", { name: "Go back" }));
-    expect(back).not.toHaveBeenCalled();
-    expect(mockNavigateTo).toHaveBeenCalledWith("/admin");
-  });
+    if (back.mock.calls.length > 0) return "back";
+    return mockNavigateTo.mock.calls.some(([path]) => path === "/admin")
+      ? "dashboard"
+      : "nowhere";
+  }
 
   describe("where the browser has the Navigation API", () => {
-    // jsdom has none, so each case defines it and the cleanup removes it.
-    function withNavigation(canGoBack: boolean) {
+    // jsdom has none, so each case defines one and the cleanup removes it.
+    // `entries()` lists this origin's entries only, as browsers do.
+    function previousEntry(url: string | null) {
+      const entries =
+        url === null
+          ? [{ url: here("/admin/collections/tags"), index: 0 }]
+          : [
+              { url, index: 0 },
+              { url: here("/admin/collections/tags"), index: 1 },
+            ];
       Object.defineProperty(window, "navigation", {
-        value: { canGoBack },
+        value: {
+          // A browser reports this too, true for ANY same-origin entry
+          // behind; the site's pages count, so it alone cannot decide.
+          canGoBack: entries.length > 1,
+          currentEntry: entries[entries.length - 1],
+          entries: () => entries,
+        },
         configurable: true,
       });
     }
@@ -175,40 +181,57 @@ describe("PermissionGuard", () => {
       Reflect.deleteProperty(window, "navigation");
     });
 
-    it("goes to the dashboard when the entries behind are another site's", () => {
-      // History holds three entries, but none of them is this site's: the
-      // previous one is the new-tab page or another site, and back would
-      // leave the admin. `canGoBack` must decide over the length.
-      holding([]);
-      withNavigation(false);
-      vi.spyOn(window.history, "length", "get").mockReturnValue(3);
-      const back = vi
-        .spyOn(window.history, "back")
-        .mockImplementation(() => {});
-      render(
-        <PermissionGuard requiredPermission="read-posts" subject="collection">
-          <Page />
-        </PermissionGuard>
-      );
-      fireEvent.click(screen.getByRole("button", { name: "Go back" }));
-      expect(back).not.toHaveBeenCalled();
-      expect(mockNavigateTo).toHaveBeenCalledWith("/admin");
+    it("goes back to the admin page before", () => {
+      previousEntry(here("/admin/collections/posts"));
+      expect(clickGoBack()).toBe("back");
     });
 
-    it("goes back when the entry behind is this site's", () => {
-      holding([]);
-      withNavigation(true);
-      const back = vi
-        .spyOn(window.history, "back")
-        .mockImplementation(() => {});
-      render(
-        <PermissionGuard requiredPermission="read-posts" subject="collection">
-          <Page />
-        </PermissionGuard>
-      );
-      fireEvent.click(screen.getByRole("button", { name: "Go back" }));
-      expect(back).toHaveBeenCalledOnce();
-      expect(mockNavigateTo).not.toHaveBeenCalled();
+    it("goes to the dashboard when the page before is the site, not the admin", () => {
+      // The admin shares its origin with the site it runs in, so a link
+      // followed from the site's own pages leaves a same-origin entry behind
+      // that is not the admin. Back would take the user out of it.
+      previousEntry(here("/"));
+      expect(clickGoBack()).toBe("dashboard");
+    });
+
+    it("reads the path by segment, so a sibling of /admin is not the admin", () => {
+      previousEntry(here("/administrator"));
+      expect(clickGoBack()).toBe("dashboard");
+    });
+
+    it("goes to the dashboard when nothing of this site came before", () => {
+      // A fresh tab, the new-tab page or another site: none of them is in
+      // this origin's entries, so the refusal is the first.
+      previousEntry(null);
+      vi.spyOn(window.history, "length", "get").mockReturnValue(3);
+      expect(clickGoBack()).toBe("dashboard");
+    });
+  });
+
+  describe("where the browser has no Navigation API", () => {
+    function referredBy(url: string) {
+      vi.spyOn(document, "referrer", "get").mockReturnValue(url);
+    }
+
+    it("goes back when the page was opened from the admin", () => {
+      referredBy(here("/admin/collections/posts"));
+      expect(clickGoBack()).toBe("back");
+    });
+
+    it("goes to the dashboard when the page was opened from the site", () => {
+      referredBy(here("/"));
+      vi.spyOn(window.history, "length", "get").mockReturnValue(3);
+      expect(clickGoBack()).toBe("dashboard");
+    });
+
+    it("goes to the dashboard when another site's admin sent the user here", () => {
+      referredBy("https://elsewhere.example/admin/collections/posts");
+      expect(clickGoBack()).toBe("dashboard");
+    });
+
+    it("goes to the dashboard from a link opened in a fresh tab", () => {
+      referredBy("");
+      expect(clickGoBack()).toBe("dashboard");
     });
   });
 

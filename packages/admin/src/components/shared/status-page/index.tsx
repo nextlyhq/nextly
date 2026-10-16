@@ -8,21 +8,59 @@ import { PageContainer } from "@admin/components/layout/page-container";
 import { ROUTES } from "@admin/constants/routes";
 import { navigateTo } from "@admin/lib/navigation";
 
+/** The admin's own address space, matched by whole segment. */
+function isAdminUrl(url: string): boolean {
+  try {
+    const { origin, pathname } = new URL(url);
+    if (origin !== window.location.origin) return false;
+    return (
+      pathname === ROUTES.DASHBOARD ||
+      pathname.startsWith(`${ROUTES.DASHBOARD}/`)
+    );
+  } catch {
+    return false;
+  }
+}
+
+/** The part of the Navigation API read here; not in every browser yet. */
+interface NavigationEntries {
+  currentEntry: { index: number } | null;
+  entries: () => ReadonlyArray<{ url: string | null }>;
+}
+
+function navigationEntries(): NavigationEntries | undefined {
+  const { navigation } = window as Window & { navigation?: unknown };
+  if (
+    typeof navigation === "object" &&
+    navigation !== null &&
+    "entries" in navigation &&
+    typeof navigation.entries === "function" &&
+    "currentEntry" in navigation
+  ) {
+    return navigation as NavigationEntries;
+  }
+  return undefined;
+}
+
 /**
- * Whether going back stays on this site.
+ * Whether the page before this one is an admin page.
  *
- * The Navigation API's `canGoBack` counts only this origin's entries, so a
- * page opened from the browser's new-tab page or from another site reads as
- * having nowhere to go back to. `history.length` counts those entries too,
- * and is used only where the Navigation API is missing; it still tells a tab
- * opened straight onto the link, which has one entry.
+ * Same-origin is not enough: the admin runs inside the site it manages, so a
+ * link followed from the site's own pages leaves an entry of this origin that
+ * is not the admin, and going back would leave it. The Navigation API lists
+ * this origin's entries with their URLs, so the one before is read directly.
+ * Without it, only the referrer says where the page was opened from; an
+ * in-admin move does not update it, so this then errs towards the dashboard,
+ * which never leaves the admin.
  */
-function canGoBackOnThisSite(): boolean {
-  const { navigation } = window as Window & {
-    navigation?: { canGoBack?: unknown };
-  };
-  if (typeof navigation?.canGoBack === "boolean") return navigation.canGoBack;
-  return window.history.length > 1;
+function previousPageIsAdmin(): boolean {
+  const navigation = navigationEntries();
+  if (navigation) {
+    const index = navigation.currentEntry?.index ?? 0;
+    const previous = index > 0 ? navigation.entries()[index - 1] : undefined;
+    return typeof previous?.url === "string" && isAdminUrl(previous.url);
+  }
+  return document.referrer !== "" && isAdminUrl(document.referrer);
 }
 
 /**
@@ -33,7 +71,7 @@ function canGoBackOnThisSite(): boolean {
  * use, so it goes to the dashboard, the nearest place inside.
  */
 function goBack(): void {
-  if (canGoBackOnThisSite()) {
+  if (previousPageIsAdmin()) {
     window.history.back();
     return;
   }
