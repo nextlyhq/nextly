@@ -7,7 +7,7 @@
 // dialects answer one contract.
 
 import type { TableDefinition } from "@nextlyhq/adapter-drizzle/types";
-import { pgTable, text } from "drizzle-orm/pg-core";
+import { integer, pgTable, text } from "drizzle-orm/pg-core";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { createPostgresAdapter } from "../index";
@@ -21,6 +21,9 @@ const TABLE_DEFINITION: TableDefinition = {
     { name: "id", type: "text", primaryKey: true },
     { name: "key", type: "text", nullable: false, unique: true },
     { name: "label", type: "text" },
+    { name: "slug", type: "text", unique: true },
+    { name: "grp", type: "text" },
+    { name: "pos", type: "integer" },
   ],
 };
 
@@ -28,6 +31,9 @@ const things = pgTable(TABLE, {
   id: text("id").primaryKey(),
   key: text("key").notNull().unique(),
   label: text("label"),
+  slug: text("slug").unique(),
+  grp: text("grp"),
+  pos: integer("pos"),
 });
 
 interface Row {
@@ -49,6 +55,11 @@ describe.skipIf(!TEST_DB_URL)("PostgreSQL upsert", () => {
     await adapter.connect();
     await adapter.executeQuery(`DROP TABLE IF EXISTS ${TABLE}`);
     await adapter.createTable(TABLE_DEFINITION);
+    // The composite key the composite-key case targets, created by statement
+    // because the table definition helper does not create indexes everywhere.
+    await adapter.executeQuery(
+      `CREATE UNIQUE INDEX int_upsert_grp_pos_uidx ON ${TABLE} (grp, pos)`
+    );
     adapter.setTableResolver({
       getTable: (name: string) => (name === TABLE ? things : null),
     });
@@ -139,5 +150,75 @@ describe.skipIf(!TEST_DB_URL)("PostgreSQL upsert", () => {
       { id: "a", key: "k1", label: "first" },
       { id: "c", key: "k2", label: "next" },
     ]);
+  });
+  it("refuses a collision on another unique key, and changes no row", async () => {
+    // The upsert is keyed on `key`. A row colliding on `slug` instead is not
+    // the row it targets: PostgreSQL and SQLite refuse it, and so must MySQL,
+    // whose duplicate-key clause would otherwise update that other row.
+    await adapter.upsert(
+      TABLE,
+      { id: "a", key: "k1", slug: "s1", label: "first" },
+      {
+        conflictColumns: ["key"],
+      }
+    );
+    await expect(
+      adapter.upsert(
+        TABLE,
+        { id: "b", key: "k2", slug: "s1", label: "second" },
+        {
+          conflictColumns: ["key"],
+        }
+      )
+    ).rejects.toThrow();
+    expect(await rows()).toEqual([{ id: "a", key: "k1", label: "first" }]);
+  });
+
+  it("reads back the row matching every column of a composite key", async () => {
+    // Two rows share the key's first column, so a read-back by that column
+    // alone could return the wrong one.
+    await adapter.upsert(
+      TABLE,
+      { id: "a", key: "k1", grp: "g", pos: 1, label: "one" },
+      {
+        conflictColumns: ["grp", "pos"],
+      }
+    );
+    await adapter.upsert(
+      TABLE,
+      { id: "b", key: "k2", grp: "g", pos: 2, label: "two" },
+      {
+        conflictColumns: ["grp", "pos"],
+      }
+    );
+    const stored = await adapter.upsert<Row>(
+      TABLE,
+      { id: "c", key: "k3", grp: "g", pos: 2, label: "two, again" },
+      { conflictColumns: ["grp", "pos"], updateColumns: ["label"] }
+    );
+    expect(stored).toMatchObject({ id: "b", label: "two, again" });
+    // And only that row: the other one sharing the first column is untouched.
+    expect(await rows()).toEqual([
+      { id: "a", key: "k1", label: "one" },
+      { id: "b", key: "k2", label: "two, again" },
+    ]);
+  });
+
+  it("inserts a row whose conflict key is null, since a null never conflicts", async () => {
+    await adapter.upsert(
+      TABLE,
+      { id: "a", key: "k1", slug: null, label: "first" },
+      {
+        conflictColumns: ["slug"],
+      }
+    );
+    await adapter.upsert(
+      TABLE,
+      { id: "b", key: "k2", slug: null, label: "second" },
+      {
+        conflictColumns: ["slug"],
+      }
+    );
+    expect((await rows()).map(row => row.id)).toEqual(["a", "b"]);
   });
 });

@@ -31,7 +31,9 @@
 
 The database adapter's `upsert` now works on MySQL. It called the PostgreSQL
 and SQLite conflict clause, which MySQL does not have, so every upsert there
-failed; it now uses `ON DUPLICATE KEY UPDATE` and returns the stored row as the
-other dialects do. An upsert that names no column to update now keeps the
-existing row and returns it on every dialect, without failing, so it can be
-used to write a row once inside a transaction.
+failed. It now resolves the conflict by the columns it names, as `ON CONFLICT`
+does elsewhere: a collision on any other unique key is refused rather than
+updating a different row, and keeping an existing row runs no update triggers.
+An upsert that names no column to update now keeps the existing row and returns
+it on every dialect, without failing, so it can be used to write a row once
+inside a transaction.

@@ -323,6 +323,16 @@ interface CountCapableDb {
   };
 }
 
+/**
+ * The fragment of a Drizzle database the MySQL upsert inserts through: the
+ * pooled instance or a transaction's, whichever the caller supplied.
+ */
+interface InsertCapableDb {
+  insert(table: never): {
+    values(data: Record<string, unknown>): PromiseLike<unknown>;
+  };
+}
+
 export abstract class DrizzleAdapter {
   // ============================================================
   // Abstract Methods (MUST be implemented by subclasses)
@@ -1929,23 +1939,16 @@ export abstract class DrizzleAdapter {
         // nothing, and the row that stands is read back below.
         const keepExisting = Object.keys(updateData).length === 0;
 
-        let query;
         if (this.dialect === "mysql") {
-          // MySQL spells the clause ON DUPLICATE KEY UPDATE, and Drizzle's
-          // MySQL builder has `onDuplicateKeyUpdate` and no
-          // `onConflictDoUpdate`. It needs at least one assignment, so keeping
-          // the existing row assigns a conflict column to itself, which changes
-          // nothing.
-          const keyColumn = options.conflictColumns[0];
-          query = db
-            .insert(tableObj)
-            .values(data)
-            .onDuplicateKeyUpdate({
-              set: keepExisting
-                ? { [keyColumn]: sql`${columns[keyColumn]}` }
-                : updateData,
-            });
-        } else if (caps.supportsOnConflict) {
+          return await this.upsertMySql<T>(table, data, options, updateData, {
+            db,
+            tableObj: tableObj as never,
+            executor,
+          });
+        }
+
+        let query;
+        if (caps.supportsOnConflict) {
           // PostgreSQL/SQLite: ON CONFLICT ... DO UPDATE, or DO NOTHING when
           // there is nothing to update.
           const inserted = db.insert(tableObj).values(data);
@@ -2004,6 +2007,66 @@ export abstract class DrizzleAdapter {
       `Table "${table}" not found in schema registry. Ensure setTableResolver() has been called during boot.`,
       undefined
     );
+  }
+  /**
+   * Upsert on MySQL, with the meaning `ON CONFLICT (target)` has elsewhere.
+   *
+   * MySQL's `ON DUPLICATE KEY UPDATE` is not that. It fires on a collision with
+   * ANY unique key, so an upsert keyed on one column whose row collides with
+   * another row on a different key would silently update that other row; and
+   * keeping the existing row by a no-op assignment still runs the table's
+   * update triggers. So the conflict is resolved by the conflict columns
+   * themselves: look the row up by them; update it only when there is
+   * something to update; otherwise insert. A duplicate on any other unique key
+   * is refused, as PostgreSQL and SQLite refuse it, and a duplicate on the
+   * target key — another writer inserting between the look-up and the insert —
+   * is resolved by taking the row that writer made.
+   *
+   * On MySQL a failed statement rolls back only itself, so a caller's
+   * transaction stays usable after the refused insert.
+   */
+  private async upsertMySql<T>(
+    table: string,
+    data: Record<string, unknown>,
+    options: UpsertOptions,
+    updateData: Record<string, unknown>,
+    target: { db: InsertCapableDb; tableObj: never; executor: unknown }
+  ): Promise<T> {
+    const values = options.conflictColumns.map(column => data[column]);
+    // A conflict key holding NULL never conflicts: a unique index admits any
+    // number of NULLs. It is an insert, and there is no key to read it back by.
+    if (values.some(value => value === null || value === undefined)) {
+      await target.db.insert(target.tableObj).values(data);
+      return data as T;
+    }
+    const where: WhereClause = {
+      and: options.conflictColumns.map((column, i) => ({
+        column,
+        op: "=" as const,
+        value: values[i] as SqlParam,
+      })),
+    };
+    const stored = () =>
+      this.selectOne<T>(table, { where }, target.executor) as Promise<T>;
+
+    if ((await this.selectOne(table, { where }, target.executor)) === null) {
+      try {
+        await target.db.insert(target.tableObj).values(data);
+        return await stored();
+      } catch (error) {
+        // Refused for a reason other than this key already existing: a
+        // collision on another unique key, which is the caller's error.
+        if (
+          (await this.selectOne(table, { where }, target.executor)) === null
+        ) {
+          throw error;
+        }
+      }
+    }
+    if (Object.keys(updateData).length > 0) {
+      await this.update(table, updateData, where, undefined, target.executor);
+    }
+    return stored();
   }
 
   // ============================================================
