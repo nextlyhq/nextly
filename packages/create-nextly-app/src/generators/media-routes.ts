@@ -86,6 +86,20 @@ const MAYBE_HANDLER_FILE = /^(route|page)\.[^.]+$/;
 const UNREADABLE =
   "cannot be read, so whether it already answers this URL is unknown; left as it is";
 
+/**
+ * The Pages Router folders Next.js reads. An app may use both routers, but
+ * Next.js refuses to build a page and an app route at one URL, so a page
+ * there leaves the route unwritten. Both places are looked in, whichever the
+ * app folder sits beside: a page in either is one Next.js might serve.
+ */
+const PAGES_DIRS = ["pages", "src/pages"];
+
+const A_PAGE_ANSWERS =
+  "is a Pages Router route at the same URL, and Next.js refuses to build two routes for one URL; left as it is";
+
+const A_PAGE_MAY_ANSWER =
+  "is a dynamic Pages Router route that may answer the same URL, and Next.js refuses to build two routes for one URL; left as it is";
+
 /** Why a folder is left alone because one of its files might be a route. */
 function unsure(file: string): string {
   return `holds ${file}, which Next.js routes only if the app configures that extension; left as it is`;
@@ -199,7 +213,9 @@ async function writeIfUnanswered(
     result.skipped.push(skipped(cwd, link, target, text, role, THROUGH_A_LINK));
     return;
   }
-  const answering = await answeringFolder(appRoot, segment, catchAll);
+  const answering =
+    (await answeringFolder(appRoot, segment, catchAll)) ??
+    (await answeringPage(cwd, segment));
   if (answering !== null) {
     result.skipped.push(
       skipped(cwd, answering.folder, target, text, role, answering.reason)
@@ -277,6 +293,90 @@ async function answeringFolder(
     }
     throw error;
   }
+}
+
+/**
+ * The first Pages Router file or folder that answers `segment`, or might,
+ * with why; or null when none does. It fails closed as the app check does: a
+ * file named for the URL's last part in any extension, that part's folder
+ * holding anything, a dynamic route anywhere on the way, a linked folder on
+ * the way, or a folder that cannot be read all leave the route unwritten.
+ */
+async function answeringPage(
+  cwd: string,
+  segment: string
+): Promise<PageFinding | null> {
+  try {
+    for (const dir of PAGES_DIRS) {
+      const found = await pageAt(path.join(cwd, dir), segment.split("/"));
+      if (found !== null) return found;
+    }
+    return null;
+  } catch (error) {
+    if (error instanceof UnreadableFolder) {
+      return { folder: error.folder, reason: UNREADABLE };
+    }
+    throw error;
+  }
+}
+
+/** A page that answers, or might, and why. */
+type PageFinding = { folder: string; reason: string };
+
+/** What in one Pages Router folder answers the URL made of `parts`, walking it part by part. */
+async function pageAt(
+  pagesRoot: string,
+  parts: string[]
+): Promise<PageFinding | null> {
+  let folder = pagesRoot;
+  for (const [index, part] of parts.entries()) {
+    const entries = await entriesOf(folder);
+    const dynamic = dynamicPage(folder, entries);
+    if (dynamic !== null) return dynamic;
+    if (index === parts.length - 1) return lastPartPage(folder, entries, part);
+    const next = entries.find(entry => entry.name === part);
+    if (next === undefined) return null;
+    // A link is not followed, so what it leads to cannot be judged.
+    if (!next.isDirectory()) {
+      return {
+        folder: path.join(folder, next.name),
+        reason: A_PAGE_MAY_ANSWER,
+      };
+    }
+    folder = path.join(folder, next.name);
+  }
+  return null;
+}
+
+/**
+ * A dynamic page or folder in `folder`, which can match the URL's part at
+ * this depth, and a catch-all the rest of the URL with it.
+ */
+function dynamicPage(folder: string, entries: fs.Dirent[]): PageFinding | null {
+  const dynamic = entries.find(entry => isDynamic(entry.name));
+  return dynamic === undefined
+    ? null
+    : { folder: path.join(folder, dynamic.name), reason: A_PAGE_MAY_ANSWER };
+}
+
+/**
+ * The page for the URL's last part: `health.ts` in any extension, or a
+ * `health/` that holds anything (its `index` page answers the URL, and what
+ * else is there cannot be judged for certain).
+ */
+async function lastPartPage(
+  folder: string,
+  entries: fs.Dirent[],
+  part: string
+): Promise<PageFinding | null> {
+  for (const entry of entries) {
+    if (entry.name !== part && !entry.name.startsWith(`${part}.`)) continue;
+    const at = path.join(folder, entry.name);
+    if (!entry.isDirectory() || (await entriesOf(at)).length > 0) {
+      return { folder: at, reason: A_PAGE_ANSWERS };
+    }
+  }
+  return null;
 }
 
 /**

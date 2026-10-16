@@ -309,6 +309,74 @@ describe("where Next.js sees the same URL", () => {
   });
 });
 
+describe("a project that also uses the Pages Router", () => {
+  // Next.js serves both routers in one app, but refuses to build when a page
+  // and an app route answer the same URL. So a Pages Router endpoint at a
+  // route's URL, in `pages/` or `src/pages/`, leaves that route unwritten.
+  it("writes no app route where a page already answers its URL", async () => {
+    mkdirSync(join(cwd, "pages/api"), { recursive: true });
+    writeFileSync(
+      join(cwd, "pages/api/health.ts"),
+      "export default function handler() {}\n"
+    );
+    mkdirSync(join(cwd, "src/pages/api/media"), { recursive: true });
+    writeFileSync(
+      join(cwd, "src/pages/api/media/[...path].ts"),
+      "export default function handler() {}\n"
+    );
+
+    const result = await generateMediaRoutes(cwd, project(true), TEMPLATES);
+
+    expect(result.written).toEqual([`src/app/${ADMIN_MEDIA}`]);
+    expect(result.skipped.map(entry => entry.path)).toEqual([
+      "src/pages/api/media",
+      "pages/api/health.ts",
+    ]);
+    for (const entry of result.skipped) {
+      expect(entry.why).toMatch(/Pages Router/);
+    }
+    expect(() => readFileSync(join(cwd, "src/app", PUBLIC_MEDIA))).toThrow();
+    expect(() => readFileSync(join(cwd, "src/app", HEALTH))).toThrow();
+  });
+
+  // A dynamic page on the way to the URL may answer it (`pages/api/[name].ts`
+  // serves /api/health), and which one wins is not this generator's to judge.
+  it("writes nothing where a dynamic page might answer the URL", async () => {
+    mkdirSync(join(cwd, "pages/api"), { recursive: true });
+    writeFileSync(
+      join(cwd, "pages/api/[name].ts"),
+      "export default function handler() {}\n"
+    );
+
+    const result = await generateMediaRoutes(cwd, project(false), TEMPLATES);
+
+    expect(result.written).toEqual([`app/${ADMIN_MEDIA}`]);
+    expect(result.skipped.map(entry => entry.path)).toEqual([
+      "pages/api/[name].ts",
+      "pages/api/[name].ts",
+    ]);
+  });
+
+  // The control: pages at other URLs leave every route free to be written.
+  it("still writes every route beside pages at other URLs", async () => {
+    mkdirSync(join(cwd, "pages/api/webhooks"), { recursive: true });
+    writeFileSync(join(cwd, "pages/about.tsx"), "export default () => null;\n");
+    writeFileSync(
+      join(cwd, "pages/api/webhooks/stripe.ts"),
+      "export default function handler() {}\n"
+    );
+
+    const result = await generateMediaRoutes(cwd, project(false), TEMPLATES);
+
+    expect(result.skipped).toEqual([]);
+    expect(result.written).toEqual([
+      `app/${ADMIN_MEDIA}`,
+      `app/${PUBLIC_MEDIA}`,
+      `app/${HEALTH}`,
+    ]);
+  });
+});
+
 describe("a route folder that is a symbolic link", () => {
   it.runIf(process.platform !== "win32")(
     "writes nothing when the app folder above it is a link",
