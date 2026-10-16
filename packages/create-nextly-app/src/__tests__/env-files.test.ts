@@ -9,7 +9,14 @@
  * and an existing `.env.example` was replaced whole.
  */
 import { execFileSync } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  link,
+  mkdtemp,
+  readFile,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -198,6 +205,32 @@ export SOME_APP_KEY="kept as it is"
     expect(warnings.join("\n")).not.toContain("short-one");
   });
 
+  // dotenv ends an unquoted value at the first `#`, spaced or not, so the
+  // app gets `short` here; reading the comment as part of the value took it
+  // for a secret long enough for production.
+  it("reads a secret the way dotenv does when a comment follows it unspaced", async () => {
+    await writeFile(
+      join(dir, ".env"),
+      `DATABASE_URL=x\nNEXTLY_SECRET=short#${"c".repeat(40)}\n`
+    );
+
+    const { warnings } = await generateEnv(dir, sqlite);
+
+    expect(warnings.join("\n")).toMatch(/NEXTLY_SECRET.*\.env.*32/);
+  });
+
+  // An empty value is the app's line, so it stays, but Nextly cannot start on
+  // it: a PostgreSQL or MySQL URL is required.
+  it("keeps an empty required value, and says it needs one without printing the URL given", async () => {
+    await writeFile(join(dir, ".env"), "DATABASE_URL=\n");
+
+    const { warnings } = await generateEnv(dir, postgresWithRealUrl);
+
+    expect(await read(".env")).toMatch(/^DATABASE_URL=\n/);
+    expect(warnings.join("\n")).toMatch(/DATABASE_URL in \.env is empty/);
+    expect(warnings.join("\n")).not.toContain("S3cr3tPassw0rd");
+  });
+
   it("changes nothing and reports nothing on a second run", async () => {
     await writeFile(join(dir, ".env"), existing);
     await generateEnv(dir, sqlite);
@@ -305,6 +338,83 @@ describe("keeping .env out of git", () => {
     }
   );
 
+  // Git reads a leading space as part of the pattern: ` .env` ignores a file
+  // named " .env", not `.env`. Trailing spaces are dropped.
+  it("adds .env when the only rule for it is indented, and accepts one with trailing spaces", async () => {
+    await writeFile(join(dir, ".gitignore"), " .env\n");
+    await generateEnv(dir, sqlite);
+    expect(await read(".gitignore")).toMatch(/^\.env$/m);
+
+    await rm(join(dir, ".gitignore"));
+    await writeFile(join(dir, ".gitignore"), ".env   \n");
+    await generateEnv(dir, sqlite);
+    expect(await read(".gitignore")).toBe(".env   \n");
+  });
+
+  // Appending through a link would edit the shared file every other project
+  // linking to it reads.
+  it.each([
+    ["a symbolic link", (target: string, at: string) => symlink(target, at)],
+    ["a hard link", (target: string, at: string) => link(target, at)],
+  ])(
+    "leaves a .gitignore that is %s, and says what to add",
+    async (_kind, makeLink) => {
+      const shared = await mkdtemp(join(tmpdir(), "nextly-shared-"));
+      try {
+        await writeFile(join(shared, "gitignore"), "node_modules\n");
+        await makeLink(join(shared, "gitignore"), join(dir, ".gitignore"));
+
+        const { files } = await generateEnv(dir, sqlite);
+
+        expect(await readFile(join(shared, "gitignore"), "utf8")).toBe(
+          "node_modules\n"
+        );
+        expect(files.skipped).toContainEqual(
+          expect.objectContaining({ path: ".gitignore", toAdd: ".env" })
+        );
+      } finally {
+        await rm(shared, { recursive: true, force: true });
+      }
+    }
+  );
+
+  // A tracked file stays tracked whatever .gitignore says, so a secret written
+  // to it goes out with the next commit.
+  it("writes no secret to a .env git tracks, and says how to stop tracking it", async () => {
+    execFileSync("git", ["init", "-q"], { cwd: dir });
+    await writeFile(join(dir, ".gitignore"), ".env\n");
+    await writeFile(join(dir, ".env"), "DB_DIALECT=postgresql\n");
+    execFileSync("git", ["add", "-f", ".env", ".gitignore"], { cwd: dir });
+
+    const { warnings } = await generateEnv(dir, postgresWithRealUrl);
+
+    const env = await read(".env");
+    expect(readEnvKeys(env).defined.has("NEXTLY_SECRET")).toBe(false);
+    expect(env).not.toContain("S3cr3tPassw0rd");
+    expect(readEnvKeys(env).defined.get("NEXT_PUBLIC_APP_URL")).toBe(
+      "http://localhost:3000"
+    );
+    const said = warnings.join("\n");
+    expect(said).toMatch(/\.env is tracked by git/);
+    expect(said).toContain("git rm --cached .env");
+    expect(said).toMatch(/NEXTLY_SECRET/);
+    expect(said).toMatch(/DATABASE_URL/);
+    expect(await read(".gitignore")).toBe(".env\n");
+  });
+
+  it("writes a tracked .env deleted from the working tree without a secret too", async () => {
+    execFileSync("git", ["init", "-q"], { cwd: dir });
+    await writeFile(join(dir, ".env"), "DB_DIALECT=sqlite\n");
+    execFileSync("git", ["add", "-f", ".env"], { cwd: dir });
+    await rm(join(dir, ".env"));
+
+    await generateEnv(dir, sqlite);
+
+    expect(readEnvKeys(await read(".env")).defined.has("NEXTLY_SECRET")).toBe(
+      false
+    );
+  });
+
   it("stages no file holding the generated secret in a fresh repository", async () => {
     await writeFile(join(dir, ".gitignore"), "node_modules\n");
     execFileSync("git", ["init", "-q"], { cwd: dir });
@@ -342,6 +452,8 @@ describe("readEnvKeys", () => {
         "  H = eight  ",
         "not a key line",
         "I=",
+        "J=unspaced#comment",
+        "K=`backtick # quoted`",
       ].join("\n")
     );
 
@@ -353,6 +465,8 @@ describe("readEnvKeys", () => {
       E: "five",
       H: "eight",
       I: "",
+      J: "unspaced",
+      K: "backtick # quoted",
     });
     expect([...mentioned].sort()).toEqual([
       "A",
@@ -364,6 +478,8 @@ describe("readEnvKeys", () => {
       "G",
       "H",
       "I",
+      "J",
+      "K",
     ]);
   });
 });

@@ -135,16 +135,72 @@ export async function generateEnv(
   const files: GeneratedFiles = { written: [], changed: [], skipped: [] };
   const warnings: string[] = [];
   const secret = generateNextlySecret();
+  const real = valuesFor("real", database, secret);
+  // A `.env` git tracks is committed whatever `.gitignore` says, so the
+  // secrets go nowhere near it; development runs without NEXTLY_SECRET.
+  const withheld = (await isTrackedByGit(cwd, ".env"))
+    ? secretKeys(real)
+    : null;
 
-  for (const [name, kind] of [
-    [".env", "real"],
-    [".env.example", "example"],
-  ] as const) {
-    const values = valuesFor(kind, database, secret);
-    warnings.push(...(await writeOrMerge(cwd, name, values, kind, files)));
-  }
+  warnings.push(
+    ...(await writeOrMerge(cwd, ".env", real, "real", files, withheld ?? [])),
+    ...(await writeOrMerge(
+      cwd,
+      ".env.example",
+      valuesFor("example", database, secret),
+      "example",
+      files,
+      []
+    ))
+  );
+  if (withheld) warnings.push(await trackedEnvWarning(cwd, withheld));
   await keepEnvOutOfGit(cwd, files);
   return { files, warnings };
+}
+
+/** The values that are secrets: the generated one, and a typed database password. */
+function secretKeys(values: Values): RequiredKey[] {
+  return hasRealPassword(values.DATABASE_URL)
+    ? ["NEXTLY_SECRET", "DATABASE_URL"]
+    : ["NEXTLY_SECRET"];
+}
+
+async function isTrackedByGit(cwd: string, name: string): Promise<boolean> {
+  try {
+    await execa("git", ["ls-files", "--error-unmatch", "--", name], { cwd });
+    return true;
+  } catch {
+    // Not tracked, not a repository, or no git: nothing is committed from here.
+    return false;
+  }
+}
+
+/**
+ * Says that `.env` is tracked and how to stop it, naming the withheld keys the
+ * file still lacks: a key the app already set there was not withheld from it.
+ */
+async function trackedEnvWarning(
+  cwd: string,
+  withheld: readonly RequiredKey[]
+): Promise<string> {
+  const { defined } = readEnvKeys(
+    await fs.readFile(path.join(cwd, ".env"), "utf-8")
+  );
+  const lacking = withheld.filter(key => !defined.has(key));
+  const add = lacking.map(key =>
+    key === "NEXTLY_SECRET"
+      ? "NEXTLY_SECRET, a random value of at least 32 characters (for example from `openssl rand -base64 32`)"
+      : "DATABASE_URL, the URL you entered"
+  );
+  const then =
+    lacking.length > 0
+      ? ` ${lacking.join(" and ")} ${lacking.length > 1 ? "were" : "was"} not added to it, so they stay out of git; add ${add.join(", and ")} once it is untracked. Development runs without NEXTLY_SECRET, and production refuses to start without it.`
+      : "";
+  return (
+    ".env is tracked by git, so what it holds is committed whatever .gitignore says. " +
+    "Stop tracking it with `git rm --cached .env` and commit that." +
+    then
+  );
 }
 
 async function writeOrMerge(
@@ -152,19 +208,24 @@ async function writeOrMerge(
   name: string,
   values: Values,
   kind: Kind,
-  files: GeneratedFiles
+  files: GeneratedFiles,
+  withheld: readonly RequiredKey[]
 ): Promise<string[]> {
   const file = path.join(cwd, name);
-  if (!(await fs.pathExists(file))) {
+  const exists = await fs.pathExists(file);
+  if (!exists && withheld.length === 0) {
     await fs.writeFile(file, fullFile(values, kind), "utf-8");
     files.written.push(name);
     return [];
   }
 
-  const text = await fs.readFile(file, "utf-8");
+  // A file with keys withheld is built the way an existing one is merged, so
+  // the withheld keys are left out of a new file as well.
+  const text = exists ? await fs.readFile(file, "utf-8") : "";
   const keys = readEnvKeys(text);
-  const added = await appendMissing(file, text, keys, values, kind);
-  if (added.length > 0) files.changed.push({ path: name, added });
+  const added = await appendMissing(file, text, keys, values, kind, withheld);
+  if (!exists) files.written.push(name);
+  else if (added.length > 0) files.changed.push({ path: name, added });
   return kind === "real"
     ? checkRealValues(name, keys.defined)
     : checkExampleValues(name, keys.defined);
@@ -180,9 +241,12 @@ async function appendMissing(
   text: string,
   { defined, mentioned }: ReturnType<typeof readEnvKeys>,
   values: Values,
-  kind: Kind
+  kind: Kind,
+  withheld: readonly RequiredKey[]
 ): Promise<string[]> {
-  const missing = REQUIRED_KEYS.filter(key => !defined.has(key));
+  const missing = REQUIRED_KEYS.filter(
+    key => !defined.has(key) && !withheld.includes(key)
+  );
   const addNote = !mentioned.has("NEXTLY_DEV_DIAGNOSTICS");
   if (missing.length === 0 && !addNote) return [];
 
@@ -193,14 +257,26 @@ async function appendMissing(
   return [...missing, ...(addNote ? ["the NEXTLY_DEV_DIAGNOSTICS note"] : [])];
 }
 
-/** A value already in `.env` that production would refuse. */
+/**
+ * A value already in `.env` that Nextly cannot start on. An empty one counts as
+ * set, so nothing is appended after it (dotenv would take the later line, and
+ * the file would then say two things); it is named instead.
+ */
 function checkRealValues(name: string, defined: Map<string, string>): string[] {
+  const warnings = REQUIRED_KEYS.filter(
+    key => key !== "NEXTLY_SECRET" && defined.get(key) === ""
+  ).map(
+    key =>
+      `${key} in ${name} is empty. It was left as it is; give it a value, since Nextly reads it at start-up.`
+  );
   const secret = defined.get("NEXTLY_SECRET");
-  if (secret === undefined || secret.length >= 32) return [];
-  return [
-    `NEXTLY_SECRET in ${name} is shorter than the 32 characters production requires. ` +
-      "It was left as it is; replace it, for example with `openssl rand -base64 32`.",
-  ];
+  if (secret !== undefined && secret.length < 32) {
+    warnings.push(
+      `NEXTLY_SECRET in ${name} is shorter than the 32 characters production requires. ` +
+        "It was left as it is; replace it, for example with `openssl rand -base64 32`."
+    );
+  }
+  return warnings;
 }
 
 /** A real-looking secret already in a file a project commits. */
@@ -259,9 +335,22 @@ async function keepEnvOutOfGit(
   if (await isEnvIgnored(cwd)) return;
 
   const file = path.join(cwd, ".gitignore");
+  // A linked .gitignore is shared with whatever else links to it, and
+  // appending would edit theirs too. `lstat` sees a symbolic link, which
+  // `pathExists` and `readFile` follow; a hard link is one inode under two
+  // names, which only its link count shows.
+  const stat = await fs.lstat(file).catch(() => null);
+  if (stat && (stat.isSymbolicLink() || stat.nlink > 1)) {
+    files.skipped.push({
+      path: ".gitignore",
+      why: "it is a link to a file shared outside this project, so it was left as it is",
+      toAdd: ".env",
+    });
+    return;
+  }
   const entry =
     "# Local environment: it holds secrets, so it is never committed\n.env\n";
-  if (await fs.pathExists(file)) {
+  if (stat) {
     const text = await fs.readFile(file, "utf-8");
     const separator = text === "" || text.endsWith("\n") ? "" : "\n";
     await fs.appendFile(file, `${separator}\n${entry}`, "utf-8");
@@ -274,7 +363,11 @@ async function keepEnvOutOfGit(
 
 async function isEnvIgnored(cwd: string): Promise<boolean> {
   try {
-    await execa("git", ["check-ignore", "-q", ".env"], { cwd });
+    // --no-index asks what the ignore rules say, whether or not the file is
+    // tracked: without it a tracked .env is never reported as ignored, and a
+    // second rule would be added beside the one already there. Tracking is
+    // judged on its own, before anything is written.
+    await execa("git", ["check-ignore", "-q", "--no-index", ".env"], { cwd });
     return true;
   } catch (error) {
     // 1: inside a repository, and not ignored. Anything else (not a
@@ -294,7 +387,9 @@ async function isEnvIgnored(cwd: string): Promise<boolean> {
 function gitignoreIgnores(text: string, name: string): boolean {
   let ignored = false;
   for (const raw of text.split(/\r?\n/)) {
-    const line = raw.trim();
+    // Git drops trailing spaces not escaped with `\`, and keeps leading ones:
+    // ` .env` names a file called " .env".
+    const line = raw.replace(/(?<!\\) +$/, "");
     if (line === "" || line.startsWith("#")) continue;
     const negated = line.startsWith("!");
     const pattern = line.replace(/^!/, "").replace(/^\//, "");

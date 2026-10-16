@@ -8,8 +8,9 @@
  * key, and then wrote none of the values the app actually lacked.
  *
  * - `defined` holds the keys a line assigns, with the value as dotenv reads
- *   it: `export KEY=` counts, a quoted value is unquoted and may hold `#`, and
- *   an unquoted value ends at ` #`.
+ *   it: `export KEY=` counts, a quoted value (single, double or backtick) is
+ *   unquoted and may hold `#`, and an unquoted value ends at the first `#`,
+ *   spaced or not, where dotenv's own line pattern ends it.
  * - `mentioned` also holds keys named only in a commented assignment
  *   (`# KEY=…`), for a note that documents a setting rather than setting it.
  *
@@ -40,10 +41,10 @@ export function readEnvKeys(text: string): EnvKeys {
 function readValue(raw: string): string {
   const value = raw.trim();
   const quote = value[0];
-  if (quote === '"' || quote === "'") {
+  if (quote === '"' || quote === "'" || quote === "`") {
     const end = value.indexOf(quote, 1);
     if (end > 0) return value.slice(1, end);
   }
-  const comment = value.search(/[ \t]#/);
+  const comment = value.indexOf("#");
   return (comment === -1 ? value : value.slice(0, comment)).trim();
 }
