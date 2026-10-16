@@ -285,12 +285,7 @@ export function getComponentRowColumnDescriptor(
     ...field,
     options: { ...options, relationType: undefined },
   } as FieldDefinition;
-  const descriptor = getColumnDescriptor(asSingleRelation, dialect, builtBy);
-  if (!descriptor || dialect !== "postgresql") return descriptor;
-  // The creating SQL writes a relationship as UUID on PostgreSQL, while the single-relationship
-  // descriptor answers text. Naming the creating type keeps an existing install from planning a
-  // type change on this column. The runtime column mapper's text is recorded as a follow-up.
-  return { ...descriptor, dialectType: "uuid" };
+  return getColumnDescriptor(asSingleRelation, dialect, builtBy);
 }
 
 /**
