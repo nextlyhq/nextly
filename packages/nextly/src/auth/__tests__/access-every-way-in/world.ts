@@ -18,7 +18,7 @@ import {
   upload,
 } from "../../../config";
 import { getDialectTables } from "../../../database/index";
-import type { Principal } from "../../../auth/principal";
+import type { Principal } from "../../../plugins/principals/types";
 import type { PluginRouteContext } from "../../../plugins/routes/route-types";
 import { seedAllPermissions } from "../../../init/seed-permissions";
 import { definePlugin } from "../../../plugins/plugin-context";
@@ -55,36 +55,25 @@ const MEMBER_ID = "m1";
 type RuleContext = { roles?: readonly string[] };
 type RuleFn = (ctx: RuleContext) => unknown;
 
-/** The rule a `rule` kind declares, for one action. */
-function ruleBody(rule: Rule): boolean | RuleFn | undefined {
-  switch (rule) {
-    case "none":
-    case "other-operation":
-      return undefined;
-    case "true":
-      return true;
-    case "false":
-      return false;
-    case "returns-true":
-      return () => true;
-    case "returns-false":
-      return () => false;
-    case "returns-null":
-      return () => null;
-    case "returns-undefined":
-      return () => undefined;
-    case "throws":
-      return () => {
-        throw new Error("the rule failed");
-      };
-    case "async-true":
-      return async () => true;
-    case "async-false":
-      return async () => false;
-    case "role-name":
-      return ({ roles }) => (roles ?? []).includes("editor");
-  }
-}
+/** The rule each `rule` kind declares, for one action. */
+const RULE_BODIES: Record<Rule, boolean | RuleFn | undefined> = {
+  none: undefined,
+  "other-operation": undefined,
+  true: true,
+  false: false,
+  "returns-true": () => true,
+  "returns-false": () => false,
+  "returns-null": () => null,
+  "returns-undefined": () => undefined,
+  throws: () => {
+    throw new Error("the rule failed");
+  },
+  "async-true": async () => true,
+  "async-false": async () => false,
+  "role-name": ({ roles }) => (roles ?? []).includes("editor"),
+};
+
+const ruleBody = (rule: Rule) => RULE_BODIES[rule];
 
 /**
  * The access object a `rule` kind declares on a target that is asked
@@ -486,20 +475,29 @@ async function seedCollections(
   return seeded;
 }
 
-async function seedCallers(t: TestNextly): Promise<Map<Caller, CallerHandle>> {
+interface SeededUser {
+  id: string;
+  roleIds: string[];
+}
+
+/**
+ * The roles and users the callers are made from: the super-admin first (the
+ * first user made is one), a role named `editor` and one named `reviewer`
+ * holding the same permissions, and `chief`, which inherits super-admin.
+ */
+async function seedUsers(t: TestNextly) {
   const services = new ServiceContainer(t.adapter);
   // The permissions and role presets an install seeds at startup, which the
   // harness does not: without them there is no `read-media` to grant.
   await seedAllPermissions();
-  // The first user made is the super-admin.
   const rootId = await makeUser(t, "root");
   const superAdminRole = (await services.roles.ensureSuperAdminRole()).id;
 
   const staffPermissions = await permissionIds(t, heldByStaff);
   const editorRole = await makeRole(t, "editor", staffPermissions);
   const reviewerRole = await makeRole(t, "reviewer", staffPermissions);
-  // `chief` inherits super-admin. A role must hold a permission of its own,
-  // and `read-refs` is one every caller here can already exercise.
+  // A role must hold a permission of its own, and `read-refs` is one every
+  // caller here can already exercise.
   const chiefRole = await makeRole(
     t,
     "chief",
@@ -507,7 +505,7 @@ async function seedCallers(t: TestNextly): Promise<Map<Caller, CallerHandle>> {
     [superAdminRole]
   );
 
-  const users: Record<string, { id: string; roleIds: string[] }> = {
+  const users: Record<string, SeededUser> = {
     root: { id: rootId, roleIds: [superAdminRole] },
   };
   for (const [name, roleId] of [
@@ -520,7 +518,20 @@ async function seedCallers(t: TestNextly): Promise<Map<Caller, CallerHandle>> {
     if (roleId) await services.userRoles.assignRoleToUser(id, roleId);
     users[name] = { id, roleIds: roleId ? [roleId] : [] };
   }
+  return { users, reviewerRole };
+}
 
+const SESSIONS: [Caller, string][] = [
+  ["user-with", "with"],
+  ["user-without", "without"],
+  ["custom-role", "custom"],
+  ["super-admin", "root"],
+  ["super-admin-inherited", "chief"],
+];
+
+/** The headers each caller sends: a session cookie, a key, or neither. */
+async function callerHeaders(t: TestNextly) {
+  const { users, reviewerRole } = await seedUsers(t);
   const keys = t.getService("apiKeyService");
   const mint = async (
     owner: string,
@@ -540,14 +551,7 @@ async function seedCallers(t: TestNextly): Promise<Map<Caller, CallerHandle>> {
     ["visitor", {}],
     ["principal", { "x-member": MEMBER_ID }],
   ]);
-  const sessions: [Caller, string][] = [
-    ["user-with", "with"],
-    ["user-without", "without"],
-    ["custom-role", "custom"],
-    ["super-admin", "root"],
-    ["super-admin-inherited", "chief"],
-  ];
-  for (const [caller, name] of sessions) {
+  for (const [caller, name] of SESSIONS) {
     const { id, roleIds } = users[name];
     headers.set(caller, { cookie: await sessionCookie(id, name, roleIds) });
   }
@@ -557,27 +561,35 @@ async function seedCallers(t: TestNextly): Promise<Map<Caller, CallerHandle>> {
     "key-role-based",
     await mint(users.with.id, "role-based", reviewerRole)
   );
-  headers.set("key-super-admin", await mint(rootId, "full-access"));
+  headers.set("key-super-admin", await mint(users.root.id, "full-access"));
+  return headers;
+}
 
+/** One caller as each way in is handed it. */
+async function handleFor(
+  t: TestNextly,
+  caller: Caller,
+  headers: Record<string, string>
+): Promise<CallerHandle> {
+  if (caller === "visitor") return { headers };
+  if (caller === "principal") {
+    const principal = await t.nextly.principals.byId(MEMBER_KIND, MEMBER_ID);
+    if (!principal) throw new Error("the member did not resolve");
+    return { headers, principal };
+  }
+  const auth = await authenticated(headers);
+  return {
+    headers,
+    user: { id: auth.userId },
+    ...(auth.authMethod === "api-key" ? { actor: apiKeyScopeFrom(auth) } : {}),
+  };
+}
+
+async function seedCallers(t: TestNextly): Promise<Map<Caller, CallerHandle>> {
+  const headers = await callerHeaders(t);
   const handles = new Map<Caller, CallerHandle>();
   for (const caller of CALLERS) {
-    const h = headers.get(caller) ?? {};
-    if (caller === "visitor") {
-      handles.set(caller, { headers: h });
-    } else if (caller === "principal") {
-      const principal = await t.nextly.principals.byId(MEMBER_KIND, MEMBER_ID);
-      if (!principal) throw new Error("the member did not resolve");
-      handles.set(caller, { headers: h, principal });
-    } else {
-      const auth = await authenticated(h);
-      handles.set(caller, {
-        headers: h,
-        user: { id: auth.userId },
-        ...(auth.authMethod === "api-key"
-          ? { actor: apiKeyScopeFrom(auth) }
-          : {}),
-      });
-    }
+    handles.set(caller, await handleFor(t, caller, headers.get(caller) ?? {}));
   }
   return handles;
 }
