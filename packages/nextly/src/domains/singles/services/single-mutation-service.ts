@@ -104,6 +104,7 @@ import {
 } from "../../i18n/runtime/companion-readiness";
 import { captureInTx } from "../../versions/capture-in-tx";
 import { resolveDraftHold } from "../../versions/draft-hold";
+import { storeDraftSave } from "../../versions/draft-save";
 import { resolveComponentSchemas } from "../../versions/restore-version";
 import {
   resolveComponentFieldMap,
@@ -125,12 +126,16 @@ import type {
 } from "../types";
 
 import {
-  readCompanionValuesInTx,
   splitPendingChange,
   writeCompanionValues,
 } from "./apply-pending-change";
 import { resolveSingleForRequest } from "./ensure-runtime-table";
-import { assertDraftsMayBePromoted } from "./promote-gate";
+import {
+  assertDraftsMayBePromoted,
+  liveStoredDocument,
+  promoteCallerFor,
+  type PromoteGateContext,
+} from "./promote-gate";
 import {
   SingleQueryService,
   buildSingleHookContext,
@@ -1337,6 +1342,26 @@ export class SingleMutationService extends BaseService {
                 defaultLocale: this.localization?.defaultLocale ?? null,
               });
 
+            // A recorded draft save restored onto a published Single must stay
+            // pending. A Single that can no longer hold a draft would take it on
+            // its live row and publish it, so the restore is refused instead.
+            if (
+              options.requireHeldDraft === true &&
+              !holdEdit &&
+              singleLiveStatus === "published"
+            ) {
+              throw NextlyError.conflict({
+                reason: "state",
+                message:
+                  "This version is a saved draft, and this Single can no longer hold a draft, so restoring it would publish it. Turn drafts back on for this Single, or restore a published version.",
+                logContext: {
+                  reason: "restore-saved-draft-unholdable",
+                  single: slug,
+                  sourceVersionNo: options.sourceVersionNo,
+                },
+              });
+            }
+
             // Publishing folds this language's pending change into the write.
             // Merged BEFORE the payload is re-split: the split moves translated
             // values out of the document and into the companion payload, so
@@ -1345,6 +1370,59 @@ export class SingleMutationService extends BaseService {
             //
             // The caller's own payload wins over the draft: a publish that also
             // sets a field is saying something about that field now.
+            // What the promotion gate judges with, for a pending change and
+            // for a publish with none pending alike.
+            // The row as THIS transaction read it, so the gate judges the row
+            // the write lands on, not one a writer committing in between has
+            // since replaced. Narrowed once for the gate's closures.
+            const promotedInto =
+              (preRow as SingleDocument | undefined) ?? existingDoc;
+            const promoteGate: PromoteGateContext = {
+              ...promoteCallerFor({
+                tx,
+                slug,
+                defaultLocale: this.localization?.defaultLocale ?? null,
+                fields: fieldConfigs,
+                options,
+                grants: promoteGrants,
+              }),
+              entryId: promotedInto.id,
+              // A snapshot belongs to this document, so its identity is
+              // this document's. Supplying both ahead of the spread
+              // satisfies the stored-document shape without asserting
+              // one, and lets the snapshot's own values win.
+              toLogical: doc =>
+                this.queryService.deserializeJsonFields(
+                  {
+                    id: promotedInto.id,
+                    updatedAt: promotedInto.updatedAt,
+                    ...doc,
+                  },
+                  singleMeta.fields
+                ),
+              // The main row is not the whole live document for a
+              // localized Single: a translation is on its language's
+              // companion row, and compared against the main row alone
+              // every translation reads as absent, so an untouched one
+              // looks like an edit.
+              liveStoredFor: gateLocale =>
+                liveStoredDocument({
+                  tx,
+                  row: promotedInto,
+                  locale: gateLocale,
+                  companion,
+                  companionExists: companionPhysicallyExists,
+                  fieldGroupDataService: this.fieldGroupDataService,
+                  parentTable: singleMeta.tableName,
+                  fieldConfigs,
+                  slug,
+                }),
+              callerData: currentData,
+              // Reached only for a write naming `published`.
+              status: "published",
+              localizedFieldNames,
+              enforceLocalizedRequired,
+            };
             let promotedDraft = false;
             if (
               !holdEdit &&
@@ -1370,9 +1448,6 @@ export class SingleMutationService extends BaseService {
                 // `beforeChange` hook turning a status-less edit into a
                 // publish, would both leave the checked document and the
                 // written document different documents.
-                // Narrowed once for the gate's arguments; the fold below
-                // already runs under the same non-null condition.
-                const promotedInto = existingDoc;
                 await assertDraftsMayBePromoted(
                   [
                     {
@@ -1380,59 +1455,7 @@ export class SingleMutationService extends BaseService {
                       snapshot: pendingDraft.snapshot,
                     },
                   ],
-                  {
-                    slug,
-                    entryId: promotedInto.id,
-                    write: entryWriteContext({
-                      kind: "single",
-                      slug,
-                      connection: {
-                        db: tx,
-                        executor: tx.getDrizzle(),
-                        defaultLocale: this.localization?.defaultLocale ?? null,
-                      },
-                    }),
-                    fields: fieldConfigs,
-                    user: options.user,
-                    overrideAccess: options.overrideAccess,
-                    authenticatedScope: options.authenticatedScope,
-                    // Resolved on the pooled connection before this
-                    // transaction opened.
-                    grants: promoteGrants,
-                    // A snapshot belongs to this document, so its identity is
-                    // this document's. Supplying both ahead of the spread
-                    // satisfies the stored-document shape without asserting
-                    // one, and lets the snapshot's own values win.
-                    toLogical: doc =>
-                      this.queryService.deserializeJsonFields(
-                        {
-                          id: promotedInto.id,
-                          updatedAt: promotedInto.updatedAt,
-                          ...doc,
-                        },
-                        singleMeta.fields
-                      ),
-                    // The main row is not the whole live document for a
-                    // localized Single: a translation is on its language's
-                    // companion row, and compared against the main row alone
-                    // every translation reads as absent, so an untouched one
-                    // looks like an edit.
-                    liveStoredFor: async gateLocale =>
-                      companion && companionPhysicallyExists && gateLocale
-                        ? {
-                            ...promotedInto,
-                            ...(await readCompanionValuesInTx(
-                              tx,
-                              companion,
-                              promotedInto.id,
-                              gateLocale
-                            )),
-                          }
-                        : promotedInto,
-                    callerData: currentData,
-                    localizedFieldNames,
-                    enforceLocalizedRequired,
-                  }
+                  promoteGate
                 );
                 // The caller's own payload wins over the pending change: a
                 // publish that also sets a field is saying something about that
@@ -1457,6 +1480,37 @@ export class SingleMutationService extends BaseService {
                 }
                 promotedDraft = true;
               }
+            }
+            // A publish with nothing pending puts the live row itself live: a
+            // first publication, a republish after an unpublish, or a Single
+            // that keeps no drafts. The validation before this transaction saw
+            // only the payload, which for a publish by status alone is
+            // `{ status }`, while what goes live is the row as stored, judged
+            // when it was saved as a draft. So it is judged here as a promotion
+            // of an empty change: the stored row with the payload on top, whole.
+            // Only on a move to published; a live row was judged as published.
+            if (
+              !holdEdit &&
+              !promotedDraft &&
+              (singleMeta as { status?: boolean }).status === true &&
+              (updatePayload as Record<string, unknown>).status ===
+                "published" &&
+              !(await this.writeLocaleIsLive(tx, {
+                liveStatus: singleLiveStatus,
+                companion: companionPhysicallyExists ? companion : null,
+                entryId: existingDoc.id,
+                writeLocale,
+              }))
+            ) {
+              await assertDraftsMayBePromoted(
+                [
+                  {
+                    locale: singleDraftLocale ?? writeLocale ?? null,
+                    snapshot: {},
+                  },
+                ],
+                promoteGate
+              );
             }
 
             // Skip the live-row UPDATE for a held edit; the pending change is
@@ -2091,18 +2145,23 @@ export class SingleMutationService extends BaseService {
                   }
                 }
               }
-              await draftRepo.upsertWorkingDraft({
+              // The draft, and the save as a version of its own. A save that
+              // changes nothing against what it replaces records no version.
+              await storeDraftSave(tx, this.versionCapture, {
                 ref: draftRef,
                 locale: singleDraftLocale,
                 snapshot: pending,
+                replaces: base,
                 createdBy: options.user?.id ?? null,
+                sourceVersionNo: options.sourceVersionNo ?? null,
+                maxPerDoc: singleMeta.versions?.maxPerDoc,
               });
             }
 
             // component subtrees form the snapshot.
             const versionsConfig = singleMeta.versions;
-            // A held edit records no durable version: nothing was published, and
-            // a version here would enter the history as though it had been.
+            // A held edit was recorded above, as a draft version of the save;
+            // this records the version of a write that changed the live Single.
             if (!holdEdit && versionsConfig?.enabled) {
               // Match the read shape: keep user field keys (field.name, which
               // may contain underscores like `site_title`) exactly, converting
@@ -2852,6 +2911,42 @@ export class SingleMutationService extends BaseService {
    * transaction's own writes and is serialized with concurrent writers by the
    * main-row lock taken just before it.
    */
+  /**
+   * Whether the language a write publishes is live already, so the write puts
+   * nothing new live.
+   *
+   * `liveStatus` is the language's status as the write's other decisions read
+   * it: the companion's for a language other than the default, the main row's
+   * for the default. The default language's translation keeps a status of its
+   * own too on a Single with per-language status, and the two can differ (a
+   * live main row over a draft default translation, after per-language status
+   * was added to existing content), so both must be live for the publish to
+   * change nothing.
+   */
+  private async writeLocaleIsLive(
+    tx: TransactionContext,
+    args: {
+      liveStatus: unknown;
+      companion: { table: unknown; companionTableName: string } | null;
+      entryId: string;
+      writeLocale: string | undefined;
+    }
+  ): Promise<boolean> {
+    if (args.liveStatus !== "published") return false;
+    const locale = args.writeLocale;
+    const isDefault =
+      locale !== undefined && locale === this.localization?.defaultLocale;
+    if (!isDefault || args.companion === null) return true;
+    // No translation row, or none carrying a status: the main row decides.
+    const own = await this.readCompanionStatusInTx(
+      tx,
+      args.companion,
+      args.entryId,
+      locale
+    );
+    return own === null || own === "published";
+  }
+
   private readCompanionStatusInTx(
     tx: TransactionContext,
     companion: { table: unknown; companionTableName: string },

@@ -11,7 +11,8 @@
  * install succeeded with its prerequisite missing.
  *
  * Kept free of any connection, like the uninstall plan: the caller reads the
- * ledger and the owner rows, and this decides from them.
+ * ledger and the plugins' recorded lifecycle states, and this decides from
+ * them.
  *
  * @module domains/schema/ownership/install-plan
  * @since 1.0.0
@@ -19,7 +20,7 @@
 import { NextlyError } from "../../../errors/nextly-error";
 import { qualifiedFilename } from "../migrate/plugin/plugin-migration";
 
-import type { OwnerRecord } from "./owner-registry";
+import type { PluginLifecycleRecord } from "./plugin-lifecycle-state";
 
 /** What the check needs about one configured plugin. */
 export interface InstallCandidate {
@@ -42,14 +43,19 @@ export interface InstallDependencyInput {
    * `rolled_back` one is not applied.
    */
   appliedFilenames: ReadonlySet<string>;
-  /** Owner rows; only the dependencies' rows are consulted. */
-  owners: readonly OwnerRecord[];
+  /**
+   * Each plugin's recorded lifecycle state (`readPluginLifecycle`); a plugin
+   * absent from it was never installed by `nextly plugins install`.
+   */
+  lifecycle: ReadonlyMap<string, PluginLifecycleRecord>;
 }
 
 /** Why a dependency does not count as installed. */
 export type MissingDependency =
   | { name: string; reason: "not-configured" }
   | { name: string; reason: "pending-modules"; pending: string[] }
+  | { name: string; reason: "never-installed" }
+  | { name: string; reason: "uninstalling" }
   | { name: string; reason: "uninstalled" };
 
 /**
@@ -62,11 +68,9 @@ export type MissingDependency =
  *
  * "Installed" is decided from the database, not the config:
  * - every module the dependency declares is applied per the ledger, and
- * - none of its owner rows is `uninstalled` — the state a full uninstall
- *   leaves behind, where its tables were dropped.
- *
- * A dependency that declares no modules and has no owner rows has nothing
- * either check could find missing, so it counts as installed.
+ * - `nextly plugins install` has recorded it installed, and no uninstall has
+ *   begun since. Applied modules alone do not say its `onInstall` ran, and a
+ *   plugin that declares none, or owns no table, has no other record at all.
  */
 export function missingDependencies(
   input: InstallDependencyInput
@@ -113,15 +117,22 @@ function notInstalledReason(
   if (pending.length > 0) {
     return { name: candidate.name, reason: "pending-modules", pending };
   }
-  // Anything but `active`. An `orphaned` dependency was uninstalled with
-  // `--keep-data`: its tables survive, but its `onUninstall` has run, so
-  // whatever its install set up outside those tables may be gone — the same
-  // reason a fully uninstalled one is refused.
-  const uninstalled = input.owners.some(
-    row => row.ownerId === candidate.name && row.state !== "active"
-  );
-  if (uninstalled) return { name: candidate.name, reason: "uninstalled" };
-  return undefined;
+  // An `orphaned` dependency was uninstalled with `--keep-data`: its tables
+  // survive, but its `onUninstall` has run, so whatever its install set up
+  // outside those tables may be gone, the same reason a fully uninstalled
+  // one is refused.
+  const record = input.lifecycle.get(candidate.name);
+  switch (record?.state) {
+    case "installed":
+      return undefined;
+    case undefined:
+      return { name: candidate.name, reason: "never-installed" };
+    case "uninstalling":
+      return { name: candidate.name, reason: "uninstalling" };
+    case "uninstalled":
+    case "orphaned":
+      return { name: candidate.name, reason: "uninstalled" };
+  }
 }
 
 function describeMissing(dep: MissingDependency): string {
@@ -131,6 +142,10 @@ function describeMissing(dep: MissingDependency): string {
       return `  - "${dep.name}": it is not configured — add it to your config, then ${install}`;
     case "pending-modules":
       return `  - "${dep.name}": its migration(s) ${dep.pending.join(", ")} ${dep.pending.length === 1 ? "is" : "are"} not applied — ${install}`;
+    case "never-installed":
+      return `  - "${dep.name}": its install, which runs its onInstall, has not run on this database — ${install}`;
+    case "uninstalling":
+      return `  - "${dep.name}": its uninstall began and did not finish — ${install}`;
     case "uninstalled":
       return `  - "${dep.name}": it was uninstalled — ${install}`;
   }

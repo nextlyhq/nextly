@@ -177,11 +177,11 @@ See [plugin authentication](/docs/plugins/auth) for the full flow.
 
 ## Super-admin setup
 
-The first time someone visits `/admin`, the panel redirects them to `/admin/setup` (driven by `GET /api/auth/setup-status`). The form creates the first user, assigns the built-in `Super Admin` role, seeds the core permission rows, and logs the new admin in -- all in a single CSRF-protected request.
+The first time someone visits `/admin`, the panel redirects them to `/admin/setup` (driven by `GET /admin/api/auth/setup-status`). The form creates the first user, assigns the built-in `Super Admin` role, seeds the core permission rows, and logs the new admin in -- all in a single CSRF-protected request.
 
 A few things to note:
 
-- Setup is a one-shot. Once any user exists, `POST /api/auth/setup` returns `403 SETUP_COMPLETE`.
+- Setup is a one-shot. Once any user exists, `POST /admin/api/auth/setup` returns `403 SETUP_COMPLETE`.
 - Passwords are validated for strength (length, character classes) before hashing -- see `validatePasswordStrength` for the exact rules.
 - `Super Admin` is a system role that bypasses every permission check. Hand it out sparingly.
 - The last active super-admin can't be removed. Deleting them, deactivating them, or taking the role from them is refused with `409 CONFLICT` ("Make another user super-admin first"), whether the request comes from the admin, the REST API or the Direct API. A plugin may not make these writes to any super-admin account, so it gets `403 FORBIDDEN` instead. Only an active account holding the `Super Admin` role itself counts: not one that is a super-admin through a role built on it, since that role's inheritance can be edited away, and not a deactivated account. To remove that person, first give another user the `Super Admin` role. Two removals sent at once can't remove both of the last two.
@@ -293,7 +293,7 @@ When a request includes a `Bearer` token, the auth middleware:
 ```typescript
 // Client-side usage
 const response = await fetch(
-  "https://example.com/api/nextly/collections/posts/entries",
+  "https://example.com/admin/api/collections/posts/entries",
   {
     headers: {
       Authorization: "Bearer nx_live_<random>...",
@@ -332,7 +332,7 @@ Two refreshes presenting the same token get one rotation. The one that loses the
 
 > **Needs the release after 0.0.2-alpha.66.**
 
-Every password write ends the account's sessions: an administrator setting it (`updateUser` or `PATCH /api/users/:id/password`), the user changing their own, a reset, accepting an invite, and setting an initial password. Deactivating an account does the same. Each deletes all of the account's refresh tokens in the same transaction as the write, forcing re-login on every device.
+Every password write ends the account's sessions: an administrator setting it (`updateUser` or `PATCH /admin/api/users/:id/password`), the user changing their own, a reset, accepting an invite, and setting an initial password. Deactivating an account does the same. Each deletes all of the account's refresh tokens in the same transaction as the write, forcing re-login on every device.
 
 ## Password management
 
@@ -396,24 +396,24 @@ openssl rand -base64 32
 
 | Method | Path                           | Description                                  |
 |--------|--------------------------------|----------------------------------------------|
-| GET    | `/api/auth/setup-status`       | Has the first user been created?             |
-| GET    | `/api/auth/session`            | Get the current session.                     |
-| GET    | `/api/auth/csrf`               | Mint a CSRF token.                           |
-| GET    | `/api/auth/pending`            | Which second factor an interrupted sign-in left outstanding. Never returns the token itself. |
-| GET    | `/api/auth/ui`                 | The login page's provider buttons, challenge views and slots. |
-| POST   | `/api/auth/setup`              | Create the first super-admin (auto-logs in). |
-| POST   | `/api/auth/login`              | Email + password login.                      |
-| POST   | `/api/auth/challenge/resolve`  | Answer a second factor with the pending token. |
-| POST   | `/api/auth/set-initial-password` | Replace an administrator-set password at first sign-in. |
-| POST   | `/api/auth/logout`             | Revoke the current session.                  |
-| POST   | `/api/auth/refresh`            | Rotate access + refresh tokens.              |
-| POST   | `/api/auth/register`           | User registration.                           |
-| PATCH  | `/api/auth/change-password`    | Change password (auth required).             |
-| POST   | `/api/auth/forgot-password`    | Request a password-reset email.              |
-| POST   | `/api/auth/reset-password`     | Reset password with the email token.         |
-| POST   | `/api/auth/accept-invite`      | Set a password from an invite link.          |
-| POST   | `/api/auth/verify-email`       | Verify email with the email token.           |
-| POST   | `/api/auth/verify-email/resend`| Resend the verification email.               |
+| GET    | `/admin/api/auth/setup-status`       | Has the first user been created?             |
+| GET    | `/admin/api/auth/session`            | Get the current session.                     |
+| GET    | `/admin/api/auth/csrf`               | Mint a CSRF token.                           |
+| GET    | `/admin/api/auth/pending`            | Which second factor an interrupted sign-in left outstanding. Never returns the token itself. |
+| GET    | `/admin/api/auth/ui`                 | The login page's provider buttons, challenge views and slots. |
+| POST   | `/admin/api/auth/setup`              | Create the first super-admin (auto-logs in). |
+| POST   | `/admin/api/auth/login`              | Email + password login.                      |
+| POST   | `/admin/api/auth/challenge/resolve`  | Answer a second factor with the pending token. |
+| POST   | `/admin/api/auth/set-initial-password` | Replace an administrator-set password at first sign-in. |
+| POST   | `/admin/api/auth/logout`             | Revoke the current session.                  |
+| POST   | `/admin/api/auth/refresh`            | Rotate access + refresh tokens.              |
+| POST   | `/admin/api/auth/register`           | User registration.                           |
+| PATCH  | `/admin/api/auth/change-password`    | Change password (auth required).             |
+| POST   | `/admin/api/auth/forgot-password`    | Request a password-reset email.              |
+| POST   | `/admin/api/auth/reset-password`     | Reset password with the email token.         |
+| POST   | `/admin/api/auth/accept-invite`      | Set a password from an invite link.          |
+| POST   | `/admin/api/auth/verify-email`       | Verify email with the email token.           |
+| POST   | `/admin/api/auth/verify-email/resend`| Resend the verification email.               |
 
 ## Next steps
 

@@ -286,7 +286,7 @@ export function WidgetGrid() {
     slots,
     cellSlots,
     fetchingPlacementIds,
-    updatedAt,
+    updatedAtFor,
     requested,
     counted,
     failed,
@@ -351,7 +351,7 @@ export function WidgetGrid() {
           slots={slots}
           cellSlots={cellSlots}
           requested={requested}
-          updatedAt={updatedAt}
+          updatedAtFor={updatedAtFor}
           fetchingPlacementIds={fetchingPlacementIds}
           retry={retry}
           announcement={announcement}

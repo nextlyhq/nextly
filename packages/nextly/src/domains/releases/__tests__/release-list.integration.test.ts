@@ -6,8 +6,9 @@
  * releases the rule names, that the order is total on every dialect (ties on
  * one instant included, which SQLite's whole-second timestamps make common),
  * that the count is the count of everything matching rather than of one page,
- * and that the search ignores case on every engine — PostgreSQL's `LIKE` does
- * not, while MySQL's and SQLite's do.
+ * and that the search ignores case on every engine, whatever the column's
+ * collation — PostgreSQL's `LIKE` is case-sensitive, and so is MySQL's under a
+ * case-sensitive collation such as `utf8mb4_bin`.
  *
  * Runs against whichever dialects the integration run configures; CI covers
  * SQLite, PostgreSQL and MySQL.
@@ -348,6 +349,43 @@ describe.each(getConfiguredTestDialects())(
       });
       expect(underscore.rows.map(row => row.title)).toEqual(["a_b"]);
     });
+
+    it.runIf(dialect === "mysql")(
+      "ignores case on MySQL under a case-sensitive collation",
+      async () => {
+        // MySQL's `LIKE` compares under the column's collation, so the default
+        // `utf8mb4_0900_ai_ci` hides a search that only ignores case by luck.
+        // The title is moved to a binary collation, keeping its stored type,
+        // and the search must still find "Spring launch" for "spring".
+        const app = await boot(dialect);
+        const [column] = await app.adapter.executeQuery<{
+          type: string;
+          nullable: string;
+        }>(
+          "SELECT COLUMN_TYPE AS type, IS_NULLABLE AS nullable FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'nextly_releases' AND COLUMN_NAME = 'title'"
+        );
+        await app.adapter.executeQuery(
+          `ALTER TABLE nextly_releases MODIFY title ${column.type} COLLATE utf8mb4_bin ${column.nullable === "NO" ? "NOT NULL" : "NULL"}`
+        );
+        const repo = new ReleasesRepository(app.adapter);
+        const now = new Date();
+        await repo.createRelease({ title: "Spring launch" });
+
+        // The control: the column now compares case-sensitively.
+        const [exact] = await app.adapter.executeQuery<{ n: number | string }>(
+          "SELECT COUNT(*) AS n FROM nextly_releases WHERE title LIKE '%spring%'"
+        );
+        expect(Number(exact.n)).toBe(0);
+
+        const page = await repo.findReleasePage({
+          tab: "drafts",
+          now,
+          search: "spring",
+          limit: 10,
+        });
+        expect(page.rows.map(row => row.title)).toEqual(["Spring launch"]);
+      }
+    );
 
     it("counts a tab without reading its rows", async () => {
       const app = await boot(dialect);

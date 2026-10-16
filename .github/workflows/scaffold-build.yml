@@ -636,6 +636,32 @@ jobs:
             console.log('the generated manifest is unmodified');
           "
 
+      # `nextly generate:types` writes types and Zod schemas into the project, and
+      # what it writes has to compile there: every import resolving from the
+      # project, the augmented `nextly` module found. Run on the legs that install
+      # this change's packages, so the generator under review is the one tested,
+      # and before the build, whose type-check then covers the generated files too.
+      - name: Check the generated types and schemas compile
+        if: matrix.core == 'workspace'
+        shell: bash
+        run: |
+          cd /tmp/scaffold-build/scaffolded-app
+          if [ "${{ matrix.pm }}" = pnpm ]; then
+            NEXTLY_TELEMETRY_DISABLED=1 pnpm exec nextly generate:types
+            pnpm exec tsc --noEmit
+          else
+            NEXTLY_TELEMETRY_DISABLED=1 npx --no-install nextly generate:types
+            npx --no-install tsc --noEmit
+          fi
+          schemas=$(find src -name '*.zod.ts' | wc -l | tr -d ' ')
+          echo "generated Zod schemas: $schemas"
+          # The visual approach declares no collections in code (its schema lives
+          # in the database), so generation has nothing to write a schema for and
+          # the compile above is the whole check. Every other leg must write some.
+          if [ "${{ matrix.approach }}" != visual ]; then
+            [ "$schemas" -gt 0 ] || { echo "generate:types wrote no Zod schema"; exit 1; }
+          fi
+
       - name: Build the scaffolded project
         shell: bash
         run: |

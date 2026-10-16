@@ -34,6 +34,13 @@ function service(holds: ReleaseAuthority[]) {
     repository: {} as ReleasesServiceDeps["repository"],
     canManageReleases,
     canActOnDocument: vi.fn(async () => true),
+    // Every target is there and has a lifecycle; the checks have their own tests.
+    targets: {
+      readDocument: async (target: { entryId: string }) => ({
+        id: target.entryId,
+      }),
+      declaresLifecycle: async () => true,
+    },
   };
   return { svc: new ReleasesService(deps), canManageReleases };
 }

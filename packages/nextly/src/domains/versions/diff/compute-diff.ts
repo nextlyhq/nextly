@@ -32,6 +32,7 @@ import {
   isFieldGroupFieldType,
 } from "../../field-groups/storage/field-group-field-type";
 import { readFieldGroupType } from "../../field-groups/storage/field-group-type-key";
+import { documentSystemKeys } from "../snapshot-system-keys";
 
 import { maskSecret } from "./mask-secret";
 import { reconcileById, type ItemMatch } from "./reconcile-list";
@@ -78,15 +79,6 @@ export interface ComputeDiffOptions {
   entity?: SystemColumnEntity;
 }
 
-// Framework-managed columns on a top-level document, never user content.
-const SYSTEM_KEYS = new Set([
-  "id",
-  "createdAt",
-  "updatedAt",
-  "createdBy",
-  "status",
-]);
-
 // The only framework key on a NESTED ROW (a component instance or repeater
 // item). A plain group has no framework columns at all, so a group child named
 // `id`/`status` is user content and must still surface when removed; the broad
@@ -119,6 +111,8 @@ interface WalkContext {
   top: boolean;
   /** The framework columns this kind of document carries. */
   systemColumns: ReadonlySet<string>;
+  /** Top-level keys this kind of document never treats as content. */
+  documentKeys: ReadonlySet<string>;
   /** The containers this level sits inside, outermost first. */
   path: DiffPathSegment[];
   /**
@@ -297,6 +291,7 @@ function inside(
   return {
     ...level,
     systemColumns: ctx.systemColumns,
+    documentKeys: ctx.documentKeys,
     path: [...ctx.path, ...segment],
     // Redaction reaches the document's own level only.
     withheld: level.top ? ctx.withheld : NOTHING_WITHHELD,
@@ -989,7 +984,7 @@ function undeclaredNodes(
  * child named `id`/`status` is user content).
  */
 function frameworkKeysAt(ctx: WalkContext): ReadonlySet<string> {
-  if (ctx.top) return SYSTEM_KEYS;
+  if (ctx.top) return ctx.documentKeys;
   return ctx.inRow ? ROW_SYSTEM_KEYS : NO_SYSTEM_KEYS;
 }
 
@@ -1045,6 +1040,7 @@ export function computeVersionDiff(
     inRow: false,
     inComponent: false,
     systemColumns: SYSTEM_COLUMN_KEYS[opts.entity ?? "collection"],
+    documentKeys: documentSystemKeys(opts.entity ?? "collection"),
     path: [],
     withheld: opts.withheld ?? NOTHING_WITHHELD,
   });

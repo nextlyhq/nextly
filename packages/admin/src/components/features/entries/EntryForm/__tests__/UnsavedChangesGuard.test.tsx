@@ -307,11 +307,21 @@ describe("moving between a document and its own views", () => {
     clearDocumentViews();
   });
 
+  // The document's own fields: two of the type the view is offered on.
+  const pageFields = [
+    { name: "hero", type: "blocks" },
+    { name: "body", type: "blocks" },
+  ];
+
   /** Starts dirty at `from`, moves to `to`, and says whether it was asked. */
-  async function moveDirty(from: string, to: string): Promise<boolean> {
+  async function moveDirty(
+    from: string,
+    to: string,
+    fields: readonly object[] = pageFields
+  ): Promise<boolean> {
     window.history.pushState(null, "", from);
     render(
-      <UnsavedChangesGuard isDirty>
+      <UnsavedChangesGuard isDirty fields={fields}>
         <GoTo path={to} label="move" />
       </UnsavedChangesGuard>
     );
@@ -379,6 +389,20 @@ describe("moving between a document and its own views", () => {
     expect(window.location.pathname).toBe(from.split("?")[0]);
   });
 
+  it("still asks before moving to a view offered on a field type the document lacks", async () => {
+    // Registered, but this document has no top-level field of its type, so the
+    // page answers not found there and the form unmounts. The control is the
+    // first "stays" case: the same move on a document that has the field.
+    expect(
+      await moveDirty(
+        "/admin/collections/pages/1",
+        "/admin/collections/pages/1/builder",
+        [{ name: "title", type: "text" }]
+      )
+    ).toBe(true);
+    expect(window.location.pathname).toBe("/admin/collections/pages/1");
+  });
+
   /**
    * Arrives at `to` by way of `from`, dirty, then presses Back, and says
    * whether it was asked.
@@ -387,7 +411,7 @@ describe("moving between a document and its own views", () => {
     window.history.pushState(null, "", from);
     window.history.pushState(null, "", to);
     render(
-      <UnsavedChangesGuard isDirty>
+      <UnsavedChangesGuard isDirty fields={pageFields}>
         <span />
       </UnsavedChangesGuard>
     );

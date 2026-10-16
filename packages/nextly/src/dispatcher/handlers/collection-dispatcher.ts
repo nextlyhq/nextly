@@ -75,7 +75,6 @@ import {
   getI18nArchiveIndexRepairDdl,
 } from "../../schemas/nextly-i18n-archive";
 import type { ServiceContainer } from "../../services";
-import type { WhereFilter } from "../../services/collections/query-operators";
 import type { CollectionsHandler } from "../../services/collections-handler";
 import { readableSlugAllowlist } from "../../services/lib/readable-slug-allowlist";
 import { SKIP_TIMEZONE_FORMAT_HEADER } from "../../shared/lib/date-formatting";
@@ -108,7 +107,7 @@ import {
   parseWhereParam,
   requireBody,
   requireParam,
-  stripOwnerColumnsFromWhere,
+  readClientWhere,
   toNumber,
 } from "../helpers/validation";
 import type { MethodHandler, Params } from "../types";
@@ -1203,7 +1202,7 @@ const COLLECTIONS_METHODS: Record<
         depth:
           p.depth !== undefined ? parseInt(String(p.depth), 10) : undefined,
         select: parseSelectParam(p.select),
-        where: parseWhereParam(p.where),
+        where: parseWhereParam(p.where, p.whereBrackets),
         richTextFormat: parseRichTextFormat(p.richTextFormat),
         sort,
         status,
@@ -1255,7 +1254,7 @@ const COLLECTIONS_METHODS: Record<
         // own grant would disclose how many rows exist beyond it.
         authenticatedScope: readAuthenticatedScope(p),
         search: p.search,
-        where: parseWhereParam(p.where),
+        where: parseWhereParam(p.where, p.whereBrackets),
         status,
         // i18n M4: keep count in parity with listEntries' locale-scoped filtering.
         locale: p.locale,
@@ -1588,13 +1587,11 @@ const COLLECTIONS_METHODS: Record<
           // The request this operation's hooks are told about.
           request,
           collectionName: p.collectionName,
-          // Strip owner-column conditions from the request body so a caller
-          // cannot target rows by the system owner column via `body.where`
-          // (mirrors parseWhereParam on the query-string path). The service's
-          // own owner constraint is added separately and is unaffected; a where
-          // that was only an owner filter becomes {} and stays bounded by the
-          // collection's access rules.
-          where: stripOwnerColumnsFromWhere(b.where as WhereFilter) ?? {},
+          // The body filter is checked as the query-string one is: a malformed
+          // filter, or one naming the owner column, is refused with a 400
+          // before any row is matched. `b.where` was checked to be an object
+          // above, so the check always returns it.
+          where: readClientWhere(b.where) ?? {},
           data: b.data,
           actor: readAuthenticatedActor(p),
           userId: p._authenticatedUserId
