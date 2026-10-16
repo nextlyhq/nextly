@@ -374,11 +374,11 @@ export function buildAuthRouterDeps(
       const authService = getService("authService");
       switch (kind) {
         case "reset":
-          return authService.resetTokenOwner(token);
+          return await authService.resetTokenOwner(token);
         case "verification":
-          return authService.verificationTokenOwner(token);
+          return await authService.verificationTokenOwner(token);
         case "invite":
-          return authService.inviteTokenOwner(token);
+          return await authService.inviteTokenOwner(token);
       }
     },
 
