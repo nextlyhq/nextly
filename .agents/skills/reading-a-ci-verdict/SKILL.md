@@ -5,6 +5,8 @@ description: >-
   request: deciding whether the required jobs actually ran, why a job is
   skipped or missing, whether a workflow was triggered at all, whether a
   review bot really reviewed, or before merging anything on green.
+metadata:
+  internal: true
 ---
 
 ## Green means nothing reported a failure

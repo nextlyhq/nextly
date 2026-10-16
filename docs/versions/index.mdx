@@ -21,32 +21,33 @@ export const Posts = defineCollection({
 `status: true` also switches history on by itself: an entity with the draft/publish lifecycle
 captures history even when `versions` is omitted.
 
-Working drafts need **both** halves — drafts-enabled versioning *and* the lifecycle. Either
+Working drafts need **both** halves — drafts-enabled versioning _and_ the lifecycle. Either
 one alone gives you history and edits that write the live row:
 
-| `versions` | `status` | History | Working drafts |
-|---|---|---|---|
-| omitted | `false` | No | No |
-| omitted | `true` | **Yes** | No |
-| `true` | `false` | Yes | **No** — the lifecycle is disabled |
-| `true` | `true` | Yes | **Yes** |
-| `{ drafts: false }` | either | Yes | No |
+| `versions`          | `status` | History | Working drafts                     |
+| ------------------- | -------- | ------- | ---------------------------------- |
+| omitted             | `false`  | No      | No                                 |
+| omitted             | `true`   | **Yes** | No                                 |
+| `true`              | `false`  | Yes     | **No** — the lifecycle is disabled |
+| `true`              | `true`   | Yes     | **Yes**                            |
+| `{ drafts: false }` | either   | Yes     | No                                 |
 
 One further gate: a collection with a reachable password field never gets working drafts,
 whatever the flags say. A snapshot strips passwords, so a draft could neither carry a password
 change nor preserve one made while it was open.
 
 <Callout type="warn">
-An entity with neither flag is unversioned and captures nothing — and turning versioning on
-later does not recover saves made before. Decide before you need it, not after.
+  An entity with neither flag is unversioned and captures nothing — and turning
+  versioning on later does not recover saves made before. Decide before you need
+  it, not after.
 </Callout>
 
 ## Availability
 
-| | |
-|---|---|
-| Built in | No plugin required |
-| Admin | A **Versions** panel on the edit screen |
+|            |                                                                                        |
+| ---------- | -------------------------------------------------------------------------------------- |
+| Built in   | No plugin required                                                                     |
+| Admin      | A **Versions** panel on the edit screen                                                |
 | Permission | Reading history requires read access to the document; restoring requires update access |
 
 ## How a version is recorded
@@ -97,9 +98,20 @@ else from seeing the current published version.
 ## Retention
 
 History grows. Old versions are trimmed when a document is saved, keeping the newest 50
-per document by default, so the table does not grow without limit. Published versions are governed separately from drafts, because the
-two have different value: a superseded draft is usually noise, and a previously published
-version is usually evidence.
+per document by default (`versions.maxPerDoc`; `false` keeps everything), so the table does
+not grow without limit. Autosaves don't count toward that limit.
+
+Some versions are kept whatever the limit, even when they are older than the versions it
+keeps:
+
+- the newest version;
+- the latest published version of each language, and the latest published version with no
+  language (a document without languages, or a publish of every language at once);
+- every named version, including the "Before restore" version a restore records;
+- every version that records a restore, and the version it was restored from.
+
+So a run of saves in one language never removes another language's published version, and
+"restored from" always points at a version that still exists.
 
 ## Related
 

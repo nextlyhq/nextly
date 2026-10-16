@@ -583,6 +583,8 @@ export {
   type PluginAdminQuerylessWidget,
   type DeclarativeWidgetArchetype,
   type PluginCollectionView,
+  type PluginDocumentView,
+  type PluginFieldTypeDocumentView,
   type PluginMenuItem,
   type PluginNavSection,
 } from "./plugins";

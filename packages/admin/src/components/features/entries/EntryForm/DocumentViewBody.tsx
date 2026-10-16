@@ -1,0 +1,190 @@
+"use client";
+
+/**
+ * A plugin's document view, drawn as the body of the document's own editor.
+ *
+ * The entry and Single editors render this in place of their form body when
+ * the route names a document view, and nothing else about them changes: the
+ * unsaved-work guard, the lock claim, the recovery offer, the save shortcut and
+ * the entry contexts are the editor's own and stay mounted around it. The view
+ * draws what the author works on; the admin keeps every fact about the
+ * document.
+ *
+ * ## No `<form>` above the view
+ *
+ * The editor's form body sits inside `EntryFormProvider`'s
+ * `<form onSubmit={save}>`. React dispatches a synthetic `submit` along the
+ * React tree, portals included, so any `<form>` a plugin renders below that
+ * element — a search box, a settings dialog — would save the document when it
+ * submits. This body is therefore a SIBLING of that element rather than inside
+ * it, and gives the view the document form through react-hook-form's own
+ * `FormProvider`, which renders no element at all.
+ *
+ * @module components/features/entries/EntryForm/DocumentViewBody
+ */
+
+import type { FieldConfig } from "nextly/config";
+import { useCallback, useEffect } from "react";
+import { FormProvider, type UseFormReturn } from "react-hook-form";
+
+import type { ViewedVersion } from "@admin/components/features/versions/document-history-context";
+import { useSuppressAdminChrome } from "@admin/components/layout/ChromeSuppression";
+import { PluginSlot } from "@admin/components/shared/plugin-slot";
+import type { UseAutosaveRecoveryResult } from "@admin/hooks/useAutosaveRecovery";
+import { useSearchParams } from "@admin/hooks/useSearchParams";
+import { setSearchParam } from "@admin/lib/navigation";
+import type { DocumentViewProps } from "@admin/lib/plugins/component-registry";
+import { resolveViewField } from "@admin/lib/plugins/document-view-registry";
+
+import { LiveDocumentRecoveryOffer } from "./AutosaveRecoveryBanner";
+import { DocumentLockBanner } from "./DocumentLockBanner";
+import { DocumentViewFieldChooser } from "./DocumentViewFieldChooser";
+import { FormErrorSummary } from "./FormErrorSummary";
+import { useLeaveWithoutWarning } from "./UnsavedChangesGuard";
+import type { DocumentLockSurface } from "./useDocumentLockSurface";
+
+/** The view the route names, as the page hands it to the editor. */
+export interface DocumentViewMount {
+  /** Component path of the view, resolved through the component registry. */
+  component: string;
+  /** Navigate to the document's own edit address. */
+  onExit: () => void;
+  /** For a view offered on a field type: that type, whose field it edits. */
+  fieldType?: string;
+}
+
+/** Which document the view is of, in the props the view receives. */
+export type DocumentViewTarget = Pick<
+  DocumentViewProps,
+  "collectionSlug" | "singleSlug" | "entryId"
+>;
+
+export interface DocumentViewBodyProps {
+  view: DocumentViewMount;
+  target: DocumentViewTarget;
+  /** The editor's own form: what the view writes is what the editor saves. */
+  form: UseFormReturn<Record<string, unknown>>;
+  /** The editor's own claim on the document. */
+  lock: DocumentLockSurface;
+  /** The editor's own recovery state. */
+  recovery: UseAutosaveRecoveryResult;
+  /** The past version on screen, which withholds the recovery offer. */
+  viewingVersion: ViewedVersion | null;
+  /** The document's top-level fields, from which a field-type view's is chosen. */
+  fields?: readonly FieldConfig[];
+}
+
+/**
+ * Keep the address naming the field being edited.
+ *
+ * Where the document has one field the view could edit, a missing or stale
+ * `?field=` still opens it — the author's intent is unambiguous — and the
+ * address is corrected IN PLACE, so a reload or a shared link then reaches
+ * exactly what is on screen, and Back does not return to the stale address.
+ */
+function useFieldInAddress(
+  editing: ReturnType<typeof resolveViewField>,
+  requested: string | string[] | undefined
+): void {
+  const named = editing.kind === "field" ? editing.name : undefined;
+  useEffect(() => {
+    if (named !== undefined && named !== requested) {
+      setSearchParam("field", named, { replace: true });
+    }
+  }, [named, requested]);
+}
+
+export function DocumentViewBody({
+  view,
+  target,
+  form,
+  lock,
+  recovery,
+  viewingVersion,
+  fields,
+}: DocumentViewBodyProps) {
+  /*
+   * The view takes the window, less the primary rail. `canExit` is false
+   * because this body renders no way back of its own — the view is handed
+   * `exit` and decides where to draw it, which nothing here can verify — so the
+   * admin keeps its navigation. A view that does render an exit asks for the
+   * rail itself.
+   */
+  useSuppressAdminChrome({
+    layers: ["subSidebar", "header", "pageFrame"],
+    canExit: false,
+  });
+
+  /*
+   * Leaving the view for the edit screen is not leaving the document. Both
+   * addresses render the same page component, so the editor and its form stay
+   * mounted across the move and nothing unsaved is lost; the guard's warning
+   * that it would be is suppressed for this one navigation.
+   */
+  const leaveWithoutWarning = useLeaveWithoutWarning();
+  const { onExit } = view;
+  const exit = useCallback(() => {
+    leaveWithoutWarning();
+    onExit();
+  }, [leaveWithoutWarning, onExit]);
+
+  // Which field the view edits, from the address. Read here rather than by
+  // the view so the rule the admin applies to the address is the one answer.
+  const requested = useSearchParams().field;
+  const editing = resolveViewField(
+    view.fieldType,
+    fields,
+    typeof requested === "string" ? requested : undefined
+  );
+  useFieldInAddress(editing, requested);
+
+  const { errors, submitCount } = form.formState;
+  const viewProps: DocumentViewProps = {
+    ...target,
+    control: form.control,
+    readOnly: lock.readOnly,
+    exit,
+    ...(editing.kind === "field" ? { field: editing.declaration } : {}),
+  };
+
+  return (
+    <FormProvider {...form}>
+      <div
+        data-testid="document-view-frame"
+        className="flex h-dvh min-h-0 flex-col bg-background"
+      >
+        {/* Above the view, in the editor's order: a document somebody else is
+            in changes what the view's edits mean, so it is read before the
+            offer to restore work into it. A save the shortcut attempted and
+            validation refused is said here too, since none of the fields it
+            names are on screen to say it themselves. */}
+        <div className="shrink-0">
+          <DocumentLockBanner
+            notice={lock.notice}
+            onTakeOver={lock.takeOver}
+            onRequestAccess={lock.requestAccess}
+          />
+          <LiveDocumentRecoveryOffer
+            recovery={recovery}
+            viewingVersion={viewingVersion}
+            className="mx-6 mt-3"
+          />
+          <FormErrorSummary
+            errors={errors}
+            submitCount={submitCount}
+            className="mx-6 mt-3"
+          />
+        </div>
+        {/* The view fills what is left. Boxed so a view rooted in bare text
+            or `display: contents` still has an element taking the height. */}
+        <div className="min-h-0 flex-1">
+          {editing.kind === "choose" ? (
+            <DocumentViewFieldChooser candidates={editing.candidates} />
+          ) : (
+            <PluginSlot path={view.component} props={viewProps} />
+          )}
+        </div>
+      </div>
+    </FormProvider>
+  );
+}

@@ -11,7 +11,7 @@
  * @module components/features/widgets/useWidgetBatch
  */
 
-import { useMemo } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
   useWidgetQueries,
@@ -53,6 +53,11 @@ export interface WidgetBatch {
   counted: number;
   failed: number;
   settling: boolean;
+  /**
+   * Reload one card: its question is asked again on its own, so Retry sends that card's query
+   * and no other card's. Until the batch next refreshes, the card shows this answer.
+   */
+  retry: (placementId: string) => void;
 }
 
 /**
@@ -150,8 +155,64 @@ export function useWidgetBatch(cards: BatchCard[]): WidgetBatch {
     [cards]
   );
 
-  const { slots, cellSlots, isFetching, fetchingPlacementIds, updatedAt } =
-    useWidgetQueries(requests);
+  const batch = useWidgetQueries(requests);
+  const { isFetching, fetchingPlacementIds, updatedAt } = batch;
+
+  // Cards being retried, each asked again in a request of its own, with how many times. The
+  // count is the request's `attempt`, so every press of Retry is a new question to the cache and
+  // sends that card's query again -- a second press after a failed retry included -- while no
+  // other card's request changes.
+  const [retrying, setRetrying] = useState<ReadonlyMap<string, number>>(
+    () => new Map()
+  );
+  const retryRequests = useMemo(
+    () =>
+      requests
+        .filter(request => retrying.has(request.placementId))
+        .map(request => ({
+          ...request,
+          attempt: retrying.get(request.placementId),
+        })),
+    [requests, retrying]
+  );
+  const retried = useWidgetQueries(retryRequests);
+  const retry = useCallback((placementId: string) => {
+    setRetrying(previous =>
+      new Map(previous).set(placementId, (previous.get(placementId) ?? 0) + 1)
+    );
+  }, []);
+  // The batch's next answer is fresher than a retry's, so a refresh of the whole batch ends
+  // every retry and its cards go back to the batch's slots.
+  // Keyed on the instant rather than the Date object, which may be a new object each render.
+  const batchAnsweredAt = batch.updatedAt?.getTime() ?? null;
+  useEffect(() => {
+    setRetrying(previous => (previous.size === 0 ? previous : new Map()));
+  }, [batchAnsweredAt]);
+
+  // A retried card reads its own answer, or none while it is in flight -- which draws its
+  // skeleton rather than the error it is being retried from.
+  const { slots, cellSlots } = useMemo(() => {
+    if (retrying.size === 0) {
+      return { slots: batch.slots, cellSlots: batch.cellSlots };
+    }
+    const mergedSlots: Record<string, WidgetSlot> = { ...batch.slots };
+    const mergedCells: CellSlots = { ...batch.cellSlots };
+    for (const placementId of retrying.keys()) {
+      delete mergedSlots[placementId];
+      delete mergedCells[placementId];
+      const slot = retried.slots[placementId];
+      if (slot) mergedSlots[placementId] = slot;
+      const cells = retried.cellSlots[placementId];
+      if (cells) mergedCells[placementId] = cells;
+    }
+    return { slots: mergedSlots, cellSlots: mergedCells };
+  }, [
+    batch.slots,
+    batch.cellSlots,
+    retried.slots,
+    retried.cellSlots,
+    retrying,
+  ]);
 
   // Which cards are actually IN the batch, taken from the requests that were
   // sent rather than re-derived from `widget.query`.
@@ -189,7 +250,12 @@ export function useWidgetBatch(cards: BatchCard[]): WidgetBatch {
             cellSlots[card.placementId]
           )
         )
-        .filter(outcome => outcome.state !== "self-drawn"),
+        // An unavailable card is neither updated nor failed, so it is left out of the
+        // announcement rather than counted as "updated" beside a card that says otherwise.
+        .filter(
+          outcome =>
+            outcome.state !== "self-drawn" && outcome.state !== "unavailable"
+        ),
     [cards, slots, cellSlots]
   );
 
@@ -203,5 +269,6 @@ export function useWidgetBatch(cards: BatchCard[]): WidgetBatch {
     counted: outcomes.length,
     failed: outcomes.filter(outcome => outcome.state === "failed").length,
     settling: outcomes.some(outcome => outcome.state === "loading"),
+    retry,
   };
 }

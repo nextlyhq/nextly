@@ -17,6 +17,7 @@ import type {
 } from "@admin/types/dashboard/widgets";
 
 import { barsAccepts, barsBody } from "../bars";
+import { CardEmpty } from "../../frame/states";
 
 const widget = (): DashboardWidget =>
   ({
@@ -39,7 +40,9 @@ const grouped = (
 function draw(result: WidgetResult, definition = widget()) {
   const outcome = barsBody(result, definition);
   if (!outcome.ok) throw new Error(`expected a body, got: ${outcome.message}`);
-  render(<>{outcome.node}</>);
+  render(
+    <>{outcome.empty ? <CardEmpty {...outcome.empty} /> : outcome.node}</>
+  );
 }
 
 describe("the bars archetype", () => {
@@ -184,7 +187,10 @@ describe("the bars archetype", () => {
 
   it("says nothing was matched rather than drawing an empty frame", () => {
     draw(grouped([]));
-    expect(screen.getByText(/no rows matched/i)).toBeInTheDocument();
+    // The frame's one empty state, worded for groups.
+    expect(screen.getByTestId("card-empty")).toHaveTextContent(
+      /Nothing to compare yet/
+    );
     expect(screen.queryByRole("table")).not.toBeInTheDocument();
   });
 });

@@ -153,6 +153,45 @@ describe("buildPluginAdminMeta", () => {
     expect(disabled[0].entryFormToolbarSlot).toBeUndefined();
   });
 
+  it("publishes document views on their routed slug, for an enabled plugin only", () => {
+    const declaration = {
+      ...base,
+      renameMap: { pages: "site-pages" },
+      contributes: {
+        admin: {
+          views: {
+            pages: {
+              documentViews: [
+                {
+                  path: "builder",
+                  component: "@acme/p/admin#Builder",
+                  label: "Page Builder",
+                },
+              ],
+            },
+          },
+        },
+      },
+    };
+    const [enabled] = buildPluginAdminMeta(asPlugins([declaration]), undefined);
+    // On the slug the admin routes, not the one the plugin wrote: the admin
+    // matches the address it is on against this.
+    expect(enabled.documentViews).toEqual([
+      {
+        slug: "site-pages",
+        path: "builder",
+        component: "@acme/p/admin#Builder",
+        label: "Page Builder",
+      },
+    ]);
+
+    const [disabled] = buildPluginAdminMeta(
+      asPlugins([{ ...declaration, enabled: false }]),
+      undefined
+    );
+    expect(disabled.documentViews).toBeUndefined();
+  });
+
   it("folds contributes.admin menu/pages/settings for enabled plugins", () => {
     const meta = buildPluginAdminMeta(
       asPlugins([

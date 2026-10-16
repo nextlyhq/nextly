@@ -12,29 +12,154 @@ can put new pages live and retire old ones in the same moment.
 
 ## Availability
 
-| | |
-|---|---|
-| Built in | No plugin required |
-| Admin | A **Releases** section with a calendar view, and an "Add to release" action on documents |
+|            |                                                                                                                                |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| Built in   | No plugin required                                                                                                             |
+| Admin      | A **Releases** section with a calendar view, and an "Add to release" action on documents                                       |
 | Permission | Scheduling requires publish access. A key scoped only to publishing releases can schedule without holding a general read grant |
 
 ## What it is not
 
 <Callout type="warn">
-This is **scheduled publishing**, not an approval workflow. There are no review stages,
-transitions or assignees. If you need "editor submits, manager approves, then it goes
-live", that is not what a release does.
+  This is **scheduled publishing**, not an approval workflow. There are no
+  review stages, transitions or assignees. If you need "editor submits, manager
+  approves, then it goes live", that is not what a release does.
 </Callout>
 
 ## The shape of a release
 
-| Step | What happens |
-|---|---|
-| Create | An empty release with a name |
-| Add members | Each member names a document and an action, `publish` or `unpublish` |
-| Schedule | The release is given a time. Blocking problems are checked first |
-| Apply | On a background-jobs pass after that time, every member's action is applied |
-| Cancel | An unapplied release can be cancelled |
+| Step        | What happens                                                                |
+| ----------- | --------------------------------------------------------------------------- |
+| Create      | An empty release with a name                                                |
+| Add members | Each member names a document and an action, `publish` or `unpublish`        |
+| Schedule    | The release is given a time. Blocking problems are checked first            |
+| Apply       | On a background-jobs pass after that time, every member's action is applied |
+| Cancel      | An unapplied release can be cancelled                                       |
+
+## Listing releases
+
+<Callout type="info">
+  Tabs, search and paging are **experimental**: their names and shapes may
+  change before the releases list is finished.
+</Callout>
+
+The list is paged on the server, so its total and every page cover every release on the
+site, however many there are. It is read in one of four tabs, and each release is in exactly
+one of them:
+
+| Tab         | Holds                                           | Order                        |
+| ----------- | ----------------------------------------------- | ---------------------------- |
+| `upcoming`  | Scheduled releases that are not overdue         | Soonest first                |
+| `attention` | Stopped (`blocked`) releases, then overdue ones | Longest waiting first        |
+| `drafts`    | Releases not yet scheduled                      | Newest first                 |
+| `done`      | Published and cancelled releases                | Most recently finished first |
+
+A release is **overdue** when it is still scheduled more than 10 minutes after its time. A
+release a few minutes past its time is still upcoming: the job runner applies it on its next
+pass. One still waiting after 10 minutes is one the runner is not reaching, usually because
+no scheduler calls it (see below).
+
+Search matches text in the title or the description, ignoring case. It reads every release
+in the tab it searches, since no index can serve a match in the middle of a text; that is
+fast for the hundreds of releases a site keeps, and grows with the size of the history. What you type is
+matched as written, so `50%` finds "50% off" and not "50 years". On SQLite, case is ignored for the letters A to Z only. On MySQL, search follows the
+collation of the releases table: the default `utf8mb4` collations ignore case, a
+case-sensitive one does not.
+
+Ties are broken by id, so a release appears on exactly one page even when several share a
+time. Releases scheduled with no tab and no `order` come soonest first; other listings
+without a tab come latest first.
+
+### Over REST
+
+`GET /api/releases` takes these query parameters:
+
+| Parameter                           | Meaning                                                                    |
+| ----------------------------------- | -------------------------------------------------------------------------- |
+| `tab`                               | `upcoming`, `attention`, `drafts` or `done`. Not combined with `state`     |
+| `reason`                            | With `tab=attention`: `stopped` or `overdue`, to read one part of that tab |
+| `state`                             | One lifecycle state, when you need it rather than a tab                    |
+| `search`                            | Text in the title or description, up to 200 characters                     |
+| `order`                             | `soonest` or `latest`. Only with no tab or with `upcoming`                 |
+| `page`                              | The page, from 1                                                           |
+| `limit`                             | Rows per page, 50 by default and at most 200                               |
+| `scheduledAfter`, `scheduledBefore` | A window on the scheduled time, as ISO 8601 instants                       |
+
+The answer is the standard list envelope. `meta.total` is the number of releases matching,
+across all pages. The page and the total are read one after the other, as on every paged list. A
+release that changes tab between the two reads (a scheduled release the drain publishes, say) can
+leave the page and the total one apart for that one response. The next request reads both again.
+
+```json
+{
+  "items": [
+    {
+      "id": "…",
+      "title": "Spring launch",
+      "state": "scheduled",
+      "can": {
+        "schedule": true,
+        "cancel": true,
+        "addMember": true,
+        "removeMember": true
+      }
+    }
+  ],
+  "meta": {
+    "total": 42,
+    "page": 1,
+    "limit": 20,
+    "totalPages": 3,
+    "hasNext": true,
+    "hasPrev": false
+  }
+}
+```
+
+To count a tab without reading its releases, ask for one row and read `meta.total`:
+`GET /api/releases?tab=attention&limit=1`.
+
+### From the Direct API
+
+`nextly.releases.find()` takes the same filters and answers with the same `{ items, meta }`
+envelope as every other Direct API list:
+
+```ts
+import { getNextly } from "nextly";
+
+import config from "../../nextly.config";
+
+const nextly = await getNextly({ config });
+
+const { items, meta } = await nextly.releases.find({
+  tab: "upcoming",
+  search: "spring",
+  page: 1,
+  limit: 20,
+});
+// meta.total counts every matching release, across all pages
+
+const needsAttention = await nextly.releases.count({ tab: "attention" });
+const overdue = await nextly.releases.count({
+  tab: "attention",
+  reason: "overdue",
+});
+```
+
+`find()` is paged like every list: without a `limit` it returns the first 50 releases. To
+read every release, ask for each page in turn, up to `meta.totalPages` (at most 200 per
+page).
+
+`count()` takes the same tab, state, window and search as `find()`, and gives the same
+number as its `meta.total` without reading the releases.
+
+Filtering by `containing` (one document's releases) still works, and still comes soonest
+first, in the order the releases will apply to that document. `tab`, `search` and `order`
+are refused alongside it.
+
+A release's documents (`GET /api/releases/:id/members`, `nextly.releases.listMembers()`)
+come back in the order they were added. Asking for the documents or the blocking reasons of a release that does not exist
+answers `404`, not an empty list.
 
 ## Scheduling stores a time; a job runner applies it
 
@@ -47,9 +172,10 @@ shared secret the caller needs, and the two ways a scheduler ends up silently do
 Wire it there once and every scheduled release depends on it.
 
 <Callout type="warn">
-**With no scheduler configured, a release is never applied.** Its due time passes and the
-sweep that would carry it out never runs. A scheduler configured but refused, by the wrong
-path or a missing secret, leaves you in the same place.
+  **With no scheduler configured, a release is never applied.** Its due time
+  passes and the sweep that would carry it out never runs. A scheduler
+  configured but refused, by the wrong path or a missing secret, leaves you in
+  the same place.
 </Callout>
 
 What that does **not** mean is that the content change is invisible. A read consults the
@@ -63,11 +189,12 @@ The sweep is what applies it for real, writing as the member's own author, and i
 only thing that advances the release's own state.
 
 <Callout type="warn">
-What a reader sees and what the stored rows hold are therefore two different questions
-while a release is waiting for the sweep, and the second one has more cases than the first:
-overlapping releases, a member whose author is gone, and a pass that applied some members
-before failing on another. If you integrate against the database directly rather than
-through Nextly, read `apply-due-releases.ts` before relying on release state.
+  What a reader sees and what the stored rows hold are therefore two different
+  questions while a release is waiting for the sweep, and the second one has
+  more cases than the first: overlapping releases, a member whose author is
+  gone, and a pass that applied some members before failing on another. If you
+  integrate against the database directly rather than through Nextly, read
+  `apply-due-releases.ts` before relying on release state.
 </Callout>
 
 A pass is bounded, which is why a due release is not always applied by the next tick: it
@@ -94,10 +221,11 @@ A member is the whole document. Adding a post to a release schedules that post i
 language it has.
 
 <Callout type="warn">
-Per-locale scheduling is **not** supported: adding a member that names a single locale is
-refused, and the admin only offers the action from a document's default locale. Each
-language does have its own published state — see [Localization](/docs/localization) — but
-that is publishing, not scheduling.
+  Per-locale scheduling is **not** supported: adding a member that names a
+  single locale is refused, and the admin only offers the action from a
+  document's default locale. Each language does have its own published state —
+  see [Localization](/docs/localization) — but that is publishing, not
+  scheduling.
 </Callout>
 
 ## Related

@@ -15,6 +15,7 @@ import type {
 } from "@admin/types/dashboard/widgets";
 
 import { tableAccepts, tableBody } from "../table";
+import { CardEmpty } from "../../frame/states";
 
 const widget = (select?: string[]): DashboardWidget =>
   ({
@@ -37,7 +38,9 @@ const listOf = (
 function draw(result: WidgetResult, definition: DashboardWidget) {
   const outcome = tableBody(result, definition);
   if (!outcome.ok) throw new Error(`expected a body, got: ${outcome.message}`);
-  render(<>{outcome.node}</>);
+  render(
+    <>{outcome.empty ? <CardEmpty {...outcome.empty} /> : outcome.node}</>
+  );
 }
 
 describe("the table archetype", () => {
@@ -102,7 +105,8 @@ describe("the table archetype", () => {
 
   it("says nothing is there rather than drawing an empty table", () => {
     draw(listOf([]), widget(["title"]));
-    expect(screen.getByTestId("widget-table-empty")).toBeInTheDocument();
+    // The frame's one empty state, not a table of nothing.
+    expect(screen.getByTestId("card-empty")).toBeInTheDocument();
     expect(screen.queryByTestId("widget-table")).not.toBeInTheDocument();
   });
 

@@ -291,6 +291,7 @@ export function WidgetGrid() {
     counted,
     failed,
     settling,
+    retry,
   } = useWidgetBatch(cards);
 
   const gridAnnouncer = useGridAnnouncer(settling, counted, failed);
@@ -352,6 +353,7 @@ export function WidgetGrid() {
           requested={requested}
           updatedAt={updatedAt}
           fetchingPlacementIds={fetchingPlacementIds}
+          retry={retry}
           announcement={announcement}
           focus={focus}
           gridRef={focus.gridRef}

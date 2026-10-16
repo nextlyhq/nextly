@@ -57,6 +57,7 @@ import {
   RELEASE_SCHEDULABLE_FROM,
   RELEASE_SCHEDULABLE_FROM_BLOCKED,
   RELEASE_SCHEDULABLE_FROM_UNBLOCKED,
+  RELEASE_STATES,
   RELEASE_STATES_SHOWN_ON_A_DOCUMENT,
   isReleaseMemberAction,
   type ReleaseBlockerReason,
@@ -65,12 +66,19 @@ import {
 } from "../../../schemas/releases/types";
 import type { VersionScopeKind } from "../../../schemas/versions/types";
 import { isUniqueViolation } from "../../../shared/lib/unique-violation";
+import {
+  RELEASE_ATTENTION_REASONS,
+  RELEASE_TABS,
+  type ReleaseAttentionReason,
+  type ReleaseTab,
+} from "../release-tabs";
 import { documentRefKey, RELEASE_LIST_ORDERS } from "../releases-repository";
 import type {
   DocumentRef,
   NewRelease,
   ReleaseListOrder,
   ReleaseMemberRow,
+  ReleasePageQuery,
   ReleaseRow,
   ReleasesRepository,
 } from "../releases-repository";
@@ -270,7 +278,10 @@ function blockerReasonFor(
 }
 
 /** Whether a row satisfies the qualifiers a list query carries beside `containing`. */
-function matchesListQuery(row: ReleaseRow, query: FindReleasesQuery): boolean {
+function matchesListQuery(
+  row: ReleaseRow,
+  query: FindReleasesFilters
+): boolean {
   if (query.state !== undefined && row.state !== query.state) return false;
   const at = row.scheduledAt?.getTime();
   if (query.scheduledAfter !== undefined) {
@@ -331,16 +342,208 @@ interface FindReleasesFilters {
   scheduledAfter?: Date;
   scheduledBefore?: Date;
   /**
-   * How many rows at most. Must be a non-negative integer when given.
-   *
-   * There is no `offset`: the select port this reads through exposes `where`,
-   * `orderBy` and `limit` and nothing else, so offset paging would mean widening
-   * it for a caller that does not exist yet. The index page brings its own
-   * paging question when it is built, and keyset paging over `scheduledAt` is
-   * the shape that will suit it — an offset would drift under a list whose rows
-   * move as releases publish.
+   * Rows per page: {@link DEFAULT_RELEASE_PAGE_SIZE} when not given, and at
+   * most {@link MAX_RELEASE_PAGE_SIZE}.
    */
   limit?: number;
+  /**
+   * Which page, counting from 1.
+   *
+   * @experimental
+   */
+  page?: number;
+}
+
+/**
+ * The page size a listing gets when it asks for none, and the most it may ask
+ * for. Declared once here so the REST route and the Direct API page alike.
+ *
+ * @experimental
+ */
+export const DEFAULT_RELEASE_PAGE_SIZE = 50;
+/** @experimental */
+export const MAX_RELEASE_PAGE_SIZE = 200;
+
+/**
+ * The longest search accepted. Well above any title a person types, and a
+ * bound on the pattern a caller can hand the database to match against every
+ * release.
+ *
+ * @experimental
+ */
+export const MAX_RELEASE_SEARCH_LENGTH = 200;
+
+/**
+ * What {@link ReleasesService.count} narrows by: the list's filters, without
+ * a page or an order.
+ *
+ * @experimental
+ */
+export interface ReleaseCountQuery {
+  tab?: ReleaseTab;
+  /** With `tab: "attention"`: only its stopped, or only its overdue, releases. */
+  reason?: ReleaseAttentionReason;
+  state?: ReleaseState;
+  scheduledAfter?: Date;
+  scheduledBefore?: Date;
+  search?: string;
+}
+
+/**
+ * One page of a release listing, and the size of the whole of it.
+ *
+ * @experimental
+ */
+export interface ReleaseListPage {
+  /** Carries `memberAction` when the listing was filtered by `containing`. */
+  rows: Array<ReleaseRow & { memberAction?: ReleaseMemberAction }>;
+  /** Every release the query matches, across all pages. */
+  total: number;
+  page: number;
+  limit: number;
+}
+
+/**
+ * The order a listing takes when the caller chose none.
+ *
+ * Soonest first for the scheduled releases — the Upcoming tab, or a plain
+ * listing filtered to `scheduled` — because the question asked of them is
+ * "what ships next", and latest first answers it with the release furthest
+ * out. Latest first otherwise, the order every other listing has always had.
+ * One rule, so a REST caller and a Direct API caller cannot disagree.
+ */
+function defaultOrderFor(query: {
+  tab?: ReleaseTab;
+  state?: ReleaseState;
+  order?: ReleaseListOrder;
+}): ReleaseListOrder {
+  if (query.order !== undefined) return query.order;
+  return query.tab === "upcoming" || query.state === "scheduled"
+    ? "soonest"
+    : "latest";
+}
+
+/**
+ * Refuse a value outside its vocabulary, naming the ones that are inside it.
+ *
+ * Each would otherwise answer with rows that look right: an unknown tab or
+ * state matches nothing and reads as "no releases", and an unknown order falls
+ * through to the default end of the timeline.
+ */
+function assertKnown(
+  name: string,
+  value: string | undefined,
+  allowed: readonly string[]
+): void {
+  if (value === undefined || allowed.includes(value)) return;
+  throw NextlyError.invalidInput({
+    message: `\`${name}\` must be one of: ${allowed.join(", ")}.`,
+    logContext: { reason: `invalid-${name}`, [name]: value },
+  });
+}
+
+/**
+ * Refuse a window bound that is not a real instant.
+ *
+ * The Direct API is reachable from JavaScript, where `scheduledAfter:
+ * "tomorrow"` or an invalid `Date` would otherwise reach the timestamp
+ * comparison and fail there as a database error, or compare differently per
+ * dialect.
+ */
+function assertInstant(name: string, value: unknown): void {
+  if (value === undefined) return;
+  if (!(value instanceof Date) || !Number.isFinite(value.getTime())) {
+    throw NextlyError.invalidInput({
+      message: `\`${name}\` must be a valid Date.`,
+      logContext: { reason: `invalid-${name}` },
+    });
+  }
+}
+
+/**
+ * Refuse filters that are each valid but ask two questions at once.
+ *
+ * A tab is already a set of states, so a tab with a state is a second way of
+ * saying which releases to show; and only Upcoming has two meaningful orders,
+ * so an `order` on another tab would be silently ignored.
+ */
+function assertListCombination(query: {
+  tab?: ReleaseTab;
+  reason?: ReleaseAttentionReason;
+  state?: ReleaseState;
+  order?: ReleaseListOrder;
+}): void {
+  if (query.reason !== undefined && query.tab !== "attention") {
+    throw NextlyError.invalidInput({
+      message:
+        '`reason` needs `tab: "attention"`: it names one part of that tab.',
+      logContext: { reason: "reason-without-attention-tab", tab: query.tab },
+    });
+  }
+  if (query.tab !== undefined && query.state !== undefined) {
+    throw NextlyError.invalidInput({
+      message:
+        "`tab` and `state` cannot be combined: a tab is already a set of states.",
+      logContext: { reason: "tab-with-state", tab: query.tab },
+    });
+  }
+  if (
+    query.order !== undefined &&
+    query.tab !== undefined &&
+    query.tab !== "upcoming"
+  ) {
+    throw NextlyError.invalidInput({
+      message: `\`order\` is only available with the upcoming tab; ${query.tab} has an order of its own.`,
+      logContext: { reason: "order-with-tab", tab: query.tab },
+    });
+  }
+}
+
+/**
+ * The search as the database should see it, or `undefined` for none.
+ *
+ * Trimmed, so a stray space typed into the box does not narrow the list to
+ * releases containing a space; empty after trimming is no search at all.
+ */
+function searchText(search: unknown): string | undefined {
+  if (search === undefined) return undefined;
+  // Checked before it is used as a string: the Direct API is reachable from
+  // JavaScript, where `search: 42` would otherwise fail on `.trim()` as a raw
+  // TypeError rather than as the refusal every other field gets.
+  if (typeof search !== "string") {
+    throw NextlyError.invalidInput({
+      message: "`search` must be a string.",
+      logContext: { reason: "invalid-search", type: typeof search },
+    });
+  }
+  const text = search.trim();
+  if (text === undefined || text === "") return undefined;
+  if (text.length > MAX_RELEASE_SEARCH_LENGTH) {
+    throw NextlyError.invalidInput({
+      message: `\`search\` must be ${MAX_RELEASE_SEARCH_LENGTH} characters or fewer.`,
+      logContext: { reason: "search-too-long", length: text.length },
+    });
+  }
+  return text;
+}
+
+/**
+ * A whole number at least `min`, or a refusal naming the field.
+ *
+ * Checked here and not only at the HTTP boundary, because the Direct API is
+ * reachable from JavaScript and a cast: on SQLite `LIMIT -1` means no limit,
+ * so an unchecked negative turns a bounded read into a full table scan.
+ */
+function assertWholeNumber(name: string, value: number, min: number): void {
+  // A SAFE integer, not merely an integer: `1e308` is an integer to
+  // `Number.isInteger`, and the offset worked out from it is `Infinity`, which
+  // reaches the database as a driver error rather than a refusal.
+  if (!Number.isSafeInteger(value) || value < min) {
+    throw NextlyError.invalidInput({
+      message: `\`${name}\` must be a whole number of at least ${min}.`,
+      logContext: { reason: `invalid-${name}`, [name]: value },
+    });
+  }
 }
 
 /**
@@ -377,17 +580,45 @@ export type FindReleasesQuery = FindReleasesFilters &
         containing?: DocumentRef;
         /** Always soonest-first; see above. */
         order?: never;
+        /** The document's own releases are not a tab of the list. */
+        tab?: never;
+        reason?: never;
+        /** Nor are they searched: a document is in a handful at most. */
+        search?: never;
       }
     | {
         containing?: undefined;
         /**
-         * Which end of the timeline a `limit` keeps.
+         * One of the list's four views (`release-tabs`). Not combined with
+         * `state`: a tab is already a set of states, and the two together
+         * would be a second way of saying which releases to show.
          *
-         * Defaults to `"latest"`, the recent-first order every caller before the
-         * dashboard wanted. `"soonest"` exists because the two are not the same
-         * question narrowed differently: asking for the next five releases under the
-         * recent-first order returns the five FURTHEST OUT, and answers with real
-         * rows in a plausible order, so nothing about the result says it is wrong.
+         * @experimental
+         */
+        tab?: ReleaseTab;
+        /**
+         * With `tab: "attention"`, only its `"stopped"` or only its
+         * `"overdue"` releases — for example, to count overdue releases alone.
+         *
+         * @experimental
+         */
+        reason?: ReleaseAttentionReason;
+        /**
+         * Text in the title or the description, without regard to case, matched
+         * as written. Applied in the database, before the page and the total.
+         *
+         * @experimental
+         */
+        search?: string;
+        /**
+         * Which end of the timeline comes first.
+         *
+         * When not given: soonest first for the scheduled releases — the
+         * upcoming tab, or `state: "scheduled"` — and latest first otherwise.
+         * Asking for the next five releases latest first returns the five
+         * FURTHEST OUT, with real rows in a plausible order, so nothing about the
+         * result says it is wrong. The other tabs have an order of their own and
+         * refuse this.
          */
         order?: ReleaseListOrder;
       }
@@ -599,7 +830,7 @@ export class ReleasesService {
    * saying it that way avoids a second implementation of that ordering.
    */
   private async findContaining(
-    query: FindReleasesQuery & { containing: DocumentRef },
+    query: FindReleasesFilters & { containing: DocumentRef },
     now: Date
   ): Promise<Array<ReleaseRow & { memberAction: ReleaseMemberAction }>> {
     const ref = query.containing;
@@ -677,70 +908,140 @@ export class ReleasesService {
         void member;
         return row;
       })
-      .filter(row => matchesListQuery(row, query))
-      .slice(0, query.limit ?? rows.length);
+      .filter(row => matchesListQuery(row, query));
   }
 
+  /**
+   * One page of releases, and how many match in all.
+   *
+   * A tab or the plain filters, a search and a page, all applied in the
+   * database, so the total and every page cover every release that matches —
+   * not only the ones one page happened to hold. Filtered by `containing`, the
+   * document's own releases instead, in the order they will be applied to it.
+   */
   async find(
     query: FindReleasesQuery,
     actor: ReleaseActor
-  ): Promise<ReleaseRow[]> {
+  ): Promise<ReleaseListPage> {
     await this.authorize(actor, "read");
-    // A negative limit is not a smaller page — on SQLite `LIMIT -1` means NO
-    // limit, so a query documented as returning "at most" N would return every
-    // release and turn a bounded dashboard read into a full table scan.
-    if (
-      query.limit !== undefined &&
-      (!Number.isInteger(query.limit) || query.limit < 0)
-    ) {
+    const page = query.page ?? 1;
+    const limit = query.limit ?? DEFAULT_RELEASE_PAGE_SIZE;
+    assertWholeNumber("page", page, 1);
+    assertWholeNumber("limit", limit, 1);
+    // The offset too: a page that is a safe integer on its own can still put
+    // the offset past the range the database is handed exactly.
+    assertWholeNumber("page", (page - 1) * limit, 0);
+    if (limit > MAX_RELEASE_PAGE_SIZE) {
       throw NextlyError.invalidInput({
-        message: "`limit` must be a non-negative integer.",
-        logContext: { reason: "invalid-limit", limit: query.limit },
+        message: `\`limit\` may be at most ${MAX_RELEASE_PAGE_SIZE}.`,
+        logContext: { reason: "limit-too-large", limit },
       });
     }
-    // Read through a widened view, deliberately: the type above makes this
-    // combination unrepresentable, and a type binds neither a JavaScript caller
+    // Read through a widened view, deliberately: the type above makes these
+    // combinations unrepresentable, and a type binds neither a JavaScript caller
     // nor a cast. Refused rather than honoured, because `findContaining`'s
     // soonest-first order is its contract -- `resolveReleaseEffect` takes the
     // LAST row as the final state -- so applying a caller's order there would
     // hand the winner's place to the loser. Refused rather than ignored,
-    // because accepting an ordering and not applying it answers a different
+    // because accepting a filter and not applying it answers a different
     // question than the one asked, with rows that look right.
     const asked: FindReleasesFilters & {
       containing?: DocumentRef;
       order?: ReleaseListOrder;
+      tab?: ReleaseTab;
+      reason?: ReleaseAttentionReason;
+      search?: string;
     } = query;
-    // 🔴 An unrecognised order is not a smaller mistake than an unrecognised
-    // state. `state` reaches a WHERE clause, so a typo answers with an empty
-    // list -- wrong, but visibly so. `order` reaches a ternary, so a typo
-    // selects the DEFAULT end and answers with real rows in the exact reverse
-    // of what was asked. Checked against the vocabulary's runtime form rather
-    // than trusted from the type, because the public Direct API is reachable
-    // from JavaScript and from a cast.
-    if (
-      asked.order !== undefined &&
-      !RELEASE_LIST_ORDERS.includes(asked.order)
-    ) {
-      throw NextlyError.invalidInput({
-        message: `\`order\` must be one of: ${RELEASE_LIST_ORDERS.join(", ")}.`,
-        logContext: { reason: "invalid-order", order: asked.order },
+    if (asked.containing !== undefined) {
+      for (const key of ["order", "tab", "reason", "search"] as const) {
+        if (asked[key] !== undefined) {
+          throw NextlyError.invalidInput({
+            message:
+              `\`${key}\` is not available with \`containing\`: that listing is a ` +
+              "document's own releases, soonest first, the order they will be applied to it.",
+            logContext: { reason: `${key}-with-containing` },
+          });
+        }
+      }
+      // Validated as the list's are — the state and the window bounds — so a
+      // typo or a bound that is not a Date is refused here too, rather than
+      // failing or silently not filtering in the in-memory pass below.
+      this.listFilters({
+        state: asked.state,
+        scheduledAfter: asked.scheduledAfter,
+        scheduledBefore: asked.scheduledBefore,
       });
-    }
-    if (asked.containing !== undefined && asked.order !== undefined) {
-      throw NextlyError.invalidInput({
-        message:
-          "`order` is not available with `containing`: that listing is always " +
-          "soonest first, the order the releases will be applied to the document.",
-        logContext: { reason: "order-with-containing", order: asked.order },
-      });
-    }
-    if (query.containing !== undefined) {
-      return this.findContaining(
-        { ...query, containing: query.containing },
+      // Every release holding one document, which is a handful, so paged in
+      // memory after the engine's order is applied rather than in the query.
+      const all = await this.findContaining(
+        {
+          state: asked.state,
+          scheduledAfter: asked.scheduledAfter,
+          scheduledBefore: asked.scheduledBefore,
+          containing: asked.containing,
+        },
         new Date()
       );
+      const offset = (page - 1) * limit;
+      return {
+        rows: all.slice(offset, offset + limit),
+        total: all.length,
+        page,
+        limit,
+      };
     }
-    return this.deps.repository.findReleases(query);
+    const found = await this.deps.repository.findReleasePage({
+      ...this.listFilters(asked),
+      order: defaultOrderFor(asked),
+      offset: (page - 1) * limit,
+      limit,
+    });
+    return { rows: found.rows, total: found.total, page, limit };
+  }
+
+  /**
+   * How many releases a listing holds, without reading them.
+   *
+   * What a page outside Releases asks — "how many need attention?" — answered
+   * by the list's own rules, so a count shown elsewhere is always the count the
+   * list would show.
+   *
+   * @experimental
+   */
+  async count(query: ReleaseCountQuery, actor: ReleaseActor): Promise<number> {
+    await this.authorize(actor, "read");
+    return this.deps.repository.countReleases(this.listFilters(query));
+  }
+
+  /**
+   * The list's filters, checked, as the repository takes them.
+   *
+   * Each refusal is one a caller can act on, and each guards against an answer
+   * that would look right while being wrong: an unknown tab or state would
+   * otherwise match nothing and read as "no releases", and an `order` on a tab
+   * that has its own would be silently ignored.
+   */
+  private listFilters(
+    query: ReleaseCountQuery & { order?: ReleaseListOrder }
+  ): Omit<ReleasePageQuery, "offset" | "limit"> {
+    assertKnown("tab", query.tab, RELEASE_TABS);
+    assertKnown("state", query.state, RELEASE_STATES);
+    assertKnown("order", query.order, RELEASE_LIST_ORDERS);
+    assertKnown("reason", query.reason, RELEASE_ATTENTION_REASONS);
+    assertInstant("scheduledAfter", query.scheduledAfter);
+    assertInstant("scheduledBefore", query.scheduledBefore);
+    assertListCombination(query);
+    return {
+      tab: query.tab,
+      reason: query.reason,
+      state: query.state,
+      scheduledAfter: query.scheduledAfter,
+      scheduledBefore: query.scheduledBefore,
+      search: searchText(query.search),
+      // One clock reading per request, so a release cannot be judged overdue
+      // for the count and not for the page it is on.
+      now: new Date(),
+    };
   }
 
   /**
@@ -767,7 +1068,28 @@ export class ReleasesService {
     actor: ReleaseActor
   ): Promise<ReleaseBlocker[]> {
     await this.authorize(actor, "read");
+    await this.requireRelease(releaseId);
     return this.derivedBlockers(releaseId);
+  }
+
+  /**
+   * Refuse a release id that names no release.
+   *
+   * Its members and its problems are both empty lists when it does not exist,
+   * and an empty list is also the honest answer for a release with no members —
+   * so without this a typo or a deleted release reads as "nothing in it, nothing
+   * wrong". Asked after authorization, so a caller who may not read releases
+   * learns nothing about which ids exist.
+   */
+  private async requireRelease(releaseId: string): Promise<void> {
+    const [release] = await this.deps.repository.findReleases({
+      ids: [releaseId],
+    });
+    if (release === undefined) {
+      throw NextlyError.notFound({
+        logContext: { reason: "release-not-found", releaseId },
+      });
+    }
   }
 
   /**
@@ -822,6 +1144,7 @@ export class ReleasesService {
     actor: ReleaseActor
   ): Promise<ReleaseMemberRow[]> {
     await this.authorize(actor, "read");
+    await this.requireRelease(releaseId);
     return this.deps.repository.listMembers(releaseId);
   }
 

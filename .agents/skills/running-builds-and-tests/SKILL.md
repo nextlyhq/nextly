@@ -1,6 +1,8 @@
 ---
 name: running-builds-and-tests
 description: Use before building, typechecking, linting or running unit, integration or end-to-end tests in the Nextly monorepo, when a build, lint or type result looks wrong, when starting the test database containers, or when sizing or overriding how much of the machine a local run may take.
+metadata:
+  internal: true
 ---
 
 # Building and testing in the Nextly monorepo

@@ -21,6 +21,8 @@ import {
 import type { WidgetResult } from "../result";
 import type { WidgetOp } from "../sources";
 
+import { quote } from "./quote";
+
 /**
  * Core's displays that draw data: today's data archetypes, so a display is a
  * way of drawing that already exists rather than a new vocabulary.
@@ -47,7 +49,7 @@ export function displayOpProblem(
   const ops: readonly string[] = ARCHETYPE_OPS[display];
   return typeof op === "string" && ops.includes(op)
     ? undefined
-    : `its query's operation ${JSON.stringify(op) ?? String(op)} is not one the "${display}" display draws (${ops.join(", ")})`;
+    : `its query's operation ${quote(op)} is not one the "${display}" display draws (${ops.join(", ")})`;
 }
 
 /**
