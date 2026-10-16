@@ -44,6 +44,7 @@ import type { DynamicCollectionRecord } from "../../../schemas/dynamic-collectio
 import type { DynamicFieldGroupRecord } from "../../../schemas/dynamic-field-groups/types";
 import type { DynamicSingleRecord } from "../../../schemas/dynamic-singles/types";
 import type { UserFieldDefinitionRecord } from "../../../schemas/user-field-definitions/types";
+import { DEFAULT_TYPESCRIPT_CONFIG } from "../../../shared/types/config";
 import { extractFieldGroupReferences } from "../../field-groups/storage/field-group-field-type";
 import { currentFieldGroupTypeKey } from "../../field-groups/storage/field-group-type-key";
 
@@ -305,9 +306,11 @@ export class TypeGenerator {
     this.generateConfig = options.generateConfig ?? true;
     this.generateModuleAugmentation =
       options.generateModuleAugmentation ?? true;
-    // The file name of the config's default `typescript.outputFile`; a test
-    // holds the two together.
-    this.filename = options.filename ?? "nextly-types.ts";
+    // The file name of the config's default `typescript.outputFile`, read
+    // from it so the two never name different files.
+    this.filename =
+      options.filename ??
+      DEFAULT_TYPESCRIPT_CONFIG.outputFile.replace(/^.*\//, "");
     this.moduleToAugment = options.moduleToAugment ?? "nextly";
   }
 

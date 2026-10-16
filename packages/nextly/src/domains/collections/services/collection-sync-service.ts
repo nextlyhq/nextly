@@ -1053,8 +1053,9 @@ export class CollectionSyncService extends BaseService {
       // The same settling `generate:types` does, after the new file exists,
       // so a sync in an app with the old default's file leaves one
       // declaration of the generated types, not two that clash.
-      const notice = retireOldDefaultTypesFile(opts.cwd, outputFile);
-      if (notice) this.logger.warn(notice);
+      for (const notice of retireOldDefaultTypesFile(opts.cwd, outputFile)) {
+        this.logger.warn(notice);
+      }
     }
 
     return outputPath;
