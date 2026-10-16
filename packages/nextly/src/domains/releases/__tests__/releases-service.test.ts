@@ -625,6 +625,8 @@ describe("ReleasesService.find pages the list", () => {
     ["an unknown state", { state: "schedule" }],
     ["a search past the limit", { search: "x".repeat(201) }],
     ["page 0", { page: 0 }],
+    ["a null page", { page: null }],
+    ["a null limit", { limit: null }],
     ["a fractional page", { page: 1.5 }],
     ["a page larger than the maximum", { limit: 201 }],
     ["a page past the safe integers", { page: 1e308 }],

@@ -924,8 +924,13 @@ export class ReleasesService {
     actor: ReleaseActor
   ): Promise<ReleaseListPage> {
     await this.authorize(actor, "read");
-    const page = query.page ?? 1;
-    const limit = query.limit ?? DEFAULT_RELEASE_PAGE_SIZE;
+    // Defaulted only when ABSENT. `??` would also turn a JavaScript caller's
+    // `null` into page 1 or the default size, answering a malformed call with
+    // a plausible page; given here, null is checked and refused like any other
+    // value that is not a whole number.
+    const page = query.page === undefined ? 1 : query.page;
+    const limit =
+      query.limit === undefined ? DEFAULT_RELEASE_PAGE_SIZE : query.limit;
     assertWholeNumber("page", page, 1);
     assertWholeNumber("limit", limit, 1);
     // The offset too: a page that is a safe integer on its own can still put

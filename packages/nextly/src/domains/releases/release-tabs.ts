@@ -235,6 +235,12 @@ export function releaseTabQuery(
           // `cancelled` to the cancel instant, and a finished release takes no
           // other write. Anything that later writes to a finished release must
           // keep that true or move this order to a column of its own.
+          //
+          // Not served by an index: the release indexes cover `(state,
+          // scheduledAt)`, so a Done page sorts the finished releases it
+          // matches before taking its page. Releases are few — one per launch
+          // — so this is a sort of hundreds of rows, not millions; an index on
+          // `(state, updatedAt)` is the remedy if a history ever grows large.
           { column: "updatedAt", direction: "desc" },
           { column: "id", direction: "desc" },
         ],
