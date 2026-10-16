@@ -24,6 +24,19 @@ describe("navigateWithinAdmin", () => {
     expect(window.location.search).toBe("?field=body");
   });
 
+  it("can clear a query, moving to the same path without it", () => {
+    window.history.pushState(
+      null,
+      "",
+      "/admin/collections/pages/p1/builder?field=body"
+    );
+    navigateWithinAdmin("/admin/collections/pages/p1/builder");
+    expect(window.location.pathname).toBe(
+      "/admin/collections/pages/p1/builder"
+    );
+    expect(window.location.search).toBe("");
+  });
+
   it.each([
     "https://example.com/admin/collections",
     "//example.com/admin/collections",

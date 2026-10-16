@@ -122,7 +122,12 @@ export function navigateWithinAdmin(href: string): void {
       `navigateWithinAdmin refused ${JSON.stringify(href)}: only a path of this admin, starting "/admin/", can be navigated to.`
     );
   }
-  navigateTo(target);
+  // Compared WHOLE — path, query and hash — so a move that only drops a query
+  // still happens. `navigateTo` skips on the path alone, which would leave a
+  // plugin unable to clear the query it set.
+  const here = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+  if (target === here) return;
+  window.history.pushState(null, "", target);
 }
 
 /** The admin path and query `href` names, or `undefined` when it names none. */
