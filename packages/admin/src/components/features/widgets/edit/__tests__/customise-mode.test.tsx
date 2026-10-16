@@ -735,8 +735,16 @@ describe("leaving with unsaved changes", () => {
     expect(writes()).toBe(0);
   });
 
-  it("does not ask while a save is already on its way", async () => {
-    api.put.mockReturnValue(new Promise(() => {}));
+  it("still asks while a save is on its way, and keeps the changes if it then fails", async () => {
+    // 🔴 The separating case. A save on its way is not yet a save: turning
+    // the guard off for it let a leave through, and when the write then
+    // failed the draft was already gone with the page.
+    let fail: (error: Error) => void = () => undefined;
+    api.put.mockReturnValue(
+      new Promise((_, reject) => {
+        fail = reject;
+      })
+    );
     const user = await changed();
     await user.click(saveButton());
     await waitFor(() =>
@@ -744,8 +752,39 @@ describe("leaving with unsaved changes", () => {
     );
 
     navigate(ELSEWHERE);
-    expect(window.location.pathname).toBe(ELSEWHERE);
-    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(await screen.findByRole("alertdialog")).toBeInTheDocument();
+    expect(window.location.pathname).toBe(DASHBOARD);
+
+    await user.click(
+      within(prompt()).getByRole("button", { name: "Keep Editing" })
+    );
+    fail(new Error("network"));
+    expect(await screen.findByTestId("dashboard-edit-error")).toBeVisible();
+    expect(window.location.pathname).toBe(DASHBOARD);
+    expect(drawnOrder()).toEqual(["core/b", "core/a", "core/c"]);
+    expect(within(bar()).getByText("Unsaved changes")).toBeInTheDocument();
+  });
+
+  it("Save Changes during a save already on its way waits for it, and writes once", async () => {
+    // A second write against the same version would come back as a conflict
+    // the reader did not cause.
+    let land: (value: unknown) => void = () => undefined;
+    api.put.mockReturnValue(
+      new Promise(resolve => {
+        land = resolve;
+      })
+    );
+    const user = await changed();
+    await user.click(saveButton());
+    navigate(ELSEWHERE);
+    await user.click(
+      within(await screen.findByRole("alertdialog")).getByRole("button", {
+        name: "Save Changes",
+      })
+    );
+    land({ message: "ok", item: {} });
+    await waitFor(() => expect(window.location.pathname).toBe(ELSEWHERE));
+    expect(api.put).toHaveBeenCalledTimes(1);
   });
 
   it("leaves the browser's own prompt to reload and close", async () => {

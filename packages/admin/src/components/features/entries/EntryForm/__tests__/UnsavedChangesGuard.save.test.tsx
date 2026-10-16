@@ -195,6 +195,30 @@ describe("the prompt with a Save choice", () => {
     expect(window.location.pathname).toBe(START);
   });
 
+  it("asks again at once when a save fails moments after the prompt opened", async () => {
+    // 🔴 No wait between the two. The guard spaces its prompts apart, and a
+    // retry inside that window used to be held without a prompt: the
+    // navigation waited on a question nobody was asked, and every attempt
+    // after it was ignored.
+    const save = heldSave();
+    const { user, dialog } = await ask(save.onSave);
+    await user.click(
+      within(dialog).getByRole("button", { name: "Save Changes" })
+    );
+    save.settle(false);
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+
+    await user.click(screen.getByRole("button", { name: "second" }));
+    expect(await screen.findByRole("alertdialog")).toBeInTheDocument();
+    expect(window.location.pathname).toBe(START);
+    await user.click(
+      within(screen.getByRole("alertdialog")).getByRole("button", {
+        name: "Discard Changes",
+      })
+    );
+    expect(window.location.pathname).toBe("/admin/second");
+  });
+
   it("Discard Changes still leaves without saving", async () => {
     const onSave = vi.fn(() => Promise.resolve(true));
     const { user, dialog, onDiscard } = await ask(onSave);

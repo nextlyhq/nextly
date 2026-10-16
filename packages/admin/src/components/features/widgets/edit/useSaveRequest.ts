@@ -12,7 +12,7 @@
  * @module components/features/widgets/edit/useSaveRequest
  */
 
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 
 import type { SaveOptions, SaveOutcome } from "./useLayoutLifecycle";
 
@@ -36,13 +36,25 @@ export function useSaveRequest(
   isUnreadable: boolean
 ): SaveRequest {
   const [askingReplace, setAskingReplace] = useState(false);
+  // The save on its way, if any. A second request while one is pending -- the
+  // prompt's Save during the bar's -- waits for that one rather than sending
+  // a second write against the same version, which the server would refuse
+  // as a conflict the reader did not cause.
+  const pending = useRef<Promise<boolean> | null>(null);
 
   const request = useCallback(async (): Promise<boolean> => {
+    if (pending.current) return pending.current;
     if (isUnreadable) {
       setAskingReplace(true);
       return false;
     }
-    return (await save()) === "saved";
+    const saving = save().then(outcome => outcome === "saved");
+    pending.current = saving;
+    try {
+      return await saving;
+    } finally {
+      pending.current = null;
+    }
   }, [isUnreadable, save]);
 
   const confirmReplace = useCallback(() => {

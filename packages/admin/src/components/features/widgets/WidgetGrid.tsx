@@ -330,13 +330,13 @@ export function WidgetGrid() {
 
   return (
     // Asks before the reader leaves with unsaved changes: Save, Discard or
-    // Keep editing. Off while a save is on its way, which is already keeping
-    // the changes. Discarding says nothing, because the page is leaving and
-    // the next one speaks for itself; reload and close get the browser's own
-    // prompt.
+    // Keep editing. 🔴 Still on while a save is on its way: until it has
+    // landed the changes exist only here, and a leave let through while it
+    // was pending lost them when it failed. Discarding says nothing, because
+    // the page is leaving and the next one speaks for itself; reload and
+    // close get the browser's own prompt.
     <UnsavedChangesGuard
       isDirty={editor.hasUnsavedChanges}
-      disabled={editor.isSaving}
       onDiscard={editor.cancel}
       onSave={saveRequest.request}
     >

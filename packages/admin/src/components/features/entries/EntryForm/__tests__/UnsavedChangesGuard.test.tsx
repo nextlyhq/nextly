@@ -16,7 +16,7 @@ import {
   onTestFinished,
 } from "vitest";
 
-import { act, render, screen } from "@admin/__tests__/utils";
+import { act, render, screen, waitFor } from "@admin/__tests__/utils";
 import {
   clearDocumentViews,
   registerDocumentViews,
@@ -87,11 +87,18 @@ afterEach(() => {
   popstateHeard = undefined;
 });
 
-/** One browser traversal, awaited until its `popstate` has fired. */
-async function traverse(step: () => void): Promise<void> {
+/**
+ * A browser traversal, awaited until `events` `popstate`s have fired: two for
+ * a move the guard holds and undoes by traversing back, since the undoing one
+ * can fire before a second wait could begin.
+ */
+async function traverse(step: () => void, events = 1): Promise<void> {
   await act(async () => {
+    let left = events;
     const heard = new Promise<void>(resolve => {
       popstateHeard = () => {
+        left -= 1;
+        if (left > 0) return;
         popstateHeard = undefined;
         resolve();
       };
@@ -608,6 +615,117 @@ describe("Back and Forward with unsaved changes", () => {
     );
     expect(window.location.pathname).toBe(AFTER);
     expect(heard).toEqual([AFTER]);
+  });
+});
+
+describe("Back and Forward where the browser reports history positions", () => {
+  const BEFORE = "/admin/collections/posts";
+  const AFTER = "/admin/collections/posts/2";
+  const LATER = "/admin/collections/posts/3";
+
+  /*
+   * jsdom has no Navigation API, so a stand-in counts the current entry's
+   * position the way the browser would: a push moves one on, a replace stays,
+   * and a traversal moves by its own distance.
+   */
+  let index = 0;
+  const writes = {
+    push: History.prototype.pushState,
+    replace: History.prototype.replaceState,
+    go: History.prototype.go,
+    back: History.prototype.back,
+    forward: History.prototype.forward,
+  };
+  beforeEach(() => {
+    index = 0;
+    // A guard that unmounted restores its writes onto the history OBJECT, and
+    // an own property there would hide the counting ones on its prototype.
+    Reflect.deleteProperty(window.history, "pushState");
+    Reflect.deleteProperty(window.history, "replaceState");
+    History.prototype.pushState = function (...args) {
+      index += 1;
+      return writes.push.apply(this, args);
+    };
+    History.prototype.replaceState = function (...args) {
+      return writes.replace.apply(this, args);
+    };
+    History.prototype.go = function (delta?: number) {
+      index += delta ?? 0;
+      return writes.go.call(this, delta);
+    };
+    History.prototype.back = function () {
+      this.go(-1);
+    };
+    History.prototype.forward = function () {
+      this.go(1);
+    };
+    Object.defineProperty(window, "navigation", {
+      configurable: true,
+      value: {
+        get currentEntry() {
+          return { index };
+        },
+      },
+    });
+  });
+  afterEach(() => {
+    History.prototype.pushState = writes.push;
+    History.prototype.replaceState = writes.replace;
+    History.prototype.go = writes.go;
+    History.prototype.back = writes.back;
+    History.prototype.forward = writes.forward;
+    Reflect.deleteProperty(window, "navigation");
+  });
+
+  /**
+   * BEFORE, START, AFTER, LATER, standing on START, with a dirty editor.
+   * Answers how to take the editor away, so the steps after are not held.
+   */
+  async function onStartWithEntriesAhead(): Promise<() => void> {
+    window.history.pushState(null, "", BEFORE);
+    window.history.pushState(null, "", START);
+    window.history.pushState(null, "", AFTER);
+    window.history.pushState(null, "", LATER);
+    await traverse(() => window.history.go(-2));
+    expect(window.location.pathname).toBe(START);
+    const view = render(
+      <UnsavedChangesGuard isDirty>
+        <span />
+      </UnsavedChangesGuard>
+    );
+    return view.unmount;
+  }
+
+  it("leaves Back going back after a held Forward the author stays from", async () => {
+    // 🔴 The separating case. Putting the address back with a new entry made
+    // the destination the entry BEHIND the editor, so Back went forward, and
+    // every entry ahead of it was gone.
+    const leaveEditor = await onStartWithEntriesAhead();
+    await traverse(() => window.history.forward());
+    // Held: the page is back on the editor, however the guard got it there.
+    await waitFor(() => expect(window.location.pathname).toBe(START));
+    await userEvent.click(
+      await screen.findByRole("button", { name: /keep editing/i })
+    );
+    expect(window.location.pathname).toBe(START);
+
+    leaveEditor();
+    await traverse(() => window.history.back());
+    expect(window.location.pathname).toBe(BEFORE);
+  });
+
+  it("keeps the entries ahead when the author confirms a held Forward", async () => {
+    const leaveEditor = await onStartWithEntriesAhead();
+    await traverse(() => window.history.forward());
+    await waitFor(() => expect(window.location.pathname).toBe(START));
+    await traverse(() =>
+      screen.getByRole("button", { name: /discard/i }).click()
+    );
+    expect(window.location.pathname).toBe(AFTER);
+
+    leaveEditor();
+    await traverse(() => window.history.forward());
+    expect(window.location.pathname).toBe(LATER);
   });
 });
 
