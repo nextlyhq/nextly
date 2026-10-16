@@ -448,6 +448,22 @@ describe("refused-claim", () => {
     expect(hits.map(f => f.line)).toEqual([1, 2, 3, 4, 5]);
   });
 
+  it("fires on text a tag puts on the page: an image's alt and a component's captions", async () => {
+    const hits = refused(
+      await findingsFor({
+        "docs/a.mdx": [
+          '<img src="/a.png" alt="No SaaS required" />',
+          '<Tabs items={["Single sign-on", "Passwords"]}>',
+          '<Callout title="Free forever">',
+          '<Callout type="sso-banner">plain words</Callout>',
+          "",
+        ].join("\n"),
+      })
+    );
+    // The last line's `type` is configuration, not a caption, so it is not read as a claim.
+    expect(hits.map(f => f.line)).toEqual([1, 2, 3]);
+  });
+
   it("reports a surface it could not read rather than passing over it", async () => {
     // The tracked list names a page the disk does not have: its claims went unexamined.
     const { root, files } = await fixture({ "README.md": "x\n", "docs/a.mdx": "x\n" });

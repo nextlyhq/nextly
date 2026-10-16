@@ -1963,10 +1963,13 @@ function refusedClaimSurfaces(repoRoot, tracked, packages) {
 const OPENS_BLOCK = /^(?:\s*$|\s*#{1,6}\s|\s*[-*+]\s|\s*\d+[.)]\s|\s*\||\s*```|\s*~~~|\s*<|\s*---)/;
 
 /**
- * A line as a reader sees its words. A link or an image shows only its label, an inline tag and
- * the emphasis and code-span markers show nothing, and an entity for a space or a hyphen shows
- * as one, so none of them can split a phrase. Unlike the prose reading the category check uses,
- * a code span keeps its text: a refused phrase in a code sample is published all the same.
+ * A line as a reader sees its words. A link or an image shows only its label, and an entity for a
+ * space or a hyphen shows as one. A tag shows the text it puts on the page and nothing else: an
+ * image its alternative text, and a component the captions `componentCaptions` reads, the same
+ * definition the prose reading uses; any other tag, like the emphasis and code-span markers,
+ * shows nothing. So none of them can split or hide a phrase. Unlike the prose reading the
+ * category check uses, a code span keeps its text: a refused phrase in a code sample is
+ * published all the same.
  *
  * An underscore is markup only at the edge of a word, so `sso_enabled` keeps its own.
  */
@@ -1974,6 +1977,11 @@ function plainLine(line) {
   return line
     .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
     .replace(/\[([^\]]*)\]\[[^\]]*\]/g, "$1")
+    .replace(
+      /<img\b[^>]*?\balt=(?:"([^"]*)"|'([^']*)')[^>]*>/gi,
+      (_, quoted, single) => ` ${quoted ?? single} `
+    )
+    .replace(/<[A-Z][A-Za-z0-9]*\b[^>]*>/g, tag => ` ${componentCaptions(tag)} `)
     .replace(/<\/?[A-Za-z][^>]*>/g, "")
     .replace(/&(?:nbsp|ensp|emsp|thinsp|#0*32|#0*160|#x0*20|#x0*a0);/gi, " ")
     .replace(/&(?:hyphen|dash|#0*45|#x0*2d);/gi, "-")
