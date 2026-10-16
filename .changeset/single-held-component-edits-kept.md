@@ -37,3 +37,10 @@ the live components, a save's changes merged sub-field by sub-field, a list
 replaced whole), the save's version records them, and publishing writes
 them. A publish that sends its own component values still wins over the
 draft's, sub-field by sub-field.
+
+The same draft, and every version a held save records, now holds the Single
+as a read returns it. Groups, repeaters and JSON fields are held as values
+rather than the text their column stores, so such a version restores
+instead of being refused by validation. A localized Single's draft holds
+every stored translation of its language, not only the fields the save
+named, so a version restores without dropping the others.

@@ -24,6 +24,8 @@ import {
 } from "../../i18n/runtime/companion-io";
 import { draftComponentValues } from "../../versions/draft-components";
 
+import { serializeJsonFields } from "./single-utils";
+
 /** The column-shaped halves a pending change persists to. */
 export interface PendingChangeParts {
   /** Values belonging on the Single's own row. */
@@ -70,9 +72,13 @@ export function splitPendingChange(
   const rowValues = Object.fromEntries(
     Object.entries(draft).filter(([key]) => !(key in components))
   );
+  // A draft holds JSON-backed fields parsed, as reads do; the row stores them
+  // encoded, as an ordinary write encodes them. Encoding is idempotent, so a
+  // draft written before drafts held the read shape passes through unchanged.
+  const encoded = serializeJsonFields(rowValues, fields as FieldConfig[]);
   const payload = stripImmutableSystemFields(
     {
-      ...(keysToSnakeCase(rowValues) as Record<string, unknown>),
+      ...(keysToSnakeCase(encoded) as Record<string, unknown>),
       ...(overrides ?? {}),
     },
     "single",

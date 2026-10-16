@@ -2089,6 +2089,21 @@ export class SingleMutationService extends BaseService {
                     ...convertTimestampsToCamelCase({
                       ...(existingDoc as Record<string, unknown>),
                     }),
+                    // The language's stored translations: the main row holds
+                    // none, so without them the draft (and its version) would
+                    // lack every translation this save did not touch.
+                    ...(companion
+                      ? Object.fromEntries(
+                          companion.localizedFields.flatMap(f =>
+                            Object.prototype.hasOwnProperty.call(
+                              previousCompanionValues,
+                              f.column
+                            )
+                              ? [[f.name, previousCompanionValues[f.column]]]
+                              : []
+                          )
+                        )
+                      : {}),
                     ...tagComponentTypes(
                       await readComponentSubtrees({
                         fieldGroupDataService: this.fieldGroupDataService,
@@ -2162,6 +2177,15 @@ export class SingleMutationService extends BaseService {
                   }
                 }
               }
+              // The draft holds the read shape throughout. `mainPayload` carries
+              // JSON-backed fields (groups, repeaters, json) serialized for the
+              // column, so they are parsed back here; a draft holding the string
+              // would restore as a string, which validation refuses. The parse
+              // walks declared fields only; the draft's id comes from its base.
+              pending = this.queryService.deserializeJsonFields(
+                pending as SingleDocument,
+                singleMeta.fields
+              );
               // This save's component values, tagged as the draft holds them and
               // merged sub-field by sub-field: a save carries only the
               // sub-fields it changed. Without this the edit was never stored
