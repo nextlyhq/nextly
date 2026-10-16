@@ -85,6 +85,32 @@ async function post(t: TestNextly): Promise<string> {
   return String(created.item?.id ?? created.id);
 }
 
+/**
+ * Forget a Single's table in this process, as a worker that booted before
+ * the Single existed has never registered it: the table is in the database,
+ * not in this worker's schema registry, until a request-scoped read registers
+ * it.
+ */
+function forgetTables(t: TestNextly, ...names: string[]): void {
+  const inner = (
+    t.adapter as unknown as { tableResolver: { getTable(n: string): unknown } }
+  ).tableResolver;
+  const forgotten = new Set(names);
+  const own = new Map<string, unknown>();
+  (
+    t.adapter as unknown as { setTableResolver(r: unknown): void }
+  ).setTableResolver({
+    getTable(name: string) {
+      if (own.has(name)) return own.get(name);
+      if (forgotten.has(name)) return null;
+      return inner.getTable(name);
+    },
+    registerDynamicSchema(name: string, table: unknown) {
+      own.set(name, table);
+    },
+  });
+}
+
 describe.each(getConfiguredTestDialects())(
   "a document joining a release through the Direct API (%s)",
   dialect => {
@@ -208,6 +234,34 @@ describe.each(getConfiguredTestDialects())(
         })
       ).rejects.toMatchObject({ code: "NOT_FOUND" });
       expect(await t.adapter.select("single_banner", {})).toEqual([]);
+    });
+
+    it("finds a saved Single in a worker that has not registered its table", async () => {
+      // The read-only existence check must register the runtime table as
+      // every request-scoped Single read does, or a valid Single cannot be
+      // added from a second server process.
+      const t = await boot(dialect);
+      const author = await seedLiveAuthor(t);
+      await t.nextly.updateSingle({
+        slug: "homepage" as never,
+        data: { headline: "Draft", status: "draft" } as never,
+      });
+      const row = await t.adapter.selectOne<{ id: string }>(
+        "single_homepage",
+        {}
+      );
+      forgetTables(t, "single_homepage");
+      const release = await t.nextly.releases.create({ title: "Launch" });
+      const member = await t.nextly.releases.addMember({
+        releaseId: release.id,
+        scopeKind: "single",
+        scopeSlug: "homepage",
+        entryId: "stale-id",
+        locale: null,
+        action: "publish",
+        userId: author,
+      });
+      expect(member.entryId).toBe(row?.id);
     });
 
     it("accepts a real draft in a collection with a lifecycle", async () => {

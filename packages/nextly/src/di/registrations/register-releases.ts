@@ -24,8 +24,10 @@ import {
   RELEASES_RESOURCE,
   ReleasesService,
 } from "../../domains/releases/services/releases-service";
+import { resolveSingleForRequest } from "../../domains/singles/services/ensure-runtime-table";
 import { NextlyError } from "../../errors";
 import type { CacheRevalidator } from "../../revalidation/types";
+import type { DynamicSingleRecord } from "../../schemas/dynamic-singles/types";
 import { hasPermission } from "../../services/lib/permissions";
 import { container } from "../container";
 
@@ -252,10 +254,18 @@ async function singleRowExists(
   slug: string
 ): Promise<boolean> {
   if (!container.has("singleRegistryService")) return false;
-  const registry = container.get<{
-    getSingleBySlug(slug: string): Promise<{ tableName?: string } | null>;
-  }>("singleRegistryService");
-  const table = (await registry.getSingleBySlug(slug))?.tableName;
+  // Resolved the way every request-scoped Single read opens: the registry row,
+  // and its runtime table registered in THIS process. A worker that booted
+  // before a UI-defined Single existed has the table in the database but not
+  // in its schema registry, and a query there would fail rather than answer.
+  const single = await resolveSingleForRequest(
+    adapter,
+    container.get<{
+      getSingleBySlug(slug: string): Promise<DynamicSingleRecord | null>;
+    }>("singleRegistryService"),
+    slug
+  );
+  const table = single?.tableName;
   if (table === undefined || !(await adapter.tableExists(table))) return false;
   const rows = await adapter.select<{ id: string }>(table, {
     columns: ["id"],
