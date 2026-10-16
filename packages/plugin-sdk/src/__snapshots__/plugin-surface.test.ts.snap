@@ -51,6 +51,7 @@ exports[`plugin-sdk public export surface > \`./admin\` surface is unchanged 1`]
   "DocumentLocale (type)",
   "DocumentLockGates (type)",
   "DocumentStatus (type)",
+  "DocumentViewProps (type)",
   "EDITABLE_VALIDATION_RULES (value)",
   "FieldDefaultOption (type)",
   "FieldDefaultValueInput (value)",

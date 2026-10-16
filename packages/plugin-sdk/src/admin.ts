@@ -58,6 +58,17 @@ export type {
 export type { CustomEditViewProps, DocumentLockGates } from "@nextlyhq/admin";
 
 /**
+ * What a plugin's document view receives (@experimental): which document it
+ * is of, the document form's `control`, whether a colleague's claim makes it
+ * read-only, and `exit` back to the document's own edit screen.
+ *
+ * Republished rather than restated, for the reason the edit-view props above
+ * are: the admin builds this object, and a plugin's own copy of the shape
+ * would keep compiling after a field the admin hands over was renamed.
+ */
+export type { DocumentViewProps } from "@nextlyhq/admin";
+
+/**
  * Which language the surrounding document is being edited in (@experimental).
  *
  * A field inside a localized document can say WHICH document it is in but not

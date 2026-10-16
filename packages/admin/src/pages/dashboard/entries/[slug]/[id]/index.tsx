@@ -20,6 +20,7 @@ import {
   DocumentLockBanner,
   EntryForm,
   useDocumentLockSurface,
+  type DocumentViewMount,
   type EntryFormCollection,
 } from "@admin/components/features/entries/EntryForm";
 import { useAddToReleaseAction } from "@admin/components/features/releases/AddToReleaseAction";
@@ -47,6 +48,7 @@ import {
   getComponent,
   type CustomEditViewProps,
 } from "@admin/lib/plugins/component-registry";
+import { routedDocumentView } from "@admin/lib/plugins/document-view-registry";
 import type { ApiCollection } from "@admin/types/entities";
 
 // ============================================================================
@@ -58,7 +60,11 @@ import type { ApiCollection } from "@admin/types/entities";
  * Params are injected by the routing system.
  */
 interface EditEntryPageProps {
-  params?: { slug?: string; id?: string };
+  /**
+   * `view` is present on a document-view address
+   * (`/admin/collections/<slug>/<id>/<view>`), which this page also answers.
+   */
+  params?: { slug?: string; id?: string; view?: string };
 }
 
 // ============================================================================
@@ -208,6 +214,31 @@ function getEntryTitle(
   return entryTitleValue(entry, useAsTitle) ?? `Entry ${id.substring(0, 8)}...`;
 }
 
+/**
+ * The plugin view this entry's address names, mounted for the form, or
+ * `undefined` on the plain edit address.
+ *
+ * Read through the lookup the resolver used to let the address through, so a
+ * view it found is the view drawn here. Leaving it returns to the entry's own
+ * edit address — the form, not the list — where the same page, and so the same
+ * form, answers.
+ */
+function entryDocumentView(
+  params: EditEntryPageProps["params"]
+): DocumentViewMount | undefined {
+  const slug = params?.slug;
+  const id = params?.id;
+  const routed = routedDocumentView(slug, params?.view);
+  if (routed === undefined || slug === undefined || id === undefined) {
+    return undefined;
+  }
+  return {
+    component: routed.component,
+    onExit: () =>
+      navigateTo(buildRoute(ROUTES.COLLECTION_ENTRY_EDIT, { slug, id })),
+  };
+}
+
 // ============================================================================
 // Component
 // ============================================================================
@@ -227,6 +258,12 @@ export default function EditEntryPage({
 }: EditEntryPageProps): React.ReactElement {
   const slug = params?.slug;
   const id = params?.id;
+  /*
+   * The plugin view this address names, if any. While one is routed this page
+   * is that view's host: the custom edit view and the edit form's injection
+   * slots belong to the edit screen, which this is not.
+   */
+  const documentView = entryDocumentView(params);
 
   // Active content language for this editor. `undefined` = the app's default locale
   // (the backend resolves it). Switching triggers a refetch (useEntry is keyed by locale) and
@@ -324,8 +361,9 @@ export default function EditEntryPage({
   // reason the hooks above give: whether a custom view renders decides whether
   // THIS page claims the document, and a hook cannot be asked that after a
   // return. The registration hook has run, so the registry can answer.
-  const customEditViewPath =
-    collection?.admin?.components?.views?.Edit?.Component;
+  const customEditViewPath = documentView
+    ? undefined
+    : collection?.admin?.components?.views?.Edit?.Component;
   const CustomEditView = customEditViewPath
     ? getComponent<CustomEditViewProps>(customEditViewPath)
     : undefined;
@@ -566,10 +604,7 @@ export default function EditEntryPage({
               auto-placed into a gutter. The registry imposes no root-element
               contract, so the page provides the box. */}
           <div>
-            <PluginSlot
-              path={customEditViewPath}
-              props={customViewProps as unknown as Record<string, unknown>}
-            />
+            <PluginSlot path={customEditViewPath} props={customViewProps} />
           </div>
         </MeasuredPageFrame>
       </QueryErrorBoundary>
@@ -579,8 +614,11 @@ export default function EditEntryPage({
   // Default: render the EntryForm directly. Breadcrumbs were removed from
   // form, not the header chrome. Before/AfterEdit injection points (D23) are
   // resolved + isolated via PluginSlot around the form.
-  const beforeEditPath = collection.admin?.components?.BeforeEdit;
-  const afterEditPath = collection.admin?.components?.AfterEdit;
+  const editComponents = documentView
+    ? undefined
+    : collection.admin?.components;
+  const beforeEditPath = editComponents?.BeforeEdit;
+  const afterEditPath = editComponents?.AfterEdit;
   const editInjectionProps: Record<string, unknown> = {
     collectionSlug: slug,
     entryId: id,
@@ -653,6 +691,7 @@ export default function EditEntryPage({
           onSuccess={handleSuccess}
           onDelete={handleDelete}
           onCancel={handleCancel}
+          documentView={documentView}
         />
         {afterEditPath && (
           <div

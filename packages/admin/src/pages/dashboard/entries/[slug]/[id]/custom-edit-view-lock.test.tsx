@@ -16,10 +16,16 @@ import {
   clearRegistry,
   registerComponent,
 } from "@admin/lib/plugins/component-registry";
+import {
+  clearDocumentViews,
+  registerDocumentViews,
+} from "@admin/lib/plugins/document-view-registry";
 
 import { renderWithProviders } from "../../../../../__tests__/utils";
 
 const useDocumentLock = vi.fn();
+/** What the page last handed the (replaced) default editor. */
+let entryFormProps: Record<string, unknown> | undefined;
 vi.mock("@admin/hooks/queries/useDocumentLock", () => ({
   useDocumentLock: (options: unknown) => useDocumentLock(options) as unknown,
 }));
@@ -33,7 +39,13 @@ vi.mock(
       await importOriginal<
         typeof import("@admin/components/features/entries/EntryForm")
       >();
-    return { ...actual, EntryForm: () => <div>default entry form</div> };
+    return {
+      ...actual,
+      EntryForm: (props: Record<string, unknown>) => {
+        entryFormProps = props;
+        return <div>default entry form</div>;
+      },
+    };
   }
 );
 
@@ -106,6 +118,7 @@ beforeEach(() => {
   };
   // Cleared, so a case reading these cannot pass on the previous case's render.
   customViewProps = undefined;
+  entryFormProps = undefined;
 });
 
 /** Registers a custom view and points the collection at it. */
@@ -122,6 +135,7 @@ function withCustomView(body = "bespoke product editor") {
 
 afterEach(() => {
   clearRegistry();
+  clearDocumentViews();
 });
 
 describe("a custom collection edit view", () => {
@@ -246,5 +260,44 @@ describe("a custom collection edit view", () => {
 
     expect(screen.getByText("default entry form")).toBeInTheDocument();
     expect(claimRequest()).toMatchObject({ enabled: false });
+  });
+});
+
+describe("a routed document view", () => {
+  const VIEW = "@acme/pb/admin#Builder";
+
+  it("is drawn by the form in place of the custom edit view, and leaves to the entry's edit address", () => {
+    registerDocumentViews([
+      { slug: "posts", path: "builder", component: VIEW },
+    ]);
+    withCustomView();
+
+    renderWithProviders(
+      <EditEntryPage params={{ slug: "posts", id: "42", view: "builder" }} />
+    );
+
+    // The form hosts the view, so the form's claim is the one taken.
+    expect(screen.getByText("default entry form")).toBeInTheDocument();
+    expect(screen.queryByText("bespoke product editor")).toBeNull();
+    expect(claimRequest()).toMatchObject({ enabled: false });
+    const documentView = entryFormProps?.documentView as
+      | { component: string; onExit: () => void }
+      | undefined;
+    expect(documentView?.component).toBe(VIEW);
+
+    documentView?.onExit();
+    expect(window.location.pathname).toBe("/admin/collections/posts/42");
+  });
+
+  it("hands the form no view on the plain edit address", () => {
+    // The control: the same registry, the address without the segment.
+    registerDocumentViews([
+      { slug: "posts", path: "builder", component: VIEW },
+    ]);
+
+    renderWithProviders(<EditEntryPage params={{ slug: "posts", id: "42" }} />);
+
+    expect(entryFormProps).toBeDefined();
+    expect(entryFormProps?.documentView).toBeUndefined();
   });
 });

@@ -19,6 +19,7 @@
 import { Alert, AlertDescription, Button, Skeleton } from "@nextlyhq/ui";
 import type React from "react";
 
+import type { DocumentViewMount } from "@admin/components/features/entries/EntryForm";
 import { useAddToReleaseAction } from "@admin/components/features/releases/AddToReleaseAction";
 import { ScheduledReleaseBanner } from "@admin/components/features/releases/ScheduledReleaseBanner";
 import {
@@ -42,13 +43,18 @@ import { useEditorLocale } from "@admin/hooks/useEditorLocale";
 import { useLocalization } from "@admin/hooks/useLocalization";
 import { useTranslationMode } from "@admin/hooks/useTranslationMode";
 import { navigateTo } from "@admin/lib/navigation";
+import { routedDocumentView } from "@admin/lib/plugins/document-view-registry";
 
 // ============================================================================
 // Types
 // ============================================================================
 
 interface SingleEditPageProps {
-  params?: { slug?: string };
+  /**
+   * `view` is present on a document-view address
+   * (`/admin/singles/<slug>/<view>`), which this page also answers.
+   */
+  params?: { slug?: string; view?: string };
 }
 
 // ============================================================================
@@ -143,6 +149,26 @@ function SingleEditPageSkeleton() {
       </div>
     </PageContainer>
   );
+}
+
+/**
+ * The plugin view this Single's address names, mounted for the form, or
+ * `undefined` on the plain edit address.
+ *
+ * Read through the lookup the resolver used to let the address through, so a
+ * view it found is the view drawn here. Leaving it returns to the Single's own
+ * edit address, where the same page — and so the same form — answers.
+ */
+function singleDocumentView(
+  params: SingleEditPageProps["params"]
+): DocumentViewMount | undefined {
+  const slug = params?.slug;
+  const routed = routedDocumentView(slug, params?.view);
+  if (routed === undefined || slug === undefined) return undefined;
+  return {
+    component: routed.component,
+    onExit: () => navigateTo(buildRoute(ROUTES.SINGLE_EDIT, { slug })),
+  };
 }
 
 // ============================================================================
@@ -389,6 +415,7 @@ export default function SingleEditPage({
           // DocumentTabs (Edit / API) are removed; the API view is reachable
           // via the consolidated dropdown in the system header.
           onViewApi={() => navigateTo(buildRoute(ROUTES.SINGLE_API, { slug }))}
+          documentView={singleDocumentView(params)}
         />
       </MeasuredPageFrame>
     </QueryErrorBoundary>

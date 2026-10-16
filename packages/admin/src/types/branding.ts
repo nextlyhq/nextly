@@ -221,6 +221,19 @@ export interface PluginMetadata {
    */
   entryFormToolbarSlot?: string;
   /**
+   * @experimental Full-screen views of one document, contributed via
+   * `contributes.admin.views[<slug>].documentViews`. Each is on the slug the
+   * admin routes it under (the plugin's rename map already applied) and is
+   * served at `/admin/collections/<slug>/<id>/<path>` or, for a Single,
+   * `/admin/singles/<slug>/<path>`. Present only for enabled plugins.
+   */
+  documentViews?: Array<{
+    slug: string;
+    path: string;
+    component: string;
+    label?: string;
+  }>;
+  /**
    * Custom field types — `type` → admin editor component path. `layout:
    * "takeover"` marks a type whose visible field collapses the entry-form body
    * to just that field + its condition controller (see takeoverLayout). The
