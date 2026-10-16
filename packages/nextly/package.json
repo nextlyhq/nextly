@@ -238,6 +238,10 @@
     "./schema-extension": {
       "types": "./dist/schema-extension.d.ts",
       "import": "./dist/schema-extension.mjs"
+    },
+    "./zod": {
+      "types": "./dist/zod.d.ts",
+      "import": "./dist/zod.mjs"
     }
   },
   "files": [

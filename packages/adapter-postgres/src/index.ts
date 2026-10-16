@@ -1258,7 +1258,10 @@ export class PostgresAdapter extends DrizzleAdapter {
     // as kind: "unknown".
     if (isDatabaseError(error)) return error;
 
-    const pgError = error as {
+    // Classified from node-postgres's own error, which Drizzle puts on `cause`
+    // when it wraps a failed query (`driverErrorIn`); it is the one carrying
+    // the SQLSTATE `code`.
+    const pgError = this.driverErrorIn<{
       code?: string;
       message?: string;
       constraint?: string;
@@ -1267,7 +1270,11 @@ export class PostgresAdapter extends DrizzleAdapter {
       detail?: string;
       hint?: string;
       severity?: string;
-    };
+      cause?: unknown;
+    }>(
+      error,
+      candidate => typeof candidate.code === "string" && candidate.code !== ""
+    );
 
     // Determine error kind from PostgreSQL error code
     const kind: DatabaseErrorKind =

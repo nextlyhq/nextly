@@ -38,8 +38,10 @@ path — the editor, the API, a batch, and an import that skips hooks:
   nest deeper than the depth limit counted from the top of the document, is
   refused, naming the placement;
 - a component change that would break a page, Layout or component placing it
-  is refused, naming that document. Documents the usage index cannot vouch for
-  are reported in the server log as unjudged.
+  is refused, saying how many documents it would break and which rule. The
+  documents themselves are named only in the server log, since they were found
+  and read as the system. Documents the usage index cannot vouch for are
+  reported in the server log as unjudged.
 
 Plugin field types gain an experimental `write` argument on `validate`: which
 entry the write is for, and `readStored`, a read of stored values of the

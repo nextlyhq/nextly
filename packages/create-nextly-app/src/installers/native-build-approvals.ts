@@ -13,6 +13,7 @@ import {
 
 import type { PackageManager } from "../types";
 import { NEXTLY_NATIVE_BUILD_DEPENDENCIES } from "../utils/template";
+import { findWorkspaceRoot } from "../utils/workspace";
 
 /**
  * Approves the install scripts of the native packages Nextly installs, BEFORE
@@ -85,7 +86,7 @@ const atLeast = (version: Version, major: number, minor: number): boolean =>
 const WORKSPACE_FILE = "pnpm-workspace.yaml";
 
 async function approveForBun(cwd: string): Promise<string[]> {
-  const root = (await findUp(cwd, isBunWorkspaceRoot)) ?? cwd;
+  const root = (await findWorkspaceRoot(cwd))?.dir ?? cwd;
   return approveInPackageJson(root, ["trustedDependencies"], {
     onlyIfListed: true,
     why: WHY.bun,
@@ -97,38 +98,17 @@ async function approveForPnpm(
   version: Version | undefined
 ): Promise<string[]> {
   if (version && !atLeast(version, 10, 0)) return [];
-  const root =
-    (await findUp(cwd, dir => fs.pathExists(path.join(dir, WORKSPACE_FILE)))) ??
-    cwd;
+  // pnpm reads the nearest workspace file, so one in the app's own folder
+  // makes the app its own root; otherwise the workspace that lists it is.
+  const root = (await fs.pathExists(path.join(cwd, WORKSPACE_FILE)))
+    ? cwd
+    : ((await findWorkspaceRoot(cwd))?.dir ?? cwd);
   if (version && !atLeast(version, 10, 6)) {
     return approveInPackageJson(root, ["pnpm", "onlyBuiltDependencies"], {
       why: WHY.pnpm,
     });
   }
   return approveInWorkspaceFile(root, formsFor(version));
-}
-
-/** The closest directory from `start` upwards that `isRoot` accepts. */
-async function findUp(
-  start: string,
-  isRoot: (dir: string) => Promise<boolean>
-): Promise<string | undefined> {
-  let dir = path.resolve(start);
-  for (;;) {
-    if (await isRoot(dir)) return dir;
-    const parent = path.dirname(dir);
-    if (parent === dir) return undefined;
-    dir = parent;
-  }
-}
-
-async function isBunWorkspaceRoot(dir: string): Promise<boolean> {
-  try {
-    const pkg: unknown = await fs.readJson(path.join(dir, "package.json"));
-    return isJsonObject(pkg) && pkg.workspaces !== undefined;
-  } catch {
-    return false;
-  }
 }
 
 /** Which of the workspace file's approval forms the app's pnpm reads. */
@@ -212,8 +192,16 @@ function decisionIn(
     if (key !== dep && !key.startsWith(`${dep}@`)) continue;
     const decided = decisionOf(pair.value);
     if (decided === undefined) continue;
-    if (key !== dep)
-      return `Kept the project's own ${key} decision in ${section}.`;
+    if (key !== dep) {
+      // Its other versions stay unapproved: a bare key here would widen what
+      // the project chose to trust, and no exact version is known before the
+      // install resolves one.
+      return (
+        `Kept the project's own ${key} decision in ${section}. Other versions of ${dep} ` +
+        "stay unapproved: if the install stops with ERR_PNPM_IGNORED_BUILDS, approve the " +
+        "version it names."
+      );
+    }
     return decided
       ? ""
       : `Left ${dep} denied in ${section}, as the project set it.`;

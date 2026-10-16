@@ -1,4 +1,5 @@
 export { RootLayout } from "./layout/RootLayout";
+export type { RootLayoutProps } from "./layout/RootLayout";
 export { QueryProvider } from "./context/providers/QueryProvider";
 export { ThemeProvider, useTheme } from "./context/providers/ThemeProvider";
 export {

@@ -18,8 +18,16 @@
  * not run anyway).
  */
 export async function register() {
-  if (process.env.NEXT_RUNTIME === "nodejs") {
-    const { registerNextCacheRevalidator } = await import("nextly/runtime");
-    registerNextCacheRevalidator();
-  }
+  if (process.env.NEXT_RUNTIME !== "nodejs") return;
+
+  const { registerNextCacheRevalidator } = await import("nextly/runtime");
+  registerNextCacheRevalidator();
+
+  // Then start Nextly itself, so it is up before this instance serves its
+  // first request: `/api/health` and any route that reads through the
+  // `nextly` proxy cannot start it on their own. Next.js skips `register()`
+  // during `next build`, so no database connection is opened at build time.
+  const { createRegister } = await import("nextly");
+  const { default: config } = await import("../nextly.config");
+  await createRegister(config)();
 }

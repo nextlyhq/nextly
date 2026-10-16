@@ -16,12 +16,15 @@
  */
 
 import { apiKeyWriteAllowed } from "../../auth/authenticated-scope";
+import { nextly } from "../../direct-api/nextly";
 import type { RBACAccessControlService } from "../../domains/auth/services/rbac-access-control-service";
+import type { ReleaseTargetCaller } from "../../domains/releases/release-targets";
 import { ReleasesRepository } from "../../domains/releases/releases-repository";
 import {
   RELEASES_RESOURCE,
   ReleasesService,
 } from "../../domains/releases/services/releases-service";
+import { NextlyError } from "../../errors";
 import type { CacheRevalidator } from "../../revalidation/types";
 import { hasPermission } from "../../services/lib/permissions";
 import { container } from "../container";
@@ -52,6 +55,57 @@ export function registerReleaseServices({
         // `permission-seed-service`. `hasPermission` fails CLOSED — it returns
         // false on any error rather than throwing — which is the behaviour a
         // gate wants: an unreachable permission store must not read as consent.
+        // What a document must be to join a release, asked of the content API
+        // and the schema registries. Resolved lazily, per call, for the
+        // reason the document check below is: the services it reads are
+        // registered elsewhere, and resolving them here would make this depend
+        // on registration order.
+        targets: {
+          readDocument: (target, caller) =>
+            // A read the caller is refused answers like a document that is
+            // not there: the two are one answer, or an add would tell a
+            // caller which ids exist where it may not look.
+            nullWhenRefused(async () => {
+              // `status: "all"`: a release most often publishes a DRAFT, and a
+              // read that defaulted to published would refuse exactly the
+              // document the release exists for.
+              const access = contentReadAccess(caller);
+              const found =
+                target.scopeKind === "single"
+                  ? await nextly.findSingle({
+                      slug: target.scopeSlug as never,
+                      status: "all",
+                      ...access,
+                    } as never)
+                  : await nextly.findByID({
+                      collection: target.scopeSlug as never,
+                      id: target.entryId,
+                      status: "all",
+                      ...access,
+                    } as never);
+              return found ?? null;
+            }),
+          declaresLifecycle: async (scopeKind, scopeSlug) => {
+            const key =
+              scopeKind === "single"
+                ? "singleRegistryService"
+                : "collectionRegistryService";
+            if (!container.has(key)) return false;
+            const registry = container.get<{
+              getCollectionBySlug?: (
+                slug: string
+              ) => Promise<{ status?: boolean } | null>;
+              getSingleBySlug?: (
+                slug: string
+              ) => Promise<{ status?: boolean } | null>;
+            }>(key);
+            const record = await (scopeKind === "single"
+              ? registry.getSingleBySlug?.(scopeSlug)
+              : registry.getCollectionBySlug?.(scopeSlug));
+            return record?.status === true;
+          },
+        },
+
         canManageReleases: (userId, authority) =>
           hasPermission(userId, authority, RELEASES_RESOURCE),
 
@@ -130,4 +184,47 @@ export function registerReleaseServices({
         },
       })
   );
+}
+
+/**
+ * The content API's access fields for reading a release target as its caller.
+ *
+ * A trusted caller reads unchecked; anyone else reads as themselves, whole: a
+ * scoped key travels as `actor`, so it is judged by its own grants rather than
+ * its owner's, and the role set travels on the user, so a rule that reads
+ * roles sees the caller's rather than none.
+ */
+function contentReadAccess(
+  caller: ReleaseTargetCaller
+): Record<string, unknown> {
+  if (caller.trusted) return { overrideAccess: true };
+  return {
+    overrideAccess: false,
+    ...(caller.userId === null
+      ? {}
+      : {
+          user: {
+            id: caller.userId,
+            ...(caller.userRoles ? { roles: caller.userRoles } : {}),
+          },
+        }),
+    ...(caller.authenticatedScope ? { actor: caller.authenticatedScope } : {}),
+  };
+}
+
+/** A read, with a refusal or an absence both answered as `null`. */
+async function nullWhenRefused<T>(
+  read: () => Promise<T | null>
+): Promise<T | null> {
+  try {
+    return await read();
+  } catch (error) {
+    if (
+      NextlyError.is(error) &&
+      (error.code === "FORBIDDEN" || error.code === "NOT_FOUND")
+    ) {
+      return null;
+    }
+    throw error;
+  }
 }
