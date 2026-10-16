@@ -2,6 +2,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import type { FieldError } from "react-hook-form";
 import { z } from "zod";
 
+import { filterStringArray } from "@admin/lib/type-guards";
 import { passwordSchema } from "@admin/lib/validation";
 
 export type RoleKey = string;
@@ -154,3 +155,29 @@ export function fieldErrorMessages(error: FieldError | undefined): string[] {
 export type CreateUserFormValues = z.infer<typeof createUserFormSchema>;
 export type EditUserFormValues = z.infer<typeof editUserFormSchema>;
 export type UserFormValues = CreateUserFormValues;
+
+/**
+ * What the edit page sends to update a user, from what its form holds.
+ *
+ * The password goes exactly as entered: a space at either end can be its
+ * symbol, and the server hashes what it receives. An empty field sends no
+ * password, so the current one is kept; whitespace alone fails the rule and
+ * never reaches here. The server hashes the password before storing it, so
+ * the request carries it in plain text only over the app's own connection.
+ * Custom fields arrive under `customFields` and are sent at the top level.
+ */
+export function editUserUpdates(values: EditUserFormValues) {
+  const customFields = (values as Record<string, unknown>).customFields as
+    | Record<string, unknown>
+    | undefined;
+  return {
+    name: values.fullName,
+    email: values.email,
+    password: values.password || undefined,
+    // filterStringArray always returns string[], no fallback needed
+    roles: filterStringArray(values.roles),
+    image: values.avatarUrl,
+    isActive: values.active,
+    ...customFields,
+  };
+}
