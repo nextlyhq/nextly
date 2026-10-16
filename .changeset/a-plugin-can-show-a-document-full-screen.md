@@ -33,7 +33,17 @@ A plugin can contribute a full-screen view of a document, at its own address
 under the document's: `/admin/collections/<slug>/<id>/<path>`, or
 `/admin/singles/<slug>/<path>` for a Single. The admin keeps the document's
 loading, soft lock, recovered-work offer, leave guard and save shortcut around
-the view, so the plugin implements none of them. Declare views under
-`contributes.admin.views[slug].documentViews`. `PluginDocumentView` and
-`DocumentViewProps` are experimental. Startup is refused when a view's path is
-malformed, reserved (`versions`, `api`), or claimed twice on one document.
+the view, so the plugin implements none of them. Declare a view for one
+collection under `contributes.admin.views[slug].documentViews`, or for every
+collection and Single with a top-level field of a type the plugin contributes
+under `contributes.admin.documentViews` with `fieldType`. `navigateTo` in
+`@nextlyhq/plugin-sdk/admin` moves to another admin page and refuses any other
+address. `PluginDocumentView`, `PluginFieldTypeDocumentView`,
+`DocumentViewProps` and `navigateTo` are experimental. Startup is refused when a
+view's path is malformed, reserved (`versions`, `api`), claimed twice on one
+document, or offered on a field type its plugin does not contribute.
+
+`nextly generate:types` now writes the plugin component import map, or removes a
+stale one, in an app that defines no schema in code. Such an app, whose schema
+is made in the Schema Builder, rendered empty plugin pages and settings
+components in a bundled admin, because the map was skipped with the types.
