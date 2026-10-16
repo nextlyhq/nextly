@@ -173,7 +173,9 @@ describe("generateInstrumentation", () => {
     expect(result.skipped).toEqual([
       expect.objectContaining({
         path: "next.config.js",
-        toAdd: "experimental: { instrumentationHook: true },",
+        toAdd: expect.stringContaining(
+          "inside the config's experimental object, beside any keys it already has"
+        ),
       }),
     ]);
     expect(await readFile(path.join(cwd, "next.config.js"), "utf-8")).toBe(
