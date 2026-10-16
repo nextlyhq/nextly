@@ -106,9 +106,17 @@ function paintAdmin(
   }
 }
 
+/**
+ * A value as JSON that is safe inside an inline `<script>`: `<` is escaped,
+ * so a string such as `</script>` in a storage key cannot end the script and
+ * start markup.
+ */
+const scriptJson = (value: unknown) =>
+  JSON.stringify(value).replace(/</g, "\\u003c");
+
 /** The inline script's source: `paintAdmin` called with the two rules and the config. */
 function paintScript(config: ThemeConfig): string {
-  return `(${paintAdmin.toString()})(${pickTheme.toString()},${resolveTheme.toString()},${JSON.stringify(config)},${JSON.stringify(THEME_SYNC_TARGETS)})`;
+  return `(${paintAdmin.toString()})(${pickTheme.toString()},${resolveTheme.toString()},${scriptJson(config)},${scriptJson(THEME_SYNC_TARGETS)})`;
 }
 
 /**
@@ -117,15 +125,29 @@ function paintScript(config: ThemeConfig): string {
  */
 const listeners = new Set<() => void>();
 
+/**
+ * Follows changes to the system's setting. Safari before 14 gives a media
+ * query only the older `addListener`, so that is used where
+ * `addEventListener` is missing.
+ */
+function followSystem(listener: () => void): () => void {
+  const system = window.matchMedia(DARK_QUERY);
+  if (typeof system.addEventListener === "function") {
+    system.addEventListener("change", listener);
+    return () => system.removeEventListener("change", listener);
+  }
+  system.addListener(listener);
+  return () => system.removeListener(listener);
+}
+
 function subscribe(listener: () => void): () => void {
   listeners.add(listener);
   window.addEventListener("storage", listener);
-  const system = window.matchMedia(DARK_QUERY);
-  system.addEventListener("change", listener);
+  const stopFollowingSystem = followSystem(listener);
   return () => {
     listeners.delete(listener);
     window.removeEventListener("storage", listener);
-    system.removeEventListener("change", listener);
+    stopFollowingSystem();
   };
 }
 

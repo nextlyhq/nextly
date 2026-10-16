@@ -38,7 +38,7 @@ const RestartOverlay = lazy(() =>
  * Admin App Content component
  * Handles theme synchronization via React state instead of manual DOM manipulation.
  */
-function AdminAppContent() {
+function AdminAppContent({ nonce }: RootLayoutProps) {
   const { route, isHydrated } = useRouter();
   const { resolvedTheme } = useTheme();
   const isDark = resolvedTheme === "dark";
@@ -77,7 +77,7 @@ function AdminAppContent() {
         )}
         suppressHydrationWarning
       >
-        <ThemePaintScript />
+        <ThemePaintScript nonce={nonce} />
       </div>
     );
   }
@@ -213,7 +213,7 @@ const RootLayout = ({ nonce }: RootLayoutProps = {}): React.ReactElement => {
           other has to stay clear of.
         */}
         <ShortcutProvider>
-          <AdminAppContent />
+          <AdminAppContent nonce={nonce} />
         </ShortcutProvider>
       </RestartProvider>
     </ThemeProvider>

@@ -104,6 +104,8 @@ describe("the admin's theme", () => {
   it("themes the admin's containers and leaves <html> exactly as the host rendered it", () => {
     systemSetting(false);
     localStorage.setItem(KEY, "dark");
+    // The pre-paint script runs first, as in a browser, then React takes over.
+    expect(paintedByScript()).toBe("dark");
     const container = adminContainer();
 
     render(
@@ -255,6 +257,52 @@ describe("the admin's theme", () => {
         </ThemeProvider>
       </ThemeProvider>
     );
+
+    expect(screen.getByRole("status").textContent).toBe("dark");
+  });
+
+  it("keeps a storage key that spells </script> inside the script", () => {
+    systemSetting(false);
+    const key = '</script><img src=x onerror="window.injected=1">';
+    localStorage.setItem(key, "dark");
+
+    const html = renderToString(
+      <ThemeProvider storageKey={key}>
+        <ThemePaintScript />
+      </ThemeProvider>
+    );
+
+    expect(html.match(/<\/script>/g)).toHaveLength(1);
+    expect(html).not.toContain("<img");
+    const container = adminContainer();
+    new Function(/<script[^>]*>([\s\S]*)<\/script>/.exec(html)?.[1] ?? "")();
+    expect(container.classList.contains("dark")).toBe(true);
+  });
+
+  it("follows the system setting through a media query's older listener API", () => {
+    let dark = false;
+    let changed: (() => void) | undefined;
+    vi.stubGlobal("matchMedia", (query: string) => ({
+      get matches() {
+        return dark && query === "(prefers-color-scheme: dark)";
+      },
+      media: query,
+      addListener: (listener: () => void) => {
+        changed = listener;
+      },
+      removeListener: () => {},
+    }));
+    render(
+      <ThemeProvider>
+        <ShowResolved />
+      </ThemeProvider>
+    );
+    expect(screen.getByRole("status").textContent).toBe("light");
+
+    act(() => {
+      dark = true;
+      changed?.();
+    });
 
     expect(screen.getByRole("status").textContent).toBe("dark");
   });
