@@ -41,6 +41,17 @@ describe("card states from a widget's answer", () => {
     expect(screen.queryByRole("button", { name: /Retry/ })).toBeNull();
   });
 
+  it("draws the declaration's description under the title", () => {
+    // The frame's one optional line, which a real declaration reaches only through the renderer.
+    render(
+      <WidgetRenderer
+        definition={{ ...list, description: "Newest first" }}
+        slot={{ ok: true, result: { op: "list", items: [{ title: "Hello" }] } }}
+      />
+    );
+    expect(screen.getByText("Newest first")).toBeInTheDocument();
+  });
+
   it("draws any other failure as an error with Retry", () => {
     const failed: WidgetSlot = {
       ok: false,

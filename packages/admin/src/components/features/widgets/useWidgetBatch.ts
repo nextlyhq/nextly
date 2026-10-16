@@ -11,7 +11,7 @@
  * @module components/features/widgets/useWidgetBatch
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 
 import {
   useWidgetQueries,
@@ -24,6 +24,7 @@ import type {
 } from "@admin/types/dashboard/widgets";
 
 import { coreDraws, resolveWidgetOutcome, type WidgetOutcome } from "./outcome";
+import { useCardRetries } from "./useCardRetries";
 
 /**
  * One card in the batch: which placement asked, and what it is asking.
@@ -58,6 +59,8 @@ export interface WidgetBatch {
    * and no other card's. Until the batch next refreshes, the card shows this answer.
    */
   retry: (placementId: string) => void;
+  /** When the answer one card shows arrived: its own retry's, or the batch's. */
+  updatedAtFor: (placementId: string) => Date | null;
 }
 
 /**
@@ -158,61 +161,11 @@ export function useWidgetBatch(cards: BatchCard[]): WidgetBatch {
   const batch = useWidgetQueries(requests);
   const { isFetching, fetchingPlacementIds, updatedAt } = batch;
 
-  // Cards being retried, each asked again in a request of its own, with how many times. The
-  // count is the request's `attempt`, so every press of Retry is a new question to the cache and
-  // sends that card's query again -- a second press after a failed retry included -- while no
-  // other card's request changes.
-  const [retrying, setRetrying] = useState<ReadonlyMap<string, number>>(
-    () => new Map()
+  // Retry for one card at a time, over the batch's answers; see `useCardRetries`.
+  const { slots, cellSlots, retry, updatedAtFor } = useCardRetries(
+    requests,
+    batch
   );
-  const retryRequests = useMemo(
-    () =>
-      requests
-        .filter(request => retrying.has(request.placementId))
-        .map(request => ({
-          ...request,
-          attempt: retrying.get(request.placementId),
-        })),
-    [requests, retrying]
-  );
-  const retried = useWidgetQueries(retryRequests);
-  const retry = useCallback((placementId: string) => {
-    setRetrying(previous =>
-      new Map(previous).set(placementId, (previous.get(placementId) ?? 0) + 1)
-    );
-  }, []);
-  // The batch's next answer is fresher than a retry's, so a refresh of the whole batch ends
-  // every retry and its cards go back to the batch's slots.
-  // Keyed on the instant rather than the Date object, which may be a new object each render.
-  const batchAnsweredAt = batch.updatedAt?.getTime() ?? null;
-  useEffect(() => {
-    setRetrying(previous => (previous.size === 0 ? previous : new Map()));
-  }, [batchAnsweredAt]);
-
-  // A retried card reads its own answer, or none while it is in flight -- which draws its
-  // skeleton rather than the error it is being retried from.
-  const { slots, cellSlots } = useMemo(() => {
-    if (retrying.size === 0) {
-      return { slots: batch.slots, cellSlots: batch.cellSlots };
-    }
-    const mergedSlots: Record<string, WidgetSlot> = { ...batch.slots };
-    const mergedCells: CellSlots = { ...batch.cellSlots };
-    for (const placementId of retrying.keys()) {
-      delete mergedSlots[placementId];
-      delete mergedCells[placementId];
-      const slot = retried.slots[placementId];
-      if (slot) mergedSlots[placementId] = slot;
-      const cells = retried.cellSlots[placementId];
-      if (cells) mergedCells[placementId] = cells;
-    }
-    return { slots: mergedSlots, cellSlots: mergedCells };
-  }, [
-    batch.slots,
-    batch.cellSlots,
-    retried.slots,
-    retried.cellSlots,
-    retrying,
-  ]);
 
   // Which cards are actually IN the batch, taken from the requests that were
   // sent rather than re-derived from `widget.query`.
@@ -270,5 +223,6 @@ export function useWidgetBatch(cards: BatchCard[]): WidgetBatch {
     failed: outcomes.filter(outcome => outcome.state === "failed").length,
     settling: outcomes.some(outcome => outcome.state === "loading"),
     retry,
+    updatedAtFor,
   };
 }
