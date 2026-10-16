@@ -171,12 +171,9 @@ function secretKeys(values: Values): RequiredKey[] {
     : ["NEXTLY_SECRET"];
 }
 
+/** A URL new URL cannot parse may still carry a password in plain sight. */
 function hasPassword(url: string): boolean {
-  try {
-    return new URL(url).password !== "";
-  } catch {
-    return false;
-  }
+  return !URL.canParse(url) || new URL(url).password !== "";
 }
 
 /** Why `.env` could reach git, when it could. */
@@ -438,14 +435,7 @@ function checkRealValues(name: string, defined: Map<string, string>): string[] {
     key =>
       `${key} in ${name} is empty. It was left as it is; give it a value, since Nextly reads it at start-up.`
   );
-  const url = defined.get("DATABASE_URL");
-  if (url && !URL.canParse(url)) {
-    // Nextly refuses at start-up a DATABASE_URL that `new URL` cannot read.
-    warnings.push(
-      `DATABASE_URL in ${name} is not a URL Nextly can read. It was left as it is; ` +
-        "set it to the database's connection URL."
-    );
-  }
+  warnings.push(...unreadableUrls(name, defined));
   const secret = defined.get("NEXTLY_SECRET");
   if (secret !== undefined && secret.length < 32) {
     warnings.push(
@@ -457,11 +447,31 @@ function checkRealValues(name: string, defined: Map<string, string>): string[] {
 }
 
 /** A real-looking secret already in a file a project commits. */
+/**
+ * The URLs a file holds that Nextly refuses at start-up: it reads
+ * DATABASE_URL and NEXT_PUBLIC_APP_URL as URLs (`new URL` and zod's url(),
+ * which agree). Empty values are judged elsewhere: an empty one is a
+ * placeholder in an example file.
+ */
+function unreadableUrls(name: string, defined: Map<string, string>): string[] {
+  return (["DATABASE_URL", "NEXT_PUBLIC_APP_URL"] as const)
+    .filter(key => {
+      const value = defined.get(key);
+      return value !== undefined && value !== "" && !URL.canParse(value);
+    })
+    .map(
+      key =>
+        `${key} in ${name} is not a URL Nextly can read. It was left as it is; ` +
+        "set it to a full URL, such as http://localhost:3000 for the app."
+    );
+}
+
 function checkExampleValues(
   name: string,
   defined: Map<string, string>
 ): string[] {
-  const warnings: string[] = [];
+  // A copied example file has to work as a .env.
+  const warnings: string[] = unreadableUrls(name, defined);
   const secret = defined.get("NEXTLY_SECRET");
   if (secret !== undefined && !isPlaceholder(secret)) {
     warnings.push(
@@ -562,7 +572,10 @@ async function isEnvIgnored(cwd: string): Promise<boolean> {
     if ((error as { exitCode?: number }).exitCode === 1) return false;
   }
   const file = path.join(cwd, ".gitignore");
-  if (!(await fs.pathExists(file))) return false;
+  // Git does not read a .gitignore that is a symbolic link, so its target's
+  // rules protect nothing once the folder becomes a repository.
+  const stat = await fs.lstat(file).catch(() => null);
+  if (!stat || stat.isSymbolicLink()) return false;
   return gitignoreIgnores(await fs.readFile(file, "utf-8"), ".env");
 }
 
@@ -578,7 +591,13 @@ function ignoredByProjectRule(verbose: string): boolean {
   const match = /^(.*):\d+:(.*)\t/.exec(verbose);
   if (!match) return false;
   const [, source, pattern] = match;
-  return path.basename(source) === ".gitignore" && !pattern.startsWith("!");
+  // A global excludes file may be named .gitignore too; git prints its path
+  // absolute, and a project's relative.
+  return (
+    !path.isAbsolute(source) &&
+    path.basename(source) === ".gitignore" &&
+    !pattern.startsWith("!")
+  );
 }
 
 /**

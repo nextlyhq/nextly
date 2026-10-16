@@ -1857,7 +1857,12 @@ export async function copyTemplate(
   // An example env file already in the target (scaffolding over a folder that
   // has files) is the env generator's to merge, never the copy's to replace.
   const targetExample = path.join(targetDir, ".env.example");
-  const keepTargetExample = await fs.pathExists(targetExample);
+  // lstat, not pathExists: pathExists follows a link, and calls a dangling
+  // one absent, which the copy would then replace.
+  const keepTargetExample = await fs
+    .lstat(targetExample)
+    .then(() => true)
+    .catch(() => false);
   await fs.copy(baseDir, targetDir, {
     filter: _src => {
       const basename = path.basename(_src);

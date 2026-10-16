@@ -45,8 +45,9 @@ export interface EnvKeys {
   unresolved: Set<string>;
 }
 
+// `KEY=value`, or dotenv's other form, `KEY: value` (a colon, then a space).
 const ASSIGNMENT =
-  /^[ \t]*(#[ \t]*)?(?:export[ \t]+)?([A-Za-z_][A-Za-z0-9_]*)[ \t]*=(.*)$/;
+  /^[ \t]*(#[ \t]*)?(?:export[ \t]+)?([A-Za-z_][A-Za-z0-9_]*)(?:[ \t]*=|:[ \t]+)(.*)$/;
 
 export function readEnvKeys(text: string): EnvKeys {
   const raw = new Map<string, RawValue>();

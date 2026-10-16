@@ -372,6 +372,35 @@ export SOME_APP_KEY="kept as it is"
     expect((await read(".env")).match(/NEXTLY_SECRET=/g)).toHaveLength(1);
   });
 
+  // dotenv also reads `KEY: value`; missing it appended a second secret,
+  // which then won and rotated the app's.
+  it("reads dotenv's colon form as an assignment", async () => {
+    await writeFile(
+      join(dir, ".env"),
+      `NEXTLY_SECRET: ${"s".repeat(40)}\nDATABASE_URL: file:./x.db\n`
+    );
+
+    await generateEnv(dir, sqlite);
+
+    const env = await read(".env");
+    expect(env.match(/NEXTLY_SECRET/g)).toHaveLength(1);
+    expect(env.match(/DATABASE_URL/g)).toHaveLength(1);
+  });
+
+  // The runtime reads NEXT_PUBLIC_APP_URL as a URL, as it does DATABASE_URL.
+  it("says an app URL is not one Nextly can read", async () => {
+    await writeFile(
+      join(dir, ".env"),
+      "DATABASE_URL=x\nNEXT_PUBLIC_APP_URL=example.com\n"
+    );
+
+    const { warnings } = await generateEnv(dir, sqlite);
+
+    expect(warnings.join("\n")).toMatch(
+      /NEXT_PUBLIC_APP_URL in \.env is not a URL/
+    );
+  });
+
   it("changes nothing and reports nothing on a second run", async () => {
     await writeFile(join(dir, ".env"), existing);
     await generateEnv(dir, sqlite);
@@ -467,6 +496,17 @@ NEXT_PUBLIC_SITE_URL=http://localhost:3000
 
     expect(warnings.join("\n")).toMatch(
       /DB_DIALECT in \.env\.example is postgresql/
+    );
+  });
+
+  // A copied example file has to work as a .env, so its URLs are checked too.
+  it("says an example file's database URL is not one Nextly can read", async () => {
+    await writeFile(join(dir, ".env.example"), "DATABASE_URL=not-a-url\n");
+
+    const { warnings } = await generateEnv(dir, sqlite);
+
+    expect(warnings.join("\n")).toMatch(
+      /DATABASE_URL in \.env\.example is not a URL/
     );
   });
 
@@ -666,6 +706,61 @@ describe("keeping .env out of git", () => {
     expect(warnings.join("\n")).toMatch(
       /could not say whether it tracks \.env/
     );
+  });
+
+  // A typed URL new URL cannot parse may still carry a password in plain
+  // sight, so it is withheld from a tracked .env too.
+  it("writes no typed URL it cannot parse to a .env git tracks", async () => {
+    execFileSync("git", ["init", "-q"], { cwd: dir });
+    await writeFile(join(dir, ".env"), "DB_DIALECT=postgresql\n");
+    execFileSync("git", ["add", "-f", ".env"], { cwd: dir });
+
+    await generateEnv(dir, {
+      ...postgresWithRealUrl,
+      connectionUrl: "postgresql://user:S3cr3t@db:bad/app",
+    });
+
+    expect(await read(".env")).not.toContain("S3cr3t");
+  });
+
+  // Git does not read a .gitignore that is a symbolic link, so a rule in its
+  // target protects nothing once the folder becomes a repository.
+  it("does not trust a linked .gitignore's rule in a folder that isn't a repository yet", async () => {
+    const shared = await mkdtemp(join(tmpdir(), "nextly-shared-"));
+    try {
+      await writeFile(join(shared, "gitignore"), ".env\n");
+      await symlink(join(shared, "gitignore"), join(dir, ".gitignore"));
+
+      await generateEnv(dir, sqlite);
+
+      expect(readEnvKeys(await read(".env")).defined.has("NEXTLY_SECRET")).toBe(
+        false
+      );
+    } finally {
+      await rm(shared, { recursive: true, force: true });
+    }
+  });
+
+  // core.excludesFile may itself be named .gitignore; it stays on this
+  // machine all the same.
+  it("adds .env to .gitignore when only a global excludes file named .gitignore ignores it", async () => {
+    const global = await mkdtemp(join(tmpdir(), "nextly-global-"));
+    try {
+      await writeFile(join(global, ".gitignore"), ".env\n");
+      execFileSync("git", ["init", "-q"], { cwd: dir });
+      execFileSync(
+        "git",
+        ["config", "core.excludesFile", join(global, ".gitignore")],
+        { cwd: dir }
+      );
+      await writeFile(join(dir, ".gitignore"), "node_modules\n");
+
+      await generateEnv(dir, sqlite);
+
+      expect(await read(".gitignore")).toMatch(/^\.env$/m);
+    } finally {
+      await rm(global, { recursive: true, force: true });
+    }
   });
 
   it("writes a tracked .env deleted from the working tree without a secret too", async () => {

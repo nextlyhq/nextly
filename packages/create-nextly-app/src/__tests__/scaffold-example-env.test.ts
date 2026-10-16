@@ -9,7 +9,15 @@
  * its password, filled the example's DATABASE_URL, the secret's placeholder was
  * long enough to pass production's check, and a storage token was never filled.
  */
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  lstat,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -85,6 +93,31 @@ describe("a template project's .env.example", () => {
   // Scaffolding over a folder that has files (the "continue" choice) copies
   // the template on top of them. The example file is the env generator's to
   // merge, so the template's copy must not replace the one already there.
+  // pathExists follows a link and calls a dangling one absent; the copy then
+  // replaced the link itself.
+  it("leaves a dangling example link in the target as it is", async () => {
+    const target = join(workspace, "app");
+    await mkdir(target);
+    await symlink(join(workspace, "gone"), join(target, ".env.example"));
+
+    await copyTemplate({
+      projectName: "app",
+      projectType: "blank",
+      targetDir: target,
+      database: postgres,
+      packageManager: "npm",
+      allowExistingTarget: true,
+      templateSource: {
+        basePath: join(templates, "base"),
+        templatePath: join(templates, "blank"),
+      },
+    });
+
+    expect((await lstat(join(target, ".env.example"))).isSymbolicLink()).toBe(
+      true
+    );
+  });
+
   it("leaves an example file already in the target for the env generator to merge", async () => {
     const target = join(workspace, "app");
     await mkdir(target);
