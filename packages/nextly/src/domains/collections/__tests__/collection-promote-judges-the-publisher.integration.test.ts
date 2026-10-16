@@ -102,6 +102,33 @@ async function pendingDrafts(
   return rows.filter(r => String(r.entryId) === id && r.versionNo === null);
 }
 
+/**
+ * Every value the store holds for one entry, as the database holds it.
+ *
+ * The entry's own row (its fields, status and timestamps) and every
+ * `nextly_versions` row for it (the published snapshots it has had and the
+ * pending working draft), read raw, so a refused write that touched any column
+ * of any of them, even one no read surface returns, changes the result.
+ */
+async function storedState(
+  t: TestNextly,
+  slug: string,
+  id: string
+): Promise<{
+  entry: Record<string, unknown>[];
+  versions: Record<string, unknown>[];
+}> {
+  const entry = (
+    await t.adapter.select<Record<string, unknown>>(`dc_${slug}`, {})
+  ).filter(r => String(r.id) === id);
+  const versions = (
+    await t.adapter.select<Record<string, unknown>>("nextly_versions", {})
+  )
+    .filter(r => String(r.entryId) === id)
+    .sort((a, b) => String(a.id).localeCompare(String(b.id)));
+  return { entry, versions };
+}
+
 async function liveDoc(
   t: TestNextly,
   id: string
@@ -135,6 +162,7 @@ describe("a collection publish re-judges the draft it promotes", () => {
     // POPULATION CONTROL: the edit really was held. Without this a later
     // "the draft is still here" could equally mean the save never became one.
     expect(JSON.stringify(await pendingDrafts(t, id))).toContain("boss-secret");
+    const before = await storedState(t, SLUG, id);
 
     // Someone else publishes. The field rule denies THEM that field.
     const published = await h.updateEntry(
@@ -158,6 +186,9 @@ describe("a collection publish re-judges the draft it promotes", () => {
     expect(live.body).toBe("live");
     expect(live.guarded).toBe("live-value");
     expect(JSON.stringify(await pendingDrafts(t, id))).toContain("boss-secret");
+    // Every stored value is as it was: the entry's columns, its status and
+    // timestamps, its published snapshots and its pending draft.
+    expect(await storedState(t, SLUG, id)).toEqual(before);
   });
 
   it("catches a denied field NESTED inside a group", async () => {
