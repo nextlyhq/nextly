@@ -15,7 +15,10 @@ import { Controller, useWatch } from "react-hook-form";
 import { UserRoleSelector } from "@admin/components/features/users/UserRoleSelector";
 import { Eye, EyeOff } from "@admin/components/icons";
 import type { Role } from "@admin/types/entities";
-import type { CreateUserFormValues } from "@admin/types/userform";
+import {
+  type CreateUserFormValues,
+  fieldErrorMessages,
+} from "@admin/types/userform";
 
 interface UserFormFieldsProps {
   /**
@@ -132,6 +135,7 @@ export function UserFormFields({
   const signInMethod = useWatch({ control, name: "signInMethod" });
   const isInviteMode = isCreateMode && signInMethod === "invite";
   const showPasswordField = !isInviteMode;
+  const passwordErrors = fieldErrorMessages(errors.password);
 
   return (
     // Not a `Grid` candidate: this is the page's own two-column split, not a
@@ -261,7 +265,17 @@ export function UserFormFields({
                 ? "Only enter a new password if you want to reset it. Leave empty to keep the current password."
                 : undefined
             }
-            error={errors.password?.message}
+            // Every rule the password misses, one per line, rather than only
+            // the first: the forms collect them all (`criteriaMode: "all"`).
+            error={
+              passwordErrors.length > 0
+                ? passwordErrors.map(message => (
+                    <span key={message} className="block">
+                      {message}
+                    </span>
+                  ))
+                : undefined
+            }
           >
             {({ id, describedBy, invalid }) => (
               <div className="relative">

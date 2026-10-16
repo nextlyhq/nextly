@@ -29,4 +29,6 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-The admin's create-user and edit-user forms now accept exactly the passwords the server accepts: any symbol counts, not only `@$!%*?&#.`, and a password over 128 characters is refused before it is sent. Each rule a password misses is shown as its own message, as on the sign-up and reset forms. Choosing "Set a password now" for a new user now says that they choose a new password the first time they sign in, which the server already requires.
+The admin's create-user and edit-user forms now accept exactly the passwords the server accepts. Any symbol counts, not only `@$!%*?&#.`, and a password over 128 characters is refused before it is sent. Every rule a password misses is listed, not only the first. Choosing "Set a password now" for a new user now says that they choose a new password the first time they sign in, which the server already requires.
+
+Setting a user's password through an update (the admin's edit form, the REST route or the Direct API's `users.update`) now stores the password exactly as given. It used to trim spaces from its ends before hashing, while account creation and sign-in did not, so a password whose symbol was a leading or trailing space could not be used to sign in. The admin's edit form no longer trims it either. A value of only whitespace still leaves the password unchanged. Existing password hashes are unaffected: only passwords written from now on change.

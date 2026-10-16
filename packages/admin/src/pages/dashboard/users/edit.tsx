@@ -1,6 +1,5 @@
 "use client";
 
-import { zodResolver } from "@hookform/resolvers/zod";
 import {
   Alert,
   AlertDescription,
@@ -40,7 +39,7 @@ import { navigateTo } from "@admin/lib/navigation";
 import { filterStringArray } from "@admin/lib/type-guards";
 import { validateUUID } from "@admin/lib/validation";
 import {
-  editUserFormSchema,
+  editUserFormSettings,
   type EditUserFormValues,
 } from "@admin/types/userform";
 
@@ -123,7 +122,8 @@ export default function EditUserPage(): ReactElement {
 
   // React Hook Form
   const form = useForm<EditUserFormValues>({
-    resolver: zodResolver(editUserFormSchema),
+    // The resolver with every unmet rule kept, shared with the other user page.
+    ...editUserFormSettings,
     defaultValues: {
       fullName: "",
       email: "",
@@ -235,8 +235,10 @@ export default function EditUserPage(): ReactElement {
     const updates = {
       name: values.fullName,
       email: values.email,
-      // Only send password if user explicitly entered a new one (trimmed to handle whitespace-only input)
-      password: values.password?.trim() || undefined,
+      // Only send a password the admin entered, exactly as entered: a space
+      // at either end can be its symbol. Whitespace alone fails the rule, so
+      // it never reaches here.
+      password: values.password || undefined,
       roles, // filterStringArray always returns string[], no fallback needed
       image: values.avatarUrl,
       isActive: values.active,

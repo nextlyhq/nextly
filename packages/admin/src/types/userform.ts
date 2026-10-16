@@ -1,3 +1,5 @@
+import { zodResolver } from "@hookform/resolvers/zod";
+import type { FieldError } from "react-hook-form";
 import { z } from "zod";
 
 import { passwordSchema } from "@admin/lib/validation";
@@ -115,6 +117,39 @@ export function getUserFormSchema(isEdit: boolean) {
 
 export const createUserFormSchema = getUserFormSchema(false);
 export const editUserFormSchema = getUserFormSchema(true);
+
+/**
+ * The react-hook-form settings the create and edit pages use. `criteriaMode:
+ * "all"` keeps every issue the schema reports for a field rather than the
+ * first, so the password field can list each rule a password misses.
+ */
+export const createUserFormSettings = {
+  resolver: zodResolver(createUserFormSchema),
+  criteriaMode: "all",
+} as const;
+export const editUserFormSettings = {
+  resolver: zodResolver(editUserFormSchema),
+  criteriaMode: "all",
+} as const;
+
+/**
+ * Every message react-hook-form holds for one field, in order and once each.
+ * Under `criteriaMode: "all"` they sit in `types`, keyed by issue code, each a
+ * message or a list of them; `message` alone holds only the first.
+ */
+export function fieldErrorMessages(error: FieldError | undefined): string[] {
+  if (!error) return [];
+  const fromTypes = Object.values(error.types ?? {}).flatMap(value =>
+    typeof value === "string"
+      ? [value]
+      : Array.isArray(value)
+        ? value.filter((item): item is string => typeof item === "string")
+        : []
+  );
+  const messages =
+    fromTypes.length > 0 ? fromTypes : error.message ? [error.message] : [];
+  return [...new Set(messages)];
+}
 
 export type CreateUserFormValues = z.infer<typeof createUserFormSchema>;
 export type EditUserFormValues = z.infer<typeof editUserFormSchema>;
