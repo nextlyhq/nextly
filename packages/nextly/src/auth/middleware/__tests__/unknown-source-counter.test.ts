@@ -215,6 +215,21 @@ describe("StoreUnknownSourceCounter", () => {
     );
   });
 
+  it("creates a key only for a request the ceiling admitted, however many arrive at once", async () => {
+    const store = new SlidingWindowMemoryStore();
+    const counter = new StoreUnknownSourceCounter(new RateLimiter(store));
+    const limits = { budget: 3, ceiling: 5, windowMs: W };
+
+    // Fifty fresh addresses at once: every one reads the ceiling as open.
+    const verdicts = await Promise.all(
+      Array.from({ length: 50 }, (_, i) => counter.admit(`burst-${i}`, limits))
+    );
+
+    expect(verdicts.filter(v => v.allowed)).toHaveLength(5);
+    // The five admitted keys and the ceiling's own; no loser left a key.
+    expect(store.size).toBe(6);
+  });
+
   it("refuses at a met ceiling without recording against the key", async () => {
     const store = new SlidingWindowMemoryStore();
     const limiter = new RateLimiter(store);

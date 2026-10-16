@@ -209,13 +209,15 @@ export class MemoryUnknownSourceCounter implements UnknownSourceCounter {
  * every instance may share.
  *
  * That contract decides one key at a time, so the ceiling and a key's budget
- * cannot be judged in one step here. The order keeps every rule but one: the
- * ceiling is read first and a met ceiling refuses with nothing recorded; the
- * key's budget is spent next, so a request it refuses never reaches the
- * ceiling; the ceiling is spent last. Another instance can fill the ceiling
- * between the read and the spend, and that request is then refused with one
- * place of its key's budget already spent: one place too many, never too few.
- * Keeping the window in the operator's shared store is worth that, since a
+ * cannot be judged in one step here. The order keeps every rule but one, and
+ * creates a key only for a request the ceiling admitted: the key's budget is
+ * read first without recording, so a request it refuses spends nothing; the
+ * ceiling is spent next, so a met ceiling refuses before any key exists, and
+ * a burst of fresh addresses past it leaves nothing in the store; the key's
+ * budget is spent last. Two requests for the SAME key can both pass the read
+ * while one budget place is left, and the one that then loses has spent a
+ * ceiling place: one place too many, never too few, and no new key. Keeping
+ * the window in the operator's shared store is worth that, since a
  * per-process count would multiply every budget by the number of instances.
  *
  * A store without `consume` can count only by recording, so the ceiling cannot
@@ -259,9 +261,13 @@ export class StoreUnknownSourceCounter implements UnknownSourceCounter {
     if (held.count >= limits.ceiling) {
       return refused("ceiling", held.resetAt.getTime());
     }
-    const own = await this.limiter.check(key, limits.budget, limits.windowMs);
-    if (!own.allowed) return refused("budget", own.resetAt.getTime());
-    return this.spendCeiling(limits);
+    const own = await this.limiter.window(key, limits.windowMs);
+    if (own && own.count >= limits.budget) {
+      return refused("budget", own.resetAt.getTime());
+    }
+    const ceiling = await this.spendCeiling(limits);
+    if (!ceiling.allowed) return ceiling;
+    return this.admitArrived(key, limits);
   }
 
   async arrive(limits: UnknownSourceLimits): Promise<UnknownSourceArrival> {
