@@ -9,15 +9,21 @@
  * CSRF token (403) or its bad token; only the limiter answers 429, so 429
  * versus anything else is the limiter's verdict.
  */
+import { createHash } from "node:crypto";
+
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { NULL_AUDIT_LOG_WRITER } from "../../../domains/audit/audit-log-writer";
 import { RateLimiter } from "../../middleware/rate-limiter";
 import { SlidingWindowMemoryStore } from "../../middleware/sliding-window-store";
-import { MemoryUnknownSourceCounter } from "../../middleware/unknown-source-counter";
+import {
+  MemoryUnknownSourceCounter,
+  StoreUnknownSourceCounter,
+} from "../../middleware/unknown-source-counter";
 import { mintPendingToken } from "../../pipeline/pending-token";
 import { buildAuthRouterDeps } from "../deps-bridge";
 import { routeAuthRequest, type AuthRouterDeps } from "../router";
+import type { RateLimitStore } from "../../../middleware/rate-limit";
 
 const W = 3_600_000;
 const SECRET = "test-secret-that-is-at-least-32-characters-long!";
@@ -191,6 +197,60 @@ describe("identifier keying", () => {
     }
     expect(await admitted(login(h, "victim@example.com"))).toBe(false);
     expect(h.counter.trackedKeys).toBeLessThanOrEqual(200);
+  });
+});
+
+describe("the keys a shared store sees", () => {
+  /** A store that remembers every key it is asked about. */
+  function recordingStore(): { store: RateLimitStore; keys: Set<string> } {
+    const inner = new SlidingWindowMemoryStore();
+    const keys = new Set<string>();
+    return {
+      keys,
+      store: {
+        increment: (key, windowMs) => {
+          keys.add(key);
+          return inner.increment(key, windowMs);
+        },
+        reset: key => inner.reset(key),
+        consume: (key, limit, windowMs) => {
+          keys.add(key);
+          return inner.consume(key, limit, windowMs);
+        },
+      },
+    };
+  }
+
+  async function keysFor(secret: string): Promise<string[]> {
+    const h = harness();
+    const recorded = recordingStore();
+    h.deps.secret = secret;
+    h.deps.authRateLimit = {
+      ...h.deps.authRateLimit,
+      unknownSourceCounter: new StoreUnknownSourceCounter(
+        new RateLimiter(recorded.store)
+      ),
+    };
+    await login(h, "Ann@Example.com");
+    return [...recorded.keys].filter(key =>
+      key.startsWith("auth-unknown:account:")
+    );
+  }
+
+  it("never names an address, plainly or as a bare hash", async () => {
+    const [key] = await keysFor(SECRET);
+    expect(key).toBeDefined();
+    const bareHash = createHash("sha256")
+      .update("ann@example.com")
+      .digest("hex");
+    expect(key).not.toContain("ann@example.com");
+    expect(key).not.toContain(bareHash);
+  });
+
+  it("keys an address differently under another install's secret", async () => {
+    const [ours] = await keysFor(SECRET);
+    const [theirs] = await keysFor(`${SECRET}-other-install`);
+    expect(ours).not.toBe(theirs);
   });
 });
 

@@ -19,7 +19,7 @@
  *
  * @module auth/handlers/unknown-source
  */
-import { createHash } from "node:crypto";
+import { createHmac, hkdfSync } from "node:crypto";
 
 import { presentedPendingToken } from "../cookies/pending-cookie";
 import { normalizeAccountEmail } from "../credentials/account-email";
@@ -61,15 +61,23 @@ const TOKEN_ROUTES: Readonly<Record<string, StoredTokenKind | "pending">> = {
 /** The budget shared by requests that bind to no account. */
 const ACCOUNTLESS_KEY = "auth-unknown:no-account";
 
+/** What this use of the install's secret is called, so its derived key is its own. */
+const ACCOUNT_KEY_INFO = "nextly auth limit account keys";
+
 /**
- * The key an account's budget is counted under. Hashed, so the addresses a
- * request names are never written into a store the app may share.
+ * The key an account's budget is counted under.
+ *
+ * An HMAC under a key derived from the install's secret for this use alone,
+ * not a bare hash: an email address has too little entropy for a hash to hide
+ * it, so anyone who could read a shared store's keys could recover addresses
+ * by hashing a list of guesses. Without the secret, a key names nothing.
  */
-function accountKey(email: string | null): string {
+function accountKey(email: string | null, secret: string): string {
   if (email === null) return ACCOUNTLESS_KEY;
   const normalized = normalizeAccountEmail(email);
   if (normalized === "") return ACCOUNTLESS_KEY;
-  const digest = createHash("sha256").update(normalized).digest("hex");
+  const key = Buffer.from(hkdfSync("sha256", secret, "", ACCOUNT_KEY_INFO, 32));
+  const digest = createHmac("sha256", key).update(normalized).digest("hex");
   return `auth-unknown:account:${digest}`;
 }
 
@@ -143,7 +151,10 @@ export async function admitUnknownSource(
   const tokenKind = TOKEN_ROUTES[authPath];
   if (tokenKind === undefined) {
     const email = stringField(body, "email");
-    return counter.admit(accountKey(email === "" ? null : email), limits);
+    return counter.admit(
+      accountKey(email === "" ? null : email, deps.secret),
+      limits
+    );
   }
 
   const token =
@@ -159,5 +170,9 @@ export async function admitUnknownSource(
   const arrival = await counter.arrive(limits);
   if (!arrival.allowed) return arrival;
   const owner = await tokenOwner(tokenKind, token, deps);
-  return counter.admitArrived(accountKey(owner), limits, arrival.at);
+  return counter.admitArrived(
+    accountKey(owner, deps.secret),
+    limits,
+    arrival.at
+  );
 }
