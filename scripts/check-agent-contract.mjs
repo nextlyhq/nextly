@@ -34,7 +34,7 @@ import { fileURLToPath } from "node:url";
 
 import { load } from "js-yaml";
 
-import { SKILLS_HOME, USER_SKILLS_HOME, skillCopyDrift, skillFrontmatterProblems, userSkillSeparation } from "./agent-skills.mjs";
+import { SKILLS_HOME, USER_SKILLS_HOME, skillCopyDrift, skillFrontmatterProblems, skillTableNames, userSkillSeparation } from "./agent-skills.mjs";
 import { copies, copyDrift, repositoryFiles } from "./agent-instructions.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -523,11 +523,7 @@ export function routerDisagreements(routed, present) {
 
 /** Skill names the AGENTS.md router table names, read from its rows. */
 export function routedSkills(agentsMd) {
-  const names = new Set();
-  for (const row of agentsMd.matchAll(/^\|\s*`([a-z][a-z0-9-]*)`\s*\|/gm)) {
-    names.add(row[1]);
-  }
-  return names;
+  return skillTableNames(agentsMd);
 }
 
 /**

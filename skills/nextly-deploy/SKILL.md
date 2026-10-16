@@ -165,6 +165,12 @@ npm run build         # runs nextly migrate against it, then next build
 npm start             # next start, on http://localhost:3000
 ```
 
+Export every other variable the config reads as well: the storage
+credentials from step 5 (such as `BLOB_READ_WRITE_TOKEN`, or the S3 keys)
+are needed to load `nextly.config.ts` at all, and the build stops without
+them. Where those exist only in the host's settings and cannot be brought to
+your machine, use the protected-host path below instead.
+
 Open `http://localhost:3000/admin/setup`, create the account, stop the
 server, then deploy. If you cannot reach the production database from your
 machine, keep the deployment private until setup is done, behind your host's
