@@ -207,11 +207,13 @@ export function createSessionStandingCache(options: {
       const joined = reading.has(userId);
       const read = readRow(userId);
       if (!joined) return read;
-      // The read this caller joined may have queried before the change that
-      // signed its token's epoch, made on another instance. An answer older
-      // than the token proves that, so it reads once more for itself.
+      // The read this caller joined may have queried before a change made on
+      // another instance: the one that signed this token's epoch, or the
+      // account's reactivation, which leaves the epoch where it was. An answer
+      // that is not active, or is older than the token, proves that, so it
+      // reads once more for itself.
       return read.then(standing =>
-        standing?.isActive === true && standing.sessionEpoch < tokenEpoch
+        standing?.isActive !== true || standing.sessionEpoch < tokenEpoch
           ? readRow(userId)
           : standing
       );
