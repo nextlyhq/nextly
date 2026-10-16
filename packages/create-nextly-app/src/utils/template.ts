@@ -1996,6 +1996,8 @@ export async function copyTemplate(
     placeholders,
     packageManager
   );
+  // The person's own example file is theirs: a token in their text stays.
+  if (keepTargetExample) alreadyRendered.add(".env.example");
 
   // Step 6d: Undo the side effect of the workspace file above for the pnpm versions that
   // read it as a workspace declaration. Only for pnpm, because npm warns about the setting

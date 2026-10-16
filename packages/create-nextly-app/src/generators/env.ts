@@ -5,7 +5,7 @@ import { execa } from "execa";
 import fs from "fs-extra";
 
 import type { DatabaseConfig, EnvGenerationResult } from "../types";
-import { readEnvKeys } from "../utils/env-file";
+import { readEnvKeys, type EnvKeys } from "../utils/env-file";
 
 import type { GeneratedFiles } from "./generated-files";
 
@@ -136,16 +136,16 @@ export async function generateEnv(
   const warnings: string[] = [];
   const secret = generateNextlySecret();
   const real = valuesFor("real", database, secret);
-  // A `.env` git tracks is committed whatever `.gitignore` says, so the
-  // secrets go nowhere near it; development runs without NEXTLY_SECRET.
-  // Before .env is written, so no later failure can leave its secret stageable.
-  await keepEnvOutOfGit(cwd, files);
-  const withheld = (await isTrackedByGit(cwd, ".env"))
-    ? secretKeys(real)
-    : null;
+  // Secrets go into .env only once it is known to stay out of git: ignored by
+  // a project rule, and not tracked, which no rule undoes. Anything else,
+  // an unknown answer included, withholds them; development runs without
+  // NEXTLY_SECRET. Settled before .env is written, so no later failure can
+  // leave a secret stageable.
+  const exposure = await envExposure(cwd, files);
+  const withheld = exposure ? secretKeys(real) : [];
 
   warnings.push(
-    ...(await writeOrMerge(cwd, ".env", real, "real", files, withheld ?? [])),
+    ...(await writeOrMerge(cwd, ".env", real, "real", files, withheld)),
     ...(await writeOrMerge(
       cwd,
       ".env.example",
@@ -155,7 +155,7 @@ export async function generateEnv(
       []
     ))
   );
-  if (withheld) warnings.push(await trackedEnvWarning(cwd, withheld));
+  if (exposure) warnings.push(await withheldWarning(cwd, exposure, withheld));
   return { files, warnings };
 }
 
@@ -179,27 +179,72 @@ function hasPassword(url: string): boolean {
   }
 }
 
-async function isTrackedByGit(cwd: string, name: string): Promise<boolean> {
+/** Why `.env` could reach git, when it could. */
+type Exposure = "tracked" | "unknown" | "unignored";
+
+async function envExposure(
+  cwd: string,
+  files: GeneratedFiles
+): Promise<Exposure | undefined> {
+  if (!(await keepEnvOutOfGit(cwd, files))) return "unignored";
+  const tracking = await envTracking(cwd);
+  return tracking === "untracked" ? undefined : tracking;
+}
+
+async function envTracking(
+  cwd: string
+): Promise<"tracked" | "untracked" | "unknown"> {
+  // Outside any repository, nothing is committed from here.
+  if (!(await insideRepository(cwd))) return "untracked";
   try {
-    await execa("git", ["ls-files", "--error-unmatch", "--", name], { cwd });
-    return true;
-  } catch {
-    // Not tracked, not a repository, or no git: nothing is committed from here.
-    return false;
+    await execa("git", ["ls-files", "--error-unmatch", "--", ".env"], { cwd });
+    return "tracked";
+  } catch (error) {
+    // 1 is "not in the index". Anything else (a corrupt index, a repository
+    // git refuses to read, no git at all) leaves the answer unknown.
+    return (error as { exitCode?: number }).exitCode === 1
+      ? "untracked"
+      : "unknown";
   }
 }
 
+async function insideRepository(cwd: string): Promise<boolean> {
+  let dir = path.resolve(cwd);
+  for (;;) {
+    if (await fs.pathExists(path.join(dir, ".git"))) return true;
+    const parent = path.dirname(dir);
+    if (parent === dir) return false;
+    dir = parent;
+  }
+}
+
+const EXPOSURE: Record<Exposure, string> = {
+  tracked:
+    ".env is tracked by git, so what it holds is committed whatever .gitignore says. " +
+    "Stop tracking it with `git rm --cached .env` and commit that.",
+  unknown:
+    "Git could not say whether it tracks .env, so it was treated as tracked. " +
+    "Check with `git ls-files .env`; if that lists it, stop tracking it with " +
+    "`git rm --cached .env` and commit that.",
+  unignored:
+    ".env is not ignored: .gitignore could not be changed (see above). " +
+    "Add `.env` to it first.",
+};
+
 /**
- * Says that `.env` is tracked and how to stop it, naming the withheld keys the
- * file still lacks: a key the app already set there was not withheld from it.
+ * Says why the secrets were withheld from `.env` and what to do, naming the
+ * withheld keys the file still lacks: a key the app already set there was not
+ * withheld from it.
  */
-async function trackedEnvWarning(
+async function withheldWarning(
   cwd: string,
+  exposure: Exposure,
   withheld: readonly RequiredKey[]
 ): Promise<string> {
-  const { defined } = readEnvKeys(
-    await fs.readFile(path.join(cwd, ".env"), "utf-8")
-  );
+  const text = await fs
+    .readFile(path.join(cwd, ".env"), "utf-8")
+    .catch(() => "");
+  const { defined } = readEnvKeys(text);
   const lacking = withheld.filter(key => !defined.has(key));
   const add = lacking.map(key =>
     key === "NEXTLY_SECRET"
@@ -208,13 +253,9 @@ async function trackedEnvWarning(
   );
   const then =
     lacking.length > 0
-      ? ` ${lacking.join(" and ")} ${lacking.length > 1 ? "were" : "was"} not added to it, so they stay out of git; add ${add.join(", and ")} once it is untracked. Development runs without NEXTLY_SECRET, and production refuses to start without it.`
+      ? ` ${lacking.join(" and ")} ${lacking.length > 1 ? "were" : "was"} not added to it, so they stay out of git; add ${add.join(", and ")} once that is done. Development runs without NEXTLY_SECRET, and production refuses to start without it.`
       : "";
-  return (
-    ".env is tracked by git, so what it holds is committed whatever .gitignore says. " +
-    "Stop tracking it with `git rm --cached .env` and commit that." +
-    then
-  );
+  return EXPOSURE[exposure] + then;
 }
 
 async function writeOrMerge(
@@ -226,7 +267,14 @@ async function writeOrMerge(
   withheld: readonly RequiredKey[]
 ): Promise<string[]> {
   const file = path.join(cwd, name);
-  const exists = await fs.pathExists(file);
+  // A linked env file is shared with whatever else links to it: appending
+  // would put Nextly's keys, the secret among them, in that file too.
+  const stat = await fs.lstat(file).catch(() => null);
+  if (stat && (stat.isSymbolicLink() || stat.nlink > 1)) {
+    await skipLinked(file, name, files);
+    return [];
+  }
+  const exists = stat !== null;
   if (!exists && withheld.length === 0) {
     await fs.writeFile(file, fullFile(values, kind), "utf-8");
     files.written.push(name);
@@ -235,6 +283,19 @@ async function writeOrMerge(
 
   // A file with keys withheld is built the way an existing one is merged, so
   // the withheld keys are left out of a new file as well.
+  return mergeInto(file, name, exists, values, kind, files, withheld);
+}
+
+/** Appends what the file lacks to it, and says what it holds that Nextly cannot use. */
+async function mergeInto(
+  file: string,
+  name: string,
+  exists: boolean,
+  values: Values,
+  kind: Kind,
+  files: GeneratedFiles,
+  withheld: readonly RequiredKey[]
+): Promise<string[]> {
   const text = exists ? await fs.readFile(file, "utf-8") : "";
   const keys = readEnvKeys(text);
   // Only values this file settles are judged: one referring to a variable it
@@ -242,74 +303,93 @@ async function writeOrMerge(
   const known = new Map(
     [...keys.defined].filter(([key]) => !keys.unresolved.has(key))
   );
-  // The dialect and the URL are one setting. When the file's half is for
-  // another database, adding the chosen database's other half would leave an
-  // app that cannot connect, so neither is added and that is said.
-  const other = otherDatabase(known, values.DB_DIALECT);
-  const skip: readonly RequiredKey[] = other
-    ? [...withheld, "DB_DIALECT", "DATABASE_URL"]
-    : withheld;
-  const added = await appendMissing(file, text, keys, values, kind, skip);
+  const pair = databasePair(name, keys, values.DB_DIALECT);
+  const added = await appendMissing(file, text, keys, values, kind, [
+    ...withheld,
+    ...pair.skip,
+  ]);
   if (!exists) files.written.push(name);
   else if (added.length > 0) files.changed.push({ path: name, added });
-  const warnings =
-    kind === "real"
-      ? checkRealValues(name, known)
-      : checkExampleValues(name, known);
-  return other
-    ? [databaseConflict(name, other, values.DB_DIALECT), ...warnings]
-    : warnings;
+  return kind === "real"
+    ? [...pair.warnings, ...checkRealValues(name, known)]
+    : checkExampleValues(name, known);
 }
 
-/**
- * The database a file is already set up for, when it is not the chosen one:
- * from its DB_DIALECT, or else from its DATABASE_URL's scheme.
- */
-function otherDatabase(
-  defined: Map<string, string>,
-  chosen: string
-): string | undefined {
-  const dialect =
-    normalDialect(defined.get("DB_DIALECT")) ??
-    dialectOfUrl(defined.get("DATABASE_URL"));
-  return dialect && dialect !== chosen ? dialect : undefined;
-}
-
-function normalDialect(value: string | undefined): string | undefined {
-  const dialect = value?.toLowerCase();
-  if (!dialect) return undefined;
-  return dialect === "postgres" ? "postgresql" : dialect;
-}
-
-/**
- * The dialect a URL implies, by the rules Nextly itself applies when
- * DB_DIALECT is unset (`dialectFromUrl` in nextly's shared/lib/env.ts), so
- * the two never read one URL differently. The generator cannot import nextly,
- * so dialect-parity.test.ts holds this copy to that one.
- */
-export function dialectOfUrl(url: string | undefined): string | undefined {
-  if (!url) return undefined;
-  if (url.startsWith("postgres://") || url.startsWith("postgresql://")) {
-    return "postgresql";
-  }
-  if (url.startsWith("mysql://")) return "mysql";
-  if (
-    url.startsWith("file:") ||
-    url.endsWith(".db") ||
-    url.endsWith(".sqlite") ||
-    url.endsWith(".sqlite3")
-  ) {
-    return "sqlite";
-  }
-  return undefined;
-}
-
-function databaseConflict(name: string, other: string, chosen: string): string {
-  return (
-    `${name} is already set up for ${other}, but ${chosen} was chosen. Its database ` +
-    `settings were left as they are and none were added: set DB_DIALECT and ` +
-    `DATABASE_URL for ${chosen}, or run again choosing ${other}.`
+/** Reports a linked env file as skipped, with the lines to add and no values. */
+async function skipLinked(
+  file: string,
+  name: string,
+  files: GeneratedFiles
+): Promise<void> {
+  const { defined } = readEnvKeys(
+    await fs.readFile(file, "utf-8").catch(() => "")
   );
+  const missing = REQUIRED_KEYS.filter(key => !defined.has(key));
+  files.skipped.push({
+    path: name,
+    why: "it is a link to a file shared outside this project, so it was left as it is",
+    toAdd:
+      missing.length > 0 ? missing.map(key => `${key}=`).join("\n") : undefined,
+  });
+}
+
+const DIALECTS: readonly string[] = ["postgresql", "mysql", "sqlite"];
+
+/**
+ * Which half of the database setting to leave out, and what to say. The
+ * dialect and the URL are one setting, and a file that has either half is the
+ * app's: no dialect is read out of a URL here, so nothing can disagree with
+ * how Nextly reads it.
+ * - The URL only: Nextly reads the dialect from it, so none is added, which
+ *   could contradict it.
+ * - DB_DIALECT only: the URL is added when it names the chosen database;
+ *   otherwise (another database, a spelling Nextly refuses, a value set
+ *   elsewhere) the chosen database's URL would not match, so it is not.
+ */
+function databasePair(
+  name: string,
+  { defined, unresolved }: EnvKeys,
+  chosen: string
+): { skip: RequiredKey[]; warnings: string[] } {
+  const dialect = unresolved.has("DB_DIALECT")
+    ? undefined
+    : defined.get("DB_DIALECT");
+  const warnings = dialectWarnings(name, dialect, chosen);
+  if (defined.has("DATABASE_URL") && !defined.has("DB_DIALECT")) {
+    warnings.push(
+      `DATABASE_URL in ${name} was already set, so DB_DIALECT was not added: Nextly ` +
+        `reads the database from that URL. Make sure it is a ${chosen} URL, the database chosen.`
+    );
+    return { skip: ["DB_DIALECT"], warnings };
+  }
+  if (defined.has("DB_DIALECT") && dialect !== chosen) {
+    if (dialect === undefined) {
+      warnings.push(
+        `DB_DIALECT in ${name} is set from a variable this file does not define, so ` +
+          "DATABASE_URL was not added beside it."
+      );
+    }
+    return { skip: ["DATABASE_URL"], warnings };
+  }
+  return { skip: [], warnings };
+}
+
+function dialectWarnings(
+  name: string,
+  dialect: string | undefined,
+  chosen: string
+): string[] {
+  if (!dialect || dialect === chosen) return [];
+  if (!DIALECTS.includes(dialect)) {
+    return [
+      `DB_DIALECT in ${name} is not one Nextly accepts: it takes postgresql, mysql or ` +
+        "sqlite. It was left as it is.",
+    ];
+  }
+  return [
+    `DB_DIALECT in ${name} is ${dialect}, but ${chosen} was chosen. It was left as it ` +
+      `is: set DB_DIALECT and DATABASE_URL for ${chosen}, or run again choosing ${dialect}.`,
+  ];
 }
 
 /**
@@ -415,13 +495,14 @@ function hasRealPassword(url: string | undefined): boolean {
 /**
  * Makes sure git ignores `.env`, which holds the real secret: a project's own
  * `.gitignore` might not. Git answers when the project is a repository; a
- * directory that is not one yet is judged from its `.gitignore`.
+ * directory that is not one yet is judged from its `.gitignore`. Says whether
+ * `.env` is now ignored: a linked `.gitignore` is left alone, so it may not be.
  */
 async function keepEnvOutOfGit(
   cwd: string,
   files: GeneratedFiles
-): Promise<void> {
-  if (await isEnvIgnored(cwd)) return;
+): Promise<boolean> {
+  if (await isEnvIgnored(cwd)) return true;
 
   const file = path.join(cwd, ".gitignore");
   // A linked .gitignore is shared with whatever else links to it, and
@@ -435,7 +516,7 @@ async function keepEnvOutOfGit(
       why: "it is a link to a file shared outside this project, so it was left as it is",
       toAdd: ".env",
     });
-    return;
+    return false;
   }
   const entry =
     "# Local environment: it holds secrets, so it is never committed\n.env\n";
@@ -448,6 +529,7 @@ async function keepEnvOutOfGit(
     await fs.writeFile(file, entry, "utf-8");
     files.written.push(".gitignore");
   }
+  return true;
 }
 
 async function isEnvIgnored(cwd: string): Promise<boolean> {

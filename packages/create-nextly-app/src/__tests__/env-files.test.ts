@@ -136,7 +136,9 @@ export SOME_APP_KEY="kept as it is"
     const keys = readEnvKeys(after).defined;
     expect(keys.get("DATABASE_URL")).toBe("file:./data/mine.db");
     expect(keys.get("SOME_APP_KEY")).toBe("kept as it is");
-    expect(keys.get("DB_DIALECT")).toBe("sqlite");
+    // Nextly reads the dialect from the URL when DB_DIALECT is unset, so none
+    // is added beside the app's URL: a second, explicit one could disagree.
+    expect(keys.has("DB_DIALECT")).toBe(false);
     expect(keys.get("NEXTLY_SECRET")?.length).toBeGreaterThanOrEqual(32);
     expect(keys.get("NEXT_PUBLIC_APP_URL")).toBe("http://localhost:3000");
     // DATABASE_URL was there, so it is not added a second time.
@@ -145,7 +147,6 @@ export SOME_APP_KEY="kept as it is"
       {
         path: ".env",
         added: [
-          "DB_DIALECT",
           "NEXTLY_SECRET",
           "NEXT_PUBLIC_APP_URL",
           "the NEXTLY_DEV_DIAGNOSTICS note",
@@ -267,13 +268,44 @@ export SOME_APP_KEY="kept as it is"
       expect(
         keys.has(key === "DB_DIALECT" ? "DATABASE_URL" : "DB_DIALECT")
       ).toBe(false);
-      expect(warnings.join("\n")).toMatch(/\.env.*postgresql.*mysql/i);
+      expect(warnings.join("\n")).toMatch(
+        new RegExp(`${key} in \\.env.*mysql`)
+      );
     }
   );
 
+  // The runtime accepts only these exact spellings.
+  it("adds no URL beside a DB_DIALECT Nextly does not accept, and says so", async () => {
+    await writeFile(join(dir, ".env"), "DB_DIALECT=postgres\n");
+
+    const { warnings } = await generateEnv(dir, postgresWithRealUrl);
+
+    expect(readEnvKeys(await read(".env")).defined.has("DATABASE_URL")).toBe(
+      false
+    );
+    expect(warnings.join("\n")).toMatch(
+      /DB_DIALECT in \.env is not one Nextly accepts.*postgresql, mysql or sqlite/
+    );
+  });
+
+  // The value a variable this file does not define stands for is only known
+  // where the app runs, a default included.
+  it("adds no DB_DIALECT beside a DATABASE_URL set from another variable", async () => {
+    await writeFile(
+      join(dir, ".env"),
+      "DATABASE_URL=${MISSING:-postgresql://localhost/app}\n"
+    );
+
+    await generateEnv(dir, sqlite);
+
+    expect(readEnvKeys(await read(".env")).defined.has("DB_DIALECT")).toBe(
+      false
+    );
+  });
+
   // Next.js expands `$NAME` references in env files, so the URL the app gets
   // here is PostgreSQL's, whatever the line spells.
-  it("reads a database URL through a reference to another key", async () => {
+  it("adds no DB_DIALECT beside a URL that refers to another key", async () => {
     await writeFile(
       join(dir, ".env"),
       "APP_DATABASE_URL=postgresql://localhost:5432/app\nDATABASE_URL=$APP_DATABASE_URL\n"
@@ -290,7 +322,7 @@ export SOME_APP_KEY="kept as it is"
     expect(readEnvKeys(await read(".env")).defined.has("DB_DIALECT")).toBe(
       false
     );
-    expect(warnings.join("\n")).toMatch(/\.env.*postgresql.*mysql/i);
+    expect(warnings.join("\n")).toMatch(/DATABASE_URL in \.env.*mysql/);
   });
 
   // A reference to a variable the file doesn't define is filled in where the
@@ -459,7 +491,7 @@ describe("keeping .env out of git", () => {
         await writeFile(join(shared, "gitignore"), "node_modules\n");
         await makeLink(join(shared, "gitignore"), join(dir, ".gitignore"));
 
-        const { files } = await generateEnv(dir, sqlite);
+        const { files, warnings } = await generateEnv(dir, sqlite);
 
         expect(await readFile(join(shared, "gitignore"), "utf8")).toBe(
           "node_modules\n"
@@ -467,6 +499,11 @@ describe("keeping .env out of git", () => {
         expect(files.skipped).toContainEqual(
           expect.objectContaining({ path: ".gitignore", toAdd: ".env" })
         );
+        // Unprotected, so nothing secret went into .env.
+        expect(
+          readEnvKeys(await read(".env")).defined.has("NEXTLY_SECRET")
+        ).toBe(false);
+        expect(warnings.join("\n")).toMatch(/\.env is not ignored/);
       } finally {
         await rm(shared, { recursive: true, force: true });
       }
@@ -529,6 +566,27 @@ describe("keeping .env out of git", () => {
     expect(await read(".gitignore")).toMatch(/^\.env$/m);
   });
 
+  // Appending through a linked .env would put the secret in a file shared
+  // outside the project.
+  it("leaves a linked .env as it is, and lists the keys to add without values", async () => {
+    const shared = await mkdtemp(join(tmpdir(), "nextly-shared-"));
+    try {
+      await writeFile(join(shared, "env"), "DATABASE_URL=file:./x.db\n");
+      await symlink(join(shared, "env"), join(dir, ".env"));
+
+      const { files } = await generateEnv(dir, sqlite);
+
+      expect(await readFile(join(shared, "env"), "utf8")).toBe(
+        "DATABASE_URL=file:./x.db\n"
+      );
+      const skipped = files.skipped.find(f => f.path === ".env");
+      expect(skipped?.toAdd).toMatch(/^NEXTLY_SECRET=$/m);
+      expect(skipped?.toAdd).toMatch(/^NEXT_PUBLIC_APP_URL=$/m);
+    } finally {
+      await rm(shared, { recursive: true, force: true });
+    }
+  });
+
   // git reports the deciding rule even when it is a `!` re-include, which
   // leaves .env stageable.
   it("adds .env to .gitignore when its deciding rule re-includes it", async () => {
@@ -550,6 +608,23 @@ describe("keeping .env out of git", () => {
     await expect(generateEnv(dir, sqlite)).rejects.toThrow();
 
     expect(await read(".gitignore")).toMatch(/^\.env$/m);
+  });
+
+  // Git failing for another reason (a corrupt index here) leaves it unknown
+  // whether .env is tracked, and unknown is treated as tracked.
+  it("writes no secret to .env when git cannot say whether it tracks it", async () => {
+    execFileSync("git", ["init", "-q"], { cwd: dir });
+    await writeFile(join(dir, ".gitignore"), ".env\n");
+    await writeFile(join(dir, ".git", "index"), "not an index");
+
+    const { warnings } = await generateEnv(dir, postgresWithRealUrl);
+
+    const env = await read(".env");
+    expect(readEnvKeys(env).defined.has("NEXTLY_SECRET")).toBe(false);
+    expect(env).not.toContain("S3cr3tPassw0rd");
+    expect(warnings.join("\n")).toMatch(
+      /could not say whether it tracks \.env/
+    );
   });
 
   it("writes a tracked .env deleted from the working tree without a secret too", async () => {

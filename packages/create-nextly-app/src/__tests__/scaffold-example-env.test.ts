@@ -88,7 +88,11 @@ describe("a template project's .env.example", () => {
   it("leaves an example file already in the target for the env generator to merge", async () => {
     const target = join(workspace, "app");
     await mkdir(target);
-    await writeFile(join(target, ".env.example"), "MY_KEY=documented\n");
+    // A token in the person's own text is theirs, not the template's to fill.
+    await writeFile(
+      join(target, ".env.example"),
+      "MY_KEY=documented {{databaseUrl}}\n"
+    );
 
     await copyTemplate({
       projectName: "app",
@@ -104,7 +108,7 @@ describe("a template project's .env.example", () => {
     });
 
     expect(await readFile(join(target, ".env.example"), "utf-8")).toBe(
-      "MY_KEY=documented\n"
+      "MY_KEY=documented {{databaseUrl}}\n"
     );
   });
 });
