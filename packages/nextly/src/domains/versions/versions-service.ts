@@ -86,6 +86,11 @@ export class VersionsService {
    * Every durable version's number, status and part, newest first, without
    * snapshots: what resolving a comparison's baseline reads.
    */
+  /** The parts that hold a working draft: a language, or null for none. */
+  async listWorkingDraftParts(ref: VersionRef): Promise<(string | null)[]> {
+    return this.repo.listWorkingDraftLocales(ref);
+  }
+
   async listPartVersions(ref: VersionRef): Promise<PartVersion[]> {
     const rows = await this.repo.listDurableForPrune(ref);
     return rows.flatMap(row =>

@@ -31,7 +31,7 @@ import {
   respondMutation,
 } from "../../api/response-shapes";
 import {
-  assertDiffVersionPair,
+  assertComparisonRequest,
   resolveSingleDocumentId,
 } from "../../api/versions-access";
 import type { FieldConfig } from "../../collections/fields/types";
@@ -290,12 +290,10 @@ export const SINGLE_VERSION_METHODS: Record<
     execute: async (_svc, p) => {
       const slug = String(p.slug ?? "");
       const comparison = readComparisonParams(p);
-      // Validate an explicit pair before resolving the live Single, so a
-      // malformed comparison fails as a validation error whether or not the
-      // Single has been materialized.
-      if (comparison.from !== undefined) {
-        assertDiffVersionPair(comparison.from, comparison.to ?? Number.NaN);
-      }
+      // Validate the request before resolving the live Single, so a malformed
+      // comparison fails as a validation error whether or not the Single has
+      // been materialized.
+      assertComparisonRequest(comparison);
       const entryId = await requireLiveSingleId(slug);
       const diff = await getVersionDiffForDocument({
         scopeKind: "single",

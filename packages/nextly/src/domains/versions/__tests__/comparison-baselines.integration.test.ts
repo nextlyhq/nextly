@@ -16,6 +16,7 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import { registerComparisonBaseline } from "../comparison-baselines";
 import { VersionsRepository } from "../versions-repository";
 
 let current: TestNextly | undefined;
@@ -183,6 +184,74 @@ describe.each(getConfiguredTestDialects())(
       const diff = await compare(id, { from: 2, to: 4 });
       expect(diff).toMatchObject({ from: 2, to: 4 });
       expect(diff.baseline).toBeUndefined();
+    });
+
+    it("refuses a malformed target as invalid, not as missing", async () => {
+      const id = await documentWithHistory(dialect, history);
+      for (const to of [0, Number.NaN, 2.5]) {
+        const error = await refusal(compare(id, { to, baseline: "previous" }));
+        expect(error.code).toBe("VALIDATION_ERROR");
+        expect(JSON.stringify(error.publicData)).toContain("INVALID_VALUE");
+      }
+    });
+
+    it("tells a baseline of no user when an API key compares", async () => {
+      const seen: (string | null)[] = [];
+      registerComparisonBaseline({
+        name: `test-who-${dialect}`,
+        label: "Who is comparing",
+        resolve: ({ userId, versions }) => {
+          seen.push(userId);
+          return versions[versions.length - 1]?.versionNo ?? null;
+        },
+      });
+      const id = await documentWithHistory(dialect, history);
+
+      await getVersionDiffForDocument({
+        scopeKind: "collection",
+        slug: "posts",
+        entryId: id,
+        user: superAdmin,
+        to: 6,
+        baseline: `test-who-${dialect}`,
+      });
+      await getVersionDiffForDocument({
+        scopeKind: "collection",
+        slug: "posts",
+        entryId: id,
+        user: superAdmin,
+        authenticatedScope: {
+          actorType: "apiKey",
+          permissions: ["read-posts"],
+        } as unknown as Parameters<
+          typeof getVersionDiffForDocument
+        >[0]["authenticatedScope"],
+        to: 6,
+        baseline: `test-who-${dialect}`,
+      });
+
+      // A person's comparison carries them; the key's carries no user.
+      expect(seen).toEqual(["tester", null]);
+    });
+
+    it("refuses to compare a draft saved before saves were recorded", async () => {
+      const id = await documentWithHistory(dialect, [
+        { status: "published", locale: "en", title: "en published" }, // v2
+      ]);
+      // A working draft with no draft version after the publish.
+      await new VersionsRepository(
+        current!.adapter as unknown as ConstructorParameters<
+          typeof VersionsRepository
+        >[0]
+      ).upsertWorkingDraft({
+        ref: { scopeKind: "collection", scopeSlug: "posts", entryId: id },
+        locale: "en",
+        snapshot: { title: "pending" },
+      });
+
+      const error = await refusal(compare(id, { locale: "en" }));
+      expect(JSON.stringify(error.publicData)).toContain("NO_BASELINE");
+      expect(JSON.stringify(error.publicData)).toContain("Save it once");
     });
 
     it("refuses a pair and a baseline together, and an unknown baseline", async () => {

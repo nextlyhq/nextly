@@ -179,6 +179,12 @@ export interface ComparisonRequest {
    */
   locale?: string | null;
   userId: string | null;
+  /**
+   * The parts that hold a working draft. A draft saved before every save was
+   * recorded as a version has no version to compare, and must not be passed
+   * over for older versions as if it did not exist.
+   */
+  workingDraftParts?: readonly (string | null)[];
 }
 
 /** The pair a request resolves to, and the baseline that chose `from`. */
@@ -209,6 +215,23 @@ export async function resolveComparisonPair(
   const part = partOf(request, versions);
   const inPart = versions.filter(v => v.locale === part);
   const draft = currentDraft(inPart);
+  const asksForDraft = request.to === undefined || request.baseline === "draft";
+  if (
+    asksForDraft &&
+    draft === undefined &&
+    (request.workingDraftParts ?? []).includes(part)
+  ) {
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: "baseline",
+          code: "NO_BASELINE",
+          message:
+            "This draft was saved before every save was kept as a version, so it has no version to compare. Save it once and compare again.",
+        },
+      ],
+    });
+  }
   const target = request.to ?? draft?.versionNo ?? inPart[0]?.versionNo;
   if (target === undefined) {
     throw NextlyError.notFound({
