@@ -56,6 +56,8 @@ export interface ArrangedGridProps {
   updatedAt: Date | null;
   /** The placements whose OWN request is still in flight. */
   fetchingPlacementIds: ReadonlySet<string>;
+  /** Reload one card's data on its own, from its error state's Retry. */
+  retry: (placementId: string) => void;
   announcement: string;
   focus: Pick<DashboardFocus, "menuRef" | "dismissRef">;
   /** The region's own ref: where focus lands when nothing nearer can take it. */
@@ -118,6 +120,7 @@ export function ArrangedGrid({
   requested,
   updatedAt,
   fetchingPlacementIds,
+  retry,
   announcement,
   focus,
   gridRef,
@@ -169,6 +172,7 @@ export function ArrangedGrid({
                 // 🔴 This card's own request, not the batch's: partitions
                 // settle independently, and a settled card must not dim.
                 isFetching: fetchingPlacementIds.has(row.placementId),
+                onRetry: () => retry(row.placementId),
               }}
               refs={{
                 menu: focus.menuRef(row.placementId),

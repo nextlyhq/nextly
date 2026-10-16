@@ -12,17 +12,10 @@
  * @module components/features/widgets/archetypes/count-value
  */
 
+import type { SizeTier } from "@nextlyhq/ui/format";
 import type { JSX } from "react";
 
-/**
- * The words a floor is said in, for both readers.
- *
- * One constant rather than one per renderer: the visible `+` and the spoken
- * phrase are two notations for the same claim, and a card whose two readers
- * disagree about whether a number is whole is the defect this module exists to
- * prevent, one level down.
- */
-const FLOOR_SUFFIX = " or more";
+import { cardNumber } from "../frame/format";
 
 /**
  * What assistive technology should HEAR for a count.
@@ -35,8 +28,8 @@ const FLOOR_SUFFIX = " or more";
  * spoken form wherever a count is announced.
  */
 export function countLabel(total: number, atLeast?: boolean): string {
-  const formatted = total.toLocaleString();
-  return atLeast === true ? `${formatted}${FLOOR_SUFFIX}` : formatted;
+  // The card formatter's spoken form: the full grouped value, "N or more" for a floor.
+  return cardNumber(total, { floor: atLeast === true }).label;
 }
 
 /**
@@ -50,19 +43,21 @@ export function countLabel(total: number, atLeast?: boolean): string {
 export function CountValue({
   total,
   atLeast,
+  tier,
 }: {
   total: number;
   atLeast?: boolean;
+  /** The card's size tier: only `small` compacts ("1.2k"). */
+  tier?: SizeTier;
 }): JSX.Element {
+  // One formatter for the drawn form and the heard one, so a compact "1.2k" is still heard as
+  // "1,248" and a floor's visible "+" is heard as "or more".
+  const figure = cardNumber(total, { floor: atLeast === true, tier });
+  if (figure.text === figure.label) return <>{figure.text}</>;
   return (
     <>
-      {total.toLocaleString()}
-      {atLeast === true ? (
-        <>
-          <span aria-hidden="true">+</span>
-          <span className="sr-only">{FLOOR_SUFFIX}</span>
-        </>
-      ) : null}
+      <span aria-hidden="true">{figure.text}</span>
+      <span className="sr-only">{figure.label}</span>
     </>
   );
 }

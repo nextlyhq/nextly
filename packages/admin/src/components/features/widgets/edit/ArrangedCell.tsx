@@ -64,6 +64,8 @@ export interface ArrangedCellProps {
     /** `null` when this card took no part in the batch. */
     updatedAt: Date | null;
     isFetching: boolean;
+    /** Reload this card's data on its own, offered in its error state. */
+    onRetry?: () => void;
   };
   /** Registers the card's controls, so focus can be sent back to them. */
   refs: {
@@ -253,6 +255,7 @@ export function ArrangedCell(props: ArrangedCellProps) {
           definition={widget}
           placement={placement}
           headerAction={headerAction}
+          customizing={isEditing}
           {...data}
         />
       )}

@@ -80,16 +80,13 @@ export const listBody: ArchetypeBody = (result, definition) => {
   }
 
   if (result.items.length === 0) {
+    // The frame's one empty state, worded for a list.
     return {
       ok: true,
-      node: (
-        <p
-          data-testid="widget-list-empty"
-          className="text-sm text-muted-foreground"
-        >
-          Nothing yet.
-        </p>
-      ),
+      empty: {
+        title: "Nothing here yet",
+        detail: "Entries show here once there are some.",
+      },
     };
   }
 

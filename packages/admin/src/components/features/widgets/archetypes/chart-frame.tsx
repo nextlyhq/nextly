@@ -29,6 +29,8 @@
 
 import { useId, type ReactNode } from "react";
 
+import { cardNumber } from "../frame/format";
+
 /**
  * One row behind a chart: its identity, its label, and its number.
  *
@@ -185,7 +187,7 @@ export function ChartFrame({
                     )}
                   </th>
                   <td className="py-1 text-right tabular-nums text-foreground">
-                    {row.count.toLocaleString()}
+                    {cardNumber(row.count).text}
                   </td>
                 </tr>
               ))}

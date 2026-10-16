@@ -19,6 +19,8 @@
  * @module components/features/widgets/archetypes/bars
  */
 
+import { cardNumber } from "../frame/format";
+
 import { ChartFrame, type ChartRow } from "./chart-frame";
 import { barFractions } from "./chart-scale";
 import type { ArchetypeAccepts, ArchetypeBody } from "./types";
@@ -78,13 +80,13 @@ export const barsBody: ArchetypeBody = (result, definition) => {
   );
 
   if (rows.length === 0) {
+    // The frame's one empty state, worded for groups.
     return {
       ok: true,
-      node: (
-        <p className="text-sm text-muted-foreground">
-          Nothing to compare yet — no rows matched this query.
-        </p>
-      ),
+      empty: {
+        title: "Nothing to compare yet",
+        detail: "No entries matched this card.",
+      },
     };
   }
 
@@ -94,7 +96,7 @@ export const barsBody: ArchetypeBody = (result, definition) => {
   // the two drifted immediately: one pluralised "category" for a single bucket
   // and the other did not, so the table's caption and the chart's own
   // description disagreed about the same data.
-  const description = `${rows.length} ${rows.length === 1 ? "category" : "categories"}. Largest: ${largest.label}, ${largest.count.toLocaleString()}.`;
+  const description = `${rows.length} ${rows.length === 1 ? "category" : "categories"}. Largest: ${largest.label}, ${cardNumber(largest.count).label}.`;
 
   return {
     ok: true,
@@ -146,7 +148,7 @@ export const barsBody: ArchetypeBody = (result, definition) => {
                     {row.label}
                   </span>
                   <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
-                    {row.count.toLocaleString()}
+                    {cardNumber(row.count).text}
                   </span>
                 </div>
                 {/* The track is always full width, so the bars share one
