@@ -8,9 +8,11 @@
  * goes to `nextly_i18n_archive`, before the column is dropped; and if the archive cannot be
  * written, nothing changes at all.
  */
-import { afterEach, beforeEach, expect, it } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 import { dispatchCollections } from "../../../dispatcher/handlers/collection-dispatcher";
+import { dispatchComponents } from "../../../dispatcher/handlers/component-dispatcher";
+import { dispatchSingles } from "../../../dispatcher/handlers/single-dispatcher";
 import { describeEachDialect } from "../../../plugins/__tests__/helpers/dialect-matrix";
 import {
   createTestNextly,
@@ -18,6 +20,7 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import type { ServiceContainer } from "../../../services";
+import type { SingleEntryService } from "../../singles/services/single-entry-service";
 
 const LOCALES = ["en", "es", "ar"];
 const VALUES: Record<string, string> = {
@@ -73,12 +76,10 @@ function quote(dialect: TestDialect, name: string): string {
 
 describeEachDialect("a field that stops being translated", dialect => {
   let current: TestNextly;
-  let previousNodeEnv: string | undefined;
 
   beforeEach(async () => {
     // The builder's update path runs its migration in development only.
-    previousNodeEnv = process.env.NODE_ENV;
-    process.env.NODE_ENV = "development";
+    vi.stubEnv("NODE_ENV", "development");
     current = await createTestNextly({
       dialect,
       collections: [],
@@ -88,7 +89,7 @@ describeEachDialect("a field that stops being translated", dialect => {
 
   afterEach(async () => {
     await current.destroy();
-    process.env.NODE_ENV = previousNodeEnv;
+    vi.unstubAllEnvs();
   });
 
   function handler(): CollectionsHandler {
@@ -151,15 +152,18 @@ describeEachDialect("a field that stops being translated", dialect => {
     return id;
   }
 
-  async function expectKept(id: string): Promise<void> {
+  async function expectKept(
+    id: string,
+    entity = { slug: "posts", table: "dc_posts" }
+  ): Promise<void> {
     const [main] = await query<{ heading: string | null }>(
-      `SELECT ${quote(dialect, "heading")} AS heading FROM ${quote(dialect, "dc_posts")} WHERE ${quote(dialect, "id")} = '${id}'`
+      `SELECT ${quote(dialect, "heading")} AS heading FROM ${quote(dialect, entity.table)} WHERE ${quote(dialect, "id")} = '${id}'`
     );
     expect(main?.heading).toBe(VALUES.en);
 
     const archived = await query<{ locale: string; value: string }>(
       `SELECT ${quote(dialect, "locale")} AS locale, ${quote(dialect, "value")} AS value FROM ${quote(dialect, "nextly_i18n_archive")} ` +
-        `WHERE ${quote(dialect, "collection")} = 'posts' AND ${quote(dialect, "field")} = 'heading' AND ${quote(dialect, "entry_id")} = '${id}' ` +
+        `WHERE ${quote(dialect, "collection")} = '${entity.slug}' AND ${quote(dialect, "field")} = 'heading' AND ${quote(dialect, "entry_id")} = '${id}' ` +
         `ORDER BY ${quote(dialect, "locale")}`
     );
     expect(archived).toEqual([
@@ -167,8 +171,8 @@ describeEachDialect("a field that stops being translated", dialect => {
       { locale: "es", value: VALUES.es },
     ]);
 
-    expect(await columnsOf("dc_posts_locales")).not.toContain("heading");
-    expect(await columnsOf("dc_posts")).toContain("heading");
+    expect(await columnsOf(`${entity.table}_locales`)).not.toContain("heading");
+    expect(await columnsOf(entity.table)).toContain("heading");
   }
 
   it("keeps them when the builder saves the field alone", async () => {
@@ -186,17 +190,92 @@ describeEachDialect("a field that stops being translated", dialect => {
   it("keeps them when the builder applies the change with the schema dialog", async () => {
     const id = await seed();
 
+    // The builder sends the schema version it previewed against.
+    const [registered] = await query<{ version: number | string | null }>(
+      `SELECT ${quote(dialect, "schema_version")} AS version FROM ${quote(dialect, "dynamic_collections")} WHERE ${quote(dialect, "slug")} = 'posts'`
+    );
     await dispatchCollections(
       {} as ServiceContainer,
       "applySchemaChanges",
       { collectionName: "posts" },
-      { fields: SHARED, confirmed: true, localized: true }
-    ).catch((error: { data?: unknown; logContext?: unknown }) => {
-      throw new Error(
-        JSON.stringify({ data: error.data, log: error.logContext })
-      );
-    });
+      {
+        fields: SHARED,
+        confirmed: true,
+        localized: true,
+        schemaVersion: Number(registered?.version ?? 1),
+      }
+    );
 
     await expectKept(id);
+  });
+
+  it("keeps them when a Single's schema is saved with the field shared", async () => {
+    await dispatchSingles(
+      "createSingle",
+      {},
+      { slug: "hero", label: "Hero", localized: true, fields: TRANSLATED }
+    );
+    const singles: SingleEntryService =
+      current.getService("singleEntryService");
+    for (const locale of LOCALES) {
+      const written = await singles.update(
+        "hero",
+        locale === "en"
+          ? { heading: VALUES.en, views: 7 }
+          : { heading: VALUES[locale] },
+        { locale, overrideAccess: true }
+      );
+      expect(written.success, JSON.stringify(written)).toBe(true);
+    }
+    const [row] = await query<{ id: string }>(
+      `SELECT ${quote(dialect, "id")} AS id FROM ${quote(dialect, "single_hero")}`
+    );
+
+    await dispatchSingles(
+      "updateSingleSchema",
+      { slug: "hero" },
+      { fields: SHARED }
+    );
+
+    await expectKept(String(row.id), { slug: "hero", table: "single_hero" });
+  });
+
+  it("keeps them when a field group's schema is saved with the field shared", async () => {
+    await dispatchComponents(
+      "createComponent",
+      {},
+      { slug: "promo", label: "Promo", localized: true, fields: TRANSLATED }
+    );
+    // A field group's rows belong to the entries that embed it; one row, written as an
+    // embedding entry would, with a value in every language.
+    const id = "promo-1";
+    await query(
+      `INSERT INTO ${quote(dialect, "comp_promo")} (${["id", "_parent_id", "_parent_table", "_parent_field", "views"].map(c => quote(dialect, c)).join(", ")}) ` +
+        `VALUES ('${id}', 'entry-1', 'dc_pages', 'promo', 7)`
+    );
+    for (const locale of LOCALES) {
+      await query(
+        `INSERT INTO ${quote(dialect, "comp_promo_locales")} (${["_parent", "_locale", "heading"].map(c => quote(dialect, c)).join(", ")}) ` +
+          `VALUES ('${id}', '${locale}', '${VALUES[locale]}')`
+      );
+    }
+
+    // A field change that alters the group's table goes through its schema apply, which the
+    // builder sends with the schema version it previewed against.
+    const [registered] = await query<{ version: number | string | null }>(
+      `SELECT ${quote(dialect, "schema_version")} AS version FROM ${quote(dialect, "dynamic_components")} WHERE ${quote(dialect, "slug")} = 'promo'`
+    );
+    await dispatchComponents(
+      "applyComponentSchemaChanges",
+      { slug: "promo" },
+      {
+        fields: SHARED,
+        confirmed: true,
+        localized: true,
+        schemaVersion: Number(registered?.version ?? 1),
+      }
+    );
+
+    await expectKept(id, { slug: "promo", table: "comp_promo" });
   });
 });
