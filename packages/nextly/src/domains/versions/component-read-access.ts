@@ -26,6 +26,7 @@ import {
   extractFieldGroupReferences,
   fieldGroupSlugList,
 } from "../field-groups/storage/field-group-field-type";
+import { readFieldGroupType } from "../field-groups/storage/field-group-type-key";
 
 /** Who is reading, and their grants, shared with the entity's own pass. */
 export interface ComponentReadCaller {
@@ -36,9 +37,6 @@ export interface ComponentReadCaller {
 
 /** Component field schemas, keyed by component slug. */
 export type ComponentFieldMap = ReadonlyMap<string, readonly FieldConfig[]>;
-
-/** The key a stored component instance names its own type under. */
-const COMPONENT_TYPE_KEY = "_componentType";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -61,8 +59,8 @@ function nameOf(field: FieldConfig): string | undefined {
 
 /**
  * The component instances a field-group field's value holds, each with the
- * component it is judged by: a block's own `_componentType`, or the field's
- * single component.
+ * component it is judged by: a block's own type (under either stored key), or
+ * the field's single component.
  */
 function componentInstances(
   field: FieldConfig,
@@ -70,8 +68,8 @@ function componentInstances(
 ): { slug: string; instance: Record<string, unknown> }[] {
   const { single } = extractFieldGroupReferences(field);
   return rowsOf(value).flatMap(instance => {
-    const own = instance[COMPONENT_TYPE_KEY];
-    const slug = typeof own === "string" && own !== "" ? own : single;
+    const own = readFieldGroupType(instance);
+    const slug = own !== undefined && own !== "" ? own : single;
     return slug ? [{ slug, instance }] : [];
   });
 }
@@ -181,9 +179,9 @@ export function nestedWithheldPaths(
         if (!afterRow) return;
         const inner = isFieldGroupField(field)
           ? componentFields.get(
-              typeof row[COMPONENT_TYPE_KEY] === "string"
-                ? row[COMPONENT_TYPE_KEY]
-                : (extractFieldGroupReferences(field).single ?? "")
+              readFieldGroupType(row) ??
+                extractFieldGroupReferences(field).single ??
+                ""
             )
           : sub;
         if (inner) walk(row, afterRow, inner, path);
@@ -209,13 +207,34 @@ function componentCarriesReadRule(
   if (seen.has(slug)) return false;
   seen.add(slug);
   if (hasReadRule(getFieldFunctions("fieldGroup", slug))) return true;
-  return (componentFields.get(slug) ?? []).some(
-    inner =>
-      isFieldGroupField(inner) &&
-      fieldGroupSlugList(inner).some(nested =>
-        componentCarriesReadRule(nested, componentFields, seen)
-      )
+  return reachesComponentRule(
+    componentFields.get(slug) ?? [],
+    componentFields,
+    seen
   );
+}
+
+/**
+ * Whether any component these fields reach carries a read rule, through
+ * groups, repeaters and layout containers as well as components themselves:
+ * a component's rules live in its own registration, not its holder's.
+ */
+function reachesComponentRule(
+  level: readonly FieldConfig[],
+  componentFields: ComponentFieldMap,
+  seen: Set<string>
+): boolean {
+  return level.some(field => {
+    if (isFieldGroupField(field)) {
+      return fieldGroupSlugList(field).some(slug =>
+        componentCarriesReadRule(slug, componentFields, seen)
+      );
+    }
+    const sub = subFieldsOf(field);
+    return (
+      sub !== undefined && reachesComponentRule(sub, componentFields, seen)
+    );
+  });
 }
 
 /**
@@ -253,10 +272,5 @@ function carriesReadRule(
   componentFields: ComponentFieldMap
 ): boolean {
   if (fn?.access?.read !== undefined || hasReadRule(fn?.fields)) return true;
-  return (
-    isFieldGroupField(field) &&
-    fieldGroupSlugList(field).some(componentSlug =>
-      componentCarriesReadRule(componentSlug, componentFields, new Set())
-    )
-  );
+  return reachesComponentRule([field], componentFields, new Set());
 }
