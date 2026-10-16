@@ -16,6 +16,7 @@
  */
 
 import { apiKeyWriteAllowed } from "../../auth/authenticated-scope";
+import { nextly } from "../../direct-api/nextly";
 import type { RBACAccessControlService } from "../../domains/auth/services/rbac-access-control-service";
 import { ReleasesRepository } from "../../domains/releases/releases-repository";
 import {
@@ -52,6 +53,57 @@ export function registerReleaseServices({
         // `permission-seed-service`. `hasPermission` fails CLOSED — it returns
         // false on any error rather than throwing — which is the behaviour a
         // gate wants: an unreachable permission store must not read as consent.
+        // What a document must be to join a release, asked of the content API
+        // and the schema registries. Resolved lazily, per call, for the
+        // reason the document check below is: the services it reads are
+        // registered elsewhere, and resolving them here would make this depend
+        // on registration order.
+        targets: {
+          readDocument: async (target, caller) => {
+            // `status: "all"`: a release most often publishes a DRAFT, and a
+            // read that defaulted to published would refuse exactly the
+            // document the release exists for. A trusted caller reads
+            // unchecked; anyone else reads as themselves, so a document they
+            // may not see is the same answer as one that is not there.
+            const access = caller.trusted
+              ? { overrideAccess: true }
+              : { overrideAccess: false, user: { id: caller.userId } };
+            const found =
+              target.scopeKind === "single"
+                ? await nextly.findSingle({
+                    slug: target.scopeSlug as never,
+                    status: "all",
+                    ...access,
+                  } as never)
+                : await nextly.findByID({
+                    collection: target.scopeSlug as never,
+                    id: target.entryId,
+                    status: "all",
+                    ...access,
+                  } as never);
+            return found ?? null;
+          },
+          declaresLifecycle: async (scopeKind, scopeSlug) => {
+            const key =
+              scopeKind === "single"
+                ? "singleRegistryService"
+                : "collectionRegistryService";
+            if (!container.has(key)) return false;
+            const registry = container.get<{
+              getCollectionBySlug?: (
+                slug: string
+              ) => Promise<{ status?: boolean } | null>;
+              getSingleBySlug?: (
+                slug: string
+              ) => Promise<{ status?: boolean } | null>;
+            }>(key);
+            const record = await (scopeKind === "single"
+              ? registry.getSingleBySlug?.(scopeSlug)
+              : registry.getCollectionBySlug?.(scopeSlug));
+            return record?.status === true;
+          },
+        },
+
         canManageReleases: (userId, authority) =>
           hasPermission(userId, authority, RELEASES_RESOURCE),
 

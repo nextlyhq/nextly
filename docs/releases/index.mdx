@@ -36,6 +36,13 @@ can put new pages live and retire old ones in the same moment.
 | Apply       | On a background-jobs pass after that time, every member's action is applied |
 | Cancel      | An unapplied release can be cancelled                                       |
 
+A document is checked when it is added, the same way over REST and from the Direct API. It
+must exist, and the person adding it must be allowed to read it. Its collection or Single
+must have drafts, since a release moves documents between draft and published. A Single is
+recorded by its own stored row, whatever id the caller passed. A trusted Direct API call
+(`overrideAccess`, the default) skips only the read permission. The document still has to
+exist and have drafts.
+
 ## Listing releases
 
 <Callout type="info">

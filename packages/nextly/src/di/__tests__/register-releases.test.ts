@@ -57,7 +57,13 @@ describe("registerReleaseServices", () => {
     // would be green about a mechanism it never ran.
     const singletons = new Map<string, unknown>();
     vi.resetModules();
-    vi.doMock("../../services/lib/permissions", () => ({
+    // Only `hasPermission` is stubbed; the rest of the module stays real,
+    // because the registration also wires the release target checks, whose
+    // content reads reach this module too.
+    vi.doMock("../../services/lib/permissions", async importOriginal => ({
+      ...(await importOriginal<
+        typeof import("../../services/lib/permissions")
+      >()),
       hasPermission: async () => true,
     }));
     vi.doMock("../container", () => ({
@@ -124,7 +130,13 @@ describe("registerReleaseServices document authority", () => {
   async function withOwnerAllowed(scopePermissions: string[]) {
     const singletons = new Map<string, unknown>();
     vi.resetModules();
-    vi.doMock("../../services/lib/permissions", () => ({
+    // Only `hasPermission` is stubbed; the rest of the module stays real,
+    // because the registration also wires the release target checks, whose
+    // content reads reach this module too.
+    vi.doMock("../../services/lib/permissions", async importOriginal => ({
+      ...(await importOriginal<
+        typeof import("../../services/lib/permissions")
+      >()),
       hasPermission: async () => true,
     }));
     vi.doMock("../container", () => ({
@@ -212,7 +224,13 @@ describe("registerReleaseServices lifecycle grants", () => {
   }) {
     const singletons = new Map<string, unknown>();
     vi.resetModules();
-    vi.doMock("../../services/lib/permissions", () => ({
+    // Only `hasPermission` is stubbed; the rest of the module stays real,
+    // because the registration also wires the release target checks, whose
+    // content reads reach this module too.
+    vi.doMock("../../services/lib/permissions", async importOriginal => ({
+      ...(await importOriginal<
+        typeof import("../../services/lib/permissions")
+      >()),
       hasPermission: async () => true,
     }));
     vi.doMock("../container", () => ({
