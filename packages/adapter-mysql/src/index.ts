@@ -1130,13 +1130,16 @@ export class MySqlAdapter extends DrizzleAdapter {
     // as kind: "unknown".
     if (isDatabaseError(error)) return error;
 
-    const mysqlError = error as {
+    // Classified from mysql2's own error, which Drizzle puts on `cause` when it
+    // wraps a failed query (`driverErrorIn`); it is the one carrying `errno`.
+    const mysqlError = this.driverErrorIn<{
       errno?: number;
       code?: string;
       sqlState?: string;
       message?: string;
       sql?: string;
-    };
+      cause?: unknown;
+    }>(error, candidate => typeof candidate.errno === "number");
 
     // Determine error kind from MySQL error number
     const kind: DatabaseErrorKind =
