@@ -132,21 +132,20 @@ export function registerReleaseServices({
         // document that could not be written now is logged exactly as a
         // scheduled run logs it.
         //
-        // The registry is resolved lazily, per call, for the reason the RBAC
-        // service below is: it is `register-jobs`' singleton, and resolving it
-        // here at registration would tie this to the order of the two. A boot
-        // that registered no job registry has nothing to run the drain with,
-        // so the release is left scheduled for now: it is due, and whatever
-        // runs this installation's releases sends it out on its next pass.
-        runDrainNow: async ({ maxDurationMs }) => {
-          if (!container.has("jobRegistry")) return;
-          await runSweepNow(
-            adapter,
-            container.get<JobRegistry>("jobRegistry"),
-            RELEASES_DRAIN_JOB,
-            { maxDurationMs }
-          );
-        },
+        // The registry is resolved HERE, once, while this registration's
+        // factory builds the service, rather than on each Publish now.
+        // Services can be cleared and registered again while a Publish now
+        // from this registration is still running; resolving per call would
+        // then pair this adapter with the next registration's registry, whose
+        // drain writes through another adapter. It cannot cycle: building the
+        // job registry resolves the document-lock and webhook services, never
+        // this one.
+        runDrainNow: drainNowWith(
+          adapter,
+          container.has("jobRegistry")
+            ? container.get<JobRegistry>("jobRegistry")
+            : undefined
+        ),
         // Publish now answers a drain it could not start with the release as
         // it stands; this is where that failure is reported.
         logger,
@@ -254,6 +253,23 @@ export function contentReadAccess(
     // `actor` from the instance's defaults, and a caller with no key of its
     // own would be judged by a default key's grants.
     actor: caller.authenticatedScope,
+  };
+}
+
+/**
+ * Publish now's drain run, bound to one registration's adapter and registry.
+ *
+ * A boot that registered no job registry has nothing to run the drain with,
+ * so nothing runs and the release is left scheduled: it is due, and whatever
+ * runs this installation's releases sends it out on its next pass.
+ */
+function drainNowWith(
+  adapter: RegistrationContext["adapter"],
+  registry: JobRegistry | undefined
+): (options: { maxDurationMs: number }) => Promise<unknown> {
+  return async ({ maxDurationMs }) => {
+    if (registry === undefined) return;
+    await runSweepNow(adapter, registry, RELEASES_DRAIN_JOB, { maxDurationMs });
   };
 }
 

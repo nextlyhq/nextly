@@ -26,6 +26,7 @@ import type { AuthenticatedScope } from "../auth/authenticated-scope";
 import { runWithCallerScope } from "../auth/caller-scope";
 import { isErrorResponse, requireAnyPermission } from "../auth/middleware";
 import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
+import { getLoggerFromDI } from "../dispatcher/helpers/di";
 import { isDueAt } from "../domains/releases/release-due";
 import {
   isReleaseTab,
@@ -530,10 +531,13 @@ function publishNowMessage(release: ReleaseRow, now: Date): string {
 /**
  * A release with its capabilities, for an answer given AFTER a write.
  *
- * The capabilities are a read, and may need an authority the write did not:
- * a key scoped to publish releases has no read grant. Refusing then would
- * report a write that happened as one that did not, so the release is
- * answered without them instead.
+ * The capabilities are decoration on a write that has already committed, so
+ * no failure to read them may fail the request: that would report a write
+ * that happened as one that did not, and invite a retry of it. The release is
+ * answered without them instead. A refusal is expected — a key scoped to
+ * publish releases has no read grant — and is not reported; any other
+ * failure is logged through the application logger, the way this layer
+ * reports work that goes wrong without failing the request.
  */
 async function decorateAfterWrite(
   release: ReleaseRow,
@@ -544,8 +548,16 @@ async function decorateAfterWrite(
     const [item] = await withCapabilities([release], caller, releases);
     return item;
   } catch (error) {
-    if (NextlyError.is(error) && error.code === "FORBIDDEN") return release;
-    throw error;
+    if (!(NextlyError.is(error) && error.code === "FORBIDDEN")) {
+      getLoggerFromDI()?.error(
+        "A release's capabilities could not be read after a write",
+        {
+          releaseId: release.id,
+          error: error instanceof Error ? error.message : String(error),
+        }
+      );
+    }
+    return release;
   }
 }
 

@@ -17,13 +17,18 @@ import { NextlyError } from "../../errors";
 import { RELEASE_STATES } from "../../schemas/releases/types";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { requireAnyPermission, isErrorResponse, getCachedNextly } = vi.hoisted(
-  () => ({
+const { requireAnyPermission, isErrorResponse, getCachedNextly, logger } =
+  vi.hoisted(() => ({
     requireAnyPermission: vi.fn(),
     isErrorResponse: vi.fn(() => false),
     getCachedNextly: vi.fn(),
-  })
-);
+    logger: {
+      debug: vi.fn(),
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+    },
+  }));
 
 vi.mock("../../auth/middleware", () => ({
   requireAnyPermission,
@@ -33,6 +38,12 @@ vi.mock("../../auth/middleware/to-nextly-error", () => ({
   toNextlyAuthError: (e: unknown) => e,
 }));
 vi.mock("../../init", () => ({ getCachedNextly }));
+// The application logger the route reports to, observed rather than resolved
+// from the container the case below stubs.
+vi.mock("../../dispatcher/helpers/di", async importOriginal => ({
+  ...(await importOriginal<typeof import("../../dispatcher/helpers/di")>()),
+  getLoggerFromDI: () => logger,
+}));
 vi.mock("../../di", () => ({
   container: {
     has: () => true,
@@ -930,6 +941,26 @@ describe("publish now over REST", () => {
     const { body } = await publish();
     expect(body.message).toMatch(/stopped/);
     expect(body.message).not.toMatch(/going out/);
+  });
+
+  it("answers a publish that happened even when reading its capabilities fails, and logs why", async () => {
+    // The capabilities are decoration on a write that has already committed.
+    // Any failure to read them, not only a refusal, must not turn a release
+    // that went out into a failed request the person then retries.
+    api.releases.capabilities.mockRejectedValueOnce(
+      new Error("capabilities read failed")
+    );
+    const { res, body } = await publish();
+    expect(res.status).toBe(200);
+    expect(body.item).toMatchObject({ id: "r1", state: "published" });
+    expect(body.item.can).toBeUndefined();
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        releaseId: "r1",
+        error: "capabilities read failed",
+      })
+    );
   });
 
   it("answers a publish that happened even when the caller may not read capabilities", async () => {
