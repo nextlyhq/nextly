@@ -56,6 +56,9 @@ into, whichever package manager installed it.
 - The blog template's featured-image alt text check reads the image through
   `nextly.media.findByID`, and refuses the save when the image cannot be read
   or no longer exists, rather than letting the post through unchecked.
+- `nextly init` in an app without `src/` writes its folders, its
+  `nextly.config.ts` paths and `lib/nextly.ts` at the root, where generation
+  then writes too, instead of creating a `src/` tree beside the root `app/`.
 - `create-nextly-app`, adding Nextly to an existing app without `src/`, now
   writes `typescript.outputFile` as `./types/generated/nextly-types.ts` instead
   of a `./src/...` path, so the types land beside the rest of the app.
