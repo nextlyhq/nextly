@@ -19,7 +19,6 @@ import { hostname } from "node:os";
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { sql } from "drizzle-orm";
-import { drizzle } from "drizzle-orm/mysql2";
 import type {
   Connection as CallbackConnection,
   Pool as CallbackPool,
@@ -137,21 +136,34 @@ interface PinnedMysql {
   destroy: () => void;
 }
 
+/** mysql2's default `connectionLimit`, used when a pool does not state one. */
+const MYSQL_DEFAULT_CONNECTION_LIMIT = 10;
+
 /**
  * Takes the connection a MySQL named lock is held on. `GET_LOCK` belongs to the
  * connection that runs it, and the pool hands out any idle connection, so the
- * lock and its release must share one connection of their own. A handle with no
- * pool behind it (a transaction's connection, or a test double) is already a
- * single connection, and is used as it is.
+ * lock and its release must share one connection of their own.
+ *
+ * Not taken from a pool of one connection: the work would then wait for that
+ * connection, which the lock holds. With one connection, the lock and its
+ * release share it already. A handle with no pool behind it (a transaction's
+ * connection, or a test double) is also used as it is.
  */
 async function pinMysqlConnection(db: unknown): Promise<PinnedMysql> {
   const client = (db as { $client?: Partial<CallbackPool> }).$client;
+  const limit =
+    client?.config?.connectionLimit ?? MYSQL_DEFAULT_CONNECTION_LIMIT;
   if (
     typeof client?.getConnection !== "function" ||
-    typeof client.promise !== "function"
+    typeof client.promise !== "function" ||
+    limit < 2
   ) {
     return { db: db as PgLike, release: () => {}, destroy: () => {} };
   }
+  // Loaded here rather than at the top of the module: the MySQL driver is a
+  // dependency only of the MySQL adapter, so a PostgreSQL or SQLite install
+  // must not need it to start the CLI.
+  const { drizzle } = await import("drizzle-orm/mysql2");
   const connection = await client.promise().getConnection();
   const callback = (connection as unknown as { connection: CallbackConnection })
     .connection;

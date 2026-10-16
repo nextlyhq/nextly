@@ -866,6 +866,16 @@ async function registerServicesOnce(
   // of the framework's two schema modes had no queryable source.
   resetWidgetRegistries(transformedConfig.plugins ?? []);
 
+  // Before any step that writes to the database or the registry: the Builder
+  // reconcile and the code-first sync below would otherwise add a refused
+  // plugin's fields and tables before the refusal.
+  await assertBootPluginInstallStates(
+    transformedConfig,
+    adapter,
+    adapterDrizzleDb,
+    resolvedLogger
+  );
+
   await publishStoredRecordingPolicies(adapter, transformedConfig);
 
   await registerConfigTablesQuietly(
@@ -962,13 +972,6 @@ async function registerServicesOnce(
     collections: collectSlugs(transformedConfig.collections),
     singles: collectSlugs(transformedConfig.singles),
   });
-
-  await assertBootPluginInstallStates(
-    transformedConfig,
-    adapter,
-    adapterDrizzleDb,
-    resolvedLogger
-  );
 
   await runBootMigrations(config, transformedConfig, deferredExtends, {
     adapter,
@@ -2063,6 +2066,12 @@ async function assertBootPluginSchemaVersions(
   const { assertPluginSchemaVersionsUsable } = await import(
     "../domains/schema/ownership/schema-version-check"
   );
+  const { isLifecycleCommandBoot } = await import(
+    "../domains/schema/ownership/plugin-lifecycle-state"
+  );
+  // A lifecycle command's boot runs a plugin's hook while its uninstall is
+  // leaving the version it declares, so the version is not judged there.
+  if (isLifecycleCommandBoot()) return;
   // Read from the migration ledger, which every install that has run a
   // migration has: a plugin whose modules only change data owns no table
   // and so has no owner row to carry its version.
@@ -2084,8 +2093,8 @@ async function assertBootPluginSchemaVersions(
 }
 
 /**
- * Layer 6.4: install state, BEFORE boot migrations and before any plugin
- * initialises.
+ * Layer 6.4: install state, BEFORE the Builder reconcile, the code-first sync,
+ * boot migrations and any plugin initialises.
  *
  * A configured plugin `nextly plugins install` has not recorded is refused in
  * production and warned about in development; one uninstalled, or whose
@@ -2155,6 +2164,12 @@ async function prepareExtensionTablesForInit(
   bootExtensionSchema: ExtensionSchema | undefined
 ): Promise<void> {
   if (!bootApplyEnabled()) return;
+  const { isLifecycleCommandBoot } = await import(
+    "../domains/schema/ownership/plugin-lifecycle-state"
+  );
+  // Not in a lifecycle command's boot: a resumed uninstall would otherwise
+  // recreate the extension tables it has already removed.
+  if (isLifecycleCommandBoot()) return;
   const { prepareExtensionTablesBeforeInit } = await import(
     "../init/first-run"
   );
