@@ -57,6 +57,8 @@ import {
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
+import { publishedEntries } from "../../ui/scripts/published-entries";
+
 // Paths are walked in `/` form on every platform, so the real tree and the
 // `/repo/...` trees the rule's own tests build resolve the same way. Windows
 // reads a `/` path as readily as its own, and `posix.join` keeps a drive
@@ -213,7 +215,35 @@ export function pickImportCondition(target: unknown): string | null {
 interface WorkspacePackage {
   readonly dir: string;
   readonly manifest: { name?: string; exports?: Record<string, unknown> };
+  /**
+   * The source each published subpath is built from, by its export key, for a
+   * package that declares that itself. Absent, a subpath's source is found by
+   * the name convention: `dist/x.mjs` is built from `src/x`.
+   */
+  readonly entrySources?: ReadonlyMap<string, string>;
 }
+
+/**
+ * The packages that publish a subpath from a source the name convention does
+ * not lead to, each read from the table its own build reads.
+ *
+ * `@nextlyhq/ui` builds `./color` from `src/lib/color/index.ts`, and declares
+ * every entry's source in `scripts/published-entries.ts`, which its build and
+ * its surface checks read. Reading the same table keeps this resolver from
+ * holding a third copy, and from needing a file at `src/color.ts` that exists
+ * only so a name convention finds it. A package with such a layout and no
+ * table here stays unresolved, and fails, rather than going unwalked.
+ */
+const ENTRY_SOURCE_TABLES: ReadonlyMap<
+  string,
+  () => ReadonlyMap<string, string>
+> = new Map([
+  [
+    "@nextlyhq/ui",
+    () =>
+      new Map(publishedEntries().map(entry => [entry.subpath, entry.source])),
+  ],
+]);
 
 /** Every workspace package, by the name other packages import it as. */
 export function readWorkspace(
@@ -226,8 +256,13 @@ export function readWorkspace(
     const manifestPath = join(dir, "package.json");
     if (!io.exists(manifestPath)) continue;
     const manifest = JSON.parse(io.read(manifestPath));
-    if (typeof manifest.name === "string")
-      index.set(manifest.name, { dir, manifest });
+    if (typeof manifest.name !== "string") continue;
+    const entrySources = ENTRY_SOURCE_TABLES.get(manifest.name)?.();
+    index.set(manifest.name, {
+      dir,
+      manifest,
+      ...(entrySources === undefined ? {} : { entrySources }),
+    });
   }
   return index;
 }
@@ -267,13 +302,19 @@ function resolveWorkspaceSubpath(
   workspace: Map<string, WorkspacePackage>,
   io: Io
 ): Resolution {
-  const { dir, manifest } = workspace.get(owner)!;
+  const { dir, manifest, entrySources } = workspace.get(owner)!;
   const subpath =
     specifier === owner ? "." : `.${specifier.slice(owner.length)}`;
   const distPath = pickImportCondition(manifest.exports?.[subpath]);
   if (typeof distPath !== "string") return { kind: "unresolved", specifier };
   // A stylesheet or other asset ends the walk: it carries no imports and reaches no driver.
   if (!/\.(mjs|js|cjs)$/.test(distPath)) return { kind: "asset" };
+
+  // The package's own word for where this subpath is built from, first.
+  const declared = entrySources?.get(subpath);
+  if (declared !== undefined) {
+    return asFile(resolveSourceFile(join(dir, declared), io), specifier);
+  }
 
   const relativeSource = distPath
     .replace(/^\.\//, "")
@@ -946,6 +987,44 @@ describe("the rule can fail", () => {
         "C.ts"
       )
     ).toBe(false);
+  });
+
+  it("resolves a published subpath through its package's own entry table", () => {
+    // `./color` builds `dist/color.mjs` from `src/lib/color/index.ts`: no name
+    // convention leads from one to the other, so only the package's table can.
+    const ui = {
+      dir: "/repo/packages/ui",
+      manifest: {
+        name: "@x/ui",
+        exports: { "./color": { import: { default: "./dist/color.mjs" } } },
+      },
+    };
+    const io = fakeIo({ "/repo/packages/ui/src/lib/color/index.ts": "" });
+    const resolve = (entrySources?: ReadonlyMap<string, string>) =>
+      makeResolver(
+        new Map(),
+        new Map([
+          ["@x/ui", { ...ui, ...(entrySources ? { entrySources } : {}) }],
+        ]),
+        io
+      )("/repo/packages/admin/src/a.ts", "@x/ui/color");
+    expect(resolve(new Map([["./color", "src/lib/color/index.ts"]]))).toEqual({
+      kind: "file",
+      file: "/repo/packages/ui/src/lib/color/index.ts",
+    });
+    // The control: by the name convention alone it is unresolved, and fails.
+    expect(resolve()).toEqual({ kind: "unresolved", specifier: "@x/ui/color" });
+  });
+
+  it("resolves the design system's nested subpaths in this repository", () => {
+    const workspace = readWorkspace(PACKAGES, realIo);
+    const resolve = makeResolver(new Map(), workspace, realIo);
+    expect(
+      resolve(join(PACKAGES, "admin/src/a.ts"), "@nextlyhq/ui/color")
+    ).toEqual({
+      kind: "file",
+      file: join(PACKAGES, "ui/src/lib/color/index.ts"),
+    });
   });
 
   it("resolves a NodeNext .js specifier to the .ts beside it", () => {
