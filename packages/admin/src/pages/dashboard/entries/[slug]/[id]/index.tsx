@@ -23,6 +23,7 @@ import {
   type DocumentViewMount,
   type EntryFormCollection,
 } from "@admin/components/features/entries/EntryForm";
+import { documentViewMount } from "@admin/components/features/entries/EntryForm/document-view-mount";
 import { DocumentViewGate } from "@admin/components/features/entries/EntryForm/DocumentViewGate";
 import { useAddToReleaseAction } from "@admin/components/features/releases/AddToReleaseAction";
 import { ScheduledReleaseBanner } from "@admin/components/features/releases/ScheduledReleaseBanner";
@@ -44,15 +45,12 @@ import { useEditorLocale } from "@admin/hooks/useEditorLocale";
 import { useLocalization } from "@admin/hooks/useLocalization";
 import { usePluginAutoRegistration } from "@admin/hooks/usePluginAutoRegistration";
 import { useTranslationMode } from "@admin/hooks/useTranslationMode";
-import { navigateTo, withCurrentQuery } from "@admin/lib/navigation";
+import { navigateTo } from "@admin/lib/navigation";
 import {
   getComponent,
   type CustomEditViewProps,
 } from "@admin/lib/plugins/component-registry";
-import {
-  documentViewMissing,
-  routedDocumentView,
-} from "@admin/lib/plugins/document-view-registry";
+import { documentViewMissing } from "@admin/lib/plugins/document-view-registry";
 import { getCollectionFields } from "@admin/types/collection";
 import type { ApiCollection } from "@admin/types/entities";
 
@@ -219,37 +217,17 @@ function getEntryTitle(
   return entryTitleValue(entry, useAsTitle) ?? `Entry ${id.substring(0, 8)}...`;
 }
 
-/**
- * The plugin view this entry's address names, mounted for the form, or
- * `undefined` on the plain edit address.
- *
- * Read through the lookup the resolver used to let the address through, so a
- * view it found is the view drawn here. Leaving it returns to the entry's own
- * edit address — the form, not the list — where the same page, and so the same
- * form, answers.
- */
+/** The plugin view this entry's address names, or `undefined` on its edit address. */
 function entryDocumentView(
   params: EditEntryPageProps["params"]
 ): DocumentViewMount | undefined {
   const slug = params?.slug;
   const id = params?.id;
-  const routed = routedDocumentView("collection", slug, params?.view);
-  if (routed === undefined || slug === undefined || id === undefined) {
-    return undefined;
-  }
-  return {
-    component: routed.component,
-    // Back to the same document in the same language: the view's own field
-    // choice is the only part of the address the edit screen does not read.
-    onExit: () =>
-      navigateTo(
-        withCurrentQuery(
-          buildRoute(ROUTES.COLLECTION_ENTRY_EDIT, { slug, id }),
-          ["field"]
-        )
-      ),
-    ...("fieldType" in routed ? { fieldType: routed.fieldType } : {}),
-  };
+  const editPath =
+    slug !== undefined && id !== undefined
+      ? buildRoute(ROUTES.COLLECTION_ENTRY_EDIT, { slug, id })
+      : undefined;
+  return documentViewMount("collection", slug, params?.view, editPath);
 }
 
 // ============================================================================

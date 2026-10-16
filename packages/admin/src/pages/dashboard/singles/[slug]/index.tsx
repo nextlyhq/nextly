@@ -20,6 +20,7 @@ import { Alert, AlertDescription, Button, Skeleton } from "@nextlyhq/ui";
 import type React from "react";
 
 import type { DocumentViewMount } from "@admin/components/features/entries/EntryForm";
+import { documentViewMount } from "@admin/components/features/entries/EntryForm/document-view-mount";
 import { DocumentViewGate } from "@admin/components/features/entries/EntryForm/DocumentViewGate";
 import { useAddToReleaseAction } from "@admin/components/features/releases/AddToReleaseAction";
 import { ScheduledReleaseBanner } from "@admin/components/features/releases/ScheduledReleaseBanner";
@@ -43,11 +44,8 @@ import {
 import { useEditorLocale } from "@admin/hooks/useEditorLocale";
 import { useLocalization } from "@admin/hooks/useLocalization";
 import { useTranslationMode } from "@admin/hooks/useTranslationMode";
-import { navigateTo, withCurrentQuery } from "@admin/lib/navigation";
-import {
-  documentViewMissing,
-  routedDocumentView,
-} from "@admin/lib/plugins/document-view-registry";
+import { navigateTo } from "@admin/lib/navigation";
+import { documentViewMissing } from "@admin/lib/plugins/document-view-registry";
 
 // ============================================================================
 // Types
@@ -155,29 +153,17 @@ function SingleEditPageSkeleton() {
   );
 }
 
-/**
- * The plugin view this Single's address names, mounted for the form, or
- * `undefined` on the plain edit address.
- *
- * Read through the lookup the resolver used to let the address through, so a
- * view it found is the view drawn here. Leaving it returns to the Single's own
- * edit address, where the same page — and so the same form — answers.
- */
+/** The plugin view this Single's address names, or `undefined` on its edit address. */
 function singleDocumentView(
   params: SingleEditPageProps["params"]
 ): DocumentViewMount | undefined {
   const slug = params?.slug;
-  const routed = routedDocumentView("single", slug, params?.view);
-  if (routed === undefined || slug === undefined) return undefined;
-  return {
-    component: routed.component,
-    // Back to the same Single in the same language — see the entry page.
-    onExit: () =>
-      navigateTo(
-        withCurrentQuery(buildRoute(ROUTES.SINGLE_EDIT, { slug }), ["field"])
-      ),
-    ...("fieldType" in routed ? { fieldType: routed.fieldType } : {}),
-  };
+  return documentViewMount(
+    "single",
+    slug,
+    params?.view,
+    slug === undefined ? undefined : buildRoute(ROUTES.SINGLE_EDIT, { slug })
+  );
 }
 
 // ============================================================================
