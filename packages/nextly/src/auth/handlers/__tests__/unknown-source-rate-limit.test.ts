@@ -16,6 +16,7 @@ import { RateLimiter } from "../../middleware/rate-limiter";
 import { SlidingWindowMemoryStore } from "../../middleware/sliding-window-store";
 import { MemoryUnknownSourceCounter } from "../../middleware/unknown-source-counter";
 import { mintPendingToken } from "../../pipeline/pending-token";
+import { buildAuthRouterDeps } from "../deps-bridge";
 import { routeAuthRequest, type AuthRouterDeps } from "../router";
 
 const W = 3_600_000;
@@ -56,20 +57,17 @@ function harness(
   const store = new SlidingWindowMemoryStore();
   const tokenLookups: Harness["tokenLookups"] = [];
   const accountLookups: string[] = [];
-  const unused = () => {
-    throw new Error("not reached by these requests");
+  // Every dependency these requests never reach comes from the real bridge
+  // over stand-in services (an adapter with no database: building the deps
+  // asks for one, and nothing here queries it); the ones they do reach are
+  // replaced below.
+  const services: Record<string, unknown> = {
+    adapter: { getDrizzle: () => ({}) },
   };
   const deps: AuthRouterDeps = {
+    ...buildAuthRouterDeps(name => services[name] ?? {}),
     secret: SECRET,
-    isProduction: false,
-    accessTokenTTL: 900,
-    refreshTokenTTL: 604800,
-    maxLoginAttempts: 5,
-    lockoutDurationSeconds: 900,
     loginStallTimeMs: 0,
-    requireEmailVerification: true,
-    revealRegistrationConflict: false,
-    devAutoLogin: false,
     allowedOrigins: [],
     trustProxy: options.trustProxy ?? false,
     trustedProxyIps: [],
@@ -104,32 +102,7 @@ function harness(
     },
     verifyEmail: async () => ({ success: false, error: "bad token" }),
     getUserCount: async () => 1,
-  } as AuthRouterDeps;
-  for (const name of [
-    "incrementFailedAttempts",
-    "lockAccount",
-    "resetFailedAttempts",
-    "fetchSessionRoles",
-    "fetchCustomFields",
-    "storeRefreshToken",
-    "findRefreshTokenByHash",
-    "deleteRefreshToken",
-    "withSessionRowTransaction",
-    "deleteRefreshTokenByHash",
-    "deleteAllRefreshTokensForUser",
-    "createSuperAdmin",
-    "seedPermissions",
-    "registerUser",
-    "generatePasswordResetToken",
-    "resetPasswordWithToken",
-    "acceptInvite",
-    "setInitialPassword",
-    "changePassword",
-    "resendVerificationEmail",
-    "fetchAccountState",
-  ] as const) {
-    (deps as unknown as Record<string, unknown>)[name] = unused;
-  }
+  };
   return { deps, counter, store, tokenLookups, accountLookups };
 }
 
