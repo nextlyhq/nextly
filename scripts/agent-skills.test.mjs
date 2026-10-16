@@ -336,6 +336,7 @@ describe("what makes a skill loadable by both harnesses", () => {
  * holding real files, read the way the check reads the real one.
  */
 describe("keeping contributor skills out of what people building with Nextly install", () => {
+  const USER_SKILL = "---\nname: nextly-install\ndescription: when installing Nextly\n---\n\nInstall Nextly.\n";
   const internal = name => `---\nname: ${name}\ndescription: when ${name} applies\nmetadata:\n  internal: true\n---\n\nThe contributor procedure for ${name}.\n`;
 
   function repository() {
@@ -346,7 +347,7 @@ describe("keeping contributor skills out of what people building with Nextly ins
     repository();
     skill(SKILLS_HOME, "a", internal("a"));
     skill(CLAUDE_COPY, "a", internal("a"));
-    skill(USER_SKILLS_HOME, "nextly-install");
+    skill(USER_SKILLS_HOME, "nextly-install", USER_SKILL);
     expect(userSkillSeparation(base)).toEqual({
       contributor: ["a"],
       user: ["nextly-install"],
@@ -357,6 +358,7 @@ describe("keeping contributor skills out of what people building with Nextly ins
   it("names a contributor skill the skills command would offer, in the skills and in the Claude Code copy", () => {
     repository();
     skill(SKILLS_HOME, "a");
+    skill(USER_SKILLS_HOME, "nextly-install", USER_SKILL);
     skill(CLAUDE_COPY, "a");
     skill(SKILLS_HOME, "b", internal("b"));
     expect(userSkillSeparation(base).problems).toEqual([
@@ -373,6 +375,7 @@ describe("keeping contributor skills out of what people building with Nextly ins
   it("names a skill anywhere else in the repository, and one marked internal only as text", () => {
     repository();
     skill(SKILLS_HOME, "a", internal("a"));
+    skill(USER_SKILLS_HOME, "nextly-install", USER_SKILL);
     skill("packages/thing/.cursor/skills", "stray");
     skill(".windsurf/skills", "quoted", "---\nname: quoted\ndescription: some\nmetadata:\n  internal: \"true\"\n---\n");
     expect(userSkillSeparation(base).problems.map(found => found.path)).toEqual([
@@ -400,6 +403,7 @@ describe("keeping contributor skills out of what people building with Nextly ins
   it("names a skill whose frontmatter cannot be read, rather than passing it", () => {
     repository();
     skill(SKILLS_HOME, "a", internal("a"));
+    skill(USER_SKILLS_HOME, "nextly-install", USER_SKILL);
     skill(SKILLS_HOME, "broken", "---\nname: broken\ndescription: [\n---\n");
     expect(userSkillSeparation(base).problems).toEqual([
       { path: `${SKILLS_HOME}/broken/SKILL.md`, problem: "has frontmatter that cannot be read, so whether the skills command offers it is unknown" },
@@ -410,9 +414,23 @@ describe("keeping contributor skills out of what people building with Nextly ins
   // skills are what the check guards, so reading none of them is a finding.
   it("refuses a repository where it found no contributor skills to check", () => {
     repository();
-    skill(USER_SKILLS_HOME, "nextly-install");
+    skill(USER_SKILLS_HOME, "nextly-install", USER_SKILL);
     expect(userSkillSeparation(base).problems).toEqual([
       { path: SKILLS_HOME, problem: "holds no skills, so nothing was checked for leaking into what people building with Nextly install" },
+    ]);
+  });
+
+  // The other half of the population: a repository whose skills/ lost every
+  // skill would offer nothing to install and still read clean.
+  it("refuses a repository whose skills/ offers no skill to people building with Nextly", () => {
+    repository();
+    skill(SKILLS_HOME, "a", internal("a"));
+    mkdirSync(join(base, USER_SKILLS_HOME), { recursive: true });
+    writeFileSync(join(base, USER_SKILLS_HOME, "README.md"), "Skills live here.\n");
+    skill(USER_SKILLS_HOME, "hidden", internal("hidden"));
+    expect(userSkillSeparation(base).problems).toEqual([
+      { path: `${USER_SKILLS_HOME}/hidden/SKILL.md`, problem: "is marked internal, so the skills command never offers it to people building with Nextly" },
+      { path: USER_SKILLS_HOME, problem: "offers no skill, so `npx skills add nextlyhq/nextly` installs nothing for people building with Nextly" },
     ]);
   });
 

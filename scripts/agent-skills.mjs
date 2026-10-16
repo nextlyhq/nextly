@@ -359,6 +359,12 @@ export function userSkillSeparation(base = root, files = repositoryFiles(base)) 
   if (contributor.length === 0) {
     problems.unshift({ path: SKILLS_HOME, problem: "holds no skills, so nothing was checked for leaking into what people building with Nextly install" });
   }
+  // The installer offers what is readable and not hidden. None at all would
+  // install nothing, which absence of findings would otherwise pass.
+  const offered = skills.filter(found => isUserSkill(found.path) && found.fields && !isInternal(found.fields));
+  if (offered.length === 0) {
+    problems.push({ path: USER_SKILLS_HOME, problem: "offers no skill, so `npx skills add nextlyhq/nextly` installs nothing for people building with Nextly" });
+  }
   return {
     contributor: contributor.map(found => contributorSkillName(found.path)),
     user: skills.filter(found => isUserSkill(found.path)).map(found => found.path.split("/").at(-2)),

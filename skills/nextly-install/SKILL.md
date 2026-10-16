@@ -61,7 +61,8 @@ onlyBuiltDependencies:
 ```bash
 npx create-nextly-app@alpha          # npm
 pnpm dlx create-nextly-app@alpha     # pnpm
-yarn dlx create-nextly-app@alpha     # yarn
+yarn dlx create-nextly-app@alpha     # yarn 2 and later
+yarn create nextly-app               # yarn 1 (Classic): no tag; installs `latest`, the current release
 bunx create-nextly-app@alpha         # bun
 ```
 

@@ -149,14 +149,38 @@ refuses request bodies over 4.5 MB (`413 FUNCTION_PAYLOAD_TOO_LARGE`). With
 this setup, files above that size cannot be uploaded through the admin; a
 Node.js server has no such limit.
 
-## 6. Deploy
+## 6. Create the first admin before the site is public
+
+A new production database has no admin. Until it has one, whoever opens
+`/admin/setup` first becomes Super Admin, so create that account before anyone
+else can reach the site. Setup then closes for good: a later attempt is
+refused with `SETUP_COMPLETE`.
+
+The simplest way is a production build on your own machine, pointed at the
+production database:
+
+```bash
+export DATABASE_URL="<the production database>"
+npm run build         # runs nextly migrate against it, then next build
+npm start             # next start, on http://localhost:3000
+```
+
+Open `http://localhost:3000/admin/setup`, create the account, stop the
+server, then deploy. If you cannot reach the production database from your
+machine, keep the deployment private until setup is done, behind your host's
+access protection.
+
+Never run `next dev` against the production database. Development mode
+applies schema changes directly to whatever database it points at.
+
+## 7. Deploy
 
 - **Vercel:** import the repository; Next.js is detected. Add the variables
   above for Production (and Preview, with its own database), then deploy.
   The `build` script migrates the database during the build.
 - **Node.js server:** install from the lockfile (`npm ci`, `pnpm install
---frozen-lockfile`, `yarn install --immutable` or `bun install
---frozen-lockfile`), run the `build` script, then `next start` under a
+--frozen-lockfile`, `yarn install --immutable` on Yarn 2+, `yarn install --frozen-lockfile` on
+  Yarn 1, or `bun install --frozen-lockfile`), run the `build` script, then `next start` under a
   process manager such as systemd, pm2 or Docker. Put a reverse proxy in
   front that terminates TLS and forwards `Host`, `X-Forwarded-Proto` and
   `X-Forwarded-For`.
@@ -184,12 +208,12 @@ in `TRUSTED_PROXY_IPS` (comma-separated CIDRs), so the client is read from the
 right hop. Do not turn this on for an app clients can reach directly: they
 could then pick their own address.
 
-## 7. Check the live site
+## 8. Check the live site
 
 - `npx nextly migrate:status`, run against the production `DATABASE_URL`,
   shows nothing pending.
-- On a new database, open `/admin/setup` once and create the first admin;
-  then `/admin` signs in.
+- `/admin/setup` says setup is already complete, and `/admin` signs in with
+  the account created before the deploy.
 - Publish an entry and open a page that lists it: it appears.
 - Upload an image in the admin, redeploy, and check it still loads.
 - Do not use `/api/health` as an uptime probe on serverless hosts. It reports
