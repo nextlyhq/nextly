@@ -29,8 +29,19 @@ const postgres: DatabaseConfig = {
 const REQUIRED = getServerExternalPackages(postgres);
 
 let dir: string;
+const installNext = async (version: string) => {
+  await mkdir(path.join(dir, "node_modules/next"), { recursive: true });
+  await writeFile(
+    path.join(dir, "node_modules/next/package.json"),
+    JSON.stringify({ name: "next", version }),
+    "utf-8"
+  );
+};
+// Every app starts with Next.js 16 installed, as a real one would, so a case
+// reaches the config rather than stopping at an unknown version.
 beforeEach(async () => {
   dir = await mkdtemp(path.join(tmpdir(), "next-config-"));
+  await installNext("16.0.1");
 });
 afterEach(async () => {
   await rm(dir, { recursive: true, force: true });
@@ -152,6 +163,7 @@ describe("a config with no serverExternalPackages", () => {
     ] as const) {
       await rm(dir, { recursive: true, force: true });
       dir = await mkdtemp(path.join(tmpdir(), "next-config-"));
+      await installNext("16.0.1");
       await write(name, text);
 
       const result = await patchNextConfig(dir, postgres);
@@ -185,6 +197,38 @@ describe("a config it cannot change safely", () => {
     [
       "hands a wrapper its options first and the config after",
       "const nextConfig = {};\n\nexport default makeConfig({ enabled: true }, nextConfig);\n",
+    ],
+    [
+      "hands a wrapper named options first and the config written in place",
+      "const options = {};\n\nexport default makeConfig(options, {});\n",
+    ],
+    [
+      "hands a wrapper the config and its options",
+      'const nextConfig = {};\n\nexport default withSentryConfig(nextConfig, { org: "acme" });\n',
+    ],
+    [
+      "assigns module.exports twice",
+      "module.exports = {};\nmodule.exports = { reactStrictMode: true };\n",
+    ],
+    [
+      "sets a property of module.exports after assigning it",
+      'module.exports = {};\nmodule.exports.serverExternalPackages = ["my-native-lib"];\n',
+    ],
+    [
+      "replaces module.exports inside a branch",
+      'module.exports = {};\nif (process.env.CI) {\n  module.exports = { output: "standalone" };\n}\n',
+    ],
+    [
+      "spreads another object before its own list",
+      'const shared = {};\n\nexport default {\n  ...shared,\n  serverExternalPackages: ["sharp"],\n};\n',
+    ],
+    [
+      "spreads another object into its experimental settings",
+      "const shared = {};\n\nexport default {\n  experimental: { ...shared },\n};\n",
+    ],
+    [
+      "reads transpilePackages from a getter",
+      'export default {\n  get transpilePackages() {\n    return ["nextly"];\n  },\n};\n',
     ],
     [
       "builds the list's key at run time",
@@ -244,24 +288,6 @@ describe("configs it can still change safely", () => {
     });
     expect(await read("next.config.mjs")).toContain(
       `["serverExternalPackages"]: ["my-native-lib", ${quoted(REQUIRED).join(", ")}]`
-    );
-  });
-
-  it("follows a wrapper given the config by name and its options after", async () => {
-    await write(
-      "next.config.mjs",
-      'const nextConfig = {\n  reactStrictMode: true,\n};\n\nexport default withSentryConfig(nextConfig, { org: "acme" });\n'
-    );
-
-    const result = await patchNextConfig(dir, postgres);
-
-    expect(result).toEqual({
-      kind: "written",
-      file: "next.config.mjs",
-      added: REQUIRED,
-    });
-    expect(await read("next.config.mjs")).toContain(
-      'withSentryConfig(nextConfig, { org: "acme" })'
     );
   });
 
@@ -341,7 +367,7 @@ describe("an app on Next.js 14", () => {
     expect(result).toMatchObject({
       kind: "manual",
       file: "next.config.mjs",
-      legacyOption: true,
+      spelling: "legacy",
     });
     expect(await read("next.config.mjs")).toBe(text);
     expect(nextConfigReport(result).message).toContain(
@@ -355,9 +381,73 @@ describe("an app on Next.js 14", () => {
 
     const result = await patchNextConfig(dir, postgres);
 
-    expect(result).toMatchObject({ kind: "manual", legacyOption: true });
+    expect(result).toMatchObject({ kind: "manual", spelling: "legacy" });
     await expect(read("next.config.ts")).rejects.toThrow();
     await expect(read("next.config.mjs")).rejects.toThrow();
+  });
+});
+
+describe("an app whose Next.js is not installed", () => {
+  const config = "export default {\n  reactStrictMode: true,\n};\n";
+  const uninstall = () =>
+    rm(path.join(dir, "node_modules"), { recursive: true, force: true });
+  const declare = (range: string) =>
+    write("package.json", JSON.stringify({ dependencies: { next: range } }));
+
+  it("goes by the range in package.json when it admits one major", async () => {
+    await uninstall();
+    await declare("^15.1.0");
+    await write("next.config.mjs", config);
+
+    const result = await patchNextConfig(dir, postgres);
+
+    expect(result).toMatchObject({ kind: "written", file: "next.config.mjs" });
+  });
+
+  it("gives the Next.js 14 option when that range is 14's", async () => {
+    await uninstall();
+    await declare("~14.2.3");
+    await write("next.config.mjs", config);
+
+    const result = await patchNextConfig(dir, postgres);
+
+    expect(result).toMatchObject({ kind: "manual", spelling: "legacy" });
+    expect(await read("next.config.mjs")).toBe(config);
+  });
+
+  for (const [why, range] of [
+    ["admits several majors", ">=14"],
+    ["admits either of two majors", "14 || 15"],
+    ["names no version", "latest"],
+    ["is missing", null],
+  ] as const) {
+    it(`leaves the config untouched and prints both spellings when the range ${why}`, async () => {
+      await uninstall();
+      if (range) await declare(range);
+      await write("next.config.mjs", config);
+
+      const result = await patchNextConfig(dir, postgres);
+
+      expect(result).toMatchObject({ kind: "manual", spelling: "either" });
+      expect(await read("next.config.mjs")).toBe(config);
+      const { message } = nextConfigReport(result);
+      expect(message).toContain(
+        `serverExternalPackages: [${quoted(REQUIRED).join(", ")}],`
+      );
+      expect(message).toContain(
+        `experimental: { serverComponentsExternalPackages: [${quoted(REQUIRED).join(", ")}] },`
+      );
+    });
+  }
+
+  it("goes by the installed version over the range", async () => {
+    await installNext("14.2.3");
+    await declare("^15.1.0");
+    await write("next.config.mjs", config);
+
+    const result = await patchNextConfig(dir, postgres);
+
+    expect(result).toMatchObject({ kind: "manual", spelling: "legacy" });
   });
 });
 

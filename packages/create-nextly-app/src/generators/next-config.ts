@@ -108,8 +108,13 @@ export type NextConfigPatch =
       file: string;
       reason: string;
       packages: string[];
-      /** Next.js 14 spells the option `experimental.serverComponentsExternalPackages`. */
-      legacyOption?: boolean;
+      /**
+       * Which spelling of the option to print: Next.js 14 reads
+       * `experimental.serverComponentsExternalPackages`, and "either" gives
+       * both when the app's version could not be read. Absent, the
+       * top-level `serverExternalPackages` of Next.js 15 and later.
+       */
+      spelling?: "legacy" | "either";
     };
 
 /**
@@ -173,16 +178,48 @@ function moduleExportsOf(statement: Statement): Expression | null {
     : null;
 }
 
+/** Whether a node is `module.exports`, or the `exports` it starts as. */
+const isCommonJsExport = (node: Node) =>
+  isNamed(node, "exports") ||
+  (node.type === "MemberExpression" &&
+    isNamed(node.object, "module") &&
+    isNamed(node.property, "exports"));
+
+const isPropertyOfExport = (node: Node) =>
+  node.type === "MemberExpression" && isCommonJsExport(node.object);
+
+/**
+ * How many times the file sets what it exports, anywhere in it: each
+ * `export default`, and each write to `module.exports`, `exports` or a
+ * property of either, `Object.assign` among them.
+ */
+function exportWrites(body: Statement[]): number {
+  let writes = body.filter(
+    statement => statement.type === "ExportDefaultDeclaration"
+  ).length;
+  for (const node of nodesUnder(body)) {
+    const target = changedBy(node);
+    if (target && (isCommonJsExport(target) || isPropertyOfExport(target)))
+      writes++;
+  }
+  return writes;
+}
+
 /**
  * The value `export default` or `module.exports =` hands Next.js, or why
- * there is none this can follow.
+ * there is none this can follow. A file that sets its export more than once
+ * hands Next.js whichever runs last, which reading the file cannot settle,
+ * so it answers why instead.
  */
 function exportedValue(body: Statement[]): Expression | string {
-  for (const statement of body) {
-    const value = defaultExportOf(statement) ?? moduleExportsOf(statement);
-    if (value) return value;
-  }
-  return "it has no default export";
+  const [value] = body.flatMap(statement => {
+    const exported = defaultExportOf(statement) ?? moduleExportsOf(statement);
+    return exported === null ? [] : [exported];
+  });
+  if (value === undefined) return "it has no default export";
+  return exportWrites(body) > 1
+    ? "it sets what it exports more than once"
+    : value;
 }
 
 /** The initial value of a variable declared at the top of the file, if it has one. */
@@ -262,32 +299,26 @@ function followVariable(
 }
 
 /**
- * The config a wrapper call is handed. With one argument, as in
- * `withMDX(nextConfig)`, that argument is the config. With several, the first
- * is followed only when it alone is a named value, as in
- * `withSentryConfig(nextConfig, { org })`; otherwise which argument Next.js
- * receives as its config cannot be told, so it answers why.
+ * The config a wrapper call is handed, when it is handed exactly one
+ * argument, as in `withMDX(nextConfig)`. With several, as in
+ * `withSentryConfig(nextConfig, { org })`, which one becomes the config is
+ * the wrapper's own contract, which reading the file cannot tell, so it
+ * answers why.
  */
 function followCall(
   call: CallExpression,
   body: Statement[],
   depth: number
 ): ObjectExpression | string {
-  const [first, ...rest] = call.arguments;
-  const unclear =
-    "it exports the result of a call whose config argument cannot be told";
-  if (
-    !first ||
-    first.type === "SpreadElement" ||
-    first.type === "ArgumentPlaceholder"
-  ) {
-    return unclear;
-  }
-  if (rest.length === 0) return configObject(first, body, depth + 1);
-  const firstIsTheNamedOne =
-    first.type === "Identifier" &&
-    rest.every(argument => argument.type !== "Identifier");
-  return firstIsTheNamedOne ? configObject(first, body, depth + 1) : unclear;
+  const [only, ...rest] = call.arguments;
+  const followable =
+    only !== undefined &&
+    rest.length === 0 &&
+    only.type !== "SpreadElement" &&
+    only.type !== "ArgumentPlaceholder";
+  return followable
+    ? configObject(only, body, depth + 1)
+    : "it exports the result of a call whose config argument cannot be told";
 }
 
 /** Keys of a node that hold positions and comments, never code. */
@@ -335,16 +366,16 @@ const isMethodCall = (callee: Node, object: string, method: string) =>
   isNamed(callee.object, object) &&
   isNamed(callee.property, method);
 
-/** Whether a node is `Object.assign(name, ...)`. */
-function isObjectAssignTo(node: Node, name: string): boolean {
-  if (node.type !== "CallExpression") return false;
-  const [first] = node.arguments;
-  return (
-    isMethodCall(node.callee, "Object", "assign") &&
-    first !== undefined &&
-    isNamed(first, name)
-  );
+/** The object `Object.assign(object, ...)` writes to, or null for any other node. */
+function objectAssignTarget(node: Node): Node | null {
+  if (node.type !== "CallExpression") return null;
+  if (!isMethodCall(node.callee, "Object", "assign")) return null;
+  return node.arguments[0] ?? null;
 }
+
+/** What a node writes to: an assignment, an increment or `Object.assign`. */
+const changedBy = (node: Node) =>
+  writtenTarget(node) ?? objectAssignTarget(node);
 
 /**
  * Whether the file assigns to the variable after declaring it, assigns to one
@@ -353,9 +384,8 @@ function isObjectAssignTo(node: Node, name: string): boolean {
  */
 function isReassigned(name: string, body: Statement[]): boolean {
   for (const node of nodesUnder(body)) {
-    const target = writtenTarget(node);
-    if ((target && writesTo(target, name)) || isObjectAssignTo(node, name))
-      return true;
+    const target = changedBy(node);
+    if (target && writesTo(target, name)) return true;
   }
   return false;
 }
@@ -403,15 +433,39 @@ function isListProperty(property: Node): property is ObjectProperty {
 }
 
 /**
- * Whether a property might define the list in a way this cannot read: a
- * computed key built at run time, or a getter or method of that name.
+ * Whether a property might set one of `names` in a way this cannot read: a
+ * spread, a computed key built at run time, or a getter or method of one of
+ * those names.
  */
-function mightBeTheList(property: Node): boolean {
-  if (property.type === "ObjectMethod") {
-    const name = keyName(property);
-    return name === null || name === PROPERTY;
-  }
-  return property.type === "ObjectProperty" && keyName(property) === null;
+function mayHide(property: Node, names: readonly string[]): boolean {
+  if (property.type === "SpreadElement") return true;
+  if (property.type !== "ObjectMethod" && property.type !== "ObjectProperty")
+    return false;
+  const name = keyName(property);
+  return (
+    name === null || (property.type === "ObjectMethod" && names.includes(name))
+  );
+}
+
+/**
+ * The settings an edit depends on, at the top of the config and under
+ * `experimental`: the list itself, and the lists Next.js checks it against.
+ */
+const TOP_LEVEL_SETTINGS = [PROPERTY, "transpilePackages", "experimental"];
+const EXPERIMENTAL_SETTINGS = [
+  "optimizePackageImports",
+  "serverComponentsExternalPackages",
+];
+
+/** Why an object might set one of `names` where this cannot read it, or null. */
+function hiddenSettings(
+  object: ObjectExpression,
+  names: readonly string[],
+  where: string
+): string | null {
+  return object.properties.some(property => mayHide(property, names))
+    ? `${where} spreads another object or has a computed or accessor property, which may set ${names.join(", ")}`
+    : null;
 }
 
 /** The package names an array literal already lists. */
@@ -547,24 +601,15 @@ function parseBody(source: string, file: string): Statement[] | null {
 
 /**
  * The config's own list, null when it has none, or why the list cannot be
- * edited: a spread after it may hold or replace it, and a list that is not an
- * array literal cannot be read here.
+ * edited: a list that is not an array literal cannot be read here. A spread,
+ * or a property that may set the list unseen, is refused before this, by
+ * `conflictOf`.
  */
 function existingList(
   object: ObjectExpression
 ): ArrayExpression | null | string {
   const { properties } = object;
-  if (properties.some(mightBeTheList)) {
-    return `it has a computed or accessor property that may define ${PROPERTY}`;
-  }
-  const listIndex = lastIndexOf(properties, isListProperty);
-  const spreadIndex = lastIndexOf(
-    properties,
-    property => property.type === "SpreadElement"
-  );
-  if (spreadIndex > listIndex)
-    return "it spreads another object, which may hold or replace the list";
-  const property = properties[listIndex];
+  const property = properties[lastIndexOf(properties, isListProperty)];
   if (!property || !isListProperty(property)) return null;
   return property.value.type === "ArrayExpression"
     ? property.value
@@ -628,29 +673,45 @@ function experimentalOf(
     : "its experimental settings are not an object written in place";
 }
 
-/** Why the config's other settings make an edit unsafe, or null when none does. */
+/**
+ * Why the config's other settings make an edit unsafe, or null when none
+ * does. A setting this cannot read, at the top or under `experimental`, is
+ * treated as one that may clash.
+ */
 function conflictOf(
   object: ObjectExpression,
   required: string[]
 ): string | null {
+  const hidden = hiddenSettings(object, TOP_LEVEL_SETTINGS, "it");
+  if (hidden) return hidden;
   const experimental = experimentalOf(object);
   if (typeof experimental === "string") return experimental;
-  if (
-    experimental &&
-    propertyValue(experimental, "serverComponentsExternalPackages")
-  ) {
+  return experimental
+    ? (hiddenSettings(
+        experimental,
+        EXPERIMENTAL_SETTINGS,
+        "its experimental object"
+      ) ?? experimentalConflict(object, experimental, required))
+    : clashReason("transpilePackages", object, "transpilePackages", required);
+}
+
+/** Why the config's lists clash, given an `experimental` object it can read. */
+function experimentalConflict(
+  object: ObjectExpression,
+  experimental: ObjectExpression,
+  required: string[]
+): string | null {
+  if (propertyValue(experimental, "serverComponentsExternalPackages")) {
     return `it lists packages under experimental.serverComponentsExternalPackages, which Next.js moves to ${PROPERTY}; keep a single list there`;
   }
   return (
     clashReason("transpilePackages", object, "transpilePackages", required) ??
-    (experimental
-      ? clashReason(
-          "experimental.optimizePackageImports",
-          experimental,
-          "optimizePackageImports",
-          required
-        )
-      : null)
+    clashReason(
+      "experimental.optimizePackageImports",
+      experimental,
+      "optimizePackageImports",
+      required
+    )
   );
 }
 
@@ -714,26 +775,74 @@ function editConfig(
   return { text, added: plan.added };
 }
 
-/**
- * The major version of the Next.js the app has installed, read from its own
- * `node_modules`, or null when it cannot be read: the range in package.json
- * can admit several majors, and only the installed one decides the option.
- */
-async function installedNextMajor(cwd: string): Promise<number | null> {
+/** The string at `keys` inside a parsed JSON file, or null. */
+function stringAt(json: unknown, keys: readonly string[]): string | null {
+  let value = json;
+  for (const key of keys) {
+    if (typeof value !== "object" || value === null || !(key in value))
+      return null;
+    value = (value as Record<string, unknown>)[key];
+  }
+  return typeof value === "string" ? value : null;
+}
+
+/** A JSON file of the app's, or null when it is missing or does not parse. */
+async function readJsonOrNull(file: string): Promise<unknown> {
   try {
-    const manifest: unknown = await fs.readJson(
-      path.join(cwd, "node_modules", "next", "package.json")
-    );
-    const version =
-      typeof manifest === "object" && manifest !== null && "version" in manifest
-        ? manifest.version
-        : null;
-    const major =
-      typeof version === "string" ? Number.parseInt(version, 10) : Number.NaN;
-    return Number.isInteger(major) ? major : null;
+    return (await fs.readJson(file)) as unknown;
   } catch {
     return null;
   }
+}
+
+/**
+ * A version range that admits one major only, such as `^15.1.0`, `~16.0`,
+ * `15.x` or `16.0.0-canary.3`, with the major it admits. A range such as
+ * `>=14`, `14 || 15` or `latest` admits several, or names none.
+ */
+const SINGLE_MAJOR = /^[\^~]?(\d+)(?:\.(?:\d+|[xX*])){0,2}(?:-[\w.]+)?$/;
+
+/**
+ * The major version of the app's Next.js: the installed one, read from its
+ * own `node_modules`, or else the one its package.json range admits when
+ * that range admits a single major. Null when neither tells, as when
+ * dependencies are not installed yet and the range is `latest`.
+ */
+async function nextMajor(cwd: string): Promise<number | null> {
+  const installed = stringAt(
+    await readJsonOrNull(
+      path.join(cwd, "node_modules", "next", "package.json")
+    ),
+    ["version"]
+  );
+  const manifest = await readJsonOrNull(path.join(cwd, "package.json"));
+  const range =
+    stringAt(manifest, ["dependencies", "next"]) ??
+    stringAt(manifest, ["devDependencies", "next"]);
+  const match = SINGLE_MAJOR.exec((installed ?? range ?? "").trim());
+  return match ? Number(match[1]) : null;
+}
+
+/**
+ * Why the option cannot be written for the app's Next.js, and which spelling
+ * to print instead, or null when it can. Next.js 14 reads the list under
+ * another name, and an unknown version may be 14: writing the top-level list
+ * there would report success and externalise nothing.
+ */
+function versionBlock(
+  major: number | null
+): { reason: string; spelling: "legacy" | "either" } | null {
+  if (major === null)
+    return {
+      reason: "the version of Next.js the app uses could not be read",
+      spelling: "either",
+    };
+  return major < FIRST_TOP_LEVEL_MAJOR
+    ? {
+        reason: `the app runs Next.js ${major}, which reads the list as experimental.serverComponentsExternalPackages`,
+        spelling: "legacy",
+      }
+    : null;
 }
 
 /** The app's Next config file, by the name Next.js would read first. */
@@ -781,17 +890,16 @@ export async function patchNextConfig(
 ): Promise<NextConfigPatch> {
   const file = await findConfigFile(cwd);
   const required = getServerExternalPackages(database);
-  // Next.js 14 reads the list under another name. Writing the top-level one
-  // there would report success and externalise nothing, so a 14 app is told
-  // the exact option to add rather than given a config that does nothing.
-  const major = await installedNextMajor(cwd);
-  if (major !== null && major < FIRST_TOP_LEVEL_MAJOR) {
+  // A version that reads the list under another name, or one that cannot be
+  // told, gets the exact option to add rather than a config that may do
+  // nothing.
+  const blocked = versionBlock(await nextMajor(cwd));
+  if (blocked) {
     return {
       kind: "manual",
       file: file ?? "next.config.js",
-      reason: `the app runs Next.js ${major}, which reads the list as experimental.serverComponentsExternalPackages`,
       packages: required,
-      legacyOption: true,
+      ...blocked,
     };
   }
   if (!file) return createNextConfig(cwd, database);
@@ -802,6 +910,20 @@ export async function patchNextConfig(
   if (edited.added.length === 0) return { kind: "unchanged", file };
   await fs.writeFile(path.join(cwd, file), edited.text, "utf-8");
   return { kind: "written", file, added: edited.added };
+}
+
+/** The option to add by hand, in the spelling the app's Next.js reads. */
+function optionText(
+  packages: string[],
+  spelling: "legacy" | "either" | undefined
+): string {
+  const list = packages.map(name => JSON.stringify(name)).join(", ");
+  const current = `  ${PROPERTY}: [${list}],`;
+  const legacy = `  experimental: { serverComponentsExternalPackages: [${list}] },`;
+  if (spelling === "legacy") return legacy;
+  return spelling === "either"
+    ? `On Next.js 15 or later:\n\n${current}\n\nOn Next.js 14:\n\n${legacy}`
+    : current;
 }
 
 /** The line the CLI prints for a patch: what changed, or exactly what to add and where. */
@@ -825,15 +947,10 @@ export function nextConfigReport(patch: NextConfigPatch): {
         level: "info",
         message: `${patch.file} already lists every package Nextly needs in ${PROPERTY}`,
       };
-    case "manual": {
-      const list = patch.packages.map(name => JSON.stringify(name)).join(", ");
-      const option = patch.legacyOption
-        ? `experimental: { serverComponentsExternalPackages: [${list}] },`
-        : `${PROPERTY}: [${list}],`;
+    case "manual":
       return {
         level: "warn",
-        message: `Nextly's packages were not added to ${patch.file}: ${patch.reason}. Add them to the config object it exports, keeping any packages already listed:\n\n  ${option}`,
+        message: `Nextly's packages were not added to ${patch.file}: ${patch.reason}. Add them to the config object it exports, keeping any packages already listed:\n\n${optionText(patch.packages, patch.spelling)}`,
       };
-    }
   }
 }
