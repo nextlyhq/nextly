@@ -27,6 +27,16 @@ export interface ArrangementAnnouncer {
   removed: (title: string) => void;
   restored: (title: string) => void;
   reset: () => void;
+  /** Customise mode opened. */
+  entered: () => void;
+  /** Cancel threw the draft away. */
+  discarded: () => void;
+  /** A save landed. */
+  saved: () => void;
+  /** A save was refused: the dashboard moved elsewhere. */
+  refused: () => void;
+  /** A save failed; the draft is kept. */
+  saveFailed: () => void;
 }
 
 export interface AnnouncerRelay {
@@ -61,6 +71,11 @@ export function useAnnouncerRelay(): AnnouncerRelay {
       removed: title => announcer.current?.announceRemoved(title),
       restored: title => announcer.current?.announceRestored(title),
       reset: () => announcer.current?.announceReset(),
+      entered: () => announcer.current?.announceEntered(),
+      discarded: () => announcer.current?.announceDiscarded(),
+      saved: () => announcer.current?.announceSaved(),
+      refused: () => announcer.current?.announceRefused(),
+      saveFailed: () => announcer.current?.announceSaveFailed(),
     }),
     []
   );

@@ -198,6 +198,29 @@ interface PendingNavigation {
   args?: [data: unknown, unused: string, url?: string | URL | null];
 }
 
+/** Where the guarded page is: its address, and the history entry's state. */
+interface GuardedPlace {
+  url: string;
+  state: unknown;
+}
+
+/** The place the reader is on now. */
+function currentPlace(): GuardedPlace {
+  return { url: window.location.href, state: window.history.state as unknown };
+}
+
+/**
+ * Whether the address has moved off `place`, by the same rule as a history
+ * write: path or query, never the hash alone.
+ */
+function hasLeft(place: GuardedPlace): boolean {
+  const was = new URL(place.url);
+  return (
+    was.pathname !== window.location.pathname ||
+    was.search !== window.location.search
+  );
+}
+
 // ============================================================================
 // Hook
 // ============================================================================
@@ -244,12 +267,13 @@ export function useUnsavedChanges({
   // Store pending navigation to execute after confirmation
   const pendingNavigation = useRef<PendingNavigation | null>(null);
 
-  // The last address this guard let the page reach: what a Back or Forward is
-  // judged FROM, since the browser has moved the address before it reports.
-  const lastLocation = useRef<{ pathname: string; search: string }>({
-    pathname: typeof window === "undefined" ? "" : window.location.pathname,
-    search: typeof window === "undefined" ? "" : window.location.search,
-  });
+  // The last place this guard let the page reach: what a Back or Forward is
+  // judged FROM, since the browser has moved the address before it reports,
+  // and what a held one puts back. Its address AND its history state, so the
+  // entry put back is the one the reader was on.
+  const lastLocation = useRef<GuardedPlace>(
+    typeof window === "undefined" ? { url: "", state: null } : currentPlace()
+  );
 
   // Read by the interceptors, which are installed once and outlive renders.
   const fieldsRef = useRef(fields);
@@ -268,6 +292,10 @@ export function useUnsavedChanges({
 
   // Track if we're programmatically navigating (to avoid re-interception)
   const isNavigating = useRef(false);
+
+  // Set while the traversal that completes a confirmed Back or Forward is on
+  // its way, so its `popstate` is let through to the router rather than held.
+  const releasing = useRef(false);
 
   // Confirm leaving - execute pending navigation
   const confirmLeave = useCallback(() => {
@@ -292,6 +320,7 @@ export function useUnsavedChanges({
         originalPushState.current.apply(window.history, pending.args);
         // Dispatch locationchange event for the custom router
         window.dispatchEvent(new Event("locationchange"));
+        lastLocation.current = currentPlace();
       } else if (
         pending.type === "replaceState" &&
         pending.args &&
@@ -299,10 +328,17 @@ export function useUnsavedChanges({
       ) {
         originalReplaceState.current.apply(window.history, pending.args);
         window.dispatchEvent(new Event("locationchange"));
+        lastLocation.current = currentPlace();
       } else if (pending.type === "popstate") {
-        // For popstate, we need to allow the navigation that was prevented
-        // The browser has already changed the URL, we just need to trigger the router
-        window.dispatchEvent(new Event("locationchange"));
+        // 🔴 Completed by traversing, not by telling the router to look. The
+        // address was put back when the Back or Forward was held, on a new
+        // entry just after the one the reader was going to, so one step back
+        // lands there whichever way they were going. Dispatching
+        // `locationchange` instead, as this once did, made the router re-read
+        // the address that had been put back: the reader confirmed leaving
+        // and stayed on the page, with their changes already discarded.
+        releasing.current = true;
+        window.history.back();
       }
     } finally {
       // Delay resetting the flag to prevent immediate re-interception
@@ -328,25 +364,8 @@ export function useUnsavedChanges({
     setShowDialog(false);
     setIsBlocked(false);
 
-    const pending = pendingNavigation.current;
-
-    // If this was a popstate (back/forward), we need to restore the URL
-    if (pending?.type === "popstate" && originalPushState.current) {
-      // Push the current location back to restore the URL the user was on
-      isNavigating.current = true;
-      try {
-        // Restore the URL without triggering our interceptor
-        originalPushState.current.call(
-          window.history,
-          null,
-          "",
-          window.location.href
-        );
-      } finally {
-        isNavigating.current = false;
-      }
-    }
-
+    // Nothing to put back for a held Back or Forward: the address was put
+    // back when it was held, so staying is already where the reader is.
     pendingNavigation.current = null;
   }, []);
 
@@ -359,6 +378,7 @@ export function useUnsavedChanges({
     originalPushState.current = window.history.pushState;
     // eslint-disable-next-line @typescript-eslint/unbound-method
     originalReplaceState.current = window.history.replaceState;
+    lastLocation.current = currentPlace();
 
     // Create interceptor for pushState
     // A history write let through, and the address it reached recorded.
@@ -368,10 +388,7 @@ export function useUnsavedChanges({
       args: [data: unknown, unused: string, url?: string | URL | null]
     ): void => {
       write.apply(history, args);
-      lastLocation.current = {
-        pathname: window.location.pathname,
-        search: window.location.search,
-      };
+      lastLocation.current = currentPlace();
     };
 
     const interceptPushState = function (
@@ -463,46 +480,56 @@ export function useUnsavedChanges({
       return undefined;
     };
 
-    // Handle browser back/forward
-    const handlePopState = () => {
-      // Where the history move came FROM. The browser has already changed the
-      // address by the time this runs, so it is the last one this guard let
-      // through, not the one in the bar.
+    // Handle browser back/forward.
+    //
+    // By the time `popstate` fires the browser has already moved the address,
+    // and nothing can cancel that. So a held Back or Forward is undone: the
+    // event is kept from everyone else, and the address is put back.
+    const handlePopState = (event: PopStateEvent) => {
+      // Where the history move came FROM: the last place this guard let the
+      // page go, not the address in the bar, which has already moved.
       const from = lastLocation.current;
-      lastLocation.current = {
-        pathname: window.location.pathname,
-        search: window.location.search,
-      };
-      if (!isDirty || isNavigating.current) {
+      // The traversal `confirmLeave` started: the reader already answered.
+      if (releasing.current) {
+        releasing.current = false;
+        lastLocation.current = currentPlace();
         return;
       }
-      // Back or Forward between a document and its own views stays on the
-      // document, exactly as a history write between them does.
-      if (staysOnDocument(from, window.location, fieldsRef.current)) {
+      if (
+        !isDirty ||
+        isNavigating.current ||
+        // Only a hash crossed: the page stays, as a hash push does.
+        !hasLeft(from) ||
+        // Back or Forward between a document and its own views stays on the
+        // document, exactly as a history write between them does.
+        staysOnDocument(new URL(from.url), window.location, fieldsRef.current)
+      ) {
+        lastLocation.current = currentPlace();
         return;
       }
 
-      // Prevent the navigation by pushing the current state back
+      // 🔴 Kept from every other listener, the admin's router above all. It
+      // was mounted long before this page, so it hears `popstate` first unless
+      // this listener runs in the capture phase, which on the target runs
+      // before every non-capturing one. Heard, the router drew the page the
+      // reader is being asked about leaving for, and this page -- its unsaved
+      // work and this question -- was gone before any answer.
+      event.stopImmediatePropagation();
+
+      // 🔴 Put back with a NEW entry rather than by stepping forward with
+      // `history.go(1)`, which this once did. That was right only for Back: a
+      // held Forward stepped further forward. And it is native, so neither
+      // the router nor this guard's own interceptor sees a navigation.
+      History.prototype.pushState.call(
+        window.history,
+        from.state,
+        "",
+        from.url
+      );
 
       // If there's already a pending navigation, ignore new popstate attempts
       if (pendingNavigation.current) return;
-
-      // Store the pending navigation first
       pendingNavigation.current = { type: "popstate" };
-
-      // The URL has already changed at this point, so we need to go back
-      // to where we were. We'll use pushState to restore our location.
-      isNavigating.current = true;
-      try {
-        // Go back to where we were (the URL before popstate)
-        // Note: We can't reliably know where the user was going,
-        // so we restore the URL they were on before
-        window.history.go(1); // This might not work in all cases
-      } catch {
-        // If go(1) fails, try pushing current state
-      } finally {
-        isNavigating.current = false;
-      }
 
       setIsBlocked(true);
 
@@ -527,7 +554,7 @@ export function useUnsavedChanges({
     // Apply interceptors
     window.history.pushState = interceptPushState;
     window.history.replaceState = interceptReplaceState;
-    window.addEventListener("popstate", handlePopState);
+    window.addEventListener("popstate", handlePopState, { capture: true });
     window.addEventListener("beforeunload", handleBeforeUnload);
 
     // Cleanup
@@ -539,7 +566,9 @@ export function useUnsavedChanges({
       if (originalReplaceState.current) {
         window.history.replaceState = originalReplaceState.current;
       }
-      window.removeEventListener("popstate", handlePopState);
+      window.removeEventListener("popstate", handlePopState, {
+        capture: true,
+      });
       window.removeEventListener("beforeunload", handleBeforeUnload);
     };
   }, [isDirty, disabled]);
