@@ -1,0 +1,123 @@
+/**
+ * Holding a save as the working draft, and keeping it in the history.
+ *
+ * A save that names no status on a published document does not change what is
+ * live: it is stored as the document's working draft, one row per document and
+ * language that every later save rewrites. On its own that row keeps only the
+ * newest save, credited to whoever saved last. So the same step also records
+ * the save as a durable version, numbered, retried and retained like every
+ * other version, and credited to the person who made it.
+ *
+ * Both steps live here, behind one function, so no write path can hold a draft
+ * without recording it. The version mirrors the draft row it was saved into:
+ * the same language key and the same snapshot. A write path that stores
+ * several drafts in one save (one per part of a document) calls this once per
+ * draft, and each part's save becomes that part's version.
+ *
+ * @module domains/versions/draft-save
+ */
+
+import type { VersionsDbApi } from "./db-api";
+import { DOCUMENT_SYSTEM_KEYS } from "./snapshot-system-keys";
+import type { VersionCaptureService } from "./version-capture-service";
+import { VersionsRepository, type VersionRef } from "./versions-repository";
+
+/** One held save. */
+export interface DraftSaveInput {
+  ref: VersionRef;
+  /** The working draft's language key: null for a document with no languages. */
+  locale: string | null;
+  /** The working draft after this save, as it is stored. */
+  snapshot: Record<string, unknown>;
+  /**
+   * What this save replaces: the previous working draft, or the live document
+   * on the first held save. A save whose content equals it records no version.
+   */
+  replaces: Record<string, unknown>;
+  /** Who saved, or null when the write carried no person. */
+  createdBy: string | null;
+  /** The version this save restored, when it is a restore. */
+  sourceVersionNo?: number | null;
+  /**
+   * Durable versions kept for the document, from its versions config; `false`
+   * or omitted leaves history unbounded, as for every capture.
+   */
+  maxPerDoc?: number | false;
+}
+
+/** The version a held save recorded, or null when it changed nothing. */
+export interface DraftSaveResult {
+  versionNo: number | null;
+}
+
+/**
+ * Store the working draft and record the save as a version, inside `tx`.
+ *
+ * The version's snapshot leaves out `status`. A held draft is built on the live
+ * document, so its snapshot carries the live status, which says nothing about
+ * the save. The version row's own `status` (`draft`) is what the version is,
+ * and a restore of a snapshot that names no status cannot publish or unpublish
+ * anything: on a published document it is held as a draft, like any save.
+ */
+export async function storeDraftSave(
+  tx: VersionsDbApi,
+  capture: VersionCaptureService,
+  input: DraftSaveInput
+): Promise<DraftSaveResult> {
+  await new VersionsRepository(tx).upsertWorkingDraft({
+    ref: input.ref,
+    locale: input.locale,
+    snapshot: input.snapshot,
+    createdBy: input.createdBy,
+  });
+  if (sameContent(input.snapshot, input.replaces)) return { versionNo: null };
+
+  const { versionNo } = await capture.capture(tx, {
+    ref: input.ref,
+    status: "draft",
+    snapshot: Object.fromEntries(
+      Object.entries(input.snapshot).filter(([key]) => key !== "status")
+    ),
+    createdBy: input.createdBy,
+    locale: input.locale,
+    sourceVersionNo: input.sourceVersionNo ?? null,
+    maxPerDoc: input.maxPerDoc,
+  });
+  return { versionNo };
+}
+
+/**
+ * Whether two document snapshots hold the same content: equal in every key an
+ * editor writes, whatever their framework keys (id, timestamps, author, status)
+ * say. A save moves `updatedAt` every time, so comparing whole snapshots would
+ * call every save a change.
+ *
+ * Key order does not matter. Values are compared as the JSON they are stored
+ * as, because one side is usually read back from the database (a date as its
+ * string) and the other built in memory (a date as a Date).
+ */
+export function sameContent(
+  a: Record<string, unknown>,
+  b: Record<string, unknown>
+): boolean {
+  return canonicalJson(contentOf(a)) === canonicalJson(contentOf(b));
+}
+
+function contentOf(document: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(document).filter(([key]) => !DOCUMENT_SYSTEM_KEYS.has(key))
+  );
+}
+
+/** JSON with object keys sorted at every depth, so equal content is equal text. */
+function canonicalJson(value: unknown): string {
+  return JSON.stringify(value, (_key, inner: unknown) =>
+    inner !== null && typeof inner === "object" && !Array.isArray(inner)
+      ? Object.fromEntries(
+          Object.entries(inner as Record<string, unknown>).sort(([x], [y]) =>
+            x < y ? -1 : x > y ? 1 : 0
+          )
+        )
+      : inner
+  );
+}

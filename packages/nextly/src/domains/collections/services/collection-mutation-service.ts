@@ -158,6 +158,7 @@ import {
 import { assembleDocument } from "../../versions/assemble-document";
 import { captureInTx } from "../../versions/capture-in-tx";
 import { resolveDraftHold } from "../../versions/draft-hold";
+import { storeDraftSave } from "../../versions/draft-save";
 import { isDraftSplitEligible } from "../../versions/draft-split-eligibility";
 import {
   buildRestorePayload,
@@ -551,8 +552,20 @@ interface WorkingDraftWriteContext {
   draftLocale: string | null;
   fields: FieldDefinition[];
   manyToManyData: Record<string, string[]>;
-  params: { collectionName: string; entryId: string; user?: UserContext };
+  params: {
+    collectionName: string;
+    entryId: string;
+    user?: UserContext;
+    /** The version a restore write restored; recorded on the save's version. */
+    sourceVersionNo?: number | null;
+  };
   parentRow: Record<string, unknown>;
+  /**
+   * The live parent row before this write, at `parentRow`'s shape. A first
+   * held save is compared with the live document built from it: `parentRow`
+   * already carries this write, so it cannot tell a change from none.
+   */
+  liveParentRow: Record<string, unknown>;
   snapshotComponents: Record<string, unknown> | undefined;
   snapshotM2M: Record<string, string[]> | undefined;
   splitComponentSchemas: ComponentSchemas | null;
@@ -5467,7 +5480,12 @@ export class CollectionMutationService extends BaseService {
     tx: TransactionContext,
     ctx: WorkingDraftWriteContext,
     existingDraft: { snapshot: unknown } | undefined
-  ): Promise<Record<string, unknown>> {
+  ): Promise<{
+    /** The working draft after this save. */
+    draftDocument: Record<string, unknown>;
+    /** What it replaces: the previous draft, or the live document. */
+    replaces: Record<string, unknown>;
+  }> {
     const {
       componentFieldData,
       fields,
@@ -5540,7 +5558,20 @@ export class CollectionMutationService extends BaseService {
       fields as unknown as FieldConfig[],
       splitComponentSchemas
     );
-    return draftDocument;
+    const replaces = existingDraft
+      ? draftBase
+      : assembleDocument(
+          await this.snapshotPartsFor(
+            {
+              parentRow: ctx.liveParentRow,
+              components: snapshotComponents ?? {},
+              manyToMany: snapshotM2M ?? {},
+            },
+            fields,
+            tx
+          )
+        );
+    return { draftDocument, replaces };
   }
 
   /**
@@ -5586,7 +5617,7 @@ export class CollectionMutationService extends BaseService {
     // shape. `patchedDocument` overlaid the current patch onto the live
     // relations and REPLACED a single component whole, so a partial
     // patch is captured here (touched keys only) and merged onto the
-    const draftDocument = await this.buildAccumulatedDraft(
+    const { draftDocument, replaces } = await this.buildAccumulatedDraft(
       tx,
       ctx,
       existingDraft
@@ -5620,17 +5651,22 @@ export class CollectionMutationService extends BaseService {
         draftIsPluginCollection
       );
     }
-    await draftRepo.upsertWorkingDraft({
+    // The draft, and the save as a version of its own, in this transaction.
+    // A save that changes nothing against what it replaces records no version.
+    const versionsConfig = (collection as Record<string, unknown>).versions as
+      | ResolvedVersionsConfig
+      | null
+      | undefined;
+    await storeDraftSave(tx, this.versionCapture, {
       ref: draftRef,
-      // The split is non-localized only, so the working draft is one
-      // logical document with no per-locale variant: key it under the
-      // unlocalized `locale IS NULL` slot. Keying it by the resolved
-      // request locale would orphan it when a later read or publish
-      // arrives under a different locale in a localization-configured
-      // app. The read overlay and promote use the same null key.
+      // The key the read overlay, the promote and the discard look under,
+      // from `workingDraftLocale`; the version is keyed the same way.
       locale: draftLocale,
       snapshot: draftDocument,
+      replaces,
       createdBy: params.user?.id ?? null,
+      sourceVersionNo: params.sourceVersionNo ?? null,
+      maxPerDoc: versionsConfig?.maxPerDoc,
     });
 
     return { workingDraftDocument, priorWorkingDraftDocument };
@@ -7504,6 +7540,15 @@ export class CollectionMutationService extends BaseService {
               // relations onto the (unchanged) live relations read for the
               // snapshot so a changed component/m2m field is reflected.
               if (storeAsWorkingDraft) {
+                // The same row with nothing of this write in it: a held write
+                // has changed neither the parent, its translations nor its
+                // relations, so these reads are still the live document.
+                const liveParentRow = this.deserializeJsonFieldsForSnapshot(
+                  { ...currentParent, ...priorLocalizedValues },
+                  fields
+                );
+                stripPasswordFieldValues(liveParentRow, fields);
+                stripServerOnlyColumns(liveParentRow, tableName);
                 const draftWrite = await this.storeWorkingDraftInTx(tx, {
                   collection,
                   collectionHasStatus,
@@ -7518,6 +7563,7 @@ export class CollectionMutationService extends BaseService {
                   manyToManyData,
                   params,
                   parentRow,
+                  liveParentRow,
                   snapshotComponents,
                   snapshotM2M,
                   splitComponentSchemas,
@@ -9820,6 +9866,11 @@ export class CollectionMutationService extends BaseService {
                   fields
                 ),
               },
+              fields,
+              tableName
+            ),
+            liveParentRow: this.readShapeEventDocument(
+              existingEntry,
               fields,
               tableName
             ),

@@ -105,6 +105,7 @@ import {
 } from "../../i18n/runtime/companion-readiness";
 import { captureInTx } from "../../versions/capture-in-tx";
 import { resolveDraftHold } from "../../versions/draft-hold";
+import { storeDraftSave } from "../../versions/draft-save";
 import { resolveComponentSchemas } from "../../versions/restore-version";
 import {
   resolveComponentFieldMap,
@@ -2092,18 +2093,23 @@ export class SingleMutationService extends BaseService {
                   }
                 }
               }
-              await draftRepo.upsertWorkingDraft({
+              // The draft, and the save as a version of its own. A save that
+              // changes nothing against what it replaces records no version.
+              await storeDraftSave(tx, this.versionCapture, {
                 ref: draftRef,
                 locale: singleDraftLocale,
                 snapshot: pending,
+                replaces: base,
                 createdBy: options.user?.id ?? null,
+                sourceVersionNo: options.sourceVersionNo ?? null,
+                maxPerDoc: singleMeta.versions?.maxPerDoc,
               });
             }
 
             // component subtrees form the snapshot.
             const versionsConfig = singleMeta.versions;
-            // A held edit records no durable version: nothing was published, and
-            // a version here would enter the history as though it had been.
+            // A held edit was recorded above, as a draft version of the save;
+            // this records the version of a write that changed the live Single.
             if (!holdEdit && versionsConfig?.enabled) {
               // Match the read shape: keep user field keys (field.name, which
               // may contain underscores like `site_title`) exactly, converting

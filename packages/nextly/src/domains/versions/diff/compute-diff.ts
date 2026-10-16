@@ -28,6 +28,7 @@ import {
   isFieldGroupFieldType,
 } from "../../field-groups/storage/field-group-field-type";
 import { readFieldGroupType } from "../../field-groups/storage/field-group-type-key";
+import { DOCUMENT_SYSTEM_KEYS } from "../snapshot-system-keys";
 
 import { maskSecret } from "./mask-secret";
 import { reconcileById, type ItemMatch } from "./reconcile-list";
@@ -54,13 +55,7 @@ export interface ComputeDiffOptions {
 }
 
 // Framework-managed columns on a top-level document, never user content.
-const SYSTEM_KEYS = new Set([
-  "id",
-  "createdAt",
-  "updatedAt",
-  "createdBy",
-  "status",
-]);
+const SYSTEM_KEYS = DOCUMENT_SYSTEM_KEYS;
 
 // The only framework key on a NESTED ROW (a component instance or repeater
 // item). A plain group has no framework columns at all, so a group child named
