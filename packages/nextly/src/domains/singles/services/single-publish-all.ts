@@ -69,12 +69,15 @@ import type {
 } from "../types";
 
 import {
-  readCompanionValuesInTx,
   splitPendingChange,
   writeCompanionValues,
 } from "./apply-pending-change";
 import { resolveSingleForRequest } from "./ensure-runtime-table";
-import { assertDraftsMayBePromoted, promoteCallerFor } from "./promote-gate";
+import {
+  assertDraftsMayBePromoted,
+  liveStoredDocument,
+  promoteCallerFor,
+} from "./promote-gate";
 import {
   checkSingleAccess,
   type SingleQueryService,
@@ -630,18 +633,19 @@ export class SinglePublishAllService extends BaseService {
       // identifier with the document a read would have expanded it into. And
       // with this language's companion values over it, since a translation
       // lives there and the main row reports every one of them as absent.
-      liveStoredFor: async locale =>
-        companion && locale
-          ? {
-              ...live,
-              ...(await readCompanionValuesInTx(
-                tx,
-                companion,
-                existingDoc.id,
-                locale
-              )),
-            }
-          : live,
+      liveStoredFor: locale =>
+        liveStoredDocument({
+          tx,
+          row: live,
+          locale,
+          companion,
+          // The condition this read has always been taken under here.
+          companionExists: companion !== null,
+          fieldGroupDataService: this.fieldGroupDataService,
+          parentTable: singleMeta.tableName,
+          fieldConfigs,
+          slug,
+        }),
       // A language whose draft was saved as a draft still goes live here.
       status: "published",
       localizedFieldNames: new Set(

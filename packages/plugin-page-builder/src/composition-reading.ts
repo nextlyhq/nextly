@@ -174,10 +174,15 @@ export interface ReadComposition {
   /** The last composition, with every placement the reads could supply expanded. */
   readonly composition: ResolvedComposition;
   /**
-   * The components at which a reference loop closed, over every round. Empty
-   * when none did. By component rather than one answer for the composition, so
-   * a caller comparing two compositions can tell a new loop from one that was
-   * already there.
+   * Each reference loop the composition closed, identified by the component
+   * it closes at and the placement it is cut at. Empty when none did.
+   *
+   * By placement, not by component alone: two loops that close at the same
+   * component are distinct loops, and a caller comparing two compositions has
+   * to tell a new one from one that was already there. The composed ids are
+   * the resolver's, derived from each placement's path, so one loop has one
+   * identity in both compositions. A loop closed in a round whose expansion was
+   * later abandoned keeps only its component, which is all that round left.
    */
   readonly loopsClosed: ReadonlySet<string>;
   /** Whether a limit ended the descent somewhere. */
@@ -252,7 +257,13 @@ function noteRound(
   composition: ResolvedComposition,
   seen: { loopsClosed: Set<string>; stoppedShort: boolean }
 ): void {
-  for (const id of composition.loopsClosed) seen.loopsClosed.add(id);
+  const cut = composition.unresolved.filter(one => one.reason === "cycle");
+  for (const one of cut) {
+    seen.loopsClosed.add(`${one.componentId}\u0000${one.instanceId}`);
+  }
+  for (const id of composition.loopsClosed) {
+    if (!cut.some(one => one.componentId === id)) seen.loopsClosed.add(id);
+  }
   if (composition.unresolved.some(one => STOPPED_SHORT.includes(one.reason))) {
     seen.stoppedShort = true;
   }

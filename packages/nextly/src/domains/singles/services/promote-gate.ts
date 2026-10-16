@@ -32,6 +32,7 @@ import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import type { FieldConfig } from "../../../collections/fields/types";
 import { NextlyError } from "../../../errors";
+import type { FieldGroupDataService } from "../../../services/field-groups/field-group-data-service";
 import {
   declaredFieldNames,
   resolvePromotedDocument,
@@ -47,6 +48,10 @@ import {
 } from "../../../shared/lib/field-level-registry";
 import { relationshipValidationView } from "../../../shared/lib/field-transform";
 import { entryWriteContext } from "../../collections/services/stored-field-read";
+import { readComponentSubtrees } from "../../field-groups/read-component-subtrees";
+import type { CompanionSchema } from "../../i18n/runtime/companion-io";
+
+import { readCompanionValuesInTx } from "./apply-pending-change";
 
 /** One language's pending change, as the versions repository stores it. */
 export interface PromotableDraft {
@@ -100,6 +105,58 @@ export function promoteCallerFor(args: {
     // Resolved on the pooled connection before the transaction opened.
     grants: args.grants,
   };
+}
+
+/**
+ * A Single's live document for one language, as stored and as the promotion
+ * gate judges it: the row this transaction read, that language's translations,
+ * and its component subtrees.
+ *
+ * The components are read because they live in tables of their own. Judged
+ * without them, a promotion that carries none, such as a publish with nothing
+ * pending, would be refused for a required component it stores, and an
+ * optional one would never be judged at all. Read on the transaction, and a
+ * read that fails refuses the publish rather than judging less than goes live.
+ */
+export async function liveStoredDocument(args: {
+  tx: TransactionContext;
+  row: Record<string, unknown>;
+  locale: string | null;
+  companion: CompanionSchema | null;
+  companionExists: boolean;
+  fieldGroupDataService: FieldGroupDataService | undefined;
+  parentTable: string;
+  fieldConfigs: FieldConfig[];
+  slug: string;
+}): Promise<Record<string, unknown>> {
+  const translations =
+    args.companion && args.companionExists && args.locale
+      ? await readCompanionValuesInTx(
+          args.tx,
+          args.companion,
+          String(args.row.id),
+          args.locale
+        )
+      : {};
+  const components = await readComponentSubtrees({
+    fieldGroupDataService: args.fieldGroupDataService,
+    tx: args.tx,
+    entryId: String(args.row.id),
+    parentTable: args.parentTable,
+    fieldConfigs: args.fieldConfigs,
+    ...(args.locale ? { locale: args.locale } : {}),
+    reason: "single-promote-gate-component-read",
+    logContext: { slug: args.slug },
+    onReadFailure: () => {
+      throw NextlyError.internal({
+        logContext: {
+          cause: "promote-gate-component-read-failed",
+          slug: args.slug,
+        },
+      });
+    },
+  });
+  return { ...args.row, ...translations, ...components };
 }
 
 /** What judging a promotion needs from the service that performs it. */

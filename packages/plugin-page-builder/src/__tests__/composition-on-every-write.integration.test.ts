@@ -505,6 +505,51 @@ describe.each(getConfiguredTestDialects())(
       expect(JSON.stringify(result)).toContain('"path":"content"');
     });
 
+    it("refuses a status-only publish on a collection that keeps no drafts", async () => {
+      // No working draft can exist here at all: the row as stored is what
+      // every publish puts live.
+      current = await createTestNextly({
+        dialect,
+        plugins: [pageBuilder({ limits: { ...DEFAULT_LIMITS, maxDepth: 4 } })],
+        collections: [
+          {
+            slug: "notes",
+            status: true,
+            fields: [
+              { name: "title", type: "text" },
+              { name: "content", type: BLOCKS_TYPE },
+            ],
+          } as never,
+        ],
+      });
+      const t = current;
+      const split = await componentDeeperWhenPublished(t);
+      const note = await t.nextly.create({
+        collection: "notes",
+        data: {
+          title: "Note",
+          content: document("page", [
+            box("p1", [box("p2", [placing("i1", split)])]),
+          ]),
+          status: "draft",
+        },
+        overrideAccess: true,
+      });
+
+      const refused = await refusalOf(
+        t.nextly.update({
+          collection: "notes",
+          id: String(note.item.id),
+          data: { status: "published" },
+          overrideAccess: true,
+        })
+      );
+
+      expect(issuesOf(refused)).toEqual([
+        expect.objectContaining({ path: "content", code: "depth-exceeded" }),
+      ]);
+    });
+
     it("does not re-judge a translation already live when its status is sent again", async () => {
       const t = await bootTranslated();
       const entries = translatedEntries(t);

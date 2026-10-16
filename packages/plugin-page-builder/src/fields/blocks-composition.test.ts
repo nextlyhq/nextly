@@ -968,6 +968,54 @@ describe("a component save judged inside its hosts: what each selection and writ
     expect(lookups).toHaveBeenCalled();
   });
 
+  it("refuses a new loop that closes at the same component as one the host already holds", async () => {
+    // The page's second placement already overrides `swap2` back to `a`, a loop
+    // closing at `a`. The change also exposes `swap`, which the first
+    // placement overrides to `a`: a second loop, closing at `a` too. Told apart
+    // only by where they close, the two would read as one.
+    const exposure = (id: string, nodeId: string) => ({
+      id,
+      label: id,
+      nodeId,
+      propPath: "componentId",
+      type: "select",
+    });
+    const leaf = component([node("l1")]);
+    const shape = [box("a1", [placing("n", "leaf"), placing("n2", "leaf")])];
+    const before = component(shape, { exposed: [exposure("swap2", "n2")] });
+    const after = component(shape, {
+      exposed: [exposure("swap2", "n2"), exposure("swap", "n")],
+    });
+    const { readStored } = storeOf({
+      [COMPONENTS]: { a: { published: before }, leaf: { published: leaf } },
+      pages: {
+        home: {
+          published: page([
+            {
+              ...placing("i1", "a"),
+              props: { componentId: "a", overrides: { swap: "a" } },
+            },
+            {
+              ...placing("i2", "a"),
+              props: { componentId: "a", overrides: { swap2: "a" } },
+            },
+          ]),
+        },
+      },
+    });
+    const { hostsOf } = listing([hostPage]);
+
+    const issues = await judge(after, write(readStored, COMPONENTS, "a"), {
+      hostsOf,
+      status: "published",
+    });
+
+    expect(codes(issues)).toEqual(["COMPONENT_HOST_BROKEN"]);
+    expect(issues[0]!.message).toContain(
+      "a component would end up containing itself"
+    );
+  });
+
   it("counts a page placing the component in two fields as one document", async () => {
     const { readStored } = storeOf({
       [COMPONENTS]: { x: { published: shallowComponent } },

@@ -126,13 +126,13 @@ import type {
 } from "../types";
 
 import {
-  readCompanionValuesInTx,
   splitPendingChange,
   writeCompanionValues,
 } from "./apply-pending-change";
 import { resolveSingleForRequest } from "./ensure-runtime-table";
 import {
   assertDraftsMayBePromoted,
+  liveStoredDocument,
   promoteCallerFor,
   type PromoteGateContext,
 } from "./promote-gate";
@@ -1385,18 +1385,18 @@ export class SingleMutationService extends BaseService {
               // companion row, and compared against the main row alone
               // every translation reads as absent, so an untouched one
               // looks like an edit.
-              liveStoredFor: async gateLocale =>
-                companion && companionPhysicallyExists && gateLocale
-                  ? {
-                      ...promotedInto,
-                      ...(await readCompanionValuesInTx(
-                        tx,
-                        companion,
-                        promotedInto.id,
-                        gateLocale
-                      )),
-                    }
-                  : promotedInto,
+              liveStoredFor: gateLocale =>
+                liveStoredDocument({
+                  tx,
+                  row: promotedInto,
+                  locale: gateLocale,
+                  companion,
+                  companionExists: companionPhysicallyExists,
+                  fieldGroupDataService: this.fieldGroupDataService,
+                  parentTable: singleMeta.tableName,
+                  fieldConfigs,
+                  slug,
+                }),
               callerData: currentData,
               // Reached only for a write naming `published`.
               status: "published",
@@ -1475,7 +1475,12 @@ export class SingleMutationService extends BaseService {
               (singleMeta as { status?: boolean }).status === true &&
               (updatePayload as Record<string, unknown>).status ===
                 "published" &&
-              singleLiveStatus !== "published"
+              !(await this.writeLocaleIsLive(tx, {
+                liveStatus: singleLiveStatus,
+                companion: companionPhysicallyExists ? companion : null,
+                entryId: existingDoc.id,
+                writeLocale,
+              }))
             ) {
               await assertDraftsMayBePromoted(
                 [
@@ -2885,6 +2890,42 @@ export class SingleMutationService extends BaseService {
    * queries it. `(_parent, _locale)` is the companion primary key, so the lookup
    * returns at most one row.
    */
+  /**
+   * Whether the language a write publishes is live already, so the write puts
+   * nothing new live.
+   *
+   * `liveStatus` is the language's status as the write's other decisions read
+   * it: the companion's for a language other than the default, the main row's
+   * for the default. The default language's translation keeps a status of its
+   * own too on a Single with per-language status, and the two can differ (a
+   * live main row over a draft default translation, after per-language status
+   * was added to existing content), so both must be live for the publish to
+   * change nothing.
+   */
+  private async writeLocaleIsLive(
+    tx: TransactionContext,
+    args: {
+      liveStatus: unknown;
+      companion: { table: unknown } | null;
+      entryId: string;
+      writeLocale: string | undefined;
+    }
+  ): Promise<boolean> {
+    if (args.liveStatus !== "published") return false;
+    const locale = args.writeLocale;
+    const isDefault =
+      locale !== undefined && locale === this.localization?.defaultLocale;
+    if (!isDefault || args.companion === null) return true;
+    // No translation row, or none carrying a status: the main row decides.
+    const own = await this.readCompanionStatusInTx(
+      tx,
+      args.companion,
+      args.entryId,
+      locale
+    );
+    return own === null || own === "published";
+  }
+
   private async readCompanionStatusInTx(
     tx: TransactionContext,
     companion: { table: unknown },
