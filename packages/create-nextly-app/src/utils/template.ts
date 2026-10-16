@@ -1832,9 +1832,16 @@ export async function copyTemplate(
     );
   }
 
+  // An example env file already in the target (scaffolding over a folder that
+  // has files) is the env generator's to merge, never the copy's to replace.
+  const targetExample = path.join(targetDir, ".env.example");
+  const keepTargetExample = await fs.pathExists(targetExample);
   await fs.copy(baseDir, targetDir, {
     filter: _src => {
       const basename = path.basename(_src);
+      if (keepTargetExample && _src === path.join(baseDir, ".env.example")) {
+        return false;
+      }
       return !SKIP_FILES.has(basename);
     },
   });

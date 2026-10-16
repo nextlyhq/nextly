@@ -11,6 +11,7 @@ import { generateConfig } from "./generators/config";
 import { generateEnv } from "./generators/env";
 import { generateMediaRoutes } from "./generators/media-routes";
 import { patchNextConfig } from "./generators/next-config";
+import { reportEnvFiles } from "./generators/report-env-files";
 import { generateRoutes } from "./generators/routes";
 import { generateTypesDirectory } from "./generators/types";
 import { installDependencies } from "./installers/dependencies";
@@ -63,18 +64,6 @@ import { copyTemplate } from "./utils/template";
  * scaffolded directory. Also defends against directory names that aren't
  * valid as the `package.json` "name" field (npm forbids uppercase, etc).
  */
-/**
- * Says what the env generator wrote, extended and left for the person to fix.
- * File names and key names only: an env value never reaches the terminal.
- */
-function reportEnvFiles({ files, warnings }: EnvGenerationResult): void {
-  for (const name of files.written) p.log.info(`Wrote ${name}`);
-  for (const { path: name, added } of files.changed) {
-    p.log.info(`Added ${added.join(", ")} to ${name}`);
-  }
-  for (const warning of warnings) p.log.warn(warning);
-}
-
 function cwdProjectName(cwd: string): string {
   const basename = path.basename(cwd);
   if (!/^[a-z0-9][a-z0-9._-]*$/.test(basename)) {

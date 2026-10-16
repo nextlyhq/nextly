@@ -231,6 +231,55 @@ export SOME_APP_KEY="kept as it is"
     expect(warnings.join("\n")).not.toContain("S3cr3tPassw0rd");
   });
 
+  // dotenv turns \n and \r in a double-quoted value into the characters, so
+  // 16 escaped newlines are 16 characters to the app, not 32.
+  it("measures a double-quoted secret after its escapes are decoded", async () => {
+    await writeFile(
+      join(dir, ".env"),
+      `DATABASE_URL=x\nNEXTLY_SECRET="${"\\n".repeat(16)}"\n`
+    );
+
+    const { warnings } = await generateEnv(dir, sqlite);
+
+    expect(warnings.join("\n")).toMatch(/NEXTLY_SECRET.*\.env.*32/);
+  });
+
+  // The dialect and the URL are one setting: appending the chosen database's
+  // half beside the app's other half leaves an app that cannot connect.
+  it.each([
+    ["DB_DIALECT=postgresql\n", "DB_DIALECT"],
+    ["DATABASE_URL=postgresql://localhost:5432/app\n", "DATABASE_URL"],
+  ])(
+    "adds neither database key when the app's (%s) is for another database, and says so",
+    async (existing, key) => {
+      await writeFile(join(dir, ".env"), existing);
+
+      const { warnings } = await generateEnv(dir, {
+        type: "mysql",
+        adapter: "@nextlyhq/adapter-mysql",
+        databaseDriver: "mysql2",
+        connectionUrl: "mysql://root:x@localhost:3306/app",
+        envExample: "mysql://user:password@localhost:3306/nextly",
+      });
+
+      const keys = readEnvKeys(await read(".env")).defined;
+      expect(
+        keys.has(key === "DB_DIALECT" ? "DATABASE_URL" : "DB_DIALECT")
+      ).toBe(false);
+      expect(warnings.join("\n")).toMatch(/\.env.*postgresql.*mysql/i);
+    }
+  );
+
+  it("completes the pair when the app's half is for the chosen database", async () => {
+    await writeFile(join(dir, ".env"), "DB_DIALECT=sqlite\n");
+
+    await generateEnv(dir, sqlite);
+
+    expect(readEnvKeys(await read(".env")).defined.get("DATABASE_URL")).toBe(
+      sqlite.connectionUrl
+    );
+  });
+
   it("changes nothing and reports nothing on a second run", async () => {
     await writeFile(join(dir, ".env"), existing);
     await generateEnv(dir, sqlite);
@@ -402,6 +451,26 @@ describe("keeping .env out of git", () => {
     expect(await read(".gitignore")).toBe(".env\n");
   });
 
+  // Whether a password looks like a placeholder is a question for an example
+  // file. In a tracked .env, any password the person typed is a credential.
+  it.each(["password", "your_db_pass"])(
+    "writes no typed URL with a password (%s) to a .env git tracks",
+    async password => {
+      execFileSync("git", ["init", "-q"], { cwd: dir });
+      await writeFile(join(dir, ".env"), "DB_DIALECT=postgresql\n");
+      execFileSync("git", ["add", "-f", ".env"], { cwd: dir });
+
+      await generateEnv(dir, {
+        ...postgresWithRealUrl,
+        connectionUrl: `postgresql://app:${password}@db.internal:5432/app`,
+      });
+
+      expect(readEnvKeys(await read(".env")).defined.has("DATABASE_URL")).toBe(
+        false
+      );
+    }
+  );
+
   it("writes a tracked .env deleted from the working tree without a secret too", async () => {
     execFileSync("git", ["init", "-q"], { cwd: dir });
     await writeFile(join(dir, ".env"), "DB_DIALECT=sqlite\n");
@@ -454,6 +523,8 @@ describe("readEnvKeys", () => {
         "I=",
         "J=unspaced#comment",
         "K=`backtick # quoted`",
+        'L="two\\nlines"',
+        "M='kept\\nraw'",
       ].join("\n")
     );
 
@@ -467,6 +538,8 @@ describe("readEnvKeys", () => {
       I: "",
       J: "unspaced",
       K: "backtick # quoted",
+      L: "two\nlines",
+      M: "kept\\nraw",
     });
     expect([...mentioned].sort()).toEqual([
       "A",
@@ -480,6 +553,8 @@ describe("readEnvKeys", () => {
       "I",
       "J",
       "K",
+      "L",
+      "M",
     ]);
   });
 });

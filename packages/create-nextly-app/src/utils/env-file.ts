@@ -43,7 +43,13 @@ function readValue(raw: string): string {
   const quote = value[0];
   if (quote === '"' || quote === "'" || quote === "`") {
     const end = value.indexOf(quote, 1);
-    if (end > 0) return value.slice(1, end);
+    // dotenv expands \n and \r inside double quotes only.
+    if (end > 0) {
+      const inner = value.slice(1, end);
+      return quote === '"'
+        ? inner.replace(/\\n/g, "\n").replace(/\\r/g, "\r")
+        : inner;
+    }
   }
   const comment = value.indexOf("#");
   return (comment === -1 ? value : value.slice(0, comment)).trim();

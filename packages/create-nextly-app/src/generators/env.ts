@@ -158,11 +158,24 @@ export async function generateEnv(
   return { files, warnings };
 }
 
-/** The values that are secrets: the generated one, and a typed database password. */
+/**
+ * The values that are secrets: the generated one, and a typed database URL
+ * carrying any password. Whether a password looks like a placeholder is a
+ * question for an example file; one typed for the app's own database is a
+ * credential whatever it says.
+ */
 function secretKeys(values: Values): RequiredKey[] {
-  return hasRealPassword(values.DATABASE_URL)
+  return hasPassword(values.DATABASE_URL)
     ? ["NEXTLY_SECRET", "DATABASE_URL"]
     : ["NEXTLY_SECRET"];
+}
+
+function hasPassword(url: string): boolean {
+  try {
+    return new URL(url).password !== "";
+  } catch {
+    return false;
+  }
 }
 
 async function isTrackedByGit(cwd: string, name: string): Promise<boolean> {
@@ -223,12 +236,59 @@ async function writeOrMerge(
   // the withheld keys are left out of a new file as well.
   const text = exists ? await fs.readFile(file, "utf-8") : "";
   const keys = readEnvKeys(text);
-  const added = await appendMissing(file, text, keys, values, kind, withheld);
+  // The dialect and the URL are one setting. When the file's half is for
+  // another database, adding the chosen database's other half would leave an
+  // app that cannot connect, so neither is added and that is said.
+  const other = otherDatabase(keys.defined, values.DB_DIALECT);
+  const skip: readonly RequiredKey[] = other
+    ? [...withheld, "DB_DIALECT", "DATABASE_URL"]
+    : withheld;
+  const added = await appendMissing(file, text, keys, values, kind, skip);
   if (!exists) files.written.push(name);
   else if (added.length > 0) files.changed.push({ path: name, added });
-  return kind === "real"
-    ? checkRealValues(name, keys.defined)
-    : checkExampleValues(name, keys.defined);
+  const warnings =
+    kind === "real"
+      ? checkRealValues(name, keys.defined)
+      : checkExampleValues(name, keys.defined);
+  return other
+    ? [databaseConflict(name, other, values.DB_DIALECT), ...warnings]
+    : warnings;
+}
+
+/**
+ * The database a file is already set up for, when it is not the chosen one:
+ * from its DB_DIALECT, or else from its DATABASE_URL's scheme.
+ */
+function otherDatabase(
+  defined: Map<string, string>,
+  chosen: string
+): string | undefined {
+  const dialect =
+    normalDialect(defined.get("DB_DIALECT")) ??
+    dialectOfUrl(defined.get("DATABASE_URL"));
+  return dialect && dialect !== chosen ? dialect : undefined;
+}
+
+function normalDialect(value: string | undefined): string | undefined {
+  const dialect = value?.toLowerCase();
+  if (!dialect) return undefined;
+  return dialect === "postgres" ? "postgresql" : dialect;
+}
+
+function dialectOfUrl(url: string | undefined): string | undefined {
+  if (!url) return undefined;
+  if (/^postgres(ql)?:/i.test(url)) return "postgresql";
+  if (/^mysql:/i.test(url)) return "mysql";
+  if (/^(file|sqlite):/i.test(url)) return "sqlite";
+  return undefined;
+}
+
+function databaseConflict(name: string, other: string, chosen: string): string {
+  return (
+    `${name} is already set up for ${other}, but ${chosen} was chosen. Its database ` +
+    `settings were left as they are and none were added: set DB_DIALECT and ` +
+    `DATABASE_URL for ${chosen}, or run again choosing ${other}.`
+  );
 }
 
 /**
