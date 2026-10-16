@@ -202,6 +202,10 @@ export async function admitUnknownSource(
 
   const tokenKind = TOKEN_ROUTES[authPath];
   if (tokenKind === undefined) {
+    // The email the body names is the credential the built-in password
+    // strategy consumes. A strategy an app adds that authenticates from
+    // another field is not keyed on what it reads, so its requests are bounded
+    // by the ceiling alone rather than per identity.
     const email = stringField(body, "email");
     return counter.admit(
       accountKey(email === "" ? null : email, deps.secret),
