@@ -376,6 +376,61 @@ describe.each(getConfiguredTestDialects())(
       });
     });
 
+    it("has no published baseline for a translation while the document is a draft", async () => {
+      // German is published while the document itself never was: a public
+      // reader is served nothing, so nothing is published in German either.
+      current = await createTestNextly({
+        dialect,
+        collections: [
+          defineCollection({
+            slug: "notes",
+            localized: true,
+            status: true,
+            versions: true,
+            fields: [text({ name: "title", localized: true })],
+          }),
+        ],
+        localization: { locales: ["en", "de"], defaultLocale: "en" },
+      });
+      const handler = current.getService("collectionsHandler");
+      const created = await handler.createEntry(
+        { collectionName: "notes", overrideAccess: true, locale: "en" },
+        { title: "EN", status: "draft" }
+      ); // v1, en draft
+      const id = (created.data as { id: string }).id;
+      await handler.updateEntry(
+        {
+          collectionName: "notes",
+          entryId: id,
+          overrideAccess: true,
+          locale: "de",
+        },
+        { title: "DE", status: "published" }
+      ); // v2, de published
+      await handler.updateEntry(
+        {
+          collectionName: "notes",
+          entryId: id,
+          overrideAccess: true,
+          locale: "de",
+        },
+        { title: "DE edited" }
+      ); // v3: the document is a draft, so the save is not held; German stays published
+
+      const de = await refusal(
+        getVersionDiffForDocument({
+          scopeKind: "collection",
+          slug: "notes",
+          entryId: id,
+          user: superAdmin,
+          // v2, so a "published" answer would be v3 rather than itself.
+          to: 2,
+          baseline: "published",
+        })
+      );
+      expect(JSON.stringify(de.publicData)).toContain("NO_BASELINE");
+    });
+
     it("refuses a pair and a baseline together, and an unknown baseline", async () => {
       const id = await documentWithHistory(dialect, history);
       const both = await refusal(

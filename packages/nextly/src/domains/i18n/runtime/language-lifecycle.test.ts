@@ -95,7 +95,7 @@ describe("languageIsLive", () => {
     );
   });
 
-  it("judges another language by its own status alone", () => {
+  it("judges another language by the main row and its own status", () => {
     expect(
       languageIsLive({
         ...base,
@@ -108,6 +108,14 @@ describe("languageIsLive", () => {
       languageIsLive({
         ...base,
         mainStatus: "draft",
+        ownStatus: "published",
+        locale: "de",
+      })
+    ).toBe(false);
+    expect(
+      languageIsLive({
+        ...base,
+        mainStatus: "published",
         ownStatus: "published",
         locale: "de",
       })

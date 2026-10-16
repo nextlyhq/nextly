@@ -50,8 +50,9 @@ export interface LanguageStatuses {
  *   decides.
  * - The default language: the main row must be live, and its own translation
  *   too where it has a status.
- * - Any other language: its own translation status decides; one with no
- *   translation row has nothing of its own live.
+ * - Any other language: the main row must be live, since it gates whether the
+ *   document is served at all, and the language's own translation status
+ *   too; one with no translation row has nothing of its own live.
  */
 export function languageIsLive(statuses: LanguageStatuses): boolean {
   const isLive = (status: unknown): boolean =>
@@ -63,5 +64,5 @@ export function languageIsLive(statuses: LanguageStatuses): boolean {
       mainLive && (statuses.ownStatus === null || isLive(statuses.ownStatus))
     );
   }
-  return isLive(statuses.ownStatus);
+  return mainLive && isLive(statuses.ownStatus);
 }
