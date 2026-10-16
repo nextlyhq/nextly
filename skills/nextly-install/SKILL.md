@@ -26,7 +26,37 @@ Checked against `nextly` 0.0.2-alpha.66 with Next.js 16.4. Run
 - Node.js `^20.19.0 || ^22.12.0 || >=24.0.0`. Node 23 is not supported.
 - A clean git working tree, so every change below is visible in one diff.
 
-## 1. Run the generator in the project root
+## 1. On pnpm, allow the native builds first
+
+Skip this on npm, yarn and bun. pnpm blocks dependency build scripts, and the
+generator's own install then fails: pnpm 11 and later stop with
+`ERR_PNPM_IGNORED_BUILDS` for `better-sqlite3` and `esbuild`, and pnpm 10
+installs without building them, so `better-sqlite3` has no binding and the app
+fails at boot. Allow them in `pnpm-workspace.yaml` before running the
+generator (create the file with `packages: []` if the project has none):
+
+```yaml
+allowBuilds:
+  better-sqlite3: true
+  esbuild: true
+  sharp: true
+onlyBuiltDependencies:
+  - better-sqlite3
+  - esbuild
+  - sharp
+```
+
+- pnpm 11 and later read `allowBuilds`; pnpm 10.6+ reads
+  `onlyBuiltDependencies`. If the file already has an `allowBuilds` map, which
+  a recent create-next-app writes with `sharp: false`, add the entries to that
+  map (and set `sharp: true`) rather than adding a second `allowBuilds` key.
+- pnpm 10.0 to 10.5 ignore both in this file: put the list in `package.json`
+  instead, as `"pnpm": { "onlyBuiltDependencies": ["better-sqlite3", "esbuild", "sharp"] }`,
+  or upgrade pnpm.
+- If the generator already ran without this, add it now and run
+  `pnpm install` again.
+
+## 2. Run the generator in the project root
 
 ```bash
 npx create-nextly-app@alpha          # npm
@@ -76,7 +106,7 @@ Check the two files it may have left alone:
   `openssl rand -base64 32` rather than copying the one written into
   `.env.example`, which is meant to be committed.
 
-## 2. Install esbuild
+## 3. Install esbuild
 
 Nextly reads `nextly.config.ts` with esbuild, an optional peer dependency the
 generator does not add. Without it nothing in the config loads, and the dev
@@ -85,28 +115,6 @@ server logs `Reading "nextly.config.ts" needs the "esbuild" package`.
 ```bash
 npm install -D esbuild      # or: pnpm add -D esbuild / yarn add -D esbuild / bun add -d esbuild
 ```
-
-## 3. On pnpm 10 or later, allow the native builds
-
-pnpm blocks dependency build scripts by default, and `better-sqlite3` then has
-no compiled binding. Add this to `pnpm-workspace.yaml` (create it with
-`packages: []` if the project has none), then run `pnpm install` again:
-
-```yaml
-allowBuilds:
-  better-sqlite3: true
-  esbuild: true
-  sharp: true
-onlyBuiltDependencies:
-  - better-sqlite3
-  - esbuild
-  - sharp
-```
-
-pnpm 11 reads `allowBuilds`; pnpm 10.6+ reads `onlyBuiltDependencies`. pnpm
-10.0 to 10.5 ignore both in this file: put the list in `package.json` instead,
-as `"pnpm": { "onlyBuiltDependencies": ["better-sqlite3", "esbuild", "sharp"] }`,
-or upgrade pnpm. npm, yarn and bun need nothing here.
 
 ## 4. Add the admin's media route
 
@@ -171,8 +179,8 @@ connection load, not an error.
 ## Doing it by hand
 
 If the generator cannot be used, the manual steps are at
-<https://nextlyhq.com/docs/getting-started/installation> (option B). Steps 2 to
-5 above apply there too.
+<https://nextlyhq.com/docs/getting-started/installation> (option B). Steps 1
+and 3 to 5 above apply there too.
 
 ## Next
 
