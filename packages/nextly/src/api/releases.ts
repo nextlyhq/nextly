@@ -27,11 +27,22 @@ import { runWithCallerScope } from "../auth/caller-scope";
 import { isErrorResponse, requireAnyPermission } from "../auth/middleware";
 import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
 import { container } from "../di";
-import type {
-  DocumentRef,
-  ReleaseRow,
+import {
+  isReleaseTab,
+  RELEASE_ATTENTION_REASONS,
+  RELEASE_TABS,
+  type ReleaseAttentionReason,
+  type ReleaseTab,
+} from "../domains/releases/release-tabs";
+import {
+  RELEASE_LIST_ORDERS,
+  type DocumentRef,
+  type ReleaseListOrder,
+  type ReleaseRow,
 } from "../domains/releases/releases-repository";
 import {
+  DEFAULT_RELEASE_PAGE_SIZE,
+  MAX_RELEASE_PAGE_SIZE,
   RELEASES_RESOURCE,
   type ReleaseCapabilities,
 } from "../domains/releases/services/releases-service";
@@ -264,21 +275,76 @@ function releaseStateParam(value: string | null): ReleaseState | undefined {
  * unbounded read on any installation with a real release history. A supplied one
  * was accepted at any size, which is the same read asked for explicitly.
  */
-const DEFAULT_RELEASE_PAGE = 50;
-const MAX_RELEASE_PAGE = 200;
-
 function pageSize(value: string | null): number {
-  if (value === null) return DEFAULT_RELEASE_PAGE;
+  if (value === null) return DEFAULT_RELEASE_PAGE_SIZE;
   const n = Number(value);
   if (!Number.isInteger(n) || n <= 0) {
     throw badRequest("`limit` must be a positive integer.");
   }
-  if (n > MAX_RELEASE_PAGE) {
-    throw badRequest(`\`limit\` may be at most ${MAX_RELEASE_PAGE}.`, {
+  if (n > MAX_RELEASE_PAGE_SIZE) {
+    throw badRequest(`\`limit\` may be at most ${MAX_RELEASE_PAGE_SIZE}.`, {
       requested: n,
     });
   }
   return n;
+}
+
+/**
+ * Which page, counting from 1.
+ *
+ * Refused rather than clamped when it is not a whole number of at least one: a
+ * client asking for page 0 or page "2a" has a bug, and answering with page 1
+ * would hide it behind a plausible list.
+ */
+function pageNumber(value: string | null): number {
+  if (value === null) return 1;
+  const n = Number(value);
+  // A safe integer: `1e308` passes `Number.isInteger` and becomes an infinite
+  // offset further in.
+  if (!Number.isSafeInteger(n) || n < 1) {
+    throw badRequest("`page` must be a whole number of at least 1.");
+  }
+  return n;
+}
+
+/**
+ * One of the list's tabs, or a refusal.
+ *
+ * Refused rather than ignored for the reason `state` is: an unknown tab dropped
+ * on the floor answers with every release, and a client paging through what it
+ * believes is one tab cannot tell.
+ */
+function releaseTabParam(value: string | null): ReleaseTab | undefined {
+  if (value === null) return undefined;
+  if (!isReleaseTab(value)) {
+    throw badRequest(`\`tab\` must be one of: ${RELEASE_TABS.join(", ")}.`);
+  }
+  return value;
+}
+
+/** One part of the attention tab, or a refusal. */
+function releaseReasonParam(
+  value: string | null
+): ReleaseAttentionReason | undefined {
+  if (value === null) return undefined;
+  const known = RELEASE_ATTENTION_REASONS.find(reason => reason === value);
+  if (known === undefined) {
+    throw badRequest(
+      `\`reason\` must be one of: ${RELEASE_ATTENTION_REASONS.join(", ")}.`
+    );
+  }
+  return known;
+}
+
+/** Which end of the timeline comes first, or a refusal. */
+function releaseOrderParam(value: string | null): ReleaseListOrder | undefined {
+  if (value === null) return undefined;
+  if (!(RELEASE_LIST_ORDERS as readonly string[]).includes(value)) {
+    throw badRequest(
+      `\`order\` must be one of: ${RELEASE_LIST_ORDERS.join(", ")}.`
+    );
+  }
+  return value as ReleaseListOrder;
 }
 
 /**
@@ -525,17 +591,12 @@ const RELEASE_OPERATIONS: Record<
 > = {
   listReleases: async ({ request, caller, releases }) => {
     const params = new URL(request.url).searchParams;
-    const limit = pageSize(params.get("limit"));
-    // ONE row past the limit, so truncation is observable. Without it a page of
-    // five is reported as `total: 5, hasNext: false` whether five releases exist
-    // or five hundred do, and a client renders an incomplete schedule as the
-    // whole one.
-    const found = await releases.find({
+    // The runtime guards belong HERE, at the untyped boundary. The service
+    // takes typed values so a typed caller cannot pass a typo, but a query
+    // string is whatever was sent — and an unrecognised state or tab answered
+    // with an empty list reads exactly like "nothing is scheduled".
+    const shared = {
       ...caller,
-      // The runtime guard belongs HERE, at the untyped boundary. The service
-      // takes `ReleaseState` so a typed caller cannot pass a typo, but a query
-      // string is whatever was sent — and an unrecognised state answered with
-      // an empty list reads exactly like "nothing is scheduled".
       state: releaseStateParam(params.get("state")),
       scheduledAfter: optionalInstant(
         params.get("scheduledAfter"),
@@ -545,28 +606,39 @@ const RELEASE_OPERATIONS: Record<
         params.get("scheduledBefore"),
         "scheduledBefore"
       ),
-      ...containingRef(params),
-      limit: limit + 1,
-    });
-    const page = found.slice(0, limit);
-    const hasNext = found.length > limit;
-    const items = await withCapabilities(page, caller, releases);
-    // The canonical list envelope, so shared client tooling reads this like
-    // every other list. The meta is synthetic because the query is windowed
-    // rather than paged — `total` is what this page holds, and a second query
-    // to count the whole table would be a read nobody asked for.
-    return respondList(items, {
-      // `total` is what this window holds, not a count of the table: the query
-      // is windowed rather than paged, and a second COUNT would be a read
-      // nobody asked for. `hasNext` is the honest part — it says whether more
-      // matched than were returned.
-      total: page.length,
-      page: 1,
-      limit,
-      totalPages: hasNext ? 2 : 1,
-      hasNext,
-      hasPrev: false,
-    });
+      page: pageNumber(params.get("page")),
+      limit: pageSize(params.get("limit")),
+    };
+    const listOnly = {
+      tab: releaseTabParam(params.get("tab")),
+      reason: releaseReasonParam(params.get("reason")),
+      // Passed as sent: the service trims it, bounds its length and matches it
+      // literally, so a REST and a Direct API caller searching the same text
+      // get the same releases.
+      search: params.get("search") ?? undefined,
+      order: releaseOrderParam(params.get("order")),
+    };
+    const { containing } = containingRef(params);
+    if (containing !== undefined) {
+      // One document's releases are not a tab of the list, nor searched, and
+      // come in the order they will be applied to it. Refused rather than
+      // dropped: a filter accepted and ignored answers a different question.
+      const extra = Object.entries(listOnly).find(([, v]) => v !== undefined);
+      if (extra !== undefined) {
+        throw badRequest(
+          `\`${extra[0]}\` is not available when filtering by document.`
+        );
+      }
+    }
+    const found = await releases.find(
+      containing !== undefined
+        ? { ...shared, containing }
+        : { ...shared, ...listOnly }
+    );
+    const items = await withCapabilities(found.items, caller, releases);
+    // The service's own page and total, so `meta.total` is every release the
+    // query matches, not the rows this page holds.
+    return respondList(items, found.meta);
   },
 
   getRelease: async ({ caller, releases, releaseId }) => {

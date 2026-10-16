@@ -31,10 +31,10 @@ function stubDb() {
   return { db, batches };
 }
 
-describe("VersionsRepository.deleteByIds", () => {
+describe("VersionsRepository.deletePrunedVersions", () => {
   it("issues no statement for an empty list", async () => {
     const { db, batches } = stubDb();
-    const deleted = await new VersionsRepository(db).deleteByIds([]);
+    const deleted = await new VersionsRepository(db).deletePrunedVersions([]);
     expect(deleted).toBe(0);
     expect(batches).toEqual([]);
   });
@@ -43,7 +43,7 @@ describe("VersionsRepository.deleteByIds", () => {
     const { db, batches } = stubDb();
     const ids = Array.from({ length: 10 }, (_, i) => `id-${i}`);
 
-    const deleted = await new VersionsRepository(db).deleteByIds(ids);
+    const deleted = await new VersionsRepository(db).deletePrunedVersions(ids);
 
     expect(deleted).toBe(10);
     expect(batches).toHaveLength(1);
@@ -54,7 +54,7 @@ describe("VersionsRepository.deleteByIds", () => {
     const { db, batches } = stubDb();
     const ids = Array.from({ length: 1200 }, (_, i) => `id-${i}`);
 
-    const deleted = await new VersionsRepository(db).deleteByIds(ids);
+    const deleted = await new VersionsRepository(db).deletePrunedVersions(ids);
 
     // Every id is still removed, and no single statement exceeds the cap.
     expect(deleted).toBe(1200);

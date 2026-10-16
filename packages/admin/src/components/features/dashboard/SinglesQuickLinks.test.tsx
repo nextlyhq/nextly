@@ -44,12 +44,17 @@ describe("the singles card", () => {
   it("draws its section even when the list is empty", () => {
     // 🔴 The reserved-slot guard. Returning `null` here is what the host's
     // condition replaced, and it is the one line a tidy-minded edit would put
-    // back. The section is queried by its accessible name, which is what the
-    // grid placement is drawn around.
+    // back. The card's frame (its title and region) is drawn around this body,
+    // so what is asserted is that the body still renders with no singles.
     singlesHook.mockReturnValue(listing([]));
     render(<SinglesQuickLinks />);
 
-    expect(screen.getByRole("region", { name: "Singles" })).toBeInTheDocument();
+    // The frame's empty state, which says what will appear: a blank body would also satisfy
+    // "rendered something and no links", so the state itself is what is asserted.
+    expect(screen.getByTestId("card-empty")).toHaveTextContent(
+      "No Singles yet"
+    );
+    expect(screen.queryAllByRole("link")).toHaveLength(0);
   });
 
   it("draws one card per single it was given", () => {
@@ -63,7 +68,6 @@ describe("the singles card", () => {
     );
     render(<SinglesQuickLinks />);
 
-    expect(screen.getByRole("region", { name: "Singles" })).toBeInTheDocument();
     expect(screen.getAllByRole("link")).toHaveLength(2);
   });
 });

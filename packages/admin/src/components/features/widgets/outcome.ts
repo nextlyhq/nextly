@@ -45,6 +45,7 @@ import type {
   CellSlotLookup,
   DeclaredWidget,
 } from "./archetypes/types";
+import type { CardEmptyContent } from "./frame/states";
 
 /**
  * The archetypes core draws from a query result.
@@ -142,6 +143,9 @@ export type WidgetOutcome =
   | { state: "self-drawn" }
   | { state: "loading" }
   | { state: "failed"; message: string }
+  // The source is forbidden, gone, or kept off the dashboard: one state for all three.
+  | { state: "unavailable" }
+  | { state: "empty"; empty: CardEmptyContent }
   | { state: "ready"; node: ReactNode };
 
 /**
@@ -152,9 +156,14 @@ export type WidgetOutcome =
  * the dispatch read as three decisions where there is one.
  */
 function asOutcome(drawn: ArchetypeOutcome): WidgetOutcome {
-  return drawn.ok
-    ? { state: "ready", node: drawn.node }
-    : { state: "failed", message: drawn.message };
+  if (!drawn.ok) {
+    return drawn.unavailable
+      ? { state: "unavailable" }
+      : { state: "failed", message: drawn.message };
+  }
+  return drawn.empty !== undefined
+    ? { state: "empty", empty: drawn.empty }
+    : { state: "ready", node: drawn.node };
 }
 
 /**
@@ -245,7 +254,12 @@ export function resolveWidgetOutcome(
     return { state: "loading" };
   }
 
-  if (!slot.ok) return { state: "failed", message: slot.error };
+  if (!slot.ok) {
+    // The server marks every "not available" answer with one code; anything else failed.
+    return slot.code === "unavailable"
+      ? { state: "unavailable" }
+      : { state: "failed", message: slot.error };
+  }
 
   return asOutcome(renderer.body(slot.result, definition));
 }

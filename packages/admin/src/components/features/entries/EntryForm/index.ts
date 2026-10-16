@@ -83,6 +83,9 @@ export {
   type DocumentLockSurface,
 } from "./useDocumentLockSurface";
 
+// A plugin's document view, as a page hands it to the editor.
+export type { DocumentViewMount } from "./DocumentViewBody";
+
 // Show JSON dialog
 export { ShowJSONDialog, type ShowJSONDialogProps } from "./ShowJSONDialog";
 

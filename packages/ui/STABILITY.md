@@ -14,6 +14,7 @@ Plugin authors use both:
 | Registering components, contribution types, DataTable, field-UI kit | `@nextlyhq/plugin-sdk` (and `/admin`) |
 | Buttons, inputs, dialogs, tables and the design tokens              | `@nextlyhq/ui`                        |
 | A pure class-name helper (`cn`)                                     | `@nextlyhq/ui/utils`                  |
+| Formatting a figure on a dashboard card                             | `@nextlyhq/ui/format`                 |
 | The Tailwind v3 preset                                              | `@nextlyhq/ui/tailwind-preset`        |
 
 > **Never import from `@nextlyhq/admin`.** It is an application, not a published API.
@@ -289,11 +290,18 @@ trade for using them early.
 - **Theming beyond the tokens.** Override `--nx-*` values; do not depend on class names,
   DOM structure or Radix internals, none of which are part of the contract.
 - **Server components.** The root barrel is published with `"use client"`. Only
-  `@nextlyhq/ui/utils`, `@nextlyhq/ui/tailwind-preset` and `@nextlyhq/ui/color`
-  are importable from server code.
+  `@nextlyhq/ui/utils`, `@nextlyhq/ui/tailwind-preset`, `@nextlyhq/ui/color` and
+  `@nextlyhq/ui/format` are importable from server code.
 
 `@nextlyhq/ui/color` is `@experimental`: conversions between sRGB, HSV and OKLCH. It sits on
 the server-safe side deliberately — the functions are arithmetic on numbers, and a colour a
 server renders should not have to cross into client code to be converted. The OKLCH direction
 reduces chroma to reach the displayable gamut, so a colour outside sRGB is approximated by one
 of the same hue rather than a different one.
+
+`@nextlyhq/ui/format` is `@experimental`: the one number formatter for dashboard cards.
+`formatCount` shows the full grouped value, except in a card's small size tier, where values
+from 1,000 compact ("1.2k", "3.4M"); a floor reads "N+"; the accessible name is always the full
+value ("1,248", "100 or more"). `formatChange` carries a change's direction in an arrow and a
+sign as well as in words. Every figure a card shows, in its body, chart, tooltip, table and text
+alternative, goes through these, so one value never reads two ways.

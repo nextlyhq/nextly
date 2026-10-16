@@ -1,0 +1,451 @@
+/**
+ * The entry editor hosting a plugin's document view.
+ *
+ * What these pin is that the view replaces the form BODY and nothing the
+ * editor keeps around it: the save shortcut still saves, the claim still
+ * speaks, the recovery offer is still made — and a `<form>` the view renders
+ * is the view's own, never a way to save the document.
+ */
+import { ShortcutProvider } from "@nextlyhq/ui";
+import { QueryClientProvider } from "@tanstack/react-query";
+// RTL's own `render`: the shared one fixes its wrapper, and these need a
+// shortcut owner that listens.
+import { fireEvent, render } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import type { ComponentProps, ReactElement, ReactNode } from "react";
+import { useFormContext } from "react-hook-form";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import {
+  act,
+  cleanup,
+  createTestQueryClient,
+  screen,
+  waitFor,
+} from "@admin/__tests__/utils";
+import {
+  clearRegistry,
+  registerComponent,
+  type DocumentViewProps,
+} from "@admin/lib/plugins/component-registry";
+
+const { useDocumentLock, update, recovery } = vi.hoisted(() => ({
+  useDocumentLock: vi.fn(),
+  update: vi.fn(),
+  recovery: {
+    current: {
+      offer: null as { savedAt: Date; snapshot: unknown } | null,
+      isResolved: true,
+      dismiss: () => {},
+      restore: () => {},
+    },
+  },
+}));
+
+vi.mock("@admin/hooks/queries/useDocumentLock", () => ({ useDocumentLock }));
+// The save is observed where it leaves the editor: the update mutation.
+vi.mock("@admin/hooks/queries/useUpdateEntry", () => ({
+  useUpdateEntry: () => ({ mutateAsync: update, isPending: false }),
+}));
+vi.mock("@admin/hooks/useAutosaveRecovery", () => ({
+  useAutosaveRecovery: () => recovery.current,
+}));
+vi.mock("@admin/hooks/useDocumentAutosave", async importOriginal => ({
+  ...(await importOriginal<
+    typeof import("@admin/hooks/useDocumentAutosave")
+  >()),
+  useDocumentAutosave: () => ({ status: "idle", lastSavedAt: null }),
+}));
+vi.mock("@admin/hooks/useLocalization", () => ({
+  useLocalization: () => ({
+    enabled: false,
+    locales: [],
+    defaultLocale: "en",
+    fallback: true,
+    getLocale: () => undefined,
+  }),
+}));
+
+import { EntryForm } from "../EntryForm";
+
+const VIEW = "@acme/pb/admin#Builder";
+const collection = {
+  name: "pages",
+  label: "Pages",
+  fields: [{ name: "title", type: "text", label: "Title" }],
+} as never;
+const entry = { id: "e1", title: "Hello" } as never;
+const bob = { ownerId: "u2", ownerLabel: "Bob", expiresInSeconds: 90 };
+
+const received = vi.fn();
+
+/**
+ * A view with the shapes a real one has: a field written through the
+ * document form, a form of its own, and a way out.
+ */
+function BuilderView(props: DocumentViewProps): ReactElement {
+  received(props);
+  const { register } = useFormContext();
+  return (
+    <div data-testid="builder-view">
+      <input aria-label="Page heading" {...register("title")} />
+      <form
+        aria-label="Find a block"
+        onSubmit={event => event.preventDefault()}
+      >
+        <input aria-label="Block name" />
+        <button type="submit">Find</button>
+      </form>
+      <button type="button" onClick={props.exit}>
+        Done
+      </button>
+    </div>
+  );
+}
+
+/**
+ * The shared providers, with a shortcut owner that listens: the default test
+ * wrapper attaches none, and the save shortcut is one of the things on trial.
+ */
+function Providers({ children }: { children: ReactNode }): ReactElement {
+  return (
+    <QueryClientProvider client={createTestQueryClient()}>
+      <ShortcutProvider isApple={false}>{children}</ShortcutProvider>
+    </QueryClientProvider>
+  );
+}
+
+const onExit = vi.fn();
+
+const onCancel = vi.fn();
+
+/** Translation mode as the page passes it once the URL asks for it. */
+const translatingFromFrench = {
+  from: "fr",
+  sourceDocument: { title: "Bonjour" },
+};
+
+function renderView(extra: Partial<ComponentProps<typeof EntryForm>> = {}) {
+  return render(
+    <EntryForm
+      collection={collection}
+      entry={entry}
+      mode="edit"
+      onCancel={onCancel}
+      documentView={{ component: VIEW, onExit }}
+      {...extra}
+    />,
+    { wrapper: Providers }
+  );
+}
+
+function press(target: HTMLElement | Document, key: string): void {
+  target.dispatchEvent(
+    new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true })
+  );
+}
+
+function pressSave(target: HTMLElement): void {
+  target.dispatchEvent(
+    new KeyboardEvent("keydown", {
+      key: "s",
+      ctrlKey: true,
+      bubbles: true,
+      cancelable: true,
+    })
+  );
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  registerComponent(VIEW, BuilderView);
+  useDocumentLock.mockReturnValue({
+    state: { status: "held-by-me" },
+    takeOver: vi.fn(),
+    requestAccess: vi.fn(),
+  });
+  update.mockResolvedValue({ item: { id: "e1", title: "Saved" } });
+  recovery.current = { ...recovery.current, offer: null };
+});
+
+afterEach(() => {
+  cleanup();
+  clearRegistry();
+});
+
+describe("EntryForm with a document view", () => {
+  it("draws the view in place of the form body, outside the entry form element", () => {
+    renderView();
+
+    expect(screen.getByTestId("builder-view")).toBeInTheDocument();
+    // No entry form at all: no header title input, no fields, no rail, and no
+    // `<form>` element whose submit is the save.
+    expect(document.querySelector("form#entry-form")).toBeNull();
+    expect(screen.queryByLabelText("Title")).toBeNull();
+    expect(received).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        collectionSlug: "pages",
+        entryId: "e1",
+        readOnly: false,
+      })
+    );
+  });
+
+  it("does not save the document when the view's own form submits", async () => {
+    const user = userEvent.setup();
+    renderView();
+
+    // Dirty, so a save that the submit DID reach would have something to send.
+    await user.type(screen.getByLabelText("Page heading"), " world");
+    await user.click(screen.getByRole("button", { name: "Find" }));
+    await act(async () => {
+      await new Promise(resolve => setTimeout(resolve, 50));
+    });
+    expect(update).not.toHaveBeenCalled();
+
+    // The positive control: the same spy sees a save the editor does make, so
+    // the silence above is the submit not reaching it.
+    pressSave(screen.getByLabelText("Page heading"));
+    await waitFor(() => expect(update).toHaveBeenCalledTimes(1));
+  });
+
+  it("saves on Mod+S what the view wrote through the document form", async () => {
+    const user = userEvent.setup();
+    renderView();
+
+    await user.type(screen.getByLabelText("Page heading"), " world");
+    pressSave(document.body);
+
+    await waitFor(() => expect(update).toHaveBeenCalledTimes(1));
+    expect(update).toHaveBeenCalledWith(
+      expect.objectContaining({ title: "Hello world" })
+    );
+  });
+
+  it("names a colleague's claim above the view and hands the view readOnly", () => {
+    useDocumentLock.mockReturnValue({
+      state: { status: "held-by-other", holder: bob, requestSent: false },
+      takeOver: vi.fn(),
+      requestAccess: vi.fn(),
+    });
+    renderView();
+
+    const banner = screen.getByTestId("document-lock-banner");
+    expect(banner).toHaveTextContent("Bob");
+    // Above, in document order: read before the view whose edits it qualifies.
+    expect(
+      banner.compareDocumentPosition(screen.getByTestId("builder-view")) &
+        Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+    expect(received).toHaveBeenLastCalledWith(
+      expect.objectContaining({ readOnly: true })
+    );
+  });
+
+  it("offers recovered work above the view", () => {
+    recovery.current = {
+      ...recovery.current,
+      offer: { savedAt: new Date(), snapshot: { title: "Recovered" } },
+    };
+    renderView();
+
+    expect(
+      screen.getByText(/you have unsaved changes from/i)
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Restore" })).toBeInTheDocument();
+  });
+
+  it("leaves through the page's exit with unsaved work, without the leave warning", async () => {
+    // The page's exit navigates to the edit address, which renders the same
+    // page and so keeps this form mounted: the work is not lost, and the
+    // guard's "will be lost" dialog would be untrue.
+    onExit.mockImplementation(() => {
+      window.history.pushState(null, "", "/admin/collections/pages/e1");
+    });
+    window.history.pushState(null, "", "/admin/collections/pages/e1/builder");
+    const user = userEvent.setup();
+    renderView();
+
+    await user.type(screen.getByLabelText("Page heading"), " world");
+    await user.click(screen.getByRole("button", { name: "Done" }));
+
+    expect(onExit).toHaveBeenCalledTimes(1);
+    expect(window.location.pathname).toBe("/admin/collections/pages/e1");
+    expect(screen.queryByText("Unsaved Changes")).toBeNull();
+  });
+
+  it("leaves Escape to the view rather than cancelling to the list", () => {
+    renderView();
+
+    press(document.body, "Escape");
+
+    expect(onCancel).not.toHaveBeenCalled();
+  });
+
+  it("cancels on Escape in the ordinary editor", () => {
+    // The control for the case above: the same keystroke reaches the cancel
+    // binding when no view is routed.
+    renderView({ documentView: undefined });
+
+    press(document.body, "Escape");
+
+    expect(onCancel).toHaveBeenCalledTimes(1);
+  });
+
+  it("draws the view alone when the address asks for translation mode", () => {
+    renderView({ translation: translatingFromFrench });
+
+    expect(screen.getByTestId("builder-view")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("separator", { name: "Source and translation" })
+    ).toBeNull();
+    expect(screen.queryByText("Bonjour")).toBeNull();
+  });
+
+  it("splits the ordinary editor in translation mode", () => {
+    // The control: the same translation state does reach the split when no
+    // view is routed, so its absence above is the view mode withholding it.
+    renderView({ documentView: undefined, translation: translatingFromFrench });
+
+    expect(
+      screen.getByRole("separator", { name: "Source and translation" })
+    ).toBeInTheDocument();
+  });
+
+  it("keeps the ordinary editor when no view is routed", () => {
+    // The control for the first case: the same render without a view does
+    // produce the entry form element and its fields.
+    render(<EntryForm collection={collection} entry={entry} mode="edit" />, {
+      wrapper: Providers,
+    });
+
+    expect(document.querySelector("form#entry-form")).not.toBeNull();
+    expect(screen.queryByTestId("builder-view")).toBeNull();
+    expect(screen.queryByTestId("document-view-frame")).toBeNull();
+  });
+});
+
+describe("a field-type view on a document with two fields of its type", () => {
+  const twoBlocks = {
+    name: "pages",
+    label: "Pages",
+    fields: [
+      { name: "title", type: "text", label: "Title" },
+      { name: "hero", type: "blocks", label: "Hero" },
+      { name: "body", type: "blocks", label: "Body" },
+    ],
+  } as never;
+
+  function openAt(search: string) {
+    window.history.pushState(
+      null,
+      "",
+      `/admin/collections/pages/e1/builder${search}`
+    );
+    return renderView({
+      collection: twoBlocks,
+      documentView: { component: VIEW, onExit, fieldType: "blocks" },
+    });
+  }
+
+  afterEach(() => {
+    window.history.pushState(null, "", "/");
+  });
+
+  it.each(["hero", "body"])("edits %s when the address names it", name => {
+    openAt(`?field=${name}`);
+    expect(screen.getByTestId("builder-view")).toBeInTheDocument();
+    expect(received).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        field: expect.objectContaining({ name: name, type: "blocks" }),
+      })
+    );
+  });
+
+  it.each([
+    ["names no field", ""],
+    ["names a field that is not one of them", "?field=title"],
+    ["names a field the document does not have", "?field=nope"],
+  ])(
+    "asks which field when the address %s, drawing no view",
+    (_case, search) => {
+      openAt(search);
+      expect(
+        screen.getByRole("heading", {
+          name: "Which field do you want to edit?",
+        })
+      ).toBeInTheDocument();
+      expect(screen.queryByTestId("builder-view")).toBeNull();
+      expect(screen.getByRole("button", { name: "Hero" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Body" })).toBeInTheDocument();
+    }
+  );
+
+  it("opens the chosen field and records it in the address", () => {
+    openAt("");
+    fireEvent.click(screen.getByRole("button", { name: "Body" }));
+    // The admin's router announces every history move with this event; the
+    // test has no router, so it announces the one the click made.
+    act(() => {
+      window.dispatchEvent(new Event("locationchange"));
+    });
+    expect(new URLSearchParams(window.location.search).get("field")).toBe(
+      "body"
+    );
+    expect(received).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        field: expect.objectContaining({ name: "body", type: "blocks" }),
+      })
+    );
+  });
+
+  it.each([
+    ["names a field the document does not have", "?field=stale"],
+    ["names no field", ""],
+  ])(
+    "corrects the address in place when it %s, on a document with one",
+    (_case, search) => {
+      window.history.pushState(
+        null,
+        "",
+        `/admin/collections/pages/e1/builder${search}`
+      );
+      const depth = window.history.length;
+      renderView({
+        collection: {
+          name: "pages",
+          fields: [{ name: "layout", type: "blocks" }],
+        } as never,
+        documentView: { component: VIEW, onExit, fieldType: "blocks" },
+      });
+      // The editor opens the only field, and the address now names it, so a
+      // reload or a shared link reaches exactly what is on screen.
+      expect(received).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          field: expect.objectContaining({ name: "layout" }),
+        })
+      );
+      expect(new URLSearchParams(window.location.search).get("field")).toBe(
+        "layout"
+      );
+      // Replaced, not pushed: Back does not return to the stale address.
+      expect(window.history.length).toBe(depth);
+    }
+  );
+
+  it("opens the only field of its type without asking", () => {
+    window.history.pushState(null, "", "/admin/collections/pages/e1/builder");
+    renderView({
+      collection: {
+        name: "pages",
+        fields: [{ name: "layout", type: "blocks" }],
+      } as never,
+      documentView: { component: VIEW, onExit, fieldType: "blocks" },
+    });
+    expect(received).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        field: expect.objectContaining({ name: "layout", type: "blocks" }),
+      })
+    );
+  });
+});

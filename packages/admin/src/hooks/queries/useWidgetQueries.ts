@@ -68,6 +68,13 @@ export interface WidgetQueryRequest {
    */
   cellKey?: string;
   query: WidgetQuery;
+  /**
+   * How many times this card's Retry has been pressed, for a retried card only.
+   *
+   * Part of the cache key and never sent: each press is a new question to the cache, so the card's
+   * query is asked again even when the previous retry's answer is still cached.
+   */
+  attempt?: number;
 }
 
 /** One card's cell answers, keyed by cell key. */
@@ -225,9 +232,14 @@ function asSlot(value: unknown): WidgetSlot {
   }
   if (!isObject(value)) return malformed();
 
-  const slot = value as { ok?: unknown; error?: unknown; result?: unknown };
+  const slot = value as {
+    ok?: unknown;
+    error?: unknown;
+    code?: unknown;
+    result?: unknown;
+  };
 
-  if (slot.ok === false) return refusal(slot.error);
+  if (slot.ok === false) return refusal(slot.error, slot.code);
   if (slot.ok !== true) return malformed();
 
   const result = asResult(slot.result);
@@ -531,9 +543,17 @@ function malformed(): WidgetSlot {
  * failure -- refusing to show it would be a second, silent one -- so it falls
  * back rather than being discarded.
  */
-function refusal(error: unknown): WidgetSlot {
+function refusal(error: unknown, code?: unknown): WidgetSlot {
   const usable = typeof error === "string" && error.trim() !== "";
-  return { ok: false, error: usable ? error : MALFORMED_SLOT_ERROR };
+  return {
+    ok: false,
+    error: usable ? error : MALFORMED_SLOT_ERROR,
+    // The one code the server sends for a source that is not available, kept so the card can
+    // say "Not available to you" rather than offering Retry for something that will not change.
+    // Only on a well-formed refusal: a slot missing its message is a broken answer that may
+    // recover, and the code would hide that behind a state that removes Retry.
+    ...(usable && code === "unavailable" && { code: "unavailable" as const }),
+  };
 }
 
 function readResults(body: unknown): unknown[] {

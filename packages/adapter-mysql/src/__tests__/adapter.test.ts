@@ -23,6 +23,7 @@ import {
 const mockConnection = {
   query: vi.fn(),
   release: vi.fn(),
+  destroy: vi.fn(),
   // The callback connection the mysql2/promise wrapper exposes, which is what
   // Drizzle's mysql2 driver binds to (and whose `config` it writes to).
   connection: { config: {} },
@@ -586,6 +587,91 @@ describe("@nextly/adapter-mysql", () => {
       expect(mockConnection.query).toHaveBeenCalledWith(
         "SET SESSION innodb_lock_wait_timeout = 5"
       );
+    });
+
+    it("puts the session's lock wait timeout back before the connection returns to the pool", async () => {
+      // MySQL has no transaction-scoped form of this setting, so the value set
+      // for one transaction would otherwise stay on the pooled connection for
+      // every later query handed it.
+      const answer = mockConnection.query.getMockImplementation();
+      mockConnection.query.mockImplementation((statement: string) =>
+        statement.startsWith("SELECT @@SESSION.innodb_lock_wait_timeout")
+          ? Promise.resolve([[{ timeout: 50 }], []])
+          : answer?.(statement)
+      );
+      const adapter = createMySqlAdapter({
+        url: "mysql://localhost:3306/test",
+      });
+      await adapter.connect();
+
+      for (const work of [
+        async () => "done",
+        async () => {
+          throw new Error("refused");
+        },
+      ]) {
+        mockConnection.query.mockClear();
+        mockConnection.release.mockClear();
+        await adapter.transaction(work, { timeoutMs: 5000 }).catch(() => {});
+
+        const statements = mockConnection.query.mock.calls.map(
+          call => call[0] as string
+        );
+        const restore = statements.indexOf(
+          "SET SESSION innodb_lock_wait_timeout = 50"
+        );
+        const ended = Math.max(
+          statements.indexOf("COMMIT"),
+          statements.indexOf("ROLLBACK")
+        );
+        expect(ended).toBeGreaterThanOrEqual(0);
+        expect(restore).toBeGreaterThan(ended);
+        expect(mockConnection.release).toHaveBeenCalledTimes(1);
+      }
+    });
+
+    it("destroys a connection whose ROLLBACK failed instead of pooling it", async () => {
+      // A connection the ROLLBACK did not reach may still be inside the
+      // transaction; pooled, it would put the next request's statements in it.
+      const answer = mockConnection.query.getMockImplementation();
+      mockConnection.query.mockImplementation((statement: string) =>
+        statement === "ROLLBACK"
+          ? Promise.reject(new Error("connection lost"))
+          : answer?.(statement)
+      );
+      const adapter = createMySqlAdapter({
+        url: "mysql://localhost:3306/test",
+      });
+      await adapter.connect();
+      // Connecting borrows and returns a connection of its own.
+      mockConnection.release.mockClear();
+
+      await expect(
+        adapter.transaction(async () => {
+          throw new Error("refused");
+        })
+      ).rejects.toThrow();
+
+      expect(mockConnection.destroy).toHaveBeenCalledTimes(1);
+      expect(mockConnection.release).not.toHaveBeenCalled();
+    });
+
+    it("returns a rolled-back connection to the pool for reuse", async () => {
+      const adapter = createMySqlAdapter({
+        url: "mysql://localhost:3306/test",
+      });
+      await adapter.connect();
+      // Connecting borrows and returns a connection of its own.
+      mockConnection.release.mockClear();
+
+      await expect(
+        adapter.transaction(async () => {
+          throw new Error("refused");
+        })
+      ).rejects.toThrow();
+
+      expect(mockConnection.release).toHaveBeenCalledTimes(1);
+      expect(mockConnection.destroy).not.toHaveBeenCalled();
     });
   });
 

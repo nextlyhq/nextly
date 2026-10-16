@@ -249,8 +249,11 @@ export {
   registerKnownPlugin,
   type ComponentPath,
   type CustomEditViewProps,
+  type DocumentViewProps,
 } from "./lib/plugins/component-registry";
 export type { DocumentLockGates } from "./components/features/entries/EntryForm/document-lock-affordances";
+// Navigation a plugin may perform: a page of this admin, judged before it moves.
+export { navigateWithinAdmin } from "./lib/navigation";
 
 // Unified DataTable + plugin registries — author surface re-exported by
 // `@nextlyhq/plugin-sdk/admin`. Plugins can render the shared table and add cell
