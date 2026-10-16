@@ -24,7 +24,7 @@
  */
 
 import type { FieldConfig } from "nextly/config";
-import { useCallback } from "react";
+import { useCallback, useEffect } from "react";
 import { FormProvider, type UseFormReturn } from "react-hook-form";
 
 import type { ViewedVersion } from "@admin/components/features/versions/document-history-context";
@@ -32,6 +32,7 @@ import { useSuppressAdminChrome } from "@admin/components/layout/ChromeSuppressi
 import { PluginSlot } from "@admin/components/shared/plugin-slot";
 import type { UseAutosaveRecoveryResult } from "@admin/hooks/useAutosaveRecovery";
 import { useSearchParams } from "@admin/hooks/useSearchParams";
+import { setSearchParam } from "@admin/lib/navigation";
 import type { DocumentViewProps } from "@admin/lib/plugins/component-registry";
 import { resolveViewField } from "@admin/lib/plugins/document-view-registry";
 
@@ -71,6 +72,26 @@ export interface DocumentViewBodyProps {
   viewingVersion: ViewedVersion | null;
   /** The document's top-level fields, from which a field-type view's is chosen. */
   fields?: readonly FieldConfig[];
+}
+
+/**
+ * Keep the address naming the field being edited.
+ *
+ * Where the document has one field the view could edit, a missing or stale
+ * `?field=` still opens it — the author's intent is unambiguous — and the
+ * address is corrected IN PLACE, so a reload or a shared link then reaches
+ * exactly what is on screen, and Back does not return to the stale address.
+ */
+function useFieldInAddress(
+  editing: ReturnType<typeof resolveViewField>,
+  requested: string | string[] | undefined
+): void {
+  const named = editing.kind === "field" ? editing.name : undefined;
+  useEffect(() => {
+    if (named !== undefined && named !== requested) {
+      setSearchParam("field", named, { replace: true });
+    }
+  }, [named, requested]);
 }
 
 export function DocumentViewBody({
@@ -115,6 +136,7 @@ export function DocumentViewBody({
     fields,
     typeof requested === "string" ? requested : undefined
   );
+  useFieldInAddress(editing, requested);
 
   const { errors, submitCount } = form.formState;
   const viewProps: DocumentViewProps = {

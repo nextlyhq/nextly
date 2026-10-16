@@ -399,6 +399,40 @@ describe("a field-type view on a document with two fields of its type", () => {
     );
   });
 
+  it.each([
+    ["names a field the document does not have", "?field=stale"],
+    ["names no field", ""],
+  ])(
+    "corrects the address in place when it %s, on a document with one",
+    (_case, search) => {
+      window.history.pushState(
+        null,
+        "",
+        `/admin/collections/pages/e1/builder${search}`
+      );
+      const depth = window.history.length;
+      renderView({
+        collection: {
+          name: "pages",
+          fields: [{ name: "layout", type: "blocks" }],
+        } as never,
+        documentView: { component: VIEW, onExit, fieldType: "blocks" },
+      });
+      // The editor opens the only field, and the address now names it, so a
+      // reload or a shared link reaches exactly what is on screen.
+      expect(received).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          field: expect.objectContaining({ name: "layout" }),
+        })
+      );
+      expect(new URLSearchParams(window.location.search).get("field")).toBe(
+        "layout"
+      );
+      // Replaced, not pushed: Back does not return to the stale address.
+      expect(window.history.length).toBe(depth);
+    }
+  );
+
   it("opens the only field of its type without asking", () => {
     window.history.pushState(null, "", "/admin/collections/pages/e1/builder");
     renderView({
