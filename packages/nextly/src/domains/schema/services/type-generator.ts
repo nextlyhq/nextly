@@ -424,6 +424,14 @@ export class TypeGenerator {
     this.reserveGlobalsWritten(lines.slice(importSlot).join("\n"), reserved);
 
     const imports: string[] = [];
+    // A `declare module` augments only a module the app's program already
+    // holds; one that nothing imports draws TS2664 ("Invalid module name in
+    // augmentation") even when it resolves, and a new app imports only subpaths
+    // such as `nextly/config`. This type-only import brings the augmented entry
+    // into the program itself, and is erased from every build.
+    if (this.generateModuleAugmentation) {
+      imports.push(`import type {} from "${this.moduleToAugment}";`);
+    }
     // A blocks field is typed as the engine's document, imported from `nextly`
     // rather than the engine package so the generated file resolves against the
     // dependency every app already has.

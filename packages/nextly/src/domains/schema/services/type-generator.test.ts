@@ -123,3 +123,28 @@ describe("TypeGenerator — permissions and events maps (D47)", () => {
     expect(code).toContain("user: User;");
   });
 });
+
+describe("TypeGenerator — the augmented module is part of the app's program", () => {
+  // TypeScript reports TS2664 ("Invalid module name in augmentation") for a
+  // `declare module` whose target no file of the program imports, even when the
+  // module resolves. A new app imports only subpaths such as `nextly/config`, so
+  // the generated file has to bring the root entry in itself.
+  it("imports the augmented module, type-only, before augmenting it", () => {
+    const { code } = new TypeGenerator().generateTypesFile([collection([])]);
+
+    const importAt = code.indexOf('import type {} from "nextly";');
+    expect(importAt).toBeGreaterThanOrEqual(0);
+    expect(importAt).toBeLessThan(code.indexOf('declare module "nextly" {'));
+  });
+
+  it("imports whichever module it is told to augment", () => {
+    // The import follows `moduleToAugment`; a fixed "nextly" would leave a
+    // custom target's augmentation as unresolved as before.
+    const { code } = new TypeGenerator({
+      moduleToAugment: "@acme/cms",
+    }).generateTypesFile([collection([])]);
+
+    expect(code).toContain('import type {} from "@acme/cms";');
+    expect(code).not.toContain('import type {} from "nextly";');
+  });
+});

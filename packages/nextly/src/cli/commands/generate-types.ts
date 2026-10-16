@@ -30,10 +30,6 @@ import { resolve, dirname, join } from "node:path";
 import type { Command } from "commander";
 
 import type { CollectionConfig } from "../../collections/config/define-collection";
-import {
-  TypeGenerator,
-  type TypeGeneratorOptions,
-} from "../../domains/schema/services/type-generator";
 import { ZodGenerator } from "../../domains/schema/services/zod-generator";
 import { resolveComponentTableName } from "../../domains/schema/utils/resolve-table-name";
 import { resolveSingleTableName } from "../../domains/singles/services/resolve-single-table-name";
@@ -41,7 +37,6 @@ import { describeError } from "../../errors/index";
 // Reserved-option refusals are reported through the canonical error shape, so
 // the CLI renders them like any other declaration failure.
 import type { FieldGroupConfig } from "../../field-groups/config/types";
-import { collectCodegenNames } from "../../plugins/codegen/collect-codegen-names";
 import {
   buildImportMapArtifact,
   COMPONENT_IMPORT_MAP_FILENAME,
@@ -52,6 +47,10 @@ import type { DynamicCollectionRecord } from "../../schemas/dynamic-collections/
 import type { DynamicFieldGroupRecord } from "../../schemas/dynamic-field-groups/types";
 import type { DynamicSingleRecord } from "../../schemas/dynamic-singles/types";
 import type { UserFieldDefinitionRecord } from "../../schemas/user-field-definitions/types";
+import {
+  generatedTypesFile,
+  generatedZodDir,
+} from "../../shared/lib/generated-output-paths";
 import { toSingularLabel, toPluralLabel } from "../../shared/lib/pluralization";
 import { carriedUserFieldOptions } from "../../shared/lib/user-field-plugin-options";
 import type { SingleConfig } from "../../singles/config/types";
@@ -59,6 +58,7 @@ import type { UserFieldConfig } from "../../users/config/types";
 import { createContext, type CommandContext } from "../program";
 import { loadConfig, type LoadConfigResult } from "../utils/config-loader";
 import { formatDuration, formatCount } from "../utils/logger";
+import { writeGeneratedTypesFile } from "../utils/write-generated-types";
 
 import {
   applyBlockManifestState,
@@ -194,10 +194,15 @@ export async function runGenerateTypes(
   // belongs on disk. `expected === null` is expressed by REMOVING any previous
   // manifest: writing nothing would leave the last run's file still advertising
   // blocks the app no longer has.
+  // Fitted to the app's layout, as the types file it sits beside is below.
+  const manifestCwd = options.cwd ?? process.cwd();
   const manifestState = await readBlockManifestState(
     configResult.config.plugins ?? [],
-    options.output ?? configResult.config.typescript.outputFile,
-    options.cwd ?? process.cwd()
+    generatedTypesFile(
+      manifestCwd,
+      options.output ?? configResult.config.typescript.outputFile
+    ),
+    manifestCwd
   );
   await applyBlockManifestState(manifestState);
   const writtenManifestPath =
@@ -287,35 +292,19 @@ async function generateTypes(
 
   logger.debug(`Generating TypeScript types (declare: ${generateDeclare})`);
 
-  const typeGeneratorOptions: TypeGeneratorOptions = {
-    includeComments: true,
-    generateInputTypes: true,
-    generateConfig: true,
-    generateModuleAugmentation: generateDeclare,
-  };
-
-  // Permission slugs + event names for typed PermissionSlug/EventName (D47).
   // `config` is the already-merged config (plugin contributions folded by
   // loadConfig); `config.plugins` is the resolved plugin list.
-  const { permissionSlugs, eventNames } = collectCodegenNames(
+  const typesFilePath = await writeGeneratedTypesFile({
+    cwd,
+    outputFile: typesOutputPath,
     config,
-    config.plugins ?? []
-  );
-
-  const typeGenerator = new TypeGenerator(typeGeneratorOptions);
-  const typesFile = typeGenerator.generateTypesFile(
-    records,
-    singleRecords,
-    componentRecords,
-    userFieldRecords,
-    permissionSlugs,
-    eventNames
-  );
-
-  // Resolve and write types file
-  const typesFilePath = resolve(cwd, typesOutputPath);
-  await ensureDir(dirname(typesFilePath));
-  await writeFile(typesFilePath, typesFile.code, "utf-8");
+    plugins: config.plugins ?? [],
+    collections: records,
+    singles: singleRecords,
+    components: componentRecords,
+    userFields: userFieldRecords,
+    moduleAugmentation: generateDeclare,
+  });
 
   result.typesFile = typesFilePath;
   logger.debug(`Written types to: ${typesFilePath}`);
@@ -324,10 +313,8 @@ async function generateTypes(
   // any plugin contributes admin components. Importing this generated module
   // from the app self-registers those components (no manual host imports), and
   // sidesteps the dynamic auto-registration race. No-op when there are none.
-  const importMap = buildImportMapArtifact(
-    config.plugins ?? [],
-    typesOutputPath
-  );
+  // Placed beside the file actually written, which follows the app's layout.
+  const importMap = buildImportMapArtifact(config.plugins ?? [], typesFilePath);
   if (importMap) {
     const importMapPath = resolve(cwd, importMap.path);
     await ensureDir(dirname(importMapPath));
@@ -339,13 +326,9 @@ async function generateTypes(
     // map. This one is worse than a stale data file: the generated module is
     // IMPORTED by the app, so leaving it behind keeps importing a package that
     // is no longer installed and breaks the next build.
-    await rm(
-      resolve(
-        cwd,
-        join(dirname(typesOutputPath), COMPONENT_IMPORT_MAP_FILENAME)
-      ),
-      { force: true }
-    );
+    await rm(join(dirname(typesFilePath), COMPONENT_IMPORT_MAP_FILENAME), {
+      force: true,
+    });
   }
 
   // Generate Zod schemas if enabled
@@ -360,8 +343,8 @@ async function generateTypes(
     // Generate schemas for all collections
     const zodSchemas = zodGenerator.generateAllSchemas(records);
 
-    // Determine output directory for Zod schemas (use schemasDir/zod)
-    const zodOutputDir = resolve(cwd, config.db.schemasDir, "zod");
+    // Zod schemas go to schemasDir/zod, fitted to the app's layout.
+    const zodOutputDir = generatedZodDir(cwd, config.db.schemasDir);
     await ensureDir(zodOutputDir);
 
     // Write individual schema files
