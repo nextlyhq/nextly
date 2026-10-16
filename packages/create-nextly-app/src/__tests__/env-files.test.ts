@@ -10,6 +10,7 @@
  */
 import { execFileSync } from "node:child_process";
 import {
+  chmod,
   link,
   mkdtemp,
   readFile,
@@ -270,6 +271,51 @@ export SOME_APP_KEY="kept as it is"
     }
   );
 
+  // Next.js expands `$NAME` references in env files, so the URL the app gets
+  // here is PostgreSQL's, whatever the line spells.
+  it("reads a database URL through a reference to another key", async () => {
+    await writeFile(
+      join(dir, ".env"),
+      "APP_DATABASE_URL=postgresql://localhost:5432/app\nDATABASE_URL=$APP_DATABASE_URL\n"
+    );
+
+    const { warnings } = await generateEnv(dir, {
+      type: "mysql",
+      adapter: "@nextlyhq/adapter-mysql",
+      databaseDriver: "mysql2",
+      connectionUrl: "mysql://root:x@localhost:3306/app",
+      envExample: "mysql://user:password@localhost:3306/nextly",
+    });
+
+    expect(readEnvKeys(await read(".env")).defined.has("DB_DIALECT")).toBe(
+      false
+    );
+    expect(warnings.join("\n")).toMatch(/\.env.*postgresql.*mysql/i);
+  });
+
+  // A reference to a variable the file doesn't define is filled in where the
+  // app runs; its value is unknown here, so nothing is judged from it.
+  it("judges no value that refers to a variable the file doesn't define", async () => {
+    await writeFile(
+      join(dir, ".env"),
+      "DATABASE_URL=x\nNEXTLY_SECRET=${SECRET_FROM_HOST}\n"
+    );
+
+    const { warnings } = await generateEnv(dir, sqlite);
+
+    expect(warnings.join("\n")).not.toMatch(/NEXTLY_SECRET/);
+  });
+
+  // The runtime refuses a DATABASE_URL that `new URL` cannot read.
+  it("says a database URL is not one Nextly can read, without printing it", async () => {
+    await writeFile(join(dir, ".env"), "DATABASE_URL=not-a-url\n");
+
+    const { warnings } = await generateEnv(dir, sqlite);
+
+    expect(warnings.join("\n")).toMatch(/DATABASE_URL in \.env is not a URL/);
+    expect(warnings.join("\n")).not.toContain("not-a-url");
+  });
+
   it("completes the pair when the app's half is for the chosen database", async () => {
     await writeFile(join(dir, ".env"), "DB_DIALECT=sqlite\n");
 
@@ -471,6 +517,41 @@ describe("keeping .env out of git", () => {
     }
   );
 
+  // An exclude that lives only on this machine (.git/info/exclude, a global
+  // excludes file) doesn't travel with the project; .gitignore does.
+  it("adds .env to .gitignore when only this machine's exclude ignores it", async () => {
+    execFileSync("git", ["init", "-q"], { cwd: dir });
+    await writeFile(join(dir, ".git", "info", "exclude"), ".env\n");
+    await writeFile(join(dir, ".gitignore"), "node_modules\n");
+
+    await generateEnv(dir, sqlite);
+
+    expect(await read(".gitignore")).toMatch(/^\.env$/m);
+  });
+
+  // git reports the deciding rule even when it is a `!` re-include, which
+  // leaves .env stageable.
+  it("adds .env to .gitignore when its deciding rule re-includes it", async () => {
+    execFileSync("git", ["init", "-q"], { cwd: dir });
+    await writeFile(join(dir, ".gitignore"), ".env\n!.env\n");
+
+    await generateEnv(dir, sqlite);
+
+    expect(await read(".gitignore")).toMatch(/!\.env\n[\s\S]*^\.env$/m);
+  });
+
+  // .env is protected before the secret is written, so a later failure leaves
+  // no stageable secret behind.
+  it("keeps .env out of git even when writing the example file then fails", async () => {
+    await writeFile(join(dir, ".gitignore"), "node_modules\n");
+    await writeFile(join(dir, ".env.example"), "MY_KEY=1\n");
+    await chmod(join(dir, ".env.example"), 0o444);
+
+    await expect(generateEnv(dir, sqlite)).rejects.toThrow();
+
+    expect(await read(".gitignore")).toMatch(/^\.env$/m);
+  });
+
   it("writes a tracked .env deleted from the working tree without a secret too", async () => {
     execFileSync("git", ["init", "-q"], { cwd: dir });
     await writeFile(join(dir, ".env"), "DB_DIALECT=sqlite\n");
@@ -524,6 +605,7 @@ describe("readEnvKeys", () => {
         "J=unspaced#comment",
         "K=`backtick # quoted`",
         'L="two\\nlines"',
+        "N=$A-${B}-\\$C-${MISSING}",
         "M='kept\\nraw'",
       ].join("\n")
     );
@@ -540,7 +622,11 @@ describe("readEnvKeys", () => {
       K: "backtick # quoted",
       L: "two\nlines",
       M: "kept\\nraw",
+      N: "1-two-$C-${MISSING}",
     });
+    // `\$C` is an escaped dollar, not a reference; `${MISSING}` is one the
+    // file cannot fill, so N is known only where the app runs.
+    expect([...readEnvKeys("N=$A-${MISSING}\nA=1").unresolved]).toEqual(["N"]);
     expect([...mentioned].sort()).toEqual([
       "A",
       "B",
@@ -555,6 +641,7 @@ describe("readEnvKeys", () => {
       "K",
       "L",
       "M",
+      "N",
     ]);
   });
 });

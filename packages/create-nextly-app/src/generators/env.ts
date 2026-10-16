@@ -138,6 +138,8 @@ export async function generateEnv(
   const real = valuesFor("real", database, secret);
   // A `.env` git tracks is committed whatever `.gitignore` says, so the
   // secrets go nowhere near it; development runs without NEXTLY_SECRET.
+  // Before .env is written, so no later failure can leave its secret stageable.
+  await keepEnvOutOfGit(cwd, files);
   const withheld = (await isTrackedByGit(cwd, ".env"))
     ? secretKeys(real)
     : null;
@@ -154,7 +156,6 @@ export async function generateEnv(
     ))
   );
   if (withheld) warnings.push(await trackedEnvWarning(cwd, withheld));
-  await keepEnvOutOfGit(cwd, files);
   return { files, warnings };
 }
 
@@ -236,10 +237,15 @@ async function writeOrMerge(
   // the withheld keys are left out of a new file as well.
   const text = exists ? await fs.readFile(file, "utf-8") : "";
   const keys = readEnvKeys(text);
+  // Only values this file settles are judged: one referring to a variable it
+  // does not define is filled in where the app runs.
+  const known = new Map(
+    [...keys.defined].filter(([key]) => !keys.unresolved.has(key))
+  );
   // The dialect and the URL are one setting. When the file's half is for
   // another database, adding the chosen database's other half would leave an
   // app that cannot connect, so neither is added and that is said.
-  const other = otherDatabase(keys.defined, values.DB_DIALECT);
+  const other = otherDatabase(known, values.DB_DIALECT);
   const skip: readonly RequiredKey[] = other
     ? [...withheld, "DB_DIALECT", "DATABASE_URL"]
     : withheld;
@@ -248,8 +254,8 @@ async function writeOrMerge(
   else if (added.length > 0) files.changed.push({ path: name, added });
   const warnings =
     kind === "real"
-      ? checkRealValues(name, keys.defined)
-      : checkExampleValues(name, keys.defined);
+      ? checkRealValues(name, known)
+      : checkExampleValues(name, known);
   return other
     ? [databaseConflict(name, other, values.DB_DIALECT), ...warnings]
     : warnings;
@@ -275,11 +281,26 @@ function normalDialect(value: string | undefined): string | undefined {
   return dialect === "postgres" ? "postgresql" : dialect;
 }
 
-function dialectOfUrl(url: string | undefined): string | undefined {
+/**
+ * The dialect a URL implies, by the rules Nextly itself applies when
+ * DB_DIALECT is unset (`dialectFromUrl` in nextly's shared/lib/env.ts), so
+ * the two never read one URL differently. The generator cannot import nextly,
+ * so dialect-parity.test.ts holds this copy to that one.
+ */
+export function dialectOfUrl(url: string | undefined): string | undefined {
   if (!url) return undefined;
-  if (/^postgres(ql)?:/i.test(url)) return "postgresql";
-  if (/^mysql:/i.test(url)) return "mysql";
-  if (/^(file|sqlite):/i.test(url)) return "sqlite";
+  if (url.startsWith("postgres://") || url.startsWith("postgresql://")) {
+    return "postgresql";
+  }
+  if (url.startsWith("mysql://")) return "mysql";
+  if (
+    url.startsWith("file:") ||
+    url.endsWith(".db") ||
+    url.endsWith(".sqlite") ||
+    url.endsWith(".sqlite3")
+  ) {
+    return "sqlite";
+  }
   return undefined;
 }
 
@@ -329,6 +350,14 @@ function checkRealValues(name: string, defined: Map<string, string>): string[] {
     key =>
       `${key} in ${name} is empty. It was left as it is; give it a value, since Nextly reads it at start-up.`
   );
+  const url = defined.get("DATABASE_URL");
+  if (url && !URL.canParse(url)) {
+    // Nextly refuses at start-up a DATABASE_URL that `new URL` cannot read.
+    warnings.push(
+      `DATABASE_URL in ${name} is not a URL Nextly can read. It was left as it is; ` +
+        "set it to the database's connection URL."
+    );
+  }
   const secret = defined.get("NEXTLY_SECRET");
   if (secret !== undefined && secret.length < 32) {
     warnings.push(
@@ -427,8 +456,12 @@ async function isEnvIgnored(cwd: string): Promise<boolean> {
     // tracked: without it a tracked .env is never reported as ignored, and a
     // second rule would be added beside the one already there. Tracking is
     // judged on its own, before anything is written.
-    await execa("git", ["check-ignore", "-q", "--no-index", ".env"], { cwd });
-    return true;
+    const { stdout } = await execa(
+      "git",
+      ["check-ignore", "-v", "--no-index", ".env"],
+      { cwd }
+    );
+    return ignoredByProjectRule(stdout);
   } catch (error) {
     // 1: inside a repository, and not ignored. Anything else (not a
     // repository, or no git) falls back to reading the project's .gitignore.
@@ -437,6 +470,21 @@ async function isEnvIgnored(cwd: string): Promise<boolean> {
   const file = path.join(cwd, ".gitignore");
   if (!(await fs.pathExists(file))) return false;
   return gitignoreIgnores(await fs.readFile(file, "utf-8"), ".env");
+}
+
+/**
+ * Whether git's deciding rule for `.env` (`check-ignore -v`:
+ * `<source>:<line>:<pattern><TAB><path>`) ignores it from a `.gitignore`.
+ * Only a `.gitignore` travels with the project: `.git/info/exclude` and a
+ * global excludes file belong to one machine, so on another the secret would
+ * be stageable. With `-v`, git also reports a deciding `!` rule, which
+ * re-includes the file.
+ */
+function ignoredByProjectRule(verbose: string): boolean {
+  const match = /^(.*):\d+:(.*)\t/.exec(verbose);
+  if (!match) return false;
+  const [, source, pattern] = match;
+  return path.basename(source) === ".gitignore" && !pattern.startsWith("!");
 }
 
 /**
