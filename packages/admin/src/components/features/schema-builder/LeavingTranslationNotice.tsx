@@ -36,7 +36,7 @@ function RestoreCommand({ command }: { command: string }) {
   const { copied, copy } = useCopyToClipboard(command);
   return (
     <div className="flex items-center gap-2">
-      <code className="flex-1 overflow-x-auto rounded-sm border border-border bg-primary/5 px-2 py-1.5 font-mono text-xs break-all">
+      <code className="flex-1 overflow-x-auto rounded-sm border border-border bg-primary/5 px-2 py-1.5 font-mono text-xs whitespace-pre-wrap break-words">
         {command}
       </code>
       <Button

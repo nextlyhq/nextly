@@ -147,13 +147,33 @@ describe("BuilderSchemaChangeDialogs", () => {
               '"heading" is required, so it cannot stop being translated in the same change.',
           },
         ],
+        classification: "interactive",
+        interactiveFields: [
+          {
+            name: "heading",
+            reason: "new_required_no_default",
+            tableRowCount: 2,
+            options: ["provide_default", "mark_nullable", "cancel"],
+          },
+        ],
       })
     );
 
     expect(screen.getByText(/"heading" is required/)).toBeInTheDocument();
     expect(screen.queryByText(/nextly i18n:restore/)).not.toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: /save changes/i })
+      screen.getByText("Schema Change Needs Another Step")
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/This change cannot be saved to/)
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/will be applied to/)).not.toBeInTheDocument();
+    // The push's own prompt for the refused field's new column is moot, so it is not asked.
+    expect(
+      screen.queryByText(/is required but table has/)
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /apply changes|save changes/i })
     ).toBeDisabled();
   });
 

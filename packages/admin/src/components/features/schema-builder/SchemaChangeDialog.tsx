@@ -110,17 +110,25 @@ export function SchemaChangeDialog({
     changes.removed.length > 0 ||
     changes.changed.length > 0;
 
+  // A field that cannot leave translation in one change is refused by the server, so the dialog
+  // does not offer Apply, and any prompt the same field raises (a default for its new shared
+  // column, say) is moot: the change that would need the answer will not run.
+  const refusedNames = new Set(
+    leavingTranslation.filter(field => field.refusal).map(field => field.name)
+  );
+  const refused = refusedNames.size > 0;
+  const promptedFields = interactiveFields.filter(
+    f => !refusedNames.has(f.name)
+  );
+
   // Check if all interactive fields have been resolved with valid values.
   // "provide_default" requires a non-empty value; "mark_nullable" is always valid.
-  const allResolved = interactiveFields.every(f => {
+  const allResolved = promptedFields.every(f => {
     const res = resolutions[f.name];
     if (!res?.action) return false;
     if (res.action === "provide_default") return !!res.value?.trim();
     return true;
   });
-  // A field that cannot leave translation in one change is refused by the server, so the dialog
-  // does not offer Apply; its notice says why and what to do instead.
-  const refused = leavingTranslation.some(field => field.refusal);
   const canApply =
     (classification !== "interactive" || allResolved) && !refused;
 
@@ -170,15 +178,21 @@ export function SchemaChangeDialog({
       <AlertDialogContent className="max-w-lg">
         <AlertDialogHeader>
           <AlertDialogTitle>
-            {classification === "interactive"
-              ? "Schema Changes Need Input"
-              : hasDestructiveChanges
-                ? "Schema Changes Detected"
-                : "Save Collection"}
+            {refused
+              ? "Schema Change Needs Another Step"
+              : classification === "interactive"
+                ? "Schema Changes Need Input"
+                : hasDestructiveChanges
+                  ? "Schema Changes Detected"
+                  : "Save Collection"}
           </AlertDialogTitle>
+          {/* A refused change applies nothing, so the description must not promise it will. */}
           <AlertDialogDescription>
-            The following changes will be applied to{" "}
-            <strong className="text-foreground">{collectionName}</strong>.
+            {refused
+              ? "This change cannot be saved to "
+              : "The following changes will be applied to "}
+            <strong className="text-foreground">{collectionName}</strong>
+            {refused ? " in one step." : "."}
           </AlertDialogDescription>
         </AlertDialogHeader>
 
@@ -335,9 +349,9 @@ export function SchemaChangeDialog({
         )}
 
         {/* Interactive fields -- need user input */}
-        {interactiveFields.length > 0 && (
+        {promptedFields.length > 0 && (
           <div className="space-y-3 rounded-md  border border-border border-warning-200 bg-warning-50 p-3 dark:border-warning-800 dark:bg-warning-950">
-            {interactiveFields.map(field => (
+            {promptedFields.map(field => (
               <div key={field.name} className="space-y-2">
                 <Label className="text-sm font-medium">
                   {field.reason === "new_required_no_default"
