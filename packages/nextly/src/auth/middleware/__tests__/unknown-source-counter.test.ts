@@ -7,6 +7,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import type { RateLimitStore } from "../../../middleware/rate-limit";
 import { RateLimiter } from "../rate-limiter";
 import { SlidingWindowMemoryStore } from "../sliding-window-store";
 import {
@@ -177,6 +178,43 @@ describe("MemoryUnknownSourceCounter", () => {
 });
 
 describe("StoreUnknownSourceCounter", () => {
+  /** A store of the contract's required methods only, recording its keys. */
+  function incrementOnlyStore(): {
+    store: RateLimitStore;
+    keys: Set<string>;
+  } {
+    const inner = new SlidingWindowMemoryStore();
+    const keys = new Set<string>();
+    return {
+      keys,
+      store: {
+        increment: (key, windowMs) => {
+          keys.add(key);
+          return inner.increment(key, windowMs);
+        },
+        reset: key => inner.reset(key),
+      },
+    };
+  }
+
+  it("creates no key past a met ceiling on a store without consume", async () => {
+    const { store, keys } = incrementOnlyStore();
+    const counter = new StoreUnknownSourceCounter(new RateLimiter(store));
+    const limits = { budget: 2, ceiling: 2, windowMs: W };
+    expect((await counter.admit("a", limits)).allowed).toBe(true);
+    expect((await counter.admit("b", limits)).allowed).toBe(true);
+
+    for (let i = 0; i < 20; i++) {
+      expect(await counter.admit(`fresh-${i}`, limits)).toMatchObject({
+        allowed: false,
+        by: "ceiling",
+      });
+    }
+    expect([...keys].sort()).toEqual(
+      ["a", "b", UNKNOWN_SOURCE_CEILING_KEY].sort()
+    );
+  });
+
   it("refuses at a met ceiling without recording against the key", async () => {
     const store = new SlidingWindowMemoryStore();
     const limiter = new RateLimiter(store);

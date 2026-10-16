@@ -342,6 +342,69 @@ describe("token routes", () => {
   });
 });
 
+describe("reading the body", () => {
+  /** A login whose body records whether anything read it. */
+  function watchedLogin(h: Harness, email: string) {
+    const watch = { pulled: false };
+    const bytes = new TextEncoder().encode(
+      JSON.stringify({ email, password: "pw" })
+    );
+    // A queue of zero, so the stream is pulled only when something reads it.
+    const body = new ReadableStream<Uint8Array>(
+      {
+        pull(controller) {
+          watch.pulled = true;
+          controller.enqueue(bytes);
+          controller.close();
+        },
+      },
+      { highWaterMark: 0 }
+    );
+    const request = new Request("http://localhost:3000/admin/api/auth/login", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Origin: "http://localhost:3000",
+      },
+      body,
+      duplex: "half",
+    } as RequestInit);
+    return { watch, response: routeAuthRequest(request, "login", h.deps) };
+  }
+
+  it("refuses at a met ceiling without reading the body", async () => {
+    const h = harness({ budget: 1 }); // ceiling 100
+    for (let i = 0; i < 100; i++) await login(h, `flood-${i}@example.com`);
+
+    const { watch, response } = watchedLogin(h, "late@example.com");
+    expect((await response)?.status).toBe(429);
+    expect(watch.pulled).toBe(false);
+  });
+
+  it("reads the body below the ceiling (the control)", async () => {
+    const h = harness({ budget: 1 });
+    const { watch, response } = watchedLogin(h, "a@example.com");
+    expect((await response)?.status).not.toBe(429);
+    expect(watch.pulled).toBe(true);
+  });
+
+  it("acts on nothing past its bound: an oversized body counts as naming no account", async () => {
+    const h = harness({ budget: 1 });
+    await login(h, "a@example.com");
+    expect(await admitted(login(h, "a@example.com"))).toBe(false);
+
+    const oversized = {
+      email: "a@example.com",
+      password: "pw",
+      padding: "x".repeat(40 * 1024),
+    };
+    // Not refused by a's spent budget: the limiter never read the address.
+    expect(await admitted(post(h, "login", oversized))).toBe(true);
+    // It spent the account-less budget instead.
+    expect(await admitted(post(h, "login", oversized))).toBe(false);
+  });
+});
+
 describe("the account-less budget", () => {
   it("bounds bodies that name nothing together, apart from keyed sign-ins", async () => {
     const h = harness({ budget: 2 });

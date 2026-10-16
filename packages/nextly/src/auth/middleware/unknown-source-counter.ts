@@ -49,6 +49,15 @@ export type UnknownSourceArrival =
 
 /** Where unknown-source admissions are counted. */
 export interface UnknownSourceCounter {
+  /**
+   * The ceiling's refusal when it is already met, or `null`, recording
+   * nothing. A cheap answer asked before any work a request costs, such as
+   * reading its body; `null` where the store cannot say without recording,
+   * and the admission that follows still decides.
+   */
+  ceilingMet(
+    limits: UnknownSourceLimits
+  ): Promise<Extract<UnknownSourceVerdict, { allowed: false }> | null>;
   /** Admit against `key`'s budget and the ceiling together. */
   admit(
     key: string,
@@ -104,6 +113,12 @@ export class MemoryUnknownSourceCounter implements UnknownSourceCounter {
   /** Keys currently tracked. For tests and monitoring only. */
   get trackedKeys(): number {
     return this.buckets.size;
+  }
+
+  ceilingMet(
+    limits: UnknownSourceLimits
+  ): Promise<Extract<UnknownSourceVerdict, { allowed: false }> | null> {
+    return Promise.resolve(this.ceilingRefusal(Date.now(), limits));
   }
 
   admit(
@@ -203,13 +218,30 @@ export class MemoryUnknownSourceCounter implements UnknownSourceCounter {
  * Keeping the window in the operator's shared store is worth that, since a
  * per-process count would multiply every budget by the number of instances.
  *
- * A store without `consume` can count only by recording, so there every
- * attempt is counted, refusals included, as {@link RateLimiter.check}
- * documents: stricter, never looser. How long keys are kept is the store's
+ * A store without `consume` can count only by recording, so the ceiling cannot
+ * be read without being spent. There the ceiling is spent FIRST, and a met
+ * ceiling refuses before the key is touched: otherwise every fresh address
+ * offered past the ceiling would still create a key in the store, and the
+ * ceiling would bound nothing about the store's size. The price is the one
+ * such stores already pay ({@link RateLimiter.check}): every attempt counts,
+ * refusals included, so a request its own budget refuses has spent the
+ * ceiling too. Stricter, never looser. How long keys are kept is the store's
  * own concern.
  */
 export class StoreUnknownSourceCounter implements UnknownSourceCounter {
   constructor(private readonly limiter: RateLimiter) {}
+
+  async ceilingMet(
+    limits: UnknownSourceLimits
+  ): Promise<Extract<UnknownSourceVerdict, { allowed: false }> | null> {
+    const held = await this.limiter.window(
+      UNKNOWN_SOURCE_CEILING_KEY,
+      limits.windowMs
+    );
+    return held && held.count >= limits.ceiling
+      ? refused("ceiling", held.resetAt.getTime())
+      : null;
+  }
 
   async admit(
     key: string,
@@ -219,7 +251,12 @@ export class StoreUnknownSourceCounter implements UnknownSourceCounter {
       UNKNOWN_SOURCE_CEILING_KEY,
       limits.windowMs
     );
-    if (held && held.count >= limits.ceiling) {
+    if (held === undefined) {
+      const ceiling = await this.spendCeiling(limits);
+      if (!ceiling.allowed) return ceiling;
+      return this.admitArrived(key, limits);
+    }
+    if (held.count >= limits.ceiling) {
       return refused("ceiling", held.resetAt.getTime());
     }
     const own = await this.limiter.check(key, limits.budget, limits.windowMs);

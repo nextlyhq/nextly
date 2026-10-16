@@ -81,11 +81,59 @@ function accountKey(email: string | null, secret: string): string {
   return `auth-unknown:account:${digest}`;
 }
 
-/** The JSON object a request carries, or an empty one when it carries none. */
+/**
+ * The most of a body the limiter reads to find the address or token it
+ * names. Those are short strings near the top of a small JSON object; a body
+ * larger than this names nothing the limiter will act on, and counts against
+ * the account-less budget. The handler still reads the whole body.
+ */
+const LIMITER_BODY_BYTES = 32 * 1024;
+
+/** The first `limit` bytes of a request's body, or `null` past them. */
+async function boundedBody(
+  request: Request,
+  limit: number
+): Promise<Uint8Array | null> {
+  const declared = Number(request.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > limit) return null;
+  // A clone, because the handler that runs next reads the body itself.
+  const stream = request.clone().body;
+  if (!stream) return new Uint8Array();
+  const reader = stream.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > limit) {
+      // A declared length can be absent or wrong; stop reading here either
+      // way. Not awaited: cancelling one branch of a cloned body settles only
+      // once the other branch is cancelled too, and the handler is about to
+      // read that one to its end.
+      reader.cancel().catch(() => undefined);
+      return null;
+    }
+    chunks.push(value);
+  }
+  const bytes = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
+}
+
+/**
+ * The JSON object a request carries, or an empty one when it carries none or
+ * one too large to be worth reading.
+ */
 async function readBody(request: Request): Promise<Record<string, unknown>> {
   try {
-    // A clone, because the handler that runs next reads the body itself.
-    const body: unknown = await request.clone().json();
+    const bytes = await boundedBody(request, LIMITER_BODY_BYTES);
+    if (bytes === null) return {};
+    const body: unknown = JSON.parse(new TextDecoder().decode(bytes));
     return body !== null && typeof body === "object" && !Array.isArray(body)
       ? (body as Record<string, unknown>)
       : {};
@@ -146,6 +194,10 @@ export async function admitUnknownSource(
     windowMs: deps.authRateLimit.windowMs,
   };
   const counter = counterFor(deps);
+  // A met ceiling refuses every request it would, so it refuses before the
+  // body is read: past the ceiling, a request costs no reading and no parse.
+  const met = await counter.ceilingMet(limits);
+  if (met) return met;
   const body = await readBody(request);
 
   const tokenKind = TOKEN_ROUTES[authPath];

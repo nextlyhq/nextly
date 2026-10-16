@@ -41,15 +41,47 @@ async function removeTokenHashIndexes(fresh: FreshDatabase): Promise<void> {
   }
 }
 
-/** A reset token issued before the indexes, by statement. */
-async function insertLegacyToken(fresh: FreshDatabase): Promise<void> {
+/** A reset token and a verification token issued before the indexes. */
+async function insertLegacyTokens(fresh: FreshDatabase): Promise<void> {
   // Seconds on SQLite, where the columns are integer timestamps.
   const at = (sqlite: string, other: string) =>
     fresh.dialect === "sqlite" ? sqlite : `'${other}'`;
-  await fresh.exec(
-    "INSERT INTO password_reset_tokens (identifier, token_hash, expires, created_at) " +
-      `VALUES ('legacy@example.com', 'legacy-hash', ${at("1893456000", "2030-01-01 00:00:00")}, ${at("1767225600", "2026-01-01 00:00:00")})`
-  );
+  const expires = at("1893456000", "2030-01-01 00:00:00");
+  const created = at("1767225600", "2026-01-01 00:00:00");
+  for (const table of ["password_reset_tokens", "email_verification_tokens"]) {
+    await fresh.exec(
+      `INSERT INTO ${table} (identifier, token_hash, expires, created_at) ` +
+        `VALUES ('legacy@example.com', 'legacy-${table}', ${expires}, ${created})`
+    );
+  }
+}
+
+/** Both legacy tokens, every column, in a fixed order. */
+async function readLegacyTokens(
+  fresh: FreshDatabase
+): Promise<Array<Record<string, unknown>>> {
+  const { passwordResetTokens, emailVerificationTokens } =
+    fresh.tables as unknown as Record<string, { tokenHash: unknown }>;
+  const db = fresh.db as unknown as {
+    select: () => {
+      from: (table: unknown) => {
+        where: (cond: unknown) => Promise<Record<string, unknown>[]>;
+      };
+    };
+  };
+  const rows: Array<Record<string, unknown>> = [];
+  for (const [table, hash] of [
+    [passwordResetTokens, "legacy-password_reset_tokens"],
+    [emailVerificationTokens, "legacy-email_verification_tokens"],
+  ] as const) {
+    rows.push(
+      ...(await db
+        .select()
+        .from(table)
+        .where(eq(table.tokenHash as never, hash)))
+    );
+  }
+  return rows;
 }
 
 /** An app with no migration files, so only the core phase has work to do. */
@@ -76,34 +108,22 @@ describe.each(availableDialects())(
         for (const { table, index } of INDEXES) {
           expect(await fresh.indexesOf(table)).not.toContain(index);
         }
-        await insertLegacyToken(fresh);
-        const before = await fresh.columnsOf("password_reset_tokens");
+        await insertLegacyTokens(fresh);
+        const read = () => readLegacyTokens(fresh);
+        const before = await read();
+        expect(before.map(row => row.tokenHash)).toEqual([
+          "legacy-password_reset_tokens",
+          "legacy-email_verification_tokens",
+        ]);
 
         expect(await migrateFresh(fresh, NO_MIGRATIONS)).toBe(true);
 
         for (const { table, index } of INDEXES) {
           expect(await fresh.indexesOf(table)).toContain(index);
         }
-        // An index adds nothing to a row: the columns are the ones the table
-        // had, and the token issued before is still there to be found.
-        expect(await fresh.columnsOf("password_reset_tokens")).toEqual(before);
-        const { passwordResetTokens } = fresh.tables as unknown as {
-          passwordResetTokens: { tokenHash: unknown };
-        };
-        const db = fresh.db as unknown as {
-          select: () => {
-            from: (table: unknown) => {
-              where: (cond: unknown) => Promise<Record<string, unknown>[]>;
-            };
-          };
-        };
-        const rows = await db
-          .select()
-          .from(passwordResetTokens)
-          .where(eq(passwordResetTokens.tokenHash as never, "legacy-hash"));
-        expect(rows).toEqual([
-          expect.objectContaining({ identifier: "legacy@example.com" }),
-        ]);
+        // An index adds nothing to a row: both tokens issued before read back
+        // exactly as they were, in every column.
+        expect(await read()).toEqual(before);
 
         // Nothing left to add.
         expect(await migrateFresh(fresh, NO_MIGRATIONS)).toBe(false);
