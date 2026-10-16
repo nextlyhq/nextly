@@ -101,8 +101,10 @@ const OPERATOR_MAP: Record<QueryOperator, WhereOperator> = {
   less_than: "<",
   less_than_equal: "<=",
   like: "LIKE",
-  contains: "ILIKE",
-  search: "ILIKE", // Alias for contains - case-insensitive search
+  // Case-insensitive literal substring matching, compiled by the adapter's one rule for it
+  // (`caseInsensitiveContains`) whatever the column's collation.
+  contains: "ICONTAINS",
+  search: "ICONTAINS", // Alias for contains
   in: "IN",
   not_in: "NOT IN",
   exists: "IS NOT NULL", // Will be handled specially for false value
@@ -190,14 +192,21 @@ function buildCondition(
     };
   }
 
-  // Special handling for 'like', 'contains', and 'search' - wrap with wildcards.
-  // 'search' is an alias for 'contains' (case-insensitive ILIKE).
-  // Escape backslash, percent, and underscore in the user-supplied
-  // value so they are matched as literals rather than as
-  // SQL LIKE wildcards. Backslash escape MUST come first or it will
-  // double-escape the % / _ replacements that follow. Mirrors the
-  // logic in buildSearchCondition (collection-query-service.ts:1196).
-  if (operator === "like" || operator === "contains" || operator === "search") {
+  // 'contains' and 'search' take the text as typed: `ICONTAINS` matches it literally and does
+  // its own escaping, so a typed `%` or `_` is a character to find.
+  if (operator === "contains" || operator === "search") {
+    return {
+      column: field,
+      op: OPERATOR_MAP[operator],
+      value: String(value),
+    };
+  }
+
+  // 'like' - wrap with wildcards. Escape backslash, percent, and underscore in the
+  // user-supplied value so they are matched as literals rather than as SQL LIKE
+  // wildcards. Backslash escape MUST come first or it will double-escape the % / _
+  // replacements that follow.
+  if (operator === "like") {
     const escaped =
       typeof value === "string"
         ? value.replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_")

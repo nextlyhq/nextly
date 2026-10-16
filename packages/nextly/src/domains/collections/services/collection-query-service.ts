@@ -14,12 +14,11 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+import { caseInsensitiveContains } from "@nextlyhq/adapter-drizzle/text-match";
 import {
   eq,
   and,
   or,
-  like,
-  ilike,
   sql,
   asc,
   desc,
@@ -1789,7 +1788,6 @@ export class CollectionQueryService extends BaseService {
       params.schema,
       searchableFields,
       params.search,
-      this.queryDialect,
       params.localizedCtx
     );
   }
@@ -1886,7 +1884,6 @@ export class CollectionQueryService extends BaseService {
       const whereCondition = this.buildDrizzleCondition(
         buildWhereClause(cleanedWhere),
         params.schema,
-        this.queryDialect,
         params.localizedCtx
       );
       if (whereCondition) conditions.push(whereCondition);
@@ -4694,7 +4691,6 @@ export class CollectionQueryService extends BaseService {
    * @param schema - Drizzle schema for the collection
    * @param fields - Field names to search
    * @param query - Search query string
-   * @param dialect - Database dialect (for ILIKE vs LIKE selection)
    * @returns Drizzle WHERE condition or undefined if no search
    */
   private buildSearchCondition(
@@ -4702,20 +4698,20 @@ export class CollectionQueryService extends BaseService {
     schema: any,
     fields: string[],
     query: string,
-    dialect: string = "postgresql",
     localizedCtx?: LocalizedQueryContext | null
   ): ReturnType<typeof or> | undefined {
     if (!query || fields.length === 0) {
       return undefined;
     }
 
-    // Normalize and escape the search query
-    const searchTerm = `%${query.trim().replace(/%/g, "\\%").replace(/_/g, "\\_")}%`;
+    // The text as typed: `caseInsensitiveContains` matches it literally, without regard to
+    // case, whatever the column's collation, the one rule every search here goes through.
+    const searchText = query.trim();
 
     // Build OR conditions for each searchable field. A localized searchable field lives in the
     // companion table (absent from the main schema); match it via a companion EXISTS on the
-    // requested locale instead of silently dropping it. Non-localized fields keep the
-    // main-table ILIKE/LIKE.
+    // requested locale instead of silently dropping it. Non-localized fields match on the main
+    // table.
     const conditions = fields
       .map(fieldName => {
         const localizedField = localizedCtx?.localizedFields.find(
@@ -4724,23 +4720,20 @@ export class CollectionQueryService extends BaseService {
         if (localizedCtx && localizedField) {
           const t = sql.identifier(localizedCtx.companionTableName);
           const col = sql.identifier(localizedField.column);
-          const valueCondition =
-            dialect === "postgresql"
-              ? sql`${t}.${col} ILIKE ${searchTerm}`
-              : sql`${t}.${col} LIKE ${searchTerm}`;
           return buildCompanionExists({
             companionTableName: localizedCtx.companionTableName,
             mainIdColumn: localizedCtx.mainIdColumn,
             locale: localizedCtx.locale,
-            valueCondition,
+            valueCondition: caseInsensitiveContains(
+              sql`${t}.${col}`,
+              searchText
+            ),
             statusValues: localizedCtx.statusValues,
           });
         }
         const column = schema[fieldName];
         if (!column) return undefined; // not on main table and not localized → skip
-        return dialect === "postgresql"
-          ? ilike(column, searchTerm)
-          : like(column, searchTerm);
+        return caseInsensitiveContains(column, searchText);
       })
       .filter((c): c is NonNullable<typeof c> => c !== undefined);
 
@@ -4774,13 +4767,11 @@ export class CollectionQueryService extends BaseService {
     whereClause: ReturnType<typeof buildWhereClause>,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Drizzle dynamic schema
     schema: any,
-    dialect: string = "postgresql",
     localizedCtx?: LocalizedQueryContext | null
   ): ReturnType<typeof and> | undefined {
     return buildDrizzleCondition(
       whereClause,
       schema,
-      dialect,
       localizedCtx,
       buildLocalizedWhereExists
     );
