@@ -20,17 +20,14 @@
 
 name: Generated code compiles
 
+# Triggered for every pull request and queued merge, and narrowed by the `changes`
+# job below rather than by `on.paths`: a workflow filtered out by `on.paths` never
+# creates its checks, so if this one is ever made a required check, an unrelated
+# pull request would wait for a status that never comes. A job skipped by `if:`
+# reports `skipped`, which branch protection and the merge queue accept.
 on:
   pull_request:
-    paths:
-      - "packages/nextly/src/domains/schema/services/type-generator.ts"
-      - "packages/nextly/src/domains/schema/services/zod-generator.ts"
-      - "packages/nextly/src/shared/lib/generated-output-paths.ts"
-      - "packages/nextly/src/cli/commands/generate-types.ts"
-      - "packages/nextly/src/zod.ts"
-      - "packages/nextly/package.json"
-      - "packages/nextly/tsup.config.js"
-      - ".github/workflows/generated-code-compiles.yml"
+  merge_group:
 
 permissions:
   contents: read
@@ -40,8 +37,46 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  changes:
+    name: Decide whether this commit touches generated code
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      inert: ${{ steps.decide.outputs.inert }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # The merge base has to be present for the diff; anything the
+          # comparison cannot read runs the job (`scripts/change-scope.mjs`).
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+
+      - name: Decide
+        id: decide
+        env:
+          SCOPE_TITLE: Generated code scope
+          # Every path is inert EXCEPT the ones that shape what `generate:types`
+          # writes or how it resolves in an app: the type and Zod generators, the
+          # paths they write to, the shared types writer, the code plugins
+          # contribute to generated files, the command, the `nextly/zod` entry,
+          # nextly's manifest and build entries (its exports and its zod range),
+          # the templates a project starts from, and this workflow. Unlike `ci.yml`
+          # this is an inclusion list, deliberately: the check is about one
+          # pipeline, and running it for every change would hold three runners for
+          # nothing. A file added to that pipeline belongs here too.
+          INERT_PATHS: '^(?!(packages/nextly/src/domains/schema/services/(type|zod)-generator\.ts|packages/nextly/src/shared/lib/generated-output-paths\.ts|packages/nextly/src/cli/utils/write-generated-types\.ts|packages/nextly/src/cli/commands/generate-types\.ts|packages/nextly/src/plugins/codegen/|packages/nextly/src/zod\.ts|packages/nextly/package\.json|packages/nextly/tsup\.config\.js|templates/|\.github/workflows/generated-code-compiles\.yml))'
+        run: node scripts/change-scope.mjs
+
   compiles:
     name: Generated code compiles (${{ matrix.pm }})
+    needs: changes
+    if: needs.changes.outputs.inert != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
