@@ -11,9 +11,15 @@
  */
 
 /**
+ * The longest delay a browser timer holds. `setTimeout` stores it as a signed
+ * 32-bit integer, so anything longer overflows and fires almost at once.
+ */
+const MAX_TIMER_DELAY_MS = 2_147_483_647;
+
+/**
  * @returns The configured interval in milliseconds, or `undefined` to keep the
  * editor's default: when the payload carries none, or a value no timer can
- * honour (zero, negative, not a finite number).
+ * honour (zero, negative, not a finite number, or longer than a timer holds).
  */
 export function autosaveIntervalFrom(schema: unknown): number | undefined {
   if (typeof schema !== "object" || schema === null) return undefined;
@@ -23,7 +29,8 @@ export function autosaveIntervalFrom(schema: unknown): number | undefined {
   const intervalMs = versions?.drafts?.autosave?.intervalMs;
   return typeof intervalMs === "number" &&
     Number.isFinite(intervalMs) &&
-    intervalMs > 0
+    intervalMs > 0 &&
+    intervalMs <= MAX_TIMER_DELAY_MS
     ? intervalMs
     : undefined;
 }

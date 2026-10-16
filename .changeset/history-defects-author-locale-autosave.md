@@ -31,10 +31,11 @@
 
 Three fixes in the admin's version history:
 
-- A version with no recorded author reads "Author not recorded", instead of
-  "Unknown author", in the history panel and on the comparison page.
-- A Single's comparison page honours the language its address names, as an
-  entry's already does, so a shared link opens under that language's title.
+- A version with no recorded author reads "Author not recorded", and one whose
+  recorded author can no longer be named reads "Author unavailable", instead of
+  "Unknown author" for both, in the history panel and on the comparison page.
+- A comparison page honours the language its address names: it lists that
+  language's versions (and the shared ones), for Singles as for entries.
 - The editors record recovery points at the interval a collection or Single
   configures (`versions.drafts.autosave.intervalMs`), instead of a fixed two
-  seconds.
+  seconds. An interval longer than a browser timer can hold keeps the default.

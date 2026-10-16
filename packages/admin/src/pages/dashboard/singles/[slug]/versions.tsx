@@ -69,6 +69,7 @@ export default function SingleVersionsPage({
       readOnlyHref={ROUTES.DASHBOARD}
       from={readVersionParam(searchParams?.from)}
       to={readVersionParam(searchParams?.to)}
+      locale={locale}
     />
   );
 }
