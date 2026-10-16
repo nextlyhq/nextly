@@ -3,6 +3,10 @@ title: Security helpers
 description: Core's helpers for the people a plugin signs in itself — passwords, opaque secrets, and one-purpose links and codes — with their guarantees and bounds.
 ---
 
+<Callout type="warn">
+**Needs the release after 0.0.2-alpha.66.** 0.0.2-alpha.66 has no `ctx.security`.
+</Callout>
+
 # Security helpers
 
 > **Alpha (`0.x`) — `@experimental`.** Everything on this page is new and ships
@@ -63,7 +67,7 @@ async function signIn(
 export default definePlugin({
   name: "@acme/accounts",
   version: "1.0.0",
-  nextly: ">=0.0.0",
+  nextly: ">=0.0.2-alpha.67",
   init(ctx) {
     ctx.logger.info(`passwords up to ${ctx.security.passwords.ceiling} characters`);
     void signUp;

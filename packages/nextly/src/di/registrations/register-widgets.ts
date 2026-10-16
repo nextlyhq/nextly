@@ -41,9 +41,17 @@ import { registerReleasesWidgetSource } from "../../domains/releases/releases-wi
 import { registerVersionsWidgetSource } from "../../domains/versions/versions-widget-source";
 import { setContributedWidgets } from "../../domains/widgets/canonical";
 import { CORE_WIDGETS } from "../../domains/widgets/core-widgets";
+import {
+  clearDeclaredWidgets,
+  registerWidgetDeclarations,
+} from "../../domains/widgets/declaration/declared-widgets";
 import { clearWidgets, registerWidget } from "../../domains/widgets/registry";
 import { clearSources } from "../../domains/widgets/sources";
 import { clearSystemResolvers } from "../../domains/widgets/system-sources";
+import {
+  pluginLegacyWidgetIds,
+  pluginWidgetDeclarationGroups,
+} from "../../plugins/dashboard-declarations";
 import type { PluginDefinition } from "../../plugins/plugin-context";
 import { contributedWidgetSummaries } from "../../plugins/validate-admin-widgets";
 
@@ -51,6 +59,9 @@ export function resetWidgetRegistries(
   plugins: readonly PluginDefinition[] = []
 ): void {
   clearWidgets();
+  // Cleared with the registry it publishes into, so a reload's declarations
+  // are checked against this boot's alone.
+  clearDeclaredWidgets();
   clearSources();
   // 🔴 Cleared WITH the source store, never apart from it. The two are halves
   // of one registration and both are pinned to `globalThis`, so a reset that
@@ -83,6 +94,16 @@ export function resetWidgetRegistries(
   for (const definition of CORE_WIDGETS) {
     registerWidget(definition);
   }
+
+  // Plugins' widgets declared with `defineWidget()`, after core's own, so an id
+  // that collides with one of core's fails here, by name. Every declaration of
+  // every enabled plugin is checked together and startup stops on any fault,
+  // all of them reported at once; today's shape is passed for the id rules it
+  // still keeps (`declared-widgets.ts`).
+  registerWidgetDeclarations(
+    pluginWidgetDeclarationGroups(plugins),
+    pluginLegacyWidgetIds(plugins)
+  );
 
   // The domains that answer a source of their own publish it here, after the
   // stores are empty. PUSHED from the composition root rather than pulled by

@@ -1,6 +1,6 @@
 # @nextlyhq/storage-s3
 
-Amazon S3 (and S3-compatible: Cloudflare R2, MinIO, Backblaze B2, Wasabi, DigitalOcean Spaces) storage adapter for Nextly.
+Amazon S3 (and S3-compatible: Cloudflare R2, MinIO, DigitalOcean Spaces) storage adapter for Nextly.
 
 <p align="center">
   <a href="https://www.npmjs.com/package/@nextlyhq/storage-s3"><img alt="npm" src="https://img.shields.io/npm/v/@nextlyhq/storage-s3?style=flat-square&label=npm&color=cb3837" /></a>
@@ -13,7 +13,7 @@ Amazon S3 (and S3-compatible: Cloudflare R2, MinIO, Backblaze B2, Wasabi, Digita
 
 ## What it is
 
-Stores Nextly media uploads on Amazon S3 or any S3-compatible object store. R2, MinIO, B2, Wasabi, and DigitalOcean Spaces all work via the same adapter; you do not need separate packages.
+Stores Nextly media uploads on Amazon S3 or an S3-compatible object store. Cloudflare R2, MinIO and DigitalOcean Spaces all work via the same adapter; you do not need separate packages.
 
 > **You do not need this for development.** Nextly's default storage is local disk under `./public/uploads/`. Install this when you are ready to move uploads to a cloud object store, typically for production deployments.
 
@@ -109,11 +109,11 @@ s3Storage({
 
 ## Compatibility
 
-| Tool     | Version                                                                 |
-| -------- | ----------------------------------------------------------------------- |
-| Node.js  | 20+                                                                     |
-| `nextly` | 0.0.x                                                                   |
-| Stores   | AWS S3, Cloudflare R2, MinIO, Backblaze B2, Wasabi, DigitalOcean Spaces |
+| Tool     | Version                                           |
+| -------- | ------------------------------------------------- |
+| Node.js  | 20.19+, 22.12+ or 24+                             |
+| `nextly` | 0.0.x                                             |
+| Stores   | AWS S3, Cloudflare R2, MinIO, DigitalOcean Spaces |
 
 ## Documentation
 

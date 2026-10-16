@@ -62,7 +62,10 @@ export default defineSingle({
   hooks: {
     afterChange: [
       async ({ data }) => {
-        await fetch("/api/revalidate?tag=site-settings", { method: "POST" });
+        // Nextly invalidates its own cache tags on every write once the cache
+        // revalidator is registered (see ISR caching). Use hooks for side
+        // effects of your own.
+        console.info("site settings updated", data);
       },
     ],
   },
@@ -111,7 +114,7 @@ The Schema Builder produces the same `SingleConfig` that code-first singles use.
 | **Access control operations** | `create`, `read`, `update`, `delete` | `read`, `update` only |
 | **Hooks** | 8 hooks | 4 hooks (`beforeRead`, `afterRead`, `beforeChange`, `afterChange`) |
 | **Default table prefix** | None — uses slug as table name | `single_` (e.g. `single_site_settings`) |
-| **API endpoint** | `/api/[slug]` | `/api/singles/[slug]` |
+| **API endpoint** | `/api/collections/[slug]/entries` | `/api/singles/[slug]` |
 
 ## Single options
 
@@ -247,8 +250,14 @@ What a `beforeChange` handler returns is written without being re-validated.
 hooks: {
   afterChange: [
     async ({ data }) => {
-      // Invalidate ISR / CDN caches when settings change
-      await fetch("/api/revalidate?tag=site-settings", { method: "POST" });
+      // Nextly's own cache tags are already invalidated on every write once
+      // the cache revalidator is registered (see ISR caching). Notify a
+      // system of your own here, with an absolute URL: a relative fetch
+      // throws on the server.
+      await fetch(`${process.env.NEXT_PUBLIC_APP_URL}/api/my-webhook`, {
+        method: "POST",
+        body: JSON.stringify(data),
+      });
     },
   ],
   afterRead: [

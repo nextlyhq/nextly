@@ -28,10 +28,9 @@ Its peer dependencies are `nextly` and `@nextlyhq/plugin-sdk`, and while Nextly 
 alpha the manifest pins `nextly` at the **matching lockstep version**: every publishable
 package ships on one train, so install the plugin and the core at the same version.
 
-The plugin also declares a compatibility range of `>=0.0.2-alpha.55` for the runtime
-check. That is a floor, not an invitation: it records the oldest core that exported
-everything the plugin imported at the time, and the import graph has moved since, so a
-deliberately older pairing can be refused by npm or fail to resolve at module load.
+The plugin also declares a compatibility range for the runtime check: `>=` its own
+version, so a core older than the plugin is refused at boot. Install the two at the same
+version.
 
 ## Basic setup
 

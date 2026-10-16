@@ -1,84 +1,163 @@
 /**
- * The one place a widget's width is decided.
+ * The one place a card's drawn width is decided.
  *
- * Sizes are named steps on a 12-column grid, and the map below is the design's
- * responsive table written as class text:
+ * The dashboard is ONE ordered list of cards on twelve tracks, and each card is
+ * one of five widths. Which tracks a width takes depends on how wide the
+ * DASHBOARD is, not the window: the grid sits in an `@container/dashboard`
+ * wrapper and every span below answers to it, so a dashboard squeezed by an
+ * open sidebar draws the band that fits it.
  *
- * | size   | < md | md | >= lg |
- * |--------|------|----|-------|
- * | `sm`   | 12   | 6  | 3     |
- * | `md`   | 12   | 6  | 4     |
- * | `lg`   | 12   | 12 | 6     |
- * | `xl`   | 12   | 12 | 8     |
- * | `full` | 12   | 12 | 12    |
+ * | width       | < 640px | 640-1023px | >= 1024px |
+ * |-------------|---------|------------|-----------|
+ * | `quarter`   | 12      | 6          | 3         |
+ * | `third`     | 12      | 6          | 4         |
+ * | `half`      | 12      | 6          | 6         |
+ * | `twoThirds` | 12      | 12         | 8         |
+ * | `full`      | 12      | 12         | 12        |
  *
- * Two properties this file exists to hold.
- *
- * The BASE span is 12 for every size, with no exceptions. Below `md` a
- * dashboard is one column: an unprefixed `col-span-6` is half a phone screen,
- * which is what the grid this replaces shipped.
- *
- * And every class is written out IN FULL. Tailwind resolves utilities by
- * scanning source TEXT, so a `col-span-${n}` template literal produces a
- * `className` at runtime that has no rule behind it in the built stylesheet —
- * the element gets the attribute and no width. The `md:col-span-12` entries are
- * therefore literal and deliberate even where they restate the base: they make
- * the map readable as the table it is, and cost one scanned class each.
+ * Every class is written out IN FULL. Tailwind resolves utilities by scanning
+ * source TEXT, so a `col-span-${n}` template literal produces a `className` at
+ * runtime that has no rule behind it in the built stylesheet.
  *
  * @module components/features/widgets/sizes
  */
 
 import type { WidgetSize } from "nextly/config";
 
+import type { WidgetWidth } from "@admin/types/dashboard/widgets";
+
+/** The five widths, narrowest first. The order is the width ranking. */
+export const WIDGET_WIDTHS: readonly WidgetWidth[] = Object.freeze([
+  "quarter",
+  "third",
+  "half",
+  "twoThirds",
+  "full",
+]);
+
+/** Whether a value from the wire is one of the five widths. */
+export function isWidgetWidth(value: unknown): value is WidgetWidth {
+  // `includes` on the list rather than a lookup on an object: a stored value
+  // spelled like a prototype member ("constructor") is then simply not a width.
+  return typeof value === "string" && WIDGET_WIDTHS.some(w => w === value);
+}
+
 /**
- * Span classes per size. Frozen because this is the shared map, not a starting
- * point a caller may edit for one grid.
+ * Span classes per width, the table above as class text. Frozen because this
+ * is the shared map, not a starting point a caller may edit for one grid.
  */
-export const WIDGET_SPAN_CLASSES: Readonly<Record<WidgetSize, string>> =
+export const WIDTH_SPAN_CLASSES: Readonly<Record<WidgetWidth, string>> =
   Object.freeze({
-    sm: "col-span-12 md:col-span-6 lg:col-span-3",
-    md: "col-span-12 md:col-span-6 lg:col-span-4",
-    lg: "col-span-12 md:col-span-12 lg:col-span-6",
-    xl: "col-span-12 md:col-span-12 lg:col-span-8",
+    quarter:
+      "col-span-12 @min-[640px]/dashboard:col-span-6 @min-[1024px]/dashboard:col-span-3",
+    third:
+      "col-span-12 @min-[640px]/dashboard:col-span-6 @min-[1024px]/dashboard:col-span-4",
+    half: "col-span-12 @min-[640px]/dashboard:col-span-6 @min-[1024px]/dashboard:col-span-6",
+    twoThirds:
+      "col-span-12 @min-[640px]/dashboard:col-span-12 @min-[1024px]/dashboard:col-span-8",
     full: "col-span-12",
   });
 
+/** How many of the grid's twelve tracks each width spans when drawn as chosen. */
+const WIDTH_TRACKS: Readonly<Record<WidgetWidth, number>> = Object.freeze({
+  quarter: 3,
+  third: 4,
+  half: 6,
+  twoThirds: 8,
+  full: 12,
+});
+
+/** What each width is called in the card menu, and its short label. */
+export const WIDTH_NAMES: Readonly<
+  Record<WidgetWidth, { name: string; fraction: string }>
+> = Object.freeze({
+  quarter: { name: "Quarter width", fraction: "¼" },
+  third: { name: "Third width", fraction: "⅓" },
+  half: { name: "Half width", fraction: "½" },
+  twoThirds: { name: "Two-thirds width", fraction: "⅔" },
+  full: { name: "Full width", fraction: "Full" },
+});
+
+/** A width's place in the ranking; a width this admin does not know ranks as full. */
+function widthRank(width: string): number {
+  return isWidgetWidth(width)
+    ? WIDGET_WIDTHS.indexOf(width)
+    : WIDGET_WIDTHS.length - 1;
+}
+
 /**
- * The span classes for `size`, falling back to full width.
+ * The width a stored placement is DRAWN at.
  *
- * The fallback is not defensive decoration: `size` reaches here from a plugin's
- * declaration over the wire, so a value outside the enum is a shape the admin
- * has to survive. Full width is the safe answer — a widget too wide is legible,
- * a widget with no span class at all collapses to the grid's implicit one.
+ * The stored width while the widget still allows it. Otherwise the NEAREST
+ * width it does allow, and the WIDER of two equally near: a card shown a little
+ * too wide stays legible, one shown too narrow may not. The stored value itself
+ * is never changed by this; it comes back if the widget allows it again.
  *
- * 🔴 The parameter is `string`, not `WidgetSize`, and widening it was a
- * CORRECTION rather than a loosening. The narrow type asserted a guarantee the
- * function never had and the codebase does not hold: the body exists precisely
- * to survive a value outside the enum, and the callers now include a stored
- * arrangement whose size may have been written by a plugin built against a
- * newer core. A signature that refuses what the body handles pushes the cast to
- * every call site, which is where the `Object.hasOwn` guard below stops being
- * reachable.
+ * A width from a newer core counts as full, which is how the server reads one
+ * too. With no allowed widths to go on (a widget missing from the read), the
+ * stored width is drawn as it is.
  */
-export function widgetSpanClass(size: string | undefined): string {
-  if (!size) return WIDGET_SPAN_CLASSES.full;
-  // `Object.hasOwn`, not a plain lookup with `??`. The value arrives over the
-  // wire from a plugin declaration, so it can be any string -- and `constructor`
-  // or `toString` resolve to inherited `Object.prototype` members rather than
-  // `undefined`, which means the fallback never runs and the grid is handed a
-  // FUNCTION where it expected a class list. `__proto__` returns an object the
-  // same way.
-  //
-  // The fallback below is what makes an unknown size survivable at all, so a
-  // lookup that can silently skip it defeats the boundary rather than guarding
-  // it.
-  // `Object.hasOwn` narrows nothing for the compiler — it is a runtime guard,
-  // not a type predicate — so the indexed read is asserted rather than left to
-  // fail the build. The assertion is sound BECAUSE of the line above it: the
-  // key is known to be an own property of this exact table by the time it runs.
-  return Object.hasOwn(WIDGET_SPAN_CLASSES, size)
-    ? WIDGET_SPAN_CLASSES[size as WidgetSize]
-    : WIDGET_SPAN_CLASSES.full;
+export function drawnWidth(
+  stored: string,
+  allowed: readonly WidgetWidth[] | undefined
+): WidgetWidth {
+  const rank = widthRank(stored);
+  const own = WIDGET_WIDTHS[rank];
+  if (!allowed || allowed.length === 0 || allowed.includes(own)) return own;
+  // Nearness is measured in TRACKS, the width a reader actually sees, so a
+  // two-thirds card the widget no longer allows draws at half (2 tracks
+  // narrower) rather than full (4 tracks wider). Only a real tie in tracks
+  // falls to the wider width.
+  const tracks = WIDTH_TRACKS[own];
+  let best = allowed[0];
+  for (const candidate of allowed) {
+    const distance = Math.abs(WIDTH_TRACKS[candidate] - tracks);
+    const bestDistance = Math.abs(WIDTH_TRACKS[best] - tracks);
+    // On a tie the higher rank replaces the current pick, so the wider of two
+    // equally near wins whatever order the allowed list arrives in.
+    if (
+      distance < bestDistance ||
+      (distance === bestDistance && widthRank(candidate) > widthRank(best))
+    ) {
+      best = candidate;
+    }
+  }
+  return best;
+}
+
+/**
+ * The span classes for one card: its stored width, drawn at the nearest width
+ * its widget allows. The one function the grid draws a card's width through.
+ */
+export function cardSpanClass(
+  stored: string,
+  allowed: readonly WidgetWidth[] | undefined
+): string {
+  return WIDTH_SPAN_CLASSES[drawnWidth(stored, allowed)];
+}
+
+/**
+ * The width of a widget's declared size, for the cards drawn before any
+ * arrangement has been read.
+ *
+ * Only that fallback asks this: once a read lands, every card carries the width
+ * the server gave it. The pairs are the server's own (3, 4, 6, 8 and 12 of 12
+ * tracks), restated because `nextly/config` does not publish them; anything
+ * else, or nothing, is full, as the server reads it.
+ */
+const WIDTH_BY_SIZE: ReadonlyMap<string, WidgetWidth> = new Map<
+  WidgetSize,
+  WidgetWidth
+>([
+  ["sm", "quarter"],
+  ["md", "third"],
+  ["lg", "half"],
+  ["xl", "twoThirds"],
+  ["full", "full"],
+]);
+
+export function widthFromDeclaredSize(size: string | undefined): WidgetWidth {
+  return (size === undefined ? undefined : WIDTH_BY_SIZE.get(size)) ?? "full";
 }
 
 /**
@@ -91,23 +170,3 @@ export function widgetSpanClass(size: string | undefined): string {
  * where the dashboard's size questions are answered from.
  */
 export { legacySizeToWidgetSize } from "nextly/config";
-
-/**
- * The grid tracks for each supported column count.
- *
- * 🔴 Spelled out rather than built from a template string. Tailwind scans this
- * file as TEXT, so `grid-cols-${n}` produces a class the build never emits and
- * the dashboard renders as one column whatever the reader chose.
- *
- * Every count folds to ONE column on small screens and, above two, to two at
- * the middle breakpoint. Folding rather than reflowing is what keeps a card's
- * position derivable at every width: a column's contents stay together and in
- * order, so a reader who arranged on a wide screen recognises the same
- * dashboard on a narrow one.
- */
-export const COLUMN_TRACK_CLASSES: Readonly<Record<number, string>> =
-  Object.freeze({
-    2: "grid-cols-1 md:grid-cols-2",
-    3: "grid-cols-1 md:grid-cols-2 lg:grid-cols-3",
-    4: "grid-cols-1 md:grid-cols-2 lg:grid-cols-4",
-  });

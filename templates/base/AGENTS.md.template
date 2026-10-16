@@ -112,6 +112,8 @@ const slug = typeof doc.slug === "string" ? doc.slug : undefined;
   collection or on any of its fields?**
 
   ```ts
+  import { cachedFind, nextlyTags } from "nextly/runtime";
+
   // NO read rule, on the collection OR its fields — the result is identical for
   // every reader, so one shared entry is correct and gets the full ISR benefit.
   // `find()` always returns the list envelope `{ items, meta }`, so a detail route takes the

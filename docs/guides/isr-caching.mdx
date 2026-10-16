@@ -30,10 +30,16 @@ serverless worker handles a request — so **every** write context busts tags,
 not just the ones that happen to have loaded the admin route:
 
 ```ts
-// instrumentation.ts (project root, next to your app/ directory)
+// src/instrumentation.ts in a project with a src/ directory (every scaffolded
+// project); instrumentation.ts at the project root otherwise. Next.js ignores
+// the file anywhere else, silently.
 export async function register() {
-  const { registerNextCacheRevalidator } = await import("nextly/runtime");
-  registerNextCacheRevalidator();
+  // Node.js only: the adapter loads `next/cache` with `createRequire`, which
+  // the edge runtime does not have.
+  if (process.env.NEXT_RUNTIME === "nodejs") {
+    const { registerNextCacheRevalidator } = await import("nextly/runtime");
+    registerNextCacheRevalidator();
+  }
 }
 ```
 
@@ -41,10 +47,15 @@ Mounting the admin route handler also registers it, which is enough if every
 content write goes through the admin API in the same process:
 
 ```ts
-// app/admin/[[...params]]/route.ts
+// src/app/admin/api/[[...params]]/route.ts
+import nextlyConfig from "../../../../../nextly.config";
 import { createDynamicHandlers } from "nextly/runtime";
 
-export const { GET, POST, PATCH, DELETE } = createDynamicHandlers();
+export const { GET, POST, PUT, PATCH, DELETE, OPTIONS } = createDynamicHandlers(
+  {
+    config: nextlyConfig,
+  }
+);
 ```
 
 If you write content through the Direct API (`nextly.create(...)`) from a Server
