@@ -107,9 +107,12 @@ const OPERATOR_CASES: ReadonlyArray<{
     params: ["%test%"],
   },
   {
+    // Lower-cased on both sides rather than drizzle's `ilike`: only PostgreSQL has ILIKE, and
+    // the builder emits one statement for every dialect. On MySQL the comparison also stops
+    // depending on the column's collation, which a bare LIKE inherits.
     operator: "ILIKE",
     condition: { column: "name", op: "ILIKE", value: "%test%" },
-    sql: `"test_table"."name" ilike $1`,
+    sql: `lower("test_table"."name") like lower($1)`,
     params: ["%test%"],
   },
   {
@@ -156,6 +159,14 @@ const OPERATOR_CASES: ReadonlyArray<{
     condition: { column: "name", op: "CONTAINS", value: "test" },
     sql: `"test_table"."name" like $1 escape '!'`,
     params: ["%test%"],
+  },
+  {
+    // CONTAINS without regard to case, on every dialect and whatever the column's collation:
+    // both sides lower-cased, the value matched literally as CONTAINS matches it.
+    operator: "ICONTAINS",
+    condition: { column: "name", op: "ICONTAINS", value: "Test" },
+    sql: `lower("test_table"."name") like lower($1) escape '!'`,
+    params: ["%Test%"],
   },
 ];
 
@@ -236,12 +247,14 @@ describe("buildDrizzleWhere", () => {
     // The metacharacter-free case is the operator table's `CONTAINS` row above, not repeated
     // here; the partition assertion keeps that row from being deleted, so it holds the control
     // for these.
-    it.each([
+    const LITERAL_CASES = [
       ["a percent", "a%b", "%a!%b%"],
       ["an underscore", "a_b", "%a!_b%"],
       ["the escape character itself", "a!b", "%a!!b%"],
       ["all of them at once", "100%_!", "%100!%!_!!%"],
-    ])(
+    ] as const;
+
+    it.each(LITERAL_CASES)(
       "CONTAINS matches %s literally, escaping the LIKE metacharacters",
       (_label, value, pattern) => {
         // Without the escaping, `CONTAINS "a%b"` is the pattern `%a%b%`, which matches anything
@@ -252,6 +265,18 @@ describe("buildDrizzleWhere", () => {
           compile({ and: [{ column: "name", op: "CONTAINS", value }] })
         ).toEqual({
           sql: `"test_table"."name" like $1 escape '!'`,
+          params: [pattern],
+        });
+      }
+    );
+
+    it.each(LITERAL_CASES)(
+      "ICONTAINS matches %s literally, as CONTAINS does",
+      (_label, value, pattern) => {
+        expect(
+          compile({ and: [{ column: "name", op: "ICONTAINS", value }] })
+        ).toEqual({
+          sql: `lower("test_table"."name") like lower($1) escape '!'`,
           params: [pattern],
         });
       }
