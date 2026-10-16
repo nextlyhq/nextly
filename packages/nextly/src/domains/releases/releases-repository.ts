@@ -21,6 +21,7 @@ import {
   RELEASE_SCHEDULABLE_FROM,
   RELEASE_STATES_AFFECTING_CONTENT,
   type ReleaseMemberAction,
+  type ReleaseKind,
   type ReleaseState,
 } from "../../schemas/releases/types";
 import type { VersionScopeKind } from "../../schemas/versions/types";
@@ -194,6 +195,8 @@ export interface ReleaseListFilters {
   /** Only these releases. An empty list means none, not "no filter". */
   ids?: string[];
   state?: string;
+  /** Only releases of this kind: `release` leaves out single-document ones. */
+  kind?: ReleaseKind;
   scheduledAfter?: Date;
   scheduledBefore?: Date;
   /**
@@ -251,6 +254,7 @@ export interface ReleaseRow {
   scheduledAt: Date | null;
   timezone: string | null;
   state: ReleaseState;
+  kind: ReleaseKind;
   publishedAt: Date | null;
   createdBy: string | null;
   createdAt: Date;
@@ -267,6 +271,13 @@ export interface ReleaseMemberRow {
   locale: string | null;
   action: ReleaseMemberAction;
   memberKey: string;
+  /**
+   * 1 for the member of a single-document release, null otherwise: the column
+   * the database holds unique per release, so a single release cannot take a
+   * second member. Written by {@link ReleasesRepository.addMember} from the
+   * release's kind, and kept as it was by a restore.
+   */
+  singleSlot: number | null;
   createdBy: string | null;
   createdAt: Date;
 }
@@ -274,6 +285,8 @@ export interface ReleaseMemberRow {
 export interface NewRelease {
   title: string;
   description?: string | null;
+  /** `release` when not given. Fixed once the release exists. */
+  kind?: ReleaseKind;
   createdBy?: string | null;
 }
 
@@ -428,6 +441,7 @@ export class ReleasesRepository {
       // A new release is always assembled before it is scheduled, so it
       // starts in the one state the read rule never consults.
       state: "draft",
+      kind: input.kind ?? "release",
       publishedAt: null,
       createdBy: input.createdBy ?? null,
       createdAt: now,
@@ -805,6 +819,9 @@ export class ReleasesRepository {
     if (filters.state !== undefined) {
       conditions.push({ column: "state", op: "=", value: filters.state });
     }
+    if (filters.kind !== undefined) {
+      conditions.push({ column: "kind", op: "=", value: filters.kind });
+    }
     if (filters.scheduledAfter !== undefined) {
       conditions.push({
         column: "scheduledAt",
@@ -991,6 +1008,14 @@ export class ReleasesRepository {
   }
 
   async addMember(input: NewReleaseMember): Promise<ReleaseMemberRow> {
+    // The slot comes from the release's stored kind, read here rather than
+    // taken from the caller, so no path that adds a member can leave a single
+    // release's member without it — and so unprotected.
+    const [release] = await this.db.select<{ kind: ReleaseKind }>(RELEASES, {
+      columns: ["kind"],
+      where: { and: [{ column: "id", op: "=", value: input.releaseId }] },
+      limit: 1,
+    });
     const row: ReleaseMemberRow = {
       // Time-ordered, so members added within one second — one stored
       // instant on SQLite — still list in the order they were added, which
@@ -1003,6 +1028,7 @@ export class ReleasesRepository {
       locale: input.locale,
       action: input.action,
       memberKey: releaseMemberKey(input.releaseId, input),
+      singleSlot: release?.kind === "single" ? 1 : null,
       createdBy: input.createdBy ?? null,
       createdAt: new Date(),
     };

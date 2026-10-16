@@ -6,9 +6,17 @@
 // the ones that matter most are the NEGATIVE cases: a guard that fires on a
 // clean form is worse than no guard, because it gets removed.
 import userEvent from "@testing-library/user-event";
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import {
+  describe,
+  it,
+  expect,
+  vi,
+  beforeEach,
+  afterEach,
+  onTestFinished,
+} from "vitest";
 
-import { act, render, screen } from "@admin/__tests__/utils";
+import { act, render, screen, waitFor } from "@admin/__tests__/utils";
 import {
   clearDocumentViews,
   registerDocumentViews,
@@ -62,6 +70,43 @@ function DeliberateLeave() {
 }
 
 const START = "/admin/collections/posts/1";
+
+/*
+ * Waits for a browser traversal. Heard in the CAPTURE phase and added before
+ * any guard mounts, so it runs ahead of the guard: a held Back is kept from
+ * every listener after it, the admin's router above all, and a waiter heard
+ * later would wait for an event it can never receive.
+ */
+let popstateHeard: (() => void) | undefined;
+const hearPopstate = () => popstateHeard?.();
+beforeEach(() => {
+  window.addEventListener("popstate", hearPopstate, { capture: true });
+});
+afterEach(() => {
+  window.removeEventListener("popstate", hearPopstate, { capture: true });
+  popstateHeard = undefined;
+});
+
+/**
+ * A browser traversal, awaited until `events` `popstate`s have fired: two for
+ * a move the guard holds and undoes by traversing back, since the undoing one
+ * can fire before a second wait could begin.
+ */
+async function traverse(step: () => void, events = 1): Promise<void> {
+  await act(async () => {
+    let left = events;
+    const heard = new Promise<void>(resolve => {
+      popstateHeard = () => {
+        left -= 1;
+        if (left > 0) return;
+        popstateHeard = undefined;
+        resolve();
+      };
+    });
+    step();
+    await heard;
+  });
+}
 
 describe("UnsavedChangesGuard", () => {
   beforeEach(() => {
@@ -415,12 +460,7 @@ describe("moving between a document and its own views", () => {
         <span />
       </UnsavedChangesGuard>
     );
-    await act(async () => {
-      window.history.back();
-      await new Promise(resolve =>
-        window.addEventListener("popstate", resolve, { once: true })
-      );
-    });
+    await traverse(() => window.history.back());
     return screen.queryByRole("alertdialog") !== null;
   }
 
@@ -443,6 +483,249 @@ describe("moving between a document and its own views", () => {
         "/admin/collections/pages/1/builder"
       )
     ).toBe(true);
+  });
+});
+
+describe("Back and Forward with unsaved changes", () => {
+  const BEFORE = "/admin/collections/posts";
+  const AFTER = "/admin/collections/posts/2";
+
+  /**
+   * The admin's router, as far as this guard meets it: it hears `popstate`
+   * in the ordinary bubbling phase, having been mounted long before any page.
+   */
+  function routerHears(): string[] {
+    const heard: string[] = [];
+    const listener = () => heard.push(window.location.pathname);
+    window.addEventListener("popstate", listener);
+    onTestFinished(() => window.removeEventListener("popstate", listener));
+    return heard;
+  }
+
+  function dirtyEditorAfter(...visited: string[]) {
+    for (const path of visited) window.history.pushState(null, "", path);
+    window.history.pushState(null, "", START);
+    render(
+      <UnsavedChangesGuard isDirty>
+        <span />
+      </UnsavedChangesGuard>
+    );
+  }
+
+  it("holds Back on the editor while it asks, out of the router's hearing", async () => {
+    const heard = routerHears();
+    dirtyEditorAfter(BEFORE);
+    await traverse(() => window.history.back());
+    expect(await screen.findByRole("alertdialog")).toBeInTheDocument();
+    // Still on the editor, and the router drew nothing: the work is there to
+    // be asked about.
+    expect(window.location.pathname).toBe(START);
+    expect(heard).toEqual([]);
+  });
+
+  it("leaves to where Back was going when the author confirms", async () => {
+    // 🔴 The separating case. Confirming once told the router to re-read an
+    // address that had already been put back, so the author confirmed
+    // leaving, lost their changes, and stayed on the editor.
+    const heard = routerHears();
+    dirtyEditorAfter(BEFORE);
+    await traverse(() => window.history.back());
+    await traverse(() =>
+      screen.getByRole("button", { name: /discard/i }).click()
+    );
+    expect(window.location.pathname).toBe(BEFORE);
+    expect(heard).toEqual([BEFORE]);
+  });
+
+  it("stays on the editor, with nothing moved, when the author keeps editing", async () => {
+    const heard = routerHears();
+    dirtyEditorAfter(BEFORE);
+    await traverse(() => window.history.back());
+    await userEvent.click(
+      await screen.findByRole("button", { name: /keep editing/i })
+    );
+    expect(window.location.pathname).toBe(START);
+    expect(heard).toEqual([]);
+  });
+
+  it("withholds a traversal from other listeners only while it is held", async () => {
+    // Any other `popstate` listener -- analytics, a plugin -- hears it as the
+    // router does. The guard keeps ONE event from it: the Back it is asking
+    // about, while the prompt shows. Nothing held, or answered, it hears all.
+    const heard = routerHears();
+
+    // Clean: nothing to hold, so the Back is heard.
+    window.history.pushState(null, "", BEFORE);
+    window.history.pushState(null, "", START);
+    const clean = render(
+      <UnsavedChangesGuard isDirty={false}>
+        <span />
+      </UnsavedChangesGuard>
+    );
+    await traverse(() => window.history.back());
+    expect(heard).toEqual([BEFORE]);
+    clean.unmount();
+
+    // Dirty, across a hash only: the page stays, so nothing is held. The
+    // history is laid down before the dirty guard mounts, which would
+    // otherwise ask about these writes too.
+    window.history.pushState(null, "", START);
+    window.history.pushState(null, "", `${START}#fields`);
+    render(
+      <UnsavedChangesGuard isDirty>
+        <span />
+      </UnsavedChangesGuard>
+    );
+    await traverse(() => window.history.back());
+    expect(heard).toEqual([BEFORE, START]);
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+
+    // Dirty, off the page: held, and that one event is withheld...
+    await traverse(() => window.history.back());
+    expect(await screen.findByRole("alertdialog")).toBeInTheDocument();
+    expect(heard).toEqual([BEFORE, START]);
+
+    // ...and the leave the author confirms is heard like any other.
+    await traverse(() =>
+      screen.getByRole("button", { name: /discard/i }).click()
+    );
+    expect(heard).toEqual([BEFORE, START, BEFORE]);
+  });
+
+  it("leaves to where Forward was going, not one step further", async () => {
+    // Forward from the editor to AFTER, and AFTER is not the last entry: a
+    // put-back by stepping forward once more lands past where the author
+    // was going.
+    window.history.pushState(null, "", BEFORE);
+    window.history.pushState(null, "", START);
+    window.history.pushState(null, "", AFTER);
+    window.history.pushState(null, "", "/admin/collections/posts/3");
+    await traverse(() => window.history.go(-2));
+    expect(window.location.pathname).toBe(START);
+    const heard = routerHears();
+    render(
+      <UnsavedChangesGuard isDirty>
+        <span />
+      </UnsavedChangesGuard>
+    );
+    await traverse(() => window.history.forward());
+    expect(window.location.pathname).toBe(START);
+    await traverse(() =>
+      screen.getByRole("button", { name: /discard/i }).click()
+    );
+    expect(window.location.pathname).toBe(AFTER);
+    expect(heard).toEqual([AFTER]);
+  });
+});
+
+describe("Back and Forward where the browser reports history positions", () => {
+  const BEFORE = "/admin/collections/posts";
+  const AFTER = "/admin/collections/posts/2";
+  const LATER = "/admin/collections/posts/3";
+
+  /*
+   * jsdom has no Navigation API, so a stand-in counts the current entry's
+   * position the way the browser would: a push moves one on, a replace stays,
+   * and a traversal moves by its own distance.
+   */
+  let index = 0;
+  const writes = {
+    push: History.prototype.pushState,
+    replace: History.prototype.replaceState,
+    go: History.prototype.go,
+    back: History.prototype.back,
+    forward: History.prototype.forward,
+  };
+  beforeEach(() => {
+    index = 0;
+    // A guard that unmounted restores its writes onto the history OBJECT, and
+    // an own property there would hide the counting ones on its prototype.
+    Reflect.deleteProperty(window.history, "pushState");
+    Reflect.deleteProperty(window.history, "replaceState");
+    History.prototype.pushState = function (...args) {
+      index += 1;
+      return writes.push.apply(this, args);
+    };
+    History.prototype.replaceState = function (...args) {
+      return writes.replace.apply(this, args);
+    };
+    History.prototype.go = function (delta?: number) {
+      index += delta ?? 0;
+      return writes.go.call(this, delta);
+    };
+    History.prototype.back = function () {
+      this.go(-1);
+    };
+    History.prototype.forward = function () {
+      this.go(1);
+    };
+    Object.defineProperty(window, "navigation", {
+      configurable: true,
+      value: {
+        get currentEntry() {
+          return { index };
+        },
+      },
+    });
+  });
+  afterEach(() => {
+    History.prototype.pushState = writes.push;
+    History.prototype.replaceState = writes.replace;
+    History.prototype.go = writes.go;
+    History.prototype.back = writes.back;
+    History.prototype.forward = writes.forward;
+    Reflect.deleteProperty(window, "navigation");
+  });
+
+  /**
+   * BEFORE, START, AFTER, LATER, standing on START, with a dirty editor.
+   * Answers how to take the editor away, so the steps after are not held.
+   */
+  async function onStartWithEntriesAhead(): Promise<() => void> {
+    window.history.pushState(null, "", BEFORE);
+    window.history.pushState(null, "", START);
+    window.history.pushState(null, "", AFTER);
+    window.history.pushState(null, "", LATER);
+    await traverse(() => window.history.go(-2));
+    expect(window.location.pathname).toBe(START);
+    const view = render(
+      <UnsavedChangesGuard isDirty>
+        <span />
+      </UnsavedChangesGuard>
+    );
+    return view.unmount;
+  }
+
+  it("leaves Back going back after a held Forward the author stays from", async () => {
+    // 🔴 The separating case. Putting the address back with a new entry made
+    // the destination the entry BEHIND the editor, so Back went forward, and
+    // every entry ahead of it was gone.
+    const leaveEditor = await onStartWithEntriesAhead();
+    await traverse(() => window.history.forward());
+    // Held: the page is back on the editor, however the guard got it there.
+    await waitFor(() => expect(window.location.pathname).toBe(START));
+    await userEvent.click(
+      await screen.findByRole("button", { name: /keep editing/i })
+    );
+    expect(window.location.pathname).toBe(START);
+
+    leaveEditor();
+    await traverse(() => window.history.back());
+    expect(window.location.pathname).toBe(BEFORE);
+  });
+
+  it("keeps the entries ahead when the author confirms a held Forward", async () => {
+    const leaveEditor = await onStartWithEntriesAhead();
+    await traverse(() => window.history.forward());
+    await waitFor(() => expect(window.location.pathname).toBe(START));
+    await traverse(() =>
+      screen.getByRole("button", { name: /discard/i }).click()
+    );
+    expect(window.location.pathname).toBe(AFTER);
+
+    leaveEditor();
+    await traverse(() => window.history.forward());
+    expect(window.location.pathname).toBe(LATER);
   });
 });
 

@@ -66,7 +66,7 @@ import {
   resolveTypeColumns,
 } from "../domains/field-groups/storage/resolve-storage-names";
 import type { SanitizedLocalizationConfig } from "../domains/i18n/config/types";
-import type { JobDefinition } from "../domains/jobs/job-registry";
+import type { AnyJobDefinition } from "../domains/jobs/job-registry";
 import type { LimitStore } from "../domains/limits/limit-store";
 import { selectLimitStore } from "../domains/limits/select-limit-store";
 import type { MetaService } from "../domains/meta";
@@ -393,7 +393,7 @@ export interface NextlyServiceConfig {
    * Background job types this application declares itself, alongside any a
    * plugin contributes. Registered at boot; see `plugins/jobs/collect-jobs`.
    */
-  jobs?: JobDefinition[];
+  jobs?: AnyJobDefinition[];
 
   /** Collection configurations. */
   collections?: CollectionConfig[];

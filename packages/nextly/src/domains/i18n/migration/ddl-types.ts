@@ -96,6 +96,30 @@ export function lit(value: string): string {
 }
 
 /** Cast a column expression to text for archival, per dialect. */
+/**
+ * An expression to compare byte for byte. MySQL compares text under each column's collation, and
+ * two tables created at different times can carry different ones, which it refuses to compare at
+ * all; as binary the comparison is exact and the collations do not meet. Elsewhere the expression
+ * is returned unchanged.
+ */
+export function exactText(expr: string, dialect: SupportedDialect): string {
+  return dialect === "mysql" ? `CAST(${expr} AS BINARY)` : expr;
+}
+
+/**
+ * Whether two expressions differ, treating two NULLs as equal and a NULL and a value as different.
+ * Each dialect spells null-safe comparison its own way.
+ */
+export function nullSafeDiffers(
+  left: string,
+  right: string,
+  dialect: SupportedDialect
+): string {
+  if (dialect === "mysql") return `NOT (${left} <=> ${right})`;
+  if (dialect === "sqlite") return `(${left}) IS NOT (${right})`;
+  return `(${left}) IS DISTINCT FROM (${right})`;
+}
+
 export function castText(colExpr: string, dialect: SupportedDialect): string {
   return dialect === "mysql"
     ? `CAST(${colExpr} AS CHAR)`

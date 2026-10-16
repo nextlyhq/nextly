@@ -201,11 +201,7 @@ describe("empty lists keep their meaning", () => {
     title: text("title"),
   });
   const render = (where: WhereFilter) => {
-    const condition = buildDrizzleCondition(
-      buildWhereClause(where),
-      table,
-      "postgresql"
-    );
+    const condition = buildDrizzleCondition(buildWhereClause(where), table);
     return condition ? dialect.sqlToQuery(condition).sql : undefined;
   };
 
@@ -243,7 +239,7 @@ describe("the condition builder refuses a key it cannot resolve", () => {
     author: uuid("author"),
   });
   const build = (where: WhereFilter) => () =>
-    buildDrizzleCondition(buildWhereClause(where), table, "postgresql");
+    buildDrizzleCondition(buildWhereClause(where), table);
 
   it("refuses an unknown field", () => {
     expect(refusalCodes(build({ titel: { equals: "a" } }))).toContain(
@@ -307,8 +303,7 @@ describe("the condition builder refuses a key it cannot resolve", () => {
     });
     const condition = buildDrizzleCondition(
       buildWhereClause({ createdAt: { greater_than: new Date(0) } }),
-      withTimestamps,
-      "postgresql"
+      withTimestamps
     );
     expect(condition).toBeDefined();
     expect(new PgDialect().sqlToQuery(condition!).sql).toContain(

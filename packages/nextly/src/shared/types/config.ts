@@ -26,7 +26,7 @@ import type {
   LocalizationConfig,
   SanitizedLocalizationConfig,
 } from "../../domains/i18n/config/types";
-import type { JobDefinition } from "../../domains/jobs/job-registry";
+import type { AnyJobDefinition } from "../../domains/jobs/job-registry";
 import {
   resolveStoreSetting,
   type LimitStoreSelection,
@@ -803,7 +803,7 @@ export interface NextlyConfig {
    * actually reach it — a definition the public type does not admit is an option
    * nobody can set.
    */
-  jobs?: JobDefinition[];
+  jobs?: AnyJobDefinition[];
 
   /** @experimental Custom permissions declared by the app (seeded like plugin permissions, D36). */
   permissions?: PluginPermission[];
@@ -940,7 +940,7 @@ export interface SanitizedNextlyConfig {
    * @experimental Background job types the application declared, carried through
    * sanitisation so the collector that registers them can see them.
    */
-  jobs?: JobDefinition[];
+  jobs?: AnyJobDefinition[];
 
   /** @experimental App-declared custom permissions (undefined if none). Seeded like plugin permissions (D36). */
   permissions?: PluginPermission[];

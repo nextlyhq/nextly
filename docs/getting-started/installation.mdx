@@ -413,6 +413,10 @@ Open [http://localhost:3000/admin/setup](http://localhost:3000/admin/setup) to c
 | TypeScript | 5+ |
 | Database | PostgreSQL (recommended for production), MySQL, or SQLite (local demo only) |
 
+### Yarn Plug'n'Play
+
+Nextly installs and generates types under Yarn's Plug'n'Play, but Next.js's default bundler, Turbopack, does not support Plug'n'Play: it is listed among Turbopack's [unsupported features](https://nextjs.org/docs/app/api-reference/turbopack#unsupported-and-unplanned-features), and `next build` stops with "Could not find the Next.js package". Run Next.js with webpack instead (`next dev --webpack`, `next build --webpack`), or set `nodeLinker: node-modules` in `.yarnrc.yml` and install again.
+
 ## Next Steps
 
 - [Quick Start](/docs/getting-started/quick-start) -- Build a blog, step by step
