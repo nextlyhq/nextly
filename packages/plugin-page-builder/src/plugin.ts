@@ -25,6 +25,7 @@ import {
   registerCoreBlocks,
   registerDeclaredBlocks,
 } from "./blocks/registration-service";
+import { BUILDER_VIEW_COMPONENT, BUILDER_VIEW_PATH } from "./builder-view";
 import { patternCapabilityRoute } from "./capability-route";
 import { blocksFieldSurvey } from "./class-usage-blocks-fields";
 import { registerClassUsageMaintenance } from "./class-usage-hook";
@@ -52,7 +53,7 @@ import { indexHostFinder } from "./component-hosts";
 import { registerComponentReadinessNotice } from "./component-readiness-hook";
 import { componentUsageIndex } from "./component-usage";
 import type { CompositionSetup } from "./fields/blocks-composition";
-import { blocksFieldType } from "./fields/blocksField";
+import { blocksFieldType, BLOCKS_TYPE } from "./fields/blocksField";
 import { hostFetchPolicy } from "./host-policy";
 import { registerLayoutComponentGuard } from "./layout-component-guard";
 import { PAGE_BUILDER_PLUGIN_NAME } from "./library-contract";
@@ -62,6 +63,7 @@ import {
   patternLibraryRoute,
   type ComponentStore,
 } from "./library-route";
+import { warnNestedBlocksFields } from "./nested-blocks-fields";
 import { previewViewportsFromSiteStyle } from "./preview-viewports";
 import { savePatternRoute } from "./save-pattern-route";
 import { resolveSiteStyle, siteBreakpoints } from "./site-style";
@@ -953,6 +955,13 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) => {
       });
       registerReadinessNotice(ctx, opts);
     },
+    // Said at configuration time, in the CLI as at boot: a blocks field below
+    // the top level has no Page Builder to open, and the operator should learn
+    // that from the log before an author meets it in the form.
+    setup: config => {
+      warnNestedBlocksFields(config);
+      return config;
+    },
     contributes: {
       // The channel another plugin adds blocks through. Core carries no
       // `contributes.blocks` key — a plugin contributing blocks is contributing
@@ -1153,6 +1162,17 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) => {
         // with no design entry, so grouping them elsewhere would mean widening
         // that list — a change to the admin's navigation model, and a larger
         // question than where three links go.
+        // The editor is a full-screen view of the document, offered wherever a
+        // blocks field is used — including collections the Schema Builder adds
+        // later — and opened by the field's card at that address.
+        documentViews: [
+          {
+            path: BUILDER_VIEW_PATH,
+            fieldType: BLOCKS_TYPE,
+            component: BUILDER_VIEW_COMPONENT,
+            label: "Page Builder",
+          },
+        ],
         menu: [
           {
             label: "Patterns",

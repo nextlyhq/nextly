@@ -141,6 +141,8 @@ export interface PageBuilderCardProps {
   href: string | undefined;
   /** Moves to `href` within the admin, keeping the form mounted. */
   onNavigate: (href: string) => void;
+  /** Why there is no `href`, said beside the disabled action. */
+  unavailableReason?: string;
 }
 
 /**
@@ -167,10 +169,12 @@ function OpenBuilder({
   href,
   label,
   onNavigate,
+  unavailableReason = "Save this page to open the Page Builder.",
 }: {
   href: string | undefined;
   label: string;
   onNavigate: (href: string) => void;
+  unavailableReason?: string;
 }): React.JSX.Element {
   if (href === undefined) {
     return (
@@ -178,9 +182,7 @@ function OpenBuilder({
         <Button type="button" disabled>
           {label}
         </Button>
-        <p className="text-xs text-muted-foreground">
-          Save this page to open the Page Builder.
-        </p>
+        <p className="text-xs text-muted-foreground">{unavailableReason}</p>
       </div>
     );
   }
@@ -296,6 +298,7 @@ export function PageBuilderCard({
   canEdit,
   href,
   onNavigate,
+  unavailableReason,
 }: PageBuilderCardProps) {
   const total = useMemo(
     // Counted under the SITE's cap rather than an unbounded read, so the number
@@ -343,6 +346,7 @@ export function PageBuilderCard({
             href={href}
             label={empty ? BUILD_PAGE_LABEL : OPEN_BUILDER_LABEL}
             onNavigate={onNavigate}
+            {...(unavailableReason === undefined ? {} : { unavailableReason })}
           />
         ) : null}
       </div>

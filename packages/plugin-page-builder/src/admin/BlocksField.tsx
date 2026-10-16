@@ -40,7 +40,8 @@
  * @module @nextlyhq/plugin-page-builder/admin/BlocksField
  */
 
-import { useMemo, useState } from "react";
+import { navigateTo, useDocumentIdentity } from "@nextlyhq/plugin-sdk/admin";
+import { useMemo } from "react";
 import {
   useController,
   type Control,
@@ -50,7 +51,7 @@ import {
 
 import { acceptedKinds } from "../fields/blocks-options";
 
-import { BlocksEditor } from "./editor/BlocksEditor";
+import { builderAddress } from "./editor/builder-address";
 import { documentFrom, PLUGIN_SOURCE } from "./editor/stored-document";
 import { PageBuilderCard } from "./PageBuilderCard";
 import { useRestingPageRender } from "./use-resting-page-render";
@@ -141,8 +142,14 @@ export function BlocksField<TFieldValues extends FieldValues = FieldValues>({
   // declaration, that is the form's state.
   field: declaration,
 }: BlocksFieldProps<TFieldValues>) {
-  const [open, setOpen] = useState(false);
   const { field } = useController({ name, control });
+  /*
+   * Where the builder opens for this field: the document view at the
+   * document's own address. The editor is that screen rather than an overlay
+   * inside this form, so nothing it draws can submit the form, and it can move
+   * between pages without being tied to the one that mounted it.
+   */
+  const address = builderAddress(useDocumentIdentity(), name);
 
   // What an empty document has to be for THIS field. Asked once and passed
   // down, so the resting card and the open editor cannot seed different kinds.
@@ -177,33 +184,7 @@ export function BlocksField<TFieldValues extends FieldValues = FieldValues>({
   );
   const resting = useRestingPageRender(PLUGIN_SOURCE, restingDocument);
 
-  /*
-   * Closed if the form becomes read-only while the editor is up.
-   *
-   * Not a hypothetical: a permission can be revoked and a form can start
-   * submitting under an open editor. Rendering the summary instead of the
-   * editor from that render on is not enough on its own — the state has to go
-   * back too, or reopening later would show an editor seeded from a value the
-   * author has not seen since.
-   */
-  if (open && !editable) setOpen(false);
-
-  return open && editable ? (
-    <BlocksEditor
-      // Remounted per opening: the editor seeds its own history from the value
-      // it opened with, and a key change is what discards a previous session's
-      // undo stack rather than carrying it into a document it cannot describe.
-      key={String(field.value === undefined ? "empty" : "seeded")}
-      initialValue={field.value}
-      kinds={kinds}
-      onCommit={field.onChange}
-      onClose={() => setOpen(false)}
-      // Named and controlled so the editor can record its live document as
-      // part of the whole document's recovery point — see `useCheckpoints`.
-      name={name}
-      control={control}
-    />
-  ) : (
+  return (
     <PageBuilderCard
       document={restingDocument}
       siteStyles={resting.siteStyles}
@@ -214,7 +195,11 @@ export function BlocksField<TFieldValues extends FieldValues = FieldValues>({
       // already answers it for the editor above, and two readings of "may this
       // author edit" is one more than the question has.
       canEdit={editable}
-      onOpen={() => setOpen(true)}
+      href={"href" in address ? address.href : undefined}
+      onNavigate={navigateTo}
+      {...("unavailable" in address
+        ? { unavailableReason: address.unavailable }
+        : {})}
     />
   );
 }
