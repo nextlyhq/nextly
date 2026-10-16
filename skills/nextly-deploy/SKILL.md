@@ -28,19 +28,27 @@ Use PostgreSQL (recommended) or MySQL in production; on Vercel, a managed one
 such as Neon, Supabase or Vercel Postgres. SQLite does not survive on
 serverless hosts.
 
-Develop against the same kind of database. `migrate:create` writes SQL in the
-dialect of the database configured when you run it, so migrations made on
-SQLite will not run on PostgreSQL. To switch a project from SQLite to
-PostgreSQL:
+Develop against the same kind of database, and switch **before** creating the
+first migration. `migrate:create` writes SQL in the dialect of the database
+configured when you run it, so migrations made on SQLite will not run on
+PostgreSQL. If SQLite migrations already exist and nothing has been deployed,
+delete `src/db/migrations/` (the `.sql` files and `meta/`) after switching and
+run `migrate:create` again. A live SQLite installation needs its data moved,
+which this skill does not cover.
+
+To switch a project from SQLite to PostgreSQL:
 
 Nextly's packages are released together, so install each `@nextlyhq/*`
 package at exactly the version of `nextly` the project runs. `npx nextly
 --version` prints it, for example `0.0.2-alpha.66`:
 
 ```bash
-npm install @nextlyhq/adapter-postgres@0.0.2-alpha.66 pg
-npm ls nextly @nextlyhq/adapter-postgres     # both must show the same version
+npm install @nextlyhq/adapter-postgres@0.0.2-alpha.66 pg   # pnpm add / yarn add / bun add
+npm ls nextly @nextlyhq/adapter-postgres     # or pnpm ls / yarn why; both at the same version
 ```
+
+Use the project's own package manager throughout, so its lockfile stays the
+one that is deployed.
 
 Then, in `.env`, set `DB_DIALECT=postgresql` and `DATABASE_URL` to a local
 PostgreSQL database, and add `"@nextlyhq/adapter-postgres"` and `"pg"` to
@@ -146,10 +154,35 @@ Node.js server has no such limit.
 - **Vercel:** import the repository; Next.js is detected. Add the variables
   above for Production (and Preview, with its own database), then deploy.
   The `build` script migrates the database during the build.
-- **Node.js server:** `npm ci`, `npm run build`, then `npm start` (`next
-start`) under a process manager such as systemd, pm2 or Docker, behind a
-  reverse proxy that terminates TLS and forwards `Host` and
-  `X-Forwarded-Proto`.
+- **Node.js server:** install from the lockfile (`npm ci`, `pnpm install
+--frozen-lockfile`, `yarn install --immutable` or `bun install
+--frozen-lockfile`), run the `build` script, then `next start` under a
+  process manager such as systemd, pm2 or Docker. Put a reverse proxy in
+  front that terminates TLS and forwards `Host`, `X-Forwarded-Proto` and
+  `X-Forwarded-For`.
+
+### Behind a proxy, including Vercel
+
+Nextly ignores `X-Forwarded-For` unless told to trust it, and then it cannot
+tell clients apart: every sign-in, registration and password-reset request
+shares one rate-limit bucket, 30 an hour by default, and everyone gets 429
+after that. When every request reaches the app through a proxy that sets
+`X-Forwarded-For` (Vercel does; configure nginx or Caddy to), trust it:
+
+```ts
+// nextly.config.ts
+import { defineConfig } from "nextly/config";
+
+export default defineConfig({
+  security: { trustProxy: true },
+  // collections, typescript, ...
+});
+```
+
+When requests pass through more than one proxy, list the proxies' addresses
+in `TRUSTED_PROXY_IPS` (comma-separated CIDRs), so the client is read from the
+right hop. Do not turn this on for an app clients can reach directly: they
+could then pick their own address.
 
 ## 7. Check the live site
 

@@ -103,8 +103,10 @@ onlyBuiltDependencies:
   - sharp
 ```
 
-pnpm 11 reads `allowBuilds`; pnpm 10.6+ reads `onlyBuiltDependencies`. npm,
-yarn and bun need nothing here.
+pnpm 11 reads `allowBuilds`; pnpm 10.6+ reads `onlyBuiltDependencies`. pnpm
+10.0 to 10.5 ignore both in this file: put the list in `package.json` instead,
+as `"pnpm": { "onlyBuiltDependencies": ["better-sqlite3", "esbuild", "sharp"] }`,
+or upgrade pnpm. npm, yarn and bun need nothing here.
 
 ## 4. Add the admin's media route
 
