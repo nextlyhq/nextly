@@ -2050,19 +2050,29 @@ function continuation(lines, i) {
  */
 function refusedOnLine(lines, i, wraps) {
   const own = plainLine(lines[i]);
-  const rest = wraps ? continuation(lines, i) : [];
-  const hits = refusedClaimsIn(`${own} ${rest.join(" ")}`).filter(hit => hit.index < own.length);
-  // Where each continued line starts in the joined text: after line `i` and one space, then
-  // after each earlier continued line and its space.
-  const starts = [];
-  let offset = own.length + 1;
-  for (const text of rest) {
-    starts.push(offset);
-    offset += text.length + 1;
-  }
+  const { text, starts } = joinedLines([own, ...(wraps ? continuation(lines, i) : [])]);
+  const hits = refusedClaimsIn(text).filter(hit => hit.index < own.length);
   const end = Math.max(0, ...hits.map(hit => hit.index + hit.text.length));
-  const reached = starts.filter(start => start < end).length;
+  // Line `i` starts at 0 and is always in the passage; each continued line is in it when the
+  // furthest phrase reaches past where that line starts.
+  const reached = starts.slice(1).filter(start => start < end).length;
   return { hits, passage: lines.slice(i, i + 1 + reached).join("\n") };
+}
+
+/**
+ * Lines read as one sentence, joined by a space, with where each starts in the joined text.
+ * Built together, so the offsets a phrase is measured against are those of the text it was
+ * found in.
+ */
+function joinedLines(parts) {
+  const starts = [];
+  let text = "";
+  for (const part of parts) {
+    if (starts.length > 0) text += " ";
+    starts.push(text.length);
+    text += part;
+  }
+  return { text, starts };
 }
 
 function pushRefused(findings, isExempt, { file, line, source, hits }) {

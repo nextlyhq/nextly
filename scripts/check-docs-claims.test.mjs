@@ -532,6 +532,14 @@ describe("refused-claim", () => {
       expect(await run([first, edited], digestLine(`${first}\n${second}`))).toEqual([1]);
     });
 
+    it("ends at the line the phrase ends on, so later lines of the paragraph stay free to change", async () => {
+      // A third line continues the sentence after the phrase is complete. The exemption covers
+      // the phrase's own lines only, so rewording the third line keeps it.
+      const digest = digestLine(`${first}\n${second}`);
+      expect(await run([first, second, "and that is the whole point."], digest)).toEqual([]);
+      expect(await run([first, second, "which we have said for years."], digest)).toEqual([]);
+    });
+
     it("is not held by its first line alone", async () => {
       // A digest of the opening line would survive any edit beneath it, which is the hole:
       // the phrase's own words on the next line could be rewritten under a standing exemption.
