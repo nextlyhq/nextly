@@ -132,12 +132,34 @@ export async function readPluginLifecycle(
  * uninstalled too, since plugins are installed one at a time. Kept out of the
  * service config, which is public, so no app can switch the gate off.
  */
-const lifecycleCommandBoot = new AsyncLocalStorage<true>();
+const lifecycleCommandBoot = new AsyncLocalStorage<{ target: string }>();
 
-export function asLifecycleCommandBoot<T>(work: () => Promise<T>): Promise<T> {
-  return lifecycleCommandBoot.run(true, work);
+/**
+ * Runs `work` as the boot of a lifecycle command for the plugin `target`.
+ * Inside it, only that plugin initialises: see `pluginsToInitialize`.
+ */
+export function asLifecycleCommandBoot<T>(
+  target: string,
+  work: () => Promise<T>
+): Promise<T> {
+  return lifecycleCommandBoot.run({ target }, work);
 }
 
 export function isLifecycleCommandBoot(): boolean {
-  return lifecycleCommandBoot.getStore() === true;
+  return lifecycleCommandBoot.getStore() !== undefined;
+}
+
+/**
+ * The configured plugins a boot initialises. Every one, except in a lifecycle
+ * command's boot, where only the command's target runs: a sibling that is not
+ * installed, or is mid-uninstall, must not reach `init()` against a schema the
+ * command is changing, and the boot exists only to give the target's hook its
+ * context.
+ */
+export function pluginsToInitialize<P extends { name: string }>(
+  plugins: readonly P[]
+): P[] {
+  const scope = lifecycleCommandBoot.getStore();
+  if (scope === undefined) return [...plugins];
+  return plugins.filter(plugin => plugin.name === scope.target);
 }

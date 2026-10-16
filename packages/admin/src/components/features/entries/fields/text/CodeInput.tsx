@@ -102,7 +102,7 @@ function CodeEditorSkeleton({ minHeight }: { minHeight: number }) {
  * - Auto-indentation and bracket matching
  * - Code folding
  * - Configurable editor options
- * - Theme integration with next-themes
+ * - Theme integration with the admin's theme (`useTheme`)
  * - Accessibility: keyboard navigation, screen reader support
  * - Read-only and disabled states
  *

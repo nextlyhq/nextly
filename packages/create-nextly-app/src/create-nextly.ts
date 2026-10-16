@@ -9,6 +9,8 @@ import pc from "picocolors";
 import { generateAdminPage } from "./generators/admin";
 import { generateConfig } from "./generators/config";
 import { generateEnv } from "./generators/env";
+import type { GeneratedFiles } from "./generators/generated-files";
+import { generateInstrumentation } from "./generators/instrumentation";
 import { generateMediaRoutes } from "./generators/media-routes";
 import {
   nextConfigReport,
@@ -47,6 +49,7 @@ import type {
   DatabaseConfig,
   DatabaseType,
   EnvGenerationResult,
+  PackageManager,
   ProjectApproach,
   ProjectType,
 } from "./types";
@@ -377,6 +380,12 @@ export async function createNextly(
 
   // --- Scaffold project from template ---
 
+  // A new project's package manager, settled here before any file is written
+  // and kept by detection below: the scaffold writes pnpm-workspace.yaml for
+  // its build allowlist whatever manager installs it, so reading the files
+  // back would answer differently.
+  let scaffoldPackageManager: PackageManager | undefined;
+
   if (isFreshProject && projectName) {
     const targetDir = installInCwd ? cwd : path.join(cwd, projectName);
 
@@ -412,7 +421,7 @@ export async function createNextly(
       // agent of the command that invoked this CLI, which is the package
       // manager that will run the install a moment later; the target has no
       // lockfile yet, so nothing else could answer.
-      const scaffoldPackageManager = await detectPackageManager(targetDir);
+      scaffoldPackageManager = await detectPackageManager(targetDir);
 
       await copyTemplate({
         projectName,
@@ -480,10 +489,10 @@ export async function createNextly(
       if (projectType === "plugin") {
         // A plugin keeps its library in src/ and its Next.js app in dev/, a
         // layout the app detector rejects ("App Router not detected").
-        projectInfo = await detectPluginPackage(cwd);
+        projectInfo = await detectPluginPackage(cwd, scaffoldPackageManager);
         s.stop("Detected plugin package");
       } else {
-        projectInfo = await detectProject(cwd);
+        projectInfo = await detectProject(cwd, scaffoldPackageManager);
         s.stop(`Detected Next.js ${projectInfo.nextVersion || "unknown"}`);
       }
     } catch (error) {
@@ -542,13 +551,16 @@ export async function createNextly(
     const s = p.spinner();
     s.start("Setting up environment...");
     let nextConfigPatch: NextConfigPatch | null = null;
+    // What the existing-app generators did that the developer should know about.
+    const reported: GeneratedFiles[] = [];
     try {
       if (!isFreshProject) {
         // Existing project: generate Nextly config files
-        await generateConfig(cwd, projectType);
+        await generateConfig(cwd, projectType, projectInfo);
         await generateRoutes(cwd, projectInfo);
         await generateAdminPage(cwd, projectInfo);
         await generateMediaRoutes(cwd, projectInfo);
+        reported.push(await generateInstrumentation(cwd, projectInfo));
         await generateTypesDirectory(cwd, projectInfo);
         nextConfigPatch = await patchNextConfig(cwd, database);
       }
@@ -568,6 +580,15 @@ export async function createNextly(
       // Said after the spinner, so each line stays on screen. Keys and file
       // names only: nothing here ever carries an env value.
       if (nextConfigPatch) printNextConfigPatch(nextConfigPatch);
+      for (const files of reported) {
+        for (const written of files.written) p.log.info(`Wrote ${written}`);
+        for (const { path: changed, added } of files.changed)
+          p.log.info(`Updated ${changed}: ${added.join(", ")}`);
+        for (const { path: skipped, why, toAdd } of files.skipped) {
+          p.log.warn(`Left ${skipped} as it was: ${why}`);
+          if (toAdd) p.log.message(toAdd);
+        }
+      }
       if (envResult) reportEnvFiles(envResult);
     } catch (error) {
       s.stop("Failed to generate configuration");

@@ -7,8 +7,6 @@
 
 import type { ServiceType, OperationType } from "@nextly/services/dispatcher";
 
-import { parseWhereQuery } from "../services/collections/query-parser";
-
 // ============================================================================
 // Types
 // ============================================================================
@@ -2646,24 +2644,22 @@ export function parseRestRoute(
 
   // Add search parameters to routeParams
   if (searchParams) {
-    let hasBracketWhere = false;
+    const bracketWhere = new URLSearchParams();
 
     for (const [key, value] of searchParams.entries()) {
       if (key.startsWith("where[")) {
-        hasBracketWhere = true;
+        bracketWhere.append(key, value);
       } else {
         routeParams[key] = value;
       }
     }
 
-    // Parse bracket notation where params (e.g. where[slug][equals]=value)
-    // into a JSON string so the dispatcher's parseWhereParam() can handle it
-    if (hasBracketWhere && !routeParams.where) {
-      const parsed = parseWhereQuery(searchParams);
-      if (parsed) {
-        routeParams.where = JSON.stringify(parsed);
-      }
-    }
+    // Bracket notation where params (e.g. where[slug][equals]=value) travel
+    // to the dispatcher as written, and are parsed there by parseWhereParam()
+    // beside any JSON `where`. Parsing them here would put a refusal outside
+    // the dispatcher's error mapping, where it answers 500 instead of 400.
+    const brackets = bracketWhere.toString();
+    if (brackets) routeParams.whereBrackets = brackets;
   }
 
   // Handle /api/me endpoint for current user

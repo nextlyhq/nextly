@@ -260,10 +260,25 @@ export async function runPluginInstallCommand(
  * the command that installs it — the mirror of uninstall refusing while an
  * enabled dependent remains.
  */
+/**
+ * A disabled plugin's hooks do not run, so an install or an uninstall of it
+ * could record a state its hook never produced. Refused before any change.
+ */
+function assertEnabled(plugin: LifecyclePlugin): void {
+  if (plugin.enabled) return;
+  throw new NextlyError({
+    code: "PLUGIN_DISABLED",
+    publicMessage:
+      `The plugin "${plugin.name}" is disabled in config. Enable it in ` +
+      "the config to install or uninstall it.",
+  });
+}
+
 async function assertInstallable(
   plugin: LifecyclePlugin,
   deps: PluginLifecycleDeps
 ): Promise<void> {
+  assertEnabled(plugin);
   assertDependenciesInstalled({
     pluginName: plugin.name,
     configured: deps.plugins,
@@ -316,6 +331,7 @@ async function decideUninstall(
   deps: PluginLifecycleDeps
 ): Promise<UninstallDecision> {
   const plugin = find(deps.plugins, name);
+  assertEnabled(plugin);
   assertResumedTheSameWay(
     plugin,
     (await deps.readLifecycle()).get(plugin.name),

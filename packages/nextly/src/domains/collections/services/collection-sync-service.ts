@@ -33,7 +33,7 @@
  */
 
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join } from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
@@ -49,6 +49,10 @@ import type {
 } from "../../../schemas/dynamic-collections/types";
 import type { Logger } from "../../../services/shared";
 import { BaseService } from "../../../shared/base-service";
+import {
+  generatedTypesFile,
+  generatedZodDir,
+} from "../../../shared/lib/generated-output-paths";
 import {
   toSingularLabel,
   toPluralLabel,
@@ -584,7 +588,8 @@ export class CollectionSyncService extends BaseService {
       // dynamic_collections metadata via generateRuntimeSchema), so they
       // were orphan output. `result.generatedSchemas` stays an empty array
       // for backward compatibility with consumers that read it.
-      const zodDir = resolve(opts.cwd, config.db.schemasDir, "zod");
+      // The same folder generateZodSchemas writes to, fitted to the app's layout.
+      const zodDir = generatedZodDir(opts.cwd, config.db.schemasDir);
       const missingZodCollections = config.collections.filter(c => {
         const zodPath = join(zodDir, `${c.slug}.zod.ts`);
         return !existsSync(zodPath);
@@ -982,7 +987,8 @@ export class CollectionSyncService extends BaseService {
 
     const indexFile = generator.generateIndexFile(records);
 
-    const outputDir = resolve(opts.cwd, schemasDir, "zod");
+    // schemasDir/zod, fitted to the app's layout as every generator fits it.
+    const outputDir = generatedZodDir(opts.cwd, schemasDir);
 
     if (!opts.dryRun) {
       if (!existsSync(outputDir)) {
@@ -1029,7 +1035,8 @@ export class CollectionSyncService extends BaseService {
     const typesFile = generator.generateTypesFile(records);
 
     // Resolve output path
-    const outputPath = resolve(opts.cwd, outputFile);
+    // Fitted to the app's layout, as `generate:types` writes it.
+    const outputPath = generatedTypesFile(opts.cwd, outputFile);
 
     if (!opts.dryRun) {
       // Ensure directory exists

@@ -34,6 +34,8 @@
  */
 import type { ReleaseMemberAction } from "../../schemas/releases/types";
 
+import { isDueAt } from "./release-due";
+
 /** One release membership that could affect a document, as stored. */
 export interface DueMember {
   memberId: string;
@@ -71,13 +73,11 @@ export function resolveReleaseEffect(input: {
   members: DueMember[];
   now: Date;
 }): ReleaseEffectDecision {
-  const nowMs = input.now.getTime();
   let winner: DueMember | null = null;
 
   for (const candidate of input.members) {
-    // Inclusive: a release scheduled for 09:00 is in effect AT 09:00, not from
-    // the first request after it.
-    if (candidate.scheduledAt.getTime() > nowMs) continue;
+    // The one due boundary (`release-due`), the same the drain queries by.
+    if (!isDueAt(candidate.scheduledAt, input.now)) continue;
     if (winner === null || isLater(candidate, winner)) winner = candidate;
   }
 
