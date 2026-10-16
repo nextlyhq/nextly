@@ -144,8 +144,9 @@ describe("draft/published split — updateEntry (integration)", () => {
     expect(drafts).toHaveLength(1);
     expect(drafts[0].snapshot.title).toBe("edited-in-draft");
 
-    // No durable (numbered) version was stamped for the draft edit.
-    expect(await durableCount()).toBe(durableBefore);
+    // The save is kept in the history as exactly one durable draft version,
+    // beside the working draft it was stored into.
+    expect(await durableCount()).toBe(durableBefore + 1);
   });
 
   it("accumulates disjoint status-less edits onto the working draft instead of overwriting them", async () => {

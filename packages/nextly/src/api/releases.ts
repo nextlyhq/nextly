@@ -26,7 +26,6 @@ import type { AuthenticatedScope } from "../auth/authenticated-scope";
 import { runWithCallerScope } from "../auth/caller-scope";
 import { isErrorResponse, requireAnyPermission } from "../auth/middleware";
 import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
-import { container } from "../di";
 import {
   isReleaseTab,
   RELEASE_ATTENTION_REASONS,
@@ -360,122 +359,6 @@ function optionalInstant(value: string | null, key: string): Date | undefined {
 }
 
 /**
- * Whether this scope declares a Draft/Published lifecycle.
- *
- * Asked of the registry, which holds what the schema declared. Answering `false`
- * when the registry cannot be reached is deliberate: a member whose lifecycle
- * support is unknown is one the drain may not be able to perform, and admitting
- * it on an unavailable answer trades a clear refusal now for a release that
- * silently never publishes.
- */
-async function declaresLifecycle(
-  scopeKind: "collection" | "single",
-  scopeSlug: string
-): Promise<boolean> {
-  const key =
-    scopeKind === "single"
-      ? "singleRegistryService"
-      : "collectionRegistryService";
-  if (!container.has(key)) return false;
-  const registry = container.get<{
-    getCollectionBySlug?: (
-      slug: string
-    ) => Promise<{ status?: boolean } | null>;
-    getSingleBySlug?: (slug: string) => Promise<{ status?: boolean } | null>;
-  }>(key);
-  const record = await (scopeKind === "single"
-    ? registry.getSingleBySlug?.(scopeSlug)
-    : registry.getCollectionBySlug?.(scopeSlug));
-  return record?.status === true;
-}
-
-/**
- * Refuse a member whose target document is not there.
- *
- * A typo or a stale id is accepted happily by the write path — nothing joins a
- * member to a document — and then fails at the scheduled instant with
- * not-found, holding the release open and reporting a failure nobody is
- * watching for. Resolved as the CALLER, so a document they may not read is
- * indistinguishable from one that does not exist and this cannot be used to
- * probe for ids.
- *
- * Placed at this boundary because it is where a content reader is available.
- * When the add-time document-rule check lands in the wiring it will carry the
- * reader into the service, and this moves there so the Direct API path gets it
- * too.
- */
-async function resolveTarget(
-  ctx: ReleaseContext,
-  scopeKind: "collection" | "single",
-  scopeSlug: string,
-  entryId: string
-): Promise<string> {
-  // `status: "all"` is REQUIRED, not incidental. An untrusted read defaults to
-  // `published`, and the document a release most often exists to publish is a
-  // DRAFT — so the ordinary draft-to-launch flow would 404 at the moment it is
-  // assembled, which is the one case this check must not break.
-  const found = (await (scopeKind === "single"
-    ? ctx.nextly.findSingle({
-        slug: scopeSlug as never,
-        overrideAccess: false,
-        user: { id: ctx.caller.userId } as never,
-        status: "all",
-      } as never)
-    : ctx.nextly.findByID({
-        collection: scopeSlug as never,
-        id: entryId,
-        overrideAccess: false,
-        user: { id: ctx.caller.userId } as never,
-        status: "all",
-      } as never))) as { id?: string; status?: unknown } | null | undefined;
-
-  if (found === null || found === undefined) {
-    // Read AS the caller, so a document they may not see and one that is not
-    // there are the same answer and this cannot be used to probe for ids.
-    throw NextlyError.notFound({
-      logContext: {
-        reason: "release-member-target-missing",
-        scopeKind,
-        scopeSlug,
-        entryId,
-      },
-    });
-  }
-
-  // A target with no publish lifecycle can never satisfy the member.
-  // Materialisation works by writing the status field, so with the lifecycle
-  // disabled the write produces no observable published or draft state, the
-  // drain records a failed action, and the release stays scheduled forever.
-  //
-  // Read from the SCHEMA, not probed on the row. An earlier version checked
-  // whether the row carried a `status` property, which is wrong in the
-  // dangerous direction: the name is reserved only when the lifecycle is
-  // enabled, so a collection with it DISABLED may legally define an ordinary
-  // field called `status` — and materialisation would then overwrite that
-  // author's field with "published" and report the release complete.
-  if (!(await declaresLifecycle(scopeKind, scopeSlug))) {
-    throw badRequest(
-      `\`${scopeSlug}\` has no draft/published lifecycle, so it cannot be scheduled in a release.`,
-      { reason: "target-without-lifecycle", scopeKind, scopeSlug }
-    );
-  }
-
-  // The SINGLE's own id, not the one the caller sent. A Single is addressed by
-  // slug, so any id is accepted here — but release visibility compares stored
-  // decisions against the row's real id, and a member carrying a stale one is
-  // invisible to reads until a background drain happens to run.
-  if (scopeKind === "single") {
-    if (typeof found.id !== "string") {
-      throw NextlyError.internal({
-        logContext: { reason: "single-without-id", scopeSlug },
-      });
-    }
-    return found.id;
-  }
-  return entryId;
-}
-
-/**
  * What every release operation is handed.
  *
  * `caller` carries `overrideAccess: false`, which is what turns the service's
@@ -722,10 +605,9 @@ const RELEASE_OPERATIONS: Record<
       });
     }
 
-    // Returns the id the member must carry, which for a Single is the row's
-    // own rather than whatever the caller sent.
-    const targetId = await resolveTarget(ctx, scopeKind, scopeSlug, entryId);
-
+    // The target checks — the document is there for the caller, its
+    // collection has a lifecycle, a Single resolves to its own row — are the
+    // service's, so the Direct API makes them too.
     return respondMutation(
       "Added to release.",
       await releases.addMember({
@@ -733,7 +615,7 @@ const RELEASE_OPERATIONS: Record<
         releaseId,
         scopeKind,
         scopeSlug,
-        entryId: targetId,
+        entryId,
         locale,
         action,
       }),

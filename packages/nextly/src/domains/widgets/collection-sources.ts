@@ -399,9 +399,13 @@ function useAsTitleOf(collection: RegisteredCollection): string | undefined {
   return trimmed === "" ? undefined : trimmed;
 }
 
-export async function refreshCollectionSources(): Promise<void> {
+/**
+ * Rebuild the `collection:` sources, answering whether the registry could be
+ * read. On `false` the previous sources stand, as the note above explains.
+ */
+export async function refreshCollectionSources(): Promise<boolean> {
   const collections = await readRegisteredCollections();
-  if (!collections) return;
+  if (!collections) return false;
 
   // A collection kept off the dashboard gets no source, so no card is generated for it and a
   // query naming it is refused exactly as an unknown name is -- for a super-admin too.
@@ -436,4 +440,5 @@ export async function refreshCollectionSources(): Promise<void> {
   // registry refuses keeps the previous sources AND the previous record, so the sources and the
   // other surfaces that ask this record always describe one snapshot.
   recordKeptOffDashboard("collection", collections);
+  return true;
 }

@@ -57,6 +57,8 @@ import {
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
+import { publishedEntries } from "../../ui/scripts/published-entries";
+
 // Paths are walked in `/` form on every platform, so the real tree and the
 // `/repo/...` trees the rule's own tests build resolve the same way. Windows
 // reads a `/` path as readily as its own, and `posix.join` keeps a drive
@@ -116,26 +118,28 @@ export function serverOnlyKind(specifier: string): string | null {
 }
 
 /**
- * The third-party packages nextly's client-safe entries may reach, each reviewed as safe in a
- * browser.
+ * The third-party imports nextly's client-safe entries may reach, each reviewed as safe in a
+ * browser, as `specifier@version`.
  *
  * 🔴 The walk stops at a third-party package: it cannot read what a published package imports in
  * turn, and walking into `node_modules` would read the Node build where a bundler takes the
- * `browser` one. So the boundary for those entries is this list. A package reached that is not on
- * it fails the run until someone reviews it and adds it with the reason; a package on it that is
- * no longer reached fails too, so the list never vouches for more than is used. Reviewed
- * 2026-10-15 against the installed versions:
+ * `browser` one. So the boundary for those entries is this list, and an approval covers exactly
+ * the subpath and the version that were read: another entry point of the same package, or an
+ * upgrade, is a different import and fails the run until it is reviewed and added with its reason.
+ * An entry no longer reached fails too, so the list never vouches for more than is used. Reviewed
+ * 2026-10-15:
  */
 const REVIEWED_BROWSER_PACKAGES: readonly string[] = [
-  // 2.3.1, reached through `@nextlyhq/blocks-engine` as `css-tree/parser` and `css-tree/walker`.
-  // Those subpaths import no package and do not reach `lib/data.js` or `lib/version.js`, the only
-  // files that use Node's `module`, which its `browser` field swaps for prebuilt `dist/` files.
-  "css-tree",
-  // 4.0.5, reached through `@nextlyhq/blocks-engine`. It imports no Node built-in; it reads
-  // `process.platform` only behind a `typeof process` guard.
-  "picomatch",
+  // Through `@nextlyhq/blocks-engine`. These two subpaths walk 79 files that import no package and
+  // never reach `lib/data.js` or `lib/version.js`, the only files using Node's `module`, which the
+  // package's `browser` field swaps for prebuilt `dist/` files anyway.
+  "css-tree/parser@2.3.1",
+  "css-tree/walker@2.3.1",
+  // Through `@nextlyhq/blocks-engine`. It imports no Node built-in, and reads `process.platform`
+  // only behind a `typeof process` guard.
+  "picomatch@4.0.5",
   // Validation with no runtime dependencies, written to run in browsers.
-  "zod",
+  "zod@4.6.2",
 ];
 
 /**
@@ -211,7 +215,35 @@ export function pickImportCondition(target: unknown): string | null {
 interface WorkspacePackage {
   readonly dir: string;
   readonly manifest: { name?: string; exports?: Record<string, unknown> };
+  /**
+   * The source each published subpath is built from, by its export key, for a
+   * package that declares that itself. Absent, a subpath's source is found by
+   * the name convention: `dist/x.mjs` is built from `src/x`.
+   */
+  readonly entrySources?: ReadonlyMap<string, string>;
 }
+
+/**
+ * The packages that publish a subpath from a source the name convention does
+ * not lead to, each read from the table its own build reads.
+ *
+ * `@nextlyhq/ui` builds `./color` from `src/lib/color/index.ts`, and declares
+ * every entry's source in `scripts/published-entries.ts`, which its build and
+ * its surface checks read. Reading the same table keeps this resolver from
+ * holding a third copy, and from needing a file at `src/color.ts` that exists
+ * only so a name convention finds it. A package with such a layout and no
+ * table here stays unresolved, and fails, rather than going unwalked.
+ */
+const ENTRY_SOURCE_TABLES: ReadonlyMap<
+  string,
+  () => ReadonlyMap<string, string>
+> = new Map([
+  [
+    "@nextlyhq/ui",
+    () =>
+      new Map(publishedEntries().map(entry => [entry.subpath, entry.source])),
+  ],
+]);
 
 /** Every workspace package, by the name other packages import it as. */
 export function readWorkspace(
@@ -224,8 +256,13 @@ export function readWorkspace(
     const manifestPath = join(dir, "package.json");
     if (!io.exists(manifestPath)) continue;
     const manifest = JSON.parse(io.read(manifestPath));
-    if (typeof manifest.name === "string")
-      index.set(manifest.name, { dir, manifest });
+    if (typeof manifest.name !== "string") continue;
+    const entrySources = ENTRY_SOURCE_TABLES.get(manifest.name)?.();
+    index.set(manifest.name, {
+      dir,
+      manifest,
+      ...(entrySources === undefined ? {} : { entrySources }),
+    });
   }
   return index;
 }
@@ -265,13 +302,19 @@ function resolveWorkspaceSubpath(
   workspace: Map<string, WorkspacePackage>,
   io: Io
 ): Resolution {
-  const { dir, manifest } = workspace.get(owner)!;
+  const { dir, manifest, entrySources } = workspace.get(owner)!;
   const subpath =
     specifier === owner ? "." : `.${specifier.slice(owner.length)}`;
   const distPath = pickImportCondition(manifest.exports?.[subpath]);
   if (typeof distPath !== "string") return { kind: "unresolved", specifier };
   // A stylesheet or other asset ends the walk: it carries no imports and reaches no driver.
   if (!/\.(mjs|js|cjs)$/.test(distPath)) return { kind: "asset" };
+
+  // The package's own word for where this subpath is built from, first.
+  const declared = entrySources?.get(subpath);
+  if (declared !== undefined) {
+    return asFile(resolveSourceFile(join(dir, declared), io), specifier);
+  }
 
   const relativeSource = distPath
     .replace(/^\.\//, "")
@@ -316,11 +359,34 @@ export interface ClosureResult {
   readonly violations: { package: string; kind: string; chain: string[] }[];
   readonly unresolved: { from: string; specifier: string }[];
   /**
-   * The third-party packages reached, by name. The walk stops at each one, so what a package
-   * imports in turn is not seen here; a walk that must vouch for those holds this set to a list
-   * of packages reviewed as safe for its kind of bundle.
+   * The third-party imports reached, each as `specifier@version`: the subpath imported and the
+   * version installed where it is imported from (`unknown` when none is). The walk stops at each
+   * one, so what a package imports in turn is not seen here; a walk that must vouch for those holds
+   * this set to imports reviewed as safe for its kind of bundle, and a new subpath or an upgrade is
+   * a new import to review.
    */
   readonly packages: Set<string>;
+}
+
+/**
+ * The version of a package installed where `fromFile` would load it: the first
+ * `node_modules/<name>/package.json` found walking up from the file's directory, as Node and
+ * pnpm's links resolve it.
+ */
+export function installedVersion(
+  specifier: string,
+  fromFile: string,
+  io: Io
+): string {
+  const name = packageNameOf(specifier);
+  for (let dir = dirname(fromFile); ; dir = dirname(dir)) {
+    const manifest = join(dir, "node_modules", name, "package.json");
+    if (io.exists(manifest)) {
+      const version: unknown = JSON.parse(io.read(manifest)).version;
+      return typeof version === "string" ? version : "unknown";
+    }
+    if (dirname(dir) === dir) return "unknown";
+  }
 }
 
 /** The package a bare specifier belongs to: `@scope/name` or `name`, without a subpath. */
@@ -373,7 +439,7 @@ export function walkClientClosure(
       if (kind !== null) {
         violations.push({ package: next.name, kind, chain: chainTo(file) });
       } else {
-        packages.add(packageNameOf(next.name));
+        packages.add(`${next.name}@${installedVersion(next.name, file, io)}`);
       }
       return null;
     }
@@ -761,11 +827,15 @@ describe("the rule can fail", () => {
     );
   });
 
-  it("names a third-party package no one has reviewed, and a listed one no longer reached", () => {
+  it("names a third-party import no one has reviewed, and a listed one no longer reached", () => {
     // The case the list exists for: a package whose own imports the walk cannot see.
     const { io, resolve } = build({
       "/repo/packages/nextly/src/config.ts":
         'import { pick } from "leaky-lib/sub";\nimport { z } from "zod";\nexport { pick, z };',
+      "/repo/packages/nextly/node_modules/leaky-lib/package.json":
+        '{ "version": "1.0.0" }',
+      "/repo/packages/nextly/node_modules/zod/package.json":
+        '{ "version": "4.6.2" }',
     });
     const result = walkClientClosure(
       ["/repo/packages/nextly/src/config.ts"],
@@ -773,14 +843,34 @@ describe("the rule can fail", () => {
       io
     );
     expect(result.violations).toEqual([]);
-    expect(packagesOffList(result, ["zod", "gone"])).toEqual({
-      unreviewed: ["leaky-lib"],
-      unused: ["gone"],
+    expect(
+      packagesOffList(result, ["zod@4.6.2", "leaky-lib/sub@1.0.0"])
+    ).toEqual({ unreviewed: [], unused: [] });
+    expect(packagesOffList(result, ["zod@4.6.2", "gone@1.0.0"])).toEqual({
+      unreviewed: ["leaky-lib/sub@1.0.0"],
+      unused: ["gone@1.0.0"],
     });
-    expect(packagesOffList(result, ["zod", "leaky-lib"])).toEqual({
-      unreviewed: [],
-      unused: [],
+    // An approval of one subpath does not cover another, and an approval of one version does not
+    // cover the next: each is a new import to review.
+    expect(packagesOffList(result, ["zod@4.6.1", "leaky-lib@1.0.0"])).toEqual({
+      unreviewed: ["leaky-lib/sub@1.0.0", "zod@4.6.2"],
+      unused: ["zod@4.6.1", "leaky-lib@1.0.0"],
     });
+  });
+
+  it("reads the version installed nearest the importing file", () => {
+    const io = fakeIo({
+      "/repo/node_modules/zod/package.json": '{ "version": "3.0.0" }',
+      "/repo/packages/nextly/node_modules/zod/package.json":
+        '{ "version": "4.6.2" }',
+    });
+    expect(
+      installedVersion("zod", "/repo/packages/nextly/src/a/b.ts", io)
+    ).toBe("4.6.2");
+    expect(installedVersion("zod", "/repo/packages/admin/src/c.ts", io)).toBe(
+      "3.0.0"
+    );
+    expect(installedVersion("absent", "/repo/x.ts", io)).toBe("unknown");
   });
 
   it("names a scoped package without its subpath", () => {
@@ -897,6 +987,44 @@ describe("the rule can fail", () => {
         "C.ts"
       )
     ).toBe(false);
+  });
+
+  it("resolves a published subpath through its package's own entry table", () => {
+    // `./color` builds `dist/color.mjs` from `src/lib/color/index.ts`: no name
+    // convention leads from one to the other, so only the package's table can.
+    const ui = {
+      dir: "/repo/packages/ui",
+      manifest: {
+        name: "@x/ui",
+        exports: { "./color": { import: { default: "./dist/color.mjs" } } },
+      },
+    };
+    const io = fakeIo({ "/repo/packages/ui/src/lib/color/index.ts": "" });
+    const resolve = (entrySources?: ReadonlyMap<string, string>) =>
+      makeResolver(
+        new Map(),
+        new Map([
+          ["@x/ui", { ...ui, ...(entrySources ? { entrySources } : {}) }],
+        ]),
+        io
+      )("/repo/packages/admin/src/a.ts", "@x/ui/color");
+    expect(resolve(new Map([["./color", "src/lib/color/index.ts"]]))).toEqual({
+      kind: "file",
+      file: "/repo/packages/ui/src/lib/color/index.ts",
+    });
+    // The control: by the name convention alone it is unresolved, and fails.
+    expect(resolve()).toEqual({ kind: "unresolved", specifier: "@x/ui/color" });
+  });
+
+  it("resolves the design system's nested subpaths in this repository", () => {
+    const workspace = readWorkspace(PACKAGES, realIo);
+    const resolve = makeResolver(new Map(), workspace, realIo);
+    expect(
+      resolve(join(PACKAGES, "admin/src/a.ts"), "@nextlyhq/ui/color")
+    ).toEqual({
+      kind: "file",
+      file: join(PACKAGES, "ui/src/lib/color/index.ts"),
+    });
   });
 
   it("resolves a NodeNext .js specifier to the .ts beside it", () => {

@@ -572,7 +572,7 @@ async function connect(options: RunnerOptions, context: CommandContext) {
       // `try` skipped the cleanup exactly then.
       // As the lifecycle command's boot: the install-state gate would refuse
       // the very plugin this command is installing or uninstalling.
-      await asLifecycleCommandBoot(() =>
+      await asLifecycleCommandBoot(plugin.name, () =>
         registerServices(
           buildServiceConfig({
             // The config as the app wrote it. The boot runs every `setup`

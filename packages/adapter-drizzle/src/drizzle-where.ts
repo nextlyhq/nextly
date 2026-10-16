@@ -204,9 +204,10 @@ function buildCondition(
       // its where clause as a required argument, a widened match is a widened deletion.
       return sql`${col} like ${containsPattern(String(cond.value))} escape '!'`;
     case "ICONTAINS":
-      // CONTAINS without regard to case, on every dialect and whatever the column's collation:
-      // the same literal pattern and escape, both sides lower-cased. SQLite's `lower()` folds
-      // ASCII letters only, so there "É" and "é" still differ.
+      // CONTAINS without regard to case, on every dialect, even where the column's collation is
+      // case-sensitive: the same literal pattern and escape, both sides lower-cased. Which
+      // letters fold is the database's own `lower()`: ASCII letters only on SQLite and under
+      // PostgreSQL's `C` or `POSIX` collation, so there "É" and "é" still differ.
       return sql`lower(${col}) like lower(${containsPattern(String(cond.value))}) escape '!'`;
     default:
       throw new Error(`Unsupported operator: ${cond.op}`);

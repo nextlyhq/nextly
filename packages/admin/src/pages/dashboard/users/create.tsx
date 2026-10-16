@@ -1,6 +1,5 @@
 "use client";
 
-import { zodResolver } from "@hookform/resolvers/zod";
 import {
   Alert,
   AlertDescription,
@@ -36,7 +35,7 @@ import { getErrorMessage } from "@admin/lib/errors/error-types";
 import { navigateTo } from "@admin/lib/navigation";
 import { filterStringArray } from "@admin/lib/type-guards";
 import {
-  createUserFormSchema,
+  createUserFormSettings,
   type CreateUserFormValues,
 } from "@admin/types/userform";
 
@@ -102,7 +101,8 @@ export default function CreateUserPage(): ReactElement {
 
   // React Hook Form
   const form = useForm<CreateUserFormValues>({
-    resolver: zodResolver(createUserFormSchema),
+    // The resolver with every unmet rule kept, shared with the other user page.
+    ...createUserFormSettings,
     defaultValues: {
       fullName: "",
       email: "",

@@ -136,6 +136,7 @@ export const NEXTLY_ERROR_STATUS = {
   // A configured plugin `nextly plugins install` has not recorded as
   // installed, refused at a production boot.
   PLUGIN_NOT_INSTALLED: 409,
+  PLUGIN_DISABLED: 409,
   // An uninstall that began and did not finish: refused at boot, and when
   // run again the other way (with or without `--keep-data`).
   PLUGIN_UNINSTALL_UNFINISHED: 409,

@@ -32,6 +32,7 @@ import type {
   VersionsWhereCondition,
 } from "../versions/db-api";
 
+import { releaseDueCondition } from "./release-due";
 import { releaseMemberKey } from "./release-member-key";
 import { releaseRevalidationIntent } from "./release-revalidation";
 import { NO_DECISIONS } from "./release-scope";
@@ -232,7 +233,7 @@ export interface ReleasePage {
  * The search, as a condition that ignores case on every engine.
  *
  * `ICONTAINS` is the adapter's literal substring match without regard to
- * case, whatever the column's collation: a typed `%` or `_` is searched for,
+ * case, even under a case-sensitive collation: a typed `%` or `_` is searched for,
  * not read as a wildcard, and a MySQL column under a case-sensitive collation
  * still matches "Spring" for "spring".
  */
@@ -647,16 +648,6 @@ export class ReleasesRepository {
   }
 
   /**
-   * Every scheduled release whose instant has arrived.
-   *
-   * `scheduledAt <= now` is decided HERE in TypeScript rather than in the
-   * where clause, for the reason `findDueMembersFor` gives: dueness is one
-   * judgement, and `resolveReleaseEffect` already owns it. A second spelling in
-   * SQL would be a second place for the boundary case — a release scheduled for
-   * 09:00 is in effect AT 09:00, not from the first request after it — to be
-   * got wrong, and the two would disagree silently.
-   */
-  /**
    * Touch a release ONLY if it is still assemblable, and say whether it was.
    *
    * One conditional UPDATE rather than a read followed by a decision. A caller
@@ -857,16 +848,24 @@ export class ReleasesRepository {
     });
   }
 
+  /**
+   * Every scheduled release whose instant has arrived, and no other.
+   *
+   * Asked of the database, on the `(state, scheduled_at)` index the table
+   * carries for exactly this question, so a site with a year of launches
+   * planned reads only the ones due rather than every scheduled release.
+   * The due boundary is `releaseDueCondition`, the one `resolveReleaseEffect`
+   * evaluates too; which member wins is still that function's alone.
+   */
   async findDueReleases(now: Date): Promise<ReleaseRow[]> {
-    const rows = await this.db.select<ReleaseRow>(RELEASES, {
+    return this.db.select<ReleaseRow>(RELEASES, {
       where: {
-        and: [{ column: "state", op: "=", value: "scheduled" }],
+        and: [
+          { column: "state", op: "=", value: "scheduled" },
+          releaseDueCondition(now),
+        ],
       },
     });
-    const nowMs = now.getTime();
-    return rows.filter(
-      row => row.scheduledAt !== null && row.scheduledAt.getTime() <= nowMs
-    );
   }
 
   /**

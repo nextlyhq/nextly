@@ -34,6 +34,17 @@ const mockAppendFile = vi.mocked(fs.appendFile);
 const mockReadFile = vi.mocked(fs.readFile);
 const mockEnsureDir = vi.mocked(fs.ensureDir);
 
+const srcLayout: ProjectInfo = {
+  isNextJs: true,
+  isAppRouter: true,
+  hasTypescript: true,
+  packageManager: "pnpm",
+  nextVersion: "16.0.0",
+  srcDir: true,
+  appDir: "src/app",
+};
+const rootLayout: ProjectInfo = { ...srcLayout, srcDir: false, appDir: "app" };
+
 describe("generateConfig", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -42,7 +53,7 @@ describe("generateConfig", () => {
   });
 
   it("should generate blank template", async () => {
-    await generateConfig("/test/project", "blank");
+    await generateConfig("/test/project", "blank", rootLayout);
 
     expect(mockWriteFile).toHaveBeenCalledTimes(1);
     const [path, content] = mockWriteFile.mock.calls[0];
@@ -54,7 +65,7 @@ describe("generateConfig", () => {
 
   it("should fall back to blank for unknown project types", async () => {
     // Unknown types fall back to blank template via BASE_TEMPLATES lookup
-    await generateConfig("/test/project", "blank");
+    await generateConfig("/test/project", "blank", rootLayout);
 
     const [, content] = mockWriteFile.mock.calls[0];
     expect(content).toContain("collections: []");
@@ -62,7 +73,7 @@ describe("generateConfig", () => {
   });
 
   it("should not include storage configuration", async () => {
-    await generateConfig("/test/project", "blank");
+    await generateConfig("/test/project", "blank", rootLayout);
 
     const [, content] = mockWriteFile.mock.calls[0];
     expect(content).not.toContain("storage");
@@ -73,9 +84,50 @@ describe("generateConfig", () => {
   it("should throw error if config already exists", async () => {
     mockPathExists.mockResolvedValue(true as never);
 
-    await expect(generateConfig("/test/project", "blank")).rejects.toThrow(
-      "nextly.config.ts already exists"
+    await expect(
+      generateConfig("/test/project", "blank", rootLayout)
+    ).rejects.toThrow("nextly.config.ts already exists");
+  });
+
+  // The types file goes where the app keeps its code. A `./src/...` path written
+  // into an app with no src/ makes the first `generate:types` create a src/
+  // folder beside the root app/, split from the schemas it writes at the root.
+  it("points the types file into src/ for an app that uses src/", async () => {
+    await generateConfig("/test/project", "blank", srcLayout);
+
+    const [, content] = mockWriteFile.mock.calls[0];
+    expect(content).toContain(
+      'outputFile: "./src/types/generated/nextly-types.ts"'
     );
+  });
+
+  it("points the types file at the root for an app with no src/", async () => {
+    await generateConfig("/test/project", "blank", rootLayout);
+
+    const [, content] = mockWriteFile.mock.calls[0];
+    expect(content).toContain(
+      'outputFile: "./types/generated/nextly-types.ts"'
+    );
+    expect(content).not.toContain("./src/");
+  });
+
+  it("names the same file the types directory step creates", async () => {
+    // Two steps write one path: the config names it, the types step creates
+    // its placeholder. Observed from both calls, not restated here.
+    mockEnsureDir.mockResolvedValue(undefined as never);
+    for (const layout of [srcLayout, rootLayout]) {
+      vi.clearAllMocks();
+      mockPathExists.mockResolvedValue(false as never);
+      await generateConfig("/test/project", "blank", layout);
+      await generateTypesDirectory("/test/project", layout);
+
+      const configured = String(mockWriteFile.mock.calls[0][1]).match(
+        /outputFile: "\.\/([^"]+)"/
+      )?.[1];
+      const placeholder = posix(mockWriteFile.mock.calls[2][0]);
+      expect(configured).toBeDefined();
+      expect(placeholder).toBe(`/test/project/${configured}`);
+    }
   });
 });
 

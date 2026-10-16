@@ -13,10 +13,16 @@
  * @since 1.0.0
  */
 
+import type { AuthenticatedScope } from "../../auth/authenticated-scope";
 import { NextlyError } from "../../errors/nextly-error";
 
 import { toCamelCase, toSnakeCase } from "./case-conversion";
-import { getFieldFunctions, type FieldFunctions } from "./field-level-registry";
+import {
+  callerAccessGrants,
+  getFieldFunctions,
+  readableWithoutEntry,
+  type FieldFunctions,
+} from "./field-level-registry";
 
 type EntityKind = "collection" | "single";
 
@@ -58,24 +64,6 @@ export function filterKeys(
   return into;
 }
 
-/**
- * Refuse a filter that names a field carrying a read rule.
- *
- * **Conservative by construction, and deliberately so.** A field read rule is a
- * function of the ROW — it may consult `data` or `id` — and at query time there
- * is no row to judge, so "may this caller read this field" is not yet
- * answerable. Rather than guess, this refuses any field that CAN deny. Fields
- * with no read rule, which is nearly all of them, are untouched.
- *
- * That direction is forced rather than chosen: this is a precondition, and a
- * precondition that cannot decide must fail closed. Guessing "allowed" here
- * would hand back exactly the disclosure the module exists to stop.
- *
- * Refusing NAMES the field. That discloses the field is restricted, which the
- * caller already learns from its absence in every response, and it is the
- * difference between an API a developer can work with and one that silently
- * returns the wrong rows.
- */
 /**
  * Whether this field, or anything nested inside it, carries a read rule.
  *
@@ -140,18 +128,62 @@ function transformedFields(
     .sort();
 }
 
-/** Field names the caller may not use to select or order rows. */
-function protectedFields(
+/** Who is asking a query: the caller whose read rules are judged. */
+export interface QueryCaller {
+  user?: Record<string, unknown>;
+  /** The caller's own grants when they arrived on an API key. */
+  authenticatedScope?: AuthenticatedScope;
+}
+
+/**
+ * Field names, as the caller wrote them, that this caller may not read when no
+ * entry is given — so may not use to select, order, group or match rows.
+ *
+ * A field read rule is asked the question it is written to answer, for this
+ * caller, with no entry: a rule allowing the caller outright (by role,
+ * permission or identity) lets the field be queried, and a rule that refuses,
+ * throws, or needs an entry to decide does not. The last is what keeps a field
+ * readable only on some entries out of every query: a predicate, an ordering
+ * or a match would reveal its value on the entries where it is hidden.
+ *
+ * Judged under every spelling the name reaches the column by, so
+ * `secret_answer` is refused wherever `secretAnswer` is. The caller's grants
+ * are read once, and only if a named field carries a rule.
+ */
+async function unreadableFields(
   kind: EntityKind,
   slug: string,
-  names: Iterable<string>
-): string[] {
+  names: Iterable<string>,
+  caller: QueryCaller
+): Promise<string[]> {
   const fns = getFieldFunctions(kind, slug);
   if (!fns) return [];
-  return [...names]
-    .filter(name => spellings(name).some(n => carriesReadRule(fns[n])))
-    .sort();
+  const ruleCaller = {
+    user: caller.user,
+    grants: callerAccessGrants(caller.user, caller.authenticatedScope),
+  };
+  const denied: string[] = [];
+  for (const name of new Set(names)) {
+    for (const spelled of spellings(name)) {
+      const field = fns[spelled];
+      if (!field) continue;
+      // A rule-bearing field whose read value is not its stored value stays
+      // out however the rule answers: every row shows the transformed value,
+      // so a query on the stored one probes exactly what the rows hide.
+      const hidden =
+        (carriesReadRule(field) && transformsOnRead(field)) ||
+        !(await readableWithoutEntry(field, ruleCaller));
+      if (hidden) {
+        denied.push(name);
+        break;
+      }
+    }
+  }
+  return denied.sort();
 }
+
+/** The head of a dotted key: the field that owns any rule on its path. */
+const ownerOf = (key: string): string => key.split(".")[0];
 
 /** Where a field was named, and what naming it there would disclose. */
 type Position = "where" | "sort" | "groupBy";
@@ -197,7 +229,7 @@ function refusalFor(
   return fields.map(field => ({
     path: `${at}.${field}`,
     code,
-    message: `The field "${field}" carries a read rule, so it cannot be used to ${at === "groupBy" ? "group" : at === "sort" ? "sort" : "filter"}. ${because}`,
+    message: `"${field}" is a field you may not read, or may read only on some entries, so it cannot be used to ${at === "groupBy" ? "group" : at === "sort" ? "sort" : "filter"}. ${because}`,
   }));
 }
 
@@ -206,22 +238,19 @@ function refuse(fields: string[], at: Position): never {
 }
 
 /**
- * Refuse a filter that names a field carrying a read rule.
+ * Refuse a filter that names a field this caller may not read.
  *
- * **Conservative by construction, and deliberately so.** A field read rule is a
- * function of the ROW — it may consult `data` or `id` — and at query time there
- * is no row to judge, so "may this caller read this field" is not yet
- * answerable. Rather than guess, this refuses any field that CAN deny. Fields
- * with no read rule, which is nearly all of them, are untouched.
+ * A field read rule is a function of the ROW — it may consult `data` or `id`
+ * — and at query time there is no row, so the rule is asked for this caller
+ * with no entry (see `unreadableFields`). A rule that cannot allow without an
+ * entry refuses: this is a precondition, and a precondition that cannot decide
+ * must fail closed. Fields with no read rule, which is nearly all of them, are
+ * untouched.
  *
- * That direction is forced rather than chosen: this is a precondition, and a
- * precondition that cannot decide must fail closed. Guessing "allowed" here
- * would hand back exactly the disclosure the module exists to stop.
- *
- * Refusing NAMES the field. That discloses the field is restricted, which the
- * caller already learns from its absence in every response, and it is the
- * difference between an API a developer can work with and one that silently
- * returns the wrong rows.
+ * Refusing NAMES the key as the caller wrote it. That discloses the field is
+ * restricted, which the caller already learns from its absence in every
+ * response, and it is the difference between an API a developer can work with
+ * and one that silently returns the wrong rows.
  *
  * **Judge the CALLER's filter, not the settled one.** A `beforeRead` or
  * `beforeOperation` hook is trusted server code and narrows reads on purpose,
@@ -229,12 +258,16 @@ function refuse(fields: string[], at: Position): never {
  * Handing this the post-hook predicate would reject the very reads those hooks
  * exist to make safe.
  */
-export function assertFilterableFields(
+export async function assertFilterableFields(
   kind: EntityKind,
   slug: string,
   where: unknown,
-  opts: { overrideAccess?: boolean; frameworkFilter?: boolean } = {}
-): void {
+  opts: {
+    overrideAccess?: boolean;
+    frameworkFilter?: boolean;
+    caller?: QueryCaller;
+  } = {}
+): Promise<void> {
   // A trusted caller has already decided who is asking.
   if (opts.overrideAccess) return;
 
@@ -252,12 +285,15 @@ export function assertFilterableFields(
   if (opts.frameworkFilter) return;
   if (!where) return;
 
-  const referenced = new Set<string>();
-  referencedFields(where, referenced);
-  if (referenced.size === 0) return;
+  const keys = [...filterKeys(where)];
+  if (keys.length === 0) return;
 
-  const denied = protectedFields(kind, slug, referenced);
-  if (denied.length > 0) refuse(denied, "where");
+  // Judged by the field that owns the rule; named as the caller wrote it.
+  const denied = new Set(
+    await unreadableFields(kind, slug, keys.map(ownerOf), opts.caller ?? {})
+  );
+  const refused = keys.filter(key => denied.has(ownerOf(key))).sort();
+  if (refused.length > 0) refuse(refused, "where");
 }
 
 /**
@@ -305,54 +341,48 @@ export function refuseHiddenColumnFilter(keys: readonly string[]): void {
 }
 
 /**
- * Refuse an ORDER BY that names a field carrying a read rule.
+ * Refuse an ORDER BY that names a field this caller may not read.
  *
  * Sorting leaks the same value more slowly. The rows come back redacted, but
  * their ORDER is a comparison of the hidden column, and a caller who can create
  * rows with chosen anchor values can bisect a neighbour's value from where it
  * lands between them. A guard on the filter alone leaves that open.
  */
-export function assertSortableField(
+export async function assertSortableField(
   kind: EntityKind,
   slug: string,
   sort: string | undefined,
-  opts: { overrideAccess?: boolean; frameworkFilter?: boolean } = {}
-): void {
+  opts: {
+    overrideAccess?: boolean;
+    frameworkFilter?: boolean;
+    caller?: QueryCaller;
+  } = {}
+): Promise<void> {
   if (opts.overrideAccess || opts.frameworkFilter || !sort) return;
   // `-field` is descending; the field is the same either way.
-  const name = sort.replace(/^-/, "").split(".")[0];
-  const denied = protectedFields(kind, slug, [name]);
-  if (denied.length > 0) refuse(denied, "sort");
+  const written = sort.replace(/^-/, "");
+  const denied = await unreadableFields(
+    kind,
+    slug,
+    [ownerOf(written)],
+    opts.caller ?? {}
+  );
+  if (denied.length > 0) refuse([written], "sort");
 }
 
 /**
- * Refuse a GROUP BY that names a field carrying a read rule.
+ * Why this field cannot be a group key whoever asks, if it cannot.
  *
- * 🔴 A third disclosure route, and the one the other two guards do not cover.
- * `where` leaks a hidden value through which rows come back and `sort` through
- * where they land; grouping leaks it MORE directly than either, because the
- * distinct values become the buckets. A caller never sees the column -- field
- * redaction strips it from every row -- and reads the whole value set off the
- * labels instead. Selecting the field is not required, and refusing it does not
- * help: the answer is the grouping, not the row.
- *
- * Conservative for the reason the module states: a field read rule is a
- * function of the ROW, there is no row at query time, and a precondition that
- * cannot decide fails closed.
- */
-/**
- * Why this field cannot be a group key, if it cannot.
- *
- * THE one decision. `assertGroupableField` throws what this returns and
- * `isGroupableFieldName` reads whether it returned anything, so a restriction
- * added here reaches both. Two independent compositions of the same two checks
- * is how a source goes on advertising a field the read has started refusing.
+ * The caller-independent half of the group-key decision: a key that is not a
+ * string, or one naming a field whose stored value is not what a read returns.
+ * Whether THIS caller may read the field is the other half, asked by
+ * `assertGroupableField`; both read this, so a restriction added here reaches
+ * the read and the widget source alike.
  */
 export function groupableFieldProblem(
   kind: EntityKind,
   slug: string,
-  groupBy: unknown,
-  opts: { overrideAccess?: boolean; frameworkFilter?: boolean } = {}
+  groupBy: unknown
 ): Array<{ path: string; code: string; message: string }> | undefined {
   // `undefined` means "no group key was given", and an empty string is the same
   // absence spelled differently. Anything else non-string is MALFORMED, and is
@@ -383,17 +413,12 @@ export function groupableFieldProblem(
   }
   if (groupBy === "") return undefined;
 
-  // Nested paths address the field that OWNS the rule, as `where` does.
-  const name = groupBy.split(".")[0];
-
-  // BEFORE the trust check, and independently of it. A read rule asks who may
-  // see a value, so a caller reading with `overrideAccess` has already been
-  // answered. A transform asks what the value IS, and that answer does not
-  // change with the caller: a trusted grouped read would still publish stored
-  // values as labels while a list of the same rows shows the transformed ones,
-  // and the two describing the same rows differently is the defect whatever
-  // the caller's trust.
-  const transformed = transformedFields(kind, slug, [name]);
+  // A transform asks what the value IS, and that answer does not change with
+  // the caller: a trusted grouped read would still publish stored values as
+  // labels while a list of the same rows shows the transformed ones, and the
+  // two describing the same rows differently is the defect whatever the
+  // caller's trust.
+  const transformed = transformedFields(kind, slug, [ownerOf(groupBy)]);
   if (transformed.length > 0) {
     return transformed.map(field => ({
       path: `groupBy.${field}`,
@@ -401,37 +426,61 @@ export function groupableFieldProblem(
       message: `The field "${field}" is transformed when it is read, so its stored value is not the one a read returns. Grouping would publish the stored value as a bucket label, past the hook that changes it.`,
     }));
   }
-
-  if (opts.overrideAccess || opts.frameworkFilter) return undefined;
-  const denied = protectedFields(kind, slug, [name]);
-  if (denied.length > 0) return refusalFor(denied, "groupBy");
   return undefined;
 }
 
 /**
- * Whether an UNTRUSTED caller could ever group by this field.
+ * Whether a widget source should offer this field as a group key.
  *
- * Derived from the one decision above rather than repeating its checks, so a
- * restriction added there reaches this too. Answers for the untrusted case on
- * purpose: a widget executes with `overrideAccess: false`, so a field this
- * returns `false` for is one every dashboard request would be refused.
+ * A source is one list for every caller, so it cannot ask whether a given
+ * caller may read the field: it offers only fields no read rule can refuse,
+ * on top of the caller-independent half of the decision. A caller a rule
+ * allows can still group by the field directly.
  */
 export function isGroupableFieldName(
   kind: EntityKind,
   slug: string,
   name: string
 ): boolean {
-  return groupableFieldProblem(kind, slug, name) === undefined;
+  if (groupableFieldProblem(kind, slug, name) !== undefined) return false;
+  const fns = getFieldFunctions(kind, slug);
+  return !spellings(ownerOf(name)).some(n => carriesReadRule(fns?.[n]));
 }
 
-export function assertGroupableField(
+/**
+ * Refuse a GROUP BY this caller may not make.
+ *
+ * 🔴 A third disclosure route, and the one the other two guards do not cover.
+ * `where` leaks a hidden value through which rows come back and `sort` through
+ * where they land; grouping leaks it MORE directly than either, because the
+ * distinct values become the buckets. A caller never sees the column -- field
+ * redaction strips it from every row -- and reads the whole value set off the
+ * labels instead. Selecting the field is not required, and refusing it does not
+ * help: the answer is the grouping, not the row.
+ *
+ * The caller-independent problems apply to every caller, trusted or not; the
+ * read rule is asked of the caller as `where` asks it.
+ */
+export async function assertGroupableField(
   kind: EntityKind,
   slug: string,
   groupBy: string | undefined,
-  opts: { overrideAccess?: boolean; frameworkFilter?: boolean } = {}
-): void {
-  const errors = groupableFieldProblem(kind, slug, groupBy, opts);
+  opts: {
+    overrideAccess?: boolean;
+    frameworkFilter?: boolean;
+    caller?: QueryCaller;
+  } = {}
+): Promise<void> {
+  const errors = groupableFieldProblem(kind, slug, groupBy);
   if (errors) throw NextlyError.validation({ errors });
+  if (opts.overrideAccess || opts.frameworkFilter || !groupBy) return;
+  const denied = await unreadableFields(
+    kind,
+    slug,
+    [ownerOf(groupBy)],
+    opts.caller ?? {}
+  );
+  if (denied.length > 0) refuse([groupBy], "groupBy");
 }
 
 /**
@@ -443,16 +492,18 @@ export function assertGroupableField(
  * A caller searching asked "find rows matching this text" and never named a
  * column, so dropping the ones they may not read answers exactly what they
  * asked — and leaving them in would let `search=alpha` probe a hidden value
- * through which rows come back.
+ * through which rows come back. A field readable only on some entries is left
+ * out for the same reason it may not be filtered on.
  */
-export function filterSearchableFields(
+export async function filterSearchableFields(
   kind: EntityKind,
   slug: string,
   fields: string[],
-  opts: { overrideAccess?: boolean } = {}
-): string[] {
+  opts: { overrideAccess?: boolean; caller?: QueryCaller } = {}
+): Promise<string[]> {
   if (opts.overrideAccess) return fields;
-  const fns = getFieldFunctions(kind, slug);
-  if (!fns) return fields;
-  return fields.filter(name => !carriesReadRule(fns[name]));
+  const denied = new Set(
+    await unreadableFields(kind, slug, fields, opts.caller ?? {})
+  );
+  return fields.filter(name => !denied.has(name));
 }

@@ -17,6 +17,16 @@ on:
 
 permissions: {}
 
+# One run per pull request at a time: a newer push or edit cancels the older
+# run, which checks a revision or text that is no longer there. Keyed by the
+# number, because under `pull_request_target` `github.ref` is the base branch,
+# which every pull request shares. Each workflow keys its own group, so the
+# workflows of one push never cancel one another, and the queue's runs are
+# keyed by commit and never cancelled.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request_target' && format('pr-{0}', github.event.pull_request.number) || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request_target' }}
+
 jobs:
   lint:
     name: Validate PR title follows Conventional Commits
