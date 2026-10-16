@@ -3,14 +3,12 @@
 **Experimental.** This is the package that exposes a Nextly install to AI agents
 over the [Model Context Protocol](https://modelcontextprotocol.io), read-only.
 
-This release adds the endpoint and its first tool. A client that connects finds
+It is off by default. A client that connects finds
 a server advertising `tools` and nothing else: no resource and no prompt, and no
 tool that writes. The one tool is `get_initial_context`, which answers what the
 connecting credential may read and how this CMS expects to be asked.
 
-The surface lands in small reviewable pieces. Reads of actual documents are the
-next one; until they arrive an agent can learn the shape of an install and not
-its contents.
+An agent can learn the shape of an install, not its contents.
 
 ## Install
 
@@ -30,10 +28,9 @@ export default defineConfig({
 ```
 
 `enabled` defaults to `false` and stays that way while the surface is
-experimental. While it is off the plugin contributes no route at all. What the
-endpoint will expose is an install's schema and content to any client that can
-reach it, so turning it on is an operator's decision rather than something a
-version bump does.
+experimental. While it is off the plugin contributes no route at all. Turned
+on, it answers any client that can reach it with a valid credential, so turning
+it on is an operator's decision rather than something a version bump does.
 
 ## Where it answers
 
@@ -109,8 +106,7 @@ revision removed them.
 
 ## Status
 
-Read-only by design for its first release. Writes, if they arrive, land as
-proposals a person reviews rather than as direct edits.
+Experimental and read-only: no tool writes.
 
 ## Related packages
 

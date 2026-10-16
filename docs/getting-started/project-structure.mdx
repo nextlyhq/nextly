@@ -170,7 +170,7 @@ Collections you create through the Visual Schema Builder are stored in the datab
 | **Code-First** | `nextly.config.ts` (or files you import from it) | Auto-synced on save in development; in production, a migration you create with `nextly migrate:create` and apply with `nextly migrate` |
 | **Visual Schema Builder** | Admin panel at `/admin/builder/collections` | Stored in the database, and written to `ui-schema.json` in development for `migrate:create` |
 
-Both approaches produce the same result: database tables, admin UI, REST endpoints, and Direct API access. You can mix them -- define some collections in config and create others through the Visual Schema Builder.
+Both feed the same core runtime for the supported field set: database tables, admin UI, REST endpoints, and Direct API access. Two differences remain. A collection made in the Visual Schema Builder cannot carry access functions, field rules or hooks, because a function cannot be stored in the database; and `nextly generate:types` writes types only for what your config defines. You can mix them -- define some collections in config and create others through the Visual Schema Builder.
 
 ## Next Steps
 
