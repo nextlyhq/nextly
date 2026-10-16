@@ -226,6 +226,32 @@ describe("createSessionStandingCache", () => {
     expect(read).toHaveBeenCalledTimes(2);
   });
 
+  it("reads again for a token that joined a read answering inactive", async () => {
+    // The account was deactivated when the running read queried and has been
+    // reactivated since. Reactivation leaves the epoch where it was, so the
+    // token signed after it carries the same epoch the inactive answer has.
+    // Taking that answer would refuse a session the account may now use.
+    let release: (value: SessionStanding) => void = () => {};
+    const read = vi
+      .fn<(userId: string) => Promise<SessionStanding | null>>()
+      .mockImplementationOnce(
+        () =>
+          new Promise<SessionStanding>(resolve => {
+            release = resolve;
+          })
+      )
+      .mockResolvedValue(ACTIVE);
+    const cache = createSessionStandingCache({ read });
+
+    const older = cache.standing("u1", 0);
+    const newer = cache.standing("u1", 0);
+    release({ isActive: false, sessionEpoch: 0 });
+
+    expect(await older).toEqual({ isActive: false, sessionEpoch: 0 });
+    expect(await newer).toEqual(ACTIVE);
+    expect(read).toHaveBeenCalledTimes(2);
+  });
+
   it("keeps no answer from a read that failed", async () => {
     // A failure to read is not an answer. Cached, it would refuse every
     // request for the lifetime, or worse, hold an earlier answer past it.
