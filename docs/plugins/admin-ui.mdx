@@ -270,6 +270,16 @@ without renumbering anything.
 A reader's saved layout, once they have arranged their dashboard, wins over this. Think
 of it as where the card starts, not where it stays.
 
+### The card frame and its states
+
+Every card draws in one frame: its title, an optional line under it, the body, at most one footer
+link, and when its data last arrived. The frame also owns the states, so a card never draws its
+own: a skeleton while data has never arrived, the last value marked busy while it refreshes, an
+empty state, one "Not available to you" state for a source the reader cannot see (forbidden,
+missing and hidden all read the same), and an error that keeps the title and offers Retry for
+that card only. Figures go through `formatCount` from `@nextlyhq/ui/format`, so a number reads the
+same on every card.
+
 ### Widgets that draw their own surface
 
 A `custom` widget may set `chrome: "none"` to decline the card frame entirely, and is

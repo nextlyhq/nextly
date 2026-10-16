@@ -324,6 +324,18 @@ exports[`ui public export surface > ./color surface is unchanged 1`] = `
 ]
 `;
 
+exports[`ui public export surface > ./format surface is unchanged 1`] = `
+[
+  "ChangeDirection (type)",
+  "FormatCountOptions (type)",
+  "FormattedChange (type)",
+  "FormattedNumber (type)",
+  "SizeTier (type)",
+  "formatChange (value)",
+  "formatCount (value)",
+]
+`;
+
 exports[`ui public export surface > ./tailwind-preset surface is unchanged 1`] = `
 [
   "default (value)",

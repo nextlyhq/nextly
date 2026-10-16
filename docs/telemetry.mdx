@@ -3,9 +3,9 @@ title: Telemetry
 description: What Nextly's CLI collects, why, and how to opt out.
 ---
 
-Nextly collects anonymous usage data from its CLI tools (`create-nextly-app` and `nextly`) to understand which features are used, catch regressions, and make data-driven product decisions during alpha.
+Nextly collects usage data under a random ID from its CLI tools (`create-nextly-app` and `nextly`) to understand which features are used, catch regressions, and make data-driven product decisions during alpha.
 
-Telemetry is **anonymous**, **opt-out**, automatically disabled in CI, Docker, production, and non-interactive shells, and can be disabled permanently with one command or one environment variable.
+Telemetry never includes your name, project contents, file paths or secrets. It is **opt-out**, automatically disabled in CI, Docker, production, and non-interactive shells, and can be disabled permanently with one command or one environment variable. The random ID lasts between runs, and the `nextly` CLI also sends a hashed project ID with each event, so one install's events can be linked to each other, though never to an account or an email address.
 
 ## How to opt out
 
@@ -80,7 +80,7 @@ Errors map to a fixed enum. Raw error messages and stack traces never leave your
 - Raw error messages or stack traces.
 - Next.js or Nextly config file contents.
 
-## How anonymous identity works
+## How the random ID works
 
 On first run, Nextly generates two random values:
 

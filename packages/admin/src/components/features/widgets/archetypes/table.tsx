@@ -45,16 +45,13 @@ export const tableBody: ArchetypeBody = (result, definition) => {
   }
 
   if (result.items.length === 0) {
+    // The frame's one empty state, worded for a table.
     return {
       ok: true,
-      node: (
-        <p
-          data-testid="widget-table-empty"
-          className="text-sm text-muted-foreground"
-        >
-          Nothing yet.
-        </p>
-      ),
+      empty: {
+        title: "Nothing here yet",
+        detail: "Entries show here once there are some.",
+      },
     };
   }
 

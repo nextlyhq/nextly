@@ -19,8 +19,17 @@ import type {
   WidgetSlot,
 } from "@admin/types/dashboard/widgets";
 
+import type { CardEmptyContent } from "../frame/states";
+
 export type ArchetypeOutcome =
-  | { ok: true; node: ReactNode }
+  | { ok: true; node: ReactNode; empty?: undefined }
+  /**
+   * Nothing to show: the frame draws its one empty state from this, so every card says
+   * "nothing yet" in the same words and look, instead of each archetype its own sentence.
+   * `node` is declared absent rather than missing, so code that reads a drawn body's `node`
+   * still type-checks and finds nothing.
+   */
+  | { ok: true; empty: CardEmptyContent; node?: undefined }
   | { ok: false; message: string };
 
 export type ArchetypeBody = (

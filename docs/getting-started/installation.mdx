@@ -136,20 +136,22 @@ pnpm add @nextlyhq/adapter-sqlite better-sqlite3
 </Tab>
 </Tabs>
 
-On pnpm 10 or later, allow the native packages to run their build scripts, or `better-sqlite3` has no compiled binding and the app fails at boot. On pnpm 10.6 or later, add to `pnpm-workspace.yaml` (create it with `packages: []` if you have none):
+On pnpm 10 or later, allow the native packages to run their build scripts, or `better-sqlite3` has no compiled binding and the app fails at boot, and `sharp`, `esbuild` and `unrs-resolver` fall back to slower paths. On pnpm 10.6 or later, add to `pnpm-workspace.yaml` (create it with `packages: []` if you have none):
 
 ```yaml title="pnpm-workspace.yaml"
 allowBuilds:
   better-sqlite3: true
   esbuild: true
   sharp: true
+  unrs-resolver: true
 onlyBuiltDependencies:
   - better-sqlite3
   - esbuild
   - sharp
+  - unrs-resolver
 ```
 
-pnpm 11 reads `allowBuilds`, pnpm 10.6+ reads `onlyBuiltDependencies`. On pnpm 10.0 to 10.5, put the same list in `package.json` instead, as `"pnpm": { "onlyBuiltDependencies": ["better-sqlite3", "esbuild", "sharp"] }`, or upgrade pnpm. npm, yarn and bun need none of this.
+pnpm 11 reads `allowBuilds`, pnpm 10.6+ reads `onlyBuiltDependencies`. On pnpm 10.0 to 10.5, put the same list in `package.json` instead, as `"pnpm": { "onlyBuiltDependencies": ["better-sqlite3", "esbuild", "sharp", "unrs-resolver"] }`, or upgrade pnpm. npm, yarn and bun need none of this.
 
 Cloud storage is optional -- Nextly's default is local disk under `./public/uploads/`. Install a storage adapter only if you need one:
 
@@ -395,7 +397,7 @@ Open [http://localhost:3000/admin/setup](http://localhost:3000/admin/setup) to c
 
 ## Next Steps
 
-- [Quick Start](/docs/getting-started/quick-start) -- Build a blog in 5 minutes
+- [Quick Start](/docs/getting-started/quick-start) -- Build a blog, step by step
 - [Project Structure](/docs/getting-started/project-structure) -- Understand the file layout
 - [Configuration](/docs/configuration) -- Full configuration reference
 - [Environment Variables](/docs/configuration/environment) -- All environment variables explained
