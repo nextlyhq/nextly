@@ -104,8 +104,14 @@ Check the two files it may have left alone:
 - **`.env`:** if it already had a `DATABASE_URL`, the generator adds nothing to
   it. Add any of `DB_DIALECT`, `NEXTLY_SECRET` and `NEXT_PUBLIC_APP_URL` that
   are missing, using `.env.example` as the guide. Generate a new secret with
-  `openssl rand -base64 32` rather than copying the one written into
-  `.env.example`, which is meant to be committed.
+  `openssl rand -base64 32` rather than copying the one in `.env.example`.
+
+**Before the first commit, take the secret out of `.env.example`.** The
+generator writes the same generated `NEXTLY_SECRET` into `.env` and into
+`.env.example`, and `.env.example` is the file projects commit. Replace its
+value with a placeholder such as `NEXTLY_SECRET=replace-with-openssl-rand-base64-32`.
+If that file was already committed or pushed with the real value, treat the
+secret as exposed and generate a new one for `.env`.
 
 ## 3. Install esbuild
 
