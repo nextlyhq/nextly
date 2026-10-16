@@ -23,6 +23,7 @@ import { gotoAdmin } from "./support/admin";
 
 const OPEN_BUILDER_ACTION = /^(?:Build this page|Open Page Builder)$/;
 const HOMEPAGE_API = "/admin/api/singles/homepage";
+const BUILDER_ADDRESS = "/singles/homepage/builder?field=layout";
 // The password an admin sets, and the one its owner chooses at first sign-in.
 const SET_PASSWORD = "Second-Editor-Pass-123!";
 const OWN_PASSWORD = "Second-Editor-Own-456!";
@@ -131,7 +132,22 @@ async function openBuilder(page: Page): Promise<void> {
   await page.getByRole("link", { name: OPEN_BUILDER_ACTION }).click();
 }
 
+/**
+ * The builder's own address, reached directly, as a shared link or a bookmark
+ * reaches it. The way a second person arrives while the page is held: the edit
+ * form they would otherwise come through is read-only for them, and its card
+ * rightly offers no way into an editor they may not use.
+ */
+async function arriveAtBuilder(page: Page): Promise<void> {
+  await gotoAdmin(page, BUILDER_ADDRESS);
+}
+
 test.describe("two editors on one page", () => {
+  // Two sessions, and a lock heartbeat each side waits on: the holder learns
+  // of a request, and the displaced author of a takeover, only at its next
+  // beat, which the steps below allow 45 seconds for.
+  test.describe.configure({ timeout: 120_000 });
+
   test.beforeEach(async ({ page }) => {
     const stored = await page.request.patch(HOMEPAGE_API, {
       data: {
@@ -155,7 +171,7 @@ test.describe("two editors on one page", () => {
 
     const other = await secondEditor(browser, page, baseURL);
     try {
-      await openBuilder(other.page);
+      await arriveAtBuilder(other.page);
       await expect(
         other.page.getByText(/is editing this document/)
       ).toBeVisible({ timeout: 30_000 });
@@ -189,7 +205,7 @@ test.describe("two editors on one page", () => {
 
     const other = await secondEditor(browser, page, baseURL);
     try {
-      await openBuilder(other.page);
+      await arriveAtBuilder(other.page);
       await other.page.getByRole("button", { name: "Take over" }).click();
       // The new holder edits the page as stored: the first author's edit was
       // never saved, so it is not theirs to see.
@@ -203,11 +219,18 @@ test.describe("two editors on one page", () => {
           /took over this document\. Your unsaved changes are still here/
         )
       ).toBeVisible({ timeout: 45_000 });
-      // Drawn read-only now, outside the editor's canvas.
-      await expect(
-        page.locator('[data-nx-node="first"]').first()
-      ).toBeVisible();
-      await expect(page.locator('[data-nx-node="second"]')).toHaveCount(0);
+      // Drawn read-only now, outside the editor's canvas, and WITH the edit:
+      // the page the banner promises, not the one from before it. Read by
+      // text, since the read-only page is the published renderer and carries
+      // none of the canvas's node markers.
+      const main = page.locator("main");
+      await expect(main.getByText("First", { exact: true })).toBeVisible();
+      await expect(main.getByText("Second", { exact: true })).toHaveCount(0);
+
+      // Taking it back reopens the editor from the form, edit and all.
+      await page.getByRole("button", { name: "Take it back" }).click();
+      await expect(block(page, "first")).toBeVisible({ timeout: 30_000 });
+      await expect(block(page, "second")).toHaveCount(0);
     } finally {
       await other.context.close();
     }

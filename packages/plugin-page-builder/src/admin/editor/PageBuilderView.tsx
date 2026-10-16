@@ -14,7 +14,7 @@
  * @module @nextlyhq/plugin-page-builder/admin/editor/PageBuilderView
  */
 import type { DocumentViewProps } from "@nextlyhq/plugin-sdk/admin";
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useController } from "react-hook-form";
 
 import { acceptedKinds } from "../../fields/blocks-options";
@@ -81,6 +81,25 @@ function ReadOnlyPage({ control, field: declaration, name }: BoundProps) {
   );
 }
 
+/**
+ * Which surface to draw for `readOnly`, or `null` for the one commit between
+ * them.
+ *
+ * Leaving the editor hands its unsaved work to the form as it unmounts, and
+ * that lands AFTER anything drawn in the same commit has read the field. The
+ * read-only page drawn beside it would show the page from before the author's
+ * edits, under a banner saying they are still here, and its subscription to
+ * the field starts too late to hear otherwise. So the editor goes first, its
+ * work lands, and the page that replaces it reads the field afterwards.
+ */
+function useSettledSurface(readOnly: boolean): boolean | null {
+  const [settled, setSettled] = useState(readOnly);
+  useEffect(() => {
+    setSettled(readOnly);
+  }, [readOnly]);
+  return settled === readOnly ? readOnly : null;
+}
+
 export function PageBuilderView({
   control,
   exit,
@@ -94,8 +113,11 @@ export function PageBuilderView({
   // inside — but the declaration type allows a nameless field, so the name is
   // settled here once rather than assumed below.
   const name = field?.name;
-  if (field === undefined || name === undefined) return null;
-  return readOnly ? (
+  const surface = useSettledSurface(readOnly);
+  if (field === undefined || name === undefined || surface === null) {
+    return null;
+  }
+  return surface ? (
     <ReadOnlyPage control={control} exit={exit} field={field} name={name} />
   ) : (
     <BoundEditor control={control} exit={exit} field={field} name={name} />

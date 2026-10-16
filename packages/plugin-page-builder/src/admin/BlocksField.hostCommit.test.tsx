@@ -29,6 +29,7 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
 } from "@testing-library/react";
 import * as React from "react";
 import {
@@ -447,8 +448,8 @@ describe("a colleague taking the document over", () => {
     values.length = 0;
   });
 
-  it("keeps the author's edits in the form when the view goes read-only", () => {
-    const { rerender } = render(<TakeoverHost readOnly={false} />);
+  it("keeps the author's edits in the form when the view goes read-only", async () => {
+    const { rerender, container } = render(<TakeoverHost readOnly={false} />);
     editDocument();
 
     rerender(<TakeoverHost readOnly />);
@@ -456,6 +457,14 @@ describe("a colleague taking the document over", () => {
     // The banner says the unsaved changes are still here: the editor that
     // held them is gone, so the form now does.
     expect(saved).toEqual(EDITED);
+    // And the read-only page SHOWS them. The hand-over lands as the editor
+    // unmounts, after the page that replaces it has read the field, so a page
+    // drawn in the same commit showed the work from before it while the form
+    // held the edit: the screen contradicting the banner above it.
+    // Read by the count the card states: the edit is one block, and the page
+    // from before it was empty, which the card says in words of its own.
+    await waitFor(() => expect(container.textContent).toContain("1 block"));
+    expect(container.textContent).not.toContain("Nothing here yet");
     // Into this browser\'s form only. Nothing left the editor through its
     // exit, and nothing here saves.
     expect(heldAtExit).toEqual([]);
