@@ -26,11 +26,13 @@ import { documentFrom, PLUGIN_SOURCE } from "./stored-document";
 
 type BoundProps = Pick<DocumentViewProps, "control" | "exit"> & {
   field: NonNullable<DocumentViewProps["field"]>;
+  /** The field's name in the document form, which is what binds to it. */
+  name: string;
 };
 
 /** The editor, bound to the field the view opened for. */
-function BoundEditor({ control, exit, field: declaration }: BoundProps) {
-  const { field } = useController({ name: declaration.name, control });
+function BoundEditor({ control, exit, field: declaration, name }: BoundProps) {
+  const { field } = useController({ name, control });
   return (
     <BlocksEditor
       // Remounted when the stored value appears or goes: the editor seeds its
@@ -42,7 +44,7 @@ function BoundEditor({ control, exit, field: declaration }: BoundProps) {
       kinds={acceptedKinds(declaration)}
       onCommit={field.onChange}
       onClose={exit}
-      name={declaration.name}
+      name={name}
       control={control}
     />
   );
@@ -53,8 +55,8 @@ function BoundEditor({ control, exit, field: declaration }: BoundProps) {
  * admin says who above it and offers to ask for access; the editor would only
  * offer edits nobody may make.
  */
-function ReadOnlyPage({ control, field: declaration }: BoundProps) {
-  const { field } = useController({ name: declaration.name, control });
+function ReadOnlyPage({ control, field: declaration, name }: BoundProps) {
+  const { field } = useController({ name, control });
   const kinds = acceptedKinds(declaration);
   const document = useMemo(
     () => documentFrom(field.value, kinds),
@@ -85,11 +87,15 @@ export function PageBuilderView({
 }: DocumentViewProps): React.JSX.Element | null {
   // The admin names the field for a view offered on a field type, and asks the
   // author first where the document has several; without one there is nothing
-  // to bind to.
-  if (field === undefined) return null;
+  // to bind to. The field it names is always a named one — an unnamed group
+  // only arranges the form, and the admin reads through it to the fields
+  // inside — but the declaration type allows a nameless field, so the name is
+  // settled here once rather than assumed below.
+  const name = field?.name;
+  if (field === undefined || name === undefined) return null;
   return readOnly ? (
-    <ReadOnlyPage control={control} exit={exit} field={field} />
+    <ReadOnlyPage control={control} exit={exit} field={field} name={name} />
   ) : (
-    <BoundEditor control={control} exit={exit} field={field} />
+    <BoundEditor control={control} exit={exit} field={field} name={name} />
   );
 }

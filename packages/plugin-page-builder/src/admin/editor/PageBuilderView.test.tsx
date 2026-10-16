@@ -365,6 +365,21 @@ describe("a document that may not be edited", () => {
   });
 });
 
+describe("a field with no name", () => {
+  it("draws nothing rather than binding to no field", () => {
+    // The declaration type allows a nameless field (an unnamed group's), which
+    // has no value in the form to edit. The control is every case above, where
+    // a named field draws the editor.
+    const { container } = render(
+      <Host field={declaration({ type: "blocks" } as BlocksFieldConfig)} />
+    );
+
+    expect(editorChrome()).toBeNull();
+    expect(seeded).toEqual([]);
+    expect(container.textContent).toBe("");
+  });
+});
+
 describe("an empty field", () => {
   it("is seeded as the kind its declaration accepts", () => {
     // A component store seeded as a page is refused on save, so the editor
