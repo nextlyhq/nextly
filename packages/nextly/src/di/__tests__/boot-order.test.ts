@@ -77,10 +77,57 @@ describe("the boot sequence in registerServices", () => {
    * tables it declares created.
    */
   const beforePlugins = [
+    "await assertBootPluginInstallStates(",
     "await runBootMigrations(",
     "await assertBootPluginSchemaVersions(",
     "await prepareExtensionTablesForInit(",
   ];
+
+  /**
+   * A plugin that is not installed, or whose uninstall stopped part way, is
+   * refused before boot migrations: after them, a refused plugin's modules,
+   * or a half-uninstalled one's rolled-back modules, would already be
+   * applied again.
+   */
+  it("judges install state before the boot migrations, through the gate", () => {
+    const gate = boot.indexOf("await assertBootPluginInstallStates(");
+    expect(gate).toBeGreaterThan(-1);
+    expect(gate).toBeLessThan(boot.indexOf("await runBootMigrations("));
+    expect(bodyOf("assertBootPluginInstallStates")).toContain(
+      "await assertBootPluginsInstalled("
+    );
+  });
+
+  /**
+   * The gate reads only the ledger and the configuration, so it can run before
+   * any step that writes to the database or the registry. Checked after one of
+   * those, a refused plugin's Builder fields, code-first tables and registry
+   * rows would already have been written.
+   */
+  it("judges install state before any step that writes the schema or the registry", () => {
+    const gate = boot.indexOf("await assertBootPluginInstallStates(");
+    for (const step of [
+      "await reconcileBuilderTargets(",
+      "await syncCodeFirstEntities(",
+      "await runBootMigrations(",
+    ]) {
+      expect(boot.indexOf(step), step).toBeGreaterThan(-1);
+      expect(gate, step).toBeLessThan(boot.indexOf(step));
+    }
+  });
+
+  /**
+   * A lifecycle command's boot exists to run one plugin's hook. A resumed
+   * uninstall is leaving a schema version the plugin declares, and a
+   * development boot must not recreate extension tables the uninstall removed,
+   * so neither check is made in that boot.
+   */
+  it.each(["assertBootPluginSchemaVersions", "prepareExtensionTablesForInit"])(
+    "%s makes no check in a lifecycle command boot",
+    name => {
+      expect(bodyOf(name)).toContain("isLifecycleCommandBoot()");
+    }
+  );
 
   it("runs the boot migrations inside the migration phase", () => {
     expect(bodyOf("runBootMigrations")).toContain(

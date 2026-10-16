@@ -4,9 +4,10 @@ description: Nextly keeps a version history of each document, so you can see wha
 ---
 
 Version history is **opt-in per collection or single**. Turn it on and Nextly keeps a
-version history, the newest 50 per document by default, so "who changed this, and when" has
-an answer. Creates and updates record a version, with one exception: while a working draft is
-open, saving rewrites that pending draft, and a version is added when it is published.
+version history: by default the newest 50 per document, plus the versions [retention](#retention)
+always keeps, so "who changed this, and when" has an answer. Every save that changes the
+content records a version, including a save to a working draft that is not yet published
+(see [Working drafts](#working-drafts)).
 
 ```ts
 import { defineCollection, text } from "nextly/config";
@@ -70,6 +71,16 @@ The comparison understands the shapes your content actually uses, including rich
 block documents, so a diff of a page shows which blocks moved rather than one opaque
 change.
 
+A comparison can name two versions (`?from=4&to=6`), or a version and a **baseline** the
+server works out (`?to=6&baseline=previous`). The baselines are `previous` (the version
+before it in the same language), `published` (that language's latest published version)
+and `draft` (that language's current draft). With no `from` and no `baseline`, the
+comparison opens on the current draft against what is published when both exist, and
+otherwise on a version against the one before it (`?locale=` picks the language when no
+version is named). A language's first version has nothing before it, so that comparison is
+refused with `NO_BASELINE`. The response says which baseline it used. Baselines are
+experimental.
+
 Secret fields are masked in diffs. A password field's history never shows its values.
 
 ## Restoring
@@ -94,6 +105,12 @@ restore, so history cannot be used to forge them.
 A working draft holds edits in progress separately from the published document, so someone
 can work on a change over several days without it going live and without blocking anyone
 else from seeing the current published version.
+
+Each save of a working draft is also kept in the history as a draft version, credited to the
+person who saved it, so earlier saves and who made them are not lost when the next save
+replaces the draft. A save that changes nothing adds no version, and autosaves never appear
+in the history. Restoring one of these versions puts its content back as the working draft;
+it does not publish it.
 
 ## Retention
 

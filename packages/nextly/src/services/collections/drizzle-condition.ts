@@ -14,10 +14,13 @@
  * unresolved, which its own untranslatable check is expected to catch before
  * this point rather than silently dropping the predicate.
  */
+import { caseInsensitiveContains } from "@nextlyhq/adapter-drizzle/text-match";
 import type { SQL } from "drizzle-orm";
 import {
   and,
+  Column,
   eq,
+  is,
   ne,
   gt,
   gte,
@@ -26,7 +29,6 @@ import {
   inArray,
   notInArray,
   like,
-  ilike,
   isNull,
   isNotNull,
   or,
@@ -35,6 +37,8 @@ import {
 
 import type { LocalizedFieldRef } from "../../domains/i18n/companion-join";
 import { buildCompanionExists } from "../../domains/i18n/companion-join";
+import { NextlyError } from "../../errors/nextly-error";
+import { toSnakeCase } from "../../shared/lib/case-conversion";
 
 import type { buildWhereClause } from "./query-operators";
 
@@ -64,8 +68,7 @@ export type LocalizedExistsBuilder = (
   localizedCtx: LocalizedQueryContext,
   column: string,
   op: string,
-  value: unknown,
-  dialect: string
+  value: unknown
 ) => SQL | undefined;
 
 /**
@@ -84,8 +87,7 @@ export function buildLocalizedWhereExists(
   ctx: LocalizedQueryContext,
   column: string,
   op: string,
-  value: unknown,
-  dialect: string
+  value: unknown
 ): SQL | undefined {
   const t = sql.identifier(ctx.companionTableName);
   const col = sql.identifier(column);
@@ -113,10 +115,12 @@ export function buildLocalizedWhereExists(
       valueCondition = sql`${t}.${col} LIKE ${value}`;
       break;
     case "ILIKE":
-      valueCondition =
-        dialect === "postgresql"
-          ? sql`${t}.${col} ILIKE ${value}`
-          : sql`${t}.${col} LIKE ${value}`;
+      // Lower-cased on both sides, as the adapter compiles ILIKE: only PostgreSQL has the
+      // keyword, and a bare LIKE follows the column's collation.
+      valueCondition = sql`lower(${t}.${col}) like lower(${value})`;
+      break;
+    case "ICONTAINS":
+      valueCondition = caseInsensitiveContains(sql`${t}.${col}`, String(value));
       break;
     case "IS NULL": {
       // A localized field is absent for the locale when no companion row holds
@@ -155,6 +159,9 @@ export function buildLocalizedWhereExists(
           sql`, `
         );
         valueCondition = sql`${t}.${col} NOT IN (${notInList})`;
+      } else if (Array.isArray(value)) {
+        // An empty list excludes nothing, whatever the companion holds.
+        return sql`1 = 1`;
       }
       break;
     default:
@@ -170,11 +177,47 @@ export function buildLocalizedWhereExists(
   });
 }
 
+/**
+ * Refuse a filter key this builder cannot turn into a predicate.
+ *
+ * Thrown rather than skipped: a skipped member leaves its siblings to decide
+ * alone, which matches more rows than the filter states.
+ */
+function refuseKey(column: string, code: string, message: string): never {
+  throw NextlyError.validation({
+    errors: [{ path: `where.${column}`, code, message }],
+  });
+}
+
+/**
+ * The column a filter key names on this table, or a refusal.
+ *
+ * Read as an OWN property holding a Drizzle column. A plain property read
+ * also reaches the table object's prototype, so `constructor` or `getSQL`
+ * would resolve to something that is not a column and compile into a
+ * predicate nobody wrote.
+ */
+function resolveColumn(schema: object, column: string): Column {
+  // The name as written first, then its snake_case form: a runtime table keys
+  // its system timestamps `created_at`, while every response spells them
+  // `createdAt`, and a filter written the way rows read must reach them.
+  for (const key of [column, toSnakeCase(column)]) {
+    const candidate: unknown = Object.prototype.hasOwnProperty.call(schema, key)
+      ? (schema as Record<string, unknown>)[key]
+      : undefined;
+    if (is(candidate, Column)) return candidate;
+  }
+  return refuseKey(
+    column,
+    "FILTER_UNKNOWN_FIELD",
+    `"${column}" is not a field this collection can be filtered on.`
+  );
+}
+
 export function buildDrizzleCondition(
   whereClause: ReturnType<typeof buildWhereClause>,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Drizzle dynamic schema
   schema: any,
-  dialect: string = "postgresql",
   localizedCtx?: LocalizedQueryContext | null,
   localizedExists?: LocalizedExistsBuilder
 ): ReturnType<typeof and> | undefined {
@@ -190,7 +233,6 @@ export function buildDrizzleCondition(
       return buildDrizzleCondition(
         condition,
         schema,
-        dialect,
         localizedCtx,
         localizedExists
       );
@@ -199,8 +241,19 @@ export function buildDrizzleCondition(
     // It's a WhereCondition
     const { column, op, value } = condition;
 
-    // Get the column from schema (handle dot notation for nested fields)
+    // A dot path reaches into a field. The paths that can be filtered — into
+    // a component — are lifted out before this builder runs, so any path
+    // still here would compare the WHOLE head column with the value: a
+    // relationship's id with a related entry's name, a group's JSON with one
+    // of its children.
     const columnParts = column.split(".");
+    if (columnParts.length > 1) {
+      refuseKey(
+        column,
+        "FILTER_UNFILTERABLE_PATH",
+        `"${column}" does not reach a field this collection can filter on. To filter by a related entry, look its id up first and filter on the relationship field.`
+      );
+    }
 
     // i18n M4c: a filter on a localized field targets the companion table (absent from the
     // main schema). Resolve it to a companion EXISTS on the requested locale so the filter
@@ -213,18 +266,20 @@ export function buildDrizzleCondition(
         localizedCtx,
         localizedWhereField.column,
         op,
-        value,
-        dialect
+        value
       );
       if (localizedCond) return localizedCond;
+      // The field lives in the companion table, so the main table has no
+      // column to fall back on: without a companion condition it cannot be
+      // filtered at all.
+      refuseKey(
+        column,
+        "FILTER_UNKNOWN_OPERATOR",
+        `"${column}" cannot be filtered with this operator in a language.`
+      );
     }
 
-    const schemaColumn = schema[columnParts[0]];
-
-    if (!schemaColumn) {
-      // Column doesn't exist in schema, skip this condition
-      return undefined;
-    }
+    const schemaColumn = resolveColumn(schema, columnParts[0]);
 
     switch (op) {
       case "=":
@@ -242,27 +297,46 @@ export function buildDrizzleCondition(
       case "LIKE":
         return like(schemaColumn, value);
       case "ILIKE":
-        // Use ILIKE for PostgreSQL, LIKE for others
-        if (dialect === "postgresql") {
-          return ilike(schemaColumn, value);
-        }
-        return like(schemaColumn, value);
+        // Lower-cased on both sides, as the adapter compiles ILIKE: only PostgreSQL has the
+        // keyword, and a bare LIKE follows the column's collation.
+        return sql`lower(${schemaColumn}) like lower(${value})`;
+      case "ICONTAINS":
+        return caseInsensitiveContains(schemaColumn, String(value));
       case "IN":
+        // The filter shape refuses an empty `in` and drops an empty
+        // `not_in` before this point; refused again here rather than skipped,
+        // because a skipped `in` matched every row.
         if (Array.isArray(value) && value.length > 0) {
           return inArray(schemaColumn, value);
         }
-        return undefined;
+        return refuseKey(
+          column,
+          "FILTER_EMPTY_IN",
+          `"in" on "${column}" needs a list with at least one value.`
+        );
       case "NOT IN":
         if (Array.isArray(value) && value.length > 0) {
           return notInArray(schemaColumn, value);
         }
-        return undefined;
+        // An empty list excludes nothing. Rendered as true rather than left
+        // out, so it reaches here and its column is resolved first, and so an
+        // `or` holding it is true as written.
+        if (Array.isArray(value)) return sql`1 = 1`;
+        return refuseKey(
+          column,
+          "FILTER_INVALID_OPERAND",
+          `"not_in" on "${column}" needs a list.`
+        );
       case "IS NULL":
         return isNull(schemaColumn);
       case "IS NOT NULL":
         return isNotNull(schemaColumn);
       default:
-        return undefined;
+        return refuseKey(
+          column,
+          "FILTER_UNKNOWN_OPERATOR",
+          `"${String(op)}" is not an operator this builder can apply to "${column}".`
+        );
     }
   };
 
@@ -279,12 +353,15 @@ export function buildDrizzleCondition(
     }
   }
 
-  // Handle OR conditions
+  // Handle OR conditions. A disjunction with no members is false, so an
+  // empty list matches no row; dropping it would match every row instead. A
+  // member that compiles to no condition is true, and makes the whole
+  // disjunction true, so the `or` then contributes nothing.
   if (whereClause.or && Array.isArray(whereClause.or)) {
-    const orConditions = whereClause.or
-      .map(buildSingleCondition)
-      .filter(Boolean);
-    if (orConditions.length > 0) {
+    const orConditions = whereClause.or.map(buildSingleCondition);
+    if (orConditions.length === 0) {
+      conditions.push(sql`1 = 0`);
+    } else if (orConditions.every(Boolean)) {
       conditions.push(or(...orConditions));
     }
   }

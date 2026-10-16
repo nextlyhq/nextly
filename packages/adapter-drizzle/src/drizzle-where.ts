@@ -9,7 +9,6 @@ import {
   gte,
   lte,
   like,
-  ilike,
   inArray,
   notInArray,
   isNull,
@@ -24,6 +23,7 @@ import {
 } from "drizzle-orm";
 import { getColumns } from "drizzle-orm";
 
+import { caseInsensitiveContains, containsPattern } from "./text-match";
 import type { WhereClause, WhereCondition } from "./types";
 
 // Build a Drizzle SQL condition from a WhereClause and a Drizzle table object.
@@ -127,24 +127,6 @@ function namesABranch(where: WhereClause): boolean {
   return Boolean(where.and?.length || where.or?.length || where.not);
 }
 
-/**
- * Wraps a value in `%…%` for a substring match, escaping the LIKE metacharacters inside it so
- * the value matches literally.
- *
- * `!` is the escape character rather than the more usual backslash, and it has to be, because
- * this builder emits one statement for every dialect. SQLite gives LIKE no default escape
- * character at all, so a backslash there is just a backslash; declaring `ESCAPE '\'` instead
- * runs into MySQL, where the backslash also escapes inside the string literal and the clause
- * would have to be spelled differently per dialect. `ESCAPE '!'` parses identically on
- * PostgreSQL, MySQL and SQLite, and needs no per-dialect branch to stay correct.
- *
- * The escape character is escaped FIRST by including it in the character class, so a literal
- * `!` in the value cannot be produced by escaping something else afterwards.
- */
-function containsPattern(value: string): string {
-  return `%${value.replace(/[!%_]/g, character => `!${character}`)}%`;
-}
-
 function buildCondition(
   columns: Record<string, unknown>,
   cond: WhereCondition
@@ -174,7 +156,12 @@ function buildCondition(
     case "LIKE":
       return like(col, cond.value as string);
     case "ILIKE":
-      return ilike(col, cond.value as string);
+      // Both sides lower-cased rather than drizzle's `ilike`, which emits the ILIKE keyword that
+      // only PostgreSQL has: on MySQL and SQLite the statement failed to parse. It also keeps
+      // MySQL from comparing under the column's collation, which a bare LIKE inherits and which
+      // can be case-sensitive (`utf8mb4_bin`). The value stays a pattern: its `%` and `_` are
+      // wildcards, as with LIKE.
+      return sql`lower(${col}) like lower(${cond.value as string})`;
     case "IN":
       return inArray(col, cond.value as unknown[]);
     case "NOT IN":
@@ -199,6 +186,8 @@ function buildCondition(
       // `CONTAINS "a%b"` silently widens to "a, anything, b" — and through `delete`, which takes
       // its where clause as a required argument, a widened match is a widened deletion.
       return sql`${col} like ${containsPattern(String(cond.value))} escape '!'`;
+    case "ICONTAINS":
+      return caseInsensitiveContains(col, String(cond.value));
     default:
       throw new Error(`Unsupported operator: ${cond.op}`);
   }

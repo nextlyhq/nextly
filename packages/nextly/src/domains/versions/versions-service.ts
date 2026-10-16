@@ -18,6 +18,7 @@
 import { NextlyError } from "../../errors";
 import type { VersionStatus } from "../../schemas/versions/types";
 
+import type { PartVersion } from "./comparison-baselines";
 import type { VersionsDbApi } from "./db-api";
 import {
   VersionsRepository,
@@ -79,6 +80,24 @@ export class VersionsService {
     opts: VersionListOptions = {}
   ): Promise<VersionMeta[]> {
     return this.repo.listByDoc(ref, opts);
+  }
+
+  /**
+   * Every durable version's number, status and part, newest first, without
+   * snapshots: what resolving a comparison's baseline reads.
+   */
+  /** The parts that hold a working draft: a language, or null for none. */
+  async listWorkingDraftParts(ref: VersionRef): Promise<(string | null)[]> {
+    return this.repo.listWorkingDraftLocales(ref);
+  }
+
+  async listPartVersions(ref: VersionRef): Promise<PartVersion[]> {
+    const rows = await this.repo.listDurableForPrune(ref);
+    return rows.flatMap(row =>
+      typeof row.versionNo === "number"
+        ? [{ versionNo: row.versionNo, status: row.status, locale: row.locale }]
+        : []
+    );
   }
 
   /**

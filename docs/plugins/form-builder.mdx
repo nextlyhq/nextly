@@ -131,10 +131,15 @@ formOverrides: {
   ],
   access: {
     read: () => true,
-    create: ({ user }) => !!user,
+    create: ({ permissions }) => permissions.includes('forms:create'),
   },
 }
 ```
+
+By default a visitor can read a form and create a submission. Everything else needs the
+matching permission on the Roles screen: `read-form-submissions` to read submissions,
+`update-forms` to edit a form, `delete-form-submissions` to delete one. An override narrows
+from there; check the permission in it rather than a role's name.
 
 **Function style** -- full control over the field list:
 
@@ -523,7 +528,7 @@ Multiple conditions can be combined with `AND` (all must match) or `OR` (any mus
 
 Form submissions are delivered through Nextly's own [webhooks](/docs/webhooks): subscribe an endpoint to the `form.submission.created` event. Its payload says which form, when, and the submission's status, and its `resource.id` names the submission (`resource.slug` is the submissions collection, `form-submissions` unless you renamed it). It never carries the answers, the IP address or the user agent, so a receiver that needs them reads the submission by that id:
 
-- A receiver in another system calls the [REST API](/docs/api-reference/rest-api): `GET /api/collections/form-submissions/entries/{id}`, authenticated with an [API key](/docs/api-reference/rest-api#api-key-server-to-server) that may read submissions (`read-form-submissions`).
+- A receiver in another system calls the [REST API](/docs/api-reference/rest-api): `GET /admin/api/collections/form-submissions/entries/{id}`, authenticated with an [API key](/docs/api-reference/rest-api#api-key-server-to-server) that may read submissions (`read-form-submissions`).
 - A receiver inside the same Next.js app can use the [Direct API](/docs/api-reference/direct-api) instead.
 
 Verify each delivery's signature as the Webhooks page describes, before reading anything.

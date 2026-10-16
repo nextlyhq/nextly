@@ -12,7 +12,12 @@ import { QueryClientProvider } from "@tanstack/react-query";
 // shortcut owner that listens.
 import { fireEvent, render } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { ComponentProps, ReactElement, ReactNode } from "react";
+import {
+  useEffect,
+  type ComponentProps,
+  type ReactElement,
+  type ReactNode,
+} from "react";
 import { useFormContext } from "react-hook-form";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -28,6 +33,10 @@ import {
   registerComponent,
   type DocumentViewProps,
 } from "@admin/lib/plugins/component-registry";
+import {
+  clearDocumentViews,
+  registerDocumentViews,
+} from "@admin/lib/plugins/document-view-registry";
 
 const { useDocumentLock, update, recovery } = vi.hoisted(() => ({
   useDocumentLock: vi.fn(),
@@ -78,6 +87,7 @@ const entry = { id: "e1", title: "Hello" } as never;
 const bob = { ownerId: "u2", ownerLabel: "Bob", expiresInSeconds: 90 };
 
 const received = vi.fn();
+const mounted = vi.fn();
 
 /**
  * A view with the shapes a real one has: a field written through the
@@ -85,6 +95,7 @@ const received = vi.fn();
  */
 function BuilderView(props: DocumentViewProps): ReactElement {
   received(props);
+  useEffect(() => mounted(), []);
   const { register } = useFormContext();
   return (
     <div data-testid="builder-view">
@@ -255,23 +266,58 @@ describe("EntryForm with a document view", () => {
     expect(screen.getByRole("button", { name: "Restore" })).toBeInTheDocument();
   });
 
+  it("draws the view afresh when recovered work is restored", async () => {
+    // A restore replaces the form's values from outside the view, and a view
+    // may keep a working copy read once at mount, as the Page Builder does. So
+    // the restore must reach the recovery AND give the view a new mount.
+    const restore = vi.fn();
+    recovery.current = {
+      ...recovery.current,
+      offer: { savedAt: new Date(), snapshot: { title: "Recovered" } },
+      restore,
+    };
+    renderView();
+    expect(mounted).toHaveBeenCalledTimes(1);
+
+    await userEvent.click(screen.getByRole("button", { name: "Restore" }));
+
+    expect(restore).toHaveBeenCalledTimes(1);
+    expect(mounted).toHaveBeenCalledTimes(2);
+  });
+
   it("leaves through the page's exit with unsaved work, without the leave warning", async () => {
     // The page's exit navigates to the edit address, which renders the same
     // page and so keeps this form mounted: the work is not lost, and the
-    // guard's "will be lost" dialog would be untrue.
+    // guard's "will be lost" dialog would be untrue. The guard knows the view
+    // is this document's from the registry, as the router does.
+    registerDocumentViews([
+      { slug: "pages", path: "builder", component: VIEW },
+    ]);
     onExit.mockImplementation(() => {
       window.history.pushState(null, "", "/admin/collections/pages/e1");
     });
     window.history.pushState(null, "", "/admin/collections/pages/e1/builder");
     const user = userEvent.setup();
-    renderView();
+    try {
+      renderView();
 
-    await user.type(screen.getByLabelText("Page heading"), " world");
-    await user.click(screen.getByRole("button", { name: "Done" }));
+      await user.type(screen.getByLabelText("Page heading"), " world");
+      await user.click(screen.getByRole("button", { name: "Done" }));
 
-    expect(onExit).toHaveBeenCalledTimes(1);
-    expect(window.location.pathname).toBe("/admin/collections/pages/e1");
-    expect(screen.queryByText("Unsaved Changes")).toBeNull();
+      expect(onExit).toHaveBeenCalledTimes(1);
+      expect(window.location.pathname).toBe("/admin/collections/pages/e1");
+      expect(screen.queryByText("Unsaved Changes")).toBeNull();
+
+      // The work is still unsaved, so the very next leave is asked about: the
+      // exit switched nothing off on its way out.
+      act(() => {
+        window.history.pushState(null, "", "/admin/collections/pages");
+      });
+      expect(await screen.findByText("Unsaved Changes")).toBeInTheDocument();
+      expect(window.location.pathname).toBe("/admin/collections/pages/e1");
+    } finally {
+      clearDocumentViews();
+    }
   });
 
   it("leaves Escape to the view rather than cancelling to the list", () => {

@@ -24,7 +24,7 @@
  */
 
 import type { FieldConfig } from "nextly/config";
-import { useCallback, useEffect } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { FormProvider, type UseFormReturn } from "react-hook-form";
 
 import type { ViewedVersion } from "@admin/components/features/versions/document-history-context";
@@ -40,7 +40,6 @@ import { LiveDocumentRecoveryOffer } from "./AutosaveRecoveryBanner";
 import { DocumentLockBanner } from "./DocumentLockBanner";
 import { DocumentViewFieldChooser } from "./DocumentViewFieldChooser";
 import { FormErrorSummary } from "./FormErrorSummary";
-import { useLeaveWithoutWarning } from "./UnsavedChangesGuard";
 import type { DocumentLockSurface } from "./useDocumentLockSurface";
 
 /** The view the route names, as the page hands it to the editor. */
@@ -94,6 +93,35 @@ function useFieldInAddress(
   }, [named, requested]);
 }
 
+/**
+ * The recovery offer as the view body presents it, with a restore that also
+ * draws the view afresh.
+ *
+ * A restore replaces the document's values from outside the view, and a view
+ * may keep a working copy of what it edits, read once when it mounts — the Page
+ * Builder keeps its own document state. Nothing tells such a view the form
+ * changed under it, so it would go on showing, and then saving, the work the
+ * author just chose to replace. Counting restores and keying the view by the
+ * count gives it a new mount that reads the restored values.
+ */
+function useRestoreRemount(recovery: UseAutosaveRecoveryResult): {
+  recovery: UseAutosaveRecoveryResult;
+  generation: number;
+} {
+  const [generation, setGeneration] = useState(0);
+  const restoring = useMemo(
+    () => ({
+      ...recovery,
+      restore: () => {
+        recovery.restore();
+        setGeneration(count => count + 1);
+      },
+    }),
+    [recovery]
+  );
+  return { recovery: restoring, generation };
+}
+
 export function DocumentViewBody({
   view,
   target,
@@ -116,17 +144,14 @@ export function DocumentViewBody({
   });
 
   /*
-   * Leaving the view for the edit screen is not leaving the document. Both
+   * Leaving the view for the edit screen is not leaving the document: both
    * addresses render the same page component, so the editor and its form stay
-   * mounted across the move and nothing unsaved is lost; the guard's warning
-   * that it would be is suppressed for this one navigation.
+   * mounted. The guard knows that move stays on the document and lets it
+   * through, so nothing is switched off for it — a suppression would also wave
+   * through whatever navigation came next, with the work still unsaved.
    */
-  const leaveWithoutWarning = useLeaveWithoutWarning();
-  const { onExit } = view;
-  const exit = useCallback(() => {
-    leaveWithoutWarning();
-    onExit();
-  }, [leaveWithoutWarning, onExit]);
+  const exit = view.onExit;
+  const offered = useRestoreRemount(recovery);
 
   // Which field the view edits, from the address. Read here rather than by
   // the view so the rule the admin applies to the address is the one answer.
@@ -165,7 +190,7 @@ export function DocumentViewBody({
             onRequestAccess={lock.requestAccess}
           />
           <LiveDocumentRecoveryOffer
-            recovery={recovery}
+            recovery={offered.recovery}
             viewingVersion={viewingVersion}
             className="mx-6 mt-3"
           />
@@ -181,7 +206,11 @@ export function DocumentViewBody({
           {editing.kind === "choose" ? (
             <DocumentViewFieldChooser candidates={editing.candidates} />
           ) : (
-            <PluginSlot path={view.component} props={viewProps} />
+            <PluginSlot
+              key={offered.generation}
+              path={view.component}
+              props={viewProps}
+            />
           )}
         </div>
       </div>

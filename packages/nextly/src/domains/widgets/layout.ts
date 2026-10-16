@@ -48,17 +48,23 @@ import { createHash } from "node:crypto";
 import { NextlyError } from "../../errors/nextly-error";
 
 import { MAX_PLACEMENTS } from "./layout-limits";
-import { isWidgetWidth, widthFromSize, type WidgetWidth } from "./widths";
+import { LAYOUT_SCHEMA_VERSION } from "./layout-payload";
+import {
+  WIDGET_WIDTHS as WIDGET_WIDTH_ORDER,
+  isWidgetWidth,
+  widthFromSize,
+  type WidgetWidth,
+} from "./widths";
 
-/**
- * The shape this core writes and understands.
- *
- * Bumped only when the payload's structure changes, alongside a conversion that
- * carries the older shape forward. A row naming a version this core does not
- * have was written by a NEWER core, and is refused rather than guessed at,
- * because guessing would silently discard the fields this core cannot see.
- */
-export const LAYOUT_SCHEMA_VERSION = 3;
+// The payload's version, writer and size check live in the import-free
+// `layout-payload.ts`, so the browser asks the endpoint's own question about
+// what fits. Re-exported, so this module's importers are unchanged.
+export {
+  LAYOUT_SCHEMA_VERSION,
+  MAX_LAYOUT_BYTES,
+  layoutSizeProblem,
+  serializeLayout,
+} from "./layout-payload";
 
 /**
  * How many columns the flat first format was dealt across when it was read as
@@ -131,14 +137,42 @@ export interface PlaceableWidget {
 }
 
 /**
- * A widget id that has been retired, mapped to the widget that replaces it.
+ * What a retired widget's cards become.
  *
- * 🔴 ONE map, applied on EVERY read whatever the row's format, the current one
- * included. So a widget can be retired after rows were already saved in the
- * current format and still reach them, and a row with nothing to map comes
- * back unchanged.
+ * 🔴 ONE map of these, applied on EVERY read whatever the row's format, the
+ * current one included. So a widget can be retired after rows were already
+ * saved in the current format and still reach them, and a row with nothing to
+ * map comes back unchanged.
  */
-export type WidgetRetirements = ReadonlyMap<string, string>;
+export interface WidgetRetirement {
+  /** The widget a retired card becomes. */
+  successor: string;
+  /**
+   * WHICH card of the successor a card becomes, read off the card in its
+   * successor form: for a successor that shows one collection, that
+   * collection. Two cards merge only when they become the same successor with
+   * the same identity, so Posts count and Products health stay two cards.
+   * Absent, a successor has one identity, and its cards all merge.
+   */
+  identity?: (placement: WidgetPlacement) => string | undefined;
+  /**
+   * The successor's settings, from the retired card's. Absent, the retired
+   * card's settings are carried as they are.
+   */
+  settings?: (
+    placement: WidgetPlacement
+  ) => Record<string, unknown> | undefined;
+  /**
+   * The widths the successor allows, used to pick a merged card's width: the
+   * largest of the merged cards' widths that the successor allows. Declared
+   * here rather than read from the live registry, so the conversion stays a
+   * function of the stored text and this map. Absent, every width.
+   */
+  allowedWidths?: readonly WidgetWidth[];
+}
+
+/** Retired widget ids, each with what its cards become. */
+export type WidgetRetirements = ReadonlyMap<string, WidgetRetirement>;
 
 /** The widgets this release has retired. None yet. */
 export const RETIRED_WIDGETS: WidgetRetirements = new Map();
@@ -466,16 +500,165 @@ function columnsToList(
     }));
 }
 
+/** One card on its way through the retirement map. */
+interface RetiringCard {
+  placement: WidgetPlacement;
+  /** The merge group it belongs to, when it is or becomes a successor card. */
+  key?: string;
+  /** Whether it was retired, rather than already a successor card. */
+  retired: boolean;
+  /** The successor's allowed widths, for a retired card. */
+  allowedWidths?: readonly WidgetWidth[];
+}
+
+/** A card's merge key: its successor and which card of it. */
+function mergeKey(
+  successor: string,
+  identity: WidgetRetirement["identity"],
+  placement: WidgetPlacement
+): string {
+  return `${successor}\u0000${identity?.(placement) ?? ""}`;
+}
+
+/** A card in the form one retirement turns it into. */
+function retired(
+  placement: WidgetPlacement,
+  retirement: WidgetRetirement
+): WidgetPlacement {
+  const config = retirement.settings
+    ? retirement.settings(placement)
+    : placement.config;
+  const { config: _replaced, ...rest } = placement;
+  return {
+    ...rest,
+    widgetId: retirement.successor,
+    ...(config === undefined ? {} : { config }),
+  };
+}
+
 /**
- * Replaces every retired widget with its successor.
+ * The retirements a widget goes through, in order, to reach one that is not
+ * retired: more than one when its successor was itself retired later. Stops at
+ * a widget it has already passed, so a map that loops cannot loop the read.
+ */
+function retirementChain(
+  widgetId: string,
+  retirements: WidgetRetirements
+): WidgetRetirement[] {
+  const chain: WidgetRetirement[] = [];
+  const passed = new Set<string>([widgetId]);
+  let next = retirements.get(widgetId);
+  while (next !== undefined) {
+    chain.push(next);
+    if (passed.has(next.successor)) break;
+    passed.add(next.successor);
+    next = retirements.get(next.successor);
+  }
+  return chain;
+}
+
+/** Each card, retired cards in their successor form, with its merge group. */
+function retiringCards(
+  placements: readonly WidgetPlacement[],
+  retirements: WidgetRetirements
+): RetiringCard[] {
+  // How each successor tells its cards apart, so a card ALREADY of that
+  // widget joins the same groups as the cards retired into it.
+  const identityOf = new Map<string, WidgetRetirement["identity"]>();
+  for (const retirement of retirements.values()) {
+    identityOf.set(retirement.successor, retirement.identity);
+  }
+  return placements.map(placement => {
+    const chain = retirementChain(placement.widgetId, retirements);
+    if (chain.length > 0) {
+      // Each step in turn, so a widget retired again since reaches the widget
+      // that exists now, with every step's settings mapping applied.
+      const converted = chain.reduce(retired, placement);
+      const last = chain[chain.length - 1];
+      return {
+        placement: converted,
+        key: mergeKey(last.successor, last.identity, converted),
+        retired: true,
+        ...(last.allowedWidths ? { allowedWidths: last.allowedWidths } : {}),
+      };
+    }
+    if (identityOf.has(placement.widgetId)) {
+      return {
+        placement,
+        key: mergeKey(
+          placement.widgetId,
+          identityOf.get(placement.widgetId),
+          placement
+        ),
+        retired: false,
+      };
+    }
+    return { placement, retired: false };
+  });
+}
+
+/**
+ * The widest of `widths` that `allowed` holds, or the widest of all.
  *
- * Each card keeps its id, position, width, removed state and settings, under
- * the successor's widget id. When SEVERAL cards are retired into the same
- * successor, they become one card: the first of them in the list keeps its
- * id, position, width and settings, and it is removed only if every one of
- * them was. The others' ids are dropped. That is the one way a conversion
- * makes fewer cards than it read, and it is limited to cards retired together;
- * every field has one winner, so any two implementations agree.
+ * Choosing only among the CARRIED widths, never inventing one: when the
+ * successor allows none of them, the merged card keeps the reader's widest
+ * choice, the way {@link WidgetPlacement.width} keeps any width its widget
+ * stops allowing. The admin draws it at the nearest allowed width, and the
+ * choice returns if the successor allows it again.
+ */
+function widestAllowed(
+  widths: readonly WidgetWidth[],
+  allowed: readonly WidgetWidth[] | undefined
+): WidgetWidth {
+  const rank = (width: WidgetWidth) => WIDGET_WIDTH_ORDER.indexOf(width);
+  const candidates = allowed
+    ? widths.filter(width => allowed.includes(width))
+    : widths;
+  const pool = candidates.length > 0 ? candidates : widths;
+  return pool.reduce((best, width) =>
+    rank(width) > rank(best) ? width : best
+  );
+}
+
+/**
+ * The one card a merge group leaves, or `undefined` for a group of one.
+ *
+ * A successor card the layout already held keeps its id, position, width and
+ * settings, and the retired cards merge into it. Otherwise the first card in
+ * the order keeps its id, position and settings, and takes the largest of the
+ * group's widths that the successor allows. Either way the card is removed only
+ * if every card in the group was.
+ */
+function mergedCard(group: readonly RetiringCard[]): RetiringCard {
+  const kept = group.find(card => !card.retired) ?? group[0];
+  // Over the cards IN the merge: the kept one and the retired ones. Another
+  // successor card the layout already held stays as it was, so its state is
+  // no part of this card's.
+  const removed = group
+    .filter(card => card === kept || card.retired)
+    .every(card => card.placement.removed);
+  if (!kept.retired) {
+    return { ...kept, placement: { ...kept.placement, removed } };
+  }
+  const width = widestAllowed(
+    group.map(card => card.placement.width),
+    kept.allowedWidths
+  );
+  return { ...kept, placement: { ...kept.placement, width, removed } };
+}
+
+/**
+ * Replaces every retired widget with its successor, merging the cards that
+ * become the same card.
+ *
+ * Each retired card keeps its id, position, width, removed state and
+ * settings, under its successor (settings through the retirement's own
+ * mapping, where it has one). Cards merge only when they become the same
+ * successor with the same identity -- for a successor showing one collection,
+ * the same collection -- and a successor card the layout already held takes
+ * part in that merge as the card that is kept. That is the one way a
+ * conversion makes fewer cards than it read; every field has one winner, so
+ * any two implementations agree. Every other card is left where it is.
  *
  * Returns the same array when nothing is retired, so a row in the current
  * format with nothing to map comes back exactly as it was.
@@ -487,24 +670,31 @@ export function applyRetirements(
   if (!placements.some(placement => retirements.has(placement.widgetId))) {
     return placements;
   }
-  const result: WidgetPlacement[] = [];
-  const firstBySuccessor = new Map<string, number>();
-  for (const placement of placements) {
-    const successor = retirements.get(placement.widgetId);
-    if (successor === undefined) {
-      result.push(placement);
-      continue;
-    }
-    const at = firstBySuccessor.get(successor);
-    if (at === undefined) {
-      firstBySuccessor.set(successor, result.length);
-      result.push({ ...placement, widgetId: successor });
-      continue;
-    }
-    const first = result[at];
-    result[at] = { ...first, removed: first.removed && placement.removed };
+  const cards = retiringCards(placements, retirements);
+  const groups = new Map<string, RetiringCard[]>();
+  for (const card of cards) {
+    if (card.key === undefined) continue;
+    const group = groups.get(card.key) ?? [];
+    group.push(card);
+    groups.set(card.key, group);
   }
-  return result;
+  // A group's kept card stands in its own place; the rest of the group goes.
+  const keptBy = new Map<RetiringCard, RetiringCard>();
+  for (const group of groups.values()) {
+    if (!group.some(card => card.retired)) continue;
+    const kept = group.find(card => !card.retired) ?? group[0];
+    keptBy.set(kept, mergedCard(group));
+  }
+  return cards.flatMap(card => {
+    if (card.key === undefined) return [card.placement];
+    const group = groups.get(card.key) ?? [];
+    if (!group.some(member => member.retired)) return [card.placement];
+    const merged = keptBy.get(card);
+    if (merged) return [merged.placement];
+    // Only RETIRED cards go into a merge. A successor card the layout already
+    // held, other than the one that takes the merge, stays as it was.
+    return card.retired ? [] : [card.placement];
+  });
 }
 
 /**
@@ -587,23 +777,6 @@ function placementsOfVersion(
         },
       });
   }
-}
-
-/**
- * The payload written into the `layout` column.
- *
- * `arranged` defaults to TRUE: a caller that says nothing is making the
- * ordinary kind of write, a save from customise mode.
- */
-export function serializeLayout(
-  placements: readonly WidgetPlacement[],
-  arranged = true
-): string {
-  return JSON.stringify({
-    schemaVersion: LAYOUT_SCHEMA_VERSION,
-    placements,
-    ...(arranged ? {} : { unarranged: true }),
-  });
 }
 
 /**
@@ -798,13 +971,9 @@ export function mergePreservingHidden(
 const ORPHANED = "\u0000orphaned";
 
 /**
- * How many placements one layout may hold, and how large its payload may be.
- *
- * MySQL's `TEXT` is 65535 BYTES, and the other two dialects are effectively
- * unbounded, so without a cap the same PUT stores cleanly on two dialects and
- * fails or truncates on the third. 32 KiB is half MySQL's limit, leaving room
- * for multi-byte characters. `MAX_PLACEMENTS` itself is declared in
- * `layout-limits.ts`, with no imports, because the browser reads it too.
+ * How many placements one layout may hold. `layout-payload.ts` says why, beside
+ * the byte limit it shares a reason with; it is declared in the import-free
+ * `layout-limits.ts` because the browser reads it too.
  */
 export { MAX_PLACEMENTS } from "./layout-limits";
 
@@ -814,7 +983,6 @@ export { MAX_PLACEMENTS } from "./layout-limits";
  * accumulating cards they lost access to, which is the case being bounded.
  */
 export const MAX_STORED_PLACEMENTS = MAX_PLACEMENTS * 2;
-export const MAX_LAYOUT_BYTES = 32 * 1024;
 
 /**
  * How deep a `config` object may nest. `JSON.parse` accepts a structure
@@ -822,27 +990,6 @@ export const MAX_LAYOUT_BYTES = 32 * 1024;
  * unbounded depth turned a write into an internal error on the way back out.
  */
 export const MAX_CONFIG_DEPTH = 16;
-
-/**
- * Why the caller's OWN submission cannot be stored, or `undefined`.
- *
- * 🔴 Measures only what the caller sent. A budget that also weighed the cards
- * carried back on their behalf would make ACCEPTANCE depend on data they
- * cannot see, and the pass/fail edge would be the oracle.
- */
-export function layoutSizeProblem(
-  placements: readonly WidgetPlacement[]
-): string | undefined {
-  if (placements.length > MAX_PLACEMENTS) {
-    return `a layout may hold at most ${MAX_PLACEMENTS} placements`;
-  }
-  // Byte length, not string length: the column's limit is bytes.
-  const bytes = Buffer.byteLength(serializeLayout(placements), "utf8");
-  if (bytes > MAX_LAYOUT_BYTES) {
-    return `a layout may be at most ${MAX_LAYOUT_BYTES} bytes; this one is ${bytes}`;
-  }
-  return undefined;
-}
 
 /**
  * A short, stable stand-in for "what this caller could see": which widgets,

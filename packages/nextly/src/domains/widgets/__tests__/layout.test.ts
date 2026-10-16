@@ -21,6 +21,8 @@ import {
   serializeLayout,
   visibilityToken,
   type WidgetPlacement,
+  type WidgetRetirement,
+  type WidgetRetirements,
 } from "../layout";
 
 /** A placement that satisfies every rule, for a test to break one field of. */
@@ -355,10 +357,25 @@ describe("a flat first-format row becomes one ordered list", () => {
 });
 
 describe("retired widgets", () => {
-  const retirements = new Map([
-    ["core/old-one", "core/new"],
-    ["core/old-two", "core/new"],
+  // Shaped on the catalogue's own retirements: generated count and health
+  // cards become Count for their collection; Collections and Singles become
+  // one Content card.
+  const count: WidgetRetirement = {
+    successor: "core/count",
+    identity: placement => String(placement.config?.collection ?? ""),
+    allowedWidths: ["quarter", "third", "half", "twoThirds"],
+  };
+  const content: WidgetRetirement = {
+    successor: "core/content",
+    allowedWidths: ["half", "twoThirds", "full"],
+  };
+  const retirements: WidgetRetirements = new Map([
+    ["gen/count", count],
+    ["gen/health", count],
+    ["core/collections", content],
+    ["core/singles", content],
   ]);
+  const of = (collection: string) => ({ collection });
 
   it("leaves a current-format row with nothing to map exactly as it was", () => {
     const placements = [card("a"), card("b")];
@@ -368,17 +385,13 @@ describe("retired widgets", () => {
   it("maps a retired widget to its successor, keeping the card", () => {
     const read = readStoredLayout(
       serializeLayout([
-        card("x", "core/old-one", {
-          width: "half",
-          removed: true,
-          config: { k: 1 },
-        }),
+        card("x", "core/collections", { width: "half", removed: true }),
         card("y"),
       ]),
       retirements
     ).placements;
     expect(read).toEqual([
-      card("x", "core/new", { width: "half", removed: true, config: { k: 1 } }),
+      card("x", "core/content", { width: "half", removed: true }),
       card("y"),
     ]);
   });
@@ -387,66 +400,223 @@ describe("retired widgets", () => {
     const v1 = JSON.stringify({
       schemaVersion: 1,
       placements: [
-        { id: "x", widgetId: "core/old-one", order: 0, hidden: false },
+        { id: "x", widgetId: "core/singles", order: 0, hidden: false },
       ],
     });
     const v2 = columnsRow([
-      { id: "x", widgetId: "core/old-one", column: 0, order: 0, hidden: false },
+      { id: "x", widgetId: "core/singles", column: 0, order: 0, hidden: false },
     ]);
-    const v3 = serializeLayout([card("x", "core/old-one")]);
+    const v3 = serializeLayout([card("x", "core/singles")]);
     for (const raw of [v1, v2, v3]) {
       expect(readStoredLayout(raw, retirements).placements[0]?.widgetId).toBe(
-        "core/new"
+        "core/content"
       );
     }
   });
 
-  it("makes two cards retired into one successor one card, the first winning", () => {
+  it("merges cards that become the same successor for the same collection, and only those", () => {
+    const merged = applyRetirements(
+      [
+        card("posts-count", "gen/count", { config: of("posts") }),
+        card("products-health", "gen/health", { config: of("products") }),
+        card("posts-health", "gen/health", { config: of("posts") }),
+      ],
+      retirements
+    );
+    expect(merged.map(p => [p.id, p.widgetId, p.config])).toEqual([
+      ["posts-count", "core/count", of("posts")],
+      ["products-health", "core/count", of("products")],
+    ]);
+  });
+
+  it("gives a merged card the first card's id, position and settings, and the larger width the successor allows", () => {
     const merged = applyRetirements(
       [
         card("lead"),
-        card("first", "core/old-two", { width: "half", config: { a: 1 } }),
+        card("first", "gen/count", { width: "quarter", config: of("posts") }),
         card("between"),
-        card("second", "core/old-one", { width: "quarter", config: { b: 2 } }),
+        // Full is wider still, but Count does not allow it: two thirds wins.
+        card("second", "gen/health", { width: "full", config: of("posts") }),
+        card("third", "gen/count", { width: "twoThirds", config: of("posts") }),
       ],
       retirements
     );
     expect(merged).toEqual([
       card("lead"),
-      card("first", "core/new", { width: "half", config: { a: 1 } }),
+      card("first", "core/count", { width: "twoThirds", config: of("posts") }),
       card("between"),
     ]);
   });
 
-  it("keeps the merged card unless every card merged into it was removed", () => {
-    const merge = (a: boolean, b: boolean) =>
-      applyRetirements(
-        [
-          card("first", "core/old-one", { removed: a }),
-          card("second", "core/old-two", { removed: b }),
-        ],
-        retirements
-      )[0]?.removed;
-    expect(merge(true, true)).toBe(true);
-    expect(merge(true, false)).toBe(false);
-    expect(merge(false, true)).toBe(false);
-    expect(merge(false, false)).toBe(false);
+  it("keeps the widest carried width when the successor allows none of them", () => {
+    // Count allows no full width. The merged card keeps the reader's widest
+    // choice, as every stored card keeps a width its widget stops allowing:
+    // the admin draws it at the nearest width Count allows, and the choice
+    // returns if Count allows it again. Picking an allowed width here would
+    // be a second nearest-width rule beside the admin's.
+    const merged = applyRetirements(
+      [
+        card("first", "gen/count", { width: "full", config: of("posts") }),
+        card("second", "gen/health", { width: "full", config: of("posts") }),
+      ],
+      retirements
+    );
+    expect(merged.map(p => [p.id, p.widgetId, p.width])).toEqual([
+      ["first", "core/count", "full"],
+    ]);
   });
 
-  it("maps the same row the same way every time", () => {
+  it("merges into a successor card the layout already holds, which keeps everything it had", () => {
+    const existing = card("content", "core/content", {
+      width: "twoThirds",
+      config: { tab: "singles" },
+    });
+    const merged = applyRetirements(
+      [
+        // Retired, and BEFORE the existing card: the existing one still keeps
+        // its own id and position.
+        card("cols", "core/collections", { width: "full" }),
+        card("mid"),
+        existing,
+        card("sing", "core/singles", { width: "half" }),
+      ],
+      retirements
+    );
+    expect(merged).toEqual([card("mid"), existing]);
+  });
+
+  it("merges into the first of several matching successor cards, leaving the others", () => {
+    // A widget may be placed more than once with other settings: two Count
+    // cards for Posts already stand, and a retired Posts health card joins the
+    // first of them in the order. The second is not touched.
+    const first = card("first", "core/count", {
+      removed: true,
+      config: { ...of("posts"), filter: "drafts" },
+    });
+    const second = card("second", "core/count", {
+      removed: true,
+      config: { ...of("posts"), filter: "published" },
+    });
+    const merged = applyRetirements(
+      [first, second, card("health", "gen/health", { config: of("posts") })],
+      retirements
+    );
+    expect(merged).toEqual([{ ...first, removed: false }, second]);
+  });
+
+  it("takes the removed state from the cards in the merge, not from the matching card left out of it", () => {
+    // 🔴 The separating case. The first Count card and the retired card were
+    // both removed; the second Count card is visible but takes no part in the
+    // merge. Judging "every card removed" across all three would bring the
+    // first card back, an extra card nobody asked for.
+    const first = card("first", "core/count", {
+      removed: true,
+      config: { ...of("posts"), filter: "drafts" },
+    });
+    const second = card("second", "core/count", {
+      config: { ...of("posts"), filter: "published" },
+    });
+    const merged = applyRetirements(
+      [
+        first,
+        second,
+        card("health", "gen/health", { removed: true, config: of("posts") }),
+      ],
+      retirements
+    );
+    expect(merged).toEqual([first, second]);
+  });
+
+  it("removes a merged card only when every card merged into it was removed", () => {
+    const merge = (cols: boolean, sing: boolean, existing?: boolean) =>
+      applyRetirements(
+        [
+          card("cols", "core/collections", { removed: cols }),
+          card("sing", "core/singles", { removed: sing }),
+          ...(existing === undefined
+            ? []
+            : [card("content", "core/content", { removed: existing })]),
+        ],
+        retirements
+      ).find(p => p.widgetId === "core/content")?.removed;
+    for (const cols of [true, false]) {
+      for (const sing of [true, false]) {
+        expect(merge(cols, sing)).toBe(cols && sing);
+        for (const existing of [true, false]) {
+          expect(merge(cols, sing, existing)).toBe(cols && sing && existing);
+        }
+      }
+    }
+  });
+
+  it("merges either way round, the first in the order winning", () => {
+    const colsFirst = applyRetirements(
+      [card("cols", "core/collections"), card("sing", "core/singles")],
+      retirements
+    );
+    const singFirst = applyRetirements(
+      [card("sing", "core/singles"), card("cols", "core/collections")],
+      retirements
+    );
+    expect(colsFirst.map(p => p.id)).toEqual(["cols"]);
+    expect(singFirst.map(p => p.id)).toEqual(["sing"]);
+  });
+
+  it("follows a chain of retirements to the widget that exists now", () => {
+    // Retired in one release, its successor retired again in a later one: a
+    // row nobody saved in between still reaches the current widget, once.
+    const chain: WidgetRetirements = new Map<string, WidgetRetirement>([
+      ["core/old", { successor: "core/replacement" }],
+      [
+        "core/replacement",
+        {
+          successor: "core/current",
+          settings: placement => ({ ...placement.config, migrated: true }),
+        },
+      ],
+    ]);
+    const read = readStoredLayout(
+      serializeLayout([card("x", "core/old", { config: { k: 1 } })]),
+      chain
+    );
+    expect(read.placements).toEqual([
+      card("x", "core/current", { config: { k: 1, migrated: true } }),
+    ]);
+    // Reading the result again changes nothing.
+    expect(
+      readStoredLayout(serializeLayout(read.placements), chain).placements
+    ).toEqual(read.placements);
+  });
+
+  it("stops at a cycle in the map rather than looping", () => {
+    const cycle: WidgetRetirements = new Map<string, WidgetRetirement>([
+      ["core/a", { successor: "core/b" }],
+      ["core/b", { successor: "core/a" }],
+    ]);
+    const mapped = applyRetirements([card("x", "core/a")], cycle);
+    expect(mapped).toHaveLength(1);
+    expect(["core/a", "core/b"]).toContain(mapped[0]?.widgetId);
+  });
+
+  it("maps the same row the same way every time, and a mapped row maps to itself", () => {
     const raw = columnsRow([
-      { id: "a", widgetId: "core/old-two", column: 1, order: 0, hidden: true },
-      { id: "b", widgetId: "core/old-one", column: 0, order: 0, hidden: false },
+      { id: "a", widgetId: "core/singles", column: 1, order: 0, hidden: true },
+      {
+        id: "b",
+        widgetId: "core/collections",
+        column: 0,
+        order: 0,
+        hidden: false,
+      },
     ]);
     const first = readStoredLayout(raw, retirements);
     expect(readStoredLayout(raw, retirements)).toEqual(first);
-    // Reading the stored result again maps nothing more.
     expect(
       readStoredLayout(serializeLayout(first.placements), retirements)
         .placements
     ).toEqual(first.placements);
     // Row-major: "b" (column 0) comes first and keeps its id.
-    expect(first.placements).toEqual([card("b", "core/new")]);
+    expect(first.placements).toEqual([card("b", "core/content")]);
   });
 });
 
