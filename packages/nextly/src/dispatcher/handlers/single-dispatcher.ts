@@ -1053,7 +1053,11 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         ).length > 0
       ) {
         const adapter = getAdapterFromDI();
-        if (!adapter) throw new Error("Database adapter not initialized");
+        if (!adapter) {
+          throw NextlyError.internal({
+            logContext: { reason: "database adapter not initialized", slug },
+          });
+        }
         await assertI18nArchiveWritable(adapter, slug);
       }
 
