@@ -334,10 +334,26 @@ async function retrievable(get, api, marker, name, corpus) {
  * for "Security Policy"); that is not the file coming back.
  */
 function standsAlone(body, marker) {
-  return body.split("\n").some(line => {
+  return copiedLines(body).some(line => {
     const text = line.replace(/^\s*#{1,6}\s+/, "").trim();
     return text === marker || text.split(" > ").includes(marker);
   });
+}
+
+/**
+ * The answer's lines without the title Context7 writes above each snippet's citation: the
+ * last non-blank line before a `Source:` line. That title is its own wording, and can match a
+ * short heading of a file the snippet never read.
+ */
+function copiedLines(body) {
+  const lines = body.split("\n");
+  const titles = new Set();
+  let lastText = -1;
+  for (const [index, line] of lines.entries()) {
+    if (/^Source:\s/.test(line)) titles.add(lastText);
+    else if (line.trim() !== "") lastText = index;
+  }
+  return lines.filter((_, index) => !titles.has(index));
 }
 
 /**

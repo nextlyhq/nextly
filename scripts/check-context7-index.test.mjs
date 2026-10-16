@@ -694,6 +694,14 @@ describe("verify", () => {
       expect(status).toBe(0);
     });
 
+    it("is not the sentence coming back when it is only the title Context7 gave a snippet", async () => {
+      // The title above a snippet's citation is Context7's wording too, however closely it
+      // matches a heading of some other file.
+      const body = `### ${marker}\n\nSource: ${REPO_BLOB}main/docs/configuration/nextly-config.mdx\n\nSet upload limits.\n`;
+      const { status } = await verify({ root: ".", get: answering(body) });
+      expect(status).toBe(0);
+    });
+
     it("is the sentence coming back when it stands on a line of its own, whoever is cited", async () => {
       const body = snippet("docs/configuration/nextly-config.mdx", `## ${marker}`);
       const { status } = await verify({ root: ".", get: answering(body) });
