@@ -151,6 +151,24 @@ describe("check-access-rule-role-names", () => {
     ]);
   });
 
+  it("sees through satisfies, as and parentheses", () => {
+    expect(
+      scan({
+        "templates/t/src/collections/Posts.ts": [
+          "const access = {",
+          '  update: (({ roles }) => roles.includes("editor")) as Rule,',
+          "} satisfies CollectionAccessControl;",
+          'const shared = { delete: ({ roles }) => roles.includes("admin") } as const;',
+          "export const Posts = defineCollection({ access });",
+          "export const Tags = defineCollection({ access: shared });",
+        ].join("\n"),
+      })
+    ).toEqual([
+      "templates/t/src/collections/Posts.ts:2 update",
+      "templates/t/src/collections/Posts.ts:4 delete",
+    ]);
+  });
+
   it("passes a rule that decides by permission", () => {
     expect(
       scan({

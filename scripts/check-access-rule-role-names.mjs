@@ -88,6 +88,23 @@ function isFunctionNode(node) {
   );
 }
 
+/**
+ * The expression under parentheses, `as`, `satisfies` and `!`, which change
+ * what the compiler believes about a value and nothing about what it is.
+ */
+function unwrap(node) {
+  let inner = node;
+  while (
+    ts.isParenthesizedExpression(inner) ||
+    ts.isAsExpression(inner) ||
+    ts.isSatisfiesExpression(inner) ||
+    ts.isNonNullExpression(inner) ||
+    ts.isTypeAssertionExpression(inner)
+  )
+    inner = inner.expression;
+  return inner;
+}
+
 /** The name a property is written under, when it is written plainly. */
 function propertyName(name) {
   return name && (ts.isIdentifier(name) || ts.isStringLiteral(name))
@@ -130,7 +147,7 @@ function readsRole(fn) {
  */
 function declarationsOf(statement, source) {
   if (ts.isExportAssignment(statement) && !statement.isExportEquals) {
-    return [["default", { node: statement.expression, typed: false }]];
+    return [["default", { node: unwrap(statement.expression), typed: false }]];
   }
   if (ts.isFunctionDeclaration(statement)) {
     const entry = { node: statement, typed: false };
@@ -148,7 +165,7 @@ function declarationsOf(statement, source) {
     .map(decl => [
       decl.name.text,
       {
-        node: decl.initializer,
+        node: unwrap(decl.initializer),
         typed:
           decl.type !== undefined && RULE_TYPE.test(decl.type.getText(source)),
       },
@@ -256,7 +273,8 @@ function resolveRelative(fromPath, specifier, has) {
 }
 
 /** What a property's value names: an inline function, or an identifier. */
-function ruleOfValue(value, operation) {
+function ruleOfValue(written, operation) {
+  const value = unwrap(written);
   if (isFunctionNode(value)) return { fn: value, name: operation };
   if (ts.isIdentifier(value))
     return { identifier: value.text, name: value.text };
@@ -288,10 +306,9 @@ function accessObjects(source) {
     if (ts.isShorthandPropertyAssignment(node) && node.name.text === "access")
       found.push({ identifier: "access" });
     if (ts.isPropertyAssignment(node) && propertyName(node.name) === "access") {
-      if (ts.isObjectLiteralExpression(node.initializer))
-        found.push({ object: node.initializer });
-      else if (ts.isIdentifier(node.initializer))
-        found.push({ identifier: node.initializer.text });
+      const value = unwrap(node.initializer);
+      if (ts.isObjectLiteralExpression(value)) found.push({ object: value });
+      else if (ts.isIdentifier(value)) found.push({ identifier: value.text });
     }
     ts.forEachChild(node, visit);
   };

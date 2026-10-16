@@ -30,9 +30,11 @@ everything.
 
 Grants say what a role may do. When a collection declares an `access` rule for an
 operation, that rule is the whole answer for a signed-in user: the grant is not checked
-beside it, so a rule that returns `true` admits someone whose role lacks the grant. Make
-every rule check the permission itself, then add your own condition, so it only ever
-narrows what the Roles screen grants:
+beside it, so a rule that returns `true` admits someone whose role lacks the grant. So
+for staff and API keys, make the rule check the permission itself, then add your own
+condition, and it only ever narrows what the Roles screen grants. A rule that also admits
+plugin-defined people checks for them in a separate branch, since they hold no
+permissions (see the end of this section):
 
 ```ts
 import type { AccessControlFunction } from "nextly";
