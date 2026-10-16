@@ -72,3 +72,7 @@ install` has run for it on that database** (`PLUGIN_NOT_INSTALLED`),
 - **The install-state refusals come before boot migrations**, so a refused
   plugin's modules, or a half-uninstalled one's rolled-back modules, are not
   applied first.
+- **On MySQL, the migrate lock is held on one connection for the whole
+  migration.** The lock and its release used to run on whichever pooled
+  connection was free, so a release on another connection left the lock held
+  until that connection closed.
