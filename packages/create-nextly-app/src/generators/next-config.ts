@@ -779,7 +779,7 @@ const SINGLE_MAJOR = /^[\^~]?(\d+)(?:\.(?:\d+|[xX*])){0,2}(?:-[\w.]+)?$/;
  * that range admits a single major. Null when neither tells, as when
  * dependencies are not installed yet and the range is `latest`.
  */
-async function nextMajor(cwd: string): Promise<number | null> {
+export async function nextMajor(cwd: string): Promise<number | null> {
   const installed = stringAt(
     await readJsonOrNull(
       path.join(cwd, "node_modules", "next", "package.json")

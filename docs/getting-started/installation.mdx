@@ -324,7 +324,7 @@ export async function register(): Promise<void> {
 }
 ```
 
-Next.js skips `register()` during `next build`, so this opens no database connection at build time. On Next.js 14 the hook runs only when `next.config` sets `experimental: { instrumentationHook: true }`, and if the config sets `pageExtensions`, name the file with one of them (`instrumentation.page.ts` for `page.ts`).
+Next.js skips `register()` during `next build`, so this opens no database connection at build time. On Next.js 14 the hook runs only when `next.config` sets `instrumentationHook: true` in its `experimental` object (add it beside any keys already there), and if the config sets `pageExtensions`, name the file with one of them (`instrumentation.page.ts` for `page.ts`).
 
 ### 5. Set Up Environment Variables
 

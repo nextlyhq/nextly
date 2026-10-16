@@ -5,6 +5,7 @@ import fs from "fs-extra";
 import type { ProjectInfo } from "../types";
 
 import type { GeneratedFiles } from "./generated-files";
+import { nextMajor } from "./next-config";
 
 /**
  * The names Next.js loads its instrumentation hook from: `instrumentation`
@@ -102,10 +103,40 @@ ${startNextly(configImport)
 }`;
 }
 
-/** Next.js 14 runs an instrumentation hook only when the config opts in. */
-function needsHookOptIn(nextVersion: string | null): boolean {
-  const major = Number(nextVersion?.replace(/^[^0-9]*/, "").split(".")[0]);
-  return major === 14;
+/** The key Next.js 14 needs before it runs an instrumentation hook. */
+const OPT_IN = "experimental: { instrumentationHook: true }";
+
+/**
+ * What to tell an app about Next.js 14's opt-in, or null when it needs none.
+ *
+ * The major is the installed one, read the way the config patcher reads it,
+ * so a range such as `latest` or `^14 || ^15` is not guessed at. When even
+ * that cannot tell, the advice is given for the case it applies to. An app
+ * with no config gets a whole one to create, since a key alone is not a file.
+ */
+function hookOptIn(
+  major: number | null,
+  nextConfig: { name: string } | null
+): GeneratedFiles["skipped"][number] | null {
+  if (major !== null && major !== 14) return null;
+  const when =
+    major === 14
+      ? "Next.js 14 runs instrumentation.ts only when the config opts in"
+      : "the installed Next.js version could not be read, and Next.js 14 runs instrumentation.ts only when the config opts in";
+  if (!nextConfig) {
+    // An .mjs config is ESM whatever the package's own "type" says, so this
+    // one file loads in a CommonJS project and in a module one alike.
+    return {
+      path: "next.config.mjs",
+      why: `${when}, and the app has no Next.js config; on Next.js 14, create this file`,
+      toAdd: `/** @type {import('next').NextConfig} */\nexport default {\n  ${OPT_IN},\n};\n`,
+    };
+  }
+  return {
+    path: nextConfig.name,
+    why: `${when}, and the config was left as it is`,
+    toAdd: `On Next.js 14, add instrumentationHook: true inside the config's experimental object, beside any keys it already has, or add the object when there is none:\n\n${OPT_IN},`,
+  };
 }
 
 /**
@@ -121,7 +152,7 @@ function needsHookOptIn(nextVersion: string | null): boolean {
  */
 export async function generateInstrumentation(
   cwd: string,
-  projectInfo: Pick<ProjectInfo, "srcDir" | "nextVersion">
+  projectInfo: Pick<ProjectInfo, "srcDir">
 ): Promise<GeneratedFiles> {
   const dir = projectInfo.srcDir ? "src" : "";
   const configImport = projectInfo.srcDir
@@ -130,13 +161,8 @@ export async function generateInstrumentation(
   const result: GeneratedFiles = { written: [], changed: [], skipped: [] };
   const nextConfig = await readNextConfig(cwd);
 
-  if (needsHookOptIn(projectInfo.nextVersion)) {
-    result.skipped.push({
-      path: nextConfig?.name ?? "next.config.js",
-      why: "Next.js 14 runs instrumentation.ts only when the config opts in, and the config was left as it is",
-      toAdd: "experimental: { instrumentationHook: true },",
-    });
-  }
+  const optIn = hookOptIn(await nextMajor(cwd), nextConfig);
+  if (optIn) result.skipped.push(optIn);
 
   for (const name of HOOK_NAMES) {
     const relative = path.posix.join(dir, name);

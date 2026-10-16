@@ -65,41 +65,80 @@ const NOT_STARTED =
   "Start it when the server starts: an instrumentation.ts whose register() " +
   "calls createRegister(config) from 'nextly' (see the installation guide).";
 
-/** Said once per process, so a monitor polling a server that never starts it does not flood the log. */
-let notStartedLogged = false;
+/**
+ * Each said once per process, so a monitor polling a server that cannot serve
+ * does not flood the log. Kept apart, so a start that fails after a probe has
+ * already reported "not started" is still logged with its own detail.
+ */
+const reported = { "not-started": false, failed: false };
 
 /**
- * Whether Nextly is running in this process, waiting for a start already under
- * way rather than answering for a server that is seconds from being able to.
+ * Where Nextly stands in this process: running, never started, or started and
+ * failed.
  *
- * A start can still be in flight when the first probe arrives: a platform may
- * run a route before `instrumentation.register()` has finished, as Next.js on
- * Vercel did before vercel/next.js#94306. `getCachedNextly()` awaits a start in
- * progress and refuses when there is none, which is the answer wanted here.
+ * Every answer comes from `getCachedNextly()`, the one place that knows: it
+ * waits for a start in progress, through every step of it (drift checks, boot
+ * apply, seeding), before answering, and refuses with `CONFIGURATION_ERROR`
+ * when nothing has started. A platform may run this route before
+ * `instrumentation.register()` has finished, as Next.js on Vercel did before
+ * vercel/next.js#94306, so a probe that arrives mid-start waits for the start
+ * rather than answering for a server seconds from serving, or for one whose
+ * start may yet fail.
  */
-async function started(): Promise<boolean> {
-  if (isServicesRegistered()) return true;
+async function startState(): Promise<
+  | { state: "started" }
+  | { state: "not-started" }
+  | { state: "failed"; error: unknown }
+> {
   try {
     await getCachedNextly();
-    return true;
-  } catch {
-    return false;
+    return { state: "started" };
+  } catch (error) {
+    if (
+      NextlyError.isCode(error, "CONFIGURATION_ERROR") &&
+      !isServicesRegistered()
+    ) {
+      return { state: "not-started" };
+    }
+    return { state: "failed", error };
   }
 }
 
-/** Said once, at best effort: a logger that cannot write must not turn this answer into a 500. */
-function warnNotStarted(): void {
-  if (notStartedLogged) return;
+/**
+ * Says why this process cannot serve, once, at best effort: a logger that
+ * cannot write must not turn the 503 into a 500. A failed start is logged with
+ * its own detail, which nothing else here would surface.
+ */
+function reportUnavailable(
+  status: { state: "not-started" } | { state: "failed"; error: unknown }
+): void {
+  if (reported[status.state]) return;
   try {
-    getNextlyLogger().warn({ op: "health-not-started", message: NOT_STARTED });
-    notStartedLogged = true;
+    const logger = getNextlyLogger();
+    if (status.state === "not-started") {
+      logger.warn({ op: "health-not-started", message: NOT_STARTED });
+    } else {
+      const error = status.error;
+      logger.error({
+        op: "health-start-failed",
+        message: "Nextly failed to start in this process, so it cannot serve.",
+        ...(NextlyError.is(error)
+          ? {
+              code: error.code,
+              detail: error.logMessage,
+              context: error.logContext,
+            }
+          : { detail: error instanceof Error ? error.message : String(error) }),
+      });
+    }
+    reported[status.state] = true;
   } catch {
     // The 503 is the answer either way; the next probe tries the log again.
   }
 }
 
 /**
- * The database probe, or `null` when Nextly has not started in this process.
+ * The database probe, or `null` when Nextly is not running in this process.
  *
  * Asked first rather than left to the probe, which would look the adapter up,
  * fail, and report a database fault for a server that was never started.
@@ -107,8 +146,9 @@ function warnNotStarted(): void {
 async function probe(): Promise<Awaited<
   ReturnType<typeof healthCheck>
 > | null> {
-  if (!(await started())) {
-    warnNotStarted();
+  const status = await startState();
+  if (status.state !== "started") {
+    reportUnavailable(status);
     return null;
   }
   return healthCheck();
