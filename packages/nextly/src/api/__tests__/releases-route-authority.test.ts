@@ -135,7 +135,11 @@ function namespace() {
       // Answers the release as it stands after the run, so a case can say
       // which way it went.
       publishNow: vi.fn(
-        async (): Promise<{ id: string; state: string }> => ({
+        async (): Promise<{
+          id: string;
+          state: string;
+          scheduledAt?: Date | null;
+        }> => ({
           id: "r1",
           state: "published",
         })
@@ -866,6 +870,30 @@ describe("publish now over REST", () => {
     });
     const { body } = await publish();
     expect(body.message).not.toBe("Release published.");
+    expect(body.message).toMatch(/going out/);
+  });
+
+  it("names the new instant of a release rescheduled for later while it was being sent", async () => {
+    // Moved to the future by another request after Publish now judged it due:
+    // the drain leaves it until then, so "shortly" would be untrue.
+    const later = new Date(Date.now() + 60 * 60 * 1000);
+    api.releases.publishNow.mockResolvedValueOnce({
+      id: "r1",
+      state: "scheduled",
+      scheduledAt: later,
+    });
+    const { body } = await publish();
+    expect(body.message).toContain(later.toISOString());
+    expect(body.message).not.toMatch(/going out;|shortly/);
+  });
+
+  it("still says a due release is going out", async () => {
+    api.releases.publishNow.mockResolvedValueOnce({
+      id: "r1",
+      state: "scheduled",
+      scheduledAt: new Date(Date.now() - 1000),
+    });
+    const { body } = await publish();
     expect(body.message).toMatch(/going out/);
   });
 

@@ -26,6 +26,7 @@ import type { AuthenticatedScope } from "../auth/authenticated-scope";
 import { runWithCallerScope } from "../auth/caller-scope";
 import { isErrorResponse, requireAnyPermission } from "../auth/middleware";
 import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
+import { isDueAt } from "../domains/releases/release-due";
 import {
   isReleaseTab,
   RELEASE_ATTENTION_REASONS,
@@ -508,6 +509,25 @@ const PUBLISH_NOW_MESSAGES: Record<ReleaseState, string> = {
 };
 
 /**
+ * The Publish now answer for the release the run left.
+ *
+ * A `scheduled` release is going out only once its instant has come, by the
+ * drain's own rule. One rescheduled for later while Publish now ran waits for
+ * that instant, and the drain leaves it alone until then, so promising the
+ * rest shortly would be untrue: the answer names the instant instead.
+ */
+function publishNowMessage(release: ReleaseRow, now: Date): string {
+  if (
+    release.state === "scheduled" &&
+    release.scheduledAt instanceof Date &&
+    !isDueAt(release.scheduledAt, now)
+  ) {
+    return `Release was rescheduled for ${release.scheduledAt.toISOString()} while it was being sent; it will go out then.`;
+  }
+  return PUBLISH_NOW_MESSAGES[release.state];
+}
+
+/**
  * A release with its capabilities, for an answer given AFTER a write.
  *
  * The capabilities are a read, and may need an authority the write did not:
@@ -762,7 +782,7 @@ const RELEASE_OPERATIONS: Record<
     // way it went: a release still `scheduled` has documents the runner will
     // finish, and a `blocked` one stopped and will not go on until fixed.
     return respondMutation(
-      PUBLISH_NOW_MESSAGES[release.state],
+      publishNowMessage(release, new Date()),
       await decorateAfterWrite(release, caller, releases)
     );
   },
