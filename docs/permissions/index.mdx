@@ -114,6 +114,15 @@ export const Users = defineCollection({
 A field the reader may not see is removed from the response rather than blanked, and a
 field they may not change is rejected on write rather than silently dropped.
 
+A field the reader may not see cannot be used to choose rows either: filtering, sorting
+or grouping on it is refused with a `400` that names the field, and a collection's search
+leaves it out. Before a query there is no entry yet, so the `read` rule is asked without
+one. A rule that allows the reader outright, like the one above, lets an admin filter on
+`internalNotes`. A rule that needs the entry to decide, such as `({ req, data }) =>
+data?.owner === req.user?.id`, cannot allow, so the field can't be queried at all, not
+even by its owner. That keeps a filter or an ordering from revealing the value on entries
+where the reader can't see it.
+
 This is the level most systems either do not have or sell separately. It is what lets one
 collection serve two audiences — an editor who sees the article, and a finance user who
 also sees the fields describing what it cost.

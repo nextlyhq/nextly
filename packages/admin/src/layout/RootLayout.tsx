@@ -71,6 +71,7 @@ function AdminAppContent() {
     searchParams,
     routeType,
     requiredPermission,
+    accessSubject,
     requiresBuilder,
   } = route;
 
@@ -94,7 +95,10 @@ function AdminAppContent() {
 
     if (routeType === "private") {
       const content = requiredPermission ? (
-        <PermissionGuard requiredPermission={requiredPermission}>
+        <PermissionGuard
+          requiredPermission={requiredPermission}
+          subject={accessSubject}
+        >
           {componentElement}
         </PermissionGuard>
       ) : (

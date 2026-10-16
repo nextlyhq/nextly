@@ -7,9 +7,143 @@ vi.mock("../database/health", () => ({
   healthCheck: vi.fn(),
 }));
 
+// Whether Nextly has started in this process. Started unless a case says not.
+vi.mock("../di/register", () => ({
+  isServicesRegistered: vi.fn(() => true),
+}));
+
+// A start in flight, which the route waits for. None unless a case says so.
+vi.mock("../init", () => ({
+  getCachedNextly: vi.fn(async () => {
+    throw new Error("Nextly has not been initialised");
+  }),
+}));
+
 describe("Health Check Route Handlers", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  describe("before Nextly has started in this process", () => {
+    it("answers 503 with only the generic body, without probing a database it has no adapter for", async () => {
+      const { healthCheck } = await import("../database/health");
+      const { isServicesRegistered } = await import("../di/register");
+      (isServicesRegistered as any).mockReturnValueOnce(false);
+
+      const response = await GET(
+        new Request("http://localhost:3000/api/health")
+      );
+
+      expect(response.status).toBe(503);
+      const json = await response.json();
+      expect(Object.keys(json)).toEqual(["error"]);
+      expect(Object.keys(json.error).sort()).toEqual([
+        "code",
+        "message",
+        "requestId",
+      ]);
+      expect(json.error.code).toBe("SERVICE_UNAVAILABLE");
+      expect(json.error.message).toBe(
+        "Service unavailable. Please try again later."
+      );
+      expect(healthCheck).not.toHaveBeenCalled();
+    });
+
+    it("logs once per process however often a monitor polls, not once per poll", async () => {
+      // A fresh copy of the route, so this process has not yet said why.
+      vi.resetModules();
+      const { setNextlyLogger } = await import("../observability/logger");
+      const { isServicesRegistered } = await import("../di/register");
+      const route = await import("./health");
+      const lines: object[] = [];
+      const record = (payload: object) => {
+        lines.push(payload);
+      };
+      setNextlyLogger({
+        error: record,
+        warn: record,
+        info: record,
+        debug: record,
+      });
+      (isServicesRegistered as any).mockReturnValue(false);
+
+      try {
+        for (let poll = 0; poll < 3; poll++) {
+          const response = await route.GET(
+            new Request("http://localhost:3000/api/health")
+          );
+          expect(response.status).toBe(503);
+        }
+      } finally {
+        setNextlyLogger(undefined);
+        (isServicesRegistered as any).mockReturnValue(true);
+      }
+
+      expect(lines).toEqual([
+        expect.objectContaining({ op: "health-not-started" }),
+      ]);
+    });
+
+    it("waits for a start already under way, and answers for the server once it has started", async () => {
+      // A route can run before instrumentation.register() has finished; the
+      // probe then waits for that start instead of answering 503.
+      const { healthCheck } = await import("../database/health");
+      const { isServicesRegistered } = await import("../di/register");
+      const { getCachedNextly } = await import("../init");
+      (isServicesRegistered as any).mockReturnValueOnce(false);
+      (getCachedNextly as any).mockResolvedValueOnce({});
+      (healthCheck as any).mockResolvedValueOnce({
+        ok: true,
+        timestamp: "2025-01-15T10:30:00.000Z",
+        database: { connected: true, dialect: "sqlite", latencyMs: 1 },
+      });
+
+      const response = await GET(
+        new Request("http://localhost:3000/api/health")
+      );
+
+      expect(getCachedNextly).toHaveBeenCalledTimes(1);
+      expect(response.status).toBe(200);
+    });
+
+    it("still answers 503 when the logger cannot write the warning", async () => {
+      vi.resetModules();
+      const { setNextlyLogger } = await import("../observability/logger");
+      const { isServicesRegistered } = await import("../di/register");
+      const route = await import("./health");
+      const fails = () => {
+        throw new Error("log transport unavailable");
+      };
+      setNextlyLogger({ error: fails, warn: fails, info: fails, debug: fails });
+      (isServicesRegistered as any).mockReturnValue(false);
+
+      try {
+        const get = await route.GET(
+          new Request("http://localhost:3000/api/health")
+        );
+        const head = await route.HEAD(
+          new Request("http://localhost:3000/api/health", { method: "HEAD" })
+        );
+        expect(get.status).toBe(503);
+        expect((await get.json()).error.code).toBe("SERVICE_UNAVAILABLE");
+        expect(head.status).toBe(503);
+      } finally {
+        setNextlyLogger(undefined);
+        (isServicesRegistered as any).mockReturnValue(true);
+      }
+    });
+
+    it("answers HEAD with 503 too", async () => {
+      const { isServicesRegistered } = await import("../di/register");
+      (isServicesRegistered as any).mockReturnValueOnce(false);
+
+      const response = await HEAD(
+        new Request("http://localhost:3000/api/health")
+      );
+
+      expect(response.status).toBe(503);
+      expect(await response.text()).toBe("");
+    });
   });
 
   describe("GET handler", () => {

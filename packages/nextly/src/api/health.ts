@@ -14,8 +14,12 @@
  */
 
 import { healthCheck } from "../database/health";
+import { isServicesRegistered } from "../di/register";
 import { NextlyError } from "../errors/nextly-error";
+import { getCachedNextly } from "../init";
+import { getNextlyLogger } from "../observability/logger";
 
+import { buildErrorResponse } from "./error-response";
 import { readOrGenerateRequestId } from "./request-id";
 import { respondData } from "./response-shapes";
 import { withErrorHandler } from "./with-error-handler";
@@ -49,6 +53,68 @@ const HEALTH_CHECK_CACHE_SECONDS =
 const HEALTH_CACHE_CONTROL = `public, max-age=${HEALTH_CHECK_CACHE_SECONDS}, stale-while-revalidate=30`;
 
 /**
+ * What an operator is told when this process answered before Nextly started.
+ *
+ * This route cannot start Nextly: it is handed no config. A server whose
+ * Next.js `instrumentation.ts` starts Nextly in `register()` is never asked
+ * before that finishes; one without it starts Nextly on the first request that
+ * carries the config, and until then can only answer as if it could not serve.
+ */
+const NOT_STARTED =
+  "Nextly has not started in this process, so the health check cannot run. " +
+  "Start it when the server starts: an instrumentation.ts whose register() " +
+  "calls createRegister(config) from 'nextly' (see the installation guide).";
+
+/** Said once per process, so a monitor polling a server that never starts it does not flood the log. */
+let notStartedLogged = false;
+
+/**
+ * Whether Nextly is running in this process, waiting for a start already under
+ * way rather than answering for a server that is seconds from being able to.
+ *
+ * A start can still be in flight when the first probe arrives: a platform may
+ * run a route before `instrumentation.register()` has finished, as Next.js on
+ * Vercel did before vercel/next.js#94306. `getCachedNextly()` awaits a start in
+ * progress and refuses when there is none, which is the answer wanted here.
+ */
+async function started(): Promise<boolean> {
+  if (isServicesRegistered()) return true;
+  try {
+    await getCachedNextly();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Said once, at best effort: a logger that cannot write must not turn this answer into a 500. */
+function warnNotStarted(): void {
+  if (notStartedLogged) return;
+  try {
+    getNextlyLogger().warn({ op: "health-not-started", message: NOT_STARTED });
+    notStartedLogged = true;
+  } catch {
+    // The 503 is the answer either way; the next probe tries the log again.
+  }
+}
+
+/**
+ * The database probe, or `null` when Nextly has not started in this process.
+ *
+ * Asked first rather than left to the probe, which would look the adapter up,
+ * fail, and report a database fault for a server that was never started.
+ */
+async function probe(): Promise<Awaited<
+  ReturnType<typeof healthCheck>
+> | null> {
+  if (!(await started())) {
+    warnNotStarted();
+    return null;
+  }
+  return healthCheck();
+}
+
+/**
  * GET handler for health check endpoint.
  *
  * Returns the current database/runtime health as a bare object body via
@@ -74,8 +140,17 @@ const HEALTH_CACHE_CONTROL = `public, max-age=${HEALTH_CHECK_CACHE_SECONDS}, sta
  * # => {"ok":true,"version":"0.0.142","uptime":123,"timestamp":"...","database":{...}}
  * ```
  */
-export const GET = withErrorHandler(async (_request: Request) => {
-  const health = await healthCheck();
+export const GET = withErrorHandler(async (request: Request) => {
+  const health = await probe();
+
+  if (health === null) {
+    // Answered rather than thrown: the boundary logs every error thrown
+    // through it, and a monitor polling a server that never starts Nextly
+    // would log once per poll. `probe()` has said why, once per process.
+    return buildErrorResponse(NextlyError.serviceUnavailable(), {
+      requestId: readOrGenerateRequestId(request),
+    });
+  }
 
   if (!health.ok) {
     // healthCheck() reports a soft failure (returned, not thrown). Translate
@@ -128,10 +203,10 @@ export const GET = withErrorHandler(async (_request: Request) => {
  */
 export async function HEAD(request: Request): Promise<Response> {
   const requestId = readOrGenerateRequestId(request);
-  const health = await healthCheck();
+  const health = await probe();
 
   return new Response(null, {
-    status: health.ok ? 200 : 503,
+    status: health?.ok ? 200 : 503,
     headers: {
       "Cache-Control": HEALTH_CACHE_CONTROL,
       "X-Request-Id": requestId,

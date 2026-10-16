@@ -5,6 +5,7 @@ import { PluginPageHost } from "@admin/components/shared/plugin-page-host";
 
 import { ROUTES } from "../constants/routes";
 import registry, { routeConfig } from "../pages/registry";
+import type { AccessSubject } from "../types/access-subject";
 import type { CarriedRouteSection } from "../types/route-section";
 
 import { routedDocumentView } from "./plugins/document-view-registry";
@@ -41,6 +42,11 @@ export interface RouteResult {
   searchParams: Record<string, string | string[] | undefined>;
   routeType?: "public" | "private";
   requiredPermission?: string | string[];
+  /**
+   * What the route opens, when it opens a collection or a Single, so a refused
+   * visit can name it. Set beside `requiredPermission` from the same table.
+   */
+  accessSubject?: AccessSubject;
   /** Route is part of the schema builder, which is disabled in production. */
   requiresBuilder?: boolean;
   /** Set when the route resolves to a plugin-contributed page (D21). */
@@ -138,46 +144,44 @@ function matchDynamicRoute(pathname: string): {
   return null;
 }
 
-function getDynamicRequiredPermission(
-  pattern: string,
-  params: Params
-): string | undefined {
-  const slug = typeof params.slug === "string" ? params.slug : undefined;
-
-  if (pattern === ROUTES.COLLECTION_ENTRIES) {
-    return slug ? `read-${slug}` : undefined;
-  }
-  if (pattern === ROUTES.COLLECTION_ENTRY_CREATE) {
-    return slug ? `create-${slug}` : undefined;
-  }
+/**
+ * The action each slug-scoped route asks of its collection or Single, and which
+ * of the two it is. One row answers both the permission the route needs and
+ * what a refusal names, so the two cannot disagree about a route.
+ */
+const SLUG_ROUTE_ACCESS: Record<
+  string,
+  { action: "read" | "create" | "update"; subject: AccessSubject }
+> = {
+  [ROUTES.COLLECTION_ENTRIES]: { action: "read", subject: "collection" },
+  [ROUTES.COLLECTION_ENTRY_CREATE]: { action: "create", subject: "collection" },
+  [ROUTES.COLLECTION_ENTRY_EDIT]: { action: "update", subject: "collection" },
   // A document view is an editor of the document, so it asks what editing
   // it asks: the same claim, the same save.
-  if (
-    pattern === ROUTES.COLLECTION_ENTRY_EDIT ||
-    pattern === ROUTES.COLLECTION_ENTRY_VIEW
-  ) {
-    return slug ? `update-${slug}` : undefined;
-  }
-  if (pattern === ROUTES.COLLECTION_ENTRY_API) {
-    return slug ? `read-${slug}` : undefined;
-  }
+  [ROUTES.COLLECTION_ENTRY_VIEW]: { action: "update", subject: "collection" },
+  [ROUTES.COLLECTION_ENTRY_API]: { action: "read", subject: "collection" },
   // Reading a document's history is a read of that document, and restoring
   // from it goes through the ordinary update path with its own check.
-  if (pattern === ROUTES.COLLECTION_ENTRY_VERSIONS) {
-    return slug ? `read-${slug}` : undefined;
-  }
+  [ROUTES.COLLECTION_ENTRY_VERSIONS]: { action: "read", subject: "collection" },
+  [ROUTES.SINGLE_EDIT]: { action: "update", subject: "single" },
+  [ROUTES.SINGLE_VIEW]: { action: "update", subject: "single" },
+  [ROUTES.SINGLE_API]: { action: "read", subject: "single" },
+  [ROUTES.SINGLE_VERSIONS]: { action: "read", subject: "single" },
+};
 
-  if (pattern === ROUTES.SINGLE_EDIT || pattern === ROUTES.SINGLE_VIEW) {
-    return slug ? `update-${slug}` : undefined;
-  }
-  if (pattern === ROUTES.SINGLE_API) {
-    return slug ? `read-${slug}` : undefined;
-  }
-  if (pattern === ROUTES.SINGLE_VERSIONS) {
-    return slug ? `read-${slug}` : undefined;
-  }
-
-  return undefined;
+function getSlugRouteAccess(
+  pattern: string,
+  params: Params
+): { requiredPermission: string; accessSubject: AccessSubject } | undefined {
+  const slug = typeof params.slug === "string" ? params.slug : undefined;
+  const access = Object.hasOwn(SLUG_ROUTE_ACCESS, pattern)
+    ? SLUG_ROUTE_ACCESS[pattern]
+    : undefined;
+  if (!access || !slug) return undefined;
+  return {
+    requiredPermission: `${access.action}-${slug}`,
+    accessSubject: access.subject,
+  };
 }
 
 /**
@@ -238,16 +242,15 @@ export function resolveRoute(pathname: string, rawSearch: string): RouteResult {
   // Dynamic match
   const dynamic = matchDynamicRoute(pathname);
   if (dynamic && !isUndeclaredDocumentView(dynamic.pattern, dynamic.params)) {
-    const dynamicPermission = getDynamicRequiredPermission(
-      dynamic.pattern,
-      dynamic.params
-    );
+    const slugAccess = getSlugRouteAccess(dynamic.pattern, dynamic.params);
     return {
       Component: dynamic.component,
       params: dynamic.params,
       searchParams: parseSearchParams(rawSearch),
       routeType: dynamic.routeType,
-      requiredPermission: dynamicPermission ?? dynamic.requiredPermission,
+      requiredPermission:
+        slugAccess?.requiredPermission ?? dynamic.requiredPermission,
+      accessSubject: slugAccess?.accessSubject,
       requiresBuilder: dynamic.requiresBuilder,
       section: dynamic.section,
     };

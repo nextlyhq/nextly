@@ -1,8 +1,6 @@
 import Image from "next/image";
 import Link from "next/link";
 
-import { CategoryBadge } from "./CategoryBadge";
-
 import { formatPublishedDate } from "@/lib/format-date";
 import type { Post } from "@/lib/queries/types";
 
@@ -25,7 +23,6 @@ export function PostCard({ post }: PostCardProps) {
     slug,
     excerpt,
     featuredImage,
-    author,
     categories,
     publishedAt,
     readingTime,

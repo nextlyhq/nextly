@@ -17,8 +17,10 @@
  * @module domains/versions/draft-save
  */
 
+import type { SystemColumnEntity } from "../../lib/system-columns";
+
 import type { VersionsDbApi } from "./db-api";
-import { DOCUMENT_SYSTEM_KEYS } from "./snapshot-system-keys";
+import { documentSystemKeys } from "./snapshot-system-keys";
 import type { VersionCaptureService } from "./version-capture-service";
 import { VersionsRepository, type VersionRef } from "./versions-repository";
 
@@ -70,7 +72,10 @@ export async function storeDraftSave(
     snapshot: input.snapshot,
     createdBy: input.createdBy,
   });
-  if (sameContent(input.snapshot, input.replaces)) return { versionNo: null };
+  const entity = input.ref.scopeKind === "single" ? "single" : "collection";
+  if (sameContent(input.snapshot, input.replaces, entity)) {
+    return { versionNo: null };
+  }
 
   // A restore held as a draft replaces the working draft, not the live row, so
   // what it replaces is the undo point: recorded first, under the name every
@@ -121,14 +126,23 @@ function withoutStatus(
  */
 export function sameContent(
   a: Record<string, unknown>,
-  b: Record<string, unknown>
+  b: Record<string, unknown>,
+  /** The kind of document compared: its framework keys differ by kind. */
+  entity: SystemColumnEntity = "collection"
 ): boolean {
-  return canonicalJson(contentOf(a)) === canonicalJson(contentOf(b));
+  const ignored = documentSystemKeys(entity);
+  return (
+    canonicalJson(contentOf(a, ignored)) ===
+    canonicalJson(contentOf(b, ignored))
+  );
 }
 
-function contentOf(document: Record<string, unknown>): Record<string, unknown> {
+function contentOf(
+  document: Record<string, unknown>,
+  ignored: ReadonlySet<string>
+): Record<string, unknown> {
   return Object.fromEntries(
-    Object.entries(document).filter(([key]) => !DOCUMENT_SYSTEM_KEYS.has(key))
+    Object.entries(document).filter(([key]) => !ignored.has(key))
   );
 }
 

@@ -36,6 +36,13 @@ can put new pages live and retire old ones in the same moment.
 | Apply       | On a background-jobs pass after that time, every member's action is applied |
 | Cancel      | An unapplied release can be cancelled                                       |
 
+A document is checked when it is added, the same way over REST and from the Direct API. It
+must exist, and the person adding it must be allowed to read it. Its collection or Single
+must have drafts, since a release moves documents between draft and published. A Single is
+recorded by its own stored row, whatever id the caller passed. A trusted Direct API call
+(`overrideAccess`, the default) skips only the read permission. The document still has to
+exist and have drafts.
+
 ## Listing releases
 
 <Callout type="info">
@@ -61,7 +68,9 @@ no scheduler calls it (see below).
 
 Search matches text in the title or the description, ignoring case. It reads every release
 in the tab it searches, since no index can serve a match in the middle of a text; that is
-fast for the hundreds of releases a site keeps, and grows with the size of the history. What you type is
+fast for the hundreds of releases a site keeps, and grows with the size of the history. The
+`done` tab is ordered by when each release finished, which no index serves either, so it too
+sorts every finished release it matches before taking a page. What you type is
 matched as written, so `50%` finds "50% off" and not "50 years". On SQLite, case is ignored for the letters A to Z only. On MySQL, search follows the
 collation of the releases table: the default `utf8mb4` collations ignore case, a
 case-sensitive one does not.

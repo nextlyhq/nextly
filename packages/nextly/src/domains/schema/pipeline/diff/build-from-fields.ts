@@ -36,6 +36,7 @@ import {
 } from "../../extension/naming";
 import {
   getColumnDescriptor,
+  getComponentRowColumnDescriptor,
   type ColumnOrigin,
   kindAndSizes,
   systemColumnsForFields,
@@ -151,6 +152,12 @@ interface CollectionIndexContext<F> {
    */
   columnNameFor: (field: F) => string | null;
   /**
+   * Whether a relationship is indexed as a single foreign key. Defaults to the collection rule; a
+   * component passes the rule its creator follows, which indexes only a relationship with a string
+   * `relationTo`.
+   */
+  isSingleRelation?: (field: F) => boolean;
+  /**
    * Compound indexes the config declared, which nothing emitted before.
    *
    * `CollectionConfig.indexes` has been validated and then discarded since it
@@ -256,10 +263,11 @@ export function collectionIndexSpecs<F extends MinimalFieldDef>(
     // column of that name exists, keeps a component named after a system
     // column from indexing the system-injected column instead.
     if (col === null) continue;
-    const isSingleRelation =
-      (field.type === "relationship" || field.type === "upload") &&
-      field.hasMany !== true &&
-      !Array.isArray(field.relationTo);
+    const isSingleRelation = context.isSingleRelation
+      ? context.isSingleRelation(field)
+      : (field.type === "relationship" || field.type === "upload") &&
+        field.hasMany !== true &&
+        !Array.isArray(field.relationTo);
     // Asked through the same rule the generators use. Where a dialect cannot key the column they
     // keep the uniqueness inline and write no index, so declaring one here would make every diff
     // propose a `CREATE UNIQUE INDEX` the server refuses.
@@ -688,7 +696,7 @@ export function buildDesiredTableFromComponentFields(
   // User-defined fields.
   for (const field of fields) {
     if (localizedNames.has(field.name)) continue; // lives in the companion table
-    const desc = getColumnDescriptor(
+    const desc = getComponentRowColumnDescriptor(
       field as unknown as Parameters<typeof getColumnDescriptor>[0],
       dialect,
       options.builtBy
@@ -783,10 +791,16 @@ export function buildDesiredTableFromComponentFields(
       // Components have no slug column; created_at is present when the
       // component carries timestamps.
       hasSlugColumn: false,
+      // The component creator indexes a relationship only when it names a single collection, so a
+      // many-to-many (which names its target on `options`) gets no index there.
+      isSingleRelation: field =>
+        (field.type === "relationship" || field.type === "upload") &&
+        field.hasMany !== true &&
+        typeof field.relationTo === "string",
       hasCreatedAtColumn: columns.some(c => c.name === "created_at"),
       localizedNames,
       columnNameFor: field =>
-        getColumnDescriptor(
+        getComponentRowColumnDescriptor(
           field as unknown as Parameters<typeof getColumnDescriptor>[0],
           dialect,
           options.builtBy

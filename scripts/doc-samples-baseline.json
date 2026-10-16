@@ -1,8 +1,8 @@
 {
   "coverage": {
-    "pages": 78,
-    "samples": 447,
-    "compiled": 280
+    "pages": 79,
+    "samples": 451,
+    "compiled": 282
   },
   "samplesPerPage": {
     "docs/admin/branding.mdx": {
@@ -65,6 +65,10 @@
       "samples": 11,
       "compiled": 5
     },
+    "docs/database/index.mdx": {
+      "samples": 1,
+      "compiled": 1
+    },
     "docs/database/mysql.mdx": {
       "samples": 8,
       "compiled": 7
@@ -90,8 +94,8 @@
       "compiled": 7
     },
     "docs/getting-started/project-structure.mdx": {
-      "samples": 2,
-      "compiled": 2
+      "samples": 3,
+      "compiled": 3
     },
     "docs/getting-started/quick-start.mdx": {
       "samples": 5,
@@ -146,7 +150,7 @@
       "compiled": 2
     },
     "docs/plugins/admin-ui.mdx": {
-      "samples": 12,
+      "samples": 14,
       "compiled": 7
     },
     "docs/plugins/api-reference.mdx": {
@@ -355,10 +359,10 @@
       "reader-name #6 error TS2304: Cannot find name 'Page'.": 1
     },
     "docs/plugins/admin-ui.mdx": {
-      "#9 error TS2304: Cannot find name 'Skeleton'.": 1,
-      "uninstalled #11 error TS2307: Cannot find module '@acme/nextly-plugin-reports' or its corresponding type declarations.": 1,
+      "#11 error TS2304: Cannot find name 'Skeleton'.": 1,
+      "uninstalled #13 error TS2307: Cannot find module '@acme/nextly-plugin-reports' or its corresponding type declarations.": 1,
       "reader-file #0 error TS2307: Cannot find module './ReportsView' or its corresponding type declarations.": 1,
-      "reader-name #9 error TS2304: Cannot find name 'Chart'.": 1
+      "reader-name #11 error TS2304: Cannot find name 'Chart'.": 1
     },
     "docs/plugins/auth.mdx": {
       "#2 error TS2304: Cannot find name 'isTotpEnabled'.": 1,
@@ -491,6 +495,9 @@
       "reader-file #3 error TS2307: Cannot find module '../../../../nextly.config' or its corresponding type declarations.": 1,
       "reader-file #4 error TS2307: Cannot find module '../../../../../nextly.config' or its corresponding type declarations.": 1,
       "reader-file #5 error TS2307: Cannot find module '../../../../../../nextly.config' or its corresponding type declarations.": 1
+    },
+    "docs/getting-started/project-structure.mdx": {
+      "reader-file #2 error TS2307: Cannot find module '../db/schemas/collections/zod' or its corresponding type declarations.": 1
     },
     "docs/guides/authentication.mdx": {
       "reader-file #0 error TS2307: Cannot find module '../../../nextly.config' or its corresponding type declarations.": 1,

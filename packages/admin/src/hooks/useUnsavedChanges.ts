@@ -19,7 +19,7 @@
 import { useEffect, useCallback, useState, useRef } from "react";
 
 import {
-  routedDocumentView,
+  drawnDocumentView,
   type DocumentKind,
 } from "@admin/lib/plugins/document-view-registry";
 
@@ -46,6 +46,13 @@ export interface UseUnsavedChangesOptions {
    * @default false
    */
   disabled?: boolean;
+
+  /**
+   * The edited document's fields, which decide whether a view offered on a
+   * field type is drawn for it. Moving to one that is not renders not found,
+   * which unmounts the form, so it is asked about like any other leave.
+   */
+  fields?: readonly object[] | undefined;
 }
 
 export interface UseUnsavedChangesReturn {
@@ -84,29 +91,21 @@ export interface UseUnsavedChangesReturn {
 }
 
 /**
- * Whether a history write moves the reader somewhere else.
- *
- * Compares the QUERY as well as the path, because in this admin the query is
- * part of where you are rather than decoration on it: the entry editor
- * addresses its content language as `?locale=`, and switching language
- * refetches the document and discards unsaved edits exactly as leaving the page
- * would. Comparing paths alone reported that as "same place, let it through",
- * and the work went without anything asking.
- *
- * The hash is deliberately excluded. It moves within a page rather than off it.
- */
-/**
- * Whether the third segment of a document's address is one of its views: the
- * answer the router gives, from the same registry. A segment nothing answers —
- * a mistyped or removed view — renders another page, which unmounts the form.
+ * Whether the third segment of a document's address is a view the page draws
+ * for this document: the answer the page gives, from the same registry and the
+ * document's own fields. Anything else — a mistyped or removed view, or one
+ * offered on a field type this document has no top-level field of — renders
+ * another page, which unmounts the form.
  */
 function isViewOf(
   kind: DocumentKind,
   slug: string,
-  view: string | undefined
+  view: string | undefined,
+  fields: readonly object[] | undefined
 ): boolean {
   return (
-    view === undefined || routedDocumentView(kind, slug, view) !== undefined
+    view === undefined ||
+    drawnDocumentView(kind, slug, view, fields) !== undefined
   );
 }
 
@@ -115,20 +114,23 @@ function isViewOf(
  * address or on one of its registered views — or `undefined` for any other
  * address.
  */
-function documentOf(pathname: string): string | undefined {
+function documentOf(
+  pathname: string,
+  fields: readonly object[] | undefined
+): string | undefined {
   const entry = /^\/admin\/collections\/([^/]+)\/([^/]+)(?:\/([^/]+))?$/.exec(
     pathname
   );
   if (entry !== null) {
     const [, slug, id, view] = entry;
-    if (id === "create" || !isViewOf("collection", slug, view))
+    if (id === "create" || !isViewOf("collection", slug, view, fields))
       return undefined;
     return JSON.stringify(["collection", slug, id]);
   }
   const single = /^\/admin\/singles\/([^/]+)(?:\/([^/]+))?$/.exec(pathname);
   if (single === null) return undefined;
   const [, slug, view] = single;
-  if (!isViewOf("single", slug, view)) return undefined;
+  if (!isViewOf("single", slug, view, fields)) return undefined;
   return JSON.stringify(["single", slug]);
 }
 
@@ -147,21 +149,39 @@ function queryBesidesField(search: string): string {
  */
 function staysOnDocument(
   from: { pathname: string; search: string },
-  to: { pathname: string; search: string }
+  to: { pathname: string; search: string },
+  fields: readonly object[] | undefined
 ): boolean {
-  const here = documentOf(from.pathname);
+  // The guard's fields are the current document's, which is the one the
+  // move would have to stay on.
+  const here = documentOf(from.pathname, fields);
   return (
     here !== undefined &&
-    here === documentOf(to.pathname) &&
+    here === documentOf(to.pathname, fields) &&
     queryBesidesField(to.search) === queryBesidesField(from.search)
   );
 }
 
-function movesElsewhere(url: string | URL | null | undefined): boolean {
+/**
+ * Whether a history write moves the reader somewhere else.
+ *
+ * Compares the QUERY as well as the path, because in this admin the query is
+ * part of where you are rather than decoration on it: the entry editor
+ * addresses its content language as `?locale=`, and switching language
+ * refetches the document and discards unsaved edits exactly as leaving the page
+ * would. Comparing paths alone reported that as "same place, let it through",
+ * and the work went without anything asking.
+ *
+ * The hash is deliberately excluded. It moves within a page rather than off it.
+ */
+function movesElsewhere(
+  url: string | URL | null | undefined,
+  fields: readonly object[] | undefined
+): boolean {
   if (url === undefined || url === null) return false;
   try {
     const next = new URL(url.toString(), window.location.origin);
-    if (staysOnDocument(window.location, next)) return false;
+    if (staysOnDocument(window.location, next, fields)) return false;
     return (
       next.pathname !== window.location.pathname ||
       next.search !== window.location.search
@@ -216,6 +236,7 @@ export function useUnsavedChanges({
   isDirty,
   onConfirmLeave,
   disabled = false,
+  fields,
 }: UseUnsavedChangesOptions): UseUnsavedChangesReturn {
   const [showDialog, setShowDialog] = useState(false);
   const [isBlocked, setIsBlocked] = useState(false);
@@ -229,6 +250,10 @@ export function useUnsavedChanges({
     pathname: typeof window === "undefined" ? "" : window.location.pathname,
     search: typeof window === "undefined" ? "" : window.location.search,
   });
+
+  // Read by the interceptors, which are installed once and outlive renders.
+  const fieldsRef = useRef(fields);
+  fieldsRef.current = fields;
 
   // Prevent rapid re-opening of the dialog (re-entrancy protection)
   const lastDialogShownAt = useRef<number>(0);
@@ -364,7 +389,7 @@ export function useUnsavedChanges({
         ]);
       }
 
-      if (!movesElsewhere(url)) {
+      if (!movesElsewhere(url, fieldsRef.current)) {
         // Staying put — a hash, or a rewrite of the same address.
         return passThrough(originalPushState.current!, this, [
           data,
@@ -410,7 +435,7 @@ export function useUnsavedChanges({
         ]);
       }
 
-      if (!movesElsewhere(url)) {
+      if (!movesElsewhere(url, fieldsRef.current)) {
         // Staying put — a hash, or a rewrite of the same address.
         return passThrough(originalReplaceState.current!, this, [
           data,
@@ -453,7 +478,7 @@ export function useUnsavedChanges({
       }
       // Back or Forward between a document and its own views stays on the
       // document, exactly as a history write between them does.
-      if (staysOnDocument(from, window.location)) {
+      if (staysOnDocument(from, window.location, fieldsRef.current)) {
         return;
       }
 

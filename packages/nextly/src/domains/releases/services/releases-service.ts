@@ -72,6 +72,10 @@ import {
   type ReleaseAttentionReason,
   type ReleaseTab,
 } from "../release-tabs";
+import {
+  resolveReleaseTarget,
+  type ReleaseTargetReader,
+} from "../release-targets";
 import { documentRefKey, RELEASE_LIST_ORDERS } from "../releases-repository";
 import type {
   DocumentRef,
@@ -180,6 +184,12 @@ export interface ReleaseCapabilities {
 
 export interface ReleasesServiceDeps {
   repository: ReleasesRepository;
+  /**
+   * What a document must be to join a release: there for the caller, in a
+   * collection or Single with a draft/published lifecycle. Injected because
+   * the content API and the schema registries are the wiring's to hold.
+   */
+  targets: ReleaseTargetReader;
   /**
    * Whether this user holds one of the three release authorities.
    *
@@ -924,8 +934,13 @@ export class ReleasesService {
     actor: ReleaseActor
   ): Promise<ReleaseListPage> {
     await this.authorize(actor, "read");
-    const page = query.page ?? 1;
-    const limit = query.limit ?? DEFAULT_RELEASE_PAGE_SIZE;
+    // Defaulted only when ABSENT. `??` would also turn a JavaScript caller's
+    // `null` into page 1 or the default size, answering a malformed call with
+    // a plausible page; given here, null is checked and refused like any other
+    // value that is not a whole number.
+    const page = query.page === undefined ? 1 : query.page;
+    const limit =
+      query.limit === undefined ? DEFAULT_RELEASE_PAGE_SIZE : query.limit;
     assertWholeNumber("page", page, 1);
     assertWholeNumber("limit", limit, 1);
     // The offset too: a page that is a safe integer on its own can still put
@@ -1163,6 +1178,23 @@ export class ReleasesService {
     await this.authorize(actor, "create");
     await this.authorizeDocumentAction(actor, input.scopeSlug, input.action);
     requireRunnableMember(input, actor);
+    // The target checks, for every caller: REST, the Direct API and the admin
+    // alike. A precondition, so before anything is written; for a Single it
+    // also replaces the id the caller sent with the row's own.
+    const entryId = await resolveReleaseTarget(
+      this.deps.targets,
+      {
+        scopeKind: input.scopeKind,
+        scopeSlug: input.scopeSlug,
+        entryId: input.entryId,
+      },
+      {
+        userId: actor.userId,
+        trusted: actor.overrideAccess === true,
+        authenticatedScope: actor.authenticatedScope,
+        userRoles: actor.userRoles,
+      }
+    );
 
     // BEFORE the claim, which is itself a write: `touchIfAssemblable` updates
     // the release's `updatedAt`, so a refusal ordered after it would still have
@@ -1177,6 +1209,7 @@ export class ReleasesService {
     try {
       const member = await this.deps.repository.addMember({
         ...input,
+        entryId,
         releaseId,
         // Never a caller-supplied author. Materialisation performs each member
         // as its recorded author, so an author a caller could name would be an

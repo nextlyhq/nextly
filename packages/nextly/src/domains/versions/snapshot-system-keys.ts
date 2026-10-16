@@ -9,11 +9,22 @@
  * @module domains/versions/snapshot-system-keys
  */
 
-/** Keys on a top-level document that are never user content. */
-export const DOCUMENT_SYSTEM_KEYS: ReadonlySet<string> = new Set([
-  "id",
-  "createdAt",
-  "updatedAt",
-  "createdBy",
-  "status",
-]);
+import type { SystemColumnEntity } from "../../lib/system-columns";
+
+const SHARED_KEYS = ["id", "createdAt", "updatedAt", "status"];
+
+const KEYS_BY_ENTITY: Readonly<
+  Record<SystemColumnEntity, ReadonlySet<string>>
+> = {
+  // A collection's owner column. A Single has none, so a field a Single
+  // declares under that name is content like any other.
+  collection: new Set([...SHARED_KEYS, "createdBy"]),
+  single: new Set(SHARED_KEYS),
+};
+
+/** Keys on a top-level document of this kind that are never user content. */
+export function documentSystemKeys(
+  entity: SystemColumnEntity
+): ReadonlySet<string> {
+  return KEYS_BY_ENTITY[entity];
+}

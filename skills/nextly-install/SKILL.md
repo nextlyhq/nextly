@@ -21,8 +21,10 @@ Checked against `nextly` 0.0.2-alpha.66 with Next.js 16.4. Run
 
 ## Before you start
 
-- Next.js 16 with the App Router (`app/` or `src/app/`). The package also
-  accepts Next.js 14 and 15.
+- Next.js 15 or 16 with the App Router (`app/` or `src/app/`). The generator
+  writes `serverExternalPackages`, which Next.js 14 spells
+  `experimental.serverComponentsExternalPackages`, so upgrade a Next.js 14 app
+  first.
 - Node.js `^20.19.0 || ^22.12.0 || >=24.0.0`. Node 23 is not supported.
 - A clean git working tree, so every change below is visible in one diff.
 
@@ -76,7 +78,9 @@ Develop on the database you will run in production. Migrations are written in
 the dialect of the database you develop against (the `nextly-deploy` skill),
 and SQLite is not suitable for serverless hosting.
 
-What it changes:
+What it changes. On this release the generator replaces `.env.example` and
+writes `api/health/route.ts` without checking for files already there, so
+review its changes in `git diff` and restore anything of yours from git:
 
 | File                                       | What                                                                                                                  |
 | ------------------------------------------ | --------------------------------------------------------------------------------------------------------------------- |
