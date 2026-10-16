@@ -8,7 +8,7 @@
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import fs from "fs-extra";
 import ts from "typescript";
@@ -224,20 +224,29 @@ describe("generateInstrumentation", () => {
     ]);
   });
 
-  it("gives a whole config to create when a Next.js 14 app has none, and it compiles", async () => {
-    const cwd = await app("14.2.3");
+  it.each(["commonjs", "module"])(
+    "gives a whole config to create when a Next.js 14 app has none, which loads in a %s project",
+    async type => {
+      const cwd = await app("14.2.3");
+      await writeFile(path.join(cwd, "package.json"), JSON.stringify({ type }));
 
-    const result = await generateInstrumentation(cwd, { srcDir: true });
+      const result = await generateInstrumentation(cwd, { srcDir: true });
 
-    const [optIn] = result.skipped;
-    expect(optIn.path).toBe("next.config.js");
-    expect(optIn.toAdd).toContain("module.exports = {");
-    expect(optIn.toAdd).toContain(
-      "experimental: { instrumentationHook: true }"
-    );
-    expect(syntaxErrors(optIn.toAdd ?? "")).toEqual([]);
-    expect(await fs.pathExists(path.join(cwd, "next.config.js"))).toBe(false);
-  });
+      const [optIn] = result.skipped;
+      expect(optIn.path).toBe("next.config.mjs");
+      expect(await fs.pathExists(path.join(cwd, "next.config.mjs"))).toBe(
+        false
+      );
+      // Created as told, then loaded the way Node loads it: the opt-in is
+      // what the config exports, whatever the package type.
+      const created = path.join(cwd, "next.config.mjs");
+      await writeFile(created, optIn.toAdd ?? "");
+      const loaded = (await import(pathToFileURL(created).href)) as {
+        default: { experimental?: { instrumentationHook?: boolean } };
+      };
+      expect(loaded.default.experimental?.instrumentationHook).toBe(true);
+    }
+  );
 
   it("does not mistake a file Next.js never loads as the hook for one it does", async () => {
     // `.mjs` is not one of Next's default page extensions, so such a file is

@@ -173,6 +173,56 @@ describe("Health Check Route Handlers", () => {
       expect((await answer).status).toBe(200);
     });
 
+    it("logs a start that fails after an earlier probe already reported it not started", async () => {
+      // One process: a probe before the start, then the start fails. The
+      // failure is the detail an operator needs, and must not be swallowed by
+      // the earlier report.
+      vi.resetModules();
+      const { setNextlyLogger } = await import("../observability/logger");
+      const { isServicesRegistered } = await import("../di/register");
+      const { getCachedNextly } = await import("../init");
+      const { NextlyError: RouteNextlyError } = await import(
+        "../errors/nextly-error"
+      );
+      const route = await import("./health");
+      const lines: Array<Record<string, unknown>> = [];
+      const record = (payload: object) => {
+        lines.push(payload as Record<string, unknown>);
+      };
+      setNextlyLogger({
+        error: record,
+        warn: record,
+        info: record,
+        debug: record,
+      });
+
+      try {
+        vi.mocked(isServicesRegistered).mockReturnValue(false);
+        vi.mocked(getCachedNextly).mockRejectedValueOnce(
+          new RouteNextlyError({
+            code: "CONFIGURATION_ERROR",
+            statusCode: 500,
+            publicMessage: "Server configuration error.",
+          })
+        );
+        await route.GET(new Request("http://localhost:3000/api/health"));
+
+        vi.mocked(getCachedNextly).mockRejectedValueOnce(
+          RouteNextlyError.serviceUnavailable({
+            logMessage: "Boot migrations refused: 2 pending",
+          })
+        );
+        await route.GET(new Request("http://localhost:3000/api/health"));
+      } finally {
+        setNextlyLogger(undefined);
+      }
+
+      expect(lines.map(line => line.op)).toEqual([
+        "health-not-started",
+        "health-start-failed",
+      ]);
+    });
+
     it("answers 503 for a start that failed, and logs the failure itself rather than a missing hook", async () => {
       vi.resetModules();
       const { setNextlyLogger } = await import("../observability/logger");

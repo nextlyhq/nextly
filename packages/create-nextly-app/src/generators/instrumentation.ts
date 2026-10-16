@@ -124,10 +124,12 @@ function hookOptIn(
       ? "Next.js 14 runs instrumentation.ts only when the config opts in"
       : "the installed Next.js version could not be read, and Next.js 14 runs instrumentation.ts only when the config opts in";
   if (!nextConfig) {
+    // An .mjs config is ESM whatever the package's own "type" says, so this
+    // one file loads in a CommonJS project and in a module one alike.
     return {
-      path: "next.config.js",
+      path: "next.config.mjs",
       why: `${when}, and the app has no Next.js config; on Next.js 14, create this file`,
-      toAdd: `/** @type {import('next').NextConfig} */\nmodule.exports = {\n  ${OPT_IN},\n};\n`,
+      toAdd: `/** @type {import('next').NextConfig} */\nexport default {\n  ${OPT_IN},\n};\n`,
     };
   }
   return {

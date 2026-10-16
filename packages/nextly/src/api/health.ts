@@ -65,8 +65,12 @@ const NOT_STARTED =
   "Start it when the server starts: an instrumentation.ts whose register() " +
   "calls createRegister(config) from 'nextly' (see the installation guide).";
 
-/** Said once per process, so a monitor polling a server that never starts does not flood the log. */
-let reported = false;
+/**
+ * Each said once per process, so a monitor polling a server that cannot serve
+ * does not flood the log. Kept apart, so a start that fails after a probe has
+ * already reported "not started" is still logged with its own detail.
+ */
+const reported = { "not-started": false, failed: false };
 
 /**
  * Where Nextly stands in this process: running, never started, or started and
@@ -108,7 +112,7 @@ async function startState(): Promise<
 function reportUnavailable(
   status: { state: "not-started" } | { state: "failed"; error: unknown }
 ): void {
-  if (reported) return;
+  if (reported[status.state]) return;
   try {
     const logger = getNextlyLogger();
     if (status.state === "not-started") {
@@ -127,7 +131,7 @@ function reportUnavailable(
           : { detail: error instanceof Error ? error.message : String(error) }),
       });
     }
-    reported = true;
+    reported[status.state] = true;
   } catch {
     // The 503 is the answer either way; the next probe tries the log again.
   }
