@@ -664,6 +664,43 @@ describe("verify", () => {
     expect(status).toBe(0);
   });
 
+  describe("a sentence inside Context7's own wording", () => {
+    // Context7 writes a title and a description for each snippet. A short sentence such as a
+    // two-word heading can turn up inside that wording, mid-sentence, in a snippet cited from a
+    // kept page that never held it: on 2026-10-16 "Security Policy" came back as "enable SVG
+    // Content Security Policy" from nextly-config.mdx.
+    const marker = Object.values(markers.excluded)[0];
+    const answering = body => {
+      const base = context7({ topics: kept });
+      return async url => (asks(url, marker) ? { status: 200, body } : base(url));
+    };
+    const snippet = (path, text) => `### Upload limits\n\nSource: ${REPO_BLOB}main/${path}\n\n${text}\n`;
+
+    it("is not the excluded file coming back", async () => {
+      const body = snippet("docs/configuration/nextly-config.mdx", `Set limits and enable the SVG ${marker} option.`);
+      const { status } = await verify({ root: ".", get: answering(body) });
+      expect(status).toBe(0);
+    });
+
+    it("still clears a kept file whose own snippet carries its sentence reflowed into a paragraph", async () => {
+      // Context7 may join a hand-wrapped paragraph into one line. The README's sentence then
+      // sits mid-line, and the citation of README.md, which holds it, is what clears the control.
+      const base = context7({ topics: kept });
+      const reflowed = snippet("README.md", `Some words before. ${markers.readme} And some after.`);
+      const { status } = await verify({
+        root: ".",
+        get: async url => (asks(url, markers.readme) ? { status: 200, body: reflowed } : base(url)),
+      });
+      expect(status).toBe(0);
+    });
+
+    it("is the sentence coming back when it stands on a line of its own, whoever is cited", async () => {
+      const body = snippet("docs/configuration/nextly-config.mdx", `## ${marker}`);
+      const { status } = await verify({ root: ".", get: answering(body) });
+      expect(status).toBe(1);
+    });
+  });
+
   it("cannot answer when a probe's 404 is about something other than the question", async () => {
     // A 404 that names another error, such as the library itself missing, is no answer to
     // whether the sentence is held, and must not clear an exclusion.

@@ -314,14 +314,41 @@ function errorName(body) {
  * going unanswered, and it stops the run rather than being counted as an absence that would
  * then clear an exclusion.
  */
-async function retrievable(get, api, marker, name) {
+async function retrievable(get, api, marker, name, corpus) {
   const answer = await get(questionUrl(api, marker));
   if (matchedNothing(answer)) return { found: false, cites: new Set() };
   if (answer.status !== 200) throw unanswered(answer, name);
   return {
-    found: answer.body.includes(marker),
+    found: standsAlone(answer.body, marker) || heldWhereCited(answer.body, marker, corpus),
     cites: citedPaths(answer.body),
   };
+}
+
+/**
+ * Whether the answer carries the sentence as its source has it: a line of its own, or one step
+ * of a heading's breadcrumb (`### Getting Started > Two Ways to Build`). A marker is a whole
+ * line or heading of its file, so a copy of the file shows it this way whichever file the
+ * answer cites. Context7 also writes a title and a description for each snippet, and a short
+ * sentence can turn up inside that wording mid-sentence ("enable SVG Content Security Policy"
+ * for "Security Policy"); that is not the file coming back.
+ */
+function standsAlone(body, marker) {
+  return body.split("\n").some(line => {
+    const text = line.replace(/^\s*#{1,6}\s+/, "").trim();
+    return text === marker || text.split(" > ").includes(marker);
+  });
+}
+
+/**
+ * Whether a snippet carries the sentence and cites a file that holds it. Context7 may join a
+ * hand-wrapped paragraph into one line, so a prose marker can come back inside a longer line;
+ * the citation is then what says it was read from a file that has it.
+ */
+function heldWhereCited(body, marker, corpus) {
+  return body.split(/^-{8,}\s*$/m).some(snippet => {
+    if (!snippet.includes(marker)) return false;
+    return [...citedPaths(snippet)].some(path => corpus.get(path)?.includes(marker));
+  });
 }
 
 /** The context endpoint's answer to a question nothing in the index matched. */
@@ -455,7 +482,7 @@ async function keptControls({ corpus, api, get }) {
   ]);
   const findings = [];
   for (const [name, marker] of kept) {
-    const answer = await retrievable(get, api, marker, name);
+    const answer = await retrievable(get, api, marker, name, corpus);
     // The sentence must come back AND be cited from the file it was taken from: a
     // marker answered from some other file would be a control that never looked.
     if (answer.found && answer.cites.has(name)) continue;
@@ -477,7 +504,7 @@ async function exclusionFindings({ corpus, api, get, config }) {
   for (const witness of witnesses(corpus, config)) {
     const holders = holdersOf(corpus, witness);
     const elsewhere = outsideSet(holders, config, witness);
-    const answer = await retrievable(get, api, witness.marker, witness.name);
+    const answer = await retrievable(get, api, witness.marker, witness.name, corpus);
     probes.push({ witness, elsewhere, answer, leak: leakOf(answer, witness.name, elsewhere, citesAnExcludedHolder(holders, config, answer)) });
   }
   const leaks = probes.filter(probe => probe.leak);
