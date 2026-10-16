@@ -4317,32 +4317,7 @@ export function assertNoForeignDrops(args: {
       act: "drop or rename",
     });
   }
-  const added = addedKeys(read);
-  for (const { table, column } of read.alteredColumns) {
-    if (overridden(args, table, column)) continue;
-    if (added.columns.has(columnKey(table, column))) continue;
-    refuseUnlessHeld(holders.column(table, column), {
-      ...args,
-      table,
-      column,
-      act: "change in place",
-    });
-  }
-  for (const element of read.alteredElements) {
-    const table = element.table ?? args.liveIndexTables?.get(element.name);
-    if (
-      table !== undefined &&
-      added.elements.has(columnKey(table, element.name))
-    ) {
-      continue;
-    }
-    refuseUnlessHeld(holders.element(element, table, args.liveIndexTables), {
-      ...args,
-      table,
-      element: element.name,
-      act: "change in place",
-    });
-  }
+  refuseInPlaceChanges(read, holders, args);
   refuseTablesNamingIndexes(read, args);
   for (const table of read.unmodelled) {
     refuseUnlessHeld(holders.table(table), {
@@ -4684,6 +4659,45 @@ function knownNames(
       (entry): entry is [string, string] => entry[1] !== undefined
     )
   );
+}
+
+/** Refuses each in-place change to a column or element the stream does not hold. */
+function refuseInPlaceChanges(
+  read: Reading,
+  holders: OwnershipView,
+  args: {
+    stream: MigrationStream;
+    source: string;
+    liveIndexTables?: ReadonlyMap<string, string>;
+    columnOverrides?: ReadonlyArray<{ table: string; column: string }>;
+  }
+): void {
+  const added = addedKeys(read);
+  for (const { table, column } of read.alteredColumns) {
+    if (overridden(args, table, column)) continue;
+    if (added.columns.has(columnKey(table, column))) continue;
+    refuseUnlessHeld(holders.column(table, column), {
+      ...args,
+      table,
+      column,
+      act: "change in place",
+    });
+  }
+  for (const element of read.alteredElements) {
+    const table = element.table ?? args.liveIndexTables?.get(element.name);
+    if (
+      table !== undefined &&
+      added.elements.has(columnKey(table, element.name))
+    ) {
+      continue;
+    }
+    refuseUnlessHeld(holders.element(element, table, args.liveIndexTables), {
+      ...args,
+      table,
+      element: element.name,
+      act: "change in place",
+    });
+  }
 }
 
 /** The columns and elements the reading's own list adds, by table and name. */
