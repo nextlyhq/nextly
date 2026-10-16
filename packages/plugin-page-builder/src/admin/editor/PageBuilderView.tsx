@@ -35,9 +35,11 @@ function BoundEditor({ control, exit, field: declaration, name }: BoundProps) {
   const { field } = useController({ name, control });
   return (
     <BlocksEditor
-      // Remounted when the stored value appears or goes: the editor seeds its
-      // own history from the value it opened with.
-      key={field.value === undefined ? "empty" : "seeded"}
+      // No key from the value: the editor seeds its own history from the value
+      // it opened with, and keying it by whether that value exists remounted it
+      // on its own first commit into an empty field, losing its history. A
+      // value replaced from outside — a restore — arrives with a fresh mount
+      // of the whole view, which the admin gives it.
       initialValue={field.value}
       // What an empty document has to be for this field, read from its own
       // declaration: a component store seeded as a page is refused on save.

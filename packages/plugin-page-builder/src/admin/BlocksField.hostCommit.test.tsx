@@ -54,6 +54,13 @@ const chromeRequests: { layers: readonly string[]; canExit: boolean }[] = [];
 /** The value the field has written back to the form. */
 let saved: unknown;
 
+/**
+ * The document an open inline passage would produce once written, or `null`
+ * when no passage is open. Each commit hands out a NEW copy, as a real write
+ * does, so two commits are two values the form can be seen to take.
+ */
+let passage: BlockDocument | null = null;
+
 /** Replaces the open editor's document, as one undoable edit would. */
 let edit: ((next: BlockDocument) => void) | undefined;
 
@@ -146,10 +153,13 @@ vi.mock("@nextlyhq/builder/shell", async importOriginal => {
       };
     },
     useInlineEditing: () => ({
-      editing: null,
+      editing: passage === null ? null : { id: "h1" },
       editingRich: null,
       begin: () => false,
-      commit: () => ({ status: "unchanged" }),
+      commit: () =>
+        passage === null
+          ? { status: "unchanged" }
+          : { status: "written", document: { ...passage } },
       cancel: () => {},
       onDoubleClick: () => {},
     }),
@@ -225,6 +235,15 @@ const EDITED: BlockDocument = {
   nodes: [{ id: "h1", type: "core/heading", props: { text: "Edited" } }],
 } as BlockDocument;
 
+/** The page once an open passage is written into it. */
+const PASSAGE: BlockDocument = {
+  formatVersion: 1,
+  kind: "page",
+  nodes: [
+    { id: "h1", type: "core/heading", props: { text: "Typed in place" } },
+  ],
+} as BlockDocument;
+
 /** Watches what the field writes back, which is what a save persists. */
 function Saved({
   control,
@@ -291,6 +310,7 @@ beforeEach(() => {
   chromeRequests.length = 0;
   saved = undefined;
   edit = undefined;
+  passage = null;
   heldAtExit.length = 0;
 });
 
@@ -441,6 +461,18 @@ describe("a colleague taking the document over", () => {
     expect(heldAtExit).toEqual([]);
   });
 
+  it("keeps an open passage in the form when the view goes read-only", () => {
+    // The author is typing in place when the document is taken over. Their
+    // words live in the passage until it is written, so the hand-over writes
+    // it first: the banner promises the changes are still here.
+    passage = PASSAGE;
+    const { rerender } = render(<TakeoverHost readOnly={false} />);
+
+    rerender(<TakeoverHost readOnly />);
+
+    expect(saved).toEqual(PASSAGE);
+  });
+
   it("commits nothing when nothing was edited", () => {
     const { rerender } = render(<TakeoverHost readOnly={false} />);
     rerender(<TakeoverHost readOnly />);
@@ -468,6 +500,17 @@ describe("a colleague taking the document over", () => {
     fireEvent.click(screen.getByRole("button", { name: "Leave editor" }));
     rerender(<TakeoverHost readOnly={false} showView={false} />);
     expect(values).toHaveLength(1);
+  });
+
+  it("commits once when the author leaves with a passage open and the view then goes", () => {
+    // Counted by value: each write of the passage is a new document, so a
+    // second hand-over on the unmount would be a second value here.
+    passage = PASSAGE;
+    const { rerender } = render(<TakeoverHost readOnly={false} />);
+    fireEvent.click(screen.getByRole("button", { name: "Leave editor" }));
+    rerender(<TakeoverHost readOnly={false} showView={false} />);
+    expect(values).toHaveLength(1);
+    expect(saved).toEqual(PASSAGE);
   });
 
   it("asks for no recovery write of its own when the page goes away", () => {

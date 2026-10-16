@@ -17,7 +17,13 @@ import {
   useSuppressAdminChrome,
 } from "@nextlyhq/plugin-sdk/admin";
 import { chordMatches, detectApplePlatform, parseKeys } from "@nextlyhq/ui";
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+} from "react";
 import {
   useFormState,
   useWatch,
@@ -198,24 +204,38 @@ export function useDocumentDirty<TFieldValues extends FieldValues>(
  * runs one) finds nothing of its own to commit, and an exit that already
  * handed the document over marks it so the unmount after it does nothing.
  *
+ * An open passage is written first, as leaving writes it: its words are in the
+ * passage and not yet in `editor.document`, and handing over the document
+ * alone would drop the very text the banner says is still here. A LAYOUT
+ * effect's cleanup, because it runs while the canvas is still in the page and
+ * the passage can still answer; a passive one runs after the elements are gone.
+ * A refused write cannot keep the editor open here, as it can on leaving, so
+ * what is handed over is the document as it stands.
+ *
  * @returns marks the current work as handed over
  */
 function useCommitOnUnmount(
   editor: { document: BlockDocument; undoDepth: number },
-  inline: { editing: unknown; editingRich: unknown },
+  inline: {
+    commit: () => InlineEditOutcome;
+    editing: unknown;
+    editingRich: unknown;
+  },
   onCommit: (value: BlockDocument) => void
 ): () => void {
   const latest = useRef({ editor, inline, onCommit });
   latest.current = { editor, inline, onCommit };
   const committed = useRef(false);
-  useEffect(
+  useLayoutEffect(
     () => () => {
       const held = latest.current;
       if (committed.current || !hasUnsavedWork(held.editor, held.inline)) {
         return;
       }
       committed.current = true;
-      held.onCommit(held.editor.document);
+      held.onCommit(
+        finishInlineEdit(held.inline, held.editor.document).document
+      );
     },
     []
   );
