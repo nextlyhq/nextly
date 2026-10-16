@@ -130,7 +130,7 @@ admin: {
 },
 ```
 
-The toggle is evaluated server-side and shipped via the `/api/admin-meta` response, so changes take effect on the next admin reload. Hiding the Builder entry does not lock down the underlying routes — direct visits to `/admin/builder/collections` etc. still work for users with permission. Treat `showBuilder: false` as "hide from the sidebar in production", not as an authorization control.
+The toggle is evaluated server-side and shipped via the `/admin/api/admin-meta` response, so changes take effect on the next admin reload. Hiding the Builder entry does not lock down the underlying routes — direct visits to `/admin/builder/collections` etc. still work for users with permission. Treat `showBuilder: false` as "hide from the sidebar in production", not as an authorization control.
 
 ## Branding options reference
 

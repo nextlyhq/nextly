@@ -67,7 +67,8 @@ import {
   acceptsForShare,
   checkDialectVersion,
 } from "@nextlyhq/adapter-drizzle/version-check";
-import type { AnyRelations, SQL } from "drizzle-orm";
+import { and, eq, getTableColumns } from "drizzle-orm";
+import type { AnyRelations, Column, SQL } from "drizzle-orm";
 import { getTableConfig, type MySqlTable } from "drizzle-orm/mysql-core";
 import { drizzle, type MySql2Database } from "drizzle-orm/mysql2";
 import type {
@@ -885,6 +886,265 @@ export class MySqlAdapter extends DrizzleAdapter {
    * Note: Savepoint methods are not implemented (set to undefined)
    * as savepoints are disabled in this adapter per approved approach.
    */
+  /**
+   * Upsert with the meaning `INSERT … ON CONFLICT (target)` has on PostgreSQL
+   * and SQLite, on the tables where MySQL can keep that promise.
+   *
+   * MySQL cannot limit a duplicate to one key: `ON DUPLICATE KEY UPDATE`
+   * fires on a collision with ANY unique key, and a failed insert does not
+   * say reliably which one. So the conflict target must be the table's only
+   * unique key apart from its primary key, and any other table is refused
+   * before anything is written. On such a table the row is inserted first —
+   * its validation and triggers apply, as they do before `ON CONFLICT`
+   * elsewhere — and a duplicate is resolved by a locking read of the target
+   * key, which sees the latest committed row rather than the transaction's
+   * snapshot. The row found is kept as it is when there is nothing to update
+   * (a no-op assignment would still run its update triggers), or updated by
+   * its key. No row there means the collision was on the primary key, and it
+   * is refused as `ON CONFLICT (target)` refuses it.
+   *
+   * The steps run in the caller's transaction, or in one of their own, since a
+   * locking read locks nothing past its statement under autocommit. Rows are
+   * read back by their primary key, so a trigger that rewrites the conflict
+   * value still returns the row stored. The conflict columns must also be
+   * given values: MySQL cannot look a row up by a key the database would only
+   * fill in itself. A conflict is resolved on the caller's key value: a
+   * BEFORE INSERT trigger that moves the key onto another row's value is
+   * refused as a unique violation rather than resolved onto that row. A failed insert rolls back only itself on MySQL, so a
+   * caller's transaction stays usable.
+   */
+  override async upsert<T = unknown>(
+    table: string,
+    data: Record<string, unknown>,
+    options: UpsertOptions,
+    executor?: unknown
+  ): Promise<T> {
+    const tableObj = this.getTableObject(table) as MySqlTable | undefined;
+    // Unknown table: the base method reports it as every CRUD method does.
+    if (!tableObj) return super.upsert<T>(table, data, options, executor);
+    let target: { where: SQL | undefined; nullKey: boolean };
+    try {
+      // Judged before anything else, so a refused call takes no connection.
+      target = this.upsertTarget(tableObj, table, data, options);
+    } catch (error) {
+      throw this.handleQueryError(error, "upsert", table);
+    }
+    // A locking read holds its lock only inside a transaction: under autocommit
+    // it is released when its own statement ends, and the next statement may
+    // run on another pooled connection. Without the caller's transaction, the
+    // insert, the read and the update get one of their own, on one connection.
+    if (executor === undefined) {
+      return this.transaction(tx => tx.upsert<T>(table, data, options));
+    }
+    try {
+      const db = executor as MySql2Database<AnyRelations>;
+      // A conflict key holding NULL never conflicts: a unique index admits any
+      // number of NULLs. It is a plain insert, read back by its primary key.
+      if (target.nullKey) {
+        return ((await this.insertRow(db, tableObj, data)) ?? data) as T;
+      }
+      return (await this.insertOrResolve(
+        db,
+        tableObj,
+        data,
+        options,
+        target.where
+      )) as T;
+    } catch (error) {
+      throw this.handleQueryError(error, "upsert", table);
+    }
+  }
+
+  /**
+   * What an upsert is keyed on: the target's condition, and whether its key
+   * holds a NULL. Refuses a target this dialect cannot keep to, and a conflict
+   * column left for the database to fill — MySQL cannot look a row up by a key
+   * value only the database would supply.
+   */
+  private upsertTarget(
+    tableObj: MySqlTable,
+    table: string,
+    data: Record<string, unknown>,
+    options: UpsertOptions
+  ): { where: SQL | undefined; nullKey: boolean } {
+    const key = this.conflictKey(tableObj, table, options.conflictColumns);
+    const values = options.conflictColumns.map(column => data[column]);
+    if (values.some(value => value === undefined)) {
+      throw createDatabaseError({
+        kind: "query",
+        message: `upsert on ${table} needs a value for every conflict column (${options.conflictColumns.join(", ")}).`,
+      });
+    }
+    return {
+      where: and(...key.map((column, i) => eq(column, values[i] as never))),
+      nullKey: values.some(value => value === null),
+    };
+  }
+
+  /**
+   * The table's columns for a conflict target, refusing a target MySQL cannot
+   * keep to: one that is not a primary or unique key, which an update could
+   * spread over several rows, and one beside which the table has another
+   * unique key, a collision on which MySQL would not tell apart.
+   */
+  private conflictKey(
+    tableObj: MySqlTable,
+    table: string,
+    conflictColumns: readonly string[]
+  ): Column[] {
+    const record = tableObj as unknown as Record<string, Column | undefined>;
+    const columns = conflictColumns.map(name => record[name]);
+    const names = new Set(columns.map(column => column?.name));
+    const isTarget = (key: readonly string[]) =>
+      key.length === names.size && key.every(name => names.has(name));
+    const { primary, unique } = keysOf(tableObj);
+    const known = columns.every(column => column !== undefined);
+    if (
+      !known ||
+      !(isTarget(primary) || unique.some(k => isTarget(k.columns)))
+    ) {
+      throw createDatabaseError({
+        kind: "query",
+        message: `upsert on ${table}: the conflict columns (${conflictColumns.join(", ")}) are not a primary or unique key of the table.`,
+      });
+    }
+    const others = unique.filter(key => !isTarget(key.columns));
+    if (others.length > 0) {
+      throw createDatabaseError({
+        kind: "query",
+        message: `upsert on ${table}: MySQL cannot limit a duplicate to the conflict columns (${conflictColumns.join(", ")}) while the table has other unique keys (${others.map(key => key.name).join(", ")}). Upsert only on a table whose one unique key besides the primary key is the conflict target, or insert and update inside a transaction.`,
+      });
+    }
+    return columns;
+  }
+
+  /** The update an upsert applies to an existing row: never its key. */
+  private updateValues(
+    data: Record<string, unknown>,
+    options: UpsertOptions
+  ): Record<string, unknown> {
+    const key = new Set(options.conflictColumns);
+    const update: Record<string, unknown> = {};
+    for (const column of options.updateColumns ?? Object.keys(data)) {
+      if (!key.has(column) && column in data) update[column] = data[column];
+    }
+    return update;
+  }
+
+  /** The row matching `where`, by a locking (current) read. */
+  private async lockedRow(
+    db: MySql2Database<AnyRelations>,
+    tableObj: MySqlTable,
+    where: SQL | undefined
+  ): Promise<unknown> {
+    const rows = await db
+      .select()
+      .from(tableObj)
+      .where(where)
+      .limit(1)
+      .for("update");
+    return rows[0];
+  }
+
+  /**
+   * Insert the row, or resolve a duplicate on the target key. The insert is
+   * read back by the primary key it reports, not by the conflict key: a
+   * BEFORE INSERT trigger may have rewritten the conflict value, and the row
+   * stored is the one to return.
+   *
+   * A duplicate is resolved when a row holds the TARGET key, whichever unique
+   * key MySQL names in its error. PostgreSQL checks the target's index before
+   * any other, so a row colliding on the target and on another key resolves
+   * on the target there too; refusing it here because MySQL happened to check
+   * the other index first would answer that case differently. A target row
+   * committed by another transaction after this insert failed is the order in
+   * which that transaction ran first, where PostgreSQL also resolves on it.
+   */
+  private async insertOrResolve(
+    db: MySql2Database<AnyRelations>,
+    tableObj: MySqlTable,
+    data: Record<string, unknown>,
+    options: UpsertOptions,
+    where: SQL | undefined
+  ): Promise<unknown> {
+    let failure: unknown;
+    try {
+      const stored = await this.insertRow(db, tableObj, data);
+      return stored ?? (await this.lockedRow(db, tableObj, where));
+    } catch (error) {
+      if (!isDuplicateKey(error)) throw error;
+      failure = error;
+    }
+    const existing = await this.lockedRow(db, tableObj, where);
+    // No row holds the target key: the collision was on another unique key,
+    // refused as `ON CONFLICT (target)` refuses it. The driver's own error is
+    // thrown so it is classified as the unique violation it is, not as
+    // Drizzle's unnumbered wrapper.
+    if (existing === undefined) throw driverError(failure);
+    const update = this.updateValues(data, options);
+    if (Object.keys(update).length === 0) return existing;
+    await db.update(tableObj).set(update).where(where);
+    // Read back by the row's primary key as the update left it: the update may
+    // set the key itself (every given column is updated by default, as `ON
+    // CONFLICT DO UPDATE` does elsewhere), and a BEFORE UPDATE trigger may
+    // have changed the conflict value the update was keyed on.
+    return this.lockedRow(
+      db,
+      tableObj,
+      this.byIdentity(tableObj, {
+        ...(existing as Record<string, unknown>),
+        ...update,
+      }) ?? where
+    );
+  }
+
+  /**
+   * Insert a row and read it back by its primary key: the value the caller
+   * gave, or the one MySQL or the model generated, which `$returningId()`
+   * reports and a given value it does not. Undefined when the table has no
+   * primary key to read by.
+   */
+  private async insertRow(
+    db: MySql2Database<AnyRelations>,
+    tableObj: MySqlTable,
+    data: Record<string, unknown>
+  ): Promise<unknown> {
+    const [generated] = (await db
+      .insert(tableObj)
+      .values(data as never)
+      .$returningId()) as Record<string, unknown>[];
+    const identity = this.byIdentity(tableObj, { ...generated, ...data });
+    return identity === undefined
+      ? undefined
+      : this.lockedRow(db, tableObj, identity);
+  }
+
+  /**
+   * A row's primary key as a condition, from a record keyed as the model's
+   * properties are. Undefined when the table has no primary key or the record
+   * lacks part of it.
+   */
+  private byIdentity(
+    tableObj: MySqlTable,
+    record: Record<string, unknown>
+  ): SQL | undefined {
+    const primary = new Set(keysOf(tableObj).primary);
+    const parts = Object.entries(getTableColumns(tableObj)).filter(
+      ([, column]) => primary.has(column.name)
+    );
+    if (
+      parts.length === 0 ||
+      parts.some(
+        ([name]) => record[name] === undefined || record[name] === null
+      )
+    ) {
+      return undefined;
+    }
+    return and(
+      ...parts.map(([name, column]) => eq(column, record[name] as never))
+    );
+  }
+
   /** A table-level `primaryKey({ columns })`, read through the MySQL table config. */
   protected override compositePrimaryKey(
     tableObj: Record<string, unknown>
@@ -1156,6 +1416,78 @@ export class MySqlAdapter extends DrizzleAdapter {
       cause: error instanceof Error ? error : undefined,
     });
   }
+}
+
+/** A table's keys by database column name, as its model declares them. */
+interface TableKeys {
+  primary: string[];
+  unique: { name: string; columns: string[] }[];
+}
+
+const TABLE_KEYS = new WeakMap<MySqlTable, TableKeys>();
+
+/**
+ * A table's primary key and its unique keys other than the primary key, read
+ * from its model once and kept for the table's lifetime: a model is not
+ * changed in place, a new schema brings new table objects.
+ */
+function keysOf(tableObj: MySqlTable): TableKeys {
+  const cached = TABLE_KEYS.get(tableObj);
+  if (cached) return cached;
+  const config = getTableConfig(tableObj);
+  const primary = [
+    ...config.columns.filter(column => column.primary),
+    ...config.primaryKeys.flatMap(key => key.columns),
+  ].map(column => column.name);
+  const unique = [
+    ...config.columns
+      .filter(column => column.isUnique && !column.primary)
+      .map(column => ({
+        // Drizzle's own name for an unnamed column-level unique key.
+        name: column.uniqueName ?? `${config.name}_${column.name}_unique`,
+        columns: [column.name],
+      })),
+    ...config.uniqueConstraints.map(constraint => ({
+      name: constraint.name,
+      columns: constraint.columns.map(column => column.name),
+    })),
+    ...config.indexes
+      .filter(index => index.config.unique === true)
+      .map(index => ({
+        name: index.config.name,
+        columns: (index.config.columns as { name: string }[]).map(
+          column => column.name
+        ),
+      })),
+  ];
+  const keys = { primary, unique };
+  TABLE_KEYS.set(tableObj, keys);
+  return keys;
+}
+
+/**
+ * The driver's own error behind a failed write: Drizzle wraps it in a query
+ * error of its own that carries no error number, so the driver's is the one
+ * that says what failed.
+ */
+function driverError(error: unknown): unknown {
+  const cause =
+    typeof error === "object" && error !== null && "cause" in error
+      ? (error as { cause?: unknown }).cause
+      : undefined;
+  return typeof cause === "object" && cause !== null && "errno" in cause
+    ? cause
+    : error;
+}
+
+/** Whether a failed write was a duplicate key, by the driver's error number. */
+function isDuplicateKey(error: unknown): boolean {
+  const driver = driverError(error);
+  const errno =
+    typeof driver === "object" && driver !== null && "errno" in driver
+      ? (driver as { errno?: number }).errno
+      : undefined;
+  return errno !== undefined && MYSQL_ERROR_CODES[errno] === "unique_violation";
 }
 
 /**
