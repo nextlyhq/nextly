@@ -138,15 +138,7 @@ export interface JobRetryPolicy {
 
 export interface JobDefinition<TInput extends JobInput = JobInput> {
   slug: string;
-  /**
-   * Declared as a method so its input is compared bivariantly. A list of jobs,
-   * the config's `jobs` or a plugin's `contributes.jobs`, holds handlers for
-   * unrelated input shapes under the default `JobDefinition`; as a function
-   * property, a handler for `{ cursor: string }` would not be assignable there
-   * without a cast. The runner hands each handler the input stored for it, so
-   * nothing calls a handler with another job's input.
-   */
-  handler(input: TInput, context: JobContext): Promise<void>;
+  handler: (input: TInput, context: JobContext) => Promise<void>;
   retry: JobRetryPolicy;
   /**
    * Whether a trigger should keep one of these queued at all times.
@@ -159,6 +151,17 @@ export interface JobDefinition<TInput extends JobInput = JobInput> {
    */
   sweep: boolean;
 }
+
+/**
+ * Any job type, whatever input its handler takes: what a list of jobs holds.
+ *
+ * A handler for `{ cursor: string }` accepts `never`, so every
+ * `JobDefinition<TInput>` is one of these without a cast, while a value that
+ * is not a job is not. Its handler cannot be called with a made-up input,
+ * which is the point: only the runner calls it, with the input stored for it.
+ * The registry holds its job types the same way.
+ */
+export type AnyJobDefinition = JobDefinition<never>;
 
 export interface JobDefinitionInput<TInput extends JobInput = JobInput> {
   slug: string;
@@ -258,7 +261,7 @@ export function defineJob<TInput extends JobInput = JobInput>(
  * losing handler would simply never run with nothing anywhere to say so.
  */
 export class JobRegistry {
-  private readonly definitions = new Map<string, JobDefinition<never>>();
+  private readonly definitions = new Map<string, AnyJobDefinition>();
 
   register<TInput extends JobInput>(definition: JobDefinition<TInput>): void {
     // Keyed by the NORMALISED slug. `JobDefinition` is structural, so a
@@ -277,13 +280,13 @@ export class JobRegistry {
       });
     }
     // No cast: a handler declared for a specific input accepts `never`, so a
-    // JobDefinition<TInput> is already a JobDefinition<never>. Storing them
+    // JobDefinition<TInput> is already an AnyJobDefinition. Storing them
     // under that type is what lets one registry hold job types with unrelated
     // input shapes while the runner still calls them uniformly.
     this.definitions.set(definition.slug, definition);
   }
 
-  get(slug: string): JobDefinition<never> | undefined {
+  get(slug: string): AnyJobDefinition | undefined {
     return this.definitions.get(slug);
   }
 
@@ -307,7 +310,7 @@ export class JobRegistry {
    * second list is a second place to forget a job type, and forgetting it here
    * is invisible — the queue simply stays empty.
    */
-  sweeps(): JobDefinition<never>[] {
+  sweeps(): AnyJobDefinition[] {
     return [...this.definitions.values()]
       .filter(definition => definition.sweep)
       .sort((a, b) => a.slug.localeCompare(b.slug));
