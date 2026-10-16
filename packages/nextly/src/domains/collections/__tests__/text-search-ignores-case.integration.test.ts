@@ -10,7 +10,12 @@
  */
 import { afterEach, beforeEach, expect, it } from "vitest";
 
-import { defineCollection, text } from "../../../config";
+import {
+  defineCollection,
+  defineFieldGroup,
+  fieldGroup,
+  text,
+} from "../../../config";
 import { describeEachDialect } from "../../../plugins/__tests__/helpers/dialect-matrix";
 import {
   createTestNextly,
@@ -24,6 +29,7 @@ interface ListHandler {
     collectionName: string;
     overrideAccess?: boolean;
     search?: string;
+    where?: Record<string, unknown>;
   }): Promise<{
     success: boolean;
     data?: { docs: { title?: unknown }[] };
@@ -168,6 +174,56 @@ describeEachDialect(
       const listed = await registry.listCollections({ search: "a_b" });
 
       expect(listed.data.map(c => c.slug)).toEqual(["a_b"]);
+    });
+
+    it("a `contains` filter on a field group's field matches % and _ as characters", async () => {
+      // A field group's values live in its own table, and a filter on one is built apart from
+      // the collection's own fields.
+      await current.destroy();
+      current = await createTestNextly({
+        dialect,
+        fieldGroups: [
+          defineFieldGroup({
+            slug: "seo",
+            fields: [text({ name: "metaTitle" })],
+          }),
+        ],
+        collections: [
+          defineCollection({
+            slug: "pages",
+            fields: [
+              text({ name: "title" }),
+              fieldGroup({ name: "seo", component: "seo" }),
+            ],
+          }),
+        ],
+      });
+      const handler = current.getService(
+        "collectionsHandler"
+      ) as unknown as ListHandler & {
+        createEntry(
+          ctx: Record<string, unknown>,
+          data: Record<string, unknown>
+        ): Promise<unknown>;
+      };
+      for (const metaTitle of ["a_b", "AXB", "50% off", "50 years"]) {
+        await handler.createEntry(
+          { collectionName: "pages", overrideAccess: true },
+          { title: metaTitle, seo: { metaTitle } }
+        );
+      }
+      const titlesWhere = async (value: string) => {
+        const listed = await handler.listEntries({
+          collectionName: "pages",
+          overrideAccess: true,
+          where: { "seo.metaTitle": { contains: value } },
+        });
+        expect(listed.success, JSON.stringify(listed)).toBe(true);
+        return (listed.data?.docs ?? []).map(doc => String(doc.title)).sort();
+      };
+
+      expect(await titlesWhere("A_B")).toEqual(["a_b"]);
+      expect(await titlesWhere("50%")).toEqual(["50% off"]);
     });
   }
 );

@@ -207,8 +207,7 @@ import {
  */
 function buildComponentValueCondition(
   filter: ComponentFieldFilter,
-  dbColumnName: string,
-  dialect: string
+  dbColumnName: string
 ): ReturnType<typeof sql> | undefined {
   let valueCondition: ReturnType<typeof sql>;
 
@@ -236,12 +235,12 @@ function buildComponentValueCondition(
       break;
     case "contains":
     case "search":
-      // Use ILIKE for PostgreSQL, LIKE for others
-      if (dialect === "postgresql") {
-        valueCondition = sql`${sql.identifier(dbColumnName)} ILIKE ${`%${String(filter.value)}%`}`;
-      } else {
-        valueCondition = sql`LOWER(${sql.identifier(dbColumnName)}) LIKE LOWER(${`%${String(filter.value)}%`})`;
-      }
+      // The same rule as every other case-insensitive search: whatever the collation, and with
+      // the text matched as typed.
+      valueCondition = caseInsensitiveContains(
+        sql`${sql.identifier(dbColumnName)}`,
+        String(filter.value)
+      );
       break;
     case "in": {
       const inValues = Array.isArray(filter.value)
@@ -1872,7 +1871,6 @@ export class CollectionQueryService extends BaseService {
       // collection or it matches no component row.
       collectionTableName(collection, params.collectionName),
       params.schema.id,
-      this.queryDialect,
       componentTables,
       componentTypeColumns
     );
@@ -2375,20 +2373,6 @@ export class CollectionQueryService extends BaseService {
     for (const row of finalData) stripServerOnlyColumns(row, tableName);
 
     return finalData;
-  }
-
-  /**
-   * The dialect the where/search builders compile for, asked once rather than
-   * recomputed at each call site — one of the copies had already drifted to
-   * recomputing it inline where its twin used a hoisted local.
-   *
-   * Deliberately the adapter's own `dialect` rather than `BaseService.dialect`,
-   * which reads `getCapabilities().dialect`. Every builder here has always used
-   * this one, and swapping the source is a behaviour change this extraction is
-   * not the place to make.
-   */
-  private get queryDialect(): string {
-    return this.adapter?.dialect || "postgresql";
   }
 
   /**
@@ -4848,7 +4832,6 @@ export class CollectionQueryService extends BaseService {
     parentTableName: string,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Drizzle column reference
     parentIdColumn: any,
-    dialect: string = "postgresql",
     componentTableNames: Map<string, string> = new Map(),
     componentTypeColumns: Map<string, string> = new Map()
   ): ReturnType<typeof and> | undefined {
@@ -4896,8 +4879,7 @@ export class CollectionQueryService extends BaseService {
           : columnName;
         const valueCondition = buildComponentValueCondition(
           filter,
-          dbColumnName,
-          dialect
+          dbColumnName
         );
         // An operator with nothing to match — an empty `in` list, or one this
         // builder does not implement — contributes no condition for this table.
