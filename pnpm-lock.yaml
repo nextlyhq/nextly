@@ -1159,6 +1159,9 @@ importers:
       tar:
         specifier: ^7.5.22
         version: 7.5.22
+      yaml:
+        specifier: ^2.8.3
+        version: 2.8.3
     devDependencies:
       '@nextlyhq/eslint-config':
         specifier: workspace:*

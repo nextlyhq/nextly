@@ -995,6 +995,16 @@ const PINNED_VERSIONS: Record<string, string> = {
 };
 
 /**
+ * Dev dependencies a project needs so the dev server and the CLI can read
+ * `nextly.config.ts`, as `name@range` specifiers. A fresh scaffold writes them
+ * into its package.json and the existing-app path installs them, both from
+ * here, so the two cannot disagree on a version.
+ */
+export const CONFIG_TOOLING_DEV_DEPENDENCIES = [
+  `esbuild@${PINNED_VERSIONS.esbuild}`,
+] as const;
+
+/**
  * Packages whose latest version is fetched from the npm registry at
  * runtime so the CLI always scaffolds with the newest release.
  */
@@ -1521,6 +1531,15 @@ export const NATIVE_BUILD_DEPENDENCIES = [
   "sharp",
   "unrs-resolver",
 ] as const;
+
+/**
+ * The native packages Nextly itself brings: the SQLite driver, the config
+ * compiler and the image processor. `unrs-resolver` comes with a template's
+ * ESLint setup, so adding Nextly to an app the person set up leaves its
+ * approval to them.
+ */
+export const NEXTLY_NATIVE_BUILD_DEPENDENCIES =
+  NATIVE_BUILD_DEPENDENCIES.filter(dep => dep !== "unrs-resolver");
 
 /**
  * Generate the `pnpm-workspace.yaml` for a scaffolded project.
