@@ -1,0 +1,413 @@
+/**
+ * Which account a password-reset or email-verification token belongs to.
+ *
+ * A token is issued to an address, and an address can change hands: an
+ * account moves to another address, or is deleted, and the old address is
+ * later given to someone else. A token keyed by the address alone would then
+ * act on whoever holds it now. So each token records the account it was issued
+ * for (`user_id`), and is honoured only for that account, while it still holds
+ * the token's address.
+ *
+ * The rules, in one place so the issuing, redeeming and revoking paths and the
+ * upgrade cannot disagree:
+ *
+ * - Issuing, redeeming, changing an address and deleting an account each hold
+ *   the account's row for the rest of their transaction (`lockAccount`), so
+ *   they are ordered against each other. A token issued while its account is
+ *   moving or being deleted either lands first, and is revoked by the change,
+ *   or finds the account no longer at the address and is not issued.
+ * - A change of address and a deletion revoke every token of the account
+ *   (`revokeAccountTokens`). Revoked, a token issued before an address change
+ *   stays dead when the account returns to that address.
+ * - A token issued before `user_id` existed is bound to the account holding
+ *   its address only when that account was created and last changed before
+ *   the token was issued (`mayBindToAccount`): such an account is the one it
+ *   was issued for. Any other is removed (`bindIssuedTokens`), since it may
+ *   have been issued to an earlier holder of the address, and so is one whose
+ *   issue time cannot be established. Until then an unbound token is
+ *   refused: only a bound one is redeemed.
+ *
+ * @module domains/auth/services/token-account-binding
+ */
+import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
+import { and, eq, inArray, isNull, or, type SQL } from "drizzle-orm";
+
+import { toDbError } from "../../../database/errors";
+import { getDialectTables } from "../../../database/index";
+import { affectedRowCount } from "../../../shared/lib/affected-row-count";
+
+/**
+ * How long a reset or verification link lasts unless its issuer says
+ * otherwise. Verification links always last this long; a reset link may be
+ * given another lifetime by its caller.
+ */
+export const AUTH_TOKEN_LIFETIME_MS = 24 * 60 * 60 * 1000;
+
+/** The two kinds of token bound to an account. */
+export type AuthTokenKind = "password-reset" | "email-verification";
+
+type Tables = Pick<
+  ReturnType<typeof getDialectTables>,
+  "users" | "passwordResetTokens" | "emailVerificationTokens"
+>;
+
+/** The token table of one kind. */
+export function tokenTable(
+  tables: Tables,
+  kind: AuthTokenKind
+): Tables["passwordResetTokens"] | Tables["emailVerificationTokens"] {
+  return kind === "password-reset"
+    ? tables.passwordResetTokens
+    : tables.emailVerificationTokens;
+}
+
+/** An account as the binding rules read it. */
+export interface BindingAccount {
+  id: string;
+  email: string;
+  name: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+  deactivatedAt: Date | null;
+}
+
+/** A token issued before `user_id` existed, as the binding rule reads it. */
+export interface UnboundToken {
+  identifier: string;
+  expires: Date;
+  createdAt: Date;
+}
+
+/**
+ * The slice of a Drizzle database or transaction these rules use. Each
+ * statement is awaitable as-is; the account read is lockable where the
+ * dialect has row locks.
+ */
+export interface TokenBindingDb {
+  select(fields: Record<string, unknown>): {
+    from(table: unknown): {
+      where(condition: unknown): Promise<Record<string, unknown>[]> & {
+        limit(count: number): Promise<Record<string, unknown>[]> & {
+          for(strength: "update"): Promise<Record<string, unknown>[]>;
+        };
+      };
+    };
+  };
+  update(table: unknown): {
+    set(data: unknown): { where(condition: unknown): Promise<unknown> };
+  };
+  delete(table: unknown): { where(condition: unknown): Promise<unknown> };
+}
+
+/** A timestamp column read back as a Date, whatever the driver handed over. */
+function asDate(value: unknown): Date {
+  return value instanceof Date ? value : new Date(String(value));
+}
+
+function toAccount(row: Record<string, unknown>): BindingAccount {
+  return {
+    id: String(row.id),
+    email: String(row.email),
+    name: typeof row.name === "string" ? row.name : null,
+    createdAt: asDate(row.createdAt),
+    updatedAt: asDate(row.updatedAt),
+    deactivatedAt:
+      row.deactivatedAt === null || row.deactivatedAt === undefined
+        ? null
+        : asDate(row.deactivatedAt),
+  };
+}
+
+/**
+ * Read the account holding `email` (and, when given, with id `userId`), and
+ * hold its row until the transaction `tx` belongs to ends.
+ *
+ * PostgreSQL and MySQL take a row lock, and re-read the row once a writer
+ * holding it commits, so an account that has just moved to another address or
+ * been deleted is not returned. SQLite runs one write transaction at a time,
+ * so the read is already ordered against every other write.
+ */
+export async function lockAccount(
+  tx: TokenBindingDb,
+  tables: Pick<Tables, "users">,
+  dialect: SupportedDialect,
+  where: { email: string; userId?: string }
+): Promise<BindingAccount | undefined> {
+  const { users } = tables;
+  const conditions: SQL[] = [eq(users.email, where.email)];
+  if (where.userId !== undefined) conditions.push(eq(users.id, where.userId));
+  const query = tx
+    .select({
+      id: users.id,
+      email: users.email,
+      name: users.name,
+      createdAt: users.createdAt,
+      updatedAt: users.updatedAt,
+      deactivatedAt: users.deactivatedAt,
+    })
+    .from(users)
+    .where(and(...conditions))
+    .limit(1);
+  const [row] = dialect === "sqlite" ? await query : await query.for("update");
+  return row ? toAccount(row) : undefined;
+}
+
+/**
+ * How far apart the application's and the database's clocks may be for a
+ * reset link's two timestamps to count as agreeing. Time zone offsets come in
+ * steps of at least fifteen minutes, so agreement within this rules out a
+ * database stamping in another zone.
+ */
+export const CLOCK_AGREEMENT_MS = 5 * 60 * 1000;
+
+/**
+ * A time no later than the token was issued, on the clock that stamps the
+ * account's `created_at` and `updated_at`, or null when none can be
+ * established.
+ *
+ * Its expiry is stamped by the same clock. A verification link always lasts
+ * `AUTH_TOKEN_LIFETIME_MS`, so it was issued exactly that long before it
+ * expires.
+ *
+ * A reset link may have been given another lifetime by its caller, so its
+ * expiry alone does not say when it was issued. Its `created_at` does, but the
+ * database stamps it, and nothing pins the database's clock or time zone to
+ * the application's. So the two readings are used only when they agree: the
+ * link had the default lifetime and the clocks are close. The earlier of the
+ * two, less the agreement margin, is then no later than the issue. When they
+ * disagree the issue time is not known, and the answer is null.
+ */
+export function issuedNoLaterThan(
+  kind: AuthTokenKind,
+  token: UnboundToken
+): Date | null {
+  const byLifetime = token.expires.getTime() - AUTH_TOKEN_LIFETIME_MS;
+  if (kind === "email-verification") return new Date(byLifetime);
+  const byDatabase = token.createdAt.getTime();
+  if (Math.abs(byLifetime - byDatabase) > CLOCK_AGREEMENT_MS) return null;
+  return new Date(Math.min(byLifetime, byDatabase) - CLOCK_AGREEMENT_MS);
+}
+
+/**
+ * Whether a token issued before `user_id` existed was issued for `account`.
+ *
+ * It was when the account holds the token's address and was created and last
+ * changed before the token was issued: the account held the address when the
+ * token was issued, and addresses are unique. An account created or changed
+ * afterwards may have taken the address from whoever the token was issued to.
+ *
+ * Strictly before. MySQL and SQLite keep these columns to the second, so a
+ * change in the same second as the issue cannot be told from one after it,
+ * and is treated as one. So is a token whose issue time is not known.
+ */
+export function mayBindToAccount(
+  kind: AuthTokenKind,
+  token: UnboundToken,
+  account: Pick<BindingAccount, "email" | "createdAt" | "updatedAt">
+): boolean {
+  if (account.email !== token.identifier) return false;
+  const issued = issuedNoLaterThan(kind, token);
+  if (issued === null) return false;
+  return (
+    account.createdAt.getTime() < issued.getTime() &&
+    account.updatedAt.getTime() < issued.getTime()
+  );
+}
+
+/** A token table, of either kind. */
+export type TokenTable = ReturnType<typeof tokenTable>;
+
+/** The token tables by their names in the database, for a presence check. */
+export const TOKEN_TABLE_NAMES = {
+  "password-reset": "password_reset_tokens",
+  "email-verification": "email_verification_tokens",
+} as const satisfies Record<AuthTokenKind, string>;
+
+/**
+ * Delete every reset and verification token of an account from `tokenTables`,
+ * in the transaction `tx` belongs to: the ones bound to it, and any not yet
+ * bound that were issued to one of `addresses` (the spellings it held).
+ *
+ * Called when the account moves to another address and when it is deleted.
+ * Every token of an account was issued to the address it held, so after a
+ * move none of them is for the address it holds now. The caller names the
+ * tables, so a database an earlier release created without one is not
+ * asked about a table it does not have.
+ */
+export async function revokeAccountTokens(
+  tx: Pick<TokenBindingDb, "delete">,
+  tokenTables: readonly TokenTable[],
+  account: { userId: string; addresses: readonly string[] }
+): Promise<void> {
+  const addresses = [...new Set(account.addresses.filter(a => a !== ""))];
+  for (const table of tokenTables) {
+    const unbound =
+      addresses.length > 0
+        ? and(isNull(table.userId), inArray(table.identifier, addresses))
+        : undefined;
+    await tx
+      .delete(table)
+      .where(
+        unbound
+          ? or(eq(table.userId, account.userId), unbound)
+          : eq(table.userId, account.userId)
+      );
+  }
+}
+
+/** What `bindIssuedTokens` did. */
+export interface BindIssuedTokensResult {
+  bound: number;
+  removed: number;
+}
+
+/** How many addresses one account lookup names, well inside every driver's limit. */
+const LOOKUP_BATCH = 500;
+
+/**
+ * Bind every token issued before `user_id` existed to the account it was
+ * issued for, and remove the rest: expired ones, ones whose address no
+ * account holds, and ones whose account was created or changed after they
+ * were issued (`mayBindToAccount`).
+ *
+ * Run by the core reconcile after the column is added, on every run. It only
+ * reads tokens with no account, so a second run finds nothing, and a token the
+ * current code issued is never touched. Each write is conditional on the token
+ * still having no account, so a run racing another changes each token once.
+ *
+ * Statements run one at a time rather than in one transaction, as the
+ * reconcile's other data steps do. An account deleted between the read and
+ * the bind fails that bind on its foreign key, and its tokens are removed
+ * instead.
+ */
+export async function bindIssuedTokens(
+  db: unknown,
+  dialect: SupportedDialect,
+  now: Date = new Date()
+): Promise<BindIssuedTokensResult> {
+  const tables = getDialectTables(dialect);
+  const tx = db as TokenBindingDb;
+  const result: BindIssuedTokensResult = { bound: 0, removed: 0 };
+
+  for (const kind of [
+    "password-reset",
+    "email-verification",
+  ] as const satisfies readonly AuthTokenKind[]) {
+    const table = tokenTable(tables, kind);
+    const rows = await tx
+      .select({
+        id: table.id,
+        identifier: table.identifier,
+        expires: table.expires,
+        createdAt: table.createdAt,
+      })
+      .from(table)
+      .where(isNull(table.userId));
+    if (rows.length === 0) continue;
+
+    const tokens = rows.map(row => ({
+      id: Number(row.id),
+      identifier: String(row.identifier),
+      expires: asDate(row.expires),
+      createdAt: asDate(row.createdAt),
+    }));
+    const accounts = await accountsHolding(
+      tx,
+      tables,
+      tokens.map(token => token.identifier)
+    );
+
+    const { bindTo, remove } = planBinding(kind, tokens, accounts, now);
+
+    for (const [userId, ids] of bindTo) {
+      try {
+        result.bound += affectedRowCount(
+          await tx
+            .update(table)
+            .set({ userId })
+            .where(and(inArray(table.id, ids), isNull(table.userId))),
+          dialect
+        );
+      } catch (error) {
+        // The account was deleted after it was read; its tokens go with it.
+        // Any other failure stops the step with the tokens as they were, so a
+        // dropped connection never reads as a reason to remove them.
+        if (toDbError(dialect, error).kind !== "fk-violation") throw error;
+        remove.push(...ids);
+      }
+    }
+
+    for (let i = 0; i < remove.length; i += LOOKUP_BATCH) {
+      result.removed += affectedRowCount(
+        await tx
+          .delete(table)
+          .where(
+            and(
+              inArray(table.id, remove.slice(i, i + LOOKUP_BATCH)),
+              isNull(table.userId)
+            )
+          ),
+        dialect
+      );
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Which unbound tokens to bind to which account, and which to remove: a live
+ * token the binding rule ties to the account holding its address is bound to
+ * it; every other is removed.
+ */
+function planBinding(
+  kind: AuthTokenKind,
+  tokens: readonly (UnboundToken & { id: number })[],
+  accounts: ReadonlyMap<string, BindingAccount>,
+  now: Date
+): { bindTo: Map<string, number[]>; remove: number[] } {
+  const bindTo = new Map<string, number[]>();
+  const remove: number[] = [];
+  for (const token of tokens) {
+    const account = accounts.get(token.identifier);
+    if (
+      token.expires > now &&
+      account &&
+      mayBindToAccount(kind, token, account)
+    ) {
+      bindTo.set(account.id, [...(bindTo.get(account.id) ?? []), token.id]);
+    } else {
+      remove.push(token.id);
+    }
+  }
+  return { bindTo, remove };
+}
+
+/** The accounts holding any of `emails`, by address. */
+async function accountsHolding(
+  tx: TokenBindingDb,
+  tables: Pick<Tables, "users">,
+  emails: readonly string[]
+): Promise<Map<string, BindingAccount>> {
+  const { users } = tables;
+  const unique = [...new Set(emails)];
+  const byEmail = new Map<string, BindingAccount>();
+  for (let i = 0; i < unique.length; i += LOOKUP_BATCH) {
+    const rows = await tx
+      .select({
+        id: users.id,
+        email: users.email,
+        name: users.name,
+        createdAt: users.createdAt,
+        updatedAt: users.updatedAt,
+        deactivatedAt: users.deactivatedAt,
+      })
+      .from(users)
+      .where(inArray(users.email, unique.slice(i, i + LOOKUP_BATCH)));
+    for (const row of rows) {
+      const account = toAccount(row);
+      byEmail.set(account.email, account);
+    }
+  }
+  return byEmail;
+}

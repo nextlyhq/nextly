@@ -307,6 +307,16 @@ export const nextlyTables: TableDefinition[] = [
         nullable: false,
       },
       {
+        name: "user_id",
+        type: "text",
+        nullable: true,
+        references: {
+          table: "users",
+          column: "id",
+          onDelete: "cascade",
+        },
+      },
+      {
         name: "token_hash",
         type: "text",
         nullable: false,
@@ -334,6 +344,10 @@ export const nextlyTables: TableDefinition[] = [
         unique: true,
       },
       {
+        name: "prt_user_id_idx",
+        columns: ["user_id"],
+      },
+      {
         name: "prt_expires_idx",
         columns: ["expires"],
       },
@@ -359,6 +373,16 @@ export const nextlyTables: TableDefinition[] = [
         nullable: false,
       },
       {
+        name: "user_id",
+        type: "text",
+        nullable: true,
+        references: {
+          table: "users",
+          column: "id",
+          onDelete: "cascade",
+        },
+      },
+      {
         name: "token_hash",
         type: "text",
         nullable: false,
@@ -380,6 +404,10 @@ export const nextlyTables: TableDefinition[] = [
         name: "evt_identifier_token_hash_unique",
         columns: ["identifier", "token_hash"],
         unique: true,
+      },
+      {
+        name: "evt_user_id_idx",
+        columns: ["user_id"],
       },
       {
         name: "evt_expires_idx",

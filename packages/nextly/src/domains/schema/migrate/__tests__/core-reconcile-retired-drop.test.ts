@@ -67,6 +67,7 @@ function deps(over: Record<string, unknown> = {}) {
       // No database behind `db` here, and no row to fill in: the drop is the
       // only thing these cases change.
       markUnrecordedVerifications: () => Promise.resolve(0),
+      bindIssuedTokens: () => Promise.resolve({ bound: 0, removed: 0 }),
       ...over,
     },
   };
