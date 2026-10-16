@@ -59,6 +59,13 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
       }),
     ],
     singles: [
+      // Never saved in these tests: it has no stored row.
+      defineSingle({
+        slug: "banner",
+        status: true,
+        access: { read: () => true, update: () => true },
+        fields: [text({ name: "headline" })],
+      }),
       defineSingle({
         slug: "homepage",
         status: true,
@@ -182,6 +189,27 @@ describe.each(getConfiguredTestDialects())(
       expect(member.entryId).toBe(entryId);
     });
 
+    it("refuses a Single that was never saved, and creates no row for it", async () => {
+      // A Single's ordinary read creates its row when there is none. The
+      // check must not: it would accept a document that is not there and
+      // leave a blank row behind.
+      const t = await boot(dialect);
+      const author = await seedLiveAuthor(t);
+      const release = await t.nextly.releases.create({ title: "Launch" });
+      await expect(
+        t.nextly.releases.addMember({
+          releaseId: release.id,
+          scopeKind: "single",
+          scopeSlug: "banner",
+          entryId: "anything",
+          locale: null,
+          action: "publish",
+          userId: author,
+        })
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
+      expect(await t.adapter.select("single_banner", {})).toEqual([]);
+    });
+
     it("accepts a real draft in a collection with a lifecycle", async () => {
       // The control: the checks refuse only what they should.
       const t = await boot(dialect);
@@ -205,6 +233,25 @@ describe.each(getConfiguredTestDialects())(
 describe.each(getConfiguredTestDialects())(
   "finding the due releases (%s)",
   dialect => {
+    it("finds a release due at exactly now, and not one a second later", async () => {
+      // The drain's query at the boundary itself: inclusive, as the resolver
+      // is. Whole seconds, because SQLite stores instants in whole seconds.
+      const t = await boot(dialect);
+      const repo = new ReleasesRepository(t.adapter);
+      const now = new Date(Math.floor(Date.now() / 1000) * 1000);
+      const atNow = await repo.createRelease({ title: "At now" });
+      await repo.scheduleRelease(atNow.id, now, "UTC");
+      const later = await repo.createRelease({ title: "A second later" });
+      await repo.scheduleRelease(
+        later.id,
+        new Date(now.getTime() + 1000),
+        "UTC"
+      );
+
+      const due = await repo.findDueReleases(now);
+      expect(due.map(row => row.title)).toEqual(["At now"]);
+    });
+
     it("reads only the releases that are due, not every scheduled one", async () => {
       const t = await boot(dialect);
       const repo = new ReleasesRepository(t.adapter);
