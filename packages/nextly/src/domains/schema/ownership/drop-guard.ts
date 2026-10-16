@@ -1896,16 +1896,20 @@ class StatementWalk {
       return;
     }
     if (ELEMENT_ADD_WORDS.has(first)) return;
-    let k = first === "COLUMN" ? at + 2 : at + 1;
-    if (
-      this.word(k) === "IF" &&
-      this.word(k + 1) === "NOT" &&
-      this.word(k + 2) === "EXISTS"
-    ) {
-      k += 3;
-    }
-    const column = this.nameAt(k);
+    const k = first === "COLUMN" ? at + 2 : at + 1;
+    const column = this.addedColumnNameAt(k);
     if (column !== undefined) this.reader.addColumn(table, column);
+  }
+
+  /** The column named at `k`, past `IF NOT EXISTS` when it is there. */
+  private addedColumnNameAt(at: number): string | undefined {
+    const k =
+      this.word(at) === "IF" &&
+      this.word(at + 1) === "NOT" &&
+      this.word(at + 2) === "EXISTS"
+        ? at + 3
+        : at;
+    return this.nameAt(k);
   }
 
   /**
@@ -4313,15 +4317,10 @@ export function assertNoForeignDrops(args: {
       act: "drop or rename",
     });
   }
-  const added = new Set(
-    read.addedColumns.map(item => columnKey(item.table, item.column))
-  );
-  const addedElements = new Set(
-    read.addedElements.map(item => columnKey(item.table ?? "", item.name))
-  );
+  const added = addedKeys(read);
   for (const { table, column } of read.alteredColumns) {
     if (overridden(args, table, column)) continue;
-    if (added.has(columnKey(table, column))) continue;
+    if (added.columns.has(columnKey(table, column))) continue;
     refuseUnlessHeld(holders.column(table, column), {
       ...args,
       table,
@@ -4333,7 +4332,7 @@ export function assertNoForeignDrops(args: {
     const table = element.table ?? args.liveIndexTables?.get(element.name);
     if (
       table !== undefined &&
-      addedElements.has(columnKey(table, element.name))
+      added.elements.has(columnKey(table, element.name))
     ) {
       continue;
     }
@@ -4344,10 +4343,7 @@ export function assertNoForeignDrops(args: {
       act: "change in place",
     });
   }
-  for (const { table, act } of read.changed) {
-    if (act === "change the storage of") refuseIndexNamed(table, args);
-  }
-  for (const table of read.unmodelled) refuseIndexNamed(table, args);
+  refuseTablesNamingIndexes(read, args);
   for (const table of read.unmodelled) {
     refuseUnlessHeld(holders.table(table), {
       ...args,
@@ -4688,6 +4684,36 @@ function knownNames(
       (entry): entry is [string, string] => entry[1] !== undefined
     )
   );
+}
+
+/** The columns and elements the reading's own list adds, by table and name. */
+function addedKeys(read: Reading): {
+  columns: Set<string>;
+  elements: Set<string>;
+} {
+  return {
+    columns: new Set(
+      read.addedColumns.map(item => columnKey(item.table, item.column))
+    ),
+    elements: new Set(
+      read.addedElements.map(item => columnKey(item.table ?? "", item.name))
+    ),
+  };
+}
+
+/** Refuses an ALTER TABLE, of storage or unmodelled, that names an index. */
+function refuseTablesNamingIndexes(
+  read: Reading,
+  args: {
+    stream: MigrationStream;
+    source: string;
+    liveIndexTables?: ReadonlyMap<string, string>;
+  }
+): void {
+  for (const { table, act } of read.changed) {
+    if (act === "change the storage of") refuseIndexNamed(table, args);
+  }
+  for (const table of read.unmodelled) refuseIndexNamed(table, args);
 }
 
 /**
