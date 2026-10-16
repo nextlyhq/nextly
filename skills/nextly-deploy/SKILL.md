@@ -33,14 +33,18 @@ dialect of the database configured when you run it, so migrations made on
 SQLite will not run on PostgreSQL. To switch a project from SQLite to
 PostgreSQL:
 
+Nextly's packages are released together, so install each `@nextlyhq/*`
+package at exactly the version of `nextly` the project runs. `npx nextly
+--version` prints it, for example `0.0.2-alpha.66`:
+
 ```bash
-npm install @nextlyhq/adapter-postgres pg
+npm install @nextlyhq/adapter-postgres@0.0.2-alpha.66 pg
+npm ls nextly @nextlyhq/adapter-postgres     # both must show the same version
 ```
 
 Then, in `.env`, set `DB_DIALECT=postgresql` and `DATABASE_URL` to a local
 PostgreSQL database, and add `"@nextlyhq/adapter-postgres"` and `"pg"` to
-`serverExternalPackages` in `next.config.ts`. Restart `next dev`. Use the same
-version as `nextly` for the adapter: check with `npm ls nextly`.
+`serverExternalPackages` in `next.config.ts`. Restart `next dev`.
 
 ## 2. Create the migrations and commit them
 
@@ -92,11 +96,11 @@ build. Never commit `.env` files.
 ## 5. Media storage
 
 Uploads go to `./public/uploads` by default. That is lost on every deploy or
-cold start on Vercel and other serverless hosts. Use a storage adapter of the
-same version as `nextly`:
+cold start on Vercel and other serverless hosts. Use a storage adapter,
+installed at the same version as `nextly` as above:
 
 ```ts
-// nextly.config.ts, on Vercel: npm install @nextlyhq/storage-vercel-blob
+// nextly.config.ts, on Vercel: npm install @nextlyhq/storage-vercel-blob@<nextly version>
 import { defineConfig } from "nextly/config";
 import { vercelBlobStorage } from "@nextlyhq/storage-vercel-blob";
 
@@ -116,6 +120,11 @@ For S3, Cloudflare R2 or DigitalOcean Spaces, use `@nextlyhq/storage-s3` with
 `s3Storage({ bucket, region, accessKeyId, secretAccessKey, collections: { media: true } })`.
 A Node.js server with a persistent disk can keep the default.
 
+On Vercel, uploads from the admin pass through a Vercel Function, which
+refuses request bodies over 4.5 MB (`413 FUNCTION_PAYLOAD_TOO_LARGE`). With
+this setup, files above that size cannot be uploaded through the admin; a
+Node.js server has no such limit.
+
 ## 6. Deploy
 
 - **Vercel:** import the repository; Next.js is detected. Add the variables
@@ -134,7 +143,10 @@ start`) under a process manager such as systemd, pm2 or Docker, behind a
   then `/admin` signs in.
 - Publish an entry and open a page that lists it: it appears.
 - Upload an image in the admin, redeploy, and check it still loads.
-- `/api/health` answers 200 once the app has served a request.
+- Do not use `/api/health` as an uptime probe on serverless hosts. It reports
+  503 until Nextly has started in that same process, which a fresh instance
+  that only receives probes never does. Probe a page that reads content
+  instead.
 
 ## If something fails
 

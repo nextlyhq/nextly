@@ -118,11 +118,12 @@ import { getSession, isSuperAdmin } from "nextly/auth";
 import nextlyConfig from "../../../../nextly.config";
 
 export async function GET(request: Request) {
+  // Start Nextly first: this route may be the first request a server handles.
+  await getNextly({ config: nextlyConfig });
   const session = await getSession(request, process.env.NEXTLY_SECRET ?? "");
   if (!session.authenticated) {
     return Response.json({ error: "Not signed in" }, { status: 401 });
   }
-  await getNextly({ config: nextlyConfig });
   return Response.json({
     email: session.user.email,
     superAdmin: await isSuperAdmin(session.user.id),

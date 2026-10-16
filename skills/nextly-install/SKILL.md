@@ -61,6 +61,21 @@ What it changes:
 
 Without a `src/` folder the same files go under `app/`.
 
+Check the two files it may have left alone:
+
+- **`next.config.ts`:** if it already had a `serverExternalPackages` list, the
+  generator does not touch it. Make sure the list includes `nextly`,
+  `@nextlyhq/adapter-drizzle`, `drizzle-orm`, `drizzle-kit`, `bcryptjs`,
+  `sharp`, `esbuild`, and your adapter and driver:
+  `@nextlyhq/adapter-sqlite` and `better-sqlite3`,
+  `@nextlyhq/adapter-postgres` and `pg`, or `@nextlyhq/adapter-mysql` and
+  `mysql2`.
+- **`.env`:** if it already had a `DATABASE_URL`, the generator adds nothing to
+  it. Add any of `DB_DIALECT`, `NEXTLY_SECRET` and `NEXT_PUBLIC_APP_URL` that
+  are missing, using `.env.example` as the guide. Generate a new secret with
+  `openssl rand -base64 32` rather than copying the one written into
+  `.env.example`, which is meant to be committed.
+
 ## 2. Install esbuild
 
 Nextly reads `nextly.config.ts` with esbuild, an optional peer dependency the
