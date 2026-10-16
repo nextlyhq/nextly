@@ -107,9 +107,15 @@ describe("blog template — access rules", () => {
 describe("blog template — seeded roles", () => {
   /** A permissions catalog of every action on the resources the seed reads. */
   const catalog = ["posts", "categories", "tags", "media"].flatMap(resource =>
-    ["create", "read", "update", "delete", "publish", "unpublish"].map(
-      action => ({ id: `${action}-${resource}`, action, resource })
-    )
+    [
+      "create",
+      "read",
+      "update",
+      "delete",
+      "publish",
+      "unpublish",
+      "manage",
+    ].map(action => ({ id: `${action}-${resource}`, action, resource }))
   );
   const nextly = {
     permissions: { find: async () => ({ items: catalog }) },

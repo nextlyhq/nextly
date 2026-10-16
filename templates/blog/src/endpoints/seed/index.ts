@@ -133,11 +133,13 @@ async function findUserByEmail(
 }
 
 /**
- * The posts permissions the author role is not given. Access rules cannot
- * tell an author's own post from anyone else's, so either would reach every
- * post (see pickPermissionIdsForRoles).
+ * The only posts permissions the author role is given. Named rather than
+ * withheld, so an action a site adds later (`manage-posts`, say) is not
+ * handed to authors by default. Access rules cannot tell an author's own post
+ * from anyone else's, so delete or publish would reach every post (see
+ * pickPermissionIdsForRoles).
  */
-const AUTHOR_WITHHELD = new Set(["delete", "publish", "unpublish"]);
+const AUTHOR_POST_ACTIONS = new Set(["create", "read", "update"]);
 
 /**
  * Pick permission IDs appropriate for each role. Fetches the catalog of
@@ -181,7 +183,7 @@ export async function pickPermissionIdsForRoles(
         const resource = (p as { resource?: string }).resource;
         const action = (p as { action?: string }).action;
         if (resource === "media") return true;
-        if (resource === "posts") return !AUTHOR_WITHHELD.has(action ?? "");
+        if (resource === "posts") return AUTHOR_POST_ACTIONS.has(action ?? "");
         if (
           (resource === "categories" || resource === "tags") &&
           action === "read"

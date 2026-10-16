@@ -68,6 +68,28 @@ describe("check-access-rule-role-names", () => {
     ).toEqual(["templates/t/src/access/staff.ts:1 staff"]);
   });
 
+  it("follows an access object declared apart from the collection", () => {
+    expect(
+      scan({
+        "templates/t/src/collections/Posts.ts": [
+          "const access = {",
+          '  update: ({ roles }) => roles.includes("editor"),',
+          "};",
+          "export const Posts = defineCollection({ access });",
+        ].join("\n"),
+        "templates/t/src/collections/Tags.ts": [
+          'import { shared } from "./shared-access";',
+          "export const Tags = defineCollection({ access: shared });",
+        ].join("\n"),
+        "templates/t/src/collections/shared-access.ts":
+          'export const shared = { delete: ({ roles }) => roles.includes("admin") };',
+      })
+    ).toEqual([
+      "templates/t/src/collections/Posts.ts:2 update",
+      "templates/t/src/collections/shared-access.ts:1 delete",
+    ]);
+  });
+
   it("passes a rule that decides by permission", () => {
     expect(
       scan({

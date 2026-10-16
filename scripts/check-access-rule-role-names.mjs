@@ -14,7 +14,8 @@
  * that creates roles, a route that checks super-admin, prose — is not one:
  *
  * - a function that is the value of a property inside an `access: { ... }`
- *   object, a collection's or a field's alike;
+ *   object, a collection's or a field's alike, including one declared apart
+ *   and named there (`access: shared`, or `{ access }`);
  * - a function declared with an access-rule type (`AccessControlFunction`,
  *   `AccessRule`, a field access function, or an index of
  *   `CollectionAccessControl`), whether or not anything uses it yet;
@@ -118,10 +119,14 @@ function readsRole(fn) {
   return ts.forEachChild(fn, visit) === true;
 }
 
-/** A top-level `function` or `const` declaration, as the index keeps it. */
+/**
+ * A top-level `function` or `const` declaration, as the index keeps it: the
+ * node it declares (the function, or the `const`'s initializer) and whether
+ * its type names it an access rule.
+ */
 function declarationsOf(statement, source) {
   if (ts.isFunctionDeclaration(statement) && statement.name) {
-    return [[statement.name.text, { fn: statement, typed: false }]];
+    return [[statement.name.text, { node: statement, typed: false }]];
   }
   if (!ts.isVariableStatement(statement)) return [];
   return statement.declarationList.declarations
@@ -129,7 +134,7 @@ function declarationsOf(statement, source) {
     .map(decl => [
       decl.name.text,
       {
-        fn: isFunctionNode(decl.initializer) ? decl.initializer : undefined,
+        node: decl.initializer,
         typed:
           decl.type !== undefined && RULE_TYPE.test(decl.type.getText(source)),
       },
@@ -203,16 +208,21 @@ function ruleOfProperty(property) {
     : undefined;
 }
 
-/** Every `access: { ... }` object literal in a file. */
+/**
+ * Every `access` a file declares: an object literal written in place, or the
+ * name of one declared elsewhere (`access: shared`, or `{ access }`).
+ */
 function accessObjects(source) {
   const found = [];
   const visit = node => {
-    if (
-      ts.isPropertyAssignment(node) &&
-      propertyName(node.name) === "access" &&
-      ts.isObjectLiteralExpression(node.initializer)
-    )
-      found.push(node.initializer);
+    if (ts.isShorthandPropertyAssignment(node) && node.name.text === "access")
+      found.push({ identifier: "access" });
+    if (ts.isPropertyAssignment(node) && propertyName(node.name) === "access") {
+      if (ts.isObjectLiteralExpression(node.initializer))
+        found.push({ object: node.initializer });
+      else if (ts.isIdentifier(node.initializer))
+        found.push({ identifier: node.initializer.text });
+    }
     ts.forEachChild(node, visit);
   };
   visit(source);
@@ -238,35 +248,56 @@ function parserOver(files) {
   };
 }
 
-/** Follow an identifier to the function it names, here or across an import. */
+/**
+ * Follow an identifier to the node it names, here or across a relative import:
+ * the function or the initializer declared under that name.
+ */
 function follow(files, parse, path, identifier, seen = new Set()) {
   const key = `${path}#${identifier}`;
   if (seen.has(key)) return undefined;
   seen.add(key);
   const file = parse(path);
-  const local = file.declarations.get(identifier)?.fn;
-  if (local) return { path, fn: local };
+  const local = file.declarations.get(identifier)?.node;
+  if (local) return { path, node: local };
   const imported = file.imports.get(identifier);
   const target =
     imported && resolveRelative(path, imported.from, p => files.has(p));
   return target ? follow(files, parse, target, imported.name, seen) : undefined;
 }
 
+/** An `access` entry as the object literal it is, and the file it is in. */
+function accessObjectAt(files, parse, path, entry) {
+  if (entry.object) return { path, object: entry.object };
+  const target = follow(files, parse, path, entry.identifier);
+  return target && ts.isObjectLiteralExpression(target.node)
+    ? { path: target.path, object: target.node }
+    : undefined;
+}
+
+/** A rule an `access` object names, as the function it is, where declared. */
+function ruleAt(files, parse, path, rule) {
+  if (rule.fn) return { path, fn: rule.fn, name: rule.name };
+  const target = follow(files, parse, path, rule.identifier);
+  return target && isFunctionNode(target.node)
+    ? { path: target.path, fn: target.node, name: rule.name }
+    : undefined;
+}
+
 /** One file's access rules, each with where it is declared and its name. */
 function rulesIn(files, parse, path) {
   const { source, declarations } = parse(path);
   const typed = [...declarations]
-    .filter(([, entry]) => entry.typed && entry.fn)
-    .map(([name, entry]) => ({ path, fn: entry.fn, name }));
+    .filter(([, entry]) => entry.typed && isFunctionNode(entry.node))
+    .map(([name, entry]) => ({ path, fn: entry.node, name }));
   const declared = accessObjects(source)
-    .flatMap(object => object.properties.map(ruleOfProperty))
+    .map(entry => accessObjectAt(files, parse, path, entry))
     .filter(Boolean)
-    .map(rule => {
-      const target = rule.fn
-        ? { path, fn: rule.fn }
-        : follow(files, parse, path, rule.identifier);
-      return target && { ...target, name: rule.name };
-    })
+    .flatMap(({ path: at, object }) =>
+      object.properties
+        .map(ruleOfProperty)
+        .filter(Boolean)
+        .map(rule => ruleAt(files, parse, at, rule))
+    )
     .filter(Boolean);
   return [...typed, ...declared];
 }
