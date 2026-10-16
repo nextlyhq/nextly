@@ -73,10 +73,12 @@ export function matchDocumentView(
  */
 export function documentViewApplies(
   view: RegisteredDocumentView,
-  fields: readonly { type?: unknown }[] | undefined
+  fields: readonly object[] | undefined
 ): boolean {
   if (!("fieldType" in view)) return true;
-  return (fields ?? []).some(field => field.type === view.fieldType);
+  return (fields ?? []).some(
+    field => "type" in field && field.type === view.fieldType
+  );
 }
 
 /** Clear every registered view (rebuild on admin-meta change / tests). */

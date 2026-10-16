@@ -337,14 +337,7 @@ export default function SingleEditPage({
     routedView !== undefined &&
     !documentViewApplies(routedView, schema.fields)
   ) {
-    return (
-      <NotFoundPage
-        path={buildRoute(ROUTES.SINGLE_VIEW, {
-          slug: slug ?? "",
-          view: typeof params?.view === "string" ? params.view : "",
-        })}
-      />
-    );
+    return <NotFoundPage />;
   }
 
   // Document not found (should auto-create, but handle edge case)

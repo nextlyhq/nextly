@@ -91,7 +91,12 @@ function registerPluginDocumentViews(plugin: PluginMetadata): string[] {
   const views = plugin.documentViews ?? [];
   registerDocumentViews(views);
   return views.map(view =>
-    JSON.stringify(["document-view", view.slug, view.path, view.component])
+    JSON.stringify([
+      "document-view",
+      "slug" in view ? view.slug : `field:${view.fieldType}`,
+      view.path,
+      view.component,
+    ])
   );
 }
 

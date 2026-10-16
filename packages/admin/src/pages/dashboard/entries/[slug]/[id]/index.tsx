@@ -244,19 +244,6 @@ function entryDocumentView(
   };
 }
 
-/** The address of a document view, for the not-found page to name. */
-function pathOfView(
-  slug: string | undefined,
-  id: string | undefined,
-  view: string | string[] | undefined
-): string {
-  return buildRoute(ROUTES.COLLECTION_ENTRY_VIEW, {
-    slug: slug ?? "",
-    id: id ?? "",
-    view: typeof view === "string" ? view : "",
-  });
-}
-
 // ============================================================================
 // Component
 // ============================================================================
@@ -553,7 +540,7 @@ export default function EditEntryPage({
     routedView !== undefined &&
     !documentViewApplies(routedView, getCollectionFields(collection))
   ) {
-    return <NotFoundPage path={pathOfView(slug, id, params?.view)} />;
+    return <NotFoundPage />;
   }
 
   const collectionLabel = collection.label || collection.name || slug;
