@@ -1,22 +1,29 @@
+// @vitest-environment jsdom
 /**
  * The blog template reads the saved theme in two places: the inline script in
  * the layout, which paints before React hydrates, and the theme toggle, which
  * takes over after. The script is a string, so the two cannot share code; if
  * they ever paint a stored value differently, the page shows one theme and
- * then flips to the other. This runs both against the same stored values and
- * system settings, and holds each to the theme that value should give.
+ * then flips to the other. This runs the script, and renders the toggle
+ * itself, against the same stored values and system settings, and holds each
+ * to the theme that value should give.
  */
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { runInNewContext } from "node:vm";
 
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
+import { createElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import {
-  applyTheme,
-  readTheme,
-} from "../../../../templates/blog/src/lib/theme";
+import { ThemeToggle } from "../../../../templates/blog/src/app/(frontend)/components/ThemeToggle";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const layout = readFileSync(
@@ -43,14 +50,26 @@ function paintedByScript(stored: string | null, prefersDark: boolean) {
   return page.document.documentElement.dataset.theme;
 }
 
-/** The theme the toggle paints once React has hydrated. */
-function paintedByToggle(stored: string | null, prefersDark: boolean) {
-  const page = browser(stored, prefersDark);
-  vi.stubGlobal("localStorage", page.localStorage);
-  vi.stubGlobal("window", page.window);
-  vi.stubGlobal("document", page.document);
-  applyTheme(readTheme());
-  return page.document.documentElement.dataset.theme;
+/** A page in jsdom with `stored` saved and the given system setting, painted by no one yet. */
+function preparePage(stored: string | null, prefersDark: boolean) {
+  localStorage.clear();
+  if (stored !== null) localStorage.setItem("nextly-theme", stored);
+  delete document.documentElement.dataset.theme;
+  // jsdom has no matchMedia; this answers the one query the toggle asks.
+  vi.stubGlobal("matchMedia", () => ({
+    matches: prefersDark,
+    addEventListener: () => {},
+    removeEventListener: () => {},
+  }));
+}
+
+/** The theme the toggle paints once it has rendered. */
+async function paintedByToggle(stored: string | null, prefersDark: boolean) {
+  preparePage(stored, prefersDark);
+  await act(async () => {
+    render(createElement(ThemeToggle));
+  });
+  return document.documentElement.dataset.theme;
 }
 
 const CASES: Array<
@@ -73,6 +92,7 @@ const CASES: Array<
 
 describe("the blog's two readings of the saved theme", () => {
   afterEach(() => {
+    cleanup();
     vi.unstubAllGlobals();
   });
 
@@ -82,9 +102,23 @@ describe("the blog's two readings of the saved theme", () => {
 
   it.each(CASES)(
     "paint %j with a dark system setting %s as %s",
-    (stored, prefersDark, theme) => {
+    async (stored, prefersDark, theme) => {
       expect(paintedByScript(stored, prefersDark)).toBe(theme);
-      expect(paintedByToggle(stored, prefersDark)).toBe(theme);
+      expect(await paintedByToggle(stored, prefersDark)).toBe(theme);
     }
   );
+
+  it("saves and paints the choice the toggle is given", async () => {
+    expect(await paintedByToggle(null, false)).toBe("light");
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("radio", { name: "Dark" }));
+    });
+
+    expect(localStorage.getItem("nextly-theme")).toBe("dark");
+    expect(document.documentElement.dataset.theme).toBe("dark");
+    expect(
+      screen.getByRole<HTMLInputElement>("radio", { name: "Dark" }).checked
+    ).toBe(true);
+  });
 });
