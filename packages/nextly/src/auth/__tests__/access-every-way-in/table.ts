@@ -147,63 +147,77 @@ export interface Row {
   rule: Rule;
 }
 
-/** Which doors ask a case, so a row is never sent where it cannot be asked. */
+/** Which callers a door can name, and which actions it asks of each target. */
+interface Reach {
+  callers: readonly Caller[];
+  targets: Partial<Record<Target, readonly Action[]>>;
+}
+
+const READ: readonly Action[] = ["read"];
+const READ_UPDATE: readonly Action[] = ["read", "update"];
+const NOT_PRINCIPAL = CALLERS.filter(caller => caller !== "principal");
+const NOT_VISITOR = CALLERS.filter(caller => caller !== "visitor");
+
+/**
+ * What each door asks, with the access-control service registered.
+ *
+ * A principal is read only by routes that declare one, so the staff routes,
+ * the readers behind them and the schema list never see it. Only a resolved
+ * caller reaches `entity` and `can`: every route in front of them has already
+ * refused a visitor. `website` names a user or nobody, never a key.
+ */
+const REACH: Record<Door, Reach> = {
+  rest: {
+    callers: NOT_PRINCIPAL,
+    targets: {
+      collection: ACTIONS,
+      single: READ_UPDATE,
+      media: READ,
+      users: READ,
+    },
+  },
+  direct: {
+    callers: CALLERS,
+    targets: { collection: ACTIONS, single: READ_UPDATE },
+  },
+  website: { callers: ["visitor", ...USERS], targets: { collection: READ } },
+  route: {
+    callers: NOT_PRINCIPAL,
+    targets: { collection: ACTIONS, single: READ_UPDATE },
+  },
+  can: {
+    callers: STAFF,
+    targets: {
+      collection: ACTIONS,
+      single: READ_UPDATE,
+      media: READ,
+      users: READ,
+    },
+  },
+  service: { callers: CALLERS, targets: { collection: ACTIONS } },
+  entity: { callers: STAFF, targets: { collection: READ, single: READ } },
+  schema: { callers: NOT_PRINCIPAL, targets: { collection: READ } },
+  population: {
+    callers: CALLERS,
+    targets: { related: READ, media: READ, users: READ },
+  },
+  system: { callers: NOT_PRINCIPAL, targets: { media: READ, users: READ } },
+};
+
+/** What each door asks without the access-control service. */
+const REACH_WITHOUT_SERVICE: Partial<Record<Door, Reach>> = {
+  rest: { callers: NOT_VISITOR, targets: { collection: READ, single: READ } },
+  direct: { callers: CALLERS, targets: { collection: READ, single: READ } },
+  can: { callers: NOT_VISITOR, targets: { collection: READ, single: READ } },
+  entity: { callers: NOT_VISITOR, targets: { collection: READ, single: READ } },
+  population: { callers: CALLERS, targets: { related: READ } },
+};
+
+/** Whether a door asks a case, so a row is never sent where it cannot be. */
 function asks(door: Door, row: Row): boolean {
-  const { caller, action, target, setup } = row;
-  const read = action === "read";
-  if (setup === "no-service") {
-    if (target === "related") return door === "population";
-    if (door === "direct") return true;
-    return (
-      caller !== "visitor" &&
-      (door === "rest" || door === "entity" || door === "can")
-    );
-  }
-  switch (door) {
-    case "rest":
-      if (caller === "principal") return false;
-      if (target === "collection") return true;
-      if (target === "single") return action === "read" || action === "update";
-      return read && (target === "media" || target === "users");
-    case "direct":
-      if (target === "collection") return true;
-      return target === "single" && (read || action === "update");
-    case "website":
-      return (
-        target === "collection" &&
-        read &&
-        (caller === "visitor" || USERS.includes(caller))
-      );
-    case "route":
-      if (caller === "principal") return false;
-      if (target === "collection") return true;
-      return target === "single" && (read || action === "update");
-    case "can":
-      if (!STAFF.includes(caller)) return false;
-      if (target === "collection") return true;
-      if (target === "single") return read || action === "update";
-      return read && (target === "media" || target === "users");
-    case "service":
-      return target === "collection";
-    case "entity":
-      // Only a resolved caller reaches it: every route in front of it has
-      // already refused a visitor.
-      return (
-        STAFF.includes(caller) &&
-        read &&
-        (target === "collection" || target === "single")
-      );
-    case "schema":
-      return caller !== "principal" && read && target === "collection";
-    case "population":
-      return read && ["related", "media", "users"].includes(target);
-    case "system":
-      return (
-        caller !== "principal" &&
-        read &&
-        (target === "media" || target === "users")
-      );
-  }
+  const reach = (row.setup === "service" ? REACH : REACH_WITHOUT_SERVICE)[door];
+  if (!reach || !reach.callers.includes(row.caller)) return false;
+  return reach.targets[row.target]?.includes(row.action) ?? false;
 }
 
 const NO_SERVICE_CALLERS: readonly Caller[] = [
@@ -222,44 +236,46 @@ const NO_SERVICE_RULES: readonly Rule[] = [
 /** Rows pinned elsewhere for now, which join this table later. */
 function pinnedElsewhere(row: Row): boolean {
   return (
+    row.setup === "service" &&
     row.caller === "visitor" &&
-    (row.action === "create" ||
-      row.action === "update" ||
-      row.action === "delete")
+    ["create", "update", "delete"].includes(row.action)
   );
 }
 
+/** Every combination of the lists, target first and caller last. */
+function cross(
+  setup: Setup,
+  targets: readonly Target[],
+  rulesOf: (target: Target) => readonly Rule[],
+  actions: readonly Action[],
+  callers: readonly Caller[]
+): Row[] {
+  return targets.flatMap(target =>
+    rulesOf(target).flatMap(rule =>
+      actions.flatMap(action =>
+        callers.map(caller => ({ setup, caller, action, target, rule }))
+      )
+    )
+  );
+}
+
+/** The system resources declare no code rule, so they are asked once. */
+const rulesOf = (target: Target): readonly Rule[] =>
+  target === "media" || target === "users" ? ["none"] : RULES;
+
 /** Every row the table holds, in a stable order. */
 export function rows(): Row[] {
-  const out: Row[] = [];
-  for (const target of TARGETS) {
-    const rules: readonly Rule[] =
-      target === "media" || target === "users" ? ["none"] : RULES;
-    for (const rule of rules) {
-      for (const action of ACTIONS) {
-        for (const caller of CALLERS) {
-          const row: Row = { setup: "service", caller, action, target, rule };
-          if (pinnedElsewhere(row)) continue;
-          if (DOORS.some(door => asks(door, row))) out.push(row);
-        }
-      }
-    }
-  }
-  for (const target of ["collection", "single", "related"] as const) {
-    for (const rule of NO_SERVICE_RULES) {
-      for (const caller of NO_SERVICE_CALLERS) {
-        const row: Row = {
-          setup: "no-service",
-          caller,
-          action: "read",
-          target,
-          rule,
-        };
-        if (DOORS.some(door => asks(door, row))) out.push(row);
-      }
-    }
-  }
-  return out;
+  const withService = cross("service", TARGETS, rulesOf, ACTIONS, CALLERS);
+  const withoutService = cross(
+    "no-service",
+    ["collection", "single", "related"],
+    () => NO_SERVICE_RULES,
+    READ,
+    NO_SERVICE_CALLERS
+  );
+  return [...withService, ...withoutService].filter(
+    row => !pinnedElsewhere(row) && DOORS.some(door => asks(door, row))
+  );
 }
 
 export function doorsAsking(row: Row): Door[] {

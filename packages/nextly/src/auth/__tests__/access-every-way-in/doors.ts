@@ -77,7 +77,7 @@ function addressOf(world: World, row: Row, door: string) {
 }
 
 function request(
-  method: "GET" | "POST" | "PATCH" | "DELETE",
+  method: Method,
   segments: string[],
   headers: Record<string, string>,
   body?: unknown,
@@ -98,16 +98,34 @@ function request(
   return handlers[method](req, context);
 }
 
+type Method = "GET" | "POST" | "PATCH" | "DELETE";
+
+/** The REST request each collection action is, against `entries` and `id`. */
+const COLLECTION_REQUESTS: Record<
+  Row["action"],
+  { method: Method; byId: boolean; body?: Record<string, unknown> }
+> = {
+  read: { method: "GET", byId: true },
+  create: { method: "POST", byId: false, body: { title: "made" } },
+  update: { method: "PATCH", byId: true, body: { title: "changed" } },
+  delete: { method: "DELETE", byId: true },
+  publish: { method: "PATCH", byId: true, body: { status: "published" } },
+};
+
+/** The admin's media routes are their own handler, mounted gated. */
+async function restMedia(headers: Record<string, string>) {
+  const res = await createMediaHandlers({ requireAuth: true }).GET(
+    new Request(`${ORIGIN}/api/media`, {
+      headers: { origin: ORIGIN, ...headers },
+    }),
+    { params: Promise.resolve({ path: [] }) }
+  );
+  return fromStatus(res.status);
+}
+
 async function rest(world: World, row: Row, who: CallerHandle) {
   const h = who.headers;
-  if (row.target === "media") {
-    // The admin's media routes are their own handler, mounted gated.
-    const res = await createMediaHandlers({ requireAuth: true }).GET(
-      new Request(`${ORIGIN}/api/media`, { headers: { origin: ORIGIN, ...h } }),
-      { params: Promise.resolve({ path: [] }) }
-    );
-    return fromStatus(res.status);
-  }
+  if (row.target === "media") return restMedia(h);
   if (row.target === "users") {
     return fromStatus((await request("GET", ["users"], h)).status);
   }
@@ -119,27 +137,10 @@ async function rest(world: World, row: Row, who: CallerHandle) {
         : await request("PATCH", ["singles", slug], h, { headline: "edit" });
     return fromStatus(res.status);
   }
+  const { method, byId, body } = COLLECTION_REQUESTS[row.action];
   const entries = ["collections", slug, "entries"];
-  switch (row.action) {
-    case "read":
-      return fromStatus((await request("GET", [...entries, id], h)).status);
-    case "create":
-      return fromStatus(
-        (await request("POST", entries, h, { title: "made" })).status
-      );
-    case "update":
-      return fromStatus(
-        (await request("PATCH", [...entries, id], h, { title: "changed" }))
-          .status
-      );
-    case "delete":
-      return fromStatus((await request("DELETE", [...entries, id], h)).status);
-    case "publish":
-      return fromStatus(
-        (await request("PATCH", [...entries, id], h, { status: "published" }))
-          .status
-      );
-  }
+  const res = await request(method, byId ? [...entries, id] : entries, h, body);
+  return fromStatus(res.status);
 }
 
 /** The caller as a Direct API call names it. */
