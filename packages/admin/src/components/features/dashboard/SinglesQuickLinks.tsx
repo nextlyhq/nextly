@@ -1,7 +1,7 @@
 "use client";
 
-import { Card, CardContent, Skeleton } from "@nextlyhq/ui";
-import { AlertCircle, FileText } from "lucide-react";
+import { Card, CardContent } from "@nextlyhq/ui";
+import { FileText } from "lucide-react";
 import type React from "react";
 import { useMemo } from "react";
 
@@ -10,6 +10,8 @@ import { Link } from "@admin/components/ui/link";
 import { buildRoute, ROUTES } from "@admin/constants/routes";
 import { useSingles } from "@admin/hooks/queries";
 import type { ApiSingle } from "@admin/types/entities";
+
+import { CardEmpty, CardError, CardSkeleton } from "../widgets/frame/states";
 
 /**
  * Dashboard surface listing all configured Singles. Mirrors the grid +
@@ -42,9 +44,11 @@ function SingleCard({ single }: { single: ApiSingle }) {
         <CardContent className="p-5 relative z-10">
           <div className="flex items-start justify-between gap-4">
             <div className="space-y-1 min-w-0">
-              <h5 className="font-semibold text-base tracking-tight text-foreground truncate transition-colors">
+              {/* A label, not a heading: inside the card the frame's title is the one heading,
+                  and a Single's name wraps rather than clipping. */}
+              <span className="block break-words font-semibold text-sm tracking-tight text-foreground transition-colors">
                 {single.label || single.slug}
-              </h5>
+              </span>
               {single.description && (
                 <p className="text-xs text-muted-foreground line-clamp-2 leading-relaxed">
                   {single.description}
@@ -61,24 +65,12 @@ function SingleCard({ single }: { single: ApiSingle }) {
   );
 }
 
-function LoadingSkeleton() {
-  return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-      {Array.from({ length: 3 }, (_, i) => (
-        <Skeleton
-          key={i}
-          className="h-24 rounded-lg bg-muted/30 border border-border"
-        />
-      ))}
-    </div>
-  );
-}
-
 export const SinglesQuickLinks: React.FC = () => {
   const {
     data: singlesData,
     isLoading,
     error,
+    refetch,
   } = useSingles({ pagination: { page: 0, pageSize: 100 } });
 
   const singles = singlesData?.items ?? [];
@@ -89,40 +81,33 @@ export const SinglesQuickLinks: React.FC = () => {
   // its placement -- so the grid reserved an empty slot on every install that
   // never used singles. The card draws what it has and never second-guesses
   // the host.
+  // The card's frame draws its title, so this is only its body: the Singles, or the frame's
+  // own skeleton and error while they are not there.
+  if (isLoading) return <CardSkeleton shape="rows" />;
+  if (error) {
+    return (
+      <CardError
+        title="Singles"
+        message="The Singles couldn't be loaded."
+        onRetry={() => void refetch()}
+      />
+    );
+  }
+  // Nothing to list: the frame's empty state, so the card says what will appear rather than
+  // drawing a blank body under its title.
+  if (singles.length === 0) {
+    return (
+      <CardEmpty
+        title="No Singles yet"
+        detail="Singles you can edit appear here."
+      />
+    );
+  }
   return (
-    <section aria-labelledby="dashboard-singles-heading" className="space-y-6">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-4 flex-1">
-          <h4
-            id="dashboard-singles-heading"
-            className="text-sm font-semibold tracking-tight text-foreground whitespace-nowrap"
-          >
-            Singles
-          </h4>
-          <div className="h-px flex-1 bg-border" />
-        </div>
-        {singles.length > 0 && (
-          <span className="ml-4 text-xs font-medium tabular-nums text-muted-foreground">
-            {singles.length}
-          </span>
-        )}
-      </div>
-
-      {isLoading ? (
-        <LoadingSkeleton />
-      ) : error ? (
-        // Full-strength destructive border so the boundary is perceivable at the 3:1 UI minimum.
-        <div className="flex items-center gap-2 py-6 text-sm text-destructive justify-center bg-destructive/5 border border-destructive rounded-md">
-          <AlertCircle className="h-4 w-4" />
-          <span>Couldn&apos;t load singles.</span>
-        </div>
-      ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {singles.map(single => (
-            <SingleCard key={single.id} single={single} />
-          ))}
-        </div>
-      )}
-    </section>
+    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+      {singles.map(single => (
+        <SingleCard key={single.id} single={single} />
+      ))}
+    </div>
   );
 };

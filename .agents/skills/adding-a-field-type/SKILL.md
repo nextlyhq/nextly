@@ -1,6 +1,8 @@
 ---
 name: adding-a-field-type
 description: Use when adding a new field type to Nextly (a new entry in the FieldType union, a new field factory, or a new schema-builder picker type), or when a field type renders or stores incorrectly across the config, catalog, column-mapping, or admin layers.
+metadata:
+  internal: true
 ---
 
 # Adding a field type to Nextly

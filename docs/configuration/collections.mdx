@@ -97,7 +97,7 @@ The Nextly admin panel ships with a Visual Schema Builder for creating collectio
 5. Configure admin options, access control, and hooks through the UI.
 6. Click **Save** to generate the collection.
 
-The Schema Builder produces the same `CollectionConfig` that code-first collections use; you can export a builder-created collection to TypeScript at any time.
+The Schema Builder produces the same `CollectionConfig` that code-first collections use. To move a builder-created collection into code, run `nextly db:sync --promote <slug>`. It appends the collection's slug and fields to `nextly.config.ts` as a commented-out snippet, and removes the builder's record; the table and its content stay. Nothing else is carried over: add the labels, admin options, access rules, hooks and options such as `status` back in code before you move the snippet into your `collections` array. There is no supported way back: once a code-first collection has been synced, the Schema Builder shows it read-only, and its structure is edited in code.
 
 </Tab>
 </Tabs>

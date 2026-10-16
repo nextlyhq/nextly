@@ -36,7 +36,9 @@ describe("registerReleaseServices", () => {
       "../../domains/releases/services/releases-service"
     );
 
-    registerReleaseServices({ adapter: { select: async () => [] } } as never);
+    registerReleaseServices({
+      adapter: { select: async () => [], count: async () => 0 },
+    } as never);
 
     // Imported INSIDE the reset module graph, so `instanceof` compares one class
     // against itself rather than across two copies.
@@ -71,7 +73,9 @@ describe("registerReleaseServices", () => {
     const { registerReleaseServices } = await import(
       "../registrations/register-releases"
     );
-    registerReleaseServices({ adapter: { select: async () => [] } } as never);
+    registerReleaseServices({
+      adapter: { select: async () => [], count: async () => 0 },
+    } as never);
 
     const svc = singletons.get("releasesService") as {
       addMember: (r: string, m: unknown, a: unknown) => Promise<unknown>;
@@ -140,7 +144,9 @@ describe("registerReleaseServices document authority", () => {
     const { registerReleaseServices } = await import(
       "../registrations/register-releases"
     );
-    registerReleaseServices({ adapter: { select: async () => [] } } as never);
+    registerReleaseServices({
+      adapter: { select: async () => [], count: async () => 0 },
+    } as never);
     return {
       svc: singletons.get("releasesService") as {
         addMember: (r: string, m: unknown, a: unknown) => Promise<unknown>;
@@ -225,7 +231,9 @@ describe("registerReleaseServices lifecycle grants", () => {
     const { registerReleaseServices } = await import(
       "../registrations/register-releases"
     );
-    registerReleaseServices({ adapter: { select: async () => [] } } as never);
+    registerReleaseServices({
+      adapter: { select: async () => [], count: async () => 0 },
+    } as never);
     return {
       svc: singletons.get("releasesService") as {
         addMember: (r: string, m: unknown, a: unknown) => Promise<unknown>;

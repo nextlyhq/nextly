@@ -135,6 +135,41 @@ interface GenerationResult {
 // ============================================================================
 
 /**
+ * Write the admin component import map (D60) beside the types file when any
+ * plugin contributes admin components, or remove a previous one when none
+ * does. Importing the generated module from the app self-registers those
+ * components, with no manual host imports, and sidesteps the dynamic
+ * auto-registration race.
+ *
+ * Removal is how "nothing to register" is expressed. A map left behind is worse
+ * than a stale data file: the app IMPORTS it, so it keeps importing a package
+ * that is no longer installed and breaks the next build.
+ *
+ * @returns the map's path when one was written
+ */
+async function settleImportMap(
+  plugins: Parameters<typeof buildImportMapArtifact>[0],
+  typesOutputPath: string,
+  cwd: string
+): Promise<string | undefined> {
+  const importMap = buildImportMapArtifact(plugins, typesOutputPath);
+  if (importMap === null || importMap === undefined) {
+    await rm(
+      resolve(
+        cwd,
+        join(dirname(typesOutputPath), COMPONENT_IMPORT_MAP_FILENAME)
+      ),
+      { force: true }
+    );
+    return undefined;
+  }
+  const importMapPath = resolve(cwd, importMap.path);
+  await ensureDir(dirname(importMapPath));
+  await writeFile(importMapPath, importMap.code, "utf-8");
+  return importMapPath;
+}
+
+/**
  * Execute the generate:types command
  *
  * @param options - Combined global and command options
@@ -196,12 +231,13 @@ export async function runGenerateTypes(
   // blocks the app no longer has.
   // Fitted to the app's layout, as the types file it sits beside is below.
   const manifestCwd = options.cwd ?? process.cwd();
+  const typesFileForLayout = generatedTypesFile(
+    manifestCwd,
+    options.output ?? configResult.config.typescript.outputFile
+  );
   const manifestState = await readBlockManifestState(
     configResult.config.plugins ?? [],
-    generatedTypesFile(
-      manifestCwd,
-      options.output ?? configResult.config.typescript.outputFile
-    ),
+    typesFileForLayout,
     manifestCwd
   );
   await applyBlockManifestState(manifestState);
@@ -209,6 +245,21 @@ export async function runGenerateTypes(
     manifestState.expected === null ? undefined : manifestState.path;
   if (writtenManifestPath) {
     logger.debug(`Written block manifest to: ${writtenManifestPath}`);
+  }
+  // The plugin component import map, settled before the same return and for
+  // the same reason: an app whose schema is all made in the Schema Builder
+  // declares nothing in code, yet still renders plugin admin components — its
+  // plugins' pages and settings, and a document view offered on a field type.
+  // Without the map a bundled admin cannot resolve them and draws an empty
+  // slot. Beside the types file actually written, which follows the app's
+  // layout.
+  const writtenImportMapPath = await settleImportMap(
+    configResult.config.plugins ?? [],
+    typesFileForLayout,
+    manifestCwd
+  );
+  if (writtenImportMapPath) {
+    logger.debug(`Written plugin admin import map to: ${writtenImportMapPath}`);
   }
 
   if (
@@ -233,6 +284,7 @@ export async function runGenerateTypes(
     // Reported here because the manifest is settled earlier, before the
     // empty-schema return, while this object is built by the call above.
     result.blockManifestFile = writtenManifestPath;
+    result.componentImportMapFile = writtenImportMapPath;
 
     // Step 3: Display results
     displayResults(result, options, context);
@@ -308,28 +360,6 @@ async function generateTypes(
 
   result.typesFile = typesFilePath;
   logger.debug(`Written types to: ${typesFilePath}`);
-
-  // Write the admin component import map (D60), alongside the types file, when
-  // any plugin contributes admin components. Importing this generated module
-  // from the app self-registers those components (no manual host imports), and
-  // sidesteps the dynamic auto-registration race. No-op when there are none.
-  // Placed beside the file actually written, which follows the app's layout.
-  const importMap = buildImportMapArtifact(config.plugins ?? [], typesFilePath);
-  if (importMap) {
-    const importMapPath = resolve(cwd, importMap.path);
-    await ensureDir(dirname(importMapPath));
-    await writeFile(importMapPath, importMap.code, "utf-8");
-    result.componentImportMapFile = importMapPath;
-    logger.debug(`Written plugin admin import map to: ${importMapPath}`);
-  } else {
-    // Nothing to register, which has to be expressed by removing any previous
-    // map. This one is worse than a stale data file: the generated module is
-    // IMPORTED by the app, so leaving it behind keeps importing a package that
-    // is no longer installed and breaks the next build.
-    await rm(join(dirname(typesFilePath), COMPONENT_IMPORT_MAP_FILENAME), {
-      force: true,
-    });
-  }
 
   // Generate Zod schemas if enabled
   if (options.zod !== false) {

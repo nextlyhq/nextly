@@ -282,22 +282,102 @@ export async function fetchText(url) {
 }
 
 /**
+ * Where Context7 answers a question about one library. It sits beside the `api` base, which
+ * serves search and the library's page under v1: the library page's `topic` parameter is
+ * ignored, and answers the same general snippets whatever it asks, so a probe sent there can
+ * never find the sentence it asked for.
+ */
+function questionUrl(api, marker) {
+  // One trailing slash exactly, so `../` steps out of v1 whether or not the base ended in one.
+  const url = new URL("../v2/context", `${api.replace(/\/+$/, "")}/`);
+  url.searchParams.set("libraryId", LIBRARY);
+  url.searchParams.set("query", marker);
+  url.searchParams.set("type", "txt");
+  return url.toString();
+}
+
+/** The error a 404 names, or null when its body is not Context7's error shape. */
+function errorName(body) {
+  try {
+    const parsed = JSON.parse(body);
+    return typeof parsed?.error === "string" ? parsed.error : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Whether the index returns a sentence for its own topic.
  *
- * A non-200 is not "no": it is the question going unanswered, and it stops the run rather
- * than being counted as an absence that would then clear an exclusion.
+ * The context endpoint answers a question nothing matched with a 404 naming
+ * `no_relevant_snippets`, and that is the index saying it holds nothing for it: an absence.
+ * Any other non-200, a 404 naming another error included, is not "no": it is the question
+ * going unanswered, and it stops the run rather than being counted as an absence that would
+ * then clear an exclusion.
  */
-async function retrievable(get, api, marker, name) {
-  const answer = await get(
-    `${api}${LIBRARY}?type=txt&topic=${encodeURIComponent(marker)}&tokens=5000`
-  );
-  if (answer.status !== 200) {
-    throw new Unanswerable(`probing for ${name} answered ${answer.status}`);
-  }
+async function retrievable(get, api, marker, name, corpus) {
+  const answer = await get(questionUrl(api, marker));
+  if (matchedNothing(answer)) return { found: false, cites: new Set() };
+  if (answer.status !== 200) throw unanswered(answer, name);
   return {
-    found: answer.body.includes(marker),
+    found: standsAlone(answer.body, marker) || heldWhereCited(answer.body, marker, corpus),
     cites: citedPaths(answer.body),
   };
+}
+
+/**
+ * Whether the answer carries the sentence as its source has it: a line of its own, or one step
+ * of a heading's breadcrumb (`### Getting Started > Two Ways to Build`). A marker is a whole
+ * line or heading of its file, so a copy of the file shows it this way whichever file the
+ * answer cites. Context7 also writes a title and a description for each snippet, and a short
+ * sentence can turn up inside that wording mid-sentence ("enable SVG Content Security Policy"
+ * for "Security Policy"); that is not the file coming back.
+ */
+function standsAlone(body, marker) {
+  return copiedLines(body).some(line => {
+    const text = line.replace(/^\s*#{1,6}\s+/, "").trim();
+    return text === marker || text.split(" > ").includes(marker);
+  });
+}
+
+/**
+ * The answer's lines without the title Context7 writes above each snippet's citation: the
+ * last non-blank line before a `Source:` line. That title is its own wording, and can match a
+ * short heading of a file the snippet never read.
+ */
+function copiedLines(body) {
+  const lines = body.split("\n");
+  const titles = new Set();
+  let lastText = -1;
+  for (const [index, line] of lines.entries()) {
+    if (/^Source:\s/.test(line)) titles.add(lastText);
+    else if (line.trim() !== "") lastText = index;
+  }
+  return lines.filter((_, index) => !titles.has(index));
+}
+
+/**
+ * Whether a snippet carries the sentence and cites a file that holds it. Context7 may join a
+ * hand-wrapped paragraph into one line, so a prose marker can come back inside a longer line;
+ * the citation is then what says it was read from a file that has it.
+ */
+function heldWhereCited(body, marker, corpus) {
+  return body.split(/^-{8,}\s*$/m).some(snippet => {
+    if (!snippet.includes(marker)) return false;
+    return [...citedPaths(snippet)].some(path => corpus.get(path)?.includes(marker));
+  });
+}
+
+/** The context endpoint's answer to a question nothing in the index matched. */
+function matchedNothing(answer) {
+  return answer.status === 404 && errorName(answer.body) === "no_relevant_snippets";
+}
+
+/** A probe that went unanswered, named with the error Context7 gave where it gave one. */
+function unanswered(answer, name) {
+  const error = errorName(answer.body);
+  const named = error ? ` (${error})` : "";
+  return new Unanswerable(`probing for ${name} answered ${answer.status}${named}`);
 }
 
 /** A JSON body, or `Unanswerable`: a truncated or non-JSON answer is no verdict either. */
@@ -419,7 +499,7 @@ async function keptControls({ corpus, api, get }) {
   ]);
   const findings = [];
   for (const [name, marker] of kept) {
-    const answer = await retrievable(get, api, marker, name);
+    const answer = await retrievable(get, api, marker, name, corpus);
     // The sentence must come back AND be cited from the file it was taken from: a
     // marker answered from some other file would be a control that never looked.
     if (answer.found && answer.cites.has(name)) continue;
@@ -441,7 +521,7 @@ async function exclusionFindings({ corpus, api, get, config }) {
   for (const witness of witnesses(corpus, config)) {
     const holders = holdersOf(corpus, witness);
     const elsewhere = outsideSet(holders, config, witness);
-    const answer = await retrievable(get, api, witness.marker, witness.name);
+    const answer = await retrievable(get, api, witness.marker, witness.name, corpus);
     probes.push({ witness, elsewhere, answer, leak: leakOf(answer, witness.name, elsewhere, citesAnExcludedHolder(holders, config, answer)) });
   }
   const leaks = probes.filter(probe => probe.leak);

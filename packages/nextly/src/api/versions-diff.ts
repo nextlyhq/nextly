@@ -33,10 +33,12 @@ import { withErrorHandler } from "./with-error-handler";
 // deep-importing an internal module.
 export type {
   ComparableStatus,
+  DiffPathSegment,
   DiffStatus,
   FieldDiff,
   FieldDisplay,
   GroupFieldDiff,
+  HiddenFieldDiff,
   ListFieldDiff,
   ListItemDiff,
   RelationTarget,

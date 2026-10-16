@@ -27,6 +27,9 @@ function repository() {
     createRelease: vi.fn(async () => ({ id: "r1" })),
     scheduleReleaseOk: true,
     findReleases: vi.fn(async () => [{ id: "r1", state: "draft" }]),
+    // The list's paged read, which `find` routes every non-document query to.
+    findReleasePage: vi.fn(async () => ({ rows: [], total: 0 })),
+    countReleases: vi.fn(async () => 0),
     listMembers: vi.fn(async () => []),
     addMember: vi.fn(async () => ({ id: "m1" })),
     removeMember: vi.fn(async () => undefined),
@@ -95,7 +98,7 @@ describe("ReleasesService authorization", () => {
     await expect(svc.find({}, ADMIN)).rejects.toMatchObject({
       code: "FORBIDDEN",
     });
-    expect(repo.findReleases).not.toHaveBeenCalled();
+    expect(repo.findReleasePage).not.toHaveBeenCalled();
   });
 
   it("lets an assembler read, because creating implies seeing what you made", async () => {
@@ -105,7 +108,7 @@ describe("ReleasesService authorization", () => {
     // The implication is one-directional; the control for that is below.
     const { svc, repo } = service({ holds: ["create"] });
     await expect(svc.find({}, ADMIN)).resolves.toBeDefined();
-    expect(repo.findReleases).toHaveBeenCalled();
+    expect(repo.findReleasePage).toHaveBeenCalled();
   });
 
   it("refuses to schedule with only create authority, because committing is a separate power", async () => {
@@ -137,7 +140,7 @@ describe("ReleasesService authorization", () => {
     // Asking about a null user is a lookup whose only possible answer is no, and
     // a store that answered anything else would be granting authority to nobody.
     expect(deps.canManageReleases).not.toHaveBeenCalled();
-    expect(repo.findReleases).not.toHaveBeenCalled();
+    expect(repo.findReleasePage).not.toHaveBeenCalled();
   });
 
   it("lets a trusted in-process caller through without a permission store", async () => {
@@ -146,7 +149,7 @@ describe("ReleasesService authorization", () => {
     const { svc, repo, deps } = service({ holds: [] });
     await svc.find({}, { userId: null, overrideAccess: true });
     expect(deps.canManageReleases).not.toHaveBeenCalled();
-    expect(repo.findReleases).toHaveBeenCalled();
+    expect(repo.findReleasePage).toHaveBeenCalled();
   });
 });
 
@@ -458,7 +461,7 @@ describe("ReleasesService refuses input the database would answer differently", 
         ADMIN
       )
     ).rejects.toMatchObject({ code: "INVALID_INPUT" });
-    expect(repo.findReleases).not.toHaveBeenCalled();
+    expect(repo.findReleasePage).not.toHaveBeenCalled();
   });
 
   it("accepts both orders the vocabulary declares", async () => {
@@ -469,7 +472,7 @@ describe("ReleasesService refuses input the database would answer differently", 
     for (const order of RELEASE_LIST_ORDERS) {
       const { svc, repo } = service({ holds: ["read"] });
       await svc.find({ order }, ADMIN);
-      expect(repo.findReleases).toHaveBeenCalledWith(
+      expect(repo.findReleasePage).toHaveBeenCalledWith(
         expect.objectContaining({ order })
       );
     }
@@ -501,7 +504,7 @@ describe("ReleasesService refuses input the database would answer differently", 
       )
     ).rejects.toMatchObject({ code: "INVALID_INPUT" });
     expect(repo.findDueMembersFor).not.toHaveBeenCalled();
-    expect(repo.findReleases).not.toHaveBeenCalled();
+    expect(repo.findReleasePage).not.toHaveBeenCalled();
   });
 
   it("forwards `order` to the repository when nothing narrows by document", async () => {
@@ -516,7 +519,7 @@ describe("ReleasesService refuses input the database would answer differently", 
     // `releases-repository.integration.test.ts`.
     const { svc, repo } = service({ holds: ["read"] });
     await svc.find({ order: "soonest", limit: 3 }, ADMIN);
-    expect(repo.findReleases).toHaveBeenCalledWith(
+    expect(repo.findReleasePage).toHaveBeenCalledWith(
       expect.objectContaining({ order: "soonest", limit: 3 })
     );
   });
@@ -537,8 +540,18 @@ describe("ReleasesService refuses input the database would answer differently", 
         },
         ADMIN
       )
-    ).resolves.toEqual([]);
+    ).resolves.toMatchObject({ rows: [], total: 0 });
     expect(repo.findDueMembersFor).toHaveBeenCalled();
+  });
+
+  it("refuses a limit of zero, which pages nothing", async () => {
+    // A page of nothing has no next page and no meaningful count of pages, so
+    // it is a caller's mistake rather than a smaller page.
+    const { svc, repo } = service({ holds: ["read"] });
+    await expect(svc.find({ limit: 0 }, ADMIN)).rejects.toMatchObject({
+      code: "INVALID_INPUT",
+    });
+    expect(repo.findReleasePage).not.toHaveBeenCalled();
   });
 
   it("refuses a negative limit, which SQLite reads as NO limit", async () => {
@@ -548,7 +561,182 @@ describe("ReleasesService refuses input the database would answer differently", 
     await expect(svc.find({ limit: -1 }, ADMIN)).rejects.toMatchObject({
       code: "INVALID_INPUT",
     });
-    expect(repo.findReleases).not.toHaveBeenCalled();
+    expect(repo.findReleasePage).not.toHaveBeenCalled();
+  });
+});
+
+describe("ReleasesService.find pages the list", () => {
+  it("asks the repository for the page the caller named, as an offset", async () => {
+    const { svc, repo } = service({ holds: ["read"] });
+    repo.findReleasePage.mockResolvedValueOnce({ rows: [], total: 41 });
+    const page = await svc.find({ tab: "drafts", page: 3, limit: 20 }, ADMIN);
+    expect(repo.findReleasePage).toHaveBeenCalledWith(
+      expect.objectContaining({ tab: "drafts", offset: 40, limit: 20 })
+    );
+    expect(page).toMatchObject({ total: 41, page: 3, limit: 20 });
+  });
+
+  it("defaults to the first page of 50", async () => {
+    const { svc, repo } = service({ holds: ["read"] });
+    await svc.find({}, ADMIN);
+    expect(repo.findReleasePage).toHaveBeenCalledWith(
+      expect.objectContaining({ offset: 0, limit: 50 })
+    );
+  });
+
+  it("orders the upcoming tab and scheduled releases soonest first by default, and the rest latest first", async () => {
+    // Three questions, one rule: which end of the timeline a caller who named
+    // no order is asking about.
+    for (const [query, order] of [
+      [{ tab: "upcoming" }, "soonest"],
+      [{ state: "scheduled" }, "soonest"],
+      [{}, "latest"],
+      [{ state: "published" }, "latest"],
+    ] as const) {
+      const { svc, repo } = service({ holds: ["read"] });
+      await svc.find(query, ADMIN);
+      expect(repo.findReleasePage).toHaveBeenCalledWith(
+        expect.objectContaining({ order })
+      );
+    }
+  });
+
+  it("trims the search, and treats an empty one as none", async () => {
+    // A stray space typed into the box would otherwise narrow the list to
+    // releases whose text contains a space.
+    const { svc, repo } = service({ holds: ["read"] });
+    await svc.find({ search: "  spring " }, ADMIN);
+    expect(repo.findReleasePage).toHaveBeenLastCalledWith(
+      expect.objectContaining({ search: "spring" })
+    );
+    await svc.find({ search: "   " }, ADMIN);
+    expect(repo.findReleasePage).toHaveBeenLastCalledWith(
+      expect.objectContaining({ search: undefined })
+    );
+  });
+
+  it.each([
+    ["an unknown tab", { tab: "soon" }],
+    ["a tab with a state", { tab: "drafts", state: "draft" }],
+    ["an order on a tab with its own", { tab: "done", order: "soonest" }],
+    ["a reason without the attention tab", { reason: "overdue" }],
+    ["a reason on another tab", { tab: "upcoming", reason: "overdue" }],
+    ["an unknown reason", { tab: "attention", reason: "late" }],
+    ["an unknown state", { state: "schedule" }],
+    ["a search past the limit", { search: "x".repeat(201) }],
+    ["page 0", { page: 0 }],
+    ["a fractional page", { page: 1.5 }],
+    ["a page larger than the maximum", { limit: 201 }],
+    ["a page past the safe integers", { page: 1e308 }],
+    [
+      "a page whose offset is past the safe integers",
+      { page: 2 ** 52, limit: 200 },
+    ],
+    ["a search that is not text", { search: 42 }],
+    ["a window bound that is not a Date", { scheduledAfter: "tomorrow" }],
+    [
+      "a window bound that is an invalid Date",
+      { scheduledBefore: new Date("nope") },
+    ],
+  ])("refuses %s, naming it, before reading anything", async (_, query) => {
+    // Each would otherwise answer with rows that look right: an unknown tab or
+    // state matches nothing and reads as "no releases", and an order a tab
+    // cannot honour would be silently dropped.
+    const { svc, repo } = service({ holds: ["read"] });
+    await expect(
+      svc.find(query as unknown as Parameters<typeof svc.find>[0], ADMIN)
+    ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+    expect(repo.findReleasePage).not.toHaveBeenCalled();
+  });
+
+  it("checks the window bounds of a document's releases too", async () => {
+    // The document listing filters in memory; a bound that is not a Date
+    // would fail there as a TypeError, or as NaN would silently not filter.
+    const { svc, repo } = service({ holds: ["read"] });
+    for (const bound of [
+      { scheduledAfter: "tomorrow" },
+      { scheduledBefore: new Date("nope") },
+    ]) {
+      await expect(
+        svc.find(
+          {
+            containing: {
+              scopeKind: "collection",
+              scopeSlug: "posts",
+              entryId: "e1",
+              locale: null,
+            },
+            ...bound,
+          } as unknown as Parameters<typeof svc.find>[0],
+          ADMIN
+        )
+      ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+    }
+    expect(repo.findDueMembersFor).not.toHaveBeenCalled();
+  });
+
+  it("names the fix when `reason` comes without the attention tab", async () => {
+    const { svc } = service({ holds: ["read"] });
+    await expect(svc.find({ reason: "overdue" }, ADMIN)).rejects.toMatchObject({
+      publicMessage: expect.stringContaining(
+        '`reason` needs `tab: "attention"`'
+      ),
+    });
+  });
+
+  it("passes the reason through with the attention tab", async () => {
+    const { svc, repo } = service({ holds: ["read"] });
+    await svc.find({ tab: "attention", reason: "overdue" }, ADMIN);
+    expect(repo.findReleasePage).toHaveBeenCalledWith(
+      expect.objectContaining({ tab: "attention", reason: "overdue" })
+    );
+  });
+
+  it.each([
+    ["tab", "upcoming"],
+    ["search", "spring"],
+    ["reason", "overdue"],
+  ])("refuses `%s` alongside `containing`", async (key, value) => {
+    const { svc, repo } = service({ holds: ["read"] });
+    await expect(
+      svc.find(
+        {
+          containing: {
+            scopeKind: "collection",
+            scopeSlug: "posts",
+            entryId: "e1",
+            locale: null,
+          },
+          [key]: value,
+        } as unknown as Parameters<typeof svc.find>[0],
+        ADMIN
+      )
+    ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+    expect(repo.findDueMembersFor).not.toHaveBeenCalled();
+  });
+});
+
+describe("ReleasesService.count", () => {
+  it("counts with the list's own filters, checked the same way", async () => {
+    const { svc, repo } = service({ holds: ["read"] });
+    repo.countReleases.mockResolvedValueOnce(4);
+    await expect(
+      svc.count({ tab: "attention", search: " late " }, ADMIN)
+    ).resolves.toBe(4);
+    expect(repo.countReleases).toHaveBeenCalledWith(
+      expect.objectContaining({ tab: "attention", search: "late" })
+    );
+    await expect(
+      svc.count({ tab: "drafts", state: "draft" }, ADMIN)
+    ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+  });
+
+  it("refuses a caller who may not read releases", async () => {
+    const { svc, repo } = service({ holds: [] });
+    await expect(svc.count({ tab: "attention" }, ADMIN)).rejects.toMatchObject({
+      code: "FORBIDDEN",
+    });
+    expect(repo.countReleases).not.toHaveBeenCalled();
   });
 });
 
@@ -564,7 +752,7 @@ describe("ReleasesService honours a scoped API key over its owner", () => {
     // owner instead would deny a key that was explicitly granted the authority.
     const { svc, repo, deps } = service({ holds: [] });
     await svc.find({}, KEY(["read-content-releases"]));
-    expect(repo.findReleases).toHaveBeenCalled();
+    expect(repo.findReleasePage).toHaveBeenCalled();
     // The owner's grants are never consulted for a scoped key.
     expect(deps.canManageReleases).not.toHaveBeenCalled();
   });

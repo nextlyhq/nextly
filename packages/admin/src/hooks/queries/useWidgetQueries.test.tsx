@@ -190,6 +190,63 @@ describe("useWidgetQueries", () => {
     expect(result.current.error).toBeNull();
   });
 
+  it("keeps the server's unavailable code on a failed slot, and only that code", async () => {
+    vi.mocked(protectedApi.post).mockResolvedValue({
+      results: [
+        { ok: false, error: "Unavailable.", code: "unavailable" },
+        { ok: false, error: "Something else.", code: "teapot" },
+      ],
+    });
+
+    const { result } = renderHook(
+      () =>
+        useWidgetQueries([
+          {
+            placementId: "core/forbidden",
+            query: countQuery("collection:secret"),
+          },
+          { placementId: "core/odd", query: countQuery("collection:posts") },
+        ]),
+      { wrapper }
+    );
+
+    await waitFor(() => expect(result.current.slots["core/odd"]).toBeDefined());
+    // The card can only say "Not available to you" if the code survives the parse...
+    expect(result.current.slots["core/forbidden"]).toEqual({
+      ok: false,
+      error: "Unavailable.",
+      code: "unavailable",
+    });
+    // ...and a code it does not know is not passed on as if it meant something.
+    expect(result.current.slots["core/odd"]).toEqual({
+      ok: false,
+      error: "Something else.",
+    });
+  });
+
+  it("drops the unavailable code from a refusal with no usable message", async () => {
+    // A slot missing its message is a broken answer that may recover; kept, the code would hide
+    // that behind the unavailable state, which offers no Retry.
+    vi.mocked(protectedApi.post).mockResolvedValue({
+      results: [{ ok: false, error: "", code: "unavailable" }],
+    });
+
+    const { result } = renderHook(
+      () =>
+        useWidgetQueries([
+          { placementId: "core/broken", query: countQuery("collection:posts") },
+        ]),
+      { wrapper }
+    );
+
+    await waitFor(() =>
+      expect(result.current.slots["core/broken"]).toBeDefined()
+    );
+    const slot = result.current.slots["core/broken"];
+    expect(slot?.ok).toBe(false);
+    expect(slot).not.toHaveProperty("code");
+  });
+
   it("issues no request at all when there is nothing to ask", async () => {
     const { result } = renderHook(() => useWidgetQueries([]), { wrapper });
 

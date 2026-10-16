@@ -312,6 +312,14 @@ export const routeConfig: Record<string, RouteConfig> = {
     type: "private",
     section: collectionContentSection,
   },
+  // The entry's own page draws a plugin's document view, so the document's
+  // loading, lock, recovery and save are the editor's and not re-implemented.
+  // After the versions route, which must keep its address.
+  [ROUTES.COLLECTION_ENTRY_VIEW]: {
+    component: EditEntryPage,
+    type: "private",
+    section: collectionContentSection,
+  },
 
   // Security & Roles routes
   [ROUTES.SECURITY_ROLES]: {
@@ -369,6 +377,13 @@ export const routeConfig: Record<string, RouteConfig> = {
     section: overridableBy("singles"),
   },
   [ROUTES.SINGLE_EDIT]: {
+    component: SingleEditPage,
+    type: "private",
+    section: overridableBy("singles"),
+  },
+  // The Single's own page draws a plugin's document view, for the reason the
+  // entry route above gives. After the api and versions routes.
+  [ROUTES.SINGLE_VIEW]: {
     component: SingleEditPage,
     type: "private",
     section: overridableBy("singles"),

@@ -1,6 +1,8 @@
 ---
 name: release-and-changesets
 description: Use when adding a changeset to a PR, deciding whether a PR needs one, cutting or debugging a release, or when the Version PR / npm publish flow looks wrong.
+metadata:
+  internal: true
 ---
 
 # Changesets and releases in the Nextly monorepo
