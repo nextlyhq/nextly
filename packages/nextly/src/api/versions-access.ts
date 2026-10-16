@@ -15,6 +15,8 @@
  * @module api/versions-access
  */
 
+import { z } from "zod";
+
 import { apiKeyScopeFrom } from "../auth/authenticated-scope";
 import type { AuthenticatedScope } from "../auth/authenticated-scope";
 import type { FieldConfig } from "../collections/fields/types";
@@ -27,6 +29,7 @@ import {
   singleDocumentReadable,
 } from "../domains/singles/services/single-document-access";
 import type { UserContext } from "../domains/singles/types";
+import { resolveComparisonPair } from "../domains/versions/comparison-baselines";
 import { computeVersionDiff } from "../domains/versions/diff";
 import type { VersionDiff } from "../domains/versions/diff";
 import { hydrateDiffReferences } from "../domains/versions/diff-references";
@@ -586,6 +589,159 @@ export async function hydrateVersionSnapshot(
     authenticatedScope,
     locale
   );
+}
+
+/** A comparison request, as every surface that compares reads it. */
+export interface ComparisonQuery {
+  from?: number;
+  to?: number;
+  /** @experimental A registered comparison baseline's name. */
+  baseline?: string;
+  /** The part to open on when no `to` is named. */
+  locale?: string;
+  modifiedOnly: boolean;
+}
+
+const comparisonQuerySchema = z.object({
+  from: z.string().trim().optional(),
+  to: z.string().trim().optional(),
+  baseline: z.string().trim().optional(),
+  locale: z.string().trim().optional(),
+  modifiedOnly: z.string().optional(),
+});
+
+/**
+ * Parse a comparison's query parameters, the same way for the REST routes,
+ * the dispatcher and the published handler, so the surfaces never answer one
+ * request differently. An absent or blank parameter is absent; a version
+ * number that is not a whole number is left for `assertComparisonRequest` to
+ * refuse with the parameter's name.
+ */
+export function parseComparisonQuery(
+  input: Record<string, unknown>
+): ComparisonQuery {
+  const text = (value: unknown) =>
+    typeof value === "string" ? value : undefined;
+  const query = comparisonQuerySchema.parse({
+    from: text(input.from),
+    to: text(input.to),
+    baseline: text(input.baseline),
+    locale: text(input.locale),
+    modifiedOnly: text(input.modifiedOnly),
+  });
+  const present = (value: string | undefined) =>
+    value === undefined || value === "" ? undefined : value;
+  const number = (value: string | undefined) => {
+    const raw = present(value);
+    return raw === undefined ? undefined : Number(raw);
+  };
+  return {
+    from: number(query.from),
+    to: number(query.to),
+    baseline: present(query.baseline),
+    locale: present(query.locale),
+    modifiedOnly: query.modifiedOnly === "1" || query.modifiedOnly === "true",
+  };
+}
+
+/**
+ * Validate a comparison request before anything is read, so malformed input
+ * fails as a validation error naming its parameter, whatever the document's
+ * history holds. Either an explicit pair (`from` and `to`) or a target and a
+ * baseline, each optional; not a `from` and a `baseline` together.
+ */
+export function assertComparisonRequest(query: ComparisonQuery): void {
+  if (query.from !== undefined) {
+    if (query.baseline !== undefined) {
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: "baseline",
+            code: "INVALID_VALUE",
+            message: "Name either `from` or `baseline`, not both.",
+          },
+        ],
+      });
+    }
+    assertDiffVersionPair(query.from, query.to ?? Number.NaN);
+    return;
+  }
+  if (query.to !== undefined && (!Number.isInteger(query.to) || query.to < 1)) {
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: "to",
+          code: "INVALID_VALUE",
+          message: "to must be a positive integer.",
+        },
+      ],
+    });
+  }
+}
+
+/**
+ * Compare two versions of a document AFTER the caller's read access to it is
+ * confirmed: an explicit pair as given, or a target and baseline resolved from
+ * the document's own history (`resolveComparisonPair`), then diffed through
+ * `diffDocumentVersions`. Every surface that compares calls this, after its own
+ * read gate.
+ *
+ * A baseline is told who is comparing only when that is a person: an API key,
+ * a principal or the system compares with no user, so a baseline that reads a
+ * person's own records never reaches the key owner's.
+ */
+export async function compareDocumentVersions(args: {
+  scopeKind: VersionScopeKind;
+  slug: string;
+  entryId: string;
+  user: UserContext;
+  authenticatedScope?: AuthenticatedScope;
+  query: ComparisonQuery;
+}): Promise<VersionDiff> {
+  const { query } = args;
+  let pair: { from: number; to: number };
+  let baseline: { name: string; versionNo: number } | undefined;
+  if (query.from !== undefined && query.to !== undefined) {
+    pair = { from: query.from, to: query.to };
+  } else {
+    const versions = getService("versionsService");
+    const ref = {
+      scopeKind: args.scopeKind,
+      scopeSlug: args.slug,
+      entryId: args.entryId,
+    };
+    const isPerson = (args.authenticatedScope?.actorType ?? "user") === "user";
+    const [partVersions, workingDraftParts] = await Promise.all([
+      versions.listPartVersions(ref),
+      versions.listWorkingDraftParts(ref),
+    ]);
+    const resolved = await resolveComparisonPair(
+      {
+        ref,
+        to: query.to,
+        baseline: query.baseline,
+        locale: query.locale,
+        userId: isPerson ? (args.user?.id ?? null) : null,
+        workingDraftParts,
+      },
+      partVersions
+    );
+    pair = { from: resolved.from, to: resolved.to };
+    baseline = resolved.baseline;
+  }
+  assertDiffVersionPair(pair.from, pair.to);
+
+  const diff = await diffDocumentVersions({
+    scopeKind: args.scopeKind,
+    slug: args.slug,
+    entryId: args.entryId,
+    user: args.user,
+    from: pair.from,
+    to: pair.to,
+    modifiedOnly: query.modifiedOnly,
+    authenticatedScope: args.authenticatedScope,
+  });
+  return baseline ? { ...diff, baseline } : diff;
 }
 
 /**

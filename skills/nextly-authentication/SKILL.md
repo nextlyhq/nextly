@@ -28,6 +28,11 @@ OAuth login. If the site needs visitor accounts, use an auth library for the
 site and keep Nextly for content; do not try to reuse the admin sign-in for
 visitors.
 
+In particular, do not build a sign-in form for your own pages on the Direct
+API's `nextly.login()`. It is for trusted server code, not for signing people
+in, and this release has no ready path for members-only pages. Protect those
+with the auth library the site uses.
+
 ## The secret
 
 `NEXTLY_SECRET` signs the session tokens. The installer generates one in

@@ -624,6 +624,24 @@ export class VersionsRepository {
    * For the operations that act on the whole document at once — publishing all
    * of its languages — rather than on the language in front of the author.
    */
+  /**
+   * The parts (language keys, null for none) that hold a working draft,
+   * without the drafts' snapshots.
+   */
+  async listWorkingDraftLocales(ref: VersionRef): Promise<(string | null)[]> {
+    const rows = await this.db.select<{ locale: string | null }>(TABLE, {
+      columns: ["locale"],
+      where: {
+        and: [
+          ...this.docWhere(ref),
+          { column: "isAutosave", op: "=", value: false },
+          { column: "versionNo", op: "IS NULL" },
+        ],
+      },
+    });
+    return rows.map(row => row.locale);
+  }
+
   async findAllWorkingDrafts(ref: VersionRef): Promise<VersionRow[]> {
     return this.db.select<VersionRow>(TABLE, {
       where: {

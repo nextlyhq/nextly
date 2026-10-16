@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 
+import { forgetEntryBehind, recordPushFrom } from "@admin/lib/admin-history";
 import { resolveRoute, type RouteResult } from "@admin/lib/routing";
 
 import { useHydration } from "./useHydration";
@@ -45,6 +46,10 @@ export function useRouter() {
     handleLocationChange();
 
     // Set up event listeners
+    // A jump through history lands on an entry whose own predecessor the
+    // admin never saw, so what lies behind it is no longer known.
+    const handleHistoryJump = () => forgetEntryBehind();
+    window.addEventListener("popstate", handleHistoryJump);
     window.addEventListener("popstate", handleLocationChange);
     window.addEventListener("locationchange", handleLocationChange);
 
@@ -65,6 +70,8 @@ export function useRouter() {
       unused: string,
       url?: string | URL | null
     ) {
+      // The page being left is the entry a push puts behind the new one.
+      recordPushFrom(window.location.pathname);
       const result = originalPushState.apply(this, [
         data as Parameters<History["pushState"]>[0],
         unused,
@@ -90,6 +97,7 @@ export function useRouter() {
 
     return () => {
       mounted = false;
+      window.removeEventListener("popstate", handleHistoryJump);
       window.removeEventListener("popstate", handleLocationChange);
       window.removeEventListener("locationchange", handleLocationChange);
 

@@ -263,6 +263,8 @@ describe("resolveRoute for a document view", () => {
     });
     expect(resolved.requiredPermission).toBe("update-pages");
     expect(resolved.routeType).toBe("private");
+    // A refused view names what it opens, as the entry page it draws does.
+    expect(resolved.accessSubject).toBe("collection");
   });
 
   it("resolves a Single's field-type view to the Single page, gated as editing", () => {
@@ -279,6 +281,7 @@ describe("resolveRoute for a document view", () => {
     expect(resolved.Component).toBe(SingleEditPage);
     expect(resolved.params).toEqual({ slug: "homepage", view: "builder" });
     expect(resolved.requiredPermission).toBe("update-homepage");
+    expect(resolved.accessSubject).toBe("single");
   });
 
   it("does not route a collection's declared view at a Single of the same slug", () => {

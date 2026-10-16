@@ -302,6 +302,7 @@ describe("the command, run against another checkout", () => {
       put("package.json", "{}\n");
       put(".agents/skills/a/SKILL.md", "---\nname: a\ndescription: when a applies\nmetadata:\n  internal: true\n---\n");
       put("skills/nextly-install/SKILL.md", "---\nname: nextly-install\ndescription: when installing Nextly\n---\n\nInstall Nextly.\n");
+      put("skills/README.md", "# Skills\n\n| Skill | What it covers |\n| --- | --- |\n| `nextly-install` | installing |\n");
       put(".claude/skills/a/SKILL.md", "---\nname: a\ndescription: edited in the copy by hand\nmetadata:\n  internal: true\n---\n");
       execFileSync("git", ["init", "-q"], { cwd: base });
       execFileSync("git", ["add", "-A"], { cwd: base });
@@ -349,6 +350,7 @@ describe("the command, run against another checkout", () => {
     put("package.json", "{}\n");
     put(".agents/skills/a/SKILL.md", "---\nname: a\ndescription: when a applies\nmetadata:\n  internal: true\n---\n");
       put("skills/nextly-install/SKILL.md", "---\nname: nextly-install\ndescription: when installing Nextly\n---\n\nInstall Nextly.\n");
+      put("skills/README.md", "# Skills\n\n| Skill | What it covers |\n| --- | --- |\n| `nextly-install` | installing |\n");
     syncSkillCopy(base);
     execFileSync("git", ["init", "-q"], { cwd: base });
     return { base, put, copy, check, rules };
@@ -491,6 +493,7 @@ describe("reporting the skills themselves", () => {
       execFileSync("git", ["init", "-q"], { cwd: base });
       mkdirSync(join(base, "skills/nextly-install"), { recursive: true });
       writeFileSync(join(base, "skills/nextly-install/SKILL.md"), "---\nname: nextly-install\ndescription: when installing Nextly\n---\n\nInstall Nextly.\n");
+      writeFileSync(join(base, "skills/README.md"), "# Skills\n\n| Skill | What it covers |\n| --- | --- |\n| `nextly-install` | installing |\n");
       mkdirSync(join(base, ".agents/skills/a"), { recursive: true });
       writeFileSync(join(base, ".agents/skills/a/SKILL.md"), "---\ndescription: nameless\nmetadata:\n  internal: true\n---\n");
       expect(skillFindings(base)).toEqual([
@@ -510,6 +513,7 @@ describe("reporting the skills themselves", () => {
       execFileSync("git", ["init", "-q"], { cwd: base });
       mkdirSync(join(base, "skills/nextly-install"), { recursive: true });
       writeFileSync(join(base, "skills/nextly-install/SKILL.md"), "---\nname: nextly-install\ndescription: when installing Nextly\n---\n\nInstall Nextly.\n");
+      writeFileSync(join(base, "skills/README.md"), "# Skills\n\n| Skill | What it covers |\n| --- | --- |\n| `nextly-install` | installing |\n");
       mkdirSync(join(base, "elsewhere"), { recursive: true });
       writeFileSync(join(base, "elsewhere/SKILL.md"), "---\nname: a\ndescription: linked in\nmetadata:\n  internal: true\n---\n");
       mkdirSync(join(base, ".agents/skills/a"), { recursive: true });

@@ -278,6 +278,12 @@ export class TypeGenerator {
     imported: ReadonlySet<string>;
   }> = [];
 
+  /**
+   * Whether a field in this run points at the built-in `media` collection, and
+   * so names `MediaFile`, which the file then has to import.
+   */
+  private referencesBuiltInMedia = false;
+
   constructor(options: TypeGeneratorOptions = {}) {
     this.includeComments = options.includeComments ?? true;
     this.generateInputTypes = options.generateInputTypes ?? true;
@@ -312,6 +318,7 @@ export class TypeGenerator {
     const lines: string[] = [];
     this.pluginExpressions = new Map();
     this.pluginEmissions = [];
+    this.referencesBuiltInMedia = false;
 
     // File header
     lines.push("/* tslint:disable */");
@@ -423,7 +430,30 @@ export class TypeGenerator {
     // also erase core's own `Partial<Post>` and reserve nothing.
     this.reserveGlobalsWritten(lines.slice(importSlot).join("\n"), reserved);
 
+    // The built-in media row is Nextly's own `MediaFile`, imported rather than
+    // redeclared, so the file names the very type `nextly.media` returns.
+    const ownImports = new Map<string, string>();
+    if (this.referencesBuiltInMedia) {
+      ownImports.set("MediaFile", "nextly");
+      reserved.add("MediaFile");
+    }
+
     const imports: string[] = [];
+    if (ownImports.size > 0) {
+      imports.push(`import type { MediaFile } from "nextly";`);
+    }
+    // A `declare module` augments only a module the app's program already
+    // holds; one that nothing imports draws TS2664 ("Invalid module name in
+    // augmentation") even when it resolves, and a new app imports only subpaths
+    // such as `nextly/config`. This type-only import brings the augmented entry
+    // into the program itself, and is erased from every build. An import above
+    // from the same module already does that.
+    if (
+      this.generateModuleAugmentation &&
+      !(ownImports.size > 0 && this.moduleToAugment === "nextly")
+    ) {
+      imports.push(`import type {} from "${this.moduleToAugment}";`);
+    }
     // A blocks field is typed as the engine's document, imported from `nextly`
     // rather than the engine package so the generated file resolves against the
     // dependency every app already has.
@@ -438,9 +468,7 @@ export class TypeGenerator {
         this.pluginExpressions,
         // What this file imports on its own behalf: a plugin naming the same
         // binding from the same module is asking for the one already there.
-        // Empty now that no built-in brings a type of its own into the file —
-        // a contributed type declares its imports through `codegen.tsImports`.
-        new Map<string, string>()
+        ownImports
       )
     );
     if (imports.length > 0) lines.splice(importSlot, 0, ...imports, "");
@@ -880,13 +908,9 @@ export class TypeGenerator {
     else if (isRadioField(field)) {
       tsType = this.buildRadioType(field);
     }
-    // Upload fields
-    else if (isUploadField(field)) {
-      tsType = this.buildUploadType(field, allCollections);
-    }
-    // Relationship fields
-    else if (isRelationshipField(field)) {
-      tsType = this.buildRelationshipType(field, allCollections);
+    // Upload and relationship fields: both point at another collection's rows
+    else if (isUploadField(field) || isRelationshipField(field)) {
+      tsType = this.buildReferenceType(field, allCollections);
     }
     // Repeater fields
     else if (isRepeaterField(field)) {
@@ -1073,81 +1097,31 @@ export class TypeGenerator {
   }
 
   /**
-   * Builds TypeScript type for upload fields.
-   * Returns union type of string (ID) or related type.
+   * The type of a field that points at another collection's rows, which an
+   * upload and a relationship both are: the id, or the populated row, for one
+   * target or a union over several, and an array of those when `hasMany`.
    */
-  private buildUploadType(
+  private buildReferenceType(
     field: DataFieldConfig,
-    _allCollections: DynamicCollectionRecord[]
+    allCollections: DynamicCollectionRecord[]
   ): string {
-    const uploadField = field as {
+    const reference = field as {
       relationTo?: string | string[];
       hasMany?: boolean;
     };
 
-    const relationTo = uploadField.relationTo;
+    const relationTo = reference.relationTo;
 
     if (!relationTo) {
-      return uploadField.hasMany ? "string[]" : "string";
+      return reference.hasMany ? "string[]" : "string";
     }
 
-    let relationType: string;
+    const targets = Array.isArray(relationTo) ? relationTo : [relationTo];
+    const relationType = targets
+      .map(rel => `string | ${this.relationTargetType(rel, allCollections)}`)
+      .join(" | ");
 
-    if (Array.isArray(relationTo)) {
-      // Polymorphic relationship - union of all possible types
-      const types = relationTo.map(rel => {
-        const typeName = this.toPascalCase(rel);
-        return `string | ${typeName}`;
-      });
-      relationType = types.join(" | ");
-    } else {
-      // Single relationship type
-      const typeName = this.toPascalCase(relationTo);
-      relationType = `string | ${typeName}`;
-    }
-
-    if (uploadField.hasMany) {
-      return `(${relationType})[]`;
-    }
-
-    return relationType;
-  }
-
-  /**
-   * Builds TypeScript type for relationship fields.
-   * Returns union type of string (ID) or related type.
-   */
-  private buildRelationshipType(
-    field: DataFieldConfig,
-    _allCollections: DynamicCollectionRecord[]
-  ): string {
-    const relField = field as {
-      relationTo?: string | string[];
-      hasMany?: boolean;
-    };
-
-    const relationTo = relField.relationTo;
-
-    if (!relationTo) {
-      return relField.hasMany ? "string[]" : "string";
-    }
-
-    let relationType: string;
-
-    if (Array.isArray(relationTo)) {
-      // Polymorphic relationship - union of all possible types
-      const types = relationTo.map(rel => {
-        const typeName = this.toPascalCase(rel);
-        return `string | ${typeName}`;
-      });
-      relationType = types.join(" | ");
-    } else {
-      // Single relationship type
-      const typeName = this.toPascalCase(relationTo);
-      relationType = `string | ${typeName}`;
-    }
-
-    if (relField.hasMany) {
+    if (reference.hasMany) {
       return `(${relationType})[]`;
     }
 
@@ -1546,6 +1520,29 @@ ${properties}
     }
     if (names.length === 0) return "never";
     return names.map(name => `"${name}"`).join(" | ");
+  }
+
+  /**
+   * The type a relationship or upload names for the collection it points at.
+   *
+   * A configured collection is its own generated interface. `users` and
+   * `media` are built in when the config does not declare them, so no
+   * interface is generated per slug: a user is the generated `User`, and a
+   * media row is Nextly's `MediaFile`. Any other slug keeps its own name.
+   */
+  private relationTargetType(
+    slug: string,
+    allCollections: DynamicCollectionRecord[]
+  ): string {
+    if (allCollections.some(c => c.slug === slug)) {
+      return this.toPascalCase(slug);
+    }
+    if (slug === "users") return "User";
+    if (slug === "media") {
+      this.referencesBuiltInMedia = true;
+      return "MediaFile";
+    }
+    return this.toPascalCase(slug);
   }
 
   /**

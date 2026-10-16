@@ -338,6 +338,16 @@ export async function restoreVersion(
     args.versionNo
   );
 
+  // A recorded save of a working draft names no status: its content was never
+  // live. Restoring it must stay a draft. Where the document can no longer
+  // hold one (drafts turned off, or a field the split cannot hold), the update
+  // refuses rather than write it to the live row and publish it.
+  const restoresSavedDraft =
+    version.status === "draft" &&
+    typeof version.snapshot === "object" &&
+    version.snapshot !== null &&
+    !Object.prototype.hasOwnProperty.call(version.snapshot, "status");
+
   const { fields, localized, hasStatus, versioningEnabled, isPlugin } =
     await describeEntity(args.scopeKind, args.slug);
 
@@ -514,6 +524,7 @@ export async function restoreVersion(
         : {}),
       ...(writeLocale ? { locale: writeLocale } : {}),
       sourceVersionNo: args.versionNo,
+      ...(restoresSavedDraft ? { requireHeldDraft: true } : {}),
     });
     assertWriteSucceeded(result, args);
   } else {
@@ -535,6 +546,7 @@ export async function restoreVersion(
         ...(writeLocale ? { locale: writeLocale } : {}),
         ...(args.actor ? { actor: args.actor } : {}),
         sourceVersionNo: args.versionNo,
+        ...(restoresSavedDraft ? { requireHeldDraft: true } : {}),
       },
       payload
     );

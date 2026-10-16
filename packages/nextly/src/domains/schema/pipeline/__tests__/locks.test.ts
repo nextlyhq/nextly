@@ -1,6 +1,49 @@
+import { readFileSync } from "node:fs";
+
 import { describe, expect, it, vi } from "vitest";
 
 import { forceUnlock, withMigrateLock } from "../locks";
+
+/**
+ * A MySQL handle whose pool allows one connection. The lock's connection is
+ * then the only one there is, so the work must run on it: a second checkout
+ * would wait for a connection that is never released.
+ */
+function singleConnectionMysqlDb() {
+  const getConnection = vi.fn();
+  const execute = vi.fn(async () => ({ rows: [{ locked: 1 }] }));
+  return {
+    execute,
+    getConnection,
+    $client: {
+      config: { connectionLimit: 1 },
+      getConnection: getConnection,
+      promise: () => ({ getConnection }),
+    },
+  };
+}
+
+describe("withMigrateLock on MySQL with a one-connection pool", () => {
+  it("takes no second connection for the lock", async () => {
+    const db = singleConnectionMysqlDb();
+
+    await withMigrateLock(db, "mysql", async () => "ok");
+
+    expect(db.getConnection).not.toHaveBeenCalled();
+  });
+});
+
+describe("locks.ts loads the MySQL driver only where a MySQL lock is pinned", () => {
+  it("has no top-level import of the MySQL driver", () => {
+    const source = readFileSync(
+      new URL("../locks.ts", import.meta.url),
+      "utf8"
+    );
+
+    expect(source).not.toMatch(/^import [^;]*"drizzle-orm\/mysql2"/m);
+    expect(source).toContain('import("drizzle-orm/mysql2")');
+  });
+});
 
 // Fake drizzle db: records executed SQL text; `acquireRows` controls whether the
 // acquire upsert returns a row (acquired) or none (busy), per successive call.

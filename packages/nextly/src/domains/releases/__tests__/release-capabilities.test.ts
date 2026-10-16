@@ -36,6 +36,13 @@ function service(holds: ReleaseAuthority[]) {
     canActOnDocument: vi.fn(async () => true),
     // Running a release is not what these cases are about.
     runRelease: vi.fn(async () => undefined),
+    // Every target is there and has a lifecycle; the checks have their own tests.
+    targets: {
+      readDocument: async (target: { entryId: string }) => ({
+        id: target.entryId,
+      }),
+      declaresLifecycle: async () => true,
+    },
   };
   return { svc: new ReleasesService(deps), canManageReleases };
 }

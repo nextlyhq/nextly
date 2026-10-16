@@ -19,7 +19,7 @@
  * @module components/features/widgets/layout-editor
  */
 
-import { MAX_PLACEMENTS } from "nextly/config";
+import { MAX_PLACEMENTS, layoutSizeProblem } from "nextly/config";
 
 import type {
   WidgetPlacement,
@@ -394,6 +394,36 @@ function comparable(
     removed: placement.removed,
     config: placement.config ?? {},
   };
+}
+
+/**
+ * The arrangement a save may carry: as it is while the endpoint would accept
+ * it, otherwise less its REMOVED cards, latest first, until it would.
+ *
+ * A stored arrangement can hold more than one save may carry: cards kept
+ * while a reader could not see them come back when access returns. Remove
+ * keeps a card (its width and settings, for Undo and for adding it back), so
+ * without this such a reader could never save again. "Fits" is the endpoint's
+ * own `layoutSizeProblem`, by count and by bytes, not a copy of it. Only
+ * cards the reader has taken off the dashboard are shed, so nothing they can
+ * see is lost; if the cards still on the dashboard are themselves too large,
+ * the list is sent as it is and the server says why.
+ */
+export function withinSubmissionLimit(
+  placements: readonly WidgetPlacement[]
+): readonly WidgetPlacement[] {
+  if (layoutSizeProblem(placements) === undefined) return placements;
+  // Past the count, every shed card is measured again; this runs only for a
+  // save the endpoint would otherwise refuse.
+  const shed = new Set<WidgetPlacement>();
+  for (let i = placements.length - 1; i >= 0; i -= 1) {
+    if (!placements[i].removed) continue;
+    shed.add(placements[i]);
+    if (placements.length - shed.size > MAX_PLACEMENTS) continue;
+    const kept = placements.filter(placement => !shed.has(placement));
+    if (layoutSizeProblem(kept) === undefined) return kept;
+  }
+  return placements;
 }
 
 /**
