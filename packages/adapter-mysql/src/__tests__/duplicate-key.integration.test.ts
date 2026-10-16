@@ -11,7 +11,19 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 import { createMySqlAdapter, type MySqlAdapter } from "../index";
 
+import type { TableDefinition } from "@nextlyhq/adapter-drizzle/types";
+
 const TABLE = "int_mysql_duplicate_key";
+
+// Created through the adapter's own DDL path, as the schema pipeline creates
+// tables, so the unique constraint under test is the one production builds.
+const TABLE_DEFINITION: TableDefinition = {
+  name: TABLE,
+  columns: [
+    { name: "id", type: "varchar(36)", primaryKey: true },
+    { name: "slug", type: "varchar(255)", nullable: false, unique: true },
+  ],
+};
 const TEST_DB_URL = process.env.TEST_MYSQL_URL;
 
 const posts = mysqlTable(TABLE, {
@@ -54,9 +66,7 @@ describe("MySQL duplicate key classification", async () => {
     adapter = createMySqlAdapter({ url: TEST_DB_URL });
     await adapter.connect();
     await adapter.executeQuery(`DROP TABLE IF EXISTS ${TABLE}`);
-    await adapter.executeQuery(
-      `CREATE TABLE ${TABLE} (id varchar(36) PRIMARY KEY, slug varchar(255) NOT NULL UNIQUE)`
-    );
+    await adapter.createTable(TABLE_DEFINITION);
     adapter.setTableResolver({
       getTable: (name: string) => (name === TABLE ? posts : null),
     });
