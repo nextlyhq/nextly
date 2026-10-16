@@ -142,6 +142,10 @@ const overdue = await nextly.releases.count({
 });
 ```
 
+`find()` is paged like every list: without a `limit` it returns the first 50 releases. To
+read every release, ask for each page in turn, up to `meta.totalPages` (at most 200 per
+page).
+
 `count()` takes the same tab, state, window and search as `find()`, and gives the same
 number as its `meta.total` without reading the releases.
 

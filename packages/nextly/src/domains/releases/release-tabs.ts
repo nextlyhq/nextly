@@ -121,7 +121,13 @@ export interface ReleaseTabQuery {
  * @experimental
  */
 export function overdueCutoff(now: Date): Date {
-  return new Date(now.getTime() - RELEASE_OVERDUE_AFTER_MS);
+  // Whole seconds, the coarsest precision any dialect stores an instant in
+  // (SQLite keeps epoch seconds). A cutoff with a fractional second is
+  // truncated by SQLite when it is bound, so the database and the in-memory
+  // check below would disagree about a release in that same second; a cutoff
+  // that is already whole is read the same by both, on every dialect.
+  const cutoff = now.getTime() - RELEASE_OVERDUE_AFTER_MS;
+  return new Date(Math.floor(cutoff / 1000) * 1000);
 }
 
 const scheduled: VersionsWhereCondition = {

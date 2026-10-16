@@ -972,6 +972,11 @@ export class ReleasesRepository {
    * insertion order on a small table and stops being so without notice. The
    * id breaks ties on the creation time, and is time-ordered for that reason
    * (`addMember`).
+   *
+   * Members added before ids were time-ordered carry random ids, so two of
+   * them sharing a creation instant — one second, on SQLite — keep a stable
+   * but arbitrary order between themselves. Their creation times still order
+   * them against every other member.
    */
   async listMembers(releaseId: string): Promise<ReleaseMemberRow[]> {
     return this.db.select<ReleaseMemberRow>(MEMBERS, {

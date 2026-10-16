@@ -38,8 +38,11 @@ its time; `reason: "overdue"` or `"stopped"` reads one part of that tab.
 Tabs, `reason`, search, paging and `count()` are experimental.
 
 **Breaking:** `nextly.releases.find()` now returns `{ items, meta }`, like every
-other Direct API list, instead of an array. Read `result.items` where you read
-the array, and `result.meta.total` for the number of matching releases.
+other Direct API list, instead of an array, and it is paged: without a `limit`
+it returns the first 50 releases, where it used to return every match. Read
+`result.items` where you read the array and `result.meta.total` for the number
+of matching releases; to process every release, ask for each page in turn
+(`page: 1, 2, …` up to `result.meta.totalPages`, at most 200 per page).
 
 Scheduled releases listed without an `order` now come soonest first rather than
 furthest out first. A release's documents come back in the order they were
