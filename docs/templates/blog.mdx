@@ -84,14 +84,18 @@ A set of React components for the frontend lives under `src/app/(frontend)/compo
 
 ### Access control
 
-RBAC policies under `src/access/` gate each CRUD operation:
+Two rules under `src/access/` gate each CRUD operation:
 
 - `anyone` -- public read.
-- `authenticated` -- any logged-in user.
-- `is-admin` -- the `admin` role.
-- `is-author-or-editor` -- `admin`, `editor`, or `author`.
+- `has-permission` -- the caller's role holds the operation's permission on the collection,
+  as the Roles screen grants it: `update-posts` to edit a post, `create-tags` to add a tag.
 
-The demo-content seed creates three roles (`admin`, `editor`, `author`).
+Neither checks a role's name, so a role you create and an API key are judged by the
+permissions they hold. Publishing a post needs `publish-posts`.
+
+The demo-content seed creates three roles (`admin`, `editor`, `author`). An author may
+draft and edit posts but holds neither `delete-posts` nor `publish-posts`, since a rule
+cannot tell an author's own post from anyone else's; an editor publishes.
 
 ### Demo data
 

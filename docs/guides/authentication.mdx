@@ -239,7 +239,7 @@ For the full RBAC reference (role hierarchy, the seeded permission inventory, si
 
 ## Code-defined access control
 
-You can attach access rules directly to collections and singles via `defineCollection({ access })`. Rules can be a boolean or a function that receives the request context -- they take precedence over database permissions, but Super Admin always bypasses everything.
+You can attach access rules directly to collections and singles via `defineCollection({ access })`. Rules can be a boolean or a function that receives the request context. A declared rule is what a signed-in user is judged by, so it checks the role's permission itself and only narrows from there; Super Admin always bypasses everything. Don't decide by a role's name: a custom role, or an API key, that holds the permission would be refused.
 
 ```typescript
 // src/collections/posts.ts
@@ -248,15 +248,13 @@ import { defineCollection } from "nextly/config";
 export default defineCollection({
   slug: "posts",
   access: {
-    // Boolean: any authenticated user can read
+    // Boolean: anyone, visitors included, can read
     read: true,
 
-    // Function: only admins and editors can create / update
-    create: ({ roles }) => roles.includes("admin") || roles.includes("editor"),
-    update: ({ roles }) => roles.includes("admin") || roles.includes("editor"),
-
-    // Function: only admins can delete
-    delete: ({ roles }) => roles.includes("admin"),
+    // Function: the caller's role holds the permission (`create-posts`, ...)
+    create: ({ permissions }) => permissions.includes("posts:create"),
+    update: ({ permissions }) => permissions.includes("posts:update"),
+    delete: ({ permissions }) => permissions.includes("posts:delete"),
   },
   fields: [
     // ...
