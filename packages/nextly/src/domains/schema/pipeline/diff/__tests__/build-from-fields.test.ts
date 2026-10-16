@@ -763,3 +763,28 @@ describe.each(["postgresql", "mysql", "sqlite"] as const)(
     });
   }
 );
+
+describe.each(["postgresql", "mysql", "sqlite"] as const)(
+  "buildDesiredTableFromComponentFields - required many-to-many on %s",
+  dialect => {
+    // The component creator emits a required relationship as NOT NULL. The desired table must say
+    // the same, or the next preview plans to drop the constraint from a freshly created component.
+    const requiredManyToMany = {
+      name: "tags",
+      type: "relationship",
+      required: true,
+      options: { target: "tags", relationType: "manyToMany" },
+    };
+
+    it("records the many-to-many column as NOT NULL", () => {
+      const table = buildDesiredTableFromComponentFields(
+        "comp_hero",
+        [requiredManyToMany] as never,
+        dialect,
+        { builtBy: "codeFirst" }
+      );
+      const tags = table.columns.find(c => c.name === "tags");
+      expect(tags?.nullable).toBe(false);
+    });
+  }
+);
