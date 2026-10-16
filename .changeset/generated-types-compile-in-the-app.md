@@ -59,6 +59,9 @@ into, whichever package manager installed it.
 - `nextly init` in an app without `src/` writes its folders, its
   `nextly.config.ts` paths and `lib/nextly.ts` at the root, where generation
   then writes too, instead of creating a `src/` tree beside the root `app/`.
+- A project made from the blog template declares `@nextlyhq/plugin-sdk`, the
+  form builder's peer. Yarn installs no missing peer, so under Plug'n'Play the
+  form builder could not load it and the config failed to load.
 - `create-nextly-app`, adding Nextly to an existing app without `src/`, now
   writes `typescript.outputFile` as `./types/generated/nextly-types.ts` instead
   of a `./src/...` path, so the types land beside the rest of the app.
