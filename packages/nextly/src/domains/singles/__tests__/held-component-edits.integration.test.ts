@@ -14,6 +14,7 @@ import {
   defineFieldGroup,
   defineSingle,
   fieldGroup,
+  password,
   text,
 } from "../../../config";
 import {
@@ -316,6 +317,177 @@ describe.each(getConfiguredTestDialects())(
       expect(
         contentOf((de.data as Record<string, unknown>).banner)
       ).toMatchObject({ heading: "Pending de" });
+    });
+
+    it("holds no draft for a Single whose component carries a password", async () => {
+      // A draft cannot carry a password safely, so such a Single saves live
+      // and its component saver hashes the password, as on any write.
+      current = await createTestNextly({
+        dialect,
+        fieldGroups: [
+          defineFieldGroup({
+            slug: "account",
+            fields: [text({ name: "label" }), password({ name: "secret" })],
+          }),
+        ],
+        singles: [
+          defineSingle({
+            slug: "home",
+            status: true,
+            versions: true,
+            fields: [
+              text({ name: "title" }),
+              fieldGroup({ name: "account", component: "account" }),
+            ],
+          }),
+        ],
+      });
+      const singles = current.getService("singleEntryService");
+      await singles.update(
+        "home",
+        { title: "T", account: { label: "L" }, status: "published" },
+        { overrideAccess: true }
+      );
+      await singles.update(
+        "home",
+        { account: { label: "L", secret: "plain-text-secret" } },
+        { overrideAccess: true }
+      );
+
+      const rows = await current.adapter.select<Row>("nextly_versions");
+      expect(rows.filter(r => r.versionNo === null)).toHaveLength(0);
+      // Recorded as live writes, so the absence below is of the secret itself.
+      expect(rows.filter(r => typeof r.versionNo === "number").length).toBe(2);
+      expect(JSON.stringify(rows.map(r => r.snapshot))).not.toContain(
+        "plain-text-secret"
+      );
+    });
+
+    it("lets a publisher denied a component publish a draft that leaves it alone", async () => {
+      const BOSS = { id: "boss", email: "boss@x.test" };
+      const CLERK = { id: "clerk", email: "clerk@x.test" };
+      current = await createTestNextly({
+        dialect,
+        fieldGroups: [hero()],
+        singles: [
+          defineSingle({
+            slug: "home",
+            status: true,
+            versions: true,
+            access: { read: () => true, update: () => true },
+            fields: [
+              text({ name: "title" }),
+              fieldGroup({
+                name: "hero",
+                component: "hero",
+                access: { update: ({ req }) => req.user?.email === BOSS.email },
+              }),
+            ],
+          }),
+        ],
+      });
+      const singles = current.getService("singleEntryService");
+      await singles.update(
+        "home",
+        {
+          title: "T",
+          hero: { heading: "Live", subheading: "Live sub" },
+          status: "published",
+        },
+        { overrideAccess: true }
+      );
+      // The draft holds the live hero, untouched; only the title changes.
+      await singles.update(
+        "home",
+        { title: "New title" },
+        { routeAuthorized: true, user: BOSS }
+      );
+
+      const res = await singles.update(
+        "home",
+        { status: "published" },
+        { routeAuthorized: true, user: CLERK }
+      );
+      expect(res.success, JSON.stringify(res)).toBe(true);
+      expect((await liveHome(current)).title).toBe("New title");
+    });
+
+    it("judges each language's translated component edit before publishing every language", async () => {
+      const BOSS = { id: "boss", email: "boss@x.test" };
+      const CLERK = { id: "clerk", email: "clerk@x.test" };
+      current = await createTestNextly({
+        dialect,
+        fieldGroups: [
+          defineFieldGroup({
+            slug: "banner",
+            localized: true,
+            fields: [text({ name: "heading" })],
+          }),
+        ],
+        singles: [
+          defineSingle({
+            slug: "home",
+            localized: true,
+            status: true,
+            versions: true,
+            // Everyone may publish; only the heading's own rule tells the two
+            // publishers apart.
+            access: {
+              read: () => true,
+              update: () => true,
+              publish: () => true,
+            },
+            fields: [
+              text({ name: "title", localized: true }),
+              // A translated component only one publisher may change.
+              fieldGroup({
+                name: "banner",
+                component: "banner",
+                access: { update: ({ req }) => req.user?.email === BOSS.email },
+              }),
+            ],
+          }),
+        ],
+        localization: { locales: ["en", "de"], defaultLocale: "en" },
+      });
+      const singles = current.getService("singleEntryService");
+      for (const locale of ["en", "de"]) {
+        await singles.update(
+          "home",
+          {
+            title: `T ${locale}`,
+            banner: { heading: "Live" },
+            status: "published",
+          },
+          { locale, overrideAccess: true }
+        );
+      }
+      // English changes the guarded banner; German, saved after it, holds the
+      // banner at its live value. Judged against German's value, English's
+      // change looks like no change at all.
+      await singles.update(
+        "home",
+        { banner: { heading: "Changed" } },
+        { locale: "en", routeAuthorized: true, user: BOSS }
+      );
+      await singles.update(
+        "home",
+        { title: "T de edited" },
+        { locale: "de", routeAuthorized: true, user: BOSS }
+      );
+
+      // A refusal either throws or comes back unsuccessful; both refuse.
+      const res = await singles
+        .publishAllLocales("home", { routeAuthorized: true, user: CLERK })
+        .catch(() => ({ success: false }));
+      expect(res.success).toBe(false);
+      const en = await singles.get("home", {
+        locale: "en",
+        overrideAccess: true,
+      });
+      expect(
+        contentOf((en.data as Record<string, unknown>).banner)
+      ).toMatchObject({ heading: "Live" });
     });
 
     it("publishes the draft as it stands when the publish retries after a lost race", async () => {

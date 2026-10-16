@@ -21,6 +21,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
 import { actorForWrite } from "../../../auth/request-actor";
+import { isFieldGroupField } from "../../../collections/fields/guards";
 import type { FieldConfig } from "../../../collections/fields/types";
 import type { RBACAccessControlService } from "../../../domains/auth/services/rbac-access-control-service";
 import { NextlyError } from "../../../errors/nextly-error";
@@ -628,6 +629,9 @@ export class SinglePublishAllService extends BaseService {
       });
     }
 
+    const localizedFieldNames = new Set(
+      (companion?.localizedFields ?? []).map(f => f.name)
+    );
     await assertDraftsMayBePromoted(pending, {
       ...promoteCallerFor({
         tx,
@@ -663,8 +667,11 @@ export class SinglePublishAllService extends BaseService {
         }),
       // A language whose draft was saved as a draft still goes live here.
       status: "published",
-      localizedFieldNames: new Set(
-        (companion?.localizedFields ?? []).map(f => f.name)
+      localizedFieldNames,
+      perLanguageFieldNames: await this.perLanguageFieldNames(
+        tx,
+        fieldConfigs,
+        localizedFieldNames
       ),
       // Every language goes live here, so none of them is falling back to
       // another and each one's required values are enforced.
@@ -758,6 +765,39 @@ export class SinglePublishAllService extends BaseService {
       locale: locale ?? undefined,
       req: user ? { user } : {},
     });
+  }
+
+  /**
+   * The fields each language's draft carries a value of its own for: the
+   * translated fields, and every field whose component is translated, whose
+   * values `promoteComponents` writes per language. A dynamic zone counts when
+   * any type it permits is translated.
+   */
+  private async perLanguageFieldNames(
+    tx: TransactionContext,
+    fieldConfigs: FieldConfig[],
+    localizedFieldNames: Set<string>
+  ): Promise<Set<string>> {
+    const names = new Set(localizedFieldNames);
+    const service = this.fieldGroupDataService;
+    if (!service) return names;
+    for (const field of fieldConfigs) {
+      if (!isFieldGroupField(field)) continue;
+      const { component, components } = field as {
+        component?: unknown;
+        components?: unknown[];
+      };
+      const slugs = (components ?? [component]).filter(
+        (slug): slug is string => typeof slug === "string"
+      );
+      for (const slug of slugs) {
+        if (await service.isComponentLocalized(slug, tx.getDrizzle())) {
+          names.add(field.name);
+          break;
+        }
+      }
+    }
+    return names;
   }
 
   /** Every language's pending change, where the Single keeps drafts. */
