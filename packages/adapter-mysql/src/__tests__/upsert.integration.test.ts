@@ -295,6 +295,31 @@ describe.skipIf(!TEST_DB_URL)("MySQL upsert", () => {
     }
   });
 
+  it("lets exactly one of two concurrent inserts of one key report its own row", async () => {
+    // Whether a call created the row is read from the id it returns: each
+    // caller sends a fresh id, and only a caller whose insert ran gets its own
+    // id back. A read-back of the row that stands can only ever return the
+    // other caller's, so it can never report "created" for a call that kept.
+    const outcomes = await Promise.all(
+      ["first", "second"].map(id =>
+        adapter.upsert<Row>(
+          KEYED,
+          { id, key: "k1", label: id },
+          { conflictColumns: ["key"], updateColumns: [] }
+        )
+      )
+    );
+    const created = outcomes.filter(
+      (row, i) => row?.id === ["first", "second"][i]
+    );
+    expect(created).toHaveLength(1);
+    expect(outcomes.map(row => row?.id)).toEqual([
+      created[0]?.id,
+      created[0]?.id,
+    ]);
+    expect(await rows()).toHaveLength(1);
+  });
+
   it("reads back the row matching every column of a composite key", async () => {
     // Two rows share the key's first column, so a read-back by that column
     // alone could return the wrong one.

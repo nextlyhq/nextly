@@ -1959,7 +1959,10 @@ export abstract class DrizzleAdapter {
         }
 
         // Read the row that stands back by every conflict column, on the same
-        // executor so a transactional upsert reads its own write.
+        // executor so a transactional upsert reads its own write. A second
+        // statement, so a row deleted between the two is not returned (see
+        // `UpsertOptions.updateColumns`); never one this call did not find, so
+        // "created" read from the returned id stays exact.
         const conflictValues = options.conflictColumns.map(
           column => [column, data[column]] as const
         );

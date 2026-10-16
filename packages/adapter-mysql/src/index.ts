@@ -809,7 +809,9 @@ export class MySqlAdapter extends DrizzleAdapter {
    * read back by their primary key, so a trigger that rewrites the conflict
    * value still returns the row stored. The conflict columns must also be
    * given values: MySQL cannot look a row up by a key the database would only
-   * fill in itself. A failed insert rolls back only itself on MySQL, so a
+   * fill in itself. A conflict is resolved on the caller's key value: a
+   * BEFORE INSERT trigger that moves the key onto another row's value is
+   * refused as a unique violation rather than resolved onto that row. A failed insert rolls back only itself on MySQL, so a
    * caller's transaction stays usable.
    */
   override async upsert<T = unknown>(
