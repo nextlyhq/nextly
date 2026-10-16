@@ -98,6 +98,23 @@ describe("the package manager of an app inside a workspace", () => {
   });
 });
 
+describe("the workspace globs", () => {
+  // Package managers read these globs with a full matcher: braces, character
+  // classes and extglobs list an app as surely as `*` does.
+  it.each([
+    ["apps/{web,admin}", "apps/admin"],
+    ["apps/[wa]*", "apps/web"],
+    ["apps/+(web|admin)", "apps/web"],
+  ])("count %s as listing %s", async (glob, member) => {
+    launchedBy("npm");
+    await file("package.json", JSON.stringify({ workspaces: [glob] }));
+    await file("bun.lock", "");
+
+    expect(await detectAppPackageManager(await app(member))).toBe("bun");
+    expect(await detectAppPackageManager(await app("apps/docs"))).toBe("npm");
+  });
+});
+
 describe("an app no workspace lists", () => {
   it("keeps the launcher's manager under a project with a lockfile of its own", async () => {
     launchedBy("pnpm");

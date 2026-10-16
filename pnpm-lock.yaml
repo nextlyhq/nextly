@@ -1156,6 +1156,9 @@ importers:
       picocolors:
         specifier: ^1.1.1
         version: 1.1.1
+      picomatch:
+        specifier: ^4.0.4
+        version: 4.0.7
       tar:
         specifier: ^7.5.22
         version: 7.5.22
@@ -1181,6 +1184,9 @@ importers:
       '@types/node':
         specifier: ^20.19.17
         version: 20.19.17
+      '@types/picomatch':
+        specifier: ^4.0.3
+        version: 4.0.3
       '@types/tar':
         specifier: ^6.1.13
         version: 6.1.13

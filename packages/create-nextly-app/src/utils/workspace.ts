@@ -1,6 +1,7 @@
 import path from "path";
 
 import fs from "fs-extra";
+import picomatch from "picomatch";
 import { parse } from "yaml";
 
 import type { PackageManager } from "../types";
@@ -117,32 +118,16 @@ function stringsAt(value: unknown, key: string): string[] | undefined {
 /**
  * Whether the member globs include `relative`: one positive glob matches it
  * and no `!` glob does, as pnpm reads them whatever their order.
+ *
+ * Matched with picomatch, the matcher under the globbing pnpm and Yarn use,
+ * so braces, character classes and extglobs list an app as the package
+ * manager reads them; a hand-written subset took those for literals.
  */
 function listsMember(globs: readonly string[], relative: string): boolean {
-  const matches = (glob: string) => globToRegExp(glob).test(relative);
+  const matches = (glob: string) =>
+    picomatch(glob.replace(/^\.\//, "").replace(/\/+$/, ""))(relative);
   return (
     globs.some(glob => !glob.startsWith("!") && matches(glob)) &&
     !globs.some(glob => glob.startsWith("!") && matches(glob.slice(1)))
   );
-}
-
-/** `*` and `?` stay within one path segment; `**` spans any number of them. */
-function globToRegExp(glob: string): RegExp {
-  const pattern = glob.replace(/^\.\//, "").replace(/\/+$/, "");
-  let source = "";
-  for (let i = 0; i < pattern.length; i++) {
-    const char = pattern[i];
-    if (char === "*" && pattern[i + 1] === "*") {
-      const segment = pattern[i + 2] === "/";
-      source += segment ? "(?:.*/)?" : ".*";
-      i += segment ? 2 : 1;
-    } else if (char === "*") {
-      source += "[^/]*";
-    } else if (char === "?") {
-      source += "[^/]";
-    } else {
-      source += char.replace(/[.+^${}()|[\]\\]/g, "\\$&");
-    }
-  }
-  return new RegExp(`^${source}$`);
 }

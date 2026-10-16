@@ -38,6 +38,7 @@
     "execa": "^9.6.0",
     "fs-extra": "^11.3.0",
     "picocolors": "^1.1.1",
+    "picomatch": "^4.0.7",
     "tar": "^7.5.19",
     "yaml": "^2.8.3"
   },
@@ -48,6 +49,7 @@
     "@nextlyhq/tsconfig": "workspace:*",
     "@types/fs-extra": "^11.0.4",
     "@types/node": "^20.19.17",
+    "@types/picomatch": "^4.0.3",
     "@types/tar": "^6.1.13",
     "@typescript-eslint/parser": "^8.59.0",
     "@vitest/coverage-v8": "^4.1.0",
