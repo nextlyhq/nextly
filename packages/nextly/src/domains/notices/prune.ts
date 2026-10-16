@@ -8,10 +8,11 @@
  *
  * @module domains/notices/prune
  */
+import { NOTICES_TABLE } from "../../schemas/notices/table-name";
 import type { Logger } from "../../shared/types";
 import { warnQuietly } from "../retention/safe-log";
 
-import { NoticesService, type NoticesDb } from "./notices-service";
+import { deleteNoticesOlderThan, type NoticesPruneDb } from "./notices-service";
 
 /** Rows removed per statement: small enough to keep each delete short. */
 const NOTICE_PRUNE_BATCH = 500;
@@ -25,18 +26,26 @@ const NOTICE_PRUNE_BATCH = 500;
  * @returns how many notices were removed.
  */
 export async function pruneNoticesSafely(
-  deps: { db: NoticesDb; now?: () => Date; logger?: Logger },
+  deps: { db: NoticesPruneDb; now?: () => Date; logger?: Logger },
   maxAgeMs: number,
   maxBatches: number
 ): Promise<number> {
   const before = new Date(
     (deps.now ?? (() => new Date()))().getTime() - maxAgeMs
   );
-  const notices = new NoticesService({ db: deps.db });
   let removed = 0;
   try {
+    // A database from before notices has nothing to prune; passed over
+    // without a warning on every pass.
+    if (deps.db.tableExists && !(await deps.db.tableExists(NOTICES_TABLE))) {
+      return 0;
+    }
     for (let batch = 0; batch < maxBatches; batch += 1) {
-      const count = await notices.pruneOlderThan(before, NOTICE_PRUNE_BATCH);
+      const count = await deleteNoticesOlderThan(
+        deps.db,
+        before,
+        NOTICE_PRUNE_BATCH
+      );
       removed += count;
       if (count < NOTICE_PRUNE_BATCH) break;
     }

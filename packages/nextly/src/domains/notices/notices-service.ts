@@ -317,15 +317,7 @@ export class NoticesService {
    */
   async pruneOlderThan(before: Date, limit: number): Promise<number> {
     if (!(await this.tablePresent())) return 0;
-    const old = await this.deps.db.select<{ id: string }>(NOTICES_TABLE, {
-      where: { and: [{ column: "createdAt", op: "<", value: before }] },
-      orderBy: [{ column: "createdAt", direction: "asc" }],
-      limit,
-    });
-    if (old.length === 0) return 0;
-    return this.deps.db.delete(NOTICES_TABLE, {
-      and: [{ column: "id", op: "IN", value: old.map(row => row.id) }],
-    });
+    return deleteNoticesOlderThan(this.deps.db, before, limit);
   }
 
   /**
@@ -419,6 +411,33 @@ export class NoticesService {
     }
     return false;
   }
+}
+
+/**
+ * The part of the database pruning needs: reading the oldest ids and deleting
+ * them. Narrower than {@link NoticesDb} so the retention pass, which prunes
+ * several areas through one adapter, does not have to offer the notices
+ * service's whole surface. `tableExists`, when offered, lets a database from
+ * before notices be passed over quietly.
+ */
+export type NoticesPruneDb = Pick<NoticesDb, "select" | "delete"> &
+  Partial<Pick<NoticesDb, "tableExists">>;
+
+/** Remove up to `limit` notices created before `before`, oldest first. */
+export async function deleteNoticesOlderThan(
+  db: NoticesPruneDb,
+  before: Date,
+  limit: number
+): Promise<number> {
+  const old = await db.select<{ id: string }>(NOTICES_TABLE, {
+    where: { and: [{ column: "createdAt", op: "<", value: before }] },
+    orderBy: [{ column: "createdAt", direction: "asc" }],
+    limit,
+  });
+  if (old.length === 0) return 0;
+  return db.delete(NOTICES_TABLE, {
+    and: [{ column: "id", op: "IN", value: old.map(row => row.id) }],
+  });
 }
 
 /** Refuse a page or size that is not a safe whole number in range. */

@@ -383,6 +383,7 @@ const DIRECT_DISPATCH_SERVICES = new Set<string>([
   "apiKeys",
   "webhooks",
   "releases",
+  "notices",
   "jobs",
   "generalSettings",
   "previewLinks",

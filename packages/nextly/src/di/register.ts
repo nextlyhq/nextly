@@ -70,6 +70,7 @@ import type { JobDefinition } from "../domains/jobs/job-registry";
 import type { LimitStore } from "../domains/limits/limit-store";
 import { selectLimitStore } from "../domains/limits/select-limit-store";
 import type { MetaService } from "../domains/meta";
+import type { NoticesService } from "../domains/notices/notices-service";
 import { pluginSettingsSecrets } from "../domains/plugins/settings-service";
 import type { PreviewConfig } from "../domains/preview/route-config";
 import { resolvePreviewRoute } from "../domains/preview/route-config";
@@ -517,6 +518,8 @@ export interface ServiceMap {
   rbacAccessControlService: RBACAccessControlService;
   /** Content releases: the authorization boundary the Direct API namespace reaches. */
   releasesService: ReleasesService;
+  /** Each admin user's notices, recorded by other areas through `record`. */
+  noticesService: NoticesService;
   apiKeyService: ApiKeyService;
   /** Webhook endpoint management, resolved by the webhooks REST handlers. */
   webhookEndpointService: WebhookEndpointService;

@@ -29,7 +29,7 @@ import {
   type ResolvedEmailRetentionConfig,
 } from "../email/retention-config";
 import type { EmailConfig } from "../email/types";
-import type { NoticesDb } from "../notices/notices-service";
+import type { NoticesPruneDb } from "../notices/notices-service";
 import { pruneNoticesSafely } from "../notices/prune";
 import { pruneWebhookDataSafely, type PruneDeps } from "../webhooks/prune";
 import type { ResolvedWebhookRetentionConfig } from "../webhooks/retention-config";
@@ -50,7 +50,7 @@ export interface RetentionPassInput {
     PruneDeps["adapter"] &
     EmailPruneAdapter &
     OneTimeSecretsPruneAdapter &
-    NoticesDb;
+    NoticesPruneDb;
   webhookPolicy?: ResolvedWebhookRetentionConfig | null;
   auditPolicy?: ResolvedAuditRetentionConfig;
   /**
