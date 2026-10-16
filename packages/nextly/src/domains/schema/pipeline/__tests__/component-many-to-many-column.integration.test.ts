@@ -37,13 +37,6 @@ const MYSQL = makeTestContext("mysql");
 const PG_URL = PG.url ?? "";
 const MYSQL_URL = MYSQL.url ?? "";
 
-/** A many-to-many as the Builder states it: the target lives on `options`, not on `relationTo`. */
-const M2M_FIELD = {
-  name: "tags",
-  type: "relationship",
-  options: { relationType: "manyToMany", target: "tags" },
-} as never;
-
 /** A component whose fields hold a plain text field and a many-to-many. */
 function componentDesired(tableName: string, required = false): DesiredSchema {
   return {
@@ -55,7 +48,13 @@ function componentDesired(tableName: string, required = false): DesiredSchema {
         tableName,
         fields: [
           { name: "title", type: "text" },
-          { ...M2M_FIELD, required },
+          // The Builder states a many-to-many's target on `options`, not on `relationTo`.
+          {
+            name: "tags",
+            type: "relationship",
+            required,
+            options: { relationType: "manyToMany", target: "tags" },
+          },
         ] as never,
       },
     },
