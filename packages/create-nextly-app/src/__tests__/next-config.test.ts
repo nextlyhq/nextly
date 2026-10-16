@@ -215,6 +215,10 @@ describe("a config it cannot change safely", () => {
       'const nextConfig = {};\nconst settings = nextConfig;\nsettings.transpilePackages = ["nextly"];\n\nexport default nextConfig;\n',
     ],
     [
+      "uses the exported variable in a destructuring default",
+      "const nextConfig = {};\nconst [alias = configure(nextConfig)] = [];\n\nexport default nextConfig;\n",
+    ],
+    [
       "hands the exported variable to a function",
       "const nextConfig = {};\nconfigure(nextConfig);\n\nexport default nextConfig;\n",
     ],

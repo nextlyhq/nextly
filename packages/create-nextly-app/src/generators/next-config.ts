@@ -328,7 +328,10 @@ const isNode = (value: unknown): value is Node =>
  * parameters among them, which can only refuse more configs, never fewer.
  */
 function namingKeys(node: Node): readonly string[] {
-  if (node.type === "VariableDeclarator") return ["id"];
+  // Only a plain name: a destructuring pattern can hold code, a default
+  // value or a computed key, which may use the variable.
+  if (node.type === "VariableDeclarator")
+    return node.id.type === "Identifier" ? ["id"] : [];
   if ("computed" in node && node.computed) return [];
   if ("property" in node) return ["property"];
   return "key" in node ? ["key"] : [];
