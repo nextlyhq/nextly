@@ -37,6 +37,7 @@
  * @since 1.0.0
  */
 
+import type { FieldConfig } from "nextly/config";
 import type { ComponentType } from "react";
 import type { Control, FieldValues } from "react-hook-form";
 
@@ -123,12 +124,13 @@ export interface DocumentViewProps {
   /** Return to the document's own edit screen, keeping unsaved work. */
   exit: () => void;
   /**
-   * For a view offered on a field type: the top-level field it edits. The only
-   * field of that type, or the one the address names (`?field=`); where the
-   * document has several and the address names none of them, the admin asks
-   * the author before the view is drawn.
+   * For a view offered on a field type: the declaration of the top-level field
+   * it edits — the same `FieldConfig` a plugin field editor receives as its
+   * `field` prop, carrying `name`. The only field of that type, or the one the
+   * address names (`?field=`); where the document has several and the address
+   * names none of them, the admin asks the author before the view is drawn.
    */
-  fieldName?: string;
+  field?: FieldConfig;
 }
 
 /**

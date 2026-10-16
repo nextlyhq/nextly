@@ -90,10 +90,61 @@ export interface UseUnsavedChangesReturn {
  *
  * The hash is deliberately excluded. It moves within a page rather than off it.
  */
+/**
+ * Addresses a document's own screens never use as a view: its history and its
+ * API panel are pages of their own, and `create` is not a document yet.
+ */
+const NOT_A_VIEW: ReadonlySet<string> = new Set(["versions", "api", "create"]);
+
+/**
+ * The document an editor address is of — an entry or a Single, on its edit
+ * address or on one of its views — or `undefined` for any other address.
+ */
+function documentOf(pathname: string): string | undefined {
+  const entry = /^\/admin\/collections\/([^/]+)\/([^/]+)(?:\/([^/]+))?$/.exec(
+    pathname
+  );
+  if (entry !== null) {
+    const [, slug, id, view] = entry;
+    if (NOT_A_VIEW.has(id) || (view !== undefined && NOT_A_VIEW.has(view))) {
+      return undefined;
+    }
+    return JSON.stringify(["collection", slug, id]);
+  }
+  const single = /^\/admin\/singles\/([^/]+)(?:\/([^/]+))?$/.exec(pathname);
+  if (single === null) return undefined;
+  const [, slug, view] = single;
+  if (view !== undefined && NOT_A_VIEW.has(view)) return undefined;
+  return JSON.stringify(["single", slug]);
+}
+
+/** The query without `field`, which picks a view's field and nothing else. */
+function queryBesidesField(search: string): string {
+  const params = new URLSearchParams(search);
+  params.delete("field");
+  return params.toString();
+}
+
+/**
+ * Whether a move is between one document's edit address and its own views.
+ * The same page answers all of them and keeps the same form mounted, so
+ * nothing unsaved is left behind. Any other query change — a language among
+ * them — still counts, and so does another document's view.
+ */
+function staysOnDocument(next: URL): boolean {
+  const here = documentOf(window.location.pathname);
+  return (
+    here !== undefined &&
+    here === documentOf(next.pathname) &&
+    queryBesidesField(next.search) === queryBesidesField(window.location.search)
+  );
+}
+
 function movesElsewhere(url: string | URL | null | undefined): boolean {
   if (url === undefined || url === null) return false;
   try {
     const next = new URL(url.toString(), window.location.origin);
+    if (staysOnDocument(next)) return false;
     return (
       next.pathname !== window.location.pathname ||
       next.search !== window.location.search

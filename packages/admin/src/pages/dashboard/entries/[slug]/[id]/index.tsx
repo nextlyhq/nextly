@@ -44,7 +44,7 @@ import { useEditorLocale } from "@admin/hooks/useEditorLocale";
 import { useLocalization } from "@admin/hooks/useLocalization";
 import { usePluginAutoRegistration } from "@admin/hooks/usePluginAutoRegistration";
 import { useTranslationMode } from "@admin/hooks/useTranslationMode";
-import { navigateTo } from "@admin/lib/navigation";
+import { navigateTo, withCurrentQuery } from "@admin/lib/navigation";
 import {
   getComponent,
   type CustomEditViewProps,
@@ -233,14 +233,21 @@ function entryDocumentView(
 ): DocumentViewMount | undefined {
   const slug = params?.slug;
   const id = params?.id;
-  const routed = routedDocumentView(slug, params?.view);
+  const routed = routedDocumentView("collection", slug, params?.view);
   if (routed === undefined || slug === undefined || id === undefined) {
     return undefined;
   }
   return {
     component: routed.component,
+    // Back to the same document in the same language: the view's own field
+    // choice is the only part of the address the edit screen does not read.
     onExit: () =>
-      navigateTo(buildRoute(ROUTES.COLLECTION_ENTRY_EDIT, { slug, id })),
+      navigateTo(
+        withCurrentQuery(
+          buildRoute(ROUTES.COLLECTION_ENTRY_EDIT, { slug, id }),
+          ["field"]
+        )
+      ),
     ...("fieldType" in routed ? { fieldType: routed.fieldType } : {}),
   };
 }
@@ -635,6 +642,7 @@ export default function EditEntryPage({
   return (
     <DocumentViewGate
       missing={documentViewMissing(
+        "collection",
         slug,
         params?.view,
         getCollectionFields(collection)

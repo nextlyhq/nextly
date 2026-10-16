@@ -356,7 +356,9 @@ describe("a field-type view on a document with two fields of its type", () => {
     openAt(`?field=${name}`);
     expect(screen.getByTestId("builder-view")).toBeInTheDocument();
     expect(received).toHaveBeenLastCalledWith(
-      expect.objectContaining({ fieldName: name })
+      expect.objectContaining({
+        field: expect.objectContaining({ name: name, type: "blocks" }),
+      })
     );
   });
 
@@ -391,7 +393,9 @@ describe("a field-type view on a document with two fields of its type", () => {
       "body"
     );
     expect(received).toHaveBeenLastCalledWith(
-      expect.objectContaining({ fieldName: "body" })
+      expect.objectContaining({
+        field: expect.objectContaining({ name: "body", type: "blocks" }),
+      })
     );
   });
 
@@ -405,7 +409,9 @@ describe("a field-type view on a document with two fields of its type", () => {
       documentView: { component: VIEW, onExit, fieldType: "blocks" },
     });
     expect(received).toHaveBeenLastCalledWith(
-      expect.objectContaining({ fieldName: "layout" })
+      expect.objectContaining({
+        field: expect.objectContaining({ name: "layout", type: "blocks" }),
+      })
     );
   });
 });

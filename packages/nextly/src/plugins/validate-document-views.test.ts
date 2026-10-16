@@ -88,6 +88,19 @@ describe("assertDocumentViews", () => {
     expect(error.logMessage).toContain('"leads"');
   });
 
+  it("reads a rename only from the map's own keys", () => {
+    // `constructor` is a legal slug, and an inherited lookup answers it with a
+    // function — which the admin then receives as no slug at all.
+    const [view] = contributedDocumentViews(
+      asPlugins([
+        plugin("@acme/builder", "constructor", [{ path: "builder" }], {
+          renameMap: {},
+        }),
+      ])
+    );
+    expect(view).toMatchObject({ slug: "constructor" });
+  });
+
   it("checks a disabled plugin too, so enabling it cannot break boot later", () => {
     const error = refusal([
       plugin("@acme/builder", "pages", [{ path: "builder" }]),

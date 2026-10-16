@@ -36,9 +36,11 @@ describe("document view registry", () => {
   it("finds a view by slug and path, and nothing at another path or slug", () => {
     registerDocumentViews([builder]);
 
-    expect(matchDocumentView("pages", "builder")).toEqual(builder);
-    expect(matchDocumentView("pages", "preview")).toBeUndefined();
-    expect(matchDocumentView("posts", "builder")).toBeUndefined();
+    expect(matchDocumentView("collection", "pages", "builder")).toEqual(
+      builder
+    );
+    expect(matchDocumentView("collection", "pages", "preview")).toBeUndefined();
+    expect(matchDocumentView("collection", "posts", "builder")).toBeUndefined();
   });
 
   it("keeps two pairs apart that a joined key would merge", () => {
@@ -49,23 +51,31 @@ describe("document view registry", () => {
       { slug: "a", path: "b-c", component: "two" },
     ]);
 
-    expect(matchDocumentView("a-b", "c")?.component).toBe("one");
-    expect(matchDocumentView("a", "b-c")?.component).toBe("two");
+    expect(matchDocumentView("collection", "a-b", "c")?.component).toBe("one");
+    expect(matchDocumentView("collection", "a", "b-c")?.component).toBe("two");
   });
 
   it("names no view for missing or repeated route segments", () => {
     registerDocumentViews([builder]);
 
-    expect(routedDocumentView("pages", "builder")).toEqual(builder);
-    expect(routedDocumentView("pages", undefined)).toBeUndefined();
-    expect(routedDocumentView(undefined, "builder")).toBeUndefined();
-    expect(routedDocumentView(["pages"], "builder")).toBeUndefined();
+    expect(routedDocumentView("collection", "pages", "builder")).toEqual(
+      builder
+    );
+    expect(
+      routedDocumentView("collection", "pages", undefined)
+    ).toBeUndefined();
+    expect(
+      routedDocumentView("collection", undefined, "builder")
+    ).toBeUndefined();
+    expect(
+      routedDocumentView("collection", ["pages"], "builder")
+    ).toBeUndefined();
   });
 
   it("forgets every view on clear", () => {
     registerDocumentViews([builder]);
     clearDocumentViews();
-    expect(matchDocumentView("pages", "builder")).toBeUndefined();
+    expect(matchDocumentView("collection", "pages", "builder")).toBeUndefined();
   });
 });
 
@@ -79,9 +89,13 @@ const blocksBuilder = {
 describe("a view scoped to a field type", () => {
   it("is the candidate at its path on any document", () => {
     registerDocumentViews([blocksBuilder]);
-    expect(matchDocumentView("pages", "page-builder")).toBe(blocksBuilder);
-    expect(matchDocumentView("homepage", "page-builder")).toBe(blocksBuilder);
-    expect(matchDocumentView("pages", "other")).toBeUndefined();
+    expect(matchDocumentView("collection", "pages", "page-builder")).toBe(
+      blocksBuilder
+    );
+    expect(matchDocumentView("collection", "homepage", "page-builder")).toBe(
+      blocksBuilder
+    );
+    expect(matchDocumentView("collection", "pages", "other")).toBeUndefined();
   });
 
   it("applies to a document with a TOP-LEVEL field of its type only", () => {
@@ -105,19 +119,35 @@ describe("a view scoped to a field type", () => {
   it("is missing on a document without the field, and present where it has one", () => {
     registerDocumentViews([blocksBuilder]);
     expect(
-      documentViewMissing("posts", "page-builder", [{ type: "text" }])
+      documentViewMissing("collection", "posts", "page-builder", [
+        { type: "text" },
+      ])
     ).toBe(true);
     expect(
-      documentViewMissing("pages", "page-builder", [{ type: "blocks" }])
+      documentViewMissing("collection", "pages", "page-builder", [
+        { type: "blocks" },
+      ])
     ).toBe(false);
     // An address naming no view at all is the resolver's to refuse, not this.
-    expect(documentViewMissing("pages", "other", [])).toBe(false);
+    expect(documentViewMissing("collection", "pages", "other", [])).toBe(false);
+  });
+
+  it("answers a Single's address only when scoped to a field type", () => {
+    // A collection and a Single can share a slug; a view declared on the
+    // collection must not appear at the Single's address.
+    registerDocumentViews([builder, blocksBuilder]);
+    expect(matchDocumentView("single", "pages", "builder")).toBeUndefined();
+    expect(matchDocumentView("single", "home", "page-builder")).toBe(
+      blocksBuilder
+    );
   });
 
   it("is forgotten on clear", () => {
     registerDocumentViews([blocksBuilder]);
     clearDocumentViews();
-    expect(matchDocumentView("pages", "page-builder")).toBeUndefined();
+    expect(
+      matchDocumentView("collection", "pages", "page-builder")
+    ).toBeUndefined();
   });
 
   it("routes an entry address at its path to the entry page, gated as editing", () => {
@@ -149,17 +179,24 @@ describe("which field a field-type view edits", () => {
         [{ name: "layout", type: "blocks" }],
         undefined
       )
-    ).toEqual({ kind: "field", name: "layout" });
+    ).toEqual({
+      kind: "field",
+      name: "layout",
+      // The declaration itself, so the view reads the field's own options.
+      declaration: { name: "layout", type: "blocks" },
+    });
   });
 
   it("opens the field the address names, on a document with two", () => {
     expect(resolveViewField("blocks", twoFields, "hero")).toEqual({
       kind: "field",
       name: "hero",
+      declaration: twoFields[1],
     });
     expect(resolveViewField("blocks", twoFields, "body")).toEqual({
       kind: "field",
       name: "body",
+      declaration: twoFields[2],
     });
   });
 
@@ -167,8 +204,8 @@ describe("which field a field-type view edits", () => {
     expect(resolveViewField("blocks", twoFields, undefined)).toEqual({
       kind: "choose",
       candidates: [
-        { name: "hero", label: "Hero" },
-        { name: "body", label: "Body" },
+        { name: "hero", label: "Hero", declaration: twoFields[1] },
+        { name: "body", label: "Body", declaration: twoFields[2] },
       ],
     });
   });
@@ -207,8 +244,10 @@ describe("resolveRoute for a document view", () => {
     expect(resolved.routeType).toBe("private");
   });
 
-  it("resolves a Single's registered view to the Single page, gated as editing", () => {
-    registerDocumentViews([{ ...builder, slug: "homepage" }]);
+  it("resolves a Single's field-type view to the Single page, gated as editing", () => {
+    // A Single is reached only by a field-type view: `views[slug]` declares
+    // for a collection.
+    registerDocumentViews([{ ...blocksBuilder, path: "builder" }]);
     const href = buildRoute(ROUTES.SINGLE_VIEW, {
       slug: "homepage",
       view: "builder",
@@ -219,6 +258,15 @@ describe("resolveRoute for a document view", () => {
     expect(resolved.Component).toBe(SingleEditPage);
     expect(resolved.params).toEqual({ slug: "homepage", view: "builder" });
     expect(resolved.requiredPermission).toBe("update-homepage");
+  });
+
+  it("does not route a collection's declared view at a Single of the same slug", () => {
+    registerDocumentViews([{ ...builder, slug: "homepage" }]);
+    const resolved = resolveRoute(
+      buildRoute(ROUTES.SINGLE_VIEW, { slug: "homepage", view: "builder" }),
+      ""
+    );
+    expect(resolved.Component).not.toBe(SingleEditPage);
   });
 
   it("answers an address no plugin declared with the not-found page", () => {

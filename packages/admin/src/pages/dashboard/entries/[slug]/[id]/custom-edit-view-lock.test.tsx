@@ -337,6 +337,27 @@ describe("a routed document view", () => {
     expect(screen.getByText(/This page doesn.t exist/)).toBeInTheDocument();
   });
 
+  it("keeps the address's language when leaving the view, dropping only its field", () => {
+    // The language is the document being edited: losing it on the way out
+    // reloads another translation over unsaved edits.
+    registerDocumentViews([
+      { slug: "posts", path: "builder", component: VIEW },
+    ]);
+    window.history.pushState(
+      null,
+      "",
+      "/admin/collections/posts/42/builder?locale=fr&field=body"
+    );
+    renderWithProviders(
+      <EditEntryPage params={{ slug: "posts", id: "42", view: "builder" }} />
+    );
+
+    (entryFormProps?.documentView as { onExit: () => void }).onExit();
+
+    expect(window.location.pathname).toBe("/admin/collections/posts/42");
+    expect(window.location.search).toBe("?locale=fr");
+  });
+
   it("hands the form no view on the plain edit address", () => {
     // The control: the same registry, the address without the segment.
     registerDocumentViews([

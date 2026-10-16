@@ -291,6 +291,74 @@ describe("UnsavedChangesGuard", () => {
   });
 });
 
+describe("moving between a document and its own views", () => {
+  /** Starts dirty at `from`, moves to `to`, and says whether it was asked. */
+  async function moveDirty(from: string, to: string): Promise<boolean> {
+    window.history.pushState(null, "", from);
+    render(
+      <UnsavedChangesGuard isDirty>
+        <GoTo path={to} label="move" />
+      </UnsavedChangesGuard>
+    );
+    await userEvent.click(screen.getByRole("button", { name: "move" }));
+    return screen.queryByRole("alertdialog") !== null;
+  }
+
+  it.each([
+    [
+      "an entry into its view",
+      "/admin/collections/pages/1",
+      "/admin/collections/pages/1/builder?field=body",
+    ],
+    [
+      "a view back to its entry",
+      "/admin/collections/pages/1/builder",
+      "/admin/collections/pages/1",
+    ],
+    [
+      "a Single into its view",
+      "/admin/singles/home",
+      "/admin/singles/home/builder",
+    ],
+    [
+      "one field of a view to another",
+      "/admin/collections/pages/1/builder?field=hero",
+      "/admin/collections/pages/1/builder?field=body",
+    ],
+  ])("stays, without asking, from %s", async (_case, from, to) => {
+    // The same page answers both addresses and keeps the same form mounted,
+    // so nothing unsaved is left behind.
+    expect(await moveDirty(from, to)).toBe(false);
+    expect(`${window.location.pathname}${window.location.search}`).toBe(to);
+  });
+
+  it.each([
+    [
+      "another entry's view",
+      "/admin/collections/pages/1",
+      "/admin/collections/pages/2/builder",
+    ],
+    [
+      "another collection's view",
+      "/admin/collections/pages/1",
+      "/admin/collections/posts/1/builder",
+    ],
+    [
+      "the document's history, which is another page",
+      "/admin/collections/pages/1",
+      "/admin/collections/pages/1/versions",
+    ],
+    [
+      "a view in another language",
+      "/admin/collections/pages/1/builder",
+      "/admin/collections/pages/1/builder?locale=de",
+    ],
+  ])("still asks before moving to %s", async (_case, from, to) => {
+    expect(await moveDirty(from, to)).toBe(true);
+    expect(window.location.pathname).toBe(from.split("?")[0]);
+  });
+});
+
 describe("useLeaveWithoutWarning outside a guard", () => {
   it("is a no-op rather than a crash", async () => {
     // An embedded editor renders in a modal, with no guard above it.

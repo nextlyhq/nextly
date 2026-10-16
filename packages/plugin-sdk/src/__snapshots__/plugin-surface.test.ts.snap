@@ -126,6 +126,7 @@ exports[`plugin-sdk public export surface > \`./admin\` surface is unchanged 1`]
   "isApiError (value)",
   "loadInlineRichTextEditor (value)",
   "loadRichTextEditorKit (value)",
+  "navigateTo (value)",
   "operatorTakesValue (value)",
   "operatorsForType (value)",
   "pillStateFromForm (value)",

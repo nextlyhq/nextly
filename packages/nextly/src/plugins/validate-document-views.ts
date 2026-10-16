@@ -82,13 +82,23 @@ function labelOf(view: { label?: string }): { label?: string } {
   return view.label === undefined ? {} : { label: view.label };
 }
 
+/**
+ * A declared slug after the plugin's rename map, read from the map's OWN
+ * keys: `constructor` is a legal slug, and an inherited lookup answers it with
+ * a function the admin would receive as no slug at all.
+ */
+function renamedSlug(plugin: PluginDefinition, declared: string): string {
+  const renames = plugin.renameMap ?? {};
+  return Object.hasOwn(renames, declared) ? renames[declared] : declared;
+}
+
 /** Every view one plugin declares, slug-scoped then field-type-scoped. */
 function viewsOf(plugin: PluginDefinition): ContributedDocumentView[] {
   const admin = plugin.contributes?.admin;
   const bySlug = Object.entries(admin?.views ?? {}).flatMap(
     ([declared, view]) =>
       (view.documentViews ?? []).map(documentView => ({
-        slug: plugin.renameMap?.[declared] ?? declared,
+        slug: renamedSlug(plugin, declared),
         path: documentView.path,
         component: documentView.component,
         ...labelOf(documentView),

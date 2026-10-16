@@ -26,6 +26,14 @@ export type RegisteredDocumentView = NonNullable<
   PluginMetadata["documentViews"]
 >[number];
 
+/**
+ * Which kind of document an address is of. A collection and a Single may share
+ * a slug, so a view declared on a slug — which `views[slug]` declares for a
+ * COLLECTION, as every view slot there does — must not answer a Single's
+ * address of the same slug. Field-type views answer either.
+ */
+export type DocumentKind = "collection" | "single";
+
 const registry = new Map<string, RegisteredDocumentView>();
 
 /**
@@ -60,10 +68,13 @@ export function registerDocumentViews(
  * (`documentViewApplies`), something only the page holding the schema knows.
  */
 export function matchDocumentView(
+  kind: DocumentKind,
   slug: string,
   path: string
 ): RegisteredDocumentView | undefined {
-  return registry.get(viewKey(slug, path)) ?? byFieldType.get(path);
+  const declared =
+    kind === "collection" ? registry.get(viewKey(slug, path)) : undefined;
+  return declared ?? byFieldType.get(path);
 }
 
 /**
@@ -96,11 +107,12 @@ export function clearDocumentViews(): void {
  * values: a missing or repeated segment names no view.
  */
 export function routedDocumentView(
+  kind: DocumentKind,
   slug: string | string[] | undefined,
   view: string | string[] | undefined
 ): RegisteredDocumentView | undefined {
   if (typeof slug !== "string" || typeof view !== "string") return undefined;
-  return matchDocumentView(slug, view);
+  return matchDocumentView(kind, slug, view);
 }
 
 /**
@@ -110,18 +122,20 @@ export function routedDocumentView(
  * pages, so the decision is made here and not spelled out in each.
  */
 export function documentViewMissing(
+  kind: DocumentKind,
   slug: string | string[] | undefined,
   view: string | string[] | undefined,
   fields: readonly object[] | undefined
 ): boolean {
-  const routed = routedDocumentView(slug, view);
+  const routed = routedDocumentView(kind, slug, view);
   return routed !== undefined && !documentViewApplies(routed, fields);
 }
 
-/** A field a view could edit, as the chooser names it. */
-export interface ViewFieldCandidate {
+/** A field a view could edit: its name and label for the chooser, and its declaration for the view. */
+export interface ViewFieldCandidate<F extends object = object> {
   name: string;
   label?: string;
+  declaration: F;
 }
 
 /**
@@ -129,16 +143,16 @@ export interface ViewFieldCandidate {
  * has several fields the view could edit and the address names none of them —
  * the author's choice.
  */
-export type ViewFieldResolution =
+export type ViewFieldResolution<F extends object = object> =
   | { kind: "document" }
-  | { kind: "field"; name: string }
-  | { kind: "choose"; candidates: ViewFieldCandidate[] };
+  | { kind: "field"; name: string; declaration: F }
+  | { kind: "choose"; candidates: ViewFieldCandidate<F>[] };
 
 /** The top-level fields of `fieldType`, by name and label. */
-function candidatesOf(
+function candidatesOf<F extends object>(
   fieldType: string,
-  fields: readonly object[] | undefined
-): ViewFieldCandidate[] {
+  fields: readonly F[] | undefined
+): ViewFieldCandidate<F>[] {
   return (fields ?? []).flatMap(field => {
     if (!("type" in field) || field.type !== fieldType) return [];
     if (!("name" in field) || typeof field.name !== "string") return [];
@@ -146,7 +160,7 @@ function candidatesOf(
       "label" in field && typeof field.label === "string"
         ? { label: field.label }
         : {};
-    return [{ name: field.name, ...label }];
+    return [{ name: field.name, ...label, declaration: field }];
   });
 }
 
@@ -160,17 +174,23 @@ function candidatesOf(
  * opening the wrong one of two looks like the right editor showing the wrong
  * content, which an author cannot tell from a lost page.
  */
-export function resolveViewField(
+export function resolveViewField<F extends object>(
   fieldType: string | undefined,
-  fields: readonly object[] | undefined,
+  fields: readonly F[] | undefined,
   requested: string | undefined
-): ViewFieldResolution {
+): ViewFieldResolution<F> {
   if (fieldType === undefined) return { kind: "document" };
   const candidates = candidatesOf(fieldType, fields);
-  if (candidates.length === 1) {
-    return { kind: "field", name: candidates[0].name };
+  const chosen =
+    candidates.length === 1
+      ? candidates[0]
+      : candidates.find(candidate => candidate.name === requested);
+  if (chosen !== undefined) {
+    return {
+      kind: "field",
+      name: chosen.name,
+      declaration: chosen.declaration,
+    };
   }
-  const named = candidates.find(candidate => candidate.name === requested);
-  if (named !== undefined) return { kind: "field", name: named.name };
   return { kind: "choose", candidates };
 }

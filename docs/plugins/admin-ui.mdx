@@ -191,6 +191,10 @@ under the document's:
 - `/admin/collections/<slug>/<id>/<path>` for a collection entry;
 - `/admin/singles/<slug>/<path>` for a Single.
 
+A view declared under `views[slug]` is for that collection, like every other
+slot there. A Single, or any document wherever a field type appears, is reached
+by a field-type view (below).
+
 ```ts
 views: {
   pages: {
@@ -242,9 +246,15 @@ Your component replaces the form's body and receives `DocumentViewProps` from
 | `control` | The document form's react-hook-form `control`. Write to the fields through it. |
 | `readOnly` | `true` while someone else holds the document. Don't offer edits then. |
 | `exit` | Goes back to the document's edit form. Commit any state you hold into the form first. |
-| `fieldName` | For a field-type view, the top-level field it edits. When the document has several, it is the one the address names (`?field=<name>`). If the address names none of them, the admin asks the author which one before it draws your view. |
+| `field` | For a field-type view, the declaration (`FieldConfig`, as a field editor receives it) of the top-level field it edits. When the document has several such fields, it is the one the address names (`?field=<name>`). If the address names none of them, the admin asks the author which one before it draws your view. |
 
 Opening that address requires the same permission as editing the document.
+
+To open a view from inside the admin, for example from a field editor, call
+`navigateTo(path)` from `@nextlyhq/plugin-sdk/admin`. It accepts a path
+starting `/admin/`, and refuses anything else by throwing. Moving between a
+document's edit form and its own views doesn't prompt about unsaved
+changes, because the same form stays mounted.
 
 Startup is refused, naming the plugins involved, when a view's `path`:
 

@@ -23,6 +23,7 @@
  * @module components/features/entries/EntryForm/DocumentViewBody
  */
 
+import type { FieldConfig } from "nextly/config";
 import { useCallback } from "react";
 import { FormProvider, type UseFormReturn } from "react-hook-form";
 
@@ -69,7 +70,7 @@ export interface DocumentViewBodyProps {
   /** The past version on screen, which withholds the recovery offer. */
   viewingVersion: ViewedVersion | null;
   /** The document's top-level fields, from which a field-type view's is chosen. */
-  fields?: readonly object[];
+  fields?: readonly FieldConfig[];
 }
 
 export function DocumentViewBody({
@@ -121,7 +122,7 @@ export function DocumentViewBody({
     control: form.control,
     readOnly: lock.readOnly,
     exit,
-    ...(editing.kind === "field" ? { fieldName: editing.name } : {}),
+    ...(editing.kind === "field" ? { field: editing.declaration } : {}),
   };
 
   return (

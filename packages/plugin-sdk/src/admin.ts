@@ -69,6 +69,15 @@ export type { CustomEditViewProps, DocumentLockGates } from "@nextlyhq/admin";
 export type { DocumentViewProps } from "@nextlyhq/admin";
 
 /**
+ * @experimental Move to a page of this admin, keeping what the current page
+ * holds where the same page answers the new address — opening a document's
+ * view from its edit form, for one. Takes a path starting "/admin/" and
+ * refuses anything else (an absolute or external URL, a script URL, a path
+ * that climbs out with "..") by throwing, naming the address.
+ */
+export { navigateWithinAdmin as navigateTo } from "@nextlyhq/admin";
+
+/**
  * Which language the surrounding document is being edited in (@experimental).
  *
  * A field inside a localized document can say WHICH document it is in but not

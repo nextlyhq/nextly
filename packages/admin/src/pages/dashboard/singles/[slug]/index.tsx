@@ -43,7 +43,7 @@ import {
 import { useEditorLocale } from "@admin/hooks/useEditorLocale";
 import { useLocalization } from "@admin/hooks/useLocalization";
 import { useTranslationMode } from "@admin/hooks/useTranslationMode";
-import { navigateTo } from "@admin/lib/navigation";
+import { navigateTo, withCurrentQuery } from "@admin/lib/navigation";
 import {
   documentViewMissing,
   routedDocumentView,
@@ -167,11 +167,15 @@ function singleDocumentView(
   params: SingleEditPageProps["params"]
 ): DocumentViewMount | undefined {
   const slug = params?.slug;
-  const routed = routedDocumentView(slug, params?.view);
+  const routed = routedDocumentView("single", slug, params?.view);
   if (routed === undefined || slug === undefined) return undefined;
   return {
     component: routed.component,
-    onExit: () => navigateTo(buildRoute(ROUTES.SINGLE_EDIT, { slug })),
+    // Back to the same Single in the same language — see the entry page.
+    onExit: () =>
+      navigateTo(
+        withCurrentQuery(buildRoute(ROUTES.SINGLE_EDIT, { slug }), ["field"])
+      ),
     ...("fieldType" in routed ? { fieldType: routed.fieldType } : {}),
   };
 }
@@ -371,7 +375,7 @@ export default function SingleEditPage({
 
   return (
     <DocumentViewGate
-      missing={documentViewMissing(slug, params?.view, schema.fields)}
+      missing={documentViewMissing("single", slug, params?.view, schema.fields)}
     >
       <QueryErrorBoundary fallback={<PageErrorFallback />}>
         {/* Through the shared frame rather than a bare container: translation

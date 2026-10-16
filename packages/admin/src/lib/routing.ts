@@ -195,7 +195,8 @@ function isUndeclaredDocumentView(pattern: string, params: Params): boolean {
   ) {
     return false;
   }
-  return routedDocumentView(params.slug, params.view) === undefined;
+  const kind = pattern === ROUTES.SINGLE_VIEW ? "single" : "collection";
+  return routedDocumentView(kind, params.slug, params.view) === undefined;
 }
 
 // Main route resolution function
