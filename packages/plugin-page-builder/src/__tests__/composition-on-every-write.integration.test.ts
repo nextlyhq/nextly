@@ -27,6 +27,7 @@ import {
 import { afterEach, describe, expect, it } from "vitest";
 
 import { COMPONENTS_SLUG } from "../collections/components";
+import { BLOCKS_TYPE } from "../fields/blocksField";
 import { pageBuilder } from "../plugin";
 
 type Node = Record<string, unknown>;
@@ -90,6 +91,32 @@ async function refusalOf(write: Promise<unknown>): Promise<unknown> {
   } catch (error) {
     return error;
   }
+}
+
+/** The entry service, as a translated collection's writes reach it. */
+interface TranslatedEntries {
+  createEntry(
+    params: {
+      collectionName: string;
+      overrideAccess?: boolean;
+      locale?: string;
+    },
+    data: Record<string, unknown>
+  ): Promise<{ success: boolean; data: unknown }>;
+  updateEntry(
+    params: {
+      collectionName: string;
+      entryId: string;
+      overrideAccess?: boolean;
+      locale?: string;
+    },
+    data: Record<string, unknown>
+  ): Promise<{ success: boolean }>;
+  publishAllLocales(params: {
+    collectionName: string;
+    entryId: string;
+    overrideAccess?: boolean;
+  }): Promise<{ success: boolean }>;
 }
 
 /** The batch worker behind every bulk write, imports included. */
@@ -420,6 +447,71 @@ describe.each(getConfiguredTestDialects())(
       expect(issuesOf(refused)).toEqual([
         expect.objectContaining({ path: "content", code: "depth-exceeded" }),
       ]);
+    });
+
+    it("refuses publishing every language of a translated page when one language composes past the limit as published", async () => {
+      current = await createTestNextly({
+        dialect,
+        plugins: [pageBuilder({ limits: { ...DEFAULT_LIMITS, maxDepth: 4 } })],
+        collections: [
+          {
+            slug: "articles",
+            status: true,
+            localized: true,
+            fields: [
+              { name: "title", type: "text", localized: true },
+              { name: "content", type: BLOCKS_TYPE, localized: true },
+            ],
+          } as never,
+        ],
+        localization: { locales: ["en", "de"], defaultLocale: "en" },
+      });
+      const t = current;
+      const entries = (
+        t.getService("collectionsHandler") as unknown as {
+          getEntryService(): TranslatedEntries;
+        }
+      ).getEntryService();
+      const split = await componentDeeperWhenPublished(t);
+      // English places the component at the top, which fits in both forms.
+      const created = await entries.createEntry(
+        { collectionName: "articles", overrideAccess: true, locale: "en" },
+        {
+          title: "Home",
+          content: document("page", [placing("i1", split)]),
+          status: "draft",
+        }
+      );
+      expect(created.success, JSON.stringify(created)).toBe(true);
+      const id = String((created.data as { id: unknown }).id);
+      // German places it three deep: judged as a draft, against the draft forms.
+      const german = await entries.updateEntry(
+        {
+          collectionName: "articles",
+          entryId: id,
+          locale: "de",
+          overrideAccess: true,
+        },
+        {
+          title: "Start",
+          content: document("page", [
+            box("p1", [box("p2", [placing("i1", split)])]),
+          ]),
+          status: "draft",
+        }
+      );
+      expect(german.success, JSON.stringify(german)).toBe(true);
+
+      const result = await entries.publishAllLocales({
+        collectionName: "articles",
+        entryId: id,
+        overrideAccess: true,
+      });
+
+      // This path reports a refusal in its result rather than by throwing.
+      expect(result.success).toBe(false);
+      expect(JSON.stringify(result)).toContain("depth-exceeded");
+      expect(JSON.stringify(result)).toContain('"path":"content"');
     });
 
     function page(

@@ -1926,6 +1926,85 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
+   * Refuse a publish unless every language it puts live from storage is valid
+   * as it goes live.
+   *
+   * One language for an ordinary publish: the write locale, unless it was live
+   * already, since a row already published was judged as published and
+   * re-sending the status changes nothing that goes live. Every stored
+   * translation not yet live for a publish of every language, each judged as
+   * its own publish would judge it: its values on the row, the default
+   * language's `required` rules where it is the default.
+   */
+  private async assertLanguagesGoLiveValid(args: {
+    collectionName: string;
+    entryId: string;
+    row: Record<string, unknown>;
+    patch: Record<string, unknown>;
+    writeLocale: string | undefined;
+    writeLocaleValues: Record<string, unknown>;
+    writeLocaleLive: boolean;
+    everyLanguage: boolean;
+    fields: FieldDefinition[];
+    user: UserContext | undefined;
+  }): Promise<void> {
+    const pool = { getDrizzle: <T = unknown>() => this.db as T };
+    const swept = args.everyLanguage
+      ? await this.languagesNotYetLive(args.collectionName, args.entryId)
+      : null;
+    const languages = swept ?? (args.writeLocaleLive ? [] : [args.writeLocale]);
+    for (const locale of languages) {
+      await this.assertEntryValid({
+        data: await this.storedDocumentGoingLive({
+          row: args.row,
+          patch:
+            locale === args.writeLocale
+              ? { ...args.patch, ...args.writeLocaleValues }
+              : args.patch,
+          fields: args.fields,
+          collectionName: args.collectionName,
+          entryId: args.entryId,
+          locale,
+          connection: pool,
+        }),
+        fields: args.fields,
+        collectionName: args.collectionName,
+        mode: "update",
+        user: args.user,
+        localeCtx: await this.localizedRequiredContext(
+          args.collectionName,
+          locale
+        ),
+        id: args.entryId,
+      });
+    }
+  }
+
+  /**
+   * The stored translations of an entry whose own status is not published, or
+   * `null` where the collection keeps no per-language status to read, and the
+   * document's one status decides as it does for any other publish.
+   */
+  private async languagesNotYetLive(
+    collectionName: string,
+    entryId: string
+  ): Promise<string[] | null> {
+    const companion =
+      await this.fileManager.loadCompanionSchema(collectionName);
+    if (!companion) return null;
+    const statuses = await readCompanionLocaleStatusAll(
+      this.db as Parameters<typeof readCompanionLocaleStatusAll>[0],
+      companion.table,
+      entryId,
+      cachedCompanionReadiness(this.adapter, companion.companionTableName)
+    );
+    if (statuses.size === 0) return null;
+    return [...statuses]
+      .filter(([, status]) => status !== "published")
+      .map(([locale]) => locale);
+  }
+
+  /**
    * The document a publish puts live when no working draft is promoted into
    * it: the stored row, the write locale's translations, and the caller's
    * fields on top, in the logical shape the validator reads.
@@ -4487,6 +4566,26 @@ export class CollectionMutationService extends BaseService {
       const previousStatus =
         typeof previousStatusRaw === "string" ? previousStatusRaw : null;
 
+      // Every language this puts live goes live as it is stored, each judged
+      // when it was saved as a draft and never as published. Validated as each
+      // goes live, as a single publish of it would be, before the transaction
+      // opens; the same step as the single-entry publish, so the two cannot
+      // judge one document differently.
+      if (direction.nextStatus === "published") {
+        await this.assertLanguagesGoLiveValid({
+          collectionName: params.collectionName,
+          entryId: params.entryId,
+          row: existingEntry as Record<string, unknown>,
+          patch: {},
+          writeLocale: undefined,
+          writeLocaleValues: {},
+          writeLocaleLive: previousStatus === "published",
+          everyLanguage: true,
+          fields,
+          user: params.user,
+        });
+      }
+
       // The parent row for both the snapshot and the status-change event is
       // re-read fresh inside the transaction (not the pre-transaction
       // `existingEntry`), mirroring updateEntry: a conflict retry re-runs this
@@ -6503,49 +6602,34 @@ export class CollectionMutationService extends BaseService {
       }
 
       // A publish that promotes no draft puts the STORED row live, with the
-      // caller's fields on top: a first publication, or a republish after an
-      // unpublish. The caller validation above saw only the patch, which for a
-      // publish by status alone is `{ status }`, so validate the document as it
-      // goes live, as the promotion above does with its draft. Advisory, off the
-      // row lock, for the same reason as that one.
-      //
-      // Only on a move TO published. A row already published was judged as
-      // published, and re-sending the status changes nothing that goes live. A
-      // per-locale status lives in the companion, which this does not read
-      // here, so such a write is always judged.
-      const alreadyPublished =
-        localizedUpdate?.hasStatus !== true &&
-        (existingEntry as { status?: unknown }).status === "published";
+      // caller's fields on top: a first publication, a republish after an
+      // unpublish, or every language at once. The caller validation above saw
+      // only the patch, which for a publish by status alone is `{ status }`, so
+      // validate each language as it goes live, as the promotion above does
+      // with its draft. Advisory, off the row lock, for the same reason as
+      // that one.
       if (
         collectionHasStatus &&
         !promotesDraft &&
-        transitionNextStatus === "published" &&
-        !alreadyPublished
+        transitionNextStatus === "published"
       ) {
-        await this.assertEntryValid({
-          data: await this.storedDocumentGoingLive({
-            row: existingEntry as Record<string, unknown>,
-            // The locale split moved the caller's translatable values out of
-            // `finalData`; they are part of what goes live.
-            patch: {
-              ...finalData,
-              ...(localizedUpdate?.localizedFieldValues ?? {}),
-            },
-            fields,
-            collectionName: params.collectionName,
-            entryId: params.entryId,
-            locale: localizedUpdate?.writeLocale,
-            connection: { getDrizzle: <T = unknown>() => this.db as T },
-          }),
-          fields,
+        await this.assertLanguagesGoLiveValid({
           collectionName: params.collectionName,
-          mode: "update",
+          entryId: params.entryId,
+          row: existingEntry as Record<string, unknown>,
+          patch: finalData,
+          writeLocale: localizedUpdate?.writeLocale,
+          // The locale split moved the caller's translatable values out of
+          // `finalData`; they are part of what goes live in the write locale.
+          writeLocaleValues: localizedUpdate?.localizedFieldValues ?? {},
+          // A per-locale status lives in the companion, which this does not
+          // read for a one-language write, so such a write is always judged.
+          writeLocaleLive:
+            localizedUpdate?.hasStatus !== true &&
+            (existingEntry as { status?: unknown }).status === "published",
+          everyLanguage: sweepAllLocales,
+          fields,
           user: params.user,
-          localeCtx: await this.localizedRequiredContext(
-            params.collectionName,
-            params.locale
-          ),
-          id: params.entryId,
         });
       }
 
