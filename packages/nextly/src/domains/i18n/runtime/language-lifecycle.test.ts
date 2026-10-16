@@ -77,6 +77,24 @@ describe("languageIsLive", () => {
     ).toBe(false);
   });
 
+  it("counts any state the workflow calls public as live", () => {
+    const workflow = {
+      name: "reviewed",
+      states: [
+        { name: "draft", isPublic: false },
+        { name: "approved", isPublic: false },
+        { name: "live", isPublic: true },
+      ],
+    };
+    const statuses = { ...base, ownStatus: null, locale: null, workflow };
+    expect(languageIsLive({ ...statuses, mainStatus: "live" })).toBe(true);
+    expect(languageIsLive({ ...statuses, mainStatus: "approved" })).toBe(false);
+    // A word the workflow does not declare is not public.
+    expect(languageIsLive({ ...statuses, mainStatus: "published" })).toBe(
+      false
+    );
+  });
+
   it("judges another language by its own status alone", () => {
     expect(
       languageIsLive({

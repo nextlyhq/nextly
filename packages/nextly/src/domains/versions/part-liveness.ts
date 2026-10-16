@@ -8,6 +8,8 @@
  *
  * The decision is `languageIsLive`, the one answer every path gives; this reads
  * the statuses it decides from, outside any write, on the pooled connection.
+ * A due release decides first, as it does for the public read: a document it
+ * withdraws is not served, and one it publishes is, before either is written.
  *
  * @module domains/versions/part-liveness
  */
@@ -15,10 +17,13 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import type { FieldConfig } from "../../collections/fields/types";
+import type { VersionScopeKind } from "../../schemas/versions/types";
 import { readCompanionLocaleStatus } from "../i18n/companion-join";
 import { buildCompanionSchema } from "../i18n/runtime/companion-io";
 import { resolveCompanionReadiness } from "../i18n/runtime/companion-readiness";
 import { languageIsLive } from "../i18n/runtime/language-lifecycle";
+import { releaseVisibilityFor } from "../releases/release-visibility";
+import type { ReleaseVisibility } from "../releases/release-visibility";
 
 /** What the read needs to know about the document's entity. */
 export interface LivenessEntity {
@@ -38,13 +43,30 @@ export interface LivenessEntity {
  */
 export async function readPartIsLive(args: {
   adapter: DrizzleAdapter;
+  scopeKind: VersionScopeKind;
   entity: LivenessEntity;
   entryId: string;
   part: string | null;
   defaultLocale: string | null;
+  /** What a due release makes visible; the adapter's shared one if omitted. */
+  visibility?: ReleaseVisibility;
+  now?: Date;
 }): Promise<boolean> {
   const { adapter, entity, entryId, part } = args;
   if (entity.status !== true) return true;
+
+  // The public read asks a due release before it reads the stored status, and
+  // so does this: a scheduled publication or withdrawal is in effect before
+  // the release writes it. A release moves the whole document.
+  const decisions = await (
+    args.visibility ?? releaseVisibilityFor(adapter)
+  ).decisions({
+    scopeKind: args.scopeKind,
+    scopeSlug: entity.slug,
+    now: args.now ?? new Date(),
+  });
+  if (decisions.hide.includes(entryId)) return false;
+  if (decisions.reveal.includes(entryId)) return true;
 
   const main = await adapter.selectOne<{ status?: unknown }>(entity.tableName, {
     columns: ["status"],

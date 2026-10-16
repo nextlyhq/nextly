@@ -10,8 +10,16 @@
  * answer is never one column read alone, and every place that asks it asks
  * here, with the statuses it has read.
  *
+ * A status counts as live when the workflow calls it public, asked through
+ * `isPublicState`, the one predicate the public read's filter is built from.
+ *
  * @module domains/i18n/runtime/language-lifecycle
  */
+
+import {
+  isPublicState,
+  type ContentWorkflow,
+} from "../../../lib/content-states";
 
 /** The statuses one language's answer is decided from. */
 export interface LanguageStatuses {
@@ -31,6 +39,8 @@ export interface LanguageStatuses {
   defaultLocale: string | null;
   /** Whether the entity keeps a status per language on its companion rows. */
   perLanguageStatus: boolean;
+  /** The workflow whose public states count as live; the default one if omitted. */
+  workflow?: ContentWorkflow;
 }
 
 /**
@@ -44,13 +54,14 @@ export interface LanguageStatuses {
  *   translation row has nothing of its own live.
  */
 export function languageIsLive(statuses: LanguageStatuses): boolean {
-  const mainLive = statuses.mainStatus === "published";
+  const isLive = (status: unknown): boolean =>
+    typeof status === "string" && isPublicState(status, statuses.workflow);
+  const mainLive = isLive(statuses.mainStatus);
   if (statuses.locale === null || !statuses.perLanguageStatus) return mainLive;
   if (statuses.locale === statuses.defaultLocale) {
     return (
-      mainLive &&
-      (statuses.ownStatus === null || statuses.ownStatus === "published")
+      mainLive && (statuses.ownStatus === null || isLive(statuses.ownStatus))
     );
   }
-  return statuses.ownStatus === "published";
+  return isLive(statuses.ownStatus);
 }

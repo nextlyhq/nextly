@@ -764,6 +764,7 @@ async function partIsLiveNow(
   if (!entity) return false;
   return readPartIsLive({
     adapter: getService("adapter"),
+    scopeKind,
     entity,
     entryId,
     part,
