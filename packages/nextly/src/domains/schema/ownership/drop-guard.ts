@@ -382,6 +382,23 @@ const NOT_COLUMN_ALTERS = new Set([
 ]);
 
 /** The element an `ALTER <word>` clause changes in place, by its word. */
+/** The clause words an ALTER TABLE this reader models can start with. */
+const MODELLED_CLAUSE_WORDS = new Set([
+  "ADD",
+  "DROP",
+  "RENAME",
+  "ALTER",
+  "CHANGE",
+  "MODIFY",
+  "VALIDATE",
+  "ENGINE",
+  "ATTACH",
+  "DETACH",
+]);
+
+/** The act a refusal of an unmodelled form takes. */
+const UNMODELLED_ACT = "use a form the guard cannot read";
+
 const ALTERED_ELEMENT_KINDS = new Map<string, TakenElementKind>([
   ["CONSTRAINT", "constraint"],
   ["CHECK", "check"],
@@ -690,6 +707,11 @@ class DropReader {
   /** Indexes and constraints this list changes in place (`changeElement`). */
   readonly alteredElements: TakenElement[] = [];
   /**
+   * Tables a statement alters in a form this reader does not model. The guard
+   * fails closed on them: a foreign one is refused, naming it.
+   */
+  readonly unmodelled: string[] = [];
+  /**
    * Indexes and constraints this list drops or renames away, with the table
    * named by the name it had before the list renamed it.
    */
@@ -834,6 +856,11 @@ class DropReader {
       table: this.renamedFrom.get(table.name) ?? table.name,
       column,
     });
+  }
+
+  /** Records a table an ALTER alters in a form this reader does not model. */
+  leaveUnmodelled(table: string): void {
+    this.unmodelled.push(table);
   }
 
   /** Records a column an ALTER changes in place (`alteredColumns`). */
@@ -1084,6 +1111,7 @@ class StatementWalk {
       this.readAlterTableRenames(at);
       this.readAlterTableColumns(at);
       this.readAlterIndexRename(at);
+      this.readAlterForeignTable(at);
       this.readRelationColumnRename(at);
     } else if (word === "CREATE") {
       this.readCreateTable(at);
@@ -1591,6 +1619,7 @@ class StatementWalk {
       this.readColumnClause(table, clause);
       this.readColumnChangeClause(table, clause);
       this.readTableStorageClause(table, clause);
+      this.readUnmodelledClause(table, clause);
       this.readElementClause(table, clause);
       this.readElementChangeClause(table, clause);
       this.readPartitionClause(table, clause);
@@ -1739,18 +1768,44 @@ class StatementWalk {
    * taken from its table: after the rename no record names it. The tokens
    * are not consumed.
    */
+  /**
+   * PostgreSQL's `ALTER FOREIGN TABLE t ...`: its clauses are not read, so the
+   * table is recorded as unmodelled.
+   */
+  private readAlterForeignTable(at: number): void {
+    if (this.word(at + 1) !== "FOREIGN" || this.word(at + 2) !== "TABLE") {
+      return;
+    }
+    const relation = this.qualifiedName(this.skipIfExists(at + 3));
+    if (relation === undefined) return;
+    this.reader.leaveUnmodelled(relation.name);
+  }
+
   private readAlterIndexRename(at: number): void {
     if (this.word(at + 1) !== "INDEX") return;
     const index = this.qualifiedName(this.skipIfExists(at + 2));
     if (index === undefined) return;
-    // PostgreSQL's `ALTER INDEX i SET|RESET|ALTER ...` changes it in place.
-    if (
-      this.reader.isPostgres &&
-      ["SET", "RESET", "ALTER", "ATTACH", "DEPENDS", "NO"].includes(
-        this.word(index.next) ?? ""
-      )
-    ) {
+    // Every PostgreSQL ALTER INDEX form other than RENAME changes the index
+    // in place, so the index is judged as one. The bulk form names no index.
+    if (this.reader.isPostgres && this.word(index.next) !== "RENAME") {
+      if (this.word(at + 2) === "ALL") {
+        this.refuse(
+          "an ALTER INDEX ALL IN TABLESPACE, whose indexes cannot be named"
+        );
+      }
       this.reader.changeElement(undefined, index.name, "index");
+      if (
+        this.word(index.next) === "ATTACH" &&
+        this.word(index.next + 1) === "PARTITION"
+      ) {
+        const child = this.qualifiedName(index.next + 2);
+        if (child === undefined) {
+          this.refuse(
+            "an index attached as a partition whose name cannot be read"
+          );
+        }
+        this.reader.changeElement(undefined, child.name, "index");
+      }
       return;
     }
     if (
@@ -1777,6 +1832,24 @@ class StatementWalk {
       );
     }
     this.reader.takeElement(table, element.name, element.kind);
+  }
+
+  /**
+   * One ALTER TABLE clause starting at `at` in a form this reader does not
+   * model: any clause whose first word is not one it reads. The table is
+   * recorded, so a foreign one is refused.
+   */
+  private readUnmodelledClause(table: TableRef | undefined, at: number): void {
+    if (table === undefined || this.isModelledClauseAt(at)) return;
+    this.reader.leaveUnmodelled(table.name);
+  }
+
+  private isModelledClauseAt(at: number): boolean {
+    const word = this.word(at) ?? "";
+    if (word === "SET") {
+      return ["TABLESPACE", "ACCESS"].includes(this.word(at + 1) ?? "");
+    }
+    return MODELLED_CLAUSE_WORDS.has(word);
   }
 
   /**
@@ -2727,6 +2800,7 @@ type Reading = Pick<
   | "alteredColumns"
   | "elements"
   | "alteredElements"
+  | "unmodelled"
   | "rebuilt"
   | "relationRenames"
   | "changed"
@@ -4181,6 +4255,13 @@ export function assertNoForeignDrops(args: {
       act: "change in place",
     });
   }
+  for (const table of read.unmodelled) {
+    refuseUnlessHeld(holders.table(table), {
+      ...args,
+      table,
+      act: UNMODELLED_ACT,
+    });
+  }
   for (const element of [
     ...read.elements,
     ...elementsLeftOut(read.rebuilt, args.liveElements, args.elementOwners),
@@ -4557,6 +4638,18 @@ function refuseUnlessHeld(
   }
 ): void {
   if (claim.kind === "own") return;
+  if (args.act === UNMODELLED_ACT) {
+    throw new NextlyError({
+      code: "DROP_OF_FOREIGN_TABLE",
+      publicMessage: `A migration alters ${args.table ?? "a table"} in a form the schema guard cannot read, and that table belongs to a different owner. It has been refused, and nothing was applied. Rewrite the statement as plain ALTER TABLE clauses, or use the app's override.`,
+      logContext: {
+        ...knownNames({ table: args.table }),
+        changedBy: args.stream,
+        belongsTo: claim.kind === "foreign" ? claim.owner.migratedBy : null,
+        source: args.source,
+      },
+    });
+  }
   const what = takenThing(args);
   // One code for every case: each takes something from whoever holds it, and
   // the operator's remedy is the same.
