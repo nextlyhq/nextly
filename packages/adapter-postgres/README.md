@@ -76,11 +76,11 @@ Most users do not need this. The framework's runtime does it automatically.
 
 ## Compatibility
 
-| Tool     | Version |
-| -------- | ------- |
-| Node.js  | 20+     |
-| `pg`     | 8.10+   |
-| `nextly` | 0.0.x   |
+| Tool     | Version               |
+| -------- | --------------------- |
+| Node.js  | 20.19+, 22.12+ or 24+ |
+| `pg`     | 8.10+                 |
+| `nextly` | 0.0.x                 |
 
 ## Documentation
 

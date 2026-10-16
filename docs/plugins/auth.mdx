@@ -1,6 +1,6 @@
 ---
 title: Auth extensibility
-description: Extend authentication from a plugin — custom strategies, external sign-in (OAuth/SSO), auth-flow hooks, and first-class multi-step challenges (2FA) — without forking core.
+description: Extend authentication from a plugin — custom strategies, external sign-in (OAuth), auth-flow hooks, and first-class multi-step challenges (2FA) — without forking core.
 ---
 
 > **Parts of this page need the release after 0.0.2-alpha.66:** `ctx.auth.completeLogin` and `capabilities.auth.login`, the resume cookie, `ChallengeViewProps` and the view's resolve result, and the limits on what `afterAuthenticate` and `customizeClaims` may change.
@@ -23,7 +23,7 @@ piecemeal:
 
 The built-in email/password login is itself just the `password` strategy, always
 present and run last; it cannot be disabled. A sign-in that starts with a
-redirect — OAuth, SSO — is not a strategy: see
+redirect, such as OAuth, is not a strategy: see
 [signing in with an external provider](#worked-example-signing-in-with-an-external-provider).
 
 ## Strategies are opt-in (the trust boundary)
