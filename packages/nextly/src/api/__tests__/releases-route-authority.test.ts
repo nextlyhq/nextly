@@ -48,6 +48,24 @@ let lifecycleRecord: { status?: boolean } | null = { status: true };
 
 const { handleReleaseRequest } = await import("../releases");
 
+/** The list meta of an empty first page, as the namespace answers it. */
+interface PageMeta {
+  total: number;
+  page: number;
+  limit: number;
+  totalPages: number;
+  hasNext: boolean;
+  hasPrev: boolean;
+}
+const EMPTY_META: PageMeta = {
+  total: 0,
+  page: 1,
+  limit: 50,
+  totalPages: 0,
+  hasNext: false,
+  hasPrev: false,
+};
+
 /** Every namespace call the handler can make, all inert. */
 function namespace() {
   return {
@@ -72,7 +90,12 @@ function namespace() {
       // `calls[0][0]` from it does not compile — which is the compiler saying
       // the fake and the thing it stands in for have different shapes.
       find: vi.fn(
-        async (_query: Record<string, unknown>): Promise<{ id: string }[]> => []
+        async (
+          _query: Record<string, unknown>
+        ): Promise<{ items: { id: string }[]; meta: PageMeta }> => ({
+          items: [],
+          meta: EMPTY_META,
+        })
       ),
       findByID: vi.fn(async () => ({ id: "r1" })),
       create: vi.fn(async () => ({ id: "r1" })),
@@ -491,14 +514,20 @@ describe("release member targets", () => {
 });
 
 describe("release list windowing", () => {
-  it("reports truncation rather than presenting a partial schedule as whole", async () => {
-    // Without over-fetching, a page of two is reported as `total: 2,
-    // hasNext: false` whether two releases exist or two hundred do.
-    api.releases.find.mockResolvedValueOnce([
-      { id: "a" },
-      { id: "b" },
-      { id: "c" },
-    ]);
+  it("reports the whole list's total, not the rows on this page", async () => {
+    // A page of two out of seven must say seven. A total taken from the page
+    // tells a client the schedule is complete when five releases are missing.
+    api.releases.find.mockResolvedValueOnce({
+      items: [{ id: "a" }, { id: "b" }],
+      meta: {
+        total: 7,
+        page: 1,
+        limit: 2,
+        totalPages: 4,
+        hasNext: true,
+        hasPrev: false,
+      },
+    });
     const res = await handleReleaseRequest(
       new Request("https://example.test/api/releases?limit=2"),
       "listReleases",
@@ -506,13 +535,14 @@ describe("release list windowing", () => {
     );
     const body = (await res.json()) as {
       items: unknown[];
-      meta: { hasNext: boolean };
+      meta: { total: number; totalPages: number; hasNext: boolean };
     };
     expect(body.items).toHaveLength(2);
-    expect(body.meta.hasNext).toBe(true);
-    // The over-fetch is what makes truncation observable at all.
+    expect(body.meta).toMatchObject({ total: 7, totalPages: 4, hasNext: true });
+    // Asked for exactly the page: the count comes from the service, so there
+    // is no row fetched past the limit to infer "more" from.
     expect(api.releases.find).toHaveBeenCalledWith(
-      expect.objectContaining({ limit: 3 })
+      expect.objectContaining({ limit: 2, page: 1 })
     );
   });
 
@@ -554,7 +584,7 @@ describe("release route paging and body validation", () => {
       {}
     );
     expect(api.releases.find).toHaveBeenCalledWith(
-      expect.objectContaining({ limit: 51 })
+      expect.objectContaining({ limit: 50 })
     );
   });
 
@@ -602,6 +632,63 @@ describe("release route paging and body validation", () => {
       expect.objectContaining({ userRoles: ["editor"] })
     );
   });
+});
+
+describe("the list's tab, search, page and order", () => {
+  async function list(search: string) {
+    return handleReleaseRequest(
+      new Request(`https://example.test/api/releases${search}`),
+      "listReleases",
+      {}
+    );
+  }
+
+  it("passes a tab, a search, a page and an order through", async () => {
+    const res = await list("?tab=upcoming&search=spring&page=3&order=latest");
+    expect(res.status).toBe(200);
+    expect(api.releases.find).toHaveBeenCalledWith(
+      expect.objectContaining({
+        tab: "upcoming",
+        search: "spring",
+        page: 3,
+        order: "latest",
+      })
+    );
+    const attention = await list("?tab=attention&reason=overdue");
+    expect(attention.status).toBe(200);
+    expect(api.releases.find).toHaveBeenLastCalledWith(
+      expect.objectContaining({ tab: "attention", reason: "overdue" })
+    );
+  });
+
+  it.each([
+    ["an unknown tab", "?tab=soon"],
+    ["page 0", "?page=0"],
+    ["a page that is not a whole number", "?page=2a"],
+    ["a page past the safe integers", "?page=1e308"],
+    ["an unknown order", "?order=soonestt"],
+    ["an unknown reason", "?tab=attention&reason=late"],
+  ])("refuses %s rather than answering with every release", async (_, q) => {
+    // Each would otherwise be dropped or defaulted, and a client paging
+    // through what it believes is a narrowed list could not tell.
+    const res = await list(q);
+    expect(res.status).toBe(400);
+    expect(api.releases.find).not.toHaveBeenCalled();
+  });
+
+  it.each(["tab=upcoming", "search=spring", "order=latest", "reason=overdue"])(
+    "refuses %s alongside a document filter",
+    async extra => {
+      // One document's releases are not a tab, are not searched, and come in
+      // the order they apply to it; accepting the parameter and dropping it
+      // would answer a different question.
+      const res = await list(
+        `?containingScopeKind=collection&containingScopeSlug=posts&containingEntryId=e1&${extra}`
+      );
+      expect(res.status).toBe(400);
+      expect(api.releases.find).not.toHaveBeenCalled();
+    }
+  );
 });
 
 describe("filtering the list to the releases holding ONE document", () => {

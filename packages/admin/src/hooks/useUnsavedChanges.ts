@@ -18,6 +18,11 @@
 
 import { useEffect, useCallback, useState, useRef } from "react";
 
+import {
+  routedDocumentView,
+  type DocumentKind,
+} from "@admin/lib/plugins/document-view-registry";
+
 // ============================================================================
 // Types
 // ============================================================================
@@ -90,10 +95,73 @@ export interface UseUnsavedChangesReturn {
  *
  * The hash is deliberately excluded. It moves within a page rather than off it.
  */
+/**
+ * Whether the third segment of a document's address is one of its views: the
+ * answer the router gives, from the same registry. A segment nothing answers —
+ * a mistyped or removed view — renders another page, which unmounts the form.
+ */
+function isViewOf(
+  kind: DocumentKind,
+  slug: string,
+  view: string | undefined
+): boolean {
+  return (
+    view === undefined || routedDocumentView(kind, slug, view) !== undefined
+  );
+}
+
+/**
+ * The document an editor address is of — an entry or a Single, on its edit
+ * address or on one of its registered views — or `undefined` for any other
+ * address.
+ */
+function documentOf(pathname: string): string | undefined {
+  const entry = /^\/admin\/collections\/([^/]+)\/([^/]+)(?:\/([^/]+))?$/.exec(
+    pathname
+  );
+  if (entry !== null) {
+    const [, slug, id, view] = entry;
+    if (id === "create" || !isViewOf("collection", slug, view))
+      return undefined;
+    return JSON.stringify(["collection", slug, id]);
+  }
+  const single = /^\/admin\/singles\/([^/]+)(?:\/([^/]+))?$/.exec(pathname);
+  if (single === null) return undefined;
+  const [, slug, view] = single;
+  if (!isViewOf("single", slug, view)) return undefined;
+  return JSON.stringify(["single", slug]);
+}
+
+/** The query without `field`, which picks a view's field and nothing else. */
+function queryBesidesField(search: string): string {
+  const params = new URLSearchParams(search);
+  params.delete("field");
+  return params.toString();
+}
+
+/**
+ * Whether a move is between one document's edit address and its own views.
+ * The same page answers all of them and keeps the same form mounted, so
+ * nothing unsaved is left behind. Any other query change — a language among
+ * them — still counts, and so does another document's view.
+ */
+function staysOnDocument(
+  from: { pathname: string; search: string },
+  to: { pathname: string; search: string }
+): boolean {
+  const here = documentOf(from.pathname);
+  return (
+    here !== undefined &&
+    here === documentOf(to.pathname) &&
+    queryBesidesField(to.search) === queryBesidesField(from.search)
+  );
+}
+
 function movesElsewhere(url: string | URL | null | undefined): boolean {
   if (url === undefined || url === null) return false;
   try {
     const next = new URL(url.toString(), window.location.origin);
+    if (staysOnDocument(window.location, next)) return false;
     return (
       next.pathname !== window.location.pathname ||
       next.search !== window.location.search
@@ -154,6 +222,13 @@ export function useUnsavedChanges({
 
   // Store pending navigation to execute after confirmation
   const pendingNavigation = useRef<PendingNavigation | null>(null);
+
+  // The last address this guard let the page reach: what a Back or Forward is
+  // judged FROM, since the browser has moved the address before it reports.
+  const lastLocation = useRef<{ pathname: string; search: string }>({
+    pathname: typeof window === "undefined" ? "" : window.location.pathname,
+    search: typeof window === "undefined" ? "" : window.location.search,
+  });
 
   // Prevent rapid re-opening of the dialog (re-entrancy protection)
   const lastDialogShownAt = useRef<number>(0);
@@ -261,6 +336,19 @@ export function useUnsavedChanges({
     originalReplaceState.current = window.history.replaceState;
 
     // Create interceptor for pushState
+    // A history write let through, and the address it reached recorded.
+    const passThrough = (
+      write: History["pushState"],
+      history: History,
+      args: [data: unknown, unused: string, url?: string | URL | null]
+    ): void => {
+      write.apply(history, args);
+      lastLocation.current = {
+        pathname: window.location.pathname,
+        search: window.location.search,
+      };
+    };
+
     const interceptPushState = function (
       this: History,
       data: unknown,
@@ -269,12 +357,20 @@ export function useUnsavedChanges({
     ) {
       // Skip interception if not dirty, navigating programmatically, or same URL
       if (!isDirty || isNavigating.current) {
-        return originalPushState.current!.apply(this, [data, unused, url]);
+        return passThrough(originalPushState.current!, this, [
+          data,
+          unused,
+          url,
+        ]);
       }
 
       if (!movesElsewhere(url)) {
         // Staying put — a hash, or a rewrite of the same address.
-        return originalPushState.current!.apply(this, [data, unused, url]);
+        return passThrough(originalPushState.current!, this, [
+          data,
+          unused,
+          url,
+        ]);
       }
 
       // If there's already a pending navigation, ignore new attempts
@@ -307,12 +403,20 @@ export function useUnsavedChanges({
     ) {
       // Skip interception if not dirty or navigating programmatically
       if (!isDirty || isNavigating.current) {
-        return originalReplaceState.current!.apply(this, [data, unused, url]);
+        return passThrough(originalReplaceState.current!, this, [
+          data,
+          unused,
+          url,
+        ]);
       }
 
       if (!movesElsewhere(url)) {
         // Staying put — a hash, or a rewrite of the same address.
-        return originalReplaceState.current!.apply(this, [data, unused, url]);
+        return passThrough(originalReplaceState.current!, this, [
+          data,
+          unused,
+          url,
+        ]);
       }
 
       // If there's already a pending navigation, ignore new attempts
@@ -336,7 +440,20 @@ export function useUnsavedChanges({
 
     // Handle browser back/forward
     const handlePopState = () => {
+      // Where the history move came FROM. The browser has already changed the
+      // address by the time this runs, so it is the last one this guard let
+      // through, not the one in the bar.
+      const from = lastLocation.current;
+      lastLocation.current = {
+        pathname: window.location.pathname,
+        search: window.location.search,
+      };
       if (!isDirty || isNavigating.current) {
+        return;
+      }
+      // Back or Forward between a document and its own views stays on the
+      // document, exactly as a history write between them does.
+      if (staysOnDocument(from, window.location)) {
         return;
       }
 

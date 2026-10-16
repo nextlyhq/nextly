@@ -118,6 +118,9 @@ export const NEXTLY_ERROR_STATUS = {
   // `/api/admin-meta/workspace` payload: a value `JSON.stringify` throws on
   // fails that request for every admin, not just the widget's own card.
   NEXTLY_PLUGIN_ADMIN_WIDGET_INVALID: 500,
+  // A plugin's document view cannot be routed: a malformed or reserved path,
+  // or one two declarations claim on the same document. Refused at boot.
+  NEXTLY_PLUGIN_DOCUMENT_VIEW_INVALID: 500,
   // Plugin platform (P0) — boot-time plugin dependency/version resolution.
   PLUGIN_RESOLUTION_ERROR: 500,
   // Plugin schema lifecycle. All 409: each is a state

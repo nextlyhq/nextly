@@ -1,15 +1,16 @@
 /**
  * Captures one durable version row using the caller's database handle.
  *
- * Stage 1 provides durable capture only (allocate version_no + insert). It is
- * intentionally NOT wired into any mutation path yet; Stage 2 calls it from the
- * collection/single write services with the transaction context, after building
- * the snapshot with assembleDocument(). Autosave coalescing and inline pruning
- * arrive in Stage 4.
+ * The collection and Single write services call it, directly or through
+ * captureInTx, with their transaction context, so the version commits with the
+ * content write.
+ * It allocates the next version_no, inserts the row, and then applies
+ * retention in the same transaction.
  *
  * @module domains/versions/version-capture-service
  */
 
+import { NextlyError } from "../../errors";
 import type { VersionStatus } from "../../schemas/versions/types";
 
 import type { VersionsDbApi } from "./db-api";
@@ -86,9 +87,9 @@ export class VersionCaptureService {
       }
       throw err;
     }
-    // Trim history to the configured cap inside the caller's transaction. The
-    // newest version and the most recent published one are always protected, so
-    // the head of history and the snapshot matching live content survive.
+    // Trim history to the configured cap inside the caller's transaction. What
+    // is always kept (the newest version, each language's latest published one,
+    // named versions and restore lineage) is decided by selectVersionsToPrune.
     if (typeof input.maxPerDoc === "number") {
       const durable = await repo.listDurableForPrune(input.ref);
       // A restore's own capture additionally protects two versions. The one
@@ -98,12 +99,33 @@ export class VersionCaptureService {
       // version restored FROM, which this row names as its source: pruning it
       // in the same transaction would leave that lineage pointing at nothing.
       const isRestore = typeof input.sourceVersionNo === "number";
+      // A restore reads its source before this transaction began, so a save
+      // committed in between can have pruned it. Recording it as the source
+      // then would leave lineage pointing at a version that is gone, so the
+      // restore is refused instead, and nothing it wrote is kept.
+      if (
+        isRestore &&
+        !durable.some(row => row.versionNo === input.sourceVersionNo)
+      ) {
+        throw NextlyError.conflict({
+          reason: "state",
+          message:
+            "The version you restored from was removed from the history while restoring. Reload the history and choose a version that is still kept.",
+          logContext: {
+            reason: "restore-source-pruned",
+            scopeKind: input.ref.scopeKind,
+            scopeSlug: input.ref.scopeSlug,
+            entryId: input.ref.entryId,
+            sourceVersionNo: input.sourceVersionNo,
+          },
+        });
+      }
       const staleIds = selectVersionsToPrune(durable, input.maxPerDoc, [
         isRestore ? versionNo - 1 : null,
         input.sourceVersionNo,
       ]);
       if (staleIds.length > 0) {
-        await repo.deleteByIds(staleIds);
+        await repo.deletePrunedVersions(staleIds);
       }
     }
     return { versionNo };

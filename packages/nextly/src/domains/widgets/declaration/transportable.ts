@@ -135,7 +135,11 @@ function notPlainProblem(value: object, at: string): string | undefined {
  */
 function childrenOf(value: object): [string, unknown][] {
   if (Array.isArray(value)) {
-    return value.map((item: unknown, index) => [`[${index}]`, item]);
+    // By index rather than `map`, which skips a sparse array's holes and
+    // leaves them holes; a hole is read here as `undefined`, which JSON writes
+    // as `null`, so it is refused like any other `undefined` in an array.
+    const items: readonly unknown[] = value;
+    return Array.from(items, (item, index) => [`[${index}]`, item]);
   }
   return Object.entries(value)
     .filter(([, item]) => item !== undefined)

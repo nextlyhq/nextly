@@ -26,6 +26,7 @@
 
 import type { AuthenticatedScope } from "../../auth/authenticated-scope";
 import { container } from "../../di/container";
+import { toPaginationMeta } from "../../dispatcher/helpers/service-envelope";
 import type {
   ReleaseMemberRow,
   ReleaseRow,
@@ -34,11 +35,13 @@ import type {
   AddMemberInput,
   FindReleasesQuery,
   ReleaseBlocker,
+  ReleaseCountQuery,
   ReleaseCapabilities,
   ReleasesService,
 } from "../../domains/releases/services/releases-service";
 import { NextlyError } from "../../errors/nextly-error";
 import type { ReleaseMemberAction } from "../../schemas/releases/types";
+import type { ListResult } from "../types/shared";
 
 import type { NextlyContext } from "./context";
 import { accessOptions, mergeConfig } from "./helpers";
@@ -86,18 +89,36 @@ export interface ReleasesNamespace {
     args: { title: string; description?: string | null } & ReleaseCallerArgs
   ): Promise<ReleaseRow>;
   /**
-   * Releases in a window, newest scheduled instant first.
+   * One page of releases, as `{ items, meta }` like every other Direct API
+   * list, with `meta.total` counting every release that matches.
    *
-   * Filtering by `containing` returns them SOONEST first instead — the order
-   * they will be applied to that document — and each row carries the member's
-   * action, because a release can publish one document while taking another
-   * down. Declared in the return type rather than left to the runtime: a caller
-   * that cannot see `memberAction` cannot tell which way a release moves the
-   * document it just asked about.
+   * Narrow it by `tab` (`upcoming`, `attention`, `drafts`, `done`), by `state`
+   * and a window on the scheduled instant, and by `search`, a case-insensitive
+   * match on the title or description. Page it with `page` (from 1) and
+   * `limit` (50 by default, at most 200). The scheduled releases come soonest
+   * first unless `order` says otherwise; other listings latest first.
+   *
+   * Filtering by `containing` returns one document's releases instead, SOONEST
+   * first — the order they will be applied to it — and each row carries the
+   * member's action, because a release can publish one document while taking
+   * another down. Declared in the return type rather than left to the
+   * runtime: a caller that cannot see `memberAction` cannot tell which way a
+   * release moves the document it just asked about.
+   *
+   * `tab`, `search` and `page` are `@experimental`.
    */
   find(
     args?: FindReleasesQuery & ReleaseCallerArgs
-  ): Promise<Array<ReleaseRow & { memberAction?: ReleaseMemberAction }>>;
+  ): Promise<ListResult<ReleaseRow & { memberAction?: ReleaseMemberAction }>>;
+  /**
+   * How many releases a listing holds, without reading them: the same tab,
+   * state, window and search `find` takes, and the same answer as its
+   * `meta.total`. What a page outside Releases asks, such as "how many need
+   * attention?".
+   *
+   * @experimental
+   */
+  count(args?: ReleaseCountQuery & ReleaseCallerArgs): Promise<number>;
   findByID(
     args: { id: string } & ReleaseCallerArgs
   ): Promise<ReleaseRow | null>;
@@ -260,7 +281,7 @@ export function createReleasesNamespace(ctx: NextlyContext): ReleasesNamespace {
         actorOf(ctx, args)
       ),
 
-    find: (args = {}) => {
+    find: async (args = {}) => {
       // Caller keys are stripped from the QUERY as well as read for the actor.
       // Leaving them in sends `authenticatedScope` to the repository as a filter
       // column, which is a query nobody wrote and a credential in a place it
@@ -276,7 +297,32 @@ export function createReleasesNamespace(ctx: NextlyContext): ReleasesNamespace {
       void overrideAccess;
       void authenticatedScope;
       void userRoles;
-      return service().find(query, actorOf(ctx, args));
+      const found = await service().find(query, actorOf(ctx, args));
+      return {
+        items: found.rows,
+        meta: toPaginationMeta({
+          total: found.total,
+          page: found.page,
+          limit: found.limit,
+          totalPages: Math.ceil(found.total / found.limit),
+        }),
+      };
+    },
+
+    count: (args = {}) => {
+      // Stripped for the reason `find` gives: caller keys are not filters.
+      const {
+        userId,
+        overrideAccess,
+        authenticatedScope,
+        userRoles,
+        ...query
+      } = args;
+      void userId;
+      void overrideAccess;
+      void authenticatedScope;
+      void userRoles;
+      return service().count(query, actorOf(ctx, args));
     },
 
     findByID: args => service().findByID(args.id, actorOf(ctx, args)),

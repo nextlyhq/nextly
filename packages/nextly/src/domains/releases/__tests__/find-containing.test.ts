@@ -103,7 +103,8 @@ function service(rows: Row[]) {
   return new ReleasesService(deps);
 }
 
-const ids = (rows: { id: string }[]) => rows.map(r => r.id);
+/** The ids on the page `find` answered with. */
+const ids = (page: { rows: { id: string }[] }) => page.rows.map(r => r.id);
 
 describe("the order the releases are returned in", () => {
   it("is soonest first", async () => {
@@ -284,10 +285,16 @@ describe("the document filter NARROWS the list rather than replacing it", () => 
     // Order first, then trim. Trimming an unordered set returns an arbitrary
     // subset and calls it the soonest.
     const svc = service(WINDOWED);
-    expect(ids(await svc.find({ containing: REF, limit: 2 }, ACTOR))).toEqual([
-      "before",
-      "inside",
-    ]);
+    const first = await svc.find({ containing: REF, limit: 2 }, ACTOR);
+    expect(ids(first)).toEqual(["before", "inside"]);
+    // The total is every release holding the document, not the page's rows,
+    // and the next page continues the same order rather than restarting it.
+    expect(first.total).toBe(3);
+    const second = await svc.find(
+      { containing: REF, limit: 2, page: 2 },
+      ACTOR
+    );
+    expect(ids(second)).toEqual(["after"]);
   });
 
   it("returns everything matching when no qualifier is given", async () => {
