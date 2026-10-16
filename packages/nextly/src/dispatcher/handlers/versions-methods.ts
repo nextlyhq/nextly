@@ -924,12 +924,14 @@ export async function getAutosaveForDocument(
   // whole question: a field's `access.read` rule can deny this caller today
   // even though the snapshot was stored while they could see it, and handing
   // the row back verbatim would serve that field's old value from history.
+  // The scope decoded above, the one the document gate judged: a direct
+  // dispatch carries a key's scope in its params only.
   await redactSnapshotForUser(
     row.snapshot,
     args.scopeKind,
     args.slug,
     args.user,
-    args.authenticatedScope
+    authenticatedScope
   );
   return row;
 }

@@ -26,8 +26,23 @@ vi.mock("../../../api/versions-access", () => ({
   hydrateVersionSnapshot: () => Promise.resolve(),
 }));
 
+const getAutosaveSpy = vi.fn();
+
 vi.mock("../../../di", () => ({
-  getService: vi.fn(() => ({ list: listSpy, get: getSpy })),
+  getService: vi.fn(() => ({
+    list: listSpy,
+    get: getSpy,
+    getAutosave: getAutosaveSpy,
+  })),
+}));
+
+// The entity gate the autosave read passes first; this file judges what
+// happens after it.
+vi.mock("../../../auth/entity-read-access", async importOriginal => ({
+  ...(await importOriginal<
+    typeof import("../../../auth/entity-read-access")
+  >()),
+  canReadEntity: () => Promise.resolve(true),
 }));
 
 vi.mock("../../../domains/versions/author-hydration", () => ({
@@ -35,6 +50,7 @@ vi.mock("../../../domains/versions/author-hydration", () => ({
 }));
 
 import {
+  getAutosaveForDocument,
   getVersionForDocument,
   listVersionsForDocument,
   userFromParams,
@@ -257,5 +273,34 @@ describe("userFromParams", () => {
     });
 
     expect(result.roles).toBeUndefined();
+  });
+});
+
+describe("getAutosaveForDocument", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("redacts with the key scope the request carries", async () => {
+    getAutosaveSpy.mockResolvedValue({ snapshot: { title: "x" } });
+
+    // A direct dispatch: the key's scope arrives in the params only, not as an
+    // argument, and the read decodes it from there.
+    await getAutosaveForDocument({
+      scopeKind: "collection",
+      slug: "posts",
+      entryId: "e1",
+      user,
+      params: {
+        _authenticatedActorType: "apiKey",
+        _authenticatedPermissions: JSON.stringify(["read-posts"]),
+      },
+    });
+
+    expect(redactSpy).toHaveBeenCalledWith(
+      { title: "x" },
+      "collection",
+      "posts",
+      user,
+      { actorType: "apiKey", permissions: ["read-posts"] }
+    );
   });
 });

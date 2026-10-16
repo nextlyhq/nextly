@@ -93,7 +93,15 @@ export interface VersionMeta {
 }
 
 /** One version including the stored document. */
-export type VersionDetail = VersionMeta & { snapshot: unknown };
+export type VersionDetail = VersionMeta & {
+  snapshot: unknown;
+  /**
+   * What the read rules held back from this reader: top-level field names, and
+   * dotted paths below them (`banner.secret`). A field named here was withheld,
+   * not absent from the version.
+   */
+  withheld: string[];
+};
 
 export type VersionListResponse = ListResponse<VersionMeta>;
 
