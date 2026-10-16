@@ -69,6 +69,8 @@ export function generateSqliteCoreTableStatements(): string[] {
       ON "password_reset_tokens" ("expires")`,
     `CREATE INDEX IF NOT EXISTS "prt_used_at_idx"
       ON "password_reset_tokens" ("used_at")`,
+    `CREATE INDEX IF NOT EXISTS "prt_token_hash_idx"
+      ON "password_reset_tokens" ("token_hash")`,
     `CREATE TABLE IF NOT EXISTS "email_verification_tokens" (
       "id" INTEGER PRIMARY KEY AUTOINCREMENT,
       "identifier" TEXT NOT NULL,
@@ -79,6 +81,8 @@ export function generateSqliteCoreTableStatements(): string[] {
     )`,
     `CREATE INDEX IF NOT EXISTS "evt_expires_idx"
       ON "email_verification_tokens" ("expires")`,
+    `CREATE INDEX IF NOT EXISTS "evt_token_hash_idx"
+      ON "email_verification_tokens" ("token_hash")`,
     `CREATE TABLE IF NOT EXISTS "refresh_tokens" (
       "id" TEXT PRIMARY KEY,
       "user_id" TEXT NOT NULL REFERENCES "users"("id") ON DELETE CASCADE,

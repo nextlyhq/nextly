@@ -48,3 +48,8 @@ ceiling's rate can still hold unresolvable sign-in shut while it runs.
 Requests whose address resolves through a trusted proxy keep their per-address
 bucket, unchanged, and a budget of 0 still turns the limiter off. The 429
 responses keep their shape and `Retry-After`.
+
+The password-reset and email-verification token tables gain an index on the
+token hash, which is how those tokens are looked up; until now each lookup
+read the whole table. Run `nextly migrate` to add the indexes to an existing
+database. No row is changed. A plain boot does not add them.
