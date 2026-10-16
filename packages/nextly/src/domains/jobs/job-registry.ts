@@ -138,7 +138,15 @@ export interface JobRetryPolicy {
 
 export interface JobDefinition<TInput extends JobInput = JobInput> {
   slug: string;
-  handler: (input: TInput, context: JobContext) => Promise<void>;
+  /**
+   * Declared as a method so its input is compared bivariantly. A list of jobs,
+   * the config's `jobs` or a plugin's `contributes.jobs`, holds handlers for
+   * unrelated input shapes under the default `JobDefinition`; as a function
+   * property, a handler for `{ cursor: string }` would not be assignable there
+   * without a cast. The runner hands each handler the input stored for it, so
+   * nothing calls a handler with another job's input.
+   */
+  handler(input: TInput, context: JobContext): Promise<void>;
   retry: JobRetryPolicy;
   /**
    * Whether a trigger should keep one of these queued at all times.
