@@ -29,6 +29,8 @@ export interface LeavingTranslationPreview {
   byLocale: Record<string, number>;
   /** The sum of `byLocale`. */
   total: number;
+  /** The language whose value becomes the shared one, and so is not archived. */
+  defaultLocale: string;
   /** The command that brings the archived values back once the field is translated again. */
   restoreCommand: string;
   /** Why the change will be refused, when it will be; Apply is not offered then. */
@@ -97,6 +99,7 @@ export async function previewFieldsLeavingTranslation(args: {
       name: field.name,
       byLocale,
       total: Object.values(byLocale).reduce((sum, n) => sum + n, 0),
+      defaultLocale: args.defaultLocale,
       restoreCommand: `nextly i18n:restore --collection ${args.slug} --field ${field.name}`,
       ...(refusal !== undefined ? { refusal } : {}),
     });

@@ -102,6 +102,94 @@ describe("BuilderSchemaChangeDialogs", () => {
     expect(screen.getByText(/rename to/i)).toBeInTheDocument();
   });
 
+  // A field leaving translation moves its other languages to the archive, so the
+  // short confirmation's "does not affect existing data" would be untrue.
+  it("shows the full dialog, saying what moves to the archive, for a field leaving translation", () => {
+    renderDialogs(
+      preview({
+        leavingTranslation: [
+          {
+            name: "heading",
+            byLocale: { ar: 3, es: 12 },
+            total: 15,
+            defaultLocale: "en",
+            restoreCommand:
+              "nextly i18n:restore --collection posts --field heading",
+          },
+        ],
+      })
+    );
+
+    expect(screen.queryByText(/safe change/i)).not.toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "12 Spanish and 3 Arabic values move to the archive. English becomes the shared value."
+      )
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("nextly i18n:restore --collection posts --field heading")
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /save changes/i })).toBeEnabled();
+  });
+
+  it("names the refusal and does not offer Apply for a field that cannot leave in one change", () => {
+    renderDialogs(
+      preview({
+        leavingTranslation: [
+          {
+            name: "heading",
+            byLocale: { es: 2 },
+            total: 2,
+            defaultLocale: "en",
+            restoreCommand:
+              "nextly i18n:restore --collection posts --field heading",
+            refusal:
+              '"heading" is required, so it cannot stop being translated in the same change.',
+          },
+        ],
+      })
+    );
+
+    expect(screen.getByText(/"heading" is required/)).toBeInTheDocument();
+    expect(screen.queryByText(/nextly i18n:restore/)).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /save changes/i })
+    ).toBeDisabled();
+  });
+
+  it("copies the restore command", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText },
+      configurable: true,
+    });
+    renderDialogs(
+      preview({
+        leavingTranslation: [
+          {
+            name: "heading",
+            byLocale: { es: 1 },
+            total: 1,
+            defaultLocale: "en",
+            restoreCommand:
+              "nextly i18n:restore --collection posts --field heading",
+          },
+        ],
+      })
+    );
+
+    await userEvent.click(
+      screen.getByRole("button", { name: /copy the restore command/i })
+    );
+
+    expect(writeText).toHaveBeenCalledWith(
+      "nextly i18n:restore --collection posts --field heading"
+    );
+    expect(
+      await screen.findByRole("button", { name: "Copied" })
+    ).toBeInTheDocument();
+  });
+
   it("shows the full dialog for a destructive change", () => {
     renderDialogs(
       preview({ classification: "destructive", hasDestructiveChanges: true })

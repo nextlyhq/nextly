@@ -73,6 +73,19 @@ export interface InteractiveField {
   options: Array<"provide_default" | "mark_nullable" | "cancel">;
 }
 
+// A field that stops being translated in this change: what moves to the localization archive,
+// by language, and how to bring it back. Set by the preview; empty when no field leaves.
+export interface SchemaPreviewLeavingTranslation {
+  name: string;
+  byLocale: Record<string, number>;
+  total: number;
+  /** The language whose value becomes the shared one. */
+  defaultLocale: string;
+  restoreCommand: string;
+  /** Why the change will be refused; Apply is not offered then. */
+  refusal?: string;
+}
+
 // Full response from the preview endpoint
 export interface SchemaPreviewResponse {
   hasChanges: boolean;
@@ -86,6 +99,7 @@ export interface SchemaPreviewResponse {
   // F4 Option E PR 5: empty for pure-additive changes; populated when the
   // preview detects (drop, add) pairs that might be column renames.
   renamed: SchemaPreviewRenameCandidate[];
+  leavingTranslation?: SchemaPreviewLeavingTranslation[];
 }
 
 // Response from the apply endpoint.

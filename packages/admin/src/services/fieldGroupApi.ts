@@ -204,11 +204,14 @@ export const fieldGroupApi = {
    */
   previewSchemaChanges: async (
     fieldGroupSlug: string,
-    fields: unknown[]
+    fields: unknown[],
+    // i18n: mirrors schemaApi.preview and the apply below, so the preview diffs against the
+    // localization state the apply will run with, and reports fields leaving translation.
+    localized?: boolean
   ): Promise<SchemaPreviewResponse> => {
     return protectedApi.post<SchemaPreviewResponse>(
       `/field-groups/schema/${fieldGroupSlug}/preview`,
-      { fields }
+      { fields, ...(localized !== undefined ? { localized } : {}) }
     );
   },
 

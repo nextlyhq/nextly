@@ -246,9 +246,10 @@ export default function FieldGroupBuilderEditPage({
     label: displayLabel(settings, entitySlug),
     confirmation,
     getValidatedFields,
-    // Unlike the other kinds the preview takes no i18n flag: a field group owns
-    // no rows of its own, so the toggle cannot change what it reports.
-    preview: fields => fieldGroupApi.previewSchemaChanges(entitySlug, fields),
+    // The i18n flag, as for the other kinds: the preview reports what a field
+    // leaving translation moves to the archive, which depends on it.
+    preview: fields =>
+      fieldGroupApi.previewSchemaChanges(entitySlug, fields, localized),
     apply: (fields, version, resolutions, renames) =>
       fieldGroupApi.applySchemaChanges(
         entitySlug,

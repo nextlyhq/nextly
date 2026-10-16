@@ -26,11 +26,14 @@ import { useMemo, useState } from "react";
 
 import type {
   SchemaPreviewChange,
+  SchemaPreviewLeavingTranslation,
   SchemaPreviewRenameCandidate,
   SchemaRenameResolution,
   InteractiveField,
   FieldResolution,
 } from "@admin/services/schemaApi";
+
+import { LeavingTranslationNotice } from "./LeavingTranslationNotice";
 
 interface SchemaChangeDialogProps {
   open: boolean;
@@ -44,6 +47,8 @@ interface SchemaChangeDialogProps {
   renamed?: SchemaPreviewRenameCandidate[];
   warnings: string[];
   interactiveFields: InteractiveField[];
+  // Fields that stop being translated: what moves to the archive, or why the change is refused.
+  leavingTranslation?: SchemaPreviewLeavingTranslation[];
   onConfirm: (
     resolutions: Record<string, FieldResolution>,
     renameResolutions: SchemaRenameResolution[]
@@ -61,6 +66,7 @@ export function SchemaChangeDialog({
   renamed,
   warnings,
   interactiveFields,
+  leavingTranslation = [],
   onConfirm,
   isApplying,
 }: SchemaChangeDialogProps) {
@@ -112,7 +118,11 @@ export function SchemaChangeDialog({
     if (res.action === "provide_default") return !!res.value?.trim();
     return true;
   });
-  const canApply = classification !== "interactive" || allResolved;
+  // A field that cannot leave translation in one change is refused by the server, so the dialog
+  // does not offer Apply; its notice says why and what to do instead.
+  const refused = leavingTranslation.some(field => field.refusal);
+  const canApply =
+    (classification !== "interactive" || allResolved) && !refused;
 
   const updateResolution = (fieldName: string, resolution: FieldResolution) => {
     setResolutions(prev => ({ ...prev, [fieldName]: resolution }));
@@ -233,6 +243,8 @@ export function SchemaChangeDialog({
             ))}
           </div>
         )}
+
+        <LeavingTranslationNotice fields={leavingTranslation} />
 
         {/* Rename candidates - one section per dropped column with a list
             of "rename to X" radios + a "drop and add new" option.

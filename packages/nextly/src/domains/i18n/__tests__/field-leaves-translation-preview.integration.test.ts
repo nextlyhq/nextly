@@ -35,6 +35,7 @@ interface LeavingTranslation {
   name: string;
   byLocale: Record<string, number>;
   total: number;
+  defaultLocale: string;
   restoreCommand: string;
   refusal?: string;
 }
@@ -168,6 +169,7 @@ describeEachDialect("the preview of a field leaving translation", dialect => {
         name: "heading",
         byLocale: { ar: 1, es: 2 },
         total: 3,
+        defaultLocale: "en",
         restoreCommand:
           "nextly i18n:restore --collection posts --field heading",
       },
