@@ -5,19 +5,7 @@ import fs from "fs-extra";
 import type { PackageManager, ProjectInfo } from "../types";
 
 import { detectPmFromUserAgent } from "./detect-pm-from-user-agent";
-
-/**
- * Lockfiles, and the manager each one belongs to. Bun writes the text
- * `bun.lock` by default since 1.2; `bun.lockb` is the older binary form.
- */
-const LOCKFILES: ReadonlyArray<readonly [string, PackageManager]> = [
-  ["pnpm-lock.yaml", "pnpm"],
-  ["yarn.lock", "yarn"],
-  ["bun.lock", "bun"],
-  ["bun.lockb", "bun"],
-  ["package-lock.json", "npm"],
-  ["npm-shrinkwrap.json", "npm"],
-];
+import { findWorkspaceRoot, lockfileManager } from "./workspace";
 
 /**
  * Detect the package manager used in the project.
@@ -35,47 +23,41 @@ const LOCKFILES: ReadonlyArray<readonly [string, PackageManager]> = [
 export async function detectPackageManager(
   cwd: string
 ): Promise<PackageManager> {
+  return (await lockfileManager(cwd)) ?? launcher();
+}
+
+/**
+ * The package manager of an app that already exists, which may be one member
+ * of a workspace: its own lockfile first, then the lockfile of the workspace
+ * that lists it (see {@link findWorkspaceRoot}), then the launcher. A member
+ * has no lockfile of its own, and falling back to the launcher there ran
+ * `npm install` inside a pnpm workspace.
+ */
+export async function detectAppPackageManager(
+  cwd: string
+): Promise<PackageManager> {
   return (
-    (await managerFromProject(cwd)) ??
-    detectPmFromUserAgent(process.env.npm_config_user_agent) ??
-    "npm"
+    (await lockfileManager(cwd)) ??
+    (await findWorkspaceRoot(cwd))?.manager ??
+    launcher()
   );
 }
 
-/**
- * The manager the project's own files name, from `cwd` up to its repository's
- * root. An app inside a monorepo has no lockfile of its own; the workspace
- * keeps one at its root, and a pnpm workspace is known by its workspace file
- * before its first install. The walk stops at the directory holding `.git`, so
- * a lockfile somewhere above the repository is never taken for the app's.
- */
-async function managerFromProject(
-  cwd: string
-): Promise<PackageManager | undefined> {
-  let dir = path.resolve(cwd);
-  for (;;) {
-    const found = await managerIn(dir);
-    if (found) return found;
-    const parent = path.dirname(dir);
-    if (parent === dir || (await fs.pathExists(path.join(dir, ".git")))) {
-      return undefined;
-    }
-    dir = parent;
-  }
-}
-
-async function managerIn(dir: string): Promise<PackageManager | undefined> {
-  for (const [lockfile, manager] of LOCKFILES) {
-    if (await fs.pathExists(path.join(dir, lockfile))) return manager;
-  }
-  if (await fs.pathExists(path.join(dir, "pnpm-workspace.yaml"))) return "pnpm";
-  return undefined;
-}
+const launcher = (): PackageManager =>
+  detectPmFromUserAgent(process.env.npm_config_user_agent) ?? "npm";
 
 /**
  * Detect project configuration and validate Next.js setup.
+ *
+ * `chosen` is a manager already settled: a new project's comes from the
+ * command that launched the scaffold, before any file was written. Reading
+ * the written files would answer differently, since every scaffold writes
+ * `pnpm-workspace.yaml` for its build allowlist, whatever installs it.
  */
-export async function detectProject(cwd: string): Promise<ProjectInfo> {
+export async function detectProject(
+  cwd: string,
+  chosen?: PackageManager
+): Promise<ProjectInfo> {
   const packageJsonPath = path.join(cwd, "package.json");
 
   if (!(await fs.pathExists(packageJsonPath))) {
@@ -127,7 +109,7 @@ export async function detectProject(cwd: string): Promise<ProjectInfo> {
   const hasTypescript = await fs.pathExists(path.join(cwd, "tsconfig.json"));
 
   // Detect package manager
-  const packageManager = await detectPackageManager(cwd);
+  const packageManager = chosen ?? (await detectAppPackageManager(cwd));
 
   // Determine app directory
   const appDir = srcDir ? "src/app" : "app";
@@ -152,12 +134,15 @@ export async function detectProject(cwd: string): Promise<ProjectInfo> {
  * about the layout needs detecting; only the package manager does, and it is
  * the one field a fresh scaffold's install and next steps read.
  */
-export async function detectPluginPackage(cwd: string): Promise<ProjectInfo> {
+export async function detectPluginPackage(
+  cwd: string,
+  chosen?: PackageManager
+): Promise<ProjectInfo> {
   return {
     isNextJs: false,
     isAppRouter: false,
     hasTypescript: true,
-    packageManager: await detectPackageManager(cwd),
+    packageManager: chosen ?? (await detectPackageManager(cwd)),
     nextVersion: null,
     srcDir: true,
     appDir: "dev/src/app",

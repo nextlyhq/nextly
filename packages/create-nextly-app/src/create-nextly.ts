@@ -41,6 +41,7 @@ import type {
   CreateNextlyOptions,
   DatabaseConfig,
   DatabaseType,
+  PackageManager,
   ProjectApproach,
   ProjectType,
 } from "./types";
@@ -359,6 +360,12 @@ export async function createNextly(
 
   // --- Scaffold project from template ---
 
+  // A new project's package manager, settled here before any file is written
+  // and kept by detection below: the scaffold writes pnpm-workspace.yaml for
+  // its build allowlist whatever manager installs it, so reading the files
+  // back would answer differently.
+  let scaffoldPackageManager: PackageManager | undefined;
+
   if (isFreshProject && projectName) {
     const targetDir = installInCwd ? cwd : path.join(cwd, projectName);
 
@@ -394,7 +401,7 @@ export async function createNextly(
       // agent of the command that invoked this CLI, which is the package
       // manager that will run the install a moment later; the target has no
       // lockfile yet, so nothing else could answer.
-      const scaffoldPackageManager = await detectPackageManager(targetDir);
+      scaffoldPackageManager = await detectPackageManager(targetDir);
 
       await copyTemplate({
         projectName,
@@ -463,10 +470,10 @@ export async function createNextly(
       if (projectType === "plugin") {
         // A plugin keeps its library in src/ and its Next.js app in dev/, a
         // layout the app detector rejects ("App Router not detected").
-        projectInfo = await detectPluginPackage(cwd);
+        projectInfo = await detectPluginPackage(cwd, scaffoldPackageManager);
         s.stop("Detected plugin package");
       } else {
-        projectInfo = await detectProject(cwd);
+        projectInfo = await detectProject(cwd, scaffoldPackageManager);
         s.stop(`Detected Next.js ${projectInfo.nextVersion || "unknown"}`);
       }
     } catch (error) {
