@@ -488,7 +488,7 @@ function levelHasAccessCallback(
 }
 
 /** What a field rule is told about the caller and the row. */
-interface FieldRuleCaller {
+export interface FieldRuleCaller {
   user?: Record<string, unknown>;
   id?: string;
   grants: () => Promise<CallerGrants>;
@@ -522,6 +522,32 @@ async function fieldRuleAllows(
     // Fail-secure: an access rule that throws denies the field.
     return false;
   }
+}
+
+/**
+ * Whether every read rule on this field, and on anything nested in it, lets
+ * the caller read it when no entry is given.
+ *
+ * The question a query asks before it filters, sorts, groups or searches on a
+ * field. There is no row yet, so a rule that needs one — reading `data` or
+ * `id` — cannot allow, and the field is unreadable for the query: that is what
+ * keeps a predicate, an ordering or a match from revealing the value on the
+ * entries where the rule hides it. A rule that allows the caller outright
+ * (by role, permission or identity) allows here too. A nested child is judged
+ * because a container is stored as one value, so matching the container
+ * probes the child. Asked through the same rule runner as a read, so a rule
+ * that throws denies here as it does there.
+ */
+export async function readableWithoutEntry(
+  fns: FieldFunctions,
+  caller: Omit<FieldRuleCaller, "id">
+): Promise<boolean> {
+  const rule = fns.access?.read;
+  if (rule && !(await fieldRuleAllows(rule, caller, undefined))) return false;
+  for (const nested of Object.values(fns.fields ?? {})) {
+    if (!(await readableWithoutEntry(nested, caller))) return false;
+  }
+  return true;
 }
 
 /**

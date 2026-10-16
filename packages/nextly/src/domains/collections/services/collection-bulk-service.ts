@@ -918,7 +918,7 @@ export class CollectionBulkService extends BaseService {
         },
       });
     }
-    assertCallerFilterReadable(params);
+    await assertCallerFilterReadable(params);
 
     // 2. Enumerate the target rows under the UPDATE rule. The collection-level
     // UPDATE access was already checked above, so this runs with overrideAccess
@@ -1100,7 +1100,7 @@ export class CollectionBulkService extends BaseService {
         },
       });
     }
-    assertCallerFilterReadable(params);
+    await assertCallerFilterReadable(params);
 
     // 2. Enumerate the target rows under the DELETE rule. overrideAccess skips
     // the READ rules (a role allowed to delete but not read must still see its
@@ -2210,12 +2210,24 @@ export class CollectionBulkService extends BaseService {
  * the trusted read is, so every way in (the Direct API, a plugin's service
  * call, the REST bulk routes) is held to it.
  */
-function assertCallerFilterReadable(params: {
+async function assertCallerFilterReadable(params: {
   collectionName: string;
   where: WhereFilter;
   overrideAccess?: boolean;
-}): void {
-  assertFilterableFields("collection", params.collectionName, params.where, {
-    overrideAccess: params.overrideAccess,
-  });
+  user?: UserContext;
+  authenticatedScope?: AuthenticatedScope;
+}): Promise<void> {
+  await assertFilterableFields(
+    "collection",
+    params.collectionName,
+    params.where,
+    {
+      overrideAccess: params.overrideAccess,
+      // The field rules are asked of the caller, as a read asks them.
+      caller: {
+        user: params.user as Record<string, unknown> | undefined,
+        authenticatedScope: params.authenticatedScope,
+      },
+    }
+  );
 }
