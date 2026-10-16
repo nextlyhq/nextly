@@ -630,25 +630,21 @@ export class ReleasesRepository {
     try {
       await this.db.transaction(async tx => {
         for (const entry of ordered) {
-          const affected = await tx.updateCount(
-            RELEASES,
+          // Each row locked, its revision read and bumped, in id order: a
+          // block is a scheduling move like any other, so a schedule judged
+          // before it misses on the revision rather than overwriting it.
+          const moved = await this.advanceRevision(
+            tx,
+            entry.id,
+            ["scheduled"],
             {
-              state: "blocked" satisfies ReleaseState,
-              // Always moves, which MySQL requires of a compare-and-set: it
-              // counts CHANGED rows rather than matched ones. `state` moves
-              // here too, so this is belt and braces rather than the only
-              // thing keeping the fence honest.
-              updatedAt: new Date(),
-            },
-            {
-              and: [
-                { column: "id", op: "=", value: entry.id },
-                { column: "state", op: "=", value: "scheduled" },
+              set: { state: "blocked" satisfies ReleaseState },
+              where: [
                 { column: "scheduledAt", op: "=", value: entry.scheduledAt },
               ],
             }
           );
-          if (affected === 0) {
+          if (moved === null) {
             fenceMissed = true;
             throw NextlyError.conflict({
               logContext: {
@@ -690,23 +686,21 @@ export class ReleasesRepository {
    * Fenced away from `published` for the same reason scheduling is: that
    * release already happened, and marking it cancelled would describe history
    * that did not occur while leaving the published content in place.
+   *
+   * And it bumps the revision, under the release's lock. `cancelled` is a
+   * state a schedule may leave, so a state fence alone would let a schedule
+   * judged before this cancel put the launch straight back on; the revision
+   * moved, so that schedule misses instead.
    */
   async cancelRelease(id: string): Promise<boolean> {
-    const affected = await this.db.updateCount(
-      RELEASES,
-      {
-        state: "cancelled" satisfies ReleaseState,
-        updatedAt: new Date(),
-      },
-      {
-        and: [
-          { column: "id", op: "=", value: id },
-          { column: "state", op: "IN", value: [...RELEASE_CANCELLABLE_FROM] },
-        ],
-      }
+    const moved = await this.db.transaction(tx =>
+      this.advanceRevision(tx, id, RELEASE_CANCELLABLE_FROM, {
+        set: { state: "cancelled" satisfies ReleaseState },
+      })
     );
-    if (affected === 0) return false;
-    // Cancelling changes what a read returns just as scheduling does: a page
+    if (moved === null) return false;
+    // AFTER THE COMMIT, for the reason `blockReleases` gives. Cancelling
+    // changes what a read returns just as scheduling does: a page
     // cached with a lifetime derived from this release is now bounded by an
     // instant that will never arrive.
     await this.revalidateMembersOf(id);
@@ -718,24 +712,35 @@ export class ReleasesRepository {
    * one of `allowedStates` — and answer its kind, or `null` when it is not
    * there or not in those states.
    *
-   * The first statement of every membership change, and what makes the change
-   * and its fence one atomic act. The release row is locked first, so the
-   * revision read here is the one the update compares against: two membership
-   * changes to one release queue rather than miss each other's fence. The
-   * update is a compare-and-set on that revision and on the state, so a
-   * schedule that committed in between makes it match nothing; and once it has
-   * matched, the row lock it holds until the commit makes a schedule judged
-   * against the old revision wait and then miss. SQLite takes no row lock, and
-   * needs none: it serializes writers.
+   * The ONE way a release row moves inside a transaction: every membership
+   * change, cancel, block and publish goes through here, so every one of them
+   * bumps the revision a schedule is fenced on. `move.set` is what the move
+   * writes besides the revision — a new state, a publish instant — and
+   * `move.where` narrows the fence further, as the drain's block does with the
+   * instant it planned against.
    *
-   * `updateCount`, for the reason `markReleasePublished` gives. The revision
-   * always moves, which is also what MySQL — counting changed rows rather than
-   * matched ones — needs of a compare-and-set.
+   * The release row is locked first, so the revision read here is the one the
+   * update compares against: two moves of one release queue rather than miss
+   * each other's fence. The update is a compare-and-set on that revision and
+   * on the state, so a schedule that committed in between makes it match
+   * nothing; and once it has matched, the row lock it holds until the commit
+   * makes a schedule judged against the old revision wait and then miss.
+   * SQLite takes no row lock, and needs none: it serializes writers.
+   *
+   * `updateCount` rather than `update({ returning })`: MySQL has no RETURNING,
+   * and the adapter emulates it by re-selecting on a predicate this very write
+   * invalidates. The revision always moves, which is also what MySQL —
+   * counting changed rows rather than matched ones — needs of a
+   * compare-and-set.
    */
   private async advanceRevision(
     tx: ReleasesTxApi,
     releaseId: string,
-    allowedStates: readonly ReleaseState[]
+    allowedStates: readonly ReleaseState[],
+    move: {
+      set?: Record<string, unknown>;
+      where?: readonly VersionsWhereCondition[];
+    } = {}
   ): Promise<{ kind: ReleaseKind } | null> {
     await tx.lockRow(RELEASES, releaseId);
     const [release] = await tx.select<{ revision: number; kind: ReleaseKind }>(
@@ -748,12 +753,18 @@ export class ReleasesRepository {
     if (release === undefined) return null;
     const affected = await tx.updateCount(
       RELEASES,
-      { revision: release.revision + 1, updatedAt: new Date() },
+      // The revision last, so no `set` can write a value of its own there.
+      {
+        updatedAt: new Date(),
+        ...move.set,
+        revision: release.revision + 1,
+      },
       {
         and: [
           { column: "id", op: "=", value: releaseId },
           { column: "revision", op: "=", value: release.revision },
           { column: "state", op: "IN", value: [...allowedStates] },
+          ...(move.where ?? []),
         ],
       }
     );
@@ -968,26 +979,23 @@ export class ReleasesRepository {
    * it, calling a release off during its own materialisation would still mark
    * it published.
    *
-   * `updateCount` rather than `update({ returning })` for the reason the jobs
-   * repository gives: MySQL has no RETURNING, and the adapter emulates it by
-   * re-selecting on a predicate this very write invalidates.
+   * Through `advanceRevision`, so publishing bumps the revision as every other
+   * move of the release does. A schedule judged before it is already refused
+   * by its state fence, which never admits `published`; the bump keeps "every
+   * move raises the revision" true without an exception a later reader would
+   * have to know about.
    */
   async markReleasePublished(id: string, at: Date): Promise<boolean> {
-    const affected = await this.db.updateCount(
-      RELEASES,
-      {
-        state: "published" satisfies ReleaseState,
-        publishedAt: at,
-        updatedAt: at,
-      },
-      {
-        and: [
-          { column: "id", op: "=", value: id },
-          { column: "state", op: "=", value: "scheduled" },
-        ],
-      }
+    const moved = await this.db.transaction(tx =>
+      this.advanceRevision(tx, id, ["scheduled"], {
+        set: {
+          state: "published" satisfies ReleaseState,
+          publishedAt: at,
+          updatedAt: at,
+        },
+      })
     );
-    return affected > 0;
+    return moved !== null;
   }
 
   /**

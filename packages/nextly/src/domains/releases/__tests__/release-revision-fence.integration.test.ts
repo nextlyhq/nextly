@@ -39,6 +39,8 @@ afterEach(async () => {
 });
 
 const FUTURE = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+/** Whole seconds, so every dialect stores exactly this instant. */
+const PAST = new Date("2020-01-01T00:00:00Z");
 
 /** A caller the service does not ask the permission store about. */
 const TRUSTED = { userId: null, overrideAccess: true };
@@ -296,6 +298,92 @@ describe.each(getConfiguredTestDialects())(
       ).rejects.toMatchObject({ code: "CONFLICT" });
       expect(await repo.listMembers(release.id)).toHaveLength(0);
       expect((await readRelease(repo, release.id)).revision).toBe(1);
+    });
+
+    it("refuses a schedule when the release is cancelled after the check, and it stays cancelled", async () => {
+      // `cancelled` is a state a schedule may leave, so the state fence alone
+      // would put back a launch somebody called off after the schedule read
+      // it. The cancel moves the revision, and the schedule misses on that.
+      const t = await boot(dialect);
+      const release = await t.nextly.releases.create({ title: "Spring" });
+      const repo = new InterleavedSchedule(t.adapter, () =>
+        t.nextly.releases.cancel({ id: release.id })
+      );
+
+      await expect(
+        serviceOver(repo).schedule(release.id, FUTURE, "UTC", TRUSTED)
+      ).rejects.toMatchObject({ code: "CONFLICT" });
+
+      expect(repo.ran).toBe(1);
+      const row = await readRelease(repo, release.id);
+      expect(row.state).toBe("cancelled");
+      expect(row.scheduledAt).toBeNull();
+    });
+
+    it("bumps the revision when a release is cancelled, and not when a cancel is refused", async () => {
+      const t = await boot(dialect);
+      const repo = new ReleasesRepository(t.adapter);
+      const release = await repo.createRelease({ title: "Spring" });
+
+      expect(await repo.cancelRelease(release.id)).toBe(true);
+      const cancelled = await readRelease(repo, release.id);
+      expect(cancelled.state).toBe("cancelled");
+      expect(cancelled.revision).toBe(1);
+
+      // Already cancelled, so outside the states a cancel may leave.
+      expect(await repo.cancelRelease(release.id)).toBe(false);
+      expect((await readRelease(repo, release.id)).revision).toBe(1);
+    });
+
+    it("bumps the revision when the drain blocks a release", async () => {
+      const t = await boot(dialect);
+      const repo = new ReleasesRepository(t.adapter);
+      const release = await repo.createRelease({ title: "Spring" });
+      await repo.scheduleRelease(
+        release.id,
+        PAST,
+        "UTC",
+        RELEASE_SCHEDULABLE_FROM,
+        0
+      );
+      // The instant as stored, which is what the drain plans against.
+      const scheduled = await readRelease(repo, release.id);
+      if (scheduled.scheduledAt === null) throw new Error("not scheduled");
+
+      expect(
+        await repo.blockReleases([
+          { id: release.id, scheduledAt: scheduled.scheduledAt },
+        ])
+      ).toEqual([release.id]);
+      const blocked = await readRelease(repo, release.id);
+      expect(blocked.state).toBe("blocked");
+      expect(blocked.revision).toBe(2);
+    });
+
+    it("bumps the revision when the drain publishes a release", async () => {
+      const t = await boot(dialect);
+      const repo = new ReleasesRepository(t.adapter);
+      const release = await repo.createRelease({ title: "Spring" });
+      await repo.scheduleRelease(
+        release.id,
+        PAST,
+        "UTC",
+        RELEASE_SCHEDULABLE_FROM,
+        0
+      );
+
+      expect(await repo.markReleasePublished(release.id, new Date())).toBe(
+        true
+      );
+      const published = await readRelease(repo, release.id);
+      expect(published.state).toBe("published");
+      expect(published.revision).toBe(2);
+
+      // A second pass is refused by the state fence and moves nothing.
+      expect(await repo.markReleasePublished(release.id, new Date())).toBe(
+        false
+      );
+      expect((await readRelease(repo, release.id)).revision).toBe(2);
     });
   }
 );
