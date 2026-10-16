@@ -163,6 +163,55 @@ describe("PermissionGuard", () => {
     expect(mockNavigateTo).toHaveBeenCalledWith("/admin");
   });
 
+  describe("where the browser has the Navigation API", () => {
+    // jsdom has none, so each case defines it and the cleanup removes it.
+    function withNavigation(canGoBack: boolean) {
+      Object.defineProperty(window, "navigation", {
+        value: { canGoBack },
+        configurable: true,
+      });
+    }
+    afterEach(() => {
+      Reflect.deleteProperty(window, "navigation");
+    });
+
+    it("goes to the dashboard when the entries behind are another site's", () => {
+      // History holds three entries, but none of them is this site's: the
+      // previous one is the new-tab page or another site, and back would
+      // leave the admin. `canGoBack` must decide over the length.
+      holding([]);
+      withNavigation(false);
+      vi.spyOn(window.history, "length", "get").mockReturnValue(3);
+      const back = vi
+        .spyOn(window.history, "back")
+        .mockImplementation(() => {});
+      render(
+        <PermissionGuard requiredPermission="read-posts" subject="collection">
+          <Page />
+        </PermissionGuard>
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Go back" }));
+      expect(back).not.toHaveBeenCalled();
+      expect(mockNavigateTo).toHaveBeenCalledWith("/admin");
+    });
+
+    it("goes back when the entry behind is this site's", () => {
+      holding([]);
+      withNavigation(true);
+      const back = vi
+        .spyOn(window.history, "back")
+        .mockImplementation(() => {});
+      render(
+        <PermissionGuard requiredPermission="read-posts" subject="collection">
+          <Page />
+        </PermissionGuard>
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Go back" }));
+      expect(back).toHaveBeenCalledOnce();
+      expect(mockNavigateTo).not.toHaveBeenCalled();
+    });
+  });
+
   it("shows neither the page nor the refusal while permissions load", () => {
     holding([], true);
     render(

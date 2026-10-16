@@ -9,14 +9,31 @@ import { ROUTES } from "@admin/constants/routes";
 import { navigateTo } from "@admin/lib/navigation";
 
 /**
+ * Whether going back stays on this site.
+ *
+ * The Navigation API's `canGoBack` counts only this origin's entries, so a
+ * page opened from the browser's new-tab page or from another site reads as
+ * having nowhere to go back to. `history.length` counts those entries too,
+ * and is used only where the Navigation API is missing; it still tells a tab
+ * opened straight onto the link, which has one entry.
+ */
+function canGoBackOnThisSite(): boolean {
+  const { navigation } = window as Window & {
+    navigation?: { canGoBack?: unknown };
+  };
+  if (typeof navigation?.canGoBack === "boolean") return navigation.canGoBack;
+  return window.history.length > 1;
+}
+
+/**
  * Leave a page that has nothing to show.
  *
- * A link opened in a fresh tab has a single history entry, and `back()` there
- * does nothing, so the button would look broken exactly when someone followed
- * a shared link they can't use. The dashboard is the nearest place to go.
+ * Where going back would leave the admin, or do nothing at all, the button
+ * would look broken exactly when someone followed a shared link they can't
+ * use, so it goes to the dashboard, the nearest place inside.
  */
 function goBack(): void {
-  if (window.history.length > 1) {
+  if (canGoBackOnThisSite()) {
     window.history.back();
     return;
   }
