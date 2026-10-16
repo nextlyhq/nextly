@@ -23,6 +23,8 @@ import {
   type BrokenHosts,
   type HostFinder,
   type HostRef,
+  type LockedExposures,
+  type StillBrokenHosts,
   type UnjudgedHosts,
 } from "./blocks-composition";
 
@@ -54,6 +56,25 @@ beforeEach(() => {
         name: "acme/sealed",
         slots: {
           body: { defaultBlock: [{ type: "acme/text" }], lock: "contentOnly" },
+        },
+      },
+      {
+        ...base,
+        name: "acme/fixed",
+        slots: {
+          items: { defaultBlock: [{ type: "acme/text" }], lock: "all" },
+        },
+      },
+      {
+        ...base,
+        name: "acme/quote",
+        props: { words: { type: "text", role: "content" } },
+      },
+      {
+        ...base,
+        name: "acme/sealed-quote",
+        slots: {
+          body: { defaultBlock: [{ type: "acme/quote" }], lock: "contentOnly" },
         },
       },
     ] as never,
@@ -147,6 +168,8 @@ function judge(
     hostsOf?: HostFinder;
     onUnjudged?: (unjudged: UnjudgedHosts) => void;
     onHostsBroken?: (broken: BrokenHosts) => void;
+    onLockedExposures?: (found: LockedExposures) => void;
+    onHostsStillBroken?: (found: StillBrokenHosts) => void;
     composesDocuments?: boolean;
   } = {}
 ) {
@@ -170,6 +193,12 @@ function judge(
       ...(options.onHostsBroken === undefined
         ? {}
         : { onHostsBroken: options.onHostsBroken }),
+      ...(options.onLockedExposures === undefined
+        ? {}
+        : { onLockedExposures: options.onLockedExposures }),
+      ...(options.onHostsStillBroken === undefined
+        ? {}
+        : { onHostsStillBroken: options.onHostsStillBroken }),
       composesDocuments: options.composesDocuments ?? true,
     }
   );
@@ -235,6 +264,215 @@ describe("a component that would contain itself", () => {
       await judge(component([placing("n", "b")]), write(readStored, COMPONENTS))
     ).toEqual([]);
     expect(asked.filter(t => "id" in t && t.id === "b")).toHaveLength(1);
+  });
+});
+
+describe("a component save judged against the locks inside its hosts", () => {
+  const hostPage: HostRef = {
+    slug: "pages",
+    id: "home",
+    field: FIELD,
+    localized: false,
+  };
+
+  it("refuses re-aiming an exposed slot into a lock that the host's content then breaks", async () => {
+    // The page supplies two texts to the "extra" slot, which held them in an
+    // open box. Re-aimed at a slot locked "all" that starts with one text, the
+    // same content breaks that lock on the page.
+    const aimedAt = (nodeId: string, slot: string) =>
+      component(
+        [
+          node("open", "acme/box", { children: [] }),
+          node("fixed", "acme/fixed", { items: [node("t1")] }),
+        ],
+        { slots: { extra: { label: "Extra", nodeId, slot } } }
+      );
+    const { readStored } = storeOf({
+      [COMPONENTS]: { promo: { published: aimedAt("open", "children") } },
+      pages: {
+        home: {
+          published: page([
+            placing("i1", "promo", {
+              slots: { extra: [node("x1"), node("x2")] },
+            }),
+          ]),
+        },
+      },
+    });
+    const { hostsOf } = listing([hostPage]);
+
+    const issues = await judge(
+      aimedAt("fixed", "items"),
+      write(readStored, COMPONENTS, "promo"),
+      { hostsOf, status: "published" }
+    );
+
+    expect(codes(issues)).toEqual(["COMPONENT_HOST_BROKEN"]);
+  });
+
+  it("warns about a host whose lock was already broken and is made no worse, naming the host and the rule", async () => {
+    // The page's stored value for "tone" already changes design inside the
+    // sealed slot. The save adds an unrelated exposure, which is reason enough
+    // to judge the hosts, and leaves that break as it was.
+    const sealed = (extra: Record<string, unknown>[] = []) =>
+      component(
+        [
+          node("s1", "acme/sealed", { body: [node("t1")] }),
+          node("q1", "acme/quote"),
+        ],
+        {
+          exposed: [
+            {
+              id: "tone",
+              label: "Tone",
+              nodeId: "t1",
+              propPath: "tone",
+              type: "select",
+              options: [{ value: "loud", label: "Loud" }],
+            },
+            ...extra,
+          ] as never,
+        }
+      );
+    const { readStored } = storeOf({
+      [COMPONENTS]: { promo: { published: sealed() } },
+      pages: {
+        home: {
+          published: page([
+            {
+              ...placing("i1", "promo"),
+              props: { componentId: "promo", overrides: { tone: "loud" } },
+            },
+          ]),
+        },
+      },
+    });
+    const { hostsOf } = listing([hostPage]);
+    const warned: StillBrokenHosts[] = [];
+
+    const issues = await judge(
+      sealed([
+        {
+          id: "words",
+          label: "Words",
+          nodeId: "q1",
+          propPath: "words",
+          type: "text",
+        },
+      ]),
+      write(readStored, COMPONENTS, "promo"),
+      {
+        hostsOf,
+        status: "published",
+        onHostsStillBroken: found => warned.push(found),
+      }
+    );
+
+    expect(issues).toEqual([]);
+    expect(warned).toEqual([
+      {
+        componentId: "promo",
+        hosts: [
+          expect.objectContaining({
+            slug: "pages",
+            id: "home",
+            messages: [expect.stringContaining("contentOnly")],
+          }),
+        ],
+      },
+    ]);
+  });
+});
+
+describe("a component exposing a field a contentOnly lock holds", () => {
+  /** A sealed block whose text's `tone` (not content) is exposed. */
+  const exposingTone = (label = "Tone") =>
+    component([node("s1", "acme/sealed", { body: [node("t1")] })], {
+      exposed: [
+        {
+          id: "tone",
+          label,
+          nodeId: "t1",
+          propPath: "tone",
+          type: "select",
+          options: [{ value: "loud", label: "Loud" }],
+        },
+      ],
+    });
+
+  it("is refused when the exposure is added, naming the component, the field, the slot and the rule", async () => {
+    const { readStored } = storeOf({
+      [COMPONENTS]: {
+        promo: {
+          published: component([
+            node("s1", "acme/sealed", { body: [node("t1")] }),
+          ]),
+        },
+      },
+    });
+
+    const issues = await judge(
+      exposingTone(),
+      write(readStored, COMPONENTS, "promo")
+    );
+
+    expect(codes(issues)).toEqual(["COMPONENT_EXPOSURE_LOCKED"]);
+    const message = issues[0]!.message;
+    for (const named of ['"promo"', '"Tone"', '"body"', "contentOnly"]) {
+      expect(message).toContain(named);
+    }
+    expect(message).toMatch(/remove|loosen|content field/i);
+  });
+
+  it("is refused on a new component, which has no stored version", async () => {
+    const { readStored } = storeOf({});
+    const issues = await judge(exposingTone(), write(readStored, COMPONENTS));
+    expect(codes(issues)).toEqual(["COMPONENT_EXPOSURE_LOCKED"]);
+  });
+
+  it("is kept with a warning when the component already stores it, so an unrelated edit still saves", async () => {
+    const { readStored } = storeOf({
+      [COMPONENTS]: { promo: { published: exposingTone() } },
+    });
+    const warned: unknown[] = [];
+
+    // An unrelated edit: the label changes, the exposure stays.
+    const issues = await judge(
+      exposingTone("Voice"),
+      write(readStored, COMPONENTS, "promo"),
+      { onLockedExposures: found => warned.push(found) }
+    );
+
+    expect(issues).toEqual([]);
+    expect(warned).toEqual([
+      {
+        componentId: "promo",
+        exposures: [
+          expect.objectContaining({ exposureId: "tone", slot: "body" }),
+        ],
+      },
+    ]);
+  });
+
+  it("accepts exposing the same node's content", async () => {
+    const { readStored } = storeOf({});
+    const content = component(
+      [node("s1", "acme/sealed-quote", { body: [node("t1", "acme/quote")] })],
+      {
+        exposed: [
+          {
+            id: "words",
+            label: "Words",
+            nodeId: "t1",
+            propPath: "words",
+            type: "text",
+          },
+        ],
+      }
+    );
+    expect(
+      await judge(content, write(readStored, COMPONENTS, "promo"))
+    ).toEqual([]);
   });
 });
 

@@ -56,6 +56,22 @@ beforeEach(() => {
           },
         },
       },
+      // A box that locks nothing, so a box inside a sealed slot inherits it.
+      {
+        ...base,
+        name: "acme/plain-box",
+        slots: { inner: { defaultBlock: [{ type: "acme/headline" }] } },
+      },
+      {
+        ...base,
+        name: "acme/sealed-shelf",
+        slots: {
+          shelf: {
+            defaultBlock: [{ type: "acme/plain-box" }],
+            lock: "contentOnly",
+          },
+        },
+      },
       {
         ...base,
         name: "acme/fixed-row",
@@ -143,6 +159,46 @@ function judge(host: BlockDocument) {
     definitions: registryBlockSource(),
   });
 }
+
+describe("a placement inside a lock a component's slot inherits", () => {
+  it("is refused for a value that changes design two levels beneath the lock", () => {
+    // The headline's own box declares no lock; it is held because its box sits
+    // in the shelf's contentOnly slot. Only a lock passed down the composed
+    // tree reaches it.
+    const shelf = placed("acme/sealed-shelf", "shelf");
+    const box = shelf.slots!.shelf![0]!;
+    box.slots!.inner![0] = { ...box.slots!.inner![0]!, id: "deep" };
+    const definition = {
+      formatVersion: DOCUMENT_FORMAT_VERSION,
+      kind: "component",
+      nodes: [shelf],
+      exposed: [
+        {
+          id: "side",
+          label: "Alignment",
+          nodeId: "deep",
+          propPath: "align",
+          type: "select",
+          options: [{ value: "right", label: "Right" }],
+        },
+      ],
+    } as ComponentDocument;
+    const host = placement({
+      props: { componentId: "promo", overrides: { side: "right" } },
+    });
+    const composition = resolveComponentInstances(
+      host,
+      new Map([["promo", definition]])
+    );
+    const faults = compositionFaults(host, composition, {
+      nesting: registryNestingSource(),
+      definitions: registryBlockSource(),
+    });
+    expect(faults.map(f => [f.code, f.instanceId])).toEqual([
+      ["locked-slot-content-only", "i1"],
+    ]);
+  });
+});
 
 describe("a placement inside a component's locked slot", () => {
   it("is accepted as placed, and with a new value for a content field", () => {

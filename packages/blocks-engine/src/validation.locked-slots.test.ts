@@ -305,6 +305,22 @@ describe("a locked slot", () => {
     ).toEqual(["error"]);
   });
 
+  it("reports a malformed node rather than throwing while it judges locks", () => {
+    // The node check reports these; the lock check must not be the one to trip
+    // over them, or a rejected document becomes a server error.
+    for (const nodes of [[null], [42], ["text"], [{ id: "a" }]]) {
+      const doc = {
+        formatVersion: DOCUMENT_FORMAT_VERSION,
+        kind: "page",
+        nodes,
+      };
+      expect(() => issuesOf(doc as unknown as BlockDocument)).not.toThrow();
+      expect(issuesOf(doc as unknown as BlockDocument).length).toBeGreaterThan(
+        0
+      );
+    }
+  });
+
   it("checks no lock when the caller supplies no definitions", () => {
     const hero = placed("acme/hero");
     slotOf(hero, "content").pop();

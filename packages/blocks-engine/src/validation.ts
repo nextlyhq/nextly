@@ -935,7 +935,10 @@ function checkLockedSlots(
   const definitions = state.ctx.definitions;
   const startingChildren = state.startingChildren;
   if (definitions === undefined || startingChildren === undefined) return;
-  const type = (node as { type?: unknown }).type;
+  // A malformed node is the node check's to report; it has no slots to judge.
+  const raw: unknown = node;
+  if (!isPlainRecord(raw)) return;
+  const type = raw.type;
   const breaks = slotLockBreaks(node, inherited, definitions, startingChildren);
   for (const found of breaks) {
     const slotPath = pointer(pointer(path, "slots"), found.slot);
