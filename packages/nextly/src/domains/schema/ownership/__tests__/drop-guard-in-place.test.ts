@@ -8,7 +8,7 @@ import { describe, expect, it } from "vitest";
 import type { SupportedDialect } from "../../../../database/schema-registry";
 import { NextlyError } from "../../../../errors/nextly-error";
 import type { ContributedElements } from "../../pipeline/diff/types";
-import { assertNoForeignDrops } from "../drop-guard";
+import { assertNoForeignDrops, indexesNamedWithoutTable } from "../drop-guard";
 import type { OwnerRecord } from "../owner-registry";
 
 function record(over: Partial<OwnerRecord>): OwnerRecord {
@@ -224,5 +224,102 @@ describe("the app's override of a plugin column's storage", () => {
       )
     );
     expect(log).toMatchObject({ table: "fx__notes", column: "body" });
+  });
+});
+
+describe("the remaining PostgreSQL ALTER INDEX forms", () => {
+  it.each<string>([
+    "ALTER INDEX idx_status ATTACH PARTITION other_idx",
+    "ALTER INDEX idx_status DEPENDS ON EXTENSION citext",
+    "ALTER INDEX idx_status NO DEPENDS ON EXTENSION citext",
+  ])("refuses %s to the app's migration", sql => {
+    expect(refusal(() => guard([sql], "app", "postgresql"))).toMatchObject({
+      belongsTo: "plugin:fx",
+    });
+  });
+});
+
+describe("an attribute reset and a validation on another owner's objects", () => {
+  it("refuses RESET of a plugin column's attributes", () => {
+    expect(
+      refusal(() =>
+        guard(
+          ["ALTER TABLE app_notes ALTER COLUMN status RESET (n_distinct)"],
+          "app",
+          "postgresql"
+        )
+      )
+    ).toMatchObject({ table: "app_notes", column: "status" });
+  });
+
+  it("refuses VALIDATE CONSTRAINT on another owner's constraint", () => {
+    expect(
+      refusal(() =>
+        guard(
+          ["ALTER TABLE app_notes VALIDATE CONSTRAINT fk_owner"],
+          "app",
+          "postgresql"
+        )
+      )
+    ).toMatchObject({ belongsTo: "plugin:fx" });
+  });
+});
+
+describe("a table-level change to another owner's table", () => {
+  it.each<[SupportedDialect, string]>([
+    ["postgresql", "ALTER TABLE fx__notes SET ACCESS METHOD heap"],
+    ["postgresql", "ALTER TABLE fx__notes SET TABLESPACE other"],
+    ["mysql", "ALTER TABLE fx__notes ENGINE=InnoDB"],
+  ])("is refused to the app's migration on %s: %s", (dialect, sql) => {
+    expect(refusal(() => guard([sql], "app", dialect))).toMatchObject({
+      table: "fx__notes",
+      belongsTo: "plugin:fx",
+    });
+  });
+
+  it("leaves the app's own table's storage to the app", () => {
+    expect(() =>
+      guard(["ALTER TABLE app_notes SET TABLESPACE other"], "app", "postgresql")
+    ).not.toThrow();
+  });
+});
+
+describe("live index discovery covers in-place index changes", () => {
+  it("names an index an ALTER INDEX changes without its table", () => {
+    expect(
+      indexesNamedWithoutTable(
+        ["ALTER INDEX idx_body SET TABLESPACE other"],
+        "postgresql"
+      )
+    ).toEqual(["idx_body"]);
+  });
+
+  it("refuses the change to a plugin table's index the database places there", () => {
+    expect(() =>
+      assertNoForeignDrops({
+        statements: ["ALTER INDEX idx_body SET TABLESPACE other"],
+        stream: "app",
+        owners,
+        elementOwners,
+        dialect: "postgresql",
+        source: "0010_under_test",
+        liveTables: new Set([...owners.keys(), "users"]),
+        liveIndexTables: new Map([["idx_body", "fx__notes"]]),
+      })
+    ).toThrow();
+  });
+});
+
+describe("an in-place refusal is logged as a change", () => {
+  it("names the changer, not a dropper", () => {
+    const log = refusal(() =>
+      guard(
+        ["ALTER TABLE app_notes ALTER COLUMN status TYPE int"],
+        "app",
+        "postgresql"
+      )
+    );
+    expect(log).toHaveProperty("changedBy", "app");
+    expect(log).not.toHaveProperty("droppedBy");
   });
 });
