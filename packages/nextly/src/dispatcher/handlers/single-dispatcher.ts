@@ -37,6 +37,8 @@ import {
 import type { FieldConfig } from "../../collections/fields/types";
 import { container } from "../../di/container";
 import { assertLocalizationConfigured } from "../../domains/i18n/config/require-app-config";
+import { assertI18nArchiveWritable } from "../../domains/i18n/migration/archive-preflight";
+import { fieldsLeavingTranslation } from "../../domains/i18n/migration/reconcile-companion";
 import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion-registration";
 import { translatePipelinePreviewToLegacy } from "../../domains/schema/legacy-preview/translate";
 import { RealClassifier } from "../../domains/schema/pipeline/classifier/classifier";
@@ -1039,6 +1041,22 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         updateData.fields = b.fields;
         updateData.schemaHash = calculateSchemaHash(b.fields);
         schemaFields = b.fields as unknown as FieldDefinition[];
+      }
+
+      // A field leaving translation keeps its other languages' values only in the archive, so
+      // the archive has to accept them before the schema or the registry row changes.
+      if (
+        wasLocalized &&
+        isLocalized &&
+        schemaFields !== undefined &&
+        fieldsLeavingTranslation(
+          (existing.fields ?? []) as unknown as FieldDefinition[],
+          schemaFields
+        ).length > 0
+      ) {
+        const adapter = getAdapterFromDI();
+        if (!adapter) throw new Error("Database adapter not initialized");
+        await assertI18nArchiveWritable(adapter, slug);
       }
 
       // The schema change and the registry row are written by one service call, because a lock has
