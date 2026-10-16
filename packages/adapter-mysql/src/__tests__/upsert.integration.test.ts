@@ -4,7 +4,9 @@
 // transaction usable after a repeat.
 //
 // The SQLite and PostgreSQL adapters carry the same cases, so the three
-// dialects answer one contract.
+// dialects answer one contract. MySQL keeps it only where the conflict target
+// is the table's one unique key besides the primary key, so each table here
+// has exactly one, and a table with two is the refusal case.
 
 import type { TableDefinition } from "@nextlyhq/adapter-drizzle/types";
 import { int, mysqlTable, uniqueIndex, varchar } from "drizzle-orm/mysql-core";
@@ -12,35 +14,78 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { createMySqlAdapter, type MySqlAdapter } from "../index";
 
-const TABLE = "int_upsert_mysql";
+const KEYED = "int_upsert_mysql";
+const NULLABLE = "int_upsert_mysql_nullable";
+const PAIR = "int_upsert_mysql_pair";
+const MANY = "int_upsert_mysql_many";
+const TABLES = [KEYED, NULLABLE, PAIR, MANY];
 const TEST_DB_URL = process.env.TEST_MYSQL_URL;
 
-const TABLE_DEFINITION: TableDefinition = {
-  name: TABLE,
-  columns: [
-    { name: "id", type: "varchar(36)", primaryKey: true },
-    { name: "key", type: "varchar(64)", nullable: false, unique: true },
-    { name: "label", type: "varchar(64)" },
-    { name: "slug", type: "varchar(64)", unique: true },
-    { name: "grp", type: "varchar(64)" },
-    { name: "pos", type: "int" },
-  ],
-};
-
-const things = mysqlTable(
-  TABLE,
+const DEFINITIONS: TableDefinition[] = [
   {
+    name: KEYED,
+    columns: [
+      { name: "id", type: "varchar(36)", primaryKey: true },
+      { name: "key", type: "varchar(64)", nullable: false, unique: true },
+      { name: "label", type: "varchar(64)" },
+    ],
+  },
+  {
+    name: NULLABLE,
+    columns: [
+      { name: "id", type: "varchar(36)", primaryKey: true },
+      { name: "slug", type: "varchar(64)", unique: true },
+      { name: "label", type: "varchar(64)" },
+    ],
+  },
+  {
+    name: PAIR,
+    columns: [
+      { name: "id", type: "varchar(36)", primaryKey: true },
+      { name: "grp", type: "varchar(64)" },
+      { name: "pos", type: "int" },
+      { name: "label", type: "varchar(64)" },
+    ],
+  },
+  {
+    name: MANY,
+    columns: [
+      { name: "id", type: "varchar(36)", primaryKey: true },
+      { name: "key", type: "varchar(64)", nullable: false, unique: true },
+      { name: "slug", type: "varchar(64)", unique: true },
+      { name: "label", type: "varchar(64)" },
+    ],
+  },
+];
+
+const models = {
+  [KEYED]: mysqlTable(KEYED, {
     id: varchar("id", { length: 36 }).primaryKey(),
     key: varchar("key", { length: 64 }).notNull().unique(),
     label: varchar("label", { length: 64 }),
+  }),
+  [NULLABLE]: mysqlTable(NULLABLE, {
+    id: varchar("id", { length: 36 }).primaryKey(),
     slug: varchar("slug", { length: 64 }).unique(),
-    grp: varchar("grp", { length: 64 }),
-    pos: int("pos"),
-  },
-  // Declared on the model as well as created in the database, so an adapter
-  // that checks the conflict target against the table's keys can see it.
-  table => [uniqueIndex("int_upsert_grp_pos_uidx").on(table.grp, table.pos)]
-);
+    label: varchar("label", { length: 64 }),
+  }),
+  [PAIR]: mysqlTable(
+    PAIR,
+    {
+      id: varchar("id", { length: 36 }).primaryKey(),
+      grp: varchar("grp", { length: 64 }),
+      pos: int("pos"),
+      label: varchar("label", { length: 64 }),
+    },
+    table => [uniqueIndex("int_upsert_grp_pos_uidx").on(table.grp, table.pos)]
+  ),
+  [MANY]: mysqlTable(MANY, {
+    id: varchar("id", { length: 36 }).primaryKey(),
+    key: varchar("key", { length: 64 }).notNull().unique(),
+    slug: varchar("slug", { length: 64 }).unique(),
+    label: varchar("label", { length: 64 }),
+  }),
+};
 
 interface Row {
   id: string;
@@ -51,38 +96,46 @@ interface Row {
 describe.skipIf(!TEST_DB_URL)("MySQL upsert", () => {
   let adapter: MySqlAdapter;
 
-  const rows = () =>
-    adapter.executeQuery<Row>(
-      `SELECT id, \`key\`, label FROM ${TABLE} ORDER BY id`
+  const rows = (table = KEYED) =>
+    adapter.executeQuery<{ id: string; label: string | null }>(
+      table === KEYED
+        ? `SELECT id, \`key\`, label FROM ${KEYED} ORDER BY id`
+        : `SELECT id, label FROM ${table} ORDER BY id`
     );
 
   beforeAll(async () => {
     adapter = createMySqlAdapter({ url: TEST_DB_URL as string });
     await adapter.connect();
-    await adapter.executeQuery(`DROP TABLE IF EXISTS ${TABLE}`);
-    await adapter.createTable(TABLE_DEFINITION);
-    // The composite key the composite-key case targets, created by statement
-    // because the table definition helper does not create indexes everywhere.
+    for (const definition of DEFINITIONS) {
+      await adapter.executeQuery(`DROP TABLE IF EXISTS ${definition.name}`);
+      await adapter.createTable(definition);
+    }
+    // The composite key, created by statement because the table definition
+    // helper does not create indexes everywhere.
     await adapter.executeQuery(
-      `CREATE UNIQUE INDEX int_upsert_grp_pos_uidx ON ${TABLE} (grp, pos)`
+      `CREATE UNIQUE INDEX int_upsert_grp_pos_uidx ON ${PAIR} (grp, pos)`
     );
     adapter.setTableResolver({
-      getTable: (name: string) => (name === TABLE ? things : null),
+      getTable: (name: string) => models[name as keyof typeof models] ?? null,
     });
   });
 
   beforeEach(async () => {
-    await adapter.executeQuery(`DELETE FROM ${TABLE}`);
+    for (const table of TABLES) {
+      await adapter.executeQuery(`DELETE FROM ${table}`);
+    }
   });
 
   afterAll(async () => {
-    await adapter.executeQuery(`DROP TABLE IF EXISTS ${TABLE}`);
+    for (const table of TABLES) {
+      await adapter.executeQuery(`DROP TABLE IF EXISTS ${table}`);
+    }
     await adapter.disconnect();
   });
 
   it("inserts a new key and returns the stored row", async () => {
     const stored = await adapter.upsert<Row>(
-      TABLE,
+      KEYED,
       { id: "a", key: "k1", label: "first" },
       { conflictColumns: ["key"] }
     );
@@ -92,14 +145,12 @@ describe.skipIf(!TEST_DB_URL)("MySQL upsert", () => {
 
   it("updates the named columns of an existing key and returns the stored row", async () => {
     await adapter.upsert(
-      TABLE,
+      KEYED,
       { id: "a", key: "k1", label: "first" },
-      {
-        conflictColumns: ["key"],
-      }
+      { conflictColumns: ["key"] }
     );
     const stored = await adapter.upsert<Row>(
-      TABLE,
+      KEYED,
       { id: "b", key: "k1", label: "second" },
       { conflictColumns: ["key"], updateColumns: ["label"] }
     );
@@ -110,14 +161,12 @@ describe.skipIf(!TEST_DB_URL)("MySQL upsert", () => {
 
   it("keeps the existing row unchanged when no column is left to update", async () => {
     await adapter.upsert(
-      TABLE,
+      KEYED,
       { id: "a", key: "k1", label: "first" },
-      {
-        conflictColumns: ["key"],
-      }
+      { conflictColumns: ["key"] }
     );
     const stored = await adapter.upsert<Row>(
-      TABLE,
+      KEYED,
       { id: "b", key: "k1", label: "second" },
       { conflictColumns: ["key"], updateColumns: [] }
     );
@@ -130,26 +179,20 @@ describe.skipIf(!TEST_DB_URL)("MySQL upsert", () => {
   it("repeats inside a transaction and leaves the transaction usable", async () => {
     await adapter.transaction(async tx => {
       await tx.upsert(
-        TABLE,
+        KEYED,
         { id: "a", key: "k1", label: "first" },
-        {
-          conflictColumns: ["key"],
-          updateColumns: [],
-        }
+        { conflictColumns: ["key"], updateColumns: [] }
       );
       const again = await tx.upsert<Row>(
-        TABLE,
+        KEYED,
         { id: "b", key: "k1", label: "repeat" },
         { conflictColumns: ["key"], updateColumns: [] }
       );
       expect(again).toMatchObject({ id: "a" });
       await tx.upsert(
-        TABLE,
+        KEYED,
         { id: "c", key: "k2", label: "next" },
-        {
-          conflictColumns: ["key"],
-          updateColumns: [],
-        }
+        { conflictColumns: ["key"], updateColumns: [] }
       );
     });
     expect(await rows()).toEqual([
@@ -157,82 +200,51 @@ describe.skipIf(!TEST_DB_URL)("MySQL upsert", () => {
       { id: "c", key: "k2", label: "next" },
     ]);
   });
-  it("refuses a collision on another unique key, and changes no row", async () => {
-    // The upsert is keyed on `key`. A row colliding on `slug` instead is not
-    // the row it targets: PostgreSQL and SQLite refuse it, and so must MySQL,
-    // whose duplicate-key clause would otherwise update that other row.
-    await adapter.upsert(
-      TABLE,
-      { id: "a", key: "k1", slug: "s1", label: "first" },
-      {
-        conflictColumns: ["key"],
-      }
-    );
+
+  it("refuses a table with another unique key before writing anything", async () => {
+    // MySQL cannot tell a collision on `slug` from one on `key`, so it could
+    // update a row the caller never targeted. The table is refused up front,
+    // naming the other key and what to do instead.
     await expect(
       adapter.upsert(
-        TABLE,
-        { id: "b", key: "k2", slug: "s1", label: "second" },
-        {
-          conflictColumns: ["key"],
-        }
+        MANY,
+        { id: "a", key: "k1", slug: "s1", label: "first" },
+        { conflictColumns: ["key"] }
       )
-    ).rejects.toThrow();
-    expect(await rows()).toEqual([{ id: "a", key: "k1", label: "first" }]);
+    ).rejects.toThrow(
+      /other unique keys \(int_upsert_mysql_many_slug_unique\)/
+    );
+    expect(await rows(MANY)).toEqual([]);
   });
 
-  it("resolves on the target when the row collides on another key as well", async () => {
-    // PostgreSQL checks the target's index before any other unique index, so
-    // a proposed row colliding with one row on the target and with another
-    // row elsewhere updates the target row. Every dialect answers the same,
-    // whichever index its engine happens to check first.
+  it("refuses a primary-key collision as a unique violation, and changes no row", async () => {
+    // The one duplicate besides the target a permitted table can raise. No row
+    // holds the target key, so it is refused as ON CONFLICT (key) refuses it,
+    // with the kind a caller handles it by.
     await adapter.upsert(
-      TABLE,
-      { id: "a", key: "k1", slug: "s1", label: "first" },
-      { conflictColumns: ["slug"] }
-    );
-    await adapter.upsert(
-      TABLE,
-      { id: "b", key: "k2", slug: "s2", label: "second" },
-      { conflictColumns: ["slug"] }
-    );
-    const stored = await adapter.upsert<Row>(
-      TABLE,
-      { id: "c", key: "k2", slug: "s1", label: "renamed" },
-      { conflictColumns: ["slug"], updateColumns: ["label"] }
-    );
-    expect(stored).toMatchObject({ id: "a", label: "renamed" });
-    expect(await rows()).toEqual([
-      { id: "a", key: "k1", label: "renamed" },
-      { id: "b", key: "k2", label: "second" },
-    ]);
-  });
-
-  it("reports a refused collision as a unique violation", async () => {
-    // The typed error contract: a caller handles a refused collision by its
-    // kind, which must survive Drizzle wrapping the driver's error.
-    await adapter.upsert(
-      TABLE,
-      { id: "a", key: "k1", slug: "s1", label: "first" },
+      KEYED,
+      { id: "a", key: "k1", label: "first" },
       { conflictColumns: ["key"] }
     );
     await expect(
       adapter.upsert(
-        TABLE,
-        { id: "b", key: "k2", slug: "s1", label: "second" },
+        KEYED,
+        { id: "a", key: "k2", label: "second" },
         { conflictColumns: ["key"] }
       )
     ).rejects.toMatchObject({ kind: "unique_violation" });
+    expect(await rows()).toEqual([{ id: "a", key: "k1", label: "first" }]);
   });
 
   it("returns the stored row when an insert trigger rewrites the conflict key", async () => {
     // PostgreSQL's RETURNING gives the row as stored. A read-back by the
     // caller's conflict value would find nothing once a trigger changed it.
     await adapter.executeQuery(
-      `CREATE TRIGGER int_upsert_prefix BEFORE INSERT ON ${TABLE} FOR EACH ROW SET NEW.\`key\` = CONCAT('t-', NEW.\`key\`)`
+      `CREATE TRIGGER int_upsert_prefix BEFORE INSERT ON ${KEYED} FOR EACH ROW SET NEW.\`key\` = CONCAT('t-', NEW.\`key\`)`
     );
     try {
       const stored = await adapter.upsert<Row>(
-        TABLE,
+        KEYED,
         { id: "a", key: "k1", label: "first" },
         { conflictColumns: ["key"] }
       );
@@ -246,109 +258,95 @@ describe.skipIf(!TEST_DB_URL)("MySQL upsert", () => {
     // Two rows share the key's first column, so a read-back by that column
     // alone could return the wrong one.
     await adapter.upsert(
-      TABLE,
-      { id: "a", key: "k1", grp: "g", pos: 1, label: "one" },
-      {
-        conflictColumns: ["grp", "pos"],
-      }
+      PAIR,
+      { id: "a", grp: "g", pos: 1, label: "one" },
+      { conflictColumns: ["grp", "pos"] }
     );
     await adapter.upsert(
-      TABLE,
-      { id: "b", key: "k2", grp: "g", pos: 2, label: "two" },
-      {
-        conflictColumns: ["grp", "pos"],
-      }
+      PAIR,
+      { id: "b", grp: "g", pos: 2, label: "two" },
+      { conflictColumns: ["grp", "pos"] }
     );
     const stored = await adapter.upsert<Row>(
-      TABLE,
-      { id: "c", key: "k3", grp: "g", pos: 2, label: "two, again" },
+      PAIR,
+      { id: "c", grp: "g", pos: 2, label: "two, again" },
       { conflictColumns: ["grp", "pos"], updateColumns: ["label"] }
     );
     expect(stored).toMatchObject({ id: "b", label: "two, again" });
     // And only that row: the other one sharing the first column is untouched.
-    expect(await rows()).toEqual([
-      { id: "a", key: "k1", label: "one" },
-      { id: "b", key: "k2", label: "two, again" },
+    expect(await rows(PAIR)).toEqual([
+      { id: "a", label: "one" },
+      { id: "b", label: "two, again" },
     ]);
   });
 
   it("inserts a row whose conflict key is null, since a null never conflicts", async () => {
     await adapter.upsert(
-      TABLE,
-      { id: "a", key: "k1", slug: null, label: "first" },
-      {
-        conflictColumns: ["slug"],
-      }
+      NULLABLE,
+      { id: "a", slug: null, label: "first" },
+      { conflictColumns: ["slug"] }
     );
     await adapter.upsert(
-      TABLE,
-      { id: "b", key: "k2", slug: null, label: "second" },
-      {
-        conflictColumns: ["slug"],
-      }
+      NULLABLE,
+      { id: "b", slug: null, label: "second" },
+      { conflictColumns: ["slug"] }
     );
-    expect((await rows()).map(row => row.id)).toEqual(["a", "b"]);
+    expect((await rows(NULLABLE)).map(row => row.id)).toEqual(["a", "b"]);
   });
+
+  it("returns the stored row for a null conflict key", async () => {
+    const stored = await adapter.upsert<Row>(
+      NULLABLE,
+      { id: "a", slug: null, label: "first" },
+      { conflictColumns: ["slug"] }
+    );
+    expect(stored).toMatchObject({ id: "a", label: "first" });
+  });
+
   it("keeps an existing row without running its update triggers", async () => {
     // A no-op duplicate-key assignment would still fire BEFORE/AFTER UPDATE
     // triggers; keeping the row must not touch it at all.
     await adapter.executeQuery(
-      `CREATE TRIGGER int_upsert_touch BEFORE UPDATE ON ${TABLE} FOR EACH ROW SET NEW.label = 'touched'`
+      `CREATE TRIGGER int_upsert_touch BEFORE UPDATE ON ${KEYED} FOR EACH ROW SET NEW.label = 'touched'`
     );
     try {
       await adapter.upsert(
-        TABLE,
+        KEYED,
         { id: "a", key: "k1", label: "first" },
-        {
-          conflictColumns: ["key"],
-        }
+        { conflictColumns: ["key"] }
       );
       await adapter.upsert(
-        TABLE,
+        KEYED,
         { id: "b", key: "k1", label: "second" },
-        {
-          conflictColumns: ["key"],
-          updateColumns: [],
-        }
+        { conflictColumns: ["key"], updateColumns: [] }
       );
       expect(await rows()).toEqual([{ id: "a", key: "k1", label: "first" }]);
     } finally {
       await adapter.executeQuery("DROP TRIGGER IF EXISTS int_upsert_touch");
     }
   });
+
   it("refuses conflict columns that are not a unique key", async () => {
     // A target that is not unique could match several rows; PostgreSQL and
     // SQLite refuse it as an ON CONFLICT target, and so must every dialect.
     await expect(
       adapter.upsert(
-        TABLE,
+        KEYED,
         { id: "a", key: "k1", label: "first" },
-        {
-          conflictColumns: ["label"],
-        }
+        { conflictColumns: ["label"] }
       )
-    ).rejects.toThrow();
+    ).rejects.toThrow(/not a primary or unique key/);
     expect(await rows()).toEqual([]);
   });
 
-  it("returns the stored row for a null conflict key", async () => {
-    const stored = await adapter.upsert<Row>(
-      TABLE,
-      { id: "a", key: "k1", slug: null, label: "first" },
-      { conflictColumns: ["slug"] }
-    );
-    expect(stored).toMatchObject({ id: "a", key: "k1", label: "first" });
-  });
   it("refuses an upsert that leaves a conflict column for the database to fill", async () => {
     // MySQL cannot look a row up by a key value the database would only
     // supply itself; said, rather than treating the omission as NULL.
     await expect(
       adapter.upsert(
-        TABLE,
-        { id: "a", key: "k1", label: "first" },
-        {
-          conflictColumns: ["slug"],
-        }
+        NULLABLE,
+        { id: "a", label: "first" },
+        { conflictColumns: ["slug"] }
       )
     ).rejects.toThrow(/needs a value for every conflict column/);
   });
@@ -359,16 +357,14 @@ describe.skipIf(!TEST_DB_URL)("MySQL upsert", () => {
     // to a plain select here, so only a locking (current) read can find the
     // row the duplicate-key error is about.
     await adapter.transaction(async tx => {
-      await tx.select(TABLE, {});
+      await tx.select(KEYED, {});
       await adapter.upsert(
-        TABLE,
+        KEYED,
         { id: "theirs", key: "k1", label: "theirs" },
-        {
-          conflictColumns: ["key"],
-        }
+        { conflictColumns: ["key"] }
       );
       const stored = await tx.upsert<Row>(
-        TABLE,
+        KEYED,
         { id: "mine", key: "k1", label: "mine" },
         { conflictColumns: ["key"], updateColumns: [] }
       );

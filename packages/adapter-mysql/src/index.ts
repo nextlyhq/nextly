@@ -789,25 +789,24 @@ export class MySqlAdapter extends DrizzleAdapter {
    */
   /**
    * Upsert with the meaning `INSERT … ON CONFLICT (target)` has on PostgreSQL
-   * and SQLite, which MySQL does not have.
+   * and SQLite, on the tables where MySQL can keep that promise.
    *
-   * MySQL's `ON DUPLICATE KEY UPDATE` fires on a collision with ANY unique key,
-   * so it could update a row the caller never targeted, and keeping a row by a
-   * no-op assignment still runs its update triggers. So the row is inserted
-   * first — the insert's own validation and triggers apply, as they do before
-   * `ON CONFLICT` elsewhere — and only a duplicate on the TARGET key is
-   * resolved:
+   * MySQL cannot limit a duplicate to one key: `ON DUPLICATE KEY UPDATE`
+   * fires on a collision with ANY unique key, and a failed insert does not
+   * say reliably which one. So the conflict target must be the table's only
+   * unique key apart from its primary key, and any other table is refused
+   * before anything is written. On such a table the row is inserted first —
+   * its validation and triggers apply, as they do before `ON CONFLICT`
+   * elsewhere — and a duplicate is resolved by a locking read of the target
+   * key, which sees the latest committed row rather than the transaction's
+   * snapshot. The row found is kept as it is when there is nothing to update
+   * (a no-op assignment would still run its update triggers), or updated by
+   * its key. No row there means the collision was on the primary key, and it
+   * is refused as `ON CONFLICT (target)` refuses it.
    *
-   *   - found by a locking read, which sees the latest committed row rather
-   *     than the transaction's snapshot, so a concurrent writer's row is seen;
-   *   - kept as it is when there is nothing to update, or updated by its key;
-   *   - a duplicate on any other unique key finds nothing there, and is
-   *     refused, as `ON CONFLICT (target)` refuses it.
-   *
-   * The conflict columns must be a declared primary or unique key — anything
-   * else could match several rows — and must be given values: MySQL cannot look
-   * a row up by a key the database would only fill in itself. A failed insert
-   * rolls back only itself on MySQL, so a caller's transaction stays usable.
+   * The conflict columns must also be given values: MySQL cannot look a row up
+   * by a key the database would only fill in itself. A failed insert rolls
+   * back only itself on MySQL, so a caller's transaction stays usable.
    */
   override async upsert<T = unknown>(
     table: string,
@@ -850,37 +849,37 @@ export class MySqlAdapter extends DrizzleAdapter {
   }
 
   /**
-   * The table's columns for a conflict target, refusing one that is not a
-   * declared primary or unique key: an update by a key that is not unique
-   * would touch every row sharing it.
+   * The table's columns for a conflict target, refusing a target MySQL cannot
+   * keep to: one that is not a primary or unique key, which an update could
+   * spread over several rows, and one beside which the table has another
+   * unique key, a collision on which MySQL would not tell apart.
    */
   private conflictKey(
     tableObj: MySqlTable,
     table: string,
     conflictColumns: readonly string[]
   ): Column[] {
-    const columns = conflictColumns.map(
-      name => (tableObj as unknown as Record<string, Column | undefined>)[name]
-    );
+    const record = tableObj as unknown as Record<string, Column | undefined>;
+    const columns = conflictColumns.map(name => record[name]);
     const names = new Set(columns.map(column => column?.name));
-    const config = getTableConfig(tableObj);
-    const sameColumns = (key: readonly { name: string }[]) =>
-      key.length === names.size && key.every(column => names.has(column.name));
-    const unique =
-      columns.every(column => column !== undefined) &&
-      ((columns.length === 1 &&
-        (columns[0]?.primary === true || columns[0]?.isUnique === true)) ||
-        config.primaryKeys.some(pk => sameColumns(pk.columns)) ||
-        config.uniqueConstraints.some(uc => sameColumns(uc.columns)) ||
-        config.indexes.some(
-          index =>
-            index.config.unique === true &&
-            sameColumns(index.config.columns as { name: string }[])
-        ));
-    if (!unique) {
+    const isTarget = (key: readonly string[]) =>
+      key.length === names.size && key.every(name => names.has(name));
+    const { primary, unique } = keysOf(tableObj);
+    const known = columns.every(column => column !== undefined);
+    if (
+      !known ||
+      !(isTarget(primary) || unique.some(k => isTarget(k.columns)))
+    ) {
       throw createDatabaseError({
         kind: "query",
         message: `upsert on ${table}: the conflict columns (${conflictColumns.join(", ")}) are not a primary or unique key of the table.`,
+      });
+    }
+    const others = unique.filter(key => !isTarget(key.columns));
+    if (others.length > 0) {
+      throw createDatabaseError({
+        kind: "query",
+        message: `upsert on ${table}: MySQL cannot limit a duplicate to the conflict columns (${conflictColumns.join(", ")}) while the table has other unique keys (${others.map(key => key.name).join(", ")}). Upsert only on a table whose one unique key besides the primary key is the conflict target, or insert and update inside a transaction.`,
       });
     }
     return columns;
@@ -1257,6 +1256,53 @@ export class MySqlAdapter extends DrizzleAdapter {
       cause: error instanceof Error ? error : undefined,
     });
   }
+}
+
+/** A table's keys by database column name, as its model declares them. */
+interface TableKeys {
+  primary: string[];
+  unique: { name: string; columns: string[] }[];
+}
+
+const TABLE_KEYS = new WeakMap<MySqlTable, TableKeys>();
+
+/**
+ * A table's primary key and its unique keys other than the primary key, read
+ * from its model once and kept for the table's lifetime: a model is not
+ * changed in place, a new schema brings new table objects.
+ */
+function keysOf(tableObj: MySqlTable): TableKeys {
+  const cached = TABLE_KEYS.get(tableObj);
+  if (cached) return cached;
+  const config = getTableConfig(tableObj);
+  const primary = [
+    ...config.columns.filter(column => column.primary),
+    ...config.primaryKeys.flatMap(key => key.columns),
+  ].map(column => column.name);
+  const unique = [
+    ...config.columns
+      .filter(column => column.isUnique && !column.primary)
+      .map(column => ({
+        // Drizzle's own name for an unnamed column-level unique key.
+        name: column.uniqueName ?? `${config.name}_${column.name}_unique`,
+        columns: [column.name],
+      })),
+    ...config.uniqueConstraints.map(constraint => ({
+      name: constraint.name,
+      columns: constraint.columns.map(column => column.name),
+    })),
+    ...config.indexes
+      .filter(index => index.config.unique === true)
+      .map(index => ({
+        name: index.config.name,
+        columns: (index.config.columns as { name: string }[]).map(
+          column => column.name
+        ),
+      })),
+  ];
+  const keys = { primary, unique };
+  TABLE_KEYS.set(tableObj, keys);
+  return keys;
 }
 
 /**
