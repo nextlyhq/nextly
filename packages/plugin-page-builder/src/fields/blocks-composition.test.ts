@@ -49,6 +49,13 @@ beforeEach(() => {
         slots: { label: { allow: ["acme/text"] } },
       },
       { ...base, name: "acme/text" },
+      {
+        ...base,
+        name: "acme/sealed",
+        slots: {
+          body: { defaultBlock: [{ type: "acme/text" }], lock: "contentOnly" },
+        },
+      },
     ] as never,
     { source: "acme" }
   );
@@ -246,6 +253,47 @@ describe("a page judged as a reader receives it", () => {
 
     expect(codes(issues)).toEqual(["restricted-at-root"]);
     expect(issues[0]!.message).toContain('"cols"');
+  });
+
+  it("refuses a placement whose exposed value changes design inside a contentOnly slot", async () => {
+    // The component is as its sealed block started; only the placement's
+    // value, written into the definition's text, changes what the lock holds.
+    const sealed = component(
+      [node("s1", "acme/sealed", { body: [node("t1")] })],
+      {
+        exposed: [
+          {
+            id: "tone",
+            label: "Tone",
+            nodeId: "t1",
+            propPath: "tone",
+            type: "select",
+            options: [{ value: "loud", label: "Loud" }],
+          },
+        ],
+      }
+    );
+    const { readStored } = storeOf({
+      [COMPONENTS]: { sealed: { published: sealed } },
+    });
+    const placed = (overrides: Record<string, unknown>) =>
+      page([
+        {
+          ...placing("i1", "sealed"),
+          props: { componentId: "sealed", overrides },
+        },
+      ]);
+
+    // CONTROL: placed with no values of its own, it composes as it started.
+    expect(await judge(placed({}), write(readStored, "pages", "p1"))).toEqual(
+      []
+    );
+    const issues = await judge(
+      placed({ tone: "loud" }),
+      write(readStored, "pages", "p1")
+    );
+    expect(codes(issues)).toEqual(["locked-slot-content-only"]);
+    expect(issues[0]!.message).toContain('"sealed"');
   });
 
   it("refuses page content a placement puts where the component cannot hold it", async () => {

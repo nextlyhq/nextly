@@ -483,6 +483,7 @@ export {
   allSupports,
   clearBlocks,
   MAX_BLOCK_VERSION,
+  registryBlockSource,
   registryLookup,
   registryMigrationSource,
   registryNestingSource,

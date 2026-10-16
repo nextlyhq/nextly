@@ -21,6 +21,7 @@
 import type { BlockDocument, BreakpointSet } from "@nextlyhq/blocks-engine";
 import {
   DOCUMENT_VERDICT_CODES,
+  registryBlockSource,
   registryNestingSource,
   validateDocument,
   walkNodes,
@@ -143,6 +144,15 @@ export function validateBlocksValue(
     // reaches exactly the blocks something has contributed, and no document is
     // refused for a declaration nobody made.
     nesting: registryNestingSource(),
+    // A block that locks one of its slots fixes which children that slot
+    // holds, and this is the path that holds every writer to it: the editor,
+    // the API, an import and an agent all reach a save through here, and none
+    // of them brings the document's previous version for a rule about edits to
+    // be judged against. The engine checks the slot against the same
+    // definitions an insert expands its starting children from, so what a save
+    // requires is what an insert creates. An unpopulated registry declares no
+    // locks, so it refuses nothing, for the reason given for nesting above.
+    definitions: registryBlockSource(),
   });
   // Errors only, which means the breakpoint set threaded in here decides
   // nothing about a document — and that is the correct behaviour today, not an
