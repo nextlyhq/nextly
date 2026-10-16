@@ -14,6 +14,7 @@
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { and, eq, type Column } from "drizzle-orm";
 
+import type { FieldConfig } from "../../../collections/fields/types";
 import { keysToSnakeCase } from "../../../lib/case-conversion";
 import { stripImmutableSystemFields } from "../../../lib/immutable-system-fields";
 import type { CompanionSchema } from "../../i18n/runtime/companion-io";
@@ -21,6 +22,7 @@ import {
   splitLocalizedWrite,
   upsertCompanionRow,
 } from "../../i18n/runtime/companion-io";
+import { draftComponentValues } from "../../versions/draft-components";
 
 /** The column-shaped halves a pending change persists to. */
 export interface PendingChangeParts {
@@ -28,6 +30,12 @@ export interface PendingChangeParts {
   main: Record<string, unknown>;
   /** Values belonging on the write locale's companion row. */
   companion: Record<string, unknown>;
+  /**
+   * The draft's component values, keyed by field name. They are stored in the
+   * component tables, not on either row, so the publish writes them with the
+   * component save.
+   */
+  components: Record<string, unknown>;
 }
 
 /**
@@ -55,21 +63,28 @@ export function splitPendingChange(
   companion: CompanionSchema | null,
   overrides?: Record<string, unknown>
 ): PendingChangeParts {
+  const draft = (snapshot ?? {}) as Record<string, unknown>;
+  const components = draftComponentValues(draft, fields as FieldConfig[]);
+  // The component values leave the row-shaped halves: neither row has a
+  // column for them.
+  const rowValues = Object.fromEntries(
+    Object.entries(draft).filter(([key]) => !(key in components))
+  );
   const payload = stripImmutableSystemFields(
     {
-      ...(keysToSnakeCase(snapshot) as Record<string, unknown>),
+      ...(keysToSnakeCase(rowValues) as Record<string, unknown>),
       ...(overrides ?? {}),
     },
     "single",
     tableName,
     fields
   );
-  if (!companion) return { main: payload, companion: {} };
+  if (!companion) return { main: payload, companion: {}, components };
   const { main, companion: companionValues } = splitLocalizedWrite(
     payload,
     companion.localizedFields
   );
-  return { main, companion: companionValues };
+  return { main, companion: companionValues, components };
 }
 
 /** The transaction surface a companion write needs. */

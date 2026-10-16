@@ -104,6 +104,7 @@ import {
   resolveCompanionReadiness,
 } from "../../i18n/runtime/companion-readiness";
 import { captureInTx } from "../../versions/capture-in-tx";
+import { mergeComponentPatches } from "../../versions/draft-components";
 import { resolveDraftHold } from "../../versions/draft-hold";
 import { storeDraftSave } from "../../versions/draft-save";
 import { resolveComponentSchemas } from "../../versions/restore-version";
@@ -1459,14 +1460,29 @@ export class SingleMutationService extends BaseService {
                 // The caller's own payload wins over the pending change: a
                 // publish that also sets a field is saying something about that
                 // field now.
-                ({ main: mainPayload, companion: companionData } =
-                  splitPendingChange(
-                    pendingDraft.snapshot,
-                    singleMeta.tableName,
-                    fieldConfigs,
-                    companion && companionPhysicallyExists ? companion : null,
-                    updatePayload
-                  ));
+                const promoted = splitPendingChange(
+                  pendingDraft.snapshot,
+                  singleMeta.tableName,
+                  fieldConfigs,
+                  companion && companionPhysicallyExists ? companion : null,
+                  updatePayload
+                );
+                mainPayload = promoted.main;
+                companionData = promoted.companion;
+                // The draft's component values are written by the component
+                // save below. The publish's own component values win, merged
+                // sub-field by sub-field, as its row values win over the draft's.
+                const promotedComponents = mergeComponentPatches(
+                  promoted.components,
+                  componentFieldData,
+                  fieldConfigs,
+                  singleComponentSchemas
+                );
+                for (const [name, value] of Object.entries(
+                  promotedComponents
+                )) {
+                  componentFieldData[name] = value;
+                }
                 // A non-default language's lifecycle lives on its companion
                 // `_status`; the main row must not be clobbered by it.
                 if (
@@ -2061,11 +2077,44 @@ export class SingleMutationService extends BaseService {
                 draftRef,
                 singleDraftLocale
               );
+              // Component values live in tables of their own and are not on the
+              // row, so the live document the first held save builds on reads
+              // them in, tagged as every snapshot and a collection's draft hold
+              // them. A later save builds on the draft, which already has them.
+              const componentResolver = (componentSlug: string) =>
+                singleComponentSchemas?.get(componentSlug)?.fields;
               const base = existingDraft
                 ? (existingDraft.snapshot as Record<string, unknown>)
-                : convertTimestampsToCamelCase({
-                    ...(existingDoc as Record<string, unknown>),
-                  });
+                : {
+                    ...convertTimestampsToCamelCase({
+                      ...(existingDoc as Record<string, unknown>),
+                    }),
+                    ...tagComponentTypes(
+                      await readComponentSubtrees({
+                        fieldGroupDataService: this.fieldGroupDataService,
+                        tx,
+                        entryId: existingDoc.id,
+                        parentTable: singleMeta.tableName,
+                        fieldConfigs,
+                        locale: options.locale,
+                        reason: "working-draft-single-component-read",
+                        logContext: { slug },
+                        onReadFailure: err =>
+                          this.logger.error(
+                            "Working draft: failed to read single components; failing the save instead of holding an incomplete draft",
+                            {
+                              slug,
+                              error:
+                                err instanceof Error
+                                  ? err.message
+                                  : String(err),
+                            }
+                          ),
+                      }),
+                      fieldConfigs,
+                      componentResolver
+                    ),
+                  };
               // The base is the READ shape (field names); `mainPayload` is the
               // WRITE shape (columns). Spreading one onto the other put both
               // spellings of every edited field in the snapshot — the live value
@@ -2077,7 +2126,7 @@ export class SingleMutationService extends BaseService {
               // Mapped through the declared fields rather than camel-cased
               // wholesale, for the reason the version capture below gives: a
               // field genuinely named `site_title` must keep its own spelling.
-              const pending: Record<string, unknown> = { ...base };
+              let pending: Record<string, unknown> = { ...base };
               for (const field of singleMeta.fields) {
                 if (field.name === undefined) continue;
                 const column = toSnakeCase(field.name);
@@ -2112,6 +2161,22 @@ export class SingleMutationService extends BaseService {
                     pending[f.name] = companionData[f.column];
                   }
                 }
+              }
+              // This save's component values, tagged as the draft holds them and
+              // merged sub-field by sub-field: a save carries only the
+              // sub-fields it changed. Without this the edit was never stored
+              // anywhere while held, and the publish shipped the old values.
+              if (Object.keys(componentFieldData).length > 0) {
+                pending = mergeComponentPatches(
+                  pending,
+                  tagComponentTypes(
+                    componentFieldData,
+                    fieldConfigs,
+                    componentResolver
+                  ),
+                  fieldConfigs,
+                  singleComponentSchemas
+                );
               }
               // The draft, and the save as a version of its own. A save that
               // changes nothing against what it replaces records no version.
