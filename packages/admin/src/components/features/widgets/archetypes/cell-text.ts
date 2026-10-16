@@ -111,13 +111,17 @@ export function asPresentedText(
   value: unknown,
   column: CellColumn | undefined
 ): string | undefined {
+  // A choice column shows the value's label, never the stored value ("Published", not
+  // `published`); the stored value is kept when the column names no label for it. Asked
+  // before the value is judged printable, so an option that stores "" under a label ("None")
+  // reads as that label, as it does on a bar, rather than as an empty cell.
+  const named =
+    typeof value === "string" && column?.choices
+      ? choiceLabel(value, column.choices)
+      : undefined;
+  if (named !== undefined) return named;
   const text = asText(value);
   if (text === undefined) return undefined;
-  // A choice column shows the value's label, never the stored value ("Published", not
-  // `published`); the stored value is kept when the column names no label for it.
-  if (typeof value === "string" && column?.choices) {
-    return choiceLabel(value, column.choices) ?? text;
-  }
   if (column?.type !== "date") return text;
 
   // The raw text is the FALLBACK, so an unparseable value still reaches the

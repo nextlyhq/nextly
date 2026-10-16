@@ -71,7 +71,9 @@ describe("a list cell is presented by its declared kind", () => {
 
 describe("asPresentedText", () => {
   it("leaves a non-date alone", () => {
-    expect(asPresentedText("Autumn launch", { type: "string" })).toBe("Autumn launch");
+    expect(asPresentedText("Autumn launch", { type: "string" })).toBe(
+      "Autumn launch"
+    );
   });
 
   /*
@@ -144,6 +146,14 @@ describe("a choice column shows each value's label", () => {
 
   it("shows the label for a value the column names", () => {
     expect(asPresentedText("needs_review", stage)).toBe("Needs review");
+  });
+
+  it("names an empty stored value by its declared label, as a bar does", () => {
+    // An option that stores "" under "None" is a value the column names, not a missing one.
+    const priority = { choices: [{ value: "", label: "None" }] };
+    expect(asPresentedText("", priority)).toBe("None");
+    // With no label declared for it, an empty value is still an empty cell.
+    expect(asPresentedText("", stage)).toBeUndefined();
   });
 
   it("keeps the stored value for one the column does not name", () => {

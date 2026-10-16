@@ -710,7 +710,11 @@ describe("useWidgetQueries", () => {
       });
     });
 
-    it("drops malformed value labels but keeps the column", async () => {
+    it.each([
+      ["a value that is not a string", { value: 3, label: "Three" }],
+      ["an empty label", { value: "done", label: "" }],
+      ["a label of spaces", { value: "done", label: "   " }],
+    ])("drops value labels with %s but keeps the column", async (_, choice) => {
       // Presentation, so a broken list costs the labels, not the column or the rows.
       expect(
         await slotFor({
@@ -718,9 +722,7 @@ describe("useWidgetQueries", () => {
           result: {
             op: "list",
             items: [{ stage: "done" }],
-            fields: [
-              { name: "stage", label: "Stage", choices: [{ value: 3, label: "Three" }] },
-            ],
+            fields: [{ name: "stage", label: "Stage", choices: [choice] }],
           },
         })
       ).toEqual({
@@ -743,11 +745,19 @@ describe("useWidgetQueries", () => {
       expect(
         await slotFor({
           ok: true,
-          result: { op: "groupBy", buckets: [{ value: "done", count: 2 }], field },
+          result: {
+            op: "groupBy",
+            buckets: [{ value: "done", count: 2 }],
+            field,
+          },
         })
       ).toEqual({
         ok: true,
-        result: { op: "groupBy", buckets: [{ value: "done", count: 2 }], field },
+        result: {
+          op: "groupBy",
+          buckets: [{ value: "done", count: 2 }],
+          field,
+        },
       });
     });
 

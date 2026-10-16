@@ -132,16 +132,47 @@ describe("a collection or Single kept off the dashboard is never counted", () =>
       expect.objectContaining({ collection: "nx_pb_class_usage" })
     );
     // Nor is its activity counted in the recent-changes figure: the activity query leaves out
-    // the same slugs the registry reads above left out.
-    const activity = vi
-      .mocked(adapter.executeQuery)
-      .mock.calls.find(([sql]) => String(sql).includes("activity_log"));
+    // the collection the registry read above left out. Not the Single: the trail records none.
+    const activity = activityQuery(adapter);
     expect(String(activity?.[0])).toContain("NOT IN");
-    expect(activity?.[1]).toEqual(
-      expect.arrayContaining(["nx_pb_class_usage", "hidden-single"])
-    );
+    expect(activity?.[1]).toContain("nx_pb_class_usage");
+    expect(activity?.[1]).not.toContain("hidden-single");
+  });
+
+  it("keeps a visible collection's activity when a hidden Single shares its slug", async () => {
+    containerGet.mockImplementation((name: string) => {
+      if (name === "collectionRegistryService") {
+        return { getAllCollections: vi.fn().mockResolvedValue(COLLECTIONS) };
+      }
+      if (name === "singleRegistryService") {
+        return {
+          getAllSingles: vi
+            .fn()
+            .mockResolvedValue([{ slug: "posts", admin: { hidden: true } }]),
+        };
+      }
+      throw new Error(`unexpected container.get("${name}")`);
+    });
+
+    const adapter = makeAdapter();
+    const stats = await new DashboardService(adapter, makeLogger()).getStats({
+      scope: allResources(),
+      caller: CALLER,
+    });
+
+    expect(stats.singles).toBe(0);
+    const activity = activityQuery(adapter);
+    expect(String(activity?.[0])).not.toContain("NOT IN");
+    expect(activity?.[1]).not.toContain("posts");
   });
 });
+
+/** The recent-changes count's query and its bound values, as the adapter received them. */
+function activityQuery(adapter: ReturnType<typeof makeAdapter>) {
+  return vi
+    .mocked(adapter.executeQuery)
+    .mock.calls.find(([sql]) => String(sql).includes("activity_log"));
+}
 
 describe("per-collection totals honour the caller's row-level access", () => {
   it("reports the access-controlled count, not the physical row count", async () => {

@@ -140,11 +140,17 @@ export class DashboardService extends BaseService {
     // pass one gets an empty dashboard, which is visible and reportable; the
     // old default returned everything, which was not.
     const scope = options.scope ?? someResources([]);
-    // The slugs the two reads below leave out as kept off the dashboard, so the activity figure
-    // leaves out the same ones from the same reads rather than counting them by its own rule.
-    const keptOff = new Set<string>();
-    const collections = await this.getRegisteredCollections(scope, keptOff);
-    const singles = await this.getRegisteredSingles(scope, keptOff);
+    // The collections the read below leaves out as kept off the dashboard, so the activity figure
+    // leaves out the same ones from the same read rather than counting them by its own rule.
+    // Collections only: the activity trail records no Single, and its `collection` column holds
+    // collection slugs, so a hidden Single sharing a visible collection's slug must not remove
+    // that collection's activity.
+    const keptOffCollections = new Set<string>();
+    const collections = await this.getRegisteredCollections(
+      scope,
+      keptOffCollections
+    );
+    const singles = await this.getRegisteredSingles(scope);
 
     // Computed first, rather than folded into the `Promise.all` below: the
     // status breakdown reuses these numbers for every collection without the
@@ -166,7 +172,7 @@ export class DashboardService extends BaseService {
       statusBreakdown,
     ] = await Promise.all([
       this.countTable("media"),
-      this.countRecentChanges24h(scope, keptOff),
+      this.countRecentChanges24h(scope, keptOffCollections),
       this.countTable("users"),
       this.countTable("roles"),
       this.countTable("permissions"),
@@ -346,8 +352,7 @@ export class DashboardService extends BaseService {
   }
 
   private async getRegisteredSingles(
-    scope: ReadableResources,
-    keptOff?: Set<string>
+    scope: ReadableResources
   ): Promise<Array<{ slug: string }>> {
     try {
       const singleRegistryService = container.get<{
@@ -356,7 +361,7 @@ export class DashboardService extends BaseService {
 
       // Kept off the dashboard, for the reason the collections above are.
       const singles = (await singleRegistryService.getAllSingles()).filter(
-        single => !leftOut(single, keptOff)
+        single => !keptOffDashboard(single)
       );
       return filterByResource(scope, singles, s => String(s.slug));
     } catch (error) {
@@ -476,7 +481,7 @@ export class DashboardService extends BaseService {
    */
   private async countRecentChanges24h(
     scope: ReadableResources,
-    /** Collections and Singles kept off the dashboard: their activity is not counted. */
+    /** Collections kept off the dashboard: their activity is not counted. */
     keptOff: ReadonlySet<string> = new Set()
   ): Promise<number> {
     if (scope.kind === "some" && scope.resources.size === 0) return 0;

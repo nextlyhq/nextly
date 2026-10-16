@@ -350,7 +350,14 @@ function asChoices(
       value?: unknown;
       label?: unknown;
     };
-    if (typeof stored !== "string" || typeof label !== "string") {
+    // A blank label is malformed too: the cell or bar would show nothing where the value belongs,
+    // which is why a source registering one is refused. A resolver's answer reaches here without
+    // passing that check, so it is repeated at this boundary.
+    if (
+      typeof stored !== "string" ||
+      typeof label !== "string" ||
+      label.trim() === ""
+    ) {
       return undefined;
     }
     choices.push({ value: stored, label });
