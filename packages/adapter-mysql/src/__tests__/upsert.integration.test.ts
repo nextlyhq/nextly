@@ -272,6 +272,29 @@ describe.skipIf(!TEST_DB_URL)("MySQL upsert", () => {
     expect(await rows()).toEqual([{ id: "b", key: "k1", label: "second" }]);
   });
 
+  it("returns the stored row when an update trigger rewrites the primary key", async () => {
+    // The key the update left is not the one the trigger wrote, so the row is
+    // found by the conflict value, which the trigger did not touch.
+    await adapter.upsert(
+      KEYED,
+      { id: "a", key: "k1", label: "first" },
+      { conflictColumns: ["key"] }
+    );
+    await adapter.executeQuery(
+      `CREATE TRIGGER int_upsert_reid BEFORE UPDATE ON ${KEYED} FOR EACH ROW SET NEW.id = CONCAT('t-', OLD.id)`
+    );
+    try {
+      const stored = await adapter.upsert<Row>(
+        KEYED,
+        { id: "b", key: "k1", label: "second" },
+        { conflictColumns: ["key"], updateColumns: ["label"] }
+      );
+      expect(stored).toMatchObject({ id: "t-a", key: "k1", label: "second" });
+    } finally {
+      await adapter.executeQuery("DROP TRIGGER IF EXISTS int_upsert_reid");
+    }
+  });
+
   it("returns the stored row when an update trigger rewrites the conflict key", async () => {
     // Read back by the row's primary key: by the conflict value the update was
     // keyed on, the row a trigger re-keyed is not found.

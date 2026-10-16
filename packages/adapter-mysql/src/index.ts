@@ -1087,15 +1087,18 @@ export class MySqlAdapter extends DrizzleAdapter {
     // Read back by the row's primary key as the update left it: the update may
     // set the key itself (every given column is updated by default, as `ON
     // CONFLICT DO UPDATE` does elsewhere), and a BEFORE UPDATE trigger may
-    // have changed the conflict value the update was keyed on.
-    return this.lockedRow(
-      db,
-      tableObj,
-      this.byIdentity(tableObj, {
-        ...(existing as Record<string, unknown>),
-        ...update,
-      }) ?? where
-    );
+    // have changed the conflict value the update was keyed on. A trigger that
+    // changed the primary key instead leaves the conflict value standing, so
+    // the row is looked for there next; one that changed both is not found.
+    const identity = this.byIdentity(tableObj, {
+      ...(existing as Record<string, unknown>),
+      ...update,
+    });
+    const updated =
+      identity === undefined
+        ? undefined
+        : await this.lockedRow(db, tableObj, identity);
+    return updated ?? this.lockedRow(db, tableObj, where);
   }
 
   /**
