@@ -18,6 +18,7 @@ import { isServicesRegistered } from "../di/register";
 import { NextlyError } from "../errors/nextly-error";
 import { getNextlyLogger } from "../observability/logger";
 
+import { buildErrorResponse } from "./error-response";
 import { readOrGenerateRequestId } from "./request-id";
 import { respondData } from "./response-shapes";
 import { withErrorHandler } from "./with-error-handler";
@@ -114,11 +115,16 @@ async function probe(): Promise<Awaited<
  * # => {"ok":true,"version":"0.0.142","uptime":123,"timestamp":"...","database":{...}}
  * ```
  */
-export const GET = withErrorHandler(async (_request: Request) => {
+export const GET = withErrorHandler(async (request: Request) => {
   const health = await probe();
 
   if (health === null) {
-    throw NextlyError.serviceUnavailable({ logMessage: NOT_STARTED });
+    // Answered rather than thrown: the boundary logs every error thrown
+    // through it, and a monitor polling a server that never starts Nextly
+    // would log once per poll. `probe()` has said why, once per process.
+    return buildErrorResponse(NextlyError.serviceUnavailable(), {
+      requestId: readOrGenerateRequestId(request),
+    });
   }
 
   if (!health.ok) {

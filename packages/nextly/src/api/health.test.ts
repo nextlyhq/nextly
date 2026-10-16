@@ -42,6 +42,41 @@ describe("Health Check Route Handlers", () => {
       expect(healthCheck).not.toHaveBeenCalled();
     });
 
+    it("logs once per process however often a monitor polls, not once per poll", async () => {
+      // A fresh copy of the route, so this process has not yet said why.
+      vi.resetModules();
+      const { setNextlyLogger } = await import("../observability/logger");
+      const { isServicesRegistered } = await import("../di/register");
+      const route = await import("./health");
+      const lines: object[] = [];
+      const record = (payload: object) => {
+        lines.push(payload);
+      };
+      setNextlyLogger({
+        error: record,
+        warn: record,
+        info: record,
+        debug: record,
+      });
+      (isServicesRegistered as any).mockReturnValue(false);
+
+      try {
+        for (let poll = 0; poll < 3; poll++) {
+          const response = await route.GET(
+            new Request("http://localhost:3000/api/health")
+          );
+          expect(response.status).toBe(503);
+        }
+      } finally {
+        setNextlyLogger(undefined);
+        (isServicesRegistered as any).mockReturnValue(true);
+      }
+
+      expect(lines).toEqual([
+        expect.objectContaining({ op: "health-not-started" }),
+      ]);
+    });
+
     it("answers HEAD with 503 too", async () => {
       const { isServicesRegistered } = await import("../di/register");
       (isServicesRegistered as any).mockReturnValueOnce(false);

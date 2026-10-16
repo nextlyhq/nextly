@@ -56,41 +56,106 @@ ${startNextly(configImport)}
 `;
 }
 
+/** The files Next.js reads its own config from, in the order it looks. */
+const NEXT_CONFIG_NAMES = [
+  "next.config.js",
+  "next.config.mjs",
+  "next.config.ts",
+  "next.config.mts",
+  "next.config.cjs",
+];
+
+/** The text of the app's Next.js config, or null when it has none. */
+async function readNextConfig(
+  cwd: string
+): Promise<{ name: string; text: string } | null> {
+  for (const name of NEXT_CONFIG_NAMES) {
+    const file = path.join(cwd, name);
+    if (await fs.pathExists(file)) {
+      return { name, text: await fs.readFile(file, "utf-8") };
+    }
+  }
+  return null;
+}
+
+/**
+ * What to add to a hook the app already has. Written as the whole function,
+ * because the statements await: a `register()` that is not `async` has to
+ * become so, and saying it in code is the version that cannot be pasted wrong.
+ */
+function linesToAdd(configImport: string): string {
+  return `Make register() async if it is not, and add Nextly's start inside it:
+
+export async function register() {
+  // ...what the hook already does...
+
+  if (process.env.NEXT_RUNTIME === "nodejs") {
+${startNextly(configImport)
+  .split("\n")
+  .map(line => (line ? `  ${line}` : line))
+  .join("\n")}
+  }
+}`;
+}
+
+/** Next.js 14 runs an instrumentation hook only when the config opts in. */
+function needsHookOptIn(nextVersion: string | null): boolean {
+  const major = Number(nextVersion?.replace(/^[^0-9]*/, "").split(".")[0]);
+  return major === 14;
+}
+
 /**
  * Give an existing app the hook that starts Nextly when its server starts.
  *
  * Next.js reads the hook beside \`app/\`: in \`src/\` when the app lives there,
  * at the root otherwise. A hook that is already there belongs to the app and is
- * never rewritten; it is reported as skipped with the lines to add to its
- * \`register()\`.
+ * never rewritten; it is reported as skipped with what to add. So is the case
+ * where the app sets \`pageExtensions\`: Next.js then reads the hook only under a
+ * name with one of those extensions, which this does not guess. The config file
+ * itself is never edited: on Next.js 14, which runs the hook only with
+ * \`experimental.instrumentationHook\`, the line to add is reported instead.
  */
 export async function generateInstrumentation(
   cwd: string,
-  projectInfo: Pick<ProjectInfo, "srcDir">
+  projectInfo: Pick<ProjectInfo, "srcDir" | "nextVersion">
 ): Promise<GeneratedFiles> {
   const dir = projectInfo.srcDir ? "src" : "";
   const configImport = projectInfo.srcDir
     ? "../nextly.config"
     : "./nextly.config";
+  const result: GeneratedFiles = { written: [], changed: [], skipped: [] };
+  const nextConfig = await readNextConfig(cwd);
+
+  if (needsHookOptIn(projectInfo.nextVersion)) {
+    result.skipped.push({
+      path: nextConfig?.name ?? "next.config.js",
+      why: "Next.js 14 runs instrumentation.ts only when the config opts in, and the config was left as it is",
+      toAdd: "experimental: { instrumentationHook: true },",
+    });
+  }
 
   for (const name of HOOK_NAMES) {
     const relative = path.posix.join(dir, name);
     if (await fs.pathExists(path.join(cwd, relative))) {
-      return {
-        written: [],
-        changed: [],
-        skipped: [
-          {
-            path: relative,
-            why: "the app already has a server-start hook, so it was left as it is",
-            toAdd: `Inside register(), under the Node.js runtime only (process.env.NEXT_RUNTIME === "nodejs"):\n\n${startNextly(configImport)}`,
-          },
-        ],
-      };
+      result.skipped.push({
+        path: relative,
+        why: "the app already has a server-start hook, so it was left as it is",
+        toAdd: linesToAdd(configImport),
+      });
+      return result;
     }
   }
 
   const relative = path.posix.join(dir, "instrumentation.ts");
+  if (nextConfig?.text.includes("pageExtensions")) {
+    result.skipped.push({
+      path: relative,
+      why: `${nextConfig.name} sets pageExtensions, and Next.js reads the hook only under a name with one of them, so none was written; create it under that name with this content`,
+      toAdd: instrumentationHook(configImport),
+    });
+    return result;
+  }
+
   await fs.ensureDir(path.dirname(path.join(cwd, relative)));
   await fs.writeFile(
     path.join(cwd, relative),
@@ -100,5 +165,6 @@ export async function generateInstrumentation(
       flag: "wx",
     }
   );
-  return { written: [relative], changed: [], skipped: [] };
+  result.written.push(relative);
+  return result;
 }
