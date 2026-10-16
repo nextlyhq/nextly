@@ -430,7 +430,8 @@ export function generateSqliteCoreTableStatements(): string[] {
       "created_by" TEXT,
       "created_at" INTEGER NOT NULL,
       "updated_at" INTEGER NOT NULL,
-      "revision" INTEGER NOT NULL DEFAULT 0
+      "revision" INTEGER NOT NULL DEFAULT 0,
+      "kind" TEXT NOT NULL DEFAULT 'release'
     )`,
     `CREATE TABLE IF NOT EXISTS "nextly_release_members" (
       "id" TEXT PRIMARY KEY NOT NULL,
@@ -441,6 +442,7 @@ export function generateSqliteCoreTableStatements(): string[] {
       "locale" TEXT,
       "action" TEXT NOT NULL,
       "member_key" TEXT NOT NULL,
+      "single_slot" INTEGER,
       "created_by" TEXT,
       "created_at" INTEGER NOT NULL
     )`,
@@ -455,6 +457,10 @@ export function generateSqliteCoreTableStatements(): string[] {
     // permit any number of unlocalized members for one document in one release.
     `CREATE UNIQUE INDEX IF NOT EXISTS "nextly_release_members_key_uidx"
       ON "nextly_release_members" ("member_key")`,
+    // The one-member rule of a single release: a slot that is 1 for its
+    // member and NULL for every other, unique per release.
+    `CREATE UNIQUE INDEX IF NOT EXISTS "nextly_release_members_single_uidx"
+      ON "nextly_release_members" ("release_id", "single_slot")`,
     `CREATE INDEX IF NOT EXISTS "nextly_release_members_doc_idx"
       ON "nextly_release_members" ("scope_kind", "scope_slug", "entry_id", "locale")`,
     `CREATE INDEX IF NOT EXISTS "nextly_release_members_release_idx"

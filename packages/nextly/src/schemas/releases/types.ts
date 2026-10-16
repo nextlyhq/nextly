@@ -36,6 +36,26 @@ export type ReleaseState =
   | "cancelled"
   | "blocked";
 
+/**
+ * What a release is. An ordinary `release` holds any number of documents; a
+ * `single` one is a document scheduled on its own, and holds exactly that one.
+ *
+ * Stored rather than inferred: a release with one member may be an ordinary
+ * release still being assembled, and a title can be renamed, so neither tells
+ * the two apart. Set when the release is made and never changed.
+ */
+export type ReleaseKind = "release" | "single";
+
+/** The release kinds, the ordinary one first: it is the default. */
+export const RELEASE_KINDS: readonly ReleaseKind[] = ["release", "single"];
+
+/** Runtime guard: true iff `v` is one of the release kinds. */
+export function isReleaseKind(v: unknown): v is ReleaseKind {
+  return (
+    typeof v === "string" && (RELEASE_KINDS as readonly string[]).includes(v)
+  );
+}
+
 /** What a member does to its document when the release takes effect. */
 export type ReleaseMemberAction = "publish" | "unpublish";
 

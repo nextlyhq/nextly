@@ -49,8 +49,11 @@ import {
 import { NextlyError } from "../errors";
 import { getCachedNextly } from "../init";
 import {
+  isReleaseKind,
   isReleaseState,
+  RELEASE_KINDS,
   RELEASE_STATES,
+  type ReleaseKind,
   type ReleaseState,
 } from "../schemas/releases/types";
 
@@ -263,6 +266,18 @@ function releaseStateParam(value: string | null): ReleaseState | undefined {
   if (value === null) return undefined;
   if (!isReleaseState(value)) {
     throw badRequest(`\`state\` must be one of: ${RELEASE_STATES.join(", ")}.`);
+  }
+  return value;
+}
+
+/**
+ * A release kind from a query string or a body, or a refusal — for the reason
+ * an unknown state is refused: `kind=singles` ignored would list every release.
+ */
+function releaseKindParam(value: unknown): ReleaseKind | undefined {
+  if (value === null || value === undefined) return undefined;
+  if (!isReleaseKind(value)) {
+    throw badRequest(`\`kind\` must be one of: ${RELEASE_KINDS.join(", ")}.`);
   }
   return value;
 }
@@ -598,6 +613,7 @@ const RELEASE_OPERATIONS: Record<
     const shared = {
       ...caller,
       state: releaseStateParam(params.get("state")),
+      kind: releaseKindParam(params.get("kind")),
       scheduledAfter: optionalInstant(
         params.get("scheduledAfter"),
         "scheduledAfter"
@@ -680,6 +696,7 @@ const RELEASE_OPERATIONS: Record<
         ...caller,
         title: requireString(body, "title"),
         description,
+        kind: releaseKindParam(body.kind),
       }),
       { status: 201 }
     );
