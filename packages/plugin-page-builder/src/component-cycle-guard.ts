@@ -139,6 +139,11 @@ export interface CycleQuestion {
   readonly source: ComponentSource;
   /** The site's caps, so the walk reads a document under the same bound the canvas does. */
   readonly limits: DocumentLimits;
+  /**
+   * The save's ONE allowance, shared with every other composition the save
+   * performs, so the bound is on the save rather than on each check.
+   */
+  readonly work: WorkAllowance;
 }
 
 /**
@@ -151,12 +156,9 @@ export interface CycleQuestion {
 export async function componentCycleRefusal(
   question: CycleQuestion
 ): Promise<string | null> {
-  const { self, document, source, limits } = question;
+  const { self, document, source, limits, work } = question;
   if (!isForest(document)) return null;
   try {
-    // ONE allowance for every composition this save performs, so the bound is
-    // on the save rather than on each check that composes.
-    const work: WorkAllowance = { left: MOST_COMPOSED_NODES };
     // Decided from the document in hand, before any read: the one loop that
     // takes no library to see costs nothing to refuse.
     const options: CycleGuardOptions = { limits };
@@ -623,7 +625,7 @@ async function composesUnder(
   // A loop outranks every limit: a composition that closed one has shown it,
   // whatever else stopped it. A capped branch or a read that failed rules
   // nothing out, so either leaves the question open rather than answered.
-  if (composed.loopClosed) return "cycle";
+  if (composed.loopsClosed.size > 0) return "cycle";
   return composed.incomplete || composed.stoppedShort
     ? "indeterminate"
     : "none";

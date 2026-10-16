@@ -187,7 +187,7 @@ function useColorInjection(colors: ResolvedBrandingColors | undefined) {
  * Used when no `branding.favicon` is configured.
  *
  * Note: uses the OS-level color-scheme preference rather than the in-app
- * `next-themes` value — favicons can't reliably react to JS theme toggles
+ * theme (`useTheme`) — favicons can't reliably react to JS theme toggles
  * across browsers, so the in-app dark-mode switch won't update the favicon.
  */
 const DEFAULT_FAVICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${DEFAULT_MARK_VIEWBOX}"><style>path{fill:#000}@media (prefers-color-scheme: dark){path{fill:#fff}}</style>${DEFAULT_MARK_PATHS.map(d => `<path d="${d}"/>`).join("")}</svg>`;

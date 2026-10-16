@@ -206,8 +206,28 @@ async function installIntoExistingApp(
     pm,
     pm === "pnpm" ? await readPnpmVersion(cwd) : undefined
   );
-  const allPackages = getPackagesToInstall(database);
+  try {
+    await installPackages(cwd, pm, database, useYalc, pluginPackages);
+  } catch (error) {
+    // The notes are printed after a successful install, so a failed one
+    // carries them: a version-scoped rule the app kept is what makes pnpm
+    // stop, and the note says what to do then.
+    if (notes.length === 0) throw error;
+    throw new Error(`${(error as Error).message}\n\n${notes.join("\n")}`, {
+      cause: error,
+    });
+  }
+  return notes;
+}
 
+async function installPackages(
+  cwd: string,
+  pm: PackageManager,
+  database: DatabaseConfig,
+  useYalc: boolean,
+  pluginPackages: string[]
+): Promise<void> {
+  const allPackages = getPackagesToInstall(database);
   if (useYalc) {
     await installWithYalc(cwd, pm, allPackages, pluginPackages);
   } else {
@@ -217,7 +237,6 @@ async function installIntoExistingApp(
   if (tooling.length > 0) {
     await runInstall(DEV_INSTALL_COMMANDS[pm], tooling, cwd);
   }
-  return notes;
 }
 
 /**

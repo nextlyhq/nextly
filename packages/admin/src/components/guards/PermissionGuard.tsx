@@ -4,14 +4,16 @@ import { Spinner } from "@nextlyhq/ui";
 import type React from "react";
 import { useEffect, useState } from "react";
 
-import { ROUTES } from "@admin/constants/routes";
+import { PageContainer } from "@admin/components/layout/page-container";
+import { SectionErrorFallback } from "@admin/components/shared/error-fallbacks";
+import { NoAccessPage } from "@admin/components/shared/no-access-page";
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
 import {
   DEFAULT_MARK_PATHS,
   DEFAULT_MARK_VIEWBOX,
 } from "@admin/lib/branding/default-mark";
-import { navigateTo } from "@admin/lib/navigation";
 import { cn } from "@admin/lib/utils";
+import type { AccessSubject } from "@admin/types/access-subject";
 
 interface PermissionGuardProps {
   /**
@@ -21,6 +23,8 @@ interface PermissionGuardProps {
    * satisfying read/create/delete) without duplicating a route per slug.
    */
   requiredPermission: string | string[];
+  /** What the route opens, so a refusal can name it; absent for other pages. */
+  subject?: AccessSubject;
   children: React.ReactNode;
 }
 
@@ -32,14 +36,22 @@ interface PermissionGuardProps {
  *
  * - Super-admin bypasses all permission checks
  * - While permissions are loading, shows a loading spinner
- * - If permission is denied, shows an access denied message with a link to Dashboard
+ * - If permission is denied, shows the no-access page in place of the route,
+ *   at the address that was asked for. It never redirects: a silent trip to
+ *   the dashboard reads as a broken link rather than as a refusal.
  */
 export function PermissionGuard({
   requiredPermission,
+  subject,
   children,
 }: PermissionGuardProps) {
-  const { hasPermission, isLoading: permissionsLoading } =
-    useCurrentUserPermissions();
+  const {
+    hasPermission,
+    isLoading: permissionsLoading,
+    hasAnswer,
+    error,
+    retry,
+  } = useCurrentUserPermissions();
   const [isForceLoading, setIsForceLoading] = useState(false);
   const hasAccess = Array.isArray(requiredPermission)
     ? requiredPermission.some(hasPermission)
@@ -55,12 +67,6 @@ export function PermissionGuard({
   }, []);
 
   const isLoading = permissionsLoading || isForceLoading;
-
-  useEffect(() => {
-    if (!isLoading && !hasAccess) {
-      navigateTo(ROUTES.DASHBOARD);
-    }
-  }, [hasAccess, isLoading]);
 
   if (isLoading) {
     return (
@@ -113,8 +119,24 @@ export function PermissionGuard({
     );
   }
 
+  // No answer is not a refusal. With the first request failed, the
+  // permissions are empty for everyone, a super-admin included, and saying
+  // "you don't have access" would be a claim nothing supports.
+  if (!hasAnswer && error) {
+    return (
+      <PageContainer className="py-8">
+        <SectionErrorFallback
+          title="Couldn't check your access"
+          description="The admin couldn't load your permissions, so it can't tell whether you can open this page."
+          error={error}
+          reset={retry}
+        />
+      </PageContainer>
+    );
+  }
+
   if (!hasAccess) {
-    return null;
+    return <NoAccessPage subject={subject} />;
   }
 
   return <>{children}</>;

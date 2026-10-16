@@ -122,10 +122,17 @@ function scopeOf(view: ContributedDocumentView): string {
     : `on every document with a "${view.fieldType}" field`;
 }
 
-/** Why one view cannot be routed on its own, or `undefined` when it can. */
+/** Why one view is refused on its own, or `undefined` when it is not. */
 function unroutableReason(view: ContributedDocumentView): string | undefined {
   if (typeof view.component !== "string" || view.component === "") {
     return `${scopeOf(view)} at "${view.path}" names no component to draw`;
+  }
+  // Read through `unknown`: a JavaScript plugin or a setup transformer is not
+  // held to the type. The label is published in the admin metadata, sent as
+  // JSON, where anything but text fails the whole response, not this view.
+  const label: unknown = view.label;
+  if (label !== undefined && typeof label !== "string") {
+    return `${scopeOf(view)} at "${view.path}" has a label that is not text`;
   }
   if (typeof view.path !== "string" || !VIEW_PATH.test(view.path)) {
     return (

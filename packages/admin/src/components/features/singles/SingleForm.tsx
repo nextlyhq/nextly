@@ -829,6 +829,7 @@ export function SingleForm({
     <UnsavedChangesGuard
       isDirty={hasUnsavedWork}
       disabled={isSubmitting}
+      fields={schema.fields}
       // Same rule as the entry editor: a refused switch takes its seed with it.
       onCancel={onSeedHandled}
     >

@@ -941,14 +941,19 @@ limits are accepted:
 | Code | Meaning |
 | --- | --- |
 | `PLUGIN_SCHEMA_BEHIND` | The plugin expects a newer schema than the database has. Run `nextly migrate`. |
-| `PLUGIN_SCHEMA_UNINSTALLED` | The plugin was uninstalled but is still in your config. Reinstall it or remove the line. |
+| `PLUGIN_NOT_INSTALLED` | A configured plugin has not been installed on this database. Run `nextly plugins install <name>` for each one it names. |
+| `PLUGIN_SCHEMA_UNINSTALLED` | The plugin was uninstalled, with or without `--keep-data`, but is still in your config. Reinstall it or remove the line. |
+| `PLUGIN_UNINSTALL_UNFINISHED` | An uninstall of the plugin began and did not finish. Run it again, the way it began, to finish it, or reinstall the plugin. |
 | `PLUGIN_MIGRATIONS_UNAVAILABLE` | A plugin declares tables and ships no migrations to create them. |
 | `MIGRATION_CHECKSUM_MISMATCH` | A migration changed after it was generated or applied. |
 | `DROP_OF_FOREIGN_TABLE` | A migration would drop or rename another owner's table, column, index, foreign key or check, or a plugin migration a table no owner row claims. Nothing was applied. |
 
-In development, `PLUGIN_SCHEMA_BEHIND` only logs: push reconciles from config
-on every reload, so it resolves itself moments later and refusing would make
-the edit loop impossible.
+In development, `PLUGIN_SCHEMA_BEHIND` and `PLUGIN_NOT_INSTALLED` only log:
+push reconciles from config on every reload, so a schema behind resolves
+itself moments later, and a plugin is added to the config and tried before
+anyone installs it. The other refusals hold in every environment. The
+install-state refusals come before boot migrations run, so a refused plugin's
+modules are not applied first.
 
 ### Ledger commands and plugin rows
 
@@ -970,6 +975,25 @@ longer ships shows as applied with its file missing.
 The default matters: `migrate:down` picks the newest applied migration of any
 kind, so without the exclusion it would revert a plugin's migration while
 reporting an app rollback.
+
+### Installing
+
+A plugin is installed on a database once `nextly plugins install <name>` has
+run there and finished: it applies the plugin's pending modules, runs its
+`onInstall`, and records the plugin installed. `nextly migrate` applies a
+plugin's modules too, but never runs `onInstall`, so it does not install the
+plugin. A production boot refuses a configured plugin that has not been
+installed (`PLUGIN_NOT_INSTALLED`), whether or not migrations run at boot.
+
+So, for every plugin in your config, run the install command once on each
+database, after `nextly migrate`, before the first production boot that
+includes the plugin. Running it again is safe: it applies what is pending and
+calls `onInstall` again, which is why `onInstall` has to be idempotent.
+
+A plugin's install also refuses while a plugin it depends on is not installed
+(`PLUGIN_DEPENDENCY_NOT_INSTALLED`): one never installed, uninstalled, or
+whose uninstall has not finished. That holds for a dependency that owns no
+tables too, whose install record is the only trace it leaves.
 
 ### Uninstalling
 
@@ -1013,9 +1037,19 @@ owner rows are marked, so neither can interleave with the other or with
 `nextly migrate`. The boot each command makes to run the hook never runs boot
 migrations.
 
-The state is kept on the plugin's owner rows. A plugin that owns no tables has
-none, so nothing records its uninstall: remove it from your config, or it
-initializes again on the next boot.
+Each command records the plugin's state as an event in the migration ledger,
+so a plugin that owns no tables has one too. An uninstall records that it has
+begun before its first change, and that it has finished, `uninstalled` or, with
+`--keep-data`, `orphaned`, at its end. Until the plugin leaves your config,
+the boot refuses it in every environment: `PLUGIN_SCHEMA_UNINSTALLED` once the
+uninstall finished, `PLUGIN_UNINSTALL_UNFINISHED` while it has not.
+
+An uninstall that stops part way, after some of its DOWNs have committed, is
+finished by running it again the same way, with or without `--keep-data` as
+before: it plans over the modules still applied and the tables still there,
+calls `onUninstall` again, and carries on. Run the other way, it is refused
+(`PLUGIN_UNINSTALL_UNFINISHED`). `onUninstall` has to be idempotent for this
+reason. `nextly plugins install` reinstates the plugin instead.
 
 A full uninstall that would drop tables, or run a DOWN that drops a column,
 lists what it would drop and stops with `PLUGIN_UNINSTALL_UNCONFIRMED` until

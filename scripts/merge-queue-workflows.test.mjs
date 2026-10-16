@@ -101,6 +101,48 @@ describe("the last commit Integration tested", () => {
   });
 });
 
+describe("Integration on request", () => {
+  /*
+   * A pull request runs the database legs only while it carries the
+   * `run-integration` label; the queue and `main` always run them. One step of
+   * the `changes` job answers (`scripts/integration-request.mjs`, tested on its
+   * own), so each leg's condition reads the same for every event, as the queue
+   * checks below require. Adding the label is a separate workflow's job, so no
+   * other label ever starts an Integration run.
+   */
+  const workflow = read(".github/workflows/integration.yml");
+  const request = read(".github/workflows/integration-request.yml");
+
+  it("asks one unconditional step, whose output is the answer", () => {
+    const step = workflow.jobs.changes.steps.find(candidate => candidate.id === "requested");
+    expect(step.run).toBe("node scripts/integration-request.mjs requested");
+    expect(step.if).toBeUndefined();
+    expect(workflow.jobs.changes.outputs.requested).toBe("${{ steps.requested.outputs.requested }}");
+    expect(workflow.jobs.changes.permissions["pull-requests"]).toBe("read");
+  });
+
+  it("skips a leg only on an answer of no, so a question that failed still runs it", () => {
+    const legs = Object.values(workflow.jobs).filter(job => String(job.name).startsWith("Integration ("));
+    expect(legs.length).toBe(3);
+    for (const leg of legs) expect(leg.if, leg.name).toContain("needs.changes.outputs.requested != 'false'");
+  });
+
+  it("is not started by a label, so another label cannot repeat, cancel or hide a run", () => {
+    const types = triggersOf(workflow).pull_request?.types;
+    expect(types ?? ["opened", "synchronize", "reopened"]).not.toContain("labeled");
+  });
+
+  it("leaves adding the label to a workflow that only re-runs, and only for that label", () => {
+    expect(triggersOf(request)).toEqual({ pull_request: { branches: ["main"], types: ["labeled"] } });
+    const jobs = Object.values(request.jobs);
+    expect(jobs.length).toBe(1);
+    expect(jobs[0].if).toBe("github.event.label.name == 'run-integration'");
+    expect(jobs[0].steps.at(-1).run).toBe("node scripts/integration-request.mjs rerun");
+    expect(request.permissions).toEqual({ contents: "read" });
+    expect(jobs[0].permissions).toEqual({ contents: "read", actions: "write" });
+  });
+});
+
 describe("conditions that skip the queue's run", () => {
   /*
    * A step that runs on a pull request's own run but not in the queue is

@@ -19,7 +19,12 @@ export type SchemaEventType =
   // A rollback of an applied migration file or plugin module that failed.
   // Its own type, so readers of a migration's applied state — which read
   // `file_apply` rows only — never take it for a change of that state.
-  | "file_rollback";
+  | "file_rollback"
+  // A plugin's lifecycle state changed: `nextly plugins install` finished, or
+  // `uninstall` began or finished. Recorded for every plugin, schema or none,
+  // so a plugin that owns no table has a state the boot and the next install
+  // read. Never pruned: the newest one IS the state.
+  | "plugin_lifecycle";
 
 /** Lifecycle state of an event row. */
 export type SchemaEventStatus =

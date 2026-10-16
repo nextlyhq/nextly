@@ -845,14 +845,14 @@ Field-level access control — granular permissions per CRUD operation.
 text({
   name: "internalNotes",
   access: {
-    create: ({ req }) => req.user?.role === "admin",
-    read: ({ req }) => req.user?.role === "admin",
-    update: ({ req }) => req.user?.role === "admin",
+    create: ({ permissions }) => permissions.includes("users:update"),
+    read: ({ permissions }) => permissions.includes("users:update"),
+    update: ({ permissions }) => permissions.includes("users:update"),
   },
 });
 ```
 
-Each function receives `{ req, id?, data? }` and returns `boolean | Promise<boolean>`. Field-level access is checked **in addition to** collection/single access.
+Each function receives `{ req, id?, data?, permissions, roles, principal }` and returns `boolean | Promise<boolean>`. `permissions` is the caller's, as `resource:action`; decide by it rather than by a role's name. Field-level access is checked **in addition to** collection/single access.
 
 ### `hooks`
 

@@ -5,19 +5,7 @@ import fs from "fs-extra";
 import type { PackageManager, ProjectInfo } from "../types";
 
 import { detectPmFromUserAgent } from "./detect-pm-from-user-agent";
-
-/**
- * Lockfiles, and the manager each one belongs to. Bun writes the text
- * `bun.lock` by default since 1.2; `bun.lockb` is the older binary form.
- */
-const LOCKFILES: ReadonlyArray<readonly [string, PackageManager]> = [
-  ["pnpm-lock.yaml", "pnpm"],
-  ["yarn.lock", "yarn"],
-  ["bun.lock", "bun"],
-  ["bun.lockb", "bun"],
-  ["package-lock.json", "npm"],
-  ["npm-shrinkwrap.json", "npm"],
-];
+import { findWorkspaceRoot, lockfileManager } from "./workspace";
 
 /**
  * Detect the package manager used in the project.
@@ -35,17 +23,41 @@ const LOCKFILES: ReadonlyArray<readonly [string, PackageManager]> = [
 export async function detectPackageManager(
   cwd: string
 ): Promise<PackageManager> {
-  for (const [lockfile, manager] of LOCKFILES) {
-    if (await fs.pathExists(path.join(cwd, lockfile))) return manager;
-  }
-
-  return detectPmFromUserAgent(process.env.npm_config_user_agent) ?? "npm";
+  return (await lockfileManager(cwd)) ?? launcher();
 }
 
 /**
- * Detect project configuration and validate Next.js setup.
+ * The package manager of an app that already exists, which may be one member
+ * of a workspace: its own lockfile first, then the lockfile of the workspace
+ * that lists it (see {@link findWorkspaceRoot}), then the launcher. A member
+ * has no lockfile of its own, and falling back to the launcher there ran
+ * `npm install` inside a pnpm workspace.
  */
-export async function detectProject(cwd: string): Promise<ProjectInfo> {
+export async function detectAppPackageManager(
+  cwd: string
+): Promise<PackageManager> {
+  return (
+    (await lockfileManager(cwd)) ??
+    (await findWorkspaceRoot(cwd))?.manager ??
+    launcher()
+  );
+}
+
+const launcher = (): PackageManager =>
+  detectPmFromUserAgent(process.env.npm_config_user_agent) ?? "npm";
+
+/**
+ * Detect project configuration and validate Next.js setup.
+ *
+ * `chosen` is a manager already settled: a new project's comes from the
+ * command that launched the scaffold, before any file was written. Reading
+ * the written files would answer differently, since every scaffold writes
+ * `pnpm-workspace.yaml` for its build allowlist, whatever installs it.
+ */
+export async function detectProject(
+  cwd: string,
+  chosen?: PackageManager
+): Promise<ProjectInfo> {
   const packageJsonPath = path.join(cwd, "package.json");
 
   if (!(await fs.pathExists(packageJsonPath))) {
@@ -97,7 +109,7 @@ export async function detectProject(cwd: string): Promise<ProjectInfo> {
   const hasTypescript = await fs.pathExists(path.join(cwd, "tsconfig.json"));
 
   // Detect package manager
-  const packageManager = await detectPackageManager(cwd);
+  const packageManager = chosen ?? (await detectAppPackageManager(cwd));
 
   // Determine app directory
   const appDir = srcDir ? "src/app" : "app";
@@ -122,12 +134,15 @@ export async function detectProject(cwd: string): Promise<ProjectInfo> {
  * about the layout needs detecting; only the package manager does, and it is
  * the one field a fresh scaffold's install and next steps read.
  */
-export async function detectPluginPackage(cwd: string): Promise<ProjectInfo> {
+export async function detectPluginPackage(
+  cwd: string,
+  chosen?: PackageManager
+): Promise<ProjectInfo> {
   return {
     isNextJs: false,
     isAppRouter: false,
     hasTypescript: true,
-    packageManager: await detectPackageManager(cwd),
+    packageManager: chosen ?? (await detectPackageManager(cwd)),
     nextVersion: null,
     srcDir: true,
     appDir: "dev/src/app",

@@ -180,6 +180,13 @@ export interface UpdateSingleOptions {
    */
   sourceVersionNo?: number;
   /**
+   * Set when this write restores a recorded save of a working draft: its
+   * content was never live, so on a published Single it must be held as the
+   * working draft. Where the Single can no longer hold one, the write is
+   * refused rather than applied to the live row.
+   */
+  requireHeldDraft?: boolean;
+  /**
    * Locale for localized fields.
    * Reserved for future i18n support.
    */

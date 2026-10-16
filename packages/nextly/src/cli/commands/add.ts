@@ -152,7 +152,7 @@ export async function runAdd(
 export function registerAddCommand(program: Command): void {
   program
     .command("add <package>")
-    .description("Install a Nextly plugin and show how to register it (D70)")
+    .description("Install a Nextly plugin and show how to register it")
     .option("-D, --dev", "Install as a dev dependency", false)
     .option(
       "--skip-install",

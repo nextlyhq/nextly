@@ -19,7 +19,7 @@ import {
   type DataWidgetArchetype,
 } from "../definition";
 import type { WidgetResult } from "../result";
-import type { WidgetOp } from "../sources";
+import { WIDGET_SOURCE_FIELD_TYPES, type WidgetOp } from "../sources";
 
 import { quote } from "./quote";
 
@@ -129,13 +129,30 @@ export type WidgetDisplay = CoreDisplay | ComponentDisplay;
  */
 const ROW = z.record(z.string(), z.unknown());
 
+/** A list's column, as `WidgetResultField` declares it. */
+const RESULT_FIELD = z.looseObject({
+  name: z.string(),
+  label: z.string().optional(),
+  type: z.enum(WIDGET_SOURCE_FIELD_TYPES).optional(),
+});
+
+/**
+ * A list's rows and, when the query selected them, its columns: the admin's
+ * table heads and formats each column from `fields`, so a malformed one would
+ * break the card it was accepted for.
+ */
+const LIST_DATA = z.looseObject({
+  items: z.array(ROW),
+  fields: z.array(RESULT_FIELD).optional(),
+});
+
 const DISPLAY_DATA_SCHEMAS: Record<CoreDisplay, z.ZodType> = {
   metric: z.looseObject({
     total: z.number().finite(),
     atLeast: z.boolean().optional(),
   }),
-  list: z.looseObject({ items: z.array(ROW) }),
-  table: z.looseObject({ items: z.array(ROW) }),
+  list: LIST_DATA,
+  table: LIST_DATA,
   bars: z.looseObject({
     buckets: z.array(
       z.looseObject({
