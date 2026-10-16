@@ -1251,6 +1251,83 @@ export class AuthService extends BaseService {
   }
 
   /**
+   * The address a live password-reset token was issued to, or `null` when
+   * the token is unknown, used or expired. Reads only: the token stays
+   * usable. The auth limiter asks it to count a reset whose client address
+   * cannot be resolved against the account it would reset.
+   */
+  async resetTokenOwner(token: string): Promise<string | null> {
+    return this.liveTokenIdentifier(token, tokenHash =>
+      this.db.query.passwordResetTokens.findFirst({
+        where: {
+          tokenHash: requireFilterValue(tokenHash, "tokenHash"),
+          usedAt: { isNull: true },
+        },
+        columns: { identifier: true, expires: true },
+      })
+    );
+  }
+
+  /**
+   * The address a live email-verification token was issued to, or `null`
+   * when it is unknown or expired. Reads only, as {@link resetTokenOwner}.
+   */
+  async verificationTokenOwner(token: string): Promise<string | null> {
+    return this.liveTokenIdentifier(token, tokenHash =>
+      this.db.query.emailVerificationTokens.findFirst({
+        where: { tokenHash: requireFilterValue(tokenHash, "tokenHash") },
+        columns: { identifier: true, expires: true },
+      })
+    );
+  }
+
+  /**
+   * The address of the account a live invite token sets up, or `null` when
+   * the invite is unknown, used or expired, or its account is gone. Reads
+   * only, as {@link resetTokenOwner}.
+   */
+  async inviteTokenOwner(token: string): Promise<string | null> {
+    const tokenHash = hashInviteToken(token);
+    let invite: { userId: string; expires: Date } | undefined;
+    let user: { email: string } | undefined;
+    try {
+      invite = await this.db.query.userInviteTokens.findFirst({
+        where: { tokenHash, usedAt: { isNull: true } },
+        columns: { userId: true, expires: true },
+      });
+      if (!invite || invite.expires < new Date()) return null;
+      user = await this.db.query.users.findFirst({
+        where: { id: requireFilterValue(invite.userId, "id") },
+        columns: { email: true },
+      });
+    } catch (error) {
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
+    }
+    return user?.email ?? null;
+  }
+
+  /**
+   * The identifier a stored token row names while it is live, or `null`.
+   * The reset and verification tables keep their tokens alike: the SHA-256
+   * of the raw token, beside the address it was issued to and its expiry.
+   */
+  private async liveTokenIdentifier(
+    token: string,
+    find: (
+      tokenHash: string
+    ) => PromiseLike<{ identifier: string; expires: Date } | undefined>
+  ): Promise<string | null> {
+    const tokenHash = createHash("sha256").update(token).digest("hex");
+    let row: { identifier: string; expires: Date } | undefined;
+    try {
+      row = await find(tokenHash);
+    } catch (error) {
+      throw NextlyError.fromDatabaseError(toDbError(this.dialect, error));
+    }
+    return row && row.expires >= new Date() ? row.identifier : null;
+  }
+
+  /**
    * Clean up expired tokens
    */
   async cleanupExpiredTokens(): Promise<void> {

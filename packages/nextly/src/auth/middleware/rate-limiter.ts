@@ -109,8 +109,25 @@ export class RateLimiter {
    * @param windowMs - The window `check` counts within.
    */
   async peek(key: string, windowMs: number): Promise<number | undefined> {
+    return (await this.window(key, windowMs))?.count;
+  }
+
+  /**
+   * What `key` holds in the current window, and when it slides, recording
+   * none; `undefined` where the store can count only by recording.
+   *
+   * {@link peek} is this without the time: one read, asked the same way.
+   *
+   * @param key      - The key `check` counts under.
+   * @param windowMs - The window `check` counts within.
+   */
+  async window(
+    key: string,
+    windowMs: number
+  ): Promise<{ count: number; resetAt: Date } | undefined> {
     if (!this.store.consume) return undefined;
-    return (await this.store.consume(key, 0, windowMs)).count;
+    const held = await this.store.consume(key, 0, windowMs);
+    return { count: held.count, resetAt: new Date(held.resetTime) };
   }
 
   /**
