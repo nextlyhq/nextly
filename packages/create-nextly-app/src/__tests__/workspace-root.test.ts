@@ -8,14 +8,15 @@
  * project) lists nothing; reading either as the app's switched the manager.
  */
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { parse } from "yaml";
 
 import { approveNativeBuilds } from "../installers/native-build-approvals";
 import { detectAppPackageManager, detectProject } from "../utils/detect";
+import { NEXTLY_NATIVE_BUILD_DEPENDENCIES } from "../utils/template";
 
 let repo: string;
 const originalUserAgent = process.env.npm_config_user_agent;
@@ -197,6 +198,14 @@ describe("where an app's build approvals go", () => {
     expect(await readFile(join(repo, "pnpm-workspace.yaml"), "utf8")).toBe(
       "packages:\n  - packages/*\n"
     );
-    expect(existsSync(join(web, "pnpm-workspace.yaml"))).toBe(true);
+    // The app's own file must hold the approvals, or its install still stops.
+    const local: unknown = parse(
+      await readFile(join(web, "pnpm-workspace.yaml"), "utf8")
+    );
+    expect(local).toMatchObject({
+      allowBuilds: Object.fromEntries(
+        NEXTLY_NATIVE_BUILD_DEPENDENCIES.map(dep => [dep, true])
+      ),
+    });
   });
 });
