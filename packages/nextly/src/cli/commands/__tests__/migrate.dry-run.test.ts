@@ -105,6 +105,8 @@ describe("migrate --dry-run", () => {
       "  • plugin:acme/001_init",
       "  • plugin:acme/002_more",
       "  • 20260101_000000_000_init.sql",
+      // The SQL the file would run, as `migrate:down --dry-run` prints a rollback's.
+      "SELECT 1;",
     ]);
   });
 
@@ -134,6 +136,8 @@ describe("migrate --dry-run", () => {
       "Pending: 2 migrations",
       "  • plugin:acme/002_more",
       "  • 20260101_000000_000_init.sql",
+      // The SQL the file would run, as `migrate:down --dry-run` prints a rollback's.
+      "SELECT 1;",
     ]);
   });
 

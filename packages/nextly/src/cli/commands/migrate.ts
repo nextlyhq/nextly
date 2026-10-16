@@ -670,8 +670,9 @@ export async function previewMigrate(args: {
 
 /**
  * One pending file as `migrate --dry-run` lists it: its name, whether it runs
- * outside a transaction, and each refusal a real run would make, from the
- * same check, so the preview and the run cannot disagree.
+ * outside a transaction, each refusal a real run would make, from the same
+ * check, so the preview and the run cannot disagree, and the SQL it would run,
+ * as `migrate:down --dry-run` prints the SQL a rollback would run.
  */
 function previewPendingFile(
   m: ParsedMigration,
@@ -688,6 +689,7 @@ function previewPendingFile(
   )) {
     logger.info(`    ✖ a real run would refuse it: ${refusal.message}`);
   }
+  logger.info(m.upSql.trim());
 }
 
 /** Clear a stale migrate lock when `--force-unlock` was passed (else no-op). */

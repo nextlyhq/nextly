@@ -27,6 +27,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
   parseSqlSections,
+  previewMigrate,
   runFileMigrations,
 } from "../../../../cli/commands/migrate";
 import {
@@ -293,6 +294,42 @@ for (const entry of DIALECTS) {
         }
 
         expect(await archived()).toEqual([{ locale: "es", value: "Hola" }]);
+      });
+
+      it("shows both moves in a dry run, and changes nothing", async () => {
+        await migrateCreate(translated);
+        await migrate();
+        await seed();
+        await migrateCreate(shared);
+        const printed: string[] = [];
+        const capture = new Proxy(
+          {},
+          {
+            get:
+              () =>
+              (...parts: unknown[]) => {
+                printed.push(parts.map(String).join(" "));
+              },
+          }
+        ) as Parameters<typeof previewMigrate>[0]["logger"];
+
+        await previewMigrate({
+          adapter: adapter as never,
+          db: adapter.getDrizzle(),
+          dialect,
+          migrationsDir,
+          plugins: [],
+          logger: capture,
+        });
+
+        const output = printed.join("\n");
+        expect(output).toContain(`INSERT INTO ${q("nextly_i18n_archive")}`);
+        expect(output).toContain(`ALTER TABLE ${q(table)} ADD COLUMN`);
+        expect(output).toContain(
+          `ALTER TABLE ${q(companion)} DROP COLUMN ${q("body")}`
+        );
+        expect(await archived()).toEqual([]);
+        expect(await columnsOf(companion)).toContain("body");
       });
 
       /** The shared file made to fail: its companion column renamed out from under it. */
