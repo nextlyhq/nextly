@@ -46,7 +46,7 @@ export function MissingDocumentViewComponent({
         {development ? (
           <>
             <p className="font-medium">
-              This screen's component isn't in the admin's component map.
+              {"This screen's component isn't in the admin's component map."}
             </p>
             <code className="mt-1 block break-all text-xs text-muted-foreground">
               {path}
@@ -57,7 +57,7 @@ export function MissingDocumentViewComponent({
           </>
         ) : (
           <p className="font-medium">
-            This screen isn't available. Ask your developer.
+            {"This screen isn't available. Ask your developer."}
           </p>
         )}
       </div>
