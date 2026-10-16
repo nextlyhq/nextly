@@ -24,8 +24,11 @@ import {
   type ReleaseState,
 } from "../../schemas/releases/types";
 import type { VersionScopeKind } from "../../schemas/versions/types";
+import type { SupportedDialect } from "../../types/database";
+import { uuidV7 } from "../../utils/uuid-v7";
 import type {
   VersionsDbApi,
+  VersionsSelectOptions,
   VersionsWhere,
   VersionsWhereCondition,
 } from "../versions/db-api";
@@ -34,6 +37,11 @@ import { releaseMemberKey } from "./release-member-key";
 import { releaseRevalidationIntent } from "./release-revalidation";
 import { NO_DECISIONS } from "./release-scope";
 import type { ReleaseDecisions } from "./release-scope";
+import {
+  releaseTabSegments,
+  type ReleaseTab,
+  type ReleaseTabSegment,
+} from "./release-tabs";
 import type { DueMember } from "./resolve-release-effect";
 import { resolveReleaseEffect } from "./resolve-release-effect";
 import { invalidateTransitionCacheFor } from "./transition-cache-registry";
@@ -55,7 +63,34 @@ import { invalidateTransitionCacheFor } from "./transition-cache-registry";
  * one that moved the row. Widened here rather than in the versions port,
  * because that port's own note says any widening should be a deliberate act.
  */
-export type ReleasesDbApi = VersionsDbApi & {
+export type ReleasesDbApi = Omit<VersionsDbApi, "select" | "dialect"> & {
+  /**
+   * Which engine this handle talks to.
+   *
+   * REQUIRED here, where the versions port leaves it optional, because the
+   * list search has to choose its operator by engine (see
+   * {@link releaseSearchCondition}) and a handle that could not say would be
+   * searched case-sensitively on one engine with nothing to show for it. Only
+   * the adapter satisfies this port, and the adapter always knows.
+   */
+  readonly dialect: SupportedDialect;
+  /**
+   * The versions port's select, with the two text-matching operators the list
+   * search needs. Widened here rather than in the versions port, which says a
+   * widening there should be a deliberate act for its own readers.
+   */
+  select<T = unknown>(
+    table: string,
+    options?: ReleasesSelectOptions
+  ): Promise<T[]>;
+  /**
+   * How many rows match, counted by the database.
+   *
+   * A list's total is the count of everything its query matches, and the only
+   * other way to learn that number is to read every matching row and measure
+   * the array — which transfers the whole table to report one integer.
+   */
+  count(table: string, options?: { where?: ReleasesWhere }): Promise<number>;
   updateCount(
     table: string,
     data: Record<string, unknown>,
@@ -135,6 +170,103 @@ export const RELEASE_LIST_ORDERS = ["soonest", "latest"] as const;
  * reads as a working query.
  */
 export type ReleaseListOrder = (typeof RELEASE_LIST_ORDERS)[number];
+
+/**
+ * A condition the release list can put to the database: the versions port's
+ * operators, plus the two the search uses to match text.
+ */
+export interface ReleasesWhereCondition
+  extends Omit<VersionsWhereCondition, "op"> {
+  op: VersionsWhereCondition["op"] | "ILIKE" | "CONTAINS";
+}
+
+/** A where clause over {@link ReleasesWhereCondition}s. */
+export interface ReleasesWhere {
+  and?: (ReleasesWhereCondition | ReleasesWhere)[];
+  or?: (ReleasesWhereCondition | ReleasesWhere)[];
+}
+
+/** The versions port's select options, over the wider where clause. */
+export interface ReleasesSelectOptions
+  extends Omit<VersionsSelectOptions, "where"> {
+  where?: ReleasesWhere;
+}
+
+/**
+ * What narrows a release listing, whichever way it is ordered or paged.
+ *
+ * @experimental `search` may change until the releases list redesign is
+ *   complete.
+ */
+export interface ReleaseListFilters {
+  /** Only these releases. An empty list means none, not "no filter". */
+  ids?: string[];
+  state?: string;
+  scheduledAfter?: Date;
+  scheduledBefore?: Date;
+  /**
+   * Text the title or the description contains, without regard to case.
+   * Matched literally: `%` and `_` are characters to find, not wildcards.
+   */
+  search?: string;
+}
+
+/**
+ * One page of a release listing.
+ *
+ * `tab` takes the tab's own conditions and order; without one, the filters are
+ * ordered by scheduled instant, latest first unless `order` says otherwise.
+ *
+ * @experimental
+ */
+export interface ReleasePageQuery extends ReleaseListFilters {
+  tab?: ReleaseTab;
+  /** The moment overdue is judged at. Required with a tab. */
+  now?: Date;
+  order?: ReleaseListOrder;
+  offset?: number;
+  limit?: number;
+}
+
+/** Where a page read across segments has got to: rows still to skip, and room left. */
+interface PageCursor {
+  skip: number;
+  /** `undefined` is no limit. */
+  room: number | undefined;
+}
+
+/** @experimental */
+export interface ReleasePage {
+  rows: ReleaseRow[];
+  /** Every release the query matches, across all pages. */
+  total: number;
+}
+
+/**
+ * The search, as a condition this engine evaluates without regard to case.
+ *
+ * Per engine because the engines disagree. PostgreSQL's `LIKE` is
+ * case-sensitive, so it needs `ILIKE`; MySQL and SQLite have no `ILIKE`, and
+ * their `LIKE` already ignores case (MySQL through the column's
+ * case-insensitive collation, SQLite for ASCII letters, which is the most
+ * SQLite does without an extension). `CONTAINS` is the adapter's literal
+ * substring match there, with `%` and `_` escaped for us.
+ *
+ * `ILIKE` takes its pattern as given, so the escaping is done here, with the
+ * backslash PostgreSQL uses as its default `LIKE` escape: without it, a search
+ * for "50%" also finds "50 years".
+ */
+export function releaseSearchCondition(
+  dialect: SupportedDialect,
+  column: "title" | "description",
+  search: string
+): ReleasesWhereCondition {
+  if (dialect === "postgresql") {
+    const literal = search.replace(/[\\%_]/g, character => `\\${character}`);
+    return { column, op: "ILIKE", value: `%${literal}%` };
+  }
+  return { column, op: "CONTAINS", value: search };
+}
 
 export interface ReleaseRow {
   id: string;
@@ -221,6 +353,51 @@ export function documentRefKey(ref: DocumentRef): string {
     .join(":");
 }
 
+/**
+ * The plain listing's order: by scheduled instant, latest first by default.
+ *
+ * The product read with no tab, as opposed to `findDueReleases`, which answers
+ * the drain's question and nothing else. A window and a limit come from the
+ * caller, because a release index and a dashboard widget ask with different
+ * bounds, and the bounds are pushed to the database rather than filtered in
+ * memory.
+ *
+ * 🔴 The direction decides WHICH END of the window a `limit` keeps, so it
+ * belongs to the caller's question. Descending answers "what happened
+ * recently" and stays this method's default; ascending answers "what ships
+ * next", which under the descending order returns the FURTHEST-OUT releases
+ * while looking correct.
+ */
+function scheduleOrderSegment(order?: ReleaseListOrder): ReleaseTabSegment {
+  const direction = order === "soonest" ? "asc" : "desc";
+  return {
+    where: [],
+    orderBy: [
+      // NULLS LAST in BOTH directions, stated rather than defaulted. An
+      // unscheduled draft has a null instant, and the default differs per
+      // dialect — on PostgreSQL a descending order puts nulls first, so a
+      // limited "what ships next" query would return drafts and omit every
+      // scheduled release. Ascending is no safer left implicit: PostgreSQL
+      // puts nulls last there while SQLite and MySQL put them first, so the
+      // same query would answer differently per dialect. A draft is not the
+      // next thing to ship under either direction.
+      { column: "scheduledAt", direction, nulls: "last" },
+      { column: "createdAt", direction },
+      // `id` last, so the order is actually total. `createdAt` is not unique
+      // and is stored coarsely enough for concurrent releases to tie —
+      // especially on SQLite — and two drafts tie on a null `scheduledAt` as
+      // well, so without this a limited page can return different rows across
+      // query plans and dialects.
+      //
+      // Both tiebreakers follow `direction` rather than staying descending,
+      // so a tie breaks toward the same end the primary key does: under
+      // "soonest" the earlier-created of two releases sharing an instant
+      // comes first, which is the one a reader means by "next".
+      { column: "id", direction },
+    ],
+  };
+}
+
 export class ReleasesRepository {
   /**
    * @param revalidator flushed when a release's SCHEDULE changes, so pages
@@ -263,7 +440,11 @@ export class ReleasesRepository {
   async createRelease(input: NewRelease): Promise<ReleaseRow> {
     const now = new Date();
     const row: ReleaseRow = {
-      id: crypto.randomUUID(),
+      // Time-ordered, because the list breaks ties on the id: SQLite stores
+      // instants in whole seconds, so releases made within one second share a
+      // creation time, and only an id that rises in creation order keeps
+      // "newest first" true among them. A random id would order them by chance.
+      id: uuidV7(),
       title: input.title,
       description: input.description ?? null,
       scheduledAt: null,
@@ -501,25 +682,6 @@ export class ReleasesRepository {
    * got wrong, and the two would disagree silently.
    */
   /**
-   * Releases matching a window and a state, newest scheduled instant first.
-   *
-   * The product read, as opposed to {@link findDueReleases}, which answers the
-   * drain's question and nothing else. Two shapes ask this with different
-   * bounds — a release index wants a page of everything, a dashboard widget
-   * wants the next seven days — so the caller supplies the window and the limit
-   * rather than receiving fixed ones. Fixing either here is what forces the
-   * second caller to grow a second query.
-   *
-   * The bounds are pushed to the database rather than filtered in JS. The window
-   * is the whole point of the query, so discarding rows in memory would mean
-   * reading every release on the site to answer "what ships this week".
-   *
-   * Ordered by `scheduledAt` DESCENDING with `createdAt` breaking ties, so the
-   * order is total: several releases scheduled for one instant is the ordinary
-   * case for a coordinated launch, and an unstable order there makes a paged
-   * list skip and repeat rows.
-   */
-  /**
    * Touch a release ONLY if it is still assemblable, and say whether it was.
    *
    * One conditional UPDATE rather than a read followed by a decision. A caller
@@ -568,76 +730,188 @@ export class ReleasesRepository {
     return this.liveAuthorIds(ids);
   }
 
-  async findReleases(query: {
-    ids?: string[];
-    state?: string;
-    scheduledAfter?: Date;
-    scheduledBefore?: Date;
-    limit?: number;
-    order?: ReleaseListOrder;
-  }): Promise<ReleaseRow[]> {
-    const conditions: VersionsWhereCondition[] = [];
-    // An explicitly EMPTY id list means "none of them", which is not the same
-    // question as "no id filter" — answering it with every release would be the
-    // widest possible wrong answer.
-    if (query.ids !== undefined) {
-      if (query.ids.length === 0) return [];
+  /**
+   * Releases matching some filters, latest scheduled instant first unless
+   * `order` says otherwise. The unpaged read the engine and the dashboard use;
+   * {@link findReleasePage} is the same read with a page and a true total.
+   */
+  async findReleases(
+    query: ReleaseListFilters & {
+      limit?: number;
+      offset?: number;
+      order?: ReleaseListOrder;
+    }
+  ): Promise<ReleaseRow[]> {
+    const page = await this.readSegments(
+      [scheduleOrderSegment(query.order)],
+      query,
+      { offset: query.offset, limit: query.limit, total: false }
+    );
+    return page.rows;
+  }
+
+  /**
+   * One page of releases, and how many match in all.
+   *
+   * With a `tab`, the tab's own conditions and order (`release-tabs`); without
+   * one, the filters alone, in scheduled order. The filters narrow either.
+   *
+   * @experimental
+   */
+  async findReleasePage(query: ReleasePageQuery): Promise<ReleasePage> {
+    return this.readSegments(this.segmentsFor(query), query, {
+      offset: query.offset,
+      limit: query.limit,
+      total: true,
+    });
+  }
+
+  /**
+   * How many releases a listing would hold, without reading them.
+   *
+   * The question a dashboard asks ("how many need attention?"), answered by the
+   * same segments the list reads, so the count and the list cannot disagree.
+   *
+   * @experimental
+   */
+  async countReleases(query: ReleasePageQuery): Promise<number> {
+    const extra = this.filterConditions(query);
+    if (extra === null) return 0;
+    let total = 0;
+    for (const segment of this.segmentsFor(query)) {
+      total += await this.db.count(RELEASES, {
+        where: { and: [...segment.where, ...extra] },
+      });
+    }
+    return total;
+  }
+
+  /** The segments a listing reads: its tab's, or the plain scheduled order. */
+  private segmentsFor(query: ReleasePageQuery): ReleaseTabSegment[] {
+    if (query.tab === undefined) return [scheduleOrderSegment(query.order)];
+    if (query.now === undefined) {
+      // A tab without a moment cannot say which scheduled releases are
+      // overdue. Refused rather than defaulted to the clock, so the one place
+      // that decides "now" for a request stays the caller.
+      throw NextlyError.internal({
+        logContext: { reason: "release-tab-without-now", tab: query.tab },
+      });
+    }
+    return releaseTabSegments(query.tab, query.now, query.order);
+  }
+
+  /**
+   * The filters as conditions, or `null` when they can match nothing.
+   *
+   * `null` rather than a condition that is always false, because an explicitly
+   * EMPTY id list means "none of them" — answering it with every release would
+   * be the widest possible wrong answer — and `IN ()` is a syntax error on every
+   * dialect this supports.
+   */
+  private filterConditions(
+    filters: ReleaseListFilters
+  ): (ReleasesWhereCondition | ReleasesWhere)[] | null {
+    const conditions: (ReleasesWhereCondition | ReleasesWhere)[] = [];
+    if (filters.ids !== undefined) {
+      if (filters.ids.length === 0) return null;
       conditions.push({
         column: "id",
         op: "IN",
-        value: [...new Set(query.ids)],
+        value: [...new Set(filters.ids)],
       });
     }
-    if (query.state !== undefined) {
-      conditions.push({ column: "state", op: "=", value: query.state });
+    if (filters.state !== undefined) {
+      conditions.push({ column: "state", op: "=", value: filters.state });
     }
-    if (query.scheduledAfter !== undefined) {
+    if (filters.scheduledAfter !== undefined) {
       conditions.push({
         column: "scheduledAt",
         op: ">=",
-        value: query.scheduledAfter,
+        value: filters.scheduledAfter,
       });
     }
-    if (query.scheduledBefore !== undefined) {
+    if (filters.scheduledBefore !== undefined) {
       conditions.push({
         column: "scheduledAt",
         op: "<=",
-        value: query.scheduledBefore,
+        value: filters.scheduledBefore,
       });
     }
-    // 🔴 The direction decides WHICH END of the window a `limit` keeps, so it
-    // belongs to the caller's question rather than to this method. Descending
-    // answers "what happened recently" and stays the default, so every existing
-    // caller is unchanged; ascending answers "what ships next", which under the
-    // descending order returns the FURTHEST-OUT releases while looking correct.
-    const direction = query.order === "soonest" ? "asc" : "desc";
-    return this.db.select<ReleaseRow>(RELEASES, {
-      where: conditions.length > 0 ? { and: conditions } : undefined,
-      orderBy: [
-        // NULLS LAST in BOTH directions, stated rather than defaulted. An
-        // unscheduled draft has a null instant, and the default differs per
-        // dialect — on PostgreSQL a descending order puts nulls first, so a
-        // limited "what ships next" query would return drafts and omit every
-        // scheduled release. Ascending is no safer left implicit: PostgreSQL
-        // puts nulls last there while SQLite and MySQL put them first, so the
-        // same query would answer differently per dialect. A draft is not the
-        // next thing to ship under either direction.
-        { column: "scheduledAt", direction, nulls: "last" },
-        { column: "createdAt", direction },
-        // `id` last, so the order is actually total. `createdAt` is not unique
-        // and is stored coarsely enough for concurrent releases to tie —
-        // especially on SQLite — and two drafts tie on a null `scheduledAt` as
-        // well, so without this a limited page can return different rows across
-        // query plans and dialects.
-        //
-        // Both tiebreakers follow `direction` rather than staying descending,
-        // so a tie breaks toward the same end the primary key does: under
-        // "soonest" the earlier-created of two releases sharing an instant
-        // comes first, which is the one a reader means by "next".
-        { column: "id", direction },
-      ],
-      limit: query.limit,
+    if (filters.search !== undefined && filters.search.length > 0) {
+      // In the WHERE clause, before the count and the page, so the total and
+      // every page cover all matching releases. A search applied to a page
+      // after reading it finds only what that page happened to hold.
+      conditions.push({
+        or: [
+          releaseSearchCondition(this.db.dialect, "title", filters.search),
+          releaseSearchCondition(
+            this.db.dialect,
+            "description",
+            filters.search
+          ),
+        ],
+      });
+    }
+    return conditions;
+  }
+
+  /**
+   * Read a page across segments, one after another, as if they were one list.
+   *
+   * Each segment is counted when the total is wanted, or when there is more
+   * than one — the count is how a page that starts inside the second segment
+   * knows how many rows of the first to skip. A segment entirely before the
+   * page is counted and never read.
+   */
+  private async readSegments(
+    segments: ReleaseTabSegment[],
+    filters: ReleaseListFilters,
+    page: { offset?: number; limit?: number; total: boolean }
+  ): Promise<ReleasePage> {
+    const extra = this.filterConditions(filters);
+    if (extra === null) return { rows: [], total: 0 };
+
+    const counted = page.total || segments.length > 1;
+    const cursor: PageCursor = { skip: page.offset ?? 0, room: page.limit };
+    const rows: ReleaseRow[] = [];
+    let total = 0;
+    for (const segment of segments) {
+      const where: ReleasesWhere = { and: [...segment.where, ...extra] };
+      const size = counted
+        ? await this.db.count(RELEASES, { where })
+        : undefined;
+      total += size ?? 0;
+      rows.push(...(await this.readWithin(segment, where, size, cursor)));
+    }
+    return { rows, total: counted ? total : rows.length };
+  }
+
+  /**
+   * The rows of one segment that fall on the page, moving the cursor past it.
+   *
+   * A segment wholly before the page — its count no larger than the rows still
+   * to skip — is skipped by arithmetic and never read.
+   */
+  private async readWithin(
+    segment: ReleaseTabSegment,
+    where: ReleasesWhere,
+    size: number | undefined,
+    cursor: PageCursor
+  ): Promise<ReleaseRow[]> {
+    if (cursor.room === 0) return [];
+    if (size !== undefined && cursor.skip >= size) {
+      cursor.skip -= size;
+      return [];
+    }
+    const found = await this.db.select<ReleaseRow>(RELEASES, {
+      where,
+      orderBy: segment.orderBy,
+      ...(cursor.skip > 0 ? { offset: cursor.skip } : {}),
+      ...(cursor.room !== undefined ? { limit: cursor.room } : {}),
     });
+    if (cursor.room !== undefined) cursor.room -= found.length;
+    cursor.skip = 0;
+    return found;
   }
 
   async findDueReleases(now: Date): Promise<ReleaseRow[]> {
@@ -727,10 +1001,22 @@ export class ReleasesRepository {
     );
   }
 
-  /** Every member of one release, in the order they were added. */
+  /**
+   * Every member of one release, in the order they were added.
+   *
+   * Ordered, not left to the database: without an ORDER BY each engine may
+   * return rows in whatever order its plan reads them, which happens to be
+   * insertion order on a small table and stops being so without notice. The
+   * id breaks ties on the creation time, and is time-ordered for that reason
+   * (`addMember`).
+   */
   async listMembers(releaseId: string): Promise<ReleaseMemberRow[]> {
     return this.db.select<ReleaseMemberRow>(MEMBERS, {
       where: { and: [{ column: "releaseId", op: "=", value: releaseId }] },
+      orderBy: [
+        { column: "createdAt", direction: "asc" },
+        { column: "id", direction: "asc" },
+      ],
     });
   }
 
@@ -759,7 +1045,10 @@ export class ReleasesRepository {
 
   async addMember(input: NewReleaseMember): Promise<ReleaseMemberRow> {
     const row: ReleaseMemberRow = {
-      id: crypto.randomUUID(),
+      // Time-ordered, so members added within one second — one stored
+      // instant on SQLite — still list in the order they were added, which
+      // `listMembers` promises by breaking creation-time ties on the id.
+      id: uuidV7(),
       releaseId: input.releaseId,
       scopeKind: input.scopeKind,
       scopeSlug: input.scopeSlug,

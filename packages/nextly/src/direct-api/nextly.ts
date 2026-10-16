@@ -916,6 +916,8 @@ export const nextly = {
       requireNextly().releases.create(args),
     find: (args?: Parameters<ReleasesNamespace["find"]>[0]) =>
       requireNextly().releases.find(args),
+    count: (args?: Parameters<ReleasesNamespace["count"]>[0]) =>
+      requireNextly().releases.count(args),
     findByID: (args: Parameters<ReleasesNamespace["findByID"]>[0]) =>
       requireNextly().releases.findByID(args),
     addMember: (args: Parameters<ReleasesNamespace["addMember"]>[0]) =>

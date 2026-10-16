@@ -19,7 +19,15 @@ import { createReleasesNamespace } from "../releases";
 import type { NextlyContext } from "../context";
 
 const service = {
-  find: vi.fn(async () => []),
+  find: vi.fn(
+    async (): Promise<{
+      rows: { id: string }[];
+      total: number;
+      page: number;
+      limit: number;
+    }> => ({ rows: [], total: 0, page: 1, limit: 50 })
+  ),
+  count: vi.fn(async () => 0),
   create: vi.fn(async () => ({ id: "r1" })),
   addMember: vi.fn(async () => ({ id: "m1" })),
 };
@@ -213,6 +221,41 @@ describe("releases namespace credential lifetime", () => {
         userId: "u2",
         authenticatedScope: requestScope,
       })
+    );
+  });
+});
+
+describe("the list's envelope", () => {
+  it("answers `{ items, meta }`, with the page arithmetic from the true total", async () => {
+    // The shape every other Direct API list returns. `meta` is derived from
+    // the service's total, so a page of 2 out of 7 says 4 pages and more to come.
+    service.find.mockResolvedValueOnce({
+      rows: [{ id: "a" }, { id: "b" }],
+      total: 7,
+      page: 2,
+      limit: 2,
+    });
+    const releases = createReleasesNamespace(instance({}));
+    await expect(releases.find({ page: 2, limit: 2 })).resolves.toEqual({
+      items: [{ id: "a" }, { id: "b" }],
+      meta: {
+        total: 7,
+        page: 2,
+        limit: 2,
+        totalPages: 4,
+        hasNext: true,
+        hasPrev: true,
+      },
+    });
+  });
+
+  it("counts with the caller keys stripped from the query", async () => {
+    // A caller key left in the query would reach the repository as a filter.
+    const releases = createReleasesNamespace(instance({}));
+    await releases.count({ tab: "attention", userId: "u2" });
+    expect(service.count).toHaveBeenCalledWith(
+      { tab: "attention" },
+      expect.objectContaining({ userId: "u2" })
     );
   });
 });
