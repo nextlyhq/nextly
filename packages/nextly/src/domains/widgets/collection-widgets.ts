@@ -602,8 +602,14 @@ export function generatedWidgets(): WidgetDefinition[] {
  * `single:` query through the query endpoint was refused as unknown on a cold
  * process while the same query through the layout endpoint ran.
  */
-export async function refreshContentSources(): Promise<void> {
-  await Promise.all([refreshCollectionSources(), refreshSingleSources()]);
+export async function refreshContentSources(): Promise<boolean> {
+  const read = await Promise.all([
+    refreshCollectionSources(),
+    refreshSingleSources(),
+  ]);
+  // Whether both registries could be read; a consumer that judges what the
+  // sources hold needs to know the answer is current, not left standing.
+  return read.every(Boolean);
 }
 
 /**

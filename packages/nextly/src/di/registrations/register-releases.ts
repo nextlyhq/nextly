@@ -27,8 +27,10 @@ import {
   RELEASES_RESOURCE,
   ReleasesService,
 } from "../../domains/releases/services/releases-service";
+import { resolveSingleForRequest } from "../../domains/singles/services/ensure-runtime-table";
 import { NextlyError } from "../../errors";
 import type { CacheRevalidator } from "../../revalidation/types";
+import type { DynamicSingleRecord } from "../../schemas/dynamic-singles/types";
 import { hasPermission } from "../../services/lib/permissions";
 import { container } from "../container";
 
@@ -70,6 +72,16 @@ export function registerReleaseServices({
             // not there: the two are one answer, or an add would tell a
             // caller which ids exist where it may not look.
             nullWhenRefused(async () => {
+              // A Single's ordinary read CREATES its row when there is none,
+              // so it can never answer "not there" and would leave a blank
+              // row behind a refused add. Its row is looked for first, by a
+              // read that writes nothing.
+              if (
+                target.scopeKind === "single" &&
+                !(await singleRowExists(adapter, target.scopeSlug, logger))
+              ) {
+                return null;
+              }
               // `status: "all"`: a release most often publishes a DRAFT, and a
               // read that defaulted to published would refuse exactly the
               // document the release exists for.
@@ -224,7 +236,7 @@ export function registerReleaseServices({
  * its owner's, and the role set travels on the user, so a rule that reads
  * roles sees the caller's rather than none.
  */
-function contentReadAccess(
+export function contentReadAccess(
   caller: ReleaseTargetCaller
 ): Record<string, unknown> {
   if (caller.trusted) return { overrideAccess: true };
@@ -238,7 +250,10 @@ function contentReadAccess(
             ...(caller.userRoles ? { roles: caller.userRoles } : {}),
           },
         }),
-    ...(caller.authenticatedScope ? { actor: caller.authenticatedScope } : {}),
+    // Always stated, `undefined` included: left out, the content API fills
+    // `actor` from the instance's defaults, and a caller with no key of its
+    // own would be judged by a default key's grants.
+    actor: caller.authenticatedScope,
   };
 }
 
@@ -257,4 +272,37 @@ async function nullWhenRefused<T>(
     }
     throw error;
   }
+}
+
+/**
+ * Whether a Single has its stored row, asked of its table directly: a read
+ * that cannot create the row the way the Single's content read does. `false`
+ * for a Single that is not registered or whose table is not there yet.
+ */
+async function singleRowExists(
+  adapter: RegistrationContext["adapter"],
+  slug: string,
+  logger: RegistrationContext["logger"]
+): Promise<boolean> {
+  if (!container.has("singleRegistryService")) return false;
+  // Resolved the way every request-scoped Single read opens: the registry row,
+  // and its runtime table registered in THIS process. A worker that booted
+  // before a UI-defined Single existed has the table in the database but not
+  // in its schema registry, and a query there would fail rather than answer.
+  // The logger carries the reason when that registration cannot be made.
+  const single = await resolveSingleForRequest(
+    adapter,
+    container.get<{
+      getSingleBySlug(slug: string): Promise<DynamicSingleRecord | null>;
+    }>("singleRegistryService"),
+    slug,
+    logger
+  );
+  const table = single?.tableName;
+  if (table === undefined || !(await adapter.tableExists(table))) return false;
+  const rows = await adapter.select<{ id: string }>(table, {
+    columns: ["id"],
+    limit: 1,
+  });
+  return rows.length > 0;
 }

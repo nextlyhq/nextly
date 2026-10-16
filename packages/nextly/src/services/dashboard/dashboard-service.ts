@@ -23,6 +23,7 @@ import { container } from "../../di/container";
 import { requireNextly } from "../../direct-api/nextly";
 import type { CountArgs, FindArgs } from "../../direct-api/types";
 import { COMMON_TITLE_FIELDS } from "../../domains/collections/entry-title";
+import { keptOffDashboard } from "../../domains/widgets/kept-off-dashboard";
 import { entryHeading } from "../../lib/entry-heading";
 import { BaseService } from "../base-service";
 import type { Logger } from "../shared";
@@ -99,6 +100,18 @@ export interface ProjectStatsResponse {
 /** Maximum number of collections to query for recent entries. */
 const MAX_COLLECTIONS_FOR_RECENT = 20;
 
+/**
+ * Whether a registry record is kept off the dashboard, noting its slug in `keptOff` when it is.
+ */
+function leftOut(
+  record: { slug: string; admin?: unknown },
+  keptOff: Set<string> | undefined
+): boolean {
+  if (!keptOffDashboard(record)) return false;
+  keptOff?.add(record.slug);
+  return true;
+}
+
 export class DashboardService extends BaseService {
   constructor(adapter: DrizzleAdapter, logger: Logger) {
     super(adapter, logger);
@@ -127,7 +140,16 @@ export class DashboardService extends BaseService {
     // pass one gets an empty dashboard, which is visible and reportable; the
     // old default returned everything, which was not.
     const scope = options.scope ?? someResources([]);
-    const collections = await this.getRegisteredCollections(scope);
+    // The collections the read below leaves out as kept off the dashboard, so the activity figure
+    // leaves out the same ones from the same read rather than counting them by its own rule.
+    // Collections only: the activity trail records no Single, and its `collection` column holds
+    // collection slugs, so a hidden Single sharing a visible collection's slug must not remove
+    // that collection's activity.
+    const keptOffCollections = new Set<string>();
+    const collections = await this.getRegisteredCollections(
+      scope,
+      keptOffCollections
+    );
     const singles = await this.getRegisteredSingles(scope);
 
     // Computed first, rather than folded into the `Promise.all` below: the
@@ -150,7 +172,7 @@ export class DashboardService extends BaseService {
       statusBreakdown,
     ] = await Promise.all([
       this.countTable("media"),
-      this.countRecentChanges24h(scope),
+      this.countRecentChanges24h(scope, keptOffCollections),
       this.countTable("users"),
       this.countTable("roles"),
       this.countTable("permissions"),
@@ -277,7 +299,9 @@ export class DashboardService extends BaseService {
   }
 
   private async getRegisteredCollections(
-    scope: ReadableResources
+    scope: ReadableResources,
+    /** Collects the slugs left out as kept off the dashboard, for the figures read elsewhere. */
+    keptOff?: Set<string>
   ): Promise<CollectionInfo[]> {
     try {
       const registryService = container.get<{
@@ -286,7 +310,7 @@ export class DashboardService extends BaseService {
             slug: string;
             tableName: string;
             labels: { singular: string; plural: string };
-            admin?: { useAsTitle?: string; group?: string };
+            admin?: { useAsTitle?: string; group?: string; hidden?: boolean };
             /**
              * The Draft/Published lifecycle toggle. This is a top-level
              * column on `dynamic_collections`, entirely separate from
@@ -303,7 +327,11 @@ export class DashboardService extends BaseService {
         >;
       }>("collectionRegistryService");
 
-      const collections = await registryService.getAllCollections();
+      // A collection kept off the dashboard is neither listed nor counted here, for any caller,
+      // a super-admin included; see `keptOffDashboard`.
+      const collections = (await registryService.getAllCollections()).filter(
+        c => !leftOut(c, keptOff)
+      );
       const mapped = collections.map(c => ({
         slug: c.slug,
         tableName: c.tableName,
@@ -328,10 +356,13 @@ export class DashboardService extends BaseService {
   ): Promise<Array<{ slug: string }>> {
     try {
       const singleRegistryService = container.get<{
-        getAllSingles: () => Promise<Array<{ slug: string }>>;
+        getAllSingles: () => Promise<Array<{ slug: string; admin?: unknown }>>;
       }>("singleRegistryService");
 
-      const singles = await singleRegistryService.getAllSingles();
+      // Kept off the dashboard, for the reason the collections above are.
+      const singles = (await singleRegistryService.getAllSingles()).filter(
+        single => !keptOffDashboard(single)
+      );
       return filterByResource(scope, singles, s => String(s.slug));
     } catch (error) {
       this.logger.error("Failed to get registered singles", {
@@ -449,7 +480,9 @@ export class DashboardService extends BaseService {
    *   built rather than as a driver rejection swallowed by the catch below.
    */
   private async countRecentChanges24h(
-    scope: ReadableResources
+    scope: ReadableResources,
+    /** Collections kept off the dashboard: their activity is not counted. */
+    keptOff: ReadonlySet<string> = new Set()
   ): Promise<number> {
     if (scope.kind === "some" && scope.resources.size === 0) return 0;
 
@@ -474,16 +507,10 @@ export class DashboardService extends BaseService {
         return this.dialect === "postgresql" ? `$${params.length}` : "?";
       };
 
-      let sql =
+      const sql =
         `SELECT COUNT(*) as count FROM ${q}activity_log${q} ` +
-        `WHERE ${q}created_at${q} > ${bind(cutoffParam)}`;
-
-      if (scope.kind === "some") {
-        const placeholders = [...scope.resources]
-          .map(resource => bind(resource))
-          .join(", ");
-        sql += ` AND ${q}collection${q} IN (${placeholders})`;
-      }
+        `WHERE ${q}created_at${q} > ${bind(cutoffParam)}` +
+        this.recentChangesCollectionFilter(scope, keptOff, bind, q);
 
       const result = await this.adapter.executeQuery<{
         count: number | string;
@@ -496,6 +523,31 @@ export class DashboardService extends BaseService {
       });
       return 0;
     }
+  }
+
+  /**
+   * The `collection` conditions of the recent-changes count: inside what the caller may read, and
+   * outside what is kept off the dashboard. Every name goes through `bind`, after the cutoff, so
+   * the placeholders number in the order the values were pushed.
+   */
+  private recentChangesCollectionFilter(
+    scope: ReadableResources,
+    keptOff: ReadonlySet<string>,
+    bind: (value: SqlParam) => string,
+    q: string
+  ): string {
+    let sql = "";
+    if (scope.kind === "some") {
+      const placeholders = [...scope.resources]
+        .map(resource => bind(resource))
+        .join(", ");
+      sql += ` AND ${q}collection${q} IN (${placeholders})`;
+    }
+    if (keptOff.size > 0) {
+      const excluded = [...keptOff].map(slug => bind(slug)).join(", ");
+      sql += ` AND ${q}collection${q} NOT IN (${excluded})`;
+    }
+    return sql;
   }
 
   private async countRegistryItems(serviceName: string): Promise<number> {

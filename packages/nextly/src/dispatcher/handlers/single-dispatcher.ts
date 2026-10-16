@@ -37,6 +37,7 @@ import {
 import type { FieldConfig } from "../../collections/fields/types";
 import { container } from "../../di/container";
 import { assertLocalizationConfigured } from "../../domains/i18n/config/require-app-config";
+import { archiveFieldsLeavingTranslation } from "../../domains/i18n/migration/archive-preflight";
 import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion-registration";
 import { translatePipelinePreviewToLegacy } from "../../domains/schema/legacy-preview/translate";
 import { RealClassifier } from "../../domains/schema/pipeline/classifier/classifier";
@@ -94,6 +95,7 @@ import { buildFullDesiredSchema } from "../helpers/desired-schema";
 import {
   getAdapterFromDI,
   getComponentRegistryFromDI,
+  getConfigFromDI,
   getMigrationJournalFromDI,
   getSchemaRegistryFromDI,
   getSingleEntryServiceFromDI,
@@ -912,6 +914,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         versions: single.versions,
         fields: single.fields,
         slug: (single as { slug?: string }).slug,
+        localized: (single as { localized?: boolean }).localized,
+        entityKind: "single",
       });
 
       // The schema record IS the doc here, so the admin Schema Builder
@@ -1212,6 +1216,20 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
 
       const adapter = getAdapterFromDI();
       if (!adapter) throw new Error("Database adapter not initialized");
+      // A field leaving translation has preconditions of its own, asked before the push alters
+      // anything.
+      await archiveFieldsLeavingTranslation({
+        // This builder made the table, which decides the column bounds compared.
+        builtBy: "collection",
+        tableName: single.tableName,
+        defaultLocale: getConfigFromDI()?.localization?.defaultLocale ?? "en",
+        adapter,
+        entity: slug,
+        oldFields: single.fields as unknown as FieldDefinition[],
+        newFields: fields as unknown as FieldDefinition[],
+        wasLocalized,
+        isLocalized,
+      });
       const dialect = adapter.dialect;
       const db = adapter.getDrizzle();
       const databaseName =

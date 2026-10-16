@@ -448,6 +448,7 @@ export * from "./security-config"; // Zod — review in Task 19
 // state the server has never sent.
 export type {
   ReleaseState,
+  ReleaseKind,
   ReleaseMemberAction,
   ReleaseBlockerReason,
 } from "./releases/types";

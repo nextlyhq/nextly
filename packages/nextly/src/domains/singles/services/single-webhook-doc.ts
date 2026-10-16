@@ -93,7 +93,12 @@ export async function buildSingleWebhookDoc(
   companionExists: boolean,
   companionValues: Record<string, unknown>,
   snapshotLocale: string | undefined,
-  localeStatus?: string
+  localeStatus?: string,
+  /**
+   * The component subtrees to assemble with, when the caller read them before
+   * a write in this transaction replaced them. Read here otherwise.
+   */
+  components?: Record<string, unknown>
 ): Promise<Record<string, unknown>> {
   // Keep user field keys (which may contain underscores like `site_title`)
   // exactly; convert only the timestamp columns so the shape matches a read.
@@ -144,17 +149,19 @@ export async function buildSingleWebhookDoc(
   applyReadShape(parentRow, fieldConfigs, parentTable);
   // Read the component subtrees on the transaction so the assembly sees the
   // right generation (post-write: just saved; pre-write: prior).
-  const components = await readComponentSubtrees({
-    fieldGroupDataService,
-    tx,
-    entryId,
-    parentTable,
-    fieldConfigs,
-    locale: snapshotLocale,
-    reason: "webhook-single-component-read",
-    logContext: { table: parentTable },
-  });
-  const doc: Record<string, unknown> = { ...parentRow, ...components };
+  const subtrees =
+    components ??
+    (await readComponentSubtrees({
+      fieldGroupDataService,
+      tx,
+      entryId,
+      parentTable,
+      fieldConfigs,
+      locale: snapshotLocale,
+      reason: "webhook-single-component-read",
+      logContext: { table: parentTable },
+    }));
+  const doc: Record<string, unknown> = { ...parentRow, ...subtrees };
   // Overlay the resolved per-locale status: for a non-default-locale write the
   // main row keeps the default language's status, so the assembled `status`
   // above is the wrong one for this locale — replace it with the caller's.

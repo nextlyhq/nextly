@@ -9,7 +9,7 @@ import type {
 import type { AuthorableFieldConfig } from "../collections/fields/types/plugin-field";
 import type { GeneratedTypes } from "../direct-api/types/shared";
 import type { RegisteredEmailProvider } from "../domains/email/provider-definition";
-import type { JobDefinition } from "../domains/jobs/job-registry";
+import type { AnyJobDefinition } from "../domains/jobs/job-registry";
 import type { LimitRule } from "../domains/limits/limit-rules";
 import type { SchemaHook } from "../domains/schema/extension/draft";
 import type { TableDefinition } from "../domains/schema/extension/dsl";
@@ -644,7 +644,7 @@ export interface PluginContributions {
    * that never reaches the registry is queueable and unrunnable, and silently
    * so — the enqueue succeeds and every drain defers the row forever.
    */
-  jobs?: JobDefinition[];
+  jobs?: AnyJobDefinition[];
   /**
    * @experimental Custom services registered into DI. Each entry is a
    * factory `(ctx) => instance`; the service is exposed lazily (instantiated on

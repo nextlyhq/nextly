@@ -779,7 +779,7 @@ const SINGLE_MAJOR = /^[\^~]?(\d+)(?:\.(?:\d+|[xX*])){0,2}(?:-[\w.]+)?$/;
  * that range admits a single major. Null when neither tells, as when
  * dependencies are not installed yet and the range is `latest`.
  */
-async function nextMajor(cwd: string): Promise<number | null> {
+export async function nextMajor(cwd: string): Promise<number | null> {
   const installed = stringAt(
     await readJsonOrNull(
       path.join(cwd, "node_modules", "next", "package.json")
@@ -814,6 +814,17 @@ function versionBlock(
         spelling: "legacy",
       }
     : null;
+}
+
+/**
+ * The Next config file any advice about the app's config names: the one it
+ * has, or, when it has none, the one to create. `.mjs` is ESM whatever the
+ * package's own "type" says, so that file loads in any project. Every step
+ * that tells the developer to change the config asks here, so two steps never
+ * name two different files.
+ */
+export async function nextConfigFileToChange(cwd: string): Promise<string> {
+  return (await findConfigFile(cwd)) ?? "next.config.mjs";
 }
 
 /** The app's Next config file, by the name Next.js would read first. */
@@ -868,7 +879,7 @@ export async function patchNextConfig(
   if (blocked) {
     return {
       kind: "manual",
-      file: file ?? "next.config.js",
+      file: file ?? (await nextConfigFileToChange(cwd)),
       packages: required,
       ...blocked,
     };

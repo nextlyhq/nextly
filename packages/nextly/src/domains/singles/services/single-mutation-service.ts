@@ -21,7 +21,6 @@
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
-import { and, eq, type Column } from "drizzle-orm";
 
 import { actorForWrite } from "../../../auth/request-actor";
 import { isFieldGroupField } from "../../../collections/fields/guards";
@@ -103,7 +102,12 @@ import {
   companionNotReadyMessage,
   resolveCompanionReadiness,
 } from "../../i18n/runtime/companion-readiness";
+import { languageIsLive } from "../../i18n/runtime/language-lifecycle";
 import { captureInTx } from "../../versions/capture-in-tx";
+import {
+  draftComponentValues,
+  mergeComponentPatches,
+} from "../../versions/draft-components";
 import { resolveDraftHold } from "../../versions/draft-hold";
 import { storeDraftSave } from "../../versions/draft-save";
 import { resolveComponentSchemas } from "../../versions/restore-version";
@@ -984,6 +988,12 @@ export class SingleMutationService extends BaseService {
         // race; the re-run re-reads the max. The single UPDATE is deterministic.
         updatedRows = await withVersionConflictRetry(() =>
           this.adapter.transaction(async tx => {
+            // This attempt's component values. A publish merges the held
+            // draft's into them, and a retry after a lost race must start again
+            // from the caller's own values: the draft may have moved on since.
+            const attemptComponentFields: Record<string, unknown> = {
+              ...componentFieldData,
+            };
             // True only when THIS transaction inserted the row AND seeded the
             // default-locale companion with the localized defaults. The version
             // snapshot overlay below is gated on it, not on `autoCreated`: two
@@ -1328,20 +1338,24 @@ export class SingleMutationService extends BaseService {
                     writeLocale
                   )
                 : preRowMainStatus;
-            const { hold: holdEdit, draftLocale: singleDraftLocale } =
-              resolveDraftHold({
-                collectionHasStatus:
-                  (singleMeta as { status?: boolean }).status === true,
-                draftsVersioningEnabled:
-                  singleMeta.versions?.drafts?.enabled === true,
-                documentLocalized: singleMeta.localized === true,
-                fields: fieldConfigs,
-                componentSchemas: singleComponentSchemas,
-                namedStatus: (updatePayload as Record<string, unknown>).status,
-                liveStatus: singleLiveStatus,
-                requestLocale: writeLocale ?? null,
-                defaultLocale: this.localization?.defaultLocale ?? null,
-              });
+            const {
+              hold: holdEdit,
+              draftLocale: singleDraftLocale,
+              eligible: singleDraftsEligible,
+            } = resolveDraftHold({
+              collectionHasStatus:
+                (singleMeta as { status?: boolean }).status === true,
+              draftsVersioningEnabled:
+                singleMeta.versions?.drafts?.enabled === true,
+              documentLocalized: singleMeta.localized === true,
+              entityKind: "single",
+              fields: fieldConfigs,
+              componentSchemas: singleComponentSchemas,
+              namedStatus: (updatePayload as Record<string, unknown>).status,
+              liveStatus: singleLiveStatus,
+              requestLocale: writeLocale ?? null,
+              defaultLocale: this.localization?.defaultLocale ?? null,
+            });
 
             // A recorded draft save restored onto a published Single must stay
             // pending. A Single that can no longer hold a draft would take it on
@@ -1427,8 +1441,10 @@ export class SingleMutationService extends BaseService {
             let promotedDraft = false;
             if (
               !holdEdit &&
-              (singleMeta as { status?: boolean }).status === true &&
-              singleMeta.versions?.drafts?.enabled === true &&
+              // Lifecycle and drafts versioning included. A draft stored before
+              // the schema made the Single ineligible is hidden from every read
+              // and is not promoted over a publish that never saw it.
+              singleDraftsEligible &&
               (updatePayload as Record<string, unknown>).status === "published"
             ) {
               const pendingDraft = await new VersionsRepository(
@@ -1442,6 +1458,24 @@ export class SingleMutationService extends BaseService {
                 singleDraftLocale
               );
               if (pendingDraft) {
+                // The component values this publish writes: the draft's, with
+                // the publish's own merged over them sub-field by sub-field,
+                // tagged as a draft holds them. Built once, so the gate judges
+                // exactly the values the component save below persists.
+                const promotedComponents = mergeComponentPatches(
+                  draftComponentValues(
+                    pendingDraft.snapshot as Record<string, unknown>,
+                    fieldConfigs
+                  ),
+                  tagComponentTypes(
+                    attemptComponentFields,
+                    fieldConfigs,
+                    componentSlug =>
+                      singleComponentSchemas?.get(componentSlug)?.fields
+                  ),
+                  fieldConfigs,
+                  singleComponentSchemas
+                );
                 // Judged here, on the draft this transaction has LOCKED, and
                 // after the hooks that decide the status. Before the
                 // transaction the gate could only judge a copy of the world as
@@ -1456,19 +1490,32 @@ export class SingleMutationService extends BaseService {
                       snapshot: pendingDraft.snapshot,
                     },
                   ],
-                  promoteGate
+                  {
+                    ...promoteGate,
+                    // The caller's component values are not in `currentData`,
+                    // which they left for the component save.
+                    callerData: { ...currentData, ...promotedComponents },
+                  }
                 );
                 // The caller's own payload wins over the pending change: a
                 // publish that also sets a field is saying something about that
                 // field now.
-                ({ main: mainPayload, companion: companionData } =
-                  splitPendingChange(
-                    pendingDraft.snapshot,
-                    singleMeta.tableName,
-                    fieldConfigs,
-                    companion && companionPhysicallyExists ? companion : null,
-                    updatePayload
-                  ));
+                const promoted = splitPendingChange(
+                  pendingDraft.snapshot,
+                  singleMeta.tableName,
+                  fieldConfigs,
+                  companion && companionPhysicallyExists ? companion : null,
+                  updatePayload
+                );
+                mainPayload = promoted.main;
+                companionData = promoted.companion;
+                // The draft's component values, with the publish's own over
+                // them, are written by the component save below.
+                for (const [name, value] of Object.entries(
+                  promotedComponents
+                )) {
+                  attemptComponentFields[name] = value;
+                }
                 // A non-default language's lifecycle lives on its companion
                 // `_status`; the main row must not be clobbered by it.
                 if (
@@ -1497,6 +1544,7 @@ export class SingleMutationService extends BaseService {
               (updatePayload as Record<string, unknown>).status ===
                 "published" &&
               !(await this.writeLocaleIsLive(tx, {
+                mainStatus: preRowMainStatus,
                 liveStatus: singleLiveStatus,
                 companion: companionPhysicallyExists ? companion : null,
                 entryId: existingDoc.id,
@@ -1674,8 +1722,8 @@ export class SingleMutationService extends BaseService {
             const dataLocaleStatus = writtenStatus ?? previousLocaleStatus;
 
             // Whether this write genuinely stored per-locale component data.
-            // Derived from the write INPUT (`componentFieldData`), not the read-
-            // back doc: a scalar-only edit persists no component data, so it is
+            // Derived from the write INPUT (`attemptComponentFields`), not the
+            // read-back doc: a scalar-only edit persists no component data, so it is
             // not mistaken for a localized component write. A non-localized
             // component written at a locale is the narrower edge this shares
             // with the version-capture gate.
@@ -1692,9 +1740,9 @@ export class SingleMutationService extends BaseService {
               snapshotLocale !== undefined &&
               this.fieldGroupDataService &&
               this.localization !== undefined &&
-              Object.keys(componentFieldData).length > 0
+              Object.keys(attemptComponentFields).length > 0
             ) {
-              for (const writtenName of Object.keys(componentFieldData)) {
+              for (const writtenName of Object.keys(attemptComponentFields)) {
                 const fieldConfig = fieldConfigs.find(
                   f => "name" in f && f.name === writtenName
                 );
@@ -1704,7 +1752,7 @@ export class SingleMutationService extends BaseService {
                 // `_componentType` block (only the blocks the write used).
                 const instances = writtenComponentInstances(
                   fieldConfig,
-                  componentFieldData[writtenName]
+                  attemptComponentFields[writtenName]
                 );
                 let anyLocalizedWrite = false;
                 for (const { slug, data } of instances) {
@@ -1912,7 +1960,9 @@ export class SingleMutationService extends BaseService {
             // in place (hashing passwords, assigning ids), so a conflict retry
             // must start from the user's original values, and the snapshot below
             // uses this post-save copy (ids populated) rather than the raw input.
-            const attemptComponentData = structuredClone(componentFieldData);
+            const attemptComponentData = structuredClone(
+              attemptComponentFields
+            );
 
             // 9.5. Save component field data to separate comp_{slug} tables. The
             // write locale is threaded so an embedded localized component stores
@@ -2094,11 +2144,66 @@ export class SingleMutationService extends BaseService {
                 draftRef,
                 singleDraftLocale
               );
-              const base = existingDraft
-                ? (existingDraft.snapshot as Record<string, unknown>)
-                : convertTimestampsToCamelCase({
-                    ...(existingDoc as Record<string, unknown>),
-                  });
+              // Component values live in tables of their own and are not on the
+              // row, so the live document the first held save builds on reads
+              // them in, tagged as every snapshot and a collection's draft hold
+              // them. A later save builds on the draft, which already has them.
+              const componentResolver = (componentSlug: string) =>
+                singleComponentSchemas?.get(componentSlug)?.fields;
+              // In read shape whichever it comes from: the save is compared with
+              // it, and a JSON-backed field read from the row (or held as text
+              // by a draft stored before drafts held the read shape) would
+              // differ from the parsed value of an unchanged save.
+              const base = this.queryService.deserializeJsonFields(
+                (existingDraft
+                  ? existingDraft.snapshot
+                  : {
+                      ...convertTimestampsToCamelCase({
+                        ...(existingDoc as Record<string, unknown>),
+                      }),
+                      // The language's stored translations: the main row holds
+                      // none, so without them the draft (and its version) would
+                      // lack every translation this save did not touch.
+                      ...(companion
+                        ? Object.fromEntries(
+                            companion.localizedFields.flatMap(f =>
+                              Object.prototype.hasOwnProperty.call(
+                                previousCompanionValues,
+                                f.column
+                              )
+                                ? [[f.name, previousCompanionValues[f.column]]]
+                                : []
+                            )
+                          )
+                        : {}),
+                      ...tagComponentTypes(
+                        await readComponentSubtrees({
+                          fieldGroupDataService: this.fieldGroupDataService,
+                          tx,
+                          entryId: existingDoc.id,
+                          parentTable: singleMeta.tableName,
+                          fieldConfigs,
+                          locale: options.locale,
+                          reason: "working-draft-single-component-read",
+                          logContext: { slug },
+                          onReadFailure: err =>
+                            this.logger.error(
+                              "Working draft: failed to read single components; failing the save instead of holding an incomplete draft",
+                              {
+                                slug,
+                                error:
+                                  err instanceof Error
+                                    ? err.message
+                                    : String(err),
+                              }
+                            ),
+                        }),
+                        fieldConfigs,
+                        componentResolver
+                      ),
+                    }) as SingleDocument,
+                singleMeta.fields
+              ) as Record<string, unknown>;
               // The base is the READ shape (field names); `mainPayload` is the
               // WRITE shape (columns). Spreading one onto the other put both
               // spellings of every edited field in the snapshot — the live value
@@ -2110,7 +2215,7 @@ export class SingleMutationService extends BaseService {
               // Mapped through the declared fields rather than camel-cased
               // wholesale, for the reason the version capture below gives: a
               // field genuinely named `site_title` must keep its own spelling.
-              const pending: Record<string, unknown> = { ...base };
+              let pending: Record<string, unknown> = { ...base };
               for (const field of singleMeta.fields) {
                 if (field.name === undefined) continue;
                 const column = toSnakeCase(field.name);
@@ -2145,6 +2250,31 @@ export class SingleMutationService extends BaseService {
                     pending[f.name] = companionData[f.column];
                   }
                 }
+              }
+              // The draft holds the read shape throughout. `mainPayload` carries
+              // JSON-backed fields (groups, repeaters, json) serialized for the
+              // column, so they are parsed back here; a draft holding the string
+              // would restore as a string, which validation refuses. The parse
+              // walks declared fields only; the draft's id comes from its base.
+              pending = this.queryService.deserializeJsonFields(
+                pending as SingleDocument,
+                singleMeta.fields
+              );
+              // This save's component values, tagged as the draft holds them and
+              // merged sub-field by sub-field: a save carries only the
+              // sub-fields it changed. Without this the edit was never stored
+              // anywhere while held, and the publish shipped the old values.
+              if (Object.keys(attemptComponentFields).length > 0) {
+                pending = mergeComponentPatches(
+                  pending,
+                  tagComponentTypes(
+                    attemptComponentFields,
+                    fieldConfigs,
+                    componentResolver
+                  ),
+                  fieldConfigs,
+                  singleComponentSchemas
+                );
               }
               // The draft, and the save as a version of its own. A save that
               // changes nothing against what it replaces records no version.
@@ -2908,72 +3038,75 @@ export class SingleMutationService extends BaseService {
    * The write locale's committed per-locale `_status`, read INSIDE the write
    * transaction (on its connection) for the under-lock publish-transition gate.
    *
-   * Reads through `tx.getDrizzle()` so it sees the transaction's own writes and
-   * is serialized with concurrent writers by the main-row lock taken just before
-   * it. The companion `_locales` table is a runtime Drizzle table object rather
-   * than part of the static schema, so its columns are reached off the object
-   * built by `buildCompanionSchema` — the same way `populateCompanionFields`
-   * queries it. `(_parent, _locale)` is the companion primary key, so the lookup
-   * returns at most one row.
+   * Through the shared typed reader on `tx.getDrizzle()`, so it sees the
+   * transaction's own writes and is serialized with concurrent writers by the
+   * main-row lock taken just before it.
    */
   /**
    * Whether the language a write publishes is live already, so the write puts
-   * nothing new live.
+   * nothing new live. Decided by `languageIsLive`, the one answer to "is this
+   * language live", from the statuses this write has read under its lock.
    *
    * `liveStatus` is the language's status as the write's other decisions read
    * it: the companion's for a language other than the default, the main row's
-   * for the default. The default language's translation keeps a status of its
-   * own too on a Single with per-language status, and the two can differ (a
-   * live main row over a draft default translation, after per-language status
-   * was added to existing content), so both must be live for the publish to
-   * change nothing.
+   * otherwise. The default language's own translation status is read here,
+   * since it can differ from the main row's.
    */
   private async writeLocaleIsLive(
     tx: TransactionContext,
     args: {
+      mainStatus: unknown;
       liveStatus: unknown;
-      companion: { table: unknown } | null;
+      companion: { table: unknown; companionTableName: string } | null;
       entryId: string;
       writeLocale: string | undefined;
     }
   ): Promise<boolean> {
-    if (args.liveStatus !== "published") return false;
-    const locale = args.writeLocale;
-    const isDefault =
-      locale !== undefined && locale === this.localization?.defaultLocale;
-    if (!isDefault || args.companion === null) return true;
-    // No translation row, or none carrying a status: the main row decides.
-    const own = await this.readCompanionStatusInTx(
-      tx,
-      args.companion,
-      args.entryId,
-      locale
-    );
-    return own === null || own === "published";
+    const locale = args.writeLocale ?? null;
+    const defaultLocale = this.localization?.defaultLocale ?? null;
+    if (locale !== null && locale !== defaultLocale) {
+      // Another language: `liveStatus` already is the status this write
+      // judges it by, so it is that language's own.
+      return languageIsLive({
+        mainStatus: args.mainStatus,
+        ownStatus: typeof args.liveStatus === "string" ? args.liveStatus : null,
+        locale,
+        defaultLocale,
+        perLanguageStatus: true,
+      });
+    }
+    // The default language, or none: the main row, and the default
+    // translation's own status where there is a companion to hold one.
+    const ownStatus =
+      args.companion && locale !== null
+        ? await this.readCompanionStatusInTx(
+            tx,
+            args.companion,
+            args.entryId,
+            locale
+          )
+        : null;
+    return languageIsLive({
+      mainStatus: args.mainStatus,
+      ownStatus,
+      locale,
+      defaultLocale,
+      perLanguageStatus: args.companion !== null,
+    });
   }
 
-  private async readCompanionStatusInTx(
+  private readCompanionStatusInTx(
     tx: TransactionContext,
-    companion: { table: unknown },
+    companion: { table: unknown; companionTableName: string },
     parentId: string,
     locale: string
   ): Promise<string | null> {
-    const table = companion.table as Record<string, Column>;
-    const drizzle = tx.getDrizzle<{
-      select: () => {
-        from: (t: unknown) => {
-          where: (c: unknown) => Promise<Record<string, unknown>[]>;
-        };
-      };
-    }>();
-    const rows = (await drizzle
-      .select()
-      .from(companion.table)
-      .where(and(eq(table._parent, parentId), eq(table._locale, locale)))) as {
-      _status?: unknown;
-    }[];
-
-    const status = rows[0]?._status;
-    return typeof status === "string" ? status : null;
+    return readCompanionLocaleStatus(
+      tx.getDrizzle<Parameters<typeof readCompanionLocaleStatus>[0]>(),
+      companion.table,
+      parentId,
+      locale,
+      cachedCompanionReadiness(this.adapter, companion.companionTableName)
+    );
   }
 }

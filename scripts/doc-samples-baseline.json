@@ -2,7 +2,7 @@
   "coverage": {
     "pages": 79,
     "samples": 451,
-    "compiled": 282
+    "compiled": 283
   },
   "samplesPerPage": {
     "docs/admin/branding.mdx": {
@@ -26,7 +26,7 @@
       "compiled": 2
     },
     "docs/configuration/collections.mdx": {
-      "samples": 9,
+      "samples": 8,
       "compiled": 3
     },
     "docs/configuration/environment.mdx": {
@@ -90,8 +90,8 @@
       "compiled": 2
     },
     "docs/getting-started/installation.mdx": {
-      "samples": 7,
-      "compiled": 7
+      "samples": 8,
+      "compiled": 8
     },
     "docs/getting-started/project-structure.mdx": {
       "samples": 3,
@@ -464,7 +464,7 @@
       "uninstalled #0 error TS2307: Cannot find module '{{pluginName}}' or its corresponding type declarations.": 1
     },
     "docs/api-reference/rest-api.mdx": {
-      "reader-file #0 error TS2307: Cannot find module '../../../nextly.config' or its corresponding type declarations.": 1
+      "reader-file #0 error TS2307: Cannot find module '../../../../../nextly.config' or its corresponding type declarations.": 1
     },
     "docs/configuration/collections.mdx": {
       "reader-file #1 error TS2307: Cannot find module './src/collections/posts' or its corresponding type declarations.": 1
@@ -494,7 +494,8 @@
     "docs/getting-started/installation.mdx": {
       "reader-file #3 error TS2307: Cannot find module '../../../../nextly.config' or its corresponding type declarations.": 1,
       "reader-file #4 error TS2307: Cannot find module '../../../../../nextly.config' or its corresponding type declarations.": 1,
-      "reader-file #5 error TS2307: Cannot find module '../../../../../../nextly.config' or its corresponding type declarations.": 1
+      "reader-file #5 error TS2307: Cannot find module '../../../../../../nextly.config' or its corresponding type declarations.": 1,
+      "reader-file #7 error TS2307: Cannot find module '../nextly.config' or its corresponding type declarations.": 1
     },
     "docs/getting-started/project-structure.mdx": {
       "reader-file #2 error TS2307: Cannot find module '../db/schemas/collections/zod' or its corresponding type declarations.": 1

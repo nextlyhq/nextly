@@ -178,8 +178,14 @@ export interface UseDashboardLayoutResult {
   reload: () => Promise<unknown>;
 }
 
-/** Whether a failed write was a lost race rather than a broken request. */
-function isConflictError(error: Error | null): boolean {
+/**
+ * Whether a failed write was a lost race rather than a broken request.
+ *
+ * Exported for a caller that has to tell the reader which of the two just
+ * happened to a write it made: the same rule the `isConflict` flag reads, so
+ * the two cannot disagree.
+ */
+export function isConflictError(error: Error | null): boolean {
   if (!error) return false;
   // The status is what the server actually distinguishes on; the message is
   // human copy that may be translated or reworded. Read the code where one is

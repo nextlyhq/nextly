@@ -324,7 +324,7 @@ export async function register(): Promise<void> {
 }
 ```
 
-Next.js skips `register()` during `next build`, so this opens no database connection at build time. On Next.js 14 the hook runs only when `next.config` sets `experimental: { instrumentationHook: true }`, and if the config sets `pageExtensions`, name the file with one of them (`instrumentation.page.ts` for `page.ts`).
+Next.js skips `register()` during `next build`, so this opens no database connection at build time. On Next.js 14 the hook runs only when `next.config` sets `instrumentationHook: true` in its `experimental` object (add it beside any keys already there), and if the config sets `pageExtensions`, name the file with one of them (`instrumentation.page.ts` for `page.ts`).
 
 ### 5. Set Up Environment Variables
 
@@ -412,6 +412,10 @@ Open [http://localhost:3000/admin/setup](http://localhost:3000/admin/setup) to c
 | React | 19+ |
 | TypeScript | 5+ |
 | Database | PostgreSQL (recommended for production), MySQL, or SQLite (local demo only) |
+
+### Yarn Plug'n'Play
+
+Nextly installs and generates types under Yarn's Plug'n'Play, but Next.js's default bundler, Turbopack, does not support Plug'n'Play: it is listed among Turbopack's [unsupported features](https://nextjs.org/docs/app/api-reference/turbopack#unsupported-and-unplanned-features), and `next build` stops with "Could not find the Next.js package". Run Next.js with webpack instead (`next dev --webpack`, `next build --webpack`), or set `nodeLinker: node-modules` in `.yarnrc.yml` and install again.
 
 ## Next Steps
 

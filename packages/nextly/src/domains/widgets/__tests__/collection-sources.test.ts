@@ -13,11 +13,14 @@ import { container } from "../../../di/container";
 import { setNextlyLogger } from "../../../observability/logger";
 import { refreshCollectionSources } from "../collection-sources";
 import { setDeferredEntities } from "../deferred-entities";
+import { isKeptOffDashboard } from "../kept-off-dashboard";
+import { validateWidgetQuery } from "../query";
 import {
   clearSources,
   getSource,
   listSources,
   registerSource,
+  UNAVAILABLE_SOURCE_MESSAGE,
 } from "../sources";
 
 type Row = {
@@ -31,6 +34,8 @@ type Row = {
     label?: string;
     /** A registry row can carry this; the source builder reads it. */
     localized?: boolean;
+    /** A choice field's options, as stored config: read, not trusted, so `unknown`. */
+    options?: unknown;
     fields?: Array<{ name: string; type: string }>;
   }>;
   timestamps?: boolean;
@@ -111,6 +116,48 @@ describe("refreshCollectionSources", () => {
     const source = getSource("collection:reports");
     expect(source?.kind).toBe("collection");
     expect(source?.fields.map(f => f.name)).toContain("title");
+  });
+
+  it("publishes no source for a collection kept off the dashboard, so a query names an unknown one", async () => {
+    // `internal: true` is stored as `admin.hidden: true`, so the page builder's usage index
+    // stands for both. No source means no generated card and a query refused exactly as an
+    // invented name is.
+    registryHolds([
+      { slug: "posts", fields: [{ name: "title", type: "text" }] },
+      {
+        slug: "nx_pb_class_usage",
+        fields: [{ name: "className", type: "text" }],
+        admin: { hidden: true },
+      },
+    ]);
+
+    await refreshCollectionSources();
+
+    expect(listSources().map(source => source.id)).toEqual([
+      "collection:posts",
+    ]);
+    expect(() =>
+      validateWidgetQuery({
+        source: "collection:nx_pb_class_usage",
+        op: "count",
+      })
+    ).toThrow(UNAVAILABLE_SOURCE_MESSAGE);
+    expect(isKeptOffDashboard("collection", "nx_pb_class_usage")).toBe(true);
+  });
+
+  it("keeps a collection whose admin options say nothing about hiding it", async () => {
+    // The control: `admin` alone, or `hidden: false`, leaves the collection on the dashboard.
+    registryHolds([
+      { slug: "a", fields: [], admin: { useAsTitle: "title" } },
+      { slug: "b", fields: [], admin: { hidden: false } },
+    ]);
+
+    await refreshCollectionSources();
+
+    expect(listSources().map(source => source.id)).toEqual([
+      "collection:a",
+      "collection:b",
+    ]);
   });
 
   it("advertises a date nested in an unnamed group as a top-level field", async () => {
@@ -212,6 +259,69 @@ describe("refreshCollectionSources", () => {
     expect(field?.label).toBeUndefined();
   });
 
+  it("carries a select's option labels onto the source as its value labels", async () => {
+    // A row stores `needs_review`; a person reads "Needs review". The label is the option's
+    // own, the one the entry form shows beside that choice.
+    registryHolds([
+      {
+        slug: "tickets",
+        fields: [
+          {
+            name: "stage",
+            type: "select",
+            label: "Stage",
+            options: [
+              { value: "needs_review", label: "Needs review" },
+              { value: "done", label: "Done" },
+            ],
+          },
+        ],
+      },
+    ]);
+
+    await refreshCollectionSources();
+
+    const field = getSource("collection:tickets")?.fields.find(
+      f => f.name === "stage"
+    );
+    expect(field?.choices).toEqual([
+      { value: "needs_review", label: "Needs review" },
+      { value: "done", label: "Done" },
+    ]);
+  });
+
+  it("keeps only the options it can name, and carries none for a field that is not a choice", async () => {
+    // Stored config is read, not trusted: an option with no string value or no usable label is
+    // left out rather than drawn as a blank bar. A text field with an `options` key is not a
+    // choice field and carries nothing.
+    registryHolds([
+      {
+        slug: "tickets",
+        fields: [
+          {
+            name: "stage",
+            type: "radio",
+            options: [
+              { value: "open", label: "Open" },
+              { value: "closed", label: "  " },
+              { value: 3, label: "Three" },
+              null,
+            ],
+          },
+          { name: "note", type: "text", options: [{ value: "a", label: "A" }] },
+        ],
+      },
+    ]);
+
+    await refreshCollectionSources();
+
+    const fields = getSource("collection:tickets")?.fields ?? [];
+    expect(fields.find(f => f.name === "stage")?.choices).toEqual([
+      { value: "open", label: "Open" },
+    ]);
+    expect(fields.find(f => f.name === "note")?.choices).toBeUndefined();
+  });
+
   it("drops the source for a collection that has left the registry", async () => {
     // The direction that is easy to omit. A source declares what a query may
     // NAME, so a set that only ever grows keeps naming a collection that is
@@ -233,7 +343,7 @@ describe("refreshCollectionSources", () => {
     // duplicate id, correctly, which is why the rebuild replaces by kind.
     registryHolds([{ slug: "posts", fields: [] }]);
     await refreshCollectionSources();
-    await expect(refreshCollectionSources()).resolves.toBeUndefined();
+    await expect(refreshCollectionSources()).resolves.toBe(true);
     expect(listSources()).toHaveLength(1);
   });
 
@@ -265,7 +375,9 @@ describe("refreshCollectionSources", () => {
     await refreshCollectionSources();
 
     registryUnreachable();
-    await refreshCollectionSources();
+    // Says so, so a reader that judges what the sources hold can tell a
+    // current answer from one left standing.
+    await expect(refreshCollectionSources()).resolves.toBe(false);
 
     expect(getSource("collection:posts")).toBeDefined();
   });
@@ -504,7 +616,7 @@ describe("the display label a source takes from the registry", () => {
       },
     ]);
 
-    await expect(refreshCollectionSources()).resolves.toBeUndefined();
+    await expect(refreshCollectionSources()).resolves.toBe(true);
     expect(getSource("collection:posts")?.label).toBe("posts");
   });
 
