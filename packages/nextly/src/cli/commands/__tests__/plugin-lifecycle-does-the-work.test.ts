@@ -1252,9 +1252,8 @@ describe("a disabled plugin is refused by install and uninstall", () => {
         { keepData: false, yes: true },
         deps({
           plugins: [disabled],
-          runDown,
           recordLifecycle,
-          ...droppedByDowns(),
+          ...droppedByDowns(runDown),
         })
       )
     ).rejects.toMatchObject({ code: "PLUGIN_DISABLED" });
