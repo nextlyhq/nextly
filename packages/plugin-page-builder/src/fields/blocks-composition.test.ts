@@ -839,6 +839,183 @@ describe("a component save judged inside its hosts: what each selection and writ
     );
   });
 
+  it("refuses a new loop in a host that already holds an unrelated one", async () => {
+    // The page already composes `p` → `q` → `p`, a loop a reader sees drawn as
+    // a placeholder. The change adds a second one, `a` inside itself through
+    // the page's override; one "a loop closed" answer for the whole host would
+    // be the same before and after, and hide it.
+    const leaf = component([node("l1")]);
+    const before = component([box("a1", [placing("n", "leaf")])]);
+    const after = component([box("a1", [placing("n", "leaf")])], {
+      exposed: [
+        {
+          id: "swap",
+          label: "Which",
+          nodeId: "n",
+          propPath: "componentId",
+          type: "select",
+        },
+      ],
+    });
+    const { readStored } = storeOf({
+      [COMPONENTS]: {
+        a: { published: before },
+        leaf: { published: leaf },
+        p: { published: component([placing("pq", "q")]) },
+        q: { published: component([placing("qp", "p")]) },
+      },
+      pages: {
+        home: {
+          published: page([
+            {
+              ...placing("i1", "a"),
+              props: { componentId: "a", overrides: { swap: "a" } },
+            },
+            placing("i2", "p"),
+          ]),
+        },
+      },
+    });
+    const { hostsOf } = listing([hostPage]);
+
+    const issues = await judge(after, write(readStored, COMPONENTS, "a"), {
+      hostsOf,
+      status: "published",
+    });
+
+    expect(codes(issues)).toEqual(["COMPONENT_HOST_BROKEN"]);
+    expect(issues[0]!.message).toContain(
+      "a component would end up containing itself"
+    );
+  });
+
+  it("refuses removing an exposure whose override kept a host within the limit", async () => {
+    // The page swaps the nested placement for a shallow component. Removing
+    // the exposure returns it to the default, the deep one, which takes the
+    // page past the limit. The component composed alone is the same shape
+    // before and after, so only the removal says the page has to be judged.
+    const swapping = (exposed: Node[]) =>
+      component([box("a1", [placing("n", "deep")])], { exposed });
+    const swap = {
+      id: "swap",
+      label: "Which",
+      nodeId: "n",
+      propPath: "componentId",
+      type: "select",
+    };
+    const { readStored } = storeOf({
+      [COMPONENTS]: {
+        a: { published: swapping([swap]) },
+        deep: {
+          published: component([box("d1", [box("d2", [node("d3")])])]),
+        },
+        shallow: { published: component([node("s1")]) },
+      },
+      pages: {
+        home: {
+          published: page([
+            box("p1", [
+              {
+                ...placing("i1", "a"),
+                props: { componentId: "a", overrides: { swap: "shallow" } },
+              },
+            ]),
+          ]),
+        },
+      },
+    });
+    const { hostsOf } = listing([hostPage]);
+
+    const issues = await judge(
+      swapping([]),
+      write(readStored, COMPONENTS, "a"),
+      {
+        limits,
+        hostsOf,
+        status: "published",
+      }
+    );
+
+    expect(codes(issues)).toEqual(["COMPONENT_HOST_BROKEN"]);
+    expect(issues[0]!.message).toContain("deeper than the maximum of 4");
+  });
+
+  it("judges the hosts of a slot re-aimed at another node of the same type, slot and depth", async () => {
+    // Two boxes side by side: the same holder type, slot name and depth. Only
+    // the node says which one a placement's content lands in.
+    const aimedAt = (nodeId: string) =>
+      component([box("g1", []), box("g2", [])], {
+        slots: { cells: { label: "Cells", nodeId, slot: "children" } },
+      });
+    const { readStored } = storeOf({
+      [COMPONENTS]: { a: { published: aimedAt("g1") } },
+      pages: {
+        home: {
+          published: page([
+            placing("i1", "a", { slots: { cells: [node("t")] } }),
+          ]),
+        },
+      },
+    });
+    const { hostsOf, lookups } = listing([hostPage]);
+
+    await judge(aimedAt("g2"), write(readStored, COMPONENTS, "a"), {
+      limits,
+      hostsOf,
+      status: "published",
+    });
+
+    expect(lookups).toHaveBeenCalled();
+  });
+
+  it("refuses a new loop that closes at the same component as one the host already holds", async () => {
+    // The page's second placement already overrides `swap2` back to `a`, a loop
+    // closing at `a`. The change also exposes `swap`, which the first
+    // placement overrides to `a`: a second loop, closing at `a` too. Told apart
+    // only by where they close, the two would read as one.
+    const exposure = (id: string, nodeId: string) => ({
+      id,
+      label: id,
+      nodeId,
+      propPath: "componentId",
+      type: "select",
+    });
+    const leaf = component([node("l1")]);
+    const shape = [box("a1", [placing("n", "leaf"), placing("n2", "leaf")])];
+    const before = component(shape, { exposed: [exposure("swap2", "n2")] });
+    const after = component(shape, {
+      exposed: [exposure("swap2", "n2"), exposure("swap", "n")],
+    });
+    const { readStored } = storeOf({
+      [COMPONENTS]: { a: { published: before }, leaf: { published: leaf } },
+      pages: {
+        home: {
+          published: page([
+            {
+              ...placing("i1", "a"),
+              props: { componentId: "a", overrides: { swap: "a" } },
+            },
+            {
+              ...placing("i2", "a"),
+              props: { componentId: "a", overrides: { swap2: "a" } },
+            },
+          ]),
+        },
+      },
+    });
+    const { hostsOf } = listing([hostPage]);
+
+    const issues = await judge(after, write(readStored, COMPONENTS, "a"), {
+      hostsOf,
+      status: "published",
+    });
+
+    expect(codes(issues)).toEqual(["COMPONENT_HOST_BROKEN"]);
+    expect(issues[0]!.message).toContain(
+      "a component would end up containing itself"
+    );
+  });
+
   it("counts a page placing the component in two fields as one document", async () => {
     const { readStored } = storeOf({
       [COMPONENTS]: { x: { published: shallowComponent } },

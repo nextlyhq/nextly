@@ -191,6 +191,9 @@ export async function compositionIssues(
   const source = storedComponentSource(write, setup.store);
   const self = componentSaved(write, args.path, setup.store);
   const report = issueReport(args.path);
+  // ONE allowance for every composition this save performs, the loop check
+  // included, so the bound is on the save rather than on each check.
+  const work: WorkAllowance = { left: MOST_COMPOSED_NODES };
 
   if (self !== undefined) {
     const cycle = await componentCycleRefusal({
@@ -199,6 +202,7 @@ export async function compositionIssues(
       nextStatus,
       source,
       limits: setup.limits,
+      work,
     });
     // A loop makes the composition a placeholder where it closes; judging the
     // rest of it would report the symptom of the one thing to fix.
@@ -210,7 +214,6 @@ export async function compositionIssues(
 
   if (!setup.composesDocuments) return report.issues;
 
-  const work: WorkAllowance = { left: MOST_COMPOSED_NODES };
   const tally = hostTally(self ?? "", setup);
   for (const draft of formsChangedBy(nextStatus)) {
     const read = documentReader(source, draft);
@@ -637,7 +640,9 @@ function reportWhatBroke(args: {
   tally: Tally;
 }): void {
   const { host, stored, before, after, setup, tally } = args;
-  if (after.loopClosed && !before.loopClosed) {
+  // By where each loop closes, not whether one does: a host that already
+  // holds an unrelated loop would otherwise hide the one this save adds.
+  if ([...after.loopsClosed].some(id => !before.loopsClosed.has(id))) {
     tally.broke(host, {
       code: "cycle",
       instanceId: "",
@@ -728,12 +733,19 @@ async function footprintOf(
       limits: setup.limits,
       work,
     });
-    if (composed.incomplete) complete = false;
+    const componentDepth = componentDepthOf(
+      self,
+      variant,
+      library.held,
+      setup,
+      work
+    );
+    if (composed.incomplete || componentDepth === undefined) complete = false;
     const nodes = composed.composition.document.nodes;
     selections.set(variant ?? "", {
       rootTypes: new Set(nodes.map(root => root.type)),
       depth: deepest(nodes, setup),
-      componentDepth: componentDepthOf(self, variant, library.held, setup),
+      componentDepth: componentDepth ?? MAX_COMPOSED_DEPTH + 1,
     });
   }
   return {
@@ -763,13 +775,19 @@ function deepest(nodes: readonly BlockNode[], setup: CompositionSetup): number {
 /**
  * How many levels of components the definition composes, by asking the
  * resolver itself: the smallest cap under which it refuses nothing for depth.
+ *
+ * Each probe is a composition, so each is charged to the save's allowance like
+ * any other. `undefined` when the allowance ran out first: a probe stopped by
+ * it refuses for the budget rather than for depth, and read as a depth answer
+ * that would make the component look shallower than it is.
  */
 function componentDepthOf(
   self: string,
   variant: string | undefined,
   held: ReadonlyMap<string, unknown>,
-  setup: CompositionSetup
-): number {
+  setup: CompositionSetup,
+  work: WorkAllowance
+): number | undefined {
   const lookup = {
     has: (id: string) => held.has(id),
     get: (id: string) => held.get(id) as BlockDocument | undefined,
@@ -781,8 +799,12 @@ function componentDepthOf(
       {
         limits: setup.limits,
         maxComposedDepth: cap,
+        work,
       }
     );
+    if (work.left <= 0 || unresolved.some(one => one.reason === "budget")) {
+      return undefined;
+    }
     if (!unresolved.some(one => one.reason === "composed-depth")) return cap;
   }
   return MAX_COMPOSED_DEPTH + 1;
@@ -805,7 +827,11 @@ function exposedProperties(
   return out;
 }
 
-/** Each exposed slot, keyed by its id, as `type|slot|depth` of its holder. */
+/**
+ * Each exposed slot, keyed by its id, as `nodeId|type|slot|depth` of its
+ * holder. The node is part of it: two holders of one type, slot and depth can
+ * still draw what lands in them differently.
+ */
 function exposedSlots(
   document: BlockDocument,
   setup: CompositionSetup
@@ -827,11 +853,14 @@ function exposedSlots(
   };
   visit(document.nodes, 1);
   for (const [id, slot] of Object.entries(declared)) {
-    const holder = depthOf.get(String((slot as { nodeId?: unknown }).nodeId));
+    const nodeId = String((slot as { nodeId?: unknown }).nodeId);
+    const holder = depthOf.get(nodeId);
     const name = String((slot as { slot?: unknown }).slot);
     out.set(
       id,
-      holder === undefined ? "?" : `${holder.type}|${name}|${holder.depth}`
+      holder === undefined
+        ? "?"
+        : `${nodeId}|${holder.type}|${name}|${holder.depth}`
     );
   }
   return out;
@@ -842,9 +871,11 @@ function exposedSlots(
  *
  * Conservative in one direction only: a footprint that could not be worked out
  * may worsen, and so does, in any one selection, a new root type, extra depth
- * or extra component depth, as does a selection that did not exist before and
- * any slot that moved. A slot removed or a root type dropped cannot make a host
- * break a rule it kept before.
+ * or extra component depth, as does a selection that did not exist before, any
+ * slot that moved, and any exposure added, re-aimed or removed. A slot removed
+ * or a root type dropped cannot make a host break a rule it kept before; an
+ * exposure removed can, since the host's override of it falls back to the
+ * default, which may draw what the override kept out.
  */
 function mayWorsen(was: Footprint, now: Footprint): boolean {
   if (!was.complete || !now.complete) return true;
@@ -852,8 +883,10 @@ function mayWorsen(was: Footprint, now: Footprint): boolean {
     selectionsWorsen(was, now) ||
     removedSelectionsWorsen(was, now) ||
     // What a placement can override: a new or re-aimed exposure lets a host's
-    // existing override reach somewhere it could not, a loop included.
+    // existing override reach somewhere it could not, a loop included. Read
+    // the other way, an exposure that is gone hands the default back.
     moved(was.exposures, now.exposures) ||
+    moved(now.exposures, was.exposures) ||
     moved(was.slots, now.slots)
   );
 }
