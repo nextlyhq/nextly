@@ -67,7 +67,9 @@ import {
   type ReleaseState,
 } from "../../../schemas/releases/types";
 import type { VersionScopeKind } from "../../../schemas/versions/types";
+import type { Logger } from "../../../services/shared";
 import { isUniqueViolation } from "../../../shared/lib/unique-violation";
+import { isDueAt } from "../release-due";
 import {
   RELEASE_ATTENTION_REASONS,
   RELEASE_TABS,
@@ -247,6 +249,12 @@ export interface ReleasesServiceDeps {
    * writes with are wiring the domain does not hold.
    */
   runDrainNow: (options: { maxDurationMs: number }) => Promise<unknown>;
+  /**
+   * Where Publish now reports a drain it could not start. Optional: without
+   * one the failure goes unreported, and the release is still answered as it
+   * stands.
+   */
+  logger?: Pick<Logger, "warn">;
 }
 
 /**
@@ -1623,18 +1631,37 @@ export class ReleasesService {
    * runner's own releases drain job is run at once, under the same claim a
    * scheduled pass takes. Like any pass, it sends out every release that is
    * due, this one among them, and settles releases sharing a document
-   * together.
+   * together. A release already scheduled at or before now is due as it
+   * stands, so it is not moved: the drain's claim is what keeps two runs
+   * apart, and moving a due release again would make a drain already running
+   * it leave it unfinished for the next pass.
    *
    * Answers the release as it stands afterwards: `published`; `blocked` when
    * a document stopped it part-way; or still `scheduled` when the budget ran
-   * out, a document could not be written yet, or another runner was already
-   * running the drain (or it is waiting to retry). A `scheduled` release is
-   * due, so that runner or the next pass finishes it.
+   * out, a document could not be written yet, another runner was already
+   * running the drain (or it is waiting to retry), or the drain could not be
+   * started. A `scheduled` release is due, so that runner or the next pass
+   * finishes it.
    *
    * @experimental
    */
   async publishNow(id: string, actor: ReleaseActor): Promise<ReleaseRow> {
     await this.authorize(actor, "publish");
+    const current = await this.publishableNow(id);
+    // The same refusal scheduling makes, before anything is written, so a
+    // release that would stop part-way sends none of its documents out.
+    await this.assertNothingBlocks(id, current.state);
+    await this.moveToNowUnlessDue(current);
+    await this.runDrainForPublishNow(id);
+    const [after] = await this.deps.repository.findReleases({ ids: [id] });
+    return after ?? current;
+  }
+
+  /**
+   * The release Publish now may run, read once, or the refusal saying why
+   * not: absent, final, or stopped.
+   */
+  private async publishableNow(id: string): Promise<ReleaseRow> {
     const [current] = await this.deps.repository.findReleases({ ids: [id] });
     if (current === undefined) {
       throw NextlyError.notFound({
@@ -1657,17 +1684,33 @@ export class ReleasesService {
         },
       });
     }
-    // The same refusal scheduling makes, before anything is written, so a
-    // release that would stop part-way sends none of its documents out.
-    await this.assertNothingBlocks(id, current.state);
+    return current;
+  }
 
+  /**
+   * Make the release due for Publish now: move it to this moment, unless its
+   * instant has already come.
+   *
+   * A scheduled release whose instant has come is already due, and is not
+   * moved. Moving it would change the instant a drain that is running it
+   * checks before marking it published, and that drain would then leave it
+   * for the next pass; the drain's claim, not the move, keeps two runs apart.
+   * Due by the same rule the drain selects releases with (`isDueAt`), so a
+   * release left unmoved here is one the drain will pick up.
+   */
+  private async moveToNowUnlessDue(current: ReleaseRow): Promise<void> {
     const now = new Date();
-    // Fenced on the state the checks above were made against, so a release
+    const alreadyDue =
+      current.state === "scheduled" &&
+      current.scheduledAt instanceof Date &&
+      isDueAt(current.scheduledAt, now);
+    if (alreadyDue) return;
+    // Fenced on the state the checks were made against, so a release
     // cancelled or stopped in between is not run — and on its revision, so of
-    // two overlapping requests (a double click, a retry) only one moves it and
-    // runs it; the other is refused before anything is written.
+    // two overlapping requests (a double click, a retry) only one moves it;
+    // the other is refused before anything is written.
     const moved = await this.deps.repository.scheduleRelease(
-      id,
+      current.id,
       now,
       // The zone the author chose stays part of the record.
       current.timezone ?? "UTC",
@@ -1678,17 +1721,31 @@ export class ReleasesService {
       throw NextlyError.conflict({
         logContext: {
           reason: "release-moved-during-publish-now",
-          releaseId: id,
+          releaseId: current.id,
         },
       });
     }
-    // The drain is the one runner of releases; running it here rather than a
-    // pass of our own is what keeps this from overlapping the scheduled drain
-    // or another Publish now on a shared document. Whether it ran is not the
-    // answer: the release's state afterwards is.
-    await this.deps.runDrainNow({ maxDurationMs: PUBLISH_NOW_BUDGET_MS });
-    const [after] = await this.deps.repository.findReleases({ ids: [id] });
-    return after ?? current;
+  }
+
+  /**
+   * Run the releases drain for Publish now, never failing the request.
+   *
+   * The drain is the one runner of releases; running it here rather than a
+   * pass of our own is what keeps this from overlapping the scheduled drain
+   * or another Publish now on a shared document. The release is due by now,
+   * so the runner sends it whether or not this run started: a drain that
+   * could not be started is logged, and the release is answered as it
+   * stands, as when another runner holds the drain.
+   */
+  private async runDrainForPublishNow(releaseId: string): Promise<void> {
+    try {
+      await this.deps.runDrainNow({ maxDurationMs: PUBLISH_NOW_BUDGET_MS });
+    } catch (error) {
+      this.deps.logger?.warn("Publish now could not run the releases drain", {
+        releaseId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   async cancel(id: string, actor: ReleaseActor): Promise<void> {

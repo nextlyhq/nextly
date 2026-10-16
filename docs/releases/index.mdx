@@ -53,9 +53,9 @@ exist and have drafts.
 
 Publish now runs a draft or scheduled release straight away. It makes the same checks as
 scheduling, so a release that would stop part-way is refused before any document is written.
-Then it moves the release to the current time and starts the job runner's releases run at
-once, the same run a scheduled time gets: every document is written as the person who added
-it, and the release goes out together.
+Then it moves the release to the current time, unless its time has already come, and starts
+the job runner's releases run at once, the same run a scheduled time gets: every document is
+written as the person who added it, and the release goes out together.
 
 |            |                                             |
 | ---------- | ------------------------------------------- |
@@ -65,8 +65,8 @@ it, and the release goes out together.
 
 The answer is the release as it then stands. Usually that is `published`, or `blocked` if a
 document stopped it part-way. It is still `scheduled` when a very large release outlasts the
-request, or when a releases run was already in progress: the release is then due, and goes
-out with that run or the job runner's next pass.
+request, when a releases run was already in progress, or when the run could not be started:
+the release is then due, and goes out with that run or the job runner's next pass.
 
 Like any releases run, it sends out every release whose time has come, not only this one, so
 a release that was already overdue goes out with it.

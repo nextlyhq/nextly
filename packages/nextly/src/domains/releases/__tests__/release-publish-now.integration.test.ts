@@ -46,7 +46,11 @@ afterEach(async () => {
 const SLUG = "posts";
 const DAY = 24 * 60 * 60 * 1000;
 
-async function boot(dialect: TestDialect): Promise<TestNextly> {
+async function boot(
+  dialect: TestDialect,
+  /** Run after each write to a document, for a case that must pause one. */
+  afterChange?: () => Promise<void>
+): Promise<TestNextly> {
   current = await createTestNextly({
     dialect,
     collections: [
@@ -59,11 +63,46 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
           publish: () => true,
           unpublish: () => true,
         },
+        ...(afterChange === undefined
+          ? {}
+          : { hooks: { afterChange: [() => afterChange()] } }),
         fields: [text({ name: "title" })],
       }),
     ],
   });
   return current;
+}
+
+/**
+ * A gate a document write waits at once armed, so a case can act while a
+ * drain is part-way through a release. `entered` settles when a write reaches
+ * it; `open` lets every waiting write through. Writes before `arm` pass.
+ */
+function writeGate() {
+  let armed = false;
+  let writes = 0;
+  let signalEntered: () => void = () => {};
+  let release: () => void = () => {};
+  const entered = new Promise<void>(resolve => {
+    signalEntered = resolve;
+  });
+  const opened = new Promise<void>(resolve => {
+    release = resolve;
+  });
+  return {
+    arm: () => {
+      armed = true;
+    },
+    entered,
+    open: () => release(),
+    writes: () => writes,
+    afterChange: async () => {
+      if (!armed) return;
+      writes += 1;
+      signalEntered();
+      await opened;
+    },
+  };
 }
 
 /** The stored lifecycle of a row, read RAW rather than through the read path. */
@@ -169,27 +208,75 @@ describe.each(getConfiguredTestDialects())(
     });
 
     it("runs a release once when two requests to publish it now overlap", async () => {
-      // A double click or a retry: both read the release at one revision. Only
-      // one may move it and run the drain; the other is refused before
-      // anything runs. A request that read it after the move cannot run beside
-      // the first either: the drain is one claim (the case below).
-      const t = await boot(dialect);
+      // A double click or a retry. The first request moves the release to now
+      // and runs the drain. The second arrives while that drain is part-way
+      // through: the release is due, so it is not moved again, and the drain
+      // is held, so nothing runs a second time. It answers `scheduled`, and
+      // the first run finishes the release.
+      const gate = writeGate();
+      const t = await boot(dialect, gate.afterChange);
       const author = await seedLiveAuthor(t);
-      const id = await releaseOf(t, author, [await draft(t, "Once")]);
+      const a = await draft(t, "Once");
+      const id = await releaseOf(t, author, [a]);
       await new ReleasesRepository(t.adapter).scheduleRelease(
         id,
         new Date(Date.now() + 7 * DAY),
         "UTC"
       );
-      const outcomes = await Promise.allSettled([
-        t.nextly.releases.publishNow({ id }),
-        t.nextly.releases.publishNow({ id }),
+      gate.arm();
+
+      const first = t.nextly.releases.publishNow({ id });
+      // The first run is writing the document, and waits there.
+      const reached = await Promise.race([
+        gate.entered.then(() => "drain" as const),
+        first.then(() => "finished" as const),
       ]);
-      expect(outcomes.filter(o => o.status === "fulfilled")).toHaveLength(1);
-      expect(outcomes.find(o => o.status === "rejected")).toMatchObject({
-        reason: { code: "CONFLICT" },
+      expect(reached).toBe("drain");
+      const moved = await new ReleasesRepository(t.adapter).findReleases({
+        ids: [id],
       });
+
+      const second = await t.nextly.releases.publishNow({ id });
+
+      expect(second.state).toBe("scheduled");
+      // Not moved again: the instant the running drain checks is unchanged.
+      expect(second.scheduledAt?.getTime()).toBe(
+        moved[0]?.scheduledAt?.getTime()
+      );
+      expect(second.revision).toBe(moved[0]?.revision);
+
+      gate.open();
+      expect((await first).state).toBe("published");
       expect(await stateOf(t, id)).toBe("published");
+      expect(await storedStatus(t, a)).toBe("published");
+      // Written once: the second request ran nothing of its own.
+      expect(gate.writes()).toBe(1);
+    });
+
+    it("a second Publish now while the first's drain runs does not delay the release", async () => {
+      // The release is already due and another runner holds the drain. Moving
+      // it again would change the instant that drain checks before marking it
+      // published, and it would leave the release for the next pass. So it is
+      // left as it is, and answered `scheduled`.
+      const t = await boot(dialect);
+      const author = await seedLiveAuthor(t);
+      const a = await draft(t, "Due");
+      const id = await releaseOf(t, author, [a]);
+      const due = new Date(Date.now() - 60_000);
+      await new ReleasesRepository(t.adapter).scheduleRelease(id, due, "UTC");
+      const [before] = await new ReleasesRepository(t.adapter).findReleases({
+        ids: [id],
+      });
+      await holdDrain(t);
+
+      const answered = await t.nextly.releases.publishNow({ id });
+
+      expect(answered.state).toBe("scheduled");
+      expect(answered.scheduledAt?.getTime()).toBe(
+        before?.scheduledAt?.getTime()
+      );
+      expect(answered.revision).toBe(before?.revision);
+      expect(await storedStatus(t, a)).toBe("draft");
     });
 
     it("answers scheduled while another runner holds the drain, and the next pass publishes it", async () => {

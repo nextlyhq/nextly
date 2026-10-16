@@ -31,8 +31,8 @@
 
 A release can be published now: `POST /api/releases/:id/publish` and
 `nextly.releases.publishNow({ id })` run a draft or scheduled release at once,
-with the same checks as scheduling, by moving it to the current time and
-starting the job runner's releases run straight away, and answer the release as
+with the same checks as scheduling, by moving it to the current time (unless
+it is already due) and starting the job runner's releases run straight away, and answer the release as
 it then stands. When a releases run is already in progress, the release goes
 out with it (or with the next one) and the answer says it is still scheduled.
 Each release in a list also says whether the reader may publish it now

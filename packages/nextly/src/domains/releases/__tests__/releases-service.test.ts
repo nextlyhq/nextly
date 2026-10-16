@@ -33,6 +33,7 @@ function repository() {
           state: string;
           timezone?: string;
           revision?: number;
+          scheduledAt?: Date | null;
         }>
       > => [{ id: "r1", state: "draft" }]
     ),
@@ -90,6 +91,9 @@ function service(over?: {
     runDrainNow: vi.fn(
       async (_options: { maxDurationMs: number }) => undefined
     ),
+    logger: {
+      warn: vi.fn((_message: string, _meta?: Record<string, unknown>) => {}),
+    },
   };
   return { svc: new ReleasesService(deps), repo, deps };
 }
@@ -764,14 +768,21 @@ describe("ReleasesService.count", () => {
 
 describe("ReleasesService.publishNow", () => {
   it("schedules the release for this moment, then runs the drain within the budget", async () => {
-    // Scheduled first, fenced on the state and the revision it was read at, so
-    // the run is the drain's ordinary run of a due release rather than a
-    // second way to publish. Then the runner's drain job, bounded by the
-    // request's budget; the answer is the release as the drain left it.
+    // Scheduled for later, so it is moved first, fenced on the state and the
+    // revision it was read at: the run is the drain's ordinary run of a due
+    // release rather than a second way to publish. Then the runner's drain
+    // job, bounded by the request's budget; the answer is the release as the
+    // drain left it.
     const { svc, repo, deps } = service({ holds: ["publish"] });
     repo.findReleases
       .mockResolvedValueOnce([
-        { id: "r1", state: "scheduled", timezone: "Asia/Karachi", revision: 4 },
+        {
+          id: "r1",
+          state: "scheduled",
+          timezone: "Asia/Karachi",
+          revision: 4,
+          scheduledAt: new Date(Date.now() + 60 * 60 * 1000),
+        },
       ])
       .mockResolvedValueOnce([
         { id: "r1", state: "published", timezone: "Asia/Karachi", revision: 6 },
@@ -794,6 +805,58 @@ describe("ReleasesService.publishNow", () => {
       deps.runDrainNow.mock.invocationCallOrder[0]
     );
     expect(answer.state).toBe("published");
+  });
+
+  it("runs the drain for a release already due without moving it", async () => {
+    // Its instant has come, so it is due as it stands. Moving it again would
+    // change the instant a drain already running it checks before marking it
+    // published, and that drain would leave it for the next pass.
+    const { svc, repo, deps } = service({ holds: ["publish"] });
+    repo.findReleases.mockResolvedValue([
+      {
+        id: "r1",
+        state: "scheduled",
+        revision: 2,
+        scheduledAt: new Date(Date.now() - 60_000),
+      },
+    ]);
+    await svc.publishNow("r1", ADMIN);
+    expect(repo.scheduleRelease).not.toHaveBeenCalled();
+    expect(deps.runDrainNow).toHaveBeenCalledWith({ maxDurationMs: 15_000 });
+  });
+
+  it("still moves a draft to now before running the drain", async () => {
+    // The control for the case above: only a release already due is left
+    // where it is.
+    const { svc, repo, deps } = service({ holds: ["publish"] });
+    repo.findReleases.mockResolvedValue([
+      { id: "r1", state: "draft", revision: 0, scheduledAt: null },
+    ]);
+    await svc.publishNow("r1", ADMIN);
+    expect(repo.scheduleRelease).toHaveBeenCalledTimes(1);
+    expect(deps.runDrainNow).toHaveBeenCalledTimes(1);
+  });
+
+  it("answers the release as it stands when the drain could not be started, and logs it", async () => {
+    // The move has happened and the release is due, so the runner sends it
+    // whatever happened here. Failing the request would report a release that
+    // is going out as one that is not.
+    const { svc, repo, deps } = service({ holds: ["publish"] });
+    repo.findReleases
+      .mockResolvedValueOnce([{ id: "r1", state: "draft", revision: 0 }])
+      .mockResolvedValueOnce([{ id: "r1", state: "scheduled", revision: 1 }]);
+    deps.runDrainNow.mockRejectedValueOnce(new Error("jobs table is gone"));
+
+    const answer = await svc.publishNow("r1", ADMIN);
+
+    expect(answer).toMatchObject({ id: "r1", state: "scheduled", revision: 1 });
+    expect(deps.logger.warn).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        releaseId: "r1",
+        error: "jobs table is gone",
+      })
+    );
   });
 
   it("answers scheduled when the drain sent nothing, rather than published", async () => {

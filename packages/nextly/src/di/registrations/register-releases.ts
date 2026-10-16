@@ -36,6 +36,7 @@ import type { RegistrationContext } from "./types";
 
 export function registerReleaseServices({
   adapter,
+  logger,
 }: RegistrationContext): void {
   container.registerSingleton<ReleasesService>(
     "releasesService",
@@ -134,6 +135,9 @@ export function registerReleaseServices({
             { maxDurationMs }
           );
         },
+        // Publish now answers a drain it could not start with the release as
+        // it stands; this is where that failure is reported.
+        logger,
 
         // The document's OWN authority, asked with the same operation the
         // ordinary write path uses. Adding a document to a release is a deferred
