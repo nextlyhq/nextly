@@ -65,6 +65,7 @@ import { PreviewPanes } from "@admin/components/features/entries/PreviewMode/Pre
 import { TranslationPanes } from "@admin/components/features/entries/TranslationMode/TranslationPanes";
 import { useTranslationSource } from "@admin/components/features/entries/TranslationMode/useTranslationSource";
 import { useEntryLocaleContext } from "@admin/components/features/entries/useEntryLocaleContext";
+import { autosaveIntervalFrom } from "@admin/components/features/versions/autosave-interval";
 import { DocumentHistoryContext } from "@admin/components/features/versions/document-history-context";
 import { historyEnabledFrom } from "@admin/components/features/versions/history-enabled";
 import {
@@ -814,6 +815,8 @@ export function SingleForm({
     // colleague's claim deliberately does not stop it: the recovery point is
     // this author's own work, which is what a takeover preserves.
     enabled: mayRecordRecovery(busy, viewingVersion),
+    // The pace the Single configures, else the editor's default.
+    debounceMs: autosaveIntervalFrom(schema),
   });
   const recovery = useAutosaveRecovery({
     scope: autosaveScope,

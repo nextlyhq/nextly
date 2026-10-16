@@ -17,6 +17,7 @@
 
 import { useCallback, useMemo, useState } from "react";
 
+import { autosaveIntervalFrom } from "@admin/components/features/versions/autosave-interval";
 import { DocumentHistoryContext } from "@admin/components/features/versions/document-history-context";
 import { historyEnabledFrom } from "@admin/components/features/versions/history-enabled";
 import {
@@ -666,6 +667,8 @@ export function EntryForm({
      * shared predicate states the rule once for both editors.
      */
     enabled: mayRecordRecovery(isSubmitting, viewingVersion),
+    // The pace the collection configures, else the editor's default.
+    debounceMs: autosaveIntervalFrom(collection),
   });
   const linkLocale = previewLinkLocale({
     localized: collection.localized === true,

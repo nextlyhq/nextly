@@ -45,6 +45,7 @@ export default function EntryVersionsPage({ params, searchParams }: PageProps) {
       readOnlyHref={buildRoute(ROUTES.COLLECTION_ENTRIES, { slug })}
       from={readVersionParam(searchParams?.from)}
       to={readVersionParam(searchParams?.to)}
+      locale={locale}
     />
   );
 }
