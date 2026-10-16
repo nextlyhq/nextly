@@ -192,6 +192,8 @@ export function WidgetRenderer({
 }: WidgetRendererProps) {
   const shared = {
     title: definition.title,
+    // The declaration's one optional line under the title, which the frame draws.
+    description: definition.description,
     icon: resolveIconName(definition.icon),
     link: definition.link,
     headerAction,

@@ -76,6 +76,64 @@ describe("Retry", () => {
     expect(asked(1)).toEqual(["collection:a"]);
     expect(asked(2)).toEqual(["collection:a"]);
   });
+
+  it("asks only the card pressed, never the cards retried before it, and keeps their answers", async () => {
+    const failed = { ok: false, error: "An unexpected error occurred." };
+    vi.mocked(protectedApi.post).mockResolvedValue({
+      results: [failed, failed],
+    });
+    const cards = [metric("a", "collection:a"), metric("b", "collection:b")];
+
+    const { result } = renderHook(() => useWidgetBatch(cards), { wrapper });
+    await waitFor(() => expect(result.current.slots.a).toBeDefined());
+
+    // Card a's retry answers.
+    vi.mocked(protectedApi.post).mockResolvedValue({
+      results: [{ ok: true, result: { op: "count", total: 5 } }],
+    });
+    act(() => result.current.retry("a"));
+    await waitFor(() => expect(result.current.slots.a?.ok).toBe(true));
+
+    // Then card b is retried: only b is asked, and a keeps the answer its retry brought.
+    vi.mocked(protectedApi.post).mockResolvedValue({
+      results: [{ ok: true, result: { op: "count", total: 7 } }],
+    });
+    act(() => result.current.retry("b"));
+    await waitFor(() => expect(result.current.slots.b?.ok).toBe(true));
+
+    expect(vi.mocked(protectedApi.post)).toHaveBeenCalledTimes(3);
+    expect(asked(2)).toEqual(["collection:b"]);
+    expect(result.current.slots.a).toEqual({
+      ok: true,
+      result: { op: "count", total: 5 },
+    });
+  });
+
+  it("dates a retried card by its retry's answer, and every other card by the batch's", async () => {
+    // A clock the test moves, so the two answers cannot land in the same millisecond.
+    const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
+    try {
+      const failed = { ok: false, error: "An unexpected error occurred." };
+      vi.mocked(protectedApi.post).mockResolvedValue({
+        results: [failed, failed],
+      });
+      const cards = [metric("a", "collection:a"), metric("b", "collection:b")];
+      const { result } = renderHook(() => useWidgetBatch(cards), { wrapper });
+      await waitFor(() => expect(result.current.updatedAt).not.toBeNull());
+
+      now.mockReturnValue(5_000);
+      vi.mocked(protectedApi.post).mockResolvedValue({
+        results: [{ ok: true, result: { op: "count", total: 5 } }],
+      });
+      act(() => result.current.retry("a"));
+      await waitFor(() => expect(result.current.slots.a?.ok).toBe(true));
+
+      expect(result.current.updatedAtFor("a")?.getTime()).toBe(5_000);
+      expect(result.current.updatedAtFor("b")?.getTime()).toBe(1_000);
+    } finally {
+      now.mockRestore();
+    }
+  });
 });
 
 describe("the announcement's count", () => {

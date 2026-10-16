@@ -3,7 +3,7 @@
  * much it says out loud.
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -423,6 +423,28 @@ describe("WidgetGrid — collection and gating", () => {
     expect(protectedApi.post).not.toHaveBeenCalled();
   });
 
+  it("offers no Retry on a card refused before it was asked", async () => {
+    // The card never entered the batch, so there is no question to ask again: a Retry there
+    // would do nothing at all when pressed.
+    mockBranding = brandingWith([
+      {
+        id: "acme/recent",
+        title: "Recent posts",
+        archetype: "list",
+        query: { source: "collection:posts", op: "list" },
+      },
+    ]);
+
+    renderGrid();
+
+    await waitFor(() =>
+      expect(screen.getByTestId("widget-cell-acme/recent")).toBeInTheDocument()
+    );
+    // The control: the card IS in its error state, so the absence below is about Retry.
+    expect(screen.getByTestId("widget-card-error")).toBeInTheDocument();
+    expect(screen.queryByTestId("card-retry")).not.toBeInTheDocument();
+  });
+
   it("keeps a contributed component when the registered list is under-declared", async () => {
     // A widget declared through BOTH channels. The registration names `list`
     // and omits `select`, so core cannot draw it -- and the contributed
@@ -541,7 +563,14 @@ describe("WidgetGrid — collection and gating", () => {
         screen.getByTestId("widget-cell-core/shortcuts")
       ).toBeInTheDocument()
     );
-    expect(screen.getByTestId("widget-actions-empty")).toBeInTheDocument();
+    // The frame's empty state, and the frame says so: a bespoke "nothing here" node inside a
+    // card marked ready would keep its freshness line and footer link.
+    const cell = screen.getByTestId("widget-cell-core/shortcuts");
+    expect(within(cell).getByTestId("card-empty")).toBeInTheDocument();
+    expect(cell.querySelector("[data-state]")).toHaveAttribute(
+      "data-state",
+      "empty"
+    );
     expect(
       screen.queryByText(/declares no shortcuts/i)
     ).not.toBeInTheDocument();
