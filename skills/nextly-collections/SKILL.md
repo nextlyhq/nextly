@@ -182,9 +182,13 @@ export default async function PostsPage() {
   a post is saved, so the page updates on publish. It also lets the page build
   in an app with `cacheComponents: true`, where an uncached database read
   outside `<Suspense>` fails `next build`.
-- `keyParts` names the cache entry. A shared entry is only safe when every
-  reader may see the same rows: do not cache a read that applies the reader's
-  own access rules under a key without the reader in it.
+- `keyParts` names the cache entry, and everyone whose read uses the same key
+  gets the same rows. Cache only reads that are the same for every reader:
+  published content of a collection with no read rule, on the collection or
+  on any of its fields. Do not cache a read that applies a reader's access
+  rules (`overrideAccess: false` with a `user`): the reader's roles and
+  permissions can change without any content changing, so no tag clears the
+  entry. Read it uncached inside `<Suspense>` instead.
 - Rich text comes back as Lexical JSON. Pass `richTextFormat: "html"` to
   `find()` to get HTML instead.
 - Users are not a normal collection: read them with `nextly.users.find()`,

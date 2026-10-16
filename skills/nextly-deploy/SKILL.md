@@ -116,9 +116,25 @@ export default defineConfig({
 ```
 
 Vercel sets `BLOB_READ_WRITE_TOKEN` when Blob storage is added to the project.
-For S3, Cloudflare R2 or DigitalOcean Spaces, use `@nextlyhq/storage-s3` with
+For AWS S3, use `@nextlyhq/storage-s3` with
 `s3Storage({ bucket, region, accessKeyId, secretAccessKey, collections: { media: true } })`.
-A Node.js server with a persistent disk can keep the default.
+Other S3-compatible providers also need their `endpoint`, and a `publicUrl`
+when files are served from another address. For Cloudflare R2:
+
+```ts
+s3Storage({
+  bucket: process.env.R2_BUCKET!,
+  region: "auto",
+  accessKeyId: process.env.R2_ACCESS_KEY_ID!,
+  secretAccessKey: process.env.R2_SECRET_ACCESS_KEY!,
+  endpoint: `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
+  publicUrl: process.env.R2_PUBLIC_URL,
+  collections: { media: true },
+});
+```
+
+For other providers, use the settings in the adapter's README. A Node.js
+server with a persistent disk can keep the default.
 
 On Vercel, uploads from the admin pass through a Vercel Function, which
 refuses request bodies over 4.5 MB (`413 FUNCTION_PAYLOAD_TOO_LARGE`). With
