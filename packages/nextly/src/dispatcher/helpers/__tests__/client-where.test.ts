@@ -112,6 +112,11 @@ describe("the owner column cannot be filtered on", () => {
       "where.created_by.any",
     ],
     [
+      "a spelling that resolves to the owner column",
+      { CreatedBy: { equals: "u1" } },
+      "where.CreatedBy",
+    ],
+    [
       "an owner key inside or",
       { or: [{ createdBy: { equals: "u2" } }] },
       "where.or.0.createdBy",

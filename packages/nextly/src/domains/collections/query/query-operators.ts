@@ -329,16 +329,18 @@ function logicalClauses(
   }
 
   // OR conditions. A member with no condition is true, which makes the whole
-  // disjunction true, so it contributes nothing; dropping only that member
-  // would make the `or` NARROWER than written. An `or` with no members at all
-  // is false, and is kept as an empty list for the builder to render.
+  // disjunction true; dropping only that member would make the `or` NARROWER
+  // than written. An `or` with no members at all is false, and is kept as an
+  // empty list for the builder to render.
   if (Array.isArray(payload.or)) {
-    const orConditions = payload.or.map((cond, i) =>
-      buildClause(cond, `${path}.or.${i}`, geo)
-    );
-    if (!orConditions.includes(undefined)) {
-      clauses.push({ or: orConditions as WhereClause[] });
-    }
+    // A member with no condition is kept as an empty conjunction rather than
+    // folding the `or` away here: the condition builder still has to resolve
+    // every other member's fields, and it treats the empty one as true.
+    clauses.push({
+      or: payload.or.map(
+        (cond, i) => buildClause(cond, `${path}.or.${i}`, geo) ?? { and: [] }
+      ),
+    });
   }
   return clauses;
 }

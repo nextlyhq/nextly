@@ -19,6 +19,7 @@ import type { StatusOption } from "../../lib/status-filter";
 import { readSelectParam } from "../../query/select-param";
 import type { WhereFilter } from "../../services/collections/query-operators";
 import { parseWhereQuery } from "../../services/collections/query-parser";
+import { toSnakeCase } from "../../shared/lib/case-conversion";
 import type { Params } from "../types";
 
 // ============================================================
@@ -98,6 +99,19 @@ export const parseSelectParam = (
 export const OWNER_QUERY_COLUMNS = new Set(["created_by", "createdBy"]);
 
 /**
+ * Whether a filter key reaches the owner column. Judged by its first segment
+ * under the same snake_case mapping the condition builder resolves a column
+ * by, so `CreatedBy` — which that mapping turns into `created_by` — is caught
+ * as well as the two documented spellings.
+ */
+function namesOwnerColumn(key: string): boolean {
+  const head = key.split(".")[0];
+  return (
+    OWNER_QUERY_COLUMNS.has(head) || OWNER_QUERY_COLUMNS.has(toSnakeCase(head))
+  );
+}
+
+/**
  * Every place a client filter names the system owner column, as a refusal.
  *
  * A dotted key like `created_by.any` still targets the owner column, because
@@ -116,7 +130,7 @@ function ownerColumnProblems(
       value.forEach((child, i) =>
         ownerColumnProblems(child, `${at}.${i}`, into)
       );
-    } else if (OWNER_QUERY_COLUMNS.has(key.split(".")[0])) {
+    } else if (namesOwnerColumn(key)) {
       into.push({
         path: at,
         code: "FIELD_NOT_FILTERABLE",

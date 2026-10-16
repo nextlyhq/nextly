@@ -200,6 +200,14 @@ function setNestedValue(
       // Another parameter already gave this segment a value, so nothing can
       // nest under it; assigning onto that value would throw.
       refuseKey(bracketKey(path), "It nests under a value already given.");
+    } else if (Array.isArray(current[key]) !== isNextArray) {
+      // A named key set on a list is ignored by everything that reads the
+      // list, and an index under an object is no list member, so either way
+      // the condition under it would vanish.
+      refuseKey(
+        bracketKey(path),
+        "It mixes list indexes and named keys at one level."
+      );
     }
 
     current = current[key] as Record<string, unknown>;
@@ -247,6 +255,14 @@ function parseBracketPath(key: string): string[] | null {
     // prototype every other object shares.
     if (PROTOTYPE_SEGMENTS.has(segment)) {
       refuseKey(key, `"${segment}" cannot be a filter segment.`);
+    }
+    // An index written with leading zeros is not an array index: it would be
+    // set as a property the list's length ignores, and its member dropped.
+    if (/^\d+$/.test(segment) && !/^(0|[1-9]\d*)$/.test(segment)) {
+      refuseKey(
+        key,
+        `A list index is written as a plain integer, not "${segment}".`
+      );
     }
     // Refused before any list is built: an index makes a list that long, and
     // a filter cannot have more members than it may have conditions.

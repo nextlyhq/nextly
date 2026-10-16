@@ -83,12 +83,13 @@ Newly refused, and what to write instead:
 - **A REST bracket key that is not bracketed segments**
   (`where[title]equals=a`), that names `__proto__`, `constructor` or
   `prototype`, whose list index is 50 or more (the most conditions a filter
-  may have), that nests under a value another parameter gave, or that repeats
-  a condition already given — `FILTER_INVALID_KEY`. A `__proto__`,
+  may have), that nests under a value another parameter gave, that mixes list
+  indexes and named keys at one level, whose index has leading zeros, or
+  that repeats a condition already given — `FILTER_INVALID_KEY`. A `__proto__`,
   `constructor` or `prototype` field key in a JSON `where` is refused as an
   unknown field.
-- **A REST filter on the owner column** (`created_by`, `createdBy`, or a
-  dotted form) — `FIELD_NOT_FILTERABLE`. It used to be removed silently, so
+- **A REST filter on the owner column** (`created_by`, `createdBy`, any
+  spelling that resolves to it such as `CreatedBy`, or a dotted form) — `FIELD_NOT_FILTERABLE`. It used to be removed silently, so
   `or: [{ createdBy: … }]` matched every entry. The column is never returned,
   so it cannot choose rows either.
 

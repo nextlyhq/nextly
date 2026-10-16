@@ -119,6 +119,39 @@ describe("bracket filters that cannot be read", () => {
     ).toEqual(["FILTER_INVALID_KEY"]);
   });
 
+  it("refuses a list index that is not written as a plain integer", () => {
+    // `00` is not an array index, so it was set as a property the list's
+    // length ignores, and the `and` was read as empty, dropping the tenant.
+    expect(
+      refusedErrors(() => whereOf("where[and][00][tenant][equals]=acme")).map(
+        e => e.code
+      )
+    ).toEqual(["FILTER_INVALID_KEY"]);
+  });
+
+  it("refuses a named segment under a list, and an index under an object", () => {
+    // A named key set on a list is ignored by everything that reads the
+    // list, so the condition under it would vanish.
+    expect(
+      refusedErrors(() =>
+        whereOf("where[or][0][a][equals]=1&where[or][b][equals]=2")
+      ).map(e => e.code)
+    ).toEqual(["FILTER_INVALID_KEY"]);
+    expect(
+      refusedErrors(() =>
+        whereOf("where[title][equals]=a&where[title][0]=b")
+      ).map(e => e.code)
+    ).toEqual(["FILTER_INVALID_KEY"]);
+  });
+
+  it("refuses a scalar value given before a nested one at the same path", () => {
+    expect(
+      refusedErrors(() => whereOf("where[title]=x&where[title][equals]=x")).map(
+        e => e.code
+      )
+    ).toEqual(["FILTER_INVALID_KEY"]);
+  });
+
   it("refuses the same condition given twice rather than keeping the last", () => {
     expect(
       refusedErrors(() =>

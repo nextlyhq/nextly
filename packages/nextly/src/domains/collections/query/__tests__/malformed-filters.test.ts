@@ -274,6 +274,14 @@ describe("the condition builder refuses a key it cannot resolve", () => {
     );
   });
 
+  it("refuses an unknown field beside an empty member of an or", () => {
+    // The empty member makes the `or` true, and folding it away before its
+    // other members were resolved let a misspelt field through unrefused.
+    expect(
+      refusalCodes(build({ or: [{}, { titel: { equals: "a" } }] }))
+    ).toContain("FILTER_UNKNOWN_FIELD");
+  });
+
   it("refuses an unknown field whose only condition is an empty not_in", () => {
     // The condition excludes nothing, and dropping it before the field was
     // resolved let a misspelt field through as an unfiltered read.
