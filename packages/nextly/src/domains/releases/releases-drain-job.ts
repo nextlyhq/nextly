@@ -37,31 +37,57 @@ import { createReleaseMutations } from "./release-mutations";
 import { ReleasesRepository } from "./releases-repository";
 import type { ReleasesDbApi } from "./releases-repository";
 
-/** The registered slug. Stated once so the runner and the trigger agree. */
-export const RELEASES_DRAIN_JOB = "releases:drain";
-
-export function createReleasesDrainJob(deps: {
+/** What a pass needs to write content as each member's author. */
+export interface ReleasePassDeps {
   db: ReleasesDbApi;
   /** The Direct API the member's bound client wraps. */
   contentApi: JobContentSource;
   /** The identity reads, so a member's author can be resolved. */
   runAs: RunAsDeps;
-  /**
-   * What to do with the outcome of each pass. REQUIRED.
-   *
-   * Not optional, because a pass can fail members while the job row completes
-   * successfully: an author is deleted, a write is refused, a release is
-   * cancelled mid-pass. Those releases stay `scheduled` and are retried
-   * forever, and with an optional callback the only trace of why is a returned
-   * object nobody read — no durable error, nothing for an administrator to
-   * diagnose.
-   *
-   * The domain does not pick a logger: the wiring site knows where a report
-   * belongs. Making it required is what forces that decision to be MADE rather
-   * than defaulted to silence.
-   */
-  onOutcome: (result: ApplyDueReleasesResult) => void | Promise<void>;
-}): JobDefinition {
+}
+
+/**
+ * One pass of the release engine.
+ *
+ * The ONE place a release run is started: the runner's scheduled pass and
+ * Publish now both come through here, so the two cannot drift apart in how
+ * they write, as whom, or what they settle together. When publishing moves to
+ * a single publish service, this is the call that changes.
+ */
+export function runReleasePass(
+  deps: ReleasePassDeps,
+  options: { now?: () => Date; deadline?: Date; only?: string }
+): Promise<ApplyDueReleasesResult> {
+  return applyDueReleases({
+    ...options,
+    repository: new ReleasesRepository(deps.db),
+    mutations: createReleaseMutations({ contentApi: deps.contentApi }),
+    runAs: deps.runAs,
+  });
+}
+
+/** The registered slug. Stated once so the runner and the trigger agree. */
+export const RELEASES_DRAIN_JOB = "releases:drain";
+
+export function createReleasesDrainJob(
+  deps: ReleasePassDeps & {
+    /**
+     * What to do with the outcome of each pass. REQUIRED.
+     *
+     * Not optional, because a pass can fail members while the job row completes
+     * successfully: an author is deleted, a write is refused, a release is
+     * cancelled mid-pass. Those releases stay `scheduled` and are retried
+     * forever, and with an optional callback the only trace of why is a returned
+     * object nobody read — no durable error, nothing for an administrator to
+     * diagnose.
+     *
+     * The domain does not pick a logger: the wiring site knows where a report
+     * belongs. Making it required is what forces that decision to be MADE rather
+     * than defaulted to silence.
+     */
+    onOutcome: (result: ApplyDueReleasesResult) => void | Promise<void>;
+  }
+): JobDefinition {
   return defineJob({
     slug: RELEASES_DRAIN_JOB,
     // A sweep: a release comes due at an instant with no request attached, so
@@ -71,7 +97,7 @@ export function createReleasesDrainJob(deps: {
     sweep: true,
     handler: async (_input, context) => {
       const startedAt = Date.now();
-      const result = await applyDueReleases({
+      const result = await runReleasePass(deps, {
         // ONE origin for both sides of the pass's `now() >= deadline` test.
         // `context.now` is the instant the runner is treating as now and does
         // not advance during the pass, so elapsed time comes from the real clock
@@ -91,9 +117,6 @@ export function createReleasesDrainJob(deps: {
         // rather than a whole tick, and taking a fixed budget anyway means
         // outliving the invocation and being killed part-way.
         deadline: context.deadline,
-        repository: new ReleasesRepository(deps.db),
-        mutations: createReleaseMutations({ contentApi: deps.contentApi }),
-        runAs: deps.runAs,
       });
       await deps.onOutcome(result);
     },

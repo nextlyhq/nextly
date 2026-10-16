@@ -34,7 +34,44 @@ can put new pages live and retire old ones in the same moment.
 | Add members | Each member names a document and an action, `publish` or `unpublish`        |
 | Schedule    | The release is given a time. Blocking problems are checked first            |
 | Apply       | On a background-jobs pass after that time, every member's action is applied |
+| Publish now | A draft or scheduled release is run at once instead of waiting for its time |
 | Cancel      | An unapplied release can be cancelled                                       |
+
+## Publish now
+
+<Callout type="info">
+  Publish now is **experimental**: its name and answer may change before
+  releases are finished.
+</Callout>
+
+Publish now runs a draft or scheduled release straight away. It makes the same checks as
+scheduling, so a release that would stop part-way is refused before any document is written,
+and it runs through the same engine as a scheduled time: every document is written as the
+person who added it, and the release goes out together.
+
+|            |                                             |
+| ---------- | ------------------------------------------- |
+| REST       | `POST /api/releases/:id/publish`            |
+| Direct API | `nextly.releases.publishNow({ id })`        |
+| Permission | The same as scheduling: publishing releases |
+
+The answer is the release as it then stands. Almost always that is `published`. A very large
+release may still be `scheduled` when the answer comes, with the rest of its documents
+finished by the job runner on its next pass.
+
+Only this release runs, together with any other due release that shares a document with it
+(those are always settled together). Other releases that happen to be due are left to the
+job runner.
+
+## Releases that ran are final
+
+A **published** release is the record of what went live, and a **cancelled** one the record
+of a launch called off. Neither changes again: no documents are added or removed, it is not
+scheduled again, and Publish now refuses it. To try again, create a new release. A cancelled
+release you no longer want can be deleted.
+
+A **stopped** release has not run. Remove or fix the documents that stopped it, then schedule
+it again. Publish now refuses it until then, so the fix is checked before anything goes out.
 
 ## Listing releases
 

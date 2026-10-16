@@ -187,6 +187,16 @@ export interface ReleasesNamespace {
     args: { id: string; at: Date; timezone: string } & ReleaseCallerArgs
   ): Promise<void>;
   cancel(args: { id: string } & ReleaseCallerArgs): Promise<void>;
+  /**
+   * Run a draft or scheduled release now, with the same checks and the same
+   * all-together run as at its scheduled time, and answer the release as it
+   * then stands: `published`, or still `scheduled` if some of it is left for
+   * the runner to finish. Refused for a stopped release (fix it and schedule it
+   * again) and for a published or cancelled one, which never runs again.
+   *
+   * @experimental
+   */
+  publishNow(args: { id: string } & ReleaseCallerArgs): Promise<ReleaseRow>;
 }
 
 /**
@@ -367,5 +377,7 @@ export function createReleasesNamespace(ctx: NextlyContext): ReleasesNamespace {
       service().schedule(args.id, args.at, args.timezone, actorOf(ctx, args)),
 
     cancel: args => service().cancel(args.id, actorOf(ctx, args)),
+
+    publishNow: args => service().publishNow(args.id, actorOf(ctx, args)),
   };
 }

@@ -130,6 +130,14 @@ function namespace() {
       ]),
       schedule: vi.fn(async () => undefined),
       cancel: vi.fn(async () => undefined),
+      // Answers the release as it stands after the run, so a case can say
+      // which way it went.
+      publishNow: vi.fn(
+        async (): Promise<{ id: string; state: string }> => ({
+          id: "r1",
+          state: "published",
+        })
+      ),
     },
   };
 }
@@ -189,6 +197,15 @@ describe("release route authority", () => {
     // and would have to hand it to a publisher to be told.
     expect(await authorityFor("listReleaseBlockers")).toEqual({
       action: "read",
+      resource: "content-releases",
+    });
+  });
+
+  it("demands publish to publish now", async () => {
+    // Running a release puts content live, the same power scheduling needs.
+    // Anything less would let someone who may only assemble releases ship one.
+    expect(await authorityFor("publishRelease")).toEqual({
+      action: "publish",
       resource: "content-releases",
     });
   });
@@ -780,5 +797,48 @@ describe("the detail read explains a BLOCKED release", () => {
     const { api, body } = await detail("scheduled");
     expect(api.releases.blockingReasons).not.toHaveBeenCalled();
     expect(body.blockedBy).toBeUndefined();
+  });
+});
+
+describe("publish now over REST", () => {
+  async function publish() {
+    const res = await handleReleaseRequest(
+      new Request("https://example.test/api/releases/r1/publish", {
+        method: "POST",
+      }),
+      "publishRelease",
+      { releaseId: "r1" }
+    );
+    return {
+      res,
+      body: (await res.json()) as {
+        message: string;
+        item: { id: string; state: string; can?: unknown };
+      },
+    };
+  }
+
+  it("runs the release it names and answers it as it now stands", async () => {
+    const { res, body } = await publish();
+    expect(res.status).toBe(200);
+    expect(api.releases.publishNow).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "r1" })
+    );
+    expect(body.message).toBe("Release published.");
+    expect(body.item).toMatchObject({ id: "r1", state: "published" });
+    // With what the caller may do next, as every other release answer carries.
+    expect(body.item.can).toBeDefined();
+  });
+
+  it("does not call a release published while some of it is still going out", async () => {
+    // A large release can outlast the request; the runner finishes it. Saying
+    // "published" then would tell the person it is done when it is not.
+    api.releases.publishNow.mockResolvedValueOnce({
+      id: "r1",
+      state: "scheduled",
+    });
+    const { body } = await publish();
+    expect(body.message).not.toBe("Release published.");
+    expect(body.message).toMatch(/going out/);
   });
 });

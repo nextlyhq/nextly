@@ -55,6 +55,8 @@ function service(held: number) {
     } as unknown as ReleasesServiceDeps["repository"],
     canManageReleases: vi.fn(async () => true),
     canActOnDocument: vi.fn(async () => true),
+    // Running a release is not what these cases are about.
+    runRelease: vi.fn(async () => undefined),
   };
   return { svc: new ReleasesService(deps), addMember, touchIfAssemblable };
 }

@@ -88,6 +88,7 @@ const RELEASE_AUTHORITY: Record<string, "read" | "create" | "publish"> = {
   removeReleaseMember: "create",
   scheduleRelease: "publish",
   cancelRelease: "publish",
+  publishRelease: "publish",
 };
 
 /**
@@ -572,6 +573,7 @@ async function withCapabilities(
       cancel: false,
       addMember: false,
       removeMember: false,
+      publishNow: false,
     },
   }));
 }
@@ -798,6 +800,20 @@ const RELEASE_OPERATIONS: Record<
     // Not `{ cancelled: true }`: the response-shape contract refuses
     // boolean-only bodies, because a caller cannot grow against them.
     return respondAction("Release cancelled.", { releaseId });
+  },
+
+  publishRelease: async ({ caller, releases, releaseId }) => {
+    const release = await releases.publishNow({ ...caller, id: releaseId });
+    // The release as it stands after the run, and a message that says which
+    // way it went: a release still `scheduled` has documents the runner will
+    // finish, and calling that "published" would tell the person it is done.
+    const [item] = await withCapabilities([release], caller, releases);
+    return respondMutation(
+      release.state === "published"
+        ? "Release published."
+        : "Release is going out; the rest of its documents will follow shortly.",
+      item
+    );
   },
 };
 

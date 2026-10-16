@@ -930,6 +930,8 @@ export const nextly = {
       requireNextly().releases.schedule(args),
     cancel: (args: Parameters<ReleasesNamespace["cancel"]>[0]) =>
       requireNextly().releases.cancel(args),
+    publishNow: (args: Parameters<ReleasesNamespace["publishNow"]>[0]) =>
+      requireNextly().releases.publishNow(args),
   },
 
   users: {

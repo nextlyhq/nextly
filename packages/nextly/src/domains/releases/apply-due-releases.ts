@@ -53,7 +53,10 @@ import { resolveRunAs, type RunAsDeps } from "../../shared/lib/resolve-run-as";
 import type { UserContext } from "../collections/services/collection-types";
 
 import { planReleaseMaterialisation } from "./plan-release-materialisation";
-import type { MaterialisationAction } from "./plan-release-materialisation";
+import type {
+  MaterialisationAction,
+  MaterialisationPlan,
+} from "./plan-release-materialisation";
 import type {
   DocumentRef,
   ReleaseMemberRow,
@@ -171,6 +174,37 @@ export interface ApplyDueReleasesDeps {
    * tick.
    */
   deadline?: Date;
+  /**
+   * Run only this release, and the due releases that share a document with it.
+   *
+   * What Publish now asks for: one release at once, not every release that
+   * happens to be due. The releases sharing its documents come with it because
+   * they are only ever settled together — applying one of an overlapping set
+   * alone can reverse the other's work (see `overlappingReleases`). Absent, the
+   * pass runs everything due, as the runner does.
+   */
+  only?: string;
+}
+
+/**
+ * Narrow a plan to the overlapping set holding one release.
+ *
+ * Exact rather than approximate because a document's releases are all in one
+ * set: every action whose winner is in the set touches only documents of that
+ * set, and no action outside it does.
+ */
+function restrictPlan(
+  plan: MaterialisationPlan,
+  only: string
+): MaterialisationPlan {
+  const set =
+    plan.overlappingReleases.find(group => group.includes(only)) ?? [];
+  const inSet = new Set(set);
+  return {
+    actions: plan.actions.filter(action => inSet.has(action.releaseId)),
+    releaseIds: plan.releaseIds.filter(id => inSet.has(id)),
+    overlappingReleases: set.length > 0 ? [set] : [],
+  };
 }
 
 /** Why one action did not happen. Recorded, never swallowed. */
@@ -373,7 +407,7 @@ export async function applyDueReleases(
 
   const members = await deps.repository.listMembersOf(releases.map(r => r.id));
 
-  const plan = planReleaseMaterialisation({
+  const planned = planReleaseMaterialisation({
     releases: releases.map(r => ({
       id: r.id,
       // `findDueReleases` returns only releases with an instant, so this is
@@ -384,6 +418,8 @@ export async function applyDueReleases(
     members,
     now: at,
   });
+  const plan =
+    deps.only === undefined ? planned : restrictPlan(planned, deps.only);
 
   const { outcomes, unfinished, applied } = await applyWithinBudget(
     deps,
@@ -442,7 +478,8 @@ export async function applyDueReleases(
   const deferred = plan.actions.length - outcomes.length;
   const failed = outcomes.filter(o => o.failure !== null).length;
   return {
-    due: releases.length,
+    // The releases this pass took on: every due one, or the set `only` named.
+    due: plan.releaseIds.length,
     published,
     applied: outcomes.length - failed,
     failed,

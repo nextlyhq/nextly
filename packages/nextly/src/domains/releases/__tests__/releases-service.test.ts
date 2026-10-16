@@ -26,7 +26,11 @@ function repository() {
   return {
     createRelease: vi.fn(async () => ({ id: "r1" })),
     scheduleReleaseOk: true,
-    findReleases: vi.fn(async () => [{ id: "r1", state: "draft" }]),
+    findReleases: vi.fn(
+      async (): Promise<
+        Array<{ id: string; state: string; timezone?: string }>
+      > => [{ id: "r1", state: "draft" }]
+    ),
     // The list's paged read, which `find` routes every non-document query to.
     findReleasePage: vi.fn(async () => ({ rows: [], total: 0 })),
     countReleases: vi.fn(async () => 0),
@@ -69,6 +73,9 @@ function service(over?: {
         action: string;
         authenticatedScope?: unknown;
       }) => over?.mayActOnDocument !== false
+    ),
+    runRelease: vi.fn(
+      async (_options: { only: string; deadline: Date }) => undefined
     ),
   };
   return { svc: new ReleasesService(deps), repo, deps };
@@ -737,6 +744,110 @@ describe("ReleasesService.count", () => {
       code: "FORBIDDEN",
     });
     expect(repo.countReleases).not.toHaveBeenCalled();
+  });
+});
+
+describe("ReleasesService.publishNow", () => {
+  it("schedules the release for this moment, then runs it alone", async () => {
+    // Scheduled first, fenced on the state it was read in, so the run is the
+    // engine's ordinary run of a due release rather than a second way to publish.
+    const { svc, repo, deps } = service({ holds: ["publish"] });
+    repo.findReleases.mockResolvedValue([
+      { id: "r1", state: "scheduled", timezone: "Asia/Karachi" },
+    ]);
+    const before = Date.now();
+    await svc.publishNow("r1", ADMIN);
+
+    const [id, at, zone, from] = repo.scheduleRelease.mock
+      .calls[0] as unknown as [string, Date, string, string[]];
+    expect(id).toBe("r1");
+    expect(at.getTime()).toBeGreaterThanOrEqual(before);
+    expect(zone).toBe("Asia/Karachi");
+    expect(from).toEqual(["scheduled"]);
+    expect(deps.runRelease).toHaveBeenCalledWith(
+      expect.objectContaining({ only: "r1" })
+    );
+  });
+
+  it.each([
+    ["published", "Create a new release"],
+    ["cancelled", "create a new release"],
+    ["blocked", "schedule it again"],
+  ])(
+    "refuses a %s release, saying what to do instead, before writing anything",
+    async (state, advice) => {
+      const { svc, repo, deps } = service({ holds: ["publish"] });
+      repo.findReleases.mockResolvedValue([{ id: "r1", state }]);
+      await expect(svc.publishNow("r1", ADMIN)).rejects.toMatchObject({
+        code: "CONFLICT",
+        publicMessage: expect.stringContaining(advice),
+      });
+      expect(repo.scheduleRelease).not.toHaveBeenCalled();
+      expect(deps.runRelease).not.toHaveBeenCalled();
+    }
+  );
+
+  it("refuses a caller who may assemble releases but not publish them", async () => {
+    // Running a release is the act that puts content live, the same power
+    // scheduling needs.
+    const { svc, repo, deps } = service({ holds: ["create", "read"] });
+    await expect(svc.publishNow("r1", ADMIN)).rejects.toMatchObject({
+      code: "FORBIDDEN",
+    });
+    expect(repo.scheduleRelease).not.toHaveBeenCalled();
+    expect(deps.runRelease).not.toHaveBeenCalled();
+  });
+
+  it("does not run a release that moved between the read and the write", async () => {
+    // Cancelled by someone else in that window: the fenced write matches
+    // nothing, and running it anyway would publish a cancelled launch.
+    const { svc, repo, deps } = service({ holds: ["publish"] });
+    repo.findReleases.mockResolvedValue([{ id: "r1", state: "draft" }]);
+    repo.scheduleRelease.mockResolvedValueOnce(false);
+    await expect(svc.publishNow("r1", ADMIN)).rejects.toMatchObject({
+      code: "CONFLICT",
+    });
+    expect(deps.runRelease).not.toHaveBeenCalled();
+  });
+
+  it("answers not found for a release that does not exist", async () => {
+    const { svc, repo } = service({ holds: ["publish"] });
+    repo.findReleases.mockResolvedValue([]);
+    await expect(svc.publishNow("nope", ADMIN)).rejects.toMatchObject({
+      code: "NOT_FOUND",
+    });
+  });
+});
+
+describe("a finished release offers nothing to change", () => {
+  it.each(["published", "cancelled"])(
+    "offers no schedule, membership change or publish now on a %s release",
+    async state => {
+      // The admin draws its controls from these, so a finished release that
+      // still offered one would show a button the server then refuses.
+      const { svc } = service({ holds: ["publish", "create", "read"] });
+      const can = await svc.capabilities([{ id: "r1", state } as never], ADMIN);
+      expect(can.get("r1")).toEqual({
+        schedule: false,
+        cancel: false,
+        addMember: false,
+        removeMember: false,
+        publishNow: false,
+      });
+    }
+  );
+
+  it("still lets a stopped release be fixed and rescheduled, but not run as it is", async () => {
+    const { svc } = service({ holds: ["publish", "create", "read"] });
+    const can = await svc.capabilities(
+      [{ id: "r1", state: "blocked" } as never],
+      ADMIN
+    );
+    expect(can.get("r1")).toMatchObject({
+      schedule: true,
+      removeMember: true,
+      publishNow: false,
+    });
   });
 });
 

@@ -16,7 +16,10 @@
  */
 
 import { apiKeyWriteAllowed } from "../../auth/authenticated-scope";
+import { nextly } from "../../direct-api/nextly";
 import type { RBACAccessControlService } from "../../domains/auth/services/rbac-access-control-service";
+import { databaseRunAs } from "../../domains/jobs/jobs-runner";
+import { runReleasePass } from "../../domains/releases/releases-drain-job";
 import { ReleasesRepository } from "../../domains/releases/releases-repository";
 import {
   RELEASES_RESOURCE,
@@ -26,10 +29,12 @@ import type { CacheRevalidator } from "../../revalidation/types";
 import { hasPermission } from "../../services/lib/permissions";
 import { container } from "../container";
 
+import { reportReleasesOutcome } from "./register-jobs";
 import type { RegistrationContext } from "./types";
 
 export function registerReleaseServices({
   adapter,
+  logger,
 }: RegistrationContext): void {
   container.registerSingleton<ReleasesService>(
     "releasesService",
@@ -64,6 +69,19 @@ export function registerReleaseServices({
         // `register-auth`, and resolving at registration time would make this
         // depend on an ordering between two registrations rather than on the
         // container — the first reordering would break it silently.
+        // Publish now runs through the SAME pass the runner's job uses, built
+        // from the same three parts — the adapter, the Direct API facade the
+        // member's bound client wraps, and the identity reads that resolve each
+        // member's author — and reported the same way, so a document that could
+        // not be written now is logged exactly as a scheduled run would log it.
+        runRelease: async ({ only, deadline }) => {
+          const result = await runReleasePass(
+            { db: adapter, contentApi: nextly, runAs: databaseRunAs(adapter) },
+            { only, deadline }
+          );
+          reportReleasesOutcome(logger, result);
+        },
+
         canActOnDocument: async ({
           userId,
           scopeSlug,

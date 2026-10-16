@@ -2063,6 +2063,18 @@ const RELEASE_ROUTES: ReleaseRoute[] = [
     operation: "update",
     method: "cancelRelease",
   },
+  // Publish now: a run of its own rather than a schedule with "now" in the
+  // body, because it is refused in states scheduling accepts (a stopped
+  // release is scheduled again, never run as it is), and a route is something
+  // an audit log can see.
+  {
+    id: true,
+    subresource: "publish",
+    subId: false,
+    verb: "POST",
+    operation: "update",
+    method: "publishRelease",
+  },
   // A READ, and deliberately its own route rather than a field on the detail.
   // Answering it costs an identity lookup over every member, which the detail
   // read must not pay to tell the overwhelming majority of callers that nothing

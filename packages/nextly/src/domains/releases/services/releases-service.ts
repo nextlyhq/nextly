@@ -54,6 +54,8 @@ import {
   RELEASE_ASSEMBLABLE_FROM,
   RELEASE_ASSEMBLABLE_WITH_PUBLISH_FROM,
   RELEASE_CANCELLABLE_FROM,
+  RELEASE_FINAL_STATES,
+  RELEASE_PUBLISHABLE_NOW_FROM,
   RELEASE_SCHEDULABLE_FROM,
   RELEASE_SCHEDULABLE_FROM_BLOCKED,
   RELEASE_SCHEDULABLE_FROM_UNBLOCKED,
@@ -176,6 +178,13 @@ export interface ReleaseCapabilities {
   addMember: boolean;
   /** Take a document out of it. Necessary, not sufficient. */
   removeMember: boolean;
+  /**
+   * Run it now. True only for a draft or scheduled release: a stopped one is
+   * fixed and scheduled again, and a published or cancelled one is final.
+   *
+   * @experimental
+   */
+  publishNow: boolean;
 }
 
 export interface ReleasesServiceDeps {
@@ -213,6 +222,57 @@ export interface ReleasesServiceDeps {
     authenticatedScope?: AuthenticatedScope;
     userRoles?: string[];
   }) => Promise<boolean>;
+  /**
+   * Run one release at once, with the releases sharing its documents, through
+   * the same engine the runner's scheduled pass uses (`runReleasePass`).
+   *
+   * Injected because running writes content as each member's author, which
+   * needs the content API and the identity reads only the wiring holds. The
+   * pass stops starting new writes at `deadline`; whatever it leaves is
+   * finished by the runner, as for any release whose time has come.
+   */
+  runRelease: (options: { only: string; deadline: Date }) => Promise<unknown>;
+}
+
+/**
+ * How long Publish now may spend writing before it answers.
+ *
+ * A request has a time limit the runner's pass does not, and a release past
+ * this budget is not lost: it is already due, so the runner finishes it on its
+ * next pass, and the answer says it is still going out.
+ */
+const PUBLISH_NOW_BUDGET_MS = 15_000;
+
+/**
+ * The refusal for a change to a release that has finished, saying what to do
+ * instead.
+ *
+ * A published or cancelled release is the record of a launch, and it takes no
+ * further change. The person meant to do something real, so the message names
+ * the way to do it: a new release.
+ */
+function finishedReleaseRefusal(
+  release: { id: string; state: ReleaseState },
+  attempted: string
+): NextlyError {
+  // Each state named, rather than "not published means cancelled": a caller
+  // reaching here with a state that is not final would otherwise be told a
+  // release it can still fix is cancelled.
+  const message =
+    release.state === "published"
+      ? "This release has already been published, so it cannot be changed or run again. Create a new release to schedule these documents again."
+      : release.state === "cancelled"
+        ? "This release is cancelled; create a new release to schedule these documents again."
+        : "This release cannot be changed in its current state.";
+  return NextlyError.conflict({
+    message,
+    logContext: {
+      reason: "release-is-final",
+      releaseId: release.id,
+      state: release.state,
+      attempted,
+    },
+  });
 }
 
 /**
@@ -806,6 +866,9 @@ export class ReleasesService {
               mayPublish && RELEASE_CANCELLABLE_FROM.includes(release.state),
             addMember: editable,
             removeMember: editable,
+            publishNow:
+              mayPublish &&
+              RELEASE_PUBLISHABLE_NOW_FROM.includes(release.state),
           },
         ];
       })
@@ -1324,15 +1387,10 @@ export class ReleasesService {
       await this.authorize(actor, "publish");
       return;
     }
-    // Published or cancelled: never materialised again, so this is work that
-    // cannot happen rather than work someone is not allowed to do.
-    throw NextlyError.conflict({
-      logContext: {
-        reason: "release-not-mutable",
-        releaseId,
-        state: parent.state,
-      },
-    });
+    // Published or cancelled: final, so this is work that cannot happen
+    // rather than work someone is not allowed to do — and the refusal says
+    // what to do instead.
+    throw finishedReleaseRefusal(parent, "change-members");
   }
 
   /** Whether this user holds ANY of these authorities. */
@@ -1429,6 +1487,9 @@ export class ReleasesService {
     // there are any. Scheduling is not a hot path, and the alternative is
     // spending it at the instant instead, when nobody is watching.
     const [current] = await this.deps.repository.findReleases({ ids: [id] });
+    if (current !== undefined && RELEASE_FINAL_STATES.includes(current.state)) {
+      throw finishedReleaseRefusal(current, "schedule");
+    }
     const wasBlocked = current?.state === "blocked";
     await this.assertNothingBlocks(id, current?.state);
 
@@ -1513,6 +1574,73 @@ export class ReleasesService {
         state,
       },
     });
+  }
+
+  /**
+   * Run a release now, with the same checks and the same all-together run as
+   * at a scheduled time.
+   *
+   * It is scheduled for this moment and then run through the engine the
+   * runner uses, limited to this release and the releases sharing its
+   * documents — so Publish now is a scheduled run that does not wait, not a
+   * second way of publishing. Answers the release as it stands afterwards:
+   * `published`, or still `scheduled` when the budget ran out or a document
+   * could not be written yet, which the runner then finishes or stops.
+   *
+   * @experimental
+   */
+  async publishNow(id: string, actor: ReleaseActor): Promise<ReleaseRow> {
+    await this.authorize(actor, "publish");
+    const [current] = await this.deps.repository.findReleases({ ids: [id] });
+    if (current === undefined) {
+      throw NextlyError.notFound({
+        logContext: { reason: "release-not-found", releaseId: id },
+      });
+    }
+    if (RELEASE_FINAL_STATES.includes(current.state)) {
+      throw finishedReleaseRefusal(current, "publish-now");
+    }
+    if (!RELEASE_PUBLISHABLE_NOW_FROM.includes(current.state)) {
+      // Stopped. It is fixed and scheduled again, so the fix is checked before
+      // it goes out, rather than run as it is.
+      throw NextlyError.conflict({
+        message:
+          "This release is stopped. Fix or remove the documents blocking it, then schedule it again.",
+        logContext: {
+          reason: "release-stopped",
+          releaseId: id,
+          state: current.state,
+        },
+      });
+    }
+    // The same refusal scheduling makes, before anything is written, so a
+    // release that would stop part-way sends none of its documents out.
+    await this.assertNothingBlocks(id, current.state);
+
+    const now = new Date();
+    // Fenced on the state the checks above were made against, so a release
+    // cancelled or stopped in between is not run.
+    const moved = await this.deps.repository.scheduleRelease(
+      id,
+      now,
+      // The zone the author chose stays part of the record.
+      current.timezone ?? "UTC",
+      [current.state]
+    );
+    if (!moved) {
+      throw NextlyError.conflict({
+        logContext: {
+          reason: "release-moved-during-publish-now",
+          releaseId: id,
+        },
+      });
+    }
+    await this.deps.runRelease({
+      only: id,
+      deadline: new Date(now.getTime() + PUBLISH_NOW_BUDGET_MS),
+    });
+    const [after] = await this.deps.repository.findReleases({ ids: [id] });
+    return after ?? current;
   }
 
   async cancel(id: string, actor: ReleaseActor): Promise<void> {

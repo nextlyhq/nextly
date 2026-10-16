@@ -99,6 +99,8 @@ function service(rows: Row[]) {
     repository: repository as unknown as ReleasesServiceDeps["repository"],
     canManageReleases: vi.fn(async () => true),
     canActOnDocument: vi.fn(async () => true),
+    // Running a release is not what these cases are about.
+    runRelease: vi.fn(async () => undefined),
   };
   return new ReleasesService(deps);
 }
