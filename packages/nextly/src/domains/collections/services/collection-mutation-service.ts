@@ -70,8 +70,6 @@ import type { TrustBound } from "../../../services/collections/trust-grant";
 import { narrows } from "../../../services/collections/trust-grant";
 import type { FieldGroupDataService } from "../../../services/field-groups/field-group-data-service";
 import type { Logger } from "../../../services/shared";
-import type { AddressableField } from "../../../shared/addressable-fields";
-import { addressableFields } from "../../../shared/addressable-fields";
 import { BaseService } from "../../../shared/base-service";
 import {
   convertTimestampsToCamelCase,
@@ -118,10 +116,7 @@ import type { SupportedDialect } from "../../../types/database";
 import { willRecordMutationActivity } from "../../audit/record-activity";
 import type { DynamicCollectionService } from "../../dynamic-collections";
 import { readComponentSubtrees } from "../../field-groups/read-component-subtrees";
-import {
-  fieldGroupSlugList,
-  extractFieldGroupReferences,
-} from "../../field-groups/storage/field-group-field-type";
+import { fieldGroupSlugList } from "../../field-groups/storage/field-group-field-type";
 import { readFieldGroupType } from "../../field-groups/storage/field-group-type-key";
 import {
   COMPANION_LOCALE_COLUMN,
@@ -157,6 +152,7 @@ import {
 } from "../../i18n/runtime/companion-readiness";
 import { assembleDocument } from "../../versions/assemble-document";
 import { captureInTx } from "../../versions/capture-in-tx";
+import { mergeComponentPatches } from "../../versions/draft-components";
 import { resolveDraftHold } from "../../versions/draft-hold";
 import { storeDraftSave } from "../../versions/draft-save";
 import { isDraftSplitEligible } from "../../versions/draft-split-eligibility";
@@ -2510,7 +2506,7 @@ export class CollectionMutationService extends BaseService {
     // Caller scalars win over the draft; the caller's single-component patches
     // merge onto the draft's components (a patch wins per sub-field); the caller's
     // m2m replaces the draft's.
-    const mergedComponents = this.mergeSingleComponentPatches(
+    const mergedComponents = mergeComponentPatches(
       draftComponents,
       callerComponentData,
       fields as unknown as FieldConfig[],
@@ -2562,67 +2558,6 @@ export class CollectionMutationService extends BaseService {
     rehydrateSystemTimestamps(payload);
     rehydrateSnapshotDates(payload, fields, componentSchemas);
     return payload;
-  }
-
-  /**
-   * Overlay `patch` onto `base`, recursively merging single (non-repeatable)
-   * component objects instead of replacing them.
-   *
-   * A patch-shaped save carries only the sub-fields it changed, so replacing a
-   * component's whole object would drop sub-fields an earlier save set. Recurses
-   * according to the resolved component schemas so a component nested inside a
-   * component is merged at every depth. A dynamic zone (array), a repeatable
-   * component, and a scalar are replaced whole (patch wins).
-   */
-  private mergeSingleComponentPatches(
-    base: Record<string, unknown>,
-    patch: Record<string, unknown>,
-    fields: FieldConfig[],
-    componentSchemas: ComponentSchemas | null
-  ): Record<string, unknown> {
-    // Flatten unnamed presentational groups (matching `tagComponentTypes`): a
-    // single component declared inside such a group stores its value at the
-    // enclosing level, so without flattening the lookup would miss it and treat
-    // it as a scalar, replacing rather than merging a nested component patch.
-    const byName = new Map<string, AddressableField>();
-    for (const f of addressableFields(fields)) {
-      const name = (f as { name?: unknown }).name;
-      if (typeof name === "string") byName.set(name, f);
-    }
-    const out: Record<string, unknown> = { ...base };
-    for (const [key, patchVal] of Object.entries(patch)) {
-      const field = byName.get(key);
-      // Through the shared extractor: a migrated definition names its fixed
-      // slug under `fieldGroup`, and a merge that misses it would REPLACE the
-      // whole object, dropping sibling sub-fields an earlier save set.
-      const refs = field ? extractFieldGroupReferences(field) : {};
-      const slug =
-        field &&
-        refs.single !== undefined &&
-        (field as { repeatable?: unknown }).repeatable !== true
-          ? refs.single
-          : undefined;
-      const baseVal = out[key];
-      if (
-        slug !== undefined &&
-        baseVal !== null &&
-        typeof baseVal === "object" &&
-        !Array.isArray(baseVal) &&
-        patchVal !== null &&
-        typeof patchVal === "object" &&
-        !Array.isArray(patchVal)
-      ) {
-        out[key] = this.mergeSingleComponentPatches(
-          baseVal as Record<string, unknown>,
-          patchVal as Record<string, unknown>,
-          componentSchemas?.get(slug)?.fields ?? [],
-          componentSchemas
-        );
-      } else {
-        out[key] = patchVal;
-      }
-    }
-    return out;
   }
 
   /**
@@ -5795,7 +5730,7 @@ export class CollectionMutationService extends BaseService {
     // nested single components) rather than overwriting them, so
     // disjoint sub-field edits coalesce at any depth. A dynamic zone, a
     // repeatable component, and a scalar are replaced whole.
-    const draftDocument = this.mergeSingleComponentPatches(
+    const draftDocument = mergeComponentPatches(
       draftBase,
       patchFields,
       fields as unknown as FieldConfig[],

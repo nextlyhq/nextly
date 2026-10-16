@@ -1717,8 +1717,12 @@ export class UserMutationService extends BaseService {
       // PASSWORD: hash plain-text password before storing
       if (Object.prototype.hasOwnProperty.call(changes, "password")) {
         const rawPassword =
-          typeof changes.password === "string" ? changes.password.trim() : "";
-        if (rawPassword.length > 0) {
+          typeof changes.password === "string" ? changes.password : "";
+        // Only whitespace sets nothing, as an empty value does. Anything else
+        // is hashed exactly as given, as account creation and sign-in use it:
+        // a space at either end can be the password's symbol, and hashing the
+        // trimmed form would store a password nobody typed.
+        if (rawPassword.trim().length > 0) {
           Object.assign(
             updateData,
             passwordColumns(await hashPassword(rawPassword))

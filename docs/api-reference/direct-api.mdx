@@ -700,7 +700,7 @@ The full TypeScript surface is generated from [`packages/nextly/src/direct-api/n
 | `less_than` | `<` | `{ price: { less_than: 50 } }` |
 | `less_than_equal` | `<=` | `{ price: { less_than_equal: 50 } }` |
 | `like` | SQL `LIKE` (case-sensitive) | `{ title: { like: "%hello%" } }` |
-| `contains` | Case-insensitive substring (`ILIKE`) | `{ title: { contains: "hello" } }` |
+| `contains` | Substring, ignoring case on every database; `%` and `_` are matched as typed | `{ title: { contains: "hello" } }` |
 | `search` | Alias for `contains` | `{ title: { search: "hello" } }` |
 | `in` | Value in array | `{ status: { in: ["draft", "published"] } }` |
 | `not_in` | Value not in array | `{ status: { not_in: ["archived"] } }` |

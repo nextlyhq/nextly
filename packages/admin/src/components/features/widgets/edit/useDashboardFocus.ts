@@ -44,7 +44,11 @@ export type FocusTarget =
   /** The region that holds the cards. */
   | { kind: "grid" }
   /** The dashboard's one level-one heading. */
-  | { kind: "heading" };
+  | { kind: "heading" }
+  /** The customise bar, as customise mode opens. */
+  | { kind: "bar" }
+  /** The Customize button, as customise mode closes. */
+  | { kind: "customize" };
 
 /** A ref callback that files an element under one key. */
 type Register = (element: HTMLElement | null) => void;
@@ -56,6 +60,10 @@ export interface DashboardFocus {
   dismissRef: (placementId: string) => Register;
   /** Registers the notice's Undo button. */
   undoRef: Register;
+  /** Registers the customise bar. */
+  barRef: Register;
+  /** Registers the Customize button. */
+  customizeRef: Register;
   /** The add picker. */
   addRef: RefObject<HTMLElement | null>;
   /** The region holding the cards. */
@@ -130,6 +138,8 @@ export function useDashboardFocus(): DashboardFocus {
       menuRef: (placementId: string) => register(`menu:${placementId}`),
       dismissRef: (placementId: string) => register(`dismiss:${placementId}`),
       undoRef: register("undo"),
+      barRef: register("bar"),
+      customizeRef: register("customize"),
       addRef,
       gridRef,
       request,

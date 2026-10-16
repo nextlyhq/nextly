@@ -32,6 +32,7 @@ import {
   respondMutation,
 } from "../../api/response-shapes";
 import { assertLocalizationConfigured } from "../../domains/i18n/config/require-app-config";
+import { archiveFieldsLeavingTranslation } from "../../domains/i18n/migration/archive-preflight";
 import { buildCompanionTransitionStatements } from "../../domains/i18n/migration/reconcile-companion";
 import {
   companionHasStatusColumn,
@@ -862,6 +863,21 @@ const COLLECTIONS_METHODS: Record<
           }
           return out;
         },
+      });
+
+      // A field leaving translation has preconditions of its own, asked before the push alters
+      // anything.
+      await archiveFieldsLeavingTranslation({
+        // This builder made the table, which decides the column bounds compared.
+        builtBy: "collection",
+        tableName,
+        defaultLocale: getConfigFromDI()?.localization?.defaultLocale ?? "en",
+        adapter,
+        entity: String(p.collectionName),
+        oldFields: (collection.fields ?? []) as unknown as FieldDefinition[],
+        newFields: fields as unknown as FieldDefinition[],
+        wasLocalized,
+        isLocalized,
       });
 
       const result = await apply(desired, "ui", {

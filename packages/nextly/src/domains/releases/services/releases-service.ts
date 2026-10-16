@@ -57,15 +57,18 @@ import {
   RELEASE_SCHEDULABLE_FROM,
   RELEASE_SCHEDULABLE_FROM_BLOCKED,
   RELEASE_SCHEDULABLE_FROM_UNBLOCKED,
+  RELEASE_KINDS,
   RELEASE_STATES,
   RELEASE_STATES_SHOWN_ON_A_DOCUMENT,
   isReleaseMemberAction,
   type ReleaseBlockerReason,
+  type ReleaseKind,
   type ReleaseMemberAction,
   type ReleaseState,
 } from "../../../schemas/releases/types";
 import type { VersionScopeKind } from "../../../schemas/versions/types";
 import { isUniqueViolation } from "../../../shared/lib/unique-violation";
+import { releaseMemberKey } from "../release-member-key";
 import {
   RELEASE_ATTENTION_REASONS,
   RELEASE_TABS,
@@ -293,12 +296,21 @@ function matchesListQuery(
   query: FindReleasesFilters
 ): boolean {
   if (query.state !== undefined && row.state !== query.state) return false;
-  const at = row.scheduledAt?.getTime();
-  if (query.scheduledAfter !== undefined) {
-    if (at === undefined || at < query.scheduledAfter.getTime()) return false;
+  if (query.kind !== undefined && row.kind !== query.kind) return false;
+  return isWithinWindow(row.scheduledAt, query);
+}
+
+/** Whether a scheduled instant falls inside a listing's window, if it has one. */
+function isWithinWindow(
+  scheduledAt: Date | null,
+  window: Pick<FindReleasesFilters, "scheduledAfter" | "scheduledBefore">
+): boolean {
+  const at = scheduledAt?.getTime();
+  if (window.scheduledAfter !== undefined) {
+    if (at === undefined || at < window.scheduledAfter.getTime()) return false;
   }
-  if (query.scheduledBefore !== undefined) {
-    if (at === undefined || at > query.scheduledBefore.getTime()) return false;
+  if (window.scheduledBefore !== undefined) {
+    if (at === undefined || at > window.scheduledBefore.getTime()) return false;
   }
   return true;
 }
@@ -342,6 +354,14 @@ interface FindReleasesFilters {
    * no diagnostic, which reads exactly like "nothing is scheduled".
    */
   state?: ReleaseState;
+  /**
+   * Restrict to one kind of release: `release` leaves out single-document
+   * releases, `single` lists only them. Filtered on the stored kind, never on
+   * how many documents a release holds.
+   *
+   * @experimental
+   */
+  kind?: ReleaseKind;
   /**
    * Window on the scheduled instant, both bounds optional and independent.
    *
@@ -394,6 +414,7 @@ export interface ReleaseCountQuery {
   /** With `tab: "attention"`: only its stopped, or only its overdue, releases. */
   reason?: ReleaseAttentionReason;
   state?: ReleaseState;
+  kind?: ReleaseKind;
   scheduledAfter?: Date;
   scheduledBefore?: Date;
   search?: string;
@@ -544,6 +565,19 @@ function searchText(search: unknown): string | undefined {
  * reachable from JavaScript and a cast: on SQLite `LIMIT -1` means no limit,
  * so an unchecked negative turns a bounded read into a full table scan.
  */
+/**
+ * A single-document release refusing a second document, saying what to do
+ * instead: a single release is one document scheduled on its own, and several
+ * documents going out together are an ordinary release.
+ */
+function singleReleaseHoldsOne(releaseId: string): NextlyError {
+  return NextlyError.conflict({
+    message:
+      'A single-document release holds one document. To release several documents together, put them in an ordinary release (kind "release").',
+    logContext: { reason: "single-release-holds-one", releaseId },
+  });
+}
+
 function assertWholeNumber(name: string, value: number, min: number): void {
   // A SAFE integer, not merely an integer: `1e308` is an integer to
   // `Number.isInteger`, and the offset worked out from it is `Infinity`, which
@@ -749,6 +783,10 @@ export class ReleasesService {
         logContext: { reason: "title-too-long", length: input.title.length },
       });
     }
+    // Checked here as well as typed: the Direct API is reachable from
+    // JavaScript, and an unknown kind stored would be a release no filter and
+    // no rule recognises.
+    assertKnown("kind", input.kind, RELEASE_KINDS);
     // `createdBy` comes from the ACTOR, never from the input. Materialisation
     // performs each member as its recorded author, so an author a caller could
     // name would be an identity they could borrow at a future instant.
@@ -983,6 +1021,7 @@ export class ReleasesService {
       // failing or silently not filtering in the in-memory pass below.
       this.listFilters({
         state: asked.state,
+        kind: asked.kind,
         scheduledAfter: asked.scheduledAfter,
         scheduledBefore: asked.scheduledBefore,
       });
@@ -991,6 +1030,7 @@ export class ReleasesService {
       const all = await this.findContaining(
         {
           state: asked.state,
+          kind: asked.kind,
           scheduledAfter: asked.scheduledAfter,
           scheduledBefore: asked.scheduledBefore,
           containing: asked.containing,
@@ -1041,6 +1081,7 @@ export class ReleasesService {
   ): Omit<ReleasePageQuery, "offset" | "limit"> {
     assertKnown("tab", query.tab, RELEASE_TABS);
     assertKnown("state", query.state, RELEASE_STATES);
+    assertKnown("kind", query.kind, RELEASE_KINDS);
     assertKnown("order", query.order, RELEASE_LIST_ORDERS);
     assertKnown("reason", query.reason, RELEASE_ATTENTION_REASONS);
     assertInstant("scheduledAfter", query.scheduledAfter);
@@ -1050,6 +1091,7 @@ export class ReleasesService {
       tab: query.tab,
       reason: query.reason,
       state: query.state,
+      kind: query.kind,
       scheduledAfter: query.scheduledAfter,
       scheduledBefore: query.scheduledBefore,
       search: searchText(query.search),
@@ -1200,6 +1242,27 @@ export class ReleasesService {
     // the release's `updatedAt`, so a refusal ordered after it would still have
     // changed the row — and "refused before the write" would be false for the
     // one path that says it loudest.
+    // Keyed by the RESOLVED id: for a Single that is the row's own, whatever
+    // the caller sent, so the same Single again is the duplicate it is.
+    const memberKey = releaseMemberKey(releaseId, { ...input, entryId });
+    const [release] = await this.deps.repository.findReleases({
+      ids: [releaseId],
+    });
+    // A committed release is a publisher's to change. Asked before anything
+    // about its contents is answered, so a caller without that authority
+    // learns nothing of what the release holds.
+    if (
+      release !== undefined &&
+      RELEASE_ASSEMBLABLE_WITH_PUBLISH_FROM.includes(release.state)
+    ) {
+      await this.authorize(actor, "publish");
+    }
+    // The early answer for the common case. The guarantee is the database's:
+    // two adds racing past this both reach the insert, and the single-slot
+    // index refuses the second (translated below).
+    if (await this.singleReleaseHoldsAnother(release, memberKey)) {
+      throw singleReleaseHoldsOne(releaseId);
+    }
     await this.assertRoomForOneMore(releaseId);
 
     // Claimed ATOMICALLY, and the author checked, before the member is written.
@@ -1245,6 +1308,13 @@ export class ReleasesService {
       // stable error contract rather than the adapter's DatabaseError — and
       // narrowly, so an unexpected database failure still propagates.
       if (isUniqueViolation(error)) {
+        // Two unique indexes can refuse this insert: the single-slot one, when
+        // a single release already holds another document, and the member key,
+        // when this document is already in the release. Told apart by what the
+        // release holds now, not by the error, whose wording is the driver's.
+        if (await this.singleReleaseHoldsAnother(release, memberKey)) {
+          throw singleReleaseHoldsOne(releaseId);
+        }
         throw NextlyError.duplicate({
           logContext: {
             reason: "member-already-in-release",
@@ -1296,6 +1366,7 @@ export class ReleasesService {
       });
     }
 
+    await this.assertNotEmptyingCommittedSingle(member.releaseId, actor);
     await this.claimAssemblable(member.releaseId, actor);
     await this.deps.repository.removeMember(memberId);
 
@@ -1411,6 +1482,49 @@ export class ReleasesService {
    * member is removed by another route, and a cap enforced from a stale number
    * refuses a release that has room.
    */
+  /**
+   * Whether this is a single-document release already holding a document
+   * other than the one named by `memberKey`. The same document again is not
+   * this refusal but the duplicate one.
+   */
+  private async singleReleaseHoldsAnother(
+    release: ReleaseRow | undefined,
+    memberKey: string
+  ): Promise<boolean> {
+    if (release?.kind !== "single") return false;
+    const held = await this.deps.repository.listMembers(release.id);
+    return held.some(member => member.memberKey !== memberKey);
+  }
+
+  /**
+   * Refuse taking the only document out of a committed single-document
+   * release: it would run with nothing and read as published. Cancelling is
+   * the way to call it off.
+   */
+  private async assertNotEmptyingCommittedSingle(
+    releaseId: string,
+    actor: ReleaseActor
+  ): Promise<void> {
+    const [release] = await this.deps.repository.findReleases({
+      ids: [releaseId],
+    });
+    if (
+      release === undefined ||
+      !RELEASE_ASSEMBLABLE_WITH_PUBLISH_FROM.includes(release.state)
+    ) {
+      return;
+    }
+    // A committed release is a publisher's to change, and that is asked
+    // first, so a caller without the authority learns nothing of its kind.
+    await this.authorize(actor, "publish");
+    if (release.kind !== "single") return;
+    throw NextlyError.conflict({
+      message:
+        "This single-document release is scheduled with this one document. Cancel the release instead of removing it.",
+      logContext: { reason: "single-release-would-empty", releaseId },
+    });
+  }
+
   private async assertRoomForOneMore(releaseId: string): Promise<void> {
     const held = await this.deps.repository.listMembers(releaseId);
     if (held.length < MAX_RELEASE_MEMBERS) return;
@@ -1464,6 +1578,18 @@ export class ReleasesService {
     const [current] = await this.deps.repository.findReleases({ ids: [id] });
     const wasBlocked = current?.state === "blocked";
     await this.assertNothingBlocks(id, current?.state);
+    // A single-document release is one document scheduled on its own: with
+    // none it would run and publish nothing, and read as done.
+    if (
+      current?.kind === "single" &&
+      (await this.deps.repository.listMembers(id)).length === 0
+    ) {
+      throw NextlyError.conflict({
+        message:
+          "A single-document release needs its document before it can be scheduled. Add it, then schedule.",
+        logContext: { reason: "single-release-empty", releaseId: id },
+      });
+    }
 
     // FENCED ON THE STATE THE VERDICT ABOVE WAS FORMED AGAINST, which is what
     // makes the check and the write one decision rather than two.

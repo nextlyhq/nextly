@@ -82,4 +82,18 @@ describe("a virtual field on a Single", () => {
     expect(main).not.toHaveProperty("display_title");
     expect(main).not.toHaveProperty("displayTitle");
   });
+
+  it("keeps a row field named like an Object.prototype member on the row", () => {
+    // `constructor` is a legal field name; the component split must not mistake
+    // it for a component the draft holds.
+    const { main, components } = splitPendingChange(
+      { siteName: "Draft", constructor: "Held" },
+      TABLE,
+      [textField("siteName"), textField("constructor")],
+      null
+    );
+
+    expect(main.constructor).toBe("Held");
+    expect(Object.keys(components)).toEqual([]);
+  });
 });

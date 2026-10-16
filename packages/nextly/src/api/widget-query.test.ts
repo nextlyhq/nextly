@@ -83,9 +83,9 @@ const testLogger = {
 /** Reads the slots out of a batch response. */
 async function slotsOf(
   res: Response
-): Promise<Array<{ ok: boolean; error?: string }>> {
+): Promise<Array<{ ok: boolean; error?: string; code?: string }>> {
   const body = (await res.json()) as {
-    results: Array<{ ok: boolean; error?: string }>;
+    results: Array<{ ok: boolean; error?: string; code?: string }>;
   };
   return body.results;
 }
@@ -311,6 +311,55 @@ describe("POST /api/dashboard/query", () => {
       expect(a.error).toBe(b.error);
       // Nothing ran: the refusal is taken before the query is compiled.
       expect(executeWidgetQuery).not.toHaveBeenCalled();
+    });
+
+    it("marks a forbidden source and an unknown one with the same typed code", async () => {
+      // The card tells "not available" from "couldn't load" by a code rather than by matching
+      // the sentence. Compared as WHOLE slots, so a code given to one and not the other -- or
+      // any other field that differs -- fails here rather than reopening the oracle.
+      const forbidden = await postWidgetQuery(
+        makeReq({ queries: [{ source: "collection:salaries", op: "count" }] })
+      );
+      const unknown = await postWidgetQuery(
+        makeReq({ queries: [{ source: "collection:nope", op: "count" }] })
+      );
+
+      const a = (await slotsOf(forbidden))[0];
+      const b = (await slotsOf(unknown))[0];
+      expect(a).toEqual({ ok: false, error: a.error, code: "unavailable" });
+      expect(b).toEqual(a);
+    });
+
+    it("takes a read decision for an unknown source as it does for a forbidden one", async () => {
+      // The answers were already alike; the WORK was not. A forbidden source cost a permission
+      // decision before its refusal and an invented one cost nothing, so timing told them
+      // apart. Asserted as "both paths ask", not as elapsed time, which would be flaky.
+      await postWidgetQuery(
+        makeReq({
+          queries: [
+            { source: "collection:salaries", op: "count" },
+            { source: "collection:nope", op: "count" },
+            { source: "single:also-nope", op: "list" },
+          ],
+        })
+      );
+
+      const asked = canReadEntity.mock.calls.map(call => call[0]);
+      expect(asked).toEqual(
+        expect.arrayContaining(["salaries", "nope", "also-nope"])
+      );
+    });
+
+    it("gives the field-level detail no code: it is an error in the widget, not an absence", async () => {
+      // The control for the code. A caller who MAY read the source gets the specific message,
+      // and the card shows it as an error with Retry rather than as "not available".
+      canReadEntity.mockResolvedValue(true);
+
+      const res = await postWidgetQuery(makeReq(probe("collection:salaries")));
+      const slot = (await slotsOf(res))[0];
+
+      expect(slot.ok).toBe(false);
+      expect(slot.code).toBeUndefined();
     });
 
     it("takes ONE read decision per entity for the whole batch", async () => {
@@ -874,6 +923,9 @@ describe("POST /api/dashboard/query", () => {
       expect(a.ok).toBe(false);
       expect(b.ok).toBe(false);
       expect(a.error).toBe(b.error);
+      // The whole slot, code included: a code on the unknown id alone would confirm that
+      // `system:listing-only` exists just as a different sentence would.
+      expect(b).toEqual(a);
       expect(a.error).not.toContain("salaries");
       expect(b.error).not.toContain("listing-only");
     });

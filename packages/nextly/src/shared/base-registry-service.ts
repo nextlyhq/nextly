@@ -308,13 +308,14 @@ export abstract class BaseRegistryService<
 
       // Add search filter (searches columns returned by getSearchColumns())
       if (options?.search) {
-        const searchPattern = `%${options.search}%`;
+        // The text as typed: `ICONTAINS` matches it literally, without regard to case,
+        // so a typed `%` or `_` is a character to find rather than a wildcard.
         const searchColumns = this.getSearchColumns();
         conditions.push({
           or: searchColumns.map(column => ({
             column,
-            op: "ILIKE" as const,
-            value: searchPattern,
+            op: "ICONTAINS" as const,
+            value: options.search,
           })),
         });
       }
