@@ -160,20 +160,15 @@ export async function generateEnv(
 }
 
 /**
- * The values that are secrets: the generated one, and a typed database URL
- * carrying any password. Whether a password looks like a placeholder is a
- * question for an example file; one typed for the app's own database is a
- * credential whatever it says.
+ * The values that are secrets: the generated one, and the typed database URL
+ * for any database but SQLite. A driver can read credentials from more places
+ * than the URL's password (pg takes `?password=`), so no URL is judged
+ * safe by looking at it; SQLite's is a file path, with no credential in it.
  */
 function secretKeys(values: Values): RequiredKey[] {
-  return hasPassword(values.DATABASE_URL)
-    ? ["NEXTLY_SECRET", "DATABASE_URL"]
-    : ["NEXTLY_SECRET"];
-}
-
-/** A URL new URL cannot parse may still carry a password in plain sight. */
-function hasPassword(url: string): boolean {
-  return !URL.canParse(url) || new URL(url).password !== "";
+  return values.DB_DIALECT === "sqlite"
+    ? ["NEXTLY_SECRET"]
+    : ["NEXTLY_SECRET", "DATABASE_URL"];
 }
 
 /** Why `.env` could reach git, when it could. */

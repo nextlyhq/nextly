@@ -898,6 +898,34 @@ describe("keeping .env out of git", () => {
     }
   });
 
+  // A driver can read credentials from more places than the URL's password
+  // (pg takes ?password=), so any typed URL but SQLite's is withheld.
+  it("writes no typed URL holding a password in its query to a .env git tracks", async () => {
+    execFileSync("git", ["init", "-q"], { cwd: dir });
+    await writeFile(join(dir, ".env"), "DB_DIALECT=postgresql\n");
+    execFileSync("git", ["add", "-f", ".env"], { cwd: dir });
+
+    await generateEnv(dir, {
+      ...postgresWithRealUrl,
+      connectionUrl: "postgresql://db.example/app?user=alice&password=S3cr3t",
+    });
+
+    expect(await read(".env")).not.toContain("S3cr3t");
+  });
+
+  // SQLite's URL is a file path, with no credential in it.
+  it("still writes a SQLite URL to a .env git tracks", async () => {
+    execFileSync("git", ["init", "-q"], { cwd: dir });
+    await writeFile(join(dir, ".env"), "DB_DIALECT=sqlite\n");
+    execFileSync("git", ["add", "-f", ".env"], { cwd: dir });
+
+    await generateEnv(dir, sqlite);
+
+    expect(readEnvKeys(await read(".env")).defined.get("DATABASE_URL")).toBe(
+      sqlite.connectionUrl
+    );
+  });
+
   it("writes a tracked .env deleted from the working tree without a secret too", async () => {
     execFileSync("git", ["init", "-q"], { cwd: dir });
     await writeFile(join(dir, ".env"), "DB_DIALECT=sqlite\n");
