@@ -144,6 +144,47 @@ function restoreTargetType(
   return ddlType(column, dialect);
 }
 
+/**
+ * Copies every non-default language's value of one companion column into the localization
+ * archive, where `nextly i18n:restore` reads it back. One row per (entry, language), the value
+ * cast to text, recorded under the entity's slug and the column's name.
+ */
+function buildArchiveNonDefaultStatement(
+  ref: Pick<CompanionCopyRef, "dialect" | "companionTable" | "defaultLocale">,
+  collection: string,
+  columnName: string
+): string {
+  const { dialect, companionTable, defaultLocale } = ref;
+  return (
+    `INSERT INTO ${q(ARCHIVE, dialect)} ` +
+    `(${q("collection", dialect)}, ${q("entry_id", dialect)}, ${q("locale", dialect)}, ${q("field", dialect)}, ${q("value", dialect)}) ` +
+    `SELECT ${lit(collection)}, ${q("_parent", dialect)}, ${q("_locale", dialect)}, ${lit(columnName)}, ${castText(q(columnName, dialect), dialect)} ` +
+    `FROM ${q(companionTable, dialect)} WHERE ${q("_locale", dialect)} <> ${lit(defaultLocale)}`
+  );
+}
+
+/**
+ * What a field that stops being translated needs before its companion column is dropped: every
+ * non-default language's value archived, then the default language's value copied onto the main
+ * table's column of the same name, which the caller has already added.
+ *
+ * Archive first, because it is the step that keeps what the drop would lose: if it fails, the
+ * column has not been touched yet. Both statements are safe to re-run before the drop, so a run
+ * stopped part-way loses nothing. The copy picks its row by the same rule as disabling translation
+ * for the whole entity (`buildDefaultLocaleRestoreStatements`), so the two cannot disagree on what
+ * the shared value becomes.
+ */
+export function buildFieldLeavesTranslationStatements(
+  ref: CompanionCopyRef,
+  collection: string,
+  columnName: string
+): string[] {
+  return [
+    buildArchiveNonDefaultStatement(ref, collection, columnName),
+    ...buildDefaultLocaleRestoreStatements(ref, [columnName]),
+  ];
+}
+
 export function buildLocalizationDownStatements(
   spec: CompanionMigrationSpec,
   options: LocalizationDownOptions = {}
@@ -194,12 +235,12 @@ export function buildLocalizationDownStatements(
 
   // 3. archive non-default translations
   for (const c of columns) {
-    const comp = q(companionTable, dialect);
     stmts.push(
-      `INSERT INTO ${q(ARCHIVE, dialect)} ` +
-        `(${q("collection", dialect)}, ${q("entry_id", dialect)}, ${q("locale", dialect)}, ${q("field", dialect)}, ${q("value", dialect)}) ` +
-        `SELECT ${lit(collection)}, ${q("_parent", dialect)}, ${q("_locale", dialect)}, ${lit(c.name)}, ${castText(q(c.name, dialect), dialect)} ` +
-        `FROM ${comp} WHERE ${q("_locale", dialect)} <> ${lit(defaultLocale)}`
+      buildArchiveNonDefaultStatement(
+        { dialect, companionTable, defaultLocale },
+        collection,
+        c.name
+      )
     );
   }
 

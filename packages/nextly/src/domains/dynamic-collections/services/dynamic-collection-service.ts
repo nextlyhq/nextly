@@ -24,7 +24,10 @@ import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
 import { assertLocalizationConfigured } from "../../i18n/config/require-app-config";
 import { deriveCompanionSpec } from "../../i18n/migration/derive-companion-spec";
 import { buildCompanionCreateOnlySql } from "../../i18n/migration/generate-up";
-import { buildCompanionTransitionPlans } from "../../i18n/migration/reconcile-companion";
+import {
+  buildCompanionTransitionPlans,
+  fieldsLeavingTranslation,
+} from "../../i18n/migration/reconcile-companion";
 import {
   companionHasStatusColumn,
   localizedColumnsOnMain,
@@ -1111,11 +1114,19 @@ export class DynamicCollectionService extends BaseService {
             collectionIsLocalized
           ),
         ]);
+        // A field that stops being translated while the collection stays translated is the
+        // exception: main gains its column here, so the companion transition below has a
+        // shared column to copy the default language's value into before it drops its own.
+        const leavingTranslation = new Set(
+          collectionWasLocalized && collectionIsLocalized
+            ? fieldsLeavingTranslation(oldUserFields, userDefinedFields)
+            : []
+        );
         const oldShared = oldUserFields.filter(
           f => !excludedLocalized.has(f.name)
         );
         const newShared = userDefinedFields.filter(
-          f => !excludedLocalized.has(f.name)
+          f => !excludedLocalized.has(f.name) || leavingTranslation.has(f.name)
         );
 
         // Detected from the FULL lists: a renamed LOCALIZED field-group field
@@ -1168,10 +1179,12 @@ export class DynamicCollectionService extends BaseService {
           : "";
         // A disable re-adds the translatable columns to main (companionSQL), so run the companion
         // transition FIRST (after ensuring the archive table), then the shared ALTER. An enable /
-        // field change runs the shared ALTER first, then seeds + drops / ADD-DROPs the companion.
+        // field change runs the shared ALTER first, then seeds + drops / ADD-DROPs the companion;
+        // a field change that archives (a field leaving translation) ensures the archive table
+        // between the two.
         const assemble = (companion: string) =>
           (collectionIsLocalized
-            ? [mainSQL, companion]
+            ? [mainSQL, archiveSQL, companion]
             : [archiveSQL, companion, mainSQL]
           )
             .filter(sql => sql && sql.trim())
