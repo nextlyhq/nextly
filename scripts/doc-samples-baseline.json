@@ -1,7 +1,7 @@
 {
   "coverage": {
     "pages": 78,
-    "samples": 447,
+    "samples": 449,
     "compiled": 280
   },
   "samplesPerPage": {
@@ -146,7 +146,7 @@
       "compiled": 2
     },
     "docs/plugins/admin-ui.mdx": {
-      "samples": 12,
+      "samples": 14,
       "compiled": 7
     },
     "docs/plugins/api-reference.mdx": {
@@ -355,10 +355,10 @@
       "reader-name #6 error TS2304: Cannot find name 'Page'.": 1
     },
     "docs/plugins/admin-ui.mdx": {
-      "#9 error TS2304: Cannot find name 'Skeleton'.": 1,
-      "uninstalled #11 error TS2307: Cannot find module '@acme/nextly-plugin-reports' or its corresponding type declarations.": 1,
+      "#11 error TS2304: Cannot find name 'Skeleton'.": 1,
+      "uninstalled #13 error TS2307: Cannot find module '@acme/nextly-plugin-reports' or its corresponding type declarations.": 1,
       "reader-file #0 error TS2307: Cannot find module './ReportsView' or its corresponding type declarations.": 1,
-      "reader-name #9 error TS2304: Cannot find name 'Chart'.": 1
+      "reader-name #11 error TS2304: Cannot find name 'Chart'.": 1
     },
     "docs/plugins/auth.mdx": {
       "#2 error TS2304: Cannot find name 'isTotpEnabled'.": 1,
