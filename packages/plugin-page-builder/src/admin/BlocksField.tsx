@@ -15,27 +15,15 @@
  * It stays a pure read-only account of the document; both it and the card ask
  * `page-summary` what the document holds, so they cannot disagree.
  *
- * ## Why the editor opens OVER the form rather than inside it
+ * ## Why the editor is a screen of its own
  *
  * A block canvas needs the window. Rendered inline it would compete with the
  * form's own measure, and every published page it previews is wider than the
  * column a field occupies — so an inline canvas previews a layout at a width
- * the site never uses. Opening it over the form gives the canvas the viewport
- * and leaves the form exactly as it was underneath, still holding its other
- * fields' unsaved state.
- *
- * ## Why "Done" and not a close glyph
- *
- * The editor covers the form completely, so the way back is the only way back.
- * The shell owns that affordance and its wording — it renders an exit only when
- * given a handler, labels it rather than drawing a bare glyph, and confirms
- * first when the document is dirty. This component supplies the handler and
- * does not restate any of that.
- *
- * That handler is also the EVIDENCE for `canExit`. The admin only hides its
- * navigation rail for a surface that can be left, and it is told so by this
- * component — derived from the handler that does the leaving, never asserted
- * beside it, so the claim and the affordance cannot drift apart.
+ * the site never uses. The editor is the document's own view at its own
+ * address instead, which this card links to: the admin keeps the document's
+ * form, lock, recovery and leave guard around it, and nothing the editor draws
+ * sits inside this form, so nothing it draws can submit it.
  *
  * @module @nextlyhq/plugin-page-builder/admin/BlocksField
  */
@@ -151,8 +139,8 @@ export function BlocksField<TFieldValues extends FieldValues = FieldValues>({
    */
   const address = builderAddress(useDocumentIdentity(), name);
 
-  // What an empty document has to be for THIS field. Asked once and passed
-  // down, so the resting card and the open editor cannot seed different kinds.
+  // What an empty document has to be for THIS field, asked of its declaration
+  // as the editor's view asks it, so the card and the editor read one answer.
   const kinds = acceptedKinds(declaration);
 
   const editable = canEditBlocks({ readOnly, disabled });
@@ -192,8 +180,8 @@ export function BlocksField<TFieldValues extends FieldValues = FieldValues>({
       components={resting.components}
       render={resting.render}
       // The gate is passed through rather than restated: `canEditBlocks`
-      // already answers it for the editor above, and two readings of "may this
-      // author edit" is one more than the question has.
+      // answers it, and two readings of "may this author edit" is one more
+      // than the question has.
       canEdit={editable}
       href={"href" in address ? address.href : undefined}
       onNavigate={navigateTo}
