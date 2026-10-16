@@ -23,11 +23,13 @@
  *   past every collection and Single rule; no key with super-admin authority;
  *   a plugin's person judged by the rule alone; and a visitor judged by a
  *   Public role that does not exist yet and so holds nothing. A door listed in
- *   {@link NOT_YET_ONE_ANSWER} is not yet expected to give it. Its rows that
- *   agree today are asserted as usual. Its rows that disagree run as expected
- *   failures named `NOT YET ONE ANSWER`, so each disagreement is watched
- *   failing, and a door that starts agreeing fails the run until it is
- *   switched on here. Nothing is skipped.
+ *   {@link NOT_YET_ONE_ANSWER} is not yet expected to give it everywhere: the
+ *   cells where it disagrees are listed BY HAND in `known-disagreements.txt`,
+ *   and run as expected failures named `NOT YET ONE ANSWER`, so each is
+ *   watched failing. Every other cell must give the one answer. The list is
+ *   kept apart from the answers on purpose: accepting a new answer with `-u`
+ *   never makes a new disagreement acceptable, and a cell that starts agreeing
+ *   fails the run until it is taken off the list. Nothing is skipped.
  *
  * **Which rows.** The callers, rules, actions and targets are crossed in full,
  * and each row is sent to every door that can ask it (`table.ts`, `asks`). A
@@ -71,13 +73,13 @@ import { ask } from "./doors";
 import {
   doorsAsking,
   oneAnswer,
-  parseAnswers,
   renderAnswers,
   rowKey,
   rows,
   verdictOf,
   type Answer,
   type Door,
+  type Row,
 } from "./table";
 import { boot, type World } from "./world";
 
@@ -102,16 +104,22 @@ const NOT_YET_ONE_ANSWER: ReadonlySet<Door> = new Set<Door>([
 ]);
 
 const ANSWERS_FILE = join(__dirname, "answers-today.txt");
+const DISAGREEMENTS_FILE = join(__dirname, "known-disagreements.txt");
 
-/** Today's answers as the file records them, read when the tests are listed. */
-function recordedAnswers(): Map<string, Map<Door, Answer>> {
-  try {
-    return parseAnswers(readFileSync(ANSWERS_FILE, "utf8"));
-  } catch {
-    // No file yet: every conformance row is asserted, and the first run
-    // writes the file for review.
-    return new Map();
-  }
+/** One cell of the table: a row at a door, as the disagreements file names it. */
+const cellKey = (row: Row, door: Door) => `${rowKey(row)} at ${door}`;
+
+/**
+ * The cells allowed to disagree with the one answer for now, as listed by hand.
+ * Blank lines and lines starting with `#` are ignored.
+ */
+function knownDisagreements(): Set<string> {
+  return new Set(
+    readFileSync(DISAGREEMENTS_FILE, "utf8")
+      .split("\n")
+      .map(line => line.trim())
+      .filter(line => line !== "" && !line.startsWith("#"))
+  );
 }
 
 /** The whole suite for one dialect, skipped when that dialect is not set up. */
@@ -119,7 +127,7 @@ export function describeEveryWayIn(dialect: TestDialect): void {
   const configured = getConfiguredTestDialects().includes(dialect);
   const title = `every way in, one table of access cases (${dialect})`;
   (configured ? describe : describe.skip)(title, () => {
-    const today = recordedAnswers();
+    const known = knownDisagreements();
     let world: World | undefined;
     const answers = new Map<string, Map<Door, Answer>>();
 
@@ -148,13 +156,27 @@ export function describeEveryWayIn(dialect: TestDialect): void {
     });
 
     describe("one answer", () => {
+      it("lists only disagreements of cells this table asks, at doors not yet moved", () => {
+        const asked = new Set(
+          rows().flatMap(row =>
+            doorsAsking(row).map(door => cellKey(row, door))
+          )
+        );
+        const stale = [...known].filter(
+          cell =>
+            !asked.has(cell) ||
+            !NOT_YET_ONE_ANSWER.has(
+              cell.slice(cell.lastIndexOf(" ") + 1) as Door
+            )
+        );
+        expect(stale).toEqual([]);
+      });
+
       for (const row of rows()) {
         const expected = oneAnswer(row);
         for (const door of doorsAsking(row)) {
-          const name = `${rowKey(row)} at ${door} is ${expected}`;
-          const recorded = today.get(rowKey(row))?.get(door);
-          const disagrees =
-            recorded !== undefined && verdictOf(recorded) !== expected;
+          const name = `${cellKey(row, door)} is ${expected}`;
+          const disagrees = known.has(cellKey(row, door));
           const check = () => {
             const answer = answers.get(rowKey(row))?.get(door);
             expect(answer, "the door was asked").toBeDefined();

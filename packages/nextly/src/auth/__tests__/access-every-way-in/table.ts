@@ -6,9 +6,9 @@
  * generated from the lists, so adding a caller, a rule or a way in is one entry
  * rather than a new block of tests.
  *
- * Two readers share it: `access-every-way-in.integration.test.ts` pins what
- * each way in answers today, and checks each way in against the one answer
- * `oneAnswer` below works out from the composition the access design states.
+ * The suite in `suite.ts` reads it twice: it pins what each way in answers
+ * today, and checks each way in against the one answer `oneAnswer` below
+ * works out for every row.
  */
 
 /**
@@ -17,9 +17,13 @@
  * `user-with` holds every permission the targets need through a role named
  * `editor`, and `custom-role` holds the same permissions through a role named
  * `reviewer`, so a rule that checks a role's NAME answers them differently
- * while the role screen says the same thing for both. The read-only and
- * full-access keys are made by `user-with`; the role-based key carries
- * `reviewer`; `key-super-admin` is a full-access key made by the super-admin.
+ * while the role screen says the same thing for both. `user-partial` holds
+ * read, update and publish only, through a role named `partial`, so a door
+ * that asks for the wrong action's permission answers it differently from the
+ * others. The read-only and full-access keys are made by `user-with`; the
+ * role-based keys carry `reviewer` and `partial`; `key-super-admin` is a
+ * full-access key made by the super-admin. `principal` and `principal-other`
+ * are plugin-defined signed-in people of two different kinds.
  */
 export const CALLERS = [
   "visitor",
@@ -32,7 +36,10 @@ export const CALLERS = [
   "key-full-access",
   "key-role-based",
   "key-super-admin",
+  "user-partial",
+  "key-partial",
   "principal",
+  "principal-other",
 ] as const;
 export type Caller = (typeof CALLERS)[number];
 
@@ -42,18 +49,18 @@ const USERS: readonly Caller[] = [
   "custom-role",
   "super-admin",
   "super-admin-inherited",
+  "user-partial",
 ];
 const KEYS: readonly Caller[] = [
   "key-read-only",
   "key-full-access",
   "key-role-based",
   "key-super-admin",
+  "key-partial",
 ];
 const STAFF: readonly Caller[] = [...USERS, ...KEYS];
 
-export function isKey(caller: Caller): boolean {
-  return KEYS.includes(caller);
-}
+const PRINCIPALS: readonly Caller[] = ["principal", "principal-other"];
 
 /**
  * The code rule a target declares, for every action it is asked about.
@@ -63,6 +70,11 @@ export function isKey(caller: Caller): boolean {
  * read, a create or a delete meets an access object with no rule for it.
  * `role-name` admits a caller whose roles include one named `editor`, the
  * shape a template rule takes when it checks names instead of permissions.
+ * `permission-spelling` admits a caller whose rule-facing permissions hold
+ * `<collection>:<operation>`, the spelling a rule is promised, so a door that
+ * hands a rule the stored `<operation>-<collection>` spelling refuses it.
+ * `principal-kind` admits only a person of the `principal` caller's kind,
+ * so a door that drops the person from the rule's context refuses it too.
  */
 export const RULES = [
   "none",
@@ -77,6 +89,8 @@ export const RULES = [
   "async-false",
   "other-operation",
   "role-name",
+  "permission-spelling",
+  "principal-kind",
 ] as const;
 export type Rule = (typeof RULES)[number];
 
@@ -86,6 +100,7 @@ export const ACTIONS = [
   "update",
   "delete",
   "publish",
+  "unpublish",
 ] as const;
 export type Action = (typeof ACTIONS)[number];
 
@@ -155,7 +170,7 @@ interface Reach {
 
 const READ: readonly Action[] = ["read"];
 const READ_UPDATE: readonly Action[] = ["read", "update"];
-const NOT_PRINCIPAL = CALLERS.filter(caller => caller !== "principal");
+const NOT_PRINCIPAL = CALLERS.filter(caller => !PRINCIPALS.includes(caller));
 const NOT_VISITOR = CALLERS.filter(caller => caller !== "visitor");
 
 /**
@@ -305,6 +320,12 @@ function ruleSays(rule: Rule, action: Action, caller: Caller): boolean | null {
       return true;
     case "role-name":
       return holdsRoleNamedEditor(caller);
+    case "permission-spelling":
+      return (
+        STAFF.includes(caller) && holdsPermission(caller, action, "collection")
+      );
+    case "principal-kind":
+      return caller === "principal";
     default:
       return false;
   }
@@ -329,6 +350,11 @@ function holdsPermission(caller: Caller, action: Action, target: Target) {
       return target !== "users";
     case "key-read-only":
       return action === "read" && target !== "users";
+    case "user-partial":
+    case "key-partial":
+      return (
+        target !== "users" && ["read", "update", "publish"].includes(action)
+      );
     case "key-super-admin":
       // A full-access key carries its maker's live permissions, and a
       // super-admin's are the whole catalogue.
@@ -347,14 +373,18 @@ function holdsPermission(caller: Caller, action: Action, target: Target) {
  * - a super-admin, held directly or through inheritance, passes every
  *   collection and Single rule. No key carries super-admin authority;
  * - a plugin's signed-in person holds no role, so the target's rule decides
- *   alone, and a target that declares none refuses;
+ *   alone, and a target that declares none refuses. As today, a person never
+ *   publishes or unpublishes, whatever the rule says;
  * - everyone else needs the permission AND, where the target declares a rule
  *   for the action, a rule that answers exactly `true`.
  */
 export function oneAnswer(row: Row): Verdict {
   const { caller, action, target, rule } = row;
   const says = ruleSays(rule, action, caller);
-  if (caller === "principal") return says === true ? "allow" : "refuse";
+  if (PRINCIPALS.includes(caller)) {
+    if (action === "publish" || action === "unpublish") return "refuse";
+    return says === true ? "allow" : "refuse";
+  }
   if (caller === "visitor") return "refuse";
   if (caller === "super-admin" || caller === "super-admin-inherited") {
     return "allow";
@@ -403,21 +433,4 @@ export function renderAnswers(
       .join("  ")
       .trimEnd();
   return `${[pad(header), ...lines.map(pad)].join("\n")}\n`;
-}
-
-/** The answers a rendered file records, by row key and door. */
-export function parseAnswers(text: string): Map<string, Map<Door, Answer>> {
-  const out = new Map<string, Map<Door, Answer>>();
-  const [, ...body] = text.split("\n").filter(line => line.trim() !== "");
-  for (const line of body) {
-    const cells = line.trim().split(/\s+/);
-    const key = cells.slice(0, COLUMNS.length).join(" ");
-    const byDoor = new Map<Door, Answer>();
-    DOORS.forEach((door, i) => {
-      const answer = cells[COLUMNS.length + i] ?? ".";
-      if (answer !== ".") byDoor.set(door, answer);
-    });
-    out.set(key, byDoor);
-  }
-  return out;
 }

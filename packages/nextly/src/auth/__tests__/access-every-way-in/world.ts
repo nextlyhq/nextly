@@ -49,10 +49,33 @@ export const singleOf = (rule: Rule) => `s_${rule.replace(/-/g, "_")}`;
 /** The relationship on `refs` that points at `rule`'s collection. */
 export const relationOf = (rule: Rule) => `to_${rule.replace(/-/g, "_")}`;
 
-const MEMBER_KIND = "members:member";
-const MEMBER_ID = "m1";
+/**
+ * The two kinds of plugin-defined person: the `principal` caller is a member,
+ * `principal-other` a guest. Each is resolved from a header of its own.
+ */
+const PEOPLE = {
+  principal: {
+    name: "member",
+    kind: "members:member",
+    header: "x-member",
+    id: "m1",
+  },
+  "principal-other": {
+    name: "guest",
+    kind: "members:guest",
+    header: "x-guest",
+    id: "g1",
+  },
+} as const;
+const MEMBER_KIND = PEOPLE.principal.kind;
 
-type RuleContext = { roles?: readonly string[] };
+type RuleContext = {
+  roles?: readonly string[];
+  permissions?: readonly string[];
+  principal?: { kind?: string } | null;
+  collection?: string;
+  operation?: string;
+};
 type RuleFn = (ctx: RuleContext) => unknown;
 
 /** The rule each `rule` kind declares, for one action. */
@@ -71,6 +94,9 @@ const RULE_BODIES: Record<Rule, boolean | RuleFn | undefined> = {
   "async-true": async () => true,
   "async-false": async () => false,
   "role-name": ({ roles }) => (roles ?? []).includes("editor"),
+  "permission-spelling": ({ permissions, collection, operation }) =>
+    (permissions ?? []).includes(`${collection}:${operation}`),
+  "principal-kind": ({ principal }) => principal?.kind === MEMBER_KIND,
 };
 
 const ruleBody = (rule: Rule) => RULE_BODIES[rule];
@@ -180,7 +206,10 @@ export interface Seeded {
   readId: string;
   /** A draft row every update rewrites. */
   updateId: string;
-  /** A draft row of its own for each door, caller and destructive action. */
+  /**
+   * A row of its own for each door, caller and action that consumes one: a
+   * delete, a publish (from a draft) and an unpublish (from a published row).
+   */
   own: Map<string, string>;
 }
 
@@ -193,27 +222,44 @@ export const ownKey = (door: string, caller: Caller, action: Action) =>
  * Shared by the staff, public and member routes, so the three differ only in
  * who the call is made as.
  */
+type Collections = PluginRouteContext["services"]["collections"];
+type Opts = Record<string, unknown>;
+
+/** The plugin service call each action is, on `slug` and row `id`. */
+const SERVICE_CALLS: Record<
+  Action,
+  (c: Collections, slug: string, id: string, opts: Opts) => Promise<unknown>
+> = {
+  read: (c, slug, id, opts) => c.findEntryById(slug, id, opts),
+  create: (c, slug, _id, opts) => c.createEntry(slug, { title: "made" }, opts),
+  update: (c, slug, id, opts) =>
+    c.updateEntry(slug, id, { title: "changed" }, opts),
+  delete: (c, slug, id, opts) => c.deleteEntry(slug, id, opts),
+  publish: (c, slug, id, opts) =>
+    c.updateEntry(slug, id, { status: "published" }, opts),
+  unpublish: (c, slug, id, opts) =>
+    c.updateEntry(slug, id, { status: "draft" }, opts),
+};
+
+/**
+ * A plugin call as `opts`, for the action a probe route names.
+ *
+ * Shared by the staff, public and person routes, so they differ only in who
+ * the call is made as.
+ */
 function serviceCall(
   ctx: PluginRouteContext,
   params: Record<string, string>,
   query: URLSearchParams,
-  opts: Record<string, unknown>
+  opts: Opts
 ): Promise<unknown> {
-  const collections = ctx.services.collections;
-  const slug = params.slug;
-  const id = query.get("id") ?? "";
-  switch (params.action as Action) {
-    case "read":
-      return collections.findEntryById(slug, id, opts);
-    case "create":
-      return collections.createEntry(slug, { title: "made" }, opts);
-    case "update":
-      return collections.updateEntry(slug, id, { title: "changed" }, opts);
-    case "delete":
-      return collections.deleteEntry(slug, id, opts);
-    case "publish":
-      return collections.updateEntry(slug, id, { status: "published" }, opts);
-  }
+  const call = SERVICE_CALLS[params.action as Action];
+  return call(
+    ctx.services.collections,
+    params.slug,
+    query.get("id") ?? "",
+    opts
+  );
 }
 
 function probePlugin() {
@@ -280,41 +326,49 @@ function probePlugin() {
   });
 }
 
-/** The plugin that defines a signed-in person, resolved from a header. */
+/**
+ * The plugin that defines both kinds of person, and one route for each kind
+ * that makes a service call as the person it serves.
+ */
 function membersPlugin() {
-  const lookup = async (id: string) =>
-    id === MEMBER_ID ? { id, attributes: {} } : null;
+  const people = Object.values(PEOPLE);
   return definePlugin({
     name: "members",
     version: "1.0.0",
     nextly: ">=0.0.1",
     contributes: {
-      principals: [
-        {
-          name: "member",
+      principals: people.map(person => {
+        const lookup = async (id: string) =>
+          id === person.id ? { id, attributes: {} } : null;
+        return {
+          name: person.name,
           attributes: {},
           resolve: async (request: Request) => {
-            const id = request.headers.get("x-member");
+            const id = request.headers.get(person.header);
             return id ? lookup(id) : null;
           },
           lookup,
-        },
-      ],
-      routes: [
-        {
-          method: "GET" as const,
-          path: "/service/:slug/:action",
-          principal: { kind: MEMBER_KIND },
-          handler: (req: Request, ctx: PluginRouteContext) =>
-            outcome(() =>
-              serviceCall(ctx, ctx.params, new URL(req.url).searchParams, {
-                principal: ctx.principal ?? undefined,
-              })
-            ),
-        },
-      ],
+        };
+      }),
+      routes: people.map(person => ({
+        method: "GET" as const,
+        path: `/${person.name}-service/:slug/:action`,
+        principal: { kind: person.kind },
+        handler: (req: Request, ctx: PluginRouteContext) =>
+          outcome(() =>
+            serviceCall(ctx, ctx.params, new URL(req.url).searchParams, {
+              principal: ctx.principal ?? undefined,
+            })
+          ),
+      })),
     },
   } as never);
+}
+
+/** The path of the route that serves a person caller's kind. */
+export function personRoute(caller: Caller): string | undefined {
+  const person = PEOPLE[caller as keyof typeof PEOPLE];
+  return person ? `/plugins/members/${person.name}-service` : undefined;
 }
 
 /** How each way in is handed one caller. */
@@ -354,6 +408,15 @@ async function permissionIds(t: TestNextly, keep: (slug: string) => boolean) {
 function heldByStaff(slug: string): boolean {
   return (
     /^(create|read|update|delete|publish|unpublish)-(c|s)_/.test(slug) ||
+    slug === "read-refs" ||
+    slug === "read-media"
+  );
+}
+
+/** What `user-partial` holds: read, update and publish, and nothing else. */
+function heldByPartial(slug: string): boolean {
+  return (
+    /^(read|update|publish)-(c|s)_/.test(slug) ||
     slug === "read-refs" ||
     slug === "read-media"
   );
@@ -451,13 +514,18 @@ async function seedCollections(
     const slug = collectionOf(rule);
     const keys = ["rest", "direct", "service"].flatMap(door =>
       CALLERS.flatMap(caller =>
-        (["delete", "publish"] as const).map(action =>
+        (["delete", "publish", "unpublish"] as const).map(action =>
           ownKey(door, caller, action)
         )
       )
     );
+    // An unpublish takes a published row back to a draft; the rest start as one.
     const ids = await inBatches(keys, batch, key =>
-      create(slug, "draft", key.replace(/ /g, "-"))
+      create(
+        slug,
+        key.endsWith(" unpublish") ? "published" : "draft",
+        key.replace(/ /g, "-")
+      )
     );
     const own = new Map(keys.map((key, i) => [key, ids[i]]));
     seeded.set(slug, {
@@ -496,6 +564,11 @@ async function seedUsers(t: TestNextly) {
   const staffPermissions = await permissionIds(t, heldByStaff);
   const editorRole = await makeRole(t, "editor", staffPermissions);
   const reviewerRole = await makeRole(t, "reviewer", staffPermissions);
+  const partialRole = await makeRole(
+    t,
+    "partial",
+    await permissionIds(t, heldByPartial)
+  );
   // A role must hold a permission of its own, and `read-refs` is one every
   // caller here can already exercise.
   const chiefRole = await makeRole(
@@ -513,12 +586,13 @@ async function seedUsers(t: TestNextly) {
     ["without", undefined],
     ["custom", reviewerRole],
     ["chief", chiefRole],
+    ["partial", partialRole],
   ] as const) {
     const id = await makeUser(t, name);
     if (roleId) await services.userRoles.assignRoleToUser(id, roleId);
     users[name] = { id, roleIds: roleId ? [roleId] : [] };
   }
-  return { users, reviewerRole };
+  return { users, reviewerRole, partialRole };
 }
 
 const SESSIONS: [Caller, string][] = [
@@ -527,11 +601,12 @@ const SESSIONS: [Caller, string][] = [
   ["custom-role", "custom"],
   ["super-admin", "root"],
   ["super-admin-inherited", "chief"],
+  ["user-partial", "partial"],
 ];
 
 /** The headers each caller sends: a session cookie, a key, or neither. */
 async function callerHeaders(t: TestNextly) {
-  const { users, reviewerRole } = await seedUsers(t);
+  const { users, reviewerRole, partialRole } = await seedUsers(t);
   const keys = t.getService("apiKeyService");
   const mint = async (
     owner: string,
@@ -549,7 +624,10 @@ async function callerHeaders(t: TestNextly) {
 
   const headers = new Map<Caller, Record<string, string>>([
     ["visitor", {}],
-    ["principal", { "x-member": MEMBER_ID }],
+    ...Object.entries(PEOPLE).map(
+      ([caller, person]) =>
+        [caller as Caller, { [person.header]: person.id }] as const
+    ),
   ]);
   for (const [caller, name] of SESSIONS) {
     const { id, roleIds } = users[name];
@@ -562,6 +640,10 @@ async function callerHeaders(t: TestNextly) {
     await mint(users.with.id, "role-based", reviewerRole)
   );
   headers.set("key-super-admin", await mint(users.root.id, "full-access"));
+  headers.set(
+    "key-partial",
+    await mint(users.with.id, "role-based", partialRole)
+  );
   return headers;
 }
 
@@ -572,9 +654,10 @@ async function handleFor(
   headers: Record<string, string>
 ): Promise<CallerHandle> {
   if (caller === "visitor") return { headers };
-  if (caller === "principal") {
-    const principal = await t.nextly.principals.byId(MEMBER_KIND, MEMBER_ID);
-    if (!principal) throw new Error("the member did not resolve");
+  const person = PEOPLE[caller as keyof typeof PEOPLE];
+  if (person) {
+    const principal = await t.nextly.principals.byId(person.kind, person.id);
+    if (!principal) throw new Error(`the ${person.name} did not resolve`);
     return { headers, principal };
   }
   const auth = await authenticated(headers);

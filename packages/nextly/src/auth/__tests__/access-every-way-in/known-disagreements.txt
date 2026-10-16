@@ -1,0 +1,8 @@
+# The cells of the access table that do not give the one answer yet.
+#
+# Each line is a row and a door, exactly as a conformance test names it
+# (`<setup> <caller> <action> <target> <rule> at <door>`). A listed cell runs
+# as an expected failure; every other cell must give the one answer. Edit this
+# by hand: take a cell off when its door starts agreeing, and add one only
+# when a change is meant to make that cell disagree.
+
