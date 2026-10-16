@@ -626,7 +626,7 @@ judged safe. Read the whole list before setting it.
 
 Earlier releases stored some passwords as they were typed instead of hashing them: a
 password of 32 characters or more that contained a colon, given when an account was
-created, and any value sent to `PATCH /api/users/:id/password`. Such a value never let
+created, and any value sent to `PATCH /admin/api/users/:id/password`. Such a value never let
 anyone sign in, because sign-in only compares against a hash, but it is a readable
 password in your database and in every backup of it.
 

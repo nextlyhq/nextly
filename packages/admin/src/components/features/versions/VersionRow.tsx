@@ -15,6 +15,7 @@ import { formatDateTime } from "@admin/lib/dates/format";
 import { cn } from "@admin/lib/utils";
 import type { VersionMeta } from "@admin/services/versionApi";
 
+import { versionAuthorLabel } from "./version-author";
 import { VersionLocaleBadge, useVersionLocale } from "./VersionLocaleBadge";
 
 export interface VersionRowProps {
@@ -84,9 +85,8 @@ export function VersionRow({
   const named = version.label !== null && version.label !== "";
   const title = named ? (version.label as string) : ordinal;
 
-  // Attribution is absent for a system write rather than missing, so it reads
-  // as "nobody signed this" instead of looking like a failed lookup.
-  const author = version.author?.name ?? "Unknown author";
+  // An absent author reads as not recorded, never as a guess or a blank.
+  const author = versionAuthorLabel(version);
 
   // A restore records the version it was made from, so this row can show its
   // lineage. Absent (null) for an ordinary edit, in which case nothing shows.

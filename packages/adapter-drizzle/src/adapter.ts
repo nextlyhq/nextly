@@ -1884,7 +1884,8 @@ export abstract class DrizzleAdapter {
    * @remarks
    * Default implementation uses dialect-specific ON CONFLICT syntax.
    * PostgreSQL/SQLite: ON CONFLICT ... DO UPDATE
-   * MySQL: ON DUPLICATE KEY UPDATE
+   * MySQL: the MySQL adapter overrides this, resolving the conflict by the
+   * conflict columns (see its `upsert`)
    *
    * @param table - Table name
    * @param data - Record data
@@ -1937,43 +1938,62 @@ export abstract class DrizzleAdapter {
           }
         }
 
+        // Nothing left to update means "insert, or keep the row that is
+        // there": the write-once a caller inside a transaction needs. It must
+        // not raise on a repeat — on PostgreSQL a failed statement aborts the
+        // whole transaction — so it is spelled as a conflict that changes
+        // nothing, and the row that stands is read back below.
+        const keepExisting = Object.keys(updateData).length === 0;
+
         let query;
         if (caps.supportsOnConflict) {
-          // PostgreSQL/SQLite: ON CONFLICT DO UPDATE
-          query = db.insert(tableObj).values(data).onConflictDoUpdate({
-            target: conflictTarget,
-            set: updateData,
-          });
+          // PostgreSQL/SQLite: ON CONFLICT ... DO UPDATE, or DO NOTHING when
+          // there is nothing to update.
+          const inserted = db.insert(tableObj).values(data);
+          query = keepExisting
+            ? inserted.onConflictDoNothing({ target: conflictTarget })
+            : inserted.onConflictDoUpdate({
+                target: conflictTarget,
+                set: updateData,
+              });
         } else {
-          // MySQL: fallback to insert, catch duplicate key, then update
-          // This is handled by the MySQL adapter override
+          // A dialect without a conflict clause overrides `upsert` (the MySQL
+          // adapter does); this plain insert is only the fallback for one that
+          // has not.
           query = db.insert(tableObj).values(data);
         }
 
         if (caps.supportsReturning) {
           const result = await query.returning();
-          return (Array.isArray(result) ? result[0] : result) as T;
+          const row = Array.isArray(result) ? result[0] : result;
+          // DO NOTHING returns no row on a conflict; the row that stands is
+          // read back instead, the same way on every dialect.
+          if (row !== undefined) return row as T;
+        } else {
+          await query;
         }
 
-        await query;
-
-        // For databases without RETURNING: select back using conflict columns
-        // on the same executor so a transactional upsert reads its own write.
+        // Read the row that stands back by every conflict column, on the same
+        // executor so a transactional upsert reads its own write. A second
+        // statement, so a row deleted between the two is not returned (see
+        // `UpsertOptions.updateColumns`); never one this call did not find, so
+        // "created" read from the returned id stays exact.
+        const conflictValues = options.conflictColumns.map(
+          column => [column, data[column]] as const
+        );
         if (
-          options.conflictColumns.length &&
-          data[options.conflictColumns[0]] !== undefined
+          conflictValues.length > 0 &&
+          conflictValues.every(([, value]) => value !== undefined)
         ) {
           return (await this.selectOne<T>(
             table,
             {
               where: {
-                and: [
-                  {
-                    column: options.conflictColumns[0],
-                    op: "=",
-                    value: data[options.conflictColumns[0]] as SqlParam,
-                  },
-                ],
+                and: conflictValues.map(([column, value]) => ({
+                  column,
+                  op: "=" as const,
+                  value: value as SqlParam,
+                })),
               },
             },
             executor
