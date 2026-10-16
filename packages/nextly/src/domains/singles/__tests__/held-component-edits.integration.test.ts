@@ -295,17 +295,22 @@ describe.each(getConfiguredTestDialects())(
         { hero: { heading: "Pending", subheading: "Live sub" } },
         { locale: "en", overrideAccess: true }
       );
-      const before = (
-        await current.adapter.select<{ id: string }>("nextly_events")
-      ).length;
+      // By id, not by position: a select has no order on every dialect.
+      const before = new Set(
+        (await current.adapter.select<{ id: string }>("nextly_events")).map(
+          r => r.id
+        )
+      );
 
       await singles.publishAllLocales("home", { overrideAccess: true });
 
       const recorded = (
-        await current.adapter.select<{ type: string; payload: unknown }>(
-          "nextly_events"
-        )
-      ).slice(before);
+        await current.adapter.select<{
+          id: string;
+          type: string;
+          payload: unknown;
+        }>("nextly_events")
+      ).filter(r => !before.has(r.id));
       const envelope = recorded
         .map(
           r =>
