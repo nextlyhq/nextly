@@ -81,7 +81,9 @@ Newly refused, and what to write instead:
   `FILTER_GIVEN_TWICE`. The bracket conditions used to be ignored. Send one
   form.
 - **A REST bracket key that is not bracketed segments**
-  (`where[title]equals=a`) — `FILTER_INVALID_KEY`.
+  (`where[title]equals=a`), that names `__proto__`, `constructor` or
+  `prototype`, or whose list index is 50 or more (the most conditions a
+  filter may have) — `FILTER_INVALID_KEY`.
 - **A REST filter on the owner column** (`created_by`, `createdBy`, or a
   dotted form) — `FIELD_NOT_FILTERABLE`. It used to be removed silently, so
   `or: [{ createdBy: … }]` matched every entry. The column is never returned,

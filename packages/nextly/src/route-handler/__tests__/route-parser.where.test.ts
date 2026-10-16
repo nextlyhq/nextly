@@ -95,6 +95,32 @@ describe("bracket filters that cannot be read", () => {
     ).toEqual(["FILTER_INVALID_KEY"]);
   });
 
+  it.each(["__proto__", "constructor", "prototype"])(
+    "refuses a %s segment without touching Object.prototype",
+    segment => {
+      // Assigning through an inherited `__proto__` writes onto
+      // Object.prototype, which every later request would then inherit.
+      expect(
+        refusedErrors(() =>
+          whereOf(`where[${segment}][polluted]=yes&where[title][equals]=a`)
+        ).map(e => e.code)
+      ).toEqual(["FILTER_INVALID_KEY"]);
+      expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+    }
+  );
+
+  it("refuses a list index past the condition limit before building the list", () => {
+    // A list built to this index has a billion slots, and walking them blocks
+    // the server; the index has to be refused before any list exists.
+    const started = Date.now();
+    expect(
+      refusedErrors(() =>
+        whereOf("where[or][1000000000][title][equals]=x")
+      ).map(e => e.code)
+    ).toEqual(["FILTER_INVALID_KEY"]);
+    expect(Date.now() - started).toBeLessThan(1000);
+  });
+
   it("refuses an or list with a gap where a member should be", () => {
     // `where[or][1]` with no `[0]` builds a list whose first slot is empty. A
     // translator that skipped the hole read the empty member as "no

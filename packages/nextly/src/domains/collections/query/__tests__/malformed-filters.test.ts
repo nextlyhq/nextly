@@ -9,7 +9,7 @@
  * member would return a clause (or `undefined`) rather than throw, so it fails
  * every case here.
  */
-import { pgTable, text, uuid } from "drizzle-orm/pg-core";
+import { pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
 import { PgDialect } from "drizzle-orm/pg-core";
 import { describe, expect, it } from "vitest";
 
@@ -287,6 +287,25 @@ describe("the condition builder refuses a key it cannot resolve", () => {
 
   it("still resolves a real column", () => {
     expect(build({ title: { equals: "a" } })()).toBeDefined();
+  });
+
+  it("resolves a system timestamp by its public spelling", () => {
+    // A runtime table keys its timestamps `created_at` while every response
+    // spells them `createdAt`, so the public spelling must reach the column
+    // rather than be refused as an unknown field.
+    const withTimestamps = pgTable("posts", {
+      id: uuid("id").primaryKey(),
+      created_at: timestamp("created_at"),
+    });
+    const condition = buildDrizzleCondition(
+      buildWhereClause({ createdAt: { greater_than: new Date(0) } }),
+      withTimestamps,
+      "postgresql"
+    );
+    expect(condition).toBeDefined();
+    expect(new PgDialect().sqlToQuery(condition!).sql).toContain(
+      '"created_at" >'
+    );
   });
 });
 

@@ -38,6 +38,7 @@ import {
 import type { LocalizedFieldRef } from "../../domains/i18n/companion-join";
 import { buildCompanionExists } from "../../domains/i18n/companion-join";
 import { NextlyError } from "../../errors/nextly-error";
+import { toSnakeCase } from "../../shared/lib/case-conversion";
 
 import type { buildWhereClause } from "./query-operators";
 
@@ -197,13 +198,15 @@ function refuseKey(column: string, code: string, message: string): never {
  * predicate nobody wrote.
  */
 function resolveColumn(schema: object, column: string): Column {
-  const candidate: unknown = Object.prototype.hasOwnProperty.call(
-    schema,
-    column
-  )
-    ? (schema as Record<string, unknown>)[column]
-    : undefined;
-  if (is(candidate, Column)) return candidate;
+  // The name as written first, then its snake_case form: a runtime table keys
+  // its system timestamps `created_at`, while every response spells them
+  // `createdAt`, and a filter written the way rows read must reach them.
+  for (const key of [column, toSnakeCase(column)]) {
+    const candidate: unknown = Object.prototype.hasOwnProperty.call(schema, key)
+      ? (schema as Record<string, unknown>)[key]
+      : undefined;
+    if (is(candidate, Column)) return candidate;
+  }
   return refuseKey(
     column,
     "FILTER_UNKNOWN_FIELD",

@@ -45,6 +45,7 @@ import { releaseVisibilityFor } from "../../domains/releases/release-visibility"
 import type { RetentionRunner } from "../../domains/retention/runner";
 import type { WebhookFastDrainScheduler } from "../../domains/webhooks/after-drain";
 import { errorEnvelopeFields } from "../../errors/from-service-envelope";
+import { NextlyError } from "../../errors/nextly-error";
 import type {
   CacheRevalidator,
   RevalidationIntent,
@@ -87,13 +88,17 @@ function refusedFilter<T>(where: unknown): CollectionServiceResult<T> | null {
     assertWellFormedFilter(where, { allowTranslated: true });
     return null;
   } catch (error: unknown) {
-    const fields = errorEnvelopeFields(error);
+    // The check throws only a NextlyError; anything else is a fault, not a
+    // refusal, and goes on as one.
+    if (!NextlyError.is(error)) throw error;
+    // Status and message come from the error, which carries its code's
+    // canonical status, so no second copy of the mapping lives here.
     return {
       success: false,
-      statusCode: fields.statusCode ?? 400,
-      message: fields.message ?? "Validation failed.",
+      statusCode: error.statusCode,
+      message: error.publicMessage,
       data: null,
-      ...fields,
+      ...errorEnvelopeFields(error),
     };
   }
 }
