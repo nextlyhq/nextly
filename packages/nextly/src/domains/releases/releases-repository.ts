@@ -232,7 +232,7 @@ export interface ReleasePage {
  * The search, as a condition that ignores case on every engine.
  *
  * `ICONTAINS` is the adapter's literal substring match without regard to
- * case, whatever the column's collation: a typed `%` or `_` is searched for,
+ * case, even under a case-sensitive collation: a typed `%` or `_` is searched for,
  * not read as a wildcard, and a MySQL column under a case-sensitive collation
  * still matches "Spring" for "spring".
  */
