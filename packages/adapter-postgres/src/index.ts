@@ -639,6 +639,10 @@ export class PostgresAdapter extends DrizzleAdapter {
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       const client = await pool.connect();
       const startTime = Date.now();
+      // Set when the ROLLBACK failed. The client may then still be inside the
+      // transaction, so it is destroyed rather than pooled: the next request
+      // handed it would otherwise write into a transaction nobody commits.
+      let discard: Error | true | undefined;
 
       try {
         // Begin transaction with options
@@ -665,7 +669,9 @@ export class PostgresAdapter extends DrizzleAdapter {
         return result;
       } catch (error) {
         // Rollback transaction
-        await client.query("ROLLBACK").catch(() => {});
+        await client.query("ROLLBACK").catch((rollbackError: unknown) => {
+          discard = rollbackError instanceof Error ? rollbackError : true;
+        });
 
         lastError = error;
 
@@ -696,7 +702,9 @@ export class PostgresAdapter extends DrizzleAdapter {
 
         throw this.classifyError(error);
       } finally {
-        client.release();
+        // node-postgres destroys a client released with an error or `true`,
+        // and pools one released with nothing.
+        client.release(discard);
       }
     }
 

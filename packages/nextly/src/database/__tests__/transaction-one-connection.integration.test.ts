@@ -294,6 +294,47 @@ describeEachDialect("a transaction holds one connection", dialect => {
     await expectRolledBackOnOneSession(outcome);
   });
 
+  it.runIf(dialect === "mysql")(
+    "hands its connection back with the session's own lock wait timeout",
+    async () => {
+      // MySQL's lock wait timeout has no transaction-scoped form, so a
+      // transaction's own timeout is set on the session; the session must
+      // have its own value back before the pool hands it to anyone else.
+      // Read by connection id, so it is that session's value, whichever
+      // pooled connection the read itself runs on.
+      const readTimeout = async (session: number): Promise<number> => {
+        const [row] = await current.adapter.executeQuery<{
+          value: string | number;
+        }>(
+          "SELECT v.VARIABLE_VALUE AS value FROM performance_schema.variables_by_thread v JOIN performance_schema.threads t ON t.THREAD_ID = v.THREAD_ID WHERE t.PROCESSLIST_ID = ? AND v.VARIABLE_NAME = 'innodb_lock_wait_timeout'",
+          [session]
+        );
+        return Number(row.value);
+      };
+      const [global] = await current.adapter.executeQuery<{
+        value: string | number;
+      }>("SELECT @@GLOBAL.innodb_lock_wait_timeout AS value");
+
+      let session = 0;
+      let during = 0;
+      await current.adapter.transaction(
+        async ctx => {
+          const [row] = await ctx.execute<{ id: number | string }>(
+            "SELECT CONNECTION_ID() AS id"
+          );
+          session = Number(row.id);
+          during = await readTimeout(session);
+        },
+        { timeoutMs: 7000 }
+      );
+
+      // The transaction did change it, so the check below can tell.
+      expect(during).toBe(7);
+      expect(Number(global.value)).not.toBe(7);
+      expect(await readTimeout(session)).toBe(Number(global.value));
+    }
+  );
+
   it("leaves the pool usable: a later transaction commits on a clean session", async () => {
     await failOnLastStatement(work =>
       current.adapter.transaction(ctx =>

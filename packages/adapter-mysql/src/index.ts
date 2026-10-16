@@ -117,7 +117,62 @@ interface Pool extends Queryable {
  * mysql2 PoolConnection interface with query and release methods
  */
 interface PoolConnection extends Queryable {
+  /** Returns the connection to the pool, for the next request to use. */
   release(): void;
+  /** Closes the connection and removes it from the pool. */
+  destroy(): void;
+}
+
+/**
+ * What a transaction changed on its connection's session, to put back before
+ * the connection returns to the pool; null when it changed nothing.
+ *
+ * MySQL has no transaction-scoped form of `innodb_lock_wait_timeout`: a
+ * `SET SESSION` outlives the transaction, and the pooled connection would
+ * carry one transaction's timeout into every later query handed it.
+ * `lockWaitTimeout` is the session's value from before the change, or null
+ * when it could not be read, and then the connection cannot be put back.
+ */
+type SessionRestore = { lockWaitTimeout: number | null } | null;
+
+/**
+ * Puts back what a transaction changed on its connection's session. False
+ * when that could not be done, and the connection must not be pooled.
+ */
+async function restoreSession(
+  connection: PoolConnection,
+  restore: SessionRestore
+): Promise<boolean> {
+  if (restore === null) return true;
+  if (restore.lockWaitTimeout === null) return false;
+  try {
+    // An integer read from the server, never caller input.
+    await connection.query(
+      `SET SESSION innodb_lock_wait_timeout = ${restore.lockWaitTimeout}`
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Ends a transaction's hold on its connection: back to the pool once its
+ * session is as the transaction found it, or closed when it is not. A
+ * connection whose ROLLBACK failed (`rollbackFailed`) may still be inside
+ * the transaction, and the next request handed it would write into a
+ * transaction nobody commits.
+ */
+async function returnTransactionConnection(
+  connection: PoolConnection,
+  rollbackFailed: boolean,
+  restore: SessionRestore
+): Promise<void> {
+  if (!rollbackFailed && (await restoreSession(connection, restore))) {
+    connection.release();
+  } else {
+    connection.destroy();
+  }
 }
 
 // Re-export types for convenience
@@ -505,10 +560,15 @@ export class MySqlAdapter extends DrizzleAdapter {
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       const connection = await pool.getConnection();
       const startTime = Date.now();
+      // Set when the ROLLBACK failed (`returnTransactionConnection`).
+      let rollbackFailed = false;
+      // What `beginTransaction` changed on the session, to put back once the
+      // transaction has ended.
+      let restore: SessionRestore = null;
 
       try {
         // Begin transaction with options
-        await this.beginTransaction(connection, options);
+        restore = await this.beginTransaction(connection, options);
 
         // Create transaction context
         const ctx = this.createTransactionContext(connection);
@@ -531,7 +591,9 @@ export class MySqlAdapter extends DrizzleAdapter {
         return result;
       } catch (error) {
         // Rollback transaction
-        await connection.query("ROLLBACK").catch(() => {});
+        await connection.query("ROLLBACK").catch(() => {
+          rollbackFailed = true;
+        });
 
         lastError = error;
 
@@ -560,7 +622,7 @@ export class MySqlAdapter extends DrizzleAdapter {
 
         throw this.classifyError(error);
       } finally {
-        connection.release();
+        await returnTransactionConnection(connection, rollbackFailed, restore);
       }
     }
 
@@ -741,12 +803,13 @@ export class MySqlAdapter extends DrizzleAdapter {
   }
 
   /**
-   * Begins a transaction with the specified options.
+   * Begins a transaction with the specified options, and returns what it
+   * changed on the session for `restoreSession` to put back.
    */
   private async beginTransaction(
     connection: PoolConnection,
     options?: TransactionOptions
-  ): Promise<void> {
+  ): Promise<SessionRestore> {
     // Set isolation level if specified (must be done before BEGIN)
     if (options?.isolationLevel) {
       const isolationMap: Record<string, string> = {
@@ -771,12 +834,20 @@ export class MySqlAdapter extends DrizzleAdapter {
 
     // Set lock wait timeout if specified
     if (options?.timeoutMs) {
+      // Read first, so the session's own value can be put back once the
+      // transaction has ended (`SessionRestore`).
+      const [rows] = await connection.query<RowDataPacket[]>(
+        "SELECT @@SESSION.innodb_lock_wait_timeout AS timeout"
+      );
+      const previous = Number(rows[0]?.timeout);
       // MySQL uses seconds for lock_wait_timeout
       const timeoutSeconds = Math.ceil(options.timeoutMs / 1000);
       await connection.query(
         `SET SESSION innodb_lock_wait_timeout = ${timeoutSeconds}`
       );
+      return { lockWaitTimeout: Number.isInteger(previous) ? previous : null };
     }
+    return null;
   }
 
   /**
