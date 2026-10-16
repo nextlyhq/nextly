@@ -324,6 +324,8 @@ A separate rate limit guards `/auth/login`, `/auth/register`, `/auth/forgot-pass
 | Password reset, email verification, invite acceptance, second-factor answer, initial-password set | The account the request's token belongs to. |
 | A body that names no address, or a token that belongs to no account | One shared account-less budget. |
 
+Sign-in is keyed on the `email` its body carries, which is what the built-in password strategy reads. A [custom strategy](/docs/plugins/auth) that signs people in from something else, such as a username or an OAuth code, is not yet keyed on what it reads: until it can name its account to the limiter, its requests from an unreadable address are bounded only by the ceiling below, not per identity.
+
 Each account, and the account-less budget, gets the configured budget (30 an hour by default). All of these requests together are also held to a ceiling of 100 times that budget (3,000 an hour by default), so inventing addresses buys no extra attempts. A request whose address can be read never counts against the ceiling.
 
 What happens when each is spent, answered with `429` and a `Retry-After` header until the oldest counted request leaves the window (an hour by default):
