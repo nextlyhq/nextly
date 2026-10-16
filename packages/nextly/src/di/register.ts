@@ -962,7 +962,11 @@ async function registerServicesOnce(
 
   registerDomainServices(ctx);
 
-  await syncCodeFirstEntities(adapter, resolvedLogger, transformedConfig);
+  const { databaseNotSetUp } = await syncCodeFirstEntities(
+    adapter,
+    resolvedLogger,
+    transformedConfig
+  );
 
   // Declared widgets' starting queries, against the content just synced: the
   // first point in boot where the collections, Singles and their fields exist.
@@ -971,6 +975,7 @@ async function registerServicesOnce(
   await checkDeclaredWidgetReferences({
     collections: collectSlugs(transformedConfig.collections),
     singles: collectSlugs(transformedConfig.singles),
+    databaseNotSetUp,
   });
 
   await runBootMigrations(config, transformedConfig, deferredExtends, {
@@ -1976,12 +1981,12 @@ async function syncCodeFirstEntities(
   adapter: DrizzleAdapter,
   logger: Logger,
   transformedConfig: NextlyServiceConfig
-): Promise<void> {
+): Promise<{ databaseNotSetUp: boolean }> {
   // ----------------------------------------
   // Layer 4: Sync Code-First Collections
   // ----------------------------------------
   const bootTableWork = emptyBootTableWork();
-  await syncCodeFirstCollections(
+  const collectionsNotSetUp = await syncCodeFirstCollections(
     adapter,
     logger,
     transformedConfig,
@@ -2007,12 +2012,22 @@ async function syncCodeFirstEntities(
   // ----------------------------------------
   // Layer 6: Sync Code-First Singles
   // ----------------------------------------
-  await syncCodeFirstSingles(adapter, logger, transformedConfig, bootTableWork);
+  const singlesNotSetUp = await syncCodeFirstSingles(
+    adapter,
+    logger,
+    transformedConfig,
+    bootTableWork
+  );
 
   // ----------------------------------------
   // Layer 6.1: Create the missing code-first tables
   // ----------------------------------------
   await createMissingCodeFirstTables(adapter, logger, bootTableWork);
+
+  // Whether either sync found the registries not yet created: a fresh
+  // database, before migrations and `/setup` have run. Reported so a check
+  // that reads the registries can tell that apart from a read that failed.
+  return { databaseNotSetUp: collectionsNotSetUp || singlesNotSetUp };
 }
 
 /**
@@ -3079,13 +3094,17 @@ async function publishBootDeferrals(
   setDeferredEntities(kind, unwrittenSlugs(syncResult));
 }
 
+/**
+ * Answers whether the collections registry was found not yet created (every
+ * sync error a missing table), which boot tolerates so `/setup` can run.
+ */
 async function syncCodeFirstCollections(
   adapter: DrizzleAdapter,
   logger: Logger,
   transformedConfig: NextlyServiceConfig,
   /** Collects this kind's missing tables for `createMissingCodeFirstTables`. */
   work: BootTableWork
-): Promise<void> {
+): Promise<boolean> {
   if (
     !transformedConfig.collections ||
     transformedConfig.collections.length === 0
@@ -3095,7 +3114,7 @@ async function syncCodeFirstCollections(
     // would leave whatever an earlier registration in this process published
     // — an `allowIdOnCreate` a later collection of the same slug would inherit.
     publishCollectionDbOptions([]);
-    return;
+    return false;
   }
 
   const collectionRegistry = container.get<CollectionRegistryService>(
@@ -3171,6 +3190,7 @@ async function syncCodeFirstCollections(
       logger.warn?.(
         `Collections sync skipped (database tables not yet created — run migrations first). ${syncResult.errors.length} collection(s) deferred.`
       );
+      return true;
     } else {
       const errorDetails = syncResult.errors
         .map(e => `  - ${e.slug}: ${e.error}`)
@@ -3211,7 +3231,7 @@ async function syncCodeFirstCollections(
     }
   }
 
-  if (collectionsNeedingTableSync.length === 0) return;
+  if (collectionsNeedingTableSync.length === 0) return false;
 
   logger.info?.(
     `Auto-syncing ${collectionsNeedingTableSync.length} collection table(s)...`
@@ -3389,6 +3409,7 @@ async function syncCodeFirstCollections(
       },
     });
   }
+  return false;
 }
 
 /**
@@ -3606,7 +3627,8 @@ async function syncCodeFirstComponents(
 /**
  * Syncs code-first Singles to the `dynamic_singles` table so permission
  * seeding (in `runPostInitTasks`) can find them. Mirrors collection sync
- * at Layer 4.
+ * at Layer 4. Answers whether the Singles registry was found not yet created,
+ * as {@link syncCodeFirstCollections} does for collections.
  */
 async function syncCodeFirstSingles(
   adapter: DrizzleAdapter,
@@ -3614,9 +3636,9 @@ async function syncCodeFirstSingles(
   transformedConfig: NextlyServiceConfig,
   /** Collects this kind's missing tables for `createMissingCodeFirstTables`. */
   work: BootTableWork
-): Promise<void> {
+): Promise<boolean> {
   if (!transformedConfig.singles || transformedConfig.singles.length === 0) {
-    return;
+    return false;
   }
 
   const singleRegistry = container.get<SingleRegistryService>(
@@ -3685,7 +3707,7 @@ async function syncCodeFirstSingles(
     logger.warn?.(
       `Singles sync failed: ${error instanceof Error ? error.message : String(error)}`
     );
-    return;
+    return false;
   }
 
   // 🔴 The same reading the collections sync makes of its own errors, and for
@@ -3707,6 +3729,7 @@ async function syncCodeFirstSingles(
       logger.warn?.(
         `Singles sync skipped (database tables not yet created — run migrations first). ${singleSyncResult.errors.length} single(s) deferred.`
       );
+      return true;
     } else {
       // `NextlyError`, unlike the bare throw the collections path still
       // carries: the slugs and the driver's words are operator detail, so they
@@ -3735,6 +3758,7 @@ async function syncCodeFirstSingles(
   // dev-server boot path and the `nextly db:sync` CLI converge on the
   // same physical-table contract.
   await reconcileSingleTablesForBoot(adapter, logger, transformedConfig, work);
+  return false;
 }
 
 // physical `single_*` tables match `dynamic_singles`. Lives next to the

@@ -40,6 +40,12 @@ import {
 export interface CodeDefinedContent {
   readonly collections: ReadonlySet<string>;
   readonly singles: ReadonlySet<string>;
+  /**
+   * Whether boot found the content registries not yet created: a fresh
+   * database, before migrations and `/setup`. Only then is a registry that
+   * cannot be read no reason to stop.
+   */
+  readonly databaseNotSetUp: boolean;
 }
 
 const COLLECTION_SOURCE = "collection:";
@@ -152,6 +158,20 @@ function contentFault(
   return undefined;
 }
 
+/**
+ * Startup refused because the content registries could not be read, so no
+ * declared widget's starting query could be checked. A failure to read, not a
+ * fault in any declaration: the remedy is to start again once the database
+ * answers.
+ */
+const registriesUnreadable = (): NextlyError =>
+  NextlyError.serviceUnavailable({
+    logMessage:
+      "Declared dashboard widgets could not be checked: the collections or " +
+      "Singles registry could not be read. Startup stops rather than admit " +
+      "widgets it has not checked; start again once the database answers.",
+  });
+
 /** Whether a source is a collection or a Single, which boot syncs. */
 const isContentSource = (source: string): boolean =>
   source.startsWith(COLLECTION_SOURCE) || source.startsWith(SINGLE_SOURCE);
@@ -189,7 +209,14 @@ export async function checkDeclaredWidgetReferences(
   if (declared.length === 0) return;
   // The sources a query names are derived from the registries, which hold the
   // synced content only now.
-  await refreshContentSources();
+  const read = await refreshContentSources();
+  // 🔴 A registry that could not be read on a database that is set up leaves
+  // the sources as they stood, and every code-defined collection would look
+  // as if its table had not been made yet, so each widget over one would pass
+  // unchecked. Startup stops instead, and is tried again. On a fresh database
+  // the read fails for the reason boot already tolerates, and the content
+  // queries wait for a start where the content exists.
+  if (!read && !content.databaseNotSetUp) throw registriesUnreadable();
 
   const faults: WidgetDeclarationFault[] = declared.flatMap(declared => {
     const problem = startingQueryFault(declared, content);
