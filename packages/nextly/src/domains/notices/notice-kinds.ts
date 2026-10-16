@@ -97,6 +97,12 @@ export interface NoticeKind<TData = unknown> {
  */
 const KIND_KEY = /^[a-z][a-z0-9-]*\.[a-z][a-z0-9-.]*$/;
 
+/** The longest kind key or subject type: the width of their MySQL columns. */
+export const NOTICE_NAME_MAX = 64;
+
+/** The longest subject id or occurrence: the width of their MySQL columns. */
+export const NOTICE_REFERENCE_MAX = 191;
+
 /**
  * Declare a kind, with its data type inferred from its schema.
  *
@@ -108,10 +114,17 @@ const KIND_KEY = /^[a-z][a-z0-9-]*\.[a-z][a-z0-9-.]*$/;
 export function defineNoticeKind<TData>(
   kind: NoticeKind<TData>
 ): NoticeKind<TData> {
-  if (!KIND_KEY.test(kind.key)) {
+  // Bounded as well as shaped: the key and subject type are stored in columns
+  // of NOTICE_NAME_MAX characters on MySQL, and are refused here on every
+  // dialect so one cannot store what another truncates.
+  if (
+    !KIND_KEY.test(kind.key) ||
+    kind.key.length > NOTICE_NAME_MAX ||
+    kind.subjectType.length > NOTICE_NAME_MAX
+  ) {
     throw NextlyError.internal({
       logContext: {
-        detail: `Notice kind key "${kind.key}" must be "<feature>.<name>" in lowercase, such as "releases.stopped".`,
+        detail: `Notice kind key "${kind.key}" must be "<feature>.<name>" in lowercase, such as "releases.stopped", and it and its subject type at most ${NOTICE_NAME_MAX} characters.`,
         reason: "invalid-notice-kind-key",
         key: kind.key,
       },

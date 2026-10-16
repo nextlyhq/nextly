@@ -2389,9 +2389,13 @@ function parseWebhookRoutes(
  */
 function parseNoticeRoutes(
   id: string | undefined,
+  extra: readonly unknown[],
   httpMethod: string,
   routeParams: Record<string, string>
 ): ParsedRoute | null {
+  // Only the three documented paths: a trailing segment is a different path,
+  // and `POST /api/notices/read/anything` must not mark anything read.
+  if (extra.some(segment => segment !== undefined)) return null;
   const routes: Record<string, { operation: OperationType; method: string }> = {
     "GET ": { operation: "list", method: "getNotices" },
     "GET count": { operation: "count", method: "getNoticeCount" },
@@ -2919,7 +2923,12 @@ export function parseRestRoute(
 
   // Handle the signed-in person's notices
   if (resource === "notices") {
-    const result = parseNoticeRoutes(id, httpMethod, routeParams);
+    const result = parseNoticeRoutes(
+      id,
+      [subresource, subId, ...additionalParams],
+      httpMethod,
+      routeParams
+    );
     if (result) return result;
   }
 

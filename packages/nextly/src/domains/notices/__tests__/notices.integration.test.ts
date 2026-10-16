@@ -163,6 +163,69 @@ describe.each(getConfiguredTestDialects())("notices (%s)", dialect => {
     expect(await notices.count({ userId: "alice" })).toBe(0);
   });
 
+  it("marks read only what the person may see now", async () => {
+    // A kind hidden from them is not marked read unseen, and reads as unread
+    // when it is shown to them again.
+    const notices = await boot(dialect);
+    await notices.record({
+      kind: stopped,
+      userId: "alice",
+      subjectId: "r1",
+      occurrence: "1",
+      data: { title: "Spring" },
+    });
+    await notices.record({
+      kind: plain,
+      userId: "alice",
+      subjectId: "t1",
+      occurrence: "1",
+      data: { n: 1 },
+    });
+    mayReadReleases.delete("alice");
+    expect(await notices.markRead({ userId: "alice", all: true })).toBe(1);
+    mayReadReleases.add("alice");
+    expect(await notices.count({ userId: "alice", unread: true })).toBe(1);
+  });
+
+  it("refuses data that would not survive JSON storage, and writes nothing", async () => {
+    const notices = await boot(dialect);
+    const dated = defineNoticeKind({
+      key: "test.dated",
+      subjectType: "thing",
+      data: z.object({ at: z.date() }),
+      render: () => ({ title: "dated" }),
+    });
+    const counted = defineNoticeKind({
+      key: "test.counted",
+      subjectType: "thing",
+      data: z.object({ n: z.bigint() }),
+      render: () => ({ title: "counted" }),
+    });
+    registerNoticeKind(dated);
+    registerNoticeKind(counted);
+    const base = { userId: "alice", subjectId: "t1", occurrence: "1" };
+    await expect(
+      notices.record({ ...base, kind: dated, data: { at: new Date() } })
+    ).rejects.toMatchObject({ code: "INTERNAL_ERROR" });
+    await expect(
+      notices.record({ ...base, kind: counted, data: { n: 1n } })
+    ).rejects.toMatchObject({ code: "INTERNAL_ERROR" });
+    expect(await notices.count({ userId: "alice" })).toBe(0);
+  });
+
+  it("refuses a subject id longer than its stored column", async () => {
+    const notices = await boot(dialect);
+    await expect(
+      notices.record({
+        kind: plain,
+        userId: "alice",
+        subjectId: "s".repeat(192),
+        occurrence: "1",
+        data: { n: 1 },
+      })
+    ).rejects.toMatchObject({ code: "INTERNAL_ERROR" });
+  });
+
   it("marks read only the caller's own notices", async () => {
     const notices = await boot(dialect);
     const mine = await notices.record({

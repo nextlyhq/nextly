@@ -34,6 +34,28 @@ describe("notice kinds", () => {
     expect(() => defineNoticeKind(kind(key))).toThrow();
   });
 
+  it("refuses a key or subject type longer than its stored column", () => {
+    // Stored in 64-character columns on MySQL; refused on every dialect so
+    // one cannot store what another truncates.
+    const long = `test.${"k".repeat(60)}`;
+    expect(() =>
+      defineNoticeKind({
+        key: long,
+        subjectType: "thing",
+        data: z.object({}),
+        render: () => ({ title: "x" }),
+      })
+    ).toThrow();
+    expect(() =>
+      defineNoticeKind({
+        key: "test.ok",
+        subjectType: "s".repeat(65),
+        data: z.object({}),
+        render: () => ({ title: "x" }),
+      })
+    ).toThrow();
+  });
+
   it("accepts a namespaced key, and finds the kind by it", () => {
     const stopped = defineNoticeKind(kind("releases.stopped"));
     registerNoticeKind(stopped);

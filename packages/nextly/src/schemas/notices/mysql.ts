@@ -20,7 +20,8 @@ export const nextlyNoticesMysql = mysqlTable(
   NOTICES_TABLE,
   {
     id: varchar("id", { length: 36 }).primaryKey(),
-    userId: varchar("user_id", { length: 36 }).notNull(),
+    // As wide as `users.id`, whose key it holds.
+    userId: varchar("user_id", { length: 191 }).notNull(),
     kind: varchar("kind", { length: 64 }).notNull(),
     subjectType: varchar("subject_type", { length: 64 }).notNull(),
     subjectId: varchar("subject_id", { length: 191 }).notNull(),

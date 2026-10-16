@@ -24,6 +24,9 @@ describe("parsing the notices routes", () => {
     [["notices"], "POST"],
     [["notices", "read"], "GET"],
     [["notices", "someone"], "GET"],
+    // A trailing segment is another path: it must not mark anything read.
+    [["notices", "read", "anything"], "POST"],
+    [["notices", "count", "x"], "GET"],
   ] as const)("does not route %j %s to a notices handler", (path, verb) => {
     expect(parseRestRoute([...path], verb).service).not.toBe("notices");
   });

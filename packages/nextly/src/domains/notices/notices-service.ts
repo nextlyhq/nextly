@@ -35,6 +35,7 @@ import type { VersionsWhere, VersionsWhereCondition } from "../versions/db-api";
 
 import {
   registeredNoticeKind,
+  NOTICE_REFERENCE_MAX,
   registeredNoticeKinds,
   type NoticeKind,
 } from "./notice-kinds";
@@ -56,6 +57,7 @@ export interface NoticesDb extends NoticesWriter {
     table: string,
     options?: {
       where?: VersionsWhere;
+      columns?: string[];
       orderBy?: { column: string; direction?: "asc" | "desc" }[];
       limit?: number;
       offset?: number;
@@ -207,6 +209,8 @@ export class NoticesService {
         },
       });
     }
+    assertReferencesFit(input.kind.key, input.subjectId, input.occurrence);
+    const data = jsonSnapshot(input.kind, parsed.data);
     if (!(await this.tablePresent())) return { created: false, id: null };
 
     const row = {
@@ -223,7 +227,7 @@ export class NoticesService {
         subjectId: input.subjectId,
         occurrence: input.occurrence,
       }),
-      data: parsed.data,
+      data,
       createdAt: new Date(),
       readAt: null,
     };
@@ -289,8 +293,13 @@ export class NoticesService {
     input: { userId: string } & ({ ids: string[] } | { all: true })
   ): Promise<number> {
     if (!(await this.tablePresent())) return 0;
+    // Only notices the person may see now, by the rule `find` and `count`
+    // apply: one hidden by its kind is not marked read unseen.
+    const kinds = await visibleKinds(input.userId);
+    if (kinds.length === 0) return 0;
     const conditions: VersionsWhereCondition[] = [
       { column: "userId", op: "=", value: input.userId },
+      { column: "kind", op: "IN", value: kinds },
       { column: "readAt", op: "IS NULL" },
     ];
     if ("ids" in input) {
@@ -330,12 +339,7 @@ export class NoticesService {
     unread?: boolean
   ): Promise<VersionsWhere | null> {
     if (!(await this.tablePresent())) return null;
-    const kinds: string[] = [];
-    for (const kind of registeredNoticeKinds()) {
-      if (kind.visible === undefined || (await kind.visible(userId))) {
-        kinds.push(kind.key);
-      }
-    }
+    const kinds = await visibleKinds(userId);
     if (kinds.length === 0) return null;
     const conditions: VersionsWhereCondition[] = [
       { column: "userId", op: "=", value: userId },
@@ -413,6 +417,75 @@ export class NoticesService {
   }
 }
 
+/** The registered kinds a person may see now: each kind's `visible`, or all. */
+async function visibleKinds(userId: string): Promise<string[]> {
+  const kinds: string[] = [];
+  for (const kind of registeredNoticeKinds()) {
+    if (kind.visible === undefined || (await kind.visible(userId))) {
+      kinds.push(kind.key);
+    }
+  }
+  return kinds;
+}
+
+/**
+ * Refuse a subject id or occurrence longer than its column holds on MySQL,
+ * on every dialect, so one cannot store what another truncates.
+ */
+function assertReferencesFit(
+  kind: string,
+  subjectId: string,
+  occurrence: string
+): void {
+  if (
+    subjectId.length <= NOTICE_REFERENCE_MAX &&
+    occurrence.length <= NOTICE_REFERENCE_MAX
+  ) {
+    return;
+  }
+  throw NextlyError.internal({
+    logContext: {
+      detail: `A notice's subject id and occurrence must be at most ${NOTICE_REFERENCE_MAX} characters.`,
+      reason: "notice-reference-too-long",
+      kind,
+    },
+  });
+}
+
+/** What a stored snapshot must survive: JSON, exactly as written. */
+const UNSTORABLE = Symbol("unstorable");
+
+/**
+ * The kind's data as it will be stored and read back. It must survive JSON
+ * storage and still satisfy the kind's schema, or a snapshot that passes now —
+ * a `bigint`, a `Date` — would fail the insert, or fail the same schema when
+ * the notice is read.
+ */
+function jsonSnapshot(
+  kind: {
+    key: string;
+    data: { safeParse(value: unknown): { success: boolean } };
+  },
+  data: unknown
+): unknown {
+  let stored: unknown;
+  try {
+    stored = data === undefined ? undefined : JSON.parse(JSON.stringify(data));
+  } catch {
+    stored = UNSTORABLE;
+  }
+  if (stored !== UNSTORABLE && kind.data.safeParse(stored).success) {
+    return stored;
+  }
+  throw NextlyError.internal({
+    logContext: {
+      detail: `Notice data for kind "${kind.key}" does not survive JSON storage: use only JSON values (no bigint or Date).`,
+      reason: "notice-data-not-json",
+      kind: kind.key,
+    },
+  });
+}
+
 /**
  * The part of the database pruning needs: reading the oldest ids and deleting
  * them. Narrower than {@link NoticesDb} so the retention pass, which prunes
@@ -430,6 +503,9 @@ export async function deleteNoticesOlderThan(
   limit: number
 ): Promise<number> {
   const old = await db.select<{ id: string }>(NOTICES_TABLE, {
+    // The ids alone: every row also carries its snapshot, which a delete
+    // by id never needs to read.
+    columns: ["id"],
     where: { and: [{ column: "createdAt", op: "<", value: before }] },
     orderBy: [{ column: "createdAt", direction: "asc" }],
     limit,
