@@ -67,7 +67,7 @@ async function openBuilder(page: Page): Promise<void> {
     true
   );
   await gotoAdmin(page, "/singles/homepage");
-  await page.getByRole("button", { name: OPEN_BUILDER_ACTION }).click();
+  await page.getByRole("link", { name: OPEN_BUILDER_ACTION }).click();
   await expect(
     page.locator('[data-nx-node="pattern-source"]').first()
   ).toBeVisible({ timeout: 30_000 });
