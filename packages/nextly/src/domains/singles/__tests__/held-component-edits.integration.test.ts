@@ -262,6 +262,70 @@ describe.each(getConfiguredTestDialects())(
       });
     });
 
+    it("reports a publish-all's component change against the state before it", async () => {
+      current = await createTestNextly({
+        dialect,
+        fieldGroups: [hero()],
+        singles: [
+          defineSingle({
+            slug: "home",
+            localized: true,
+            status: true,
+            versions: true,
+            fields: [
+              text({ name: "title", localized: true }),
+              fieldGroup({ name: "hero", component: "hero" }),
+            ],
+          }),
+        ],
+        localization: { locales: ["en", "de"], defaultLocale: "en" },
+      });
+      const singles = current.getService("singleEntryService");
+      await singles.update(
+        "home",
+        {
+          title: "T",
+          hero: { heading: "Live", subheading: "Live sub" },
+          status: "published",
+        },
+        { locale: "en", overrideAccess: true }
+      );
+      await singles.update(
+        "home",
+        { hero: { heading: "Pending", subheading: "Live sub" } },
+        { locale: "en", overrideAccess: true }
+      );
+      const before = (
+        await current.adapter.select<{ id: string }>("nextly_events")
+      ).length;
+
+      await singles.publishAllLocales("home", { overrideAccess: true });
+
+      const recorded = (
+        await current.adapter.select<{ type: string; payload: unknown }>(
+          "nextly_events"
+        )
+      ).slice(before);
+      const envelope = recorded
+        .map(
+          r =>
+            (typeof r.payload === "string"
+              ? JSON.parse(r.payload)
+              : r.payload) as {
+              type?: string;
+              previous?: Record<string, unknown> | null;
+              changedFields?: string[];
+              resource?: { locale?: string };
+            }
+        )
+        .find(e => e.type === "single.updated" && !e.resource?.locale);
+      expect(envelope).toBeDefined();
+      expect(contentOf(envelope!.previous?.hero)).toMatchObject({
+        heading: "Live",
+      });
+      expect(envelope!.changedFields).toContain("hero");
+    });
+
     it("publishes a held translated component edit after a restart", async () => {
       current = await createTestNextly({
         dialect,
