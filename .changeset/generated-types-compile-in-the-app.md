@@ -47,6 +47,15 @@ into, whichever package manager installed it.
   `types/generated/` and `db/schemas/collections/zod/` rather than into a new
   `src/` folder, while `typescript.outputFile` and `db.schemasDir` are left at
   their defaults. A path you set is used as written.
+- A relationship or upload field pointing at a built-in collection is typed
+  with a type the file has: `users` as the generated `User`, and `media` as
+  `MediaFile`, imported from `nextly` (the type `nextly.media.findByID`
+  returns). They were typed as `Users` and `Media`, which nothing declared, so
+  any app with such a field failed to compile once its types were generated. A
+  collection you define with one of those slugs keeps its own interface.
+- The blog template's featured-image alt text check reads the image through
+  `nextly.media.findByID`, and refuses the save when the image cannot be read
+  or no longer exists, rather than letting the post through unchecked.
 - `create-nextly-app`, adding Nextly to an existing app without `src/`, now
   writes `typescript.outputFile` as `./types/generated/nextly-types.ts` instead
   of a `./src/...` path, so the types land beside the rest of the app.

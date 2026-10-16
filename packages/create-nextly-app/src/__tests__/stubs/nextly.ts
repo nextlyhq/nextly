@@ -46,3 +46,25 @@ export async function seedSuperAdmin(
   seedOptions.push({ email: options.email, password: options.password });
   return { success: true };
 }
+
+/**
+ * `NextlyError.validation` in the shape the real one carries (`code` and
+ * `publicData.errors`), which is what the admin reads to show a writer the
+ * field to fix, so a test can assert the refusal a template hook raises.
+ */
+export class NextlyError extends Error {
+  constructor(
+    readonly code: string,
+    readonly publicData: {
+      errors: Array<{ path: string; code: string; message: string }>;
+    }
+  ) {
+    super("Validation failed.");
+  }
+
+  static validation(opts: {
+    errors: Array<{ path: string; code: string; message: string }>;
+  }): NextlyError {
+    return new NextlyError("VALIDATION_ERROR", { errors: opts.errors });
+  }
+}

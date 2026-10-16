@@ -148,3 +148,71 @@ describe("TypeGenerator — the augmented module is part of the app's program", 
     expect(code).not.toContain('import type {} from "nextly";');
   });
 });
+
+describe("TypeGenerator — a field pointing at a built-in collection names a type the file has", () => {
+  // `users` and `media` are built in: no config declares them, so no interface
+  // is generated per slug, and naming one (`Users`, `Media`) left the file
+  // referring to types it never declared or imported.
+  const posts = (fields: unknown[]) => collection(fields);
+
+  it("types a relationship to users as the generated User", () => {
+    const { code } = new TypeGenerator().generateTypesFile([
+      posts([{ name: "author", type: "relationship", relationTo: "users" }]),
+    ]);
+
+    expect(code).toContain("author?: string | User | null;");
+    expect(code).not.toMatch(/\bUsers\b/);
+  });
+
+  it("types an upload to media as Nextly's MediaFile, imported from nextly", () => {
+    const { code } = new TypeGenerator().generateTypesFile([
+      posts([{ name: "featuredImage", type: "upload", relationTo: "media" }]),
+    ]);
+
+    expect(code).toContain("featuredImage?: string | MediaFile | null;");
+    expect(code).toContain('import type { MediaFile } from "nextly";');
+    expect(code).not.toMatch(/\bMedia\b/);
+  });
+
+  it("imports MediaFile only when a field points at media", () => {
+    const { code } = new TypeGenerator().generateTypesFile([
+      posts([{ name: "title", type: "text" }]),
+    ]);
+
+    expect(code).not.toContain("MediaFile");
+  });
+
+  it("keeps a configured collection's own interface when its slug is media or users", () => {
+    // A config may declare its own `media` collection; then the generated
+    // interface is the type, and nothing is imported in its place.
+    const { code } = new TypeGenerator().generateTypesFile([
+      posts([
+        { name: "cover", type: "upload", relationTo: "media" },
+        { name: "owner", type: "relationship", relationTo: "users" },
+      ]),
+      collection([{ name: "label", type: "text" }], "media"),
+      collection([{ name: "label", type: "text" }], "users"),
+    ]);
+
+    expect(code).toContain("cover?: string | Media | null;");
+    expect(code).toContain("owner?: string | Users | null;");
+    expect(code).toContain("export interface Media {");
+    expect(code).not.toContain("MediaFile");
+  });
+
+  it("resolves each target of a polymorphic relationship the same way", () => {
+    const { code } = new TypeGenerator().generateTypesFile([
+      posts([
+        {
+          name: "subject",
+          type: "relationship",
+          relationTo: ["users", "media", "posts"],
+        },
+      ]),
+    ]);
+
+    expect(code).toContain(
+      "subject?: string | User | string | MediaFile | string | Posts | null;"
+    );
+  });
+});
