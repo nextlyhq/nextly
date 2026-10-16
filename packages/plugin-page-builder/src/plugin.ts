@@ -954,13 +954,10 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) => {
         limits: () => opts.limits ?? DEFAULT_LIMITS,
       });
       registerReadinessNotice(ctx, opts);
-    },
-    // Said at configuration time, in the CLI as at boot: a blocks field below
-    // the top level has no Page Builder to open, and the operator should learn
-    // that from the log before an author meets it in the form.
-    setup: config => {
-      warnNestedBlocksFields(config);
-      return config;
+      // A blocks field below the top level has no Page Builder to open, and the
+      // operator should learn that from the log before an author meets it in
+      // the form.
+      warnNestedBlocksFields(ctx.config, message => ctx.logger.warn(message));
     },
     contributes: {
       // The channel another plugin adds blocks through. Core carries no

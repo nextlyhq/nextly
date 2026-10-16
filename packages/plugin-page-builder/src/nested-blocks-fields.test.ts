@@ -70,53 +70,60 @@ describe("nestedBlocksFields", () => {
 });
 
 describe("warnNestedBlocksFields", () => {
-  it("warns once per field, naming where it is and what to do", () => {
+  it("warns once per field, naming where each is and what to do", () => {
     const warn = vi.fn();
     const config = {
-      logger: { warn },
       collections: [
         {
           slug: "pages",
-          fields: [{ name: "hero", type: "group", fields: [blocks("layout")] }],
-        },
-      ],
-    };
-
-    warnNestedBlocksFields(config);
-    // Setup can run more than once in one process; the operator is told once.
-    warnNestedBlocksFields(config);
-
-    expect(warn).toHaveBeenCalledOnce();
-    const [message] = warn.mock.calls[0] as [string];
-    expect(message).toContain('collection "pages"');
-    expect(message).toContain('"hero.layout"');
-    expect(message).toContain("top-level fields only");
-    expect(message).toContain("Move it to the top level");
-  });
-
-  it("warns on the console when the config carries no logger", () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    warnNestedBlocksFields({
-      singles: [
-        {
-          slug: "landing",
           fields: [
+            { name: "hero", type: "group", fields: [blocks("layout")] },
             { name: "rows", type: "repeater", fields: [blocks("cell")] },
           ],
         },
       ],
-    });
-    expect(warn).toHaveBeenCalledOnce();
-    expect(warn.mock.calls[0]?.[0]).toContain('single "landing"');
-    warn.mockRestore();
+    };
+
+    warnNestedBlocksFields(config, warn);
+    // A reload in one process runs it again; the operator is told once per
+    // field, and every field is told: a single "warned already" flag would
+    // say the first and drop the second.
+    warnNestedBlocksFields(config, warn);
+
+    expect(warn).toHaveBeenCalledTimes(2);
+    const messages = warn.mock.calls.map(call => call[0] as string);
+    expect(messages[0]).toContain('collection "pages"');
+    expect(messages[0]).toContain('"hero.layout"');
+    expect(messages[0]).toContain("top-level fields only");
+    expect(messages[0]).toContain("Move it to the top level");
+    expect(messages[1]).toContain('"rows.cell"');
   });
 
   it("says nothing when every blocks field is at the top level", () => {
     const warn = vi.fn();
-    warnNestedBlocksFields({
-      logger: { warn },
-      collections: [{ slug: "posts", fields: [blocks("content")] }],
-    });
+    warnNestedBlocksFields(
+      { collections: [{ slug: "posts", fields: [blocks("content")] }] },
+      warn
+    );
     expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("names a Single as a Single", () => {
+    const warn = vi.fn();
+    warnNestedBlocksFields(
+      {
+        singles: [
+          {
+            slug: "landing",
+            fields: [
+              { name: "rows", type: "repeater", fields: [blocks("cell")] },
+            ],
+          },
+        ],
+      },
+      warn
+    );
+    expect(warn).toHaveBeenCalledOnce();
+    expect(warn.mock.calls[0]?.[0]).toContain('single "landing"');
   });
 });

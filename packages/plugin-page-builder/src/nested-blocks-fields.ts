@@ -91,27 +91,25 @@ export function nestedBlocksFields(config: {
   ];
 }
 
-/** Fields already reported in this process, so a repeated setup says nothing new. */
+/** Fields already reported in this process, so a repeated install says nothing new. */
 const reported = new Set<string>();
 
 /**
  * Warn once for each blocks field declared below the top level: where it is,
  * that the Page Builder opens for top-level fields only, and what to do.
  *
- * Called from the plugin's `setup`, which runs at boot and in the CLI alike,
- * so the warning reaches an operator wherever the config is loaded.
+ * Called from the plugin's `init` with its own logger. Not from `setup`:
+ * a plugin with a `setup` transformer makes every cold request the route
+ * boot decision cannot rule out boot the app, anonymous scans included, and
+ * `setup` is handed no logger to say it with anyway.
  */
-export function warnNestedBlocksFields(config: {
-  collections?: readonly DeclaredDocument[];
-  singles?: readonly DeclaredDocument[];
-  logger?: { warn: (message: string) => void };
-}): void {
-  // The config's logger where it has one; the console where it has none, as
-  // the CLI's config loader does, so the warning is never silently dropped.
-  const warn = (message: string) =>
-    config.logger === undefined
-      ? console.warn(message)
-      : config.logger.warn(message);
+export function warnNestedBlocksFields(
+  config: {
+    collections?: readonly DeclaredDocument[];
+    singles?: readonly DeclaredDocument[];
+  },
+  warn: (message: string) => void
+): void {
   for (const field of nestedBlocksFields(config)) {
     const key = JSON.stringify([field.kind, field.slug, field.path]);
     if (reported.has(key)) continue;
