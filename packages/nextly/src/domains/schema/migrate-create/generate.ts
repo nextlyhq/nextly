@@ -286,7 +286,8 @@ export async function generateMigration(
     args.dialect,
     args.defaultLocale ?? "en",
     await readCompanionColumnHistory(args.migrationsDir),
-    args.onWarning ?? (() => {})
+    args.onWarning ?? (() => {}),
+    desiredSnapshot
   );
 
   const hasCompanions =
@@ -683,7 +684,8 @@ function planFieldsLeavingTranslation(
     string,
     ReadonlyMap<string, LocalizedColumnSpec>
   >,
-  warn: (message: string) => void
+  warn: (message: string) => void,
+  desiredSnapshot: NextlySchemaSnapshot
 ): FieldLeavesEntry[] {
   const entries: FieldLeavesEntry[] = [];
   for (const { entity: c, kind } of entities) {
@@ -697,7 +699,13 @@ function planFieldsLeavingTranslation(
       companionHistoryKey(kind, c.slug)
     );
     warnOfUnknownShapes(c.slug, leaving, previousColumns, warn);
-    assertFieldsMayLeaveTranslation(c, leaving, previousColumns, dialect);
+    assertFieldsMayLeaveTranslation(
+      c,
+      leaving,
+      previousColumns,
+      dialect,
+      desiredSnapshot.tables.find(t => t.name === c.tableName)
+    );
 
     entries.push({
       entity: kind,
@@ -809,6 +817,26 @@ function warnOfUnknownShapes(
 }
 
 /**
+ * The leaving fields a unique index on the main table covers, read from the table as this
+ * migration makes it: an index declared in the config, the one every `slug` column carries, or
+ * one a schema hook adds. The main file creates them while the new columns are still empty, so a
+ * value they would refuse is found only when the shared file copies it in.
+ */
+function uniqueIndexedFields(
+  leaving: readonly LeavingField[],
+  desiredTable: TableSpec | undefined
+): Set<string> {
+  const unique = new Set(
+    (desiredTable?.indexes ?? [])
+      .filter(index => index.unique)
+      .flatMap(index => index.columns)
+  );
+  return new Set(
+    leaving.filter(l => unique.has(l.column.name)).map(l => l.field.name)
+  );
+}
+
+/**
  * Refuses the run when a leaving field cannot leave translation in one migration
  * (`refusalsForFieldsLeavingTranslation`), naming the steps that work, before any file is written.
  */
@@ -816,17 +844,15 @@ function assertFieldsMayLeaveTranslation(
   c: MinimalConfigEntity,
   leaving: readonly LeavingField[],
   previousColumns: ReadonlyMap<string, LocalizedColumnSpec> | undefined,
-  dialect: SupportedDialect
+  dialect: SupportedDialect,
+  /** The entity's main table as this migration makes it, with every index it will carry. */
+  desiredTable: TableSpec | undefined
 ): void {
   const refusals = refusalsForFieldsLeavingTranslation({
     leaving: new Set(leaving.map(l => l.field.name)),
     newFields: c.fields,
     ...(previousColumns ? { previousColumns } : {}),
-    uniqueIndexed: new Set(
-      (c.indexes ?? [])
-        .filter(index => index.unique === true)
-        .flatMap(index => index.fields)
-    ),
+    uniqueIndexed: uniqueIndexedFields(leaving, desiredTable),
     dialect,
     builtBy: "codeFirst",
     surface: "code",

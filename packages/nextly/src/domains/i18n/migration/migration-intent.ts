@@ -20,7 +20,7 @@ export const LOCALIZATION_INTENT_HEADER = "-- Localization:";
  * Absence of the field is different, and does mean verbatim — that is what every file written
  * before this existed looks like.
  */
-export const LOCALIZATION_INTENT_VERSION = 1;
+export const LOCALIZATION_INTENT_VERSION = 2;
 
 /**
  * Every payload version this build has a parser for.
@@ -30,9 +30,7 @@ export const LOCALIZATION_INTENT_VERSION = 1;
  * When version 2 arrives and 1 is still readable, both belong here; when 1 stops being readable, it
  * comes out and its files start refusing instead of being silently misread.
  */
-const SUPPORTED_INTENT_VERSIONS: ReadonlySet<number> = new Set([
-  LOCALIZATION_INTENT_VERSION,
-]);
+const SUPPORTED_INTENT_VERSIONS: ReadonlySet<number> = new Set([1, 2]);
 
 /**
  * What a companion migration file declares it is FOR, as opposed to the statements it happens to
@@ -69,6 +67,31 @@ export const LOCALIZATION_MIGRATION_KINDS = [
 export type LocalizationMigrationKind =
   (typeof LOCALIZATION_MIGRATION_KINDS)[number];
 
+/**
+ * The kinds each payload version can declare. Version 2 added `archive` and `shared`; version 1
+ * has only the whole-entity transitions.
+ */
+const KINDS_BY_VERSION: ReadonlyMap<
+  number,
+  readonly LocalizationMigrationKind[]
+> = new Map<number, readonly LocalizationMigrationKind[]>([
+  [1, ["enable", "create-only", "disable"]],
+  [2, LOCALIZATION_MIGRATION_KINDS],
+]);
+
+/**
+ * The version a file of this kind is written with: the lowest that can declare it. A file of a
+ * version-1 kind stays readable by a build that knows only version 1, and a file of a newer kind
+ * is refused by such a build as a version it does not support, which says to upgrade, rather
+ * than as a corrupt version-1 file.
+ */
+export function intentVersionFor(kind: LocalizationMigrationKind): number {
+  for (const [version, kinds] of KINDS_BY_VERSION) {
+    if (kinds.includes(kind)) return version;
+  }
+  return LOCALIZATION_INTENT_VERSION;
+}
+
 export interface LocalizationMigrationIntent {
   version: number;
   kind: LocalizationMigrationKind;
@@ -93,7 +116,7 @@ export function formatLocalizationIntent(
 ): string {
   const s = intent.spec;
   const ordered = {
-    version: LOCALIZATION_INTENT_VERSION,
+    version: intentVersionFor(intent.kind),
     kind: intent.kind,
     entity: intent.entity,
     spec: {
@@ -231,7 +254,9 @@ function isIntentShape(value: unknown): value is LocalizationMigrationIntent {
   const v = value as Record<string, unknown>;
   if (typeof v.version !== "number") return false;
   if (
-    !LOCALIZATION_MIGRATION_KINDS.includes(v.kind as LocalizationMigrationKind)
+    !(KINDS_BY_VERSION.get(v.version) ?? []).includes(
+      v.kind as LocalizationMigrationKind
+    )
   )
     return false;
   if (

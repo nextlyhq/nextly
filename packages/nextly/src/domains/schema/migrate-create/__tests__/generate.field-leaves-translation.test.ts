@@ -140,6 +140,21 @@ describe.each(["sqlite", "postgresql", "mysql"] as const)(
       ).rejects.toThrow(/"body" changes how it is stored/);
     });
 
+    it("refuses a slug leaving translation, which its automatic unique index covers", async () => {
+      // No `unique` flag and no declared index: every `slug` column gets a unique index of its own,
+      // which the main file creates while the column is still empty.
+      const withSlug = (localized: boolean) => ({
+        ...TRANSLATED,
+        fields: [
+          { name: "slug", type: "text", localized },
+          { name: "price", type: "number" },
+        ],
+      });
+      await expect(
+        secondRun(dialect, withSlug(false), { first: withSlug(true) })
+      ).rejects.toThrow(/"slug" is unique/);
+    });
+
     it("refuses a field a unique index covers, naming it", async () => {
       await expect(
         secondRun(dialect, {
