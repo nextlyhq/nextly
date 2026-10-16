@@ -33,16 +33,16 @@
 
 Removed exports: `triggerWebhooks`, `fireWebhooks`, `isValidWebhookUrl`, `getSupportedWebhookEvents`, and the types `WebhookPayload`, `TriggerWebhooksOptions`, `WebhookDeliveryResult`, `TriggerWebhooksResult`, `WebhookConfig` and `WebhookEvent`.
 
-Removed option: `notifications.webhooks` on a form config, and `webhooks` on `FormDocument`. The plugin never read it, so it sent nothing. A config that still sets it now logs a warning naming the replacement. Stored forms are not changed.
+Removed option: `notifications.webhooks` on a form config, and `webhooks` on `FormDocument`. The plugin never read it, so it sent nothing. A config that still sets it now logs a warning naming the replacement, from `createFormConfig`, `applyFormDefaults` and `validateFormConfig`. Stored forms are not changed.
 
-To be told about new submissions, subscribe an endpoint to the core event instead:
+To be told about new submissions, subscribe an endpoint to the core event instead. There is no replacement for `submission.updated` or `submission.deleted`: the submissions collection sends no events when a submission is edited or deleted, because they would carry its answers.
 
 ```ts
 // Before: accepted, and never sent
-createFormConfig({
-  slug: "contact",
-  fields,
+createFormConfig("contact", fields, {
   notifications: {
+    enabled: true,
+    recipients: [{ email: "team@example.com" }],
     webhooks: [
       { url: "https://crm.example.com/hook", events: ["submission.created"] },
     ],
