@@ -254,6 +254,29 @@ describe.skipIf(!TEST_DB_URL)("MySQL upsert", () => {
     }
   });
 
+  it("returns the stored row when an update trigger rewrites the conflict key", async () => {
+    // Read back by the row's primary key: by the conflict value the update was
+    // keyed on, the row a trigger re-keyed is not found.
+    await adapter.upsert(
+      KEYED,
+      { id: "a", key: "k1", label: "first" },
+      { conflictColumns: ["key"] }
+    );
+    await adapter.executeQuery(
+      `CREATE TRIGGER int_upsert_rekey BEFORE UPDATE ON ${KEYED} FOR EACH ROW SET NEW.\`key\` = CONCAT('u-', OLD.\`key\`)`
+    );
+    try {
+      const stored = await adapter.upsert<Row>(
+        KEYED,
+        { id: "b", key: "k1", label: "second" },
+        { conflictColumns: ["key"], updateColumns: ["label"] }
+      );
+      expect(stored).toMatchObject({ id: "a", key: "u-k1", label: "second" });
+    } finally {
+      await adapter.executeQuery("DROP TRIGGER IF EXISTS int_upsert_rekey");
+    }
+  });
+
   it("reads back the row matching every column of a composite key", async () => {
     // Two rows share the key's first column, so a read-back by that column
     // alone could return the wrong one.

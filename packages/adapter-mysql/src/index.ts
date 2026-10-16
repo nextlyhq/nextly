@@ -67,7 +67,7 @@ import {
   acceptsForShare,
   checkDialectVersion,
 } from "@nextlyhq/adapter-drizzle/version-check";
-import { and, eq } from "drizzle-orm";
+import { and, eq, getTableColumns } from "drizzle-orm";
 import type { AnyRelations, Column, SQL } from "drizzle-orm";
 import { getTableConfig, type MySqlTable } from "drizzle-orm/mysql-core";
 import { drizzle, type MySql2Database } from "drizzle-orm/mysql2";
@@ -804,9 +804,13 @@ export class MySqlAdapter extends DrizzleAdapter {
    * its key. No row there means the collision was on the primary key, and it
    * is refused as `ON CONFLICT (target)` refuses it.
    *
-   * The conflict columns must also be given values: MySQL cannot look a row up
-   * by a key the database would only fill in itself. A failed insert rolls
-   * back only itself on MySQL, so a caller's transaction stays usable.
+   * The steps run in the caller's transaction, or in one of their own, since a
+   * locking read locks nothing past its statement under autocommit. Rows are
+   * read back by their primary key, so a trigger that rewrites the conflict
+   * value still returns the row stored. The conflict columns must also be
+   * given values: MySQL cannot look a row up by a key the database would only
+   * fill in itself. A failed insert rolls back only itself on MySQL, so a
+   * caller's transaction stays usable.
    */
   override async upsert<T = unknown>(
     table: string,
@@ -817,23 +821,25 @@ export class MySqlAdapter extends DrizzleAdapter {
     const tableObj = this.getTableObject(table) as MySqlTable | undefined;
     // Unknown table: the base method reports it as every CRUD method does.
     if (!tableObj) return super.upsert<T>(table, data, options, executor);
+    let target: { where: SQL | undefined; nullKey: boolean };
     try {
-      const key = this.conflictKey(tableObj, table, options.conflictColumns);
-      const db = (executor ??
-        this.getDrizzle()) as MySql2Database<AnyRelations>;
-      const values = options.conflictColumns.map(column => data[column]);
-      if (values.some(value => value === undefined)) {
-        throw createDatabaseError({
-          kind: "query",
-          message: `upsert on ${table} needs a value for every conflict column (${options.conflictColumns.join(", ")}).`,
-        });
-      }
-      const where = and(
-        ...key.map((column, i) => eq(column, values[i] as never))
-      );
+      // Judged before anything else, so a refused call takes no connection.
+      target = this.upsertTarget(tableObj, table, data, options);
+    } catch (error) {
+      throw this.handleQueryError(error, "upsert", table);
+    }
+    // A locking read holds its lock only inside a transaction: under autocommit
+    // it is released when its own statement ends, and the next statement may
+    // run on another pooled connection. Without the caller's transaction, the
+    // insert, the read and the update get one of their own, on one connection.
+    if (executor === undefined) {
+      return this.transaction(tx => tx.upsert<T>(table, data, options));
+    }
+    try {
+      const db = executor as MySql2Database<AnyRelations>;
       // A conflict key holding NULL never conflicts: a unique index admits any
       // number of NULLs. It is a plain insert, read back by its primary key.
-      if (values.some(value => value === null)) {
+      if (target.nullKey) {
         return ((await this.insertRow(db, tableObj, data)) ?? data) as T;
       }
       return (await this.insertOrResolve(
@@ -841,11 +847,37 @@ export class MySqlAdapter extends DrizzleAdapter {
         tableObj,
         data,
         options,
-        where
+        target.where
       )) as T;
     } catch (error) {
       throw this.handleQueryError(error, "upsert", table);
     }
+  }
+
+  /**
+   * What an upsert is keyed on: the target's condition, and whether its key
+   * holds a NULL. Refuses a target this dialect cannot keep to, and a conflict
+   * column left for the database to fill — MySQL cannot look a row up by a key
+   * value only the database would supply.
+   */
+  private upsertTarget(
+    tableObj: MySqlTable,
+    table: string,
+    data: Record<string, unknown>,
+    options: UpsertOptions
+  ): { where: SQL | undefined; nullKey: boolean } {
+    const key = this.conflictKey(tableObj, table, options.conflictColumns);
+    const values = options.conflictColumns.map(column => data[column]);
+    if (values.some(value => value === undefined)) {
+      throw createDatabaseError({
+        kind: "query",
+        message: `upsert on ${table} needs a value for every conflict column (${options.conflictColumns.join(", ")}).`,
+      });
+    }
+    return {
+      where: and(...key.map((column, i) => eq(column, values[i] as never))),
+      nullKey: values.some(value => value === null),
+    };
   }
 
   /**
@@ -951,37 +983,59 @@ export class MySqlAdapter extends DrizzleAdapter {
     const update = this.updateValues(data, options);
     if (Object.keys(update).length === 0) return existing;
     await db.update(tableObj).set(update).where(where);
-    return this.lockedRow(db, tableObj, where);
+    // Read back by the row's own primary key: a BEFORE UPDATE trigger may have
+    // changed the conflict value the update was keyed on.
+    return this.lockedRow(
+      db,
+      tableObj,
+      this.byIdentity(tableObj, existing as Record<string, unknown>) ?? where
+    );
   }
 
   /**
-   * Insert a row and read it back by the primary key the insert reports —
-   * the value given, or the one MySQL generated. Undefined when the table has
-   * no column-level primary key to report.
+   * Insert a row and read it back by its primary key: the value the caller
+   * gave, or the one MySQL or the model generated, which `$returningId()`
+   * reports and a given value it does not. Undefined when the table has no
+   * primary key to read by.
    */
   private async insertRow(
     db: MySql2Database<AnyRelations>,
     tableObj: MySqlTable,
     data: Record<string, unknown>
   ): Promise<unknown> {
-    const [ids] = (await db
+    const [generated] = (await db
       .insert(tableObj)
       .values(data as never)
       .$returningId()) as Record<string, unknown>[];
-    const record = tableObj as unknown as Record<string, Column | undefined>;
-    const primary = Object.entries(ids ?? {}).filter(
-      ([name, value]) =>
-        record[name] !== undefined && value !== undefined && value !== null
+    const identity = this.byIdentity(tableObj, { ...generated, ...data });
+    return identity === undefined
+      ? undefined
+      : this.lockedRow(db, tableObj, identity);
+  }
+
+  /**
+   * A row's primary key as a condition, from a record keyed as the model's
+   * properties are. Undefined when the table has no primary key or the record
+   * lacks part of it.
+   */
+  private byIdentity(
+    tableObj: MySqlTable,
+    record: Record<string, unknown>
+  ): SQL | undefined {
+    const primary = new Set(keysOf(tableObj).primary);
+    const parts = Object.entries(getTableColumns(tableObj)).filter(
+      ([, column]) => primary.has(column.name)
     );
-    if (primary.length === 0) return undefined;
-    return this.lockedRow(
-      db,
-      tableObj,
-      and(
-        ...primary.map(([name, value]) =>
-          eq(record[name] as Column, value as never)
-        )
+    if (
+      parts.length === 0 ||
+      parts.some(
+        ([name]) => record[name] === undefined || record[name] === null
       )
+    ) {
+      return undefined;
+    }
+    return and(
+      ...parts.map(([name, column]) => eq(column, record[name] as never))
     );
   }
 

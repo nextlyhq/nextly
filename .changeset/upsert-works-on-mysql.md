@@ -37,9 +37,11 @@ other table before writing, naming the other unique keys. On a table it accepts,
 it means what it does on PostgreSQL and SQLite:
 
 - the row is inserted first, or the row holding that key is updated, found by a
-  read that sees rows other transactions have committed;
+  locking read that sees rows other transactions have committed, all in the
+  caller's transaction or in one of its own;
 - keeping an existing row runs no update triggers;
-- the row returned is the one stored, even when an insert trigger changed it;
+- the row returned is the one stored, read by its primary key, even when a
+  trigger changed its key;
 - a primary-key collision is refused as a unique violation.
 
 The conflict columns must be given values.

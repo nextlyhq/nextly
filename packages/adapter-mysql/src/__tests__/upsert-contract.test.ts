@@ -10,7 +10,7 @@ import {
   uniqueIndex,
   varchar,
 } from "drizzle-orm/mysql-core";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { createMySqlAdapter } from "../index";
 
@@ -93,6 +93,30 @@ describe("MySQL upsert: the tables it accepts", () => {
         { conflictColumns: ["grp"] }
       )
     ).rejects.toThrow(/not a primary or unique key/);
+  });
+
+  it("runs an upsert without the caller's transaction in one of its own", async () => {
+    // A locking read under autocommit locks nothing past its own statement,
+    // so the read and the update after it would not be protected. A refused
+    // call is judged first and opens nothing.
+    const unconnected = adapter();
+    const transaction = vi
+      .spyOn(unconnected, "transaction")
+      .mockResolvedValue({ id: "a" });
+    await unconnected.upsert(
+      "single_key",
+      { id: "a", key: "k1" },
+      { conflictColumns: ["key"] }
+    );
+    expect(transaction).toHaveBeenCalledTimes(1);
+    await expect(
+      unconnected.upsert(
+        "column_and_index",
+        { id: "a", key: "k1" },
+        { conflictColumns: ["key"] }
+      )
+    ).rejects.toThrow(/other unique keys/);
+    expect(transaction).toHaveBeenCalledTimes(1);
   });
 
   it("accepts the one unique key, declared on a column or as a constraint", async () => {
