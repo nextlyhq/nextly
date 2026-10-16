@@ -134,8 +134,70 @@ export interface PageBuilderCardProps {
   render: PageRenderInputs;
   /** Whether this author may open the editor at all. */
   canEdit: boolean;
-  /** Opens the builder over the form. */
-  onOpen: () => void;
+  /**
+   * The builder's own address for this document and field, or `undefined`
+   * while the document has none — a page that has never been saved.
+   */
+  href: string | undefined;
+  /** Moves to `href` within the admin, keeping the form mounted. */
+  onNavigate: (href: string) => void;
+}
+
+/**
+ * Whether a click is the plain primary one this page may handle itself.
+ * Anything else — a modifier, or another button — belongs to the browser,
+ * which is how an author opens the builder in a new tab or window.
+ */
+function isPlainClick(event: React.MouseEvent): boolean {
+  return (
+    event.button === 0 &&
+    !event.metaKey &&
+    !event.ctrlKey &&
+    !event.shiftKey &&
+    !event.altKey
+  );
+}
+
+/**
+ * The way in: a real link to the builder's address, handled within the admin
+ * on a plain click so the form and its unsaved work stay mounted. Disabled,
+ * with the reason beside it, while the document has no address yet.
+ */
+function OpenBuilder({
+  href,
+  label,
+  onNavigate,
+}: {
+  href: string | undefined;
+  label: string;
+  onNavigate: (href: string) => void;
+}): React.JSX.Element {
+  if (href === undefined) {
+    return (
+      <div className="flex flex-col items-end gap-1">
+        <Button type="button" disabled>
+          {label}
+        </Button>
+        <p className="text-xs text-muted-foreground">
+          Save this page to open the Page Builder.
+        </p>
+      </div>
+    );
+  }
+  return (
+    <Button asChild>
+      <a
+        href={href}
+        onClick={event => {
+          if (!isPlainClick(event)) return;
+          event.preventDefault();
+          onNavigate(href);
+        }}
+      >
+        {label}
+      </a>
+    </Button>
+  );
 }
 
 /**
@@ -232,7 +294,8 @@ export function PageBuilderCard({
   components,
   render,
   canEdit,
-  onOpen,
+  href,
+  onNavigate,
 }: PageBuilderCardProps) {
   const total = useMemo(
     // Counted under the SITE's cap rather than an unbounded read, so the number
@@ -276,9 +339,11 @@ export function PageBuilderCard({
         </div>
 
         {canEdit ? (
-          <Button type="button" onClick={onOpen}>
-            {empty ? BUILD_PAGE_LABEL : OPEN_BUILDER_LABEL}
-          </Button>
+          <OpenBuilder
+            href={href}
+            label={empty ? BUILD_PAGE_LABEL : OPEN_BUILDER_LABEL}
+            onNavigate={onNavigate}
+          />
         ) : null}
       </div>
     </div>
