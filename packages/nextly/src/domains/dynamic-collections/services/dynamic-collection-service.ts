@@ -22,6 +22,7 @@ import { FieldGroupRegistryService } from "../../field-groups/services/field-gro
 import { fieldGroupSlugList } from "../../field-groups/storage/field-group-field-type";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
 import { assertLocalizationConfigured } from "../../i18n/config/require-app-config";
+import { assertI18nArchiveWritable } from "../../i18n/migration/archive-preflight";
 import { deriveCompanionSpec } from "../../i18n/migration/derive-companion-spec";
 import { buildCompanionCreateOnlySql } from "../../i18n/migration/generate-up";
 import {
@@ -1083,6 +1084,15 @@ export class DynamicCollectionService extends BaseService {
         oldUserFields,
         userDefinedFields
       );
+      // A field leaving translation keeps its other languages' values only in the archive, so
+      // the archive has to accept them before anything here is written or altered.
+      if (
+        collectionWasLocalized &&
+        collectionIsLocalized &&
+        fieldsLeavingTranslation(oldUserFields, userDefinedFields).length > 0
+      ) {
+        await assertI18nArchiveWritable(this.adapter, collectionName);
+      }
 
       // Pass status flags so the alter migration can ADD/DROP the
       // `status` column when the user toggles Draft/Published on or off.
