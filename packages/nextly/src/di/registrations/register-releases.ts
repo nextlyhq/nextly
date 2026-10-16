@@ -35,6 +35,7 @@ import type { RegistrationContext } from "./types";
 
 export function registerReleaseServices({
   adapter,
+  logger,
 }: RegistrationContext): void {
   container.registerSingleton<ReleasesService>(
     "releasesService",
@@ -74,7 +75,7 @@ export function registerReleaseServices({
               // read that writes nothing.
               if (
                 target.scopeKind === "single" &&
-                !(await singleRowExists(adapter, target.scopeSlug))
+                !(await singleRowExists(adapter, target.scopeSlug, logger))
               ) {
                 return null;
               }
@@ -251,19 +252,22 @@ async function nullWhenRefused<T>(
  */
 async function singleRowExists(
   adapter: RegistrationContext["adapter"],
-  slug: string
+  slug: string,
+  logger: RegistrationContext["logger"]
 ): Promise<boolean> {
   if (!container.has("singleRegistryService")) return false;
   // Resolved the way every request-scoped Single read opens: the registry row,
   // and its runtime table registered in THIS process. A worker that booted
   // before a UI-defined Single existed has the table in the database but not
   // in its schema registry, and a query there would fail rather than answer.
+  // The logger carries the reason when that registration cannot be made.
   const single = await resolveSingleForRequest(
     adapter,
     container.get<{
       getSingleBySlug(slug: string): Promise<DynamicSingleRecord | null>;
     }>("singleRegistryService"),
-    slug
+    slug,
+    logger
   );
   const table = single?.tableName;
   if (table === undefined || !(await adapter.tableExists(table))) return false;
