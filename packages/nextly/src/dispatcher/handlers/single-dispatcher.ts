@@ -128,6 +128,7 @@ import {
   setVersionLabelForDocument,
   listVersionsForDocument,
   userFromParams,
+  readComparisonParams,
 } from "./versions-methods";
 
 // ============================================================
@@ -288,12 +289,13 @@ export const SINGLE_VERSION_METHODS: Record<
   getSingleVersionDiff: {
     execute: async (_svc, p) => {
       const slug = String(p.slug ?? "");
-      const from = Number(p.from);
-      const to = Number(p.to);
-      // Validate the version pair before resolving the live Single, so a
+      const comparison = readComparisonParams(p);
+      // Validate an explicit pair before resolving the live Single, so a
       // malformed comparison fails as a validation error whether or not the
       // Single has been materialized.
-      assertDiffVersionPair(from, to);
+      if (comparison.from !== undefined) {
+        assertDiffVersionPair(comparison.from, comparison.to ?? Number.NaN);
+      }
       const entryId = await requireLiveSingleId(slug);
       const diff = await getVersionDiffForDocument({
         scopeKind: "single",
@@ -301,9 +303,7 @@ export const SINGLE_VERSION_METHODS: Record<
         entryId,
         user: userFromParams(p),
         authenticatedScope: readAuthenticatedScope(p),
-        from,
-        to,
-        modifiedOnly: p.modifiedOnly === "1" || p.modifiedOnly === "true",
+        ...comparison,
       });
       return respondDoc(diff);
     },

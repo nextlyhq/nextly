@@ -9,6 +9,8 @@
  * @module dispatcher/handlers/versions-methods
  */
 
+import { z } from "zod";
+
 import type { PaginationMeta } from "../../api/response-shapes";
 import {
   assertDiffVersionPair,
@@ -32,6 +34,7 @@ import {
   attachVersionAuthors,
   type VersionMetaWithAuthor,
 } from "../../domains/versions/author-hydration";
+import { resolveComparisonPair } from "../../domains/versions/comparison-baselines";
 import type { VersionDiff } from "../../domains/versions/diff";
 import {
   discardWorkingDraft,
@@ -306,14 +309,83 @@ export async function getVersionForDocument(
 }
 
 /**
+ * A comparison request's query, parsed once for every route that compares. An
+ * absent or blank parameter is absent; a version number that is not a whole
+ * number is left for `assertDiffVersionPair` to refuse with the parameter's
+ * name, so a malformed pair keeps its existing error.
+ */
+const comparisonQuery = z.object({
+  from: z.string().trim().optional(),
+  to: z.string().trim().optional(),
+  baseline: z.string().trim().optional(),
+  locale: z.string().trim().optional(),
+  modifiedOnly: z.string().optional(),
+});
+
+export function readComparisonParams(p: Params): {
+  from?: number;
+  to?: number;
+  baseline?: string;
+  locale?: string;
+  modifiedOnly: boolean;
+} {
+  const query = comparisonQuery.parse({
+    from: typeof p.from === "string" ? p.from : undefined,
+    to: typeof p.to === "string" ? p.to : undefined,
+    baseline: typeof p.baseline === "string" ? p.baseline : undefined,
+    locale: typeof p.locale === "string" ? p.locale : undefined,
+    modifiedOnly:
+      typeof p.modifiedOnly === "string" ? p.modifiedOnly : undefined,
+  });
+  const present = (value: string | undefined) =>
+    value === undefined || value === "" ? undefined : value;
+  const number = (value: string | undefined) => {
+    const raw = present(value);
+    return raw === undefined ? undefined : Number(raw);
+  };
+  return {
+    from: number(query.from),
+    to: number(query.to),
+    baseline: present(query.baseline),
+    locale: present(query.locale),
+    modifiedOnly: query.modifiedOnly === "1" || query.modifiedOnly === "true",
+  };
+}
+
+/**
  * A typed diff of two versions of one document over the dispatcher, gated
  * exactly like a single-version read.
+ *
+ * Either an explicit pair (`from` and `to`), or a target and a baseline the
+ * server resolves (`to` and `baseline`, each optional; see
+ * `resolveComparisonPair` for the defaults). Naming both a `from` and a
+ * `baseline` is refused: they are two answers to one question.
  */
 export async function getVersionDiffForDocument(
-  args: VersionMethodArgs & { from: number; to: number; modifiedOnly?: boolean }
+  args: VersionMethodArgs & {
+    from?: number;
+    to?: number;
+    /** @experimental A registered comparison baseline's name. */
+    baseline?: string;
+    modifiedOnly?: boolean;
+  }
 ): Promise<VersionDiff> {
-  assertDiffVersionPair(args.from, args.to);
+  if (args.from !== undefined) {
+    if (args.baseline !== undefined) {
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: "baseline",
+            code: "INVALID_VALUE",
+            message: "Name either `from` or `baseline`, not both.",
+          },
+        ],
+      });
+    }
+    assertDiffVersionPair(args.from, args.to ?? Number.NaN);
+  }
 
+  // The read gate runs before anything about the document's history is read.
   await assertVersionDocumentReadable(
     args.scopeKind,
     args.slug,
@@ -322,16 +394,37 @@ export async function getVersionDiffForDocument(
     args.authenticatedScope
   );
 
-  return diffDocumentVersions({
+  const ref = {
+    scopeKind: args.scopeKind,
+    scopeSlug: args.slug,
+    entryId: args.entryId,
+  };
+  const resolved =
+    args.from !== undefined && args.to !== undefined
+      ? { from: args.from, to: args.to, baseline: undefined }
+      : await resolveComparisonPair(
+          {
+            ref,
+            to: args.to,
+            baseline: args.baseline,
+            locale: args.locale,
+            userId: args.user?.id ?? null,
+          },
+          await getService("versionsService").listPartVersions(ref)
+        );
+  assertDiffVersionPair(resolved.from, resolved.to);
+
+  const diff = await diffDocumentVersions({
     scopeKind: args.scopeKind,
     slug: args.slug,
     entryId: args.entryId,
     user: args.user,
-    from: args.from,
-    to: args.to,
+    from: resolved.from,
+    to: resolved.to,
     modifiedOnly: args.modifiedOnly,
     authenticatedScope: args.authenticatedScope,
   });
+  return resolved.baseline ? { ...diff, baseline: resolved.baseline } : diff;
 }
 
 /**

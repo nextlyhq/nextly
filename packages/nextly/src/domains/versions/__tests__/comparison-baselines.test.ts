@@ -1,0 +1,97 @@
+/**
+ * Another core feature adds a comparison baseline without changing the history
+ * code: Workflows registers "since submitted" and "since approved".
+ */
+import { describe, expect, it } from "vitest";
+
+import { NextlyError } from "../../../errors";
+import {
+  comparisonBaselineNames,
+  registerComparisonBaseline,
+  resolveComparisonBaseline,
+  type PartVersion,
+} from "../comparison-baselines";
+
+const ref = {
+  scopeKind: "collection" as const,
+  scopeSlug: "posts",
+  entryId: "e1",
+};
+
+function versions(
+  ...rows: [number, "draft" | "published", string | null][]
+): PartVersion[] {
+  // Newest first, as the history is read.
+  return rows.map(([versionNo, status, locale]) => ({
+    versionNo,
+    status,
+    locale,
+  }));
+}
+
+describe("comparison baselines", () => {
+  it("offers the core baselines", () => {
+    expect(comparisonBaselineNames()).toEqual(
+      expect.arrayContaining(["previous", "published", "draft"])
+    );
+  });
+
+  it("lets a feature add a baseline, and resolves through it", async () => {
+    registerComparisonBaseline({
+      name: "test-oldest",
+      label: "Oldest in this language",
+      resolve: ({ versions: inPart }) =>
+        inPart.length > 0 ? inPart[inPart.length - 1].versionNo : null,
+    });
+
+    expect(comparisonBaselineNames()).toContain("test-oldest");
+    await expect(
+      resolveComparisonBaseline("test-oldest", {
+        ref,
+        part: "en",
+        target: 9,
+        userId: null,
+        versions: versions(
+          [9, "draft", "en"],
+          [5, "published", "en"],
+          [2, "draft", "en"]
+        ),
+      })
+    ).resolves.toBe(2);
+  });
+
+  it("refuses a second baseline under a name already taken", () => {
+    expect(() =>
+      registerComparisonBaseline({
+        name: "previous",
+        label: "Mine",
+        resolve: () => null,
+      })
+    ).toThrow(/already registered/);
+  });
+
+  it("refuses a name that is not kebab-case", () => {
+    for (const name of ["Since Approved", "since_approved", "", "-x"]) {
+      expect(() =>
+        registerComparisonBaseline({ name, label: "x", resolve: () => null })
+      ).toThrow(NextlyError);
+    }
+  });
+
+  it("only offers versions of the part being compared", async () => {
+    // A German version is never another language's "previous".
+    await expect(
+      resolveComparisonBaseline("previous", {
+        ref,
+        part: "en",
+        target: 9,
+        userId: null,
+        versions: versions(
+          [9, "draft", "en"],
+          [8, "draft", "de"],
+          [4, "draft", "en"]
+        ),
+      })
+    ).resolves.toBe(4);
+  });
+});
