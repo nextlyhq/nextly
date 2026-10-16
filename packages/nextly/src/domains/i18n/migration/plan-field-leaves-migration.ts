@@ -20,6 +20,8 @@
  */
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
+import { COMPANION_STATUS_COLUMN } from "../companion-columns";
+
 import { castText, ddlType, exactText, lit, q } from "./ddl-types";
 import {
   buildDefaultLocaleRestoreStatements,
@@ -107,25 +109,46 @@ export function planFieldLeavesTranslationMigration(
 
   const parent = `${comp}.${q("_parent", dialect)}`;
   const locale = `${comp}.${q("_locale", dialect)}`;
-  const sharedDown = spec.columns.flatMap(column => {
-    const col = q(column.name, dialect);
-    const newestArchived =
-      `(SELECT ${q("archived", dialect)}.${q("value", dialect)} FROM ${q(ARCHIVE, dialect)} ${q("archived", dialect)} ` +
-      `WHERE ${q("archived", dialect)}.${q("collection", dialect)} = ${lit(collection)} ` +
-      `AND ${exactText(`${q("archived", dialect)}.${q("entry_id", dialect)}`, dialect)} = ${exactText(castText(parent, dialect), dialect)} ` +
-      `AND ${exactText(`${q("archived", dialect)}.${q("locale", dialect)}`, dialect)} = ${exactText(locale, dialect)} ` +
-      `AND ${q("archived", dialect)}.${q("field", dialect)} = ${lit(column.name)} ` +
-      `ORDER BY ${q("archived", dialect)}.${q("id", dialect)} DESC LIMIT 1)`;
-    return [
-      `ALTER TABLE ${comp} ADD COLUMN ${col} ${ddlType(column, dialect)}`,
-      // The default language's value is the shared one the main table holds now.
-      `UPDATE ${comp} SET ${col} = (SELECT ${main}.${col} FROM ${main} WHERE ${main}.${q("id", dialect)} = ${parent}) ` +
-        `WHERE ${locale} = ${lit(defaultLocale)}`,
-      // Every other language from the newest value archived for it.
-      `UPDATE ${comp} SET ${col} = ${fromArchivedText(newestArchived, column, dialect)} ` +
-        `WHERE ${locale} <> ${lit(defaultLocale)}`,
-    ];
-  });
+  const newestArchived = (column: LocalizedColumnSpec) =>
+    `(SELECT ${q("archived", dialect)}.${q("value", dialect)} FROM ${q(ARCHIVE, dialect)} ${q("archived", dialect)} ` +
+    `WHERE ${q("archived", dialect)}.${q("collection", dialect)} = ${lit(collection)} ` +
+    `AND ${exactText(`${q("archived", dialect)}.${q("entry_id", dialect)}`, dialect)} = ${exactText(castText(parent, dialect), dialect)} ` +
+    `AND ${exactText(`${q("archived", dialect)}.${q("locale", dialect)}`, dialect)} = ${exactText(locale, dialect)} ` +
+    `AND ${q("archived", dialect)}.${q("field", dialect)} = ${lit(column.name)} ` +
+    `ORDER BY ${q("archived", dialect)}.${q("id", dialect)} DESC LIMIT 1)`;
+  const mainId = `${main}.${q("id", dialect)}`;
+  // The companion row a default-language value goes back into. An entry created while the field
+  // was shared may have none (when this was the entity's last translated field, nothing wrote
+  // one), and the main table's column is dropped right after this file's DOWN, so it is created
+  // here from the main row, publishing state included, rather than its value being left behind.
+  const insertMissingDefaultRows =
+    `INSERT INTO ${comp} (${q("_parent", dialect)}, ${q("_locale", dialect)}, ` +
+    `${names.map(name => q(name, dialect)).join(", ")}` +
+    `${spec.status ? `, ${q(COMPANION_STATUS_COLUMN, dialect)}` : ""}) ` +
+    `SELECT ${mainId}, ${lit(defaultLocale)}, ` +
+    `${names.map(name => `${main}.${q(name, dialect)}`).join(", ")}` +
+    `${spec.status ? `, ${main}.${q("status", dialect)}` : ""} ` +
+    `FROM ${main} WHERE NOT EXISTS (SELECT 1 FROM ${comp} WHERE ${parent} = ${mainId} ` +
+    `AND ${locale} = ${lit(defaultLocale)})`;
+  const sharedDown = [
+    // Sized as the forward copy sized the main column, so a value it could hold comes back whole.
+    ...spec.columns.map(
+      column =>
+        `ALTER TABLE ${comp} ADD COLUMN ${q(column.name, dialect)} ${restoreTargetType(column, dialect)}`
+    ),
+    insertMissingDefaultRows,
+    ...spec.columns.flatMap(column => {
+      const col = q(column.name, dialect);
+      return [
+        // The default language's value is the shared one the main table holds now.
+        `UPDATE ${comp} SET ${col} = (SELECT ${main}.${col} FROM ${main} WHERE ${mainId} = ${parent}) ` +
+          `WHERE ${locale} = ${lit(defaultLocale)}`,
+        // Every other language from the newest value archived for it.
+        `UPDATE ${comp} SET ${col} = ${fromArchivedText(newestArchived(column), column, dialect)} ` +
+          `WHERE ${locale} <> ${lit(defaultLocale)}`,
+      ];
+    }),
+  ];
 
   return {
     archive: {

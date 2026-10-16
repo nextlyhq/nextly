@@ -687,6 +687,7 @@ function planFieldsLeavingTranslation(
 ): FieldLeavesEntry[] {
   const entries: FieldLeavesEntry[] = [];
   for (const { entity: c, kind } of entities) {
+    warnOfRenamesIntoShared(c, previousSnapshot, dialect, warn);
     const leaving = fieldsLeavingTranslationIn(c, previousSnapshot, dialect);
     if (leaving.length === 0) continue;
 
@@ -708,6 +709,8 @@ function planFieldsLeavingTranslation(
         defaultLocale,
         parentIdType: dialect === "mysql" ? "VARCHAR(36)" : "TEXT",
         columns: leaving.map(l => l.column),
+        // A rollback recreates default-language rows with the main row's publishing state.
+        status: c.status === true,
       }),
     });
   }
@@ -740,6 +743,44 @@ function fieldsLeavingTranslationIn(
     const column = fieldToLocalizedColumnSpec(field, dialect, "codeFirst");
     return column && recorded.includes(column.name) ? [{ field, column }] : [];
   });
+}
+
+/**
+ * Says when a translated field leaves the config in the same change that adds a shared one, which
+ * is how a rename into a shared field reads to a migration that sees names only. Its translations
+ * are not moved: the new field is new to it, and the old one's values stay where they are.
+ */
+function warnOfRenamesIntoShared(
+  c: MinimalConfigEntity,
+  previousSnapshot: NextlySchemaSnapshot,
+  dialect: SupportedDialect,
+  warn: (message: string) => void
+): void {
+  if (c.localized !== true) return;
+  const prevMain = previousSnapshot.tables.find(t => t.name === c.tableName);
+  if (prevMain?.localized !== true) return;
+  const recorded = prevMain.localizedColumns ?? [];
+  const columnOf = (field: MinimalConfigField) =>
+    fieldToLocalizedColumnSpec(field, dialect, "codeFirst")?.name;
+  const current = new Set(c.fields.map(columnOf));
+  const gone = recorded.filter(name => !current.has(name));
+  const onMain = new Set(prevMain.columns.map(col => col.name));
+  const added = c.fields.filter(field => {
+    const name = columnOf(field);
+    return (
+      !isFieldLocalized(field, true) &&
+      name !== undefined &&
+      !onMain.has(name) &&
+      !recorded.includes(name)
+    );
+  });
+  if (gone.length === 0 || added.length === 0) return;
+  warn(
+    `In "${c.slug}", translated ${gone.map(n => `"${n}"`).join(", ")} ${gone.length === 1 ? "is" : "are"} ` +
+      `gone and shared ${added.map(f => `"${f.name}"`).join(", ")} ${added.length === 1 ? "is" : "are"} new. ` +
+      `If one is a rename, this migration does not carry its translations over: keep the ` +
+      `field's name while it stops being translated, and rename it in a later migration.`
+  );
 }
 
 /** Says which leaving fields no migration file describes, so their storage is not checked. */

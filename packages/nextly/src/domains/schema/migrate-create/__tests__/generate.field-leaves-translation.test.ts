@@ -188,8 +188,33 @@ describe.each(["sqlite", "postgresql", "mysql"] as const)(
         );
         expect(widen).toBeGreaterThan(-1);
         expect(widen).toBeLessThan(shared.up.indexOf("UPDATE"));
+        // A rollback puts the column back as wide, so a value the shared column held fits.
+        expect(shared.down).toContain(
+          `ALTER TABLE ${q("dc_docs_locales")} ADD COLUMN ${q("body")} LONGTEXT`
+        );
       });
     }
+
+    it("warns when a translated field goes and a shared one arrives in the same change", async () => {
+      const warnings: string[] = [];
+      await secondRun(
+        dialect,
+        {
+          ...TRANSLATED,
+          fields: [
+            { name: "content", type: "text", localized: false },
+            { name: "price", type: "number" },
+          ],
+        },
+        { onWarning: message => warnings.push(message) }
+      );
+
+      expect(warnings).toEqual([
+        expect.stringMatching(
+          /translated "body" is gone and shared "content" is new/
+        ),
+      ]);
+    });
 
     it("refuses a required field leaving translation, naming it", async () => {
       await expect(

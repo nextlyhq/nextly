@@ -250,13 +250,22 @@ for (const entry of DIALECTS) {
         await migrate();
         await expectShared();
 
+        // An entry made while the field is shared, with no translated row of its own.
+        await adapter.executeQuery(
+          `INSERT INTO ${q(table)} (${q("id")}, ${q("title")}, ${q("slug")}, ${q("body")}) VALUES ('e2', 'Two', 'two', 'Fresh')`
+        );
+
         // The shared file, the main file and the archive file, newest first.
         expect(await migrateDown(3)).toHaveLength(3);
+        const [fresh] = await adapter.executeQuery<{ body: string | null }>(
+          `SELECT ${q("body")} AS body FROM ${q(companion)} WHERE ${q("_parent")} = 'e2' AND ${q("_locale")} = 'en'`
+        );
+        expect(fresh?.body).toBe("Fresh");
         const back = await adapter.executeQuery<{
           locale: string;
           body: string;
         }>(
-          `SELECT ${q("_locale")} AS locale, ${q("body")} AS body FROM ${q(companion)} ORDER BY ${q("_locale")}`
+          `SELECT ${q("_locale")} AS locale, ${q("body")} AS body FROM ${q(companion)} WHERE ${q("_parent")} = 'e1' ORDER BY ${q("_locale")}`
         );
         expect(back).toEqual([
           { locale: "en", body: "Hello" },
