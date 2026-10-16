@@ -38,7 +38,8 @@ measured against the blocks the slot starts with (its `defaultBlock`):
   design stay editable;
 - `contentOnly`: only content can change. A block declares its content props
   with `role: "content"` (WordPress's spelling); its other props, its styles,
-  classes, visibility, custom CSS and lock stay as the block started;
+  classes, CSS id, HTML attributes, visibility, custom CSS and lock stay as the
+  block started;
 - `false`: no lock.
 
 A slot that declares no lock inherits its parent's, `false` stops that, and
@@ -50,4 +51,8 @@ or through content it supplies to an exposed slot.
 Registration refuses a lock value outside the four, and a prop `role` other
 than `"content"`, naming the block. A block that declares no content props has
 nothing editable inside a `contentOnly` slot: declare `role: "content"` on the
-props an author should be able to change there.
+props an author should be able to change there. The core blocks declare theirs:
+a heading's text and link, a paragraph's and a rich text's text, an image's
+picture, alt text and caption, a button's label and link, a quote, a list's
+items, an embed's address and title, an accordion item's title and a form's
+submit label.

@@ -62,8 +62,11 @@ export const headline = defineBlock({
 });
 ```
 
-Everything else stays as the block started: its other props, its styles, classes,
-visibility, custom CSS and its own lock. A block that declares no content props has
+The core blocks already declare theirs: a heading's text and link, an image's media,
+alt text and caption, a button's label and link, and so on.
+
+Everything else stays as the block started: its other props, its styles, classes, its
+root element's id and attributes, visibility, custom CSS and its own lock. A block that declares no content props has
 nothing an author can change inside a `"contentOnly"` slot. Its layer name stays
 editable, since the page never draws it.
 

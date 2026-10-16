@@ -52,7 +52,7 @@ export const paragraph = defineBlock<ParagraphProps, PageContext>({
     category: CONTENT,
     keywords: ["paragraph", "copy", "body", "prose"],
   },
-  props: { text: { type: "textarea", inline: true } },
+  props: { text: { role: "content", type: "textarea", inline: true } },
   defaultProps: { text: "" },
   // The opening prose is what a search result should quote. Offered whole and
   // untruncated: how long a description may be is the metadata layer's rule,

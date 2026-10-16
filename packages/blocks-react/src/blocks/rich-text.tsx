@@ -99,7 +99,9 @@ export const richText = defineBlock<RichTextBlockProps, PageContext>({
     category: CONTENT,
     keywords: ["rich text", "formatted", "prose", "wysiwyg", "editor"],
   },
-  props: { content: { type: RICH_TEXT_PROP_TYPE, inline: true } },
+  props: {
+    content: { role: "content", type: RICH_TEXT_PROP_TYPE, inline: true },
+  },
   defaultProps: { content: EMPTY_PASSAGE },
   /*
    * The words, with the formatting dropped. Taken from the engine's own

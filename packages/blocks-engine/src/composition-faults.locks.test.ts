@@ -72,6 +72,14 @@ beforeEach(() => {
           },
         },
       },
+      // Locks "all" a slot that starts with a box holding a headline.
+      {
+        ...base,
+        name: "acme/fixed-shelf",
+        slots: {
+          items: { defaultBlock: [{ type: "acme/plain-box" }], lock: "all" },
+        },
+      },
       {
         ...base,
         name: "acme/fixed-row",
@@ -197,6 +205,81 @@ describe("a placement inside a lock a component's slot inherits", () => {
     expect(faults.map(f => [f.code, f.instanceId])).toEqual([
       ["locked-slot-content-only", "i1"],
     ]);
+  });
+});
+
+describe("a placement supplying content to a locked exposed slot", () => {
+  /** A component exposing the shelf's locked slot, beside the sealed card. */
+  function shelfComponent(): ComponentDocument {
+    const doc = promo();
+    const shelf = placed("acme/fixed-shelf", "shelf");
+    return {
+      ...doc,
+      nodes: [...doc.nodes, shelf],
+      slots: {
+        ...(doc.slots ?? {}),
+        stock: { label: "Stock", nodeId: "shelf", slot: "items" },
+      },
+    } as ComponentDocument;
+  }
+
+  function judgeWith(host: BlockDocument) {
+    const composition = resolveComponentInstances(
+      host,
+      new Map([["promo", shelfComponent()]])
+    );
+    return compositionFaults(host, composition, {
+      nesting: registryNestingSource(),
+      definitions: registryBlockSource(),
+    });
+  }
+
+  it("holds the lock inside a container it supplies, as the slot inherits it", () => {
+    // The box is the slot's starting block, so the slot itself holds what it
+    // starts with; the box's own slot inherits "all", and the page's box puts
+    // a second headline in it.
+    const box = placed("acme/plain-box", "b1");
+    box.slots!.inner!.push(makeNode("acme/headline", 1, {}));
+    const faults = judgeWith(placement({ slots: { stock: [box] } }));
+    expect(faults.map(f => [f.code, f.instanceId])).toEqual([
+      ["locked-slot-altered", "i1"],
+    ]);
+  });
+
+  it("says the placement changes which blocks the slot holds, when it removes them", () => {
+    // Supplying nothing removes the box the slot starts with.
+    const faults = judgeWith(placement({ slots: { stock: [] } }));
+    expect(faults.map(f => f.code)).toEqual(["locked-slot-altered"]);
+    expect(faults[0]!.message).not.toContain("puts other blocks");
+    expect(faults[0]!.message).toContain("starts with");
+  });
+
+  it("reports each locked slot a placement breaks, not one per placement", () => {
+    // Two slots locked "all", each broken by the same placement: one fault
+    // per placement and rule would name only the first.
+    const faults = judgeWith(
+      placement({
+        slots: {
+          stock: [],
+          extra: [
+            makeNode("acme/headline", 1, {}),
+            makeNode("acme/headline", 1, {}),
+          ],
+        },
+      })
+    );
+    expect(faults.map(f => f.code)).toEqual([
+      "locked-slot-altered",
+      "locked-slot-altered",
+    ]);
+    expect(faults.map(f => f.message).join(" ")).toContain('"items"');
+    // Both slots are called "items"; each message names the block holding
+    // its slot, so an author can tell the two apart.
+    expect(faults[0]!.message).not.toEqual(faults[1]!.message);
+    expect(faults.map(f => f.message).join(" ")).toContain('"acme/fixed-row"');
+    expect(faults.map(f => f.message).join(" ")).toContain(
+      '"acme/fixed-shelf"'
+    );
   });
 });
 

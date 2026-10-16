@@ -136,8 +136,8 @@ export const embed = defineBlock<EmbedProps, PageContext>({
     keywords: ["video", "iframe", "youtube", "external"],
   },
   props: {
-    src: { type: "url" },
-    title: { type: "text" },
+    src: { role: "content", type: "url" },
+    title: { role: "content", type: "text" },
     allowFullscreen: { type: "checkbox" },
   },
   defaultProps: { title: "", allowFullscreen: true },

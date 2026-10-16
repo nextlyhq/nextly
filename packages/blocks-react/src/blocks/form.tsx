@@ -380,7 +380,7 @@ export const form = defineBlock<FormProps, PageContext>({
     action: { type: "url" },
     method: { type: "select", options: [...FORM_METHODS] },
     fields: { type: "array", of: "object" },
-    submitText: { type: "text" },
+    submitText: { role: "content", type: "text" },
   },
   defaultProps: { method: "post", submitText: "Submit", fields: [] },
   example: {

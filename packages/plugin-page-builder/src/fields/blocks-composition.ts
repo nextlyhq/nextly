@@ -42,6 +42,7 @@ import {
   compositionFaults,
   contentOnlyExposures,
   MAX_COMPOSED_DEPTH,
+  nodeLocks,
   registryBlockSource,
   registryNestingSource,
   resolveComponentInstances,
@@ -52,6 +53,7 @@ import {
   type CompositionFault,
   type DocumentLimits,
   type LockedExposure,
+  type NodeLock,
   type WorkAllowance,
 } from "@nextlyhq/blocks-engine";
 import type {
@@ -675,6 +677,10 @@ function ruleBroken(code: string, setup: CompositionSetup): string {
       return "components would be nested inside one another too deeply";
     case "cycle":
       return "a component would end up containing itself";
+    case "locked-slot-altered":
+      return "a locked slot would hold other blocks than it starts with";
+    case "locked-slot-content-only":
+      return "a locked slot that allows only content changes would have its design or settings changed";
     default:
       return "a block would sit where it is not allowed to";
   }
@@ -808,12 +814,10 @@ function reportWhatBroke(args: {
     });
   }
   const had = new Set(
-    faultsIn(stored, before.composition, setup).map(
-      f => `${f.code}\u0000${f.instanceId}`
-    )
+    faultsIn(stored, before.composition, setup).map(faultIdentity)
   );
   for (const fault of faultsIn(stored, after.composition, setup)) {
-    if (had.has(`${fault.code}\u0000${fault.instanceId}`)) {
+    if (had.has(faultIdentity(fault))) {
       // Broken before this save and no worse after it: not this save's to
       // refuse, and still worth an operator's attention when it is a lock.
       if (LOCK_FAULTS.has(fault.code)) tally.stillBroken(host, fault);
@@ -821,6 +825,17 @@ function reportWhatBroke(args: {
     }
     tally.broke(host, fault);
   }
+}
+
+/**
+ * A fault as the before/after comparison knows it: its rule and placement,
+ * and, for a lock, the slot and what changed, which its message names. Two
+ * locked slots broken at one placement are two faults, so a save that breaks a
+ * second is not taken for one leaving the first as it was.
+ */
+function faultIdentity(fault: HostFault): string {
+  const base = `${fault.code}\u0000${fault.instanceId}`;
+  return LOCK_FAULTS.has(fault.code) ? `${base}\u0000${fault.message}` : base;
 }
 
 /** The faults that are a lock broken in the composed host. */
@@ -891,6 +906,10 @@ async function footprintOf(
   setup: CompositionSetup,
   work: WorkAllowance
 ): Promise<Footprint> {
+  // The lock each node sits under, by the rule a save enforces. Part of what
+  // a placement's values and slot content are held to, so moving a node under
+  // a lock, everything else kept, is a change a host can be judged against.
+  const locks = nodeLocks(document.nodes, registryBlockSource());
   const library = heldLibrary(new Map([[self, document]]));
   const selections = new Map<string, SelectionFootprint>();
   let complete = true;
@@ -920,8 +939,8 @@ async function footprintOf(
   return {
     complete,
     selections,
-    slots: exposedSlots(document, setup),
-    exposures: exposedProperties(document),
+    slots: exposedSlots(document, setup, locks),
+    exposures: exposedProperties(document, locks),
   };
 }
 
@@ -979,9 +998,13 @@ function componentDepthOf(
   return MAX_COMPOSED_DEPTH + 1;
 }
 
-/** Each exposed property, keyed by its id, as `nodeId|propPath|type`. */
+/**
+ * Each exposed property, keyed by its id, as `nodeId|propPath|type|lock`, the
+ * lock being the one its node sits under.
+ */
 function exposedProperties(
-  document: BlockDocument
+  document: BlockDocument,
+  locks: ReadonlyMap<string, NodeLock>
 ): ReadonlyMap<string, string> {
   const declared = (document as { exposed?: unknown }).exposed;
   const out = new Map<string, string>();
@@ -990,20 +1013,22 @@ function exposedProperties(
     if (typeof entry?.id !== "string") continue;
     out.set(
       entry.id,
-      `${String(entry.nodeId)}|${String(entry.propPath)}|${String(entry.type)}`
+      `${String(entry.nodeId)}|${String(entry.propPath)}|${String(entry.type)}|${lockOf(locks, entry.nodeId)}`
     );
   }
   return out;
 }
 
 /**
- * Each exposed slot, keyed by its id, as `nodeId|type|slot|depth` of its
+ * Each exposed slot, keyed by its id, as `nodeId|type|slot|depth|lock` of its
  * holder. The node is part of it: two holders of one type, slot and depth can
- * still draw what lands in them differently.
+ * still draw what lands in them differently. So is the lock it sits under,
+ * which its slot passes on to what a placement puts there.
  */
 function exposedSlots(
   document: BlockDocument,
-  setup: CompositionSetup
+  setup: CompositionSetup,
+  locks: ReadonlyMap<string, NodeLock>
 ): ReadonlyMap<string, string> {
   const declared = (document as { slots?: unknown }).slots;
   const out = new Map<string, string>();
@@ -1029,10 +1054,17 @@ function exposedSlots(
       id,
       holder === undefined
         ? "?"
-        : `${nodeId}|${holder.type}|${name}|${holder.depth}`
+        : `${nodeId}|${holder.type}|${name}|${holder.depth}|${lockOf(locks, nodeId)}`
     );
   }
   return out;
+}
+
+/** The lock a node sits under, as a footprint records it. */
+function lockOf(locks: ReadonlyMap<string, NodeLock>, nodeId: unknown): string {
+  return (
+    (typeof nodeId === "string" ? locks.get(nodeId)?.lock : undefined) ?? "-"
+  );
 }
 
 /**

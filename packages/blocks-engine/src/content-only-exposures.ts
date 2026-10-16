@@ -33,7 +33,7 @@ export interface LockedExposure {
 }
 
 /** Where a node sits inside a `"contentOnly"` area, if it does. */
-interface Area {
+export interface Area {
   readonly slot: string;
   readonly holderType: string;
 }
@@ -52,14 +52,14 @@ export function contentOnlyExposures(
 ): LockedExposure[] {
   const exposed = (document as { exposed?: unknown }).exposed;
   if (!Array.isArray(exposed) || exposed.length === 0) return [];
-  const areas = contentOnlyAreas(document.nodes, sources.definitions);
+  const areas = nodeLocks(document.nodes, sources.definitions);
   const found: LockedExposure[] = [];
   for (const entry of exposed) {
     if (!isPlainRecord(entry)) continue;
     const { id, label, nodeId, propPath } = entry;
     if (typeof nodeId !== "string" || typeof propPath !== "string") continue;
     const at = areas.get(nodeId);
-    if (at === undefined) continue;
+    if (at?.area === undefined) continue;
     const content = contentPropsOf(sources.definitions.get(at.type)?.props);
     if (content.has(rootOfPath(propPath))) continue;
     found.push({
@@ -74,18 +74,27 @@ export function contentOnlyExposures(
   return found;
 }
 
+/** Where one node of a document sits with respect to the locks above it. */
+export interface NodeLock {
+  readonly type: string;
+  /** The lock of the slot the node sits in; undefined where none applies. */
+  readonly lock: ActiveSlotLock | undefined;
+  /** The `"contentOnly"` area it sits in, named by its outermost slot. */
+  readonly area: Area | undefined;
+}
+
 /**
- * Each node inside a `"contentOnly"` area, by id, with its type and the area.
+ * Each node of a document, by id, with the lock of the slot it sits in.
  *
  * Walked with the lock each slot passes down, asked of `slotLockOf`, the rule
- * validation applies, so the areas found here are the areas a save enforces.
+ * validation applies, so the locks read here are the locks a save enforces.
  * Bounded by the document cap.
  */
-function contentOnlyAreas(
+export function nodeLocks(
   nodes: unknown,
   definitions: SlotDefaultSource
-): Map<string, { type: string; area: Area }> {
-  const inside = new Map<string, { type: string; area: Area }>();
+): ReadonlyMap<string, NodeLock> {
+  const inside = new Map<string, NodeLock>();
   if (!Array.isArray(nodes)) return inside;
   const queue: Visit[] = nodes.map(node => ({
     node,
@@ -95,8 +104,8 @@ function contentOnlyAreas(
   for (let head = 0; head < queue.length && head < MAX_NODES; head += 1) {
     const { node, lock, area } = queue[head];
     if (!isPlainRecord(node) || typeof node.type !== "string") continue;
-    if (area !== undefined && typeof node.id === "string") {
-      inside.set(node.id, { type: node.type, area });
+    if (typeof node.id === "string") {
+      inside.set(node.id, { type: node.type, lock, area });
     }
     queue.push(...childVisits(node, node.type, { lock, area }, definitions));
   }
@@ -124,10 +133,13 @@ function childVisits(
     const children = ownEntry(slots, slot);
     if (!Array.isArray(children)) continue;
     const lock = slotLockOf(definitions, type, slot, at.lock);
-    // The OUTERMOST slot that locks it, which is the lock an author meets.
+    // Inside an area exactly while the lock this slot passes down is
+    // contentOnly, as validation reads it: a slot its block does not declare
+    // passes none. Named by the OUTERMOST slot, the lock an author meets.
     const area =
-      at.area ??
-      (lock === "contentOnly" ? { slot, holderType: type } : undefined);
+      lock === "contentOnly"
+        ? (at.area ?? { slot, holderType: type })
+        : undefined;
     for (const child of children as BlockNode[]) {
       visits.push({ node: child, lock, area });
     }

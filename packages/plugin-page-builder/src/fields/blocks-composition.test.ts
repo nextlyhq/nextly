@@ -67,6 +67,18 @@ beforeEach(() => {
       },
       {
         ...base,
+        name: "acme/plain-box",
+        slots: { inner: { defaultBlock: [{ type: "acme/text" }] } },
+      },
+      {
+        ...base,
+        name: "acme/fixed-shelf",
+        slots: {
+          items: { defaultBlock: [{ type: "acme/plain-box" }], lock: "all" },
+        },
+      },
+      {
+        ...base,
         name: "acme/quote",
         props: { words: { type: "text", role: "content" } },
       },
@@ -293,6 +305,91 @@ describe("a component save judged against the locks inside its hosts", () => {
 
     const issues = await judge(
       aimedAt("fixed", "items"),
+      write(readStored, COMPONENTS, "promo"),
+      { hostsOf, status: "published" }
+    );
+
+    expect(codes(issues)).toEqual(["COMPONENT_HOST_BROKEN"]);
+    // Named as the lock it is, not as a block in the wrong place.
+    expect(issues[0]!.message).toContain("locked slot");
+  });
+
+  it("refuses a second lock break at a placement that already broke one", async () => {
+    // The page's placement already leaves the shelf's locked slot empty. The
+    // save re-aims the other exposed slot into a second locked slot, which the
+    // same placement's content then breaks: a new break, though its rule and
+    // placement match the old one.
+    const aimedAt = (nodeId: string, slot: string) =>
+      component(
+        [
+          node("open", "acme/box", { children: [] }),
+          node("fixed", "acme/fixed", { items: [node("t1")] }),
+          node("shelf", "acme/fixed-shelf", {
+            items: [node("pb", "acme/plain-box", { inner: [node("pt")] })],
+          }),
+        ],
+        {
+          slots: {
+            extra: { label: "Extra", nodeId, slot },
+            stock: { label: "Stock", nodeId: "shelf", slot: "items" },
+          },
+        }
+      );
+    const { readStored } = storeOf({
+      [COMPONENTS]: { promo: { published: aimedAt("open", "children") } },
+      pages: {
+        home: {
+          published: page([
+            placing("i1", "promo", {
+              slots: { extra: [node("x1"), node("x2")], stock: [] },
+            }),
+          ]),
+        },
+      },
+    });
+    const { hostsOf } = listing([hostPage]);
+
+    const issues = await judge(
+      aimedAt("fixed", "items"),
+      write(readStored, COMPONENTS, "promo"),
+      { hostsOf, status: "published" }
+    );
+
+    expect(codes(issues)).toEqual(["COMPONENT_HOST_BROKEN"]);
+  });
+
+  it("judges the hosts of an exposed-slot holder moved under a lock, everything else kept", async () => {
+    // Two branches, each two deep: an open box and a shelf locked "all". The
+    // exposed slot's holder trades places with its twin, keeping its id, type,
+    // slot and depth, and every root and exposure stays as it was. Only the
+    // lock it now sits under differs, and the page's two texts in that slot
+    // break it.
+    const twin = (id: string) =>
+      node(id, "acme/plain-box", { inner: [node(`${id}-t`)] });
+    const swapped = (inOpen: string, inShelf: string) =>
+      component(
+        [
+          node("open", "acme/box", { children: [twin(inOpen)] }),
+          node("shelf", "acme/fixed-shelf", { items: [twin(inShelf)] }),
+        ],
+        { slots: { extra: { label: "Extra", nodeId: "pb", slot: "inner" } } }
+      );
+    const { readStored } = storeOf({
+      [COMPONENTS]: { promo: { published: swapped("pb", "other") } },
+      pages: {
+        home: {
+          published: page([
+            placing("i1", "promo", {
+              slots: { extra: [node("x1"), node("x2")] },
+            }),
+          ]),
+        },
+      },
+    });
+    const { hostsOf } = listing([hostPage]);
+
+    const issues = await judge(
+      swapped("other", "pb"),
       write(readStored, COMPONENTS, "promo"),
       { hostsOf, status: "published" }
     );

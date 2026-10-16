@@ -133,13 +133,16 @@ export function holdsStartingChildren(
 
 /**
  * The parts of a node besides its props that `"contentOnly"` fixes: its design
- * (`styles`, `classes`, `customCss`), when it is shown (`visibility`), and its
- * own lock (`locked`). Its layer `name` is not among them, because the page
- * never draws it: it is the editor's label for the block.
+ * (`styles`, `classes`, `customCss`), what its root element carries (`cssId`,
+ * `attributes`), when it is shown (`visibility`), and its own lock (`locked`).
+ * Its layer `name` is not among them, because the page never draws it: it is
+ * the editor's label for the block.
  */
 const PINNED_PARTS = [
   "styles",
   "classes",
+  "cssId",
+  "attributes",
   "visibility",
   "customCss",
   "locked",

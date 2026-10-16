@@ -153,6 +153,19 @@ describe("contentOnlyExposures", () => {
     expect(found(doc)).toEqual([]);
   });
 
+  it("leaves an exposure alone beneath a slot its block does not declare", () => {
+    // Children stored under an undeclared slot are not drawn, so no lock
+    // reaches them, as validation reads it.
+    const stray = sealed();
+    const box = stray.slots!.body![0]!;
+    box.slots = { ...box.slots, stray: [headline("h9")] };
+    const doc = exposing(
+      [stray],
+      [{ nodeId: "h9", propPath: "align", type: "select" }]
+    );
+    expect(found(doc)).toEqual([]);
+  });
+
   it("finds an exposure of a nested value of a prop that is not content", () => {
     const doc = exposing(
       [sealed()],

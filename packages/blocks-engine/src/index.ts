@@ -400,8 +400,8 @@ export type {
 // A component's exposed fields that drive something a `contentOnly` lock
 // holds. Exported for the component's own save, which refuses a new one so a
 // designer meets the lock where the exposure is made, not on every page.
-export { contentOnlyExposures } from "./content-only-exposures";
-export type { LockedExposure } from "./content-only-exposures";
+export { contentOnlyExposures, nodeLocks } from "./content-only-exposures";
+export type { LockedExposure, NodeLock } from "./content-only-exposures";
 // The measurement's return type travels with the function. Without it a
 // consumer naming `measureBytes`'s result has to rebuild the union by hand or
 // reach for `ReturnType`, and a hand-rebuilt copy is the second statement of a

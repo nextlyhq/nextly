@@ -140,7 +140,7 @@ export const accordionItem = defineBlock<AccordionItemProps, PageContext>({
     keywords: ["disclosure", "panel", "faq"],
   },
   props: {
-    title: { type: "text" },
+    title: { role: "content", type: "text" },
     open: { type: "checkbox" },
   },
   defaultProps: { title: "Section", open: false },

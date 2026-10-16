@@ -158,8 +158,10 @@ export function compositionFaults(
     report: (code, instanceId, detail) => {
       // One per placement and rule: a definition breaking a rule at forty nodes
       // is one thing for its author to fix, and forty messages spend the field's
-      // issue allowance on the same repair.
-      const key = `${code}\u0000${instanceId}`;
+      // issue allowance on the same repair. A lock is per SLOT, though: two
+      // locked slots broken are two repairs, and one hidden behind the other
+      // would let a save that breaks a second pass as no worse.
+      const key = `${code}\u0000${instanceId}\u0000${detail.holder ?? ""}\u0000${detail.slot ?? ""}`;
       if (reported.has(key)) return;
       reported.add(key);
       const componentId = placed.get(instanceId) ?? "";
@@ -269,7 +271,11 @@ function reportComposedRules(
   // A node a definition put here: its locked slots hold what the placement
   // wrote into them, its values and its slot content, which neither the page
   // nor the component shows on its own.
-  if (reached.composed) {
+  //
+  // And a node the PLACEMENT supplied, once it sits inside a locked slot of
+  // the definition: its own slots inherit that lock, so content it holds is
+  // held to it as much as the definition's own.
+  if (reached.composed || visit.lock !== undefined) {
     reportLockBreaks(node, visit.lock, reached.through, judge);
   }
 }
@@ -299,6 +305,8 @@ function reportLockBreaks(
       {
         type: found.kind === "content" ? found.childType : node.type,
         slot: found.slot,
+        holder: node.id,
+        holderType: node.type,
         lock: found.kind === "membership" ? found.lock : "contentOnly",
         changes: found.kind === "content" ? found.changes : [],
       }
@@ -358,8 +366,10 @@ interface Detail {
   readonly type?: string;
   readonly where?: PlacementTarget;
   readonly permitted?: readonly string[];
-  /** The locked slot, for a lock break. */
+  /** The locked slot, for a lock break, and the node that declares it, by id and type. */
   readonly slot?: string;
+  readonly holder?: string;
+  readonly holderType?: string;
   readonly lock?: ActiveSlotLock;
   /** What a block in a `"contentOnly"` slot changed besides content. */
   readonly changes?: readonly string[];
@@ -373,6 +383,7 @@ interface MessageParts {
   readonly permitted: string;
   readonly maxDepth: number;
   readonly slot: string;
+  readonly holderType: string;
   readonly lock: string;
   readonly changes: string;
 }
@@ -399,9 +410,9 @@ const MESSAGES: Readonly<
   "node-depth": m =>
     `${m.named} holds content nested deeper than the maximum of ${m.maxDepth} levels. Flatten its content.`,
   "locked-slot-altered": m =>
-    `${m.named} has a "${m.slot}" slot locked "${m.lock}", which holds only the blocks it starts with, and this placement puts other blocks in it. Remove the content this placement adds there.`,
+    `${m.named} has the "${m.slot}" slot of a "${m.holderType}" locked "${m.lock}", which holds exactly the blocks it starts with, and this placement changes them. Give that slot exactly the blocks it starts with on this placement, or leave it to the component.`,
   "locked-slot-content-only": m =>
-    `${m.named} has a "${m.slot}" slot locked "contentOnly", where only content can change, and this placement changes its "${m.type}"'s ${m.changes}. Reset those values on this placement.`,
+    `${m.named} has the "${m.slot}" slot of a "${m.holderType}" locked "contentOnly", where only content can change, and this placement changes its "${m.type}"'s ${m.changes}. Reset those values on this placement.`,
 };
 
 /** The sentence for one fault. */
@@ -426,6 +437,7 @@ function messageFor(
       .join(" or "),
     maxDepth: limits.maxDepth,
     slot: describeValue(detail.slot),
+    holderType: describeValue(detail.holderType),
     lock: detail.lock ?? "",
     changes: (detail.changes ?? []).join(", "),
   });
