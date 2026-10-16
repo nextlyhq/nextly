@@ -1,7 +1,15 @@
 export { RootLayout } from "./layout/RootLayout";
 export type { RootLayoutProps } from "./layout/RootLayout";
 export { QueryProvider } from "./context/providers/QueryProvider";
-export { ThemeProvider, useTheme } from "./context/providers/ThemeProvider";
+export {
+  ThemePaintScript,
+  ThemeProvider,
+  useTheme,
+} from "./context/providers/ThemeProvider";
+export type {
+  ThemeProviderProps,
+  UseThemeProps,
+} from "./context/providers/ThemeProvider";
 export {
   BrandingProvider,
   useBranding,
