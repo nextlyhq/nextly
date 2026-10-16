@@ -61,16 +61,14 @@ export const actionsBody: DeclaredBody = definition => {
   const visible = declared.slice(0, MAX_ACTIONS);
 
   if (visible.length === 0) {
+    // The frame's one empty state, so the card reads as empty -- no freshness line, no footer
+    // link -- like every other card with nothing to show.
     return {
       ok: true,
-      node: (
-        <p
-          data-testid="widget-actions-empty"
-          className="text-sm text-muted-foreground"
-        >
-          Nothing here for you.
-        </p>
-      ),
+      empty: {
+        title: "No shortcuts for you here",
+        detail: "Shortcuts you can use appear here.",
+      },
     };
   }
 
