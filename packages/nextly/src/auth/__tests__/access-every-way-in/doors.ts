@@ -29,6 +29,7 @@ import {
   USER_MARKER,
   collectionOf,
   ownKey,
+  personRoute,
   relationOf,
   singleOf,
   type CallerHandle,
@@ -110,6 +111,7 @@ const COLLECTION_REQUESTS: Record<
   update: { method: "PATCH", byId: true, body: { title: "changed" } },
   delete: { method: "DELETE", byId: true },
   publish: { method: "PATCH", byId: true, body: { status: "published" } },
+  unpublish: { method: "PATCH", byId: true, body: { status: "draft" } },
 };
 
 /** The admin's media routes are their own handler, mounted gated. */
@@ -153,6 +155,31 @@ function directCaller(who: CallerHandle) {
   };
 }
 
+type Nextly = World["t"]["nextly"];
+type DirectCaller = ReturnType<typeof directCaller>;
+
+/** The Direct API call each collection action is, on `collection` and `id`. */
+const DIRECT_CALLS: Record<
+  Row["action"],
+  (
+    n: Nextly,
+    collection: string,
+    id: string,
+    as: DirectCaller
+  ) => Promise<unknown>
+> = {
+  read: (n, collection, id, as) => n.findByID({ collection, id, ...as }),
+  create: (n, collection, _id, as) =>
+    n.create({ collection, data: { title: "made" }, ...as }),
+  update: (n, collection, id, as) =>
+    n.update({ collection, id, data: { title: "changed" }, ...as }),
+  delete: (n, collection, id, as) => n.delete({ collection, id, ...as }),
+  publish: (n, collection, id, as) =>
+    n.update({ collection, id, data: { status: "published" }, ...as }),
+  unpublish: (n, collection, id, as) =>
+    n.update({ collection, id, data: { status: "draft" }, ...as }),
+};
+
 async function direct(world: World, row: Row, who: CallerHandle) {
   const nextly = world.t.nextly;
   const as = directCaller(who);
@@ -162,34 +189,7 @@ async function direct(world: World, row: Row, who: CallerHandle) {
     else await nextly.updateSingle({ slug, data: { headline: "edit" }, ...as });
     return "A";
   }
-  const collection = slug;
-  switch (row.action) {
-    case "read":
-      await nextly.findByID({ collection, id, ...as });
-      break;
-    case "create":
-      await nextly.create({ collection, data: { title: "made" }, ...as });
-      break;
-    case "update":
-      await nextly.update({
-        collection,
-        id,
-        data: { title: "changed" },
-        ...as,
-      });
-      break;
-    case "delete":
-      await nextly.delete({ collection, id, ...as });
-      break;
-    case "publish":
-      await nextly.update({
-        collection,
-        id,
-        data: { status: "published" },
-        ...as,
-      });
-      break;
-  }
+  await DIRECT_CALLS[row.action](nextly, slug, id, as);
   return "A";
 }
 
@@ -271,8 +271,13 @@ async function can(_world: World, row: Row, who: CallerHandle) {
 async function service(world: World, row: Row, who: CallerHandle) {
   const { slug, id } = addressOf(world, row, "service");
   const search = `?id=${encodeURIComponent(id)}`;
-  const res = who.principal
-    ? await runMemberRoute(slug, row.action, search, who.headers)
+  const person = personRoute(row.caller);
+  const res = person
+    ? await runPersonRoute(
+        `${person}/${slug}/${row.action}`,
+        search,
+        who.headers
+      )
     : await pluginRequest(
         [
           "probe",
@@ -289,14 +294,12 @@ async function service(world: World, row: Row, who: CallerHandle) {
   return body.status === null ? "E" : String(body.status);
 }
 
-/** A principal route, run as the dispatcher runs one for its person. */
-async function runMemberRoute(
-  slug: string,
-  action: string,
+/** A person's route, run as the dispatcher runs one for its person. */
+async function runPersonRoute(
+  path: string,
   search: string,
   headers: Record<string, string>
 ) {
-  const path = `/plugins/members/service/${slug}/${action}`;
   const match = getPluginRouteRegistry().match("GET", path, "plugin");
   if (!match) throw new Error(`no route for ${path}`);
   return runPluginRoute(
