@@ -20,9 +20,10 @@ import type { GeneratedFiles } from "./generated-files";
  *
  * `segment` is the folder that owns each route's URLs. Next.js serves a
  * `route.js` as readily as a `route.ts`, and an optional catch-all answers
- * its parent URL too, so any handler already in that folder could compete
- * with the one written here: the folder, not the one file, decides whether
- * the app already has the route.
+ * its parent URL too, so a handler anywhere in that folder could compete with
+ * the one written here: a handler in the folder, not the one file name,
+ * decides whether the app already has the route. A folder holding no
+ * handler (empty, or only a placeholder) competes with nothing.
  *
  * `role` says what Nextly's route does there, for a media route the app
  * already has something in place of; the report then carries the route to
@@ -60,6 +61,9 @@ const CONFIG_IMPORT =
   /(import\s+\w+\s+from\s+")([^"]*(?:@nextly-config|nextly\.config))(";)/;
 
 const LEFT_AS_IT_IS = "already holds routes; left as it is";
+
+/** A file Next.js answers requests through: a route or a page, in any of its source extensions. */
+const HANDLER_FILE = /^(route|page)\.[cm]?[jt]sx?$/;
 
 /**
  * Write the media and health routes into an existing app, from the template
@@ -151,13 +155,33 @@ async function writeIfFolderAbsent(
   { target, segment, text, role }: PreparedRoute,
   result: GeneratedFiles
 ): Promise<void> {
-  if (await fs.pathExists(segment)) {
+  if (await holdsHandler(segment)) {
     result.skipped.push(skipped(cwd, segment, target, text, role));
     return;
   }
   await fs.ensureDir(path.dirname(target));
   await fs.writeFile(target, text, { encoding: "utf-8", flag: "wx" });
   result.written.push(toPosix(path.relative(cwd, target)));
+}
+
+/** Whether a folder, or any folder inside it, holds a file Next.js answers requests through. */
+async function holdsHandler(folder: string): Promise<boolean> {
+  if (!(await fs.pathExists(folder))) return false;
+  const entries = await fs.readdir(folder, { withFileTypes: true });
+  for (const entry of entries) {
+    // A linked route file is still a route Next.js serves.
+    if (
+      (entry.isFile() || entry.isSymbolicLink()) &&
+      HANDLER_FILE.test(entry.name)
+    )
+      return true;
+    if (
+      entry.isDirectory() &&
+      (await holdsHandler(path.join(folder, entry.name)))
+    )
+      return true;
+  }
+  return false;
 }
 
 /** The report for a folder left alone: for a media route, what Nextly's route does and the text to add. */

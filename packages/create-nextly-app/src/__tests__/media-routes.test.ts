@@ -215,6 +215,52 @@ describe("a project that already has routes where these go", () => {
   });
 });
 
+describe("a folder that holds no handler", () => {
+  // A folder is not a route: Next.js answers only through a route (or page)
+  // file. An empty folder, or one with only a placeholder, competes with
+  // nothing, so the route still goes there.
+  it("still receives the route, beside whatever else it holds", async () => {
+    mkdirSync(join(cwd, "src/app/admin/api/media"), { recursive: true });
+    mkdirSync(join(cwd, "src/app/api/media"), { recursive: true });
+    writeFileSync(join(cwd, "src/app/api/media/.gitkeep"), "");
+    mkdirSync(join(cwd, "src/app/api/health/notes"), { recursive: true });
+    writeFileSync(
+      join(cwd, "src/app/api/health/notes/README.md"),
+      "Health notes.\n"
+    );
+
+    const result = await generateMediaRoutes(cwd, project(true), TEMPLATES);
+
+    expect(result).toEqual({
+      written: [
+        `src/app/${ADMIN_MEDIA}`,
+        `src/app/${PUBLIC_MEDIA}`,
+        `src/app/${HEALTH}`,
+      ],
+      changed: [],
+      skipped: [],
+    });
+    expect(readFileSync(join(cwd, "src/app/api/media/.gitkeep"), "utf8")).toBe(
+      ""
+    );
+  });
+
+  it("counts a handler anywhere inside the folder, in any route or page file", async () => {
+    mkdirSync(join(cwd, "src/app/admin/api/media/[id]"), { recursive: true });
+    writeFileSync(
+      join(cwd, "src/app/admin/api/media/[id]/route.tsx"),
+      "export const GET = () => new Response();\n"
+    );
+
+    const result = await generateMediaRoutes(cwd, project(true), TEMPLATES);
+
+    expect(result.skipped.map(entry => entry.path)).toEqual([
+      "src/app/admin/api/media",
+    ]);
+    expect(() => readFileSync(join(cwd, "src/app", ADMIN_MEDIA))).toThrow();
+  });
+});
+
 describe("a template that no longer imports the config", () => {
   // A route copied without a config to rewrite would boot with none. Refusing
   // is the only safe answer, and it must come before anything is written.
