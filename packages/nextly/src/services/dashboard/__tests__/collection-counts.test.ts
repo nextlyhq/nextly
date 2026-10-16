@@ -30,7 +30,11 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import type { Logger } from "../../shared";
 import { DashboardService } from "../dashboard-service";
-import { someResources, type ReadCaller } from "../readable-resources";
+import {
+  allResources,
+  someResources,
+  type ReadCaller,
+} from "../readable-resources";
 
 /** Rows physically present in `posts`, of which the caller owns two. */
 const ROWS_IN_TABLE = 7;
@@ -81,6 +85,52 @@ beforeEach(() => {
   // The stored read rule at work: the access-controlled count sees two rows
   // where the table holds seven.
   count.mockResolvedValue({ total: ROWS_THE_CALLER_MAY_READ });
+});
+
+describe("a collection or Single kept off the dashboard is never counted", () => {
+  it("leaves a hidden collection and a hidden Single out, even for a caller who may read everything", async () => {
+    // `allResources()` is a super-admin's scope, so nothing about access removes them: only the
+    // dashboard rule does. The page builder's internal usage index stands for `internal: true`,
+    // which is stored as `admin.hidden`.
+    containerGet.mockImplementation((name: string) => {
+      if (name === "collectionRegistryService") {
+        return {
+          getAllCollections: vi.fn().mockResolvedValue([
+            ...COLLECTIONS,
+            {
+              slug: "nx_pb_class_usage",
+              tableName: "nx_pb_class_usage",
+              labels: { plural: "Class usage" },
+              admin: { hidden: true },
+              fields: [],
+            },
+          ]),
+        };
+      }
+      if (name === "singleRegistryService") {
+        return {
+          getAllSingles: vi
+            .fn()
+            .mockResolvedValue([
+              { slug: "site-settings" },
+              { slug: "hidden-single", admin: { hidden: true } },
+            ]),
+        };
+      }
+      throw new Error(`unexpected container.get("${name}")`);
+    });
+
+    const stats = await makeService().getStats({
+      scope: allResources(),
+      caller: CALLER,
+    });
+
+    expect(stats.collectionCounts.map(row => row.slug)).toEqual(["posts"]);
+    expect(stats.singles).toBe(1);
+    expect(count).not.toHaveBeenCalledWith(
+      expect.objectContaining({ collection: "nx_pb_class_usage" })
+    );
+  });
 });
 
 describe("per-collection totals honour the caller's row-level access", () => {

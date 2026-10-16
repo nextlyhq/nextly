@@ -34,6 +34,7 @@ import {
 
 import { registerBuiltInSources } from "./built-in-sources";
 import { deferredEntities } from "./deferred-entities";
+import { keptOffDashboard, recordKeptOffDashboard } from "./kept-off-dashboard";
 import type { WidgetFieldChoice } from "./sources";
 
 /**
@@ -390,10 +391,16 @@ function useAsTitleOf(collection: RegisteredCollection): string | undefined {
 export async function refreshCollectionSources(): Promise<void> {
   const collections = await readRegisteredCollections();
   if (!collections) return;
+  // From this same read, so what is left out here and what the other surfaces leave out agree.
+  recordKeptOffDashboard("collection", collections);
 
+  // A collection kept off the dashboard gets no source, so no card is generated for it and a
+  // query naming it is refused exactly as an unknown name is -- for a super-admin too.
   const named = collections.filter(
     (collection): collection is RegisteredCollection & { slug: string } =>
-      typeof collection.slug === "string" && collection.slug !== ""
+      typeof collection.slug === "string" &&
+      collection.slug !== "" &&
+      !keptOffDashboard(collection)
   );
 
   registerBuiltInSources(

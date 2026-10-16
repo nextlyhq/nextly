@@ -13,11 +13,14 @@ import { container } from "../../../di/container";
 import { setNextlyLogger } from "../../../observability/logger";
 import { refreshCollectionSources } from "../collection-sources";
 import { setDeferredEntities } from "../deferred-entities";
+import { isKeptOffDashboard } from "../kept-off-dashboard";
+import { validateWidgetQuery } from "../query";
 import {
   clearSources,
   getSource,
   listSources,
   registerSource,
+  UNAVAILABLE_SOURCE_MESSAGE,
 } from "../sources";
 
 type Row = {
@@ -113,6 +116,48 @@ describe("refreshCollectionSources", () => {
     const source = getSource("collection:reports");
     expect(source?.kind).toBe("collection");
     expect(source?.fields.map(f => f.name)).toContain("title");
+  });
+
+  it("publishes no source for a collection kept off the dashboard, so a query names an unknown one", async () => {
+    // `internal: true` is stored as `admin.hidden: true`, so the page builder's usage index
+    // stands for both. No source means no generated card and a query refused exactly as an
+    // invented name is.
+    registryHolds([
+      { slug: "posts", fields: [{ name: "title", type: "text" }] },
+      {
+        slug: "nx_pb_class_usage",
+        fields: [{ name: "className", type: "text" }],
+        admin: { hidden: true },
+      },
+    ]);
+
+    await refreshCollectionSources();
+
+    expect(listSources().map(source => source.id)).toEqual([
+      "collection:posts",
+    ]);
+    expect(() =>
+      validateWidgetQuery({
+        source: "collection:nx_pb_class_usage",
+        op: "count",
+      })
+    ).toThrow(UNAVAILABLE_SOURCE_MESSAGE);
+    expect(isKeptOffDashboard("collection", "nx_pb_class_usage")).toBe(true);
+  });
+
+  it("keeps a collection whose admin options say nothing about hiding it", async () => {
+    // The control: `admin` alone, or `hidden: false`, leaves the collection on the dashboard.
+    registryHolds([
+      { slug: "a", fields: [], admin: { useAsTitle: "title" } },
+      { slug: "b", fields: [], admin: { hidden: false } },
+    ]);
+
+    await refreshCollectionSources();
+
+    expect(listSources().map(source => source.id)).toEqual([
+      "collection:a",
+      "collection:b",
+    ]);
   });
 
   it("advertises a date nested in an unnamed group as a top-level field", async () => {

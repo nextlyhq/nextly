@@ -23,6 +23,7 @@ import { getNextlyLogger } from "../../observability/logger";
 import { registerBuiltInSingleSources } from "./built-in-sources";
 import { readableFields, statusClaimsPresent } from "./collection-sources";
 import { deferredEntities } from "./deferred-entities";
+import { keptOffDashboard, recordKeptOffDashboard } from "./kept-off-dashboard";
 
 /**
  * The slice of a `dynamic_singles` row this needs. Structural, like the
@@ -36,6 +37,8 @@ interface RegisteredSingle {
   migrationStatus?: unknown;
   /** The Draft/Published `status` column, read for the reason the collection's is. */
   status?: unknown;
+  /** Admin options, read for `hidden`; see `keptOffDashboard`. Stored JSON, so `unknown`. */
+  admin?: unknown;
 }
 
 interface SingleRegistrySurface {
@@ -83,6 +86,8 @@ function labelOf(single: RegisteredSingle): string | undefined {
 export async function refreshSingleSources(): Promise<void> {
   const singles = await readRegisteredSingles();
   if (!singles) return;
+  // From this same read, so what is left out here and what the other surfaces leave out agree.
+  recordKeptOffDashboard("single", singles);
 
   const deferred = deferredEntities("single");
   const named = singles.filter(
@@ -90,7 +95,9 @@ export async function refreshSingleSources(): Promise<void> {
       typeof single.slug === "string" &&
       single.slug !== "" &&
       !deferred.has(single.slug) &&
-      statusClaimsPresent(single)
+      statusClaimsPresent(single) &&
+      // Kept off the dashboard: no source, no card, and a query naming it reads as unknown.
+      !keptOffDashboard(single)
   );
 
   registerBuiltInSingleSources(

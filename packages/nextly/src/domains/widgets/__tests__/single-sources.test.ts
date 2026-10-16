@@ -28,6 +28,7 @@ import { generatedCollectionSlug, singleWidgets } from "../collection-widgets";
 import { setDeferredEntities } from "../deferred-entities";
 import { executeWidgetQuery } from "../execute";
 import { validateWidgetQuery } from "../query";
+import { isKeptOffDashboard } from "../kept-off-dashboard";
 import { refreshSingleSources } from "../single-sources";
 import { clearSources, getSource, listSources } from "../sources";
 
@@ -366,6 +367,27 @@ describe("refreshing the single sources from the registry", () => {
       "single:ready",
       "single:older",
     ]);
+  });
+
+  it("publishes no source for a single kept off the dashboard, and records it as kept off", async () => {
+    // Hidden from the navigation (an internal single is stored the same way): no source, so no
+    // card is generated and a query naming it is refused as unknown -- for a super-admin too,
+    // since nothing here depends on the caller.
+    getAllSingles.mockResolvedValue([
+      { slug: "shown", migrationStatus: "synced", fields: [] },
+      {
+        slug: "hidden",
+        migrationStatus: "synced",
+        fields: [],
+        admin: { hidden: true },
+      },
+    ]);
+
+    await refreshSingleSources();
+
+    expect(listSources().map(source => source.id)).toEqual(["single:shown"]);
+    expect(isKeptOffDashboard("single", "hidden")).toBe(true);
+    expect(isKeptOffDashboard("single", "shown")).toBe(false);
   });
 
   it("leaves the published sources standing when the registry cannot be read", async () => {

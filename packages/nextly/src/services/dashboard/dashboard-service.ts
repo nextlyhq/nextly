@@ -23,6 +23,7 @@ import { container } from "../../di/container";
 import { requireNextly } from "../../direct-api/nextly";
 import type { CountArgs, FindArgs } from "../../direct-api/types";
 import { COMMON_TITLE_FIELDS } from "../../domains/collections/entry-title";
+import { keptOffDashboard } from "../../domains/widgets/kept-off-dashboard";
 import { entryHeading } from "../../lib/entry-heading";
 import { BaseService } from "../base-service";
 import type { Logger } from "../shared";
@@ -286,7 +287,7 @@ export class DashboardService extends BaseService {
             slug: string;
             tableName: string;
             labels: { singular: string; plural: string };
-            admin?: { useAsTitle?: string; group?: string };
+            admin?: { useAsTitle?: string; group?: string; hidden?: boolean };
             /**
              * The Draft/Published lifecycle toggle. This is a top-level
              * column on `dynamic_collections`, entirely separate from
@@ -303,7 +304,11 @@ export class DashboardService extends BaseService {
         >;
       }>("collectionRegistryService");
 
-      const collections = await registryService.getAllCollections();
+      // A collection kept off the dashboard is neither listed nor counted here, for any caller,
+      // a super-admin included; see `keptOffDashboard`.
+      const collections = (await registryService.getAllCollections()).filter(
+        c => !keptOffDashboard(c)
+      );
       const mapped = collections.map(c => ({
         slug: c.slug,
         tableName: c.tableName,
@@ -328,10 +333,13 @@ export class DashboardService extends BaseService {
   ): Promise<Array<{ slug: string }>> {
     try {
       const singleRegistryService = container.get<{
-        getAllSingles: () => Promise<Array<{ slug: string }>>;
+        getAllSingles: () => Promise<Array<{ slug: string; admin?: unknown }>>;
       }>("singleRegistryService");
 
-      const singles = await singleRegistryService.getAllSingles();
+      // Kept off the dashboard, for the reason the collections above are.
+      const singles = (await singleRegistryService.getAllSingles()).filter(
+        single => !keptOffDashboard(single)
+      );
       return filterByResource(scope, singles, s => String(s.slug));
     } catch (error) {
       this.logger.error("Failed to get registered singles", {

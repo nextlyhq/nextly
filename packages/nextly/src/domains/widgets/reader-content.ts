@@ -37,6 +37,7 @@ import type { FindArgs } from "../../direct-api/types/collections";
 import type { ReadCaller } from "../../services/dashboard/readable-resources";
 import { readableSlugAllowlist } from "../../services/lib/readable-slug-allowlist";
 
+import { isKeptOffDashboard } from "./kept-off-dashboard";
 import { listSources, sourceKindFromId, sourceTarget } from "./sources";
 
 /**
@@ -76,9 +77,11 @@ function readArgs(caller: ReadCaller) {
 export async function readableCollectionSlugs(
   caller: ReadCaller
 ): Promise<string[]> {
-  return (
-    (await readableSlugAllowlist(readAccessCaller(caller), "collection")) ?? []
-  );
+  const readable =
+    (await readableSlugAllowlist(readAccessCaller(caller), "collection")) ?? [];
+  // A collection kept off the dashboard does not make a content card worth offering: the card
+  // would leave it out and draw empty.
+  return readable.filter(slug => !isKeptOffDashboard("collection", slug));
 }
 
 /**
@@ -91,9 +94,10 @@ export async function readableCollectionSlugs(
 export async function readableSingleSlugs(
   caller: ReadCaller
 ): Promise<string[]> {
-  return (
-    (await readableSlugAllowlist(readAccessCaller(caller), "single")) ?? []
-  );
+  const readable =
+    (await readableSlugAllowlist(readAccessCaller(caller), "single")) ?? [];
+  // Kept off the dashboard, for the reason the collections' are.
+  return readable.filter(slug => !isKeptOffDashboard("single", slug));
 }
 
 /**
