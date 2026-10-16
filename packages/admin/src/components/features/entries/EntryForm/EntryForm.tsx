@@ -834,6 +834,7 @@ export function EntryForm({
     <UnsavedChangesGuard
       isDirty={hasUnsavedWork}
       disabled={isSubmitting}
+      fields={getCollectionFields(collection)}
       // A refused switch takes its seed with it. The request to fill the target
       // from this language was made ALONGSIDE a navigation; if the navigation
       // does not happen, the request did not either — and a seed left behind

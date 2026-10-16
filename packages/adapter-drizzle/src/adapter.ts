@@ -2734,6 +2734,38 @@ export abstract class DrizzleAdapter {
   }
 
   /**
+   * The driver's own error inside `error`: the first in its `cause` chain that
+   * `isDriverError` recognises, or `error` itself when none does.
+   *
+   * A query that runs through Drizzle fails with Drizzle's `DrizzleQueryError`,
+   * whose message is the SQL statement and which carries no driver code; the
+   * driver's error, the only object that knows what actually went wrong, is
+   * its `cause`. A dialect's {@link classifyError} classifies from what this
+   * returns, so a failure reads the same whether or not Drizzle wrapped it.
+   *
+   * The walk is bounded, because an error chain can be made cyclic and a
+   * classifier that can hang is worse than one that gives up. Falling back to
+   * `error` keeps an error that carries no code anywhere classified as before.
+   *
+   * @param error - The error as it was caught
+   * @param isDriverError - Whether a link in the chain is the driver's error
+   * @returns The driver's error, or `error` when no link is
+   */
+  protected driverErrorIn<T extends { cause?: unknown }>(
+    error: unknown,
+    isDriverError: (candidate: T) => boolean
+  ): T {
+    let cursor: unknown = error;
+    for (let depth = 0; depth < 10; depth++) {
+      if (cursor === null || typeof cursor !== "object") break;
+      const candidate = cursor as T;
+      if (isDriverError(candidate)) return candidate;
+      cursor = candidate.cause;
+    }
+    return (error ?? {}) as T;
+  }
+
+  /**
    * Classify an error into a DatabaseError.
    *
    * @remarks

@@ -24,6 +24,13 @@ import {
   qualifiedFilename,
   type PluginMigration,
 } from "../../domains/schema/migrate/plugin/plugin-migration";
+import {
+  asLifecycleCommandBoot,
+  readPluginLifecycle,
+  recordPluginLifecycle,
+  type PluginLifecycleRecord,
+} from "../../domains/schema/ownership/plugin-lifecycle-state";
+import { SchemaOwnersRepository } from "../../domains/schema/ownership/schema-owners-repository";
 import { NextlyError } from "../../errors/nextly-error";
 import type { PluginDefinition } from "../../plugins/plugin-context";
 import { SCHEMA_OWNERS_TABLE } from "../../schemas/schema-owners";
@@ -563,28 +570,32 @@ async function connect(options: RunnerOptions, context: CommandContext) {
       // that throws after that point leaves their `init()` work running with
       // the registered flag never set — and a `registerServices` outside the
       // `try` skipped the cleanup exactly then.
-      await registerServices(
-        buildServiceConfig({
-          // The config as the app wrote it. The boot runs every `setup`
-          // transformer and contribution fold itself; booting from the
-          // loader's `config`, which holds their result, ran each twice, so
-          // a transformer that adds a plugin or a collection added it again.
-          //
-          // Boot migrations off: the hook runs inside the command's migrate
-          // lock, so a boot that migrated would wait on that lock itself,
-          // and on SQLite, whose lock holds nothing back, it could apply a
-          // module after the uninstall had fixed which ones to undo.
-          config: {
-            ...appConfig,
-            db: { ...appConfig.db, runMigrationsOnBoot: false },
-          },
-          // The grants the loader read before any `setup` transformer ran.
-          pluginConsent,
-          adapter: drizzleAdapter,
-          imageProcessor: getImageProcessor(),
-          hookRegistry: getHookRegistry(),
-          logger: context.logger,
-        })
+      // As the lifecycle command's boot: the install-state gate would refuse
+      // the very plugin this command is installing or uninstalling.
+      await asLifecycleCommandBoot(() =>
+        registerServices(
+          buildServiceConfig({
+            // The config as the app wrote it. The boot runs every `setup`
+            // transformer and contribution fold itself; booting from the
+            // loader's `config`, which holds their result, ran each twice, so
+            // a transformer that adds a plugin or a collection added it again.
+            //
+            // Boot migrations off: the hook runs inside the command's migrate
+            // lock, so a boot that migrated would wait on that lock itself,
+            // and on SQLite, whose lock holds nothing back, it could apply a
+            // module after the uninstall had fixed which ones to undo.
+            config: {
+              ...appConfig,
+              db: { ...appConfig.db, runMigrationsOnBoot: false },
+            },
+            // The grants the loader read before any `setup` transformer ran.
+            pluginConsent,
+            adapter: drizzleAdapter,
+            imageProcessor: getImageProcessor(),
+            hookRegistry: getHookRegistry(),
+            logger: context.logger,
+          })
+        )
       );
       const pluginContext = getInitializedPluginContext(plugin.name);
       if (pluginContext === undefined) {
@@ -628,10 +639,36 @@ async function connect(options: RunnerOptions, context: CommandContext) {
     }
   };
 
+  /**
+   * Every plugin's recorded state, and the write of one: through the
+   * lifecycle-state module, the one place either is decided.
+   */
+  const readLifecycle = async (): Promise<
+    ReadonlyMap<string, PluginLifecycleRecord>
+  > =>
+    readPluginLifecycle(
+      new SchemaEventsRepository(drizzleAdapter.getDrizzle(), dialect),
+      await new SchemaOwnersRepository(
+        drizzleAdapter.getDrizzle(),
+        dialect
+      ).read()
+    );
+  const recordLifecycle = (
+    plugin: LifecyclePlugin,
+    record: PluginLifecycleRecord
+  ): Promise<void> =>
+    recordPluginLifecycle(
+      new SchemaEventsRepository(drizzleAdapter.getDrizzle(), dialect),
+      plugin.name,
+      record
+    );
+
   return {
     adapter,
     dialect,
     applyMigrations,
+    readLifecycle,
+    recordLifecycle,
     // Read PER ACCESS, never captured. The same cast `migrate` makes —
     // `CLIDatabaseAdapter` is deliberately connect/disconnect/dialect, and the
     // Drizzle handle underneath it is what any command touching data needs —

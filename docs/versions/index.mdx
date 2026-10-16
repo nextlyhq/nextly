@@ -4,8 +4,8 @@ description: Nextly keeps a version history of each document, so you can see wha
 ---
 
 Version history is **opt-in per collection or single**. Turn it on and Nextly keeps a
-version history, the newest 50 per document by default, so "who changed this, and when" has
-an answer. Creates and updates record a version, with one exception: while a working draft is
+version history: by default the newest 50 per document, plus the versions [retention](#retention)
+always keeps, so "who changed this, and when" has an answer. Creates and updates record a version, with one exception: while a working draft is
 open, saving rewrites that pending draft, and a version is added when it is published.
 
 ```ts

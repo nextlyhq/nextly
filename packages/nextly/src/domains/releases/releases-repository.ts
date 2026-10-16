@@ -24,7 +24,6 @@ import {
   type ReleaseState,
 } from "../../schemas/releases/types";
 import type { VersionScopeKind } from "../../schemas/versions/types";
-import type { SupportedDialect } from "../../types/database";
 import { uuidV7 } from "../../utils/uuid-v7";
 import type {
   VersionsDbApi,
@@ -65,19 +64,9 @@ import { invalidateTransitionCacheFor } from "./transition-cache-registry";
  * one that moved the row. Widened here rather than in the versions port,
  * because that port's own note says any widening should be a deliberate act.
  */
-export type ReleasesDbApi = Omit<VersionsDbApi, "select" | "dialect"> & {
+export type ReleasesDbApi = Omit<VersionsDbApi, "select"> & {
   /**
-   * Which engine this handle talks to.
-   *
-   * REQUIRED here, where the versions port leaves it optional, because the
-   * list search has to choose its operator by engine (see
-   * {@link releaseSearchCondition}) and a handle that could not say would be
-   * searched case-sensitively on one engine with nothing to show for it. Only
-   * the adapter satisfies this port, and the adapter always knows.
-   */
-  readonly dialect: SupportedDialect;
-  /**
-   * The versions port's select, with the two text-matching operators the list
+   * The versions port's select, with the text-matching operator the list
    * search needs. Widened here rather than in the versions port, which says a
    * widening there should be a deliberate act for its own readers.
    */
@@ -175,11 +164,11 @@ export type ReleaseListOrder = (typeof RELEASE_LIST_ORDERS)[number];
 
 /**
  * A condition the release list can put to the database: the versions port's
- * operators, plus the two the search uses to match text.
+ * operators, plus the one the search uses to match text.
  */
 export interface ReleasesWhereCondition
   extends Omit<VersionsWhereCondition, "op"> {
-  op: VersionsWhereCondition["op"] | "ILIKE" | "CONTAINS";
+  op: VersionsWhereCondition["op"] | "ICONTAINS";
 }
 
 /** A where clause over {@link ReleasesWhereCondition}s. */
@@ -240,29 +229,18 @@ export interface ReleasePage {
 }
 
 /**
- * The search, as a condition this engine evaluates without regard to case.
+ * The search, as a condition that ignores case on every engine.
  *
- * Per engine because the engines disagree. PostgreSQL's `LIKE` is
- * case-sensitive, so it needs `ILIKE`; MySQL and SQLite have no `ILIKE`, and
- * their `LIKE` already ignores case (MySQL through the column's
- * case-insensitive collation, SQLite for ASCII letters, which is the most
- * SQLite does without an extension). `CONTAINS` is the adapter's literal
- * substring match there, with `%` and `_` escaped for us.
- *
- * `ILIKE` takes its pattern as given, so the escaping is done here, with the
- * backslash PostgreSQL uses as its default `LIKE` escape: without it, a search
- * for "50%" also finds "50 years".
+ * `ICONTAINS` is the adapter's literal substring match without regard to
+ * case, whatever the column's collation: a typed `%` or `_` is searched for,
+ * not read as a wildcard, and a MySQL column under a case-sensitive collation
+ * still matches "Spring" for "spring".
  */
 export function releaseSearchCondition(
-  dialect: SupportedDialect,
   column: "title" | "description",
   search: string
 ): ReleasesWhereCondition {
-  if (dialect === "postgresql") {
-    const literal = search.replace(/[\\%_]/g, character => `\\${character}`);
-    return { column, op: "ILIKE", value: `%${literal}%` };
-  }
-  return { column, op: "CONTAINS", value: search };
+  return { column, op: "ICONTAINS", value: search };
 }
 
 export interface ReleaseRow {
@@ -856,12 +834,8 @@ export class ReleasesRepository {
       // after reading it finds only what that page happened to hold.
       conditions.push({
         or: [
-          releaseSearchCondition(this.db.dialect, "title", filters.search),
-          releaseSearchCondition(
-            this.db.dialect,
-            "description",
-            filters.search
-          ),
+          releaseSearchCondition("title", filters.search),
+          releaseSearchCondition("description", filters.search),
         ],
       });
     }
