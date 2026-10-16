@@ -23,7 +23,9 @@ import { gotoAdmin } from "./support/admin";
 
 const OPEN_BUILDER_ACTION = /^(?:Build this page|Open Page Builder)$/;
 const HOMEPAGE_API = "/admin/api/singles/homepage";
-const SECOND_PASSWORD = "Second-Editor-Pass-123!";
+// The password an admin sets, and the one its owner chooses at first sign-in.
+const SET_PASSWORD = "Second-Editor-Pass-123!";
+const OWN_PASSWORD = "Second-Editor-Own-456!";
 
 function heading(id: string, text: string) {
   return { id, type: "core/heading", version: 1, props: { text, level: "h2" } };
@@ -33,12 +35,36 @@ function block(page: Page, id: string) {
   return page.locator(`.nx-canvas [data-nx-node="${id}"]`).first();
 }
 
-/** A second super-admin, signed in in a context of its own. */
+/** A fresh CSRF token for a context; the cookie it sets travels with it. */
+async function csrfHeaders(
+  context: BrowserContext,
+  origin: string
+): Promise<Record<string, string>> {
+  const issued = await context.request.get("/admin/api/auth/csrf");
+  expect(issued.ok(), `issuing a CSRF token: ${issued.status()}`).toBe(true);
+  const { token } = (await issued.json()) as { token: string };
+  return { origin, "x-csrf-token": token };
+}
+
+/**
+ * A second super-admin, signed in in a context of its own.
+ *
+ * Signed in through the auth API rather than the form. This suite's server
+ * runs the playground's dev auto-login, which answers the login page of a
+ * context with no session by signing it in as the dev user — the same lock
+ * holder as the first page, which would prove nothing. Once this context holds
+ * a valid session, auto-login never runs for it. The account's first sign-in
+ * asks for a new password, as for any account whose password an admin set, and
+ * that step is taken here too.
+ */
 async function secondEditor(
   browser: Browser,
-  first: Page
+  first: Page,
+  baseURL: string | undefined
 ): Promise<{ context: BrowserContext; page: Page }> {
-  const roles = await first.request.get("/admin/api/roles?pageSize=100");
+  // `limit`, not a page size: the roles list reads only `limit` and `page`,
+  // and super-admin sorts last.
+  const roles = await first.request.get("/admin/api/roles?limit=100");
   expect(roles.ok(), `listing roles: ${roles.status()}`).toBe(true);
   const { items } = (await roles.json()) as {
     items: { id: string; slug: string }[];
@@ -51,7 +77,7 @@ async function secondEditor(
     data: {
       name: "Second Editor",
       email,
-      password: SECOND_PASSWORD,
+      password: SET_PASSWORD,
       isActive: true,
       roles: [superAdmin?.id],
     },
@@ -60,14 +86,44 @@ async function secondEditor(
     true
   );
 
-  const context = await browser.newContext({ storageState: undefined });
-  const page = await context.newPage();
-  await page.goto("/admin/login");
-  await page.getByLabel(/email/i).fill(email);
-  await page.getByLabel(/password/i).fill(SECOND_PASSWORD);
-  await page.getByRole("button", { name: /sign in|log in/i }).click();
-  await page.waitForURL(/\/admin(?!\/login)/, { timeout: 30_000 });
-  return { context, page };
+  if (!baseURL) throw new Error("The suite configures no baseURL.");
+  // A context from `browser` inherits none of the test's options, so it is
+  // given the address and starts with no session of the dev user's.
+  const context = await browser.newContext({ baseURL });
+  const origin = new URL(baseURL).origin;
+
+  const login = await context.request.post("/admin/api/auth/login", {
+    headers: await csrfHeaders(context, origin),
+    data: { email, password: SET_PASSWORD },
+  });
+  expect(login.ok(), `signing in the second editor: ${login.status()}`).toBe(
+    true
+  );
+  const paused = (await login.json()) as {
+    status?: string;
+    pendingToken?: string;
+  };
+  expect(paused.status).toBe("password_change_required");
+
+  const changed = await context.request.post(
+    "/admin/api/auth/set-initial-password",
+    {
+      headers: await csrfHeaders(context, origin),
+      data: { pendingToken: paused.pendingToken, newPassword: OWN_PASSWORD },
+    }
+  );
+  expect(
+    changed.ok(),
+    `setting the second editor's password: ${changed.status()}`
+  ).toBe(true);
+
+  // The session is the second editor's, not one auto-login substituted.
+  const session = await context.request.get("/admin/api/auth/session");
+  expect(session.ok(), `reading the session: ${session.status()}`).toBe(true);
+  const { user } = (await session.json()) as { user?: { email?: string } };
+  expect(user?.email).toBe(email);
+
+  return { context, page: await context.newPage() };
 }
 
 async function openBuilder(page: Page): Promise<void> {
@@ -92,11 +148,12 @@ test.describe("two editors on one page", () => {
   test("the second sees it read-only, named as held, and can ask for it", async ({
     page,
     browser,
+    baseURL,
   }) => {
     await openBuilder(page);
     await expect(block(page, "first")).toBeVisible({ timeout: 30_000 });
 
-    const other = await secondEditor(browser, page);
+    const other = await secondEditor(browser, page, baseURL);
     try {
       await openBuilder(other.page);
       await expect(
@@ -122,6 +179,7 @@ test.describe("two editors on one page", () => {
   test("a takeover keeps the displaced author's unsaved edits", async ({
     page,
     browser,
+    baseURL,
   }) => {
     await openBuilder(page);
     await expect(block(page, "second")).toBeVisible({ timeout: 30_000 });
@@ -129,7 +187,7 @@ test.describe("two editors on one page", () => {
     await page.keyboard.press("Delete");
     await expect(block(page, "second")).toHaveCount(0);
 
-    const other = await secondEditor(browser, page);
+    const other = await secondEditor(browser, page, baseURL);
     try {
       await openBuilder(other.page);
       await other.page.getByRole("button", { name: "Take over" }).click();
