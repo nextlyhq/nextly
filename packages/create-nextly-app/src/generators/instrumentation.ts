@@ -5,7 +5,7 @@ import fs from "fs-extra";
 import type { ProjectInfo } from "../types";
 
 import type { GeneratedFiles } from "./generated-files";
-import { nextMajor } from "./next-config";
+import { nextConfigFileToChange, nextMajor } from "./next-config";
 
 /**
  * The names Next.js loads its instrumentation hook from: `instrumentation`
@@ -116,7 +116,8 @@ const OPT_IN = "experimental: { instrumentationHook: true }";
  */
 function hookOptIn(
   major: number | null,
-  nextConfig: { name: string } | null
+  nextConfig: { name: string } | null,
+  configFile: string
 ): GeneratedFiles["skipped"][number] | null {
   if (major !== null && major !== 14) return null;
   const when =
@@ -124,11 +125,11 @@ function hookOptIn(
       ? "Next.js 14 runs instrumentation.ts only when the config opts in"
       : "the installed Next.js version could not be read, and Next.js 14 runs instrumentation.ts only when the config opts in";
   if (!nextConfig) {
-    // An .mjs config is ESM whatever the package's own "type" says, so this
-    // one file loads in a CommonJS project and in a module one alike.
+    // The same file the Next config step names for Nextly's packages, so
+    // following both pieces of advice makes one config, not two.
     return {
-      path: "next.config.mjs",
-      why: `${when}, and the app has no Next.js config; on Next.js 14, create this file`,
+      path: configFile,
+      why: `${when}, and the app has no Next.js config; on Next.js 14, create this file, which is also where Nextly's packages go`,
       toAdd: `/** @type {import('next').NextConfig} */\nexport default {\n  ${OPT_IN},\n};\n`,
     };
   }
@@ -161,7 +162,11 @@ export async function generateInstrumentation(
   const result: GeneratedFiles = { written: [], changed: [], skipped: [] };
   const nextConfig = await readNextConfig(cwd);
 
-  const optIn = hookOptIn(await nextMajor(cwd), nextConfig);
+  const optIn = hookOptIn(
+    await nextMajor(cwd),
+    nextConfig,
+    await nextConfigFileToChange(cwd)
+  );
   if (optIn) result.skipped.push(optIn);
 
   for (const name of HOOK_NAMES) {
