@@ -230,7 +230,11 @@ export interface UnknownFieldDiff {
 /**
  * A field the reader may not read. It is named in its place so the reader
  * knows it exists, but nothing about its values is sent, not even whether
- * they changed: `status` is always `unchanged`.
+ * they changed: `status` is always `unchanged`, it never appears in a
+ * changes-only comparison, and the comparison is marked `incomplete`.
+ *
+ * A new member of the {@link FieldDiff} union: a consumer that switches over
+ * `kind` exhaustively adds a `hidden` case (or a default) when it upgrades.
  *
  * @experimental
  */
@@ -351,7 +355,18 @@ export interface VersionDiff {
   to: number;
   /** The (single) locale both snapshots belong to; null for unlocalized docs. */
   locale: string | null;
-  /** True when any field node is not "unchanged". */
+  /**
+   * True when any field node is not "unchanged". Speaks only for the fields
+   * the reader may read: see `incomplete`.
+   */
   hasChanges: boolean;
+  /**
+   * True when fields were withheld from the reader. Their changes cannot be
+   * shown, so `hasChanges: false` then means only that nothing the reader may
+   * read changed, never that the versions are the same.
+   *
+   * @experimental
+   */
+  incomplete?: boolean;
   fields: FieldDiff[];
 }

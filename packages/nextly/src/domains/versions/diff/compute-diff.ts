@@ -22,7 +22,10 @@
 import { dequal } from "dequal";
 
 import type { FieldConfig } from "../../../collections/fields/types";
-import { SYSTEM_COLUMNS } from "../../../lib/system-columns";
+import {
+  SYSTEM_COLUMNS,
+  type SystemColumnEntity,
+} from "../../../lib/system-columns";
 import { normalizeStoredValue } from "../../../shared/lib/normalize-stored-value";
 import {
   extractFieldGroupReferences,
@@ -49,7 +52,10 @@ import type {
 } from "./types";
 
 /** The engine's output; the caller stamps `from`/`to`/`locale`. */
-export type VersionDiffBody = Pick<VersionDiff, "hasChanges" | "fields">;
+export type VersionDiffBody = Pick<
+  VersionDiff,
+  "hasChanges" | "fields" | "incomplete"
+>;
 
 export interface ComputeDiffOptions {
   /** Drop every node that did not change (nested included). */
@@ -62,6 +68,14 @@ export interface ComputeDiffOptions {
    * @experimental
    */
   withheld?: ReadonlySet<string>;
+  /**
+   * The kind of document compared. A framework column belongs to some kinds
+   * only (a Single has no owner column), and a key that is not one of this
+   * kind's columns is a removed field. Defaults to `collection`.
+   *
+   * @experimental
+   */
+  entity?: SystemColumnEntity;
 }
 
 // Framework-managed columns on a top-level document, never user content.
@@ -80,18 +94,31 @@ const SYSTEM_KEYS = new Set([
 const ROW_SYSTEM_KEYS = new Set(["id"]);
 const NO_SYSTEM_KEYS = new Set<string>();
 
-// Every column the framework keeps on a document, under both spellings. A key
-// among them that the schema does not declare is a system field (when it was
-// first published, say), not a field the content type has lost.
-const SYSTEM_COLUMN_KEYS: ReadonlySet<string> = new Set(
-  SYSTEM_COLUMNS.flatMap(column => [column.name, column.camelName])
-);
+// Every column the framework keeps on a document of each kind, under both
+// spellings. A key among them that the schema does not declare is a system
+// field (when it was first published, say), not a field the content type has
+// lost.
+function systemColumnKeys(entity: SystemColumnEntity): ReadonlySet<string> {
+  return new Set(
+    SYSTEM_COLUMNS.filter(column => column.appliesTo.includes(entity)).flatMap(
+      column => [column.name, column.camelName]
+    )
+  );
+}
+const SYSTEM_COLUMN_KEYS: Readonly<
+  Record<SystemColumnEntity, ReadonlySet<string>>
+> = {
+  collection: systemColumnKeys("collection"),
+  single: systemColumnKeys("single"),
+};
 const NOTHING_WITHHELD: ReadonlySet<string> = new Set();
 
 /** Where in the tree a walk is, which decides framework-key and redaction rules. */
 interface WalkContext {
   /** The top-level document object (framework columns live here). */
   top: boolean;
+  /** The framework columns this kind of document carries. */
+  systemColumns: ReadonlySet<string>;
   /** The containers this level sits inside, outermost first. */
   path: DiffPathSegment[];
   /**
@@ -269,6 +296,7 @@ function inside(
       : [{ name, declaredLabel, type: container.type }];
   return {
     ...level,
+    systemColumns: ctx.systemColumns,
     path: [...ctx.path, ...segment],
     // Redaction reaches the document's own level only.
     withheld: level.top ? ctx.withheld : NOTHING_WITHHELD,
@@ -916,10 +944,11 @@ function fieldNodes(
   // Redaction never ran inside a component, so a field declaring a read rule
   // there is omitted rather than risk exposing a value the caller may not read.
   if (ctx.inComponent && hasReadAccessRule(field)) return [];
-  if (!(name in beforeObj) && !(name in afterObj)) {
-    // Absent from both because the reader may not read it: say so, in place.
-    return ctx.withheld.has(name) ? [hiddenNode(field, name, ctx)] : [];
-  }
+  // Withheld from either version: say so in place, and diff neither side. A
+  // rule that reads the document can deny one version only, and comparing the
+  // side that is left would still say the field came or went.
+  if (ctx.withheld.has(name)) return [hiddenNode(field, name, ctx)];
+  if (!(name in beforeObj) && !(name in afterObj)) return [];
   return [diffField(field, name, beforeObj[name], afterObj[name], ctx)];
 }
 
@@ -941,7 +970,7 @@ function undeclaredNodes(
   const removed: FieldDiff[] = [];
   for (const key of keys) {
     if (consumed.has(key) || ignored.has(key) || key.startsWith("_")) continue;
-    const isSystem = ctx.top && SYSTEM_COLUMN_KEYS.has(key);
+    const isSystem = ctx.top && ctx.systemColumns.has(key);
     const node = unknownNode(
       key,
       beforeObj[key],
@@ -1015,16 +1044,17 @@ export function computeVersionDiff(
     top: true,
     inRow: false,
     inComponent: false,
+    systemColumns: SYSTEM_COLUMN_KEYS[opts.entity ?? "collection"],
     path: [],
     withheld: opts.withheld ?? NOTHING_WITHHELD,
   });
   const hasChanges = nodes.some(n => n.status !== "unchanged");
-  if (!opts.modifiedOnly) return { hasChanges, fields: nodes };
+  // Hidden fields can only be at the top, where redaction runs.
+  const incomplete = nodes.some(n => n.kind === "hidden");
+  if (!opts.modifiedOnly) return { hasChanges, incomplete, fields: nodes };
 
-  // A hidden field stays in a changes-only comparison: whether it changed is
-  // exactly what cannot be shown, so dropping it as unchanged would claim it.
-  const fieldsOut = nodes
-    .filter(n => n.status !== "unchanged" || n.kind === "hidden")
-    .map(pruneNode);
-  return { hasChanges, fields: fieldsOut };
+  // Changed nodes only. A hidden field's change cannot be known, so it is not
+  // listed as one; `incomplete` tells the reader the comparison left it out.
+  const fieldsOut = nodes.filter(n => n.status !== "unchanged").map(pruneNode);
+  return { hasChanges, incomplete, fields: fieldsOut };
 }

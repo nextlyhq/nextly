@@ -37,4 +37,11 @@ whose heading was lost before. A field the reader may not read is reported in
 its place as `hidden`, with nothing of its values, instead of disappearing.
 Keys with no field are marked `system` (a framework column such as when the
 document was first published) or `removed`, and removed fields are listed
-last. The new response fields are experimental.
+last. A comparison with withheld fields is marked `incomplete`, so "no
+changes" then means only that nothing the reader may read changed; a
+changes-only comparison never lists a hidden field. The new response fields
+are experimental.
+
+Compatibility: `FieldDiff` gains the `hidden` member. Code that switches over
+`kind` exhaustively needs a `hidden` case (or a default) after upgrading; the
+admin draws it as "Hidden: you don't have access to this field".

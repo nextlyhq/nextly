@@ -192,6 +192,59 @@ describe("computeVersionDiff — fields the reader cannot see, and fields that a
     });
   });
 
+  it("hides a field withheld from one version only, sending neither side", () => {
+    // A rule that reads the document can deny one version and allow the
+    // other; diffing the readable side would still say the field came or went.
+    const diff = computeVersionDiff(
+      { title: "A", notes: "visible then" },
+      { title: "A" },
+      [
+        field({ name: "title", type: "text" }),
+        field({ name: "notes", type: "textarea" }),
+      ],
+      { withheld: new Set(["notes"]) }
+    );
+    expect(find(diff.fields, "notes")).toMatchObject({
+      kind: "hidden",
+      status: "unchanged",
+    });
+    expect(JSON.stringify(diff)).not.toContain("visible then");
+  });
+
+  it("says a comparison is incomplete when fields were withheld, never that nothing changed", () => {
+    const fields = [
+      field({ name: "title", type: "text" }),
+      field({ name: "notes", type: "textarea" }),
+    ];
+    const withheld = new Set(["notes"]);
+
+    const full = computeVersionDiff({ title: "A" }, { title: "A" }, fields, {
+      withheld,
+    });
+    expect(full).toMatchObject({ hasChanges: false, incomplete: true });
+
+    // A changes-only comparison returns changed nodes only; the hidden field,
+    // whose change cannot be known, is carried by `incomplete` instead.
+    const changedOnly = computeVersionDiff(
+      { title: "A" },
+      { title: "A" },
+      fields,
+      { withheld, modifiedOnly: true }
+    );
+    expect(changedOnly).toMatchObject({
+      hasChanges: false,
+      incomplete: true,
+      fields: [],
+    });
+  });
+
+  it("is complete when nothing was withheld", () => {
+    const diff = computeVersionDiff({ title: "A" }, { title: "B" }, [
+      field({ name: "title", type: "text" }),
+    ]);
+    expect(diff.incomplete).toBe(false);
+  });
+
   it("says a framework column is a system field, not a removed one", () => {
     const diff = computeVersionDiff(
       { title: "A", firstPublishedAt: "2026-10-01T00:00:00.000Z" },
@@ -219,6 +272,28 @@ describe("computeVersionDiff — fields the reader cannot see, and fields that a
       reason: "removed",
       path: [],
     });
+  });
+
+  it("judges system columns by the kind of document compared", () => {
+    // A Single has no owner column, so `created_by` there is a field someone
+    // declared and later removed.
+    const before = { title: "A", created_by: "u1" };
+    const after = { title: "A", created_by: "u2" };
+    const fields = [field({ name: "title", type: "text" })];
+
+    expect(
+      find(
+        computeVersionDiff(before, after, fields, { entity: "single" }).fields,
+        "created_by"
+      )
+    ).toMatchObject({ reason: "removed" });
+    expect(
+      find(
+        computeVersionDiff(before, after, fields, { entity: "collection" })
+          .fields,
+        "created_by"
+      )
+    ).toMatchObject({ reason: "system" });
   });
 
   it("treats a framework column's name inside a group as a removed field", () => {

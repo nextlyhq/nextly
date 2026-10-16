@@ -197,6 +197,8 @@ describe("version diff (integration)", () => {
       status: "unchanged",
       path: [],
     });
+    // The comparison says it left something out.
+    expect(diff.incomplete).toBe(true);
     // Neither value reaches the reader, anywhere in the result.
     const wire = JSON.stringify(diff);
     expect(wire).not.toContain("falcon");

@@ -668,6 +668,7 @@ export async function diffDocumentVersions(args: {
     {
       modifiedOnly: args.modifiedOnly,
       withheld: new Set([...withheldFrom, ...withheldTo]),
+      entity: lookupKind,
     }
   );
 
@@ -689,6 +690,7 @@ export async function diffDocumentVersions(args: {
     to: args.to,
     locale: fromRow.locale,
     hasChanges: body.hasChanges,
+    incomplete: body.incomplete,
     fields: body.fields,
   };
 }
