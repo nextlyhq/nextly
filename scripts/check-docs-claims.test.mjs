@@ -422,6 +422,37 @@ describe("refused-claim", () => {
     expect(hits.map(f => f.line)).toEqual([1, 2]);
   });
 
+  it("fires through a link, an inline tag, an entity or underscore emphasis inside the phrase", async () => {
+    // Each renders as the bare words, so each must not split the phrase it sits in.
+    const hits = refused(
+      await findingsFor({
+        "docs/a.mdx": [
+          "No [SaaS](https://example.com) here.",
+          "There are [no paid][plans] gates.",
+          "No <strong>SaaS</strong> here.",
+          "No&nbsp;SaaS here.",
+          "There are no _paid_ gates.",
+          "",
+        ].join("\n"),
+      })
+    );
+    expect(hits.map(f => f.line)).toEqual([1, 2, 3, 4, 5]);
+  });
+
+  it("reports a surface it could not read rather than passing over it", async () => {
+    // The tracked list names a page the disk does not have: its claims went unexamined.
+    const { root, files } = await fixture({ "README.md": "x\n", "docs/a.mdx": "x\n" });
+    const { findings } = await runChecks({
+      repoRoot: root,
+      files: [...files, "docs/gone.mdx"],
+      remoteRefs: REFS,
+      hasLocalCommit: () => true,
+    });
+    expect(
+      findings.filter(f => f.check === "refused-claim-unexamined").map(f => f.file)
+    ).toEqual(["docs/gone.mdx"]);
+  });
+
   it("does not join a line to a new block beneath it", async () => {
     // A list item and a quotation opening beneath a sentence are separate statements. Each
     // marker is one the reading strips, so without the boundary the two lines would run

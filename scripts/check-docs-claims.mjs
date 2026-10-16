@@ -1962,8 +1962,23 @@ function refusedClaimSurfaces(repoRoot, tracked, packages) {
 /** A line beneath that opens a block of its own, so it is not the sentence above continuing. */
 const OPENS_BLOCK = /^(?:\s*$|\s*#{1,6}\s|\s*[-*+]\s|\s*\d+[.)]\s|\s*\||\s*```|\s*~~~|\s*<|\s*---)/;
 
-/** Emphasis and code-span markers render as nothing, so they cannot hide a phrase. */
-const INLINE_MARKUP = /[*`]/g;
+/**
+ * A line as a reader sees its words. A link or an image shows only its label, an inline tag and
+ * the emphasis and code-span markers show nothing, and an entity for a space or a hyphen shows
+ * as one, so none of them can split a phrase. Unlike the prose reading the category check uses,
+ * a code span keeps its text: a refused phrase in a code sample is published all the same.
+ *
+ * An underscore is markup only at the edge of a word, so `sso_enabled` keeps its own.
+ */
+function plainLine(line) {
+  return line
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/\[([^\]]*)\]\[[^\]]*\]/g, "$1")
+    .replace(/<\/?[A-Za-z][^>]*>/g, "")
+    .replace(/&(?:nbsp|ensp|emsp|thinsp|#0*32|#0*160|#x0*20|#x0*a0);/gi, " ")
+    .replace(/&(?:hyphen|dash|#0*45|#x0*2d);/gi, "-")
+    .replace(/[*`]|(?<![\p{L}\p{N}])_+|_+(?![\p{L}\p{N}])/gu, "");
+}
 
 /** A quotation repeats its marker on every line, and the marker is not part of the sentence. */
 const QUOTE_MARKER = /^\s*(?:>\s?)+/;
@@ -1980,19 +1995,6 @@ function describeRefused(hits) {
 }
 
 /**
- * Refused phrases on the public surfaces, reported on the line where each starts.
- *
- * These files are hand-wrapped, so a phrase is read across a wrap: each line is read together
- * with the one beneath unless that one opens a new block, and only matches STARTING on the
- * line are reported there. A phrase split by a wrap is therefore reported once, on its first
- * line, and a phrase wholly on the next line waits for that line's turn. Navigation files are
- * JSON, where every line is its own value, so they are read a line at a time.
- *
- * Raw lines rather than the rendered prose the category check reads: a refused phrase in a
- * code sample or a page's frontmatter is published as surely as one in a paragraph, and a line
- * number is what lets an accurate quotation be allowlisted by its file and its text.
- */
-/**
  * The text of the line beneath when it continues the same sentence, and nothing when it does
  * not. A quotation's marker comes off that line only when this line is quoted too: beneath a
  * plain line a quotation is a new block, and its marker left in place keeps the two apart.
@@ -2000,7 +2002,7 @@ function describeRefused(hits) {
 function continuation(line, next) {
   if (next === undefined) return "";
   const below = QUOTE_MARKER.test(line) ? next.replace(QUOTE_MARKER, "") : next;
-  return OPENS_BLOCK.test(below) ? "" : below.replace(INLINE_MARKUP, "");
+  return OPENS_BLOCK.test(below) ? "" : plainLine(below);
 }
 
 /**
@@ -2008,7 +2010,7 @@ function continuation(line, next) {
  * line continues the sentence.
  */
 function refusedOnLine(lines, i, wraps) {
-  const own = lines[i].replace(INLINE_MARKUP, "");
+  const own = plainLine(lines[i]);
   const rest = wraps ? continuation(lines[i], lines[i + 1]) : "";
   return refusedClaimsIn(`${own} ${rest}`).filter(hit => hit.index < own.length);
 }
@@ -2023,6 +2025,14 @@ function refusedInFile(repoRoot, file, findings, isExempt) {
   try {
     text = readFileSync(join(repoRoot, file), "utf-8");
   } catch {
+    // Fail closed: a surface git tracks and this could not read is one whose claims went
+    // unexamined, and skipping it would let the run pass on exactly that file.
+    findings.push({
+      check: "refused-claim-unexamined",
+      file,
+      line: null,
+      message: "is a public surface git tracks, and could not be read to check its claims",
+    });
     return;
   }
   const lines = text.split("\n");
@@ -2062,6 +2072,19 @@ function refusedClaimsUnexamined(surfaces, findings) {
   });
 }
 
+/**
+ * Refused phrases on the public surfaces, reported on the line where each starts.
+ *
+ * These files are hand-wrapped, so a phrase is read across a wrap: each line is read together
+ * with the one beneath unless that one opens a new block, and only matches STARTING on the
+ * line are reported there. A phrase split by a wrap is therefore reported once, on its first
+ * line, and a phrase wholly on the next line waits for that line's turn. Navigation files are
+ * JSON, where every line is its own value, so they are read a line at a time.
+ *
+ * Source lines rather than the rendered prose the category check reads: a refused phrase in a
+ * code sample or a page's frontmatter is published as surely as one in a paragraph, and a line
+ * number is what lets an accurate quotation be allowlisted by its file and its text.
+ */
 function refusedClaims(repoRoot, tracked, packages, findings, isExempt) {
   const surfaces = refusedClaimSurfaces(repoRoot, tracked, packages);
   for (const file of surfaces) refusedInFile(repoRoot, file, findings, isExempt);
