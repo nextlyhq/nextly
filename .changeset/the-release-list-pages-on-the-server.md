@@ -50,3 +50,8 @@ Scheduled releases listed without an `order` now come soonest first rather than
 furthest out first. A release's documents come back in the order they were
 added, and asking for the documents or blocking reasons of a release that does
 not exist answers not found instead of an empty list.
+
+New releases and release documents get time-ordered (version 7) UUIDs instead
+of random (version 4) ones, so ties in the list keep the order they were made
+in. They are still standard UUID strings in the same columns; only code that
+checks the version digit would notice. Existing ids are unchanged.

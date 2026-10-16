@@ -963,8 +963,14 @@ export class ReleasesService {
           });
         }
       }
-      // Validated as the list's are, so a typo in `state` is refused here too.
-      this.listFilters({ state: asked.state });
+      // Validated as the list's are — the state and the window bounds — so a
+      // typo or a bound that is not a Date is refused here too, rather than
+      // failing or silently not filtering in the in-memory pass below.
+      this.listFilters({
+        state: asked.state,
+        scheduledAfter: asked.scheduledAfter,
+        scheduledBefore: asked.scheduledBefore,
+      });
       // Every release holding one document, which is a handful, so paged in
       // memory after the engine's order is applied rather than in the query.
       const all = await this.findContaining(

@@ -59,7 +59,9 @@ release a few minutes past its time is still upcoming: the job runner applies it
 pass. One still waiting after 10 minutes is one the runner is not reaching, usually because
 no scheduler calls it (see below).
 
-Search matches text in the title or the description, ignoring case. What you type is
+Search matches text in the title or the description, ignoring case. It reads every release
+in the tab it searches, since no index can serve a match in the middle of a text; that is
+fast for the hundreds of releases a site keeps, and grows with the size of the history. What you type is
 matched as written, so `50%` finds "50% off" and not "50 years". On SQLite, case is ignored for the letters A to Z only. On MySQL, search follows the
 collation of the releases table: the default `utf8mb4` collations ignore case, a
 case-sensitive one does not.

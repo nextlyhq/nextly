@@ -649,6 +649,32 @@ describe("ReleasesService.find pages the list", () => {
     expect(repo.findReleasePage).not.toHaveBeenCalled();
   });
 
+  it("checks the window bounds of a document's releases too", async () => {
+    // The document listing filters in memory; a bound that is not a Date
+    // would fail there as a TypeError, or as NaN would silently not filter.
+    const { svc, repo } = service({ holds: ["read"] });
+    for (const bound of [
+      { scheduledAfter: "tomorrow" },
+      { scheduledBefore: new Date("nope") },
+    ]) {
+      await expect(
+        svc.find(
+          {
+            containing: {
+              scopeKind: "collection",
+              scopeSlug: "posts",
+              entryId: "e1",
+              locale: null,
+            },
+            ...bound,
+          } as unknown as Parameters<typeof svc.find>[0],
+          ADMIN
+        )
+      ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+    }
+    expect(repo.findDueMembersFor).not.toHaveBeenCalled();
+  });
+
   it("names the fix when `reason` comes without the attention tab", async () => {
     const { svc } = service({ holds: ["read"] });
     await expect(svc.find({ reason: "overdue" }, ADMIN)).rejects.toMatchObject({
