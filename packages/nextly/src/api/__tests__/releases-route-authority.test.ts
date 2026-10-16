@@ -14,6 +14,7 @@
  * @module api/__tests__/releases-route-authority.test
  */
 import { NextlyError } from "../../errors";
+import { RELEASE_STATES } from "../../schemas/releases/types";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { requireAnyPermission, isErrorResponse, getCachedNextly } = vi.hoisted(
@@ -867,6 +868,31 @@ describe("publish now over REST", () => {
     expect(body.message).not.toBe("Release published.");
     expect(body.message).toMatch(/going out/);
   });
+
+  it("says a release cancelled after the move was cancelled, not that it is going out", async () => {
+    // Called off between the move and the answer: nothing more of it goes
+    // out, and a message promising the rest would be untrue.
+    api.releases.publishNow.mockResolvedValueOnce({
+      id: "r1",
+      state: "cancelled",
+    });
+    const { body } = await publish();
+    expect(body.message).toMatch(/cancelled/);
+    expect(body.message).not.toMatch(/going out|published/);
+  });
+
+  it.each(
+    RELEASE_STATES.filter(state => state !== "scheduled").map(state => [state])
+  )(
+    "says only a scheduled release is going out, never a %s one",
+    async state => {
+      // Every state the answer can carry has its own sentence, so no state
+      // falls into the one that promises the rest is on its way.
+      api.releases.publishNow.mockResolvedValueOnce({ id: "r1", state });
+      const { body } = await publish();
+      expect(body.message).not.toMatch(/going out/);
+    }
+  );
 
   it("says a release that stopped part-way stopped, not that it is going out", async () => {
     api.releases.publishNow.mockResolvedValueOnce({

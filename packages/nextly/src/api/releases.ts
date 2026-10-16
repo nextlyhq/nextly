@@ -43,7 +43,6 @@ import {
   DEFAULT_RELEASE_PAGE_SIZE,
   MAX_RELEASE_PAGE_SIZE,
   RELEASES_RESOURCE,
-  type ReleaseCapabilities,
 } from "../domains/releases/services/releases-service";
 import { NextlyError } from "../errors";
 import { getCachedNextly } from "../init";
@@ -52,6 +51,7 @@ import {
   isReleaseState,
   RELEASE_KINDS,
   RELEASE_STATES,
+  type ReleaseCapabilities,
   type ReleaseKind,
   type ReleaseState,
 } from "../schemas/releases/types";
@@ -487,18 +487,25 @@ async function withCapabilities(
 /**
  * What a Publish now answer says, by the state the run left the release in.
  *
+ * One sentence per state, in a record keyed by every state, so a state added
+ * later is a compile error here rather than a release told it is going out.
+ *
  * A release still `scheduled` is due and is being sent out by the runner: the
  * run here ran out of time or could not write a document yet, or another run
  * of the drain already held it. The wording holds for each, since none of its
- * documents may be live yet.
+ * documents may be live yet. A `cancelled` one was called off after it was
+ * moved to now, and nothing more of it goes out.
  */
-function publishNowMessage(state: ReleaseState): string {
-  if (state === "published") return "Release published.";
-  if (state === "blocked") {
-    return "Release stopped part-way. Fix the documents blocking it, then schedule it again.";
-  }
-  return "Release is going out; any of its documents not yet live will follow shortly.";
-}
+const PUBLISH_NOW_MESSAGES: Record<ReleaseState, string> = {
+  published: "Release published.",
+  blocked:
+    "Release stopped part-way. Fix the documents blocking it, then schedule it again.",
+  scheduled:
+    "Release is going out; any of its documents not yet live will follow shortly.",
+  cancelled:
+    "Release was cancelled before it went out; nothing more from it will be sent.",
+  draft: "Release has not been sent; it is still a draft.",
+};
 
 /**
  * A release with its capabilities, for an answer given AFTER a write.
@@ -755,7 +762,7 @@ const RELEASE_OPERATIONS: Record<
     // way it went: a release still `scheduled` has documents the runner will
     // finish, and a `blocked` one stopped and will not go on until fixed.
     return respondMutation(
-      publishNowMessage(release.state),
+      PUBLISH_NOW_MESSAGES[release.state],
       await decorateAfterWrite(release, caller, releases)
     );
   },

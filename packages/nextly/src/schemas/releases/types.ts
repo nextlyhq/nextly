@@ -265,3 +265,34 @@ export const RELEASE_SCHEDULABLE_FROM_UNBLOCKED: readonly ReleaseState[] =
 export const RELEASE_SCHEDULABLE_FROM_BLOCKED: readonly ReleaseState[] = [
   "blocked",
 ];
+
+/**
+ * What a caller may do to one release, as the server sees it.
+ *
+ * Declared beside the lifecycle vocabulary and published through
+ * `nextly/schemas`, so the admin renders its controls from this type rather
+ * than a copy of it: a capability added here reaches the admin's type at once.
+ *
+ * Sent WITH the release rather than derived by the reader. Payload computes the
+ * same thing per document for its edit view, and Sanity gates each release
+ * action by its own permission id so scheduling can be granted without
+ * publishing — in both, the answer depends on authority the client does not
+ * hold, so a client that computed it would be guessing.
+ */
+export interface ReleaseCapabilities {
+  /** Set or move this release's instant. */
+  schedule: boolean;
+  /** Call it off — which is also how an unwanted draft is abandoned. */
+  cancel: boolean;
+  /** Put a document in it. Necessary, not sufficient: see `capabilities`. */
+  addMember: boolean;
+  /** Take a document out of it. Necessary, not sufficient. */
+  removeMember: boolean;
+  /**
+   * Run it now. True only for a draft or scheduled release: a stopped one is
+   * fixed and scheduled again, and a published or cancelled one is final.
+   *
+   * @experimental
+   */
+  publishNow: boolean;
+}

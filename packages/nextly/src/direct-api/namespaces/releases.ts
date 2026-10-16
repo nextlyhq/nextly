@@ -36,11 +36,11 @@ import type {
   FindReleasesQuery,
   ReleaseBlocker,
   ReleaseCountQuery,
-  ReleaseCapabilities,
   ReleasesService,
 } from "../../domains/releases/services/releases-service";
 import { NextlyError } from "../../errors/nextly-error";
 import type {
+  ReleaseCapabilities,
   ReleaseKind,
   ReleaseMemberAction,
 } from "../../schemas/releases/types";

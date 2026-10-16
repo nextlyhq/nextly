@@ -379,6 +379,32 @@ describe.each(getConfiguredTestDialects())(
       expect(await stateOf(t, other)).toBe("published");
     });
 
+    it("refuses a single-document release with no document, and changes nothing", async () => {
+      // Run now, it would publish nothing and be final with nothing in it. The
+      // same refusal scheduling makes, before anything is written.
+      const t = await boot(dialect);
+      const author = await seedLiveAuthor(t);
+      const repo = new ReleasesRepository(t.adapter);
+      const empty = await repo.createRelease({
+        title: "Launch post",
+        kind: "single",
+        createdBy: author,
+      });
+
+      await expect(
+        t.nextly.releases.publishNow({ id: empty.id })
+      ).rejects.toMatchObject({
+        code: "CONFLICT",
+        publicMessage: expect.stringContaining(
+          "A single-document release needs its document"
+        ),
+      });
+      const [after] = await repo.findReleases({ ids: [empty.id] });
+      expect(after?.state).toBe("draft");
+      expect(after?.scheduledAt).toBeNull();
+      expect(after?.revision).toBe(empty.revision);
+    });
+
     it("never runs a release twice, nor one that stopped or was cancelled", async () => {
       const t = await boot(dialect);
       const author = await seedLiveAuthor(t);

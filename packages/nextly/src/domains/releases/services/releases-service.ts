@@ -67,6 +67,7 @@ import {
   type ReleaseKind,
   type ReleaseMemberAction,
   type ReleaseState,
+  type ReleaseCapabilities,
 } from "../../../schemas/releases/types";
 import type { VersionScopeKind } from "../../../schemas/versions/types";
 import type { Logger } from "../../../services/shared";
@@ -167,33 +168,6 @@ export interface ReleaseActor {
    * against the real user rather than against an empty list.
    */
   userRoles?: string[];
-}
-
-/**
- * What a caller may do to one release, as the server sees it.
- *
- * Sent WITH the release rather than derived by the reader. Payload computes the
- * same thing per document for its edit view, and Sanity gates each release
- * action by its own permission id so scheduling can be granted without
- * publishing — in both, the answer depends on authority the client does not
- * hold, so a client that computed it would be guessing.
- */
-export interface ReleaseCapabilities {
-  /** Set or move this release's instant. */
-  schedule: boolean;
-  /** Call it off — which is also how an unwanted draft is abandoned. */
-  cancel: boolean;
-  /** Put a document in it. Necessary, not sufficient: see `capabilities`. */
-  addMember: boolean;
-  /** Take a document out of it. Necessary, not sufficient. */
-  removeMember: boolean;
-  /**
-   * Run it now. True only for a draft or scheduled release: a stopped one is
-   * fixed and scheduled again, and a published or cancelled one is final.
-   *
-   * @experimental
-   */
-  publishNow: boolean;
 }
 
 export interface ReleasesServiceDeps {
@@ -1651,19 +1625,7 @@ export class ReleasesService {
       throw finishedReleaseRefusal(current, "schedule");
     }
     const wasBlocked = current?.state === "blocked";
-    await this.assertNothingBlocks(id, current?.state);
-    // A single-document release is one document scheduled on its own: with
-    // none it would run and publish nothing, and read as done.
-    if (
-      current?.kind === "single" &&
-      (await this.deps.repository.listMembers(id)).length === 0
-    ) {
-      throw NextlyError.conflict({
-        message:
-          "A single-document release needs its document before it can be scheduled. Add it, then schedule.",
-        logContext: { reason: "single-release-empty", releaseId: id },
-      });
-    }
+    await this.assertReadyToRun(id, current);
 
     // FENCED ON THE STATE THE VERDICT ABOVE WAS FORMED AGAINST, which is what
     // makes the check and the write one decision rather than two.
@@ -1704,6 +1666,33 @@ export class ReleasesService {
     if (!(await this.deps.repository.scheduleRelease(id, at, timezone, from))) {
       throw NextlyError.conflict({
         logContext: { reason: "release-not-schedulable", releaseId: id },
+      });
+    }
+  }
+
+  /**
+   * Refuse a release that could not run as it stands: one whose members carry
+   * something nothing can run, or a single-document release with no document.
+   *
+   * The one precondition scheduling and Publish now both make before they
+   * write, so a release either may run at its instant or may run now, never
+   * one and not the other.
+   */
+  private async assertReadyToRun(
+    id: string,
+    current: ReleaseRow | undefined
+  ): Promise<void> {
+    await this.assertNothingBlocks(id, current?.state);
+    // A single-document release is one document scheduled on its own: with
+    // none it would run and publish nothing, and read as done.
+    if (
+      current?.kind === "single" &&
+      (await this.deps.repository.listMembers(id)).length === 0
+    ) {
+      throw NextlyError.conflict({
+        message:
+          "A single-document release needs its document before it can be scheduled. Add it, then schedule.",
+        logContext: { reason: "single-release-empty", releaseId: id },
       });
     }
   }
@@ -1775,8 +1764,9 @@ export class ReleasesService {
     await this.authorize(actor, "publish");
     const current = await this.publishableNow(id);
     // The same refusal scheduling makes, before anything is written, so a
-    // release that would stop part-way sends none of its documents out.
-    await this.assertNothingBlocks(id, current.state);
+    // release that would stop part-way, or a single-document release with no
+    // document, sends nothing out and is not marked published.
+    await this.assertReadyToRun(id, current);
     await this.moveToNowUnlessDue(current);
     await this.runDrainForPublishNow(id);
     const [after] = await this.deps.repository.findReleases({ ids: [id] });

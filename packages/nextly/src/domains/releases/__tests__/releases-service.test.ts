@@ -1053,6 +1053,27 @@ describe("ReleasesService.publishNow", () => {
     expect(deps.runDrainNow).not.toHaveBeenCalled();
   });
 
+  it.each(["draft", "scheduled"])(
+    "refuses a %s single-document release with no document, as scheduling does",
+    async state => {
+      // Run now, it would publish nothing and read as done: final, with
+      // nothing in it. The same refusal scheduling makes, before any write.
+      const { svc, repo, deps } = service({ holds: ["publish"] });
+      repo.findReleases.mockResolvedValue([
+        { id: "r1", state, kind: "single", revision: 0 },
+      ]);
+      repo.listMembers.mockResolvedValue([]);
+      await expect(svc.publishNow("r1", ADMIN)).rejects.toMatchObject({
+        code: "CONFLICT",
+        publicMessage: expect.stringContaining(
+          "A single-document release needs its document"
+        ),
+      });
+      expect(repo.scheduleRelease).not.toHaveBeenCalled();
+      expect(deps.runDrainNow).not.toHaveBeenCalled();
+    }
+  );
+
   it("answers not found for a release that does not exist", async () => {
     const { svc, repo, deps } = service({ holds: ["publish"] });
     repo.findReleases.mockResolvedValue([]);
