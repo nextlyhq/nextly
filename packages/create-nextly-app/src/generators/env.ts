@@ -191,26 +191,42 @@ async function envExposure(
 async function envTracking(
   cwd: string
 ): Promise<"tracked" | "untracked" | "unknown"> {
-  // Outside any repository, nothing is committed from here.
-  if (!(await insideRepository(cwd))) return "untracked";
   try {
-    await execa("git", ["ls-files", "--error-unmatch", "--", ".env"], { cwd });
+    await execa("git", ["ls-files", "--error-unmatch", "--", ".env"], {
+      cwd,
+      env: GIT_ENV,
+    });
     return "tracked";
   } catch (error) {
-    // 1 is "not in the index". Anything else (a corrupt index, a repository
-    // git refuses to read, no git at all) leaves the answer unknown.
-    return (error as { exitCode?: number }).exitCode === 1
-      ? "untracked"
-      : "unknown";
+    // 1 is "not in the index". Outside any repository nothing is committed
+    // from here. Anything else (a corrupt index, a repository git refuses to
+    // read) leaves the answer unknown.
+    if ((error as { exitCode?: number }).exitCode === 1) return "untracked";
+    return (await outsideRepository(cwd, error)) ? "untracked" : "unknown";
   }
 }
 
-async function insideRepository(cwd: string): Promise<boolean> {
-  let dir = path.resolve(cwd);
+/** Git's messages in English, so its "not a git repository" can be recognised. */
+const GIT_ENV = { LC_ALL: "C" };
+
+/**
+ * Whether a git command failed because the folder is in no repository. Git
+ * itself is asked, since it finds a repository through a symbolic link that a
+ * walk up the folder's own path would miss. Without git, a `.git` above the
+ * folder's real path still means one.
+ */
+async function outsideRepository(
+  cwd: string,
+  error: unknown
+): Promise<boolean> {
+  const { stderr, code } = error as { stderr?: string; code?: string };
+  if (/not a git repository/i.test(stderr ?? "")) return true;
+  if (code !== "ENOENT") return false;
+  let dir = await fs.realpath(cwd);
   for (;;) {
-    if (await fs.pathExists(path.join(dir, ".git"))) return true;
+    if (await fs.pathExists(path.join(dir, ".git"))) return false;
     const parent = path.dirname(dir);
-    if (parent === dir) return false;
+    if (parent === dir) return true;
     dir = parent;
   }
 }
@@ -266,21 +282,39 @@ async function writeOrMerge(
   const file = path.join(cwd, name);
   // A linked env file is shared with whatever else links to it: appending
   // would put Nextly's keys, the secret among them, in that file too.
-  const stat = await fs.lstat(file).catch(() => null);
+  const stat = await fs.lstat(file).catch(absentAsNull);
   if (stat && (stat.isSymbolicLink() || stat.nlink > 1)) {
-    await skipLinked(file, name, files);
-    return [];
+    return skipLinked(file, name, kind, files);
   }
-  const exists = stat !== null;
-  if (!exists && withheld.length === 0) {
-    await fs.writeFile(file, fullFile(values, kind), "utf-8");
-    files.written.push(name);
-    return [];
+  // Created exclusively, so a file that appeared since the check is merged
+  // into, never truncated.
+  if (!stat && withheld.length === 0) {
+    if (await createNew(file, fullFile(values, kind))) {
+      files.written.push(name);
+      return [];
+    }
+    return mergeInto(file, name, true, values, kind, files, withheld);
   }
 
   // A file with keys withheld is built the way an existing one is merged, so
   // the withheld keys are left out of a new file as well.
-  return mergeInto(file, name, exists, values, kind, files, withheld);
+  return mergeInto(file, name, stat !== null, values, kind, files, withheld);
+}
+
+/** Only an absent file is null; any other failure to look is not hidden. */
+function absentAsNull(error: unknown): null {
+  if ((error as { code?: string }).code === "ENOENT") return null;
+  throw error;
+}
+
+async function createNew(file: string, content: string): Promise<boolean> {
+  try {
+    await fs.writeFile(file, content, { encoding: "utf-8", flag: "wx" });
+    return true;
+  } catch (error) {
+    if ((error as { code?: string }).code === "EEXIST") return false;
+    throw error;
+  }
 }
 
 /** Appends what the file lacks to it, and says what it holds that Nextly cannot use. */
@@ -295,11 +329,8 @@ async function mergeInto(
 ): Promise<string[]> {
   const text = exists ? await fs.readFile(file, "utf-8") : "";
   const keys = readEnvKeys(text);
-  // Only values this file settles are judged: one referring to a variable it
-  // does not define is filled in where the app runs.
-  const known = new Map(
-    [...keys.defined].filter(([key]) => !keys.unresolved.has(key))
-  );
+  // Only values this file settles are judged.
+  const known = knownValues(keys);
   const pair = databasePair(name, keys, values.DB_DIALECT, kind);
   const added = await appendMissing(file, text, keys, values, kind, [
     ...withheld,
@@ -321,18 +352,28 @@ async function mergeInto(
 async function skipLinked(
   file: string,
   name: string,
+  kind: Kind,
   files: GeneratedFiles
-): Promise<void> {
-  const { defined } = readEnvKeys(
-    await fs.readFile(file, "utf-8").catch(() => "")
-  );
-  const missing = REQUIRED_KEYS.filter(key => !defined.has(key));
+): Promise<string[]> {
+  const keys = readEnvKeys(await fs.readFile(file, "utf-8").catch(() => ""));
+  const missing = REQUIRED_KEYS.filter(key => !keys.defined.has(key));
   files.skipped.push({
     path: name,
     why: "it is a link to a file shared outside this project, so it was left as it is",
     toAdd:
       missing.length > 0 ? missing.map(key => `${key}=`).join("\n") : undefined,
   });
+  // Left alone, but what it holds is still said: git commits a hard link's
+  // contents, so a secret in a hard-linked example file goes out with it.
+  const known = knownValues(keys);
+  return kind === "real"
+    ? checkRealValues(name, known)
+    : checkExampleValues(name, known);
+}
+
+/** Values this file settles: one set from a variable it lacks is filled in where the app runs. */
+function knownValues({ defined, unresolved }: EnvKeys): Map<string, string> {
+  return new Map([...defined].filter(([key]) => !unresolved.has(key)));
 }
 
 const DIALECTS: readonly string[] = ["postgresql", "mysql", "sqlite"];
@@ -497,8 +538,11 @@ function isPlaceholder(value: string): boolean {
 }
 
 function hasRealPassword(url: string | undefined): boolean {
-  if (!url || !URL.canParse(url)) return false;
-  const raw = new URL(url).password;
+  if (!url) return false;
+  // A URL new URL cannot parse can still show its password in plain sight.
+  const raw = URL.canParse(url)
+    ? new URL(url).password
+    : (/^[a-z][a-z0-9+.-]*:\/\/[^:/@\s]*:([^@\s]*)@/i.exec(url)?.[1] ?? "");
   // new URL keeps a % that decodeURIComponent refuses, such as `pa%ss`; the
   // password is no less real for it, so it is judged as written.
   let password = raw;
@@ -563,13 +607,15 @@ async function isEnvIgnored(cwd: string): Promise<boolean> {
     const { stdout } = await execa(
       "git",
       ["check-ignore", "-v", "--no-index", ".env"],
-      { cwd }
+      { cwd, env: GIT_ENV }
     );
     return ignoredByProjectRule(stdout);
   } catch (error) {
-    // 1: inside a repository, and not ignored. Anything else (not a
-    // repository, or no git) falls back to reading the project's .gitignore.
+    // 1: inside a repository, and not ignored. Any other failure inside one
+    // leaves it uncertain, so not ignored. Outside a repository, the
+    // project's .gitignore is read instead.
     if ((error as { exitCode?: number }).exitCode === 1) return false;
+    if (!(await outsideRepository(cwd, error))) return false;
   }
   const file = path.join(cwd, ".gitignore");
   // Git does not read a .gitignore that is a symbolic link, so its target's

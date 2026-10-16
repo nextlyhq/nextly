@@ -121,11 +121,20 @@ function closingLine(lines: string[], i: number, firstLine: string): number {
   const value = firstLine.trim();
   const quote = value[0];
   if (quote !== '"' && quote !== "'" && quote !== "`") return i;
-  if (value.indexOf(quote, 1) > 0) return i;
+  if (closingQuote(value, quote, 1) > 0) return i;
   for (let j = i + 1; j < lines.length; j++) {
-    if (lines[j].includes(quote)) return j;
+    if (closingQuote(lines[j], quote, 0) >= 0) return j;
   }
   return i;
+}
+
+/** The first `quote` from `from` that a backslash does not escape, or -1. */
+function closingQuote(text: string, quote: string, from: number): number {
+  for (let i = from; i < text.length; i++) {
+    if (text[i] === "\\") i++;
+    else if (text[i] === quote) return i;
+  }
+  return -1;
 }
 
 interface RawValue {
@@ -141,7 +150,7 @@ function readValue(raw: string): RawValue {
   const value = raw.trim();
   const quote = value[0];
   if (quote === '"' || quote === "'" || quote === "`") {
-    const end = value.indexOf(quote, 1);
+    const end = closingQuote(value, quote, 1);
     // dotenv expands \n and \r inside double quotes only.
     if (end > 0) {
       const inner = value.slice(1, end);

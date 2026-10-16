@@ -12,6 +12,7 @@ import { execFileSync } from "node:child_process";
 import {
   chmod,
   link,
+  mkdir,
   mkdtemp,
   readFile,
   rm,
@@ -22,7 +23,8 @@ import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import fsExtra from "fs-extra";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { generateEnv } from "../generators/env";
 import type { DatabaseConfig } from "../types";
@@ -420,6 +422,41 @@ export SOME_APP_KEY="kept as it is"
     expect(keys.get("NEXTLY_SECRET")?.length).toBeGreaterThanOrEqual(32);
   });
 
+  // dotenv's quoted values may hold an escaped quote, which does not close
+  // them.
+  it("reads past an escaped quote in a multiline value", async () => {
+    await writeFile(
+      join(dir, ".env"),
+      `PRIVATE_CONFIG="header \\"\nNEXTLY_SECRET=${"s".repeat(40)}\nfooter"\nDATABASE_URL=x\n`
+    );
+
+    await generateEnv(dir, sqlite);
+
+    expect((await read(".env")).match(/NEXTLY_SECRET=/g)).toHaveLength(2);
+  });
+
+  // A file that appears between the check and the write (or one the check
+  // could not see) is merged into, never truncated.
+  it("merges into a .env that appears after it was checked", async () => {
+    await writeFile(join(dir, ".env"), "MINE=kept\n");
+    const realLstat = fsExtra.lstat.bind(fsExtra);
+    const spy = vi.spyOn(fsExtra, "lstat").mockImplementation((async (
+      p: string
+    ) => {
+      if (String(p).endsWith(`${"/"}.env`)) {
+        throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+      }
+      return realLstat(p);
+    }) as typeof fsExtra.lstat);
+    try {
+      await generateEnv(dir, sqlite);
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(await read(".env")).toMatch(/^MINE=kept\n/);
+  });
+
   it("changes nothing and reports nothing on a second run", async () => {
     await writeFile(join(dir, ".env"), existing);
     await generateEnv(dir, sqlite);
@@ -527,6 +564,42 @@ NEXT_PUBLIC_SITE_URL=http://localhost:3000
     expect(warnings.join("\n")).toMatch(
       /DATABASE_URL in \.env\.example is not a URL/
     );
+  });
+
+  // A malformed URL can still show its password in plain sight.
+  it("warns about a password in an example URL it cannot parse", async () => {
+    await writeFile(
+      join(dir, ".env.example"),
+      "DATABASE_URL=postgresql://user:S3cr3t@db:bad/app\n"
+    );
+
+    const { warnings } = await generateEnv(dir, sqlite);
+
+    expect(warnings.join("\n")).toMatch(
+      /\.env\.example holds a database password/
+    );
+    expect(warnings.join("\n")).not.toContain("S3cr3t");
+  });
+
+  // Git commits a hard link's contents, so a secret in a hard-linked example
+  // is said, though the file is left alone.
+  it("warns about a secret in a hard-linked example file it leaves alone", async () => {
+    const shared = await mkdtemp(join(tmpdir(), "nextly-shared-"));
+    try {
+      await writeFile(
+        join(shared, "example"),
+        `NEXTLY_SECRET=${"r".repeat(40)}\n`
+      );
+      await link(join(shared, "example"), join(dir, ".env.example"));
+
+      const { warnings } = await generateEnv(dir, sqlite);
+
+      expect(warnings.join("\n")).toMatch(
+        /\.env\.example holds a value for NEXTLY_SECRET/
+      );
+    } finally {
+      await rm(shared, { recursive: true, force: true });
+    }
   });
 
   it("does not warn about the generic example values", async () => {
@@ -798,6 +871,30 @@ describe("keeping .env out of git", () => {
       expect(await read(".gitignore")).toMatch(/^\.env$/m);
     } finally {
       await rm(global, { recursive: true, force: true });
+    }
+  });
+
+  // Reached through a symbolic link, the folder's parents are not the
+  // repository's, but git still finds it and commits what .env holds.
+  it("writes no secret to a tracked .env reached through a symbolic link", async () => {
+    const elsewhere = await mkdtemp(join(tmpdir(), "nextly-link-"));
+    try {
+      execFileSync("git", ["init", "-q"], { cwd: dir });
+      await mkdir(join(dir, "app"));
+      await writeFile(join(dir, "app", ".gitignore"), ".env\n");
+      await writeFile(join(dir, "app", ".env"), "DB_DIALECT=sqlite\n");
+      execFileSync("git", ["add", "-f", "app/.env"], { cwd: dir });
+      await symlink(join(dir, "app"), join(elsewhere, "app"));
+
+      await generateEnv(join(elsewhere, "app"), sqlite);
+
+      expect(
+        readEnvKeys(
+          await readFile(join(dir, "app", ".env"), "utf8")
+        ).defined.has("NEXTLY_SECRET")
+      ).toBe(false);
+    } finally {
+      await rm(elsewhere, { recursive: true, force: true });
     }
   });
 
