@@ -10,7 +10,11 @@ import { generateAdminPage } from "./generators/admin";
 import { generateConfig } from "./generators/config";
 import { generateEnv } from "./generators/env";
 import { generateMediaRoutes } from "./generators/media-routes";
-import { patchNextConfig } from "./generators/next-config";
+import {
+  nextConfigReport,
+  patchNextConfig,
+  type NextConfigPatch,
+} from "./generators/next-config";
 import { generateRoutes } from "./generators/routes";
 import { generateTypesDirectory } from "./generators/types";
 import { installDependencies } from "./installers/dependencies";
@@ -519,6 +523,7 @@ export async function createNextly(
   {
     const s = p.spinner();
     s.start("Setting up environment...");
+    let nextConfigPatch: NextConfigPatch | null = null;
     try {
       if (!isFreshProject) {
         // Existing project: generate Nextly config files
@@ -527,7 +532,7 @@ export async function createNextly(
         await generateAdminPage(cwd, projectInfo);
         await generateMediaRoutes(cwd, projectInfo);
         await generateTypesDirectory(cwd, projectInfo);
-        await patchNextConfig(cwd, database);
+        nextConfigPatch = await patchNextConfig(cwd, database);
       }
 
       // App flows generate a root .env. A plugin is a library — its env lives
@@ -539,6 +544,14 @@ export async function createNextly(
         await generateEnv(cwd, envDatabase);
       }
       s.stop("Environment configured");
+      // Said after the spinner stops, so the line is not drawn over: what the
+      // app's Next config gained, or exactly what to add when it could not be
+      // changed safely.
+      if (nextConfigPatch) {
+        const report = nextConfigReport(nextConfigPatch);
+        if (report.level === "warn") p.log.warn(report.message);
+        else p.log.info(report.message);
+      }
     } catch (error) {
       s.stop("Failed to generate configuration");
       telemetry.capture("scaffold_failed", {
