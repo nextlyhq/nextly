@@ -103,6 +103,49 @@ const VERSION_FIELDS = [
 /** What an owner says about a template beside its version (see OwnerDetails). */
 const DETAIL_FIELDS = ["description", "variables"] as const;
 
+/** What a new template holds where its input leaves a field out. */
+const NEW_TEMPLATE_DEFAULTS = {
+  kind: "template" as const,
+  plainTextContent: null,
+  preheader: null,
+  layoutId: null,
+  fromOverride: null,
+  replyTo: null,
+  variables: null,
+  useLayout: true,
+  isActive: true,
+  providerId: null,
+  attachments: null,
+  description: null,
+};
+
+function orDefault<K extends keyof typeof NEW_TEMPLATE_DEFAULTS>(
+  data: CreateEmailTemplateInput,
+  key: K
+):
+  | NonNullable<CreateEmailTemplateInput[K]>
+  | (typeof NEW_TEMPLATE_DEFAULTS)[K] {
+  return data[key] ?? NEW_TEMPLATE_DEFAULTS[key];
+}
+
+/** The columns `updateTemplate` writes when given; the slug and kind are fixed once created. */
+const UPDATABLE_FIELDS = [
+  "name",
+  "subject",
+  "htmlContent",
+  "plainTextContent",
+  "preheader",
+  "layoutId",
+  "fromOverride",
+  "replyTo",
+  "variables",
+  "useLayout",
+  "isActive",
+  "providerId",
+  "attachments",
+  "description",
+] as const satisfies ReadonlyArray<keyof UpdateEmailTemplateInput>;
+
 /** The owner's current version and details, kept as an override's base. */
 function keptBase(entry: OwnedTemplate): KeptBase {
   return { ...entry.version, details: detailsOf(entry.defaults) };
@@ -392,7 +435,7 @@ export class EmailTemplateService extends BaseService {
     data: CreateEmailTemplateInput,
     actor?: RequestActor | null
   ): Promise<EmailTemplateRecord> {
-    this.assertLayoutMarker(data.kind ?? "template", data.htmlContent);
+    this.assertLayoutMarker(orDefault(data, "kind"), data.htmlContent);
     const id = randomUUID();
     const now = new Date();
 
@@ -400,20 +443,20 @@ export class EmailTemplateService extends BaseService {
       id,
       name: data.name,
       slug: data.slug,
-      kind: data.kind ?? "template",
+      kind: orDefault(data, "kind"),
       subject: data.subject,
       htmlContent: data.htmlContent,
-      plainTextContent: data.plainTextContent ?? null,
-      preheader: data.preheader ?? null,
-      layoutId: data.layoutId ?? null,
-      fromOverride: data.fromOverride ?? null,
-      replyTo: data.replyTo ?? null,
-      variables: data.variables ?? null,
-      useLayout: data.useLayout ?? true,
-      isActive: data.isActive ?? true,
-      providerId: data.providerId ?? null,
-      attachments: data.attachments ?? null,
-      description: data.description ?? null,
+      plainTextContent: orDefault(data, "plainTextContent"),
+      preheader: orDefault(data, "preheader"),
+      layoutId: orDefault(data, "layoutId"),
+      fromOverride: orDefault(data, "fromOverride"),
+      replyTo: orDefault(data, "replyTo"),
+      variables: orDefault(data, "variables"),
+      useLayout: orDefault(data, "useLayout"),
+      isActive: orDefault(data, "isActive"),
+      providerId: orDefault(data, "providerId"),
+      attachments: orDefault(data, "attachments"),
+      description: orDefault(data, "description"),
       ...storedOwner({ kind: "site" }),
       overridden: false,
       createdAt: now,
@@ -537,7 +580,8 @@ export class EmailTemplateService extends BaseService {
    * Update an existing email template.
    *
    * Template `slug` cannot be changed after creation. Changing what an owned
-   * template says (its subject, preheader, HTML or plain text) overrides it,
+   * template says (its subject, preheader, HTML, plain text, description or
+   * declared variables) overrides it,
    * as the explicit Override does: the change is the site's, and the owner's
    * later versions wait for review rather than overwriting it at the next
    * boot.
@@ -564,40 +608,10 @@ export class EmailTemplateService extends BaseService {
       updatedAt: new Date(),
     };
 
-    if (data.name !== undefined) updateData.name = data.name;
-    if (data.subject !== undefined) updateData.subject = data.subject;
-    if (data.htmlContent !== undefined)
-      updateData.htmlContent = data.htmlContent;
-    if (data.plainTextContent !== undefined)
-      updateData.plainTextContent = data.plainTextContent;
-    if (data.preheader !== undefined) updateData.preheader = data.preheader;
-    if (data.layoutId !== undefined) updateData.layoutId = data.layoutId;
-    if (data.fromOverride !== undefined)
-      updateData.fromOverride = data.fromOverride;
-    if (data.replyTo !== undefined) updateData.replyTo = data.replyTo;
-    if (data.variables !== undefined) updateData.variables = data.variables;
-    if (data.useLayout !== undefined) updateData.useLayout = data.useLayout;
-    if (data.isActive !== undefined) updateData.isActive = data.isActive;
-    if (data.providerId !== undefined) updateData.providerId = data.providerId;
-    if (data.attachments !== undefined)
-      updateData.attachments = data.attachments;
-    if (data.description !== undefined)
-      updateData.description = data.description;
-
-    // An edit to what the owner sets (its version, or what it says about the
-    // template) makes the template the site's: the next boot would otherwise
-    // put the owner's back. Name, layout use and the other settings are the
-    // site's anyway and change nothing here.
-    const changesOwned = [...VERSION_FIELDS, ...DETAIL_FIELDS].some(
-      field =>
-        updateData[field] !== undefined &&
-        !sameStoredValue(updateData[field] ?? null, existing[field] ?? null)
-    );
-    const overriding =
-      changesOwned &&
-      isProtectedOwner(record.owner) &&
-      !record.overridden &&
-      this.registry.owned.has(record.slug);
+    for (const field of UPDATABLE_FIELDS) {
+      if (data[field] !== undefined) updateData[field] = data[field];
+    }
+    const overriding = this.overridesOwner(existing, record, updateData);
     if (overriding) {
       const entry = this.ownedEntry(record);
       updateData.overridden = true;
@@ -640,6 +654,31 @@ export class EmailTemplateService extends BaseService {
       actor,
     });
     return updated;
+  }
+
+  /**
+   * Whether an update makes an owned template the site's. An edit to what the
+   * owner sets (its version, or what it says about the template) does: the
+   * next boot would otherwise put the owner's back. Name, layout use and the
+   * other settings are the site's anyway and change nothing here.
+   */
+  private overridesOwner(
+    existing: StoredTemplateRow,
+    record: EmailTemplateRecord,
+    updateData: Record<string, unknown>
+  ): boolean {
+    if (
+      !isProtectedOwner(record.owner) ||
+      record.overridden ||
+      !this.registry.owned.has(record.slug)
+    ) {
+      return false;
+    }
+    return [...VERSION_FIELDS, ...DETAIL_FIELDS].some(
+      field =>
+        updateData[field] !== undefined &&
+        !sameStoredValue(updateData[field] ?? null, existing[field] ?? null)
+    );
   }
 
   /**
