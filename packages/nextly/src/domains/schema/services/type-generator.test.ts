@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import type { DynamicCollectionRecord } from "../../../schemas/dynamic-collections/types";
+import { DEFAULT_TYPESCRIPT_CONFIG } from "../../../shared/types/config";
+
 import { TypeGenerator } from "./type-generator";
 
 const collection = (fields: unknown[], slug = "posts") =>
@@ -256,6 +258,16 @@ describe("TypeGenerator — a field pointing at a built-in collection names a ty
 
     expect(code).toContain(
       "subject?: string | User | string | MediaFile | string | Posts | null;"
+    );
+  });
+});
+
+describe("TypeGenerator — the file it suggests is the config's default", () => {
+  it("names the file the default typescript.outputFile writes", () => {
+    const suggested = new TypeGenerator().generateTypesFile([]).filename;
+
+    expect(DEFAULT_TYPESCRIPT_CONFIG.outputFile.split("/").pop()).toBe(
+      suggested
     );
   });
 });

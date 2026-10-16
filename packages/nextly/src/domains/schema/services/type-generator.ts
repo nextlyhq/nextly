@@ -156,13 +156,13 @@ export interface GeneratedComponentTypeInterface {
 }
 
 /**
- * Result of generating the complete payload-types.ts file.
+ * Result of generating the complete types file.
  */
 export interface GeneratedTypesFile {
   /** Generated TypeScript code for the types file */
   code: string;
 
-  /** Suggested filename (default: "payload-types.ts") */
+  /** Suggested filename (default: "nextly-types.ts") */
   filename: string;
 }
 
@@ -196,7 +196,7 @@ export interface TypeGeneratorOptions {
 
   /**
    * Custom filename for generated types.
-   * @default "payload-types.ts"
+   * @default "nextly-types.ts"
    */
   filename?: string;
 
@@ -305,7 +305,9 @@ export class TypeGenerator {
     this.generateConfig = options.generateConfig ?? true;
     this.generateModuleAugmentation =
       options.generateModuleAugmentation ?? true;
-    this.filename = options.filename ?? "payload-types.ts";
+    // The file name of the config's default `typescript.outputFile`; a test
+    // holds the two together.
+    this.filename = options.filename ?? "nextly-types.ts";
     this.moduleToAugment = options.moduleToAugment ?? "nextly";
   }
 
@@ -314,7 +316,7 @@ export class TypeGenerator {
   // ============================================================
 
   /**
-   * Generates the complete payload-types.ts file with all collections, singles, components, and user type.
+   * Generates the complete types file with all collections, singles, components, and user type.
    *
    * @param collections - Array of collection records
    * @param singles - Optional array of single records
