@@ -86,7 +86,12 @@ describe("generateInstrumentation", () => {
     expect(hook).not.toContain('"../nextly.config"');
   });
 
-  it.each(["instrumentation.ts", "instrumentation.js", "instrumentation.mjs"])(
+  it.each([
+    "instrumentation.ts",
+    "instrumentation.tsx",
+    "instrumentation.js",
+    "instrumentation.jsx",
+  ])(
     "leaves an existing %s exactly as it was, and says what to add",
     async name => {
       const cwd = await app();
@@ -186,4 +191,19 @@ describe("generateInstrumentation", () => {
       expect(result.skipped).toEqual([]);
     }
   );
+
+  it("does not mistake a file Next.js never loads as the hook for one it does", async () => {
+    // `.mjs` is not one of Next's default page extensions, so such a file is
+    // not a hook and the app still needs one.
+    const cwd = await app();
+    await mkdir(path.join(cwd, "src"), { recursive: true });
+    await writeFile(path.join(cwd, "src/instrumentation.mjs"), "export {};\n");
+
+    const result = await generateInstrumentation(cwd, {
+      srcDir: true,
+      nextVersion: NEXT,
+    });
+
+    expect(result.written).toEqual(["src/instrumentation.ts"]);
+  });
 });

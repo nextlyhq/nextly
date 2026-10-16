@@ -6,12 +6,16 @@ import type { ProjectInfo } from "../types";
 
 import type { GeneratedFiles } from "./generated-files";
 
-/** Every name Next.js loads its instrumentation hook from. */
+/**
+ * The names Next.js loads its instrumentation hook from: `instrumentation`
+ * with one of its default page extensions, the same list it reads routes by.
+ * An app that sets `pageExtensions` is handled apart, below.
+ */
 const HOOK_NAMES = [
   "instrumentation.ts",
+  "instrumentation.tsx",
   "instrumentation.js",
-  "instrumentation.mts",
-  "instrumentation.mjs",
+  "instrumentation.jsx",
 ];
 
 /**

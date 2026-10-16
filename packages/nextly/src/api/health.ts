@@ -16,6 +16,7 @@
 import { healthCheck } from "../database/health";
 import { isServicesRegistered } from "../di/register";
 import { NextlyError } from "../errors/nextly-error";
+import { getCachedNextly } from "../init";
 import { getNextlyLogger } from "../observability/logger";
 
 import { buildErrorResponse } from "./error-response";
@@ -68,6 +69,36 @@ const NOT_STARTED =
 let notStartedLogged = false;
 
 /**
+ * Whether Nextly is running in this process, waiting for a start already under
+ * way rather than answering for a server that is seconds from being able to.
+ *
+ * A start can still be in flight when the first probe arrives: a platform may
+ * run a route before `instrumentation.register()` has finished, as Next.js on
+ * Vercel did before vercel/next.js#94306. `getCachedNextly()` awaits a start in
+ * progress and refuses when there is none, which is the answer wanted here.
+ */
+async function started(): Promise<boolean> {
+  if (isServicesRegistered()) return true;
+  try {
+    await getCachedNextly();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Said once, at best effort: a logger that cannot write must not turn this answer into a 500. */
+function warnNotStarted(): void {
+  if (notStartedLogged) return;
+  try {
+    getNextlyLogger().warn({ op: "health-not-started", message: NOT_STARTED });
+    notStartedLogged = true;
+  } catch {
+    // The 503 is the answer either way; the next probe tries the log again.
+  }
+}
+
+/**
  * The database probe, or `null` when Nextly has not started in this process.
  *
  * Asked first rather than left to the probe, which would look the adapter up,
@@ -76,14 +107,8 @@ let notStartedLogged = false;
 async function probe(): Promise<Awaited<
   ReturnType<typeof healthCheck>
 > | null> {
-  if (!isServicesRegistered()) {
-    if (!notStartedLogged) {
-      notStartedLogged = true;
-      getNextlyLogger().warn({
-        op: "health-not-started",
-        message: NOT_STARTED,
-      });
-    }
+  if (!(await started())) {
+    warnNotStarted();
     return null;
   }
   return healthCheck();
