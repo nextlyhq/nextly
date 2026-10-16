@@ -83,3 +83,55 @@ describe("a bulk update a hook turns into a publish", () => {
     expect(result.failed, JSON.stringify(result)).toBe(1);
   });
 });
+
+describe("a status-only publish on a collection that keeps no drafts", () => {
+  it("is refused when the stored row it puts live breaks a rule", async () => {
+    // No working draft can exist here: the row as stored is what every
+    // publish puts live.
+    current = await createTestNextly({
+      collections: [
+        defineCollection({
+          slug: "memos",
+          status: true,
+          fields: [
+            text({
+              name: "title",
+              validate: (value: unknown) =>
+                value !== "retired" || "title cannot be retired",
+            }),
+          ],
+        }),
+      ],
+    });
+    const t = current;
+    const created = await t.nextly.create({
+      collection: "memos",
+      data: { title: "Ok", status: "draft" },
+      overrideAccess: true,
+    });
+    const id = String(created.item.id);
+    await t.adapter.update(
+      "dc_memos",
+      { title: "retired" },
+      { and: [{ column: "id", op: "=", value: id }] }
+    );
+
+    const refused = await t.nextly
+      .update({
+        collection: "memos",
+        id,
+        data: { status: "published" },
+        overrideAccess: true,
+      })
+      .then(
+        () => undefined,
+        (error: unknown) => error
+      );
+
+    expect(
+      (
+        refused as { publicData?: { errors?: { path: string }[] } } | undefined
+      )?.publicData?.errors?.map(issue => issue.path)
+    ).toEqual(["title"]);
+  });
+});
