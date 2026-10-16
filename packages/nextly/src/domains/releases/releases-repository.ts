@@ -33,6 +33,7 @@ import type {
   VersionsWhereCondition,
 } from "../versions/db-api";
 
+import { releaseDueCondition } from "./release-due";
 import { releaseMemberKey } from "./release-member-key";
 import { releaseRevalidationIntent } from "./release-revalidation";
 import { NO_DECISIONS } from "./release-scope";
@@ -879,16 +880,15 @@ export class ReleasesRepository {
    * Asked of the database, on the `(state, scheduled_at)` index the table
    * carries for exactly this question, so a site with a year of launches
    * planned reads only the ones due rather than every scheduled release.
-   * `scheduledAt <= now` is the boundary `resolveReleaseEffect` uses — a
-   * release scheduled for 09:00 is in effect AT 09:00 — stated once more here
-   * only as the filter; which member wins is still that function's alone.
+   * The due boundary is `releaseDueCondition`, the one `resolveReleaseEffect`
+   * evaluates too; which member wins is still that function's alone.
    */
   async findDueReleases(now: Date): Promise<ReleaseRow[]> {
     return this.db.select<ReleaseRow>(RELEASES, {
       where: {
         and: [
           { column: "state", op: "=", value: "scheduled" },
-          { column: "scheduledAt", op: "<=", value: now },
+          releaseDueCondition(now),
         ],
       },
     });

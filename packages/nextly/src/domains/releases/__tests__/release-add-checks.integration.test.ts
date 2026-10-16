@@ -41,6 +41,15 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
         access: { read: () => true, update: () => true, publish: () => true },
         fields: [text({ name: "title" })],
       }),
+      // Anyone may write and publish a memo, but there is no read rule: who
+      // may READ one is the caller's grants alone, so a scoped key is judged
+      // by its own and not its owner's.
+      defineCollection({
+        slug: "memos",
+        status: true,
+        access: { update: () => true, publish: () => true },
+        fields: [text({ name: "title" })],
+      }),
       // No `status`: no draft/published lifecycle, so nothing a release can
       // publish.
       defineCollection({
@@ -135,6 +144,42 @@ describe.each(getConfiguredTestDialects())(
         userId: author,
       });
       expect(member.entryId).toBe(row?.id);
+    });
+
+    it("reads the target as the calling key, not as the key's owner", async () => {
+      // The owner holds no grant on memos at all; the key holds the ones the
+      // add needs. Judged by the owner, the key could not see the memo it was
+      // allowed to schedule — and, the other way round, a key without
+      // `read-memos` could confirm a document its owner can read.
+      const t = await boot(dialect);
+      const owner = await seedLiveAuthor(t);
+      const memo = (await t.nextly.create({
+        collection: "memos" as never,
+        data: { title: "Memo", status: "draft" } as never,
+      })) as unknown as { item?: { id?: string }; id?: string };
+      const entryId = String(memo.item?.id ?? memo.id);
+      const release = await t.nextly.releases.create({ title: "Launch" });
+      const asKey = (permissions: string[]) =>
+        t.nextly.releases.addMember({
+          releaseId: release.id,
+          scopeKind: "collection",
+          scopeSlug: "memos",
+          entryId,
+          locale: null,
+          action: "publish",
+          userId: owner,
+          overrideAccess: false,
+          authenticatedScope: { actorType: "apiKey", permissions },
+        });
+      const writes = [
+        "create-content-releases",
+        "update-memos",
+        "publish-memos",
+      ];
+
+      await expect(asKey(writes)).rejects.toMatchObject({ code: "NOT_FOUND" });
+      const member = await asKey([...writes, "read-memos"]);
+      expect(member.entryId).toBe(entryId);
     });
 
     it("accepts a real draft in a collection with a lifecycle", async () => {

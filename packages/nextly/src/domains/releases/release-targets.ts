@@ -13,6 +13,7 @@
  *
  * @module domains/releases/release-targets
  */
+import type { AuthenticatedScope } from "../../auth/authenticated-scope";
 import { NextlyError } from "../../errors";
 
 /** The document a member names, as the caller sent it. */
@@ -20,6 +21,20 @@ export interface ReleaseTargetInput {
   scopeKind: "collection" | "single";
   scopeSlug: string;
   entryId: string;
+}
+
+/**
+ * Who is asking, whole: the person, whether the call is trusted, and — for a
+ * scoped API key or a caller whose rules read roles — the key's own grants and
+ * the role set. Carried entire so the read is judged as THIS caller; reduced
+ * to a user id, a key would be judged by its owner's grants and a role rule
+ * by an empty role list.
+ */
+export interface ReleaseTargetCaller {
+  userId: string | null;
+  trusted: boolean;
+  authenticatedScope?: AuthenticatedScope;
+  userRoles?: string[];
 }
 
 /** What the domain needs to know about a target, from outside it. */
@@ -32,7 +47,7 @@ export interface ReleaseTargetReader {
    */
   readDocument(
     target: ReleaseTargetInput,
-    caller: { userId: string | null; trusted: boolean }
+    caller: ReleaseTargetCaller
   ): Promise<{ id?: unknown } | null>;
   /**
    * Whether the collection or Single declares a draft/published lifecycle, as
@@ -52,7 +67,7 @@ export interface ReleaseTargetReader {
 export async function resolveReleaseTarget(
   reader: ReleaseTargetReader,
   target: ReleaseTargetInput,
-  caller: { userId: string | null; trusted: boolean }
+  caller: ReleaseTargetCaller
 ): Promise<string> {
   const found = await reader.readDocument(target, caller);
   if (found === null) {

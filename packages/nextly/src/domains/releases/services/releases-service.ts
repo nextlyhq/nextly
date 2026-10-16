@@ -1188,7 +1188,12 @@ export class ReleasesService {
         scopeSlug: input.scopeSlug,
         entryId: input.entryId,
       },
-      { userId: actor.userId, trusted: actor.overrideAccess === true }
+      {
+        userId: actor.userId,
+        trusted: actor.overrideAccess === true,
+        authenticatedScope: actor.authenticatedScope,
+        userRoles: actor.userRoles,
+      }
     );
 
     // BEFORE the claim, which is itself a write: `touchIfAssemblable` updates
