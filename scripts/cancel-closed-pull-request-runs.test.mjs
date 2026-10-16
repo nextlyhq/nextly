@@ -33,11 +33,12 @@ function cancelled(path, cancelStatus) {
   return { ok: status < 300, status };
 }
 
-/** One page of runs in a state: the state's runs on the first page, none after. */
+/** One page of runs in a state and of an event, as GitHub filters them: all on the first page, none after, with their total. */
 function listed(path, byStatus) {
   const { searchParams } = new URL(path, "https://api.github.com/");
-  const items = searchParams.get("page") === "1" ? (byStatus[searchParams.get("status")] ?? []) : [];
-  return { ok: true, status: 200, json: async () => ({ workflow_runs: items }) };
+  const all = (byStatus[searchParams.get("status")] ?? []).filter(run => run.event === searchParams.get("event"));
+  const items = searchParams.get("page") === "1" ? all : [];
+  return { ok: true, status: 200, json: async () => ({ total_count: all.length, workflow_runs: items }) };
 }
 
 describe("the runs that belong to the closed pull request", () => {
@@ -112,12 +113,41 @@ describe("the command a workflow step runs", () => {
     expect(calls).not.toContain("POST");
   });
 
-  it("refuses to cancel from a list cut short", async () => {
-    const full = Array.from({ length: 100 }, (_, at) => run(1000 + at));
+  it("refuses to cancel from a list shorter than the total GitHub reports for it", async () => {
+    const posts = [];
     const fetchImpl = async (url, { method = "GET" } = {}) => {
-      if (method === "POST") return { ok: true, status: 202 };
-      return { ok: true, status: 200, json: async () => ({ workflow_runs: url.includes("status=queued") ? full : [] }) };
+      if (method === "POST") {
+        posts.push(url);
+        return { ok: true, status: 202 };
+      }
+      return { ok: true, status: 200, json: async () => ({ total_count: 5, workflow_runs: url.includes("status=queued&") && url.includes("event=pull_request&") ? [run(1)] : [] }) };
     };
     expect(await main(env, { fetchImpl })).toBe(1);
+    expect(posts).toEqual([]);
+  });
+
+  it("refuses past the API's 1,000-run window, which a full page through page 10 cannot see beyond", async () => {
+    const page = Array.from({ length: 100 }, (_, at) => run(1000 + at));
+    const fetchImpl = async (url, { method = "GET" } = {}) => {
+      if (method === "POST") return { ok: true, status: 202 };
+      const full = url.includes("status=queued&") && url.includes("event=pull_request&");
+      return { ok: true, status: 200, json: async () => ({ total_count: full ? 1500 : 0, workflow_runs: full ? page : [] }) };
+    };
+    expect(await main(env, { fetchImpl })).toBe(1);
+  });
+
+  it("scans again, so a run that moved between states while the list was read is still cancelled", async () => {
+    let reads = 0;
+    const byStatus = {
+      queued: [run(1)],
+      // Read twice a scan, once per event: run 9 is there from the second scan on.
+      get in_progress() {
+        reads += 1;
+        return reads > 2 ? [run(9)] : [];
+      },
+    };
+    const { fetchImpl, calls } = api(byStatus);
+    expect(await main(env, { fetchImpl })).toBe(0);
+    expect(calls.filter(call => call.startsWith("POST"))).toEqual([`POST repos/${REPO}/actions/runs/1/cancel`, `POST repos/${REPO}/actions/runs/9/cancel`]);
   });
 });

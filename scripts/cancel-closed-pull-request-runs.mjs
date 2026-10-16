@@ -23,45 +23,54 @@
  * Reads GITHUB_EVENT_PATH, GITHUB_REPOSITORY, GITHUB_RUN_ID and GH_TOKEN.
  */
 import { isCliEntry } from "./cli-entry.mjs";
+import { githubJson, githubRequest } from "./github-api.mjs";
 import { commandText, eventPayload } from "./workflow-context.mjs";
 
 /** The events a pull request's own runs start from. */
 const PULL_REQUEST_EVENTS = new Set(["pull_request", "pull_request_target"]);
 
-/** The states of a run that has not finished, each listed by the API on its own. */
-const UNFINISHED = ["queued", "in_progress", "waiting", "pending", "requested"];
+/**
+ * The states of a run that has not finished, each listed by the API on its
+ * own, in the order a run moves through them: a run that moves on between two
+ * reads is then read again in its later state, not missed.
+ */
+const UNFINISHED = ["requested", "waiting", "pending", "queued", "in_progress"];
 
-/** Pages of 100 read per state; a longer list is refused rather than cut short. */
-const MAX_PAGES = 20;
+/** GitHub lists at most 1,000 runs for one filter: ten pages of 100. */
+const MAX_PAGES = 10;
 
-async function api(path, { token, fetchImpl }, method = "GET") {
-  const headers = { accept: "application/vnd.github+json", "x-github-api-version": "2022-11-28" };
-  if (token) headers.authorization = `Bearer ${token}`;
-  const response = await fetchImpl(`https://api.github.com/${path}`, { method, headers });
-  return response;
-}
+/** Scans of the whole list; another runs while the one before found runs to cancel, since runs move between states as they are read. */
+const MAX_PASSES = 3;
 
-async function getJson(path, context) {
-  const response = await api(path, context);
-  if (!response.ok) throw new Error(`GET ${path}: HTTP ${response.status}`);
-  return response.json();
-}
-
-/** Every unfinished run in the repository, each state read to its last page. */
+/**
+ * Every unfinished run a pull request's own events started, each event and
+ * state read to its last page. Filtering by event keeps each list well under
+ * the API's 1,000-run window, and runs of other events are never wanted.
+ */
 async function unfinishedRuns(repository, context) {
   const runs = [];
-  for (const status of UNFINISHED) runs.push(...(await allPages(`repos/${repository}/actions/runs?status=${status}`, context)));
+  for (const status of UNFINISHED) {
+    for (const event of PULL_REQUEST_EVENTS) runs.push(...(await allPages(`repos/${repository}/actions/runs?event=${event}&status=${status}`, context)));
+  }
   return runs;
 }
 
+/**
+ * Every page of one list, checked against the total GitHub reports for it:
+ * a list shorter than its total, which the 1,000-run window or a list that
+ * grew while it was read can leave, is refused rather than taken as whole.
+ */
 async function allPages(path, context) {
   const runs = [];
+  let total = 0;
   for (let page = 1; page <= MAX_PAGES; page += 1) {
-    const { workflow_runs: items } = await getJson(`${path}&per_page=100&page=${page}`, context);
+    const { total_count: count, workflow_runs: items } = await githubJson(`${path}&per_page=100&page=${page}`, context);
+    total = Math.max(total, count ?? 0);
     runs.push(...items);
-    if (items.length < 100) return runs;
+    if (items.length < 100) break;
   }
-  throw new Error(`more than ${MAX_PAGES * 100} runs at ${path}; refusing to cancel from a list cut short`);
+  if (runs.length < total) throw new Error(`${path} listed ${runs.length} of ${total} runs; refusing to cancel from a list cut short`);
+  return runs;
 }
 
 /**
@@ -85,10 +94,28 @@ function belongsTo(pull, run) {
 export async function cancelAll(runs, repository, context) {
   const outcomes = [];
   for (const run of runs) {
-    const response = await api(`repos/${repository}/actions/runs/${run.id}/cancel`, context, "POST");
+    const response = await githubRequest(`repos/${repository}/actions/runs/${run.id}/cancel`, context, "POST");
     outcomes.push({ id: run.id, workflow: run.name, status: response.status, ok: response.ok || response.status === 409 });
   }
   return outcomes;
+}
+
+/**
+ * Scans and cancels until a scan finds nothing new, at most `MAX_PASSES`
+ * times: a run that moved between states while one scan read the list is
+ * found by the next.
+ */
+async function cancelInPasses(pull, env, context) {
+  const runs = [];
+  const outcomes = [];
+  for (let pass = 1; pass <= MAX_PASSES; pass += 1) {
+    const seen = new Set(runs.map(run => run.id));
+    const found = runsOf(pull, await unfinishedRuns(env.GITHUB_REPOSITORY, context), env.GITHUB_RUN_ID).filter(run => !seen.has(run.id));
+    if (found.length === 0) break;
+    runs.push(...found);
+    outcomes.push(...(await cancelAll(found, env.GITHUB_REPOSITORY, context)));
+  }
+  return { runs, outcomes };
 }
 
 /** Cancels the closed pull request's runs, and returns the exit code. */
@@ -97,8 +124,7 @@ export async function main(env = process.env, { fetchImpl = fetch } = {}) {
   if (!pull?.number) return refuse("the event names no pull request");
   const context = { token: env.GH_TOKEN, fetchImpl };
   try {
-    const runs = runsOf(pull, await unfinishedRuns(env.GITHUB_REPOSITORY, context), env.GITHUB_RUN_ID);
-    const outcomes = await cancelAll(runs, env.GITHUB_REPOSITORY, context);
+    const { runs, outcomes } = await cancelInPasses(pull, env, context);
     for (const outcome of outcomes) console.log(`cancel-closed-pull-request-runs: ${outcome.workflow} run ${outcome.id}: HTTP ${outcome.status}`);
     console.log(`cancel-closed-pull-request-runs: #${pull.number} had ${runs.length} unfinished pull-request run(s)`);
     const failed = outcomes.filter(outcome => !outcome.ok);

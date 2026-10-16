@@ -173,6 +173,8 @@ describe("which runs a pull-request workflow's concurrency group cancels", () =>
     const [job] = Object.values(closing.jobs);
     expect(job.permissions).toEqual({ contents: "read", actions: "write" });
     expect(job.steps.at(-1).run).toBe("node scripts/cancel-closed-pull-request-runs.mjs");
+    // The script holding `actions: write` comes from the default branch, never the closed pull request.
+    expect(job.steps.find(step => String(step.uses).startsWith("actions/checkout@")).with.ref).toBe("${{ github.event.repository.default_branch }}");
   });
 });
 

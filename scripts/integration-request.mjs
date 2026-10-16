@@ -28,6 +28,7 @@
 import { appendFileSync } from "node:fs";
 
 import { isCliEntry } from "./cli-entry.mjs";
+import { githubJson, githubWrite } from "./github-api.mjs";
 import { commandText, eventPayload } from "./workflow-context.mjs";
 
 /** The label that asks for the legs on a pull request. */
@@ -39,14 +40,8 @@ const DECIDING_JOB = "Decide what this commit can affect";
 /** How long `rerun` waits for a run whose labels were already read to finish: its skipped legs end it within seconds. */
 const WAIT = { tries: 30, everyMs: 20_000 };
 
-/** A GitHub API resource; a failure throws, for the caller to turn into its safe answer. */
-async function api(path, { token, fetchImpl }, method = "GET") {
-  const headers = { accept: "application/vnd.github+json", "x-github-api-version": "2022-11-28" };
-  if (token) headers.authorization = `Bearer ${token}`;
-  const response = await fetchImpl(`https://api.github.com/${path}`, { method, headers });
-  if (!response.ok) throw new Error(`${method} ${path}: HTTP ${response.status}`);
-  return method === "GET" ? response.json() : undefined;
-}
+/** A GET's JSON or a write; any failure throws, for the caller to turn into its safe answer. */
+const api = (path, context, method = "GET") => (method === "GET" ? githubJson(path, context) : githubWrite(path, context, method));
 
 /**
  * Whether this run's legs were asked for. Outside a pull request always; on
