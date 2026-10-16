@@ -1,11 +1,11 @@
 /**
  * Captures one durable version row using the caller's database handle.
  *
- * Stage 1 provides durable capture only (allocate version_no + insert). It is
- * intentionally NOT wired into any mutation path yet; Stage 2 calls it from the
- * collection/single write services with the transaction context, after building
- * the snapshot with assembleDocument(). Autosave coalescing and inline pruning
- * arrive in Stage 4.
+ * The collection and Single write services call it, directly or through
+ * captureInTx, with their transaction context, so the version commits with the
+ * content write.
+ * It allocates the next version_no, inserts the row, and then applies
+ * retention in the same transaction.
  *
  * @module domains/versions/version-capture-service
  */
@@ -86,9 +86,9 @@ export class VersionCaptureService {
       }
       throw err;
     }
-    // Trim history to the configured cap inside the caller's transaction. The
-    // newest version and the most recent published one are always protected, so
-    // the head of history and the snapshot matching live content survive.
+    // Trim history to the configured cap inside the caller's transaction. What
+    // is always kept (the newest version, each language's latest published one,
+    // named versions and restore lineage) is decided by selectVersionsToPrune.
     if (typeof input.maxPerDoc === "number") {
       const durable = await repo.listDurableForPrune(input.ref);
       // A restore's own capture additionally protects two versions. The one

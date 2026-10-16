@@ -847,12 +847,20 @@ export class VersionsRepository {
 
   /**
    * Durable rows for one document, newest-first, projecting only what the
-   * retention rules need. Autosave rows are excluded because they never count
-   * toward the cap.
+   * retention rules need: the language, name and restore source decide what is
+   * always kept, and the snapshot is never read. Autosave rows are excluded
+   * because they never count toward the cap.
    */
   async listDurableForPrune(ref: VersionRef): Promise<PrunableVersion[]> {
     return this.db.select<PrunableVersion>(TABLE, {
-      columns: ["id", "versionNo", "status"],
+      columns: [
+        "id",
+        "versionNo",
+        "status",
+        "locale",
+        "label",
+        "sourceVersionNo",
+      ],
       where: {
         and: [
           ...this.docWhere(ref),
