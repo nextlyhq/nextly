@@ -39,6 +39,7 @@ import { NO_DECISIONS } from "./release-scope";
 import type { ReleaseDecisions } from "./release-scope";
 import {
   releaseTabSegments,
+  type ReleaseAttentionReason,
   type ReleaseTab,
   type ReleaseTabSegment,
 } from "./release-tabs";
@@ -221,6 +222,8 @@ export interface ReleaseListFilters {
  */
 export interface ReleasePageQuery extends ReleaseListFilters {
   tab?: ReleaseTab;
+  /** One part of the attention tab only. Ignored with any other tab. */
+  reason?: ReleaseAttentionReason;
   /** The moment overdue is judged at. Required with a tab. */
   now?: Date;
   order?: ReleaseListOrder;
@@ -797,7 +800,12 @@ export class ReleasesRepository {
         logContext: { reason: "release-tab-without-now", tab: query.tab },
       });
     }
-    return releaseTabSegments(query.tab, query.now, query.order);
+    const segments = releaseTabSegments(query.tab, query.now, query.order);
+    // A narrower view of the same tab, selected from its own segments rather
+    // than restated, so "overdue" here is exactly the overdue part of the list.
+    return query.reason === undefined
+      ? segments
+      : segments.filter(segment => segment.reason === query.reason);
   }
 
   /**

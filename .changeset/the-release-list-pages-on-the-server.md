@@ -34,7 +34,8 @@ and `nextly.releases.find()` take a `tab` (`upcoming`, `attention`, `drafts`,
 `done`), a `search` over the title and description, and a `page`; a new
 `nextly.releases.count()` counts a tab without reading it. A release counts as
 overdue, and moves to `attention`, once it is still scheduled 10 minutes after
-its time. Tabs, search, paging and `count()` are experimental.
+its time; `reason: "overdue"` or `"stopped"` reads one part of that tab.
+Tabs, `reason`, search, paging and `count()` are experimental.
 
 **Breaking:** `nextly.releases.find()` now returns `{ items, meta }`, like every
 other Direct API list, instead of an array. Read `result.items` where you read

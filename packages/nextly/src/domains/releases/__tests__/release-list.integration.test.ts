@@ -319,6 +319,22 @@ describe.each(getConfiguredTestDialects())(
       expect(
         await repo.countReleases({ tab: "attention", now, search: "stop" })
       ).toBe(1);
+      // Each part of Needs attention alone: what a dashboard counting overdue
+      // releases asks, answered from the tab's own definition of overdue.
+      expect(
+        await repo.countReleases({ tab: "attention", reason: "overdue", now })
+      ).toBe(1);
+      expect(
+        await repo.countReleases({ tab: "attention", reason: "stopped", now })
+      ).toBe(1);
+      const overdue = await repo.findReleasePage({
+        tab: "attention",
+        reason: "overdue",
+        now,
+        limit: 10,
+      });
+      expect(overdue.rows.map(row => row.title)).toEqual(["Overdue"]);
+      expect(overdue.total).toBe(1);
     });
 
     it("returns a release's members in the order they were added", async () => {

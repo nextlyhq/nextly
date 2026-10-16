@@ -71,15 +71,16 @@ without a tab come latest first.
 
 `GET /api/releases` takes these query parameters:
 
-| Parameter                           | Meaning                                                                |
-| ----------------------------------- | ---------------------------------------------------------------------- |
-| `tab`                               | `upcoming`, `attention`, `drafts` or `done`. Not combined with `state` |
-| `state`                             | One lifecycle state, when you need it rather than a tab                |
-| `search`                            | Text in the title or description, up to 200 characters                 |
-| `order`                             | `soonest` or `latest`. Only with no tab or with `upcoming`             |
-| `page`                              | The page, from 1                                                       |
-| `limit`                             | Rows per page, 50 by default and at most 200                           |
-| `scheduledAfter`, `scheduledBefore` | A window on the scheduled time, as ISO 8601 instants                   |
+| Parameter                           | Meaning                                                                    |
+| ----------------------------------- | -------------------------------------------------------------------------- |
+| `tab`                               | `upcoming`, `attention`, `drafts` or `done`. Not combined with `state`     |
+| `reason`                            | With `tab=attention`: `stopped` or `overdue`, to read one part of that tab |
+| `state`                             | One lifecycle state, when you need it rather than a tab                    |
+| `search`                            | Text in the title or description, up to 200 characters                     |
+| `order`                             | `soonest` or `latest`. Only with no tab or with `upcoming`                 |
+| `page`                              | The page, from 1                                                           |
+| `limit`                             | Rows per page, 50 by default and at most 200                               |
+| `scheduledAfter`, `scheduledBefore` | A window on the scheduled time, as ISO 8601 instants                       |
 
 The answer is the standard list envelope. `meta.total` is the number of releases matching,
 across all pages:
@@ -128,6 +129,10 @@ const { items, meta } = await nextly.releases.find({
 // meta.total counts every matching release, across all pages
 
 const needsAttention = await nextly.releases.count({ tab: "attention" });
+const overdue = await nextly.releases.count({
+  tab: "attention",
+  reason: "overdue",
+});
 ```
 
 `count()` takes the same tab, state, window and search as `find()`, and gives the same

@@ -619,6 +619,9 @@ describe("ReleasesService.find pages the list", () => {
     ["an unknown tab", { tab: "soon" }],
     ["a tab with a state", { tab: "drafts", state: "draft" }],
     ["an order on a tab with its own", { tab: "done", order: "soonest" }],
+    ["a reason without the attention tab", { reason: "overdue" }],
+    ["a reason on another tab", { tab: "upcoming", reason: "overdue" }],
+    ["an unknown reason", { tab: "attention", reason: "late" }],
     ["an unknown state", { state: "schedule" }],
     ["a search past the limit", { search: "x".repeat(201) }],
     ["page 0", { page: 0 }],
@@ -635,9 +638,27 @@ describe("ReleasesService.find pages the list", () => {
     expect(repo.findReleasePage).not.toHaveBeenCalled();
   });
 
+  it("names the fix when `reason` comes without the attention tab", async () => {
+    const { svc } = service({ holds: ["read"] });
+    await expect(svc.find({ reason: "overdue" }, ADMIN)).rejects.toMatchObject({
+      publicMessage: expect.stringContaining(
+        '`reason` needs `tab: "attention"`'
+      ),
+    });
+  });
+
+  it("passes the reason through with the attention tab", async () => {
+    const { svc, repo } = service({ holds: ["read"] });
+    await svc.find({ tab: "attention", reason: "overdue" }, ADMIN);
+    expect(repo.findReleasePage).toHaveBeenCalledWith(
+      expect.objectContaining({ tab: "attention", reason: "overdue" })
+    );
+  });
+
   it.each([
     ["tab", "upcoming"],
     ["search", "spring"],
+    ["reason", "overdue"],
   ])("refuses `%s` alongside `containing`", async (key, value) => {
     const { svc, repo } = service({ holds: ["read"] });
     await expect(

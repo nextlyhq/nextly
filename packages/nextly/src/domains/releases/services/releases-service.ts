@@ -66,7 +66,12 @@ import {
 } from "../../../schemas/releases/types";
 import type { VersionScopeKind } from "../../../schemas/versions/types";
 import { isUniqueViolation } from "../../../shared/lib/unique-violation";
-import { RELEASE_TABS, type ReleaseTab } from "../release-tabs";
+import {
+  RELEASE_ATTENTION_REASONS,
+  RELEASE_TABS,
+  type ReleaseAttentionReason,
+  type ReleaseTab,
+} from "../release-tabs";
 import { documentRefKey, RELEASE_LIST_ORDERS } from "../releases-repository";
 import type {
   DocumentRef,
@@ -376,6 +381,8 @@ export const MAX_RELEASE_SEARCH_LENGTH = 200;
  */
 export interface ReleaseCountQuery {
   tab?: ReleaseTab;
+  /** With `tab: "attention"`: only its stopped, or only its overdue, releases. */
+  reason?: ReleaseAttentionReason;
   state?: ReleaseState;
   scheduledAfter?: Date;
   scheduledBefore?: Date;
@@ -444,9 +451,17 @@ function assertKnown(
  */
 function assertListCombination(query: {
   tab?: ReleaseTab;
+  reason?: ReleaseAttentionReason;
   state?: ReleaseState;
   order?: ReleaseListOrder;
 }): void {
+  if (query.reason !== undefined && query.tab !== "attention") {
+    throw NextlyError.invalidInput({
+      message:
+        '`reason` needs `tab: "attention"`: it names one part of that tab.',
+      logContext: { reason: "reason-without-attention-tab", tab: query.tab },
+    });
+  }
   if (query.tab !== undefined && query.state !== undefined) {
     throw NextlyError.invalidInput({
       message:
@@ -536,6 +551,7 @@ export type FindReleasesQuery = FindReleasesFilters &
         order?: never;
         /** The document's own releases are not a tab of the list. */
         tab?: never;
+        reason?: never;
         /** Nor are they searched: a document is in a handful at most. */
         search?: never;
       }
@@ -549,6 +565,13 @@ export type FindReleasesQuery = FindReleasesFilters &
          * @experimental
          */
         tab?: ReleaseTab;
+        /**
+         * With `tab: "attention"`, only its `"stopped"` or only its
+         * `"overdue"` releases — for example, to count overdue releases alone.
+         *
+         * @experimental
+         */
+        reason?: ReleaseAttentionReason;
         /**
          * Text in the title or the description, without regard to case, matched
          * as written. Applied in the database, before the page and the total.
@@ -892,10 +915,11 @@ export class ReleasesService {
       containing?: DocumentRef;
       order?: ReleaseListOrder;
       tab?: ReleaseTab;
+      reason?: ReleaseAttentionReason;
       search?: string;
     } = query;
     if (asked.containing !== undefined) {
-      for (const key of ["order", "tab", "search"] as const) {
+      for (const key of ["order", "tab", "reason", "search"] as const) {
         if (asked[key] !== undefined) {
           throw NextlyError.invalidInput({
             message:
@@ -963,9 +987,11 @@ export class ReleasesService {
     assertKnown("tab", query.tab, RELEASE_TABS);
     assertKnown("state", query.state, RELEASE_STATES);
     assertKnown("order", query.order, RELEASE_LIST_ORDERS);
+    assertKnown("reason", query.reason, RELEASE_ATTENTION_REASONS);
     assertListCombination(query);
     return {
       tab: query.tab,
+      reason: query.reason,
       state: query.state,
       scheduledAfter: query.scheduledAfter,
       scheduledBefore: query.scheduledBefore,

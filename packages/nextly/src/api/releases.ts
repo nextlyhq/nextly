@@ -29,7 +29,9 @@ import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
 import { container } from "../di";
 import {
   isReleaseTab,
+  RELEASE_ATTENTION_REASONS,
   RELEASE_TABS,
+  type ReleaseAttentionReason,
   type ReleaseTab,
 } from "../domains/releases/release-tabs";
 import {
@@ -318,6 +320,20 @@ function releaseTabParam(value: string | null): ReleaseTab | undefined {
   return value;
 }
 
+/** One part of the attention tab, or a refusal. */
+function releaseReasonParam(
+  value: string | null
+): ReleaseAttentionReason | undefined {
+  if (value === null) return undefined;
+  const known = RELEASE_ATTENTION_REASONS.find(reason => reason === value);
+  if (known === undefined) {
+    throw badRequest(
+      `\`reason\` must be one of: ${RELEASE_ATTENTION_REASONS.join(", ")}.`
+    );
+  }
+  return known;
+}
+
 /** Which end of the timeline comes first, or a refusal. */
 function releaseOrderParam(value: string | null): ReleaseListOrder | undefined {
   if (value === null) return undefined;
@@ -593,6 +609,7 @@ const RELEASE_OPERATIONS: Record<
     };
     const listOnly = {
       tab: releaseTabParam(params.get("tab")),
+      reason: releaseReasonParam(params.get("reason")),
       // Passed as sent: the service trims it, bounds its length and matches it
       // literally, so a REST and a Direct API caller searching the same text
       // get the same releases.

@@ -50,6 +50,20 @@ export function isReleaseTab(v: unknown): v is ReleaseTab {
 }
 
 /**
+ * Why a release is in Needs attention: it stopped, or it is overdue.
+ *
+ * The two parts of that tab, named so a reader that needs only one — a
+ * dashboard counting overdue releases, say — narrows the tab rather than
+ * writing its own rule beside it.
+ *
+ * @experimental
+ */
+export const RELEASE_ATTENTION_REASONS = ["stopped", "overdue"] as const;
+
+/** @experimental */
+export type ReleaseAttentionReason = (typeof RELEASE_ATTENTION_REASONS)[number];
+
+/**
  * How long past its instant a scheduled release may still be waiting before it
  * counts as overdue.
  *
@@ -85,6 +99,8 @@ export interface ReleaseTabOrder {
  * after the other give the same total order without a per-dialect expression.
  */
 export interface ReleaseTabSegment {
+  /** Which part of Needs attention this segment is; absent elsewhere. */
+  reason?: ReleaseAttentionReason;
   /** All of them must hold. */
   where: VersionsWhereCondition[];
   /** Ends in `id`, so the order is total and a page boundary never splits a tie. */
@@ -150,6 +166,7 @@ export function releaseTabSegments(
         {
           // Stopped first: a stopped release will not run until somebody acts,
           // while an overdue one may still run on the next pass.
+          reason: "stopped",
           where: [
             {
               column: "state",
@@ -165,6 +182,7 @@ export function releaseTabSegments(
           ],
         },
         {
+          reason: "overdue",
           where: [scheduled, { column: "scheduledAt", op: "<", value: cutoff }],
           orderBy: [
             { column: "scheduledAt", direction: "asc" },

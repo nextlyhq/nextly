@@ -654,6 +654,11 @@ describe("the list's tab, search, page and order", () => {
         order: "latest",
       })
     );
+    const attention = await list("?tab=attention&reason=overdue");
+    expect(attention.status).toBe(200);
+    expect(api.releases.find).toHaveBeenLastCalledWith(
+      expect.objectContaining({ tab: "attention", reason: "overdue" })
+    );
   });
 
   it.each([
@@ -661,6 +666,7 @@ describe("the list's tab, search, page and order", () => {
     ["page 0", "?page=0"],
     ["a page that is not a whole number", "?page=2a"],
     ["an unknown order", "?order=soonestt"],
+    ["an unknown reason", "?tab=attention&reason=late"],
   ])("refuses %s rather than answering with every release", async (_, q) => {
     // Each would otherwise be dropped or defaulted, and a client paging
     // through what it believes is a narrowed list could not tell.
@@ -669,7 +675,7 @@ describe("the list's tab, search, page and order", () => {
     expect(api.releases.find).not.toHaveBeenCalled();
   });
 
-  it.each(["tab=upcoming", "search=spring", "order=latest"])(
+  it.each(["tab=upcoming", "search=spring", "order=latest", "reason=overdue"])(
     "refuses %s alongside a document filter",
     async extra => {
       // One document's releases are not a tab, are not searched, and come in
