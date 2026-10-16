@@ -285,11 +285,7 @@ export function getComponentRowColumnDescriptor(
     ...field,
     options: { ...options, relationType: undefined },
   } as FieldDefinition;
-  const descriptor = getColumnDescriptor(asSingleRelation, dialect, builtBy);
-  if (!descriptor) return null;
-  // A single relationship's column is always nullable in the collection's DDL, but the component's
-  // creator writes a required relationship NOT NULL, so this column follows `required`.
-  return { ...descriptor, nullable: field.required !== true };
+  return getColumnDescriptor(asSingleRelation, dialect, builtBy);
 }
 
 /**

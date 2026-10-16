@@ -767,8 +767,9 @@ describe.each(["postgresql", "mysql", "sqlite"] as const)(
 describe.each(["postgresql", "mysql", "sqlite"] as const)(
   "buildDesiredTableFromComponentFields - required many-to-many on %s",
   dialect => {
-    // The component creator emits a required relationship as NOT NULL. The desired table must say
-    // the same, or the next preview plans to drop the constraint from a freshly created component.
+    // The component creator writes every relationship column without NOT NULL, required or not, so
+    // the desired column stays nullable. Asserting NOT NULL here would plan a constraint the creator
+    // never sets.
     const requiredManyToMany = {
       name: "tags",
       type: "relationship",
@@ -776,7 +777,7 @@ describe.each(["postgresql", "mysql", "sqlite"] as const)(
       options: { target: "tags", relationType: "manyToMany" },
     };
 
-    it("records the many-to-many column as NOT NULL", () => {
+    it("records the many-to-many column as nullable, as the creator writes it", () => {
       const table = buildDesiredTableFromComponentFields(
         "comp_hero",
         [requiredManyToMany] as never,
@@ -784,7 +785,7 @@ describe.each(["postgresql", "mysql", "sqlite"] as const)(
         { builtBy: "codeFirst" }
       );
       const tags = table.columns.find(c => c.name === "tags");
-      expect(tags?.nullable).toBe(false);
+      expect(tags?.nullable).toBe(true);
     });
   }
 );
