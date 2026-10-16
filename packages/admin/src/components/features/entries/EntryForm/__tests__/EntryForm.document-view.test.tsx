@@ -88,6 +88,8 @@ const bob = { ownerId: "u2", ownerLabel: "Bob", expiresInSeconds: 90 };
 
 const received = vi.fn();
 const mounted = vi.fn();
+/** What happened to the view and the recovery, in order. */
+const lifecycle: string[] = [];
 
 /**
  * A view with the shapes a real one has: a field written through the
@@ -95,7 +97,13 @@ const mounted = vi.fn();
  */
 function BuilderView(props: DocumentViewProps): ReactElement {
   received(props);
-  useEffect(() => mounted(), []);
+  useEffect(() => {
+    mounted();
+    lifecycle.push("mount");
+    return () => {
+      lifecycle.push("unmount");
+    };
+  }, []);
   const { register } = useFormContext();
   return (
     <div data-testid="builder-view">
@@ -270,7 +278,15 @@ describe("EntryForm with a document view", () => {
     // A restore replaces the form's values from outside the view, and a view
     // may keep a working copy read once at mount, as the Page Builder does. So
     // the restore must reach the recovery AND give the view a new mount.
-    const restore = vi.fn();
+    //
+    // In that order: the outgoing view unmounts BEFORE the values are
+    // replaced. A view that hands its unsaved work to the form as it goes (the
+    // Page Builder does, for a takeover) would otherwise write its pre-restore
+    // copy over the restored values, and the new mount would read those.
+    lifecycle.length = 0;
+    const restore = vi.fn(() => {
+      lifecycle.push("restore");
+    });
     recovery.current = {
       ...recovery.current,
       offer: { savedAt: new Date(), snapshot: { title: "Recovered" } },
@@ -282,7 +298,8 @@ describe("EntryForm with a document view", () => {
     await userEvent.click(screen.getByRole("button", { name: "Restore" }));
 
     expect(restore).toHaveBeenCalledTimes(1);
-    expect(mounted).toHaveBeenCalledTimes(2);
+    await waitFor(() => expect(mounted).toHaveBeenCalledTimes(2));
+    expect(lifecycle).toEqual(["mount", "unmount", "restore", "mount"]);
   });
 
   it("leaves through the page's exit with unsaved work, without the leave warning", async () => {
