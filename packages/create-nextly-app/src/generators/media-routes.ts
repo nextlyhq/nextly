@@ -3,110 +3,153 @@ import path from "path";
 import fs from "fs-extra";
 
 import type { ProjectInfo } from "../types";
+import { resolveTemplatePath } from "../utils/template";
 
-// ============================================================
-// Media Route Template (Single Catch-All)
-// ============================================================
-
-/**
- * Single catch-all handler for all media operations.
- */
-/**
- * Generate the import path for nextly.config based on whether src/ directory is used.
- * - With src/: src/app/api/media/[[...path]]/route.ts → "../../../../../nextly.config"
- * - Without src/: app/api/media/[[...path]]/route.ts → "../../../../nextly.config"
- */
-function getConfigImportPath(useSrcDir: boolean): string {
-  return useSrcDir
-    ? "../../../../../nextly.config"
-    : "../../../../nextly.config";
-}
-
-const MEDIA_CATCH_ALL_TEMPLATE = (configImportPath: string) => `/**
- * Media API Routes (Catch-All Handler)
- *
- * This single route handles all media operations:
- *
- * Media Files:
- * - GET    /api/media                        - List media with pagination
- * - POST   /api/media                        - Upload new media file
- * - GET    /api/media/:id                    - Get media by ID
- * - PATCH  /api/media/:id                    - Update media metadata
- * - DELETE /api/media/:id                    - Delete media file
- * - PATCH  /api/media/:id/move               - Move media to folder
- *
- * Folders:
- * - GET    /api/media/folders                - List folders
- * - POST   /api/media/folders                - Create folder
- * - GET    /api/media/folders/:id            - Get folder by ID
- * - PATCH  /api/media/folders/:id            - Update folder
- * - DELETE /api/media/folders/:id            - Delete folder
- * - GET    /api/media/folders/:id/contents   - Get folder contents
- * - GET    /api/media/folders/root/contents  - Get root folder contents
- */
-
-import { createMediaHandlers } from "nextly/api/media-handlers";
-
-import nextlyConfig from "${configImportPath}";
-
-// Pass config to ensure storage plugins work across all worker processes
-const handlers = createMediaHandlers({ config: nextlyConfig });
-
-export const GET = handlers.GET;
-export const POST = handlers.POST;
-export const PATCH = handlers.PATCH;
-export const DELETE = handlers.DELETE;
-`;
-
-const HEALTH_ROUTE_TEMPLATE = `/**
- * Health Check Endpoint
- *
- * GET /api/health - Check if the API is running
- */
-
-export { GET, HEAD } from "nextly/api/health";
-`;
-
-// ============================================================
-// Generator Function
-// ============================================================
+import type { GeneratedFiles } from "./generated-files";
 
 /**
- * Generate the media API routes for Nextly.
- * Uses a single catch-all route pattern.
+ * The routes an existing app receives, as the base template's app directory
+ * holds them. They are read from the template rather than kept as strings
+ * here, so an app Nextly is added to gets the same files a new project does:
  *
- * Creates:
- * - /api/media/[[...path]]/route.ts - All media and folder operations
- * - /api/health/route.ts - Health check endpoint
+ * - the admin's media route, `admin/api/media/...`, where the admin uploads,
+ *   lists and deletes media, every request checked against the signed-in
+ *   caller's media permissions (`requireAuth: true` in the template);
+ * - the public media route, `api/media/...`, which serves reads only;
+ * - the health check.
+ */
+const ROUTES = [
+  {
+    path: "admin/api/media/[[...path]]/route.ts",
+    importsConfig: true,
+    adminNeedsIt: true,
+  },
+  {
+    path: "api/media/[[...path]]/route.ts",
+    importsConfig: true,
+    adminNeedsIt: false,
+  },
+  { path: "api/health/route.ts", importsConfig: false, adminNeedsIt: false },
+] as const;
+
+/**
+ * The import that brings in the Nextly config: the template spells it through
+ * the `@nextly-config` alias or a path relative to its own layout, neither of
+ * which an existing app is guaranteed to resolve.
+ */
+const CONFIG_IMPORT =
+  /(import\s+\w+\s+from\s+")([^"]*(?:@nextly-config|nextly\.config))(";)/;
+
+const LEFT_AS_IT_IS = "already exists; left as it is";
+
+/**
+ * Why a route the admin calls was left as it was. The admin's media library
+ * needs Nextly's handler at that path, so the report carries the route the
+ * project would have received, for the developer to put there by hand.
+ */
+const ADMIN_NEEDS_IT = `${LEFT_AS_IT_IS}. The admin's media library needs Nextly's route here: replace or merge it with the content below`;
+
+/**
+ * Write the media and health routes into an existing app, from the template
+ * in `templatesDir` (the CLI's bundled templates by default).
+ *
+ * A file the project already has is never replaced: it is reported as
+ * skipped, exactly as it was. Every route is read and prepared before any is
+ * written, so a template whose route no longer imports the config is refused
+ * with nothing written.
  */
 export async function generateMediaRoutes(
   cwd: string,
-  projectInfo: ProjectInfo
-): Promise<void> {
-  const apiDir = path.join(cwd, projectInfo.appDir, "api");
+  projectInfo: ProjectInfo,
+  templatesDir: string = resolveTemplatePath()
+): Promise<GeneratedFiles> {
+  const prepared = await Promise.all(
+    ROUTES.map(route => prepareRoute(cwd, projectInfo, templatesDir, route))
+  );
+  const result: GeneratedFiles = { written: [], changed: [], skipped: [] };
+  for (const route of prepared) {
+    await writeIfAbsent(cwd, route, result);
+  }
+  return result;
+}
 
-  // Check if any media route already exists
-  const mediaDir = path.join(apiDir, "media");
-  if (await fs.pathExists(mediaDir)) {
+/** A route ready to write: where it goes, its text, and whether the admin depends on it. */
+interface PreparedRoute {
+  target: string;
+  text: string;
+  adminNeedsIt: boolean;
+}
+
+/** One route's destination in the project and its text, with the config import made relative. */
+async function prepareRoute(
+  cwd: string,
+  projectInfo: ProjectInfo,
+  templatesDir: string,
+  route: (typeof ROUTES)[number]
+): Promise<PreparedRoute> {
+  const source = path.join(templatesDir, "base", "src", "app", route.path);
+  const text = await fs.readFile(source, "utf-8");
+  const target = path.join(cwd, projectInfo.appDir, route.path);
+  return {
+    target,
+    text: route.importsConfig
+      ? withRelativeConfigImport(text, cwd, target, route.path)
+      : text,
+    adminNeedsIt: route.adminNeedsIt,
+  };
+}
+
+/**
+ * The route's text with its config import pointing at the project's
+ * `nextly.config` by a path relative to where the route is written, so it
+ * resolves with or without a `src/` folder and with no import alias at all.
+ */
+function withRelativeConfigImport(
+  text: string,
+  cwd: string,
+  target: string,
+  routePath: string
+): string {
+  if (!CONFIG_IMPORT.test(text)) {
     throw new Error(
-      "Media API routes already exist at api/media. Please remove them first."
+      `The template's ${routePath} does not import the Nextly config, so no route that finds it can be written.`
     );
   }
-
-  // Generate the catch-all media route
-  const mediaRoutePath = path.join(apiDir, "media", "[[...path]]", "route.ts");
-  const configImportPath = getConfigImportPath(
-    projectInfo.appDir.startsWith("src")
+  const specifier = toPosix(
+    path.relative(path.dirname(target), path.join(cwd, "nextly.config"))
   );
-  await fs.ensureDir(path.dirname(mediaRoutePath));
-  await fs.writeFile(
-    mediaRoutePath,
-    MEDIA_CATCH_ALL_TEMPLATE(configImportPath),
-    "utf-8"
+  return text.replace(
+    CONFIG_IMPORT,
+    (_match, head: string, _old: string, tail: string) =>
+      `${head}${specifier}${tail}`
   );
+}
 
-  // Generate health check route
-  const healthRoutePath = path.join(apiDir, "health", "route.ts");
-  await fs.ensureDir(path.dirname(healthRoutePath));
-  await fs.writeFile(healthRoutePath, HEALTH_ROUTE_TEMPLATE, "utf-8");
+/**
+ * Write a route only where nothing is: an existing file is reported as
+ * skipped. The write itself refuses an existing path too (`wx`), so a file
+ * that appears between the check and the write is not replaced either.
+ */
+async function writeIfAbsent(
+  cwd: string,
+  { target, text, adminNeedsIt }: PreparedRoute,
+  result: GeneratedFiles
+): Promise<void> {
+  const relative = toPosix(path.relative(cwd, target));
+  if (await fs.pathExists(target)) {
+    result.skipped.push(
+      adminNeedsIt
+        ? { path: relative, why: ADMIN_NEEDS_IT, toAdd: text }
+        : { path: relative, why: LEFT_AS_IT_IS }
+    );
+    return;
+  }
+  await fs.ensureDir(path.dirname(target));
+  await fs.writeFile(target, text, { encoding: "utf-8", flag: "wx" });
+  result.written.push(relative);
+}
+
+/** A path in `/` form, as an import specifier and the report both spell it. */
+function toPosix(p: string): string {
+  return p.split(path.sep).join("/");
 }

@@ -9,6 +9,7 @@ import pc from "picocolors";
 import { generateAdminPage } from "./generators/admin";
 import { generateConfig } from "./generators/config";
 import { generateEnv } from "./generators/env";
+import type { GeneratedFiles } from "./generators/generated-files";
 import { generateMediaRoutes } from "./generators/media-routes";
 import { patchNextConfig } from "./generators/next-config";
 import { generateRoutes } from "./generators/routes";
@@ -51,7 +52,7 @@ import {
 } from "./utils/detect";
 import { emptyDirectory, isDirectoryNotEmpty } from "./utils/fs";
 import { scriptRunner } from "./utils/package-manager-commands";
-import { copyTemplate } from "./utils/template";
+import { copyTemplate, resolveTemplatePath } from "./utils/template";
 
 /**
  * Pick a safe project name when the user has chosen "install in cwd".
@@ -519,13 +520,20 @@ export async function createNextly(
   {
     const s = p.spinner();
     s.start("Setting up environment...");
+    let mediaRoutes: GeneratedFiles | undefined;
     try {
       if (!isFreshProject) {
         // Existing project: generate Nextly config files
         await generateConfig(cwd, projectType);
         await generateRoutes(cwd, projectInfo);
         await generateAdminPage(cwd, projectInfo);
-        await generateMediaRoutes(cwd, projectInfo);
+        // The template's own media and health routes, so an app Nextly is
+        // added to gets the admin's media route a new project has.
+        mediaRoutes = await generateMediaRoutes(
+          cwd,
+          projectInfo,
+          resolveTemplatePath(options.localTemplatePath)
+        );
         await generateTypesDirectory(cwd, projectInfo);
         await patchNextConfig(cwd, database);
       }
@@ -539,6 +547,17 @@ export async function createNextly(
         await generateEnv(cwd, envDatabase);
       }
       s.stop("Environment configured");
+      // A route the project already had was left as it was; say which, so
+      // the developer knows the admin may not be using Nextly's version of it.
+      // Where the admin needs Nextly's route, the text to add follows.
+      for (const { path: skipped, why, toAdd } of mediaRoutes?.skipped ?? []) {
+        if (toAdd === undefined) {
+          p.log.info(`${skipped}: ${why}`);
+        } else {
+          p.log.warn(`${skipped}: ${why}`);
+          p.log.message(toAdd);
+        }
+      }
     } catch (error) {
       s.stop("Failed to generate configuration");
       telemetry.capture("scaffold_failed", {
