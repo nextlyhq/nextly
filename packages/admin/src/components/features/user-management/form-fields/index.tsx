@@ -228,9 +228,11 @@ export function UserFormFields({
                       <div className="text-sm font-medium">
                         Set a password now
                       </div>
+                      {/* The server makes an admin-set password one the
+                          person must replace, so the form says so. */}
                       <p className="text-xs text-muted-foreground">
-                        For handing over credentials directly. They can change
-                        it after signing in.
+                        For handing over credentials directly. They choose a new
+                        password the first time they sign in.
                       </p>
                     </div>
                   </label>
@@ -268,7 +270,8 @@ export function UserFormFields({
                   aria-describedby={describedBy}
                   aria-invalid={invalid}
                   type={showPassword ? "text" : "password"}
-                  placeholder="Min 8 chars, uppercase, lowercase, number, special (@$!%*?&#.)"
+                  // The server's rule: any symbol counts, not a fixed list.
+                  placeholder="8+ characters, upper and lower case, a number and a symbol"
                   aria-required={isCreateMode}
                   {...register("password")}
                   className="pr-10"
