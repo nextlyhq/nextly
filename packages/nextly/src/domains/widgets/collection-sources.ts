@@ -355,9 +355,13 @@ function useAsTitleOf(collection: RegisteredCollection): string | undefined {
   return trimmed === "" ? undefined : trimmed;
 }
 
-export async function refreshCollectionSources(): Promise<void> {
+/**
+ * Rebuild the `collection:` sources, answering whether the registry could be
+ * read. On `false` the previous sources stand, as the note above explains.
+ */
+export async function refreshCollectionSources(): Promise<boolean> {
   const collections = await readRegisteredCollections();
-  if (!collections) return;
+  if (!collections) return false;
 
   const named = collections.filter(
     (collection): collection is RegisteredCollection & { slug: string } =>
@@ -384,4 +388,5 @@ export async function refreshCollectionSources(): Promise<void> {
       status: collection.status === true,
     }))
   );
+  return true;
 }

@@ -27,10 +27,9 @@ function admin(...attributes: Array<[string, string]>): HTMLElement {
 /**
  * Render the provider with the page pinned to one mode.
  *
- * `defaultTheme`, not `forcedTheme`: next-themes leaves `resolvedTheme` at the
- * default under a forced theme, and ThemeSync reads `resolvedTheme`, so a
- * forced mount syncs nothing and every assertion below would pass vacuously.
- * `enableSystem` is off so the result does not depend on the matchMedia stub.
+ * `defaultTheme` with a storage key nothing is saved under, so the mode is the
+ * default. `enableSystem` is off so the result does not depend on the
+ * matchMedia stub.
  */
 function mount(theme: "light" | "dark") {
   return render(

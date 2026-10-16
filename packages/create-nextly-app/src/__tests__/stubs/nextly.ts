@@ -77,3 +77,27 @@ export class NextlyError extends Error {
     return new NextlyError("VALIDATION_ERROR", { errors: opts.errors });
   }
 }
+
+/**
+ * Collection and field builders, passed through unchanged, so a test can load
+ * a template's collection and read the config it declares, access rules
+ * included, rather than its source text.
+ */
+export function defineCollection<T>(config: T): T {
+  return config;
+}
+
+function field(type: string) {
+  return <T extends object>(options: T) => ({ type, ...options });
+}
+
+export const text = field("text");
+export const textarea = field("textarea");
+export const richText = field("richText");
+export const date = field("date");
+export const checkbox = field("checkbox");
+export const number = field("number");
+export const upload = field("upload");
+export const relationship = field("relationship");
+export const group = field("group");
+

@@ -243,7 +243,10 @@ export interface FormBuilderPluginOptions {
    *   labels: { singular: 'My Form', plural: 'My Forms' },
    *   access: {
    *     read: () => true,
-   *     create: ({ roles }) => roles.includes('admin'),
+   *     // Narrow the permission, never replace it: the role screen still
+   *     // decides who holds `create-my-forms`.
+   *     create: ({ permissions }) =>
+   *       permissions.includes('my-forms:create') && process.env.CONTENT_FREEZE !== 'on',
    *   },
    *   fields: [
    *     text({ name: 'internalNotes', label: 'Internal Notes' }),
@@ -254,7 +257,7 @@ export interface FormBuilderPluginOptions {
    * formOverrides: {
    *   slug: 'contact-forms',
    *   access: {
-   *     read: ({ user }) => !!user,
+   *     read: ({ permissions }) => permissions.includes('contact-forms:read'),
    *     update: () => false,
    *   },
    *   fields: ({ defaultFields }) => {
@@ -285,7 +288,7 @@ export interface FormBuilderPluginOptions {
    *   slug: 'my-submissions',
    *   labels: { singular: 'Response', plural: 'Responses' },
    *   access: {
-   *     read: ({ roles }) => roles.includes('admin'),
+   *     read: ({ permissions }) => permissions.includes('my-submissions:read'),
    *   },
    *   fields: [
    *     select({

@@ -29,6 +29,18 @@
 @source "../../../plugin-form-builder/src/admin";
 @source "../../../plugin-page-builder/src/admin";
 
+/*
+ * Native controls (scrollbars, inputs, date pickers) follow the admin's own
+ * theme. It is set on the admin's container, never on the host page's <html>.
+ */
+.nextly-admin {
+  color-scheme: light;
+}
+
+.nextly-admin.dark {
+  color-scheme: dark;
+}
+
 /* Scope overflow fix to nextly-admin only */
 .nextly-admin {
   overflow-x: hidden;

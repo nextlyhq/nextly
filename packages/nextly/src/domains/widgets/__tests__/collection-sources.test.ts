@@ -233,7 +233,7 @@ describe("refreshCollectionSources", () => {
     // duplicate id, correctly, which is why the rebuild replaces by kind.
     registryHolds([{ slug: "posts", fields: [] }]);
     await refreshCollectionSources();
-    await expect(refreshCollectionSources()).resolves.toBeUndefined();
+    await expect(refreshCollectionSources()).resolves.toBe(true);
     expect(listSources()).toHaveLength(1);
   });
 
@@ -265,7 +265,9 @@ describe("refreshCollectionSources", () => {
     await refreshCollectionSources();
 
     registryUnreachable();
-    await refreshCollectionSources();
+    // Says so, so a reader that judges what the sources hold can tell a
+    // current answer from one left standing.
+    await expect(refreshCollectionSources()).resolves.toBe(false);
 
     expect(getSource("collection:posts")).toBeDefined();
   });
@@ -504,7 +506,7 @@ describe("the display label a source takes from the registry", () => {
       },
     ]);
 
-    await expect(refreshCollectionSources()).resolves.toBeUndefined();
+    await expect(refreshCollectionSources()).resolves.toBe(true);
     expect(getSource("collection:posts")?.label).toBe("posts");
   });
 
