@@ -35,11 +35,41 @@ const LOCKFILES: ReadonlyArray<readonly [string, PackageManager]> = [
 export async function detectPackageManager(
   cwd: string
 ): Promise<PackageManager> {
-  for (const [lockfile, manager] of LOCKFILES) {
-    if (await fs.pathExists(path.join(cwd, lockfile))) return manager;
-  }
+  return (
+    (await managerFromProject(cwd)) ??
+    detectPmFromUserAgent(process.env.npm_config_user_agent) ??
+    "npm"
+  );
+}
 
-  return detectPmFromUserAgent(process.env.npm_config_user_agent) ?? "npm";
+/**
+ * The manager the project's own files name, from `cwd` up to its repository's
+ * root. An app inside a monorepo has no lockfile of its own; the workspace
+ * keeps one at its root, and a pnpm workspace is known by its workspace file
+ * before its first install. The walk stops at the directory holding `.git`, so
+ * a lockfile somewhere above the repository is never taken for the app's.
+ */
+async function managerFromProject(
+  cwd: string
+): Promise<PackageManager | undefined> {
+  let dir = path.resolve(cwd);
+  for (;;) {
+    const found = await managerIn(dir);
+    if (found) return found;
+    const parent = path.dirname(dir);
+    if (parent === dir || (await fs.pathExists(path.join(dir, ".git")))) {
+      return undefined;
+    }
+    dir = parent;
+  }
+}
+
+async function managerIn(dir: string): Promise<PackageManager | undefined> {
+  for (const [lockfile, manager] of LOCKFILES) {
+    if (await fs.pathExists(path.join(dir, lockfile))) return manager;
+  }
+  if (await fs.pathExists(path.join(dir, "pnpm-workspace.yaml"))) return "pnpm";
+  return undefined;
 }
 
 /**
