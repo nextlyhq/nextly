@@ -29,11 +29,15 @@
 "@nextlyhq/ui": patch
 ---
 
-The database adapter's `upsert` now works on MySQL. It called the PostgreSQL
-and SQLite conflict clause, which MySQL does not have, so every upsert there
-failed. It now resolves the conflict by the columns it names, as `ON CONFLICT`
-does elsewhere: a collision on any other unique key is refused rather than
-updating a different row, and keeping an existing row runs no update triggers.
+The database adapter's `upsert` now works on MySQL, with the meaning it has on
+PostgreSQL and SQLite. It used to call a conflict clause MySQL does not have, so
+every upsert there failed. On MySQL the row is now inserted first, and only a
+duplicate on the conflict columns themselves is resolved, by a read that sees
+rows other transactions have committed. A collision on any other unique key is
+refused rather than updating a different row, and keeping an existing row runs
+no update triggers. On MySQL the conflict columns must be a declared primary or
+unique key and must be given values.
+
 An upsert that names no column to update now keeps the existing row and returns
-it on every dialect, without failing, so it can be used to write a row once
-inside a transaction.
+it on every dialect, without failing, so it can write a row once inside a
+transaction.

@@ -7,7 +7,7 @@
 // dialects answer one contract.
 
 import type { TableDefinition } from "@nextlyhq/adapter-drizzle/types";
-import { integer, pgTable, text } from "drizzle-orm/pg-core";
+import { integer, pgTable, text, uniqueIndex } from "drizzle-orm/pg-core";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { createPostgresAdapter } from "../index";
@@ -27,14 +27,20 @@ const TABLE_DEFINITION: TableDefinition = {
   ],
 };
 
-const things = pgTable(TABLE, {
-  id: text("id").primaryKey(),
-  key: text("key").notNull().unique(),
-  label: text("label"),
-  slug: text("slug").unique(),
-  grp: text("grp"),
-  pos: integer("pos"),
-});
+const things = pgTable(
+  TABLE,
+  {
+    id: text("id").primaryKey(),
+    key: text("key").notNull().unique(),
+    label: text("label"),
+    slug: text("slug").unique(),
+    grp: text("grp"),
+    pos: integer("pos"),
+  },
+  // Declared on the model as well as created in the database, so an adapter
+  // that checks the conflict target against the table's keys can see it.
+  table => [uniqueIndex("int_upsert_grp_pos_uidx").on(table.grp, table.pos)]
+);
 
 interface Row {
   id: string;
@@ -220,5 +226,28 @@ describe.skipIf(!TEST_DB_URL)("PostgreSQL upsert", () => {
       }
     );
     expect((await rows()).map(row => row.id)).toEqual(["a", "b"]);
+  });
+  it("refuses conflict columns that are not a unique key", async () => {
+    // A target that is not unique could match several rows; PostgreSQL and
+    // SQLite refuse it as an ON CONFLICT target, and so must every dialect.
+    await expect(
+      adapter.upsert(
+        TABLE,
+        { id: "a", key: "k1", label: "first" },
+        {
+          conflictColumns: ["label"],
+        }
+      )
+    ).rejects.toThrow();
+    expect(await rows()).toEqual([]);
+  });
+
+  it("returns the stored row for a null conflict key", async () => {
+    const stored = await adapter.upsert<Row>(
+      TABLE,
+      { id: "a", key: "k1", slug: null, label: "first" },
+      { conflictColumns: ["slug"] }
+    );
+    expect(stored).toMatchObject({ id: "a", key: "k1", label: "first" });
   });
 });

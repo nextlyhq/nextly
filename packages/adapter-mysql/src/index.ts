@@ -67,7 +67,8 @@ import {
   acceptsForShare,
   checkDialectVersion,
 } from "@nextlyhq/adapter-drizzle/version-check";
-import type { AnyRelations, SQL } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
+import type { AnyRelations, Column, SQL } from "drizzle-orm";
 import { getTableConfig, type MySqlTable } from "drizzle-orm/mysql-core";
 import { drizzle, type MySql2Database } from "drizzle-orm/mysql2";
 import type {
@@ -786,6 +787,162 @@ export class MySqlAdapter extends DrizzleAdapter {
    * Note: Savepoint methods are not implemented (set to undefined)
    * as savepoints are disabled in this adapter per approved approach.
    */
+  /**
+   * Upsert with the meaning `INSERT … ON CONFLICT (target)` has on PostgreSQL
+   * and SQLite, which MySQL does not have.
+   *
+   * MySQL's `ON DUPLICATE KEY UPDATE` fires on a collision with ANY unique key,
+   * so it could update a row the caller never targeted, and keeping a row by a
+   * no-op assignment still runs its update triggers. So the row is inserted
+   * first — the insert's own validation and triggers apply, as they do before
+   * `ON CONFLICT` elsewhere — and only a duplicate on the TARGET key is
+   * resolved:
+   *
+   *   - found by a locking read, which sees the latest committed row rather
+   *     than the transaction's snapshot, so a concurrent writer's row is seen;
+   *   - kept as it is when there is nothing to update, or updated by its key;
+   *   - a duplicate on any other unique key finds nothing there, and is
+   *     refused, as `ON CONFLICT (target)` refuses it.
+   *
+   * The conflict columns must be a declared primary or unique key — anything
+   * else could match several rows — and must be given values: MySQL cannot look
+   * a row up by a key the database would only fill in itself. A failed insert
+   * rolls back only itself on MySQL, so a caller's transaction stays usable.
+   */
+  override async upsert<T = unknown>(
+    table: string,
+    data: Record<string, unknown>,
+    options: UpsertOptions,
+    executor?: unknown
+  ): Promise<T> {
+    const tableObj = this.getTableObject(table) as MySqlTable | undefined;
+    // Unknown table: the base method reports it as every CRUD method does.
+    if (!tableObj) return super.upsert<T>(table, data, options, executor);
+    try {
+      const key = this.conflictKey(tableObj, table, options.conflictColumns);
+      const db = (executor ??
+        this.getDrizzle()) as MySql2Database<AnyRelations>;
+      const values = options.conflictColumns.map(column => data[column]);
+      if (values.some(value => value === undefined)) {
+        throw createDatabaseError({
+          kind: "query",
+          message: `upsert on ${table} needs a value for every conflict column (${options.conflictColumns.join(", ")}).`,
+        });
+      }
+      const where = and(
+        ...key.map((column, i) => eq(column, values[i] as never))
+      );
+      // A conflict key holding NULL never conflicts: a unique index admits any
+      // number of NULLs. It is a plain insert, read back by its primary key.
+      if (values.some(value => value === null)) {
+        await db.insert(tableObj).values(data as never);
+        return (await this.byPrimaryKey<T>(db, tableObj, data)) ?? (data as T);
+      }
+
+      try {
+        await db.insert(tableObj).values(data as never);
+      } catch (error) {
+        if (!isDuplicateKey(error)) throw error;
+        if ((await this.lockedRow(db, tableObj, where)) === undefined) {
+          // The collision was on another unique key, not the target.
+          throw error;
+        }
+        const update = this.updateValues(data, options);
+        if (Object.keys(update).length > 0) {
+          await db.update(tableObj).set(update).where(where);
+        }
+      }
+      return (await this.lockedRow(db, tableObj, where)) as T;
+    } catch (error) {
+      throw this.handleQueryError(error, "upsert", table);
+    }
+  }
+
+  /**
+   * The table's columns for a conflict target, refusing one that is not a
+   * declared primary or unique key: an update by a key that is not unique
+   * would touch every row sharing it.
+   */
+  private conflictKey(
+    tableObj: MySqlTable,
+    table: string,
+    conflictColumns: readonly string[]
+  ): Column[] {
+    const columns = conflictColumns.map(
+      name => (tableObj as unknown as Record<string, Column | undefined>)[name]
+    );
+    const names = new Set(columns.map(column => column?.name));
+    const config = getTableConfig(tableObj);
+    const sameColumns = (key: readonly { name: string }[]) =>
+      key.length === names.size && key.every(column => names.has(column.name));
+    const unique =
+      columns.every(column => column !== undefined) &&
+      ((columns.length === 1 &&
+        (columns[0]?.primary === true || columns[0]?.isUnique === true)) ||
+        config.primaryKeys.some(pk => sameColumns(pk.columns)) ||
+        config.uniqueConstraints.some(uc => sameColumns(uc.columns)) ||
+        config.indexes.some(
+          index =>
+            index.config.unique === true &&
+            sameColumns(index.config.columns as { name: string }[])
+        ));
+    if (!unique) {
+      throw createDatabaseError({
+        kind: "query",
+        message: `upsert on ${table}: the conflict columns (${conflictColumns.join(", ")}) are not a primary or unique key of the table.`,
+      });
+    }
+    return columns;
+  }
+
+  /** The update an upsert applies to an existing row: never its key. */
+  private updateValues(
+    data: Record<string, unknown>,
+    options: UpsertOptions
+  ): Record<string, unknown> {
+    const key = new Set(options.conflictColumns);
+    const update: Record<string, unknown> = {};
+    for (const column of options.updateColumns ?? Object.keys(data)) {
+      if (!key.has(column) && column in data) update[column] = data[column];
+    }
+    return update;
+  }
+
+  /** The row matching `where`, by a locking (current) read. */
+  private async lockedRow(
+    db: MySql2Database<AnyRelations>,
+    tableObj: MySqlTable,
+    where: SQL | undefined
+  ): Promise<unknown> {
+    const rows = await db
+      .select()
+      .from(tableObj)
+      .where(where)
+      .limit(1)
+      .for("update");
+    return rows[0];
+  }
+
+  /** The row just inserted, by its primary key when the data names it. */
+  private async byPrimaryKey<T>(
+    db: MySql2Database<AnyRelations>,
+    tableObj: MySqlTable,
+    data: Record<string, unknown>
+  ): Promise<T | undefined> {
+    const record = tableObj as unknown as Record<string, Column | undefined>;
+    const primary = Object.keys(data).filter(
+      name => record[name]?.primary === true
+    );
+    if (primary.length === 0) return undefined;
+    return (await this.lockedRow(
+      db,
+      tableObj,
+      and(
+        ...primary.map(name => eq(record[name] as Column, data[name] as never))
+      )
+    )) as T | undefined;
+  }
+
   /** A table-level `primaryKey({ columns })`, read through the MySQL table config. */
   protected override compositePrimaryKey(
     tableObj: Record<string, unknown>
@@ -1057,6 +1214,24 @@ export class MySqlAdapter extends DrizzleAdapter {
       cause: error instanceof Error ? error : undefined,
     });
   }
+}
+
+/**
+ * Whether a failed write was a duplicate key, read from the driver's error
+ * number on the error or on its cause: Drizzle wraps the driver's error in its
+ * own query error, which carries no number of its own.
+ */
+function isDuplicateKey(error: unknown): boolean {
+  const errnoOf = (value: unknown) =>
+    typeof value === "object" && value !== null && "errno" in value
+      ? (value as { errno?: number }).errno
+      : undefined;
+  const cause =
+    typeof error === "object" && error !== null && "cause" in error
+      ? (error as { cause?: unknown }).cause
+      : undefined;
+  const errno = errnoOf(error) ?? errnoOf(cause);
+  return errno !== undefined && MYSQL_ERROR_CODES[errno] === "unique_violation";
 }
 
 /**

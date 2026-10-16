@@ -7,7 +7,7 @@
 // dialects answer one contract.
 
 import type { TableDefinition } from "@nextlyhq/adapter-drizzle/types";
-import { int, mysqlTable, varchar } from "drizzle-orm/mysql-core";
+import { int, mysqlTable, uniqueIndex, varchar } from "drizzle-orm/mysql-core";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { createMySqlAdapter, type MySqlAdapter } from "../index";
@@ -27,14 +27,20 @@ const TABLE_DEFINITION: TableDefinition = {
   ],
 };
 
-const things = mysqlTable(TABLE, {
-  id: varchar("id", { length: 36 }).primaryKey(),
-  key: varchar("key", { length: 64 }).notNull().unique(),
-  label: varchar("label", { length: 64 }),
-  slug: varchar("slug", { length: 64 }).unique(),
-  grp: varchar("grp", { length: 64 }),
-  pos: int("pos"),
-});
+const things = mysqlTable(
+  TABLE,
+  {
+    id: varchar("id", { length: 36 }).primaryKey(),
+    key: varchar("key", { length: 64 }).notNull().unique(),
+    label: varchar("label", { length: 64 }),
+    slug: varchar("slug", { length: 64 }).unique(),
+    grp: varchar("grp", { length: 64 }),
+    pos: int("pos"),
+  },
+  // Declared on the model as well as created in the database, so an adapter
+  // that checks the conflict target against the table's keys can see it.
+  table => [uniqueIndex("int_upsert_grp_pos_uidx").on(table.grp, table.pos)]
+);
 
 interface Row {
   id: string;
@@ -247,5 +253,64 @@ describe.skipIf(!TEST_DB_URL)("MySQL upsert", () => {
     } finally {
       await adapter.executeQuery("DROP TRIGGER IF EXISTS int_upsert_touch");
     }
+  });
+  it("refuses conflict columns that are not a unique key", async () => {
+    // A target that is not unique could match several rows; PostgreSQL and
+    // SQLite refuse it as an ON CONFLICT target, and so must every dialect.
+    await expect(
+      adapter.upsert(
+        TABLE,
+        { id: "a", key: "k1", label: "first" },
+        {
+          conflictColumns: ["label"],
+        }
+      )
+    ).rejects.toThrow();
+    expect(await rows()).toEqual([]);
+  });
+
+  it("returns the stored row for a null conflict key", async () => {
+    const stored = await adapter.upsert<Row>(
+      TABLE,
+      { id: "a", key: "k1", slug: null, label: "first" },
+      { conflictColumns: ["slug"] }
+    );
+    expect(stored).toMatchObject({ id: "a", key: "k1", label: "first" });
+  });
+  it("refuses an upsert that leaves a conflict column for the database to fill", async () => {
+    // MySQL cannot look a row up by a key value the database would only
+    // supply itself; said, rather than treating the omission as NULL.
+    await expect(
+      adapter.upsert(
+        TABLE,
+        { id: "a", key: "k1", label: "first" },
+        {
+          conflictColumns: ["slug"],
+        }
+      )
+    ).rejects.toThrow(/needs a value for every conflict column/);
+  });
+
+  it("takes a row another transaction committed after this one's snapshot", async () => {
+    // Repeatable read: this transaction's first read fixes its snapshot. A
+    // row with the same key committed by someone else after that is invisible
+    // to a plain select here, so only a locking (current) read can find the
+    // row the duplicate-key error is about.
+    await adapter.transaction(async tx => {
+      await tx.select(TABLE, {});
+      await adapter.upsert(
+        TABLE,
+        { id: "theirs", key: "k1", label: "theirs" },
+        {
+          conflictColumns: ["key"],
+        }
+      );
+      const stored = await tx.upsert<Row>(
+        TABLE,
+        { id: "mine", key: "k1", label: "mine" },
+        { conflictColumns: ["key"], updateColumns: [] }
+      );
+      expect(stored).toMatchObject({ id: "theirs", label: "theirs" });
+    });
   });
 });
