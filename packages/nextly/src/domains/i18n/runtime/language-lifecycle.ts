@@ -41,6 +41,12 @@ export interface LanguageStatuses {
   perLanguageStatus: boolean;
   /** The workflow whose public states count as live; the default one if omitted. */
   workflow?: ContentWorkflow;
+  /**
+   * A due release publishes the document before it is written: the main row
+   * then counts as live whatever it stores. A language's own status still
+   * decides, as it does for the public read, which widens only the main row.
+   */
+  mainRevealed?: boolean;
 }
 
 /**
@@ -57,7 +63,8 @@ export interface LanguageStatuses {
 export function languageIsLive(statuses: LanguageStatuses): boolean {
   const isLive = (status: unknown): boolean =>
     typeof status === "string" && isPublicState(status, statuses.workflow);
-  const mainLive = isLive(statuses.mainStatus);
+  const mainLive =
+    statuses.mainRevealed === true || isLive(statuses.mainStatus);
   if (statuses.locale === null || !statuses.perLanguageStatus) return mainLive;
   if (statuses.locale === statuses.defaultLocale) {
     return (

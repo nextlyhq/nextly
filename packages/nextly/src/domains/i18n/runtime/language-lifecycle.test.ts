@@ -95,6 +95,19 @@ describe("languageIsLive", () => {
     );
   });
 
+  it("lets a due release make the main row live, but not a withdrawn translation", () => {
+    const revealed = { ...base, mainStatus: "draft", mainRevealed: true };
+    expect(languageIsLive({ ...revealed, ownStatus: null, locale: null })).toBe(
+      true
+    );
+    expect(
+      languageIsLive({ ...revealed, ownStatus: "draft", locale: "de" })
+    ).toBe(false);
+    expect(
+      languageIsLive({ ...revealed, ownStatus: "published", locale: "de" })
+    ).toBe(true);
+  });
+
   it("judges another language by the main row and its own status", () => {
     expect(
       languageIsLive({

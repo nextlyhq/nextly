@@ -57,7 +57,9 @@ export async function readPartIsLive(args: {
 
   // The public read asks a due release before it reads the stored status, and
   // so does this: a scheduled publication or withdrawal is in effect before
-  // the release writes it. A release moves the whole document.
+  // the release writes it. A withdrawal hides the whole document; a
+  // publication widens the main row only, and each language's own status
+  // still decides, as the public read's translation filter does.
   const decisions = await (
     args.visibility ?? releaseVisibilityFor(adapter)
   ).decisions({
@@ -66,7 +68,7 @@ export async function readPartIsLive(args: {
     now: args.now ?? new Date(),
   });
   if (decisions.hide.includes(entryId)) return false;
-  if (decisions.reveal.includes(entryId)) return true;
+  const mainRevealed = decisions.reveal.includes(entryId);
 
   const main = await adapter.selectOne<{ status?: unknown }>(entity.tableName, {
     columns: ["status"],
@@ -107,5 +109,6 @@ export async function readPartIsLive(args: {
     locale: part,
     defaultLocale: args.defaultLocale,
     perLanguageStatus: companion?.hasStatus === true,
+    mainRevealed,
   });
 }
