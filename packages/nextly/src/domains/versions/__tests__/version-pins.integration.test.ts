@@ -222,6 +222,122 @@ describe.each(getConfiguredTestDialects())(
       }
     );
 
+    it.skipIf(dialect === "sqlite")(
+      "waits for a pin of the same document before releasing",
+      async () => {
+        const doc = await cappedDocument(dialect);
+        const holder = versionPins.holder("workflows");
+        await doc.inTx(tx =>
+          holder.pin(tx, { ref: doc.ref, slot: "approved", versionNo: 1 })
+        );
+        const collection = await current!
+          .getService("collectionRegistryService")
+          .getCollectionBySlug("notes");
+        const order: string[] = [];
+        let finish!: () => void;
+        const held = new Promise<void>(resolve => {
+          finish = resolve;
+        });
+        let locked!: () => void;
+        const lockTaken = new Promise<void>(resolve => {
+          locked = resolve;
+        });
+
+        // Holds the document as a pin moving the slot does, between reading
+        // the slot and writing it.
+        const pinning = doc
+          .inTx(async tx => {
+            await tx.lockRow(collection!.tableName, doc.entryId);
+            locked();
+            await held;
+            order.push("pin finished");
+          })
+          .then(() => undefined);
+        await lockTaken;
+
+        const releasing = doc
+          .inTx(tx => holder.release(tx, { ref: doc.ref, slot: "approved" }))
+          .then(() => {
+            order.push("released");
+          });
+
+        await new Promise(resolve => setTimeout(resolve, 500));
+        finish();
+        await Promise.all([pinning, releasing]);
+
+        expect(order).toEqual(["pin finished", "released"]);
+      }
+    );
+
+    it.skipIf(dialect === "sqlite")(
+      "refuses a pin on a document deleted while the pin waited",
+      async () => {
+        const doc = await cappedDocument(dialect);
+        const collection = await current!
+          .getService("collectionRegistryService")
+          .getCollectionBySlug("notes");
+        let finish!: () => void;
+        const held = new Promise<void>(resolve => {
+          finish = resolve;
+        });
+        let locked!: () => void;
+        const lockTaken = new Promise<void>(resolve => {
+          locked = resolve;
+        });
+
+        // A delete under way: the row is gone once it commits, and its
+        // history is kept.
+        const deleting = doc
+          .inTx(async tx => {
+            await tx.lockRow(collection!.tableName, doc.entryId);
+            locked();
+            await held;
+            await tx.delete(collection!.tableName, {
+              and: [{ column: "id", op: "=", value: doc.entryId }],
+            });
+          })
+          .then(() => undefined);
+        await lockTaken;
+
+        const pinning = doc
+          .inTx(tx =>
+            versionPins
+              .holder("workflows")
+              .pin(tx, { ref: doc.ref, slot: "approved", versionNo: 1 })
+          )
+          .then(
+            () => undefined,
+            (error: unknown) => error
+          );
+
+        await new Promise(resolve => setTimeout(resolve, 500));
+        finish();
+        await deleting;
+        const refused = await pinning;
+
+        expect(NextlyError.is(refused)).toBe(true);
+        expect(refused).toMatchObject({ code: "NOT_FOUND" });
+        expect(await versionPins.list(current!.adapter, doc.ref)).toEqual([]);
+      }
+    );
+
+    it("removes a collection's pins when the collection is deleted", async () => {
+      const doc = await cappedDocument(dialect);
+      await doc.inTx(tx =>
+        versionPins
+          .holder("workflows")
+          .pin(tx, { ref: doc.ref, slot: "approved", versionNo: 1 })
+      );
+      expect(await versionPins.list(current!.adapter, doc.ref)).toHaveLength(1);
+
+      // The registry's delete, which every collection deletion reaches.
+      await current!
+        .getService("collectionRegistryService")
+        .deleteCollection("notes", { force: true });
+
+      expect(await versionPins.list(current!.adapter, doc.ref)).toEqual([]);
+    });
+
     it("removes a document's pins when the document is deleted", async () => {
       const doc = await cappedDocument(dialect);
       await doc.inTx(tx =>

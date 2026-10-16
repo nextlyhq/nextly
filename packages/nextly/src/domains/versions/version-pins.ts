@@ -157,12 +157,13 @@ function assertSlot(slot: string): void {
 
 /**
  * The document's table, read on the caller's transaction, so its row can be
- * locked the way a save locks it.
+ * locked the way a save locks it. Null when the collection or Single itself
+ * is gone.
  */
 async function documentTableName(
   tx: TransactionContext,
   ref: VersionRef
-): Promise<string> {
+): Promise<string | null> {
   const executor = tx.getDrizzle();
   const record =
     ref.scopeKind === "single"
@@ -174,12 +175,32 @@ async function documentTableName(
           ref.scopeSlug,
           executor
         );
-  if (!record) {
-    throw NextlyError.notFound({
-      logContext: { reason: "version-pin-entity-missing", ...ref },
-    });
-  }
-  return record.tableName;
+  return record ? record.tableName : null;
+}
+
+/**
+ * Take the document's write lock, the lock every save and delete of it
+ * holds, and say whether the document still exists.
+ *
+ * One locking read rather than a lock and then a read: on MySQL a plain read
+ * returns the transaction's snapshot, which can still hold a row a delete
+ * committed while this waited for the lock; a locking read sees the latest
+ * committed row on every dialect.
+ */
+async function lockDocument(
+  tx: TransactionContext,
+  ref: VersionRef
+): Promise<boolean> {
+  const tableName = await documentTableName(tx, ref);
+  if (tableName === null) return false;
+  const row = await tx.selectOne<{ id: string }>(tableName, {
+    columns: ["id"],
+    where: {
+      and: [{ column: "id", op: "=" as const, value: ref.entryId }],
+    },
+    forUpdate: true,
+  });
+  return row !== null;
 }
 
 async function assertVersionExists(
@@ -217,8 +238,16 @@ function holderHandle(name: string): VersionPinHolder {
         });
       }
       // The save path's lock: a save's retention pass and this pin serialize,
-      // so the pass either sees this pin or runs before it exists.
-      await tx.lockRow(await documentTableName(tx, ref), ref.entryId);
+      // so the pass either sees this pin or runs before it exists. A delete
+      // holds it too, so a document deleted while this waited is refused
+      // here rather than left with a pin its delete already swept.
+      if (!(await lockDocument(tx, ref))) {
+        throw NextlyError.notFound({
+          message:
+            "This document does not exist, so its versions cannot be pinned.",
+          logContext: { reason: "version-pin-document-missing", ...ref },
+        });
+      }
       await assertVersionExists(tx, ref, versionNo);
 
       const pinKey = versionPinKey(ref, name, slot);
@@ -251,6 +280,10 @@ function holderHandle(name: string): VersionPinHolder {
     },
     async release(tx, { ref, slot }) {
       assertSlot(slot);
+      // Under the document lock, so a release cannot land between a pin's
+      // read of its slot and its write: the pin would report success over a
+      // row this deleted.
+      await lockDocument(tx, ref);
       await tx.delete(PINS_TABLE, {
         and: [
           {
@@ -262,6 +295,7 @@ function holderHandle(name: string): VersionPinHolder {
       });
     },
     async releaseAll(tx, ref) {
+      await lockDocument(tx, ref);
       await tx.delete(PINS_TABLE, {
         and: [
           ...documentWhere(ref),

@@ -52,6 +52,7 @@ import {
   calculateSchemaHash,
   schemaHashesMatch,
 } from "../../schema/services/schema-hash";
+import { deletePinsForEntity } from "../../versions/version-pins";
 import { VersionsRepository } from "../../versions/versions-repository";
 import {
   clearWebhookRecording,
@@ -685,6 +686,9 @@ export class SingleRegistryService extends BaseRegistryService<
           "single",
           slug
         );
+        // Pins go too: nothing could release them once the entity is gone,
+        // and a later entity under this slug must not inherit them.
+        await deletePinsForEntity(tx, "single", slug);
         return tx.delete(this.registryTableName, this.whereEq("slug", slug));
       });
 

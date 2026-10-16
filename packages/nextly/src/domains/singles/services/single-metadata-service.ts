@@ -549,11 +549,6 @@ export class SingleMetadataService {
     );
     await teardownEntityI18n({ adapter, slug, tableName, kind: "single" });
 
-    // The versions features have pinned against retention go with the Single:
-    // nothing could release them once it is gone.
-    const { deletePinsForEntity } = await import("../../versions/version-pins");
-    await deletePinsForEntity(adapter, "single", slug);
-
     // PostgreSQL needs CASCADE to drop dependent objects: the companion's foreign key makes the
     // main table a target, and a non-cascading drop raises rather than proceeding. The other two
     // dialects reject the keyword, so it is asked for only where it means something.
