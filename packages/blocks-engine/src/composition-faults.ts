@@ -51,12 +51,8 @@ import type {
   ResolvedComposition,
 } from "./resolve-instances";
 import { boundedOwnKeys, ownEntry } from "./safe-record";
-import {
-  slotLockBreaks,
-  slotLockOf,
-  startingChildrenSource,
-  type ActiveSlotLock,
-} from "./slot-lock";
+import { slotLockBreaks, slotLockOf, type ActiveSlotLock } from "./slot-lock";
+import { startingChildrenSource } from "./starting-children";
 import { walkNodes, type SlotDefaultSource } from "./tree";
 import { isNodeType } from "./validation";
 
@@ -216,16 +212,8 @@ function judgeVisit(visit: Visit, judge: Judge, pending: Visit[]): void {
     if (through !== undefined) judge.report("depth-exceeded", through, {});
     return;
   }
-  // Only where composition put the node or its container: a fault among the
-  // host's own nodes is the host's validation's to report.
-  if (through !== undefined && (composed || visit.containerComposed)) {
-    reportNesting(node, visit.where, through, judge);
-  }
-  // A node a definition put here: its locked slots hold what the placement
-  // wrote into them, its values and its slot content, which neither the page
-  // nor the component shows on its own.
-  if (through !== undefined && composed) {
-    reportLockBreaks(node, visit.lock, through, judge);
+  if (through !== undefined) {
+    reportComposedRules(node, visit, { composed, through }, judge);
   }
   enqueueSlots(node, visit, { composed, through }, judge, pending);
 }
@@ -262,6 +250,28 @@ function reportNesting(
     where,
     permitted: verdict.permitted,
   });
+}
+
+/**
+ * The rules only the composed tree can answer, for a node reached through a
+ * placement. Only where composition put the node or its container: a fault
+ * among the host's own nodes is the host's validation's to report.
+ */
+function reportComposedRules(
+  node: ResolvedBlockNode,
+  visit: Visit,
+  reached: { composed: boolean; through: string },
+  judge: Judge
+): void {
+  if (reached.composed || visit.containerComposed) {
+    reportNesting(node, visit.where, reached.through, judge);
+  }
+  // A node a definition put here: its locked slots hold what the placement
+  // wrote into them, its values and its slot content, which neither the page
+  // nor the component shows on its own.
+  if (reached.composed) {
+    reportLockBreaks(node, visit.lock, reached.through, judge);
+  }
 }
 
 /** Each way a composed node's locked slots break their locks. */

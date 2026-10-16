@@ -87,35 +87,52 @@ function contentOnlyAreas(
 ): Map<string, { type: string; area: Area }> {
   const inside = new Map<string, { type: string; area: Area }>();
   if (!Array.isArray(nodes)) return inside;
-  const queue: {
-    node: unknown;
-    lock: ActiveSlotLock | undefined;
-    area: Area | undefined;
-  }[] = nodes.map(node => ({ node, lock: undefined, area: undefined }));
+  const queue: Visit[] = nodes.map(node => ({
+    node,
+    lock: undefined,
+    area: undefined,
+  }));
   for (let head = 0; head < queue.length && head < MAX_NODES; head += 1) {
     const { node, lock, area } = queue[head];
     if (!isPlainRecord(node) || typeof node.type !== "string") continue;
     if (area !== undefined && typeof node.id === "string") {
       inside.set(node.id, { type: node.type, area });
     }
-    const slots = node.slots;
-    if (!isPlainRecord(slots)) continue;
-    for (const slot of boundedOwnKeys(slots, MAX_NODES) ?? []) {
-      const children = ownEntry(slots, slot);
-      if (!Array.isArray(children)) continue;
-      const childLock = slotLockOf(definitions, node.type, slot, lock);
-      // The OUTERMOST slot that locks it, which is the lock an author meets.
-      const childArea =
-        area ??
-        (childLock === "contentOnly"
-          ? { slot, holderType: node.type }
-          : undefined);
-      for (const child of children as BlockNode[]) {
-        queue.push({ node: child, lock: childLock, area: childArea });
-      }
-    }
+    queue.push(...childVisits(node, node.type, { lock, area }, definitions));
   }
   return inside;
+}
+
+/** A node the walk reaches, with the lock and the area it sits in. */
+interface Visit {
+  node: unknown;
+  lock: ActiveSlotLock | undefined;
+  area: Area | undefined;
+}
+
+/** A node's children, each with the lock its slot passes down. */
+function childVisits(
+  node: Record<string, unknown>,
+  type: string,
+  at: { lock: ActiveSlotLock | undefined; area: Area | undefined },
+  definitions: SlotDefaultSource
+): Visit[] {
+  const slots = node.slots;
+  if (!isPlainRecord(slots)) return [];
+  const visits: Visit[] = [];
+  for (const slot of boundedOwnKeys(slots, MAX_NODES) ?? []) {
+    const children = ownEntry(slots, slot);
+    if (!Array.isArray(children)) continue;
+    const lock = slotLockOf(definitions, type, slot, at.lock);
+    // The OUTERMOST slot that locks it, which is the lock an author meets.
+    const area =
+      at.area ??
+      (lock === "contentOnly" ? { slot, holderType: type } : undefined);
+    for (const child of children as BlockNode[]) {
+      visits.push({ node: child, lock, area });
+    }
+  }
+  return visits;
 }
 
 /** The prop an exposure's path starts at: `align` of `align.desktop`. */

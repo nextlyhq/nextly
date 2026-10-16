@@ -173,33 +173,23 @@ function judge(
     composesDocuments?: boolean;
   } = {}
 ) {
+  const { status, limits, composesDocuments, ...callbacks } = options;
   return compositionIssues(
     value,
     {
       path: FIELD,
       data: {
         [FIELD]: value,
-        ...(options.status === undefined ? {} : { status: options.status }),
+        ...(status === undefined ? {} : { status }),
       },
       ...(w === undefined ? {} : { write: w }),
     },
     {
       store: STORE,
-      limits: options.limits ?? DEFAULT_LIMITS,
-      ...(options.hostsOf === undefined ? {} : { hostsOf: options.hostsOf }),
-      ...(options.onUnjudged === undefined
-        ? {}
-        : { onUnjudged: options.onUnjudged }),
-      ...(options.onHostsBroken === undefined
-        ? {}
-        : { onHostsBroken: options.onHostsBroken }),
-      ...(options.onLockedExposures === undefined
-        ? {}
-        : { onLockedExposures: options.onLockedExposures }),
-      ...(options.onHostsStillBroken === undefined
-        ? {}
-        : { onHostsStillBroken: options.onHostsStillBroken }),
-      composesDocuments: options.composesDocuments ?? true,
+      limits: limits ?? DEFAULT_LIMITS,
+      // Only the callbacks a case names: an absent one is never handed in.
+      ...callbacks,
+      composesDocuments: composesDocuments ?? true,
     }
   );
 }

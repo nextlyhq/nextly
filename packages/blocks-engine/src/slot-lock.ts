@@ -31,10 +31,8 @@
 import type { SlotLock } from "./block";
 import type { BlockNode } from "./document";
 import { isBlockType } from "./document";
-import type { NestingSource } from "./nesting";
 import { isPlainRecord } from "./plain-record";
-import { defineEntry, ownEntry } from "./safe-record";
-import { expandSlotDefaults } from "./tree";
+import { ownEntry } from "./safe-record";
 import type { SlotDefaultSource } from "./tree";
 
 /** A lock that fixes a slot's children. `false` and no declaration fix nothing. */
@@ -236,18 +234,19 @@ function emptyAsAbsent(value: unknown): unknown {
 /** Whether two stored values are the same value, compared structurally. */
 function sameValue(a: unknown, b: unknown): boolean {
   if (a === b) return true;
-  if (Array.isArray(a) || Array.isArray(b)) {
-    return (
-      Array.isArray(a) &&
-      Array.isArray(b) &&
-      a.length === b.length &&
-      a.every((entry, index) => sameValue(entry, b[index]))
-    );
-  }
+  if (Array.isArray(a) || Array.isArray(b)) return sameList(a, b);
   if (!isPlainRecord(a) || !isPlainRecord(b)) return false;
-  const keys = unionOfKeys(a, b);
-  for (const key of keys) if (!sameValue(a[key], b[key])) return false;
-  return true;
+  return [...unionOfKeys(a, b)].every(key => sameValue(a[key], b[key]));
+}
+
+/** Whether two values are lists holding the same values in the same order. */
+function sameList(a: unknown, b: unknown): boolean {
+  return (
+    Array.isArray(a) &&
+    Array.isArray(b) &&
+    a.length === b.length &&
+    a.every((entry, index) => sameValue(entry, b[index]))
+  );
 }
 
 /**
@@ -349,28 +348,48 @@ export function slotLockBreaks(
     // A slot value that is not an array is `invalid-slots`, which the node
     // check reports, and there are no children in it to compare.
     if (children !== undefined && !Array.isArray(children)) continue;
-    const held: readonly unknown[] = children ?? [];
-    const startingNodes = startingChildren(type, slot);
-    const starting = startingNodes.map(child => child.type);
-    // The lengths first, so a slot holding far more children than it starts
-    // with is refused without reading every one of them.
-    const holds =
-      held.length === starting.length &&
-      holdsStartingChildren(lock, held.map(typeOfChild), starting);
-    if (!holds) {
-      breaks.push({
-        kind: "membership",
-        slot,
-        lock,
-        stored: children !== undefined,
-        starting,
-        held,
-      });
-    } else if (lock === "contentOnly") {
-      breaks.push(...contentBreaks(slot, held, startingNodes, definitions));
-    }
+    breaks.push(
+      ...oneSlotBreaks(
+        { slot, lock, children, startingNodes: startingChildren(type, slot) },
+        definitions
+      )
+    );
   }
   return breaks;
+}
+
+/** How one locked slot breaks its lock, if it does. */
+function oneSlotBreaks(
+  at: {
+    slot: string;
+    lock: ActiveSlotLock;
+    children: readonly unknown[] | undefined;
+    startingNodes: readonly BlockNode[];
+  },
+  definitions: SlotDefaultSource
+): LockBreak[] {
+  const held: readonly unknown[] = at.children ?? [];
+  const starting = at.startingNodes.map(child => child.type);
+  // The lengths first, so a slot holding far more children than it starts
+  // with is refused without reading every one of them.
+  const holds =
+    held.length === starting.length &&
+    holdsStartingChildren(at.lock, held.map(typeOfChild), starting);
+  if (!holds) {
+    return [
+      {
+        kind: "membership",
+        slot: at.slot,
+        lock: at.lock,
+        stored: at.children !== undefined,
+        starting,
+        held,
+      },
+    ];
+  }
+  return at.lock === "contentOnly"
+    ? contentBreaks(at.slot, held, at.startingNodes, definitions)
+    : [];
 }
 
 /**
@@ -409,33 +428,4 @@ function contentBreaks(
     }
   });
   return breaks;
-}
-
-/**
- * The children an insert of a block type starts each of its slots with, read
- * once per type.
- *
- * Asked of `expandSlotDefaults` itself rather than read off the declaration,
- * so the children a save requires are the children an insert creates. An
- * entry the expander drops (an unregistered type, one the nesting rules
- * refuse, one that would seed itself) is not required either: a second reading
- * of the declaration would require children no insert could ever have made.
- */
-export function startingChildrenSource(
-  definitions: SlotDefaultSource,
-  nesting: NestingSource | undefined
-): (type: string, slot: string) => readonly BlockNode[] {
-  const byType = new Map<string, Record<string, readonly BlockNode[]>>();
-  return (type, slot) => {
-    let bySlot = byType.get(type);
-    if (bySlot === undefined) {
-      bySlot = {};
-      const expanded = expandSlotDefaults(type, definitions, nesting);
-      for (const [name, children] of Object.entries(expanded ?? {})) {
-        defineEntry(bySlot, name, children);
-      }
-      byType.set(type, bySlot);
-    }
-    return ownEntry(bySlot, slot) ?? [];
-  };
 }
