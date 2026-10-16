@@ -35,5 +35,5 @@ dashboard without a word.
 Opening a collection, a Single or another page your account may not open now
 shows "You don't have access to this collection" (or "this Single", or "this
 page") at the address you opened, with Go back and Go to dashboard. Go back
-stays inside the admin: where the page before belongs to another site, or there
-is none, it goes to the dashboard. The not-found page shares the same card.
+stays inside the admin: where the page before is not an admin page (the
+site itself, another site, or nothing), it goes to the dashboard. The not-found page shares the same card.
