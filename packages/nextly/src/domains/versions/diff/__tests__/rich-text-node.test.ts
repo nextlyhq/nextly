@@ -49,7 +49,13 @@ function doc(paragraphs: string[]) {
   };
 }
 
-const meta = { name: "content", label: "Content", type: "richText" };
+const meta = {
+  name: "content",
+  label: "Content",
+  declaredLabel: "Content",
+  path: [],
+  type: "richText",
+};
 
 /** Lexical's canonical empty document: a root with no children at all. */
 function emptyDoc() {
