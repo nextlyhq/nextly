@@ -22,7 +22,7 @@ import { FieldGroupRegistryService } from "../../field-groups/services/field-gro
 import { fieldGroupSlugList } from "../../field-groups/storage/field-group-field-type";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
 import { assertLocalizationConfigured } from "../../i18n/config/require-app-config";
-import { assertI18nArchiveWritable } from "../../i18n/migration/archive-preflight";
+import { assertFieldsCanLeaveTranslation } from "../../i18n/migration/archive-preflight";
 import { deriveCompanionSpec } from "../../i18n/migration/derive-companion-spec";
 import { buildCompanionCreateOnlySql } from "../../i18n/migration/generate-up";
 import {
@@ -183,6 +183,27 @@ export interface UpdateCollectionInput {
    * off every entry.
    */
   hooks?: StoredHookConfig[];
+}
+
+/**
+ * The order of a translated collection's migration parts, one statement block after another.
+ *
+ * A disable re-adds the translatable columns to main (the companion part), so the companion
+ * transition runs FIRST, after the archive table is ensured, then the shared ALTER. An enable or a
+ * field change runs the shared ALTER first, then seeds and drops or ADD/DROPs the companion; one
+ * that archives (a field leaving translation) ensures the archive table between the two.
+ */
+function orderLocalizedMigration(
+  isLocalized: boolean,
+  parts: { main: string; archive: string; companion: string }
+): string {
+  return (
+    isLocalized
+      ? [parts.main, parts.archive, parts.companion]
+      : [parts.archive, parts.companion, parts.main]
+  )
+    .filter(sql => sql && sql.trim())
+    .join("\n--> statement-breakpoint\n");
 }
 
 export class DynamicCollectionService extends BaseService {
@@ -777,6 +798,33 @@ export class DynamicCollectionService extends BaseService {
    * a field change ADDs/DROPs localized columns. Returns `needsArchive` so the caller prepends the
    * archive table's `CREATE IF NOT EXISTS` DDL before a disable's archive INSERT.
    */
+  /**
+   * A translated collection's whole migration: the main-table SQL, the archive table when the
+   * transition archives, and the companion transition, in the order `orderLocalizedMigration`
+   * sets. `localSql` is the same migration for this process's own database when the companion
+   * transition differs there.
+   */
+  private async buildLocalizedMigrationSQL(
+    mainSQL: string,
+    args: Parameters<DynamicCollectionService["buildCompanionTransitionSQL"]>[0]
+  ): Promise<{ sql: string; localSql?: string }> {
+    const { sql, localSql, needsArchive } =
+      await this.buildCompanionTransitionSQL(args);
+    const archive = needsArchive
+      ? this.toBreakpointSql(getI18nArchiveDdl(this.adapter.dialect))
+      : "";
+    const assemble = (companion: string) =>
+      orderLocalizedMigration(args.isLocalized, {
+        main: mainSQL,
+        archive,
+        companion,
+      });
+    return {
+      sql: assemble(sql),
+      ...(localSql !== undefined ? { localSql: assemble(localSql) } : {}),
+    };
+  }
+
   private async buildCompanionTransitionSQL(args: {
     slug: string;
     tableName: string;
@@ -1084,15 +1132,16 @@ export class DynamicCollectionService extends BaseService {
         oldUserFields,
         userDefinedFields
       );
-      // A field leaving translation keeps its other languages' values only in the archive, so
-      // the archive has to accept them before anything here is written or altered.
-      if (
-        collectionWasLocalized &&
-        collectionIsLocalized &&
-        fieldsLeavingTranslation(oldUserFields, userDefinedFields).length > 0
-      ) {
-        await assertI18nArchiveWritable(this.adapter, collectionName);
-      }
+      // A field leaving translation has preconditions of its own, asked before anything here is
+      // written or altered.
+      await assertFieldsCanLeaveTranslation({
+        adapter: this.adapter,
+        entity: collectionName,
+        oldFields: oldUserFields,
+        newFields: userDefinedFields,
+        wasLocalized: collectionWasLocalized,
+        isLocalized: collectionIsLocalized,
+      });
 
       // Pass status flags so the alter migration can ADD/DROP the
       // `status` column when the user toggles Draft/Published on or off.
@@ -1170,38 +1219,22 @@ export class DynamicCollectionService extends BaseService {
               : new Map(),
           }
         );
-        const {
-          sql: companionSQL,
-          localSql: localCompanionSQL,
-          needsArchive,
-        } = await this.buildCompanionTransitionSQL({
-          slug: collectionName,
-          tableName: collection.tableName,
-          oldFields: oldUserFields,
-          newFields: userDefinedFields,
-          wasLocalized: collectionWasLocalized,
-          isLocalized: collectionIsLocalized,
-          status: hasStatus,
-          wasStatus,
-        });
-        const archiveSQL = needsArchive
-          ? this.toBreakpointSql(getI18nArchiveDdl(this.adapter.dialect))
-          : "";
-        // A disable re-adds the translatable columns to main (companionSQL), so run the companion
-        // transition FIRST (after ensuring the archive table), then the shared ALTER. An enable /
-        // field change runs the shared ALTER first, then seeds + drops / ADD-DROPs the companion;
-        // a field change that archives (a field leaving translation) ensures the archive table
-        // between the two.
-        const assemble = (companion: string) =>
-          (collectionIsLocalized
-            ? [mainSQL, archiveSQL, companion]
-            : [archiveSQL, companion, mainSQL]
-          )
-            .filter(sql => sql && sql.trim())
-            .join("\n--> statement-breakpoint\n");
-        migrationSQL = assemble(companionSQL);
-        if (localCompanionSQL !== undefined) {
-          localMigrationSQL = assemble(localCompanionSQL);
+        const localizedMigration = await this.buildLocalizedMigrationSQL(
+          mainSQL,
+          {
+            slug: collectionName,
+            tableName: collection.tableName,
+            oldFields: oldUserFields,
+            newFields: userDefinedFields,
+            wasLocalized: collectionWasLocalized,
+            isLocalized: collectionIsLocalized,
+            status: hasStatus,
+            wasStatus,
+          }
+        );
+        migrationSQL = localizedMigration.sql;
+        if (localizedMigration.localSql !== undefined) {
+          localMigrationSQL = localizedMigration.localSql;
         }
       } else {
         const groupAssociationRename =
@@ -1254,33 +1287,22 @@ export class DynamicCollectionService extends BaseService {
             { wasStatus: wasStatusForUpdate, hasStatus }
           )
         : "";
-      const {
-        sql: companionSQL,
-        localSql: localCompanionSQL,
-        needsArchive,
-      } = await this.buildCompanionTransitionSQL({
-        slug: collectionName,
-        tableName: collection.tableName,
-        oldFields: oldUserFields,
-        newFields: oldUserFields,
-        wasLocalized: collectionWasLocalized,
-        isLocalized: collectionIsLocalized,
-        status: hasStatus,
-        wasStatus: wasStatusForUpdate,
-      });
-      const archiveSQL = needsArchive
-        ? this.toBreakpointSql(getI18nArchiveDdl(this.adapter.dialect))
-        : "";
-      const assemble = (companion: string) =>
-        (collectionIsLocalized
-          ? [mainSQL, companion]
-          : [archiveSQL, companion, mainSQL]
-        )
-          .filter(sql => sql && sql.trim())
-          .join("\n--> statement-breakpoint\n");
-      migrationSQL = assemble(companionSQL);
-      if (localCompanionSQL !== undefined) {
-        localMigrationSQL = assemble(localCompanionSQL);
+      const localizedMigration = await this.buildLocalizedMigrationSQL(
+        mainSQL,
+        {
+          slug: collectionName,
+          tableName: collection.tableName,
+          oldFields: oldUserFields,
+          newFields: oldUserFields,
+          wasLocalized: collectionWasLocalized,
+          isLocalized: collectionIsLocalized,
+          status: hasStatus,
+          wasStatus: wasStatusForUpdate,
+        }
+      );
+      migrationSQL = localizedMigration.sql;
+      if (localizedMigration.localSql !== undefined) {
+        localMigrationSQL = localizedMigration.localSql;
       }
       migrationFileName = `${Date.now()}_i18n_${collectionName}.sql`;
     } else if (statusFlipped) {

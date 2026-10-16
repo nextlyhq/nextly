@@ -32,11 +32,8 @@ import {
   respondMutation,
 } from "../../api/response-shapes";
 import { assertLocalizationConfigured } from "../../domains/i18n/config/require-app-config";
-import { assertI18nArchiveWritable } from "../../domains/i18n/migration/archive-preflight";
-import {
-  buildCompanionTransitionStatements,
-  fieldsLeavingTranslation,
-} from "../../domains/i18n/migration/reconcile-companion";
+import { assertFieldsCanLeaveTranslation } from "../../domains/i18n/migration/archive-preflight";
+import { buildCompanionTransitionStatements } from "../../domains/i18n/migration/reconcile-companion";
 import {
   companionHasStatusColumn,
   localizedColumnsOnMain,
@@ -868,18 +865,16 @@ const COLLECTIONS_METHODS: Record<
         },
       });
 
-      // A field leaving translation keeps its other languages' values only in the archive, so
-      // the archive has to accept them before the push alters anything.
-      if (
-        wasLocalized &&
-        isLocalized &&
-        fieldsLeavingTranslation(
-          (collection.fields ?? []) as unknown as FieldDefinition[],
-          fields as unknown as FieldDefinition[]
-        ).length > 0
-      ) {
-        await assertI18nArchiveWritable(adapter, String(p.collectionName));
-      }
+      // A field leaving translation has preconditions of its own, asked before the push alters
+      // anything.
+      await assertFieldsCanLeaveTranslation({
+        adapter,
+        entity: String(p.collectionName),
+        oldFields: (collection.fields ?? []) as unknown as FieldDefinition[],
+        newFields: fields as unknown as FieldDefinition[],
+        wasLocalized,
+        isLocalized,
+      });
 
       const result = await apply(desired, "ui", {
         promptChannel: "auto",

@@ -37,7 +37,7 @@ export interface I18nRestoreCommandOptions {
   collection?: string;
   /** Restore only this language. Omit to restore every archived language. */
   locale?: string;
-  /** Restore only this field's archived values, by its column name. */
+  /** Restore only this field's archived values, by its name or its column name. */
   field?: string;
   /** Delete the replayed rows from the archive once written. */
   purge?: boolean;

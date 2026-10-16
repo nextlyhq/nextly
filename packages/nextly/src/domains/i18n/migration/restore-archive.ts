@@ -22,6 +22,7 @@ import { and, eq, lte } from "drizzle-orm";
 
 import { NextlyError } from "../../../errors/nextly-error";
 import { nextlyI18nArchiveTables } from "../../../schemas/nextly-i18n-archive";
+import { toSnakeCase } from "../../schema/services/field-column-descriptor";
 import { COMPANION_UPDATED_AT_COLUMN } from "../companion-columns";
 import type { CompanionIntrospectAdapter } from "../runtime/companion-io";
 import {
@@ -55,8 +56,9 @@ export interface RestoreArchiveArgs {
   /** Restrict the replay to one language. Omit to restore every archived language. */
   locale?: string;
   /**
-   * Restrict the replay to one field's archived values, by its column name. A field archived
-   * when it stopped being translated is restored this way once it is translated again.
+   * Restrict the replay to one field's archived values, by its name (`subTitle`) or its column
+   * name (`sub_title`). A field archived when it stopped being translated is restored this way
+   * once it is translated again.
    */
   field?: string;
   /**
@@ -97,10 +99,41 @@ interface ArchiveRow {
  * column is handed back to the driver as a string and relies on the parameter being coerced to
  * the target column type.
  */
+/**
+ * Every archived field needs a translated column to come back to. One the entity no longer
+ * translates has none, and replaying it would fail part-way, after other languages had already
+ * been written; so the replay is refused before it starts, naming the fields.
+ */
+async function refuseFieldsNotTranslatedNow(
+  adapter: RestoreArchiveArgs["adapter"],
+  collection: string,
+  companionTableName: string,
+  archivedFields: readonly string[]
+): Promise<void> {
+  const missing: string[] = [];
+  for (const name of new Set(archivedFields)) {
+    if (!(await companionHasColumn(adapter, companionTableName, name))) {
+      missing.push(name);
+    }
+  }
+  if (missing.length === 0) return;
+  const one = missing.length === 1;
+  throw NextlyError.conflict({
+    reason: "state",
+    message:
+      `${missing.map(name => `"${name}"`).join(", ")} ${one ? "is" : "are"} not translated now, ` +
+      `so the archived values have nowhere to go. Make ${one ? "it" : "them"} translated again, then restore.`,
+    logContext: { collection, companionTableName, missing },
+  });
+}
+
 export async function restoreI18nArchive(
   args: RestoreArchiveArgs
 ): Promise<RestoreArchiveResult> {
-  const { adapter, collection, companionTableName, locale, field } = args;
+  const { adapter, collection, companionTableName, locale } = args;
+  // The archive keeps a field's values under its column name. The conversion is the column
+  // descriptor's, and a column name passes through it unchanged.
+  const field = args.field !== undefined ? toSnakeCase(args.field) : undefined;
   const db = adapter.getDrizzle<ArchiveReadWriteDb>();
   const { nextlyI18nArchive } = nextlyI18nArchiveTables(adapter.dialect);
 
@@ -125,25 +158,12 @@ export async function restoreI18nArchive(
     return { rowsRead: 0, rowsRestored: 0, locales: [] };
   }
 
-  // Every archived field needs a translated column to come back to. One the entity no longer
-  // translates has none, and replaying it would fail part-way, after other languages had already
-  // been written; so the replay is refused before it starts, naming the fields.
-  const fields = [...new Set(rows.map(r => r.field))];
-  const missing: string[] = [];
-  for (const name of fields) {
-    if (!(await companionHasColumn(adapter, companionTableName, name))) {
-      missing.push(name);
-    }
-  }
-  if (missing.length > 0) {
-    throw NextlyError.conflict({
-      reason: "state",
-      message:
-        `${missing.map(name => `"${name}"`).join(", ")} ${missing.length === 1 ? "is" : "are"} not translated now, ` +
-        `so the archived values have nowhere to go. Make ${missing.length === 1 ? "it" : "them"} translated again, then restore.`,
-      logContext: { collection, companionTableName, missing },
-    });
-  }
+  await refuseFieldsNotTranslatedNow(
+    adapter,
+    collection,
+    companionTableName,
+    rows.map(r => r.field)
+  );
 
   // Collapse the per-field archive rows back into one companion row per (entry, locale) so each
   // language is written in a single upsert rather than once per field.

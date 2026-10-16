@@ -10,6 +10,7 @@
  */
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
+import { defineCollection, text } from "../../../config";
 import { dispatchCollections } from "../../../dispatcher/handlers/collection-dispatcher";
 import { dispatchComponents } from "../../../dispatcher/handlers/component-dispatcher";
 import { dispatchSingles } from "../../../dispatcher/handlers/single-dispatcher";
@@ -21,6 +22,7 @@ import {
 } from "../../../plugins/test-nextly";
 import type { ServiceContainer } from "../../../services";
 import type { SingleEntryService } from "../../singles/services/single-entry-service";
+import { getI18nArchiveDdl } from "../../../schemas/nextly-i18n-archive/ddl";
 import { restoreI18nArchive } from "../migration/restore-archive";
 
 const LOCALES = ["en", "es", "ar"];
@@ -268,6 +270,27 @@ describeEachDialect("a field that stops being translated", dialect => {
       },
     },
     {
+      path: "a Single's schema is applied with the schema dialog",
+      entity: {
+        slug: "hero",
+        table: "single_hero",
+        registry: "dynamic_singles",
+      },
+      seed: seedSingle,
+      change: async () => {
+        await dispatchSingles(
+          "applySingleSchemaChanges",
+          { slug: "hero" },
+          {
+            fields: SHARED,
+            confirmed: true,
+            localized: true,
+            schemaVersion: await schemaVersionOf("dynamic_singles", "hero"),
+          }
+        );
+      },
+    },
+    {
       path: "a field group's schema is applied with the field shared",
       entity: {
         slug: "promo",
@@ -352,6 +375,93 @@ describeEachDialect("a field that stops being translated", dialect => {
     }
   );
 
+  /** The two ways a collection's fields change, each taking the new field list. */
+  const COLLECTION_CHANGES = [
+    {
+      path: "the builder saves the field alone",
+      change: async (fields: unknown[]) => {
+        const saved = await handler().updateCollection(
+          { collectionName: "posts" },
+          { fields }
+        );
+        if (!saved.success) throw new Error(JSON.stringify(saved));
+      },
+    },
+    {
+      path: "the builder applies the change with the schema dialog",
+      change: async (fields: unknown[]) => {
+        await dispatchCollections(
+          {} as ServiceContainer,
+          "applySchemaChanges",
+          { collectionName: "posts" },
+          {
+            fields,
+            confirmed: true,
+            localized: true,
+            schemaVersion: await schemaVersionOf(
+              "dynamic_collections",
+              "posts"
+            ),
+          }
+        );
+      },
+    },
+  ];
+
+  /** A translated collection whose two entries hold different values of `code`. */
+  async function seedCodes(code: Record<string, unknown>): Promise<void> {
+    const created = await handler().createCollection({
+      name: "posts",
+      label: "Post",
+      localized: true,
+      fields: [code],
+    });
+    expect(created.success, JSON.stringify(created)).toBe(true);
+    const entries = handler().getEntryService();
+    for (const value of ["A-1", "B-2"]) {
+      const entry = await entries.createEntry(
+        { collectionName: "posts", overrideAccess: true, locale: "en" },
+        { code: value }
+      );
+      expect(entry.success, JSON.stringify(entry)).toBe(true);
+    }
+  }
+
+  it.each(
+    COLLECTION_CHANGES.flatMap(c => [
+      { ...c, setting: "required", flags: { required: true } },
+      { ...c, setting: "unique", flags: { unique: true } },
+    ])
+  )(
+    "refuses a $setting field and changes nothing when $path",
+    async ({ change, flags }) => {
+      // The shared column is created before the values are copied into it, so every row would
+      // briefly hold the same placeholder or none, which neither setting accepts.
+      const code = { name: "code", type: "text", length: 64, ...flags };
+      await seedCodes(code);
+
+      const refusal = await change([{ ...code, localized: false }]).then(
+        () => undefined,
+        (error: unknown) => error
+      );
+
+      // The save path reports the refusal in its result, the dialog path throws it; either way it
+      // names the field and why.
+      const reported =
+        refusal instanceof Error
+          ? `${refusal.message} ${JSON.stringify((refusal as { publicData?: unknown }).publicData ?? null)}`
+          : String(refusal);
+      expect(reported).toMatch(/CONSTRAINED_FIELD_LEAVES_TRANSLATION/);
+      expect(reported).toMatch(/code\W* is (required|unique)/);
+
+      expect(await columnsOf("dc_posts")).not.toContain("code");
+      const kept = await query<{ code: string }>(
+        `SELECT ${quote(dialect, "code")} AS code FROM ${quote(dialect, "dc_posts_locales")} ORDER BY ${quote(dialect, "code")}`
+      );
+      expect(kept.map(row => row.code)).toEqual(["A-1", "B-2"]);
+    }
+  );
+
   it("brings the archived values back once the field is translated again", async () => {
     const id = await seedCollection();
     const shared = await handler().updateCollection(
@@ -388,5 +498,49 @@ describeEachDialect("a field that stops being translated", dialect => {
       { locale: "ar", heading: VALUES.ar },
       { locale: "es", heading: VALUES.es },
     ]);
+  });
+  it("restores a field by the name its author knows, not only by its column", async () => {
+    // A field defined in code keeps the name its author gave it, so `subTitle` is stored as
+    // `sub_title` and archived under that column; the Schema Builder lower-cases names, so only a
+    // code-defined field shows the difference.
+    await current.destroy();
+    current = await createTestNextly({
+      dialect,
+      collections: [
+        defineCollection({
+          slug: "articles",
+          localized: true,
+          fields: [text({ name: "subTitle" })],
+        }),
+      ],
+      localization: { locales: LOCALES, defaultLocale: "en" },
+    });
+    const created = await current.nextly.create({
+      collection: "articles",
+      data: { subTitle: VALUES.en },
+      overrideAccess: true,
+    });
+    const id = String(created.item.id);
+    for (const statement of getI18nArchiveDdl(dialect)) await query(statement);
+    await query(
+      `INSERT INTO ${quote(dialect, "nextly_i18n_archive")} (${["collection", "entry_id", "locale", "field", "value"].map(c => quote(dialect, c)).join(", ")}) ` +
+        `VALUES ('articles', '${id}', 'es', 'sub_title', '${VALUES.es}')`
+    );
+
+    const result = await restoreI18nArchive({
+      adapter: current.adapter as unknown as Parameters<
+        typeof restoreI18nArchive
+      >[0]["adapter"],
+      collection: "articles",
+      companionTableName: "dc_articles_locales",
+      field: "subTitle",
+    });
+
+    expect(result.rowsRestored).toBe(1);
+    const [back] = await query<{ value: string | null }>(
+      `SELECT ${quote(dialect, "sub_title")} AS value FROM ${quote(dialect, "dc_articles_locales")} ` +
+        `WHERE ${quote(dialect, "_parent")} = '${id}' AND ${quote(dialect, "_locale")} = 'es'`
+    );
+    expect(back?.value).toBe(VALUES.es);
   });
 });

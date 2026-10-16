@@ -31,8 +31,7 @@ import {
 } from "../../domains/field-groups/services/field-group-table-provisioning";
 import { resolveFieldGroupRegistryName } from "../../domains/field-groups/storage/resolve-storage-names";
 import { assertLocalizationConfigured } from "../../domains/i18n/config/require-app-config";
-import { assertI18nArchiveWritable } from "../../domains/i18n/migration/archive-preflight";
-import { fieldsLeavingTranslation } from "../../domains/i18n/migration/reconcile-companion";
+import { assertFieldsCanLeaveTranslation } from "../../domains/i18n/migration/archive-preflight";
 import { translatePipelinePreviewToLegacy } from "../../domains/schema/legacy-preview/translate";
 import { RealClassifier } from "../../domains/schema/pipeline/classifier/classifier";
 import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/database-url";
@@ -522,18 +521,16 @@ export const COMPONENTS_METHODS: Record<
 
           const adapter = getAdapterFromDI();
           if (!adapter) throw new Error("Database adapter not initialized");
-          // A field leaving translation keeps its other languages' values only in the archive,
-          // so the archive has to accept them before the apply alters anything.
-          if (
-            wasLocalized &&
-            isLocalized &&
-            fieldsLeavingTranslation(
-              (component.fields ?? []) as unknown as FieldDefinition[],
-              fields as unknown as FieldDefinition[]
-            ).length > 0
-          ) {
-            await assertI18nArchiveWritable(adapter, slug);
-          }
+          // A field leaving translation has preconditions of its own, asked before the apply
+          // alters anything.
+          await assertFieldsCanLeaveTranslation({
+            adapter,
+            entity: slug,
+            oldFields: (component.fields ?? []) as unknown as FieldDefinition[],
+            newFields: fields as unknown as FieldDefinition[],
+            wasLocalized,
+            isLocalized,
+          });
           // 🔴 Resolved BEFORE the apply. The runtime refresh at the end of this
           // handler suppresses its own failures by design, so a probe placed there
           // could let the handler report success over an unregistered or stale

@@ -19,6 +19,10 @@ import {
 import { isIdempotencyError } from "../../schema/pipeline/sql-statement-utils";
 
 import { lit, q } from "./ddl-types";
+import {
+  type CompanionFieldLike,
+  fieldsLeavingTranslation,
+} from "./reconcile-companion";
 
 const ARCHIVE = "nextly_i18n_archive";
 
@@ -80,4 +84,81 @@ export async function assertI18nArchiveWritable(
       cause: error instanceof Error ? error : undefined,
     });
   }
+}
+
+/** A field as a schema change describes it, with the flags the preflight reads. */
+type LeavingFieldLike = CompanionFieldLike & {
+  required?: boolean;
+  unique?: boolean;
+};
+
+/**
+ * The settings a field cannot carry while it stops being translated, as the Schema Builder names
+ * them.
+ */
+function constraintsOf(field: LeavingFieldLike): string[] {
+  return [
+    ...(field.required === true ? ["Required"] : []),
+    ...(field.unique === true ? ["Unique"] : []),
+  ];
+}
+
+/**
+ * The precondition of every schema change that can make a translated field shared, asked before
+ * the change alters anything. It is one call so the collection save, the collection, Single and
+ * field-group schema dialogs and the Single save cannot answer it differently.
+ *
+ * Two things are refused here:
+ * - A required or unique field. Its shared column is created, and its constraints checked, before
+ *   the default language's values are copied into it, so at that moment every existing row holds
+ *   the same placeholder or none. A required column then has nothing valid to hold (each dialect
+ *   and path fails differently), and a unique one fails its check part-way through the change.
+ * - An archive that cannot take a row (`assertI18nArchiveWritable`), since the other languages'
+ *   values are kept only there.
+ *
+ * Nothing is asked when no field leaves translation, or when the entity is not translated before
+ * and after the change (turning translation off for the whole entity archives by its own path).
+ *
+ * @throws NextlyError `VALIDATION_ERROR` naming each constrained field and the order that works,
+ *   or `NEXTLY_MIGRATION_APPLY_FAILED` from the archive check
+ */
+export async function assertFieldsCanLeaveTranslation(args: {
+  adapter: DrizzleAdapter;
+  /** The collection, Single or field group being changed. */
+  entity: string;
+  oldFields: readonly LeavingFieldLike[];
+  newFields: readonly LeavingFieldLike[];
+  wasLocalized: boolean;
+  isLocalized: boolean;
+}): Promise<void> {
+  if (!args.wasLocalized || !args.isLocalized) return;
+  const leaving = new Set(
+    fieldsLeavingTranslation(args.oldFields, args.newFields)
+  );
+  if (leaving.size === 0) return;
+
+  const constrained = args.newFields.filter(
+    f => leaving.has(f.name) && constraintsOf(f).length > 0
+  );
+  if (constrained.length > 0) {
+    throw NextlyError.validation({
+      errors: constrained.map(f => {
+        const settings = constraintsOf(f).join(" and ");
+        return {
+          path: `fields.${f.name}`,
+          code: "CONSTRAINED_FIELD_LEAVES_TRANSLATION",
+          message:
+            `"${f.name}" is ${settings.toLowerCase()}, so it cannot stop being translated in the ` +
+            `same change. Turn off ${settings} and save, make the field shared and save, then ` +
+            `turn ${settings} back on.`,
+        };
+      }),
+      logContext: {
+        entity: args.entity,
+        fields: constrained.map(f => f.name),
+      },
+    });
+  }
+
+  await assertI18nArchiveWritable(args.adapter, args.entity);
 }
