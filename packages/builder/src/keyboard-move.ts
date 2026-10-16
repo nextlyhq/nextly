@@ -62,10 +62,13 @@
  * @module keyboard-move
  */
 import {
+  COMPONENT_INSTANCE_TYPE,
   DEFAULT_SLOT,
   getBlock,
   locateNode,
+  readableDefinition,
   type BlockNode,
+  type ComponentLookup,
 } from "@nextlyhq/blocks-engine";
 
 import type { OpPosition, SlotAddress } from "./ops";
@@ -153,6 +156,51 @@ function positionIn(
 }
 
 /**
+ * The slots `container`'s definition declares, or `undefined` when there is no
+ * definition to read.
+ *
+ * A component instance is not a registered block: what it renders is the
+ * slots its COMPONENT exposes, read from the component's definition through
+ * the lookup the canvas was given. Anything else is read from the block
+ * registry. A lookup that raises is no answer rather than an error, the same
+ * reading the engine gives it when placing an instance.
+ */
+function declaredSlots(
+  container: BlockNode,
+  components: ComponentLookup | undefined
+): readonly string[] | undefined {
+  return container.type === COMPONENT_INSTANCE_TYPE
+    ? exposedSlots(container, components)
+    : registeredSlots(container.type);
+}
+
+/** The slots a registered block type declares, or `undefined` for none registered. */
+function registeredSlots(type: string): readonly string[] | undefined {
+  const definition = getBlock(type);
+  return definition === undefined
+    ? undefined
+    : Object.keys(definition.slots ?? {});
+}
+
+/** The slots an instance's component exposes, or `undefined` when unreadable. */
+function exposedSlots(
+  instance: BlockNode,
+  components: ComponentLookup | undefined
+): readonly string[] | undefined {
+  const componentId = (instance.props as Record<string, unknown> | undefined)
+    ?.componentId;
+  if (typeof componentId !== "string") return undefined;
+  try {
+    const definition = readableDefinition(components?.get(componentId));
+    return definition === undefined
+      ? undefined
+      : Object.keys(definition.slots ?? {});
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * The slot a block indented into `container` enters, or `null` when no single
  * slot can be named.
  *
@@ -161,16 +209,27 @@ function positionIn(
  * and invisible, selected in the inspector and gone from the canvas.
  *
  * - One declared slot: that one, whatever it is called, so a plugin container
- *   rendering `items` or `default` receives the block where it draws children.
+ *   or a component exposing `items` or `default` receives the block where it
+ *   draws children.
  * - Several: the engine's default slot when it is among them, the region a
  *   keyboard author reaches without choosing between regions they cannot see;
  *   otherwise `null`.
- * - None, or no definition at all: the engine's default slot. Whether the
- *   target may hold children is the nesting rules' question, not this one's,
- *   and they refuse the move for a block that cannot.
+ * - None declared: the engine's default slot. Whether the target may hold
+ *   children is the nesting rules' question, not this one's, and they refuse
+ *   the move for a block that cannot.
+ * - No definition to read: the one slot the container already holds, when it
+ *   holds exactly one, since that is a slot something renders; otherwise the
+ *   engine's default slot.
  */
-function indentSlot(container: BlockNode): string | null {
-  const declared = Object.keys(getBlock(container.type)?.slots ?? {});
+function indentSlot(
+  container: BlockNode,
+  components: ComponentLookup | undefined
+): string | null {
+  const declared = declaredSlots(container, components);
+  if (declared === undefined) {
+    const held = Object.keys(container.slots ?? {});
+    return held.length === 1 ? (held[0] ?? DEFAULT_SLOT) : DEFAULT_SLOT;
+  }
   if (declared.length === 1) return declared[0] ?? DEFAULT_SLOT;
   if (declared.length === 0 || declared.includes(DEFAULT_SLOT)) {
     return DEFAULT_SLOT;
@@ -184,6 +243,8 @@ function indentSlot(container: BlockNode): string | null {
  * @param nodes - the document's top-level blocks
  * @param selectedId - the block the author has selected
  * @param direction - which move they asked for
+ * @param components - the component definitions the canvas draws, so an
+ * indent into a component instance enters a slot its component exposes
  * @returns the position to move it to, or `null` when that move is not
  * available — the id is not in the document, the block is already at the end of
  * its container, there is no sibling above it to indent into, that sibling has
@@ -209,7 +270,8 @@ function indentSlot(container: BlockNode): string | null {
 export function keyboardMovePosition(
   nodes: BlockNode[],
   selectedId: string,
-  direction: MoveDirection
+  direction: MoveDirection,
+  components?: ComponentLookup
 ): KeyboardMove | null {
   const here = locateNode(nodes, selectedId);
   if (here === undefined) return null;
@@ -252,7 +314,7 @@ export function keyboardMovePosition(
   // container has no parent-to-be that would not be itself.
   if (above === undefined) return null;
 
-  const slot = indentSlot(above);
+  const slot = indentSlot(above, components);
   // A container with several regions and none of them the default: which one
   // the author meant is not something a single key press can say, so the move
   // is not offered rather than guessed.

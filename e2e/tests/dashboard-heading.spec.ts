@@ -130,12 +130,14 @@ async function placeSeedCard(page: Page): Promise<void> {
     const layout = (Array.isArray(body.placements) ? body : body.data) as {
       placements: Array<Record<string, unknown>>;
     };
+    // The array order IS the dashboard's order, so the card goes first by
+    // being first in the list; it is drawn full width, as the seed card is.
     if (!layout.placements.some(p => p.widgetId === SEED_WIDGET_ID)) {
       layout.placements.unshift({
         id: "e2e-seed-card",
         widgetId: SEED_WIDGET_ID,
-        order: -1,
-        hidden: false,
+        width: "full",
+        removed: false,
       });
     }
     await route.fulfill({ response, json: body });

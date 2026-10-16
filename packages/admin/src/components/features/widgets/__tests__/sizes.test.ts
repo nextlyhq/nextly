@@ -1,85 +1,181 @@
 /**
- * The size -> span map is the only place a widget's width is decided, so these
- * assert the RENDERED class text rather than a lookup succeeding.
+ * The width a card is DRAWN at, and the class text that draws it.
+ *
+ * Two questions, both decided in `sizes.ts` and nowhere else: which of the
+ * five widths a stored placement is drawn at once its widget's allowed widths
+ * are known, and which span classes draw that width at each container band.
+ * The classes are asserted as the RENDERED text, because Tailwind builds a
+ * rule only for class text it finds in source.
  */
 import { describe, expect, it } from "vitest";
 
+import type { WidgetWidth } from "@admin/types/dashboard/widgets";
+
 import {
-  WIDGET_SPAN_CLASSES,
+  WIDGET_WIDTHS,
+  WIDTH_NAMES,
+  WIDTH_SPAN_CLASSES,
+  cardSpanClass,
+  drawnWidth,
   legacySizeToWidgetSize,
-  widgetSpanClass,
+  widthFromDeclaredSize,
 } from "../sizes";
 
-import type { WidgetSize } from "nextly/config";
-
-const ALL_SIZES: WidgetSize[] = ["sm", "md", "lg", "xl", "full"];
-
-describe("widget span classes", () => {
-  it("gives every size a full-width base span, so a phone is one column", () => {
-    for (const size of ALL_SIZES) {
-      const classes = widgetSpanClass(size).split(" ");
-      expect(classes).toContain("col-span-12");
+describe("the width a stored placement is drawn at", () => {
+  it("is the stored width while the widget still allows it", () => {
+    for (const width of WIDGET_WIDTHS) {
+      expect(drawnWidth(width, WIDGET_WIDTHS)).toBe(width);
     }
   });
 
-  it("never emits an unprefixed span narrower than 12", () => {
-    // The defect in the grid this replaces: `col-span-6` with no breakpoint
-    // prefix, which is half a phone screen.
-    for (const size of ALL_SIZES) {
-      const unprefixed = widgetSpanClass(size)
+  it.each<[string, WidgetWidth[], WidgetWidth]>([
+    // A tie: half (6 of 12 tracks) is 2 tracks from a third and from two
+    // thirds, and the WIDER one wins.
+    ["half", ["third", "twoThirds"], "twoThirds"],
+    // Nearness is measured in TRACKS, the width a reader sees, not in steps
+    // of the width list: these are one step either way, yet one side is
+    // nearer on screen, and that side wins.
+    ["third", ["quarter", "half"], "quarter"],
+    ["twoThirds", ["half", "full"], "half"],
+    ["half", ["quarter", "full"], "quarter"],
+    // Not ties: the nearer one wins, whichever side it is on.
+    ["quarter", ["half", "full"], "half"],
+    ["full", ["third"], "third"],
+    ["full", ["quarter", "half"], "half"],
+    ["quarter", ["third", "full"], "third"],
+    ["twoThirds", ["quarter", "half"], "half"],
+  ])(
+    "draws stored %s at the nearest allowed of %j, the wider on a tie",
+    (stored, allowed, drawn) => {
+      expect(drawnWidth(stored, allowed)).toBe(drawn);
+    }
+  );
+
+  it("does not depend on the order the allowed widths arrive in", () => {
+    // The server sends them narrowest first; a tie must not be decided by
+    // which of the two was met first in a list that happened to be reversed.
+    expect(drawnWidth("half", ["twoThirds", "third"])).toBe("twoThirds");
+  });
+
+  it("draws a width from a newer core as full, then as the nearest allowed", () => {
+    expect(drawnWidth("enormous", undefined)).toBe("full");
+    expect(drawnWidth("enormous", WIDGET_WIDTHS)).toBe("full");
+    expect(drawnWidth("enormous", ["quarter", "half"])).toBe("half");
+  });
+
+  it("does not read inherited names as widths", () => {
+    // A plain lookup answers `Object.prototype` members for these, so the
+    // fallback never runs. The value comes from storage over the wire.
+    for (const name of ["constructor", "toString", "__proto__"]) {
+      expect(drawnWidth(name, undefined)).toBe("full");
+    }
+  });
+
+  it("keeps the stored width when nothing says what the widget allows", () => {
+    expect(drawnWidth("third", undefined)).toBe("third");
+    expect(drawnWidth("third", [])).toBe("third");
+  });
+});
+
+describe("span classes", () => {
+  it("draws every width full below 640px of dashboard width", () => {
+    for (const width of WIDGET_WIDTHS) {
+      const unprefixed = WIDTH_SPAN_CLASSES[width]
         .split(" ")
         .filter(c => !c.includes(":"));
       expect(unprefixed).toEqual(["col-span-12"]);
     }
   });
 
-  it("narrows only at md and lg, and to the declared column counts", () => {
-    expect(widgetSpanClass("sm")).toBe(
-      "col-span-12 md:col-span-6 lg:col-span-3"
-    );
-    expect(widgetSpanClass("md")).toBe(
-      "col-span-12 md:col-span-6 lg:col-span-4"
-    );
-    expect(widgetSpanClass("lg")).toBe(
-      "col-span-12 md:col-span-12 lg:col-span-6"
-    );
-    expect(widgetSpanClass("xl")).toBe(
-      "col-span-12 md:col-span-12 lg:col-span-8"
-    );
-    expect(widgetSpanClass("full")).toBe("col-span-12");
+  it("draws the three narrow widths at half, and the wide two full, from 640px", () => {
+    // The middle band: 640-1023px of the DASHBOARD's own width.
+    const at640 = (width: WidgetWidth) =>
+      WIDTH_SPAN_CLASSES[width]
+        .split(" ")
+        .find(c => c.startsWith("@min-[640px]/dashboard:"));
+    expect(at640("quarter")).toBe("@min-[640px]/dashboard:col-span-6");
+    expect(at640("third")).toBe("@min-[640px]/dashboard:col-span-6");
+    expect(at640("half")).toBe("@min-[640px]/dashboard:col-span-6");
+    expect(at640("twoThirds")).toBe("@min-[640px]/dashboard:col-span-12");
+    // Full is full in every band, so it needs no prefixed class at all.
+    expect(at640("full")).toBeUndefined();
   });
 
-  it("uses only md and lg as breakpoints", () => {
-    for (const size of ALL_SIZES) {
-      for (const cls of widgetSpanClass(size).split(" ")) {
-        const [prefix] = cls.split(":");
-        if (cls.includes(":")) expect(["md", "lg"]).toContain(prefix);
+  it("draws each width as chosen from 1024px: 3, 4, 6, 8 and 12 tracks", () => {
+    const at1024 = (width: WidgetWidth) =>
+      WIDTH_SPAN_CLASSES[width]
+        .split(" ")
+        .find(c => c.startsWith("@min-[1024px]/dashboard:"));
+    expect(at1024("quarter")).toBe("@min-[1024px]/dashboard:col-span-3");
+    expect(at1024("third")).toBe("@min-[1024px]/dashboard:col-span-4");
+    expect(at1024("half")).toBe("@min-[1024px]/dashboard:col-span-6");
+    expect(at1024("twoThirds")).toBe("@min-[1024px]/dashboard:col-span-8");
+    expect(WIDTH_SPAN_CLASSES.full).toBe("col-span-12");
+  });
+
+  it("answers to the dashboard's own container, never the viewport", () => {
+    // A viewport breakpoint (`md:`, `lg:`) would size cards by the window, so
+    // a dashboard beside an open sidebar would draw columns it has no room for.
+    for (const width of WIDGET_WIDTHS) {
+      for (const cls of WIDTH_SPAN_CLASSES[width].split(" ")) {
+        if (cls.includes(":"))
+          expect(cls).toMatch(/^@min-\[\d+px\]\/dashboard:/);
       }
     }
   });
 
   it("writes every class out in full, because Tailwind scans source text", () => {
-    // A `col-span-${n}` template literal produces no class in the built
-    // stylesheet. Assert the map holds literal strings with no interpolation
-    // residue rather than trusting the call site.
-    for (const value of Object.values(WIDGET_SPAN_CLASSES)) {
+    for (const value of Object.values(WIDTH_SPAN_CLASSES)) {
       expect(value).not.toMatch(/[$`{}]/);
-      expect(value).toMatch(/^col-span-12( (md|lg):col-span-\d+)*$/);
     }
   });
 
-  it("falls back to full width for a size the registry does not know", () => {
-    expect(widgetSpanClass(undefined)).toBe("col-span-12");
-    expect(widgetSpanClass("enormous" as WidgetSize)).toBe("col-span-12");
+  it("draws a card through the nearest allowed width", () => {
+    // The one function the grid calls: a stored half the widget no longer
+    // allows is drawn at two-thirds, not at half and not full.
+    expect(cardSpanClass("half", ["third", "twoThirds"])).toBe(
+      WIDTH_SPAN_CLASSES.twoThirds
+    );
+    expect(cardSpanClass("enormous", undefined)).toBe(WIDTH_SPAN_CLASSES.full);
+  });
+});
+
+describe("what each width is called", () => {
+  it("names every width and its fraction", () => {
+    expect(
+      WIDGET_WIDTHS.map(
+        w => `${WIDTH_NAMES[w].name} ${WIDTH_NAMES[w].fraction}`
+      )
+    ).toEqual([
+      "Quarter width ¼",
+      "Third width ⅓",
+      "Half width ½",
+      "Two-thirds width ⅔",
+      "Full width Full",
+    ]);
+  });
+});
+
+describe("a widget's declared size, before an arrangement is read", () => {
+  it("maps each size onto the width of the same span", () => {
+    expect(widthFromDeclaredSize("sm")).toBe("quarter");
+    expect(widthFromDeclaredSize("md")).toBe("third");
+    expect(widthFromDeclaredSize("lg")).toBe("half");
+    expect(widthFromDeclaredSize("xl")).toBe("twoThirds");
+    expect(widthFromDeclaredSize("full")).toBe("full");
+  });
+
+  it("draws a size it does not know, or none, full", () => {
+    expect(widthFromDeclaredSize(undefined)).toBe("full");
+    expect(widthFromDeclaredSize("enormous")).toBe("full");
+    expect(widthFromDeclaredSize("constructor")).toBe("full");
   });
 });
 
 describe("legacySizeToWidgetSize", () => {
-  it("maps the deprecated half alias onto the six-column size", () => {
+  it("maps the deprecated half alias onto the half-width size", () => {
     expect(legacySizeToWidgetSize("half")).toBe("lg");
-    expect(widgetSpanClass(legacySizeToWidgetSize("half"))).toContain(
-      "lg:col-span-6"
-    );
+    expect(widthFromDeclaredSize(legacySizeToWidgetSize("half"))).toBe("half");
   });
 
   it("maps the deprecated full alias onto full", () => {

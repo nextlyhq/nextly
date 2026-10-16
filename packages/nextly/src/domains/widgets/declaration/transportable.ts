@@ -64,3 +64,80 @@ export type TransportableValue =
   | TransportablePrimitive
   | readonly TransportableValue[]
   | { readonly [key: string]: TransportableValue };
+
+/**
+ * Why a value would not reach the browser as itself, or `undefined` when it
+ * would: the run-time half of {@link Transportable}, for what no type saw (a
+ * plain JavaScript declaration's example, and anything built at run time).
+ *
+ * The same rules: strings, booleans, null, finite numbers, arrays and plain
+ * objects, with an absent (`undefined`) property allowed because JSON leaving
+ * it out changes nothing. A cycle is refused, since `JSON.stringify` throws on
+ * one, and so is any object that is not plain (`Date`, `Map`, a class
+ * instance), which JSON would turn into something else.
+ */
+export function transportableProblem(value: unknown): string | undefined {
+  return problemAt(value, "the value", new Set());
+}
+
+function problemAt(
+  value: unknown,
+  at: string,
+  ancestors: Set<object>
+): string | undefined {
+  if (value === null) return undefined;
+  switch (typeof value) {
+    case "string":
+    case "boolean":
+      return undefined;
+    case "number":
+      return Number.isFinite(value) ? undefined : `${at} is ${String(value)}`;
+    case "object":
+      return objectProblem(value, at, ancestors);
+    default:
+      // bigint, symbol, function and undefined (in an array, or on its own).
+      return `${at} is a ${typeof value}`;
+  }
+}
+
+function objectProblem(
+  value: object,
+  at: string,
+  ancestors: Set<object>
+): string | undefined {
+  if (ancestors.has(value)) return `${at} refers back to itself`;
+  const notPlain = notPlainProblem(value, at);
+  if (notPlain !== undefined) return notPlain;
+  ancestors.add(value);
+  try {
+    for (const [key, item] of childrenOf(value)) {
+      const problem = problemAt(item, `${at}${key}`, ancestors);
+      if (problem !== undefined) return problem;
+    }
+    return undefined;
+  } finally {
+    ancestors.delete(value);
+  }
+}
+
+/** Why an object is not an array or a plain object, which JSON keeps. */
+function notPlainProblem(value: object, at: string): string | undefined {
+  if (Array.isArray(value)) return undefined;
+  const prototype: unknown = Object.getPrototypeOf(value);
+  if (prototype === Object.prototype || prototype === null) return undefined;
+  return `${at} is a ${value.constructor?.name ?? "non-plain object"}`;
+}
+
+/**
+ * An array's items and an object's properties, each with how a fault names
+ * it. An object's absent (`undefined`) property is left out, as JSON leaves
+ * it; an array's is kept, since JSON turns it into `null`.
+ */
+function childrenOf(value: object): [string, unknown][] {
+  if (Array.isArray(value)) {
+    return value.map((item: unknown, index) => [`[${index}]`, item]);
+  }
+  return Object.entries(value)
+    .filter(([, item]) => item !== undefined)
+    .map(([key, item]) => [`.${key}`, item]);
+}
