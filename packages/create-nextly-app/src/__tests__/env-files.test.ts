@@ -401,6 +401,25 @@ export SOME_APP_KEY="kept as it is"
     );
   });
 
+  // dotenv reads a quoted value across line breaks, so an assignment-looking
+  // line inside one is part of that value, not a key of its own.
+  it("reads a multiline quoted value as one assignment", async () => {
+    await writeFile(
+      join(dir, ".env"),
+      `PRIVATE_CONFIG="header\nNEXTLY_SECRET=${"s".repeat(40)}\nfooter"\nDATABASE_URL=x\n`
+    );
+
+    await generateEnv(dir, sqlite);
+
+    const keys = readEnvKeys(await read(".env")).defined;
+    expect(keys.get("PRIVATE_CONFIG")).toBe(
+      `header\nNEXTLY_SECRET=${"s".repeat(40)}\nfooter`
+    );
+    // The real key was missing, so it was added after the value.
+    expect((await read(".env")).match(/NEXTLY_SECRET=/g)).toHaveLength(2);
+    expect(keys.get("NEXTLY_SECRET")?.length).toBeGreaterThanOrEqual(32);
+  });
+
   it("changes nothing and reports nothing on a second run", async () => {
     await writeFile(join(dir, ".env"), existing);
     await generateEnv(dir, sqlite);
@@ -631,6 +650,25 @@ describe("keeping .env out of git", () => {
 
       expect(readEnvKeys(await read(".env")).defined.has("DATABASE_URL")).toBe(
         false
+      );
+    }
+  );
+
+  // Outside a repository the project's .gitignore is read here, and a
+  // re-include this reader cannot evaluate exactly could leave .env stageable;
+  // adding the rule last settles it, since the last matching rule wins.
+  it.each(["!**/.env", "!/.e[n]v", "!\\.env"])(
+    "adds .env after a re-include it cannot evaluate (%s), outside a repository",
+    async negation => {
+      await writeFile(join(dir, ".gitignore"), `.env\n${negation}\n`);
+
+      await generateEnv(dir, sqlite);
+
+      expect(await read(".gitignore")).toMatch(
+        new RegExp(
+          `${negation.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&")}\\n[\\s\\S]*^\\.env$`,
+          "m"
+        )
       );
     }
   );

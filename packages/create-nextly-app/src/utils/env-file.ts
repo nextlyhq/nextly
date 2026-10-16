@@ -54,12 +54,21 @@ export function readEnvKeys(text: string): EnvKeys {
   const mentioned = new Set<string>();
   // A byte order mark, which some editors write first, is not part of the
   // first line: dotenv reads that line through it.
-  for (const line of text.replace(/^\uFEFF/, "").split(/\r?\n/)) {
-    const match = ASSIGNMENT.exec(line);
+  const lines = text.replace(/^\uFEFF/, "").split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    const match = ASSIGNMENT.exec(lines[i]);
     if (!match) continue;
-    const [, commented, key, rawValue] = match;
+    const [, commented, key, firstLine] = match;
     mentioned.add(key);
-    if (!commented) raw.set(key, readValue(rawValue));
+    if (commented) continue;
+    // dotenv reads a quoted value across line breaks up to its closing quote,
+    // so the lines it spans belong to it, not to keys of their own.
+    const end = closingLine(lines, i, firstLine);
+    raw.set(
+      key,
+      readValue([firstLine, ...lines.slice(i + 1, end + 1)].join("\n"))
+    );
+    i = end;
   }
   const defined = new Map<string, string>();
   const unresolved = new Set<string>();
@@ -102,6 +111,21 @@ export function readEnvKeys(text: string): EnvKeys {
     defined.set(key, value ?? partial.get(key) ?? entry.value);
   }
   return { defined, mentioned, unresolved };
+}
+
+/**
+ * The line a value opening a quote on line `i` closes on: `i` itself when
+ * it closes there, or never closes (dotenv then reads just the one line).
+ */
+function closingLine(lines: string[], i: number, firstLine: string): number {
+  const value = firstLine.trim();
+  const quote = value[0];
+  if (quote !== '"' && quote !== "'" && quote !== "`") return i;
+  if (value.indexOf(quote, 1) > 0) return i;
+  for (let j = i + 1; j < lines.length; j++) {
+    if (lines[j].includes(quote)) return j;
+  }
+  return i;
 }
 
 interface RawValue {

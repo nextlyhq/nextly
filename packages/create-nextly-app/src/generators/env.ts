@@ -614,7 +614,14 @@ function gitignoreIgnores(text: string, name: string): boolean {
     if (line === "" || line.startsWith("#")) continue;
     const negated = line.startsWith("!");
     const pattern = line.replace(/^!/, "").replace(/^\//, "");
-    if (pattern.includes("/")) continue;
+    // Only a plain name pattern (`*` and `?` at most) is evaluated here. A
+    // re-include this reader cannot evaluate exactly might apply to .env, so
+    // .env is then not certainly ignored, and the rule is added last, where
+    // it decides. A positive pattern it cannot evaluate is simply not counted.
+    if (/[/[\\]|\*\*/.test(pattern)) {
+      if (negated) return false;
+      continue;
+    }
     const regex = new RegExp(
       "^" +
         pattern
