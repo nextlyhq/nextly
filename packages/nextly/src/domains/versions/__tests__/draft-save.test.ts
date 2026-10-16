@@ -66,4 +66,13 @@ describe("sameContent", () => {
       )
     ).toBe(false);
   });
+
+  it("counts a Single's createdBy as content, and a collection's as its owner column", () => {
+    // A Single has no owner column, so a field it declares as createdBy is
+    // something an editor wrote.
+    const before = { title: "A", createdBy: "Ana" };
+    const after = { title: "A", createdBy: "Ben" };
+    expect(sameContent(before, after, "single")).toBe(false);
+    expect(sameContent(before, after, "collection")).toBe(true);
+  });
 });
