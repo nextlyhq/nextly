@@ -13,6 +13,7 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 
+import { scheduleAsItStands } from "../../../domains/releases/__tests__/helpers/release-writes";
 import { DEFAULT_TTL_MS } from "../../../domains/releases/pending-transition-cache";
 import { ReleasesRepository } from "../../../domains/releases/releases-repository";
 import {
@@ -60,7 +61,7 @@ describe.each(getConfiguredTestDialects())(
       const t = await boot(dialect);
       const repo = new ReleasesRepository(t.adapter);
       const release = await repo.createRelease({ title: "Spring launch" });
-      await repo.scheduleRelease(release.id, at(SOON_MS), "UTC");
+      await scheduleAsItStands(repo, release.id, at(SOON_MS), "UTC");
 
       await expect(releaseBoundedRevalidate(undefined, NOW)).resolves.toBe(
         SOON_SECONDS
@@ -75,7 +76,7 @@ describe.each(getConfiguredTestDialects())(
       const t = await boot(dialect);
       const repo = new ReleasesRepository(t.adapter);
       const release = await repo.createRelease({ title: "Spring launch" });
-      await repo.scheduleRelease(release.id, at(2 * 60 * 60 * 1000), "UTC");
+      await scheduleAsItStands(repo, release.id, at(2 * 60 * 60 * 1000), "UTC");
 
       await expect(releaseBoundedRevalidate(undefined, NOW)).resolves.toBe(
         CEILING_SECONDS
@@ -108,7 +109,7 @@ describe.each(getConfiguredTestDialects())(
 
       const repo = new ReleasesRepository(t.adapter);
       const release = await repo.createRelease({ title: "Spring launch" });
-      await repo.scheduleRelease(release.id, at(SOON_MS), "UTC");
+      await scheduleAsItStands(repo, release.id, at(SOON_MS), "UTC");
 
       // No waiting for the TTL: scheduling invalidated the shared memo. The
       // release is nearer than the ceiling, so the answer MOVES — a schedule
@@ -122,7 +123,7 @@ describe.each(getConfiguredTestDialects())(
       const t = await boot(dialect);
       const repo = new ReleasesRepository(t.adapter);
       const release = await repo.createRelease({ title: "Called off" });
-      await repo.scheduleRelease(release.id, at(SOON_MS), "UTC");
+      await scheduleAsItStands(repo, release.id, at(SOON_MS), "UTC");
       expect(await releaseBoundedRevalidate(undefined, NOW)).toBe(SOON_SECONDS);
 
       await repo.cancelRelease(release.id);
@@ -138,7 +139,7 @@ describe.each(getConfiguredTestDialects())(
       const t = await boot(dialect);
       const repo = new ReleasesRepository(t.adapter);
       const release = await repo.createRelease({ title: "Spring launch" });
-      await repo.scheduleRelease(release.id, at(SOON_MS), "UTC");
+      await scheduleAsItStands(repo, release.id, at(SOON_MS), "UTC");
 
       await expect(releaseBoundedRevalidate(5, NOW)).resolves.toBe(5);
     });
@@ -149,7 +150,7 @@ describe.each(getConfiguredTestDialects())(
       const t = await boot(dialect);
       const repo = new ReleasesRepository(t.adapter);
       const release = await repo.createRelease({ title: "Spring launch" });
-      await repo.scheduleRelease(release.id, at(SOON_MS), "UTC");
+      await scheduleAsItStands(repo, release.id, at(SOON_MS), "UTC");
 
       await expect(releaseBoundedRevalidate(24 * 60 * 60, NOW)).resolves.toBe(
         SOON_SECONDS

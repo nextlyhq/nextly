@@ -23,6 +23,7 @@ import {
 import { ReleasesRepository } from "../releases-repository";
 
 import { seedLiveAuthor } from "./helpers/live-author";
+import { scheduleAsItStands } from "./helpers/release-writes";
 
 let current: TestNextly | undefined;
 
@@ -259,14 +260,20 @@ describe.each(getConfiguredTestDialects())(
       const day = 24 * 60 * 60 * 1000;
       for (let i = 0; i < 40; i += 1) {
         const future = await repo.createRelease({ title: `Future ${i}` });
-        await repo.scheduleRelease(
+        await scheduleAsItStands(
+          repo,
           future.id,
           new Date(now.getTime() + (i + 1) * day),
           "UTC"
         );
       }
       const due = await repo.createRelease({ title: "Due" });
-      await repo.scheduleRelease(due.id, new Date(now.getTime() - day), "UTC");
+      await scheduleAsItStands(
+        repo,
+        due.id,
+        new Date(now.getTime() - day),
+        "UTC"
+      );
 
       // Count the rows the database hands back for the read, through a
       // wrapper on the adapter the repository reads with.
