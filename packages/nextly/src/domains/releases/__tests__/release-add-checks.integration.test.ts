@@ -241,9 +241,10 @@ describe.each(getConfiguredTestDialects())(
       const repo = new ReleasesRepository(t.adapter);
       const now = new Date(Math.floor(Date.now() / 1000) * 1000);
       const atNow = await repo.createRelease({ title: "At now" });
-      await repo.scheduleRelease(atNow.id, now, "UTC");
+      await scheduleAsItStands(repo, atNow.id, now, "UTC");
       const later = await repo.createRelease({ title: "A second later" });
-      await repo.scheduleRelease(
+      await scheduleAsItStands(
+        repo,
         later.id,
         new Date(now.getTime() + 1000),
         "UTC"
