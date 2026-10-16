@@ -223,8 +223,9 @@ contributes: {
 ```
 
 A view can be scoped only to a field type the same plugin contributes. Only a
-top-level field counts: a document whose field sits inside a group or a
-repeater doesn't get the view. A field-type view's `path` must be unique among
+top-level field counts: a document whose field sits inside a named group or a
+repeater doesn't get the view. A field inside an unnamed group counts as top-level,
+because the group only arranges the form. A field-type view's `path` must be unique among
 every document view any plugin declares.
 
 The admin keeps the document's own behaviour around your view, so you don't

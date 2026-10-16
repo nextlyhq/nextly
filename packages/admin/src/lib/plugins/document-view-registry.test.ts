@@ -105,7 +105,7 @@ describe("a view scoped to a field type", () => {
     // Nested inside a group, the field is not counted.
     expect(
       documentViewApplies(blocksBuilder, [
-        { type: "group", fields: [{ type: "blocks" }] },
+        { name: "extra", type: "group", fields: [{ type: "blocks" }] },
       ])
     ).toBe(false);
     expect(documentViewApplies(blocksBuilder, [{ type: "text" }])).toBe(false);
@@ -214,6 +214,27 @@ describe("which field a field-type view edits", () => {
     // A text field, and a name the document does not have.
     expect(resolveViewField("blocks", twoFields, "title").kind).toBe("choose");
     expect(resolveViewField("blocks", twoFields, "nope").kind).toBe("choose");
+  });
+
+  it("counts a field in an unnamed group as top-level, and one in a named group not", () => {
+    // An unnamed group is presentation only: its fields are addressed at the
+    // top level, so the view reaches them; a named group moves them down.
+    const fields = [
+      { type: "group", fields: [{ name: "aside", type: "blocks" }] },
+      {
+        name: "hero",
+        type: "group",
+        fields: [{ name: "inner", type: "blocks" }],
+      },
+    ];
+    expect(resolveViewField("blocks", fields, undefined)).toMatchObject({
+      kind: "field",
+      name: "aside",
+    });
+    expect(documentViewApplies(blocksBuilder, fields)).toBe(true);
+    expect(documentViewApplies(blocksBuilder, [fields[1] as object])).toBe(
+      false
+    );
   });
 
   it("names no field for a view scoped to the document itself", () => {

@@ -78,6 +78,27 @@ export function matchDocumentView(
 }
 
 /**
+ * The fields a document addresses at its top level: its own, plus those of any
+ * UNNAMED group, which is presentation only and adds nothing to their paths. A
+ * named group or a repeater moves its fields down a level, out of reach.
+ */
+function addressableFields<F extends object>(
+  fields: readonly F[] | undefined
+): F[] {
+  return (fields ?? []).flatMap(field => {
+    const unnamedGroup =
+      "type" in field &&
+      field.type === "group" &&
+      !("name" in field && typeof field.name === "string" && field.name !== "");
+    if (!unnamedGroup) return [field];
+    const children = "fields" in field ? field.fields : undefined;
+    // A group's children are declarations of the same kind as the group, so
+    // they are read as the caller's field type.
+    return Array.isArray(children) ? addressableFields(children as F[]) : [];
+  });
+}
+
+/**
  * Whether a matched view applies to a document with these top-level fields.
  * A slug-scoped view always does; a field-type view only where a TOP-LEVEL
  * field has its type. A field inside a group or a repeater does not count.
@@ -87,7 +108,7 @@ export function documentViewApplies(
   fields: readonly object[] | undefined
 ): boolean {
   if (!("fieldType" in view)) return true;
-  return (fields ?? []).some(
+  return addressableFields(fields).some(
     field => "type" in field && field.type === view.fieldType
   );
 }
@@ -153,7 +174,7 @@ function candidatesOf<F extends object>(
   fieldType: string,
   fields: readonly F[] | undefined
 ): ViewFieldCandidate<F>[] {
-  return (fields ?? []).flatMap(field => {
+  return addressableFields(fields).flatMap(field => {
     if (!("type" in field) || field.type !== fieldType) return [];
     if (!("name" in field) || typeof field.name !== "string") return [];
     const label =
