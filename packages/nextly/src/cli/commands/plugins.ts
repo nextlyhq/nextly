@@ -183,7 +183,7 @@ export async function runPluginsInfoCommand(
 export function registerPluginsCommand(program: Command): void {
   const plugins = program
     .command("plugins")
-    .description("Inspect installed plugins and their contributions (D48)");
+    .description("Inspect installed plugins and their contributions");
 
   plugins
     .command("list")
