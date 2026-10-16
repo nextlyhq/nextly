@@ -52,9 +52,13 @@ describe("the singles card", () => {
     // back. The card's frame (its title and region) is drawn around this body,
     // so what is asserted is that the body still renders with no singles.
     singlesHook.mockReturnValue(listing([]));
-    const { container } = render(<SinglesQuickLinks />);
+    render(<SinglesQuickLinks />);
 
-    expect(container.firstChild).not.toBeNull();
+    // The frame's empty state, which says what will appear: a blank body would also satisfy
+    // "rendered something and no links", so the state itself is what is asserted.
+    expect(screen.getByTestId("card-empty")).toHaveTextContent(
+      "No Singles yet"
+    );
     expect(screen.queryAllByRole("link")).toHaveLength(0);
   });
 

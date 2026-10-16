@@ -156,7 +156,11 @@ export type WidgetOutcome =
  * the dispatch read as three decisions where there is one.
  */
 function asOutcome(drawn: ArchetypeOutcome): WidgetOutcome {
-  if (!drawn.ok) return { state: "failed", message: drawn.message };
+  if (!drawn.ok) {
+    return drawn.unavailable
+      ? { state: "unavailable" }
+      : { state: "failed", message: drawn.message };
+  }
   return drawn.empty !== undefined
     ? { state: "empty", empty: drawn.empty }
     : { state: "ready", node: drawn.node };

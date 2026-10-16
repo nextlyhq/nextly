@@ -48,7 +48,7 @@
  */
 
 import { Card, CardContent, CardFooter, CardHeader } from "@nextlyhq/ui";
-import { useId, type ReactNode } from "react";
+import { useId, useRef, type ReactNode } from "react";
 
 import { Link } from "@admin/components/ui/link";
 import { formatDateWithAdminTimezone } from "@admin/hooks/useAdminDateFormatter";
@@ -64,6 +64,7 @@ import {
   type CardEmptyContent,
   type SkeletonShape,
 } from "./frame/states";
+import { CardTierContext, useMeasuredTier } from "./frame/tier";
 
 /**
  * What the body shows, besides its content.
@@ -122,8 +123,13 @@ export interface WidgetCardProps {
    * code drawing its customise controls can label them after the card.
    */
   cardId?: string;
-  /** Marked on the root as `data-width` and `data-tier` for styling and tests. */
+  /** Marked on the root as `data-width` for styling and tests. */
   width?: string;
+  /**
+   * The size tier, when the caller knows it better than the card's own measurement. Otherwise
+   * the card measures the width it is drawn at (`frame/tier`). Marked on the root as
+   * `data-tier`, and handed to every figure inside the card.
+   */
   tier?: "small" | "medium" | "large";
   /** The archetype's rendering, or the plugin's component. */
   children: ReactNode;
@@ -211,55 +217,61 @@ export function WidgetCard(props: WidgetCardProps) {
   const generatedId = useId();
   const titleId = cardId ? frameIds(cardId).titleId : generatedId;
   const view = frameView(props);
+  // The width the card is drawn at decides how its figures are written; see `frame/tier`.
+  const rootRef = useRef<HTMLDivElement>(null);
+  const tier = useMeasuredTier(rootRef, props.tier);
 
   return (
-    <Card
-      // `region` + the title as its name is what lets a screen-reader user jump
-      // between widgets and know which one they landed on. Without the name a
-      // region is worse than no landmark at all.
-      role="region"
-      aria-labelledby={titleId}
-      data-card-id={cardId}
-      data-width={props.width}
-      data-tier={props.tier}
-      data-state={view.shown}
-      className={cn("flex h-full flex-col", props.className)}
-    >
-      <WidgetCardHeader
-        titleId={titleId}
-        title={title}
-        description={props.description}
-        icon={props.icon}
-        leading={props.leading}
-        quick={view.quick}
-        headerAction={props.headerAction}
-      />
-
-      <CardContent
-        data-testid="widget-card-body"
-        aria-busy={view.busy}
-        // Customise mode: what the card shows stays visible, but nothing in it can be reached.
-        inert={view.customizing || undefined}
-        className={bodyClassName(view.refreshing, view.customizing)}
+    <CardTierContext.Provider value={tier}>
+      <Card
+        ref={rootRef}
+        // `region` + the title as its name is what lets a screen-reader user jump
+        // between widgets and know which one they landed on. Without the name a
+        // region is worse than no landmark at all.
+        role="region"
+        aria-labelledby={titleId}
+        data-card-id={cardId}
+        data-width={props.width}
+        data-tier={tier}
+        data-state={view.shown}
+        className={cn("flex h-full flex-col", props.className)}
       >
-        <WidgetCardBody
-          state={view.state}
-          error={view.error}
+        <WidgetCardHeader
+          titleId={titleId}
           title={title}
-          onRetry={props.onRetry}
-          skeleton={props.skeleton}
-          empty={props.empty}
-        >
-          {props.children}
-        </WidgetCardBody>
-      </CardContent>
+          description={props.description}
+          icon={props.icon}
+          leading={props.leading}
+          quick={view.quick}
+          headerAction={props.headerAction}
+        />
 
-      <WidgetCardFooter
-        freshness={view.freshness}
-        link={view.link}
-        inert={view.customizing}
-      />
-    </Card>
+        <CardContent
+          data-testid="widget-card-body"
+          aria-busy={view.busy}
+          // Customise mode: what the card shows stays visible, but nothing in it can be reached.
+          inert={view.customizing || undefined}
+          className={bodyClassName(view.refreshing, view.customizing)}
+        >
+          <WidgetCardBody
+            state={view.state}
+            error={view.error}
+            title={title}
+            onRetry={props.onRetry}
+            skeleton={props.skeleton}
+            empty={props.empty}
+          >
+            {props.children}
+          </WidgetCardBody>
+        </CardContent>
+
+        <WidgetCardFooter
+          freshness={view.freshness}
+          link={view.link}
+          inert={view.customizing}
+        />
+      </Card>
+    </CardTierContext.Provider>
   );
 }
 

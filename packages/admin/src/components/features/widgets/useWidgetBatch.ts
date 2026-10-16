@@ -158,19 +158,27 @@ export function useWidgetBatch(cards: BatchCard[]): WidgetBatch {
   const batch = useWidgetQueries(requests);
   const { isFetching, fetchingPlacementIds, updatedAt } = batch;
 
-  // Cards being retried, each asked again in a request of its own. A Set held in state, so
-  // asking twice for one card is one retry.
-  const [retrying, setRetrying] = useState<ReadonlySet<string>>(
-    () => new Set()
+  // Cards being retried, each asked again in a request of its own, with how many times. The
+  // count is the request's `attempt`, so every press of Retry is a new question to the cache and
+  // sends that card's query again -- a second press after a failed retry included -- while no
+  // other card's request changes.
+  const [retrying, setRetrying] = useState<ReadonlyMap<string, number>>(
+    () => new Map()
   );
   const retryRequests = useMemo(
-    () => requests.filter(request => retrying.has(request.placementId)),
+    () =>
+      requests
+        .filter(request => retrying.has(request.placementId))
+        .map(request => ({
+          ...request,
+          attempt: retrying.get(request.placementId),
+        })),
     [requests, retrying]
   );
   const retried = useWidgetQueries(retryRequests);
   const retry = useCallback((placementId: string) => {
     setRetrying(previous =>
-      previous.has(placementId) ? previous : new Set(previous).add(placementId)
+      new Map(previous).set(placementId, (previous.get(placementId) ?? 0) + 1)
     );
   }, []);
   // The batch's next answer is fresher than a retry's, so a refresh of the whole batch ends
@@ -178,7 +186,7 @@ export function useWidgetBatch(cards: BatchCard[]): WidgetBatch {
   // Keyed on the instant rather than the Date object, which may be a new object each render.
   const batchAnsweredAt = batch.updatedAt?.getTime() ?? null;
   useEffect(() => {
-    setRetrying(previous => (previous.size === 0 ? previous : new Set()));
+    setRetrying(previous => (previous.size === 0 ? previous : new Map()));
   }, [batchAnsweredAt]);
 
   // A retried card reads its own answer, or none while it is in flight -- which draws its
@@ -189,7 +197,7 @@ export function useWidgetBatch(cards: BatchCard[]): WidgetBatch {
     }
     const mergedSlots: Record<string, WidgetSlot> = { ...batch.slots };
     const mergedCells: CellSlots = { ...batch.cellSlots };
-    for (const placementId of retrying) {
+    for (const placementId of retrying.keys()) {
       delete mergedSlots[placementId];
       delete mergedCells[placementId];
       const slot = retried.slots[placementId];
@@ -242,7 +250,12 @@ export function useWidgetBatch(cards: BatchCard[]): WidgetBatch {
             cellSlots[card.placementId]
           )
         )
-        .filter(outcome => outcome.state !== "self-drawn"),
+        // An unavailable card is neither updated nor failed, so it is left out of the
+        // announcement rather than counted as "updated" beside a card that says otherwise.
+        .filter(
+          outcome =>
+            outcome.state !== "self-drawn" && outcome.state !== "unavailable"
+        ),
     [cards, slots, cellSlots]
   );
 

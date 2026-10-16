@@ -85,12 +85,13 @@ export const timeseriesBody: ArchetypeBody = (result, definition) => {
   }));
 
   if (rows.length === 0) {
-    // The frame's one empty state, worded for a chart over time.
+    // The frame's one empty state, worded for a chart over time. Source-neutral: the card may read any
+    // collection's, system's or plugin's data, so it names no kind of row it cannot know.
     return {
       ok: true,
       empty: {
         title: "Nothing to plot yet",
-        detail: "Entries show here by the day they were created.",
+        detail: "Points appear here once there is activity in this period.",
       },
     };
   }

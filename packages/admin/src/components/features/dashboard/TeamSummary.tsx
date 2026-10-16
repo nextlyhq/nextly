@@ -8,7 +8,7 @@ import { Link } from "@admin/components/ui/link";
 import { ROUTES } from "@admin/constants/routes";
 import { useDashboardStats } from "@admin/hooks/queries";
 
-import { cardNumber } from "../widgets/frame/format";
+import { CardFigure } from "../widgets/frame/figure";
 import { CardError, CardSkeleton } from "../widgets/frame/states";
 
 /**
@@ -39,7 +39,7 @@ function TeamCard({ label, count, href, Icon }: TeamCardProps) {
             <div className="space-y-1">
               {/* The card type ramp's big number, through the one card formatter. */}
               <span className="text-2xl font-semibold tabular-nums tracking-tight text-foreground leading-none transition-colors">
-                {cardNumber(count).text}
+                <CardFigure value={count} />
               </span>
               {/* A label, not a heading: the frame's title is the card's one heading. */}
               <span className="block font-medium text-xs tracking-tight transition-colors leading-tight text-muted-foreground group-hover:text-foreground pt-1">

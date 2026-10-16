@@ -80,12 +80,13 @@ export const listBody: ArchetypeBody = (result, definition) => {
   }
 
   if (result.items.length === 0) {
-    // The frame's one empty state, worded for a list.
+    // The frame's one empty state, worded for a list. Source-neutral: the card may read any
+    // collection's, system's or plugin's data, so it names no kind of row it cannot know.
     return {
       ok: true,
       empty: {
         title: "Nothing here yet",
-        detail: "Entries show here once there are some.",
+        detail: "Items appear here once something matches this card.",
       },
     };
   }

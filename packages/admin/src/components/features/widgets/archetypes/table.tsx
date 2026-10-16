@@ -45,12 +45,13 @@ export const tableBody: ArchetypeBody = (result, definition) => {
   }
 
   if (result.items.length === 0) {
-    // The frame's one empty state, worded for a table.
+    // The frame's one empty state, worded for a table. Source-neutral: the card may read any
+    // collection's, system's or plugin's data, so it names no kind of row it cannot know.
     return {
       ok: true,
       empty: {
         title: "Nothing here yet",
-        detail: "Entries show here once there are some.",
+        detail: "Rows appear here once something matches this card.",
       },
     };
   }
