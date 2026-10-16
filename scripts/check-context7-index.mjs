@@ -282,22 +282,58 @@ export async function fetchText(url) {
 }
 
 /**
+ * Where Context7 answers a question about one library. It sits beside the `api` base, which
+ * serves search and the library's page under v1: the library page's `topic` parameter is
+ * ignored, and answers the same general snippets whatever it asks, so a probe sent there can
+ * never find the sentence it asked for.
+ */
+function questionUrl(api, marker) {
+  const url = new URL("../v2/context", `${api}/`);
+  url.searchParams.set("libraryId", LIBRARY);
+  url.searchParams.set("query", marker);
+  url.searchParams.set("type", "txt");
+  return url.toString();
+}
+
+/** The error a 404 names, or null when its body is not Context7's error shape. */
+function errorName(body) {
+  try {
+    const parsed = JSON.parse(body);
+    return typeof parsed?.error === "string" ? parsed.error : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Whether the index returns a sentence for its own topic.
  *
- * A non-200 is not "no": it is the question going unanswered, and it stops the run rather
- * than being counted as an absence that would then clear an exclusion.
+ * The context endpoint answers a question nothing matched with a 404 naming
+ * `no_relevant_snippets`, and that is the index saying it holds nothing for it: an absence.
+ * Any other non-200, a 404 naming another error included, is not "no": it is the question
+ * going unanswered, and it stops the run rather than being counted as an absence that would
+ * then clear an exclusion.
  */
 async function retrievable(get, api, marker, name) {
-  const answer = await get(
-    `${api}${LIBRARY}?type=txt&topic=${encodeURIComponent(marker)}&tokens=5000`
-  );
-  if (answer.status !== 200) {
-    throw new Unanswerable(`probing for ${name} answered ${answer.status}`);
-  }
+  const answer = await get(questionUrl(api, marker));
+  if (matchedNothing(answer)) return { found: false, cites: new Set() };
+  if (answer.status !== 200) throw unanswered(answer, name);
   return {
     found: answer.body.includes(marker),
     cites: citedPaths(answer.body),
   };
+}
+
+/** The context endpoint's answer to a question nothing in the index matched. */
+function matchedNothing(answer) {
+  return answer.status === 404 && errorName(answer.body) === "no_relevant_snippets";
+}
+
+/** A probe that went unanswered, named with the error Context7 gave where it gave one. */
+function unanswered(answer, name) {
+  const error = errorName(answer.body);
+  const named = error ? ` (${error})` : "";
+  return new Unanswerable(`probing for ${name} answered ${answer.status}${named}`);
 }
 
 /** A JSON body, or `Unanswerable`: a truncated or non-JSON answer is no verdict either. */

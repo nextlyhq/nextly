@@ -237,12 +237,25 @@ function searchAnswer({ registered, state, results }) {
  * What a topic query returns: the sentence, cited from the file the script
  * says holds it, or nothing.
  */
-function topicAnswer(topic, topics) {
-  const from = topics[topic];
-  if (!from) return { status: 200, body: "nothing\n" };
+/** Whether a request asks the context endpoint about this sentence. */
+function asks(url, sentence) {
+  return new URL(url).searchParams.get("query") === sentence;
+}
+
+/**
+ * The answer to a question, as Context7's context endpoint gives it: the snippets that match,
+ * or a 404 saying none did. Measured against the live API on 2026-10-16.
+ */
+function questionAnswer(query, topics) {
+  const from = topics[query];
+  if (!from)
+    return {
+      status: 404,
+      body: JSON.stringify({ error: "no_relevant_snippets", message: "No documentation matched this query." }),
+    };
   return {
     status: 200,
-    body: `### x\n\nSource: ${REPO_BLOB}main/${from}\n\n${topic}\n`,
+    body: `### x\n\nSource: ${REPO_BLOB}main/${from}\n\n${query}\n`,
   };
 }
 
@@ -270,11 +283,20 @@ function context7({
     if (status !== 200) return { status, body: "" };
     if (url.includes("/search?"))
       return searchAnswer({ registered, state, results });
-    const topic = new URL(url).searchParams.get("topic");
-    return topic === null
-      ? { status: 200, body: dump }
-      : topicAnswer(topic, topics);
+    return libraryAnswer(new URL(url), topics, dump);
   };
+}
+
+/**
+ * The context endpoint answers the question; the library's own page answers with the same
+ * general snippets whatever `topic` asks, as the live v1 endpoint did on 2026-10-16, so a
+ * probe sent there finds nothing.
+ */
+function libraryAnswer({ pathname, searchParams }, topics, dump) {
+  if (!pathname.endsWith("/v2/context")) return { status: 200, body: dump };
+  if (searchParams.get("libraryId") !== "/nextlyhq/nextly")
+    return { status: 404, body: JSON.stringify({ error: "library_not_found" }) };
+  return questionAnswer(searchParams.get("query"), topics);
 }
 
 /** A git repository in a temporary directory with these files tracked, as `verify` reads a checkout. */
@@ -628,12 +650,34 @@ describe("verify", () => {
       root: ".",
       get: context7({
         topics: kept,
-        statusFor: url =>
-          decodeURIComponent(url).includes(excludedMarker) ? 500 : 200,
+        statusFor: url => (asks(url, excludedMarker) ? 500 : 200),
       }),
     });
     expect(status).toBe(2);
     expect(lines.join("\n")).toContain("answered 500");
+  });
+
+  it("reads a question nothing matched as absent, not as unanswered", async () => {
+    // Every excluded sentence answers 404 no_relevant_snippets, which is the index saying it
+    // holds nothing for it: the exclusions took.
+    const { status } = await verify({ root: ".", get: context7({ topics: kept }) });
+    expect(status).toBe(0);
+  });
+
+  it("cannot answer when a probe's 404 is about something other than the question", async () => {
+    // A 404 that names another error, such as the library itself missing, is no answer to
+    // whether the sentence is held, and must not clear an exclusion.
+    const excludedMarker = Object.values(markers.excluded)[0];
+    const base = context7({ topics: kept });
+    const { status, lines } = await verify({
+      root: ".",
+      get: async url =>
+        asks(url, excludedMarker)
+          ? { status: 404, body: JSON.stringify({ error: "library_not_found" }) }
+          : base(url),
+    });
+    expect(status).toBe(2);
+    expect(lines.join("\n")).toContain("library_not_found");
   });
 
   it("cannot answer when the search body is not JSON", async () => {
