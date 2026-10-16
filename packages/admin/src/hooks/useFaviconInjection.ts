@@ -18,6 +18,23 @@ const ICON_LINKS = ["icon", "shortcut icon", "apple-touch-icon"]
 const SWITCHED_OFF = "nextly-replaced-icon";
 
 /**
+ * The page's host icons are switched off once for every admin provider on it,
+ * and switched back only when the last admin icon goes. A provider that left
+ * them to the others' observers would turn them on for a moment, long enough
+ * for a browser to fetch and show the host's icon.
+ */
+const adminIcons = new Set<HTMLLinkElement>();
+
+/**
+ * Each host icon switched off, with the `rel` it had: the latest one, if React
+ * changed it while an admin icon was shown.
+ */
+const originals = new Map<HTMLLinkElement, string>();
+
+/** Switches off host icons React adds or renames while an admin icon is shown. */
+let hostIconChanges: MutationObserver | undefined;
+
+/**
  * Shows the admin's favicon in place of the host app's.
  *
  * The host's icon links belong to React: Next.js renders them from the root
@@ -25,7 +42,7 @@ const SWITCHED_OFF = "nextly-replaced-icon";
  * with "Cannot read properties of null (reading 'removeChild')" the next time it
  * updates `<head>`, as a hot reload of the layout does. They are switched off
  * instead by renaming their `rel`, an attribute change React leaves alone, and
- * switched back when the admin's icon goes. The admin's own link is the only
+ * switched back when the last admin icon goes. The admin's own link is the only
  * node this adds or removes. A host icon React adds later, or a host link whose
  * `rel` React changes to an icon's, is switched off as it happens. The host's
  * original `rel` values are kept here, never written onto its nodes.
@@ -38,36 +55,47 @@ export function useFaviconInjection(href: string): void {
     if (href.startsWith("data:image/svg+xml")) own.type = "image/svg+xml";
     own.href = href;
 
-    // Each host icon switched off, with the `rel` it had: the latest one, if
-    // React changed it while the admin's icon was shown.
-    const originals = new Map<HTMLLinkElement, string>();
-    // A link can arrive in several records of one batch (added, then its
-    // `rel` changed); once it is switched off, its `rel` is no longer the
-    // host's, so a second record must not overwrite the saved one.
-    const switchOff = (icon: HTMLLinkElement) => {
-      if (icon.rel === SWITCHED_OFF) return;
-      originals.set(icon, icon.rel);
-      icon.rel = SWITCHED_OFF;
-    };
-    document.querySelectorAll<HTMLLinkElement>(ICON_LINKS).forEach(switchOff);
+    if (adminIcons.size === 0) hideHostIcons();
+    adminIcons.add(own);
     document.head.appendChild(own);
 
-    const changes = new MutationObserver(records =>
-      records.flatMap(iconsIn).forEach(switchOff)
-    );
-    changes.observe(document.head, {
-      childList: true,
-      subtree: true,
-      attributes: true,
-      attributeFilter: ["rel"],
-    });
-
     return () => {
-      changes.disconnect();
       own.remove();
-      originals.forEach(restoreHostIcon);
+      adminIcons.delete(own);
+      if (adminIcons.size === 0) showHostIcons();
     };
   }, [href]);
+}
+
+function hideHostIcons(): void {
+  document.querySelectorAll<HTMLLinkElement>(ICON_LINKS).forEach(switchOff);
+  hostIconChanges = new MutationObserver(records =>
+    records.flatMap(iconsIn).forEach(switchOff)
+  );
+  hostIconChanges.observe(document.head, {
+    childList: true,
+    subtree: true,
+    attributes: true,
+    attributeFilter: ["rel"],
+  });
+}
+
+function showHostIcons(): void {
+  hostIconChanges?.disconnect();
+  hostIconChanges = undefined;
+  originals.forEach(restoreHostIcon);
+  originals.clear();
+}
+
+/**
+ * A link can arrive in several records of one batch (added, then its `rel`
+ * changed); once it is switched off, its `rel` is no longer the host's, so a
+ * second record must not overwrite the saved one.
+ */
+function switchOff(icon: HTMLLinkElement): void {
+  if (icon.rel === SWITCHED_OFF) return;
+  originals.set(icon, icon.rel);
+  icon.rel = SWITCHED_OFF;
 }
 
 /**

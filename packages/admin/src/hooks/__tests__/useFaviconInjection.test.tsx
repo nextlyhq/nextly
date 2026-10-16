@@ -146,6 +146,22 @@ describe("the admin's favicon", () => {
     expect(hrefs().sort()).toEqual(["/second-admin.png", ADMIN_ICON].sort());
   });
 
+  it("keeps the host's icon off until the last admin provider unmounts", async () => {
+    render(<HostIcon href="/favicon.ico" />);
+    const first = renderHook(() => useFaviconInjection(ADMIN_ICON));
+    const second = renderHook(() => useFaviconInjection("/second-admin.png"));
+    await observed();
+
+    // The provider that switched the host's icon off goes first. Read before
+    // any observer runs: the host's icon must not come back even for a moment,
+    // since a browser may fetch and show it as soon as its `rel` names an icon.
+    first.unmount();
+    expect(hrefs()).toEqual(["/second-admin.png"]);
+
+    second.unmount();
+    expect(hrefs()).toEqual(["/favicon.ico"]);
+  });
+
   it("keeps a single admin icon when the branding changes it", () => {
     render(<HostIcon href="/favicon.ico" />);
     const admin = renderHook(({ href }) => useFaviconInjection(href), {
