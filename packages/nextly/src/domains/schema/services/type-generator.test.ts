@@ -200,6 +200,32 @@ describe("TypeGenerator — a field pointing at a built-in collection names a ty
     expect(code).not.toContain("MediaFile");
   });
 
+  it("aliases the import when the config declares its own MediaFile", () => {
+    // A collection `media-file` generates `export interface MediaFile`; an
+    // unaliased import beside it is a duplicate binding (TS2440).
+    const { code } = new TypeGenerator().generateTypesFile([
+      posts([{ name: "cover", type: "upload", relationTo: "media" }]),
+      collection([{ name: "label", type: "text" }], "media-file"),
+    ]);
+
+    expect(code).toContain(
+      'import type { MediaFile as NextlyMediaFile } from "nextly";'
+    );
+    expect(code).toContain("cover?: string | NextlyMediaFile | null;");
+    expect(code).toContain("export interface MediaFile {");
+  });
+
+  it("returns the MediaFile import with an interface generated on its own", () => {
+    // `generateInterface` hands back the imports its code relies on, for a
+    // caller assembling a file from interfaces.
+    const iface = new TypeGenerator().generateInterface(
+      posts([{ name: "cover", type: "upload", relationTo: "media" }])
+    );
+
+    expect(iface.code).toContain("cover?: string | MediaFile | null;");
+    expect(iface.imports).toContain('import type { MediaFile } from "nextly";');
+  });
+
   it("resolves each target of a polymorphic relationship the same way", () => {
     const { code } = new TypeGenerator().generateTypesFile([
       posts([
