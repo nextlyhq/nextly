@@ -97,6 +97,9 @@ function makeAdapter(options: { mainTableExists?: boolean } = {}) {
     // table, and both ask the adapter what exists. An empty database is the simplest state that
     // reaches the drop, which is the statement these tests order against.
     listTables: vi.fn(async (): Promise<string[]> => []),
+    // The delete path also removes the Single's version pins, a row delete rather than DDL, so it
+    // stays out of the trace.
+    delete: vi.fn(async () => 0),
     dropTable: vi.fn(async () => {
       trace.push("ddl");
     }),

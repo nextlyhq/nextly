@@ -290,8 +290,13 @@ export class SingleRegistryService extends BaseRegistryService<
   // Public API — Delegates to BaseRegistryService
   // ============================================================
 
-  async getSingleBySlug(slug: string): Promise<DynamicSingleRecord | null> {
-    return this.getRecordBySlug(slug);
+  async getSingleBySlug(
+    slug: string,
+    // Optional transaction-bound executor so the lookup runs on the caller's
+    // transaction connection instead of taking a second pooled one.
+    executor?: unknown
+  ): Promise<DynamicSingleRecord | null> {
+    return this.getRecordBySlug(slug, executor);
   }
 
   async getSingle(slug: string): Promise<DynamicSingleRecord> {

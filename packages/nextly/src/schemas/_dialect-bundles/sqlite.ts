@@ -91,6 +91,10 @@ export {
   nextlyReleaseMembersSqlite as nextlyReleaseMembers,
 } from "../releases/sqlite";
 
+// Version pins; in the bundle so freshPushSchema creates the table on a fresh
+// database, for the reason the release tables above give.
+export { nextlyVersionPinsSqlite as nextlyVersionPins } from "../version-pins/sqlite";
+
 // Background jobs; see the releases note above for why the bundle entry is
 // required and not merely tidy.
 export { nextlyJobsSqlite as nextlyJobs } from "../jobs/sqlite";

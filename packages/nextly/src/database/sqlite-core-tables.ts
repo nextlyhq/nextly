@@ -465,6 +465,25 @@ export function generateSqliteCoreTableStatements(): string[] {
       ON "nextly_release_members" ("scope_kind", "scope_slug", "entry_id", "locale")`,
     `CREATE INDEX IF NOT EXISTS "nextly_release_members_release_idx"
       ON "nextly_release_members" ("release_id")`,
+    // Version pins. Columns match schemas/version-pins/sqlite.ts.
+    `CREATE TABLE IF NOT EXISTS "nextly_version_pins" (
+      "id" TEXT PRIMARY KEY NOT NULL,
+      "scope_kind" TEXT NOT NULL,
+      "scope_slug" TEXT NOT NULL,
+      "entry_id" TEXT NOT NULL,
+      "holder" TEXT NOT NULL,
+      "slot" TEXT NOT NULL,
+      "version_no" INTEGER NOT NULL,
+      "pin_key" TEXT NOT NULL,
+      "created_at" INTEGER NOT NULL,
+      "updated_at" INTEGER NOT NULL
+    )`,
+    // Over "pin_key" alone, for the reason "member_key" above is: the digest
+    // is what one slot per document per holder is enforced on.
+    `CREATE UNIQUE INDEX IF NOT EXISTS "nextly_version_pins_key_uidx"
+      ON "nextly_version_pins" ("pin_key")`,
+    `CREATE INDEX IF NOT EXISTS "nextly_version_pins_doc_idx"
+      ON "nextly_version_pins" ("scope_kind", "scope_slug", "entry_id")`,
     // Background jobs. Columns match schemas/jobs/sqlite.ts.
     `CREATE TABLE IF NOT EXISTS "nextly_jobs" (
       "id" TEXT PRIMARY KEY NOT NULL,

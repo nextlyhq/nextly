@@ -116,6 +116,10 @@ export {
   nextlyReleaseMembersPg as nextlyReleaseMembers,
 } from "../releases/postgres";
 
+// Version pins; in the bundle so freshPushSchema creates the table on a fresh
+// database, for the reason the release tables above give.
+export { nextlyVersionPinsPg as nextlyVersionPins } from "../version-pins/postgres";
+
 // Background jobs; in the bundle for the reason the releases note above
 // gives — getCoreSchema makes a table diffable, this map is what apply
 // actually pushes.
