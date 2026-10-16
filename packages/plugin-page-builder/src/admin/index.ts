@@ -74,6 +74,6 @@ registerKnownPlugin("@nextlyhq/plugin-page-builder", () => {
   return Promise.resolve();
 });
 
-export { BlocksField, BlocksSummary };
+export { BlocksField, BlocksSummary, PageBuilderView };
 export type { BlocksFieldProps } from "./BlocksField";
 export type { BlocksSummaryProps } from "./BlocksSummary";

@@ -31,10 +31,13 @@ import {
   screen,
 } from "@testing-library/react";
 import * as React from "react";
-import { useForm, useWatch, type Control } from "react-hook-form";
+import {
+  useForm,
+  useWatch,
+  type Control,
+  type FieldValues,
+} from "react-hook-form";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
-import { OPEN_BUILDER_ACTION } from "./PageBuilderCard";
 
 /** Each unsaved-work report, as the key it was made under and its value. */
 const reports: { key: string; hasWork: boolean }[] = [];
@@ -53,6 +56,12 @@ let saved: unknown;
 
 /** Replaces the open editor's document, as one undoable edit would. */
 let edit: ((next: BlockDocument) => void) | undefined;
+
+/**
+ * What the form held for the field each time the view was asked to leave, read
+ * at that moment rather than after the render that follows it.
+ */
+const heldAtExit: unknown[] = [];
 
 vi.mock("@nextlyhq/builder/shell", async importOriginal => {
   const real = await importOriginal<Record<string, unknown>>();
@@ -151,6 +160,7 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   loadInlineRichTextEditor: () => new Promise<never>(() => {}),
   usePluginClientConfig: () => undefined,
   useDocumentIdentity: () => null,
+  navigateTo: vi.fn(),
   useDocumentLocale: () => null,
   // Every plugin read answers with nothing: a site with no stored style, no
   // components and no patterns, which none of these cases is about.
@@ -199,6 +209,14 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
 
 // Imported after the mocks, which is what makes them take effect.
 const { BlocksField } = await import("./BlocksField");
+const { PageBuilderView } = await import("./editor/PageBuilderView");
+
+/**
+ * The blocks field's declaration, as the admin hands it to the view. Typed at
+ * the boundary because `FieldConfig` is the closed union of the built-in
+ * shapes, and a contributed type such as `blocks` has no arm in it.
+ */
+const BODY_FIELD = { name: "body", type: "blocks" } as never;
 
 /** A document distinct from the opening one, so a stale hand-back shows. */
 const EDITED: BlockDocument = {
@@ -211,16 +229,22 @@ const EDITED: BlockDocument = {
 function Saved({
   control,
 }: {
-  control: Control<{ title: string; body: unknown }>;
+  control: Control<FieldValues>;
 }): React.JSX.Element | null {
   saved = useWatch({ control, name: "body" });
   return null;
 }
 
-function Host(): React.JSX.Element {
-  const { control } = useForm<{ title: string; body: unknown }>({
+/** The entry's form, which every case here starts from. */
+function useEntryForm() {
+  return useForm<FieldValues>({
     defaultValues: { title: "About us", body: undefined },
   });
+}
+
+/** The edit form with the blocks field at rest in it. */
+function FieldHost(): React.JSX.Element {
+  const { control } = useEntryForm();
   return (
     <>
       <BlocksField name="body" control={control} />
@@ -229,8 +253,31 @@ function Host(): React.JSX.Element {
   );
 }
 
+/**
+ * The builder's document view over the same form. Its `exit` records what the
+ * form held when it was called, so a case can tell a hand-back that happened
+ * before leaving from one that never happened.
+ */
+function ViewHost(): React.JSX.Element {
+  const { control, getValues } = useEntryForm();
+  return (
+    <>
+      <PageBuilderView
+        control={control}
+        field={BODY_FIELD}
+        readOnly={false}
+        exit={() => {
+          heldAtExit.push(getValues("body"));
+        }}
+      />
+      <Saved control={control} />
+    </>
+  );
+}
+
+/** Mount the builder's view, which opens the editor. */
 function openEditor(): void {
-  fireEvent.click(screen.getByRole("button", { name: OPEN_BUILDER_ACTION }));
+  render(<ViewHost />);
 }
 
 function editDocument(): void {
@@ -244,6 +291,7 @@ beforeEach(() => {
   chromeRequests.length = 0;
   saved = undefined;
   edit = undefined;
+  heldAtExit.length = 0;
 });
 
 afterEach(() => {
@@ -252,7 +300,7 @@ afterEach(() => {
 
 describe("at rest", () => {
   it("tells the form nothing while the editor is closed", () => {
-    render(<Host />);
+    render(<FieldHost />);
 
     // The field renders on every entry form holding a blocks field, open or
     // not; a channel driven from it would hide the admin's navigation and
@@ -265,7 +313,6 @@ describe("at rest", () => {
 
 describe("the unsaved-work report", () => {
   it("reports no work under the field's own key when the editor opens", () => {
-    render(<Host />);
     openEditor();
 
     expect(reports.length).toBeGreaterThan(0);
@@ -274,7 +321,6 @@ describe("the unsaved-work report", () => {
   });
 
   it("reports work once the document has been edited", () => {
-    render(<Host />);
     openEditor();
     editDocument();
 
@@ -285,7 +331,6 @@ describe("the unsaved-work report", () => {
 
 describe("the recovery point", () => {
   it("asks for none for the document the editor opened with", () => {
-    render(<Host />);
     openEditor();
 
     // That document is what the server already holds; recording it would
@@ -294,7 +339,6 @@ describe("the recovery point", () => {
   });
 
   it("asks for one after an edit, holding the whole document with the live layout", () => {
-    render(<Host />);
     openEditor();
     editDocument();
 
@@ -307,7 +351,6 @@ describe("the recovery point", () => {
 
 describe("the admin's chrome", () => {
   it("is asked to step aside, with a way back, while the editor is open", () => {
-    render(<Host />);
     openEditor();
 
     expect(chromeRequests.at(-1)).toEqual({
@@ -324,8 +367,7 @@ describe("the admin's chrome", () => {
 });
 
 describe("leaving", () => {
-  it("hands the EDITED document back to the form and closes", () => {
-    render(<Host />);
+  it("hands the EDITED document back to the form, then leaves", () => {
     openEditor();
     editDocument();
     fireEvent.click(screen.getByRole("button", { name: "Leave editor" }));
@@ -335,6 +377,9 @@ describe("leaving", () => {
     // that handed that one back would still write a page-shaped value — and
     // fail here on the missing heading.
     expect(saved).toEqual(EDITED);
-    expect(screen.queryByRole("button", { name: "Leave editor" })).toBeNull();
+    // Left exactly once, with the edited document already in the form at that
+    // moment: the hand-back is part of leaving, and the edit form the view
+    // returns to draws the field from what the form holds.
+    expect(heldAtExit).toEqual([EDITED]);
   });
 });
