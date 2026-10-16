@@ -797,7 +797,8 @@ describe("publish now over REST", () => {
   });
 
   it("does not call a release published while some of it is still going out", async () => {
-    // A large release can outlast the request; the runner finishes it. Saying
+    // A large release can outlast the request, and another run of the drain
+    // may already hold it; either way the runner finishes it. Saying
     // "published" then would tell the person it is done when it is not.
     api.releases.publishNow.mockResolvedValueOnce({
       id: "r1",

@@ -18,9 +18,10 @@
 import { apiKeyWriteAllowed } from "../../auth/authenticated-scope";
 import { nextly } from "../../direct-api/nextly";
 import type { RBACAccessControlService } from "../../domains/auth/services/rbac-access-control-service";
-import { databaseRunAs } from "../../domains/jobs/jobs-runner";
+import type { JobRegistry } from "../../domains/jobs/job-registry";
+import { runSweepNow } from "../../domains/jobs/jobs-runner";
 import type { ReleaseTargetCaller } from "../../domains/releases/release-targets";
-import { runReleasePass } from "../../domains/releases/releases-drain-job";
+import { RELEASES_DRAIN_JOB } from "../../domains/releases/releases-drain-job";
 import { ReleasesRepository } from "../../domains/releases/releases-repository";
 import {
   RELEASES_RESOURCE,
@@ -31,12 +32,10 @@ import type { CacheRevalidator } from "../../revalidation/types";
 import { hasPermission } from "../../services/lib/permissions";
 import { container } from "../container";
 
-import { reportReleasesOutcome } from "./register-jobs";
 import type { RegistrationContext } from "./types";
 
 export function registerReleaseServices({
   adapter,
-  logger,
 }: RegistrationContext): void {
   container.registerSingleton<ReleasesService>(
     "releasesService",
@@ -113,6 +112,29 @@ export function registerReleaseServices({
         canManageReleases: (userId, authority) =>
           hasPermission(userId, authority, RELEASES_RESOURCE),
 
+        // Publish now runs the runner's OWN releases drain job, through the
+        // jobs runner and under its claim, rather than a pass of its own: two
+        // runs of the engine on a shared document can only be kept apart by
+        // one claim. The job reports its own outcome (`register-jobs`), so a
+        // document that could not be written now is logged exactly as a
+        // scheduled run logs it.
+        //
+        // The registry is resolved lazily, per call, for the reason the RBAC
+        // service below is: it is `register-jobs`' singleton, and resolving it
+        // here at registration would tie this to the order of the two. A boot
+        // that registered no job registry has nothing to run the drain with,
+        // so the release is left scheduled for now: it is due, and whatever
+        // runs this installation's releases sends it out on its next pass.
+        runDrainNow: async ({ maxDurationMs }) => {
+          if (!container.has("jobRegistry")) return;
+          await runSweepNow(
+            adapter,
+            container.get<JobRegistry>("jobRegistry"),
+            RELEASES_DRAIN_JOB,
+            { maxDurationMs }
+          );
+        },
+
         // The document's OWN authority, asked with the same operation the
         // ordinary write path uses. Adding a document to a release is a deferred
         // publish of it, so this is the check that stops a release from becoming
@@ -122,19 +144,6 @@ export function registerReleaseServices({
         // `register-auth`, and resolving at registration time would make this
         // depend on an ordering between two registrations rather than on the
         // container — the first reordering would break it silently.
-        // Publish now runs through the SAME pass the runner's job uses, built
-        // from the same three parts — the adapter, the Direct API facade the
-        // member's bound client wraps, and the identity reads that resolve each
-        // member's author — and reported the same way, so a document that could
-        // not be written now is logged exactly as a scheduled run would log it.
-        runRelease: async ({ only, deadline }) => {
-          const result = await runReleasePass(
-            { db: adapter, contentApi: nextly, runAs: databaseRunAs(adapter) },
-            { only, deadline }
-          );
-          reportReleasesOutcome(logger, result);
-        },
-
         canActOnDocument: async ({
           userId,
           scopeSlug,

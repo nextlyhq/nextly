@@ -65,7 +65,7 @@ function service(members: M[], liveAuthorIds: string[], state = "blocked") {
     canManageReleases: vi.fn(async () => true),
     canActOnDocument: vi.fn(async () => true),
     // Running a release is not what these cases are about.
-    runRelease: vi.fn(async () => undefined),
+    runDrainNow: vi.fn(async () => undefined),
     // Every target is there and has a lifecycle; the checks have their own tests.
     targets: {
       readDocument: async (target: { entryId: string }) => ({
@@ -174,7 +174,7 @@ describe("as an instrument", () => {
       canManageReleases: vi.fn(async () => false),
       canActOnDocument: vi.fn(async () => true),
       // Running a release is not what these cases are about.
-      runRelease: vi.fn(async () => undefined),
+      runDrainNow: vi.fn(async () => undefined),
       // Every target is there and has a lifecycle; the checks have their own tests.
       targets: {
         readDocument: async (target: { entryId: string }) => ({
@@ -337,7 +337,7 @@ describe("the blocker verdict and the write share a fence", () => {
       canManageReleases: vi.fn(async () => true),
       canActOnDocument: vi.fn(async () => true),
       // Running a release is not what these cases are about.
-      runRelease: vi.fn(async () => undefined),
+      runDrainNow: vi.fn(async () => undefined),
       // Every target is there and has a lifecycle; the checks have their own tests.
       targets: {
         readDocument: async (target: { entryId: string }) => ({

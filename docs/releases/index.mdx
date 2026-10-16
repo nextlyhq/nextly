@@ -52,9 +52,10 @@ exist and have drafts.
 </Callout>
 
 Publish now runs a draft or scheduled release straight away. It makes the same checks as
-scheduling, so a release that would stop part-way is refused before any document is written,
-and it runs through the same engine as a scheduled time: every document is written as the
-person who added it, and the release goes out together.
+scheduling, so a release that would stop part-way is refused before any document is written.
+Then it moves the release to the current time and starts the job runner's releases run at
+once, the same run a scheduled time gets: every document is written as the person who added
+it, and the release goes out together.
 
 |            |                                             |
 | ---------- | ------------------------------------------- |
@@ -62,13 +63,13 @@ person who added it, and the release goes out together.
 | Direct API | `nextly.releases.publishNow({ id })`        |
 | Permission | The same as scheduling: publishing releases |
 
-The answer is the release as it then stands. Almost always that is `published`. A very large
-release may still be `scheduled` when the answer comes, with the rest of its documents
-finished by the job runner on its next pass.
+The answer is the release as it then stands. Usually that is `published`, or `blocked` if a
+document stopped it part-way. It is still `scheduled` when a very large release outlasts the
+request, or when a releases run was already in progress: the release is then due, and goes
+out with that run or the job runner's next pass.
 
-Only this release runs, together with any other due release that shares a document with it
-(those are always settled together). Other releases that happen to be due are left to the
-job runner.
+Like any releases run, it sends out every release whose time has come, not only this one, so
+a release that was already overdue goes out with it.
 
 ## Releases that ran are final
 

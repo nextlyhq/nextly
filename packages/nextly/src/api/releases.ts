@@ -462,21 +462,19 @@ async function withCapabilities(
 }
 
 /**
- * One function per operation, keyed by the method the route table named.
+ * What a Publish now answer says, by the state the run left the release in.
  *
- * A map rather than a switch: eight cases in one function is twenty-three paths
- * through it, and each case is independent of the others — nothing falls
- * through, nothing shares a local. Splitting them means each reads as the small
- * thing it is, and the authority table above stays the single place that says
- * what each one needs.
+ * A release still `scheduled` is due and is being sent out by the runner: the
+ * run here ran out of time or could not write a document yet, or another run
+ * of the drain already held it. The wording holds for each, since none of its
+ * documents may be live yet.
  */
-/** What a Publish now answer says, by the state the run left the release in. */
 function publishNowMessage(state: ReleaseState): string {
   if (state === "published") return "Release published.";
   if (state === "blocked") {
     return "Release stopped part-way. Fix the documents blocking it, then schedule it again.";
   }
-  return "Release is going out; the rest of its documents will follow shortly.";
+  return "Release is going out; any of its documents not yet live will follow shortly.";
 }
 
 /**
@@ -501,6 +499,15 @@ async function decorateAfterWrite(
   }
 }
 
+/**
+ * One function per operation, keyed by the method the route table named.
+ *
+ * A map rather than a switch: eight cases in one function is twenty-three paths
+ * through it, and each case is independent of the others — nothing falls
+ * through, nothing shares a local. Splitting them means each reads as the small
+ * thing it is, and the authority table above stays the single place that says
+ * what each one needs.
+ */
 const RELEASE_OPERATIONS: Record<
   string,
   (ctx: ReleaseContext) => Promise<Response>

@@ -31,9 +31,12 @@
 
 A release can be published now: `POST /api/releases/:id/publish` and
 `nextly.releases.publishNow({ id })` run a draft or scheduled release at once,
-with the same checks and through the same engine as a scheduled run, and answer
-the release as it then stands. Each release in a list also says whether the
-reader may publish it now (`can.publishNow`). Both are experimental.
+with the same checks as scheduling, by moving it to the current time and
+starting the job runner's releases run straight away, and answer the release as
+it then stands. When a releases run is already in progress, the release goes
+out with it (or with the next one) and the answer says it is still scheduled.
+Each release in a list also says whether the reader may publish it now
+(`can.publishNow`). Both are experimental.
 
 **Behaviour change:** a cancelled release is now final, like a published one.
 It can no longer be scheduled again, and documents can no longer be added to or

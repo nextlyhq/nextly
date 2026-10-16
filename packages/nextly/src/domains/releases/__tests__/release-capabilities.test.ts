@@ -35,7 +35,7 @@ function service(holds: ReleaseAuthority[]) {
     canManageReleases,
     canActOnDocument: vi.fn(async () => true),
     // Running a release is not what these cases are about.
-    runRelease: vi.fn(async () => undefined),
+    runDrainNow: vi.fn(async () => undefined),
     // Every target is there and has a lifecycle; the checks have their own tests.
     targets: {
       readDocument: async (target: { entryId: string }) => ({

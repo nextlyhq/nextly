@@ -233,19 +233,24 @@ export interface ReleasesServiceDeps {
     userRoles?: string[];
   }) => Promise<boolean>;
   /**
-   * Run one release at once, with the releases sharing its documents, through
-   * the same engine the runner's scheduled pass uses (`runReleasePass`).
+   * Run the releases drain job now, through the jobs runner, if no runner
+   * already holds it.
    *
-   * Injected because running writes content as each member's author, which
-   * needs the content API and the identity reads only the wiring holds. The
-   * pass stops starting new writes at `deadline`; whatever it leaves is
-   * finished by the runner, as for any release whose time has come.
+   * The runner's own job, claimed under its lease exactly as a scheduled pass
+   * claims it, so a run started here can never overlap the scheduled drain or
+   * another one started here: every run of the release engine goes through
+   * that one claim. When another runner holds it, nothing runs and this
+   * resolves anyway; that runner, or the next pass, sends out what is due.
+   * `maxDurationMs` is the pass's budget, as for any pass.
+   *
+   * Injected because the runner, its registry and the identity reads the drain
+   * writes with are wiring the domain does not hold.
    */
-  runRelease: (options: { only: string; deadline: Date }) => Promise<unknown>;
+  runDrainNow: (options: { maxDurationMs: number }) => Promise<unknown>;
 }
 
 /**
- * How long Publish now may spend writing before it answers.
+ * How long Publish now may spend running the drain before it answers.
  *
  * A request has a time limit the runner's pass does not, and a release past
  * this budget is not lost: it is already due, so the runner finishes it on its
@@ -1613,12 +1618,18 @@ export class ReleasesService {
    * Run a release now, with the same checks and the same all-together run as
    * at a scheduled time.
    *
-   * It is scheduled for this moment and then run through the engine the
-   * runner uses, limited to this release and the releases sharing its
-   * documents — so Publish now is a scheduled run that does not wait, not a
-   * second way of publishing. Answers the release as it stands afterwards:
-   * `published`, or still `scheduled` when the budget ran out or a document
-   * could not be written yet, which the runner then finishes or stops.
+   * Publish now is a scheduled run that does not wait, not a second way of
+   * publishing: the release is scheduled for this moment, and then the
+   * runner's own releases drain job is run at once, under the same claim a
+   * scheduled pass takes. Like any pass, it sends out every release that is
+   * due, this one among them, and settles releases sharing a document
+   * together.
+   *
+   * Answers the release as it stands afterwards: `published`; `blocked` when
+   * a document stopped it part-way; or still `scheduled` when the budget ran
+   * out, a document could not be written yet, or another runner was already
+   * running the drain (or it is waiting to retry). A `scheduled` release is
+   * due, so that runner or the next pass finishes it.
    *
    * @experimental
    */
@@ -1671,10 +1682,11 @@ export class ReleasesService {
         },
       });
     }
-    await this.deps.runRelease({
-      only: id,
-      deadline: new Date(now.getTime() + PUBLISH_NOW_BUDGET_MS),
-    });
+    // The drain is the one runner of releases; running it here rather than a
+    // pass of our own is what keeps this from overlapping the scheduled drain
+    // or another Publish now on a shared document. Whether it ran is not the
+    // answer: the release's state afterwards is.
+    await this.deps.runDrainNow({ maxDurationMs: PUBLISH_NOW_BUDGET_MS });
     const [after] = await this.deps.repository.findReleases({ ids: [id] });
     return after ?? current;
   }

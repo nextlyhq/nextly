@@ -1,11 +1,13 @@
 /**
  * Publish now, and the states a release can no longer leave.
  *
- * Publish now runs a release at once through the same engine a scheduled run
- * uses, so the properties worth proving against a real database are the ones a
- * shortcut would lose: the documents are written for real (the stored row, not
- * only what a read projects), they are written as each member's author, the
- * whole release goes together, and a run is never repeated.
+ * Publish now schedules a release for this moment and runs the runner's own
+ * releases drain job at once, under the claim a scheduled pass takes, so the
+ * properties worth proving against a real database are the ones a shortcut
+ * would lose: the documents are written for real (the stored row, not only
+ * what a read projects), they are written as each member's author, the whole
+ * release goes together, a run is never repeated, and nothing runs beside a
+ * drain another runner already holds.
  *
  * The second half is what "never re-run or change a release that ran" means
  * for the other transitions: a published or cancelled release takes no further
@@ -24,7 +26,12 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import { container } from "../../../di/container";
 import type { CollectionsHandler } from "../../../services/collections-handler";
+import type { JobRegistry } from "../../jobs/job-registry";
+import { JobsRepository } from "../../jobs/jobs-repository";
+import { runJobsPass, sweepDedupeKey } from "../../jobs/jobs-runner";
+import { RELEASES_DRAIN_JOB } from "../releases-drain-job";
 import { ReleasesRepository } from "../releases-repository";
 
 import { deactivate, seedLiveAuthor } from "./helpers/live-author";
@@ -108,6 +115,30 @@ async function stateOf(t: TestNextly, id: string): Promise<string | undefined> {
   return (await t.nextly.releases.findByID({ id }))?.state;
 }
 
+/** How long another runner's claim on the drain is held in these cases. */
+const LEASE_MS = 30_000;
+
+/**
+ * Hold the releases drain as another runner would: its one sweep row, queued
+ * under the sweep's dedupe key the way a pass queues it, and claimed under a
+ * lease. Returns the instant that lease lapses.
+ */
+async function holdDrain(t: TestNextly): Promise<Date> {
+  const jobs = new JobsRepository(t.adapter);
+  const now = new Date();
+  const { id } = await jobs.enqueue({
+    slug: RELEASES_DRAIN_JOB,
+    input: null,
+    runAt: null,
+    runAsUserId: null,
+    dedupeKey: sweepDedupeKey(RELEASES_DRAIN_JOB),
+    now,
+  });
+  const claimed = await jobs.claim(id, "another-runner", now, LEASE_MS);
+  if (claimed === null) throw new Error("the drain could not be held");
+  return new Date(now.getTime() + LEASE_MS);
+}
+
 describe.each(getConfiguredTestDialects())(
   "publish now, and releases that ran (%s)",
   dialect => {
@@ -138,8 +169,10 @@ describe.each(getConfiguredTestDialects())(
     });
 
     it("runs a release once when two requests to publish it now overlap", async () => {
-      // A double click or a retry: both read the release scheduled. Only one
-      // may move it and run it; the other is refused before anything runs.
+      // A double click or a retry: both read the release at one revision. Only
+      // one may move it and run the drain; the other is refused before
+      // anything runs. A request that read it after the move cannot run beside
+      // the first either: the drain is one claim (the case below).
       const t = await boot(dialect);
       const author = await seedLiveAuthor(t);
       const id = await releaseOf(t, author, [await draft(t, "Once")]);
@@ -157,6 +190,41 @@ describe.each(getConfiguredTestDialects())(
         reason: { code: "CONFLICT" },
       });
       expect(await stateOf(t, id)).toBe("published");
+    });
+
+    it("answers scheduled while another runner holds the drain, and the next pass publishes it", async () => {
+      // Publish now runs the drain under its claim rather than a pass of its
+      // own, so while another runner holds that claim nothing runs here: the
+      // release is moved to now and left for that runner or the next pass.
+      const t = await boot(dialect);
+      const author = await seedLiveAuthor(t);
+      const a = await draft(t, "Waits");
+      const id = await releaseOf(t, author, [a]);
+      await new ReleasesRepository(t.adapter).scheduleRelease(
+        id,
+        new Date(Date.now() + 7 * DAY),
+        "UTC"
+      );
+      const lapses = await holdDrain(t);
+
+      const answered = await t.nextly.releases.publishNow({ id });
+
+      expect(answered.state).toBe("scheduled");
+      expect(await storedStatus(t, a)).toBe("draft");
+      // Moved to now, so the next pass finds it due rather than next week.
+      expect(answered.scheduledAt?.getTime()).toBeLessThan(lapses.getTime());
+
+      // The next pass, once the other runner's lease has lapsed: the ordinary
+      // trigger, through the installation's own registry.
+      const pass = await runJobsPass(
+        t.adapter,
+        container.get<JobRegistry>("jobRegistry"),
+        { now: () => new Date(lapses.getTime() + 1_000), retentionMs: null }
+      );
+
+      expect(pass.done).toBeGreaterThanOrEqual(1);
+      expect(await stateOf(t, id)).toBe("published");
+      expect(await storedStatus(t, a)).toBe("published");
     });
 
     it("runs a draft release at once", async () => {
@@ -200,10 +268,11 @@ describe.each(getConfiguredTestDialects())(
       expect(await storedStatus(t, b)).toBe("draft");
     });
 
-    it("runs only this release, not every other release that is due", async () => {
-      // Another release, overdue and touching a different document, is the
-      // runner's to apply. Publish now acting on it too would put content live
-      // that nobody asked to publish from this screen.
+    it("sends out with it a release that was already due, as the runner's pass does", async () => {
+      // Publish now runs the drain itself, and a drain sends out every release
+      // whose time has come. An overdue release is the runner's to send, and
+      // it would have gone out on the runner's next pass anyway; it is not
+      // left waiting behind one that was run on demand.
       const t = await boot(dialect);
       const author = await seedLiveAuthor(t);
       const mine = await draft(t, "Mine");
@@ -219,8 +288,8 @@ describe.each(getConfiguredTestDialects())(
       await t.nextly.releases.publishNow({ id });
 
       expect(await storedStatus(t, mine)).toBe("published");
-      expect(await storedStatus(t, theirs)).toBe("draft");
-      expect(await stateOf(t, other)).toBe("scheduled");
+      expect(await storedStatus(t, theirs)).toBe("published");
+      expect(await stateOf(t, other)).toBe("published");
     });
 
     it("never runs a release twice, nor one that stopped or was cancelled", async () => {
