@@ -121,14 +121,34 @@ describe.each([
   });
 });
 
-describe("a project that already has one of the routes", () => {
-  it("keeps every existing file exactly as it was, and reports it as skipped", async () => {
-    const own =
-      "// the project's own media route\nexport const GET = () => new Response('mine');\n";
-    const health = "export const GET = () => Response.json({ ok: true });\n";
+describe("a project that already has routes where these go", () => {
+  /** What a project without those folders receives, for the hand-added text to match. */
+  async function freshRoute(srcDir: boolean, route: string): Promise<string> {
+    const fresh = mkdtempSync(join(tmpdir(), "media-routes-fresh-"));
+    try {
+      await generateMediaRoutes(fresh, project(srcDir), TEMPLATES);
+      return readFileSync(
+        join(fresh, srcDir ? "src/app" : "app", route),
+        "utf8"
+      );
+    } finally {
+      rmSync(fresh, { recursive: true, force: true });
+    }
+  }
+
+  const ADMIN_ROLE = (file: string) =>
+    `already holds routes; left as it is. The admin's media library needs Nextly's route at ${file}, where it uploads, edits and deletes media for signed-in users with media permissions: put the content below there, replacing or merging what handles those requests now`;
+  const PUBLIC_ROLE = (file: string) =>
+    `already holds routes; left as it is. Nextly's public media route at ${file} serves media files to visitors, read-only: put the content below there, replacing or merging what handles those requests now`;
+
+  it("leaves a file at either media route's path exactly as it was, and says what to add there", async () => {
+    const admin =
+      "// the project's own admin media route\nexport const GET = () => new Response('mine');\n";
+    const pub =
+      "// the project's own public media route\nexport const GET = () => new Response('ours');\n";
     for (const [path, text] of [
-      [`src/app/${ADMIN_MEDIA}`, own],
-      [`src/app/${HEALTH}`, health],
+      [`src/app/${ADMIN_MEDIA}`, admin],
+      [`src/app/${PUBLIC_MEDIA}`, pub],
     ]) {
       mkdirSync(dirname(join(cwd, path)), { recursive: true });
       writeFileSync(join(cwd, path), text);
@@ -136,31 +156,62 @@ describe("a project that already has one of the routes", () => {
 
     const result = await generateMediaRoutes(cwd, project(true), TEMPLATES);
 
-    // What a project without the file receives, for the hand-added text to match.
-    const fresh = mkdtempSync(join(tmpdir(), "media-routes-fresh-"));
-    try {
-      await generateMediaRoutes(fresh, project(true), TEMPLATES);
-      const nextlyRoute = readFileSync(
-        join(fresh, "src/app", ADMIN_MEDIA),
-        "utf8"
-      );
-      expect(result).toEqual({
-        written: [`src/app/${PUBLIC_MEDIA}`],
-        changed: [],
-        skipped: [
-          {
-            path: `src/app/${ADMIN_MEDIA}`,
-            why: "already exists; left as it is. The admin's media library needs Nextly's route here: replace or merge it with the content below",
-            toAdd: nextlyRoute,
-          },
-          { path: `src/app/${HEALTH}`, why: "already exists; left as it is" },
-        ],
-      });
-    } finally {
-      rmSync(fresh, { recursive: true, force: true });
+    expect(result).toEqual({
+      written: [`src/app/${HEALTH}`],
+      changed: [],
+      skipped: [
+        {
+          path: "src/app/admin/api/media",
+          why: ADMIN_ROLE(`src/app/${ADMIN_MEDIA}`),
+          toAdd: await freshRoute(true, ADMIN_MEDIA),
+        },
+        {
+          path: "src/app/api/media",
+          why: PUBLIC_ROLE(`src/app/${PUBLIC_MEDIA}`),
+          toAdd: await freshRoute(true, PUBLIC_MEDIA),
+        },
+      ],
+    });
+    expect(written("src/app", ADMIN_MEDIA)).toBe(admin);
+    expect(written("src/app", PUBLIC_MEDIA)).toBe(pub);
+  });
+
+  // The route's whole folder is the unit: Next.js serves `route.js` as well
+  // as `route.ts`, and an optional catch-all also answers its parent URL, so
+  // a handler anywhere in the folder would compete with the one written here.
+  it("adds no catch-all beside a handler the app has at its parent URL, in any route file", async () => {
+    const media = "export const GET = () => Response.json([]);\n";
+    const health = "export const GET = () => Response.json({ ok: true });\n";
+    for (const [path, text] of [
+      ["app/api/media/route.js", media],
+      ["app/api/health/route.js", health],
+    ]) {
+      mkdirSync(dirname(join(cwd, path)), { recursive: true });
+      writeFileSync(join(cwd, path), text);
     }
-    expect(written("src/app", ADMIN_MEDIA)).toBe(own);
-    expect(written("src/app", HEALTH)).toBe(health);
+
+    const result = await generateMediaRoutes(cwd, project(false), TEMPLATES);
+
+    expect(result).toEqual({
+      written: [`app/${ADMIN_MEDIA}`],
+      changed: [],
+      skipped: [
+        {
+          path: "app/api/media",
+          why: PUBLIC_ROLE(`app/${PUBLIC_MEDIA}`),
+          toAdd: await freshRoute(false, PUBLIC_MEDIA),
+        },
+        { path: "app/api/health", why: "already holds routes; left as it is" },
+      ],
+    });
+    expect(() => readFileSync(join(cwd, "app", PUBLIC_MEDIA))).toThrow();
+    expect(() => readFileSync(join(cwd, "app", HEALTH))).toThrow();
+    expect(readFileSync(join(cwd, "app/api/media/route.js"), "utf8")).toBe(
+      media
+    );
+    expect(readFileSync(join(cwd, "app/api/health/route.js"), "utf8")).toBe(
+      health
+    );
   });
 });
 
