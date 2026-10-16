@@ -194,7 +194,7 @@ export function registerReleaseServices({
  * its owner's, and the role set travels on the user, so a rule that reads
  * roles sees the caller's rather than none.
  */
-function contentReadAccess(
+export function contentReadAccess(
   caller: ReleaseTargetCaller
 ): Record<string, unknown> {
   if (caller.trusted) return { overrideAccess: true };
@@ -208,7 +208,10 @@ function contentReadAccess(
             ...(caller.userRoles ? { roles: caller.userRoles } : {}),
           },
         }),
-    ...(caller.authenticatedScope ? { actor: caller.authenticatedScope } : {}),
+    // Always stated, `undefined` included: left out, the content API fills
+    // `actor` from the instance's defaults, and a caller with no key of its
+    // own would be judged by a default key's grants.
+    actor: caller.authenticatedScope,
   };
 }
 
