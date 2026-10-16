@@ -76,7 +76,10 @@ async function boot(dialect: TestDialect): Promise<Handler> {
               }: {
                 req: { user?: { id?: unknown } };
                 data?: Record<string, unknown>;
-              }) => data !== undefined && data.owner === req.user?.id,
+              }) =>
+                // The documented ownership pattern. With no entry and no
+                // caller it reads `undefined === undefined`, which is true.
+                data?.owner === req.user?.id,
             },
           } as never),
         ],
@@ -198,6 +201,38 @@ describe.each(getConfiguredTestDialects())(
       // The control: a term in a readable field still finds its entry.
       const some = await h.listEntries(read(AGENT, { search: "north" }));
       expect(titles(some)).toEqual(["north"]);
+    });
+
+    it("refuses an anonymous caller a field whose rule reads the entry", async () => {
+      // With no entry and no user, the rule above answers true by accident.
+      // A rule that reads the entry at all is judged entry-dependent, so the
+      // accidental answer does not open the field to a query.
+      const h = await boot(dialect);
+      const anonymous = (extra: Record<string, unknown>) => ({
+        collectionName: VAULTS,
+        overrideAccess: false,
+        ...extra,
+      });
+      const cases: Array<[string, Envelope, string]> = [
+        [
+          "where",
+          await h.listEntries(
+            anonymous({ where: { ownerNote: { equals: "zebra" } } })
+          ),
+          '"path":"where.ownerNote"',
+        ],
+        [
+          "sort",
+          await h.listEntries(anonymous({ sort: "ownerNote" })),
+          '"path":"sort.ownerNote"',
+        ],
+      ];
+      for (const [name, envelope, path] of cases) {
+        expect(refusal(envelope)[0], name).toContain(path);
+      }
+      const none = await h.listEntries(anonymous({ search: "zebra" }));
+      expect(none.success, JSON.stringify(none)).toBe(true);
+      expect(titles(none)).toEqual([]);
     });
 
     it("treats a field readable only on some entries as unreadable to query", async () => {

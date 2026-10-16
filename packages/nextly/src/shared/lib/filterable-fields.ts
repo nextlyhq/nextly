@@ -166,7 +166,14 @@ async function unreadableFields(
   for (const name of new Set(names)) {
     for (const spelled of spellings(name)) {
       const field = fns[spelled];
-      if (field && !(await readableWithoutEntry(field, ruleCaller))) {
+      if (!field) continue;
+      // A rule-bearing field whose read value is not its stored value stays
+      // out however the rule answers: every row shows the transformed value,
+      // so a query on the stored one probes exactly what the rows hide.
+      const hidden =
+        (carriesReadRule(field) && transformsOnRead(field)) ||
+        !(await readableWithoutEntry(field, ruleCaller));
+      if (hidden) {
         denied.push(name);
         break;
       }

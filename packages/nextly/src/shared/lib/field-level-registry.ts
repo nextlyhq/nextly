@@ -505,23 +505,68 @@ async function fieldRuleAllows(
   ctx: FieldRuleCaller,
   snapshot: Record<string, unknown> | undefined
 ): Promise<boolean> {
+  return runFieldRule(fn, ctx, { id: ctx.id, data: snapshot });
+}
+
+/**
+ * Call a field rule with the caller's grants and the entry fields given, and
+ * read its answer; a rule that throws denies (fail-secure).
+ *
+ * `entry` is spread into the arguments, so a caller may pass accessors in
+ * place of values and observe whether the rule reads them.
+ */
+async function runFieldRule(
+  fn: FieldAccessFn,
+  ctx: Omit<FieldRuleCaller, "id">,
+  entry: Pick<Parameters<FieldAccessFn>[0], "id" | "data">
+): Promise<boolean> {
   try {
     const { permissions, roles } = await ctx.grants();
-    return await fn({
-      req: { user: ctx.user },
-      id: ctx.id,
-      data: snapshot,
-      permissions,
-      roles,
-      // The person the operation is made as, from the same frame the
-      // collection gate reads, so a field rule and the gate above it agree
-      // on who is asking.
-      principal: currentPrincipal(),
-    });
+    const args = Object.defineProperties(
+      {
+        req: { user: ctx.user },
+        permissions,
+        roles,
+        // The person the operation is made as, from the same frame the
+        // collection gate reads, so a field rule and the gate above it agree
+        // on who is asking.
+        principal: currentPrincipal(),
+      },
+      Object.getOwnPropertyDescriptors(entry)
+    ) as Parameters<FieldAccessFn>[0];
+    return await fn(args);
   } catch {
     // Fail-secure: an access rule that throws denies the field.
     return false;
   }
+}
+
+/**
+ * Whether one read rule allows the caller without reading the entry at all.
+ *
+ * A rule that reads `id` or `data` depends on the entry, and with none its
+ * answer is an accident of comparing absent values: the documented ownership
+ * rule `data?.owner === req.user?.id` reads `undefined === undefined` for an
+ * anonymous caller and answers true. So reading either refuses, whatever the
+ * rule then returns. A rule that never touches them is judged by its answer.
+ */
+async function ruleAllowsWithoutEntry(
+  rule: FieldAccessFn,
+  caller: Omit<FieldRuleCaller, "id">
+): Promise<boolean> {
+  let readsEntry = false;
+  const entry = {
+    get id(): string | undefined {
+      readsEntry = true;
+      return undefined;
+    },
+    get data(): Record<string, unknown> | undefined {
+      readsEntry = true;
+      return undefined;
+    },
+  };
+  const allowed = await runFieldRule(rule, caller, entry);
+  return allowed === true && !readsEntry;
 }
 
 /**
@@ -543,7 +588,7 @@ export async function readableWithoutEntry(
   caller: Omit<FieldRuleCaller, "id">
 ): Promise<boolean> {
   const rule = fns.access?.read;
-  if (rule && !(await fieldRuleAllows(rule, caller, undefined))) return false;
+  if (rule && !(await ruleAllowsWithoutEntry(rule, caller))) return false;
   for (const nested of Object.values(fns.fields ?? {})) {
     if (!(await readableWithoutEntry(nested, caller))) return false;
   }

@@ -606,6 +606,12 @@ interface FilteredReadParams {
   collectionName: string;
   user?: UserContext;
   /**
+   * The identity field rules are judged for, when it is not `user`: the
+   * redaction basis of a trusted read that still enforces field access. The
+   * total beside a page narrows its search by the same fields the page did.
+   */
+  fieldAccessUser?: UserContext;
+  /**
    * The instant the enclosing read resolved releases against.
    *
    * Set only by `listEntries`, which calls this as its own continuation. A
@@ -1202,6 +1208,8 @@ export class CollectionQueryService extends BaseService {
     readHooksAlreadyRan?: boolean;
     /** Whose field read rules are judged; absent judges an anonymous caller. */
     user?: UserContext;
+    /** The redaction basis, when it is not `user`; it wins, as it does for rows. */
+    fieldAccessUser?: UserContext;
     authenticatedScope?: AuthenticatedScope;
   }): Promise<void> {
     // The settled filter a list forwards to its own count already passed this
@@ -1216,8 +1224,12 @@ export class CollectionQueryService extends BaseService {
     const opts = {
       overrideAccess: fieldTrustOf(params),
       frameworkFilter: params.frameworkFilter,
+      // The identity the returned rows are redacted for, so a field a query
+      // may use is exactly a field the rows show.
       caller: {
-        user: params.user as Record<string, unknown> | undefined,
+        user: (params.fieldAccessUser ?? params.user) as
+          | Record<string, unknown>
+          | undefined,
         authenticatedScope: params.authenticatedScope,
       },
     };
@@ -2786,7 +2798,7 @@ export class CollectionQueryService extends BaseService {
         overrideAccess: params.overrideAccess,
         enforceFieldAccess: params.enforceFieldAccess,
         accessUser,
-        user: params.user,
+        user: params.fieldAccessUser ?? params.user,
         authenticatedScope: params.authenticatedScope,
         schema,
         companion,
@@ -2915,6 +2927,8 @@ export class CollectionQueryService extends BaseService {
           this.countEntries({
             collectionName: params.collectionName,
             user: params.user,
+            // Its search is narrowed by the same identity the page's was.
+            fieldAccessUser: params.fieldAccessUser,
             search: params.search,
             // This count is part of THIS read, so it resolves releases against
             // the same instant the rows did.
@@ -3557,7 +3571,7 @@ export class CollectionQueryService extends BaseService {
       // this aggregate by the fields it narrowed the rows by.
       enforceFieldAccess: params.enforceFieldAccess,
       accessUser,
-      user: params.user,
+      user: params.fieldAccessUser ?? params.user,
       authenticatedScope: params.authenticatedScope,
       schema,
       companion,
