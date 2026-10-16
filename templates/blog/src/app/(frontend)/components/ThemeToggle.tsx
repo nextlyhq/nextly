@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useSyncExternalStore } from "react";
 
 /**
  * ThemeToggle - three-state segmented control (Light / System / Dark).
@@ -18,38 +18,64 @@ import { useEffect, useState } from "react";
 type Theme = "light" | "system" | "dark";
 
 const STORAGE_KEY = "nextly-theme";
+const THEMES: readonly Theme[] = ["light", "system", "dark"];
+const DARK_QUERY = "(prefers-color-scheme: dark)";
+
+/**
+ * Everything showing the theme in this tab. The browser's `storage` event
+ * only reaches other tabs, so a change made here is announced here by hand.
+ */
+const listeners = new Set<() => void>();
+
+function subscribe(listener: () => void) {
+  listeners.add(listener);
+  window.addEventListener("storage", listener);
+  return () => {
+    listeners.delete(listener);
+    window.removeEventListener("storage", listener);
+  };
+}
+
+/** The saved choice, or "system" when there is none or it is not one of the three. */
+function readTheme(): Theme {
+  const saved = localStorage.getItem(STORAGE_KEY);
+  return THEMES.find(theme => theme === saved) ?? "system";
+}
+
+function saveTheme(theme: Theme) {
+  localStorage.setItem(STORAGE_KEY, theme);
+  for (const listener of listeners) listener();
+}
 
 function applyTheme(theme: Theme) {
-  if (typeof document === "undefined") return;
-  const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+  const prefersDark = window.matchMedia(DARK_QUERY).matches;
   const isDark = theme === "dark" || (theme === "system" && prefersDark);
   document.documentElement.dataset.theme = isDark ? "dark" : "light";
 }
 
 export function ThemeToggle() {
-  const [theme, setTheme] = useState<Theme>("system");
+  // Read from storage rather than copied into state by an effect. The server
+  // renders "system"; after hydration React swaps in the saved choice, which
+  // the layout's init script has already painted.
+  const theme = useSyncExternalStore<Theme>(
+    subscribe,
+    readTheme,
+    () => "system"
+  );
 
+  // Keep the page's colours in step with the choice, and with the system's
+  // setting for as long as "system" is the choice.
   useEffect(() => {
-    const stored = localStorage.getItem(STORAGE_KEY) as Theme | null;
-    const initial = stored ?? "system";
-    setTheme(initial);
-    applyTheme(initial);
-
-    // When user is on "system", follow OS-level changes live.
-    const mq = window.matchMedia("(prefers-color-scheme: dark)");
-    const handler = () => {
-      const current =
-        (localStorage.getItem(STORAGE_KEY) as Theme | null) ?? "system";
-      if (current === "system") applyTheme("system");
-    };
-    mq.addEventListener("change", handler);
-    return () => mq.removeEventListener("change", handler);
-  }, []);
+    applyTheme(theme);
+    if (theme !== "system") return;
+    const query = window.matchMedia(DARK_QUERY);
+    const follow = () => applyTheme("system");
+    query.addEventListener("change", follow);
+    return () => query.removeEventListener("change", follow);
+  }, [theme]);
 
   function pick(next: Theme) {
-    setTheme(next);
-    localStorage.setItem(STORAGE_KEY, next);
-    applyTheme(next);
+    saveTheme(next);
   }
 
   return (

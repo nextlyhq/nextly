@@ -85,6 +85,12 @@ export interface UnsavedChangesGuardProps {
   disabled?: boolean;
 
   /**
+   * The edited document's fields: a view offered on a field type keeps the
+   * document only where it applies to them.
+   */
+  fields?: readonly object[] | undefined;
+
+  /**
    * The form content to render.
    */
   children: ReactNode;
@@ -139,6 +145,7 @@ export function UnsavedChangesGuard({
   onDiscard,
   onCancel,
   disabled = false,
+  fields,
   children,
 }: UnsavedChangesGuardProps) {
   const { showDialog, confirmLeave, cancelLeave, leaveWithoutWarning } =
@@ -146,6 +153,7 @@ export function UnsavedChangesGuard({
       isDirty,
       onConfirmLeave: onDiscard,
       disabled,
+      fields,
     });
 
   /*

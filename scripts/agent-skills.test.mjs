@@ -339,8 +339,12 @@ describe("keeping contributor skills out of what people building with Nextly ins
   const USER_SKILL = "---\nname: nextly-install\ndescription: when installing Nextly\n---\n\nInstall Nextly.\n";
   const internal = name => `---\nname: ${name}\ndescription: when ${name} applies\nmetadata:\n  internal: true\n---\n\nThe contributor procedure for ${name}.\n`;
 
-  function repository() {
+  /** A git repository whose skills/README.md lists `listed`, as the real one lists its skills. */
+  function repository(listed = ["nextly-install"]) {
     execFileSync("git", ["init", "-q"], { cwd: base });
+    mkdirSync(join(base, USER_SKILLS_HOME), { recursive: true });
+    const rows = listed.map(name => `| \`${name}\` | what it covers |`).join("\n");
+    writeFileSync(join(base, USER_SKILLS_HOME, "README.md"), `# Skills\n\n| Skill | What it covers |\n| --- | --- |\n${rows}\n`);
   }
 
   it("passes contributor skills marked internal beside user skills that are not, and says what it read", () => {
@@ -385,7 +389,7 @@ describe("keeping contributor skills out of what people building with Nextly ins
   });
 
   it("names a user skill hidden from the installer, one sharing a contributor skill's name, and one repeating its text", () => {
-    repository();
+    repository(["a", "copied"]);
     skill(SKILLS_HOME, "a", internal("a"));
     skill(SKILLS_HOME, "b", "---\nname: b\ndescription: when b applies\nmetadata:\n  internal: true\n---\n\nRun the fallow gate.\n");
     skill(USER_SKILLS_HOME, "hidden", internal("hidden"));
@@ -423,14 +427,45 @@ describe("keeping contributor skills out of what people building with Nextly ins
   // The other half of the population: a repository whose skills/ lost every
   // skill would offer nothing to install and still read clean.
   it("refuses a repository whose skills/ offers no skill to people building with Nextly", () => {
-    repository();
+    repository([]);
     skill(SKILLS_HOME, "a", internal("a"));
-    mkdirSync(join(base, USER_SKILLS_HOME), { recursive: true });
-    writeFileSync(join(base, USER_SKILLS_HOME, "README.md"), "Skills live here.\n");
     skill(USER_SKILLS_HOME, "hidden", internal("hidden"));
     expect(userSkillSeparation(base).problems).toEqual([
       { path: `${USER_SKILLS_HOME}/hidden/SKILL.md`, problem: "is marked internal, so the skills command never offers it to people building with Nextly" },
       { path: USER_SKILLS_HOME, problem: "offers no skill, so `npx skills add nextlyhq/nextly` installs nothing for people building with Nextly" },
+    ]);
+  });
+
+  // The README is what people read before installing, so the skills it lists
+  // and the skills the installer offers are one set: a skill gone from
+  // skills/ still advertised, or one added without a word, is a finding.
+  it("names a skill the README lists that skills/ does not offer, and one it offers that the README does not list", () => {
+    repository(["nextly-install", "nextly-deploy"]);
+    skill(SKILLS_HOME, "a", internal("a"));
+    skill(USER_SKILLS_HOME, "nextly-install", USER_SKILL);
+    skill(USER_SKILLS_HOME, "nextly-extra", "---\nname: nextly-extra\ndescription: something more\n---\n\nMore.\n");
+    expect(userSkillSeparation(base).problems).toEqual([
+      { path: `${USER_SKILLS_HOME}/nextly-extra/SKILL.md`, problem: `is offered by the skills command but not listed in ${USER_SKILLS_HOME}/README.md` },
+      { path: `${USER_SKILLS_HOME}/README.md`, problem: "lists nextly-deploy, which skills/ does not offer" },
+    ]);
+  });
+
+  // The skill format allows a name to start with a digit, so the README's
+  // table must be read the same way, or a correctly listed skill is reported.
+  it("reads a listed skill whose name starts with a digit", () => {
+    repository(["3d-tools"]);
+    skill(SKILLS_HOME, "a", internal("a"));
+    skill(USER_SKILLS_HOME, "3d-tools", "---\nname: 3d-tools\ndescription: when working with 3D assets\n---\n\nModels.\n");
+    expect(userSkillSeparation(base).problems).toEqual([]);
+  });
+
+  it("refuses a skills/ without the README that lists its skills", () => {
+    repository();
+    rmSync(join(base, USER_SKILLS_HOME, "README.md"));
+    skill(SKILLS_HOME, "a", internal("a"));
+    skill(USER_SKILLS_HOME, "nextly-install", USER_SKILL);
+    expect(userSkillSeparation(base).problems).toEqual([
+      { path: `${USER_SKILLS_HOME}/README.md`, problem: "is missing, so nothing lists the skills people building with Nextly install" },
     ]);
   });
 

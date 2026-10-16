@@ -323,6 +323,13 @@ export {
   MAX_PLACEMENTS,
   type ColumnCount,
 } from "./domains/widgets/layout-limits";
+// The endpoint's own size check, so the editor can trim a save to what the
+// endpoint accepts by bytes as well as by count. From `layout-payload.ts`,
+// which reaches only `layout-limits.ts`, for the reason above.
+export {
+  MAX_LAYOUT_BYTES,
+  layoutSizeProblem,
+} from "./domains/widgets/layout-payload";
 // The VALUE as well as the type. A widget result names each column's kind, and
 // the admin has to decide which kinds it can present -- deriving that from this
 // tuple is what stops the browser silently erasing a kind core has started to

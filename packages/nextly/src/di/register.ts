@@ -866,6 +866,16 @@ async function registerServicesOnce(
   // of the framework's two schema modes had no queryable source.
   resetWidgetRegistries(transformedConfig.plugins ?? []);
 
+  // Before any step that writes to the database or the registry: the Builder
+  // reconcile and the code-first sync below would otherwise add a refused
+  // plugin's fields and tables before the refusal.
+  await assertBootPluginInstallStates(
+    transformedConfig,
+    adapter,
+    adapterDrizzleDb,
+    resolvedLogger
+  );
+
   await publishStoredRecordingPolicies(adapter, transformedConfig);
 
   await registerConfigTablesQuietly(
@@ -2040,8 +2050,7 @@ async function runBootMigrations(
  * fail its first query, far from any mention of migrations — so the boot
  * refuses here, naming the command that fixes it. Production refuses;
  * development logs, because dev push reconciles the schema on every reload
- * and a behind state there resolves itself moments later. A plugin that was
- * uninstalled and is still configured is refused in every environment.
+ * and a behind state there resolves itself moments later.
  */
 async function assertBootPluginSchemaVersions(
   transformedConfig: NextlyServiceConfig,
@@ -2057,6 +2066,12 @@ async function assertBootPluginSchemaVersions(
   const { assertPluginSchemaVersionsUsable } = await import(
     "../domains/schema/ownership/schema-version-check"
   );
+  const { isLifecycleCommandBoot } = await import(
+    "../domains/schema/ownership/plugin-lifecycle-state"
+  );
+  // A lifecycle command's boot runs a plugin's hook while its uninstall is
+  // leaving the version it declares, so the version is not judged there.
+  if (isLifecycleCommandBoot()) return;
   // Read from the migration ledger, which every install that has run a
   // migration has: a plugin whose modules only change data owns no table
   // and so has no owner row to carry its version.
@@ -2072,24 +2087,56 @@ async function assertBootPluginSchemaVersions(
         adapter.dialect
       ).listFileApplies(),
     ledgerExists: () => adapter.tableExists("nextly_schema_events"),
-    readUninstalled: async () => {
-      const { SchemaOwnersRepository } = await import(
-        "../domains/schema/ownership/schema-owners-repository"
-      );
-      const rows = await new SchemaOwnersRepository(
+    production: process.env.NODE_ENV === "production",
+    warn: m => logger.warn?.(m),
+  });
+}
+
+/**
+ * Layer 6.4: install state, BEFORE the Builder reconcile, the code-first sync,
+ * boot migrations and any plugin initialises.
+ *
+ * A configured plugin `nextly plugins install` has not recorded is refused in
+ * production and warned about in development; one uninstalled, or whose
+ * uninstall stopped part way, is refused everywhere
+ * (`plugin-install-gate.ts`). Before the migrations, so a boot that refuses
+ * a plugin never applies its modules first, and a half-uninstalled plugin's
+ * rolled-back modules are not applied again under it.
+ *
+ * Skipped in the boot a lifecycle command makes to run a plugin's hook, which
+ * runs mid-install or mid-uninstall by design.
+ */
+async function assertBootPluginInstallStates(
+  transformedConfig: NextlyServiceConfig,
+  adapter: DrizzleAdapter,
+  adapterDrizzleDb: DatabaseInstance,
+  logger: Logger
+): Promise<void> {
+  const plugins = transformedConfig.plugins ?? [];
+  if (plugins.length === 0) return;
+  const [
+    { SchemaEventsRepository },
+    { SchemaOwnersRepository, schemaOwnersTableExists },
+    { assertBootPluginsInstalled },
+    { isLifecycleCommandBoot },
+  ] = await Promise.all([
+    import("../domains/schema/events/schema-events-repository"),
+    import("../domains/schema/ownership/schema-owners-repository"),
+    import("../domains/schema/ownership/plugin-install-gate"),
+    import("../domains/schema/ownership/plugin-lifecycle-state"),
+  ]);
+  if (isLifecycleCommandBoot()) return;
+  await assertBootPluginsInstalled({
+    plugins,
+    readLifecycleEvents: () =>
+      new SchemaEventsRepository(
         adapterDrizzleDb,
         adapter.dialect
-      ).read();
-      return new Set(
-        rows.filter(row => row.state === "uninstalled").map(row => row.ownerId)
-      );
-    },
-    registryExists: async () => {
-      const { schemaOwnersTableExists } = await import(
-        "../domains/schema/ownership/schema-owners-repository"
-      );
-      return schemaOwnersTableExists(adapter);
-    },
+      ).listPluginLifecycle(),
+    ledgerExists: () => adapter.tableExists("nextly_schema_events"),
+    readOwners: () =>
+      new SchemaOwnersRepository(adapterDrizzleDb, adapter.dialect).read(),
+    registryExists: () => schemaOwnersTableExists(adapter),
     production: process.env.NODE_ENV === "production",
     warn: m => logger.warn?.(m),
   });
@@ -2117,6 +2164,12 @@ async function prepareExtensionTablesForInit(
   bootExtensionSchema: ExtensionSchema | undefined
 ): Promise<void> {
   if (!bootApplyEnabled()) return;
+  const { isLifecycleCommandBoot } = await import(
+    "../domains/schema/ownership/plugin-lifecycle-state"
+  );
+  // Not in a lifecycle command's boot: a resumed uninstall would otherwise
+  // recreate the extension tables it has already removed.
+  if (isLifecycleCommandBoot()) return;
   const { prepareExtensionTablesBeforeInit } = await import(
     "../init/first-run"
   );

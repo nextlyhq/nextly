@@ -33,14 +33,17 @@
     "clean": "rimraf dist"
   },
   "dependencies": {
+    "@babel/parser": "^7.29.7",
     "@clack/prompts": "^1.1.0",
     "commander": "^14.0.2",
     "execa": "^9.6.0",
     "fs-extra": "^11.3.0",
     "picocolors": "^1.1.1",
-    "tar": "^7.5.19"
+    "tar": "^7.5.19",
+    "yaml": "^2.8.3"
   },
   "devDependencies": {
+    "@babel/types": "^7.29.7",
     "@nextlyhq/eslint-config": "workspace:*",
     "@nextlyhq/eslint-plugin": "workspace:*",
     "@nextlyhq/telemetry": "workspace:*",

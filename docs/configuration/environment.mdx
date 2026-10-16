@@ -299,7 +299,7 @@ Nextly's RBAC layer ships a hybrid (in-memory LRU + database) permission cache. 
 The database permission cache benefits from periodic cleanup. A typical daily cron:
 
 ```bash
-0 2 * * * curl -X POST http://localhost:3000/api/auth/cache/cleanup
+0 2 * * * curl -X POST http://localhost:3000/admin/api/auth/cache/cleanup
 ```
 
 ---

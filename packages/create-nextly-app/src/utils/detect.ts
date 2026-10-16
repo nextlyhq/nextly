@@ -7,29 +7,39 @@ import type { PackageManager, ProjectInfo } from "../types";
 import { detectPmFromUserAgent } from "./detect-pm-from-user-agent";
 
 /**
+ * Lockfiles, and the manager each one belongs to. Bun writes the text
+ * `bun.lock` by default since 1.2; `bun.lockb` is the older binary form.
+ */
+const LOCKFILES: ReadonlyArray<readonly [string, PackageManager]> = [
+  ["pnpm-lock.yaml", "pnpm"],
+  ["yarn.lock", "yarn"],
+  ["bun.lock", "bun"],
+  ["bun.lockb", "bun"],
+  ["package-lock.json", "npm"],
+  ["npm-shrinkwrap.json", "npm"],
+];
+
+/**
  * Detect the package manager used in the project.
  *
- * Reads `process.env.npm_config_user_agent` first — set by every PM when
- * running a `create-*` command, so it works in fresh-scaffold contexts
- * where the target directory has no lockfile yet (the common case for
- * new Nextly projects). Falls back to lockfile detection in cwd when
- * the env var is missing (e.g., somebody invoked the bin directly via
- * `node bin/create-nextly-app.js`).
+ * A lockfile in `cwd` decides first: it says which manager installs this
+ * project, while `npm_config_user_agent` only says which one launched the
+ * generator. Running `npx create-nextly-app` inside a pnpm app otherwise ran
+ * `npm install` over pnpm's `node_modules`, and npm crashed.
  *
- * The previous lockfile-only implementation always fell back to "npm"
- * for fresh scaffolds, so the final "next steps" output told everyone
- * to run `npm run dev` regardless of which PM they actually used.
+ * With no lockfile — a fresh scaffold's empty target directory, the common
+ * case — the user agent decides, which every manager sets when it runs a
+ * `create-*` command, so "next steps" names the manager the person used.
+ * npm is the last resort, for the bin run directly with `node`.
  */
 export async function detectPackageManager(
   cwd: string
 ): Promise<PackageManager> {
-  const fromUa = detectPmFromUserAgent(process.env.npm_config_user_agent);
-  if (fromUa) return fromUa;
+  for (const [lockfile, manager] of LOCKFILES) {
+    if (await fs.pathExists(path.join(cwd, lockfile))) return manager;
+  }
 
-  if (await fs.pathExists(path.join(cwd, "pnpm-lock.yaml"))) return "pnpm";
-  if (await fs.pathExists(path.join(cwd, "yarn.lock"))) return "yarn";
-  if (await fs.pathExists(path.join(cwd, "bun.lockb"))) return "bun";
-  return "npm";
+  return detectPmFromUserAgent(process.env.npm_config_user_agent) ?? "npm";
 }
 
 /**

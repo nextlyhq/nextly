@@ -56,6 +56,10 @@ export const WHERE_OPERATORS = [
   // coerce, and there it searches the serialized text — which hits a key name as readily as a
   // value. Text columns only, and a search rather than a containment check.
   "CONTAINS",
+  // CONTAINS without regard to case: a substring match on a TEXT column with the value taken
+  // literally (`%` and `_` are characters to find, not wildcards), ignoring case on every
+  // dialect whatever the column's collation. SQLite folds ASCII letters only.
+  "ICONTAINS",
   // Declared, never implemented — the builder throws `Unsupported operator: OVERLAPS`. Kept in
   // the union because removing it would be a breaking change to a published type; the refusal
   // is pinned by a test so implementing it has to come through here.
