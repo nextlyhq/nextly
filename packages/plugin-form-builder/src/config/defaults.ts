@@ -114,6 +114,23 @@ export function pluralize(singular: string): string {
 // ============================================================
 
 /**
+ * Say so when a form config still sets `notifications.webhooks`.
+ *
+ * The plugin sends no webhooks of its own: a submission reaches other systems
+ * through Nextly's `form.submission.created` webhook. A config written before
+ * that, or in JavaScript where no type error reaches it, would otherwise lose
+ * its webhooks without a word, so it is told what to use instead.
+ */
+function warnIfWebhooksConfigured(config: FormConfig): void {
+  const notifications: unknown = config.notifications;
+  if (typeof notifications !== "object" || notifications === null) return;
+  if (!("webhooks" in notifications)) return;
+  console.warn(
+    `[form-builder] Form "${config.slug}" sets notifications.webhooks, which the Form Builder no longer reads, so those webhooks are not sent. Subscribe an endpoint to Nextly's form.submission.created webhook instead: https://nextlyhq.com/docs/plugins/form-builder#webhooks`
+  );
+}
+
+/**
  * Apply default values to form configuration.
  *
  * This function takes a partial form configuration and returns a complete
@@ -156,6 +173,8 @@ export function pluralize(singular: string): string {
  * ```
  */
 export function applyFormDefaults(config: FormConfig): FormConfig {
+  warnIfWebhooksConfigured(config);
+
   // Generate singular label from slug if not provided
   const singularLabel = config.labels?.singular || toTitleCase(config.slug);
 

@@ -2,7 +2,8 @@
  * Form Builder Handlers
  *
  * Exports handlers for form submission processing, validation,
- * spam detection, and webhook triggering.
+ * and spam detection. Submissions reach other systems through Nextly's own
+ * `form.submission.created` webhook, so the plugin sends none of its own.
  *
  * @module handlers
  */
@@ -25,15 +26,3 @@ export {
   type SpamCheckOptions,
   type SpamCheckResult,
 } from "./spam-detection";
-
-// Webhook utilities
-export {
-  triggerWebhooks,
-  fireWebhooks,
-  isValidWebhookUrl,
-  getSupportedWebhookEvents,
-  type WebhookPayload,
-  type TriggerWebhooksOptions,
-  type WebhookDeliveryResult,
-  type TriggerWebhooksResult,
-} from "./webhooks";
