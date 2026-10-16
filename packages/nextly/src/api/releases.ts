@@ -281,6 +281,14 @@ function releaseKindParam(value: unknown): ReleaseKind | undefined {
   return value;
 }
 
+/** A kind present in a body: one of the kinds, or a refusal (`null` too). */
+function requireKind(value: unknown): ReleaseKind {
+  if (!isReleaseKind(value)) {
+    throw badRequest(`\`kind\` must be one of: ${RELEASE_KINDS.join(", ")}.`);
+  }
+  return value;
+}
+
 /**
  * The page size, always bounded.
  *
@@ -579,7 +587,9 @@ const RELEASE_OPERATIONS: Record<
         ...caller,
         title: requireString(body, "title"),
         description,
-        kind: releaseKindParam(body.kind),
+        // Present means given: an explicit null is a malformed kind, not an
+        // omitted one, and is refused rather than read as `release`.
+        kind: "kind" in body ? requireKind(body.kind) : undefined,
       }),
       { status: 201 }
     );

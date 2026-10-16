@@ -587,6 +587,12 @@ describe("release route paging and body validation", () => {
       "",
       { title: "Launch", kind: "singles" },
     ],
+    [
+      "an explicit null kind on a new release",
+      "createRelease",
+      "",
+      { title: "Launch", kind: null },
+    ],
   ])("refuses %s rather than ignoring it", async (_, op, query, body) => {
     // Ignored, `kind=singles` would list every release, and a new release
     // would be made ordinary when the caller asked for something else.

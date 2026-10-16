@@ -59,7 +59,9 @@ const release = await nextly.releases.create({
 
 The database holds a single-document release to one document, so the rule holds even when two
 requests add documents to it at once. Adding a second document is refused with a conflict that says to
-put several documents in an ordinary release instead. Releases made before kinds existed read as
+put several documents in an ordinary release instead. A single-document release can't be
+scheduled before its document is added. Once it's scheduled, its document can't be taken out:
+cancel the release instead. Releases made before kinds existed read as
 `release`; `nextly migrate` adds the column without rewriting them. The `kind` option is
 experimental.
 

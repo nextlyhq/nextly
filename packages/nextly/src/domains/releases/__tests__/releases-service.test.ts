@@ -346,6 +346,71 @@ describe("ReleasesService refuses members that would act on nothing", () => {
 });
 
 describe("ReleasesService keeps a single-document release to one document", () => {
+  it("calls the same Single again a duplicate, whatever id the caller sent", async () => {
+    // A Single is recorded by its own row, so a stale id names the same
+    // document: the member key is built from the resolved id.
+    const { svc, repo, deps } = service({ holds: ["create"] });
+    deps.targets.readDocument = async () => ({ id: "row-1" });
+    const single = {
+      ...MEMBER,
+      scopeKind: "single" as const,
+      scopeSlug: "home",
+    };
+    repo.findReleases.mockResolvedValue([
+      { id: "r1", state: "draft", kind: "single" },
+    ]);
+    repo.listMembers.mockResolvedValue([
+      {
+        id: "m0",
+        memberKey: releaseMemberKey("r1", { ...single, entryId: "row-1" }),
+      },
+    ]);
+    repo.addMember.mockRejectedValueOnce(
+      Object.assign(new Error("UNIQUE constraint failed"), { code: "23505" })
+    );
+    await expect(
+      svc.addMember("r1", { ...single, entryId: "stale" }, ADMIN)
+    ).rejects.toMatchObject({ code: "DUPLICATE" });
+  });
+
+  it("asks for publish authority on a committed release before saying what it holds", async () => {
+    // Without that authority the caller learns nothing of the release's kind
+    // or occupancy: the refusal is the access decision, not the conflict.
+    const { svc, repo } = service({ holds: ["create"] });
+    repo.findReleases.mockResolvedValue([
+      { id: "r1", state: "scheduled", kind: "single" },
+    ]);
+    repo.listMembers.mockResolvedValue([{ id: "m0", memberKey: "another" }]);
+    await expect(svc.addMember("r1", MEMBER, ADMIN)).rejects.toMatchObject({
+      code: "FORBIDDEN",
+    });
+    expect(repo.listMembers).not.toHaveBeenCalled();
+  });
+
+  it("refuses to schedule a single release that has no document yet", async () => {
+    const { svc, repo } = service({ holds: ["publish"] });
+    repo.findReleases.mockResolvedValue([
+      { id: "r1", state: "draft", kind: "single" },
+    ]);
+    repo.listMembers.mockResolvedValue([]);
+    await expect(
+      svc.schedule("r1", new Date(Date.now() + 86_400_000), "UTC", ADMIN)
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+    expect(repo.scheduleRelease).not.toHaveBeenCalled();
+  });
+
+  it("refuses taking the only document out of a scheduled single release", async () => {
+    const { svc, repo } = service({ holds: ["create", "publish"] });
+    repo.findMember.mockResolvedValue({ id: "m0", releaseId: "r1" });
+    repo.findReleases.mockResolvedValue([
+      { id: "r1", state: "scheduled", kind: "single" },
+    ]);
+    await expect(svc.removeMember("m0", ADMIN)).rejects.toMatchObject({
+      code: "CONFLICT",
+    });
+    expect(repo.removeMember).not.toHaveBeenCalled();
+  });
+
   const SINGLE = { id: "r1", state: "draft", kind: "single" };
   const HELD = { id: "m0", memberKey: "another-document" };
 
@@ -497,7 +562,8 @@ describe("ReleasesService closes the window around a committed release", () => {
     // live — was wrong in exactly that direction.
     const { svc, repo } = service({ holds: ["create"] });
     repo.touchIfAssemblable.mockResolvedValueOnce(false);
-    repo.findReleases.mockResolvedValueOnce([{ id: "r1", state: "scheduled" }]);
+    // Persistent, not once: the release is read for its kind before the claim.
+    repo.findReleases.mockResolvedValue([{ id: "r1", state: "scheduled" }]);
     await expect(svc.removeMember("m1", ADMIN)).rejects.toMatchObject({
       code: "FORBIDDEN",
     });
