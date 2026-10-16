@@ -20,7 +20,7 @@ const handlers = createDynamicHandlers({ config: nextlyConfig });
 export const { GET, POST, PUT, PATCH, DELETE, OPTIONS } = handlers;
 ```
 
-The health endpoint and media-streaming endpoint can be exported at their own routes if you want to opt out of catch-all coverage:
+The health endpoint and media-streaming endpoint can be exported at their own routes if you want to opt out of catch-all coverage. Put them in the same app directory as the catch-all: `app/api/health/route.ts` in a project with a root `app/`.
 
 ```typescript title="src/app/api/health/route.ts"
 export { GET, HEAD } from "nextly/api/health";
