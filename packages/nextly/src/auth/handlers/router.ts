@@ -26,6 +26,7 @@ import type { RefreshTokenRecord } from "./issue-session";
 import { handleLogin } from "./login";
 import { handleLogout } from "./logout";
 import { handlePending } from "./pending";
+import { noteUnresolvedAuthRequest } from "./proxy-posture";
 import { handleRefresh } from "./refresh";
 import { handleRegister } from "./register";
 import { handleResetPassword } from "./reset-password";
@@ -467,6 +468,7 @@ async function checkAuthIpRateLimit(
     trustedProxyIps: deps.trustedProxyIps,
   });
 
+  if (ip === null) noteUnresolvedAuthRequest(request);
   const result =
     ip === null
       ? await admitUnknownSource(request, authPath, deps)
