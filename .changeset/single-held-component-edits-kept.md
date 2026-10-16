@@ -44,3 +44,11 @@ rather than the text their column stores, so such a version restores
 instead of being refused by validation. A localized Single's draft holds
 every stored translation of its language, not only the fields the save
 named, so a version restores without dropping the others.
+
+A Single that is not localized but embeds a localized component no longer
+holds a working draft: its draft would be keyed with no language while the
+component keeps a value per language, so it saves live, as it did before. Its
+schema reports `draftsEnabled: false` with the new reason
+`localized-component`. `DraftSplitDisabledReason` gains that member; code that
+switches over the reasons should handle it (or a default). Collections are not
+affected.
