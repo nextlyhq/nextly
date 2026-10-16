@@ -72,6 +72,10 @@ import {
   type ReleaseAttentionReason,
   type ReleaseTab,
 } from "../release-tabs";
+import {
+  resolveReleaseTarget,
+  type ReleaseTargetReader,
+} from "../release-targets";
 import { documentRefKey, RELEASE_LIST_ORDERS } from "../releases-repository";
 import type {
   DocumentRef,
@@ -180,6 +184,12 @@ export interface ReleaseCapabilities {
 
 export interface ReleasesServiceDeps {
   repository: ReleasesRepository;
+  /**
+   * What a document must be to join a release: there for the caller, in a
+   * collection or Single with a draft/published lifecycle. Injected because
+   * the content API and the schema registries are the wiring's to hold.
+   */
+  targets: ReleaseTargetReader;
   /**
    * Whether this user holds one of the three release authorities.
    *
@@ -1168,6 +1178,18 @@ export class ReleasesService {
     await this.authorize(actor, "create");
     await this.authorizeDocumentAction(actor, input.scopeSlug, input.action);
     requireRunnableMember(input, actor);
+    // The target checks, for every caller: REST, the Direct API and the admin
+    // alike. A precondition, so before anything is written; for a Single it
+    // also replaces the id the caller sent with the row's own.
+    const entryId = await resolveReleaseTarget(
+      this.deps.targets,
+      {
+        scopeKind: input.scopeKind,
+        scopeSlug: input.scopeSlug,
+        entryId: input.entryId,
+      },
+      { userId: actor.userId, trusted: actor.overrideAccess === true }
+    );
 
     // BEFORE the claim, which is itself a write: `touchIfAssemblable` updates
     // the release's `updatedAt`, so a refusal ordered after it would still have
@@ -1182,6 +1204,7 @@ export class ReleasesService {
     try {
       const member = await this.deps.repository.addMember({
         ...input,
+        entryId,
         releaseId,
         // Never a caller-supplied author. Materialisation performs each member
         // as its recorded author, so an author a caller could name would be an
