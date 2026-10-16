@@ -136,6 +136,47 @@ describe.each(getConfiguredTestDialects())(
       expect(live.siteName).toBe("Live");
     });
 
+    it("records no version for a held save that changes nothing", async () => {
+      current = await createTestNextly({
+        dialect,
+        singles: [
+          defineSingle({
+            slug: "site-meta",
+            status: true,
+            versions: true,
+            fields: [
+              text({ name: "siteName" }),
+              group({ name: "seo", fields: [text({ name: "metaTitle" })] }),
+            ],
+          }),
+        ],
+      });
+      const singles = current.getService("singleEntryService");
+      await singles.update(
+        "site-meta",
+        {
+          siteName: "Live",
+          seo: { metaTitle: "Live title" },
+          status: "published",
+        },
+        { overrideAccess: true }
+      );
+      const before = (await rowsFor(current, "site-meta")).filter(
+        r => typeof r.versionNo === "number"
+      ).length;
+
+      // The same values, held: the first held save compares with what is live.
+      await singles.update(
+        "site-meta",
+        { siteName: "Live", seo: { metaTitle: "Live title" } },
+        { overrideAccess: true }
+      );
+      const after = (await rowsFor(current, "site-meta")).filter(
+        r => typeof r.versionNo === "number"
+      ).length;
+      expect(after).toBe(before);
+    });
+
     it("holds every translation of the language, not only the fields saved", async () => {
       current = await createTestNextly({
         dialect,

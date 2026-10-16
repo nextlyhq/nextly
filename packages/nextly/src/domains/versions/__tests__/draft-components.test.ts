@@ -38,6 +38,15 @@ describe("draftComponentValues", () => {
   it("leaves out a component field the draft does not hold", () => {
     expect(draftComponentValues({ title: "T" }, fields)).toEqual({});
   });
+
+  it("reads only the draft's own keys, never an inherited one", () => {
+    // A component field may be named like an Object.prototype member; a draft
+    // without it must not hand back the inherited function as its value.
+    const named = [
+      field({ name: "constructor", type: "component", component: "hero" }),
+    ];
+    expect(draftComponentValues({ title: "T" }, named)).toEqual({});
+  });
 });
 
 describe("mergeComponentPatches", () => {

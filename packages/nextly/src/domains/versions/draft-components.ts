@@ -91,7 +91,14 @@ export function draftComponentValues(
   for (const field of fields) {
     if (!isFieldGroupField(field)) continue;
     const name = (field as { name?: unknown }).name;
-    if (typeof name === "string" && name in draft) values[name] = draft[name];
+    // Own keys only: a field named like an Object.prototype member would
+    // otherwise read an inherited function from a draft that lacks it.
+    if (
+      typeof name === "string" &&
+      Object.prototype.hasOwnProperty.call(draft, name)
+    ) {
+      values[name] = draft[name];
+    }
   }
   return values;
 }

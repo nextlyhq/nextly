@@ -2116,53 +2116,60 @@ export class SingleMutationService extends BaseService {
               // them. A later save builds on the draft, which already has them.
               const componentResolver = (componentSlug: string) =>
                 singleComponentSchemas?.get(componentSlug)?.fields;
-              const base = existingDraft
-                ? (existingDraft.snapshot as Record<string, unknown>)
-                : {
-                    ...convertTimestampsToCamelCase({
-                      ...(existingDoc as Record<string, unknown>),
-                    }),
-                    // The language's stored translations: the main row holds
-                    // none, so without them the draft (and its version) would
-                    // lack every translation this save did not touch.
-                    ...(companion
-                      ? Object.fromEntries(
-                          companion.localizedFields.flatMap(f =>
-                            Object.prototype.hasOwnProperty.call(
-                              previousCompanionValues,
-                              f.column
-                            )
-                              ? [[f.name, previousCompanionValues[f.column]]]
-                              : []
-                          )
-                        )
-                      : {}),
-                    ...tagComponentTypes(
-                      await readComponentSubtrees({
-                        fieldGroupDataService: this.fieldGroupDataService,
-                        tx,
-                        entryId: existingDoc.id,
-                        parentTable: singleMeta.tableName,
-                        fieldConfigs,
-                        locale: options.locale,
-                        reason: "working-draft-single-component-read",
-                        logContext: { slug },
-                        onReadFailure: err =>
-                          this.logger.error(
-                            "Working draft: failed to read single components; failing the save instead of holding an incomplete draft",
-                            {
-                              slug,
-                              error:
-                                err instanceof Error
-                                  ? err.message
-                                  : String(err),
-                            }
-                          ),
+              // In read shape whichever it comes from: the save is compared with
+              // it, and a JSON-backed field read from the row (or held as text
+              // by a draft stored before drafts held the read shape) would
+              // differ from the parsed value of an unchanged save.
+              const base = this.queryService.deserializeJsonFields(
+                (existingDraft
+                  ? existingDraft.snapshot
+                  : {
+                      ...convertTimestampsToCamelCase({
+                        ...(existingDoc as Record<string, unknown>),
                       }),
-                      fieldConfigs,
-                      componentResolver
-                    ),
-                  };
+                      // The language's stored translations: the main row holds
+                      // none, so without them the draft (and its version) would
+                      // lack every translation this save did not touch.
+                      ...(companion
+                        ? Object.fromEntries(
+                            companion.localizedFields.flatMap(f =>
+                              Object.prototype.hasOwnProperty.call(
+                                previousCompanionValues,
+                                f.column
+                              )
+                                ? [[f.name, previousCompanionValues[f.column]]]
+                                : []
+                            )
+                          )
+                        : {}),
+                      ...tagComponentTypes(
+                        await readComponentSubtrees({
+                          fieldGroupDataService: this.fieldGroupDataService,
+                          tx,
+                          entryId: existingDoc.id,
+                          parentTable: singleMeta.tableName,
+                          fieldConfigs,
+                          locale: options.locale,
+                          reason: "working-draft-single-component-read",
+                          logContext: { slug },
+                          onReadFailure: err =>
+                            this.logger.error(
+                              "Working draft: failed to read single components; failing the save instead of holding an incomplete draft",
+                              {
+                                slug,
+                                error:
+                                  err instanceof Error
+                                    ? err.message
+                                    : String(err),
+                              }
+                            ),
+                        }),
+                        fieldConfigs,
+                        componentResolver
+                      ),
+                    }) as SingleDocument,
+                singleMeta.fields
+              ) as Record<string, unknown>;
               // The base is the READ shape (field names); `mainPayload` is the
               // WRITE shape (columns). Spreading one onto the other put both
               // spellings of every edited field in the snapshot — the live value

@@ -210,6 +210,52 @@ describe.each(getConfiguredTestDialects())(
       expect(contentOf(version.hero)).toMatchObject({ heading: "Pending" });
     });
 
+    it("publishes a held component edit when every language is published at once", async () => {
+      current = await createTestNextly({
+        dialect,
+        fieldGroups: [hero()],
+        singles: [
+          defineSingle({
+            slug: "home",
+            localized: true,
+            status: true,
+            versions: true,
+            fields: [
+              text({ name: "title", localized: true }),
+              fieldGroup({ name: "hero", component: "hero" }),
+            ],
+          }),
+        ],
+        localization: { locales: ["en", "de"], defaultLocale: "en" },
+      });
+      const singles = current.getService("singleEntryService");
+      await singles.update(
+        "home",
+        {
+          title: "T",
+          hero: { heading: "Live", subheading: "Live sub" },
+          status: "published",
+        },
+        { locale: "en", overrideAccess: true }
+      );
+      await singles.update(
+        "home",
+        { hero: { heading: "Pending", subheading: "Live sub" } },
+        { locale: "en", overrideAccess: true }
+      );
+      expect(
+        contentOf((await workingDraft(current, "home")).hero)
+      ).toMatchObject({ heading: "Pending" });
+
+      const res = await singles.publishAllLocales("home", {
+        overrideAccess: true,
+      });
+      expect(res.success).toBe(true);
+      expect(contentOf((await liveHome(current)).hero)).toMatchObject({
+        heading: "Pending",
+      });
+    });
+
     it("lets a publish's own component value win, sub-field by sub-field", async () => {
       const singles = await bootSingle(dialect);
       await singles.update(

@@ -458,7 +458,8 @@ export class SinglePublishAllService extends BaseService {
       plan,
       lockedRow,
       priorCompanionStatuses,
-      pending
+      pending,
+      options.user
     );
 
     if (singleMeta.versions?.enabled) {
@@ -508,7 +509,9 @@ export class SinglePublishAllService extends BaseService {
     lockedRow: Record<string, unknown>,
     priorCompanionStatuses: Map<string, string | null>,
     /** The pending changes, already judged. */
-    pending: readonly PendingChange[]
+    pending: readonly PendingChange[],
+    /** The publisher, whom the component save's own field rules see. */
+    user: UserContext | undefined
   ): Promise<{
     publishedRow: Record<string, unknown>;
     mainRowTransitioned: boolean;
@@ -543,7 +546,7 @@ export class SinglePublishAllService extends BaseService {
     // the statuses would all say published while the content each author was
     // holding stayed unapplied — the document would report itself fully
     // published and show none of the work being published.
-    await this.promotePendingChanges(tx, plan, publishNow, pending);
+    await this.promotePendingChanges(tx, plan, publishNow, pending, user);
 
     if (companion && plan.companionPublishable) {
       // Every stored translation moves in ONE statement, through the adapter's
@@ -671,7 +674,8 @@ export class SinglePublishAllService extends BaseService {
     plan: PublishPlan,
     publishNow: Date,
     /** Judged before the statuses moved; see the transaction body. */
-    pending: readonly PendingChange[]
+    pending: readonly PendingChange[],
+    user: UserContext | undefined
   ): Promise<void> {
     if (pending.length === 0) return;
     const { singleMeta, existingDoc, companion } = plan;
@@ -679,7 +683,11 @@ export class SinglePublishAllService extends BaseService {
     for (const draft of pending) {
       // The pending change carries no lifecycle of its own; the statuses this
       // publish writes are the ones that count.
-      const { main, companion: companionValues } = splitPendingChange(
+      const {
+        main,
+        companion: companionValues,
+        components,
+      } = splitPendingChange(
         draft.snapshot,
         plan.singleMeta.tableName,
         plan.singleMeta.fields,
@@ -706,6 +714,20 @@ export class SinglePublishAllService extends BaseService {
           entryId: existingDoc.id,
           locale: draft.locale,
           values: companionValues,
+        });
+      }
+      // The draft's component values live in tables of their own, written the
+      // way an ordinary publish writes them. Without this the drafts below are
+      // consumed and a held component edit is lost while the publish succeeds.
+      // Cloned because the save mutates its input (ids, hashed passwords).
+      if (this.fieldGroupDataService && Object.keys(components).length > 0) {
+        await this.fieldGroupDataService.saveComponentDataInTransaction(tx, {
+          parentId: existingDoc.id,
+          parentTable: singleMeta.tableName,
+          fields: plan.fieldConfigs,
+          data: structuredClone(components),
+          locale: draft.locale ?? undefined,
+          req: user ? { user } : {},
         });
       }
     }
