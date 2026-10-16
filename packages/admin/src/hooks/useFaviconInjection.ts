@@ -18,8 +18,9 @@ const SWITCHED_OFF = "nextly-replaced-icon";
  * updates `<head>`, as a hot reload of the layout does. They are switched off
  * instead by renaming their `rel`, an attribute change React leaves alone, and
  * switched back when the admin's icon goes. The admin's own link is the only
- * node this adds or removes. A host icon added later, as when a layout change
- * makes React render a new one, is switched off as it arrives.
+ * node this adds or removes. A host icon React adds later, or a host link whose
+ * `rel` React changes to an icon's, is switched off as it happens. The host's
+ * original `rel` values are kept here, never written onto its nodes.
  */
 export function useFaviconInjection(href: string): void {
   useEffect(() => {
@@ -28,38 +29,55 @@ export function useFaviconInjection(href: string): void {
     if (href.startsWith("data:image/svg+xml")) own.type = "image/svg+xml";
     own.href = href;
 
-    const switchedOff = new Set<HTMLLinkElement>();
+    // Each host icon switched off, with the `rel` it had: the latest one, if
+    // React changed it while the admin's icon was shown.
+    const originals = new Map<HTMLLinkElement, string>();
     const switchOff = (icon: HTMLLinkElement) => {
-      if (icon === own || switchedOff.has(icon)) return;
-      icon.dataset.nextlyRel = icon.rel;
+      if (icon === own) return;
+      originals.set(icon, icon.rel);
       icon.rel = SWITCHED_OFF;
-      switchedOff.add(icon);
     };
     document.querySelectorAll<HTMLLinkElement>(ICON_LINKS).forEach(switchOff);
     document.head.appendChild(own);
 
-    const arrivals = new MutationObserver(records => {
-      for (const record of records) {
-        record.addedNodes.forEach(node => {
-          if (node instanceof HTMLLinkElement && node.matches(ICON_LINKS))
-            switchOff(node);
-        });
-      }
+    const changes = new MutationObserver(records =>
+      records.flatMap(iconsIn).forEach(switchOff)
+    );
+    changes.observe(document.head, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ["rel"],
     });
-    arrivals.observe(document.head, { childList: true });
 
     return () => {
-      arrivals.disconnect();
+      changes.disconnect();
       own.remove();
-      switchedOff.forEach(restoreHostIcon);
+      originals.forEach(restoreHostIcon);
     };
   }, [href]);
 }
 
-/** Gives a host icon back the `rel` it had before the admin's icon replaced it. */
-function restoreHostIcon(icon: HTMLLinkElement): void {
-  const rel = icon.dataset.nextlyRel;
-  if (rel === undefined) return;
-  icon.rel = rel;
-  delete icon.dataset.nextlyRel;
+/**
+ * The icon links a change to `<head>` brought: links added, or a link whose
+ * `rel` now names an icon. A switched-off link no longer matches, so this
+ * hook's own changes bring none.
+ */
+function iconsIn(record: MutationRecord): HTMLLinkElement[] {
+  const nodes =
+    record.type === "attributes"
+      ? [record.target]
+      : Array.from(record.addedNodes);
+  return nodes.filter(
+    (node): node is HTMLLinkElement =>
+      node instanceof HTMLLinkElement && node.matches(ICON_LINKS)
+  );
+}
+
+/**
+ * Gives a host icon back its `rel`, unless React has since given it another
+ * one of its own, which then stands.
+ */
+function restoreHostIcon(rel: string, icon: HTMLLinkElement): void {
+  if (icon.rel === SWITCHED_OFF) icon.rel = rel;
 }

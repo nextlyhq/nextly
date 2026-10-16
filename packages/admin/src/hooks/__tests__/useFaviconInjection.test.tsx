@@ -4,8 +4,9 @@
  * layout's metadata, and React updates them when the layout changes. If the
  * admin removes one, React later fails with "Cannot read properties of null
  * (reading 'removeChild')", which a hot reload of the layout turned into
- * hundreds of page errors. These tests render a host icon through React, as
- * Next does, and hold the admin to switching it off rather than removing it.
+ * hundreds of page errors. These tests render host icons through React, as
+ * Next does, for each relation a browser takes a favicon from, and hold the
+ * admin to switching them off rather than removing them.
  */
 import { cleanup, render, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
@@ -13,17 +14,32 @@ import { afterEach, describe, expect, it } from "vitest";
 import { useFaviconInjection } from "../useFaviconInjection";
 
 const ADMIN_ICON = "data:image/svg+xml;utf8,admin";
+const ICON_RELATIONS = ["icon", "shortcut icon", "apple-touch-icon"] as const;
 
 /** A host icon React renders and owns; React hoists it into <head>. */
-function HostIcon({ href }: { href: string }) {
-  return <link rel="icon" href={href} sizes="any" />;
+function HostIcon({
+  href,
+  rel = "icon",
+  ...data
+}: {
+  href: string;
+  rel?: string;
+  "data-nextly-rel"?: string;
+}) {
+  return <link rel={rel} href={href} sizes="any" {...data} />;
 }
 
-/** The icon links the browser would pick from now. */
+/** The icon links the browser would pick from now, under any of the three relations. */
 const activeIcons = () =>
   Array.from(
-    document.head.querySelectorAll<HTMLLinkElement>('link[rel="icon"]')
+    document.head.querySelectorAll<HTMLLinkElement>(
+      ICON_RELATIONS.map(rel => `link[rel="${rel}"]`).join(", ")
+    )
   );
+const hrefs = () => activeIcons().map(link => link.getAttribute("href"));
+
+/** Lets the hook's observer see a change React just made to <head>. */
+const observed = () => Promise.resolve();
 
 afterEach(() => {
   // React unmounts its icons first; clearing <head> under it would be the very
@@ -32,59 +48,80 @@ afterEach(() => {
   document.head.innerHTML = "";
 });
 
-describe("the admin's favicon", () => {
-  it("lets React update and remove its own icon after the admin has replaced it", () => {
-    const host = render(<HostIcon href="/favicon.ico" />);
+describe.each(ICON_RELATIONS)("a host %j link and the admin's favicon", rel => {
+  it("lets React update and remove its own link after the admin replaced it", () => {
+    const host = render(<HostIcon rel={rel} href="/favicon.ico" />);
     const hostLink = document.head.querySelector('link[href="/favicon.ico"]');
-    expect(hostLink, "React hoists the host icon into <head>").not.toBeNull();
+    expect(hostLink, "React hoists the host link into <head>").not.toBeNull();
     renderHook(() => useFaviconInjection(ADMIN_ICON));
 
-    // What a hot reload of the layout does to the icon React owns: React
+    // What a hot reload of the layout does to the link React owns: React
     // updates its own node in place, which stays switched off.
     expect(() =>
-      host.rerender(<HostIcon href="/favicon-2.ico" />)
+      host.rerender(<HostIcon rel={rel} href="/favicon-2.ico" />)
     ).not.toThrow();
     expect(hostLink?.getAttribute("href")).toBe("/favicon-2.ico");
-    expect(activeIcons().map(link => link.href)).toEqual([ADMIN_ICON]);
+    expect(hrefs()).toEqual([ADMIN_ICON]);
 
     expect(() => host.unmount()).not.toThrow();
     expect(hostLink?.isConnected).toBe(false);
-    expect(activeIcons().map(link => link.href)).toEqual([ADMIN_ICON]);
+    expect(hrefs()).toEqual([ADMIN_ICON]);
   });
 
-  it("switches off a host icon React adds after the admin's is shown", async () => {
-    const admin = renderHook(() => useFaviconInjection(ADMIN_ICON));
-
-    render(<HostIcon href="/late.ico" />);
-    // The observer runs after the DOM change, as a microtask.
-    await Promise.resolve();
-
-    expect(activeIcons().map(link => link.href)).toEqual([ADMIN_ICON]);
-    admin.unmount();
-    expect(activeIcons().map(link => link.getAttribute("href"))).toEqual([
-      "/late.ico",
-    ]);
-  });
-
-  it("shows only the admin's icon while it is mounted, keeping the host's node in place", () => {
-    render(<HostIcon href="/favicon.ico" />);
+  it("shows only the admin's icon while mounted, and gives the host its link back after", () => {
+    render(<HostIcon rel={rel} href="/favicon.ico" />);
     const hostLink = document.head.querySelector('link[href="/favicon.ico"]');
 
-    renderHook(() => useFaviconInjection(ADMIN_ICON));
-
-    expect(activeIcons().map(link => link.href)).toEqual([ADMIN_ICON]);
-    expect(hostLink?.isConnected).toBe(true);
-  });
-
-  it("gives the host its icon back when the admin's goes", () => {
-    render(<HostIcon href="/favicon.ico" />);
     const admin = renderHook(() => useFaviconInjection(ADMIN_ICON));
+    expect(hrefs()).toEqual([ADMIN_ICON]);
+    expect(hostLink?.isConnected).toBe(true);
 
     admin.unmount();
+    expect(hrefs()).toEqual(["/favicon.ico"]);
+    expect(hostLink?.getAttribute("rel")).toBe(rel);
+  });
 
-    expect(activeIcons().map(link => link.getAttribute("href"))).toEqual([
-      "/favicon.ico",
-    ]);
+  it("switches off a host link React adds after the admin's icon is shown", async () => {
+    const admin = renderHook(() => useFaviconInjection(ADMIN_ICON));
+
+    render(<HostIcon rel={rel} href="/late.ico" />);
+    await observed();
+
+    expect(hrefs()).toEqual([ADMIN_ICON]);
+    admin.unmount();
+    expect(hrefs()).toEqual(["/late.ico"]);
+  });
+});
+
+describe("the admin's favicon", () => {
+  it("keeps a host link switched off when React changes its relation, and restores the new one", async () => {
+    const host = render(<HostIcon rel="icon" href="/favicon.ico" />);
+    const admin = renderHook(() => useFaviconInjection(ADMIN_ICON));
+
+    host.rerender(<HostIcon rel="apple-touch-icon" href="/favicon.ico" />);
+    await observed();
+
+    expect(hrefs()).toEqual([ADMIN_ICON]);
+    admin.unmount();
+    expect(
+      document.head
+        .querySelector('link[href="/favicon.ico"]')
+        ?.getAttribute("rel")
+    ).toBe("apple-touch-icon");
+  });
+
+  it("leaves the host's own data on its links untouched", () => {
+    render(
+      <HostIcon href="/favicon.ico" data-nextly-rel="the host's own value" />
+    );
+    const hostLink = document.head.querySelector('link[href="/favicon.ico"]');
+
+    const admin = renderHook(() => useFaviconInjection(ADMIN_ICON));
+    admin.unmount();
+
+    expect(hostLink?.getAttribute("data-nextly-rel")).toBe(
+      "the host's own value"
+    );
   });
 
   it("keeps a single admin icon when the branding changes it", () => {
@@ -95,8 +132,6 @@ describe("the admin's favicon", () => {
 
     admin.rerender({ href: "/brand.png" });
 
-    expect(activeIcons().map(link => link.getAttribute("href"))).toEqual([
-      "/brand.png",
-    ]);
+    expect(hrefs()).toEqual(["/brand.png"]);
   });
 });
