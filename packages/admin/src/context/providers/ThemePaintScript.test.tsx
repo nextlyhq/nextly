@@ -11,7 +11,12 @@ import { act, render, screen } from "@testing-library/react";
 import { renderToString } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { ThemePaintScript, ThemeProvider, useTheme } from "./ThemeProvider";
+import {
+  ThemePaintScript,
+  ThemeProvider,
+  useTheme,
+  type UseThemeProps,
+} from "./ThemeProvider";
 
 const KEY = "nextly-theme";
 
@@ -71,6 +76,7 @@ afterEach(() => {
   document.documentElement.removeAttribute("style");
   localStorage.clear();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 describe("the admin's theme", () => {
@@ -147,6 +153,120 @@ describe("the admin's theme", () => {
     });
 
     expect(container.classList.contains("dark")).toBe(true);
+  });
+
+  it("still applies a choice in this tab when storage refuses to keep it", () => {
+    systemSetting(false);
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new DOMException("quota", "QuotaExceededError");
+    });
+    const container = adminContainer();
+    let theme: UseThemeProps | undefined;
+    function Capture() {
+      theme = useTheme();
+      return null;
+    }
+    render(
+      <ThemeProvider storageKey="nextly-theme-refused">
+        <Capture />
+      </ThemeProvider>
+    );
+
+    act(() => theme?.setTheme("dark"));
+
+    expect(theme?.theme).toBe("dark");
+    expect(container.classList.contains("dark")).toBe(true);
+  });
+
+  it("composes two functional updates made before a render", () => {
+    systemSetting(false);
+    localStorage.setItem(KEY, "light");
+    let theme: UseThemeProps | undefined;
+    function Capture() {
+      theme = useTheme();
+      return null;
+    }
+    render(
+      <ThemeProvider>
+        <Capture />
+      </ThemeProvider>
+    );
+    const toggle = (current: string) => (current === "dark" ? "light" : "dark");
+
+    act(() => {
+      theme?.setTheme(toggle);
+      theme?.setTheme(toggle);
+    });
+
+    expect(theme?.theme).toBe("light");
+  });
+
+  it("keeps the user's choice apart from a forced theme", () => {
+    systemSetting(false);
+    localStorage.setItem(KEY, "light");
+    let theme: UseThemeProps | undefined;
+    function Capture() {
+      theme = useTheme();
+      return null;
+    }
+    render(
+      <ThemeProvider forcedTheme="dark">
+        <Capture />
+      </ThemeProvider>
+    );
+
+    expect(theme?.theme).toBe("light");
+    expect(theme?.forcedTheme).toBe("dark");
+    expect(theme?.resolvedTheme).toBe("dark");
+    const html = renderToString(
+      <ThemeProvider forcedTheme="dark">
+        <ThemePaintScript />
+      </ThemeProvider>
+    );
+    const container = adminContainer();
+    new Function(/<script[^>]*>([\s\S]*)<\/script>/.exec(html)?.[1] ?? "")();
+    expect(container.classList.contains("dark")).toBe(true);
+  });
+
+  it("reports no system theme when system mode is off", () => {
+    systemSetting(true);
+    let theme: UseThemeProps | undefined;
+    function Capture() {
+      theme = useTheme();
+      return null;
+    }
+    render(
+      <ThemeProvider enableSystem={false} defaultTheme="light">
+        <Capture />
+      </ThemeProvider>
+    );
+
+    expect(theme?.systemTheme).toBeUndefined();
+    expect(theme?.themes).toEqual(["light", "dark"]);
+  });
+
+  it("lets an enclosing provider's settings hold inside a nested one", () => {
+    systemSetting(false);
+    localStorage.setItem("host-theme", "dark");
+    render(
+      <ThemeProvider storageKey="host-theme">
+        <ThemeProvider>
+          <ShowResolved />
+        </ThemeProvider>
+      </ThemeProvider>
+    );
+
+    expect(screen.getByRole("status").textContent).toBe("dark");
+  });
+
+  it("gives the pre-paint script the nonce the provider was handed", () => {
+    const html = renderToString(
+      <ThemeProvider nonce="r4nd0m">
+        <ThemePaintScript />
+      </ThemeProvider>
+    );
+
+    expect(html).toMatch(/<script[^>]*nonce="r4nd0m"/);
   });
 
   it("emits no script when the admin mounts in the browser rather than from server HTML", () => {

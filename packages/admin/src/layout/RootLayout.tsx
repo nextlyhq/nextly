@@ -192,9 +192,19 @@ function AdminAppContent() {
   );
 }
 
-const RootLayout = (): React.ReactElement => {
+/** The admin's root layout's settings. */
+export interface RootLayoutProps {
+  /**
+   * The nonce a `script-src` Content Security Policy needs. The admin paints
+   * its saved theme with a small inline script before the first paint, which
+   * such a policy blocks without it.
+   */
+  nonce?: string;
+}
+
+const RootLayout = ({ nonce }: RootLayoutProps = {}): React.ReactElement => {
   return (
-    <ThemeProvider>
+    <ThemeProvider nonce={nonce}>
       <RestartProvider>
         {/*
           The admin's one keydown listener, and the root of the shortcut layer stack. It sits

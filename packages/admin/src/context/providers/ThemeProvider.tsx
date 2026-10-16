@@ -37,19 +37,27 @@ interface ThemeConfig {
   forcedTheme?: string;
 }
 
+/** What the provider makes of a saved value. */
+interface PickedTheme {
+  /** The themes this provider offers. */
+  offered: string[];
+  /** The user's choice: the saved theme when it is offered, else the default. */
+  selected: string;
+  /** The theme the page shows: the forced one when set, else the selection. */
+  effective: string;
+}
+
 /**
- * The theme in force: the forced one, else the saved one when it is a theme
- * this provider offers, else the default. Kept free of closures and imports
- * because the pre-paint script runs its source text too.
+ * Reads a saved value. Kept free of closures and imports because the
+ * pre-paint script runs its source text too.
  */
-function pickTheme(saved: string | null, config: ThemeConfig): string {
+function pickTheme(saved: string | null, config: ThemeConfig): PickedTheme {
   const offered = config.enableSystem
     ? ["light", "dark", "system"]
     : ["light", "dark"];
-  const wanted = config.forcedTheme || saved;
-  return wanted && offered.indexOf(wanted) !== -1
-    ? wanted
-    : config.defaultTheme;
+  const selected =
+    saved && offered.indexOf(saved) !== -1 ? saved : config.defaultTheme;
+  return { offered, selected, effective: config.forcedTheme || selected };
 }
 
 /**
@@ -88,7 +96,7 @@ function paintAdmin(
     const systemDark = window.matchMedia(
       "(prefers-color-scheme: dark)"
     ).matches;
-    const dark = resolve(pick(saved, config), systemDark) === "dark";
+    const dark = resolve(pick(saved, config).effective, systemDark) === "dark";
     document.querySelectorAll(targets).forEach(element => {
       element.classList.toggle("dark", dark);
     });
@@ -121,7 +129,16 @@ function subscribe(listener: () => void): () => void {
   };
 }
 
+/**
+ * Choices storage refused to keep (a private window, a full quota), by key.
+ * They apply in this tab until the page reloads, ahead of whatever storage
+ * still holds.
+ */
+const unsaved = new Map<string, string>();
+
 function readSaved(storageKey: string): string | null {
+  const kept = unsaved.get(storageKey);
+  if (kept !== undefined) return kept;
   try {
     return window.localStorage.getItem(storageKey);
   } catch {
@@ -132,9 +149,9 @@ function readSaved(storageKey: string): string | null {
 function save(storageKey: string, theme: string): void {
   try {
     window.localStorage.setItem(storageKey, theme);
+    unsaved.delete(storageKey);
   } catch {
-    // Storage refused (a private window, a full quota): the choice still
-    // applies in this tab until the page reloads.
+    unsaved.set(storageKey, theme);
   }
   for (const listener of listeners) listener();
 }
@@ -162,7 +179,9 @@ export interface UseThemeProps {
   forcedTheme?: string;
 }
 
-const ThemeContext = createContext<UseThemeProps & { config?: ThemeConfig }>({
+const ThemeContext = createContext<
+  UseThemeProps & { config?: ThemeConfig; nonce?: string }
+>({
   setTheme: () => {},
   themes: [],
 });
@@ -181,7 +200,7 @@ export function useTheme(): UseThemeProps {
  * already in React state.
  */
 export function ThemePaintScript({ nonce }: { nonce?: string }) {
-  const { config } = useContext(ThemeContext);
+  const { config, nonce: providerNonce } = useContext(ThemeContext);
   const serverOrHydrating = useSyncExternalStore(
     neverChanges,
     onTheClient,
@@ -190,7 +209,7 @@ export function ThemePaintScript({ nonce }: { nonce?: string }) {
   if (!config || !serverOrHydrating) return null;
   return (
     <script
-      nonce={nonce}
+      nonce={nonce ?? providerNonce}
       dangerouslySetInnerHTML={{ __html: paintScript(config) }}
     />
   );
@@ -321,6 +340,8 @@ export interface ThemeProviderProps {
   enableSystem?: boolean;
   /** A theme every page uses, whatever was saved. */
   forcedTheme?: string;
+  /** The nonce a `script-src` Content Security Policy needs for the pre-paint script. */
+  nonce?: string;
 }
 
 /**
@@ -349,12 +370,22 @@ export interface ThemeProviderProps {
  * </ThemeProvider>
  * ```
  */
-export function ThemeProvider({
+export function ThemeProvider(props: ThemeProviderProps) {
+  // Inside another ThemeProvider, as when a host wraps the admin's root
+  // layout in its own, the outer one's settings and state hold: a second
+  // store would compete with it for the same containers.
+  const outer = useContext(ThemeContext);
+  if (outer.config) return <>{props.children}</>;
+  return <ThemeStore {...props} />;
+}
+
+function ThemeStore({
   children,
   defaultTheme = "system",
   storageKey = "nextly-theme",
   enableSystem = true,
   forcedTheme,
+  nonce,
 }: ThemeProviderProps) {
   const saved = useSyncExternalStore(
     subscribe,
@@ -370,22 +401,33 @@ export function ThemeProvider({
     () => ({ storageKey, defaultTheme, enableSystem, forcedTheme }),
     [storageKey, defaultTheme, enableSystem, forcedTheme]
   );
-  const theme = pickTheme(saved, config);
+  const picked = useMemo(() => pickTheme(saved, config), [saved, config]);
+  // A functional update reads the store's latest choice, not this render's,
+  // so two updates in a row compose as React's own setters do.
   const setTheme = useCallback<Dispatch<SetStateAction<string>>>(
-    next => save(storageKey, typeof next === "function" ? next(theme) : next),
-    [storageKey, theme]
+    next =>
+      save(
+        storageKey,
+        typeof next === "function"
+          ? next(pickTheme(readSaved(storageKey), config).selected)
+          : next
+      ),
+    [storageKey, config]
   );
   const value = useMemo(
     () => ({
-      theme,
+      theme: picked.selected,
       setTheme,
-      resolvedTheme: resolveTheme(theme, systemDark),
-      systemTheme: resolveTheme("system", systemDark),
-      themes: enableSystem ? ["light", "dark", "system"] : ["light", "dark"],
+      resolvedTheme: resolveTheme(picked.effective, systemDark),
+      systemTheme: enableSystem
+        ? resolveTheme("system", systemDark)
+        : undefined,
+      themes: picked.offered,
       forcedTheme,
       config,
+      nonce,
     }),
-    [theme, setTheme, systemDark, enableSystem, forcedTheme, config]
+    [picked, setTheme, systemDark, enableSystem, forcedTheme, config, nonce]
   );
   return (
     <ThemeContext.Provider value={value}>
