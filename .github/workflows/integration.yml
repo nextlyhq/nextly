@@ -120,11 +120,14 @@ jobs:
           INERT_PATHS: '(^docs/|\.md$)'
         run: node scripts/change-scope.mjs
       # Unconditional, so the step runs alike in every event; it says so in the
-      # summary when a pull request's legs skip for want of the label.
+      # summary when a pull request's legs skip for want of the label, and
+      # stays quiet when they would skip anyway (`inert`), since the label
+      # would change nothing there.
       - name: Ask whether the legs were requested
         id: requested
         env:
           GH_TOKEN: ${{ github.token }}
+          INERT: ${{ steps.decide.outputs.inert }}
         run: node scripts/integration-request.mjs requested
 
   # One job per dialect, each with a literal name and only its own database.

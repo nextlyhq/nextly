@@ -33,8 +33,9 @@ import { commandText, eventPayload } from "./workflow-context.mjs";
 /** The label that asks for the legs on a pull request. */
 export const LABEL = "run-integration";
 
-/** The job that reads the labels; until it has run, a run will see a label added now. */
+/** The job, and its step, that read the labels; until that step has run, a run will see a label added now. */
 const DECIDING_JOB = "Decide what this commit can affect";
+const ASKING_STEP = "Ask whether the legs were requested";
 
 /** How long `rerun` waits for a run whose labels were already read to finish: its skipped legs end it within seconds. */
 const WAIT = { tries: 30, everyMs: 20_000 };
@@ -83,14 +84,25 @@ export async function rerunDecision({ payload = {}, repository, token, fetchImpl
   const run = newest(runs);
   if (!run) return { action: "none", reason: `no Integration run of ${sha.slice(0, 9)} yet; the one that starts reads the label itself` };
   const { jobs } = await api(`repos/${repository}/actions/runs/${run.id}/jobs?per_page=100`, context);
-  const deciding = jobs.find(job => job.name === DECIDING_JOB);
-  if (!deciding || deciding.status !== "completed") return { action: "none", reason: `run ${run.id} has not read the labels yet, and will see this one` };
+  if (!labelsRead(jobs.find(job => job.name === DECIDING_JOB))) return { action: "none", reason: `run ${run.id} has not read the labels yet, and will see this one` };
   // A leg that skips is created already finished; one that runs is queued or
   // running, so the legs' own states say which way the labels were read.
   const legs = jobs.filter(job => job.name.startsWith("Integration ("));
   if (legs.some(leg => leg.conclusion !== "skipped")) return { action: "none", reason: `run ${run.id}'s legs ran or are running` };
   if (legs.length === 0 || run.status !== "completed") return { action: "wait", reason: `run ${run.id} read the labels before this one and is finishing`, run: run.id };
   return { action: "rerun", reason: `run ${run.id}'s legs skipped`, run: run.id };
+}
+
+/**
+ * Whether the run has read the labels: its asking step has finished. The job
+ * can still be running after that step (its later steps and clean-up), so the
+ * job's own status would read as unread too long; it stands in only when the
+ * API lists no steps.
+ */
+function labelsRead(deciding) {
+  if (!deciding) return false;
+  const asking = (deciding.steps ?? []).find(step => step.name === ASKING_STEP);
+  return (asking ?? deciding).status === "completed";
 }
 
 /** The most recently created run; the list's order is GitHub's to change. */
@@ -102,7 +114,7 @@ function newest(runs = []) {
 async function mainRequested(env, fetchImpl) {
   const answer = await requested({ event: env.GITHUB_EVENT_NAME, payload: eventPayload(env), repository: env.GITHUB_REPOSITORY, token: env.GH_TOKEN, fetchImpl });
   console.log(`integration-request: requested=${answer.requested} (${answer.reason})`);
-  if (!answer.requested) {
+  if (!answer.requested && env.INERT !== "true") {
     console.log(`::notice title=Integration not requested::${commandText(`${answer.reason}, so the database legs skip; add the label to run them. The merge queue runs them regardless.`)}`);
     appendTo(env.GITHUB_STEP_SUMMARY, `### Integration on request\n\nThis pull request does not carry \`${LABEL}\`, so the database legs skip here. Add the label to run them; the merge queue runs them before any merge.\n`);
   }

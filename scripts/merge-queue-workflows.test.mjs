@@ -141,6 +141,14 @@ describe("Integration on request", () => {
     expect(request.permissions).toEqual({ contents: "read" });
     expect(jobs[0].permissions).toEqual({ contents: "read", actions: "write" });
   });
+
+  it("keys the request by the label too, so another label never cancels a waiting request", () => {
+    const group = String(request.concurrency.group);
+    const groupFor = label => group.replace(/\$\{\{([\s\S]*?)\}\}/g, (_, expression) => String(evaluate(conditionTokens(expression), expression, { "github.event.pull_request.number": 7, "github.event.label.name": label })));
+    expect(groupFor("run-integration")).not.toBe(groupFor("enhancement"));
+    expect(groupFor("run-integration")).toBe(groupFor("run-integration"));
+    expect(request.concurrency["cancel-in-progress"]).toBe(true);
+  });
 });
 
 describe("conditions that skip the queue's run", () => {
