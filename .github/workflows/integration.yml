@@ -12,16 +12,16 @@ name: Integration
 # same thing and the legs skip by `if:`, which reports `skipped`, a result the
 # merge gate and the merge queue both accept.
 #
-# On a pull request the legs run only when it carries the `run-integration`
-# label (the `changes` job's `requested`); the merge queue and `main` always
-# run them, so nothing merges untested. `labeled` is a trigger so that adding
-# the label starts the legs without a push.
+# On a pull request the legs run only while it carries the `run-integration`
+# label (the `changes` job's `requested`, read from the API when that job
+# runs); the merge queue and `main` always run them, so nothing merges
+# untested. Adding the label is handled by `integration-request.yml`, not by a
+# `labeled` trigger here: see `scripts/integration-request.mjs` for why.
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
-    types: [opened, synchronize, reopened, labeled]
   # The merge queue tests each pull request again on the latest `main`, and
   # merges it only if the required checks pass there too.
   merge_group:
@@ -56,13 +56,9 @@ env:
 # work. The `changes` job asks first, and a run a newer push has overtaken
 # skips its legs; queued runs therefore start, ask and stop within seconds, and
 # only the newest tests. The queue stays short without anything being cancelled.
-#
-# Adding any other label also starts a run. It waits for one in progress
-# instead of cancelling it: a label is not a new commit, and cancelling would
-# throw away a leg's half-hour for nothing.
 concurrency:
   group: integration-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
-  cancel-in-progress: ${{ github.event.action != 'labeled' || github.event.label.name == 'run-integration' }}
+  cancel-in-progress: true
 
 jobs:
   # Whether this run's legs have anything to do. Two answers skip them.
@@ -84,12 +80,15 @@ jobs:
     permissions:
       contents: read
       actions: read
+      # The pull request's labels, read when this job runs.
+      pull-requests: read
     outputs:
       superseded: ${{ steps.newer.outputs.superseded }}
       inert: ${{ steps.decide.outputs.inert }}
       # Always true in the merge queue and on `main`; on a pull request, true
-      # only while it carries the `run-integration` label.
-      requested: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-integration') }}
+      # only while it carries the `run-integration` label. Empty when the step
+      # failed, which the legs read as asked for.
+      requested: ${{ steps.requested.outputs.requested }}
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -120,16 +119,13 @@ jobs:
           SCOPE_TITLE: Integration scope
           INERT_PATHS: '(^docs/|\.md$)'
         run: node scripts/change-scope.mjs
-      # Unconditional, so the step runs alike in every event; it only speaks
-      # when a pull request's legs skip for want of the label.
-      - name: Say whether the legs were asked for
+      # Unconditional, so the step runs alike in every event; it says so in the
+      # summary when a pull request's legs skip for want of the label.
+      - name: Ask whether the legs were requested
+        id: requested
         env:
-          REQUESTED: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-integration') }}
-        run: |
-          if [ "$REQUESTED" = "false" ]; then
-            echo "::notice title=Integration not requested::add the run-integration label to run the database legs on this pull request; the merge queue runs them regardless."
-            printf '%s\n' "### Integration on request" "" "This pull request has no \`run-integration\` label, so the database legs skip here. Add the label to run them; the merge queue runs them before any merge." >> "$GITHUB_STEP_SUMMARY"
-          fi
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/integration-request.mjs requested
 
   # One job per dialect, each with a literal name and only its own database.
   #

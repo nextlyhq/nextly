@@ -104,23 +104,21 @@ describe("the last commit Integration tested", () => {
 describe("Integration on request", () => {
   /*
    * A pull request runs the database legs only while it carries the
-   * `run-integration` label; the queue and `main` always run them. The
-   * decision is one output of the `changes` job, so each leg's own condition
-   * reads the same for every event, as the queue checks below require.
+   * `run-integration` label; the queue and `main` always run them. One step of
+   * the `changes` job answers (`scripts/integration-request.mjs`, tested on its
+   * own), so each leg's condition reads the same for every event, as the queue
+   * checks below require. Adding the label is a separate workflow's job, so no
+   * other label ever starts an Integration run.
    */
   const workflow = read(".github/workflows/integration.yml");
-  const requested = workflow.jobs.changes.outputs.requested;
-  const decided = (expression, known) => evaluate(conditionTokens(expression), expression, known);
-  const LABELS = "github.event.pull_request.labels.*.name";
+  const request = read(".github/workflows/integration-request.yml");
 
-  it("asks for the legs in the queue and on `main`, whatever the labels", () => {
-    for (const event of ["merge_group", "push"]) expect(decided(requested, { "github.event_name": event }), event).toBe(true);
-  });
-
-  it("asks for them on a pull request only while it carries the label", () => {
-    expect(decided(requested, { "github.event_name": "pull_request", [LABELS]: [] })).toBe(false);
-    expect(decided(requested, { "github.event_name": "pull_request", [LABELS]: ["enhancement"] })).toBe(false);
-    expect(decided(requested, { "github.event_name": "pull_request", [LABELS]: ["enhancement", "run-integration"] })).toBe(true);
+  it("asks one unconditional step, whose output is the answer", () => {
+    const step = workflow.jobs.changes.steps.find(candidate => candidate.id === "requested");
+    expect(step.run).toBe("node scripts/integration-request.mjs requested");
+    expect(step.if).toBeUndefined();
+    expect(workflow.jobs.changes.outputs.requested).toBe("${{ steps.requested.outputs.requested }}");
+    expect(workflow.jobs.changes.permissions["pull-requests"]).toBe("read");
   });
 
   it("skips a leg only on an answer of no, so a question that failed still runs it", () => {
@@ -129,18 +127,19 @@ describe("Integration on request", () => {
     for (const leg of legs) expect(leg.if, leg.name).toContain("needs.changes.outputs.requested != 'false'");
   });
 
-  it("says why the legs skipped by the same decision", () => {
-    const step = workflow.jobs.changes.steps.find(candidate => candidate.name === "Say whether the legs were asked for");
-    expect(step.env.REQUESTED).toBe(requested);
-    expect(step.if).toBeUndefined();
+  it("is not started by a label, so another label cannot repeat, cancel or hide a run", () => {
+    const types = triggersOf(workflow).pull_request?.types;
+    expect(types ?? ["opened", "synchronize", "reopened"]).not.toContain("labeled");
   });
 
-  it("starts when a label is added, and only that label cancels a run in progress", () => {
-    expect(triggersOf(workflow).pull_request.types).toContain("labeled");
-    const cancels = workflow.concurrency["cancel-in-progress"];
-    expect(decided(cancels, { "github.event.action": "labeled", "github.event.label.name": "enhancement" })).toBe(false);
-    expect(decided(cancels, { "github.event.action": "labeled", "github.event.label.name": "run-integration" })).toBe(true);
-    expect(decided(cancels, { "github.event.action": "synchronize" })).toBe(true);
+  it("leaves adding the label to a workflow that only re-runs, and only for that label", () => {
+    expect(triggersOf(request)).toEqual({ pull_request: { branches: ["main"], types: ["labeled"] } });
+    const jobs = Object.values(request.jobs);
+    expect(jobs.length).toBe(1);
+    expect(jobs[0].if).toBe("github.event.label.name == 'run-integration'");
+    expect(jobs[0].steps.at(-1).run).toBe("node scripts/integration-request.mjs rerun");
+    expect(request.permissions).toEqual({ contents: "read" });
+    expect(jobs[0].permissions).toEqual({ contents: "read", actions: "write" });
   });
 });
 
