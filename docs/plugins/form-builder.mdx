@@ -5,7 +5,7 @@ description: Create and manage dynamic forms with a visual drag-and-drop builder
 
 > **Alpha (`0.x`) — pin your versions.**
 >
-> The plugin API surface is now **stable and semver-protected** (see [API stability](/docs/plugins/stability)); the plugin packages themselves are still `0.x` alpha, so pin your versions and read the release notes before upgrading.
+> The plugin SDK is alpha: its `@public` surface becomes semver-protected at 1.0 (see [API stability](/docs/plugins/stability)). Until then, pin exact versions of the plugin packages and read the release notes before upgrading.
 
 The Form Builder plugin adds a complete form management system to Nextly. Build forms visually in the admin panel or define them in code, collect submissions, send email notifications, and protect against spam -- all without writing custom endpoints.
 
@@ -521,7 +521,12 @@ Multiple conditions can be combined with `AND` (all must match) or `OR` (any mus
 
 ## Webhooks
 
-Form submissions are delivered through Nextly's own [webhooks](/docs/webhooks): subscribe an endpoint to the `form.submission.created` event. Its payload says which form, when, and the submission's status. It never carries the answers, the IP address or the user agent; read the submission through the Direct API if the receiving end needs them. Verify each delivery's signature as the Webhooks page describes.
+Form submissions are delivered through Nextly's own [webhooks](/docs/webhooks): subscribe an endpoint to the `form.submission.created` event. Its payload says which form, when, and the submission's status, and its `resource.id` names the submission (`resource.slug` is the submissions collection, `form-submissions` unless you renamed it). It never carries the answers, the IP address or the user agent, so a receiver that needs them reads the submission by that id:
+
+- A receiver in another system calls the [REST API](/docs/api-reference/rest-api): `GET /api/collections/form-submissions/entries/{id}`, authenticated with an [API key](/docs/api-reference/rest-api#api-key-server-to-server) that may read submissions (`read-form-submissions`).
+- A receiver inside the same Next.js app can use the [Direct API](/docs/api-reference/direct-api) instead.
+
+Verify each delivery's signature as the Webhooks page describes, before reading anything.
 
 A form has no webhook settings of its own, and the submissions collection's default `entry.*` events are switched off, so an endpoint subscribed to `entry.created` or `*` does not receive the answers either.
 

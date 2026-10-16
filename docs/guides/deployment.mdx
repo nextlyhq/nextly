@@ -113,11 +113,11 @@ SQLite is **not** suitable for Vercel deployments -- the file would be wiped on 
 
 ## Self-host with Node.js
 
-Run Nextly on any host that supports Node.js 20.19+, 22.12+ or 24+ (not 23). The deployment shape is intentionally boring: build the app, run it under a process manager, put a reverse proxy in front for SSL.
+Run Nextly on any host that supports Node.js 20.19+, 22.12+ or 24+. The deployment shape is intentionally boring: build the app, run it under a process manager, put a reverse proxy in front for SSL.
 
 ### Requirements
 
-- **Node.js 20.19+, 22.12+ or 24+**, not 23 (matches the `serverExternalPackages` and `sharp` ABI requirements).
+- **Node.js 20.19+, 22.12+ or 24+** (matches the `serverExternalPackages` and `sharp` ABI requirements).
 - **A process manager** -- pm2, systemd, Docker, or similar. Keep the Node process supervised so crashes auto-restart.
 - **A reverse proxy** -- nginx or Caddy in front for TLS termination, HTTP/2, and access logging.
 
