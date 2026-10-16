@@ -701,6 +701,17 @@ describe("verify", () => {
     });
   });
 
+  it("asks the v2 context endpoint beside the base, whether or not the base ends in a slash", async () => {
+    for (const api of ["https://proxy.test/api/v1", "https://proxy.test/api/v1/"]) {
+      const asked = [];
+      const base = context7({ topics: kept });
+      await verify({ root: ".", api, get: async url => (asked.push(url), base(url)) });
+      const probes = asked.filter(url => new URL(url).searchParams.has("libraryId"));
+      expect(probes.length).toBeGreaterThan(0);
+      for (const url of probes) expect(new URL(url).pathname).toBe("/api/v2/context");
+    }
+  });
+
   it("cannot answer when a probe's 404 is about something other than the question", async () => {
     // A 404 that names another error, such as the library itself missing, is no answer to
     // whether the sentence is held, and must not clear an exclusion.

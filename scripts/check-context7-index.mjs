@@ -288,7 +288,8 @@ export async function fetchText(url) {
  * never find the sentence it asked for.
  */
 function questionUrl(api, marker) {
-  const url = new URL("../v2/context", `${api}/`);
+  // One trailing slash exactly, so `../` steps out of v1 whether or not the base ended in one.
+  const url = new URL("../v2/context", `${api.replace(/\/+$/, "")}/`);
   url.searchParams.set("libraryId", LIBRARY);
   url.searchParams.set("query", marker);
   url.searchParams.set("type", "txt");
