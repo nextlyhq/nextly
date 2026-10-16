@@ -152,6 +152,17 @@ export function projectUsesFormBuilder(projectType: ProjectType): boolean {
   return PROJECT_TYPES_WITH_FORM_BUILDER.has(projectType);
 }
 
+/**
+ * What a scaffold with the form builder installs for it: the plugin, and its
+ * peer `@nextlyhq/plugin-sdk`. npm, pnpm and Bun add a missing peer on their
+ * own; Yarn does not, and under Plug'n'Play the plugin then cannot load the
+ * SDK, so the app's config fails to load. Both install paths read this list.
+ */
+export const FORM_BUILDER_PACKAGES = [
+  "@nextlyhq/plugin-form-builder",
+  "@nextlyhq/plugin-sdk",
+] as const;
+
 /** The npm dist-tag a scaffold installs `nextly` + `@nextlyhq/*` from. */
 export type NextlyDistTag = "latest" | "alpha";
 
@@ -1187,8 +1198,9 @@ export async function generatePackageJson(
     // resolve to an uninstalled package — `next dev` would then fail
     // with "Cannot find package '@nextlyhq/plugin-form-builder'".
     if (projectUsesFormBuilder(projectType)) {
-      dependencies["@nextlyhq/plugin-form-builder"] =
-        versions["@nextlyhq/plugin-form-builder"] || "latest";
+      for (const pkg of FORM_BUILDER_PACKAGES) {
+        dependencies[pkg] = versions[pkg] || "latest";
+      }
     }
   }
 
