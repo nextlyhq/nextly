@@ -36,6 +36,7 @@ const owners = new Map<string, OwnerRecord>([
     }),
   ],
   ["fx__notes", record({ tableName: "fx__notes" })],
+  ["fx_remote", record({ tableName: "fx_remote" })],
 ]);
 
 /** `status` on the app's table is a column the plugin contributed. */
@@ -61,6 +62,12 @@ const elementOwners: OwnerRecord[] = [
     tableName: "app_notes",
     elementKind: "check",
     elementName: "chk_status",
+  }),
+  // A partition's index, the plugin's, on the plugin's table.
+  record({
+    tableName: "fx__notes",
+    elementKind: "index",
+    elementName: "fx_idx",
   }),
 ];
 
@@ -321,5 +328,71 @@ describe("an in-place refusal is logged as a change", () => {
     );
     expect(log).toHaveProperty("changedBy", "app");
     expect(log).not.toHaveProperty("droppedBy");
+  });
+});
+
+describe("a form the guard cannot read, on another owner's table, is refused", () => {
+  it("refuses attaching another owner's partition index to the app's index", () => {
+    expect(
+      refusal(() =>
+        guard(
+          ["ALTER INDEX app_idx ATTACH PARTITION fx_idx"],
+          "app",
+          "postgresql"
+        )
+      )
+    ).toMatchObject({ element: "fx_idx", belongsTo: "plugin:fx" });
+  });
+
+  it("refuses an ALTER of a foreign table the reader does not model", () => {
+    expect(
+      refusal(() =>
+        guard(
+          ["ALTER FOREIGN TABLE fx_remote ALTER COLUMN status TYPE bigint"],
+          "app",
+          "postgresql"
+        )
+      )
+    ).toMatchObject({ table: "fx_remote", belongsTo: "plugin:fx" });
+  });
+
+  it("refuses MariaDB's wait spelling before the first change, on a foreign table", () => {
+    expect(
+      refusal(() =>
+        guard(
+          ["ALTER TABLE fx__notes NOWAIT MODIFY status varchar(40)"],
+          "app",
+          "mysql"
+        )
+      )
+    ).toMatchObject({ table: "fx__notes", belongsTo: "plugin:fx" });
+  });
+
+  it("refuses an unmodelled clause on a plugin table", () => {
+    expect(
+      refusal(() =>
+        guard(
+          ["ALTER TABLE fx__notes DISABLE TRIGGER ALL"],
+          "app",
+          "postgresql"
+        )
+      )
+    ).toMatchObject({ table: "fx__notes" });
+  });
+
+  it("refuses the bulk ALTER INDEX form, which names no index", () => {
+    expect(() =>
+      guard(
+        ["ALTER INDEX ALL IN TABLESPACE old SET TABLESPACE new"],
+        "app",
+        "postgresql"
+      )
+    ).toThrow();
+  });
+
+  it("keeps an unmodelled clause on the app's own table allowed", () => {
+    expect(() =>
+      guard(["ALTER TABLE app_notes DISABLE TRIGGER ALL"], "app", "postgresql")
+    ).not.toThrow();
   });
 });
