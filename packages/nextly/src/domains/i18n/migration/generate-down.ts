@@ -1,4 +1,11 @@
-import { castText, ddlType, lit, q } from "./ddl-types";
+import {
+  castText,
+  ddlType,
+  exactText,
+  lit,
+  nullSafeDiffers,
+  q,
+} from "./ddl-types";
 import type { CompanionCopyRef, CompanionMigrationSpec } from "./types";
 
 const ARCHIVE = "nextly_i18n_archive";
@@ -148,6 +155,11 @@ function restoreTargetType(
  * Copies every non-default language's value of one companion column into the localization
  * archive, where `nextly i18n:restore` reads it back. One row per (entry, language), the value
  * cast to text, recorded under the entity's slug and the column's name.
+ *
+ * Safe to run more than once: a value is written only when it differs from the newest row already
+ * archived for that entry, language and field. A second run of the same change adds nothing, while
+ * a value that changed since it was last archived is archived again, and a restore takes the newest
+ * row. A value with nothing archived before and nothing to keep (NULL) is not written.
  */
 function buildArchiveNonDefaultStatement(
   ref: Pick<CompanionCopyRef, "dialect" | "companionTable" | "defaultLocale">,
@@ -155,11 +167,26 @@ function buildArchiveNonDefaultStatement(
   columnName: string
 ): string {
   const { dialect, companionTable, defaultLocale } = ref;
+  const source = q("source", dialect);
+  const archived = q("archived", dialect);
+  const value = castText(`${source}.${q(columnName, dialect)}`, dialect);
+  // The value archived last for this entry, language and field, or NULL when there is none.
+  const newest =
+    `(SELECT ${archived}.${q("value", dialect)} FROM ${q(ARCHIVE, dialect)} ${archived} ` +
+    `WHERE ${archived}.${q("collection", dialect)} = ${lit(collection)} ` +
+    // Cast, because the parent id mirrors the main table's id and can be a uuid where the archive
+    // keeps text, and PostgreSQL compares the two only explicitly. Exact, because the archive and
+    // the companion may carry different collations (see `exactText`).
+    `AND ${exactText(`${archived}.${q("entry_id", dialect)}`, dialect)} = ${exactText(castText(`${source}.${q("_parent", dialect)}`, dialect), dialect)} ` +
+    `AND ${exactText(`${archived}.${q("locale", dialect)}`, dialect)} = ${exactText(`${source}.${q("_locale", dialect)}`, dialect)} ` +
+    `AND ${archived}.${q("field", dialect)} = ${lit(columnName)} ` +
+    `ORDER BY ${archived}.${q("id", dialect)} DESC LIMIT 1)`;
   return (
     `INSERT INTO ${q(ARCHIVE, dialect)} ` +
     `(${q("collection", dialect)}, ${q("entry_id", dialect)}, ${q("locale", dialect)}, ${q("field", dialect)}, ${q("value", dialect)}) ` +
-    `SELECT ${lit(collection)}, ${q("_parent", dialect)}, ${q("_locale", dialect)}, ${lit(columnName)}, ${castText(q(columnName, dialect), dialect)} ` +
-    `FROM ${q(companionTable, dialect)} WHERE ${q("_locale", dialect)} <> ${lit(defaultLocale)}`
+    `SELECT ${lit(collection)}, ${source}.${q("_parent", dialect)}, ${source}.${q("_locale", dialect)}, ${lit(columnName)}, ${value} ` +
+    `FROM ${q(companionTable, dialect)} ${source} WHERE ${source}.${q("_locale", dialect)} <> ${lit(defaultLocale)} ` +
+    `AND ${nullSafeDiffers(exactText(newest, dialect), exactText(value, dialect), dialect)}`
   );
 }
 

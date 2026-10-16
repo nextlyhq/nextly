@@ -22,7 +22,7 @@ import { FieldGroupRegistryService } from "../../field-groups/services/field-gro
 import { fieldGroupSlugList } from "../../field-groups/storage/field-group-field-type";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
 import { assertLocalizationConfigured } from "../../i18n/config/require-app-config";
-import { assertFieldsCanLeaveTranslation } from "../../i18n/migration/archive-preflight";
+import { archiveFieldsLeavingTranslation } from "../../i18n/migration/archive-preflight";
 import { deriveCompanionSpec } from "../../i18n/migration/derive-companion-spec";
 import { buildCompanionCreateOnlySql } from "../../i18n/migration/generate-up";
 import {
@@ -812,7 +812,7 @@ export class DynamicCollectionService extends BaseService {
    * transition differs there.
    */
   private async buildLocalizedMigrationSQL(
-    mainSQL: string,
+    main: { artefact: string; local?: string },
     args: Parameters<DynamicCollectionService["buildCompanionTransitionSQL"]>[0]
   ): Promise<{ sql: string; localSql?: string }> {
     const { sql, localSql, beforeMainSql, needsArchive } =
@@ -820,17 +820,42 @@ export class DynamicCollectionService extends BaseService {
     const archive = needsArchive
       ? this.toBreakpointSql(getI18nArchiveDdl(this.adapter.dialect))
       : "";
-    const assemble = (companion: string) =>
+    const assemble = (mainSQL: string, companion: string) =>
       orderLocalizedMigration(args.isLocalized, {
         main: mainSQL,
         archive,
         beforeMain: beforeMainSql,
         companion,
       });
+    // What this database runs differs from the file when either half does.
+    const differs = localSql !== undefined || main.local !== undefined;
     return {
-      sql: assemble(sql),
-      ...(localSql !== undefined ? { localSql: assemble(localSql) } : {}),
+      sql: assemble(main.artefact, sql),
+      ...(differs
+        ? {
+            localSql: assemble(main.local ?? main.artefact, localSql ?? sql),
+          }
+        : {}),
     };
+  }
+
+  /**
+   * Which of the given fields still have a column on the main table of this database. Asked one
+   * field at a time, so the answer is keyed by the field's name rather than by a column name this
+   * service would have to derive the same way the introspection does.
+   */
+  private async leavingFieldsRetainedOnMain(
+    tableName: string,
+    fields: readonly FieldDefinition[]
+  ): Promise<Set<string>> {
+    const retained = new Set<string>();
+    for (const field of fields) {
+      const present = await localizedColumnsOnMain(this.adapter, tableName, [
+        field,
+      ]);
+      if (present.length > 0) retained.add(field.name);
+    }
+    return retained;
   }
 
   private async buildCompanionTransitionSQL(args: {
@@ -1151,9 +1176,11 @@ export class DynamicCollectionService extends BaseService {
       );
       // A field leaving translation has preconditions of its own, asked before anything here is
       // written or altered.
-      await assertFieldsCanLeaveTranslation({
+      await archiveFieldsLeavingTranslation({
         // This service builds Schema Builder collections.
         builtBy: "collection",
+        tableName: collection.tableName,
+        defaultLocale: this.defaultLocale,
         adapter: this.adapter,
         entity: collectionName,
         oldFields: oldUserFields,
@@ -1215,31 +1242,52 @@ export class DynamicCollectionService extends BaseService {
             oldUserFields,
             userDefinedFields
           );
+        const mainOptions = {
+          wasStatus,
+          hasStatus,
+          // The junction tables are decided on the full lists: a localized
+          // many-to-many sits in neither shared list and still has one.
+          junctionFields: { old: oldUserFields, new: userDefinedFields },
+          ...(await liveTable()),
+          // Strict only when an association rename will occur: the table
+          // names are a precondition of THAT migration, and requiring them
+          // for every edit would refuse saves unrelated to renames.
+          associationRename: groupAssociationRename ?? undefined,
+          fieldGroupTableNames: groupAssociationRename
+            ? await this.resolveFieldGroupTableNames([
+                ...oldUserFields,
+                ...userDefinedFields,
+              ])
+            : new Map(),
+        };
         const mainSQL = this.schemaService.generateAlterTableMigration(
           collection.tableName,
           oldShared,
           newShared,
-          {
-            wasStatus,
-            hasStatus,
-            // The junction tables are decided on the full lists: a localized
-            // many-to-many sits in neither shared list and still has one.
-            junctionFields: { old: oldUserFields, new: userDefinedFields },
-            ...(await liveTable()),
-            // Strict only when an association rename will occur: the table
-            // names are a precondition of THAT migration, and requiring them
-            // for every edit would refuse saves unrelated to renames.
-            associationRename: groupAssociationRename ?? undefined,
-            fieldGroupTableNames: groupAssociationRename
-              ? await this.resolveFieldGroupTableNames([
-                  ...oldUserFields,
-                  ...userDefinedFields,
-                ])
-              : new Map(),
-          }
+          mainOptions
         );
+        // A leaving field whose column unattended provisioning left on THIS database's main table.
+        // The migration file still adds the column, because a database built from migrations does
+        // not have it; this database runs a main diff that treats it as present, and the copy that
+        // follows replaces its stale value with the default language's.
+        const retainedOnMain = await this.leavingFieldsRetainedOnMain(
+          collection.tableName,
+          oldUserFields.filter(f => leavingTranslation.has(f.name))
+        );
+        const localMainSQL =
+          retainedOnMain.size > 0
+            ? this.schemaService.generateAlterTableMigration(
+                collection.tableName,
+                [
+                  ...oldShared,
+                  ...userDefinedFields.filter(f => retainedOnMain.has(f.name)),
+                ],
+                newShared,
+                mainOptions
+              )
+            : undefined;
         const localizedMigration = await this.buildLocalizedMigrationSQL(
-          mainSQL,
+          { artefact: mainSQL, local: localMainSQL },
           {
             slug: collectionName,
             tableName: collection.tableName,
@@ -1307,7 +1355,7 @@ export class DynamicCollectionService extends BaseService {
           )
         : "";
       const localizedMigration = await this.buildLocalizedMigrationSQL(
-        mainSQL,
+        { artefact: mainSQL },
         {
           slug: collectionName,
           tableName: collection.tableName,

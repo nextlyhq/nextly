@@ -337,18 +337,53 @@ describeEachDialect("a field that stops being translated", dialect => {
     expect(await columnsOf(entity.table)).toContain("heading");
   });
 
-  it.each(PATHS)(
-    "changes nothing when the archive cannot be written and $path",
-    async ({ entity, seed, change }) => {
+  /**
+   * Ways an archive can refuse the values a change depends on. Each leaves a table in place, so
+   * the create-if-missing leaves it alone and only the write itself can tell.
+   */
+  const BROKEN_ARCHIVES = [
+    {
+      archive: "has no columns for the values",
+      break: async () => {
+        await query(
+          `CREATE TABLE ${quote(dialect, "nextly_i18n_archive")} (${quote(dialect, "id")} INTEGER PRIMARY KEY)`
+        );
+      },
+    },
+    {
+      // The production table with its value column narrowed to one character: a write of NULL
+      // succeeds, and a real translation does not.
+      archive: "takes a row but not the values",
+      break: async () => {
+        const narrowed =
+          dialect === "mysql"
+            ? "`value` VARCHAR(1),"
+            : dialect === "sqlite"
+              ? `"value" TEXT CHECK (length("value") <= 1),`
+              : `"value" VARCHAR(1),`;
+        for (const statement of getI18nArchiveDdl(dialect)) {
+          await query(
+            statement
+              .replace('"value" TEXT,', narrowed)
+              .replace("`value` LONGTEXT,", narrowed)
+          );
+        }
+      },
+    },
+  ];
+
+  it.each(
+    PATHS.flatMap(path =>
+      BROKEN_ARCHIVES.map(broken => ({ ...path, ...broken }))
+    )
+  )(
+    "changes nothing when the archive $archive and $path",
+    async ({ entity, seed, change, break: breakArchive }) => {
       const id = await seed();
-      // An archive that exists but cannot take a row: the create-if-missing leaves it alone,
-      // and the write the change depends on fails.
       await query(
         `DROP TABLE IF EXISTS ${quote(dialect, "nextly_i18n_archive")}`
       );
-      await query(
-        `CREATE TABLE ${quote(dialect, "nextly_i18n_archive")} (${quote(dialect, "id")} INTEGER PRIMARY KEY)`
-      );
+      await breakArchive();
 
       await expect(change()).rejects.toThrow(/nothing was changed/);
 
@@ -462,6 +497,30 @@ describeEachDialect("a field that stops being translated", dialect => {
       expect(kept.map(row => row.code)).toEqual(["A-1", "B-2"]);
     }
   );
+
+  it("replaces the stale value of a column the main table kept", async () => {
+    // Unattended provisioning can seed a companion without dropping the main column it copied
+    // from, so this database's main table still has `heading`, holding whatever it held then.
+    const id = await seedCollection();
+    await query(
+      `ALTER TABLE ${quote(dialect, "dc_posts")} ADD COLUMN ${quote(dialect, "heading")} TEXT`
+    );
+    await query(
+      `UPDATE ${quote(dialect, "dc_posts")} SET ${quote(dialect, "heading")} = 'Stale' WHERE ${quote(dialect, "id")} = '${id}'`
+    );
+
+    const saved = await handler().updateCollection(
+      { collectionName: "posts" },
+      { fields: SHARED }
+    );
+
+    expect(saved.success, JSON.stringify(saved)).toBe(true);
+    const [main] = await query<{ heading: string | null }>(
+      `SELECT ${quote(dialect, "heading")} AS heading FROM ${quote(dialect, "dc_posts")} WHERE ${quote(dialect, "id")} = '${id}'`
+    );
+    expect(main?.heading).toBe(VALUES.en);
+    expect(await columnsOf("dc_posts_locales")).not.toContain("heading");
+  });
 
   it("writes the archive in its migration before the main table changes", async () => {
     // The save also writes its migration to a file that other databases replay. Replayed where the

@@ -1,11 +1,12 @@
 /**
- * Before a schema change archives translations, make sure the archive can take them.
+ * Before a schema change makes a translated field shared, refuse what cannot move and archive what
+ * will.
  *
  * A field that stops being translated keeps its other languages' values only because they are
- * written to `nextly_i18n_archive` before its companion column is dropped. If that write cannot
- * happen, the change must not start at all: no main-table ALTER, no registry write, no companion
- * DDL. So every path that archives asks this first, before it changes anything, and a refusal
- * names what failed and says nothing was changed.
+ * written to `nextly_i18n_archive` before its companion column is dropped. That write happens here,
+ * before the change alters anything: no main-table ALTER, no registry write, no companion DDL. An
+ * archive that refuses the real values (a missing table, a drifted column) therefore stops the
+ * change while nothing has moved, and the refusal says so.
  *
  * @module domains/i18n/migration/archive-preflight
  */
@@ -19,36 +20,23 @@ import {
 import { isIdempotencyError } from "../../schema/pipeline/sql-statement-utils";
 import type { ColumnOrigin } from "../../schema/services/field-column-descriptor";
 
-import { lit, q } from "./ddl-types";
 import { fieldToLocalizedColumnSpec } from "./field-to-column-spec";
 import {
+  buildLeavingFieldsArchiveStatements,
   type CompanionFieldLike,
   fieldsLeavingTranslation,
 } from "./reconcile-companion";
 
-const ARCHIVE = "nextly_i18n_archive";
-
 /**
- * Thrown inside the probe's transaction to roll it back. A `NextlyError`, so every adapter
- * hands it back unchanged rather than wrapping it as a database failure, which is what lets it
- * be told apart from a real one.
- */
-const PROBE_ROLLED_BACK = NextlyError.internal({
-  logContext: { reason: "archive write probe rolled back" },
-});
-
-/**
- * Creates the archive table when it is missing, and proves it accepts a row, without keeping
- * one: the probe row is written inside a transaction that is always rolled back.
+ * Creates the archive table when it is missing, then runs the given archive writes.
  *
- * @param adapter - The database the change is about to run on
- * @param entity - The collection, Single or field group being changed, for the log
- * @throws NextlyError `NEXTLY_MIGRATION_APPLY_FAILED` when the table cannot be created or
- *   written, before anything else has changed
+ * @throws NextlyError `NEXTLY_MIGRATION_APPLY_FAILED` when the table cannot be created or a write
+ *   is refused, before anything else has changed
  */
-export async function assertI18nArchiveWritable(
+async function writeArchiveFirst(
   adapter: DrizzleAdapter,
-  entity: string
+  entity: string,
+  writes: readonly string[]
 ): Promise<void> {
   const dialect = adapter.getCapabilities().dialect;
   try {
@@ -65,16 +53,10 @@ export async function assertI18nArchiveWritable(
         if (!isIdempotencyError(error)) throw error;
       }
     }
-    await adapter.transaction(async ctx => {
-      await ctx.execute(
-        `INSERT INTO ${q(ARCHIVE, dialect)} ` +
-          `(${q("collection", dialect)}, ${q("entry_id", dialect)}, ${q("locale", dialect)}, ${q("field", dialect)}, ${q("value", dialect)}) ` +
-          `VALUES (${lit(entity)}, ${lit("preflight")}, ${lit("preflight")}, ${lit("preflight")}, NULL)`
-      );
-      throw PROBE_ROLLED_BACK;
-    });
+    for (const statement of writes) {
+      await adapter.executeQuery(statement);
+    }
   } catch (error) {
-    if (error === PROBE_ROLLED_BACK) return;
     const reason = error instanceof Error ? error.message : String(error);
     throw new NextlyError({
       code: "NEXTLY_MIGRATION_APPLY_FAILED",
@@ -106,11 +88,11 @@ function constraintsOf(field: LeavingFieldLike): string[] {
 }
 
 /**
- * The precondition of every schema change that can make a translated field shared, asked before
- * the change alters anything. It is one call so the collection save, the collection, Single and
+ * The first step of every schema change that can make a translated field shared, taken before the
+ * change alters anything. It is one call so the collection save, the collection, Single and
  * field-group schema dialogs and the Single save cannot answer it differently.
  *
- * Three things are refused here:
+ * Two things are refused:
  * - A field whose storage changes in the same edit: its type (text becoming a number) or its
  *   bounds (a shorter maximum length, a smaller precision). Its values are copied into the shared
  *   column as they are, without the conversion and confirmation such a change goes through on its
@@ -120,21 +102,28 @@ function constraintsOf(field: LeavingFieldLike): string[] {
  *   the default language's values are copied into it, so at that moment every existing row holds
  *   the same placeholder or none. A required column then has nothing valid to hold (each dialect
  *   and path fails differently), and a unique one fails its check part-way through the change.
- * - An archive that cannot take a row (`assertI18nArchiveWritable`), since the other languages'
- *   values are kept only there.
+ *
+ * Then every non-default language's value of each leaving field is written to the archive. The
+ * writes are safe to repeat, so the companion transition that later drops the column, and a
+ * migration file replayed elsewhere, can make them again without adding rows. Should a later step
+ * of the change be refused, the rows written here are copies of values that are still in place.
  *
  * Nothing is asked when no field leaves translation, or when the entity is not translated before
  * and after the change (turning translation off for the whole entity archives by its own path).
  *
  * @throws NextlyError `VALIDATION_ERROR` naming each reshaped or constrained field and the order
- *   that works, or `NEXTLY_MIGRATION_APPLY_FAILED` from the archive check
+ *   that works, or `NEXTLY_MIGRATION_APPLY_FAILED` when the archive refuses the values
  */
-export async function assertFieldsCanLeaveTranslation(args: {
+export async function archiveFieldsLeavingTranslation(args: {
   adapter: DrizzleAdapter;
   /** The collection, Single or field group being changed. */
   entity: string;
+  /** Its main table; the companion is `<tableName>_locales`. */
+  tableName: string;
   /** Which builder made the entity's table, which decides a column's bounds. */
   builtBy: ColumnOrigin;
+  /** The language whose value becomes the shared one, and is therefore not archived. */
+  defaultLocale: string;
   oldFields: readonly LeavingFieldLike[];
   newFields: readonly LeavingFieldLike[];
   wasLocalized: boolean;
@@ -201,5 +190,17 @@ export async function assertFieldsCanLeaveTranslation(args: {
     });
   }
 
-  await assertI18nArchiveWritable(args.adapter, args.entity);
+  await writeArchiveFirst(
+    args.adapter,
+    args.entity,
+    buildLeavingFieldsArchiveStatements({
+      slug: args.entity,
+      tableName: args.tableName,
+      dialect,
+      builtBy: args.builtBy,
+      defaultLocale: args.defaultLocale,
+      oldFields: args.oldFields,
+      newFields: args.newFields,
+    })
+  );
 }

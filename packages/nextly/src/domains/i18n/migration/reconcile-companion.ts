@@ -485,6 +485,45 @@ export interface CompanionTransitionPlan {
 }
 
 /**
+ * The archive writes for the fields of one entity that stop being translated in this change: every
+ * non-default language's value of each one's companion column (`fieldsLeavingTranslation`). Each
+ * write is safe to repeat (see `buildFieldLeavesTranslationArchiveStatement`), so a caller that
+ * makes them before altering anything can leave the later companion transition to make them again.
+ */
+export function buildLeavingFieldsArchiveStatements(args: {
+  slug: string;
+  tableName: string;
+  dialect: SupportedDialect;
+  builtBy: ColumnOrigin;
+  defaultLocale: string;
+  oldFields: readonly CompanionFieldLike[];
+  newFields: readonly CompanionFieldLike[];
+}): string[] {
+  const leaving = new Set(
+    fieldsLeavingTranslation(args.oldFields, args.newFields)
+  );
+  const companionTable = `${args.tableName}_locales`;
+  return args.oldFields
+    .filter(f => leaving.has(f.name))
+    .flatMap(f => {
+      const col = fieldToLocalizedColumnSpec(f, args.dialect, args.builtBy);
+      return col
+        ? [
+            buildFieldLeavesTranslationArchiveStatement(
+              {
+                dialect: args.dialect,
+                companionTable,
+                defaultLocale: args.defaultLocale,
+              },
+              args.slug,
+              col.name
+            ),
+          ]
+        : [];
+    });
+}
+
+/**
  * i18n: decide the runtime companion statements for ANY localization change on an EXISTING
  * entity — the data-preserving counterpart of {@link buildCompanionReconcileStatements}, shared
  * by the collection/single/component Schema-Builder toggle paths (which have no `nextly migrate`
@@ -624,22 +663,16 @@ export function buildCompanionTransitionStatements(
     const newLocalized = newFields.filter(f => isFieldLocalized(f, true));
     const sharedAfter = fieldsLeavingTranslation(oldFields, newFields);
     const archiveFirst = args.archiveBeforeMain === true;
-    const companionTable = `${tableName}_locales`;
     const beforeMain = archiveFirst
-      ? oldLocalized
-          .filter(f => sharedAfter.includes(f.name))
-          .flatMap(f => {
-            const col = fieldToLocalizedColumnSpec(f, dialect, builtBy);
-            return col
-              ? [
-                  buildFieldLeavesTranslationArchiveStatement(
-                    { dialect, companionTable, defaultLocale },
-                    slug,
-                    col.name
-                  ),
-                ]
-              : [];
-          })
+      ? buildLeavingFieldsArchiveStatements({
+          slug,
+          tableName,
+          dialect,
+          builtBy,
+          defaultLocale,
+          oldFields,
+          newFields,
+        })
       : [];
     return {
       beforeMain,

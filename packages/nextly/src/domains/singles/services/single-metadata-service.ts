@@ -56,7 +56,7 @@ import type {
 import { assertGlobalResourceSlugAvailable } from "../../../services/lib/resource-slug-guard";
 import type { Logger } from "../../../shared/types";
 import { fieldGroupSlugList } from "../../field-groups/storage/field-group-field-type";
-import { assertFieldsCanLeaveTranslation } from "../../i18n/migration/archive-preflight";
+import { archiveFieldsLeavingTranslation } from "../../i18n/migration/archive-preflight";
 import { applyMigrationStatements } from "../../schema/services/apply-migration-statements";
 import { withSchemaChangeExcluded } from "../../schema/services/schema-change-exclusion";
 
@@ -695,7 +695,7 @@ export class SingleMetadataService {
    * now, so applying a UI edit to it would write a row the config is about to contradict.
    */
   /**
-   * The preconditions of a field leaving translation (`assertFieldsCanLeaveTranslation`), for a
+   * The first step of a field leaving translation (`archiveFieldsLeavingTranslation`), for a
    * save whose flags were derived inside the exclusion. Nothing is asked when the save sends no
    * fields or the Single is not translated before and after it.
    */
@@ -717,9 +717,17 @@ export class SingleMetadataService {
         },
       });
     }
-    await assertFieldsCanLeaveTranslation({
+    // Imported when needed, as this service does for its other runtime collaborators, to keep the
+    // dispatcher's module graph out of this one. The same default locale the Single's companion
+    // reconcile reads.
+    const { getConfigFromDI } = await import("../../../dispatcher/helpers/di");
+    const defaultLocale =
+      getConfigFromDI()?.localization?.defaultLocale ?? "en";
+    await archiveFieldsLeavingTranslation({
       // Singles are built by the collection schema service.
       builtBy: "collection",
+      tableName: input.existing.tableName,
+      defaultLocale: defaultLocale,
       adapter: this.adapter,
       entity: input.slug,
       oldFields: (input.existing.fields ?? []) as unknown as FieldDefinition[],

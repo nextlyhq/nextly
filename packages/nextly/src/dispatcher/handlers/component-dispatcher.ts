@@ -31,7 +31,7 @@ import {
 } from "../../domains/field-groups/services/field-group-table-provisioning";
 import { resolveFieldGroupRegistryName } from "../../domains/field-groups/storage/resolve-storage-names";
 import { assertLocalizationConfigured } from "../../domains/i18n/config/require-app-config";
-import { assertFieldsCanLeaveTranslation } from "../../domains/i18n/migration/archive-preflight";
+import { archiveFieldsLeavingTranslation } from "../../domains/i18n/migration/archive-preflight";
 import { translatePipelinePreviewToLegacy } from "../../domains/schema/legacy-preview/translate";
 import { RealClassifier } from "../../domains/schema/pipeline/classifier/classifier";
 import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/database-url";
@@ -68,6 +68,7 @@ import { buildFullDesiredSchema } from "../helpers/desired-schema";
 import {
   getAdapterFromDI,
   getComponentRegistryFromDI,
+  getConfigFromDI,
   getFieldGroupMetadataServiceFromDI,
   getLoggerFromDI,
   getMigrationJournalFromDI,
@@ -523,9 +524,12 @@ export const COMPONENTS_METHODS: Record<
           if (!adapter) throw new Error("Database adapter not initialized");
           // A field leaving translation has preconditions of its own, asked before the apply
           // alters anything.
-          await assertFieldsCanLeaveTranslation({
+          await archiveFieldsLeavingTranslation({
             // This builder made the table, which decides the column bounds compared.
             builtBy: "fieldGroup",
+            tableName: tableName,
+            defaultLocale:
+              getConfigFromDI()?.localization?.defaultLocale ?? "en",
             adapter,
             entity: slug,
             oldFields: (component.fields ?? []) as unknown as FieldDefinition[],
