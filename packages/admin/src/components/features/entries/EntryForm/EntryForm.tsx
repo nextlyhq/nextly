@@ -894,6 +894,7 @@ export function EntryForm({
                       lock={lock}
                       recovery={recovery}
                       viewingVersion={viewingVersion}
+                      fields={getCollectionFields(collection)}
                     />
                   ) : (
                     <div className={cn("space-y-0", className)}>

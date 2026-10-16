@@ -30,10 +30,13 @@ import type { ViewedVersion } from "@admin/components/features/versions/document
 import { useSuppressAdminChrome } from "@admin/components/layout/ChromeSuppression";
 import { PluginSlot } from "@admin/components/shared/plugin-slot";
 import type { UseAutosaveRecoveryResult } from "@admin/hooks/useAutosaveRecovery";
+import { useSearchParams } from "@admin/hooks/useSearchParams";
 import type { DocumentViewProps } from "@admin/lib/plugins/component-registry";
+import { resolveViewField } from "@admin/lib/plugins/document-view-registry";
 
 import { LiveDocumentRecoveryOffer } from "./AutosaveRecoveryBanner";
 import { DocumentLockBanner } from "./DocumentLockBanner";
+import { DocumentViewFieldChooser } from "./DocumentViewFieldChooser";
 import { FormErrorSummary } from "./FormErrorSummary";
 import { useLeaveWithoutWarning } from "./UnsavedChangesGuard";
 import type { DocumentLockSurface } from "./useDocumentLockSurface";
@@ -44,6 +47,8 @@ export interface DocumentViewMount {
   component: string;
   /** Navigate to the document's own edit address. */
   onExit: () => void;
+  /** For a view offered on a field type: that type, whose field it edits. */
+  fieldType?: string;
 }
 
 /** Which document the view is of, in the props the view receives. */
@@ -63,6 +68,8 @@ export interface DocumentViewBodyProps {
   recovery: UseAutosaveRecoveryResult;
   /** The past version on screen, which withholds the recovery offer. */
   viewingVersion: ViewedVersion | null;
+  /** The document's top-level fields, from which a field-type view's is chosen. */
+  fields?: readonly object[];
 }
 
 export function DocumentViewBody({
@@ -72,6 +79,7 @@ export function DocumentViewBody({
   lock,
   recovery,
   viewingVersion,
+  fields,
 }: DocumentViewBodyProps) {
   /*
    * The view takes the window, less the primary rail. `canExit` is false
@@ -98,12 +106,22 @@ export function DocumentViewBody({
     onExit();
   }, [leaveWithoutWarning, onExit]);
 
+  // Which field the view edits, from the address. Read here rather than by
+  // the view so the rule the admin applies to the address is the one answer.
+  const requested = useSearchParams().field;
+  const editing = resolveViewField(
+    view.fieldType,
+    fields,
+    typeof requested === "string" ? requested : undefined
+  );
+
   const { errors, submitCount } = form.formState;
   const viewProps: DocumentViewProps = {
     ...target,
     control: form.control,
     readOnly: lock.readOnly,
     exit,
+    ...(editing.kind === "field" ? { fieldName: editing.name } : {}),
   };
 
   return (
@@ -137,7 +155,11 @@ export function DocumentViewBody({
         {/* The view fills what is left. Boxed so a view rooted in bare text
             or `display: contents` still has an element taking the height. */}
         <div className="min-h-0 flex-1">
-          <PluginSlot path={view.component} props={viewProps} />
+          {editing.kind === "choose" ? (
+            <DocumentViewFieldChooser candidates={editing.candidates} />
+          ) : (
+            <PluginSlot path={view.component} props={viewProps} />
+          )}
         </div>
       </div>
     </FormProvider>

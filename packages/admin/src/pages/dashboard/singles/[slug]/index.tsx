@@ -172,6 +172,7 @@ function singleDocumentView(
   return {
     component: routed.component,
     onExit: () => navigateTo(buildRoute(ROUTES.SINGLE_EDIT, { slug })),
+    ...("fieldType" in routed ? { fieldType: routed.fieldType } : {}),
   };
 }
 

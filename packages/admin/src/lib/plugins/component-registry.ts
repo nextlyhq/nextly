@@ -122,6 +122,13 @@ export interface DocumentViewProps {
   readOnly: boolean;
   /** Return to the document's own edit screen, keeping unsaved work. */
   exit: () => void;
+  /**
+   * For a view offered on a field type: the top-level field it edits. The only
+   * field of that type, or the one the address names (`?field=`); where the
+   * document has several and the address names none of them, the admin asks
+   * the author before the view is drawn.
+   */
+  fieldName?: string;
 }
 
 /**

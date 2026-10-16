@@ -241,6 +241,7 @@ function entryDocumentView(
     component: routed.component,
     onExit: () =>
       navigateTo(buildRoute(ROUTES.COLLECTION_ENTRY_EDIT, { slug, id })),
+    ...("fieldType" in routed ? { fieldType: routed.fieldType } : {}),
   };
 }
 

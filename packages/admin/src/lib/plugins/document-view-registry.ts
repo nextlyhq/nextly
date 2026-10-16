@@ -117,3 +117,60 @@ export function documentViewMissing(
   const routed = routedDocumentView(slug, view);
   return routed !== undefined && !documentViewApplies(routed, fields);
 }
+
+/** A field a view could edit, as the chooser names it. */
+export interface ViewFieldCandidate {
+  name: string;
+  label?: string;
+}
+
+/**
+ * What a view edits: the whole document, one field, or — where the document
+ * has several fields the view could edit and the address names none of them —
+ * the author's choice.
+ */
+export type ViewFieldResolution =
+  | { kind: "document" }
+  | { kind: "field"; name: string }
+  | { kind: "choose"; candidates: ViewFieldCandidate[] };
+
+/** The top-level fields of `fieldType`, by name and label. */
+function candidatesOf(
+  fieldType: string,
+  fields: readonly object[] | undefined
+): ViewFieldCandidate[] {
+  return (fields ?? []).flatMap(field => {
+    if (!("type" in field) || field.type !== fieldType) return [];
+    if (!("name" in field) || typeof field.name !== "string") return [];
+    const label =
+      "label" in field && typeof field.label === "string"
+        ? { label: field.label }
+        : {};
+    return [{ name: field.name, ...label }];
+  });
+}
+
+/**
+ * Which field a document view edits, given the document's top-level fields and
+ * the field the address asks for (`?field=`).
+ *
+ * A view scoped to a field type edits one field of that type. The only one, if
+ * there is one; otherwise the one the address names. An address naming none,
+ * or naming something that is not such a field, is asked rather than guessed:
+ * opening the wrong one of two looks like the right editor showing the wrong
+ * content, which an author cannot tell from a lost page.
+ */
+export function resolveViewField(
+  fieldType: string | undefined,
+  fields: readonly object[] | undefined,
+  requested: string | undefined
+): ViewFieldResolution {
+  if (fieldType === undefined) return { kind: "document" };
+  const candidates = candidatesOf(fieldType, fields);
+  if (candidates.length === 1) {
+    return { kind: "field", name: candidates[0].name };
+  }
+  const named = candidates.find(candidate => candidate.name === requested);
+  if (named !== undefined) return { kind: "field", name: named.name };
+  return { kind: "choose", candidates };
+}

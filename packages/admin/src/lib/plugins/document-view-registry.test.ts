@@ -18,6 +18,7 @@ import {
   clearDocumentViews,
   documentViewApplies,
   documentViewMissing,
+  resolveViewField,
   matchDocumentView,
   registerDocumentViews,
   routedDocumentView,
@@ -131,6 +132,57 @@ describe("a view scoped to a field type", () => {
     );
     expect(resolved.Component).toBe(EditEntryPage);
     expect(resolved.requiredPermission).toBe("update-pages");
+  });
+});
+
+describe("which field a field-type view edits", () => {
+  const twoFields = [
+    { name: "title", type: "text" },
+    { name: "hero", label: "Hero", type: "blocks" },
+    { name: "body", label: "Body", type: "blocks" },
+  ];
+
+  it("opens the only field of its type, whatever the address asks", () => {
+    expect(
+      resolveViewField(
+        "blocks",
+        [{ name: "layout", type: "blocks" }],
+        undefined
+      )
+    ).toEqual({ kind: "field", name: "layout" });
+  });
+
+  it("opens the field the address names, on a document with two", () => {
+    expect(resolveViewField("blocks", twoFields, "hero")).toEqual({
+      kind: "field",
+      name: "hero",
+    });
+    expect(resolveViewField("blocks", twoFields, "body")).toEqual({
+      kind: "field",
+      name: "body",
+    });
+  });
+
+  it("asks which field when the address names none", () => {
+    expect(resolveViewField("blocks", twoFields, undefined)).toEqual({
+      kind: "choose",
+      candidates: [
+        { name: "hero", label: "Hero" },
+        { name: "body", label: "Body" },
+      ],
+    });
+  });
+
+  it("asks rather than guesses when the address names a field that is not one", () => {
+    // A text field, and a name the document does not have.
+    expect(resolveViewField("blocks", twoFields, "title").kind).toBe("choose");
+    expect(resolveViewField("blocks", twoFields, "nope").kind).toBe("choose");
+  });
+
+  it("names no field for a view scoped to the document itself", () => {
+    expect(resolveViewField(undefined, twoFields, "hero")).toEqual({
+      kind: "document",
+    });
   });
 });
 

@@ -10,7 +10,7 @@ import { ShortcutProvider } from "@nextlyhq/ui";
 import { QueryClientProvider } from "@tanstack/react-query";
 // RTL's own `render`: the shared one fixes its wrapper, and these need a
 // shortcut owner that listens.
-import { render } from "@testing-library/react";
+import { act, fireEvent, render } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ComponentProps, ReactElement, ReactNode } from "react";
 import { useFormContext } from "react-hook-form";
@@ -322,5 +322,90 @@ describe("EntryForm with a document view", () => {
     expect(document.querySelector("form#entry-form")).not.toBeNull();
     expect(screen.queryByTestId("builder-view")).toBeNull();
     expect(screen.queryByTestId("document-view-frame")).toBeNull();
+  });
+});
+
+describe("a field-type view on a document with two fields of its type", () => {
+  const twoBlocks = {
+    name: "pages",
+    label: "Pages",
+    fields: [
+      { name: "title", type: "text", label: "Title" },
+      { name: "hero", type: "blocks", label: "Hero" },
+      { name: "body", type: "blocks", label: "Body" },
+    ],
+  } as never;
+
+  function openAt(search: string) {
+    window.history.pushState(
+      null,
+      "",
+      `/admin/collections/pages/e1/builder${search}`
+    );
+    return renderView({
+      collection: twoBlocks,
+      documentView: { component: VIEW, onExit, fieldType: "blocks" },
+    });
+  }
+
+  afterEach(() => {
+    window.history.pushState(null, "", "/");
+  });
+
+  it.each(["hero", "body"])("edits %s when the address names it", name => {
+    openAt(`?field=${name}`);
+    expect(screen.getByTestId("builder-view")).toBeInTheDocument();
+    expect(received).toHaveBeenLastCalledWith(
+      expect.objectContaining({ fieldName: name })
+    );
+  });
+
+  it.each([
+    ["names no field", ""],
+    ["names a field that is not one of them", "?field=title"],
+    ["names a field the document does not have", "?field=nope"],
+  ])(
+    "asks which field when the address %s, drawing no view",
+    (_case, search) => {
+      openAt(search);
+      expect(
+        screen.getByRole("heading", {
+          name: "Which field do you want to edit?",
+        })
+      ).toBeInTheDocument();
+      expect(screen.queryByTestId("builder-view")).toBeNull();
+      expect(screen.getByRole("button", { name: "Hero" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Body" })).toBeInTheDocument();
+    }
+  );
+
+  it("opens the chosen field and records it in the address", () => {
+    openAt("");
+    fireEvent.click(screen.getByRole("button", { name: "Body" }));
+    // The admin's router announces every history move with this event; the
+    // test has no router, so it announces the one the click made.
+    act(() => {
+      window.dispatchEvent(new Event("locationchange"));
+    });
+    expect(new URLSearchParams(window.location.search).get("field")).toBe(
+      "body"
+    );
+    expect(received).toHaveBeenLastCalledWith(
+      expect.objectContaining({ fieldName: "body" })
+    );
+  });
+
+  it("opens the only field of its type without asking", () => {
+    window.history.pushState(null, "", "/admin/collections/pages/e1/builder");
+    renderView({
+      collection: {
+        name: "pages",
+        fields: [{ name: "layout", type: "blocks" }],
+      } as never,
+      documentView: { component: VIEW, onExit, fieldType: "blocks" },
+    });
+    expect(received).toHaveBeenLastCalledWith(
+      expect.objectContaining({ fieldName: "layout" })
+    );
   });
 });

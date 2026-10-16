@@ -242,6 +242,7 @@ Your component replaces the form's body and receives `DocumentViewProps` from
 | `control` | The document form's react-hook-form `control`. Write to the fields through it. |
 | `readOnly` | `true` while someone else holds the document. Don't offer edits then. |
 | `exit` | Goes back to the document's edit form. Commit any state you hold into the form first. |
+| `fieldName` | For a field-type view, the top-level field it edits. When the document has several, it is the one the address names (`?field=<name>`). If the address names none of them, the admin asks the author which one before it draws your view. |
 
 Opening that address requires the same permission as editing the document.
 

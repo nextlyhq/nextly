@@ -893,6 +893,7 @@ export function SingleForm({
                       lock={lock}
                       recovery={recovery}
                       viewingVersion={viewingVersion}
+                      fields={schema.fields}
                     />
                   ) : (
                     <div className={cn("space-y-0", className)}>
