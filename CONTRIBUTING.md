@@ -241,7 +241,11 @@ pnpm test:integration:postgres15
 pnpm test:integration:postgres17
 ```
 
-CI will catch any MySQL or SQLite failures on your PR.
+On a pull request, CI runs the integration legs (PostgreSQL, MySQL, SQLite)
+only once it carries the `run-integration` label; without it they report
+`skipped`. The merge queue always runs all three before merging, so a MySQL or
+SQLite failure is caught there at the latest. Add the label when you want that
+answer before the queue.
 
 ### Writing a new integration test
 

@@ -11,11 +11,17 @@ name: Integration
 # would wait for results that never come. The `changes` job below decides the
 # same thing and the legs skip by `if:`, which reports `skipped`, a result the
 # merge gate and the merge queue both accept.
+#
+# On a pull request the legs run only when it carries the `run-integration`
+# label (the `changes` job's `requested`); the merge queue and `main` always
+# run them, so nothing merges untested. `labeled` is a trigger so that adding
+# the label starts the legs without a push.
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
+    types: [opened, synchronize, reopened, labeled]
   # The merge queue tests each pull request again on the latest `main`, and
   # merges it only if the required checks pass there too.
   merge_group:
@@ -50,9 +56,13 @@ env:
 # work. The `changes` job asks first, and a run a newer push has overtaken
 # skips its legs; queued runs therefore start, ask and stop within seconds, and
 # only the newest tests. The queue stays short without anything being cancelled.
+#
+# Adding any other label also starts a run. It waits for one in progress
+# instead of cancelling it: a label is not a new commit, and cancelling would
+# throw away a leg's half-hour for nothing.
 concurrency:
   group: integration-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event.action != 'labeled' || github.event.label.name == 'run-integration' }}
 
 jobs:
   # Whether this run's legs have anything to do. Two answers skip them.
@@ -77,6 +87,9 @@ jobs:
     outputs:
       superseded: ${{ steps.newer.outputs.superseded }}
       inert: ${{ steps.decide.outputs.inert }}
+      # Always true in the merge queue and on `main`; on a pull request, true
+      # only while it carries the `run-integration` label.
+      requested: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-integration') }}
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -107,6 +120,16 @@ jobs:
           SCOPE_TITLE: Integration scope
           INERT_PATHS: '(^docs/|\.md$)'
         run: node scripts/change-scope.mjs
+      # Unconditional, so the step runs alike in every event; it only speaks
+      # when a pull request's legs skip for want of the label.
+      - name: Say whether the legs were asked for
+        env:
+          REQUESTED: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-integration') }}
+        run: |
+          if [ "$REQUESTED" = "false" ]; then
+            echo "::notice title=Integration not requested::add the run-integration label to run the database legs on this pull request; the merge queue runs them regardless."
+            printf '%s\n' "### Integration on request" "" "This pull request has no \`run-integration\` label, so the database legs skip here. Add the label to run them; the merge queue runs them before any merge." >> "$GITHUB_STEP_SUMMARY"
+          fi
 
   # One job per dialect, each with a literal name and only its own database.
   #
@@ -132,7 +155,7 @@ jobs:
     # gate, and three required checks would read as acceptable with nothing
     # run. A failed question has no outputs, so it falls open to running the
     # suite; only a cancelled workflow stays cancelled.
-    if: ${{ !cancelled() && needs.changes.outputs.superseded != 'true' && needs.changes.outputs.inert != 'true' }}
+    if: ${{ !cancelled() && needs.changes.outputs.superseded != 'true' && needs.changes.outputs.inert != 'true' && needs.changes.outputs.requested != 'false' }}
     runs-on: ubuntu-latest
     # A BACKSTOP now, not the bound that should ever fire.
     #
@@ -229,7 +252,7 @@ jobs:
     # gate, and three required checks would read as acceptable with nothing
     # run. A failed question has no outputs, so it falls open to running the
     # suite; only a cancelled workflow stays cancelled.
-    if: ${{ !cancelled() && needs.changes.outputs.superseded != 'true' && needs.changes.outputs.inert != 'true' }}
+    if: ${{ !cancelled() && needs.changes.outputs.superseded != 'true' && needs.changes.outputs.inert != 'true' && needs.changes.outputs.requested != 'false' }}
     runs-on: ubuntu-latest
     # The same backstop as the postgres leg, for the same reasons.
     timeout-minutes: 75
@@ -300,7 +323,7 @@ jobs:
     # gate, and three required checks would read as acceptable with nothing
     # run. A failed question has no outputs, so it falls open to running the
     # suite; only a cancelled workflow stays cancelled.
-    if: ${{ !cancelled() && needs.changes.outputs.superseded != 'true' && needs.changes.outputs.inert != 'true' }}
+    if: ${{ !cancelled() && needs.changes.outputs.superseded != 'true' && needs.changes.outputs.inert != 'true' && needs.changes.outputs.requested != 'false' }}
     runs-on: ubuntu-latest
     # A BACKSTOP, for the same reason as the database legs above: the bound that
     # should ever fire is INTEGRATION_SUITE_BUDGET on the step, which reports as

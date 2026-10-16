@@ -101,6 +101,49 @@ describe("the last commit Integration tested", () => {
   });
 });
 
+describe("Integration on request", () => {
+  /*
+   * A pull request runs the database legs only while it carries the
+   * `run-integration` label; the queue and `main` always run them. The
+   * decision is one output of the `changes` job, so each leg's own condition
+   * reads the same for every event, as the queue checks below require.
+   */
+  const workflow = read(".github/workflows/integration.yml");
+  const requested = workflow.jobs.changes.outputs.requested;
+  const decided = (expression, known) => evaluate(conditionTokens(expression), expression, known);
+  const LABELS = "github.event.pull_request.labels.*.name";
+
+  it("asks for the legs in the queue and on `main`, whatever the labels", () => {
+    for (const event of ["merge_group", "push"]) expect(decided(requested, { "github.event_name": event }), event).toBe(true);
+  });
+
+  it("asks for them on a pull request only while it carries the label", () => {
+    expect(decided(requested, { "github.event_name": "pull_request", [LABELS]: [] })).toBe(false);
+    expect(decided(requested, { "github.event_name": "pull_request", [LABELS]: ["enhancement"] })).toBe(false);
+    expect(decided(requested, { "github.event_name": "pull_request", [LABELS]: ["enhancement", "run-integration"] })).toBe(true);
+  });
+
+  it("skips a leg only on an answer of no, so a question that failed still runs it", () => {
+    const legs = Object.values(workflow.jobs).filter(job => String(job.name).startsWith("Integration ("));
+    expect(legs.length).toBe(3);
+    for (const leg of legs) expect(leg.if, leg.name).toContain("needs.changes.outputs.requested != 'false'");
+  });
+
+  it("says why the legs skipped by the same decision", () => {
+    const step = workflow.jobs.changes.steps.find(candidate => candidate.name === "Say whether the legs were asked for");
+    expect(step.env.REQUESTED).toBe(requested);
+    expect(step.if).toBeUndefined();
+  });
+
+  it("starts when a label is added, and only that label cancels a run in progress", () => {
+    expect(triggersOf(workflow).pull_request.types).toContain("labeled");
+    const cancels = workflow.concurrency["cancel-in-progress"];
+    expect(decided(cancels, { "github.event.action": "labeled", "github.event.label.name": "enhancement" })).toBe(false);
+    expect(decided(cancels, { "github.event.action": "labeled", "github.event.label.name": "run-integration" })).toBe(true);
+    expect(decided(cancels, { "github.event.action": "synchronize" })).toBe(true);
+  });
+});
+
 describe("conditions that skip the queue's run", () => {
   /*
    * A step that runs on a pull request's own run but not in the queue is
