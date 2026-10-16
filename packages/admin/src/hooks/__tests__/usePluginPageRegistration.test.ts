@@ -92,7 +92,7 @@ describe("usePluginPageRegistration", () => {
       ] satisfies PluginMetadata[])
     );
 
-    expect(matchDocumentView("pages", "builder")).toMatchObject({
+    expect(matchDocumentView("collection", "pages", "builder")).toMatchObject({
       component: "@acme/pb/admin#Builder",
     });
     expect(autoRegister).toHaveBeenCalledWith(
@@ -117,10 +117,10 @@ describe("usePluginPageRegistration", () => {
         initialProps: { plugins: initial },
       }
     );
-    expect(matchDocumentView("pages", "builder")).toBeDefined();
+    expect(matchDocumentView("collection", "pages", "builder")).toBeDefined();
 
     rerender({ plugins: [{ name: "@acme/pb", collections: [] }] });
-    expect(matchDocumentView("pages", "builder")).toBeUndefined();
+    expect(matchDocumentView("collection", "pages", "builder")).toBeUndefined();
   });
 
   it("feeds header.slot paths into auto-registration", () => {

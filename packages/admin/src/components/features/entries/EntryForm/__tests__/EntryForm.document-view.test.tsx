@@ -10,7 +10,7 @@ import { ShortcutProvider } from "@nextlyhq/ui";
 import { QueryClientProvider } from "@tanstack/react-query";
 // RTL's own `render`: the shared one fixes its wrapper, and these need a
 // shortcut owner that listens.
-import { act, fireEvent, render } from "@testing-library/react";
+import { fireEvent, render } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ComponentProps, ReactElement, ReactNode } from "react";
 import { useFormContext } from "react-hook-form";
