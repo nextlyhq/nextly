@@ -13,10 +13,10 @@
  *
  * Only runs started by a pull request's own events are cancelled. A push to
  * `main`, the merge queue and a schedule are never touched: those runs are
- * what `main`'s verdict is made of. A run belongs to the pull request when
- * GitHub lists it on the run; a run from a fork lists none, so it belongs when
- * it ran on the pull request's head branch in the pull request's head
- * repository and lists no other pull request.
+ * what `main`'s verdict is made of. A run belongs to a closed pull request
+ * when GitHub lists that pull request on the run; a run from a fork lists
+ * none, so it belongs when it ran on that pull request's head branch, in its
+ * head repository, and lists no other pull request.
  *
  * Usage, in a workflow step on `pull_request: closed`:
  *   node scripts/cancel-closed-pull-request-runs.mjs
