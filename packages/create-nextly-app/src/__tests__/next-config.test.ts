@@ -207,6 +207,30 @@ describe("a config it cannot change safely", () => {
       'const nextConfig = {};\n\nexport default withSentryConfig(nextConfig, { org: "acme" });\n',
     ],
     [
+      "sets a nested property of the exported variable",
+      'const nextConfig = { experimental: {} };\nnextConfig.experimental.optimizePackageImports = ["nextly"];\n\nexport default nextConfig;\n',
+    ],
+    [
+      "changes the exported variable through another name",
+      'const nextConfig = {};\nconst settings = nextConfig;\nsettings.transpilePackages = ["nextly"];\n\nexport default nextConfig;\n',
+    ],
+    [
+      "uses the exported variable in a destructuring default",
+      "const nextConfig = {};\nconst [alias = configure(nextConfig)] = [];\n\nexport default nextConfig;\n",
+    ],
+    [
+      "hands the exported variable to a function",
+      "const nextConfig = {};\nconfigure(nextConfig);\n\nexport default nextConfig;\n",
+    ],
+    [
+      'assigns module["exports"] after module.exports',
+      'module.exports = {};\nmodule["exports"] = { reactStrictMode: true };\n',
+    ],
+    [
+      "sets a nested property of module.exports",
+      'module.exports = { experimental: {} };\nmodule.exports.experimental.optimizePackageImports = ["nextly"];\n',
+    ],
+    [
       "assigns module.exports twice",
       "module.exports = {};\nmodule.exports = { reactStrictMode: true };\n",
     ],
@@ -289,6 +313,17 @@ describe("configs it can still change safely", () => {
     expect(await read("next.config.mjs")).toContain(
       `["serverExternalPackages"]: ["my-native-lib", ${quoted(REQUIRED).join(", ")}]`
     );
+  });
+
+  it("counts a key spelled like the config's variable as no use of it", async () => {
+    await write(
+      "next.config.mjs",
+      'const nextConfig = {\n  env: { nextConfig: "on" },\n};\n\nexport default nextConfig;\n'
+    );
+
+    const result = await patchNextConfig(dir, postgres);
+
+    expect(result).toMatchObject({ kind: "written", file: "next.config.mjs" });
   });
 
   it("reads a next.config.mts as TypeScript", async () => {

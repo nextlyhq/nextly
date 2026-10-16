@@ -178,38 +178,24 @@ function moduleExportsOf(statement: Statement): Expression | null {
     : null;
 }
 
-/** Whether a node is `module.exports`, or the `exports` it starts as. */
-const isCommonJsExport = (node: Node) =>
-  isNamed(node, "exports") ||
-  (node.type === "MemberExpression" &&
-    isNamed(node.object, "module") &&
-    isNamed(node.property, "exports"));
-
-const isPropertyOfExport = (node: Node) =>
-  node.type === "MemberExpression" && isCommonJsExport(node.object);
-
 /**
- * How many times the file sets what it exports, anywhere in it: each
- * `export default`, and each write to `module.exports`, `exports` or a
- * property of either, `Object.assign` among them.
+ * How many places in the file can set what it exports: each `export default`,
+ * and each reference to `module` or `exports`. A CommonJS config that only
+ * assigns `module.exports` once refers to `module` once; any other mention,
+ * `module["exports"]`, a property set on the export, or `module` handed on,
+ * may change what Next.js receives.
  */
-function exportWrites(body: Statement[]): number {
-  let writes = body.filter(
-    statement => statement.type === "ExportDefaultDeclaration"
-  ).length;
-  for (const node of nodesUnder(body)) {
-    const target = changedBy(node);
-    if (target && (isCommonJsExport(target) || isPropertyOfExport(target)))
-      writes++;
-  }
-  return writes;
-}
+const exportSites = (body: Statement[]) =>
+  body.filter(statement => statement.type === "ExportDefaultDeclaration")
+    .length +
+  referenceCount("module", body) +
+  referenceCount("exports", body);
 
 /**
  * The value `export default` or `module.exports =` hands Next.js, or why
- * there is none this can follow. A file that sets its export more than once
- * hands Next.js whichever runs last, which reading the file cannot settle,
- * so it answers why instead.
+ * there is none this can follow. Any second place that can set or change the
+ * export makes what Next.js receives something reading the file cannot
+ * settle, so it answers why instead.
  */
 function exportedValue(body: Statement[]): Expression | string {
   const [value] = body.flatMap(statement => {
@@ -217,8 +203,8 @@ function exportedValue(body: Statement[]): Expression | string {
     return exported === null ? [] : [exported];
   });
   if (value === undefined) return "it has no default export";
-  return exportWrites(body) > 1
-    ? "it sets what it exports more than once"
+  return exportSites(body) > 1
+    ? "it sets or changes what it exports in more than one place"
     : value;
 }
 
@@ -281,16 +267,18 @@ function isTypeAssertion(
 }
 
 /**
- * The config a variable holds, when the file declares it and never replaces
- * or changes it afterwards: the declared object is then the one Next.js gets.
+ * The config a variable holds, when the file declares it and refers to it
+ * only where it is exported: the declared object is then the one Next.js
+ * gets. Any other reference, an assignment, a property set at any depth, an
+ * alias or a call it is handed to, may change it unseen.
  */
 function followVariable(
   name: string,
   body: Statement[],
   depth: number
 ): ObjectExpression | string {
-  if (isReassigned(name, body)) {
-    return `its ${name} is assigned or changed after it is declared`;
+  if (referenceCount(name, body) > 1) {
+    return `its ${name} is used again after it is declared, where it may be changed`;
   }
   const declared = declaredValue(name, body);
   return declared
@@ -333,14 +321,31 @@ const NOT_CODE = new Set([
 const isNode = (value: unknown): value is Node =>
   typeof value === "object" && value !== null && "type" in value;
 
-/** Every node under a node, depth first. */
+/**
+ * The keys under which a node names something rather than refers to a
+ * variable: a declaration's own name, `b` in `a.b`, and a key written as a
+ * plain name. Every other identifier is counted as a reference, a function's
+ * parameters among them, which can only refuse more configs, never fewer.
+ */
+function namingKeys(node: Node): readonly string[] {
+  // Only a plain name: a destructuring pattern can hold code, a default
+  // value or a computed key, which may use the variable.
+  if (node.type === "VariableDeclarator")
+    return node.id.type === "Identifier" ? ["id"] : [];
+  if ("computed" in node && node.computed) return [];
+  if ("property" in node) return ["property"];
+  return "key" in node ? ["key"] : [];
+}
+
+/** Every node under a node that is code, depth first, leaving out naming positions. */
 function* nodesUnder(node: unknown): Generator<Node> {
   if (Array.isArray(node)) return yield* nodesIn(node);
   if (!isNode(node)) return;
   yield node;
+  const naming = namingKeys(node);
   yield* nodesIn(
     Object.entries(node)
-      .filter(([key]) => !NOT_CODE.has(key))
+      .filter(([key]) => !NOT_CODE.has(key) && !naming.includes(key))
       .map(([, value]) => value)
   );
 }
@@ -349,45 +354,11 @@ function* nodesIn(values: unknown[]): Generator<Node> {
   for (const value of values) yield* nodesUnder(value);
 }
 
-/** What an assignment or an increment writes to, or null for any other node. */
-function writtenTarget(node: Node): Node | null {
-  if (node.type === "AssignmentExpression") return node.left;
-  if (node.type === "UpdateExpression") return node.argument;
-  return null;
-}
-
-/** Whether writing to `target` changes the variable `name` or one of its properties. */
-const writesTo = (target: Node, name: string) =>
-  isNamed(target, name) ||
-  (target.type === "MemberExpression" && isNamed(target.object, name));
-
-const isMethodCall = (callee: Node, object: string, method: string) =>
-  callee.type === "MemberExpression" &&
-  isNamed(callee.object, object) &&
-  isNamed(callee.property, method);
-
-/** The object `Object.assign(object, ...)` writes to, or null for any other node. */
-function objectAssignTarget(node: Node): Node | null {
-  if (node.type !== "CallExpression") return null;
-  if (!isMethodCall(node.callee, "Object", "assign")) return null;
-  return node.arguments[0] ?? null;
-}
-
-/** What a node writes to: an assignment, an increment or `Object.assign`. */
-const changedBy = (node: Node) =>
-  writtenTarget(node) ?? objectAssignTarget(node);
-
-/**
- * Whether the file assigns to the variable after declaring it, assigns to one
- * of its properties, or hands it to `Object.assign`: any of those can replace
- * the object, or its list, after the point this would edit.
- */
-function isReassigned(name: string, body: Statement[]): boolean {
-  for (const node of nodesUnder(body)) {
-    const target = changedBy(node);
-    if (target && writesTo(target, name)) return true;
-  }
-  return false;
+/** How many times the file refers to the variable `name`, anywhere in it. */
+function referenceCount(name: string, body: Statement[]): number {
+  let count = 0;
+  for (const node of nodesUnder(body)) if (isNamed(node, name)) count++;
+  return count;
 }
 
 /**
