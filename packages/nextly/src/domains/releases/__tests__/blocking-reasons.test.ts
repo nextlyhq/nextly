@@ -64,6 +64,13 @@ function service(members: M[], liveAuthorIds: string[], state = "blocked") {
     } as unknown as ReleasesServiceDeps["repository"],
     canManageReleases: vi.fn(async () => true),
     canActOnDocument: vi.fn(async () => true),
+    // Every target is there and has a lifecycle; the checks have their own tests.
+    targets: {
+      readDocument: async (target: { entryId: string }) => ({
+        id: target.entryId,
+      }),
+      declaresLifecycle: async () => true,
+    },
   };
   return { svc: new ReleasesService(deps), liveAuthors, scheduleRelease };
 }
@@ -164,6 +171,13 @@ describe("as an instrument", () => {
       repository: {} as ReleasesServiceDeps["repository"],
       canManageReleases: vi.fn(async () => false),
       canActOnDocument: vi.fn(async () => true),
+      // Every target is there and has a lifecycle; the checks have their own tests.
+      targets: {
+        readDocument: async (target: { entryId: string }) => ({
+          id: target.entryId,
+        }),
+        declaresLifecycle: async () => true,
+      },
     };
     await expect(
       new ReleasesService(deps).blockingReasons("r1", ACTOR)
@@ -315,6 +329,13 @@ describe("the blocker verdict and the write share a fence", () => {
       } as unknown as ReleasesServiceDeps["repository"],
       canManageReleases: vi.fn(async () => true),
       canActOnDocument: vi.fn(async () => true),
+      // Every target is there and has a lifecycle; the checks have their own tests.
+      targets: {
+        readDocument: async (target: { entryId: string }) => ({
+          id: target.entryId,
+        }),
+        declaresLifecycle: async () => true,
+      },
     };
     return { svc: new ReleasesService(deps), scheduleRelease, liveAuthors };
   }

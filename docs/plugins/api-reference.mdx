@@ -68,7 +68,8 @@ interface PluginContributions {
     menu?: PluginMenuItem[]; // { label, to, icon?, order?, requiredPermission?, children? }
     pages?: PluginAdminPage[]; // { path, component, requiredPermission? }
     settings?: { component: ComponentPath };
-    views?: Record<string, PluginCollectionView>; // list/edit/before*/after* by collection slug
+    views?: Record<string, PluginCollectionView>; // list/edit/before*/after*, and @experimental documentViews, by collection slug
+    documentViews?: PluginFieldTypeDocumentView[]; // @experimental: views on every collection or Single with a top-level field of one of this plugin's field types
     widgets?: PluginAdminWidget[]; // rendered on the dashboard; @experimental
   };
 }

@@ -137,7 +137,6 @@ export interface FormDocument {
   fields: AnyFormField[];
   settings: FormSettings;
   notifications: FormNotification[];
-  webhooks?: WebhookConfig[];
   status: "draft" | "published" | "closed";
   /**
    * What a closed form tells a visitor who reaches it.
@@ -244,7 +243,10 @@ export interface FormBuilderPluginOptions {
    *   labels: { singular: 'My Form', plural: 'My Forms' },
    *   access: {
    *     read: () => true,
-   *     create: ({ roles }) => roles.includes('admin'),
+   *     // Narrow the permission, never replace it: the role screen still
+   *     // decides who holds `create-my-forms`.
+   *     create: ({ permissions }) =>
+   *       permissions.includes('my-forms:create') && process.env.CONTENT_FREEZE !== 'on',
    *   },
    *   fields: [
    *     text({ name: 'internalNotes', label: 'Internal Notes' }),
@@ -255,7 +257,7 @@ export interface FormBuilderPluginOptions {
    * formOverrides: {
    *   slug: 'contact-forms',
    *   access: {
-   *     read: ({ user }) => !!user,
+   *     read: ({ permissions }) => permissions.includes('contact-forms:read'),
    *     update: () => false,
    *   },
    *   fields: ({ defaultFields }) => {
@@ -286,7 +288,7 @@ export interface FormBuilderPluginOptions {
    *   slug: 'my-submissions',
    *   labels: { singular: 'Response', plural: 'Responses' },
    *   access: {
-   *     read: ({ roles }) => roles.includes('admin'),
+   *     read: ({ permissions }) => permissions.includes('my-submissions:read'),
    *   },
    *   fields: [
    *     select({
@@ -1012,104 +1014,6 @@ export interface FormNotifications {
 
   /** Custom email template */
   template?: string; // HTML template
-
-  /**
-   * Webhook endpoints to notify on form events.
-   *
-   * Webhooks are fired asynchronously and do not block form submission.
-   * Failed webhooks are logged but do not cause submission failures.
-   *
-   * @example
-   * ```typescript
-   * webhooks: [
-   *   {
-   *     url: 'https://api.example.com/webhooks/form-submissions',
-   *     events: ['submission.created'],
-   *     secret: 'your-webhook-secret', // Optional HMAC signature
-   *   },
-   *   {
-   *     url: 'https://crm.example.com/api/leads',
-   *     events: ['submission.created', 'submission.updated'],
-   *     headers: { 'X-API-Key': 'abc123' },
-   *     includeData: true,
-   *   },
-   * ]
-   * ```
-   */
-  webhooks?: WebhookConfig[];
-}
-
-// ============================================================
-// Webhook Types
-// ============================================================
-
-/**
- * Webhook event types.
- */
-export type WebhookEvent =
-  | "submission.created"
-  | "submission.updated"
-  | "submission.deleted";
-
-/**
- * Configuration for a webhook endpoint.
- */
-export interface WebhookConfig {
-  /** Webhook URL to send POST requests to */
-  url: string;
-
-  /**
-   * HTTP method for the webhook request.
-   * @default "POST"
-   */
-  method?: "POST" | "PUT";
-
-  /**
-   * Custom headers to include in the webhook request.
-   * Useful for authentication tokens or API keys.
-   */
-  headers?: Record<string, string>;
-
-  /**
-   * Events that trigger this webhook.
-   * Must include at least one event.
-   */
-  events: WebhookEvent[];
-
-  /**
-   * Whether to include full submission data in the webhook payload.
-   * If false, only submission ID and timestamp are included.
-   * @default true
-   */
-  includeData?: boolean;
-
-  /**
-   * Secret key for HMAC-SHA256 signature verification.
-   *
-   * When provided, the webhook request will include an
-   * `X-Webhook-Signature` header containing the signature:
-   * `sha256=<hex-encoded-hmac>`
-   *
-   * Recipients can verify the signature to ensure the webhook
-   * originated from your server and wasn't tampered with.
-   *
-   * @example
-   * ```typescript
-   * // Verifying the signature on the receiving end (Node.js):
-   * const crypto = require('crypto');
-   * const expectedSignature = req.headers['x-webhook-signature'];
-   * const payload = JSON.stringify(req.body);
-   * const signature = 'sha256=' + crypto
-   *   .createHmac('sha256', secret)
-   *   .update(payload)
-   *   .digest('hex');
-   * const isValid = crypto.timingSafeEqual(
-   *   Buffer.from(expectedSignature),
-   *   Buffer.from(signature)
-   * );
-   * ```
-   */
-  secret?: string;
 }
 
 // ============================================================

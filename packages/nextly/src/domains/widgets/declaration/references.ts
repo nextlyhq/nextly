@@ -24,9 +24,9 @@
 
 import { NextlyError } from "../../../errors/nextly-error";
 import { getNextlyLogger } from "../../../observability/logger";
-import { refreshCollectionSources } from "../collection-sources";
+import { refreshContentSources } from "../collection-widgets";
 import { validateWidgetQuery, type WidgetQuery } from "../query";
-import { refreshSingleSources } from "../single-sources";
+import { getSource } from "../sources";
 
 import { buildCardQuery } from "./card-query";
 import { type DeclaredWidget, listDeclaredWidgets } from "./declared-widgets";
@@ -40,6 +40,12 @@ import {
 export interface CodeDefinedContent {
   readonly collections: ReadonlySet<string>;
   readonly singles: ReadonlySet<string>;
+  /**
+   * Whether boot found the content registries not yet created: a fresh
+   * database, before migrations and `/setup`. Only then is a registry that
+   * cannot be read no reason to stop.
+   */
+  readonly databaseNotSetUp: boolean;
 }
 
 const COLLECTION_SOURCE = "collection:";
@@ -116,14 +122,70 @@ function startingQueryFault(
     const mismatch = displayOpProblem(display, query.op);
     if (mismatch !== undefined) return mismatch;
   }
+  return contentFault(declared, query, content);
+}
+
+/**
+ * Whether a starting query can run against the synced content: a fault when
+ * what it names is fixed by the code, a warning when it is the database's.
+ *
+ * 🔴 A collection or Single the code defines that has no source yet has not
+ * reached the database: on a fresh install its table and registry row exist
+ * only once setup runs, and boot tolerates that so `/setup` can be served.
+ * Refusing here would stop the very start setup needs, so the query waits for
+ * a start where the content exists. A misspelt name is not one the code
+ * defines, so it is still judged, as the database's.
+ */
+function contentFault(
+  declared: DeclaredWidget,
+  query: WidgetQuery,
+  content: CodeDefinedContent
+): string | undefined {
+  const codeDefined = fixedByCode(query.source, content);
+  if (
+    codeDefined &&
+    isContentSource(query.source) &&
+    !getSource(query.source)
+  ) {
+    return undefined;
+  }
   const problem = queryProblem(query);
   if (problem === undefined) return undefined;
-  if (fixedByCode(query.source, content)) {
+  if (codeDefined) {
     return `its query, built from its starting settings, cannot run: ${problem}`;
   }
   warnMissingContent(declared, query.source, problem);
   return undefined;
 }
+
+/**
+ * Startup refused because the content registries could not be read, so no
+ * declared widget's starting query could be checked. A failure to read, not a
+ * fault in any declaration: the remedy is to start again once the database
+ * answers.
+ */
+const registriesUnreadable = (): NextlyError =>
+  NextlyError.serviceUnavailable({
+    logMessage:
+      "Declared dashboard widgets could not be checked: the collections or " +
+      "Singles registry could not be read. Startup stops rather than admit " +
+      "widgets it has not checked; start again once the database answers.",
+  });
+
+/**
+ * Whether the code defines any collection or Single.
+ *
+ * Only then can a registry that was not read let a widget pass unchecked: the
+ * check refuses over code-defined content alone. And only then can boot tell
+ * a fresh database apart, since its syncs find the registries missing by
+ * writing to them; with nothing to write they report nothing.
+ */
+const definesContent = (content: CodeDefinedContent): boolean =>
+  content.collections.size > 0 || content.singles.size > 0;
+
+/** Whether a source is a collection or a Single, which boot syncs. */
+const isContentSource = (source: string): boolean =>
+  source.startsWith(COLLECTION_SOURCE) || source.startsWith(SINGLE_SOURCE);
 
 /** The warning for a query over the database's content that cannot run. */
 function warnMissingContent(
@@ -152,17 +214,30 @@ function warnMissingContent(
 export async function checkDeclaredWidgetReferences(
   content: CodeDefinedContent
 ): Promise<void> {
+  const declared = listDeclaredWidgets();
+  // Nothing to check, so nothing to read: boot reads the content registries
+  // for nothing else, and on a database not yet set up the read fails.
+  if (declared.length === 0) return;
   // The sources a query names are derived from the registries, which hold the
   // synced content only now.
-  await Promise.all([refreshCollectionSources(), refreshSingleSources()]);
+  const read = await refreshContentSources();
+  // 🔴 A registry that could not be read on a database that is set up leaves
+  // the sources as they stood, and every code-defined collection would look
+  // as if its table had not been made yet, so each widget over one would pass
+  // unchecked. Startup stops instead, and is tried again. On a fresh database
+  // the read fails for the reason boot already tolerates, and the content
+  // queries wait for a start where the content exists. With no code-defined
+  // content there is nothing to pass unchecked, and nothing for boot to have
+  // found missing, so it starts.
+  if (!read && !content.databaseNotSetUp && definesContent(content)) {
+    throw registriesUnreadable();
+  }
 
-  const faults: WidgetDeclarationFault[] = listDeclaredWidgets().flatMap(
-    declared => {
-      const problem = startingQueryFault(declared, content);
-      return problem === undefined
-        ? []
-        : [{ owner: declared.owner, widget: declared.declaration.id, problem }];
-    }
-  );
+  const faults: WidgetDeclarationFault[] = declared.flatMap(declared => {
+    const problem = startingQueryFault(declared, content);
+    return problem === undefined
+      ? []
+      : [{ owner: declared.owner, widget: declared.declaration.id, problem }];
+  });
   if (faults.length > 0) throw widgetDeclarationsRefused(faults);
 }

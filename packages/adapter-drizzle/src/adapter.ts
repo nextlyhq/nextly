@@ -24,6 +24,11 @@ import {
 import { buildDrizzleOrderBy } from "./drizzle-order";
 import { buildDrizzleWhere } from "./drizzle-where";
 import {
+  pinTransactions,
+  type DrizzleTransactor,
+  type PinnedConnection,
+} from "./pinned-transaction";
+import {
   createTransactionForwarders,
   transactionDrizzleHandles,
   type TransactionCrudForwarders,
@@ -66,17 +71,6 @@ interface FlowTransaction {
   open: boolean;
   /** The transaction the flow that opened this one was itself inside. */
   enclosing: FlowTransaction | undefined;
-}
-
-/**
- * Drizzle's database handle, as far as running a transaction goes.
- *
- * The callback takes `unknown` and the options `never`, so every dialect's
- * handle fits, whose callback receives its own transaction type and whose
- * options are its own.
- */
-interface DrizzleTransactor {
-  transaction<T>(work: (tx: unknown) => Promise<T>, config?: never): Promise<T>;
 }
 
 /**
@@ -492,6 +486,27 @@ export abstract class DrizzleAdapter {
         scope.open = false;
       }
     });
+  }
+
+  /**
+   * Run each of a pool-bound Drizzle handle's transactions on a connection
+   * `checkout` hands it, and return that connection as the adapter's own
+   * `transaction()` does: closed rather than pooled when no ROLLBACK can be
+   * confirmed on it, and never leaked by a failed BEGIN (`pinTransactions`).
+   *
+   * For PostgreSQL's and MySQL's handles. Apply it before
+   * {@link trackFlowTransactions}, which wraps whatever `transaction` the
+   * handle has at that point.
+   *
+   * @param db - A Drizzle handle on this adapter's pool
+   * @param checkout - Checks out a connection for one transaction
+   * @returns The same handle, its `transaction` replaced
+   */
+  protected pinDrizzleTransactions<D extends DrizzleTransactor>(
+    db: D,
+    checkout: () => Promise<PinnedConnection>
+  ): D {
+    return pinTransactions(db, checkout);
   }
 
   /**
@@ -1869,7 +1884,8 @@ export abstract class DrizzleAdapter {
    * @remarks
    * Default implementation uses dialect-specific ON CONFLICT syntax.
    * PostgreSQL/SQLite: ON CONFLICT ... DO UPDATE
-   * MySQL: ON DUPLICATE KEY UPDATE
+   * MySQL: the MySQL adapter overrides this, resolving the conflict by the
+   * conflict columns (see its `upsert`)
    *
    * @param table - Table name
    * @param data - Record data
@@ -1922,43 +1938,63 @@ export abstract class DrizzleAdapter {
           }
         }
 
+        // Nothing left to update means "insert, or keep the row that is
+        // there": the write-once a caller inside a transaction needs. It must
+        // not raise on a repeat — on PostgreSQL a failed statement aborts the
+        // whole transaction — so it is spelled as a conflict that changes
+        // nothing, and the row that stands is read back below.
+        const keepExisting = Object.keys(updateData).length === 0;
+        this.assertUpsertTarget(table, data, options, keepExisting);
+
         let query;
         if (caps.supportsOnConflict) {
-          // PostgreSQL/SQLite: ON CONFLICT DO UPDATE
-          query = db.insert(tableObj).values(data).onConflictDoUpdate({
-            target: conflictTarget,
-            set: updateData,
-          });
+          // PostgreSQL/SQLite: ON CONFLICT ... DO UPDATE, or DO NOTHING when
+          // there is nothing to update.
+          const inserted = db.insert(tableObj).values(data);
+          query = keepExisting
+            ? inserted.onConflictDoNothing({ target: conflictTarget })
+            : inserted.onConflictDoUpdate({
+                target: conflictTarget,
+                set: updateData,
+              });
         } else {
-          // MySQL: fallback to insert, catch duplicate key, then update
-          // This is handled by the MySQL adapter override
+          // A dialect without a conflict clause overrides `upsert` (the MySQL
+          // adapter does); this plain insert is only the fallback for one that
+          // has not.
           query = db.insert(tableObj).values(data);
         }
 
         if (caps.supportsReturning) {
           const result = await query.returning();
-          return (Array.isArray(result) ? result[0] : result) as T;
+          const row = Array.isArray(result) ? result[0] : result;
+          // DO NOTHING returns no row on a conflict; the row that stands is
+          // read back instead, the same way on every dialect.
+          if (row !== undefined) return row as T;
+        } else {
+          await query;
         }
 
-        await query;
-
-        // For databases without RETURNING: select back using conflict columns
-        // on the same executor so a transactional upsert reads its own write.
+        // Read the row that stands back by every conflict column, on the same
+        // executor so a transactional upsert reads its own write. A second
+        // statement, so a row deleted between the two is not returned (see
+        // `UpsertOptions.updateColumns`); never one this call did not find, so
+        // "created" read from the returned id stays exact.
+        const conflictValues = options.conflictColumns.map(
+          column => [column, data[column]] as const
+        );
         if (
-          options.conflictColumns.length &&
-          data[options.conflictColumns[0]] !== undefined
+          conflictValues.length > 0 &&
+          conflictValues.every(([, value]) => value !== undefined)
         ) {
           return (await this.selectOne<T>(
             table,
             {
               where: {
-                and: [
-                  {
-                    column: options.conflictColumns[0],
-                    op: "=",
-                    value: data[options.conflictColumns[0]] as SqlParam,
-                  },
-                ],
+                and: conflictValues.map(([column, value]) => ({
+                  column,
+                  op: "=" as const,
+                  value: value as SqlParam,
+                })),
               },
             },
             executor
@@ -2624,6 +2660,35 @@ export abstract class DrizzleAdapter {
   }
 
   /**
+   * Refuse an upsert target every dialect would not answer alike: a conflict
+   * column named twice, which SQLite rejects as no constraint's target and
+   * MySQL would accept; and, when nothing is to be updated, a conflict column
+   * left for the database to fill, since the row that stands is then read
+   * back by a value the caller never gave. Shared with the dialects that
+   * override `upsert`, so the refusals are one rule.
+   */
+  protected assertUpsertTarget(
+    table: string,
+    data: Record<string, unknown>,
+    options: UpsertOptions,
+    keepExisting: boolean
+  ): void {
+    const columns = options.conflictColumns;
+    if (new Set(columns).size !== columns.length) {
+      throw createDatabaseError({
+        kind: "query",
+        message: `upsert on ${table} names a conflict column more than once (${columns.join(", ")}).`,
+      });
+    }
+    if (keepExisting && columns.some(column => data[column] === undefined)) {
+      throw createDatabaseError({
+        kind: "query",
+        message: `upsert on ${table} needs a value for every conflict column (${columns.join(", ")}).`,
+      });
+    }
+  }
+
+  /**
    * The columns of a table-level `primaryKey({ columns })`, as the dialect's
    * table config reports them. The base class cannot read that config without
    * naming a dialect, so each adapter answers for its own; a dialect that does
@@ -2696,6 +2761,38 @@ export abstract class DrizzleAdapter {
       returning !== undefined &&
       !(Array.isArray(returning) && returning.length === 0)
     );
+  }
+
+  /**
+   * The driver's own error inside `error`: the first in its `cause` chain that
+   * `isDriverError` recognises, or `error` itself when none does.
+   *
+   * A query that runs through Drizzle fails with Drizzle's `DrizzleQueryError`,
+   * whose message is the SQL statement and which carries no driver code; the
+   * driver's error, the only object that knows what actually went wrong, is
+   * its `cause`. A dialect's {@link classifyError} classifies from what this
+   * returns, so a failure reads the same whether or not Drizzle wrapped it.
+   *
+   * The walk is bounded, because an error chain can be made cyclic and a
+   * classifier that can hang is worse than one that gives up. Falling back to
+   * `error` keeps an error that carries no code anywhere classified as before.
+   *
+   * @param error - The error as it was caught
+   * @param isDriverError - Whether a link in the chain is the driver's error
+   * @returns The driver's error, or `error` when no link is
+   */
+  protected driverErrorIn<T extends { cause?: unknown }>(
+    error: unknown,
+    isDriverError: (candidate: T) => boolean
+  ): T {
+    let cursor: unknown = error;
+    for (let depth = 0; depth < 10; depth++) {
+      if (cursor === null || typeof cursor !== "object") break;
+      const candidate = cursor as T;
+      if (isDriverError(candidate)) return candidate;
+      cursor = candidate.cause;
+    }
+    return (error ?? {}) as T;
   }
 
   /**

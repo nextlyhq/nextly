@@ -639,6 +639,10 @@ export class PostgresAdapter extends DrizzleAdapter {
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       const client = await pool.connect();
       const startTime = Date.now();
+      // Set when the ROLLBACK failed. The client may then still be inside the
+      // transaction, so it is destroyed rather than pooled: the next request
+      // handed it would otherwise write into a transaction nobody commits.
+      let discard: Error | true | undefined;
 
       try {
         // Begin transaction with options
@@ -665,7 +669,9 @@ export class PostgresAdapter extends DrizzleAdapter {
         return result;
       } catch (error) {
         // Rollback transaction
-        await client.query("ROLLBACK").catch(() => {});
+        await client.query("ROLLBACK").catch((rollbackError: unknown) => {
+          discard = rollbackError instanceof Error ? rollbackError : true;
+        });
 
         lastError = error;
 
@@ -696,7 +702,9 @@ export class PostgresAdapter extends DrizzleAdapter {
 
         throw this.classifyError(error);
       } finally {
-        client.release();
+        // node-postgres destroys a client released with an error or `true`,
+        // and pools one released with nothing.
+        client.release(discard);
       }
     }
 
@@ -859,18 +867,39 @@ export class PostgresAdapter extends DrizzleAdapter {
     // registry) is what powers db.query in v1; a bare instance serves the
     // select-builder CRUD paths.
     if (!relations) {
-      // Its `transaction` counts for `transactionOpenInFlow`, as the adapter's does.
-      this.drizzleBare ??= this.trackFlowTransactions(
-        drizzle({ client: pool })
-      );
+      this.drizzleBare ??= this.poolDrizzle(pool);
       return this.drizzleBare as T;
     }
     let cached = this.drizzleByRelations.get(relations);
     if (!cached) {
-      cached = this.trackFlowTransactions(drizzle({ client: pool, relations }));
+      cached = this.poolDrizzle(pool, relations);
       this.drizzleByRelations.set(relations, cached);
     }
     return cached as T;
+  }
+
+  /**
+   * A Drizzle handle on the pool, for `getDrizzle`.
+   *
+   * Its `transaction` runs on a client this adapter checks out and returns
+   * itself (`pinDrizzleTransactions`): node-postgres destroys a client
+   * released with `true`, which is what happens when no ROLLBACK could be
+   * confirmed on it. And it counts for `transactionOpenInFlow`, as the
+   * adapter's does.
+   */
+  private poolDrizzle(pool: Pool, relations?: AnyRelations) {
+    const onClient = (client: Pool | PoolClient) =>
+      relations ? drizzle({ client, relations }) : drizzle({ client });
+    return this.trackFlowTransactions(
+      this.pinDrizzleTransactions(onClient(pool), async () => {
+        const client = await pool.connect();
+        return {
+          drizzle: onClient(client),
+          rollback: () => client.query("ROLLBACK"),
+          release: dirty => client.release(dirty),
+        };
+      })
+    );
   }
 
   /**
@@ -1218,7 +1247,10 @@ export class PostgresAdapter extends DrizzleAdapter {
     // as kind: "unknown".
     if (isDatabaseError(error)) return error;
 
-    const pgError = error as {
+    // Classified from node-postgres's own error, which Drizzle puts on `cause`
+    // when it wraps a failed query (`driverErrorIn`); it is the one carrying
+    // the SQLSTATE `code`.
+    const pgError = this.driverErrorIn<{
       code?: string;
       message?: string;
       constraint?: string;
@@ -1227,7 +1259,11 @@ export class PostgresAdapter extends DrizzleAdapter {
       detail?: string;
       hint?: string;
       severity?: string;
-    };
+      cause?: unknown;
+    }>(
+      error,
+      candidate => typeof candidate.code === "string" && candidate.code !== ""
+    );
 
     // Determine error kind from PostgreSQL error code
     const kind: DatabaseErrorKind =

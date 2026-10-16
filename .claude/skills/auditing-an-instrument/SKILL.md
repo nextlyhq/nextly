@@ -4,6 +4,8 @@ description: >-
   Use when a check, test, probe, search or verification returned a clean,
   empty or surprising result and you need to know whether it examined its
   subject at all, and when designing the control for a break-verification.
+metadata:
+  internal: true
 ---
 
 ## An instrument that never examined its subject answers cleanly

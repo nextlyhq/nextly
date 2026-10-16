@@ -303,8 +303,9 @@ buckets you get back are genuinely the largest. `truncated` is `true` when the
 cap left some out; a chart drawn from a capped set is not the whole picture, so
 show that rather than hiding it.
 
-Some fields cannot be grouped, and the refusal names the reason: a field with a
-read rule, any spelling of it, a password field, the owner column, a field
+Some fields cannot be grouped, and the refusal names the reason: a field whose
+read rule does not let the caller read it (or lets them read it only on some
+entries), under any spelling, a password field, the owner column, a field
 transformed by an `afterRead` hook, and anything stored as JSON. Buckets are the
 distinct values of a column, so grouping publishes the whole value set in one
 request where a `where` yields it one probe at a time.
@@ -548,6 +549,8 @@ const result = await nextly.email.sendWithTemplate({
 The Direct API exposes auth operations as methods on the root `nextly` object. They speak directly to the auth service and are useful in server actions and admin scripts.
 
 ### login
+
+> **Needs the release after 0.0.2-alpha.66:** the account checks below, `EMAIL_NOT_VERIFIED`, and the token ending early. On 0.0.2-alpha.66, `nextly.login()` checks only the password, so a locked, deactivated or unverified account still gets a token, and that token lasts until it expires.
 
 Verify credentials and issue a signed JWT. The token expiry is 30 days, and it ends earlier, within ten seconds, if the account is deactivated or an administrator sets its password ([Authentication](/docs/guides/authentication)). The Direct API does **not** set cookies — that responsibility belongs to your route handler / server action wrapper.
 

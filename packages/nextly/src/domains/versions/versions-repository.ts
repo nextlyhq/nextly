@@ -624,6 +624,24 @@ export class VersionsRepository {
    * For the operations that act on the whole document at once — publishing all
    * of its languages — rather than on the language in front of the author.
    */
+  /**
+   * The parts (language keys, null for none) that hold a working draft,
+   * without the drafts' snapshots.
+   */
+  async listWorkingDraftLocales(ref: VersionRef): Promise<(string | null)[]> {
+    const rows = await this.db.select<{ locale: string | null }>(TABLE, {
+      columns: ["locale"],
+      where: {
+        and: [
+          ...this.docWhere(ref),
+          { column: "isAutosave", op: "=", value: false },
+          { column: "versionNo", op: "IS NULL" },
+        ],
+      },
+    });
+    return rows.map(row => row.locale);
+  }
+
   async findAllWorkingDrafts(ref: VersionRef): Promise<VersionRow[]> {
     return this.db.select<VersionRow>(TABLE, {
       where: {
@@ -847,12 +865,20 @@ export class VersionsRepository {
 
   /**
    * Durable rows for one document, newest-first, projecting only what the
-   * retention rules need. Autosave rows are excluded because they never count
-   * toward the cap.
+   * retention rules need: the language, name and restore source decide what is
+   * always kept, and the snapshot is never read. Autosave rows are excluded
+   * because they never count toward the cap.
    */
   async listDurableForPrune(ref: VersionRef): Promise<PrunableVersion[]> {
     return this.db.select<PrunableVersion>(TABLE, {
-      columns: ["id", "versionNo", "status"],
+      columns: [
+        "id",
+        "versionNo",
+        "status",
+        "locale",
+        "label",
+        "sourceVersionNo",
+      ],
       where: {
         and: [
           ...this.docWhere(ref),
@@ -1151,13 +1177,33 @@ export class VersionsRepository {
     );
   }
 
-  async deleteByIds(ids: string[]): Promise<number> {
+  /**
+   * Delete the versions a retention pass selected, except any that has been
+   * named since the pass read it.
+   *
+   * Naming a version does not take the document's write lock, so a name can be
+   * committed between the pass's read and this delete. Testing the name in the
+   * delete itself, rather than trusting the earlier read, means a version
+   * someone has just chosen to keep is never removed after they were told it
+   * was kept. The other protections are decided by writes to the same
+   * document, which that lock already serializes with the pass.
+   */
+  async deletePrunedVersions(ids: string[]): Promise<number> {
     if (ids.length === 0) return 0;
     let deleted = 0;
     for (let i = 0; i < ids.length; i += DELETE_CHUNK_SIZE) {
       const chunk = ids.slice(i, i + DELETE_CHUNK_SIZE);
       deleted += await this.db.delete(TABLE, {
-        and: [{ column: "id", op: "IN", value: chunk }],
+        and: [
+          { column: "id", op: "IN", value: chunk },
+          // Unnamed exactly as retention judges it: no label, or an empty one.
+          {
+            or: [
+              { column: "label", op: "IS NULL" },
+              { column: "label", op: "=", value: "" },
+            ],
+          },
+        ],
       });
     }
     return deleted;

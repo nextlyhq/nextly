@@ -34,7 +34,7 @@ import { fileURLToPath } from "node:url";
 
 import { load } from "js-yaml";
 
-import { SKILLS_HOME, skillCopyDrift, skillFrontmatterProblems } from "./agent-skills.mjs";
+import { SKILLS_HOME, USER_SKILLS_HOME, skillCopyDrift, skillFrontmatterProblems, skillTableNames, userSkillSeparation } from "./agent-skills.mjs";
 import { copies, copyDrift, repositoryFiles } from "./agent-instructions.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -523,11 +523,7 @@ export function routerDisagreements(routed, present) {
 
 /** Skill names the AGENTS.md router table names, read from its rows. */
 export function routedSkills(agentsMd) {
-  const names = new Set();
-  for (const row of agentsMd.matchAll(/^\|\s*`([a-z][a-z0-9-]*)`\s*\|/gm)) {
-    names.add(row[1]);
-  }
-  return names;
+  return skillTableNames(agentsMd);
 }
 
 /**
@@ -588,7 +584,9 @@ export function guidanceReferences(text) {
 
 /**
  * The skills' own findings: the Claude Code copy out of step with the skills,
- * and a skill either harness would fail to load. The copy is generated, so a
+ * a skill either harness would fail to load, among the contributor skills or
+ * the skills for people building with Nextly, and a contributor skill that
+ * installing the user skills would also install. The copy is generated, so a
  * difference is fixed by running the generator, never by editing either side
  * into agreement by hand. A finding on the skills' own side — a link, or a
  * file where their directory should be — is not: a sync would copy what the
@@ -598,6 +596,8 @@ export function skillFindings(base = root) {
   return [
     ...skillCopyDrift(base).map(({ path, problem }) => ({ file: path, kind: "skills copy", claim: problem, fix: remedyFor(path) })),
     ...skillFrontmatterProblems(base).map(({ skill, problem }) => ({ file: `${SKILLS_HOME}/${skill}/SKILL.md`, kind: "skill", claim: problem })),
+    ...skillFrontmatterProblems(base, USER_SKILLS_HOME).map(({ skill, problem }) => ({ file: `${USER_SKILLS_HOME}/${skill}/SKILL.md`, kind: "skill", claim: problem })),
+    ...userSkillSeparation(base).problems.map(({ path, problem }) => ({ file: path, kind: "skill", claim: problem })),
   ];
 }
 

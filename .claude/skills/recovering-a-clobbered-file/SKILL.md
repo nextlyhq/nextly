@@ -8,6 +8,8 @@ description: >-
   a green build says anything about a changed config file, and for the
   reasoning and measurements behind the whole-file write rule in AGENTS.md:
   noclobber, the wx flag, and writes through symbolic links.
+metadata:
+  internal: true
 ---
 
 ## First, name the BASELINE — everything below compares against it

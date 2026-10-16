@@ -7,6 +7,7 @@ import {
   buildImportMapArtifact,
   collectAdminComponentPaths,
   collectBlockEditorComponentPaths,
+  componentImportMapPaths,
 } from "./component-import-map";
 
 function plugin(admin: unknown, enabled?: boolean): PluginDefinition {
@@ -50,6 +51,40 @@ describe("buildComponentImportMap", () => {
     expect(code).not.toContain('"/x"');
   });
 
+  it("registers each document view's component, so the admin can load it", () => {
+    const p = plugin({
+      views: {
+        pages: {
+          documentViews: [
+            { path: "builder", component: "@acme/x/admin#Builder" },
+            { path: "preview", component: "@acme/x/admin#Preview" },
+          ],
+        },
+      },
+    });
+
+    const code = buildComponentImportMap([p]);
+    // The admin resolves a view by this string; one missing from the map is a
+    // route that draws nothing.
+    expect(code).toContain('"@acme/x/admin#Builder": _p0.Builder,');
+    expect(code).toContain('"@acme/x/admin#Preview": _p0.Preview,');
+  });
+
+  it("registers a field-type document view's component too", () => {
+    const p = plugin({
+      documentViews: [
+        {
+          path: "builder",
+          fieldType: "blocks",
+          component: "@acme/x/admin#Builder",
+        },
+      ],
+    });
+    expect(buildComponentImportMap([p])).toContain(
+      '"@acme/x/admin#Builder": _p0.Builder,'
+    );
+  });
+
   it("dedupes repeated paths and maps a default export (no #) to .default", () => {
     const p = plugin({
       pages: [
@@ -73,7 +108,7 @@ describe("buildComponentImportMap", () => {
     ).toEqual([]);
 
     const code = buildComponentImportMap([]);
-    expect(code).toContain("export {};");
+    expect(code).toContain("registeredComponentPaths: readonly string[] = [];");
     expect(code).not.toContain("registerComponents");
   });
 });
@@ -558,5 +593,79 @@ describe("block editor components without an active page builder", () => {
         ]),
       ])
     ).toEqual([]);
+  });
+});
+
+describe("widgets declared under contributes.dashboard", () => {
+  /** A plugin declaring widgets, as plain JavaScript would hand them over. */
+  function declaring(widgets: unknown, enabled?: boolean): PluginDefinition {
+    return {
+      name: "@acme/shop",
+      version: "1.0.0",
+      nextly: "*",
+      enabled,
+      contributes: { dashboard: { widgets } },
+    } as unknown as PluginDefinition;
+  }
+
+  it("collects the component a declared widget draws with, from a plugin with no admin contributions", () => {
+    const shop = declaring([
+      {
+        id: "acme/revenue",
+        display: { component: "@acme/shop/admin#Revenue" },
+      },
+      // A core display ships no component, so it contributes no path.
+      { id: "acme/orders", display: "list" },
+    ]);
+    expect(collectAdminComponentPaths(shop)).toEqual([
+      "@acme/shop/admin#Revenue",
+    ]);
+    expect(buildComponentImportMap([shop])).toContain(
+      '"@acme/shop/admin#Revenue": _p0.Revenue,'
+    );
+  });
+
+  it("collects nothing from a disabled plugin, and skips entries that name no component", () => {
+    expect(
+      collectAdminComponentPaths(
+        declaring(
+          [{ id: "a/b", display: { component: "@acme/shop/admin#Revenue" } }],
+          false
+        )
+      )
+    ).toEqual([]);
+    // Malformed entries are startup's to refuse, by name; the map skips them.
+    expect(
+      collectAdminComponentPaths(
+        declaring([
+          null,
+          { display: { component: "" } },
+          { display: { component: 3 } },
+          { display: null },
+        ])
+      )
+    ).toEqual([]);
+    expect(collectAdminComponentPaths(declaring("not a list"))).toEqual([]);
+  });
+});
+
+describe("the list of paths the map registers", () => {
+  it("is exported by the generated map, the same list it registers", () => {
+    const p = plugin({
+      pages: [{ path: "a", component: "@acme/x/admin#B" }],
+      settings: { component: "@acme/x/admin#A" },
+    });
+    const paths = componentImportMapPaths([p]);
+    expect(paths).toEqual(["@acme/x/admin#A", "@acme/x/admin#B"]);
+    expect(buildComponentImportMap([p])).toContain(
+      `export const registeredComponentPaths: readonly string[] = ${JSON.stringify(paths)};`
+    );
+  });
+
+  it("is exported empty by a map that registers nothing", () => {
+    expect(componentImportMapPaths([])).toEqual([]);
+    expect(buildComponentImportMap([])).toContain(
+      "export const registeredComponentPaths: readonly string[] = [];"
+    );
   });
 });

@@ -237,12 +237,25 @@ function searchAnswer({ registered, state, results }) {
  * What a topic query returns: the sentence, cited from the file the script
  * says holds it, or nothing.
  */
-function topicAnswer(topic, topics) {
-  const from = topics[topic];
-  if (!from) return { status: 200, body: "nothing\n" };
+/** Whether a request asks the context endpoint about this sentence. */
+function asks(url, sentence) {
+  return new URL(url).searchParams.get("query") === sentence;
+}
+
+/**
+ * The answer to a question, as Context7's context endpoint gives it: the snippets that match,
+ * or a 404 saying none did. Measured against the live API on 2026-10-16.
+ */
+function questionAnswer(query, topics) {
+  const from = topics[query];
+  if (!from)
+    return {
+      status: 404,
+      body: JSON.stringify({ error: "no_relevant_snippets", message: "No documentation matched this query." }),
+    };
   return {
     status: 200,
-    body: `### x\n\nSource: ${REPO_BLOB}main/${from}\n\n${topic}\n`,
+    body: `### x\n\nSource: ${REPO_BLOB}main/${from}\n\n${query}\n`,
   };
 }
 
@@ -270,11 +283,20 @@ function context7({
     if (status !== 200) return { status, body: "" };
     if (url.includes("/search?"))
       return searchAnswer({ registered, state, results });
-    const topic = new URL(url).searchParams.get("topic");
-    return topic === null
-      ? { status: 200, body: dump }
-      : topicAnswer(topic, topics);
+    return libraryAnswer(new URL(url), topics, dump);
   };
+}
+
+/**
+ * The context endpoint answers the question; the library's own page answers with the same
+ * general snippets whatever `topic` asks, as the live v1 endpoint did on 2026-10-16, so a
+ * probe sent there finds nothing.
+ */
+function libraryAnswer({ pathname, searchParams }, topics, dump) {
+  if (!pathname.endsWith("/v2/context")) return { status: 200, body: dump };
+  if (searchParams.get("libraryId") !== "/nextlyhq/nextly")
+    return { status: 404, body: JSON.stringify({ error: "library_not_found" }) };
+  return questionAnswer(searchParams.get("query"), topics);
 }
 
 /** A git repository in a temporary directory with these files tracked, as `verify` reads a checkout. */
@@ -628,12 +650,90 @@ describe("verify", () => {
       root: ".",
       get: context7({
         topics: kept,
-        statusFor: url =>
-          decodeURIComponent(url).includes(excludedMarker) ? 500 : 200,
+        statusFor: url => (asks(url, excludedMarker) ? 500 : 200),
       }),
     });
     expect(status).toBe(2);
     expect(lines.join("\n")).toContain("answered 500");
+  });
+
+  it("reads a question nothing matched as absent, not as unanswered", async () => {
+    // Every excluded sentence answers 404 no_relevant_snippets, which is the index saying it
+    // holds nothing for it: the exclusions took.
+    const { status } = await verify({ root: ".", get: context7({ topics: kept }) });
+    expect(status).toBe(0);
+  });
+
+  describe("a sentence inside Context7's own wording", () => {
+    // Context7 writes a title and a description for each snippet. A short sentence such as a
+    // two-word heading can turn up inside that wording, mid-sentence, in a snippet cited from a
+    // kept page that never held it: on 2026-10-16 "Security Policy" came back as "enable SVG
+    // Content Security Policy" from nextly-config.mdx.
+    const marker = Object.values(markers.excluded)[0];
+    const answering = body => {
+      const base = context7({ topics: kept });
+      return async url => (asks(url, marker) ? { status: 200, body } : base(url));
+    };
+    const snippet = (path, text) => `### Upload limits\n\nSource: ${REPO_BLOB}main/${path}\n\n${text}\n`;
+
+    it("is not the excluded file coming back", async () => {
+      const body = snippet("docs/configuration/nextly-config.mdx", `Set limits and enable the SVG ${marker} option.`);
+      const { status } = await verify({ root: ".", get: answering(body) });
+      expect(status).toBe(0);
+    });
+
+    it("still clears a kept file whose own snippet carries its sentence reflowed into a paragraph", async () => {
+      // Context7 may join a hand-wrapped paragraph into one line. The README's sentence then
+      // sits mid-line, and the citation of README.md, which holds it, is what clears the control.
+      const base = context7({ topics: kept });
+      const reflowed = snippet("README.md", `Some words before. ${markers.readme} And some after.`);
+      const { status } = await verify({
+        root: ".",
+        get: async url => (asks(url, markers.readme) ? { status: 200, body: reflowed } : base(url)),
+      });
+      expect(status).toBe(0);
+    });
+
+    it("is not the sentence coming back when it is only the title Context7 gave a snippet", async () => {
+      // The title above a snippet's citation is Context7's wording too, however closely it
+      // matches a heading of some other file.
+      const body = `### ${marker}\n\nSource: ${REPO_BLOB}main/docs/configuration/nextly-config.mdx\n\nSet upload limits.\n`;
+      const { status } = await verify({ root: ".", get: answering(body) });
+      expect(status).toBe(0);
+    });
+
+    it("is the sentence coming back when it stands on a line of its own, whoever is cited", async () => {
+      const body = snippet("docs/configuration/nextly-config.mdx", `## ${marker}`);
+      const { status } = await verify({ root: ".", get: answering(body) });
+      expect(status).toBe(1);
+    });
+  });
+
+  it("asks the v2 context endpoint beside the base, whether or not the base ends in a slash", async () => {
+    for (const api of ["https://proxy.test/api/v1", "https://proxy.test/api/v1/"]) {
+      const asked = [];
+      const base = context7({ topics: kept });
+      await verify({ root: ".", api, get: async url => (asked.push(url), base(url)) });
+      const probes = asked.filter(url => new URL(url).searchParams.has("libraryId"));
+      expect(probes.length).toBeGreaterThan(0);
+      for (const url of probes) expect(new URL(url).pathname).toBe("/api/v2/context");
+    }
+  });
+
+  it("cannot answer when a probe's 404 is about something other than the question", async () => {
+    // A 404 that names another error, such as the library itself missing, is no answer to
+    // whether the sentence is held, and must not clear an exclusion.
+    const excludedMarker = Object.values(markers.excluded)[0];
+    const base = context7({ topics: kept });
+    const { status, lines } = await verify({
+      root: ".",
+      get: async url =>
+        asks(url, excludedMarker)
+          ? { status: 404, body: JSON.stringify({ error: "library_not_found" }) }
+          : base(url),
+    });
+    expect(status).toBe(2);
+    expect(lines.join("\n")).toContain("library_not_found");
   });
 
   it("cannot answer when the search body is not JSON", async () => {

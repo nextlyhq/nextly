@@ -164,6 +164,24 @@ describe("a widget declaration as startup receives it", () => {
     circular.self = circular;
     // The control: a row of plain values passes.
     expect(problemsOf(row("a"))).toEqual([]);
+    // A sparse array: JSON writes its hole as `null`, so it does not arrive
+    // as it was.
+    expect(
+      problemsOf(valid({ display: "list", example: { items: Array(1) } }))[0]
+    ).toContain("example cannot be sent to the browser");
+    // An array judged by its indices, as JSON reads it, not by an iterator
+    // that answers something else.
+    const disguised: unknown[] = [1n];
+    Object.defineProperty(disguised, Symbol.iterator, {
+      value: function* () {
+        yield "safe";
+      },
+    });
+    expect(
+      problemsOf(
+        valid({ display: "list", example: { items: [{ tags: disguised }] } })
+      )[0]
+    ).toContain("example.items[0].tags[0] is a bigint");
     for (const value of [1n, new Date(0), circular, () => 1, Symbol("s")]) {
       const [problem] = problemsOf(row(value));
       expect(problem, String(typeof value)).toContain(

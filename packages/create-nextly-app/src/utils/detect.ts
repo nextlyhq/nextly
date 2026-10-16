@@ -5,37 +5,59 @@ import fs from "fs-extra";
 import type { PackageManager, ProjectInfo } from "../types";
 
 import { detectPmFromUserAgent } from "./detect-pm-from-user-agent";
+import { findWorkspaceRoot, lockfileManager } from "./workspace";
 
 /**
  * Detect the package manager used in the project.
  *
- * Reads `process.env.npm_config_user_agent` first — set by every PM when
- * running a `create-*` command, so it works in fresh-scaffold contexts
- * where the target directory has no lockfile yet (the common case for
- * new Nextly projects). Falls back to lockfile detection in cwd when
- * the env var is missing (e.g., somebody invoked the bin directly via
- * `node bin/create-nextly-app.js`).
+ * A lockfile in `cwd` decides first: it says which manager installs this
+ * project, while `npm_config_user_agent` only says which one launched the
+ * generator. Running `npx create-nextly-app` inside a pnpm app otherwise ran
+ * `npm install` over pnpm's `node_modules`, and npm crashed.
  *
- * The previous lockfile-only implementation always fell back to "npm"
- * for fresh scaffolds, so the final "next steps" output told everyone
- * to run `npm run dev` regardless of which PM they actually used.
+ * With no lockfile — a fresh scaffold's empty target directory, the common
+ * case — the user agent decides, which every manager sets when it runs a
+ * `create-*` command, so "next steps" names the manager the person used.
+ * npm is the last resort, for the bin run directly with `node`.
  */
 export async function detectPackageManager(
   cwd: string
 ): Promise<PackageManager> {
-  const fromUa = detectPmFromUserAgent(process.env.npm_config_user_agent);
-  if (fromUa) return fromUa;
-
-  if (await fs.pathExists(path.join(cwd, "pnpm-lock.yaml"))) return "pnpm";
-  if (await fs.pathExists(path.join(cwd, "yarn.lock"))) return "yarn";
-  if (await fs.pathExists(path.join(cwd, "bun.lockb"))) return "bun";
-  return "npm";
+  return (await lockfileManager(cwd)) ?? launcher();
 }
 
 /**
- * Detect project configuration and validate Next.js setup.
+ * The package manager of an app that already exists, which may be one member
+ * of a workspace: its own lockfile first, then the lockfile of the workspace
+ * that lists it (see {@link findWorkspaceRoot}), then the launcher. A member
+ * has no lockfile of its own, and falling back to the launcher there ran
+ * `npm install` inside a pnpm workspace.
  */
-export async function detectProject(cwd: string): Promise<ProjectInfo> {
+export async function detectAppPackageManager(
+  cwd: string
+): Promise<PackageManager> {
+  return (
+    (await lockfileManager(cwd)) ??
+    (await findWorkspaceRoot(cwd))?.manager ??
+    launcher()
+  );
+}
+
+const launcher = (): PackageManager =>
+  detectPmFromUserAgent(process.env.npm_config_user_agent) ?? "npm";
+
+/**
+ * Detect project configuration and validate Next.js setup.
+ *
+ * `chosen` is a manager already settled: a new project's comes from the
+ * command that launched the scaffold, before any file was written. Reading
+ * the written files would answer differently, since every scaffold writes
+ * `pnpm-workspace.yaml` for its build allowlist, whatever installs it.
+ */
+export async function detectProject(
+  cwd: string,
+  chosen?: PackageManager
+): Promise<ProjectInfo> {
   const packageJsonPath = path.join(cwd, "package.json");
 
   if (!(await fs.pathExists(packageJsonPath))) {
@@ -87,7 +109,7 @@ export async function detectProject(cwd: string): Promise<ProjectInfo> {
   const hasTypescript = await fs.pathExists(path.join(cwd, "tsconfig.json"));
 
   // Detect package manager
-  const packageManager = await detectPackageManager(cwd);
+  const packageManager = chosen ?? (await detectAppPackageManager(cwd));
 
   // Determine app directory
   const appDir = srcDir ? "src/app" : "app";
@@ -112,12 +134,15 @@ export async function detectProject(cwd: string): Promise<ProjectInfo> {
  * about the layout needs detecting; only the package manager does, and it is
  * the one field a fresh scaffold's install and next steps read.
  */
-export async function detectPluginPackage(cwd: string): Promise<ProjectInfo> {
+export async function detectPluginPackage(
+  cwd: string,
+  chosen?: PackageManager
+): Promise<ProjectInfo> {
   return {
     isNextJs: false,
     isAppRouter: false,
     hasTypescript: true,
-    packageManager: await detectPackageManager(cwd),
+    packageManager: chosen ?? (await detectPackageManager(cwd)),
     nextVersion: null,
     srcDir: true,
     appDir: "dev/src/app",

@@ -15,6 +15,8 @@
  * @module api/versions-access
  */
 
+import { z } from "zod";
+
 import { apiKeyScopeFrom } from "../auth/authenticated-scope";
 import type { AuthenticatedScope } from "../auth/authenticated-scope";
 import type { FieldConfig } from "../collections/fields/types";
@@ -27,6 +29,7 @@ import {
   singleDocumentReadable,
 } from "../domains/singles/services/single-document-access";
 import type { UserContext } from "../domains/singles/types";
+import { resolveComparisonPair } from "../domains/versions/comparison-baselines";
 import { computeVersionDiff } from "../domains/versions/diff";
 import type { VersionDiff } from "../domains/versions/diff";
 import { hydrateDiffReferences } from "../domains/versions/diff-references";
@@ -339,15 +342,21 @@ function interpretReadResult(success: boolean, statusCode: number): boolean {
  * before a field gained an access rule) is left alone rather than throwing —
  * the surrounding gate has already established the caller may read the
  * document, and redaction is a narrowing pass on top of that.
+ *
+ * Returns the top-level keys the read rules removed, so a comparison can say a
+ * field is hidden from this reader rather than leave it out unexplained.
+ * Password values are stripped too, but are not reported: a comparison never
+ * shows a password field at all.
  */
 export async function redactSnapshotForUser(
   snapshot: unknown,
   scopeKind: VersionScopeKind,
   slug: string,
   user: UserContext
-): Promise<void> {
-  if (typeof snapshot !== "object" || snapshot === null) return;
-  if (scopeKind !== "collection" && scopeKind !== "single") return;
+): Promise<ReadonlySet<string>> {
+  const withheld = new Set<string>();
+  if (typeof snapshot !== "object" || snapshot === null) return withheld;
+  if (scopeKind !== "collection" && scopeKind !== "single") return withheld;
 
   const entry = snapshot as Record<string, unknown>;
 
@@ -394,6 +403,7 @@ export async function redactSnapshotForUser(
     );
   }
 
+  const readable = new Set(Object.keys(entry));
   await applyFieldReadAccess({
     kind: scopeKind,
     slug,
@@ -401,6 +411,10 @@ export async function redactSnapshotForUser(
     user,
     overrideAccess: false,
   });
+  for (const key of readable) {
+    if (!(key in entry)) withheld.add(key);
+  }
+  return withheld;
 }
 
 /**
@@ -577,6 +591,159 @@ export async function hydrateVersionSnapshot(
   );
 }
 
+/** A comparison request, as every surface that compares reads it. */
+export interface ComparisonQuery {
+  from?: number;
+  to?: number;
+  /** @experimental A registered comparison baseline's name. */
+  baseline?: string;
+  /** The part to open on when no `to` is named. */
+  locale?: string;
+  modifiedOnly: boolean;
+}
+
+const comparisonQuerySchema = z.object({
+  from: z.string().trim().optional(),
+  to: z.string().trim().optional(),
+  baseline: z.string().trim().optional(),
+  locale: z.string().trim().optional(),
+  modifiedOnly: z.string().optional(),
+});
+
+/**
+ * Parse a comparison's query parameters, the same way for the REST routes,
+ * the dispatcher and the published handler, so the surfaces never answer one
+ * request differently. An absent or blank parameter is absent; a version
+ * number that is not a whole number is left for `assertComparisonRequest` to
+ * refuse with the parameter's name.
+ */
+export function parseComparisonQuery(
+  input: Record<string, unknown>
+): ComparisonQuery {
+  const text = (value: unknown) =>
+    typeof value === "string" ? value : undefined;
+  const query = comparisonQuerySchema.parse({
+    from: text(input.from),
+    to: text(input.to),
+    baseline: text(input.baseline),
+    locale: text(input.locale),
+    modifiedOnly: text(input.modifiedOnly),
+  });
+  const present = (value: string | undefined) =>
+    value === undefined || value === "" ? undefined : value;
+  const number = (value: string | undefined) => {
+    const raw = present(value);
+    return raw === undefined ? undefined : Number(raw);
+  };
+  return {
+    from: number(query.from),
+    to: number(query.to),
+    baseline: present(query.baseline),
+    locale: present(query.locale),
+    modifiedOnly: query.modifiedOnly === "1" || query.modifiedOnly === "true",
+  };
+}
+
+/**
+ * Validate a comparison request before anything is read, so malformed input
+ * fails as a validation error naming its parameter, whatever the document's
+ * history holds. Either an explicit pair (`from` and `to`) or a target and a
+ * baseline, each optional; not a `from` and a `baseline` together.
+ */
+export function assertComparisonRequest(query: ComparisonQuery): void {
+  if (query.from !== undefined) {
+    if (query.baseline !== undefined) {
+      throw NextlyError.validation({
+        errors: [
+          {
+            path: "baseline",
+            code: "INVALID_VALUE",
+            message: "Name either `from` or `baseline`, not both.",
+          },
+        ],
+      });
+    }
+    assertDiffVersionPair(query.from, query.to ?? Number.NaN);
+    return;
+  }
+  if (query.to !== undefined && (!Number.isInteger(query.to) || query.to < 1)) {
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: "to",
+          code: "INVALID_VALUE",
+          message: "to must be a positive integer.",
+        },
+      ],
+    });
+  }
+}
+
+/**
+ * Compare two versions of a document AFTER the caller's read access to it is
+ * confirmed: an explicit pair as given, or a target and baseline resolved from
+ * the document's own history (`resolveComparisonPair`), then diffed through
+ * `diffDocumentVersions`. Every surface that compares calls this, after its own
+ * read gate.
+ *
+ * A baseline is told who is comparing only when that is a person: an API key,
+ * a principal or the system compares with no user, so a baseline that reads a
+ * person's own records never reaches the key owner's.
+ */
+export async function compareDocumentVersions(args: {
+  scopeKind: VersionScopeKind;
+  slug: string;
+  entryId: string;
+  user: UserContext;
+  authenticatedScope?: AuthenticatedScope;
+  query: ComparisonQuery;
+}): Promise<VersionDiff> {
+  const { query } = args;
+  let pair: { from: number; to: number };
+  let baseline: { name: string; versionNo: number } | undefined;
+  if (query.from !== undefined && query.to !== undefined) {
+    pair = { from: query.from, to: query.to };
+  } else {
+    const versions = getService("versionsService");
+    const ref = {
+      scopeKind: args.scopeKind,
+      scopeSlug: args.slug,
+      entryId: args.entryId,
+    };
+    const isPerson = (args.authenticatedScope?.actorType ?? "user") === "user";
+    const [partVersions, workingDraftParts] = await Promise.all([
+      versions.listPartVersions(ref),
+      versions.listWorkingDraftParts(ref),
+    ]);
+    const resolved = await resolveComparisonPair(
+      {
+        ref,
+        to: query.to,
+        baseline: query.baseline,
+        locale: query.locale,
+        userId: isPerson ? (args.user?.id ?? null) : null,
+        workingDraftParts,
+      },
+      partVersions
+    );
+    pair = { from: resolved.from, to: resolved.to };
+    baseline = resolved.baseline;
+  }
+  assertDiffVersionPair(pair.from, pair.to);
+
+  const diff = await diffDocumentVersions({
+    scopeKind: args.scopeKind,
+    slug: args.slug,
+    entryId: args.entryId,
+    user: args.user,
+    from: pair.from,
+    to: pair.to,
+    modifiedOnly: query.modifiedOnly,
+    authenticatedScope: args.authenticatedScope,
+  });
+  return baseline ? { ...diff, baseline } : diff;
+}
+
 /**
  * Compute a diff of two versions AFTER the caller has confirmed read access to
  * the document. The dispatcher method and the standalone route both call this,
@@ -630,14 +797,15 @@ export async function diffDocumentVersions(args: {
   }
 
   // Redact each snapshot for the caller BEFORE diffing, so the diff can never
-  // surface a field the caller may not read.
-  await redactSnapshotForUser(
+  // surface a field the caller may not read. What either side withheld is
+  // named to the engine, which reports it as hidden in its place.
+  const withheldFrom = await redactSnapshotForUser(
     fromRow.snapshot,
     args.scopeKind,
     args.slug,
     args.user
   );
-  await redactSnapshotForUser(
+  const withheldTo = await redactSnapshotForUser(
     toRow.snapshot,
     args.scopeKind,
     args.slug,
@@ -653,7 +821,11 @@ export async function diffDocumentVersions(args: {
     snapshotObject(fromRow.snapshot),
     snapshotObject(toRow.snapshot),
     fields,
-    { modifiedOnly: args.modifiedOnly }
+    {
+      modifiedOnly: args.modifiedOnly,
+      withheld: new Set([...withheldFrom, ...withheldTo]),
+      entity: lookupKind,
+    }
   );
 
   // Resolve relationship and upload ids in the diff to display labels through
@@ -674,6 +846,7 @@ export async function diffDocumentVersions(args: {
     to: args.to,
     locale: fromRow.locale,
     hasChanges: body.hasChanges,
+    incomplete: body.incomplete,
     fields: body.fields,
   };
 }

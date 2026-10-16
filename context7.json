@@ -22,7 +22,7 @@
     "Users are not a normal collection: read them through nextly.users, not find({ collection: \"users\" }).",
     "Run types:generate after a schema change, in the same change; until then find() returns loosely typed documents.",
     "Migrations are append-only once shared: add a new one rather than editing an applied file.",
-    "Ask the project which Nextly it is with `nextly --version`; the documentation describes the current release and is not version-stamped."
+    "Ask the project which Nextly it is with `nextly --version`. The documentation follows the main branch: a section marked \"Needs the release after <version>\" describes what that version and older ones lack."
   ],
   "previousVersions": []
 }
