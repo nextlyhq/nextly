@@ -744,7 +744,7 @@ describe.each(["postgresql", "mysql", "sqlite"] as const)(
       expect(columnNamed(table.columns, "tags")).toBeDefined();
     });
 
-    it("gives it the same column a plain single relationship gets", () => {
+    it("gives it the column the creating SQL writes", () => {
       const withManyToMany = buildDesiredTableFromComponentFields(
         "comp_hero",
         [{ name: "tags", ...manyToMany }] as never,
@@ -757,9 +757,13 @@ describe.each(["postgresql", "mysql", "sqlite"] as const)(
         dialect,
         { builtBy: "codeFirst" }
       );
-      expect(columnNamed(withManyToMany.columns, "tags")).toEqual(
-        columnNamed(plain.columns, "tags")
-      );
+      // On PostgreSQL the creating SQL writes UUID, while a plain relationship's desired column stays
+      // text (the runtime mapper's type, a recorded follow-up). MySQL and SQLite agree.
+      const expected =
+        dialect === "postgresql"
+          ? { ...columnNamed(plain.columns, "tags"), type: "uuid" }
+          : columnNamed(plain.columns, "tags");
+      expect(columnNamed(withManyToMany.columns, "tags")).toEqual(expected);
     });
   }
 );
