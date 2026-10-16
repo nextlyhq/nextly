@@ -119,12 +119,11 @@ function latestPublishedPerLocale(rows: PrunableVersion[]): string[] {
 }
 
 /**
- * Whether a version carries a name. A blank label is no name: the admin clears
- * a name by storing null, but a label written another way may be an empty or
- * whitespace-only string.
+ * Whether a version carries a name. An empty label is no name (the admin
+ * clears a name by storing null); the retention delete tests the same rule.
  */
 function isNamed(row: PrunableVersion): boolean {
-  return row.label !== null && row.label.trim() !== "";
+  return row.label !== null && row.label !== "";
 }
 
 /** Whether a row records a restore, which names the version it came from. */

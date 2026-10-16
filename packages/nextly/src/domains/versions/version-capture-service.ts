@@ -10,6 +10,7 @@
  * @module domains/versions/version-capture-service
  */
 
+import { NextlyError } from "../../errors";
 import type { VersionStatus } from "../../schemas/versions/types";
 
 import type { VersionsDbApi } from "./db-api";
@@ -98,12 +99,33 @@ export class VersionCaptureService {
       // version restored FROM, which this row names as its source: pruning it
       // in the same transaction would leave that lineage pointing at nothing.
       const isRestore = typeof input.sourceVersionNo === "number";
+      // A restore reads its source before this transaction began, so a save
+      // committed in between can have pruned it. Recording it as the source
+      // then would leave lineage pointing at a version that is gone, so the
+      // restore is refused instead, and nothing it wrote is kept.
+      if (
+        isRestore &&
+        !durable.some(row => row.versionNo === input.sourceVersionNo)
+      ) {
+        throw NextlyError.conflict({
+          reason: "state",
+          message:
+            "The version you restored from was removed from the history while restoring. Reload the history and choose a version that is still kept.",
+          logContext: {
+            reason: "restore-source-pruned",
+            scopeKind: input.ref.scopeKind,
+            scopeSlug: input.ref.scopeSlug,
+            entryId: input.ref.entryId,
+            sourceVersionNo: input.sourceVersionNo,
+          },
+        });
+      }
       const staleIds = selectVersionsToPrune(durable, input.maxPerDoc, [
         isRestore ? versionNo - 1 : null,
         input.sourceVersionNo,
       ]);
       if (staleIds.length > 0) {
-        await repo.deleteByIds(staleIds);
+        await repo.deletePrunedVersions(staleIds);
       }
     }
     return { versionNo };

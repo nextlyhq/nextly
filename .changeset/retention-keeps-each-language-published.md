@@ -36,4 +36,7 @@ could delete the only published snapshot of another. It now keeps, whatever
 the latest one with no language, every named version (including the "Before
 restore" version a restore records), and every restore with the version it was
 made from. Nothing that was kept before is removed; documents keep a few more
-versions.
+versions. A version named while a save is trimming history is no longer
+removed by that save, and a restore whose source version was trimmed away
+while it ran now fails with a conflict instead of recording a source that no
+longer exists.

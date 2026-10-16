@@ -1159,13 +1159,33 @@ export class VersionsRepository {
     );
   }
 
-  async deleteByIds(ids: string[]): Promise<number> {
+  /**
+   * Delete the versions a retention pass selected, except any that has been
+   * named since the pass read it.
+   *
+   * Naming a version does not take the document's write lock, so a name can be
+   * committed between the pass's read and this delete. Testing the name in the
+   * delete itself, rather than trusting the earlier read, means a version
+   * someone has just chosen to keep is never removed after they were told it
+   * was kept. The other protections are decided by writes to the same
+   * document, which that lock already serializes with the pass.
+   */
+  async deletePrunedVersions(ids: string[]): Promise<number> {
     if (ids.length === 0) return 0;
     let deleted = 0;
     for (let i = 0; i < ids.length; i += DELETE_CHUNK_SIZE) {
       const chunk = ids.slice(i, i + DELETE_CHUNK_SIZE);
       deleted += await this.db.delete(TABLE, {
-        and: [{ column: "id", op: "IN", value: chunk }],
+        and: [
+          { column: "id", op: "IN", value: chunk },
+          // Unnamed exactly as retention judges it: no label, or an empty one.
+          {
+            or: [
+              { column: "label", op: "IS NULL" },
+              { column: "label", op: "=", value: "" },
+            ],
+          },
+        ],
       });
     }
     return deleted;

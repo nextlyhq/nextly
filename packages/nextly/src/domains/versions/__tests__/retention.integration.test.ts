@@ -14,6 +14,8 @@ import {
 } from "../../../plugins/test-nextly";
 import type { CollectionsHandler } from "../../../services/collections-handler";
 import type { SingleEntryService } from "../../singles/services/single-entry-service";
+import { NextlyError } from "../../../errors";
+import { VersionCaptureService } from "../version-capture-service";
 import { VersionsRepository } from "../versions-repository";
 
 let current: TestNextly | undefined;
@@ -24,6 +26,7 @@ afterEach(async () => {
 });
 
 type VersionRow = {
+  id: string;
   scopeSlug: string;
   entryId: string;
   versionNo: number;
@@ -452,6 +455,98 @@ describe.each(getConfiguredTestDialects())(
       // The three newest (11, 12 and the save's own 13) and every protected
       // version stay; only the plain drafts beyond the cap go.
       expect(kept).toEqual([2, 3, 4, 5, 6, 7, 11, 12, 13]);
+    });
+
+    it("never removes a version that was named after the pass chose it", async () => {
+      // Naming takes no document lock, so a name can land between a retention
+      // pass reading the rows and deleting the ones it chose.
+      current = await createTestNextly({
+        dialect,
+        collections: [
+          defineCollection({
+            slug: "posts",
+            versions: { drafts: false, maxPerDoc: 3 },
+            fields: [text({ name: "title" })],
+          }),
+        ],
+      });
+      const handler =
+        current.getService<CollectionsHandler>("collectionsHandler");
+      const created = await handler.createEntry(
+        { collectionName: "posts", overrideAccess: true },
+        { title: "v1" }
+      );
+      const id = (created.data as { id: string }).id;
+      await handler.updateEntry(
+        { collectionName: "posts", entryId: id, overrideAccess: true },
+        { title: "v2" }
+      );
+      const [v1, v2] = await versionsFor(current, "posts");
+      const repo = repositoryFor(current);
+      const ref = {
+        scopeKind: "collection" as const,
+        scopeSlug: "posts",
+        entryId: id,
+      };
+
+      // The pass chose v1 and v2; v1 is named before its delete runs.
+      await repo.updateLabel(ref, v1.versionNo, "Keep this");
+      await repo.deletePrunedVersions([v1.id, v2.id]);
+
+      const kept = (await versionsFor(current, "posts")).map(r => r.versionNo);
+      expect(kept).toContain(v1.versionNo);
+      expect(kept).not.toContain(v2.versionNo);
+    });
+
+    it("refuses a restore whose source was pruned before its capture, keeping nothing", async () => {
+      // A restore reads its source before its own transaction; a save
+      // committed in between can prune that source. Recording the restore
+      // then would point its lineage at a version that no longer exists.
+      current = await createTestNextly({
+        dialect,
+        collections: [
+          defineCollection({
+            slug: "posts",
+            versions: { drafts: false, maxPerDoc: 3 },
+            fields: [text({ name: "title" })],
+          }),
+        ],
+      });
+      const handler =
+        current.getService<CollectionsHandler>("collectionsHandler");
+      const created = await handler.createEntry(
+        { collectionName: "posts", overrideAccess: true },
+        { title: "v1" }
+      );
+      const id = (created.data as { id: string }).id;
+      const before = await versionsFor(current, "posts");
+      const ref = {
+        scopeKind: "collection" as const,
+        scopeSlug: "posts",
+        entryId: id,
+      };
+
+      const restoring = current.adapter.transaction(async tx =>
+        new VersionCaptureService().capture(
+          tx as unknown as Parameters<VersionCaptureService["capture"]>[0],
+          {
+            ref,
+            status: "draft",
+            snapshot: { title: "restored" },
+            // No version 42 exists: it was pruned between read and capture.
+            sourceVersionNo: 42,
+            maxPerDoc: 3,
+          }
+        )
+      );
+
+      const error = await restoring.then(
+        () => undefined,
+        (err: unknown) => err
+      );
+      expect(error).toBeDefined();
+      expect(NextlyError.is(error) && error.code).toBe("CONFLICT");
+      expect(await versionsFor(current, "posts")).toEqual(before);
     });
 
     it("does not count autosaves toward the limit", async () => {
