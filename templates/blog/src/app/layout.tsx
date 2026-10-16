@@ -49,8 +49,8 @@ export const metadata: Metadata = {
  * <html> on first paint - eliminates flash-of-wrong-theme. Reads the
  * user preference from localStorage under `nextly-theme`; follows
  * `prefers-color-scheme` when the preference is "system", unset, or not
- * one of the three choices. See `src/app/(frontend)/components/ThemeToggle.tsx`
- * for the writer side, which reads the key the same way.
+ * one of the three choices. `src/lib/theme.ts` is how the theme toggle reads
+ * and applies the key after hydration; a test holds the two to the same result.
  */
 const themeInitScript = `
 (function() {

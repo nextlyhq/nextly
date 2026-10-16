@@ -105,6 +105,7 @@ import {
 } from "../../i18n/runtime/companion-readiness";
 import { captureInTx } from "../../versions/capture-in-tx";
 import { resolveDraftHold } from "../../versions/draft-hold";
+import { storeDraftSave } from "../../versions/draft-save";
 import { resolveComponentSchemas } from "../../versions/restore-version";
 import {
   resolveComponentFieldMap,
@@ -1342,6 +1343,26 @@ export class SingleMutationService extends BaseService {
                 defaultLocale: this.localization?.defaultLocale ?? null,
               });
 
+            // A recorded draft save restored onto a published Single must stay
+            // pending. A Single that can no longer hold a draft would take it on
+            // its live row and publish it, so the restore is refused instead.
+            if (
+              options.requireHeldDraft === true &&
+              !holdEdit &&
+              singleLiveStatus === "published"
+            ) {
+              throw NextlyError.conflict({
+                reason: "state",
+                message:
+                  "This version is a saved draft, and this Single can no longer hold a draft, so restoring it would publish it. Turn drafts back on for this Single, or restore a published version.",
+                logContext: {
+                  reason: "restore-saved-draft-unholdable",
+                  single: slug,
+                  sourceVersionNo: options.sourceVersionNo,
+                },
+              });
+            }
+
             // Publishing folds this language's pending change into the write.
             // Merged BEFORE the payload is re-split: the split moves translated
             // values out of the document and into the companion payload, so
@@ -2125,18 +2146,23 @@ export class SingleMutationService extends BaseService {
                   }
                 }
               }
-              await draftRepo.upsertWorkingDraft({
+              // The draft, and the save as a version of its own. A save that
+              // changes nothing against what it replaces records no version.
+              await storeDraftSave(tx, this.versionCapture, {
                 ref: draftRef,
                 locale: singleDraftLocale,
                 snapshot: pending,
+                replaces: base,
                 createdBy: options.user?.id ?? null,
+                sourceVersionNo: options.sourceVersionNo ?? null,
+                maxPerDoc: singleMeta.versions?.maxPerDoc,
               });
             }
 
             // component subtrees form the snapshot.
             const versionsConfig = singleMeta.versions;
-            // A held edit records no durable version: nothing was published, and
-            // a version here would enter the history as though it had been.
+            // A held edit was recorded above, as a draft version of the save;
+            // this records the version of a write that changed the live Single.
             if (!holdEdit && versionsConfig?.enabled) {
               // Match the read shape: keep user field keys (field.name, which
               // may contain underscores like `site_title`) exactly, converting

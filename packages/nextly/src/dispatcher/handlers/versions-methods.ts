@@ -11,10 +11,12 @@
 
 import type { PaginationMeta } from "../../api/response-shapes";
 import {
-  assertDiffVersionPair,
+  assertComparisonRequest,
   assertVersionDocumentReadable,
   assertDocumentUpdatable,
-  diffDocumentVersions,
+  compareDocumentVersions,
+  type ComparisonQuery,
+  parseComparisonQuery,
   hydrateVersionSnapshot,
   redactSnapshotForUser,
   resolveVersionsPolicy,
@@ -306,14 +308,41 @@ export async function getVersionForDocument(
 }
 
 /**
+ * A comparison request's query from the params the route handler stamped on,
+ * parsed by the one parser every comparing surface uses.
+ */
+export function readComparisonParams(p: Params): ComparisonQuery {
+  return parseComparisonQuery(p);
+}
+
+/**
  * A typed diff of two versions of one document over the dispatcher, gated
  * exactly like a single-version read.
+ *
+ * Either an explicit pair (`from` and `to`), or a target and a baseline the
+ * server resolves (`to` and `baseline`, each optional; see
+ * `resolveComparisonPair` for the defaults). Naming both a `from` and a
+ * `baseline` is refused: they are two answers to one question.
  */
 export async function getVersionDiffForDocument(
-  args: VersionMethodArgs & { from: number; to: number; modifiedOnly?: boolean }
+  args: VersionMethodArgs & {
+    from?: number;
+    to?: number;
+    /** @experimental A registered comparison baseline's name. */
+    baseline?: string;
+    modifiedOnly?: boolean;
+  }
 ): Promise<VersionDiff> {
-  assertDiffVersionPair(args.from, args.to);
+  const query: ComparisonQuery = {
+    from: args.from,
+    to: args.to,
+    baseline: args.baseline,
+    locale: args.locale,
+    modifiedOnly: args.modifiedOnly === true,
+  };
+  assertComparisonRequest(query);
 
+  // The read gate runs before anything about the document's history is read.
   await assertVersionDocumentReadable(
     args.scopeKind,
     args.slug,
@@ -322,15 +351,13 @@ export async function getVersionDiffForDocument(
     args.authenticatedScope
   );
 
-  return diffDocumentVersions({
+  return compareDocumentVersions({
     scopeKind: args.scopeKind,
     slug: args.slug,
     entryId: args.entryId,
     user: args.user,
-    from: args.from,
-    to: args.to,
-    modifiedOnly: args.modifiedOnly,
     authenticatedScope: args.authenticatedScope,
+    query,
   });
 }
 

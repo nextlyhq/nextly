@@ -247,7 +247,7 @@ export function registerPruneCommand(program: Command): void {
   program
     .command("prune")
     .description(
-      "Drop orphaned plugin/code schema (retained by default — never auto-dropped) (D14)"
+      "Drop orphaned plugin/code schema (retained by default — never auto-dropped)"
     )
     .option(
       "--force",

@@ -1211,3 +1211,54 @@ describe("plugins uninstall run again after it stopped part way", () => {
     });
   });
 });
+
+/**
+ * A disabled plugin's hooks never run, so an install or an uninstall of it
+ * cannot do the work it records. Refused before anything changes: a record
+ * of "installed" or "uninstalled" would describe a hook that did not run.
+ */
+describe("a disabled plugin is refused by install and uninstall", () => {
+  const disabled: LifecyclePlugin = { ...plugin, enabled: false };
+
+  it("refuses to install it, applying nothing and recording nothing", async () => {
+    const applyMigrations = vi.fn(async () => {});
+    const runLifecycleHook = vi.fn(async () => {});
+    const recordLifecycle = vi.fn(async () => {});
+
+    await expect(
+      runPluginInstallCommand(
+        "@acme/fx",
+        deps({
+          plugins: [disabled],
+          applyMigrations,
+          runLifecycleHook,
+          recordLifecycle,
+        })
+      )
+    ).rejects.toMatchObject({ code: "PLUGIN_DISABLED" });
+
+    expect(applyMigrations).not.toHaveBeenCalled();
+    expect(runLifecycleHook).not.toHaveBeenCalled();
+    expect(recordLifecycle).not.toHaveBeenCalled();
+  });
+
+  it("refuses to uninstall it, running no DOWN and recording nothing", async () => {
+    const runDown = vi.fn(async () => 2);
+    const recordLifecycle = vi.fn(async () => {});
+
+    await expect(
+      runPluginUninstallCommand(
+        "@acme/fx",
+        { keepData: false, yes: true },
+        deps({
+          plugins: [disabled],
+          recordLifecycle,
+          ...droppedByDowns(runDown),
+        })
+      )
+    ).rejects.toMatchObject({ code: "PLUGIN_DISABLED" });
+
+    expect(runDown).not.toHaveBeenCalled();
+    expect(recordLifecycle).not.toHaveBeenCalled();
+  });
+});
