@@ -29,11 +29,13 @@
 "@nextlyhq/ui": patch
 ---
 
-Retention never removes a version a feature has pinned. A core feature
-registers itself as a pin holder once, then points named slots at versions of
-a document (`versionPins.holder(name).pin(tx, { ref, slot, versionNo })`);
-moving a slot frees the version it left, and a version stays while any slot of
-any feature points at it. Pins are kept in a new core table,
-`nextly_version_pins`, which `nextly migrate` creates on an existing database,
-and they go with their document or Single when either is deleted. A pin takes
-the document's write lock, so it cannot slip past a save's retention pass.
+Retention never removes a version a feature has pinned. A feature registers
+itself as a pin holder once, then points named slots at versions of a document
+(`versionPins.holder(name).pin(tx, { ref, slot, versionNo })`); moving a slot
+frees the version it left, and a version stays while any slot of any feature
+points at it. `registerVersionPinHolder`, `versionPins` and their types are
+exported from `nextly` as experimental, and the versions docs describe them.
+Pins are kept in a new core table, `nextly_version_pins`, which `nextly
+migrate` creates on an existing database, and they go with their document or
+Single when either is deleted. A pin takes the document's write lock, so it
+cannot slip past a save's retention pass.

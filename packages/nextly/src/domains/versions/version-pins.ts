@@ -84,8 +84,10 @@ const holders = new Map<string, VersionPinHolderDefinition>();
  * loads.
  *
  * Refuses a name that is not kebab-case or is too long for its column, and a
- * name already registered: two features answering to one name would release
- * each other's pins.
+ * name another feature registered: two features answering to one name would
+ * release each other's pins. The same registration again (same name and
+ * label) is accepted and changes nothing, since a module reloaded in
+ * development, or a plugin set up twice, runs its registration again.
  *
  * @experimental
  */
@@ -100,6 +102,7 @@ export function registerVersionPinHolder(
     });
   }
   const existing = holders.get(name);
+  if (existing?.label === definition.label) return;
   if (existing) {
     throw NextlyError.invalidInput({
       message: `A version pin holder is already registered as "${name}" (${existing.label}); choose another name for ${definition.label}.`,

@@ -40,6 +40,16 @@ describe("version pin holders", () => {
     ).toThrow(/Workflows/);
   });
 
+  it("accepts the same registration again, as a reloaded module makes it", () => {
+    registerVersionPinHolder({ name: "release-review", label: "Releases" });
+    expect(() =>
+      registerVersionPinHolder({ name: "release-review", label: "Releases" })
+    ).not.toThrow();
+    expect(
+      versionPinHolderNames().filter(name => name === "release-review")
+    ).toHaveLength(1);
+  });
+
   it("refuses a name that is not kebab-case or too long", () => {
     for (const name of ["Workflows", "work_flows", "", "-x", "a".repeat(65)]) {
       expect(() => registerVersionPinHolder({ name, label: "x" })).toThrow();
