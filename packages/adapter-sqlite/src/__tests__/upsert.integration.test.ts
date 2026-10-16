@@ -182,6 +182,23 @@ describe("SQLite upsert", () => {
     expect(await rows()).toEqual([{ id: "a", key: "k1", label: "first" }]);
   });
 
+  it("returns the row when the update changes its primary key", async () => {
+    // With no `updateColumns`, every given column is updated, the primary key
+    // included. The row is then found by its new key, not the one it had.
+    await adapter.upsert(
+      TABLE,
+      { id: "a", key: "k1", label: "first" },
+      { conflictColumns: ["key"] }
+    );
+    const stored = await adapter.upsert<Row>(
+      TABLE,
+      { id: "b", key: "k1", label: "second" },
+      { conflictColumns: ["key"] }
+    );
+    expect(stored).toMatchObject({ id: "b", key: "k1", label: "second" });
+    expect(await rows()).toEqual([{ id: "b", key: "k1", label: "second" }]);
+  });
+
   it("reads back the row matching every column of a composite key", async () => {
     // Two rows share the key's first column, so a read-back by that column
     // alone could return the wrong one.

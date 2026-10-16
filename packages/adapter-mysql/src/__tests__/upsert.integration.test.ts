@@ -254,6 +254,24 @@ describe.skipIf(!TEST_DB_URL)("MySQL upsert", () => {
     }
   });
 
+  it("returns the row when the update changes its primary key", async () => {
+    // With no `updateColumns`, every given column is updated, the primary key
+    // included, as ON CONFLICT DO UPDATE does on the other dialects. The row
+    // is then found by its new key, not the one it had.
+    await adapter.upsert(
+      KEYED,
+      { id: "a", key: "k1", label: "first" },
+      { conflictColumns: ["key"] }
+    );
+    const stored = await adapter.upsert<Row>(
+      KEYED,
+      { id: "b", key: "k1", label: "second" },
+      { conflictColumns: ["key"] }
+    );
+    expect(stored).toMatchObject({ id: "b", key: "k1", label: "second" });
+    expect(await rows()).toEqual([{ id: "b", key: "k1", label: "second" }]);
+  });
+
   it("returns the stored row when an update trigger rewrites the conflict key", async () => {
     // Read back by the row's primary key: by the conflict value the update was
     // keyed on, the row a trigger re-keyed is not found.
