@@ -136,6 +136,38 @@ describe("assertDocumentViews", () => {
     expect(error.code).toBe("NEXTLY_PLUGIN_DOCUMENT_VIEW_INVALID");
   });
 
+  const cyclic: Record<string, unknown> = {};
+  cyclic.self = cyclic;
+
+  it.each([
+    ["a BigInt", 10n],
+    ["a number", 42],
+    ["an object", { text: "Builder" }],
+    ["a cyclic object", cyclic],
+  ])(
+    "refuses a label that is %s rather than text, naming it",
+    (_case, label) => {
+      // A label is published in the admin metadata, which is sent as JSON; one
+      // that is not text fails that whole response rather than this one view.
+      const error = refusal([
+        plugin("@acme/builder", "pages", [
+          { path: "builder", label: label as unknown as string },
+        ]),
+      ]);
+      expect(error.code).toBe("NEXTLY_PLUGIN_DOCUMENT_VIEW_INVALID");
+      expect(error.logMessage).toContain("label");
+    }
+  );
+
+  it("accepts a view with no label", () => {
+    // The control: an absent label is the common case, not a malformed one.
+    expect(() =>
+      assertDocumentViews(
+        asPlugins([plugin("@acme/builder", "pages", [{ path: "builder" }])])
+      )
+    ).not.toThrow();
+  });
+
   it("accepts one path on two different documents", () => {
     // The control for the collision cases: a check refusing every second
     // `builder` would pass them and stop a plugin serving two collections.

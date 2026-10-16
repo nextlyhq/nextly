@@ -10,7 +10,11 @@ import { generateAdminPage } from "./generators/admin";
 import { generateConfig } from "./generators/config";
 import { generateEnv } from "./generators/env";
 import { generateMediaRoutes } from "./generators/media-routes";
-import { patchNextConfig } from "./generators/next-config";
+import {
+  nextConfigReport,
+  patchNextConfig,
+  type NextConfigPatch,
+} from "./generators/next-config";
 import { reportEnvFiles } from "./generators/report-env-files";
 import { generateRoutes } from "./generators/routes";
 import { generateTypesDirectory } from "./generators/types";
@@ -70,6 +74,18 @@ function cwdProjectName(cwd: string): string {
     return DEFAULT_PROJECT_NAME;
   }
   return basename;
+}
+
+/**
+ * Tell the developer what adding Nextly did to their Next config: the
+ * packages it added, or exactly what to add by hand when it could not change
+ * the file safely. One place prints it, so the line can move into a combined
+ * report without the patch knowing.
+ */
+function printNextConfigPatch(patch: NextConfigPatch): void {
+  const report = nextConfigReport(patch);
+  if (report.level === "warn") p.log.warn(report.message);
+  else p.log.info(report.message);
 }
 
 /**
@@ -492,7 +508,7 @@ export async function createNextly(
     const installStartedAt = Date.now();
     telemetry.capture("install_started", {});
     try {
-      await installDependencies(
+      const settingsChanged = await installDependencies(
         cwd,
         projectInfo,
         database,
@@ -501,6 +517,9 @@ export async function createNextly(
         projectType
       );
       s.stop("Dependencies installed");
+      // What the install changed in the project's own settings files, said
+      // after the spinner so each line stays on screen.
+      for (const note of settingsChanged) p.log.info(note);
       telemetry.capture("install_completed", {
         duration_ms: Date.now() - installStartedAt,
       });
@@ -522,6 +541,7 @@ export async function createNextly(
   {
     const s = p.spinner();
     s.start("Setting up environment...");
+    let nextConfigPatch: NextConfigPatch | null = null;
     try {
       if (!isFreshProject) {
         // Existing project: generate Nextly config files
@@ -530,7 +550,7 @@ export async function createNextly(
         await generateAdminPage(cwd, projectInfo);
         await generateMediaRoutes(cwd, projectInfo);
         await generateTypesDirectory(cwd, projectInfo);
-        await patchNextConfig(cwd, database);
+        nextConfigPatch = await patchNextConfig(cwd, database);
       }
 
       // App flows generate a root .env. A plugin is a library — its env lives
@@ -547,6 +567,7 @@ export async function createNextly(
       s.stop("Environment configured");
       // Said after the spinner, so each line stays on screen. Keys and file
       // names only: nothing here ever carries an env value.
+      if (nextConfigPatch) printNextConfigPatch(nextConfigPatch);
       if (envResult) reportEnvFiles(envResult);
     } catch (error) {
       s.stop("Failed to generate configuration");

@@ -8,7 +8,7 @@
  * batch wrote is seen; `draft` is the working draft a preview shows; and it is
  * scoped to the validator's own field type, refused by name otherwise.
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { CollectionConfig } from "../../../collections/config/define-collection";
 import { definePlugin } from "../../../plugins/plugin-context";
@@ -27,6 +27,7 @@ import {
 
 let current: TestNextly | undefined;
 afterEach(async () => {
+  vi.restoreAllMocks();
   await current?.destroy();
   current = undefined;
   seen.length = 0;
@@ -170,6 +171,35 @@ describe.each(getConfiguredTestDialects())("on %s", (dialect: TestDialect) => {
           form: "published",
         })
       ).toEqual({ kind: "absent" });
+    });
+
+    it("reads a collection's registry record once per write, however many reads", async () => {
+      const t = await boot(dialect);
+      const first = await created(t, "plain", { title: "a", body: { v: 1 } });
+      const second = await created(t, "plain", { title: "b", body: { v: 2 } });
+      const registry = t.getService("collectionRegistryService") as unknown as {
+        getCollectionBySlug(slug: string, executor?: unknown): Promise<unknown>;
+      };
+      const lookups = vi.spyOn(registry, "getCollectionBySlug");
+      const read = poolReader(t, "probe");
+
+      for (const id of [first, second, first]) {
+        await read({ collection: "plain", id, field: "body", form: "draft" });
+      }
+      // A second write context is a second write: it reads the record afresh.
+      await poolReader(
+        t,
+        "probe"
+      )({
+        collection: "plain",
+        id: first,
+        field: "body",
+        form: "published",
+      });
+
+      expect(
+        lookups.mock.calls.filter(([slug]) => slug === "plain")
+      ).toHaveLength(2);
     });
 
     it("reads the pending working draft as `draft`, and the live row as `published`", async () => {

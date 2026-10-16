@@ -14,7 +14,10 @@
  */
 
 import { useVersionDocumentTitle } from "@admin/components/features/versions/useVersionDocumentTitle";
-import { readVersionParam } from "@admin/components/features/versions/version-search-params";
+import {
+  readLocaleParam,
+  readVersionParam,
+} from "@admin/components/features/versions/version-search-params";
 import { VersionComparePage } from "@admin/components/features/versions/VersionComparePage";
 import { ROUTES, buildRoute } from "@admin/constants/routes";
 import { useSingleDocument } from "@admin/hooks/queries/useSingles";
@@ -27,9 +30,15 @@ export default function SingleVersionsPage({
   const slug = typeof params?.slug === "string" ? params.slug : "";
   const document = useSingleDocument(slug);
   const documentId = document.data?.id;
+  // The language the address names, as an entry's comparison page honours it:
+  // a link shared from a German history opens under the German title.
+  const locale = readLocaleParam(searchParams?.locale);
   // Read BEFORE the guard below, because a hook cannot be called after an early
   // return. It needs only the slug, which is why it asks for less than a scope.
-  const documentTitle = useVersionDocumentTitle({ kind: "single", slug });
+  const documentTitle = useVersionDocumentTitle(
+    { kind: "single", slug },
+    locale
+  );
 
   // Nothing is rendered until the document's identity is known: a scope built
   // with a placeholder id would key the cache to a document that does not
@@ -60,6 +69,7 @@ export default function SingleVersionsPage({
       readOnlyHref={ROUTES.DASHBOARD}
       from={readVersionParam(searchParams?.from)}
       to={readVersionParam(searchParams?.to)}
+      locale={locale}
     />
   );
 }

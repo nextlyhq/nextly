@@ -27,9 +27,12 @@
  * @module domains/singles/services/promote-gate
  */
 
+import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
+
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import type { FieldConfig } from "../../../collections/fields/types";
 import { NextlyError } from "../../../errors";
+import type { FieldGroupDataService } from "../../../services/field-groups/field-group-data-service";
 import {
   declaredFieldNames,
   resolvePromotedDocument,
@@ -44,6 +47,11 @@ import {
   type CallerGrants,
 } from "../../../shared/lib/field-level-registry";
 import { relationshipValidationView } from "../../../shared/lib/field-transform";
+import { entryWriteContext } from "../../collections/services/stored-field-read";
+import { readComponentSubtrees } from "../../field-groups/read-component-subtrees";
+import type { CompanionSchema } from "../../i18n/runtime/companion-io";
+
+import { readCompanionValuesInTx } from "./apply-pending-change";
 
 /** One language's pending change, as the versions repository stores it. */
 export interface PromotableDraft {
@@ -51,6 +59,104 @@ export interface PromotableDraft {
   locale: string | null;
   /** The stored snapshot, in write shape. */
   snapshot: unknown;
+}
+
+/**
+ * Who a Single's promotion is judged for, and the write it is part of, on the
+ * promoting transaction. One builder for both publish paths, so the update and
+ * `publishAllLocales` cannot come to judge one caller differently.
+ */
+export function promoteCallerFor(args: {
+  tx: TransactionContext;
+  slug: string;
+  defaultLocale: string | null;
+  fields: FieldConfig[];
+  options: {
+    user?: Record<string, unknown>;
+    overrideAccess?: boolean;
+    authenticatedScope?: AuthenticatedScope;
+  };
+  grants?: () => Promise<CallerGrants>;
+}): Pick<
+  PromoteGateContext,
+  | "slug"
+  | "write"
+  | "fields"
+  | "user"
+  | "overrideAccess"
+  | "authenticatedScope"
+  | "grants"
+> {
+  return {
+    slug: args.slug,
+    write: entryWriteContext({
+      kind: "single",
+      slug: args.slug,
+      connection: {
+        db: args.tx,
+        executor: args.tx.getDrizzle(),
+        defaultLocale: args.defaultLocale,
+      },
+    }),
+    fields: args.fields,
+    user: args.options.user,
+    overrideAccess: args.options.overrideAccess,
+    authenticatedScope: args.options.authenticatedScope,
+    // Resolved on the pooled connection before the transaction opened.
+    grants: args.grants,
+  };
+}
+
+/**
+ * A Single's live document for one language, as stored and as the promotion
+ * gate judges it: the row this transaction read, that language's translations,
+ * and its component subtrees.
+ *
+ * The components are read because they live in tables of their own. Judged
+ * without them, a promotion that carries none, such as a publish with nothing
+ * pending, would be refused for a required component it stores, and an
+ * optional one would never be judged at all. Read on the transaction, and a
+ * read that fails refuses the publish rather than judging less than goes live.
+ */
+export async function liveStoredDocument(args: {
+  tx: TransactionContext;
+  row: Record<string, unknown>;
+  locale: string | null;
+  companion: CompanionSchema | null;
+  companionExists: boolean;
+  fieldGroupDataService: FieldGroupDataService | undefined;
+  parentTable: string;
+  fieldConfigs: FieldConfig[];
+  slug: string;
+}): Promise<Record<string, unknown>> {
+  const translations =
+    args.companion && args.companionExists && args.locale
+      ? await readCompanionValuesInTx(
+          args.tx,
+          args.companion,
+          String(args.row.id),
+          args.locale
+        )
+      : {};
+  const components = await readComponentSubtrees({
+    fieldGroupDataService: args.fieldGroupDataService,
+    tx: args.tx,
+    entryId: String(args.row.id),
+    parentTable: args.parentTable,
+    fieldConfigs: args.fieldConfigs,
+    ...(args.locale ? { locale: args.locale } : {}),
+    reason: "single-promote-gate-component-read",
+    logContext: { slug: args.slug },
+    onReadFailure: () => {
+      throw NextlyError.internal({
+        logContext: {
+          cause: "promote-gate-component-read-failed",
+          slug: args.slug,
+        },
+      });
+    },
+  });
+  return { ...args.row, ...translations, ...components };
 }
 
 /** What judging a promotion needs from the service that performs it. */
@@ -111,6 +217,12 @@ export interface PromoteGateContext {
    * document that gets written is the draft with this on top.
    */
   callerData?: Record<string, unknown>;
+  /**
+   * The status the promoted document is written with. A snapshot keeps the
+   * status it was saved under, which for a pending draft is a draft's, while
+   * the write publishes it; a rule that depends on the lifecycle reads this one.
+   */
+  status: "published";
   localizedFieldNames: Set<string>;
   enforceLocalizedRequired: boolean;
 }
@@ -172,6 +284,10 @@ export async function assertDraftsMayBePromoted(
       if (ctx.localizedFieldNames.has(key)) promoted[key] = value;
     }
     Object.assign(promoted, ctx.callerData ?? {});
+    // Written with the status it publishes, whatever its snapshot was saved
+    // under. Set before the field rules run as well as before validation, so a
+    // rule reading the document's status judges the one that goes live.
+    promoted.status = ctx.status;
 
     // The document the write will persist, with every field this publisher may
     // not write held at its live value. Validated as THAT document rather than
