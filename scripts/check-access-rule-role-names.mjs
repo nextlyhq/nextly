@@ -36,8 +36,9 @@
  * followed to the declaration it names.
  *
  * ⚠️ What this does not follow: a rule built by a helper from another package,
- * one reached through `export * from` or a namespace import (`import * as`),
- * or one spread into an access object. A named re-export is followed. Each is a reason to widen this deliberately.
+ * or one reached through `export * from` or a namespace import
+ * (`import * as`). A named re-export, and an object spread into an access
+ * object, are followed. Each is a reason to widen this deliberately.
  *
  * Usage:
  *   node scripts/check-access-rule-role-names.mjs
@@ -364,6 +365,25 @@ function accessObjectAt(files, parse, path, entry) {
     : undefined;
 }
 
+/**
+ * An access object's own properties, with those of every object spread into
+ * it (`{ ...shared }`), each beside the file it is written in.
+ */
+function propertiesOf(files, parse, at, seen = new Set()) {
+  if (seen.has(at.object)) return [];
+  seen.add(at.object);
+  return at.object.properties.flatMap(property => {
+    if (!ts.isSpreadAssignment(property)) return [{ path: at.path, property }];
+    const spread = unwrap(property.expression);
+    const inner = ts.isObjectLiteralExpression(spread)
+      ? { path: at.path, object: spread }
+      : ts.isIdentifier(spread)
+        ? accessObjectAt(files, parse, at.path, { identifier: spread.text })
+        : undefined;
+    return inner ? propertiesOf(files, parse, inner, seen) : [];
+  });
+}
+
 /** A rule an `access` object names, as the function it is, where declared. */
 function ruleAt(files, parse, path, rule) {
   if (rule.fn) return { path, fn: rule.fn, name: rule.name };
@@ -382,12 +402,11 @@ function rulesIn(files, parse, path) {
   const declared = accessObjects(source)
     .map(entry => accessObjectAt(files, parse, path, entry))
     .filter(Boolean)
-    .flatMap(({ path: at, object }) =>
-      object.properties
-        .map(ruleOfProperty)
-        .filter(Boolean)
-        .map(rule => ruleAt(files, parse, at, rule))
-    )
+    .flatMap(at => propertiesOf(files, parse, at))
+    .map(({ path: at, property }) => {
+      const rule = ruleOfProperty(property);
+      return rule && ruleAt(files, parse, at, rule);
+    })
     .filter(Boolean);
   return [...typed, ...declared];
 }

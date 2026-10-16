@@ -169,6 +169,25 @@ describe("check-access-rule-role-names", () => {
     ]);
   });
 
+  it("follows rules spread into an access object", () => {
+    expect(
+      scan({
+        "templates/t/src/collections/Posts.ts": [
+          'import { base } from "./base";',
+          'const shared = { update: ({ roles }) => roles.includes("editor") };',
+          "export const Posts = defineCollection({",
+          "  access: { read: () => true, ...shared, ...base },",
+          "});",
+        ].join("\n"),
+        "templates/t/src/collections/base.ts":
+          'export const base = { delete: ({ roles }) => roles.includes("admin") };',
+      })
+    ).toEqual([
+      "templates/t/src/collections/base.ts:1 delete",
+      "templates/t/src/collections/Posts.ts:2 update",
+    ]);
+  });
+
   it("passes a rule that decides by permission", () => {
     expect(
       scan({
