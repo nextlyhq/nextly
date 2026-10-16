@@ -41,8 +41,7 @@ under `contributes.admin.documentViews` with `fieldType`. `navigateTo` in
 address. `PluginDocumentView`, `PluginFieldTypeDocumentView`,
 `DocumentViewProps` and `navigateTo` are experimental. Startup is refused when a
 view's path is malformed, reserved (`versions`, `api`), claimed twice on one
-document, offered on a field type its plugin does not contribute, or labelled
-with anything but text.
+document, or offered on a field type its plugin does not contribute.
 
 `nextly generate:types` now writes the plugin component import map, or removes a
 stale one, in an app that defines no schema in code. Such an app, whose schema
