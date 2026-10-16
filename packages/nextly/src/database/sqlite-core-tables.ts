@@ -598,7 +598,7 @@ export function generateSqliteCoreTableStatements(): string[] {
     `CREATE UNIQUE INDEX IF NOT EXISTS "nextly_notices_dedupe_uidx"
       ON "${NOTICES_TABLE}" ("dedupe_key")`,
     `CREATE INDEX IF NOT EXISTS "nextly_notices_user_idx"
-      ON "${NOTICES_TABLE}" ("user_id", "read_at", "created_at")`,
+      ON "${NOTICES_TABLE}" ("user_id", "read_at", "created_at", "id")`,
     `CREATE INDEX IF NOT EXISTS "nextly_notices_inbox_idx"
       ON "${NOTICES_TABLE}" ("user_id", "created_at", "id")`,
     `CREATE INDEX IF NOT EXISTS "nextly_notices_subject_idx"

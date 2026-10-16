@@ -40,6 +40,17 @@ import {
   type NoticeKind,
 } from "./notice-kinds";
 
+/**
+ * The order a person's notices page in: newest first. The id is time-ordered,
+ * so it breaks ties on the creation time in the order the notices were made.
+ * Each inbox index ends in these columns, so a page is read in index order
+ * rather than sorted.
+ */
+export const NOTICE_PAGE_ORDER = [
+  { column: "createdAt", direction: "desc" },
+  { column: "id", direction: "desc" },
+] as const;
+
 /** The insert-or-keep a write needs: the adapter's, or its transaction's. */
 export interface NoticesWriter {
   upsert<T = unknown>(
@@ -266,12 +277,7 @@ export class NoticesService {
     const [rows, total] = await Promise.all([
       this.deps.db.select<NoticeRow>(NOTICES_TABLE, {
         where,
-        // The id is time-ordered, so it breaks ties on the creation time in
-        // the order the notices were made.
-        orderBy: [
-          { column: "createdAt", direction: "desc" },
-          { column: "id", direction: "desc" },
-        ],
+        orderBy: [...NOTICE_PAGE_ORDER],
         offset: (page - 1) * limit,
         limit,
       }),
