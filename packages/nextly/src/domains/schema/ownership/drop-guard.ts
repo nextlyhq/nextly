@@ -1781,31 +1781,43 @@ class StatementWalk {
     this.reader.leaveUnmodelled(relation.name);
   }
 
+  /**
+   * A PostgreSQL `ALTER INDEX i <form>` other than `RENAME`: the index is
+   * changed in place, and an attached partition index is changed as well.
+   * The bulk `ALL IN TABLESPACE` form names no index, so it is refused.
+   */
+  private readPostgresIndexChange(
+    at: number,
+    index: { name: string; next: number }
+  ): void {
+    if (this.word(at + 2) === "ALL") {
+      this.refuse(
+        "an ALTER INDEX ALL IN TABLESPACE, whose indexes cannot be named"
+      );
+    }
+    this.reader.changeElement(undefined, index.name, "index");
+    if (
+      this.word(index.next) === "ATTACH" &&
+      this.word(index.next + 1) === "PARTITION"
+    ) {
+      const child = this.qualifiedName(index.next + 2);
+      if (child === undefined) {
+        this.refuse(
+          "an index attached as a partition whose name cannot be read"
+        );
+      }
+      this.reader.changeElement(undefined, child.name, "index");
+    }
+  }
+
   private readAlterIndexRename(at: number): void {
     if (this.word(at + 1) !== "INDEX") return;
     const index = this.qualifiedName(this.skipIfExists(at + 2));
     if (index === undefined) return;
     // Every PostgreSQL ALTER INDEX form other than RENAME changes the index
-    // in place, so the index is judged as one. The bulk form names no index.
+    // in place, so the index is judged as one.
     if (this.reader.isPostgres && this.word(index.next) !== "RENAME") {
-      if (this.word(at + 2) === "ALL") {
-        this.refuse(
-          "an ALTER INDEX ALL IN TABLESPACE, whose indexes cannot be named"
-        );
-      }
-      this.reader.changeElement(undefined, index.name, "index");
-      if (
-        this.word(index.next) === "ATTACH" &&
-        this.word(index.next + 1) === "PARTITION"
-      ) {
-        const child = this.qualifiedName(index.next + 2);
-        if (child === undefined) {
-          this.refuse(
-            "an index attached as a partition whose name cannot be read"
-          );
-        }
-        this.reader.changeElement(undefined, child.name, "index");
-      }
+      this.readPostgresIndexChange(at, index);
       return;
     }
     if (
