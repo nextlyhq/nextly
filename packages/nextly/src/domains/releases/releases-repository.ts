@@ -38,10 +38,11 @@ import { releaseRevalidationIntent } from "./release-revalidation";
 import { NO_DECISIONS } from "./release-scope";
 import type { ReleaseDecisions } from "./release-scope";
 import {
-  releaseTabSegments,
+  releaseTabQuery,
   type ReleaseAttentionReason,
   type ReleaseTab,
-  type ReleaseTabSegment,
+  type ReleaseTabOrder,
+  type ReleaseTabQuery,
 } from "./release-tabs";
 import type { DueMember } from "./resolve-release-effect";
 import { resolveReleaseEffect } from "./resolve-release-effect";
@@ -231,13 +232,6 @@ export interface ReleasePageQuery extends ReleaseListFilters {
   limit?: number;
 }
 
-/** Where a page read across segments has got to: rows still to skip, and room left. */
-interface PageCursor {
-  skip: number;
-  /** `undefined` is no limit. */
-  room: number | undefined;
-}
-
 /** @experimental */
 export interface ReleasePage {
   rows: ReleaseRow[];
@@ -371,7 +365,7 @@ export function documentRefKey(ref: DocumentRef): string {
  * next", which under the descending order returns the FURTHEST-OUT releases
  * while looking correct.
  */
-function scheduleOrderSegment(order?: ReleaseListOrder): ReleaseTabSegment {
+function scheduleOrderQuery(order?: ReleaseListOrder): ReleaseTabQuery {
   const direction = order === "soonest" ? "asc" : "desc";
   return {
     where: [],
@@ -745,12 +739,9 @@ export class ReleasesRepository {
       order?: ReleaseListOrder;
     }
   ): Promise<ReleaseRow[]> {
-    const page = await this.readSegments(
-      [scheduleOrderSegment(query.order)],
-      query,
-      { offset: query.offset, limit: query.limit, total: false }
-    );
-    return page.rows;
+    const listing = this.listingFor(query);
+    if (listing === null) return [];
+    return this.selectPage(listing, query);
   }
 
   /**
@@ -762,36 +753,49 @@ export class ReleasesRepository {
    * @experimental
    */
   async findReleasePage(query: ReleasePageQuery): Promise<ReleasePage> {
-    return this.readSegments(this.segmentsFor(query), query, {
-      offset: query.offset,
-      limit: query.limit,
-      total: true,
-    });
+    const listing = this.listingFor(query);
+    if (listing === null) return { rows: [], total: 0 };
+    return {
+      rows: await this.selectPage(listing, query),
+      total: await this.db.count(RELEASES, { where: listing.where }),
+    };
   }
 
   /**
    * How many releases a listing would hold, without reading them.
    *
-   * The question a dashboard asks ("how many need attention?"), answered by the
-   * same segments the list reads, so the count and the list cannot disagree.
+   * The question a dashboard asks ("how many need attention?"). It counts the
+   * same where clause {@link findReleasePage} counts for its total, built by
+   * the same {@link listingFor}, so the two cannot disagree.
    *
    * @experimental
    */
   async countReleases(query: ReleasePageQuery): Promise<number> {
-    const extra = this.filterConditions(query);
-    if (extra === null) return 0;
-    let total = 0;
-    for (const segment of this.segmentsFor(query)) {
-      total += await this.db.count(RELEASES, {
-        where: { and: [...segment.where, ...extra] },
-      });
-    }
-    return total;
+    const listing = this.listingFor(query);
+    if (listing === null) return 0;
+    return this.db.count(RELEASES, { where: listing.where });
   }
 
-  /** The segments a listing reads: its tab's, or the plain scheduled order. */
-  private segmentsFor(query: ReleasePageQuery): ReleaseTabSegment[] {
-    if (query.tab === undefined) return [scheduleOrderSegment(query.order)];
+  /**
+   * A listing as one where clause and one order: its tab's, or the plain
+   * scheduled order, narrowed by the filters. `null` when it can match
+   * nothing.
+   *
+   * The ONE place a listing's conditions are put together, for the page, its
+   * total and the count alike.
+   */
+  private listingFor(
+    query: ReleasePageQuery
+  ): { where: ReleasesWhere; orderBy: ReleaseTabOrder[] } | null {
+    const extra = this.filterConditions(query);
+    if (extra === null) return null;
+    const tab = this.tabQueryFor(query);
+    return { where: { and: [...tab.where, ...extra] }, orderBy: tab.orderBy };
+  }
+
+  /** The tab's own query, or the plain scheduled order with no conditions. */
+  private tabQueryFor(query: ReleasePageQuery): ReleaseTabQuery {
+    if (query.tab === undefined) return scheduleOrderQuery(query.order);
     if (query.now === undefined) {
       // A tab without a moment cannot say which scheduled releases are
       // overdue. Refused rather than defaulted to the clock, so the one place
@@ -800,12 +804,7 @@ export class ReleasesRepository {
         logContext: { reason: "release-tab-without-now", tab: query.tab },
       });
     }
-    const segments = releaseTabSegments(query.tab, query.now, query.order);
-    // A narrower view of the same tab, selected from its own segments rather
-    // than restated, so "overdue" here is exactly the overdue part of the list.
-    return query.reason === undefined
-      ? segments
-      : segments.filter(segment => segment.reason === query.reason);
+    return releaseTabQuery(query.tab, query.now, query.order, query.reason);
   }
 
   /**
@@ -863,63 +862,19 @@ export class ReleasesRepository {
     return conditions;
   }
 
-  /**
-   * Read a page across segments, one after another, as if they were one list.
-   *
-   * Each segment is counted when the total is wanted, or when there is more
-   * than one — the count is how a page that starts inside the second segment
-   * knows how many rows of the first to skip. A segment entirely before the
-   * page is counted and never read.
-   */
-  private async readSegments(
-    segments: ReleaseTabSegment[],
-    filters: ReleaseListFilters,
-    page: { offset?: number; limit?: number; total: boolean }
-  ): Promise<ReleasePage> {
-    const extra = this.filterConditions(filters);
-    if (extra === null) return { rows: [], total: 0 };
-
-    const counted = page.total || segments.length > 1;
-    const cursor: PageCursor = { skip: page.offset ?? 0, room: page.limit };
-    const rows: ReleaseRow[] = [];
-    let total = 0;
-    for (const segment of segments) {
-      const where: ReleasesWhere = { and: [...segment.where, ...extra] };
-      const size = counted
-        ? await this.db.count(RELEASES, { where })
-        : undefined;
-      total += size ?? 0;
-      rows.push(...(await this.readWithin(segment, where, size, cursor)));
-    }
-    return { rows, total: counted ? total : rows.length };
-  }
-
-  /**
-   * The rows of one segment that fall on the page, moving the cursor past it.
-   *
-   * A segment wholly before the page — its count no larger than the rows still
-   * to skip — is skipped by arithmetic and never read.
-   */
-  private async readWithin(
-    segment: ReleaseTabSegment,
-    where: ReleasesWhere,
-    size: number | undefined,
-    cursor: PageCursor
+  /** One page of a listing's rows, in its order. */
+  private selectPage(
+    listing: { where: ReleasesWhere; orderBy: ReleaseTabOrder[] },
+    page: { offset?: number; limit?: number }
   ): Promise<ReleaseRow[]> {
-    if (cursor.room === 0) return [];
-    if (size !== undefined && cursor.skip >= size) {
-      cursor.skip -= size;
-      return [];
-    }
-    const found = await this.db.select<ReleaseRow>(RELEASES, {
-      where,
-      orderBy: segment.orderBy,
-      ...(cursor.skip > 0 ? { offset: cursor.skip } : {}),
-      ...(cursor.room !== undefined ? { limit: cursor.room } : {}),
+    return this.db.select<ReleaseRow>(RELEASES, {
+      where: listing.where,
+      orderBy: listing.orderBy,
+      ...(page.offset !== undefined && page.offset > 0
+        ? { offset: page.offset }
+        : {}),
+      ...(page.limit !== undefined ? { limit: page.limit } : {}),
     });
-    if (cursor.room !== undefined) cursor.room -= found.length;
-    cursor.skip = 0;
-    return found;
   }
 
   async findDueReleases(now: Date): Promise<ReleaseRow[]> {

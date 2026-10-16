@@ -299,7 +299,9 @@ function pageSize(value: string | null): number {
 function pageNumber(value: string | null): number {
   if (value === null) return 1;
   const n = Number(value);
-  if (!Number.isInteger(n) || n < 1) {
+  // A safe integer: `1e308` passes `Number.isInteger` and becomes an infinite
+  // offset further in.
+  if (!Number.isSafeInteger(n) || n < 1) {
     throw badRequest("`page` must be a whole number of at least 1.");
   }
   return n;

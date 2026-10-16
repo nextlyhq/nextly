@@ -20,7 +20,7 @@
  *   list redesign is complete.
  */
 import type { ReleaseState } from "../../schemas/releases/types";
-import type { VersionsWhereCondition } from "../versions/db-api";
+import type { VersionsWhere, VersionsWhereCondition } from "../versions/db-api";
 
 import type { ReleaseListOrder, ReleaseRow } from "./releases-repository";
 
@@ -81,7 +81,12 @@ export type ReleaseAttentionReason = (typeof RELEASE_ATTENTION_REASONS)[number];
 export const RELEASE_OVERDUE_AFTER_MS = 10 * 60 * 1000;
 
 /** The columns a tab's order is made of. */
-type ReleaseOrderColumn = "scheduledAt" | "createdAt" | "updatedAt" | "id";
+type ReleaseOrderColumn =
+  | "state"
+  | "scheduledAt"
+  | "createdAt"
+  | "updatedAt"
+  | "id";
 
 /** One step of a tab's order. */
 export interface ReleaseTabOrder {
@@ -90,19 +95,19 @@ export interface ReleaseTabOrder {
   nulls?: "first" | "last";
 }
 
+/** A condition on a release row, or a nested group of them. */
+export type ReleaseTabCondition = VersionsWhereCondition | VersionsWhere;
+
 /**
- * A run of rows within a tab: the conditions they meet and their order.
+ * A tab as one query: the conditions a release must meet, and the order.
  *
- * Most tabs are one segment. Needs attention is two — stopped releases first,
- * then overdue ones — because "this group, then that group" is not an order a
- * single ORDER BY over these columns can express, and two segments read one
- * after the other give the same total order without a per-dialect expression.
+ * One statement per tab, so the page and its rows are read from one view of
+ * the table: a release moving between the two parts of Needs attention while
+ * the tab is read is seen once, in one place, never twice or not at all.
  */
-export interface ReleaseTabSegment {
-  /** Which part of Needs attention this segment is; absent elsewhere. */
-  reason?: ReleaseAttentionReason;
+export interface ReleaseTabQuery {
   /** All of them must hold. */
-  where: VersionsWhereCondition[];
+  where: ReleaseTabCondition[];
   /** Ends in `id`, so the order is total and a page boundary never splits a tie. */
   orderBy: ReleaseTabOrder[];
 }
@@ -125,104 +130,109 @@ const scheduled: VersionsWhereCondition = {
   value: "scheduled" satisfies ReleaseState,
 };
 
+/** The two parts of Needs attention, each as its own conditions. */
+function attentionParts(
+  now: Date
+): Record<ReleaseAttentionReason, VersionsWhereCondition[]> {
+  return {
+    stopped: [
+      { column: "state", op: "=", value: "blocked" satisfies ReleaseState },
+    ],
+    overdue: [
+      scheduled,
+      { column: "scheduledAt", op: "<", value: overdueCutoff(now) },
+    ],
+  };
+}
+
 /**
- * The segments of a tab, at this moment.
+ * A tab, at this moment, as one query.
  *
  * `order` applies to Upcoming only, the one tab ordered by when releases WILL
  * run, where both ends are real questions ("what ships next", "what is furthest
  * out"). The other tabs have one meaningful order each, so the caller cannot
  * choose one; the service refuses an `order` with them rather than ignore it.
  *
+ * `reason` narrows Needs attention to one of its parts, selected from the same
+ * definition, so "overdue" is exactly the overdue part of the list.
+ *
  * @experimental
  */
-export function releaseTabSegments(
+export function releaseTabQuery(
   tab: ReleaseTab,
   now: Date,
-  order: ReleaseListOrder = "soonest"
-): ReleaseTabSegment[] {
-  const cutoff = overdueCutoff(now);
+  order: ReleaseListOrder = "soonest",
+  reason?: ReleaseAttentionReason
+): ReleaseTabQuery {
   switch (tab) {
     case "upcoming": {
       const direction = order === "soonest" ? "asc" : "desc";
-      return [
-        {
-          // `>=` the cutoff: a release a few minutes past its instant is
-          // still Upcoming — the runner reaches it on its next pass — and only
-          // one past the cutoff moves to Needs attention. Every scheduled
-          // release is therefore in exactly one of the two.
-          where: [
-            scheduled,
-            { column: "scheduledAt", op: ">=", value: cutoff },
-          ],
-          orderBy: [
-            { column: "scheduledAt", direction },
-            { column: "id", direction },
-          ],
-        },
-      ];
+      return {
+        // `>=` the cutoff: a release a few minutes past its instant is still
+        // Upcoming — the runner reaches it on its next pass — and only one
+        // past the cutoff moves to Needs attention. Every scheduled release is
+        // therefore in exactly one of the two.
+        where: [
+          scheduled,
+          { column: "scheduledAt", op: ">=", value: overdueCutoff(now) },
+        ],
+        orderBy: [
+          { column: "scheduledAt", direction },
+          { column: "id", direction },
+        ],
+      };
     }
-    case "attention":
-      return [
-        {
-          // Stopped first: a stopped release will not run until somebody acts,
-          // while an overdue one may still run on the next pass.
-          reason: "stopped",
-          where: [
-            {
-              column: "state",
-              op: "=",
-              value: "blocked" satisfies ReleaseState,
-            },
-          ],
-          orderBy: [
-            // Oldest first, so the release that has waited longest leads. A
-            // stopped release keeps the instant it was due at.
-            { column: "scheduledAt", direction: "asc", nulls: "last" },
-            { column: "id", direction: "asc" },
-          ],
-        },
-        {
-          reason: "overdue",
-          where: [scheduled, { column: "scheduledAt", op: "<", value: cutoff }],
-          orderBy: [
-            { column: "scheduledAt", direction: "asc" },
-            { column: "id", direction: "asc" },
-          ],
-        },
-      ];
+    case "attention": {
+      const parts = attentionParts(now);
+      return {
+        where:
+          reason === undefined
+            ? [{ or: [{ and: parts.stopped }, { and: parts.overdue }] }]
+            : parts[reason],
+        orderBy: [
+          // Stopped first: a stopped release will not run until somebody
+          // acts, while an overdue one may still run on the next pass. The
+          // tab holds exactly two states, and "blocked" sorts before
+          // "scheduled" on every dialect (plain lowercase ASCII), so ordering
+          // by state IS that grouping, in one statement and with no
+          // dialect-specific CASE.
+          { column: "state", direction: "asc" },
+          // Then oldest first, so the release that has waited longest leads.
+          // A stopped release keeps the instant it was due at.
+          { column: "scheduledAt", direction: "asc", nulls: "last" },
+          { column: "id", direction: "asc" },
+        ],
+      };
+    }
     case "drafts":
-      return [
-        {
-          where: [
-            { column: "state", op: "=", value: "draft" satisfies ReleaseState },
-          ],
-          orderBy: [
-            { column: "createdAt", direction: "desc" },
-            { column: "id", direction: "desc" },
-          ],
-        },
-      ];
+      return {
+        where: [
+          { column: "state", op: "=", value: "draft" satisfies ReleaseState },
+        ],
+        orderBy: [
+          { column: "createdAt", direction: "desc" },
+          { column: "id", direction: "desc" },
+        ],
+      };
     case "done":
-      return [
-        {
-          where: [
-            {
-              column: "state",
-              op: "IN",
-              value: ["published", "cancelled"] satisfies ReleaseState[],
-            },
-          ],
-          orderBy: [
-            // `updatedAt` is the instant a release finished: the move to
-            // `published` sets it to the publish instant and the move to
-            // `cancelled` to the cancel instant, and a finished release takes
-            // no other write. Anything that later writes to a finished release
-            // must keep that true or move this order to a column of its own.
-            { column: "updatedAt", direction: "desc" },
-            { column: "id", direction: "desc" },
-          ],
-        },
-      ];
+      return {
+        where: [
+          {
+            column: "state",
+            op: "IN",
+            value: ["published", "cancelled"] satisfies ReleaseState[],
+          },
+        ],
+        orderBy: [
+          // `updatedAt` is the instant a release finished: the move to
+          // `published` sets it to the publish instant and the move to
+          // `cancelled` to the cancel instant, and a finished release takes no
+          // other write. Anything that later writes to a finished release must
+          // keep that true or move this order to a column of its own.
+          { column: "updatedAt", direction: "desc" },
+          { column: "id", direction: "desc" },
+        ],
+      };
   }
 }
 
@@ -233,13 +243,28 @@ export function releaseTabSegments(
  * `false` rather than `true`: a release that matched every tab would be counted
  * several times, which is the failure this module exists to prevent.
  */
-function holds(row: ReleaseRow, condition: VersionsWhereCondition): boolean {
+function holds(row: ReleaseRow, condition: ReleaseTabCondition): boolean {
+  return "column" in condition
+    ? compares(row, condition)
+    : groupHolds(row, condition);
+}
+
+/**
+ * A nested group: every `and` holds, and at least one `or` does when an `or`
+ * is given — the reading the adapter gives the same shape.
+ */
+function groupHolds(row: ReleaseRow, group: VersionsWhere): boolean {
+  const all = (group.and ?? []).every(c => holds(row, c));
+  return all && (group.or === undefined || group.or.some(c => holds(row, c)));
+}
+
+/** One column against one value. */
+function compares(row: ReleaseRow, condition: VersionsWhereCondition): boolean {
   const actual = row[condition.column as keyof ReleaseRow];
-  const expected = condition.value;
   // A missing instant compares as SQL NULL does: it meets no comparison.
   if (actual === null || actual === undefined) return false;
-  const comparable = (v: unknown) => (v instanceof Date ? v.getTime() : v);
   const a = comparable(actual);
+  const expected = condition.value;
   switch (condition.op) {
     case "=":
       return a === comparable(expected);
@@ -254,6 +279,11 @@ function holds(row: ReleaseRow, condition: VersionsWhereCondition): boolean {
   }
 }
 
+/** Instants compared as numbers, as the database compares them. */
+function comparable(value: unknown): unknown {
+  return value instanceof Date ? value.getTime() : value;
+}
+
 /**
  * The one tab a release is in right now.
  *
@@ -266,10 +296,7 @@ function holds(row: ReleaseRow, condition: VersionsWhereCondition): boolean {
  */
 export function releaseTabOf(row: ReleaseRow, now: Date): ReleaseTab | null {
   for (const tab of RELEASE_TABS) {
-    const segments = releaseTabSegments(tab, now);
-    if (segments.some(segment => segment.where.every(c => holds(row, c)))) {
-      return tab;
-    }
+    if (releaseTabQuery(tab, now).where.every(c => holds(row, c))) return tab;
   }
   return null;
 }

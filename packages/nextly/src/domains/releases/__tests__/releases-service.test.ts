@@ -627,6 +627,12 @@ describe("ReleasesService.find pages the list", () => {
     ["page 0", { page: 0 }],
     ["a fractional page", { page: 1.5 }],
     ["a page larger than the maximum", { limit: 201 }],
+    ["a page past the safe integers", { page: 1e308 }],
+    [
+      "a page whose offset is past the safe integers",
+      { page: 2 ** 52, limit: 200 },
+    ],
+    ["a search that is not text", { search: 42 }],
   ])("refuses %s, naming it, before reading anything", async (_, query) => {
     // Each would otherwise answer with rows that look right: an unknown tab or
     // state matches nothing and reads as "no releases", and an order a tab

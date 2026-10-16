@@ -60,8 +60,9 @@ pass. One still waiting after 10 minutes is one the runner is not reaching, usua
 no scheduler calls it (see below).
 
 Search matches text in the title or the description, ignoring case. What you type is
-matched as written, so `50%` finds "50% off" and not "50 years". On SQLite, case is ignored
-for the letters A to Z only.
+matched as written, so `50%` finds "50% off" and not "50 years". On SQLite, case is ignored for the letters A to Z only. On MySQL, search follows the
+collation of the releases table: the default `utf8mb4` collations ignore case, a
+case-sensitive one does not.
 
 Ties are broken by id, so a release appears on exactly one page even when several share a
 time. Releases scheduled with no tab and no `order` come soonest first; other listings
@@ -120,6 +121,12 @@ To count a tab without reading its releases, ask for one row and read `meta.tota
 envelope as every other Direct API list:
 
 ```ts
+import { getNextly } from "nextly";
+
+import config from "../../nextly.config";
+
+const nextly = await getNextly({ config });
+
 const { items, meta } = await nextly.releases.find({
   tab: "upcoming",
   search: "spring",

@@ -665,6 +665,7 @@ describe("the list's tab, search, page and order", () => {
     ["an unknown tab", "?tab=soon"],
     ["page 0", "?page=0"],
     ["a page that is not a whole number", "?page=2a"],
+    ["a page past the safe integers", "?page=1e308"],
     ["an unknown order", "?order=soonestt"],
     ["an unknown reason", "?tab=attention&reason=late"],
   ])("refuses %s rather than answering with every release", async (_, q) => {

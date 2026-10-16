@@ -487,8 +487,18 @@ function assertListCombination(query: {
  * Trimmed, so a stray space typed into the box does not narrow the list to
  * releases containing a space; empty after trimming is no search at all.
  */
-function searchText(search: string | undefined): string | undefined {
-  const text = search?.trim();
+function searchText(search: unknown): string | undefined {
+  if (search === undefined) return undefined;
+  // Checked before it is used as a string: the Direct API is reachable from
+  // JavaScript, where `search: 42` would otherwise fail on `.trim()` as a raw
+  // TypeError rather than as the refusal every other field gets.
+  if (typeof search !== "string") {
+    throw NextlyError.invalidInput({
+      message: "`search` must be a string.",
+      logContext: { reason: "invalid-search", type: typeof search },
+    });
+  }
+  const text = search.trim();
   if (text === undefined || text === "") return undefined;
   if (text.length > MAX_RELEASE_SEARCH_LENGTH) {
     throw NextlyError.invalidInput({
@@ -507,7 +517,10 @@ function searchText(search: string | undefined): string | undefined {
  * so an unchecked negative turns a bounded read into a full table scan.
  */
 function assertWholeNumber(name: string, value: number, min: number): void {
-  if (!Number.isInteger(value) || value < min) {
+  // A SAFE integer, not merely an integer: `1e308` is an integer to
+  // `Number.isInteger`, and the offset worked out from it is `Infinity`, which
+  // reaches the database as a driver error rather than a refusal.
+  if (!Number.isSafeInteger(value) || value < min) {
     throw NextlyError.invalidInput({
       message: `\`${name}\` must be a whole number of at least ${min}.`,
       logContext: { reason: `invalid-${name}`, [name]: value },
@@ -897,6 +910,9 @@ export class ReleasesService {
     const limit = query.limit ?? DEFAULT_RELEASE_PAGE_SIZE;
     assertWholeNumber("page", page, 1);
     assertWholeNumber("limit", limit, 1);
+    // The offset too: a page that is a safe integer on its own can still put
+    // the offset past the range the database is handed exactly.
+    assertWholeNumber("page", (page - 1) * limit, 0);
     if (limit > MAX_RELEASE_PAGE_SIZE) {
       throw NextlyError.invalidInput({
         message: `\`limit\` may be at most ${MAX_RELEASE_PAGE_SIZE}.`,

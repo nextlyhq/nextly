@@ -22,6 +22,7 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import { RELEASE_TABS, releaseTabOf, type ReleaseTab } from "../release-tabs";
+import { releaseMemberKey } from "../release-member-key";
 import { ReleasesRepository, type ReleaseRow } from "../releases-repository";
 
 let current: TestNextly | undefined;
@@ -102,6 +103,46 @@ async function insertScheduled(
       createdAt: created,
       updatedAt: created,
       revision: 0,
+    },
+    { returning: [] }
+  );
+}
+
+/**
+ * A release member written with an id and a creation time of the test's
+ * choosing, through the adapter's typed insert into the production table.
+ */
+async function insertMember(
+  app: TestNextly,
+  releaseId: string,
+  id: string,
+  entryId: string,
+  createdAt: Date
+): Promise<void> {
+  const ref = {
+    scopeKind: "collection" as const,
+    scopeSlug: "posts",
+    entryId,
+    locale: null,
+  };
+  await (
+    app.adapter as unknown as {
+      insert: (
+        table: string,
+        row: Record<string, unknown>,
+        options: { returning: string[] }
+      ) => Promise<unknown>;
+    }
+  ).insert(
+    "nextly_release_members",
+    {
+      id,
+      releaseId,
+      ...ref,
+      action: "publish",
+      memberKey: releaseMemberKey(releaseId, ref),
+      createdBy: null,
+      createdAt,
     },
     { returning: [] }
   );
@@ -359,6 +400,30 @@ describe.each(getConfiguredTestDialects())(
 
       const members = await repo.listMembers(release.id);
       expect(members.map(member => member.id)).toEqual(added);
+    });
+
+    it("orders members by when they were added, then by id, whatever order the rows were written in", async () => {
+      // 🔴 The rows are WRITTEN against their keys: same creation instant, ids
+      // inserted in descending order, and the earliest member written last. A
+      // read with no ORDER BY returns them as written on a small table, so
+      // only the declared order (creation time, then id) gives this answer.
+      const app = await boot(dialect);
+      const repo = new ReleasesRepository(app.adapter);
+      const release = await repo.createRelease({ title: "Ordered" });
+      const same = new Date("2026-01-01T09:00:00Z");
+      const earlier = new Date("2026-01-01T08:00:00Z");
+      const ids = Array.from(
+        { length: 5 },
+        (_, i) => `00000000-0000-7000-8000-00000000010${i}`
+      );
+      for (const id of [...ids].reverse()) {
+        await insertMember(app, release.id, id, `t${id.slice(-1)}`, same);
+      }
+      const first = "00000000-0000-7000-8000-0000000001ff";
+      await insertMember(app, release.id, first, "first", earlier);
+
+      const members = await repo.listMembers(release.id);
+      expect(members.map(member => member.id)).toEqual([first, ...ids]);
     });
 
     it("lists drafts newest first, and done releases most recently finished first", async () => {
