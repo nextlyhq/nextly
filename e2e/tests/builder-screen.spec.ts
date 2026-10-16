@@ -90,7 +90,7 @@ test.describe("the Page Builder's own screen", () => {
     await expect(block(page, "goes")).toBeVisible({ timeout: 30_000 });
     await expect(page.getByText(/You have unsaved changes from/)).toBeVisible();
 
-    await page.getByRole("button", { name: "Restore" }).click();
+    await page.getByRole("button", { name: "Restore", exact: true }).click();
 
     await expect(block(page, "goes")).toHaveCount(0);
     await expect(block(page, "stays")).toBeVisible();

@@ -51,8 +51,10 @@ async function translatedPage(page: Page): Promise<string> {
 }
 
 async function layoutIn(page: Page, id: string, locale: string) {
+  // `fallback-locale`, as the server spells it: off, a language reads only
+  // its own value, never the default language's in its place.
   const read = await page.request.get(
-    `${ENTRIES}/${id}?locale=${locale}&fallbackLocale=none`
+    `${ENTRIES}/${id}?locale=${locale}&fallback-locale=none`
   );
   expect(read.ok()).toBe(true);
   return ((await read.json()) as { layout?: unknown }).layout;
