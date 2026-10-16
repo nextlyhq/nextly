@@ -75,6 +75,18 @@ function cwdProjectName(cwd: string): string {
 }
 
 /**
+ * Tell the developer what adding Nextly did to their Next config: the
+ * packages it added, or exactly what to add by hand when it could not change
+ * the file safely. One place prints it, so the line can move into a combined
+ * report without the patch knowing.
+ */
+function printNextConfigPatch(patch: NextConfigPatch): void {
+  const report = nextConfigReport(patch);
+  if (report.level === "warn") p.log.warn(report.message);
+  else p.log.info(report.message);
+}
+
+/**
  * Main entry point for scaffolding Nextly in a Next.js project.
  *
  * Two flows:
@@ -544,14 +556,8 @@ export async function createNextly(
         await generateEnv(cwd, envDatabase);
       }
       s.stop("Environment configured");
-      // Said after the spinner stops, so the line is not drawn over: what the
-      // app's Next config gained, or exactly what to add when it could not be
-      // changed safely.
-      if (nextConfigPatch) {
-        const report = nextConfigReport(nextConfigPatch);
-        if (report.level === "warn") p.log.warn(report.message);
-        else p.log.info(report.message);
-      }
+      // After the spinner stops, so the line is not drawn over.
+      if (nextConfigPatch) printNextConfigPatch(nextConfigPatch);
     } catch (error) {
       s.stop("Failed to generate configuration");
       telemetry.capture("scaffold_failed", {
