@@ -129,11 +129,20 @@ export type WidgetDisplay = CoreDisplay | ComponentDisplay;
  */
 const ROW = z.record(z.string(), z.unknown());
 
-/** A list's column, as `WidgetResultField` declares it. */
+/**
+ * A list's column, or a grouped answer's field, as `WidgetResultField` declares it. A choice's
+ * label is what a cell or a bar shows in place of the stored value, so an empty one is refused
+ * as source registration refuses it.
+ */
 const RESULT_FIELD = z.looseObject({
   name: z.string(),
   label: z.string().optional(),
   type: z.enum(WIDGET_SOURCE_FIELD_TYPES).optional(),
+  choices: z
+    .array(
+      z.looseObject({ value: z.string(), label: z.string().trim().min(1) })
+    )
+    .optional(),
 });
 
 /**
@@ -161,6 +170,8 @@ const DISPLAY_DATA_SCHEMAS: Record<CoreDisplay, z.ZodType> = {
       })
     ),
     truncated: z.boolean().optional(),
+    // The grouped field, whose choices name each bucket's value.
+    field: RESULT_FIELD.optional(),
   }),
   timeseries: z.looseObject({
     points: z.array(

@@ -43,6 +43,28 @@ recorded by its own stored row, whatever id the caller passed. A trusted Direct 
 (`overrideAccess`, the default) skips only the read permission. The document still has to
 exist and have drafts.
 
+### Single-document releases
+
+A release has a kind, set when it is made and never changed:
+
+- `release`, the default, holds any number of documents;
+- `single` is one document scheduled on its own, and holds exactly that one.
+
+```ts
+const release = await nextly.releases.create({
+  title: "Launch post",
+  kind: "single",
+});
+```
+
+The database holds a single-document release to one document, so the rule holds even when two
+requests add documents to it at once. Adding a second document is refused with a conflict that says to
+put several documents in an ordinary release instead. A single-document release can't be
+scheduled before its document is added. Once it's scheduled, its document can't be taken out:
+cancel the release instead. Releases made before kinds existed read as
+`release`; `nextly migrate` adds the column without rewriting them. The `kind` option is
+experimental.
+
 ## Listing releases
 
 <Callout type="info">
@@ -88,6 +110,7 @@ without a tab come latest first.
 | `tab`                               | `upcoming`, `attention`, `drafts` or `done`. Not combined with `state`     |
 | `reason`                            | With `tab=attention`: `stopped` or `overdue`, to read one part of that tab |
 | `state`                             | One lifecycle state, when you need it rather than a tab                    |
+| `kind`                              | `release` to leave out single-document releases, or `single` for only them |
 | `search`                            | Text in the title or description, up to 200 characters                     |
 | `order`                             | `soonest` or `latest`. Only with no tab or with `upcoming`                 |
 | `page`                              | The page, from 1                                                           |
@@ -159,7 +182,7 @@ const overdue = await nextly.releases.count({
 read every release, ask for each page in turn, up to `meta.totalPages` (at most 200 per
 page).
 
-`count()` takes the same tab, state, window and search as `find()`, and gives the same
+`count()` takes the same tab, state, kind, window and search as `find()`, and gives the same
 number as its `meta.total` without reading the releases.
 
 Filtering by `containing` (one document's releases) still works, and still comes soonest

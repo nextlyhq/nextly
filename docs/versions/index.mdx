@@ -73,13 +73,19 @@ change.
 
 A comparison can name two versions (`?from=4&to=6`), or a version and a **baseline** the
 server works out (`?to=6&baseline=previous`). The baselines are `previous` (the version
-before it in the same language), `published` (that language's latest published version)
-and `draft` (that language's current draft). With no `from` and no `baseline`, the
-comparison opens on the current draft against what is published when both exist, and
-otherwise on a version against the one before it (`?locale=` picks the language when no
-version is named). A language's first version has nothing before it, so that comparison is
-refused with `NO_BASELINE`. The response says which baseline it used. Baselines are
-experimental.
+before it in the same language), `published` (what that language serves now: its latest
+published version, while it is published) and `draft` (that language's current draft).
+With no `from` and no `baseline`, the comparison opens on the current draft against what is
+published when the language is published and has a draft, and otherwise on a version
+against the one before it (`?locale=` picks the language when no version is named).
+
+Some comparisons have nothing to start from, and are refused with `NO_BASELINE`:
+
+- a language's first version has nothing before it;
+- a language that has been unpublished, or a translation never published, has nothing
+  published to compare with, even though its history records an earlier publish.
+
+The response says which baseline it used. Baselines are experimental.
 
 Secret fields are masked in diffs. A password field's history never shows its values.
 

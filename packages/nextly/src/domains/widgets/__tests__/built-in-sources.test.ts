@@ -283,8 +283,42 @@ describe("built-in sources", () => {
     const status = getSource("collection:posts")?.fields.find(
       f => f.name === "status"
     );
-    // Typed `string`, because the column stores "draft"/"published" text.
-    expect(status).toEqual({ name: "status", type: "string" });
+    // Typed `string`, because the column stores "draft"/"published" text -- and labelled, value
+    // and all, so a heading reads "Status" and a row reads "Published".
+    expect(status).toEqual({
+      name: "status",
+      type: "string",
+      label: "Status",
+      choices: [
+        { value: "draft", label: "Draft" },
+        { value: "published", label: "Published" },
+      ],
+    });
+  });
+
+  it("names every system column the way a person reads it", () => {
+    // These columns have no config to bring a label from, so without one a heading prints the
+    // storage name. Each is the admin's own word for it.
+    registerBuiltInSources([
+      {
+        slug: "posts",
+        fields: [{ name: "title", type: "text", label: "Title" }],
+        timestamps: true,
+        status: true,
+      },
+    ]);
+
+    const labels = Object.fromEntries(
+      (getSource("collection:posts")?.fields ?? []).map(f => [f.name, f.label])
+    );
+    expect(labels).toEqual({
+      title: "Title",
+      id: "ID",
+      createdAt: "Created",
+      updatedAt: "Updated",
+      status: "Status",
+      firstPublishedAt: "First published",
+    });
   });
 
   it("withholds it from a collection that does NOT", () => {

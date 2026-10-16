@@ -14,6 +14,7 @@
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { and, eq, type Column } from "drizzle-orm";
 
+import type { FieldConfig } from "../../../collections/fields/types";
 import { keysToSnakeCase } from "../../../lib/case-conversion";
 import { stripImmutableSystemFields } from "../../../lib/immutable-system-fields";
 import type { CompanionSchema } from "../../i18n/runtime/companion-io";
@@ -21,6 +22,9 @@ import {
   splitLocalizedWrite,
   upsertCompanionRow,
 } from "../../i18n/runtime/companion-io";
+import { draftComponentValues } from "../../versions/draft-components";
+
+import { serializeJsonFields } from "./single-utils";
 
 /** The column-shaped halves a pending change persists to. */
 export interface PendingChangeParts {
@@ -28,6 +32,12 @@ export interface PendingChangeParts {
   main: Record<string, unknown>;
   /** Values belonging on the write locale's companion row. */
   companion: Record<string, unknown>;
+  /**
+   * The draft's component values, keyed by field name. They are stored in the
+   * component tables, not on either row, so the publish writes them with the
+   * component save.
+   */
+  components: Record<string, unknown>;
 }
 
 /**
@@ -55,21 +65,35 @@ export function splitPendingChange(
   companion: CompanionSchema | null,
   overrides?: Record<string, unknown>
 ): PendingChangeParts {
+  const draft = (snapshot ?? {}) as Record<string, unknown>;
+  const components = draftComponentValues(draft, fields as FieldConfig[]);
+  // The component values leave the row-shaped halves: neither row has a
+  // column for them. Own keys only, so a field named like an Object.prototype
+  // member stays with the row.
+  const rowValues = Object.fromEntries(
+    Object.entries(draft).filter(
+      ([key]) => !Object.prototype.hasOwnProperty.call(components, key)
+    )
+  );
+  // A draft holds JSON-backed fields parsed, as reads do; the row stores them
+  // encoded, as an ordinary write encodes them. Encoding is idempotent, so a
+  // draft written before drafts held the read shape passes through unchanged.
+  const encoded = serializeJsonFields(rowValues, fields as FieldConfig[]);
   const payload = stripImmutableSystemFields(
     {
-      ...(keysToSnakeCase(snapshot) as Record<string, unknown>),
+      ...(keysToSnakeCase(encoded) as Record<string, unknown>),
       ...(overrides ?? {}),
     },
     "single",
     tableName,
     fields
   );
-  if (!companion) return { main: payload, companion: {} };
+  if (!companion) return { main: payload, companion: {}, components };
   const { main, companion: companionValues } = splitLocalizedWrite(
     payload,
     companion.localizedFields
   );
-  return { main, companion: companionValues };
+  return { main, companion: companionValues, components };
 }
 
 /** The transaction surface a companion write needs. */

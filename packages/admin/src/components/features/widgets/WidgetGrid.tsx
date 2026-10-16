@@ -16,6 +16,9 @@
  *   refresh would interrupt each other, and a reader could not tell which
  *   announcement belonged to what they just did — so the grid speaks once, for
  *   the batch, and the cards stay silent.
+ * - **Leaving.** Customise mode keeps its changes on screen until Save, so
+ *   moving away with unsaved changes asks first, through the admin's own
+ *   unsaved-changes guard, which here also offers to save.
  *
  * @module components/features/widgets/WidgetGrid
  */
@@ -24,6 +27,7 @@ import { DndContext, closestCenter } from "@dnd-kit/core";
 import { applyWidgetSettings } from "nextly/config";
 import { useMemo, type ComponentProps } from "react";
 
+import { UnsavedChangesGuard } from "@admin/components/features/entries/EntryForm/UnsavedChangesGuard";
 import {
   useBranding,
   useBrandingStatus,
@@ -48,6 +52,7 @@ import {
 } from "./edit/useDashboardArrangement";
 import { useDashboardFocus } from "./edit/useDashboardFocus";
 import type { LayoutEditor } from "./edit/useLayoutEditor";
+import { useSaveRequest } from "./edit/useSaveRequest";
 import { resolveDashboardWidgets } from "./resolve-widgets";
 import { useGridAnnouncer } from "./useGridAnnouncer";
 import { useWidgetBatch } from "./useWidgetBatch";
@@ -298,6 +303,9 @@ export function WidgetGrid() {
   const { announcement } = gridAnnouncer;
   attach(gridAnnouncer);
 
+  // Saving from the bar and from the unsaved-changes prompt alike.
+  const saveRequest = useSaveRequest(arrangement.save, layout.isUnreadable);
+
   // Nothing DECLARED. Returned after the hooks above so the hook order is the
   // same on every render, whatever the branding says.
   // THREE outcomes, not two. Every card on the dashboard now arrives through
@@ -321,60 +329,79 @@ export function WidgetGrid() {
   }
 
   return (
-    <div className="space-y-4">
-      <DashboardEditChrome
-        editor={editor}
-        writeError={layout.writeError}
-        hasArrangement={hasArrangement}
-        // The read's own answer. The rule is subtler than it looks and it
-        // belongs with the data it is about; `hasStoredRow` carries it.
-        canReset={layout.hasStoredRow}
-        isUnreadable={layout.isUnreadable}
-        onStageReset={arrangement.stageReset}
-      />
-
-      <DndContext
-        sensors={arrangement.sensors}
-        // `closestCenter`: the cards are one list laid out as a grid, so the
-        // nearest card centre is the card the pointer is aiming at.
-        collisionDetection={closestCenter}
-        onDragEnd={arrangement.handleDragEnd}
-        accessibility={{ announcements: arrangement.announcements }}
-      >
-        <ArrangedGrid
-          rows={visible}
-          placements={editor.placements}
-          isDrawn={arrangement.isDrawn}
-          isEditing={editor.isEditing}
-          isWriting={editor.isWriting}
-          singleCardWriteBlocked={singleCardWriteBlocked(layout.isUnreadable)}
-          slots={slots}
-          cellSlots={cellSlots}
-          requested={requested}
-          updatedAtFor={updatedAtFor}
-          fetchingPlacementIds={fetchingPlacementIds}
-          retry={retry}
-          announcement={announcement}
+    // Asks before the reader leaves with unsaved changes: Save, Discard or
+    // Keep editing. 🔴 Still on while a save is on its way: until it has
+    // landed the changes exist only here, and a leave let through while it
+    // was pending lost them when it failed. Discarding says nothing, because
+    // the page is leaving and the next one speaks for itself; reload and
+    // close get the browser's own prompt.
+    <UnsavedChangesGuard
+      isDirty={editor.hasUnsavedChanges}
+      onDiscard={editor.cancel}
+      onSave={saveRequest.request}
+    >
+      <div className="space-y-4">
+        <DashboardEditChrome
+          editor={editor}
+          writeError={layout.writeError}
+          hasArrangement={hasArrangement}
+          // The read's own answer. The rule is subtler than it looks and it
+          // belongs with the data it is about; `hasStoredRow` carries it.
+          canReset={layout.hasStoredRow}
+          isUnreadable={layout.isUnreadable}
+          onStageReset={arrangement.stageReset}
+          on={{
+            begin: arrangement.begin,
+            cancel: arrangement.cancel,
+            addWidget: () => focus.request({ kind: "add" }),
+          }}
+          saveRequest={saveRequest}
           focus={focus}
-          gridRef={focus.gridRef}
-          on={cardActions(arrangement, removal, editor)}
         />
-      </DndContext>
 
-      <CustomizePicker
-        editor={editor}
-        byId={byId}
-        onRestore={removal.restore}
-        sectionRef={focus.addRef}
-      />
+        <DndContext
+          sensors={arrangement.sensors}
+          // `closestCenter`: the cards are one list laid out as a grid, so the
+          // nearest card centre is the card the pointer is aiming at.
+          collisionDetection={closestCenter}
+          onDragEnd={arrangement.handleDragEnd}
+          accessibility={{ announcements: arrangement.announcements }}
+        >
+          <ArrangedGrid
+            rows={visible}
+            placements={editor.placements}
+            isDrawn={arrangement.isDrawn}
+            isEditing={editor.isEditing}
+            isWriting={editor.isWriting}
+            singleCardWriteBlocked={singleCardWriteBlocked(layout.isUnreadable)}
+            slots={slots}
+            cellSlots={cellSlots}
+            requested={requested}
+            updatedAtFor={updatedAtFor}
+            fetchingPlacementIds={fetchingPlacementIds}
+            retry={retry}
+            announcement={announcement}
+            focus={focus}
+            gridRef={focus.gridRef}
+            on={cardActions(arrangement, removal, editor)}
+          />
+        </DndContext>
 
-      <RemovalNotice
-        title={removal.notice?.title}
-        isWriting={editor.isWriting}
-        undoRef={focus.undoRef}
-        onUndo={removal.undo}
-        onClose={removal.close}
-      />
-    </div>
+        <CustomizePicker
+          editor={editor}
+          byId={byId}
+          onRestore={removal.restore}
+          sectionRef={focus.addRef}
+        />
+
+        <RemovalNotice
+          title={removal.notice?.title}
+          isWriting={editor.isWriting}
+          undoRef={focus.undoRef}
+          onUndo={removal.undo}
+          onClose={removal.close}
+        />
+      </div>
+    </UnsavedChangesGuard>
   );
 }

@@ -50,6 +50,10 @@ import { relationshipValidationView } from "../../../shared/lib/field-transform"
 import { entryWriteContext } from "../../collections/services/stored-field-read";
 import { readComponentSubtrees } from "../../field-groups/read-component-subtrees";
 import type { CompanionSchema } from "../../i18n/runtime/companion-io";
+import {
+  resolveComponentFieldMap,
+  tagComponentTypes,
+} from "../../versions/tag-component-types";
 
 import { readCompanionValuesInTx } from "./apply-pending-change";
 
@@ -156,7 +160,23 @@ export async function liveStoredDocument(args: {
       });
     },
   });
-  return { ...args.row, ...translations, ...components };
+  // Tagged as a pending change holds its components. Judged untagged, every
+  // held component differs from the live one by its `_componentType` alone,
+  // and a publisher denied the field is refused over a draft that never
+  // touched it.
+  const service = args.fieldGroupDataService;
+  const componentSchemas = service
+    ? await resolveComponentFieldMap(args.fieldConfigs, componentSlug =>
+        service.getComponentFields(componentSlug, args.tx.getDrizzle())
+      )
+    : new Map<string, FieldConfig[]>();
+  return {
+    ...args.row,
+    ...translations,
+    ...tagComponentTypes(components, args.fieldConfigs, componentSlug =>
+      componentSchemas.get(componentSlug)
+    ),
+  };
 }
 
 /** What judging a promotion needs from the service that performs it. */
@@ -224,6 +244,13 @@ export interface PromoteGateContext {
    */
   status: "published";
   localizedFieldNames: Set<string>;
+  /**
+   * The fields each language holds a value of its own for, judged per
+   * language rather than as the last draft's shared value: the translated
+   * fields, and a field whose component is translated, since its translated
+   * values are written per language. Defaults to `localizedFieldNames`.
+   */
+  perLanguageFieldNames?: Set<string>;
   enforceLocalizedRequired: boolean;
 }
 
@@ -255,10 +282,11 @@ export async function assertDraftsMayBePromoted(
   // survives is the last one written, and that is the value to judge. A
   // translatable field is not shared: it goes to its own language's companion
   // row, so it never takes part in this.
+  const perLanguage = ctx.perLanguageFieldNames ?? ctx.localizedFieldNames;
   const shared: Record<string, unknown> = {};
   for (const { values } of logical) {
     for (const [key, value] of Object.entries(values)) {
-      if (!ctx.localizedFieldNames.has(key)) shared[key] = value;
+      if (!perLanguage.has(key)) shared[key] = value;
     }
   }
 
@@ -281,7 +309,7 @@ export async function assertDraftsMayBePromoted(
     const live = ctx.toLogical(asRecord(await ctx.liveStoredFor(locale)));
     const promoted: Record<string, unknown> = { ...live, ...shared };
     for (const [key, value] of Object.entries(values)) {
-      if (ctx.localizedFieldNames.has(key)) promoted[key] = value;
+      if (perLanguage.has(key)) promoted[key] = value;
     }
     Object.assign(promoted, ctx.callerData ?? {});
     // Written with the status it publishes, whatever its snapshot was saved
