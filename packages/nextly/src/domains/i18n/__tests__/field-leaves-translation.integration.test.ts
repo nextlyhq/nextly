@@ -21,6 +21,7 @@ import {
 } from "../../../plugins/test-nextly";
 import type { ServiceContainer } from "../../../services";
 import type { SingleEntryService } from "../../singles/services/single-entry-service";
+import { restoreI18nArchive } from "../migration/restore-archive";
 
 const LOCALES = ["en", "es", "ar"];
 const VALUES: Record<string, string> = {
@@ -350,4 +351,42 @@ describeEachDialect("a field that stops being translated", dialect => {
       expect(fields.find(f => f.name === "heading")?.localized).not.toBe(false);
     }
   );
+
+  it("brings the archived values back once the field is translated again", async () => {
+    const id = await seedCollection();
+    const shared = await handler().updateCollection(
+      { collectionName: "posts" },
+      { fields: SHARED }
+    );
+    expect(shared.success, JSON.stringify(shared)).toBe(true);
+    const restore = () =>
+      restoreI18nArchive({
+        adapter: current.adapter as unknown as Parameters<
+          typeof restoreI18nArchive
+        >[0]["adapter"],
+        collection: "posts",
+        companionTableName: "dc_posts_locales",
+        field: "heading",
+      });
+
+    // While the field is shared its values have nowhere to go, and the restore says so.
+    await expect(restore()).rejects.toThrow(/"heading" is not translated now/);
+
+    const translated = await handler().updateCollection(
+      { collectionName: "posts" },
+      { fields: TRANSLATED }
+    );
+    expect(translated.success, JSON.stringify(translated)).toBe(true);
+    const result = await restore();
+
+    expect(result.locales).toEqual(["ar", "es"]);
+    const back = await query<{ locale: string; heading: string | null }>(
+      `SELECT ${quote(dialect, "_locale")} AS locale, ${quote(dialect, "heading")} AS heading FROM ${quote(dialect, "dc_posts_locales")} ` +
+        `WHERE ${quote(dialect, "_parent")} = '${id}' AND ${quote(dialect, "_locale")} <> 'en' ORDER BY ${quote(dialect, "_locale")}`
+    );
+    expect(back).toEqual([
+      { locale: "ar", heading: VALUES.ar },
+      { locale: "es", heading: VALUES.es },
+    ]);
+  });
 });

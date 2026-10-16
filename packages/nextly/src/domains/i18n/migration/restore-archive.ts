@@ -20,6 +20,7 @@
 
 import { and, eq, lte } from "drizzle-orm";
 
+import { NextlyError } from "../../../errors/nextly-error";
 import { nextlyI18nArchiveTables } from "../../../schemas/nextly-i18n-archive";
 import { COMPANION_UPDATED_AT_COLUMN } from "../companion-columns";
 import type { CompanionIntrospectAdapter } from "../runtime/companion-io";
@@ -53,6 +54,11 @@ export interface RestoreArchiveArgs {
   companionTableName: string;
   /** Restrict the replay to one language. Omit to restore every archived language. */
   locale?: string;
+  /**
+   * Restrict the replay to one field's archived values, by its column name. A field archived
+   * when it stopped being translated is restored this way once it is translated again.
+   */
+  field?: string;
   /**
    * Delete the replayed rows from the archive once they are written. Default `false` — the
    * archive is kept so a restore can be re-run and so the audit trail survives. Callers that
@@ -94,16 +100,15 @@ interface ArchiveRow {
 export async function restoreI18nArchive(
   args: RestoreArchiveArgs
 ): Promise<RestoreArchiveResult> {
-  const { adapter, collection, companionTableName, locale } = args;
+  const { adapter, collection, companionTableName, locale, field } = args;
   const db = adapter.getDrizzle<ArchiveReadWriteDb>();
   const { nextlyI18nArchive } = nextlyI18nArchiveTables(adapter.dialect);
 
-  const where = locale
-    ? and(
-        eq(nextlyI18nArchive.collection, collection),
-        eq(nextlyI18nArchive.locale, locale)
-      )
-    : eq(nextlyI18nArchive.collection, collection);
+  const where = and(
+    eq(nextlyI18nArchive.collection, collection),
+    ...(locale !== undefined ? [eq(nextlyI18nArchive.locale, locale)] : []),
+    ...(field !== undefined ? [eq(nextlyI18nArchive.field, field)] : [])
+  );
 
   const rows = (await db
     .select({
@@ -118,6 +123,26 @@ export async function restoreI18nArchive(
 
   if (rows.length === 0) {
     return { rowsRead: 0, rowsRestored: 0, locales: [] };
+  }
+
+  // Every archived field needs a translated column to come back to. One the entity no longer
+  // translates has none, and replaying it would fail part-way, after other languages had already
+  // been written; so the replay is refused before it starts, naming the fields.
+  const fields = [...new Set(rows.map(r => r.field))];
+  const missing: string[] = [];
+  for (const name of fields) {
+    if (!(await companionHasColumn(adapter, companionTableName, name))) {
+      missing.push(name);
+    }
+  }
+  if (missing.length > 0) {
+    throw NextlyError.conflict({
+      reason: "state",
+      message:
+        `${missing.map(name => `"${name}"`).join(", ")} ${missing.length === 1 ? "is" : "are"} not translated now, ` +
+        `so the archived values have nowhere to go. Make ${missing.length === 1 ? "it" : "them"} translated again, then restore.`,
+      logContext: { collection, companionTableName, missing },
+    });
   }
 
   // Collapse the per-field archive rows back into one companion row per (entry, locale) so each
