@@ -810,3 +810,23 @@ describe("buildDesiredTableFromComponentFields - many-to-many index", () => {
     expect(table.indexes?.map(i => i.name)).not.toContain("idx_comp_hero_tags");
   });
 });
+
+describe("buildDesiredTableFromComponentFields - many-to-many column type", () => {
+  // The creating SQL writes a relationship as UUID on PostgreSQL. The desired column must name the
+  // same type, or an existing install plans a type change on a column nobody touched.
+  it("declares the many-to-many column as uuid on PostgreSQL, as the creating SQL does", () => {
+    const table = buildDesiredTableFromComponentFields(
+      "comp_hero",
+      [
+        {
+          name: "tags",
+          type: "relationship",
+          options: { target: "tags", relationType: "manyToMany" },
+        },
+      ] as never,
+      "postgresql",
+      { builtBy: "codeFirst" }
+    );
+    expect(table.columns.find(c => c.name === "tags")?.type).toBe("uuid");
+  });
+});
