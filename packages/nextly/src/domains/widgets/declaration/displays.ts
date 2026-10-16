@@ -10,8 +10,11 @@
  * @module domains/widgets/declaration/displays
  */
 
+import { z } from "zod";
+
+import { TIMESERIES_INTERVALS } from "../../collections/query/timeseries-interval";
 import {
-  type ARCHETYPE_OPS,
+  ARCHETYPE_OPS,
   DATA_ARCHETYPES,
   type DataWidgetArchetype,
 } from "../definition";
@@ -26,6 +29,26 @@ export const CORE_DISPLAYS = DATA_ARCHETYPES;
 
 /** One of core's displays that draws data. */
 export type CoreDisplay = DataWidgetArchetype;
+
+/** Whether a value names one of core's displays. */
+export const isCoreDisplay = (value: unknown): value is CoreDisplay =>
+  typeof value === "string" &&
+  (CORE_DISPLAYS as readonly string[]).includes(value);
+
+/**
+ * Why a core display cannot draw what a query with this op answers, or
+ * `undefined` when it can: the run-time half of {@link DisplayOp}, read from
+ * the same table, for a declaration no type checked.
+ */
+export function displayOpProblem(
+  display: CoreDisplay,
+  op: unknown
+): string | undefined {
+  const ops: readonly string[] = ARCHETYPE_OPS[display];
+  return typeof op === "string" && ops.includes(op)
+    ? undefined
+    : `its query's operation ${JSON.stringify(op) ?? String(op)} is not one the "${display}" display draws (${ops.join(", ")})`;
+}
 
 /**
  * Which query answer each display draws, read from the table registration
@@ -90,3 +113,57 @@ export interface ComponentDisplay {
 
 /** How a widget is displayed. */
 export type WidgetDisplay = CoreDisplay | ComponentDisplay;
+
+/**
+ * The data each core display draws, as a check that runs.
+ *
+ * The types above say this to a TypeScript author. These say it to everything
+ * else: a declaration written in plain JavaScript, whose example startup checks,
+ * and a data function's answer, which the card checks before drawing it. `zod`,
+ * because both are outside input at the point they are read.
+ *
+ * Loose about extra keys, as the types are: a query's answer carries `op`, and
+ * an answer may carry what the display does not draw.
+ */
+const ROW = z.record(z.string(), z.unknown());
+
+const DISPLAY_DATA_SCHEMAS: Record<CoreDisplay, z.ZodType> = {
+  metric: z.looseObject({
+    total: z.number().finite(),
+    atLeast: z.boolean().optional(),
+  }),
+  list: z.looseObject({ items: z.array(ROW) }),
+  table: z.looseObject({ items: z.array(ROW) }),
+  bars: z.looseObject({
+    buckets: z.array(
+      z.looseObject({
+        value: z.string().nullable(),
+        count: z.number().finite(),
+      })
+    ),
+    truncated: z.boolean().optional(),
+  }),
+  timeseries: z.looseObject({
+    points: z.array(
+      z.looseObject({ start: z.string(), count: z.number().finite() })
+    ),
+    interval: z.enum(TIMESERIES_INTERVALS),
+  }),
+};
+
+/**
+ * Why `value` is not data the display draws, or `undefined` when it is.
+ *
+ * Names the first place the shape differs, as a path, so the message says
+ * where to look: `buckets.0.count: expected a number`.
+ */
+export function displayDataProblem(
+  display: CoreDisplay,
+  value: unknown
+): string | undefined {
+  const parsed = DISPLAY_DATA_SCHEMAS[display].safeParse(value);
+  if (parsed.success) return undefined;
+  const issue = parsed.error.issues[0];
+  const where = issue.path.length > 0 ? `${issue.path.join(".")}: ` : "";
+  return `${where}${issue.message}`;
+}

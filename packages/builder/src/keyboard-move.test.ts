@@ -1,9 +1,12 @@
 import {
   clearBlocks,
+  COMPONENT_INSTANCE_TYPE,
   DEFAULT_SLOT,
   moveNode,
   registerBlocks,
+  type BlockDocument,
   type BlockNode,
+  type ComponentLookup,
 } from "@nextlyhq/blocks-engine";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -364,6 +367,59 @@ describe("the slot an indented block enters, read from the container's definitio
         "indent"
       )
     ).toBeNull();
+  });
+
+  /** A component instance whose component exposes these slots. */
+  function instanceOf(slots: readonly string[]) {
+    const components: ComponentLookup = new Map([
+      [
+        "comp",
+        {
+          formatVersion: 1,
+          kind: "component",
+          nodes: [leaf("inside")],
+          slots: Object.fromEntries(slots.map(slot => [slot, {}])),
+        } as unknown as BlockDocument,
+      ],
+    ]);
+    const instance: BlockNode = {
+      id: "box",
+      type: COMPONENT_INSTANCE_TYPE,
+      version: 1,
+      props: { componentId: "comp" },
+    };
+    return { components, instance };
+  }
+
+  it("uses the slot a component instance's component exposes", () => {
+    // An instance is not a registered block, so the registry knows nothing of
+    // it: its slots are its component's, and the lookup is where they are.
+    const { components, instance } = instanceOf(["default"]);
+    expect(
+      keyboardMovePosition([instance, leaf("b")], "b", "indent", components)?.to
+    ).toEqual({ parentId: "box", slot: "default", index: 0 });
+  });
+
+  it("offers no indent into an instance exposing several slots, none the default", () => {
+    const { components, instance } = instanceOf(["header", "footer"]);
+    expect(
+      keyboardMovePosition([instance, leaf("b")], "b", "indent", components)
+    ).toBeNull();
+  });
+
+  it("keeps the one slot a container already holds when there is no definition to read", () => {
+    // An instance read without the lookup, holding content in the slot its
+    // component exposes: that slot is rendered, so it is the one to keep.
+    const instance: BlockNode = {
+      id: "box",
+      type: COMPONENT_INSTANCE_TYPE,
+      version: 1,
+      props: { componentId: "comp" },
+      slots: { default: [leaf("x")] },
+    };
+    expect(
+      keyboardMovePosition([instance, leaf("b")], "b", "indent")?.to
+    ).toEqual({ parentId: "box", slot: "default", index: 1 });
   });
 
   it("falls back to the engine's default slot for a type with no definition", () => {

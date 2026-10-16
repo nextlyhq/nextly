@@ -26,7 +26,6 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import {
-  DEFAULT_COLUMN_COUNT,
   layoutIsArranged,
   type WidgetPlacement,
 } from "../../../domains/widgets/layout";
@@ -45,9 +44,8 @@ function placement(patch: Partial<WidgetPlacement> = {}): WidgetPlacement {
   return {
     id: "p1",
     widgetId: "core/team",
-    column: 0,
-    order: 0,
-    hidden: false,
+    width: "full",
+    removed: false,
     ...patch,
   };
 }
@@ -73,13 +71,15 @@ function layoutSuite(
     it("round-trips an arrangement", async () => {
       const scope = `u-roundtrip-${label}`;
       const placements = [
-        placement({ id: "a", order: 0, size: "md" }),
+        placement({ id: "a", width: "third" }),
         placement({
           id: "b",
           widgetId: "core/other",
-          column: 0,
-          order: 10,
-          hidden: true,
+          width: "quarter",
+          removed: true,
+          // Settings are opaque to core and must survive a real write as they
+          // were sent: nested values, arrays, and text outside ASCII.
+          config: { range: 30, labels: ["Ünïcode", "日本"], nested: { a: 1 } },
         }),
       ];
 
@@ -101,9 +101,8 @@ function layoutSuite(
       await service.saveLayout(
         "user",
         scope,
-        [placement({ hidden: true })],
+        [placement({ removed: true })],
         0,
-        DEFAULT_COLUMN_COUNT,
         false
       );
       const dismissed = await service.getLayout("user", scope);
@@ -119,7 +118,6 @@ function layoutSuite(
         scope,
         [placement()],
         dismissed.version,
-        DEFAULT_COLUMN_COUNT,
         true
       );
       const arranged = await service.getLayout("user", scope);
@@ -140,7 +138,7 @@ function layoutSuite(
       const second = await service.saveLayout(
         "user",
         scope,
-        [placement({ id: "moved", order: 5 })],
+        [placement({ id: "moved", width: "half" })],
         1
       );
 
@@ -244,7 +242,194 @@ function layoutSuite(
       // instead of colliding with it.
       expect(read.version).toBe(1);
     });
+
+    it("converts a columns-format row on read, keeping every card", async () => {
+      // Written as an earlier release wrote it, with every field that format
+      // stored, so the conversion is proven against a real row's encoding.
+      const scope = `u-convert-${label}`;
+      await service.saveLayout("user", scope, [placement()], 0);
+      await writeRawLayout(
+        service,
+        layoutRowId("user", scope),
+        JSON.stringify({
+          schemaVersion: 2,
+          columnCount: 3,
+          placements: [
+            {
+              id: "c1r1",
+              widgetId: "w/a",
+              column: 1,
+              order: 10,
+              hidden: false,
+              size: "sm",
+            },
+            {
+              id: "c0r0",
+              widgetId: "w/b",
+              column: 0,
+              order: 0,
+              hidden: true,
+              size: "xl",
+              height: "tall",
+              config: { range: 7 },
+            },
+            { id: "c1r0", widgetId: "w/c", column: 1, order: 0, hidden: false },
+            {
+              id: "c0r1",
+              widgetId: "w/d",
+              column: 0,
+              order: 10,
+              hidden: false,
+              size: "future-size",
+            },
+          ],
+        })
+      );
+
+      const read = await service.getLayout("user", scope);
+      expect(read.unreadable).toBe(false);
+      expect(read.layout?.placements).toEqual([
+        {
+          id: "c0r0",
+          widgetId: "w/b",
+          width: "twoThirds",
+          removed: true,
+          config: { range: 7 },
+        },
+        { id: "c1r0", widgetId: "w/c", width: "full", removed: false },
+        { id: "c0r1", widgetId: "w/d", width: "full", removed: false },
+        { id: "c1r1", widgetId: "w/a", width: "quarter", removed: false },
+      ]);
+    });
+
+    it("leaves the row's text and version exactly as they were when it reads", async () => {
+      // 🔴 A read never writes: a converted row is stored at its owner's next
+      // save. A read that wrote would race the version guard and a second tab.
+      const scope = `u-noread-write-${label}`;
+      await service.saveLayout("user", scope, [placement()], 0);
+      const raw = JSON.stringify({
+        schemaVersion: 2,
+        columnCount: 2,
+        placements: [
+          {
+            id: "a",
+            widgetId: "w/a",
+            column: 1,
+            order: 0,
+            hidden: false,
+            size: "lg",
+          },
+        ],
+      });
+      await writeRawLayout(service, layoutRowId("user", scope), raw);
+
+      await service.getLayout("user", scope);
+      await service.getLayout("user", scope);
+
+      const row = await readRawLayout(service, layoutRowId("user", scope));
+      expect(row).toEqual({ layout: raw, version: 1 });
+    });
+
+    it("removes the row on a reset staged against its version", async () => {
+      const scope = `u-reset-${label}`;
+      await service.saveLayout("user", scope, [placement()], 0);
+
+      await service.deleteLayout("user", scope, 1);
+
+      const read = await service.getLayout("user", scope);
+      expect(read.layout).toBeUndefined();
+      expect(read.version).toBe(0);
+    });
+
+    it("refuses a reset staged against an older version, keeping the newer row", async () => {
+      // 🔴 A stale tab resetting after another tab saved: the delete names the
+      // version it was staged against, and the database refuses it.
+      const scope = `u-stale-reset-${label}`;
+      await service.saveLayout("user", scope, [placement()], 0);
+      await service.saveLayout("user", scope, [placement({ id: "newer" })], 1);
+
+      await expect(service.deleteLayout("user", scope, 1)).rejects.toSatisfy(
+        (e: unknown) => NextlyError.isConflict(e)
+      );
+
+      const read = await service.getLayout("user", scope);
+      expect(read.version).toBe(2);
+      expect(read.layout?.placements[0].id).toBe("newer");
+    });
+
+    it("refuses a reset by a caller who saw no row, once one exists", async () => {
+      const scope = `u-reset-norow-${label}`;
+      await service.saveLayout("user", scope, [placement({ id: "kept" })], 0);
+
+      await expect(service.deleteLayout("user", scope, 0)).rejects.toSatisfy(
+        (e: unknown) => NextlyError.isConflict(e)
+      );
+      expect(
+        (await service.getLayout("user", scope)).layout?.placements[0].id
+      ).toBe("kept");
+    });
+
+    it("answers a reset of a row that is already gone as done", async () => {
+      // The state the caller asked for already holds.
+      const scope = `u-reset-gone-${label}`;
+      await expect(
+        service.deleteLayout("user", scope, 0)
+      ).resolves.toBeUndefined();
+      await service.saveLayout("user", scope, [placement()], 0);
+      await service.deleteLayout("user", scope, 1);
+      await expect(
+        service.deleteLayout("user", scope, 1)
+      ).resolves.toBeUndefined();
+    });
   });
+}
+
+/** The service's own database handle and table, for writing what it never would. */
+function internalsOf(service: WidgetLayoutService) {
+  return service as unknown as {
+    db: {
+      update: (t: unknown) => {
+        set: (v: unknown) => { where: (w: unknown) => Promise<unknown> };
+      };
+      select: (fields: unknown) => {
+        from: (t: unknown) => {
+          where: (w: unknown) => Promise<Array<Record<string, unknown>>>;
+        };
+      };
+    };
+    table: { id: unknown; layout: unknown; version: unknown };
+  };
+}
+
+/** Writes a raw payload, bypassing the service's own encoder. */
+async function writeRawLayout(
+  service: WidgetLayoutService,
+  id: string,
+  layout: string
+): Promise<void> {
+  const internals = internalsOf(service);
+  const { eq } = await import("drizzle-orm");
+  await internals.db
+    .update(internals.table)
+    .set({ layout })
+    .where(eq(internals.table.id as never, id));
+}
+
+/** The row's stored text and version, exactly as the database holds them. */
+async function readRawLayout(
+  service: WidgetLayoutService,
+  id: string
+): Promise<{ layout: unknown; version: unknown }> {
+  const internals = internalsOf(service);
+  const { eq } = await import("drizzle-orm");
+  const rows = await internals.db
+    .select({
+      layout: internals.table.layout,
+      version: internals.table.version,
+    })
+    .from(internals.table)
+    .where(eq(internals.table.id as never, id));
+  return { layout: rows[0]?.layout, version: rows[0]?.version };
 }
 
 /** Writes a payload the decoder must refuse, bypassing the service's own guard. */
@@ -252,19 +437,7 @@ async function corruptLayout(
   service: WidgetLayoutService,
   id: string
 ): Promise<void> {
-  const internals = service as unknown as {
-    db: {
-      update: (t: unknown) => {
-        set: (v: unknown) => { where: (w: unknown) => Promise<unknown> };
-      };
-    };
-    table: { id: unknown };
-  };
-  const { eq } = await import("drizzle-orm");
-  await internals.db
-    .update(internals.table)
-    .set({ layout: "{not json" })
-    .where(eq(internals.table.id as never, id));
+  await writeRawLayout(service, id, "{not json");
 }
 
 // ---------------------------------------------------------------------------

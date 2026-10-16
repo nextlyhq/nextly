@@ -14,6 +14,7 @@ import type { LimitRule } from "../domains/limits/limit-rules";
 import type { SchemaHook } from "../domains/schema/extension/draft";
 import type { TableDefinition } from "../domains/schema/extension/dsl";
 import type { PluginMigration } from "../domains/schema/migrate/plugin/plugin-migration";
+import type { DashboardContribution } from "../domains/widgets/declaration/dashboard";
 import type { FieldGroupConfig } from "../field-groups/config/types";
 import type { SingleConfig } from "../singles/config/types";
 
@@ -740,6 +741,15 @@ export interface PluginContributions {
    * drawn. `PluginAdminContributions` documents each.
    */
   admin?: PluginAdminContributions;
+  /**
+   * @experimental The plugin's dashboard: widgets declared with
+   * `defineWidget()`, which core checks at startup with every other
+   * declaration, keeps on the server with their data code, and publishes to
+   * the admin as data. `suggest` and `alternatives` ask for places on the
+   * default dashboard; core and the site config decide. Beside today's
+   * `admin.widgets` and `widgetSources`, which keep working.
+   */
+  dashboard?: DashboardContribution;
   /**
    * @experimental Auth extensibility: auth-flow hooks, challenge
    * definitions, and auth-page UI. Strategies are app-opt-in (defineConfig
