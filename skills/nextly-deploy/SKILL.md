@@ -165,11 +165,13 @@ npm run build         # runs nextly migrate against it, then next build
 npm start             # next start, on http://localhost:3000
 ```
 
-Export every other variable the config reads as well: the storage
-credentials from step 5 (such as `BLOB_READ_WRITE_TOKEN`, or the S3 keys)
-are needed to load `nextly.config.ts` at all, and the build stops without
-them. Where those exist only in the host's settings and cannot be brought to
-your machine, use the protected-host path below instead.
+Export every other variable the config reads as well. With Vercel Blob,
+`BLOB_READ_WRITE_TOKEN` is needed to load `nextly.config.ts` at all, and the
+build stops without it. With S3, the bucket and region are needed to load
+it; the keys can come from the AWS credential chain instead (an IAM role, a
+profile), so a build that succeeds says nothing about them. Where a value
+exists only in the host's settings and cannot be brought to your machine, use
+the protected-host path below instead.
 
 Open `http://localhost:3000/admin/setup`, create the account, stop the
 server, then deploy. If you cannot reach the production database from your

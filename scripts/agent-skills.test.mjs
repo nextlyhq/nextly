@@ -450,6 +450,15 @@ describe("keeping contributor skills out of what people building with Nextly ins
     ]);
   });
 
+  // The skill format allows a name to start with a digit, so the README's
+  // table must be read the same way, or a correctly listed skill is reported.
+  it("reads a listed skill whose name starts with a digit", () => {
+    repository(["3d-tools"]);
+    skill(SKILLS_HOME, "a", internal("a"));
+    skill(USER_SKILLS_HOME, "3d-tools", "---\nname: 3d-tools\ndescription: when working with 3D assets\n---\n\nModels.\n");
+    expect(userSkillSeparation(base).problems).toEqual([]);
+  });
+
   it("refuses a skills/ without the README that lists its skills", () => {
     repository();
     rmSync(join(base, USER_SKILLS_HOME, "README.md"));

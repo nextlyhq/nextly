@@ -399,7 +399,8 @@ function readmeDisagreements(base, files, offered) {
  */
 export function skillTableNames(markdown) {
   const names = new Set();
-  for (const row of markdown.matchAll(/^\|\s*`([a-z][a-z0-9-]*)`\s*\|/gm)) {
+  // The first character may be a digit, as the skill format's names allow.
+  for (const row of markdown.matchAll(/^\|\s*`([a-z0-9][a-z0-9-]*)`\s*\|/gm)) {
     names.add(row[1]);
   }
   return names;
