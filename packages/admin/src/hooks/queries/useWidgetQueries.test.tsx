@@ -224,6 +224,29 @@ describe("useWidgetQueries", () => {
     });
   });
 
+  it("drops the unavailable code from a refusal with no usable message", async () => {
+    // A slot missing its message is a broken answer that may recover; kept, the code would hide
+    // that behind the unavailable state, which offers no Retry.
+    vi.mocked(protectedApi.post).mockResolvedValue({
+      results: [{ ok: false, error: "", code: "unavailable" }],
+    });
+
+    const { result } = renderHook(
+      () =>
+        useWidgetQueries([
+          { placementId: "core/broken", query: countQuery("collection:posts") },
+        ]),
+      { wrapper }
+    );
+
+    await waitFor(() =>
+      expect(result.current.slots["core/broken"]).toBeDefined()
+    );
+    const slot = result.current.slots["core/broken"];
+    expect(slot?.ok).toBe(false);
+    expect(slot).not.toHaveProperty("code");
+  });
+
   it("issues no request at all when there is nothing to ask", async () => {
     const { result } = renderHook(() => useWidgetQueries([]), { wrapper });
 

@@ -44,9 +44,10 @@ export function CardSkeleton({
       className="grid gap-2.5"
       data-testid="card-skeleton"
       data-shape={shape}
-      // A status, so assistive technology hears "Loading" once rather than nothing.
-      role="status"
     >
+      {/* Read when a reader reaches the card, not announced: the body is already
+          `aria-busy`, and the grid's one live region announces the batch, so a
+          status per card would speak once for every card loading at the same time. */}
       <span className="sr-only">Loading</span>
       {shape === "figure" && (
         <>

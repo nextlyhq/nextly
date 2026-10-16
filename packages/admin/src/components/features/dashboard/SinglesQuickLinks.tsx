@@ -11,7 +11,7 @@ import { buildRoute, ROUTES } from "@admin/constants/routes";
 import { useSingles } from "@admin/hooks/queries";
 import type { ApiSingle } from "@admin/types/entities";
 
-import { CardError, CardSkeleton } from "../widgets/frame/states";
+import { CardEmpty, CardError, CardSkeleton } from "../widgets/frame/states";
 
 /**
  * Dashboard surface listing all configured Singles. Mirrors the grid +
@@ -90,6 +90,16 @@ export const SinglesQuickLinks: React.FC = () => {
         title="Singles"
         message="The Singles couldn't be loaded."
         onRetry={() => void refetch()}
+      />
+    );
+  }
+  // Nothing to list: the frame's empty state, so the card says what will appear rather than
+  // drawing a blank body under its title.
+  if (singles.length === 0) {
+    return (
+      <CardEmpty
+        title="No Singles yet"
+        detail="Singles you can edit appear here."
       />
     );
   }

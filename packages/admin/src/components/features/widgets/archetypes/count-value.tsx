@@ -15,6 +15,7 @@
 import type { SizeTier } from "@nextlyhq/ui/format";
 import type { JSX } from "react";
 
+import { CardFigure } from "../frame/figure";
 import { cardNumber } from "../frame/format";
 
 /**
@@ -50,14 +51,8 @@ export function CountValue({
   /** The card's size tier: only `small` compacts ("1.2k"). */
   tier?: SizeTier;
 }): JSX.Element {
-  // One formatter for the drawn form and the heard one, so a compact "1.2k" is still heard as
-  // "1,248" and a floor's visible "+" is heard as "or more".
-  const figure = cardNumber(total, { floor: atLeast === true, tier });
-  if (figure.text === figure.label) return <>{figure.text}</>;
-  return (
-    <>
-      <span aria-hidden="true">{figure.text}</span>
-      <span className="sr-only">{figure.label}</span>
-    </>
-  );
+  // The frame's one figure, so a count is written for the card's measured tier like every
+  // other number on it: a compact "1.2k" is still heard as "1,248", and a floor's "+" as "or
+  // more".
+  return <CardFigure value={total} floor={atLeast === true} tier={tier} />;
 }

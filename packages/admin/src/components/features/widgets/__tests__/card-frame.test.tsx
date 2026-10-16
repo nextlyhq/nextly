@@ -7,6 +7,7 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
+import { CountValue } from "../archetypes/count-value";
 import { frameIds } from "../frame/ids";
 import { UNAVAILABLE_DETAIL, UNAVAILABLE_TITLE } from "../frame/states";
 import { WidgetCard } from "../WidgetCard";
@@ -25,6 +26,24 @@ describe("the card frame", () => {
     expect(
       screen.getByRole("region", { name: "Recent activity" })
     ).toHaveAttribute("data-card-id", "c-1");
+  });
+
+  it("keeps its name when the card's id holds a space, and keeps two such ids apart", () => {
+    // `aria-labelledby` reads a space as a separator, so an id spelled raw would point at two
+    // elements that do not exist and the region would lose its name.
+    render(
+      <WidgetCard title="Recent activity" cardId="my card">
+        <p>body</p>
+      </WidgetCard>
+    );
+    expect(
+      screen.getByRole("region", { name: "Recent activity" })
+    ).toHaveAttribute("data-card-id", "my card");
+    expect(frameIds("my card").titleId).not.toMatch(/\s/);
+    // An id already spelled like an encoded one is a different card, so a different DOM id.
+    expect(frameIds("my_20_card").titleId).not.toBe(
+      frameIds("my card").titleId
+    );
   });
 
   it("draws the leading slot before the title and the header action after it", () => {
@@ -84,6 +103,13 @@ describe("the card frame", () => {
       "true"
     );
     expect(screen.queryByText("never shown")).toBeNull();
+    // Not a live region of its own: the grid's one live region announces the batch, and a
+    // status per card would speak once for every card loading together.
+    expect(
+      screen
+        .getByTestId("card-skeleton")
+        .closest('[role="status"], [aria-live]')
+    ).toBeNull();
   });
 
   it("says what an empty card will show and offers at most its one action", () => {
@@ -150,5 +176,46 @@ describe("the card frame", () => {
       </WidgetCard>
     );
     expect(screen.queryByRole("button", { name: /Retry/ })).toBeNull();
+  });
+});
+
+describe("a card's size tier", () => {
+  /** Draws a card whose rendered width is `width`, holding one count of 1,248. */
+  function drawAt(width: number) {
+    const measure = vi
+      .spyOn(HTMLElement.prototype, "getBoundingClientRect")
+      .mockReturnValue({ width } as DOMRect);
+    try {
+      render(
+        <WidgetCard title="Posts" cardId="c-tier">
+          <CountValue total={1248} />
+        </WidgetCard>
+      );
+    } finally {
+      measure.mockRestore();
+    }
+  }
+
+  it("is measured from the width the card is drawn at, and compacts a figure in a small card", () => {
+    drawAt(300);
+
+    expect(screen.getByRole("region", { name: "Posts" })).toHaveAttribute(
+      "data-tier",
+      "small"
+    );
+    // Drawn compact, heard in full.
+    expect(screen.getByText("1.2k")).toHaveAttribute("aria-hidden", "true");
+    expect(screen.getByText("1,248")).toHaveClass("sr-only");
+  });
+
+  it("shows the full figure in a card wide enough for it", () => {
+    drawAt(900);
+
+    expect(screen.getByRole("region", { name: "Posts" })).toHaveAttribute(
+      "data-tier",
+      "large"
+    );
+    expect(screen.getByText("1,248")).not.toHaveClass("sr-only");
+    expect(screen.queryByText("1.2k")).toBeNull();
   });
 });

@@ -19,6 +19,7 @@
  * @module components/features/widgets/archetypes/bars
  */
 
+import { CardFigure } from "../frame/figure";
 import { cardNumber } from "../frame/format";
 
 import { ChartFrame, type ChartRow } from "./chart-frame";
@@ -80,12 +81,13 @@ export const barsBody: ArchetypeBody = (result, definition) => {
   );
 
   if (rows.length === 0) {
-    // The frame's one empty state, worded for groups.
+    // The frame's one empty state, worded for groups. Source-neutral: the card may read any
+    // collection's, system's or plugin's data, so it names no kind of row it cannot know.
     return {
       ok: true,
       empty: {
         title: "Nothing to compare yet",
-        detail: "No entries matched this card.",
+        detail: "Groups appear here once something matches this card.",
       },
     };
   }
@@ -148,7 +150,7 @@ export const barsBody: ArchetypeBody = (result, definition) => {
                     {row.label}
                   </span>
                   <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
-                    {cardNumber(row.count).text}
+                    <CardFigure value={row.count} />
                   </span>
                 </div>
                 {/* The track is always full width, so the bars share one

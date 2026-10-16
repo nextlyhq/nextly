@@ -30,7 +30,16 @@ export type ArchetypeOutcome =
    * still type-checks and finds nothing.
    */
   | { ok: true; empty: CardEmptyContent; node?: undefined }
-  | { ok: false; message: string };
+  | {
+      ok: false;
+      message: string;
+      /**
+       * Set when the card cannot draw because its source is not available to this reader --
+       * every cell of a `stats` card answered "unavailable" -- so the frame shows its one "Not
+       * available to you" state, with no Retry, rather than an error.
+       */
+      unavailable?: true;
+    };
 
 export type ArchetypeBody = (
   result: WidgetResult,

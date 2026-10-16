@@ -13,7 +13,7 @@ import { cn } from "@admin/lib/utils";
 import type { CollectionCount } from "@admin/types/dashboard/stats";
 import type { ApiCollection } from "@admin/types/entities";
 
-import { cardNumber } from "../widgets/frame/format";
+import { CardFigure } from "../widgets/frame/figure";
 import { CardError, CardSkeleton } from "../widgets/frame/states";
 
 interface CollectionGroup {
@@ -103,7 +103,7 @@ function CollectionCard({
             <div className="space-y-1">
               {/* The card type ramp's big number, through the one card formatter. */}
               <span className="text-2xl font-semibold tabular-nums tracking-tight text-foreground leading-none transition-colors">
-                {cardNumber(item.count).text}
+                <CardFigure value={item.count} />
               </span>
               {/* A label, not a heading, and wrapped rather than clipped: the frame's title is
                   the card's one heading, and a collection's name is read in full. */}
@@ -176,7 +176,7 @@ export const CollectionQuickLinks: React.FC = () => {
             <h3 className="flex items-baseline gap-2 text-xs font-medium text-muted-foreground">
               {group.name || "Collections"}
               <span className="tabular-nums">
-                {cardNumber(group.collections.length).text}
+                <CardFigure value={group.collections.length} />
               </span>
             </h3>
           )}

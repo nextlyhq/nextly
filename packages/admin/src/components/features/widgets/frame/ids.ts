@@ -15,5 +15,21 @@ export interface FrameIds {
 }
 
 export function frameIds(cardId: string): FrameIds {
-  return { titleId: `card-${cardId}-title` };
+  return { titleId: `card-${domSafe(cardId)}-title` };
+}
+
+/**
+ * A card id spelled so it is one valid DOM id, and still a different one for every card id.
+ *
+ * A placement id is opaque and may hold any character, a space included -- and `aria-labelledby`
+ * reads a space as a separator, so `card-my card-title` would name two elements that do not
+ * exist and the card would lose its accessible name. Every character outside `[A-Za-z0-9-]` is
+ * written as `_<hex code point>_`, the underscore included, so two different ids can never come
+ * out the same. The id itself stays as it is in `data-card-id`.
+ */
+function domSafe(cardId: string): string {
+  return cardId.replace(
+    /[^A-Za-z0-9-]/gu,
+    char => `_${char.codePointAt(0)?.toString(16) ?? ""}_`
+  );
 }
