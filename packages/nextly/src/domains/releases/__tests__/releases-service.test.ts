@@ -633,6 +633,11 @@ describe("ReleasesService.find pages the list", () => {
       { page: 2 ** 52, limit: 200 },
     ],
     ["a search that is not text", { search: 42 }],
+    ["a window bound that is not a Date", { scheduledAfter: "tomorrow" }],
+    [
+      "a window bound that is an invalid Date",
+      { scheduledBefore: new Date("nope") },
+    ],
   ])("refuses %s, naming it, before reading anything", async (_, query) => {
     // Each would otherwise answer with rows that look right: an unknown tab or
     // state matches nothing and reads as "no releases", and an order a tab

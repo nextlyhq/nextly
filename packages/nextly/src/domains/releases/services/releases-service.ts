@@ -443,6 +443,24 @@ function assertKnown(
 }
 
 /**
+ * Refuse a window bound that is not a real instant.
+ *
+ * The Direct API is reachable from JavaScript, where `scheduledAfter:
+ * "tomorrow"` or an invalid `Date` would otherwise reach the timestamp
+ * comparison and fail there as a database error, or compare differently per
+ * dialect.
+ */
+function assertInstant(name: string, value: unknown): void {
+  if (value === undefined) return;
+  if (!(value instanceof Date) || !Number.isFinite(value.getTime())) {
+    throw NextlyError.invalidInput({
+      message: `\`${name}\` must be a valid Date.`,
+      logContext: { reason: `invalid-${name}` },
+    });
+  }
+}
+
+/**
  * Refuse filters that are each valid but ask two questions at once.
  *
  * A tab is already a set of states, so a tab with a state is a second way of
@@ -1004,6 +1022,8 @@ export class ReleasesService {
     assertKnown("state", query.state, RELEASE_STATES);
     assertKnown("order", query.order, RELEASE_LIST_ORDERS);
     assertKnown("reason", query.reason, RELEASE_ATTENTION_REASONS);
+    assertInstant("scheduledAfter", query.scheduledAfter);
+    assertInstant("scheduledBefore", query.scheduledBefore);
     assertListCombination(query);
     return {
       tab: query.tab,

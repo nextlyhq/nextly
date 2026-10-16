@@ -43,6 +43,8 @@ it returns the first 50 releases, where it used to return every match. Read
 `result.items` where you read the array and `result.meta.total` for the number
 of matching releases; to process every release, ask for each page in turn
 (`page: 1, 2, …` up to `result.meta.totalPages`, at most 200 per page).
+`limit` must now be at least 1: a `limit: 0` call used to answer an empty list,
+and a caller that only wanted the number of releases asks `count()` instead.
 
 Scheduled releases listed without an `order` now come soonest first rather than
 furthest out first. A release's documents come back in the order they were
