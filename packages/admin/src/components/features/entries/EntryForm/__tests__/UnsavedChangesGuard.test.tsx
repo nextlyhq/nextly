@@ -8,7 +8,11 @@
 import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
-import { render, screen } from "@admin/__tests__/utils";
+import { act, render, screen } from "@admin/__tests__/utils";
+import {
+  clearDocumentViews,
+  registerDocumentViews,
+} from "@admin/lib/plugins/document-view-registry";
 
 import {
   UnsavedChangesGuard,
@@ -292,6 +296,17 @@ describe("UnsavedChangesGuard", () => {
 });
 
 describe("moving between a document and its own views", () => {
+  // A view is an address the admin registered, not any third segment: the
+  // registry answers which paths are views, as it does for the router.
+  beforeEach(() => {
+    registerDocumentViews([
+      { fieldType: "blocks", path: "builder", component: "@acme/pb#View" },
+    ]);
+  });
+  afterEach(() => {
+    clearDocumentViews();
+  });
+
   /** Starts dirty at `from`, moves to `to`, and says whether it was asked. */
   async function moveDirty(from: string, to: string): Promise<boolean> {
     window.history.pushState(null, "", from);
@@ -353,9 +368,57 @@ describe("moving between a document and its own views", () => {
       "/admin/collections/pages/1/builder",
       "/admin/collections/pages/1/builder?locale=de",
     ],
+    [
+      // Nothing answers it, so the page that does unmounts the form.
+      "a mistyped view",
+      "/admin/collections/pages/1",
+      "/admin/collections/pages/1/buidler",
+    ],
   ])("still asks before moving to %s", async (_case, from, to) => {
     expect(await moveDirty(from, to)).toBe(true);
     expect(window.location.pathname).toBe(from.split("?")[0]);
+  });
+
+  /**
+   * Arrives at `to` by way of `from`, dirty, then presses Back, and says
+   * whether it was asked.
+   */
+  async function backDirty(from: string, to: string): Promise<boolean> {
+    window.history.pushState(null, "", from);
+    window.history.pushState(null, "", to);
+    render(
+      <UnsavedChangesGuard isDirty>
+        <span />
+      </UnsavedChangesGuard>
+    );
+    await act(async () => {
+      window.history.back();
+      await new Promise(resolve =>
+        window.addEventListener("popstate", resolve, { once: true })
+      );
+    });
+    return screen.queryByRole("alertdialog") !== null;
+  }
+
+  it("stays, without asking, on Back from a view to its own document", async () => {
+    expect(
+      await backDirty(
+        "/admin/collections/pages/1",
+        "/admin/collections/pages/1/builder"
+      )
+    ).toBe(false);
+    expect(window.location.pathname).toBe("/admin/collections/pages/1");
+  });
+
+  it("still asks on Back to another document", async () => {
+    // The control: an exemption that let every Back through passes the case
+    // above.
+    expect(
+      await backDirty(
+        "/admin/collections/pages/2",
+        "/admin/collections/pages/1/builder"
+      )
+    ).toBe(true);
   });
 });
 
