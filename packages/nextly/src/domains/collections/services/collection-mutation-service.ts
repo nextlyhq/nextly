@@ -128,6 +128,7 @@ import {
   companionRowExists,
   populateCompanionFields,
   populateCompanionFieldsAllLocales,
+  readCompanionLocaleStatus,
   readCompanionLocaleStatusAll,
   isBlank,
 } from "../../i18n/companion-join";
@@ -1547,6 +1548,9 @@ export class CollectionMutationService extends BaseService {
     // column on a collection without it fails the whole write, so every read of
     // it must be gated on this.
     hasStatus: boolean;
+    // The companion's runtime Drizzle table, for reads of the locale's own row
+    // (its `_status`) through the shared typed reader.
+    companionTable: unknown;
   } | null> {
     if (!this.localization) return null;
     const companion = await this.fileManager.loadCompanionSchema(
@@ -1696,6 +1700,7 @@ export class CollectionMutationService extends BaseService {
       companionData,
       localizedFieldValues,
       hasStatus: companion.hasStatus,
+      companionTable: companion.table,
     };
   }
 
@@ -2389,30 +2394,27 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
-   * The write locale's per-locale `_status`, or null when the companion row has
-   * none.
-   *
-   * Read with raw `tx.execute` (matching upsertCompanionRow / publishAllLocales):
-   * the companion `_locales` table is not in the Drizzle schema, and the CRUD
-   * helpers camelCase result keys, which would rename `_status`.
+   * The write locale's committed per-locale `_status`, or null when its
+   * companion row has none. Through the shared typed reader on the write
+   * transaction's Drizzle handle, so it sees the transaction's own writes and
+   * is ordered behind the main-row lock taken before it.
    */
-  private async readCompanionStatus(
+  private readLocaleStatus(
     tx: TransactionContext,
-    companionTableName: string,
-    entryId: string,
-    locale: string
+    localizedUpdate: {
+      companionTable: unknown;
+      companionTableName: string;
+      writeLocale: string;
+    },
+    entryId: string
   ): Promise<string | null> {
-    const isMysqlDialect = this.dialect === "mysql";
-    const quote = (id: string) => (isMysqlDialect ? `\`${id}\`` : `"${id}"`);
-    const placeholder = (i: number) =>
-      this.dialect === "postgresql" ? `$${i}` : "?";
-    const rows = await tx.execute<{ _status?: unknown }>(
-      `SELECT ${quote("_status")} FROM ${quote(companionTableName)} ` +
-        `WHERE ${quote("_parent")} = ${placeholder(1)} AND ${quote("_locale")} = ${placeholder(2)} LIMIT 1`,
-      [entryId, locale]
+    return readCompanionLocaleStatus(
+      tx.getDrizzle<Parameters<typeof readCompanionLocaleStatus>[0]>(),
+      localizedUpdate.companionTable,
+      entryId,
+      localizedUpdate.writeLocale,
+      cachedCompanionReadiness(this.adapter, localizedUpdate.companionTableName)
     );
-    const status = rows[0]?._status;
-    return typeof status === "string" ? status : null;
   }
 
   /**
@@ -6917,11 +6919,10 @@ export class CollectionMutationService extends BaseService {
             // status, and querying it otherwise fails the whole write.
             committedLocaleStatus =
               localizedUpdate && localizedUpdate.hasStatus
-                ? await this.readCompanionStatus(
+                ? await this.readLocaleStatus(
                     tx,
-                    localizedUpdate.companionTableName,
-                    params.entryId,
-                    localizedUpdate.writeLocale
+                    localizedUpdate,
+                    params.entryId
                   )
                 : null;
             const previousCompanionStatus = committedLocaleStatus;
@@ -7420,11 +7421,10 @@ export class CollectionMutationService extends BaseService {
             localizedUpdate &&
             typeof localizedUpdate.companionData._status === "string"
           ) {
-            localizedPreviousStatus = await this.readCompanionStatus(
+            localizedPreviousStatus = await this.readLocaleStatus(
               tx,
-              localizedUpdate.companionTableName,
-              params.entryId,
-              localizedUpdate.writeLocale
+              localizedUpdate,
+              params.entryId
             );
           }
 
@@ -9844,11 +9844,10 @@ export class CollectionMutationService extends BaseService {
         // Gated on `hasStatus`: companion `_status` exists only on collections
         // migrated for per-locale status, and querying it otherwise fails the
         // whole write.
-        previousCompanionStatus = await this.readCompanionStatus(
+        previousCompanionStatus = await this.readLocaleStatus(
           tx,
-          localizedUpdate.companionTableName,
-          entryId,
-          localizedUpdate.writeLocale
+          localizedUpdate,
+          entryId
         );
         // A write moves the published state in two places, and the gate must
         // fire if EITHER makes a transition the caller cannot make. The main

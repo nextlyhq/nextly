@@ -24,8 +24,10 @@ import {
   RELEASES_RESOURCE,
   ReleasesService,
 } from "../../domains/releases/services/releases-service";
+import { resolveSingleForRequest } from "../../domains/singles/services/ensure-runtime-table";
 import { NextlyError } from "../../errors";
 import type { CacheRevalidator } from "../../revalidation/types";
+import type { DynamicSingleRecord } from "../../schemas/dynamic-singles/types";
 import { hasPermission } from "../../services/lib/permissions";
 import { container } from "../container";
 
@@ -33,6 +35,7 @@ import type { RegistrationContext } from "./types";
 
 export function registerReleaseServices({
   adapter,
+  logger,
 }: RegistrationContext): void {
   container.registerSingleton<ReleasesService>(
     "releasesService",
@@ -72,7 +75,7 @@ export function registerReleaseServices({
               // read that writes nothing.
               if (
                 target.scopeKind === "single" &&
-                !(await singleRowExists(adapter, target.scopeSlug))
+                !(await singleRowExists(adapter, target.scopeSlug, logger))
               ) {
                 return null;
               }
@@ -249,13 +252,24 @@ async function nullWhenRefused<T>(
  */
 async function singleRowExists(
   adapter: RegistrationContext["adapter"],
-  slug: string
+  slug: string,
+  logger: RegistrationContext["logger"]
 ): Promise<boolean> {
   if (!container.has("singleRegistryService")) return false;
-  const registry = container.get<{
-    getSingleBySlug(slug: string): Promise<{ tableName?: string } | null>;
-  }>("singleRegistryService");
-  const table = (await registry.getSingleBySlug(slug))?.tableName;
+  // Resolved the way every request-scoped Single read opens: the registry row,
+  // and its runtime table registered in THIS process. A worker that booted
+  // before a UI-defined Single existed has the table in the database but not
+  // in its schema registry, and a query there would fail rather than answer.
+  // The logger carries the reason when that registration cannot be made.
+  const single = await resolveSingleForRequest(
+    adapter,
+    container.get<{
+      getSingleBySlug(slug: string): Promise<DynamicSingleRecord | null>;
+    }>("singleRegistryService"),
+    slug,
+    logger
+  );
+  const table = single?.tableName;
   if (table === undefined || !(await adapter.tableExists(table))) return false;
   const rows = await adapter.select<{ id: string }>(table, {
     columns: ["id"],

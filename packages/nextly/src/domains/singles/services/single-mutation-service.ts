@@ -21,7 +21,6 @@
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
-import { and, eq, type Column } from "drizzle-orm";
 
 import { actorForWrite } from "../../../auth/request-actor";
 import { isFieldGroupField } from "../../../collections/fields/guards";
@@ -103,6 +102,7 @@ import {
   companionNotReadyMessage,
   resolveCompanionReadiness,
 } from "../../i18n/runtime/companion-readiness";
+import { languageIsLive } from "../../i18n/runtime/language-lifecycle";
 import { captureInTx } from "../../versions/capture-in-tx";
 import {
   draftComponentValues,
@@ -1544,6 +1544,7 @@ export class SingleMutationService extends BaseService {
               (updatePayload as Record<string, unknown>).status ===
                 "published" &&
               !(await this.writeLocaleIsLive(tx, {
+                mainStatus: preRowMainStatus,
                 liveStatus: singleLiveStatus,
                 companion: companionPhysicallyExists ? companion : null,
                 entryId: existingDoc.id,
@@ -3037,72 +3038,75 @@ export class SingleMutationService extends BaseService {
    * The write locale's committed per-locale `_status`, read INSIDE the write
    * transaction (on its connection) for the under-lock publish-transition gate.
    *
-   * Reads through `tx.getDrizzle()` so it sees the transaction's own writes and
-   * is serialized with concurrent writers by the main-row lock taken just before
-   * it. The companion `_locales` table is a runtime Drizzle table object rather
-   * than part of the static schema, so its columns are reached off the object
-   * built by `buildCompanionSchema` — the same way `populateCompanionFields`
-   * queries it. `(_parent, _locale)` is the companion primary key, so the lookup
-   * returns at most one row.
+   * Through the shared typed reader on `tx.getDrizzle()`, so it sees the
+   * transaction's own writes and is serialized with concurrent writers by the
+   * main-row lock taken just before it.
    */
   /**
    * Whether the language a write publishes is live already, so the write puts
-   * nothing new live.
+   * nothing new live. Decided by `languageIsLive`, the one answer to "is this
+   * language live", from the statuses this write has read under its lock.
    *
    * `liveStatus` is the language's status as the write's other decisions read
    * it: the companion's for a language other than the default, the main row's
-   * for the default. The default language's translation keeps a status of its
-   * own too on a Single with per-language status, and the two can differ (a
-   * live main row over a draft default translation, after per-language status
-   * was added to existing content), so both must be live for the publish to
-   * change nothing.
+   * otherwise. The default language's own translation status is read here,
+   * since it can differ from the main row's.
    */
   private async writeLocaleIsLive(
     tx: TransactionContext,
     args: {
+      mainStatus: unknown;
       liveStatus: unknown;
-      companion: { table: unknown } | null;
+      companion: { table: unknown; companionTableName: string } | null;
       entryId: string;
       writeLocale: string | undefined;
     }
   ): Promise<boolean> {
-    if (args.liveStatus !== "published") return false;
-    const locale = args.writeLocale;
-    const isDefault =
-      locale !== undefined && locale === this.localization?.defaultLocale;
-    if (!isDefault || args.companion === null) return true;
-    // No translation row, or none carrying a status: the main row decides.
-    const own = await this.readCompanionStatusInTx(
-      tx,
-      args.companion,
-      args.entryId,
-      locale
-    );
-    return own === null || own === "published";
+    const locale = args.writeLocale ?? null;
+    const defaultLocale = this.localization?.defaultLocale ?? null;
+    if (locale !== null && locale !== defaultLocale) {
+      // Another language: `liveStatus` already is the status this write
+      // judges it by, so it is that language's own.
+      return languageIsLive({
+        mainStatus: args.mainStatus,
+        ownStatus: typeof args.liveStatus === "string" ? args.liveStatus : null,
+        locale,
+        defaultLocale,
+        perLanguageStatus: true,
+      });
+    }
+    // The default language, or none: the main row, and the default
+    // translation's own status where there is a companion to hold one.
+    const ownStatus =
+      args.companion && locale !== null
+        ? await this.readCompanionStatusInTx(
+            tx,
+            args.companion,
+            args.entryId,
+            locale
+          )
+        : null;
+    return languageIsLive({
+      mainStatus: args.mainStatus,
+      ownStatus,
+      locale,
+      defaultLocale,
+      perLanguageStatus: args.companion !== null,
+    });
   }
 
-  private async readCompanionStatusInTx(
+  private readCompanionStatusInTx(
     tx: TransactionContext,
-    companion: { table: unknown },
+    companion: { table: unknown; companionTableName: string },
     parentId: string,
     locale: string
   ): Promise<string | null> {
-    const table = companion.table as Record<string, Column>;
-    const drizzle = tx.getDrizzle<{
-      select: () => {
-        from: (t: unknown) => {
-          where: (c: unknown) => Promise<Record<string, unknown>[]>;
-        };
-      };
-    }>();
-    const rows = (await drizzle
-      .select()
-      .from(companion.table)
-      .where(and(eq(table._parent, parentId), eq(table._locale, locale)))) as {
-      _status?: unknown;
-    }[];
-
-    const status = rows[0]?._status;
-    return typeof status === "string" ? status : null;
+    return readCompanionLocaleStatus(
+      tx.getDrizzle<Parameters<typeof readCompanionLocaleStatus>[0]>(),
+      companion.table,
+      parentId,
+      locale,
+      cachedCompanionReadiness(this.adapter, companion.companionTableName)
+    );
   }
 }
