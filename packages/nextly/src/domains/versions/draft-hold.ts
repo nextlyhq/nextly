@@ -51,6 +51,13 @@ export interface DraftHoldInput {
 export interface DraftHoldDecision {
   hold: boolean;
   draftLocale: string | null;
+  /**
+   * Whether the document may have a working draft at all. A publish promotes a
+   * stored draft only while this holds: one left from before the schema made
+   * the document ineligible is hidden from every read, so promoting it would
+   * write values the publisher never saw.
+   */
+  eligible: boolean;
 }
 
 /** Decide whether this write holds its edit, and under which locale key. */
@@ -74,5 +81,5 @@ export function resolveDraftHold(input: DraftHoldInput): DraftHoldDecision {
     input.liveStatus === "published" &&
     // A localized document whose locale this write cannot name is not held.
     !(input.documentLocalized && draftLocale === null);
-  return { hold, draftLocale };
+  return { hold, draftLocale, eligible };
 }

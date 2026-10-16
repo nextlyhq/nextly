@@ -52,6 +52,7 @@ import {
 } from "../../i18n/runtime/companion-readiness";
 import { captureInTx } from "../../versions/capture-in-tx";
 import { draftComponentValues } from "../../versions/draft-components";
+import { schemaDraftSplit } from "../../versions/draft-split-eligibility";
 import {
   resolveComponentFieldMap,
   tagComponentTypes,
@@ -120,6 +121,12 @@ interface PublishPlan {
   companionPublishable: boolean;
   fieldConfigs: FieldConfig[];
   recordingEnabled: boolean;
+  /**
+   * Whether the Single may have working drafts, as its schema read reports.
+   * A stored draft is promoted only while it does: one left from before the
+   * schema made it ineligible is hidden from every read.
+   */
+  draftsEligible: boolean;
   actor: ReturnType<typeof actorForWrite>;
 }
 
@@ -328,6 +335,17 @@ export class SinglePublishAllService extends BaseService {
         fieldConfigs: singleMeta.fields ?? [],
         recordingEnabled: isOutboxRecordingActive("single", slug),
         actor: actorForWrite(options.actor ?? null, options.user),
+        // Resolved before the transaction: it reads the component registry.
+        draftsEligible: (
+          await schemaDraftSplit({
+            status: (singleMeta as { status?: boolean }).status,
+            versions: singleMeta.versions,
+            fields: singleMeta.fields ?? [],
+            slug,
+            localized: singleMeta.localized,
+            entityKind: "single",
+          })
+        ).eligible,
       },
     };
   }
@@ -850,7 +868,7 @@ export class SinglePublishAllService extends BaseService {
     tx: TransactionContext,
     plan: PublishPlan
   ): Promise<PendingChange[]> {
-    if (plan.singleMeta.versions?.drafts?.enabled !== true) return [];
+    if (!plan.draftsEligible) return [];
     return new VersionsRepository(tx).findAllWorkingDrafts(
       this.workingDraftRef(plan)
     );

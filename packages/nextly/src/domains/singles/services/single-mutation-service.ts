@@ -1338,21 +1338,24 @@ export class SingleMutationService extends BaseService {
                     writeLocale
                   )
                 : preRowMainStatus;
-            const { hold: holdEdit, draftLocale: singleDraftLocale } =
-              resolveDraftHold({
-                collectionHasStatus:
-                  (singleMeta as { status?: boolean }).status === true,
-                draftsVersioningEnabled:
-                  singleMeta.versions?.drafts?.enabled === true,
-                documentLocalized: singleMeta.localized === true,
-                entityKind: "single",
-                fields: fieldConfigs,
-                componentSchemas: singleComponentSchemas,
-                namedStatus: (updatePayload as Record<string, unknown>).status,
-                liveStatus: singleLiveStatus,
-                requestLocale: writeLocale ?? null,
-                defaultLocale: this.localization?.defaultLocale ?? null,
-              });
+            const {
+              hold: holdEdit,
+              draftLocale: singleDraftLocale,
+              eligible: singleDraftsEligible,
+            } = resolveDraftHold({
+              collectionHasStatus:
+                (singleMeta as { status?: boolean }).status === true,
+              draftsVersioningEnabled:
+                singleMeta.versions?.drafts?.enabled === true,
+              documentLocalized: singleMeta.localized === true,
+              entityKind: "single",
+              fields: fieldConfigs,
+              componentSchemas: singleComponentSchemas,
+              namedStatus: (updatePayload as Record<string, unknown>).status,
+              liveStatus: singleLiveStatus,
+              requestLocale: writeLocale ?? null,
+              defaultLocale: this.localization?.defaultLocale ?? null,
+            });
 
             // A recorded draft save restored onto a published Single must stay
             // pending. A Single that can no longer hold a draft would take it on
@@ -1438,8 +1441,10 @@ export class SingleMutationService extends BaseService {
             let promotedDraft = false;
             if (
               !holdEdit &&
-              (singleMeta as { status?: boolean }).status === true &&
-              singleMeta.versions?.drafts?.enabled === true &&
+              // Lifecycle and drafts versioning included. A draft stored before
+              // the schema made the Single ineligible is hidden from every read
+              // and is not promoted over a publish that never saw it.
+              singleDraftsEligible &&
               (updatePayload as Record<string, unknown>).status === "published"
             ) {
               const pendingDraft = await new VersionsRepository(

@@ -510,6 +510,69 @@ describe.each(getConfiguredTestDialects())(
       expect(await heading("de")).toBe("Edited de");
     });
 
+    it("does not promote a draft the Single can no longer hold", async () => {
+      // A draft stored before the schema made the Single ineligible: hidden
+      // from every read, so a publish must not write its values over the
+      // document the publisher saw.
+      current = await createTestNextly({
+        dialect,
+        fieldGroups: [
+          defineFieldGroup({
+            slug: "banner",
+            localized: true,
+            fields: [text({ name: "heading" })],
+          }),
+        ],
+        singles: [
+          defineSingle({
+            slug: "home",
+            status: true,
+            versions: true,
+            fields: [
+              text({ name: "title" }),
+              text({ name: "note" }),
+              fieldGroup({ name: "banner", component: "banner" }),
+            ],
+          }),
+        ],
+        localization: { locales: ["en", "de"], defaultLocale: "en" },
+      });
+      const singles = current.getService("singleEntryService");
+      await singles.update(
+        "home",
+        { title: "T", note: "Live", status: "published" },
+        { overrideAccess: true }
+      );
+      const live = (await liveHome(current)) as { id: string };
+      await new VersionsRepository(
+        current.adapter as unknown as ConstructorParameters<
+          typeof VersionsRepository
+        >[0]
+      ).upsertWorkingDraft({
+        ref: { scopeKind: "single", scopeSlug: "home", entryId: live.id },
+        locale: null,
+        snapshot: { title: "Stale", note: "Stale note" },
+      });
+
+      await singles.update(
+        "home",
+        { title: "New", status: "published" },
+        { overrideAccess: true }
+      );
+      expect(await liveHome(current)).toMatchObject({
+        title: "New",
+        note: "Live",
+      });
+      const all = await singles.publishAllLocales("home", {
+        overrideAccess: true,
+      });
+      expect(all.success).toBe(true);
+      expect(await liveHome(current)).toMatchObject({
+        title: "New",
+        note: "Live",
+      });
+    });
+
     it("holds no draft for a Single whose component carries a password", async () => {
       // A draft cannot carry a password safely, so such a Single saves live
       // and its component saver hashes the password, as on any write.
