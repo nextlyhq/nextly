@@ -45,7 +45,10 @@ Compatibility: this applies to every collection and Single with a
 draft/publish lifecycle. A stored value that no longer passes a rule tightened
 since it was saved now stops a status-only publish, with a validation error on
 that field. Fix the field, then publish. Sending `published` again to a document
-that is already live is not re-validated.
+that is already live is not re-validated. For a collection entry, publishing
+validates the stored row's own fields and translations, as publishing a draft
+already did: a required field-group (component) value or relationship missing
+from storage is not re-checked at publish.
 
 The page builder's composition check also refuses a new loop in a document
 that already holds one, re-judges the documents placing a component when an
