@@ -470,6 +470,37 @@ async function withCapabilities(
  * thing it is, and the authority table above stays the single place that says
  * what each one needs.
  */
+/** What a Publish now answer says, by the state the run left the release in. */
+function publishNowMessage(state: ReleaseState): string {
+  if (state === "published") return "Release published.";
+  if (state === "blocked") {
+    return "Release stopped part-way. Fix the documents blocking it, then schedule it again.";
+  }
+  return "Release is going out; the rest of its documents will follow shortly.";
+}
+
+/**
+ * A release with its capabilities, for an answer given AFTER a write.
+ *
+ * The capabilities are a read, and may need an authority the write did not:
+ * a key scoped to publish releases has no read grant. Refusing then would
+ * report a write that happened as one that did not, so the release is
+ * answered without them instead.
+ */
+async function decorateAfterWrite(
+  release: ReleaseRow,
+  caller: ReleaseContext["caller"],
+  releases: ReleaseContext["releases"]
+): Promise<ReleaseRow | (ReleaseRow & { can: ReleaseCapabilities })> {
+  try {
+    const [item] = await withCapabilities([release], caller, releases);
+    return item;
+  } catch (error) {
+    if (NextlyError.is(error) && error.code === "FORBIDDEN") return release;
+    throw error;
+  }
+}
+
 const RELEASE_OPERATIONS: Record<
   string,
   (ctx: ReleaseContext) => Promise<Response>
@@ -688,13 +719,10 @@ const RELEASE_OPERATIONS: Record<
     const release = await releases.publishNow({ ...caller, id: releaseId });
     // The release as it stands after the run, and a message that says which
     // way it went: a release still `scheduled` has documents the runner will
-    // finish, and calling that "published" would tell the person it is done.
-    const [item] = await withCapabilities([release], caller, releases);
+    // finish, and a `blocked` one stopped and will not go on until fixed.
     return respondMutation(
-      release.state === "published"
-        ? "Release published."
-        : "Release is going out; the rest of its documents will follow shortly.",
-      item
+      publishNowMessage(release.state),
+      await decorateAfterWrite(release, caller, releases)
     );
   },
 };

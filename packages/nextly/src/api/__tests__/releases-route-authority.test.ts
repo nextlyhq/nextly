@@ -13,6 +13,7 @@
  *
  * @module api/__tests__/releases-route-authority.test
  */
+import { NextlyError } from "../../errors";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { requireAnyPermission, isErrorResponse, getCachedNextly } = vi.hoisted(
@@ -805,5 +806,27 @@ describe("publish now over REST", () => {
     const { body } = await publish();
     expect(body.message).not.toBe("Release published.");
     expect(body.message).toMatch(/going out/);
+  });
+
+  it("says a release that stopped part-way stopped, not that it is going out", async () => {
+    api.releases.publishNow.mockResolvedValueOnce({
+      id: "r1",
+      state: "blocked",
+    });
+    const { body } = await publish();
+    expect(body.message).toMatch(/stopped/);
+    expect(body.message).not.toMatch(/going out/);
+  });
+
+  it("answers a publish that happened even when the caller may not read capabilities", async () => {
+    // A key scoped to publish releases has no read grant. The run has already
+    // written; refusing now would report it as not having happened.
+    api.releases.capabilities.mockRejectedValueOnce(
+      NextlyError.forbidden({ logContext: { reason: "no-read" } })
+    );
+    const { res, body } = await publish();
+    expect(res.status).toBe(200);
+    expect(body.item).toMatchObject({ id: "r1", state: "published" });
+    expect(body.item.can).toBeUndefined();
   });
 });

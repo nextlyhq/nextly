@@ -460,7 +460,13 @@ export class ReleasesRepository {
     id: string,
     at: Date,
     timezone: string,
-    from: readonly ReleaseState[] = RELEASE_SCHEDULABLE_FROM
+    from: readonly ReleaseState[] = RELEASE_SCHEDULABLE_FROM,
+    /**
+     * The revision the caller read, when it must be the ONLY one to move this
+     * release from that read. The state fence cannot tell two callers apart
+     * when both read `scheduled`; the revision can, and moving bumps it.
+     */
+    expectedRevision?: number
   ): Promise<boolean> {
     const affected = await this.db.updateCount(
       RELEASES,
@@ -469,10 +475,22 @@ export class ReleasesRepository {
         timezone,
         state: "scheduled" satisfies ReleaseState,
         updatedAt: new Date(),
+        ...(expectedRevision === undefined
+          ? {}
+          : { revision: expectedRevision + 1 }),
       },
       {
         and: [
           { column: "id", op: "=", value: id },
+          ...(expectedRevision === undefined
+            ? []
+            : [
+                {
+                  column: "revision",
+                  op: "=" as const,
+                  value: expectedRevision,
+                },
+              ]),
           // The fence IS the declaration, not a copy of it: the admin decides
           // which controls to offer from the same list, so a change here cannot
           // leave a button offering a move the database refuses.
@@ -979,6 +997,40 @@ export class ReleasesRepository {
    * dialect this supports, and "no releases" is an ordinary state, not a
    * caller's mistake.
    */
+  /**
+   * Every release member naming one of these documents, in one query.
+   *
+   * What a single release's run needs to find the releases it must settle
+   * with: the ones sharing a document with it. Asked of the documents rather
+   * than of every due release, so running one release reads its own overlap
+   * and not the whole backlog.
+   */
+  async listMembersOfDocuments(
+    refs: DocumentRef[]
+  ): Promise<ReleaseMemberRow[]> {
+    if (refs.length === 0) return [];
+    const rows = await this.db.select<ReleaseMemberRow>(MEMBERS, {
+      where: {
+        and: [
+          {
+            column: "entryId",
+            op: "IN",
+            value: [...new Set(refs.map(r => r.entryId))],
+          },
+          {
+            column: "scopeSlug",
+            op: "IN",
+            value: [...new Set(refs.map(r => r.scopeSlug))],
+          },
+        ],
+      },
+    });
+    // The two IN lists cross: a row matching one ref's id and another's scope
+    // is not a member of either, and is dropped here.
+    const wanted = new Set(refs.map(documentRefKey));
+    return rows.filter(row => wanted.has(documentRefKey(row)));
+  }
+
   async listMembersOf(releaseIds: string[]): Promise<ReleaseMemberRow[]> {
     if (releaseIds.length === 0) return [];
     return this.db.select<ReleaseMemberRow>(MEMBERS, {

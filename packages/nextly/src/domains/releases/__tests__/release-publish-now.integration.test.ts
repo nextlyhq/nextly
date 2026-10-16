@@ -137,6 +137,28 @@ describe.each(getConfiguredTestDialects())(
       expect(ran.timezone).toBe("Europe/Berlin");
     });
 
+    it("runs a release once when two requests to publish it now overlap", async () => {
+      // A double click or a retry: both read the release scheduled. Only one
+      // may move it and run it; the other is refused before anything runs.
+      const t = await boot(dialect);
+      const author = await seedLiveAuthor(t);
+      const id = await releaseOf(t, author, [await draft(t, "Once")]);
+      await new ReleasesRepository(t.adapter).scheduleRelease(
+        id,
+        new Date(Date.now() + 7 * DAY),
+        "UTC"
+      );
+      const outcomes = await Promise.allSettled([
+        t.nextly.releases.publishNow({ id }),
+        t.nextly.releases.publishNow({ id }),
+      ]);
+      expect(outcomes.filter(o => o.status === "fulfilled")).toHaveLength(1);
+      expect(outcomes.find(o => o.status === "rejected")).toMatchObject({
+        reason: { code: "CONFLICT" },
+      });
+      expect(await stateOf(t, id)).toBe("published");
+    });
+
     it("runs a draft release at once", async () => {
       const t = await boot(dialect);
       const author = await seedLiveAuthor(t);

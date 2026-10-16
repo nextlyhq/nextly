@@ -1652,13 +1652,16 @@ export class ReleasesService {
 
     const now = new Date();
     // Fenced on the state the checks above were made against, so a release
-    // cancelled or stopped in between is not run.
+    // cancelled or stopped in between is not run — and on its revision, so of
+    // two overlapping requests (a double click, a retry) only one moves it and
+    // runs it; the other is refused before anything is written.
     const moved = await this.deps.repository.scheduleRelease(
       id,
       now,
       // The zone the author chose stays part of the record.
       current.timezone ?? "UTC",
-      [current.state]
+      [current.state],
+      current.revision
     );
     if (!moved) {
       throw NextlyError.conflict({

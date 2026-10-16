@@ -88,6 +88,10 @@ function deps(over: {
       blockReleases: blocked,
       listMembersOf: async ids =>
         members.filter(m => ids.includes(m.releaseId)),
+      listMembersOfDocuments: async refs =>
+        members.filter(m =>
+          refs.some(r => r.scopeSlug === m.scopeSlug && r.entryId === m.entryId)
+        ),
       isStillDueAt: async (id: string, scheduledAt: Date) =>
         over.cancelled !== id &&
         (over.rescheduledTo === undefined ||
@@ -808,6 +812,40 @@ describe("applyDueReleases", () => {
 
     expect(listMembersOf).not.toHaveBeenCalled();
     expect(result).toMatchObject({ due: 0, published: 0, applied: 0 });
+  });
+
+  it("running one release reads only its overlap, not every due release", async () => {
+    // r1 shares a document with r2; r3 is due and unrelated. Running r1 must
+    // read r1 and r2 — they settle together — and never load r3's members.
+    const members = [
+      member({ releaseId: "r1", entryId: "shared" }),
+      member({ releaseId: "r2", entryId: "shared" }),
+      member({ releaseId: "r3", entryId: "elsewhere" }),
+    ];
+    const asked: string[][] = [];
+    const d = deps({
+      releases: [
+        release({ id: "r1" }),
+        release({ id: "r2" }),
+        release({ id: "r3" }),
+      ],
+      members,
+    });
+    const result = await applyDueReleases({
+      ...d,
+      only: "r1",
+      repository: {
+        ...d.repository,
+        listMembersOf: async ids => {
+          asked.push(ids);
+          return members.filter(m => ids.includes(m.releaseId));
+        },
+      },
+    });
+
+    expect(asked.flat()).not.toContain("r3");
+    expect(asked.flat()).toEqual(expect.arrayContaining(["r1", "r2"]));
+    expect(result.due).toBe(2);
   });
 
   it("loads the members of EVERY due release in one query", async () => {

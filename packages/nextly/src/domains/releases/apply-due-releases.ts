@@ -119,6 +119,8 @@ export interface ApplyDueReleasesDeps {
      * come back in.
      */
     listMembersOf(releaseIds: string[]): Promise<ReleaseMemberRow[]>;
+    /** Every member naming one of these documents (see the repository). */
+    listMembersOfDocuments(refs: DocumentRef[]): Promise<ReleaseMemberRow[]>;
     isStillDueAt(releaseId: string, scheduledAt: Date): Promise<boolean>;
     markReleasePublished(id: string, at: Date): Promise<boolean>;
     /**
@@ -184,6 +186,37 @@ export interface ApplyDueReleasesDeps {
    * pass runs everything due, as the runner does.
    */
   only?: string;
+}
+
+/**
+ * The due releases one release must be settled with, and their members: it,
+ * every due release sharing a document with it, and so on until no new one
+ * joins. Read from the documents outward, so the cost is the overlap's, not
+ * the backlog's. A release that is not due has no overlap to run.
+ */
+async function overlapOf(
+  repository: ApplyDueReleasesDeps["repository"],
+  due: readonly ReleaseRow[],
+  only: string
+): Promise<{ releases: ReleaseRow[]; members: ReleaseMemberRow[] }> {
+  const dueIds = new Set(due.map(r => r.id));
+  if (!dueIds.has(only)) return { releases: [], members: [] };
+  const taken = new Set([only]);
+  const members: ReleaseMemberRow[] = [];
+  for (let frontier = [only]; frontier.length > 0; ) {
+    const found = await repository.listMembersOf(frontier);
+    members.push(...found);
+    const sharing = await repository.listMembersOfDocuments(found);
+    frontier = [
+      ...new Set(
+        sharing
+          .map(m => m.releaseId)
+          .filter(id => dueIds.has(id) && !taken.has(id))
+      ),
+    ];
+    for (const id of frontier) taken.add(id);
+  }
+  return { releases: due.filter(r => taken.has(r.id)), members };
 }
 
 /**
@@ -405,10 +438,18 @@ export async function applyDueReleases(
     };
   }
 
-  const members = await deps.repository.listMembersOf(releases.map(r => r.id));
+  // One release run: only its overlap is read, not the whole due backlog.
+  const scope =
+    deps.only === undefined
+      ? {
+          releases,
+          members: await deps.repository.listMembersOf(releases.map(r => r.id)),
+        }
+      : await overlapOf(deps.repository, releases, deps.only);
 
+  const { members } = scope;
   const planned = planReleaseMaterialisation({
-    releases: releases.map(r => ({
+    releases: scope.releases.map(r => ({
       id: r.id,
       // `findDueReleases` returns only releases with an instant, so this is
       // never the epoch in practice; narrowing here rather than asserting keeps
