@@ -3,6 +3,8 @@ title: Lifecycle, dependencies & order
 description: How and when a plugin runs — the setup/init/destroy lifecycle, load order, declaring dependencies on other plugins, version compatibility, and enabling/disabling.
 ---
 
+> **Parts of this page need the release after 0.0.2-alpha.66:** `contributes.transforms`, and `nextly plugins uninstall` (on 0.0.2-alpha.66, remove the plugin from the config, then run `nextly prune`).
+
 This page covers *when* a plugin's code runs, in *what order*, and how to express
 ordering and version constraints. For the errors these rules produce, see the
 [error reference](/docs/plugins/error-reference).
@@ -121,6 +123,8 @@ while it is still in the config, then remove it — see
 
 ## Install and uninstall hooks
 
+> **Needs the release after 0.0.2-alpha.66.**
+
 `onInstall` and `onUninstall` (`@experimental`) are for work that belongs to installing
 or removing the plugin rather than to every start: seeding a row, registering with an
 external service, deregistering from it. They never run at boot.
@@ -131,7 +135,7 @@ import { definePlugin } from "@nextlyhq/plugin-sdk";
 export default definePlugin({
   name: "@acme/nextly-plugin-thing",
   version: "1.0.0",
-  nextly: ">=0.0.2-alpha.63",
+  nextly: ">=0.0.2-alpha.67",
   async onInstall(ctx) {
     // After the plugin's migrations, so its tables exist.
     ctx.logger.info("installed");

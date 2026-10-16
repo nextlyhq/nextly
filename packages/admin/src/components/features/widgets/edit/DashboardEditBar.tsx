@@ -1,31 +1,34 @@
 "use client";
 
 /**
- * The dashboard's edit controls: enter, commit, abandon, reset.
+ * The dashboard's customise controls: enter, commit, abandon, reset.
  *
  * One bar rather than controls scattered across the cards, because entering and
- * leaving edit mode is a decision about the WHOLE arrangement — and because a
- * reader needs one place to look for "how do I get out of this".
+ * leaving customise mode is a decision about the WHOLE arrangement — and
+ * because a reader needs one place to look for "how do I get out of this".
  *
  * Entering is offered from the `md` breakpoint up. Below it every card is full
- * width in one column, so an arrangement is a stacked list with little to
- * reorder, and touch drag is where accessibility regressions hide; the
- * arrangement made on a wider screen still applies. The way OUT is not gated:
- * an edit already in progress keeps its Save, Cancel and Reset at every width,
- * so a window narrowed mid-edit never traps the reader in a mode they cannot
- * leave.
+ * width, so an arrangement is a stacked list with little to reorder, and touch
+ * drag is where accessibility regressions hide; the arrangement made on a wider
+ * screen still applies. The way OUT is not gated: a customisation already in
+ * progress keeps its Save, Cancel and Reset at every width, so a window
+ * narrowed mid-way never traps the reader in a mode they cannot leave.
  *
  * @module components/features/widgets/edit/DashboardEditBar
  */
 
-import { Button, RadioGroup, RadioGroupItem } from "@nextlyhq/ui";
+import { Button } from "@nextlyhq/ui";
 
 import * as Icons from "@admin/components/icons";
-import { cn } from "@admin/lib/utils";
 
 export interface DashboardEditBarProps {
   isEditing: boolean;
   hasUnsavedChanges: boolean;
+  /**
+   * Whether the draft holds the default dashboard in place of the reader's
+   * own. Said in the bar, because nothing is written until they save.
+   */
+  isResetStaged: boolean;
   isSaving: boolean;
   /**
    * Whether any layout write is in flight, including one begun outside this
@@ -36,11 +39,6 @@ export interface DashboardEditBarProps {
   isWriting: boolean;
   /** Whether the reader has an arrangement of their own to reset. */
   canReset: boolean;
-  /** How many columns the dashboard is currently drawn in. */
-  columnCount: number;
-  /** The counts a reader may choose between. */
-  columnChoices: readonly number[];
-  onColumnCount: (columnCount: number) => void;
   onBegin: () => void;
   onSave: () => void;
   onCancel: () => void;
@@ -50,12 +48,10 @@ export interface DashboardEditBarProps {
 export function DashboardEditBar({
   isEditing,
   hasUnsavedChanges,
+  isResetStaged,
   isSaving,
   isWriting,
   canReset,
-  columnCount,
-  columnChoices,
-  onColumnCount,
   onBegin,
   onSave,
   onCancel,
@@ -63,11 +59,10 @@ export function DashboardEditBar({
 }: DashboardEditBarProps) {
   if (!isEditing) {
     return (
-      // `hidden md:flex`: the same Tailwind breakpoint the grid folds to one
-      // column at (`sizes.ts`), so the offer and the fold cannot disagree the
-      // way a width read in JavaScript could. `display: none` also takes the
-      // control out of the accessibility tree, so it is not offered to a
-      // screen reader either.
+      // `hidden md:flex`: a breakpoint in CSS rather than a width read in
+      // JavaScript, so the offer cannot disagree with what the page draws.
+      // `display: none` also takes the control out of the accessibility tree,
+      // so it is not offered to a screen reader either.
       <div
         className="hidden justify-end md:flex"
         data-testid="dashboard-edit-offer"
@@ -87,7 +82,10 @@ export function DashboardEditBar({
           data-testid="dashboard-edit-begin"
         >
           <Icons.Pencil aria-hidden className="mr-2 size-4" />
-          Edit dashboard
+          {/* "Customize", the word every message about this mode uses: the
+              unreadable-layout notice tells the reader to save "from
+              Customize", so the control has to be called that. */}
+          Customize
         </Button>
       </div>
     );
@@ -95,67 +93,32 @@ export function DashboardEditBar({
 
   return (
     <div className="flex flex-wrap items-center justify-end gap-2">
+      {/* What the reader is looking at, said in words. A staged reset draws
+          the default and writes nothing, so the bar says how to keep it and
+          how to go back; otherwise it says how this mode works. */}
+      <p
+        className="mr-auto text-xs text-muted-foreground"
+        data-testid="dashboard-edit-status"
+      >
+        {isResetStaged
+          ? "Showing the default dashboard. Save to keep it, or Cancel to go back to yours."
+          : "Drag a card by its handle, or use its menu. Only you see this layout."}
+      </p>
+
       {/* Reset sits apart from Save/Cancel and reads as the destructive one,
-          because it discards an arrangement rather than an edit. Offered only
+          because it replaces an arrangement rather than an edit. Offered only
           when there IS one: a reader already on the default has nothing to
-          reset, and a button that does nothing is worse than no button. */}
-      {/* 🔴 The REAL radio group, not buttons wearing `role="radio"`.
-          ARIA roles announce a widget; they do not implement one. Custom
-          buttons with those roles leave every choice a separate Tab stop and
-          the arrow keys inert, so a keyboard reader meets something that
-          claims to be a radio group and does not behave like one -- which is
-          worse than a plain set of buttons, because the announcement sets an
-          expectation the control then breaks.
-
-          Radix supplies roving focus, arrow-key selection and the checked
-          state; this only has to style it and say what it is for. The label is
-          a visible element rather than an `aria-label`, so the name of the
-          control is available to everyone rather than only to a screen reader
-          deciding what a cluster of digits means. */}
-      <div className="mr-auto flex items-center gap-2">
-        <span
-          id="dashboard-columns-label"
-          className="text-xs text-muted-foreground"
-        >
-          Columns
-        </span>
-        <RadioGroup
-          aria-labelledby="dashboard-columns-label"
-          value={String(columnCount)}
-          onValueChange={value => onColumnCount(Number(value))}
-          disabled={isWriting}
-          className="flex items-center gap-1"
-          data-testid="dashboard-column-picker"
-        >
-          {columnChoices.map(choice => (
-            <label
-              key={choice}
-              // The whole chip is the target, so the hit area matches what a
-              // reader sees rather than a small circle beside it.
-              className={cn(
-                "flex cursor-pointer items-center gap-1.5 rounded-md border px-2 py-1 text-xs",
-                choice === columnCount
-                  ? "border-primary bg-primary/10 text-foreground"
-                  : "border-border text-muted-foreground hover:bg-muted"
-              )}
-              data-testid={`dashboard-column-choice-${choice}`}
-            >
-              <RadioGroupItem
-                value={String(choice)}
-                aria-label={`${choice} columns`}
-              />
-              {choice}
-            </label>
-          ))}
-        </RadioGroup>
-      </div>
-
+          reset, and a button that does nothing is worse than no button. It
+          asks first, and even then only stages the default. */}
       {canReset ? (
         <Button
           type="button"
           variant="ghost"
           size="sm"
           onClick={onReset}
+          // Left enabled once a reset is staged: staging it again is harmless,
+          // and disabling the control the dialog returns focus to would drop
+          // the reader's focus on `body` as the dialog closed.
           disabled={isWriting}
           className="text-muted-foreground"
           data-testid="dashboard-edit-reset"

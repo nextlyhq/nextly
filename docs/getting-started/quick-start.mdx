@@ -1,5 +1,5 @@
 ---
-title: "Quick Start: Build a Blog in 5 Minutes"
+title: "Quick Start: Build a Blog"
 description: Create a blog with posts and categories using Nextly. Define content with code or build it visually.
 ---
 
@@ -59,11 +59,14 @@ export default defineConfig({
 });
 ```
 
-In development, Nextly auto-syncs schema changes when you save `nextly.config.ts`. For production, run:
+In development, Nextly auto-syncs schema changes when you save `nextly.config.ts`. For production, generate a migration from the change, commit it, and apply it where you deploy:
 
 ```bash
+pnpm nextly migrate:create add_posts_and_categories
 pnpm nextly migrate
 ```
+
+`nextly migrate` applies the files in `migrations/`; it does not create tables from `nextly.config.ts` on its own. See [Production migrations](/docs/guides/production-migrations).
 
 </Tab>
 <Tab value="Visual Schema Builder">
@@ -102,12 +105,14 @@ Open the admin panel at [http://localhost:3000/admin](http://localhost:3000/admi
 
 ## 3. Query Content in Your App
 
-Use the Direct API to fetch posts in a Server Component. The Direct API runs on the server -- no HTTP requests, no REST endpoints needed.
+Use the Direct API to fetch posts in a Server Component. The Direct API runs on the server -- no HTTP requests, no REST endpoints needed. Get the instance with `getNextly({ config })`: it starts Nextly in this process if nothing has yet, so the page works on a cold server too.
 
 ```typescript title="src/app/blog/page.tsx"
-import { nextly } from "nextly";
+import nextlyConfig from "../../../nextly.config";
+import { getNextly } from "nextly";
 
 export default async function BlogPage() {
+  const nextly = await getNextly({ config: nextlyConfig });
   const { items: posts } = await nextly.find({
     collection: "posts",
     where: {
@@ -134,7 +139,8 @@ export default async function BlogPage() {
 ### Fetch a Single Post
 
 ```typescript title="src/app/blog/[slug]/page.tsx"
-import { nextly } from "nextly";
+import nextlyConfig from "../../../../nextly.config";
+import { getNextly } from "nextly";
 import { notFound } from "next/navigation";
 
 export default async function PostPage({
@@ -144,12 +150,15 @@ export default async function PostPage({
 }) {
   const { slug } = await params;
 
+  const nextly = await getNextly({ config: nextlyConfig });
   const { items } = await nextly.find({
     collection: "posts",
     where: {
       slug: { equals: slug },
       status: { equals: "published" },
     },
+    // Rich text is stored as JSON; ask for HTML to render it directly.
+    richTextFormat: "html",
     limit: 1,
   });
 
@@ -192,7 +201,7 @@ export default defineConfig({
 });
 ```
 
-In development, save `nextly.config.ts` and the schema syncs automatically. For production, run `pnpm nextly migrate`.
+In development, save `nextly.config.ts` and the schema syncs automatically. For production, run `pnpm nextly migrate:create <name>`, commit the file, then run `pnpm nextly migrate` where you deploy.
 
 </Tab>
 <Tab value="Visual Schema Builder">
@@ -209,13 +218,15 @@ In development, save `nextly.config.ts` and the schema syncs automatically. For 
 Query the single in your layout:
 
 ```typescript title="src/app/blog/layout.tsx"
-import { nextly } from "nextly";
+import nextlyConfig from "../../../nextly.config";
+import { getNextly } from "nextly";
 
 export default async function BlogLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
+  const nextly = await getNextly({ config: nextlyConfig });
   const settings = await nextly.findSingle({
     slug: "blog-settings",
   });
@@ -234,7 +245,7 @@ export default async function BlogLayout({
 
 ## What You Built
 
-In 5 minutes, you have:
+You now have:
 
 - Two collections (`posts` and `categories`) with typed fields
 - A single (`blog-settings`) for site-wide configuration

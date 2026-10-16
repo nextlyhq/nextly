@@ -387,6 +387,16 @@ export type {
 export { canNest, canBeRoot, canNestInSlot } from "./nesting";
 export { placementVerdict } from "./nesting";
 export type { NestingSource, NestingVerdict, NestingRefusal } from "./nesting";
+// What a composed document breaks that no stored document breaks alone: the
+// nesting rule across a placement, and depth counted from the document's own
+// root. Exported for the write path, which has to refuse what the renderer
+// would otherwise cut short or draw where the rule forbids it.
+export { compositionFaults } from "./composition-faults";
+export type {
+  CompositionFault,
+  CompositionFaultCode,
+  CompositionFaultOptions,
+} from "./composition-faults";
 // The measurement's return type travels with the function. Without it a
 // consumer naming `measureBytes`'s result has to rebuild the union by hand or
 // reach for `ReturnType`, and a hand-rebuilt copy is the second statement of a

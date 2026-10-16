@@ -161,16 +161,30 @@ const DATA_ARCHETYPE_SET: ReadonlySet<WidgetArchetype> = new Set(
  * a plugin's intent -- and the flexibility to draw something new from a new op
  * is the reason that archetype exists.
  */
+export const ARCHETYPE_OPS = {
+  metric: ["count"],
+  table: ["list"],
+  list: ["list"],
+  bars: ["groupBy"],
+  timeseries: ["timeseries"],
+} as const satisfies Record<DataWidgetArchetype, readonly WidgetOp[]>;
+
+/**
+ * `ARCHETYPE_OPS` as the lookup registration reads.
+ *
+ * Built from the literal table above, which the typed widget declaration also
+ * reads to pair a display with its data at compile time, so the two checks
+ * cannot disagree about which archetype draws which op.
+ */
 const ARCHETYPE_RESULTS: ReadonlyMap<
   DataWidgetArchetype,
   ReadonlySet<WidgetOp>
-> = new Map([
-  ["metric", new Set<WidgetOp>(["count"])],
-  ["table", new Set<WidgetOp>(["list"])],
-  ["list", new Set<WidgetOp>(["list"])],
-  ["bars", new Set<WidgetOp>(["groupBy"])],
-  ["timeseries", new Set<WidgetOp>(["timeseries"])],
-]);
+> = new Map(
+  DATA_ARCHETYPES.map(archetype => [
+    archetype,
+    new Set<WidgetOp>(ARCHETYPE_OPS[archetype]),
+  ])
+);
 
 /**
  * How many numbers one `stats` card may declare.

@@ -14,6 +14,7 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { describe, expect, it } from "vitest";
 
+import type { WidgetPlacement } from "../../domains/widgets/layout";
 import { NextlyError } from "../../errors/nextly-error";
 import type { Logger } from "../shared";
 
@@ -63,8 +64,8 @@ class StubbedService extends WidgetLayoutService {
   }
 }
 
-const placements = [
-  { id: "p1", widgetId: "core/a", column: 0, order: 0, hidden: false },
+const placements: WidgetPlacement[] = [
+  { id: "p1", widgetId: "core/a", width: "full", removed: false },
 ];
 
 describe("a failed insert", () => {

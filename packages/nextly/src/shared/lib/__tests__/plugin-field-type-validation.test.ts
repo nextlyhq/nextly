@@ -23,7 +23,11 @@ import type {
   PluginFieldValidateArgs,
   PluginFieldValidationResult,
 } from "../../../plugins/contributions";
-import { validateEntryData, type ValidatableField } from "../entry-validation";
+import {
+  validateEntryData,
+  type EntryWriteContext,
+  type ValidatableField,
+} from "../entry-validation";
 
 afterEach(() => {
   clearFieldTypes();
@@ -515,5 +519,126 @@ describe("a disabled plugin's field type", () => {
     });
 
     expect(issues).toEqual([]);
+  });
+});
+
+describe("the write a plugin field type is validated for", () => {
+  /** A write context that records which type each read was scoped to. */
+  function writeContext() {
+    const scopedTo: string[] = [];
+    const write: EntryWriteContext = {
+      kind: "collection",
+      slug: "articles",
+      id: "entry-1",
+      inTransaction: true,
+      readStored: async allowedType => {
+        scopedTo.push(allowedType);
+        return { kind: "value", value: { from: allowedType } };
+      },
+    };
+    return { write, scopedTo };
+  }
+
+  it("hands the validator which entry is written, and a read scoped to its own type", async () => {
+    let seen: PluginFieldValidateArgs["write"];
+    let read: unknown;
+    registerDocument(async (_value, args) => {
+      seen = args.write;
+      read = await args.write?.readStored({
+        collection: "other",
+        id: "x",
+        field: "body",
+        form: "published",
+      });
+      return true;
+    });
+    const { write, scopedTo } = writeContext();
+
+    await validateEntryData(
+      { body: { nodes: [] } },
+      [{ name: "body", type: "document" }],
+      { mode: "update", write }
+    );
+
+    expect(seen?.kind).toBe("collection");
+    expect(seen?.slug).toBe("articles");
+    expect(seen?.id).toBe("entry-1");
+    expect(seen?.inTransaction).toBe(true);
+    // The scope is the RUNNING validator's type, bound by core; the validator
+    // names only what to read, never what it is allowed to read.
+    expect(scopedTo).toEqual(["document"]);
+    expect(read).toEqual({ kind: "value", value: { from: "document" } });
+  });
+
+  it("binds each type's read to that type, so one type cannot read as another", async () => {
+    registerDocument(async (_value, args) => {
+      await args.write?.readStored({
+        collection: "c",
+        id: "1",
+        field: "f",
+        form: "draft",
+      });
+      return true;
+    });
+    registerRating(async (_value, args) => {
+      await args.write?.readStored({
+        collection: "c",
+        id: "1",
+        field: "f",
+        form: "draft",
+      });
+      return true;
+    });
+    const { write, scopedTo } = writeContext();
+
+    await validateEntryData(
+      { body: { nodes: [] }, stars: 3 },
+      [
+        { name: "body", type: "document" },
+        { name: "stars", type: "rating" },
+      ],
+      { mode: "update", write }
+    );
+
+    expect(scopedTo.sort()).toEqual(["document", "rating"]);
+  });
+
+  it("carries the write to a field nested in a repeater row", async () => {
+    let seen: PluginFieldValidateArgs["write"];
+    registerDocument((_value, args) => {
+      seen = args.write;
+      return true;
+    });
+    const { write } = writeContext();
+
+    await validateEntryData(
+      { rows: [{ body: { nodes: [] } }] },
+      [
+        {
+          name: "rows",
+          type: "repeater",
+          fields: [{ name: "body", type: "document" }],
+        },
+      ],
+      { mode: "update", write }
+    );
+
+    expect(seen?.id).toBe("entry-1");
+  });
+
+  it("hands no write where no entry write is behind the validation", async () => {
+    let seen: PluginFieldValidateArgs["write"] | "unset" = "unset";
+    registerDocument((_value, args) => {
+      seen = args.write;
+      return true;
+    });
+
+    await validateEntryData(
+      { body: { nodes: [] } },
+      [{ name: "body", type: "document" }],
+      { mode: "create" }
+    );
+
+    expect(seen).toBeUndefined();
   });
 });

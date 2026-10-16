@@ -315,12 +315,14 @@ export { MAX_QUERIES_PER_REQUEST } from "./domains/widgets/batch-limit";
 // submission carrying more placements than this, so the editor has to know the
 // number to stop a reader building an arrangement that can never be saved --
 // and a second copy of it on the client is a second answer that drifts.
+// From the import-free `layout-limits.ts`, not `layout.ts`: that module
+// imports `node:crypto`, and this entry is published as safe for a browser.
 export {
   COLUMN_COUNTS,
   DEFAULT_COLUMN_COUNT,
   MAX_PLACEMENTS,
   type ColumnCount,
-} from "./domains/widgets/layout";
+} from "./domains/widgets/layout-limits";
 // The VALUE as well as the type. A widget result names each column's kind, and
 // the admin has to decide which kinds it can present -- deriving that from this
 // tuple is what stops the browser silently erasing a kind core has started to

@@ -29,7 +29,12 @@ import { STORAGE_PRIMITIVE_AS_FIELD_TYPE } from "../../collections/fields/catalo
 import { isVirtualField } from "../../collections/fields/virtual";
 import { getFieldType } from "../../domains/schema/field-types/field-type-registry";
 import type { ValidationPublicData } from "../../errors/public-data";
-import type { PluginFieldType } from "../../plugins/contributions";
+import type {
+  PluginFieldType,
+  PluginFieldWrite,
+  PluginStoredValue,
+  PluginStoredValueTarget,
+} from "../../plugins/contributions";
 
 import { detachedField } from "./detached-field";
 
@@ -107,6 +112,46 @@ export interface ValidateEntryOptions {
    * reading, and the callers that seed defaults filter them out first.
    */
   emptyIsAValue?: boolean;
+  /**
+   * The entry write being validated, for the field types that judge a value
+   * against stored rows. Absent where no entry write is behind the validation,
+   * and then no type is handed one.
+   */
+  write?: EntryWriteContext;
+}
+
+/**
+ * Which entry a validation is for, and a stored read on the write's own
+ * connection.
+ *
+ * The read takes the field type it is scoped to as an ARGUMENT, and each plugin
+ * type is handed a read already bound to its own type ({@link fieldWriteFor}).
+ * So the scope is decided here, by which validator is running, and no
+ * validator can widen it by naming a different type.
+ */
+export interface EntryWriteContext {
+  readonly kind: PluginFieldWrite["kind"];
+  readonly slug: string;
+  readonly id?: string;
+  readonly inTransaction: boolean;
+  readStored(
+    allowedType: string,
+    target: PluginStoredValueTarget
+  ): Promise<PluginStoredValue>;
+}
+
+/** The write as one field type's validator may see it. */
+function fieldWriteFor(
+  write: EntryWriteContext,
+  type: string
+): PluginFieldWrite {
+  return {
+    kind: write.kind,
+    slug: write.slug,
+    ...(write.id === undefined ? {} : { id: write.id }),
+    inTransaction: write.inTransaction,
+    readStored: target => write.readStored(type, target),
+  };
 }
 
 /** Flat-or-nested rule lookup (builder writes `validation.*`, code-first is flat). */
@@ -731,6 +776,9 @@ async function validatePluginFieldType(
       // while walking a repeater row, which says nothing about whether the
       // entry itself is being created.
       mode: write.mode,
+      ...(options.write === undefined
+        ? {}
+        : { write: fieldWriteFor(options.write, field.type) }),
     });
 
     if (result === true) return;

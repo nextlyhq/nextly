@@ -810,7 +810,7 @@ describe("WidgetGrid — sizing", () => {
     }
   });
 
-  it("narrows a small widget only at md and lg", () => {
+  it("narrows a small widget only as the DASHBOARD widens, not the window", () => {
     registerComponents({ "@acme/admin#A": () => <div>a</div> });
     mockBranding = brandingWith([
       { id: "small", component: "@acme/admin#A", defaultSize: "sm" },
@@ -818,9 +818,14 @@ describe("WidgetGrid — sizing", () => {
     renderGrid();
     expect(screen.getByTestId("widget-cell-small")).toHaveClass(
       "col-span-12",
-      "md:col-span-6",
-      "lg:col-span-3"
+      "@min-[640px]/dashboard:col-span-6",
+      "@min-[1024px]/dashboard:col-span-3"
     );
+    // The container those classes answer to is the grid's own wrapper, so a
+    // dashboard narrowed by a sidebar draws the band that fits it.
+    expect(
+      screen.getByLabelText("Dashboard widgets").parentElement
+    ).toHaveClass("@container/dashboard");
   });
 
   it("honours the deprecated half alias without half-width phones", () => {
@@ -830,7 +835,10 @@ describe("WidgetGrid — sizing", () => {
     ]);
     renderGrid();
     const cell = screen.getByTestId("widget-cell-halved");
-    expect(cell).toHaveClass("col-span-12", "lg:col-span-6");
+    expect(cell).toHaveClass(
+      "col-span-12",
+      "@min-[1024px]/dashboard:col-span-6"
+    );
     expect(cell.className.split(" ")).not.toContain("col-span-6");
   });
 
@@ -845,7 +853,9 @@ describe("WidgetGrid — sizing", () => {
       },
     ]);
     renderGrid();
-    expect(screen.getByTestId("widget-cell-both")).toHaveClass("lg:col-span-3");
+    expect(screen.getByTestId("widget-cell-both")).toHaveClass(
+      "@min-[1024px]/dashboard:col-span-3"
+    );
   });
 });
 

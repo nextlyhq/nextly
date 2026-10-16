@@ -3,6 +3,8 @@ title: REST API
 description: HTTP REST API for browser code, mobile apps, and third-party integrations. Mounted under /api/ via a single Next.js catch-all route handler.
 ---
 
+> **Parts of this page need the release after 0.0.2-alpha.66:** the refresh cookie's `/admin/api/auth` scope (on 0.0.2-alpha.66 it is `/admin/api/auth/refresh`, so logout does not receive it), `403 EMAIL_NOT_VERIFIED`, and `GET /api/auth/pending`.
+
 The REST API exposes the same operations as the [Direct API](/docs/api-reference/direct-api) over HTTP. Every collection, single, user, role, permission, media file, email template, API key, and more is reachable through standard HTTP methods. Use it whenever your code does **not** run in a trusted Node.js context — browser apps, mobile clients, third-party services.
 
 ## Setup

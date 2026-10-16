@@ -67,10 +67,19 @@ to put it.
 This is the step most easily missed, and its failure is the most confusing.
 
 ```ts
+// src/app/[[...slug]]/page.tsx
 import { createBlocksPage } from "@nextlyhq/blocks-react/next";
+import { getNextly } from "nextly";
 import { previewDraftGate } from "nextly/runtime";
 
+import nextlyConfig from "../../../nextly.config";
+
+const nextly = await getNextly({ config: nextlyConfig });
+
 const { ContentPage, generateMetadata } = createBlocksPage({
+  // Without `nextly`, the page uses the instance already started in this
+  // process and throws if none is: pass `await getNextly({ config })`.
+  nextly,
   collections: ["pages"],
   field: "content",
   // State the locale on a localized site, even for the default language.
@@ -159,7 +168,12 @@ it — you tell the plugin where you serve it:
 
 ```ts
 // nextly.config.ts
-plugins: [pageBuilder({ pagePreviewPath: "/{slug}" })];
+import { pageBuilder } from "@nextlyhq/plugin-page-builder";
+import { defineConfig } from "nextly";
+
+export default defineConfig({
+  plugins: [pageBuilder({ pagePreviewPath: "/{slug}" })],
+});
 ```
 
 Use `"/blocks/{slug}"`, or whatever prefix your blocks route is mounted under.

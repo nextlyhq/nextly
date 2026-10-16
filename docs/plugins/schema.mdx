@@ -70,6 +70,8 @@ so they're cleaned up if your plugin is removed.
 
 ## Change entities you don't own
 
+> **Needs the release after 0.0.2-alpha.66.**
+
 `contributes.transforms` (`@experimental`) changes an entity another plugin or the app
 declared, not only adds fields to it: an access rule, a hook list, a field's options.
 Each transform receives a frozen copy of the entity and returns the new definition:
@@ -80,7 +82,7 @@ import { definePlugin } from "@nextlyhq/plugin-sdk";
 export default definePlugin({
   name: "@acme/nextly-plugin-public-posts",
   version: "1.0.0",
-  nextly: ">=0.0.2-alpha.63",
+  nextly: ">=0.0.2-alpha.67",
   dependsOn: { "@acme/nextly-plugin-blog": "^1" },
   contributes: {
     transforms: [
@@ -219,6 +221,8 @@ with raw SQL through `ctx.db.raw`) matters: it's what lets uninstall be clean an
 
 ### Tables declared with `defineTable`
 
+> **Needs the release after 0.0.2-alpha.66.**
+
 Tables a plugin declares with `defineTable` and ships migration modules for are
 installed and removed with two commands, run while the plugin is in your config:
 
@@ -240,6 +244,8 @@ full uninstall the boot refuses the plugin while it is still listed
 See also: [Data access](/docs/plugins/services) · [Testing](/docs/plugins/testing).
 
 ## Tables of your own
+
+> **Needs the release after 0.0.2-alpha.66.** So does every section after it on this page.
 
 A collection gives you REST routes, admin screens, validation and access
 control. Sometimes you want none of that — a join table, a cache, a log a user
@@ -272,7 +278,7 @@ const identities = defineTable(
 definePlugin({
   name: "@acme/nextly-plugin-auth",
   version: "1.0.0",
-  nextly: ">=0.1.0",
+  nextly: ">=0.0.2-alpha.67",
   contributes: {
     schema: { prefix: "auth", tables: [identities] },
   },
