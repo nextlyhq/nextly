@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 
 /**
  * SearchInput - client-side search powered by Pagefind.
@@ -80,7 +80,7 @@ export function SearchInput() {
   }, []);
 
   // Debounce the query so fast typing doesn't fire a search per keystroke.
-  const debouncedQuery = useDebounce(query, 150);
+  const debouncedQuery = useSettledQuery(query, 150);
 
   useEffect(() => {
     if (!pagefind || !debouncedQuery) return;
@@ -192,11 +192,18 @@ export function SearchInput() {
   );
 }
 
-function useDebounce<T>(value: T, delayMs: number): T {
-  const [debounced, setDebounced] = useState(value);
+/**
+ * The query to search for. Typing settles after a pause; an emptied box
+ * settles at once, during the same render, so clearing and retyping quickly
+ * still ends the old search and its results before the new one starts.
+ */
+function useSettledQuery(query: string, delayMs: number): string {
+  const [settled, setSettled] = useState(query);
+  if (!query && settled) setSettled("");
   useEffect(() => {
-    const t = setTimeout(() => setDebounced(value), delayMs);
+    if (!query) return;
+    const t = setTimeout(() => setSettled(query), delayMs);
     return () => clearTimeout(t);
-  }, [value, delayMs]);
-  return useMemo(() => debounced, [debounced]);
+  }, [query, delayMs]);
+  return settled;
 }
