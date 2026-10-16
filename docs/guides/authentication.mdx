@@ -175,6 +175,11 @@ zone differs from the application's. Expired links, and links to an address no
 account holds, are removed too. Until that run, a link from before the upgrade
 is refused.
 
+These guarantees hold once every server runs this release. During a rolling
+deploy, a server still on the previous release keeps the previous behaviour:
+it neither revokes a link when an address changes nor checks the account when
+a link is followed. Drain the old servers before relying on them.
+
 ## What a token is for
 
 > **Needs the release after 0.0.2-alpha.66.**
