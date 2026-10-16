@@ -6,7 +6,7 @@
  * builds with: its own entries kept, Nextly's missing ones added, nothing else
  * moved, and a config it cannot change left untouched with exact instructions.
  */
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -182,6 +182,34 @@ describe("a config it cannot change safely", () => {
       "const shared = {};\n\nexport default {\n  ...shared,\n  reactStrictMode: true,\n};\n",
     ],
     ["does not parse", "export default {\n  reactStrictMode: true,\n\n"],
+    [
+      "hands a wrapper its options first and the config after",
+      "const nextConfig = {};\n\nexport default makeConfig({ enabled: true }, nextConfig);\n",
+    ],
+    [
+      "builds the list's key at run time",
+      'const key = "serverExternalPackages";\n\nexport default {\n  [key]: ["my-native-lib"],\n};\n',
+    ],
+    [
+      "replaces the exported variable after declaring it",
+      "let nextConfig = {};\nnextConfig = buildConfig();\n\nexport default nextConfig;\n",
+    ],
+    [
+      "sets the list on the exported variable later",
+      'const nextConfig = {};\nnextConfig.serverExternalPackages = ["my-native-lib"];\n\nexport default nextConfig;\n',
+    ],
+    [
+      "already transpiles a package Nextly needs external",
+      'export default {\n  transpilePackages: ["nextly"],\n};\n',
+    ],
+    [
+      "optimises the imports of a package Nextly needs external",
+      'export default {\n  experimental: { optimizePackageImports: ["drizzle-orm"] },\n};\n',
+    ],
+    [
+      "uses the old experimental option for the list",
+      'export default {\n  experimental: { serverComponentsExternalPackages: ["my-native-lib"] },\n};\n',
+    ],
   ] as const) {
     it(`leaves the file untouched and says exactly what to add when the config ${why}`, async () => {
       await write("next.config.mjs", text);
@@ -198,6 +226,139 @@ describe("a config it cannot change safely", () => {
       );
     });
   }
+});
+
+describe("configs it can still change safely", () => {
+  it("reads a list under a computed string key, and keeps its entries", async () => {
+    await write(
+      "next.config.mjs",
+      'export default {\n  ["serverExternalPackages"]: ["my-native-lib"],\n};\n'
+    );
+
+    const result = await patchNextConfig(dir, postgres);
+
+    expect(result).toEqual({
+      kind: "written",
+      file: "next.config.mjs",
+      added: REQUIRED,
+    });
+    expect(await read("next.config.mjs")).toContain(
+      `["serverExternalPackages"]: ["my-native-lib", ${quoted(REQUIRED).join(", ")}]`
+    );
+  });
+
+  it("follows a wrapper given the config by name and its options after", async () => {
+    await write(
+      "next.config.mjs",
+      'const nextConfig = {\n  reactStrictMode: true,\n};\n\nexport default withSentryConfig(nextConfig, { org: "acme" });\n'
+    );
+
+    const result = await patchNextConfig(dir, postgres);
+
+    expect(result).toEqual({
+      kind: "written",
+      file: "next.config.mjs",
+      added: REQUIRED,
+    });
+    expect(await read("next.config.mjs")).toContain(
+      'withSentryConfig(nextConfig, { org: "acme" })'
+    );
+  });
+
+  it("reads a next.config.mts as TypeScript", async () => {
+    await write(
+      "next.config.mts",
+      'import type { NextConfig } from "next";\n\nexport default {\n  reactStrictMode: true,\n} satisfies NextConfig;\n'
+    );
+
+    const result = await patchNextConfig(dir, postgres);
+
+    expect(result).toEqual({
+      kind: "written",
+      file: "next.config.mts",
+      added: REQUIRED,
+    });
+  });
+
+  it("edits the file Next.js reads first when there are several", async () => {
+    // Next.js prefers next.config.js over next.config.ts.
+    const ts = "export default {};\n";
+    await write("next.config.ts", ts);
+    await write(
+      "next.config.js",
+      "module.exports = {\n  reactStrictMode: true,\n};\n"
+    );
+
+    const result = await patchNextConfig(dir, postgres);
+
+    expect(result).toMatchObject({ kind: "written", file: "next.config.js" });
+    expect(await read("next.config.ts")).toBe(ts);
+  });
+
+  it("keeps a comment in an empty list", async () => {
+    await write(
+      "next.config.mjs",
+      "export default {\n  serverExternalPackages: [/* native modules */],\n};\n"
+    );
+
+    await patchNextConfig(dir, postgres);
+
+    expect(await read("next.config.mjs")).toBe(
+      `export default {\n  serverExternalPackages: [/* native modules */ ${quoted(REQUIRED).join(", ")}],\n};\n`
+    );
+  });
+
+  it("names the clash when a package Nextly needs external is transpiled", async () => {
+    await write(
+      "next.config.mjs",
+      'export default {\n  transpilePackages: ["nextly"],\n};\n'
+    );
+
+    const result = await patchNextConfig(dir, postgres);
+
+    expect(result.kind).toBe("manual");
+    expect(nextConfigReport(result).message).toContain(
+      "nextly also appears in its transpilePackages"
+    );
+  });
+});
+
+describe("an app on Next.js 14", () => {
+  const next14 = () =>
+    write(
+      "node_modules/next/package.json",
+      JSON.stringify({ name: "next", version: "14.2.3" })
+    );
+
+  it("leaves the config untouched and prints the option Next.js 14 reads", async () => {
+    await mkdir(path.join(dir, "node_modules/next"), { recursive: true });
+    await next14();
+    const text = "export default {\n  reactStrictMode: true,\n};\n";
+    await write("next.config.mjs", text);
+
+    const result = await patchNextConfig(dir, postgres);
+
+    expect(result).toMatchObject({
+      kind: "manual",
+      file: "next.config.mjs",
+      legacyOption: true,
+    });
+    expect(await read("next.config.mjs")).toBe(text);
+    expect(nextConfigReport(result).message).toContain(
+      `experimental: { serverComponentsExternalPackages: [${quoted(REQUIRED).join(", ")}] },`
+    );
+  });
+
+  it("writes no config of its own either, and says what to add", async () => {
+    await mkdir(path.join(dir, "node_modules/next"), { recursive: true });
+    await next14();
+
+    const result = await patchNextConfig(dir, postgres);
+
+    expect(result).toMatchObject({ kind: "manual", legacyOption: true });
+    await expect(read("next.config.ts")).rejects.toThrow();
+    await expect(read("next.config.mjs")).rejects.toThrow();
+  });
 });
 
 describe("an app with no Next config", () => {
