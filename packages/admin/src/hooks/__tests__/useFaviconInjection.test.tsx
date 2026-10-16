@@ -39,11 +39,31 @@ describe("the admin's favicon", () => {
     expect(hostLink, "React hoists the host icon into <head>").not.toBeNull();
     renderHook(() => useFaviconInjection(ADMIN_ICON));
 
-    // What a hot reload of the layout does to the icon React owns.
+    // What a hot reload of the layout does to the icon React owns: React
+    // updates its own node in place, which stays switched off.
     expect(() =>
       host.rerender(<HostIcon href="/favicon-2.ico" />)
     ).not.toThrow();
+    expect(hostLink?.getAttribute("href")).toBe("/favicon-2.ico");
+    expect(activeIcons().map(link => link.href)).toEqual([ADMIN_ICON]);
+
     expect(() => host.unmount()).not.toThrow();
+    expect(hostLink?.isConnected).toBe(false);
+    expect(activeIcons().map(link => link.href)).toEqual([ADMIN_ICON]);
+  });
+
+  it("switches off a host icon React adds after the admin's is shown", async () => {
+    const admin = renderHook(() => useFaviconInjection(ADMIN_ICON));
+
+    render(<HostIcon href="/late.ico" />);
+    // The observer runs after the DOM change, as a microtask.
+    await Promise.resolve();
+
+    expect(activeIcons().map(link => link.href)).toEqual([ADMIN_ICON]);
+    admin.unmount();
+    expect(activeIcons().map(link => link.getAttribute("href"))).toEqual([
+      "/late.ico",
+    ]);
   });
 
   it("shows only the admin's icon while it is mounted, keeping the host's node in place", () => {

@@ -18,27 +18,40 @@ const SWITCHED_OFF = "nextly-replaced-icon";
  * updates `<head>`, as a hot reload of the layout does. They are switched off
  * instead by renaming their `rel`, an attribute change React leaves alone, and
  * switched back when the admin's icon goes. The admin's own link is the only
- * node this adds or removes.
+ * node this adds or removes. A host icon added later, as when a layout change
+ * makes React render a new one, is switched off as it arrives.
  */
 export function useFaviconInjection(href: string): void {
   useEffect(() => {
-    const hostIcons = Array.from(
-      document.querySelectorAll<HTMLLinkElement>(ICON_LINKS)
-    );
-    for (const icon of hostIcons) {
-      icon.dataset.nextlyRel = icon.rel;
-      icon.rel = SWITCHED_OFF;
-    }
-
     const own = document.createElement("link");
     own.rel = "icon";
     if (href.startsWith("data:image/svg+xml")) own.type = "image/svg+xml";
     own.href = href;
+
+    const switchedOff = new Set<HTMLLinkElement>();
+    const switchOff = (icon: HTMLLinkElement) => {
+      if (icon === own || switchedOff.has(icon)) return;
+      icon.dataset.nextlyRel = icon.rel;
+      icon.rel = SWITCHED_OFF;
+      switchedOff.add(icon);
+    };
+    document.querySelectorAll<HTMLLinkElement>(ICON_LINKS).forEach(switchOff);
     document.head.appendChild(own);
 
+    const arrivals = new MutationObserver(records => {
+      for (const record of records) {
+        record.addedNodes.forEach(node => {
+          if (node instanceof HTMLLinkElement && node.matches(ICON_LINKS))
+            switchOff(node);
+        });
+      }
+    });
+    arrivals.observe(document.head, { childList: true });
+
     return () => {
+      arrivals.disconnect();
       own.remove();
-      for (const icon of hostIcons) restoreHostIcon(icon);
+      switchedOff.forEach(restoreHostIcon);
     };
   }, [href]);
 }
