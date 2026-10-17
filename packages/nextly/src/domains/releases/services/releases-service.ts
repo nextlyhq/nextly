@@ -663,6 +663,30 @@ function roomFor(held: number): number {
 }
 
 /**
+ * The refusal for adding to a release holding `held` documents, or null when
+ * one more fits. It says how many fit, which is none here; a release made
+ * before the limit and over it is told it can still shrink and still runs.
+ */
+function memberLimitRefusal(
+  releaseId: string,
+  held: number
+): NextlyError | null {
+  if (roomFor(held) > 0) return null;
+  return NextlyError.conflict({
+    message:
+      held > RELEASE_MEMBER_LIMIT
+        ? `This release holds ${held} documents, more than the ${RELEASE_MEMBER_LIMIT} a release can hold now, so no more fit. Documents can still be removed, and it still runs as scheduled.`
+        : `This release holds ${RELEASE_MEMBER_LIMIT} documents, the most a release can hold, so no more fit. Remove one, or start another release.`,
+    logContext: {
+      reason: "release-member-limit",
+      releaseId,
+      held,
+      limit: RELEASE_MEMBER_LIMIT,
+    },
+  });
+}
+
+/**
  * Whether a release holding `held` documents may take one more: the
  * one-document rule for a single release, and the limit for every release.
  */
@@ -1418,7 +1442,8 @@ export class ReleasesService {
           // would be an identity they could borrow at a future instant.
           createdBy: actor.userId,
         },
-        allowedStates
+        allowedStates,
+        held => memberLimitRefusal(releaseId, held)
       );
     } catch (error) {
       // The `memberKey` unique index is what stops one document being scheduled
@@ -1648,25 +1673,16 @@ export class ReleasesService {
     });
   }
 
+  /**
+   * The early answer, before any other work: the guarantee is the same rule
+   * asked again under the release-row lock when the member is written.
+   */
   private async assertRoomForOneMore(releaseId: string): Promise<void> {
     const held =
       (await this.deps.repository.memberCountsOf([releaseId])).get(releaseId) ??
       0;
-    if (roomFor(held) > 0) return;
-    // Saying how many fit, which is none here; a release made before the
-    // limit and over it is told it can still shrink and still runs.
-    throw NextlyError.conflict({
-      message:
-        held > RELEASE_MEMBER_LIMIT
-          ? `This release holds ${held} documents, more than the ${RELEASE_MEMBER_LIMIT} a release can hold now, so no more fit. Documents can still be removed, and it still runs as scheduled.`
-          : `This release holds ${RELEASE_MEMBER_LIMIT} documents, the most a release can hold, so no more fit. Remove one, or start another release.`,
-      logContext: {
-        reason: "release-member-limit",
-        releaseId,
-        held,
-        limit: RELEASE_MEMBER_LIMIT,
-      },
-    });
+    const refusal = memberLimitRefusal(releaseId, held);
+    if (refusal !== null) throw refusal;
   }
 
   private async requireLiveAuthor(userId: string | null): Promise<void> {

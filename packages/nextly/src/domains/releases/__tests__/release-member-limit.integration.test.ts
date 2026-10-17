@@ -25,6 +25,7 @@ import { RELEASE_MEMBER_LIMIT } from "../../../schemas/releases/types";
 import type { CollectionsHandler } from "../../../services/collections-handler";
 import type { JobRegistry } from "../../jobs/job-registry";
 import { runJobsPass } from "../../jobs/jobs-runner";
+import { DEFAULT_MAX_DURATION_MS } from "../../jobs/run-jobs";
 import { ReleasesRepository } from "../releases-repository";
 
 import { seedLiveAuthor } from "./helpers/live-author";
@@ -169,7 +170,7 @@ describe.each(getConfiguredTestDialects())(
     );
 
     it(
-      "lets a release made before the limit run and shrink, but not grow",
+      "refuses to grow a release made before the limit, and runs it as it stands",
       async () => {
         const t = await boot(dialect);
         const author = await seedLiveAuthor(t);
@@ -186,21 +187,9 @@ describe.each(getConfiguredTestDialects())(
           code: "CONFLICT",
           publicMessage: expect.stringMatching(/can still be removed/),
         });
-        const row = await t.nextly.releases.findByID({ id });
-        if (row === null) throw new Error("release not found");
-        const can = (
-          await t.nextly.releases.capabilities({ releases: [row] })
-        ).get(id);
-        expect(can?.addMember).toBe(false);
-        expect(can?.removeMember).toBe(true);
 
-        // It shrinks…
-        const members = await t.nextly.releases.listMembers({ releaseId: id });
-        await t.nextly.releases.removeMember({
-          releaseId: id,
-          memberId: members[0].id,
-        });
-        // …and is still scheduled and run as it stands.
+        // Scheduled and run while still OVER the limit: a release made before
+        // it keeps working as it is.
         await scheduleAsItStands(
           new ReleasesRepository(t.adapter),
           id,
@@ -215,6 +204,62 @@ describe.each(getConfiguredTestDialects())(
         expect((await t.nextly.releases.findByID({ id }))?.state).toBe(
           "published"
         );
+        expect(await publishedCount(t)).toBe(RELEASE_MEMBER_LIMIT + 1);
+      },
+      LONG
+    );
+
+    it(
+      "lets a release made before the limit shrink, and offers removal but no add",
+      async () => {
+        const t = await boot(dialect);
+        const author = await seedLiveAuthor(t);
+        const ids = await drafts(t, RELEASE_MEMBER_LIMIT + 1);
+        const id = await releaseHolding(t, author, ids);
+
+        const row = await t.nextly.releases.findByID({ id });
+        if (row === null) throw new Error("release not found");
+        const can = (
+          await t.nextly.releases.capabilities({ releases: [row] })
+        ).get(id);
+        expect(can?.addMember).toBe(false);
+        expect(can?.removeMember).toBe(true);
+
+        const members = await t.nextly.releases.listMembers({ releaseId: id });
+        await t.nextly.releases.removeMember({
+          releaseId: id,
+          memberId: members[0].id,
+        });
+        expect(
+          await t.nextly.releases.listMembers({ releaseId: id })
+        ).toHaveLength(RELEASE_MEMBER_LIMIT);
+      },
+      LONG
+    );
+
+    it(
+      "holds the limit when documents are added at once, not only one by one",
+      async () => {
+        const t = await boot(dialect);
+        const author = await seedLiveAuthor(t);
+        const ids = await drafts(t, RELEASE_MEMBER_LIMIT + 4);
+        const id = await releaseHolding(
+          t,
+          author,
+          ids.slice(0, RELEASE_MEMBER_LIMIT - 1)
+        );
+
+        // Five adds racing for the one place left: every one reads 199 before
+        // any has written, so only the check under the release lock can hold.
+        const results = await Promise.allSettled(
+          ids
+            .slice(RELEASE_MEMBER_LIMIT - 1)
+            .map(entryId => add(t, id, entryId, author))
+        );
+        expect(results.filter(r => r.status === "fulfilled")).toHaveLength(1);
+        expect(
+          await t.nextly.releases.listMembers({ releaseId: id })
+        ).toHaveLength(RELEASE_MEMBER_LIMIT);
       },
       LONG
     );
@@ -247,8 +292,10 @@ describe.each(getConfiguredTestDialects())(
           "published"
         );
         expect(await publishedCount(t)).toBe(RELEASE_MEMBER_LIMIT);
-        // Printed rather than asserted beyond the pass itself: the runner's
-        // budget is the bound, and the number is recorded with the change.
+        // Within the runner's own budget, not merely allowed to overrun it:
+        // the runner lets a started handler outlive its deadline, so finishing
+        // is not the property; finishing inside one tick is.
+        expect(elapsedMs).toBeLessThan(DEFAULT_MAX_DURATION_MS);
         console.info(
           `[release-member-limit] ${dialect}: ${RELEASE_MEMBER_LIMIT} documents published in one pass, ${elapsedMs} ms`
         );

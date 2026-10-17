@@ -1132,11 +1132,22 @@ export class ReleasesRepository {
    */
   async addMember(
     input: NewReleaseMember,
-    allowedStates: readonly ReleaseState[]
+    allowedStates: readonly ReleaseState[],
+    /**
+     * Asked how many members the release holds, under the release-row lock
+     * and inside the insert's transaction; an error it returns refuses the
+     * add with nothing written. Under the lock, concurrent adds to one
+     * release are judged one after another, so a limit holds however many
+     * arrive at once.
+     */
+    refuseWhenHolding?: (held: number) => NextlyError | null
   ): Promise<ReleaseMemberRow> {
     // Tells a fence miss from a database failure, as in `blockReleases`: the
     // flag decides, not the shape of the error.
     let fenceMissed = false;
+    // Held in an object so the refusal set inside the transaction keeps its
+    // type once the transaction has thrown it.
+    const limit: { refused: NextlyError | null } = { refused: null };
     let row: ReleaseMemberRow;
     try {
       row = await this.db.transaction(async tx => {
@@ -1148,6 +1159,16 @@ export class ReleasesRepository {
         if (release === null) {
           fenceMissed = true;
           throw releaseMovedConflict(input.releaseId, "add-member");
+        }
+        if (refuseWhenHolding !== undefined) {
+          const held = await tx.select<{ id: string }>(MEMBERS, {
+            columns: ["id"],
+            where: {
+              and: [{ column: "releaseId", op: "=", value: input.releaseId }],
+            },
+          });
+          limit.refused = refuseWhenHolding(held.length);
+          if (limit.refused !== null) throw limit.refused;
         }
         const member: ReleaseMemberRow = {
           // Time-ordered, so members added within one second — one stored
@@ -1178,6 +1199,7 @@ export class ReleasesRepository {
       if (fenceMissed) {
         throw releaseMovedConflict(input.releaseId, "add-member");
       }
+      if (limit.refused !== null) throw limit.refused;
       throw error;
     }
     // AFTER THE COMMIT, never inside it, for the reason `blockReleases` gives.
