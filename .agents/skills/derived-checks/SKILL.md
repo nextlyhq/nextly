@@ -7,7 +7,6 @@ description: >-
   identifying by structure rather than by name, and whether a guard should
   fail open or closed.
 metadata:
-  internal: true
 ---
 
 When one piece of code checks, mirrors or summarises what another produces:
