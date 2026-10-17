@@ -77,6 +77,14 @@ export interface VersionsSelectOptions {
    * number that does not describe the data. The adapter has always supported it.
    */
   offset?: number;
+  /**
+   * A locking read: rows are read as last committed, not from the
+   * transaction's snapshot, and locked until it ends. On MySQL a plain read
+   * answers from the snapshot the transaction's first read took, so a read
+   * that decides what to delete must be a locking one to see a row another
+   * transaction committed since. Inside a transaction only; SQLite ignores it.
+   */
+  forUpdate?: boolean;
 }
 
 /** The database methods the versions repository depends on. */

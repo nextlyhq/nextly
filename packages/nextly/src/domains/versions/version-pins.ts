@@ -12,9 +12,11 @@
  * release the old one. A version stays while any slot of any feature points at
  * it, so one feature releasing never frees what another still holds.
  *
- * Holders are registered, as comparison baselines are: a feature (core or a
- * plugin) registers its name once, and pins under it. An unregistered name is
- * refused, so a misspelt holder cannot quietly create pins nobody releases.
+ * Holders are registered, as comparison baselines are: a feature registers its
+ * name once, and registration hands it the one handle that pins under that
+ * name. There is no lookup by name, so no other code can move or release the
+ * slots a feature relies on, and a misspelt holder cannot quietly create pins
+ * nobody releases.
  *
  * Every call takes the caller's transaction, so a feature pins in the same
  * transaction as the change it records. A pin takes the document's write lock,
@@ -29,7 +31,6 @@ import { createHash } from "node:crypto";
 
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
-import { getService } from "../../di";
 import { NextlyError } from "../../errors";
 import type { VersionScopeKind } from "../../schemas/versions/types";
 
@@ -41,7 +42,7 @@ const VERSIONS_TABLE = "nextly_versions";
 
 /** A feature that may hold versions. */
 export interface VersionPinHolderDefinition {
-  /** Its name, kebab-case and unique: what `versionPins.holder` is asked for. */
+  /** Its name, kebab-case and unique: what its pins are recorded under. */
   name: string;
   /** How a reader would name it ("Workflows"). */
   label: string;
@@ -77,23 +78,26 @@ const HOLDER_NAME = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
 const MAX_HOLDER_LENGTH = 64;
 const MAX_SLOT_LENGTH = 191;
 
-const holders = new Map<string, VersionPinHolderDefinition>();
+const holders = new Map<
+  string,
+  { definition: VersionPinHolderDefinition; handle: VersionPinHolder }
+>();
 
 /**
- * Register a feature that may hold versions. Called once per feature as it
- * loads.
+ * Register a feature that may hold versions, and get the handle it pins
+ * through. Called once per feature as it loads; the feature keeps the handle.
  *
  * Refuses a name that is not kebab-case or is too long for its column, and a
  * name another feature registered: two features answering to one name would
  * release each other's pins. The same registration again (same name and
- * label) is accepted and changes nothing, since a module reloaded in
- * development, or a plugin set up twice, runs its registration again.
+ * label) returns the same handle, since a module reloaded in development runs
+ * its registration again.
  *
  * @experimental
  */
 export function registerVersionPinHolder(
   definition: VersionPinHolderDefinition
-): void {
+): VersionPinHolder {
   const { name } = definition;
   if (!HOLDER_NAME.test(name) || name.length > MAX_HOLDER_LENGTH) {
     throw NextlyError.invalidInput({
@@ -102,14 +106,16 @@ export function registerVersionPinHolder(
     });
   }
   const existing = holders.get(name);
-  if (existing?.label === definition.label) return;
+  if (existing?.definition.label === definition.label) return existing.handle;
   if (existing) {
     throw NextlyError.invalidInput({
-      message: `A version pin holder is already registered as "${name}" (${existing.label}); choose another name for ${definition.label}.`,
+      message: `A version pin holder is already registered as "${name}" (${existing.definition.label}); choose another name for ${definition.label}.`,
       logContext: { name },
     });
   }
-  holders.set(name, { ...definition });
+  const handle = holderHandle(name);
+  holders.set(name, { definition: { ...definition }, handle });
+  return handle;
 }
 
 /** Every registered holder's name. */
@@ -156,26 +162,39 @@ function assertSlot(slot: string): void {
 }
 
 /**
- * The document's table, read on the caller's transaction, so its row can be
- * locked the way a save locks it. Null when the collection or Single itself
- * is gone.
+ * Where each kind of entity is registered. A page has no registry row to lock
+ * here, so its versions cannot be pinned yet: a pin on one is refused as a
+ * document that does not exist.
+ */
+const REGISTRY_TABLES: Partial<Record<VersionScopeKind, string>> = {
+  collection: "dynamic_collections",
+  single: "dynamic_singles",
+};
+
+/**
+ * The document's table, from a locking read of the entity's registry row on
+ * the caller's transaction, so its row can be locked the way a save locks it.
+ * Null when the collection or Single itself is gone.
+ *
+ * Locking the registry row is what orders a pin against the entity's deletion,
+ * which sweeps the entity's pins and removes that row in one transaction: a
+ * pin either commits before the sweep and is swept, or waits for it and finds
+ * the entity gone.
  */
 async function documentTableName(
   tx: TransactionContext,
   ref: VersionRef
 ): Promise<string | null> {
-  const executor = tx.getDrizzle();
-  const record =
-    ref.scopeKind === "single"
-      ? await getService("singleRegistryService").getSingleBySlug(
-          ref.scopeSlug,
-          executor
-        )
-      : await getService("collectionRegistryService").getCollectionBySlug(
-          ref.scopeSlug,
-          executor
-        );
-  return record ? record.tableName : null;
+  const registry = REGISTRY_TABLES[ref.scopeKind];
+  if (registry === undefined) return null;
+  const entity = await tx.selectOne<{ tableName: string }>(registry, {
+    columns: ["tableName"],
+    where: {
+      and: [{ column: "slug", op: "=" as const, value: ref.scopeSlug }],
+    },
+    forUpdate: true,
+  });
+  return entity ? entity.tableName : null;
 }
 
 /**
@@ -251,10 +270,14 @@ function holderHandle(name: string): VersionPinHolder {
       await assertVersionExists(tx, ref, versionNo);
 
       const pinKey = versionPinKey(ref, name, slot);
+      // A locking read, for the reason `pinnedVersionNos` gives: a slot
+      // another pin committed while this one waited for the lock is updated,
+      // not inserted a second time.
       const existing = await tx.select<{ id: string }>(PINS_TABLE, {
         columns: ["id"],
         where: { and: [{ column: "pinKey", op: "=" as const, value: pinKey }] },
         limit: 1,
+        forUpdate: true,
       });
       const now = new Date();
       if (existing.length > 0) {
@@ -312,20 +335,6 @@ function holderHandle(name: string): VersionPinHolder {
  * @experimental
  */
 export const versionPins = {
-  /**
-   * The handle a registered holder pins through. Refuses a name nothing
-   * registered, naming the call that registers one.
-   */
-  holder(name: string): VersionPinHolder {
-    if (!holders.has(name)) {
-      throw NextlyError.invalidInput({
-        message: `"${name}" is not a registered version pin holder. Register it once with registerVersionPinHolder({ name, label }) before pinning.`,
-        logContext: { name, registered: versionPinHolderNames() },
-      });
-    }
-    return holderHandle(name);
-  },
-
   /** Every slot on a document, of every holder. */
   async list(db: VersionsDbApi, ref: VersionRef): Promise<VersionPin[]> {
     return db.select<VersionPin>(PINS_TABLE, {
@@ -335,7 +344,12 @@ export const versionPins = {
   },
 };
 
-/** The version numbers any slot on the document points at, for retention. */
+/**
+ * The version numbers any slot on the document points at, for retention, read
+ * on the saving transaction. A locking read: a plain one on MySQL answers from
+ * the snapshot the transaction's first read took, and would miss a pin
+ * committed since, leaving its version to be pruned.
+ */
 export async function pinnedVersionNos(
   db: VersionsDbApi,
   ref: VersionRef
@@ -343,6 +357,7 @@ export async function pinnedVersionNos(
   const rows = await db.select<{ versionNo: number }>(PINS_TABLE, {
     columns: ["versionNo"],
     where: { and: documentWhere(ref) },
+    forUpdate: true,
   });
   return rows.map(row => row.versionNo);
 }
@@ -368,7 +383,3 @@ export async function deletePinsForEntity(
     ],
   });
 }
-
-// Workflows is the first holder: it pins the version an approval names and the
-// version last brought into review.
-registerVersionPinHolder({ name: "workflows", label: "Workflows" });
