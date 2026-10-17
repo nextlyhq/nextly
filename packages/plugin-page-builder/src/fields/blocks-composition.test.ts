@@ -23,6 +23,8 @@ import {
   type BrokenHosts,
   type HostFinder,
   type HostRef,
+  type LockedExposures,
+  type StillBrokenHosts,
   type UnjudgedHosts,
 } from "./blocks-composition";
 
@@ -49,6 +51,44 @@ beforeEach(() => {
         slots: { label: { allow: ["acme/text"] } },
       },
       { ...base, name: "acme/text" },
+      {
+        ...base,
+        name: "acme/sealed",
+        slots: {
+          body: { defaultBlock: [{ type: "acme/text" }], lock: "contentOnly" },
+        },
+      },
+      {
+        ...base,
+        name: "acme/fixed",
+        slots: {
+          items: { defaultBlock: [{ type: "acme/text" }], lock: "all" },
+        },
+      },
+      {
+        ...base,
+        name: "acme/plain-box",
+        slots: { inner: { defaultBlock: [{ type: "acme/text" }] } },
+      },
+      {
+        ...base,
+        name: "acme/fixed-shelf",
+        slots: {
+          items: { defaultBlock: [{ type: "acme/plain-box" }], lock: "all" },
+        },
+      },
+      {
+        ...base,
+        name: "acme/quote",
+        props: { words: { type: "text", role: "content" } },
+      },
+      {
+        ...base,
+        name: "acme/sealed-quote",
+        slots: {
+          body: { defaultBlock: [{ type: "acme/quote" }], lock: "contentOnly" },
+        },
+      },
     ] as never,
     { source: "acme" }
   );
@@ -140,30 +180,28 @@ function judge(
     hostsOf?: HostFinder;
     onUnjudged?: (unjudged: UnjudgedHosts) => void;
     onHostsBroken?: (broken: BrokenHosts) => void;
+    onLockedExposures?: (found: LockedExposures) => void;
+    onHostsStillBroken?: (found: StillBrokenHosts) => void;
     composesDocuments?: boolean;
   } = {}
 ) {
+  const { status, limits, composesDocuments, ...callbacks } = options;
   return compositionIssues(
     value,
     {
       path: FIELD,
       data: {
         [FIELD]: value,
-        ...(options.status === undefined ? {} : { status: options.status }),
+        ...(status === undefined ? {} : { status }),
       },
       ...(w === undefined ? {} : { write: w }),
     },
     {
       store: STORE,
-      limits: options.limits ?? DEFAULT_LIMITS,
-      ...(options.hostsOf === undefined ? {} : { hostsOf: options.hostsOf }),
-      ...(options.onUnjudged === undefined
-        ? {}
-        : { onUnjudged: options.onUnjudged }),
-      ...(options.onHostsBroken === undefined
-        ? {}
-        : { onHostsBroken: options.onHostsBroken }),
-      composesDocuments: options.composesDocuments ?? true,
+      limits: limits ?? DEFAULT_LIMITS,
+      // Only the callbacks a case names: an absent one is never handed in.
+      ...callbacks,
+      composesDocuments: composesDocuments ?? true,
     }
   );
 }
@@ -231,6 +269,405 @@ describe("a component that would contain itself", () => {
   });
 });
 
+describe("a component save judged against the locks inside its hosts", () => {
+  const hostPage: HostRef = {
+    slug: "pages",
+    id: "home",
+    field: FIELD,
+    localized: false,
+  };
+
+  it("refuses re-aiming an exposed slot into a lock that the host's content then breaks", async () => {
+    // The page supplies two texts to the "extra" slot, which held them in an
+    // open box. Re-aimed at a slot locked "all" that starts with one text, the
+    // same content breaks that lock on the page.
+    const aimedAt = (nodeId: string, slot: string) =>
+      component(
+        [
+          node("open", "acme/box", { children: [] }),
+          node("fixed", "acme/fixed", { items: [node("t1")] }),
+        ],
+        { slots: { extra: { label: "Extra", nodeId, slot } } }
+      );
+    const { readStored } = storeOf({
+      [COMPONENTS]: { promo: { published: aimedAt("open", "children") } },
+      pages: {
+        home: {
+          published: page([
+            placing("i1", "promo", {
+              slots: { extra: [node("x1"), node("x2")] },
+            }),
+          ]),
+        },
+      },
+    });
+    const { hostsOf } = listing([hostPage]);
+
+    const issues = await judge(
+      aimedAt("fixed", "items"),
+      write(readStored, COMPONENTS, "promo"),
+      { hostsOf, status: "published" }
+    );
+
+    expect(codes(issues)).toEqual(["COMPONENT_HOST_BROKEN"]);
+    // Named as the lock it is, not as a block in the wrong place.
+    expect(issues[0]!.message).toContain("locked slot");
+  });
+
+  it("refuses a second lock break at a placement that already broke one", async () => {
+    // The page's placement already leaves the shelf's locked slot empty. The
+    // save re-aims the other exposed slot into a second locked slot, which the
+    // same placement's content then breaks: a new break, though its rule and
+    // placement match the old one.
+    const aimedAt = (nodeId: string, slot: string) =>
+      component(
+        [
+          node("open", "acme/box", { children: [] }),
+          node("fixed", "acme/fixed", { items: [node("t1")] }),
+          node("shelf", "acme/fixed-shelf", {
+            items: [node("pb", "acme/plain-box", { inner: [node("pt")] })],
+          }),
+        ],
+        {
+          slots: {
+            extra: { label: "Extra", nodeId, slot },
+            stock: { label: "Stock", nodeId: "shelf", slot: "items" },
+          },
+        }
+      );
+    const { readStored } = storeOf({
+      [COMPONENTS]: { promo: { published: aimedAt("open", "children") } },
+      pages: {
+        home: {
+          published: page([
+            placing("i1", "promo", {
+              slots: { extra: [node("x1"), node("x2")], stock: [] },
+            }),
+          ]),
+        },
+      },
+    });
+    const { hostsOf } = listing([hostPage]);
+
+    const issues = await judge(
+      aimedAt("fixed", "items"),
+      write(readStored, COMPONENTS, "promo"),
+      { hostsOf, status: "published" }
+    );
+
+    expect(codes(issues)).toEqual(["COMPONENT_HOST_BROKEN"]);
+  });
+
+  it("judges the hosts of an exposed-slot holder moved under a lock, everything else kept", async () => {
+    // Two branches, each two deep: an open box and a shelf locked "all". The
+    // exposed slot's holder trades places with its twin, keeping its id, type,
+    // slot and depth, and every root and exposure stays as it was. Only the
+    // lock it now sits under differs, and the page's two texts in that slot
+    // break it.
+    const twin = (id: string) =>
+      node(id, "acme/plain-box", { inner: [node(`${id}-t`)] });
+    const swapped = (inOpen: string, inShelf: string) =>
+      component(
+        [
+          node("open", "acme/box", { children: [twin(inOpen)] }),
+          node("shelf", "acme/fixed-shelf", { items: [twin(inShelf)] }),
+        ],
+        { slots: { extra: { label: "Extra", nodeId: "pb", slot: "inner" } } }
+      );
+    const { readStored } = storeOf({
+      [COMPONENTS]: { promo: { published: swapped("pb", "other") } },
+      pages: {
+        home: {
+          published: page([
+            placing("i1", "promo", {
+              slots: { extra: [node("x1"), node("x2")] },
+            }),
+          ]),
+        },
+      },
+    });
+    const { hostsOf } = listing([hostPage]);
+
+    const issues = await judge(
+      swapped("other", "pb"),
+      write(readStored, COMPONENTS, "promo"),
+      { hostsOf, status: "published" }
+    );
+
+    expect(codes(issues)).toEqual(["COMPONENT_HOST_BROKEN"]);
+  });
+
+  it("logs every locked slot a save newly breaks at one placement", async () => {
+    // Both exposed slots move from open boxes into slots locked "all", and the
+    // page's content breaks each: two faults of one rule at one placement, and
+    // the operator has two slots to repair.
+    const aimedAt = (extra: string, stock: string) =>
+      component(
+        [
+          node("open", "acme/box", { children: [] }),
+          node("open2", "acme/box", { children: [] }),
+          node("fixed", "acme/fixed", { items: [node("t1")] }),
+          node("shelf", "acme/fixed-shelf", {
+            items: [node("pb", "acme/plain-box", { inner: [node("pt")] })],
+          }),
+        ],
+        {
+          slots: {
+            extra: {
+              label: "Extra",
+              nodeId: extra,
+              slot: extra.startsWith("open") ? "children" : "items",
+            },
+            stock: {
+              label: "Stock",
+              nodeId: stock,
+              slot: stock.startsWith("open") ? "children" : "items",
+            },
+          },
+        }
+      );
+    const { readStored } = storeOf({
+      [COMPONENTS]: { promo: { published: aimedAt("open", "open2") } },
+      pages: {
+        home: {
+          published: page([
+            placing("i1", "promo", {
+              slots: { extra: [node("x1"), node("x2")], stock: [] },
+            }),
+          ]),
+        },
+      },
+    });
+    const { hostsOf } = listing([hostPage]);
+    const logged: BrokenHosts[] = [];
+
+    const issues = await judge(
+      aimedAt("fixed", "shelf"),
+      write(readStored, COMPONENTS, "promo"),
+      { hostsOf, status: "published", onHostsBroken: b => logged.push(b) }
+    );
+
+    expect(codes(issues)).toEqual(["COMPONENT_HOST_BROKEN"]);
+    const messages = logged.flatMap(b => b.hosts.flatMap(h => h.messages));
+    expect(messages).toHaveLength(2);
+    expect(messages.join(" ")).toContain('"acme/fixed"');
+    expect(messages.join(" ")).toContain('"acme/fixed-shelf"');
+  });
+
+  it("judges the hosts of a variant whose value for a stored locked exposure changes", async () => {
+    // The component already stores an exposure of the text's "tone" inside
+    // its sealed slot. Its variant "loud" sets nothing for it; the save gives
+    // the variant a value, so every page picking the variant draws the sealed
+    // text changed, with no root, depth, exposure or slot moved.
+    const sealed = (tone?: string) =>
+      component([node("s1", "acme/sealed", { body: [node("t1")] })], {
+        exposed: [
+          {
+            id: "tone",
+            label: "Tone",
+            nodeId: "t1",
+            propPath: "tone",
+            type: "select",
+            options: [{ value: "loud", label: "Loud" }],
+          },
+        ],
+        variants: {
+          loud: {
+            label: "Loud",
+            overrides: tone === undefined ? {} : { tone },
+          },
+        },
+      });
+    const { readStored } = storeOf({
+      [COMPONENTS]: { promo: { published: sealed() } },
+      pages: {
+        home: {
+          published: page([
+            {
+              ...placing("i1", "promo"),
+              props: { componentId: "promo", variant: "loud" },
+            },
+          ]),
+        },
+      },
+    });
+    const { hostsOf } = listing([hostPage]);
+
+    const issues = await judge(
+      sealed("loud"),
+      write(readStored, COMPONENTS, "promo"),
+      { hostsOf, status: "published" }
+    );
+
+    expect(codes(issues)).toEqual(["COMPONENT_HOST_BROKEN"]);
+  });
+
+  it("warns about a host whose lock was already broken and is made no worse, naming the host and the rule", async () => {
+    // The page's stored value for "tone" already changes design inside the
+    // sealed slot. The save adds an unrelated exposure, which is reason enough
+    // to judge the hosts, and leaves that break as it was.
+    const sealed = (extra: Record<string, unknown>[] = []) =>
+      component(
+        [
+          node("s1", "acme/sealed", { body: [node("t1")] }),
+          node("q1", "acme/quote"),
+        ],
+        {
+          exposed: [
+            {
+              id: "tone",
+              label: "Tone",
+              nodeId: "t1",
+              propPath: "tone",
+              type: "select",
+              options: [{ value: "loud", label: "Loud" }],
+            },
+            ...extra,
+          ] as never,
+        }
+      );
+    const { readStored } = storeOf({
+      [COMPONENTS]: { promo: { published: sealed() } },
+      pages: {
+        home: {
+          published: page([
+            {
+              ...placing("i1", "promo"),
+              props: { componentId: "promo", overrides: { tone: "loud" } },
+            },
+          ]),
+        },
+      },
+    });
+    const { hostsOf } = listing([hostPage]);
+    const warned: StillBrokenHosts[] = [];
+
+    const issues = await judge(
+      sealed([
+        {
+          id: "words",
+          label: "Words",
+          nodeId: "q1",
+          propPath: "words",
+          type: "text",
+        },
+      ]),
+      write(readStored, COMPONENTS, "promo"),
+      {
+        hostsOf,
+        status: "published",
+        onHostsStillBroken: found => warned.push(found),
+      }
+    );
+
+    expect(issues).toEqual([]);
+    expect(warned).toEqual([
+      {
+        componentId: "promo",
+        hosts: [
+          expect.objectContaining({
+            slug: "pages",
+            id: "home",
+            messages: [expect.stringContaining("contentOnly")],
+          }),
+        ],
+      },
+    ]);
+  });
+});
+
+describe("a component exposing a field a contentOnly lock holds", () => {
+  /** A sealed block whose text's `tone` (not content) is exposed. */
+  const exposingTone = (label = "Tone") =>
+    component([node("s1", "acme/sealed", { body: [node("t1")] })], {
+      exposed: [
+        {
+          id: "tone",
+          label,
+          nodeId: "t1",
+          propPath: "tone",
+          type: "select",
+          options: [{ value: "loud", label: "Loud" }],
+        },
+      ],
+    });
+
+  it("is refused when the exposure is added, naming the component, the field, the slot and the rule", async () => {
+    const { readStored } = storeOf({
+      [COMPONENTS]: {
+        promo: {
+          published: component([
+            node("s1", "acme/sealed", { body: [node("t1")] }),
+          ]),
+        },
+      },
+    });
+
+    const issues = await judge(
+      exposingTone(),
+      write(readStored, COMPONENTS, "promo")
+    );
+
+    expect(codes(issues)).toEqual(["COMPONENT_EXPOSURE_LOCKED"]);
+    const message = issues[0]!.message;
+    for (const named of ['"promo"', '"Tone"', '"body"', "contentOnly"]) {
+      expect(message).toContain(named);
+    }
+    expect(message).toMatch(/remove|loosen|content field/i);
+  });
+
+  it("is refused on a new component, which has no stored version", async () => {
+    const { readStored } = storeOf({});
+    const issues = await judge(exposingTone(), write(readStored, COMPONENTS));
+    expect(codes(issues)).toEqual(["COMPONENT_EXPOSURE_LOCKED"]);
+  });
+
+  it("is kept with a warning when the component already stores it, so an unrelated edit still saves", async () => {
+    const { readStored } = storeOf({
+      [COMPONENTS]: { promo: { published: exposingTone() } },
+    });
+    const warned: unknown[] = [];
+
+    // An unrelated edit: the label changes, the exposure stays.
+    const issues = await judge(
+      exposingTone("Voice"),
+      write(readStored, COMPONENTS, "promo"),
+      { onLockedExposures: found => warned.push(found) }
+    );
+
+    expect(issues).toEqual([]);
+    expect(warned).toEqual([
+      {
+        componentId: "promo",
+        exposures: [
+          expect.objectContaining({ exposureId: "tone", slot: "body" }),
+        ],
+      },
+    ]);
+  });
+
+  it("accepts exposing the same node's content", async () => {
+    const { readStored } = storeOf({});
+    const content = component(
+      [node("s1", "acme/sealed-quote", { body: [node("t1", "acme/quote")] })],
+      {
+        exposed: [
+          {
+            id: "words",
+            label: "Words",
+            nodeId: "t1",
+            propPath: "words",
+            type: "text",
+          },
+        ],
+      }
+    );
+    expect(
+      await judge(content, write(readStored, COMPONENTS, "promo"))
+    ).toEqual([]);
+  });
+});
+
 describe("a page judged as a reader receives it", () => {
   it("refuses a component whose root may not sit where the page places it", async () => {
     const { readStored } = storeOf({
@@ -246,6 +683,148 @@ describe("a page judged as a reader receives it", () => {
 
     expect(codes(issues)).toEqual(["restricted-at-root"]);
     expect(issues[0]!.message).toContain('"cols"');
+  });
+
+  it("refuses a placement whose exposed value changes design inside a contentOnly slot", async () => {
+    // The component is as its sealed block started; only the placement's
+    // value, written into the definition's text, changes what the lock holds.
+    const sealed = component(
+      [node("s1", "acme/sealed", { body: [node("t1")] })],
+      {
+        exposed: [
+          {
+            id: "tone",
+            label: "Tone",
+            nodeId: "t1",
+            propPath: "tone",
+            type: "select",
+            options: [{ value: "loud", label: "Loud" }],
+          },
+        ],
+      }
+    );
+    const { readStored } = storeOf({
+      [COMPONENTS]: { sealed: { published: sealed } },
+    });
+    const placed = (overrides: Record<string, unknown>) =>
+      page([
+        {
+          ...placing("i1", "sealed"),
+          props: { componentId: "sealed", overrides },
+        },
+      ]);
+
+    // CONTROL: placed with no values of its own, it composes as it started.
+    expect(await judge(placed({}), write(readStored, "pages", "p1"))).toEqual(
+      []
+    );
+    const issues = await judge(
+      placed({ tone: "loud" }),
+      write(readStored, "pages", "p1")
+    );
+    expect(codes(issues)).toEqual(["locked-slot-content-only"]);
+    expect(issues[0]!.message).toContain('"sealed"');
+  });
+
+  describe("with what the page and its components already hold", () => {
+    // A block's defaults can change after pages store it, so a value nobody
+    // changed can differ from today's starting block. What the page's stored
+    // version, or the component itself, already holds is kept; a third value
+    // is refused, and a page never stored is held to the rest as before.
+    const toned = (t1: Node = node("t1")) =>
+      component([node("s1", "acme/sealed", { body: [t1] })], {
+        exposed: [
+          {
+            id: "tone",
+            label: "Tone",
+            nodeId: "t1",
+            propPath: "tone",
+            type: "select",
+            options: [
+              { value: "loud", label: "Loud" },
+              { value: "quiet", label: "Quiet" },
+            ],
+          },
+        ],
+      });
+    const placed = (overrides: Record<string, unknown>) =>
+      page([
+        {
+          ...placing("i1", "sealed"),
+          props: { componentId: "sealed", overrides },
+        },
+      ]);
+
+    it("keeps a placement value the page already stores", async () => {
+      const { readStored } = storeOf({
+        [COMPONENTS]: { sealed: { published: toned() } },
+        pages: { p1: { published: placed({ tone: "loud" }) } },
+      });
+      expect(
+        await judge(placed({ tone: "loud" }), write(readStored, "pages", "p1"))
+      ).toEqual([]);
+      // The control: a page never stored is refused for the same value.
+      expect(
+        codes(
+          await judge(
+            placed({ tone: "loud" }),
+            write(readStored, "pages", "p2")
+          )
+        )
+      ).toEqual(["locked-slot-content-only"]);
+    });
+
+    it("refuses a value neither the starting block nor the stored page holds", async () => {
+      const { readStored } = storeOf({
+        [COMPONENTS]: { sealed: { published: toned() } },
+        pages: { p1: { published: placed({ tone: "loud" }) } },
+      });
+      expect(
+        codes(
+          await judge(
+            placed({ tone: "quiet" }),
+            write(readStored, "pages", "p1")
+          )
+        )
+      ).toEqual(["locked-slot-content-only"]);
+    });
+
+    it("refuses as for a page never stored when the stored page cannot be read, as a localized field's cannot", async () => {
+      // A read that is refused, as core refuses a localized field, leaves no
+      // stored value to keep: the page is measured against the starting
+      // blocks alone, so the lock refuses rather than lets the value through.
+      const { readStored } = storeOf({
+        [COMPONENTS]: { sealed: { published: toned() } },
+        pages: { p1: { published: "unreadable" } },
+      });
+      expect(
+        codes(
+          await judge(
+            placed({ tone: "loud" }),
+            write(readStored, "pages", "p1")
+          )
+        )
+      ).toEqual(["locked-slot-content-only"]);
+    });
+
+    it("keeps what the component itself holds, on a page placing it for the first time", async () => {
+      const held = { ...node("t1"), props: { tone: "loud" } };
+      const { readStored } = storeOf({
+        [COMPONENTS]: { sealed: { published: toned(held) } },
+      });
+      expect(
+        await judge(placed({}), write(readStored, "pages", "new"))
+      ).toEqual([]);
+      // Changing it from there is still a change the lock refuses.
+      expect(
+        codes(
+          await judge(
+            placed({ tone: "quiet" }),
+            write(readStored, "pages", "new")
+          )
+        )
+      ).toEqual(["locked-slot-content-only"]);
+    });
   });
 
   it("refuses page content a placement puts where the component cannot hold it", async () => {

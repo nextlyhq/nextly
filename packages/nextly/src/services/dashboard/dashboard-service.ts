@@ -101,6 +101,16 @@ export interface ProjectStatsResponse {
 const MAX_COLLECTIONS_FOR_RECENT = 20;
 
 /**
+ * The collections one registry read left out as kept off the dashboard, and whether that read
+ * completed. Until it has, the set is not a snapshot of anything: an empty one would mean "nothing
+ * is hidden" when the truth is "the hidden ones are unknown".
+ */
+interface KeptOffRead {
+  slugs: Set<string>;
+  complete: boolean;
+}
+
+/**
  * Whether a registry record is kept off the dashboard, noting its slug in `keptOff` when it is.
  */
 function leftOut(
@@ -145,7 +155,10 @@ export class DashboardService extends BaseService {
     // Collections only: the activity trail records no Single, and its `collection` column holds
     // collection slugs, so a hidden Single sharing a visible collection's slug must not remove
     // that collection's activity.
-    const keptOffCollections = new Set<string>();
+    const keptOffCollections: KeptOffRead = {
+      slugs: new Set(),
+      complete: false,
+    };
     const collections = await this.getRegisteredCollections(
       scope,
       keptOffCollections
@@ -172,7 +185,7 @@ export class DashboardService extends BaseService {
       statusBreakdown,
     ] = await Promise.all([
       this.countTable("media"),
-      this.countRecentChanges24h(scope, keptOffCollections),
+      this.countRecentChangesOutside(scope, keptOffCollections),
       this.countTable("users"),
       this.countTable("roles"),
       this.countTable("permissions"),
@@ -301,7 +314,7 @@ export class DashboardService extends BaseService {
   private async getRegisteredCollections(
     scope: ReadableResources,
     /** Collects the slugs left out as kept off the dashboard, for the figures read elsewhere. */
-    keptOff?: Set<string>
+    keptOff?: KeptOffRead
   ): Promise<CollectionInfo[]> {
     try {
       const registryService = container.get<{
@@ -330,8 +343,9 @@ export class DashboardService extends BaseService {
       // A collection kept off the dashboard is neither listed nor counted here, for any caller,
       // a super-admin included; see `keptOffDashboard`.
       const collections = (await registryService.getAllCollections()).filter(
-        c => !leftOut(c, keptOff)
+        c => !leftOut(c, keptOff?.slugs)
       );
+      if (keptOff) keptOff.complete = true;
       const mapped = collections.map(c => ({
         slug: c.slug,
         tableName: c.tableName,
@@ -479,6 +493,20 @@ export class DashboardService extends BaseService {
    *   some dialects, so the short-circuit has to happen before the query is
    *   built rather than as a driver rejection swallowed by the catch below.
    */
+  /**
+   * The recent-changes figure without the collections kept off the dashboard, or 0 when the
+   * registry read that names them did not complete: counting then would include exactly the
+   * activity the figure promises to leave out. 0 is what the count itself answers on a failure.
+   */
+  private countRecentChangesOutside(
+    scope: ReadableResources,
+    keptOff: KeptOffRead
+  ): Promise<number> {
+    return keptOff.complete
+      ? this.countRecentChanges24h(scope, keptOff.slugs)
+      : Promise.resolve(0);
+  }
+
   private async countRecentChanges24h(
     scope: ReadableResources,
     /** Collections kept off the dashboard: their activity is not counted. */

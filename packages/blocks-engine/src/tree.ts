@@ -78,7 +78,7 @@
  * primitive was ALREADY going to rebuild, and never as a repair pass of its
  * own.
  */
-import type { SlotSpec } from "./block";
+import type { PropSchema, SlotSpec } from "./block";
 import type { BlockNode } from "./document";
 import { isBlockType, renderedDomId } from "./document";
 import { isDescendable, walkForest } from "./forest-walk";
@@ -131,6 +131,11 @@ export interface SlotDefaultSource {
         defaultProps?: object;
         /** The child's own parent restriction, read to refuse an illegal seed. */
         parent?: readonly string[];
+        /**
+         * The child's prop schemas, read for the props it declares as
+         * content, which a `"contentOnly"` slot leaves editable.
+         */
+        props?: Partial<Record<string, PropSchema>>;
       }
     | undefined;
 }

@@ -1,4 +1,4 @@
-import { existsSync } from "fs";
+import { existsSync, readdirSync } from "fs";
 import {
   chmod,
   lstat,
@@ -12,7 +12,7 @@ import {
 import path from "path";
 import { fileURLToPath } from "url";
 
-import { skillsVersion } from "../lib/bundled-skills";
+import { skillsVersion, skillsVersionIn } from "../lib/bundled-skills";
 import { EXACT_VERSION } from "../lib/exact-version";
 
 import type { GeneratedFiles } from "./generated-files";
@@ -127,6 +127,25 @@ export function bundledSkillsVersion(skills: BundledSkill[]): string {
           ?.content.toString("utf8") ?? "",
     }))
   );
+}
+
+/**
+ * The release the bundled skills declare, for the agent guide: the skills at
+ * this CLI's own tag are these same files, so this is the release that tag's
+ * skills were written for. Null when this copy carries no readable bundle,
+ * which leaves the guide nothing to offer a restore against; a scaffold run
+ * with --no-skills from such a copy must still succeed.
+ */
+export function bundledSkillsVersionOrNull(dir?: string): string | null {
+  try {
+    const skillsDir = dir ?? resolveSkillsPath();
+    const names = readdirSync(skillsDir, { withFileTypes: true })
+      .filter(entry => entry.isDirectory())
+      .map(entry => entry.name);
+    return skillsVersionIn(skillsDir, names);
+  } catch {
+    return null;
+  }
 }
 
 /**
