@@ -96,6 +96,12 @@
     "RESEND_USER_AGENT", // Resend email provider: User-Agent some proxies filter on
     "DATABASE_URL",
     "DB_DIALECT",
+    // The machine's worker limit, set by scripts/bounded.mjs for a local run
+    // and read by the playground's Next.js build for its page-data workers.
+    // A memory bound has to reach the task to bound it; strict env mode drops
+    // anything not listed. Passed through, not hashed: it changes how many
+    // workers build the output, never the output.
+    "NEXTLY_LOCAL_MAX_WORKERS",
     "NEXT_PHASE", // nextly boot: a production build seeds no permissions or roles
     "GITHUB_ACTOR", // nextly migrate: appliedBy actor in CI
     "USER", // nextly migrate: appliedBy actor on dev laptops
