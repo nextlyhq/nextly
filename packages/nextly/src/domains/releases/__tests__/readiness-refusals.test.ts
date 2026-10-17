@@ -374,10 +374,15 @@ describe("switching a document's action", () => {
     expect(repo.findMember).not.toHaveBeenCalled();
   });
 
-  it("writes nothing when the action is already the one asked for", async () => {
+  it("leaves a request for the action the member already has to the repository's locked read", async () => {
+    // The service's read can be stale: another switch may have committed since.
+    // Whether anything is written is decided under the lock, as stored.
     const { svc, repo } = service({ state: "scheduled" });
-    const same = await svc.changeMemberAction("m1", "publish", ACTOR);
-    expect(same.action).toBe("publish");
-    expect(repo.changeMemberAction).not.toHaveBeenCalled();
+    await svc.changeMemberAction("m1", "publish", ACTOR);
+    expect(repo.changeMemberAction).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "m1" }),
+      "publish",
+      expect.any(Array)
+    );
   });
 });

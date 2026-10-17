@@ -168,6 +168,25 @@ class InterleavedSwitch extends ReleasesRepository {
   }
 }
 
+/** Runs `before` once, right after the member is read: the read goes stale. */
+class StaleMemberRead extends ReleasesRepository {
+  ran = 0;
+  constructor(
+    db: TestNextly["adapter"],
+    private readonly before: () => Promise<unknown>
+  ) {
+    super(db);
+  }
+  override async findMember(
+    ...args: Parameters<ReleasesRepository["findMember"]>
+  ): ReturnType<ReleasesRepository["findMember"]> {
+    const read = await super.findMember(...args);
+    this.ran += 1;
+    await this.before();
+    return read;
+  }
+}
+
 async function readRelease(repo: ReleasesRepository, id: string) {
   const [row] = await repo.findReleases({ ids: [id] });
   if (row === undefined) throw new Error("the release is gone");
@@ -250,6 +269,58 @@ describe.each(getConfiguredTestDialects())(
         (await repo.listMembers(releaseId)).map(member => member.action)
       ).toEqual(["publish"]);
       expect((await readRelease(repo, releaseId)).state).toBe("scheduled");
+    });
+
+    it("answers a switch with the member as stored, when another switch lands after the read", async () => {
+      const t = await boot(dialect);
+      const { releaseId, memberId } = await singleWithOneMember(t);
+      // The service reads the member going live; another switch to coming down
+      // commits after that read and before this one writes.
+      const repo = new StaleMemberRead(t.adapter, () =>
+        new ReleasesRepository(t.adapter).changeMemberAction(
+          { id: memberId, releaseId },
+          "unpublish",
+          RELEASE_ASSEMBLABLE_FROM
+        )
+      );
+
+      const answered = await serviceOver(repo).changeMemberAction(
+        memberId,
+        "publish",
+        TRUSTED,
+        releaseId
+      );
+
+      expect(repo.ran).toBe(1);
+      const stored = await repo.listMembers(releaseId);
+      // What the caller is told is what the release holds, and it holds what
+      // the caller asked for.
+      expect(answered.action).toBe("publish");
+      expect(stored.map(member => member.action)).toEqual(["publish"]);
+    });
+
+    it("writes nothing when the member already has the action under the lock", async () => {
+      const t = await boot(dialect);
+      const { releaseId, memberId } = await singleWithOneMember(t);
+      const repo = new StaleMemberRead(t.adapter, () =>
+        new ReleasesRepository(t.adapter).changeMemberAction(
+          { id: memberId, releaseId },
+          "unpublish",
+          RELEASE_ASSEMBLABLE_FROM
+        )
+      );
+
+      const answered = await serviceOver(repo).changeMemberAction(
+        memberId,
+        "unpublish",
+        TRUSTED,
+        releaseId
+      );
+      const revision = (await readRelease(repo, releaseId)).revision;
+
+      expect(answered.action).toBe("unpublish");
+      // One bump, the other switch's: this one found it done and wrote nothing.
+      expect(revision).toBe(2);
     });
 
     it("bumps the revision when an action is switched, so a schedule judged before it misses", async () => {

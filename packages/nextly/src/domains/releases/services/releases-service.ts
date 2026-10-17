@@ -1652,11 +1652,14 @@ export class ReleasesService {
       "switch",
       actor
     );
-    if (member.action === action) return member;
+    // Checked for the action asked, whatever the member held when it was read:
+    // another switch may commit before this one, and what this one leaves is
+    // the member under the action asked.
     await this.assertCommittedChangeReady(release, { ...member, action });
     // FENCED on the judgement, as an add and a removal are: a release
     // committed after it was judged refuses the switch rather than take one
-    // its publisher never approved, and nothing is written then.
+    // its publisher never approved, and nothing is written then. A member
+    // already under the action, as stored, is answered without a write.
     return this.deps.repository.changeMemberAction(
       member,
       action,

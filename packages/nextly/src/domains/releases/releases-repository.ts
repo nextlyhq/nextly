@@ -1227,6 +1227,13 @@ export class ReleasesRepository {
    * one of `allowedStates` — the fence an add and a removal take, for the same
    * reason: a release committed after the caller judged it refuses the switch.
    *
+   * The member is read again under the release's lock, so the answer is the
+   * row as stored rather than as the caller last saw it. When it already has
+   * `action`, nothing is written and the stored row is the answer: a caller
+   * that read the old action, while another switch committed, is told what
+   * the member now holds, and is not told a switch it asked for happened when
+   * the stored row says otherwise.
+   *
    * The member's key does not change, since it names the document and not
    * what happens to it.
    *
@@ -1239,10 +1246,20 @@ export class ReleasesRepository {
     action: ReleaseMemberAction,
     allowedStates: readonly ReleaseState[]
   ): Promise<ReleaseMemberRow> {
+    const where: VersionsWhere = {
+      and: [
+        { column: "id", op: "=", value: member.id },
+        { column: "releaseId", op: "=", value: member.releaseId },
+      ],
+    };
     let fenceMissed = false;
-    let changed: ReleaseMemberRow | undefined;
+    let outcome: { row: ReleaseMemberRow; wrote: boolean } | undefined;
     try {
-      changed = await this.db.transaction(async tx => {
+      outcome = await this.db.transaction(async tx => {
+        await tx.lockRow(RELEASES, member.releaseId);
+        const [stored] = await tx.select<ReleaseMemberRow>(MEMBERS, { where });
+        if (stored === undefined) return undefined;
+        if (stored.action === action) return { row: stored, wrote: false };
         if (
           (await this.advanceRevision(tx, member.releaseId, allowedStates)) ===
           null
@@ -1250,15 +1267,8 @@ export class ReleasesRepository {
           fenceMissed = true;
           throw releaseMovedConflict(member.releaseId, "change-member-action");
         }
-        const where: VersionsWhere = {
-          and: [
-            { column: "id", op: "=", value: member.id },
-            { column: "releaseId", op: "=", value: member.releaseId },
-          ],
-        };
         await tx.updateCount(MEMBERS, { action }, where);
-        const [row] = await tx.select<ReleaseMemberRow>(MEMBERS, { where });
-        return row;
+        return { row: { ...stored, action }, wrote: true };
       });
     } catch (error) {
       if (fenceMissed) {
@@ -1266,9 +1276,8 @@ export class ReleasesRepository {
       }
       throw error;
     }
-    if (changed === undefined) {
-      // Removed between the caller's read and this write. The revision moved
-      // with nothing else, which at worst sends a schedule round again.
+    if (outcome === undefined) {
+      // Removed between the caller's read and this write.
       throw NextlyError.notFound({
         logContext: {
           reason: "release-member-not-found",
@@ -1278,9 +1287,9 @@ export class ReleasesRepository {
       });
     }
     // After the commit: the document's cached pages were bounded by the
-    // action it had.
-    await this.flushMember(changed);
-    return changed;
+    // action it had. Nothing to drop when nothing was written.
+    if (outcome.wrote) await this.flushMember(outcome.row);
+    return outcome.row;
   }
 
   /**
