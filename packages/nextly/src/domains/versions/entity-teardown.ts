@@ -19,8 +19,10 @@
 import type { VersionScopeKind } from "../../schemas/versions/types";
 
 import type { VersionsDbApi } from "./db-api";
-import { REGISTRY_TABLES, deletePinsForEntity } from "./version-pins";
-import { VersionsRepository } from "./versions-repository";
+import { REGISTRY_TABLES } from "./history-locks";
+import { deletePinsForDocument, deletePinsForEntity } from "./version-pins";
+import { deleteViewsForDocument, deleteViewsForEntity } from "./version-views";
+import { VersionsRepository, type VersionRef } from "./versions-repository";
 
 /**
  * Delete an entity's registry row, then its autosaves and version pins, on
@@ -48,5 +50,20 @@ export async function deleteEntityRegistryRow(
     scopeSlug
   );
   await deletePinsForEntity(tx, scopeKind, scopeSlug);
+  await deleteViewsForEntity(tx, scopeKind, scopeSlug);
   return deleted;
+}
+
+/**
+ * Remove what the versions domain holds on one deleted document, on the
+ * delete's own transaction: the pins features hold on its versions, and each
+ * person's "last looked at" marker on it. Nothing could release or read
+ * either once the document is gone.
+ */
+export async function sweepDeletedDocument(
+  tx: VersionsDbApi,
+  ref: VersionRef
+): Promise<void> {
+  await deletePinsForDocument(tx, ref);
+  await deleteViewsForDocument(tx, ref);
 }
