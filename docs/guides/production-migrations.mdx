@@ -1010,7 +1010,10 @@ nextly migrate && nextly plugins install <name> && next build
 ```
 
 Each run of an install records one row in `nextly_schema_events` and changes
-nothing else that is already in place.
+nothing else that is already in place. When you remove a plugin from
+`nextly.config.ts`, remove its `nextly plugins install` from your build
+script, since installing a plugin that is not configured fails the build.
+Install plugins that depend on others after them, as `dependsOn` lists them.
 
 A plugin's install also refuses while a plugin it depends on is not installed
 (`PLUGIN_DEPENDENCY_NOT_INSTALLED`): one never installed, uninstalled, or

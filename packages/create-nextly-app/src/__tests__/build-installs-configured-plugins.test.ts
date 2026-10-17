@@ -142,6 +142,26 @@ describe("reading the plugins a config registers", () => {
     ).toEqual(["@nextlyhq/plugin-form-builder"]);
   });
 
+  // A bracket inside an element's options does not end the list, and either
+  // quote and a default import are read as the compiler reads them.
+  it("reads every plugin in a list with nested brackets, single quotes and a default import", () => {
+    expect(
+      configuredPlugins(
+        [
+          "import { formBuilderPlugin } from '@nextlyhq/plugin-form-builder';",
+          'import seo from "@nextlyhq/plugin-seo";',
+          "export default defineConfig({",
+          '  plugins: [formBuilderPlugin({ fields: ["x"] }), seo()],',
+          "});",
+        ].join("\n")
+      )
+    ).toEqual(["@nextlyhq/plugin-form-builder", "@nextlyhq/plugin-seo"]);
+  });
+
+  it("refuses a config it cannot parse", () => {
+    expect(() => configuredPlugins("export default {")).toThrow();
+  });
+
   it("leaves out a plugin imported but not listed, and the SDK", () => {
     expect(
       configuredPlugins(

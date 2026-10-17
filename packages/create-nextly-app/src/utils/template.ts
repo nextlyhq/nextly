@@ -1,6 +1,8 @@
 import path from "path";
 import { fileURLToPath } from "url";
 
+import { parse } from "@babel/parser";
+import type { Node, ObjectProperty } from "@babel/types";
 import fs from "fs-extra";
 
 import { bundledSkillsVersionOrNull } from "../generators/agent-skills";
@@ -132,34 +134,87 @@ export async function projectHasSearchIndexScript(
 
 /**
  * The plugins a Nextly config registers, by package name: each binding it
- * imports from a `@nextlyhq/plugin-*` package (the SDK aside) that its
- * `plugins: [...]` list names. First-party plugins register under their
- * package name, which is what `nextly plugins install` takes.
+ * imports from a `@nextlyhq/plugin-*` package (the SDK aside) that a
+ * `plugins: [...]` list in it names, however deep in an element. Read with
+ * the parser the Next config step uses, so nested brackets, either quote and
+ * default or aliased imports are read as the compiler reads them. First-party
+ * plugins register under their package name, which is what
+ * `nextly plugins install` takes. Throws for a config that does not parse,
+ * since every template's must.
  *
  * Exported for the test that holds every template's config to its build.
  */
 export function configuredPlugins(configText: string): string[] {
-  const list = /\bplugins\s*:\s*\[([^\]]*)\]/.exec(configText)?.[1] ?? "";
-  const found: string[] = [];
-  for (const [, names, pkg] of configText.matchAll(
-    /import\s*\{([^}]*)\}\s*from\s*"(@nextlyhq\/plugin-[^"]+)"/g
-  )) {
-    if (pkg === "@nextlyhq/plugin-sdk" || found.includes(pkg)) continue;
-    const bindings = names
-      .split(",")
-      .map(
-        part =>
-          part
-            .trim()
-            .split(/\s+as\s+/)
-            .pop() ?? ""
-      )
-      .filter(Boolean);
-    if (bindings.some(binding => new RegExp(`\\b${binding}\\b`).test(list))) {
-      found.push(pkg);
+  const program = parse(configText, {
+    sourceType: "module",
+    plugins: ["typescript", "jsx"],
+  }).program;
+  const fromPackage = new Map<string, string>();
+  for (const statement of program.body) {
+    if (statement.type !== "ImportDeclaration") continue;
+    const pkg = statement.source.value;
+    if (
+      !pkg.startsWith("@nextlyhq/plugin-") ||
+      pkg === "@nextlyhq/plugin-sdk"
+    ) {
+      continue;
+    }
+    for (const specifier of statement.specifiers) {
+      fromPackage.set(specifier.local.name, pkg);
     }
   }
+  const found: string[] = [];
+  for (const name of identifiersInPluginLists(program)) {
+    const pkg = fromPackage.get(name);
+    if (pkg !== undefined && !found.includes(pkg)) found.push(pkg);
+  }
   return found;
+}
+
+/** Every identifier inside the value of each `plugins: [...]` property, in source order. */
+function identifiersInPluginLists(program: Node): string[] {
+  const names: string[] = [];
+  walkNodes(program, node => {
+    if (!isPluginList(node)) return;
+    walkNodes(node.value, inner => {
+      if (inner.type === "Identifier") names.push(inner.name);
+    });
+  });
+  return names;
+}
+
+/** A `plugins: [...]` property, by an identifier or a string key. */
+function isPluginList(node: Node): node is ObjectProperty {
+  if (node.type !== "ObjectProperty" || node.value.type !== "ArrayExpression") {
+    return false;
+  }
+  const key = node.key;
+  return (
+    (key.type === "Identifier" && key.name === "plugins") ||
+    (key.type === "StringLiteral" && key.value === "plugins")
+  );
+}
+
+/** Calls `visit` on `root` and every syntax node below it, parents first. */
+function walkNodes(root: unknown, visit: (node: Node) => void): void {
+  if (Array.isArray(root)) {
+    for (const child of root) walkNodes(child, visit);
+    return;
+  }
+  if (!isNode(root)) return;
+  visit(root);
+  for (const [key, child] of Object.entries(root)) {
+    if (key !== "loc") walkNodes(child, visit);
+  }
+}
+
+/** Whether a value is a syntax node: an object with a string `type`. */
+function isNode(value: unknown): value is Node {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as { type?: unknown }).type === "string"
+  );
 }
 
 /**
