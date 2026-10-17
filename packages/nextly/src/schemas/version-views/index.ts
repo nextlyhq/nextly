@@ -17,6 +17,9 @@ import * as sl from "./sqlite";
 
 export { pg, my, sl };
 
+/** The table's name, the same on every dialect. */
+export const VERSION_VIEWS_TABLE = "nextly_version_views";
+
 /** Returns the Drizzle table object for version view markers. */
 export function versionViewsTables(dialect: SupportedDialect) {
   switch (dialect) {

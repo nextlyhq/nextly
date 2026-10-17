@@ -44,6 +44,11 @@ import {
   resolveComponentFieldMap,
   stripPasswordsThroughComponents,
 } from "../domains/versions/tag-component-types";
+import {
+  lastLookedAtByPart,
+  markLastViewed,
+} from "../domains/versions/version-views";
+import type { VersionRef } from "../domains/versions/versions-repository";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
 import type {
@@ -743,6 +748,45 @@ export function assertComparisonRequest(query: ComparisonQuery): void {
 }
 
 /**
+ * The id of the person reading, or null for an API key, a principal or the
+ * system. One answer for every place that reads or records what a person last
+ * looked at, so a key never reaches its owner's marker on any of them.
+ */
+export function readingPersonId(
+  user: UserContext | undefined,
+  authenticatedScope?: AuthenticatedScope
+): string | null {
+  const actorType = authenticatedScope?.actorType ?? "user";
+  return actorType === "user" && user?.id ? String(user.id) : null;
+}
+
+/**
+ * A page of a document's history with each part's "You last looked here" row
+ * marked, for a person; anyone else's page comes back as it was. Reads only:
+ * looking at the history moves no marker.
+ */
+export async function withLastViewedMarks<
+  T extends { versionNo: number | null; locale: string | null },
+>(
+  rows: T[],
+  args: {
+    ref: VersionRef;
+    user: UserContext | undefined;
+    authenticatedScope?: AuthenticatedScope;
+    cursor?: number;
+  }
+): Promise<(T & { lastViewed?: true })[]> {
+  const personId = readingPersonId(args.user, args.authenticatedScope);
+  if (personId === null) return rows;
+  const looked = await lastLookedAtByPart(
+    getService("adapter"),
+    personId,
+    args.ref
+  );
+  return markLastViewed(rows, looked, args.cursor);
+}
+
+/**
  * Compare two versions of a document AFTER the caller's read access to it is
  * confirmed: an explicit pair as given, or a target and baseline resolved from
  * the document's own history (`resolveComparisonPair`), then diffed through
@@ -773,7 +817,7 @@ export async function compareDocumentVersions(args: {
       scopeSlug: args.slug,
       entryId: args.entryId,
     };
-    const isPerson = (args.authenticatedScope?.actorType ?? "user") === "user";
+
     const [partVersions, workingDraftParts] = await Promise.all([
       versions.listPartVersions(ref),
       versions.listWorkingDraftParts(ref),
@@ -784,7 +828,7 @@ export async function compareDocumentVersions(args: {
         to: query.to,
         baseline: query.baseline,
         locale: query.locale,
-        userId: isPerson ? (args.user?.id ?? null) : null,
+        userId: readingPersonId(args.user, args.authenticatedScope),
         workingDraftParts,
         partIsLive: part =>
           partIsLiveNow(args.scopeKind, args.slug, args.entryId, part),

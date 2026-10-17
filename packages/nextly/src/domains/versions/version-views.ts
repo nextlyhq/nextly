@@ -26,13 +26,14 @@ import { createHash } from "node:crypto";
 
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
+import { VERSION_VIEWS_TABLE } from "../../schemas/version-views";
 import type { VersionScopeKind } from "../../schemas/versions/types";
 import { isUniqueViolation } from "../../shared/lib/unique-violation";
 
 import type { VersionsDbApi } from "./db-api";
 import type { VersionRef } from "./versions-repository";
 
-const VIEWS_TABLE = "nextly_version_views";
+const VIEWS_TABLE = VERSION_VIEWS_TABLE;
 
 /** How long after a person's last mark a new mark starts a new visit. */
 export const VISIT_GAP_MS = 30 * 60 * 1000;
@@ -230,6 +231,39 @@ export async function lastLookedAtByPart(
     if (looked !== null) byPart.set(row.part ?? null, looked);
   }
   return byPart;
+}
+
+/**
+ * Mark the row of a history page where "You last looked here" sits, in each
+ * part: the newest row of the part at or below the version the person last
+ * looked at, which is that version, or the nearest older one still kept when
+ * retention removed it.
+ *
+ * A page lists versions newest first, below `cursor` when it is not the first,
+ * so a marker at or above the cursor sits on an earlier page and is left to
+ * it. Reads nothing and writes nothing: the markers are passed in.
+ */
+export function markLastViewed<
+  T extends { versionNo: number | null; locale: string | null },
+>(
+  rows: readonly T[],
+  lookedByPart: ReadonlyMap<string | null, number>,
+  cursor?: number
+): (T & { lastViewed?: true })[] {
+  const marked = new Set<number>();
+  for (const [part, looked] of lookedByPart) {
+    if (cursor !== undefined && looked >= cursor) continue;
+    const index = rows.findIndex(
+      row =>
+        (row.locale ?? null) === part &&
+        typeof row.versionNo === "number" &&
+        row.versionNo <= looked
+    );
+    if (index >= 0) marked.add(index);
+  }
+  return rows.map((row, index) =>
+    marked.has(index) ? { ...row, lastViewed: true as const } : row
+  );
 }
 
 /** Remove a document's markers with the document. */

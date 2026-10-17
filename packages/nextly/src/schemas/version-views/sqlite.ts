@@ -34,7 +34,10 @@ export const nextlyVersionViewsSqlite = sqliteTable(
 
     versionNo: integer("version_no").notNull(),
     previousVersionNo: integer("previous_version_no"),
-    viewedAt: integer("viewed_at", { mode: "timestamp_ms" }).notNull(),
+    // Seconds, as every timestamp here: the adapter writes a Date as epoch
+    // seconds, so a millisecond column would read a mark as 1970 and end every
+    // visit at once. A second is far finer than the visit gap.
+    viewedAt: integer("viewed_at", { mode: "timestamp" }).notNull(),
 
     createdAt: integer("created_at", { mode: "timestamp" })
       .$defaultFn(() => new Date())

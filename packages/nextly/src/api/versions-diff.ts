@@ -20,7 +20,7 @@
 import { NextlyError } from "../errors/nextly-error";
 import type { VersionScopeKind } from "../schemas/versions/types";
 
-import { respondDoc } from "./response-shapes";
+import { respondDoc, withSessionCacheHeaders } from "./response-shapes";
 import {
   assertComparisonRequest,
   compareDocumentVersions,
@@ -124,6 +124,8 @@ export const GET = withErrorHandler(
       query,
     });
 
-    return respondDoc(diff);
+    // Private to the caller: a comparison from where this person last looked
+    // differs from one person to the next.
+    return withSessionCacheHeaders(respondDoc(diff));
   }
 );
