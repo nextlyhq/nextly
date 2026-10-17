@@ -191,7 +191,7 @@ export interface ReleaseActor {
  */
 export type ReleaseDocumentChecks = Omit<
   ReleaseCheckReads,
-  "liveAuthors" | "scheduledMemberships"
+  "liveAuthors" | "scheduledMemberships" | "declaresLifecycle"
 >;
 
 export interface ReleasesServiceDeps {
@@ -1348,6 +1348,13 @@ export class ReleasesService {
       reads: {
         ...this.deps.checks,
         liveAuthors: ids => repository.liveAuthors([...ids]),
+        // The condition a document met to join (`resolveReleaseTarget`),
+        // asked of the same reader.
+        declaresLifecycle: scope =>
+          this.deps.targets.declaresLifecycle(
+            scope.scopeKind === "single" ? "single" : "collection",
+            scope.scopeSlug
+          ),
         scheduledMemberships: refs =>
           repository.findDueMembersFor([...refs], now),
       },

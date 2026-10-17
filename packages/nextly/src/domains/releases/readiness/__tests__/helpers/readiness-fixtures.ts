@@ -74,6 +74,7 @@ export function reads(
     actingAs: async id => ({ id, roles: [] }),
     mayPerform: async () => true,
     existing: async refs => new Set(refs.map(documentRefKey)),
+    declaresLifecycle: async () => true,
     publishProblems: perEntry(() => []),
     heldDraftLocales: perEntry(() => []),
     scheduledMemberships: async () => new Map(),

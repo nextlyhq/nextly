@@ -100,6 +100,11 @@ export interface ReleaseCheckReads {
     scope: ReleaseCheckScope,
     action: ReleaseMemberAction
   ): Promise<boolean>;
+  /**
+   * Whether the scope still declares a draft/published lifecycle: the
+   * condition a document had to meet to join the release, asked again.
+   */
+  declaresLifecycle(scope: ReleaseCheckScope): Promise<boolean>;
   /** Which of these documents still exist, as `documentRefKey` keys. */
   existing(refs: readonly DocumentRef[]): Promise<ReadonlySet<string>>;
   /**

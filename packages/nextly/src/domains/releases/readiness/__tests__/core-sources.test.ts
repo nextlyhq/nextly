@@ -13,6 +13,7 @@ import {
   CORE_AUTHOR_SOURCE,
   CORE_EXISTS_SOURCE,
   CORE_HELD_DRAFTS_SOURCE,
+  CORE_LIFECYCLE_SOURCE,
   CORE_OTHER_RELEASE_SOURCE,
   CORE_PERMISSION_SOURCE,
   CORE_RELEASE_CHECK_SOURCES,
@@ -142,6 +143,37 @@ describe("core.exists", () => {
         ),
     });
     expect(found).toEqual([{ memberId: "gone", code: "DOCUMENT_GONE" }]);
+  });
+});
+
+describe("core.lifecycle", () => {
+  it("reports documents, going live or coming down, in a scope that lost its lifecycle", async () => {
+    const declaresLifecycle = vi.fn(
+      async (scope: { scopeSlug: string }) => scope.scopeSlug !== "pages"
+    );
+    const gone = member("gone", { scopeSlug: "pages" });
+    const found = await run(
+      CORE_LIFECYCLE_SOURCE,
+      [
+        member("post"),
+        member("live-page", { scopeSlug: "pages" }),
+        member("down-page", { scopeSlug: "pages", action: "unpublish" }),
+        gone,
+      ],
+      {
+        declaresLifecycle,
+        existing: async refs =>
+          new Set(
+            refs.filter(ref => ref.entryId !== gone.entryId).map(documentRefKey)
+          ),
+      }
+    );
+    expect(found).toEqual([
+      { memberId: "live-page", code: "NO_LIFECYCLE" },
+      { memberId: "down-page", code: "NO_LIFECYCLE" },
+    ]);
+    // Once per scope.
+    expect(declaresLifecycle).toHaveBeenCalledTimes(2);
   });
 });
 

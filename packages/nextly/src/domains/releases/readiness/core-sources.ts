@@ -9,6 +9,7 @@
  *   core.author          hard  who the run acts as: none, gone, or a locale
  *   core.permission      hard  the author may no longer perform the action
  *   core.exists          hard  the document is gone
+ *   core.lifecycle       hard  its collection or Single has no lifecycle now
  *   core.held-drafts     hard  another language holds unreleased work
  *   core.required-fields hard  a document going live would fail its publish's
  *                              validation or field rules
@@ -192,6 +193,33 @@ export const CORE_EXISTS_SOURCE = defineReleaseCheckSource({
 });
 
 /**
+ * Whether each member's collection or Single still has a draft/published
+ * lifecycle, going live or coming down alike: the release's write moves a
+ * document's lifecycle, and refuses where there is none.
+ *
+ * Asked once per scope. A document that is no longer there is not reported
+ * here: `core.exists` says so, and a deleted collection has no lifecycle to
+ * speak of either.
+ */
+export const CORE_LIFECYCLE_SOURCE = defineReleaseCheckSource({
+  key: "core.lifecycle",
+  severity: "hard",
+  codes: ["NO_LIFECYCLE"],
+  async check(batch, ctx) {
+    const findings: ReleaseCheckFinding<"NO_LIFECYCLE">[] = [];
+    for (const members of groupedBy(runnable(batch), scopeKey)) {
+      if (await ctx.reads.declaresLifecycle(members[0])) continue;
+      const existing = await ctx.reads.existing(members);
+      for (const member of members) {
+        if (!existing.has(documentRefKey(member))) continue;
+        findings.push({ memberId: member.id, code: "NO_LIFECYCLE" });
+      }
+    }
+    return findings;
+  },
+});
+
+/**
  * Whether another language holds unreleased work that the release's
  * document-wide write would be refused over, going live or coming down alike:
  * the write will not decide the fate of work nobody has released.
@@ -346,6 +374,7 @@ export const CORE_RELEASE_CHECK_SOURCES: readonly ReleaseCheckSource[] = [
   CORE_AUTHOR_SOURCE,
   CORE_PERMISSION_SOURCE,
   CORE_EXISTS_SOURCE,
+  CORE_LIFECYCLE_SOURCE,
   CORE_HELD_DRAFTS_SOURCE,
   CORE_REQUIRED_FIELDS_SOURCE,
   CORE_OTHER_RELEASE_SOURCE,

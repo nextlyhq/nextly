@@ -67,6 +67,18 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
         },
         fields: [text({ name: "title" })],
       }),
+      // Its draft/published lifecycle is turned off part-way through a case.
+      defineCollection({
+        slug: "seasonal",
+        status: true,
+        access: {
+          read: () => true,
+          update: () => true,
+          publish: () => true,
+          unpublish: () => true,
+        },
+        fields: [text({ name: "title" })],
+      }),
       // Deleted part-way through a case, with a release still naming it.
       defineCollection({
         slug: "scratch",
@@ -128,7 +140,7 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
 /** A document, stored through the ordinary write. */
 async function entry(
   t: TestNextly,
-  collection: "articles" | "notices" | "memos" | "scratch",
+  collection: "articles" | "notices" | "memos" | "scratch" | "seasonal",
   status: "draft" | "published" = "draft"
 ): Promise<string> {
   const handler = t.getService("collectionsHandler") as CollectionsHandler;
@@ -162,7 +174,7 @@ async function releaseOf(
   t: TestNextly,
   author: string,
   documents: Array<{
-    collection: "articles" | "notices" | "memos" | "scratch";
+    collection: "articles" | "notices" | "memos" | "scratch" | "seasonal";
     id: string;
     action?: "publish" | "unpublish";
   }>
@@ -395,6 +407,53 @@ describe.each(getConfiguredTestDialects())(
       ).toEqual([{ memberId: member.id, code: "FIELD_NOT_PERMITTED" }]);
     });
 
+    it("reports a document whose collection no longer has a draft/published lifecycle", async () => {
+      const t = await boot(dialect);
+      const author = await seedPlainAuthor(t);
+      const live = await entry(t, "seasonal", "published");
+      const draft = await entry(t, "seasonal");
+      const { releaseId, memberIds } = await releaseOf(t, author, [
+        { collection: "seasonal", id: draft, action: "publish" },
+        { collection: "seasonal", id: live, action: "unpublish" },
+      ]);
+      await t.adapter.update(
+        "dynamic_collections",
+        { status: false },
+        { and: [{ column: "slug", op: "=", value: "seasonal" }] }
+      );
+      // The write itself now refuses the document-wide move.
+      const written = await (
+        t.getService("collectionsHandler") as CollectionsHandler
+      ).updateEntry(
+        {
+          collectionName: "seasonal",
+          entryId: live,
+          overrideAccess: true,
+          locale: "*",
+        },
+        { status: "draft" }
+      );
+      expect(written).toMatchObject({ success: false });
+
+      const found = await t.nextly.releases.readiness({ releaseId });
+      expect(
+        found.hard.filter(f => f.code === "NO_LIFECYCLE").map(f => f.memberId)
+      ).toEqual(memberIds);
+      expect(
+        await problemsOf(
+          t.nextly.releases.schedule({
+            id: releaseId,
+            at: LATER,
+            timezone: "UTC",
+          })
+        )
+      ).toEqual(
+        expect.arrayContaining(
+          memberIds.map(memberId => ({ memberId, code: "NO_LIFECYCLE" }))
+        )
+      );
+    });
+
     it("reports a document whose collection was deleted as gone, without failing the check", async () => {
       const t = await boot(dialect);
       const author = await seedPlainAuthor(t);
@@ -418,6 +477,8 @@ describe.each(getConfiguredTestDialects())(
           code: "DOCUMENT_GONE",
         })
       );
+      // Gone is the diagnosis; a deleted collection is not also "no lifecycle".
+      expect(found.hard.map(f => f.code)).not.toContain("NO_LIFECYCLE");
       expect(
         await problemsOf(
           t.nextly.releases.schedule({
