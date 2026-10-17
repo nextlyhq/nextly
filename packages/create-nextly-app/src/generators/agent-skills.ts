@@ -1,5 +1,6 @@
 import { existsSync } from "fs";
 import {
+  chmod,
   lstat,
   mkdir,
   readdir,
@@ -237,7 +238,7 @@ export async function writeAgentSkills(
       if (blocked) {
         report.skipped.push({
           path: folder,
-          why: `${blocked}. To replace it with this release's version, run: ${updateSkillsCommand(releaseTag)}`,
+          why: `${blocked}. To replace it with this release's version, run: ${updateSkillsCommand(releaseTag)} (if that release's tag is not published yet, ${SKILLS_DOCS} says how to add skills for any release)`,
         });
         continue;
       }
@@ -250,10 +251,10 @@ export async function writeAgentSkills(
         for (const file of skill.files) {
           const filePath = path.join(target, file.path);
           await mkdir(path.dirname(filePath), { recursive: true });
-          await writeFile(filePath, file.content, {
-            flag: "wx",
-            mode: file.mode,
-          });
+          await writeFile(filePath, file.content, { flag: "wx" });
+          // After the write, since a creation mode passes through the
+          // process's umask and can lose an executable bit on the way.
+          await chmod(filePath, file.mode);
         }
       } catch (error) {
         // The folder is this run's own, made just above. Left half-written,

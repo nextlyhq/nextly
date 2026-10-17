@@ -172,6 +172,11 @@ describe("a scaffolded project arrives with the guide", () => {
       if (projectType === "blank") {
         expect(guide).toContain(updateSkillsCommand(packageVersion()));
         expect(guide).toMatch(/0\.0\.2-alpha\.66 publish no\s+skills/);
+        // A project that got no skills (its Nextly did not match them) is sent
+        // to the docs, not to the command that would add them anyway.
+        expect(guide).toMatch(
+          /has no `\.agents\/skills\/`[\s\S]*?nextlyhq\.com\/docs\/guides\/coding-agents/
+        );
       }
 
       // CLAUDE.md is the pointer that makes the guide reachable; an empty or mismatched one

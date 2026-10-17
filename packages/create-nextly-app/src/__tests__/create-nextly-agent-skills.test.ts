@@ -249,6 +249,9 @@ describe("createNextly and the skills for coding agents", () => {
       .find(message => message.includes(".claude/skills/nextly-install"));
     expect(kept).toContain(`nextlyhq/nextly#v${packageVersion()}'`);
     expect(kept).not.toContain(`#v${SKILLS_VERSION}`);
+    // During a release the package can be installable before its tag is
+    // pushed, so the message also names where to look then.
+    expect(kept).toContain("nextlyhq.com/docs/guides/coding-agents");
   });
 
   it("stops before anything is scaffolded when the bundle is broken", async () => {

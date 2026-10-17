@@ -47,7 +47,7 @@ afterEach(async () => {
 const skill = (name: string, text = `---\nname: ${name}\n---\n# ${name}\n`) =>
   ({
     name,
-    files: [{ path: "SKILL.md", content: Buffer.from(text) }],
+    files: [{ path: "SKILL.md", content: Buffer.from(text), mode: 0o644 }],
   }) satisfies BundledSkill;
 
 /** Writes a bundle folder: each skill name mapped to its files. */
@@ -108,6 +108,33 @@ describe("readBundledSkills", () => {
     }
   });
 
+  // A restrictive umask filters the mode a file is created with, so the
+  // bits are applied again after the write.
+  it("keeps an executable script executable under a umask that strips it", async () => {
+    const root = await bundle({
+      "a-skill/SKILL.md": "a",
+      "a-skill/scripts/run.sh": "#!/bin/sh\n",
+    });
+    await chmod(path.join(root, "a-skill/scripts/run.sh"), 0o755);
+    const skills = await readBundledSkills(root);
+    const project = path.join(dir, "app");
+    await mkdir(project);
+
+    // Strips group and other execute; owner execute stays, so folders
+    // remain usable, as any working umask leaves them.
+    const before = process.umask(0o011);
+    try {
+      await writeAgentSkills(project, skills, "1.2.3");
+    } finally {
+      process.umask(before);
+    }
+
+    const mode = (
+      await stat(path.join(project, ".agents/skills/a-skill/scripts/run.sh"))
+    ).mode;
+    expect(mode & 0o777).toBe(0o755);
+  });
+
   it("refuses a folder without a SKILL.md, naming it", async () => {
     const root = await bundle({
       "a-skill/SKILL.md": "a",
@@ -143,8 +170,12 @@ describe("writeAgentSkills", () => {
       {
         name: "nextly-deploy",
         files: [
-          { path: "SKILL.md", content: Buffer.from("deploy") },
-          { path: "references/vercel.md", content: Buffer.from("vercel") },
+          { path: "SKILL.md", content: Buffer.from("deploy"), mode: 0o644 },
+          {
+            path: "references/vercel.md",
+            content: Buffer.from("vercel"),
+            mode: 0o644,
+          },
         ],
       },
     ];
@@ -321,9 +352,9 @@ describe("a skill that cannot be written whole", () => {
     const broken = {
       name: "nextly-install",
       files: [
-        { path: "SKILL.md", content: Buffer.from("install") },
-        { path: "notes", content: Buffer.from("a file") },
-        { path: "notes/more.md", content: Buffer.from("more") },
+        { path: "SKILL.md", content: Buffer.from("install"), mode: 0o644 },
+        { path: "notes", content: Buffer.from("a file"), mode: 0o644 },
+        { path: "notes/more.md", content: Buffer.from("more"), mode: 0o644 },
       ],
     };
 
