@@ -37,8 +37,43 @@ registerComponents({
 });
 ```
 
-Running `nextly generate:types` emits a `plugin-admin-imports.generated.ts` import map so
-these load with no manual host wiring (D60).
+An app loads these through its **component map**, two generated files beside its generated
+types (D60):
+
+- `plugin-admin-imports.generated.ts` imports and registers every plugin admin component, and
+  the app's admin page imports it.
+- `plugin-admin-components.generated.ts` lists the same paths as plain strings, and the admin's
+  server layout passes them to `checkAdminComponents` from `nextly/runtime`.
+
+The app commits both. `nextly generate:types` writes them, and `next dev` rewrites them when
+they fall behind the config. `NEXTLY_GENERATED_FILES_WRITE=0` turns that off, for a read-only
+checkout or CI. A production build whose map lacks a dashboard widget's component does not serve
+the admin: its server log names the plugin, the widget and the command that fixes it, and the
+public site keeps serving. Other components missing from the map are logged.
+
+After a map change in development, the first render can still draw the new widget's card
+empty: the map is rewritten while that request is already being served. Next reloads the
+map straight after, and the card draws with its component.
+
+**An app made from an older template** has neither line, and keeps drawing a missing
+component as an empty card, with a console warning, until it adds them. Two lines do it:
+
+```tsx
+// src/app/admin/[[...params]]/page.tsx: with the other imports
+import "../../../types/generated/plugin-admin-imports.generated";
+```
+
+```tsx
+// src/app/admin/[[...params]]/layout.tsx: make the layout async, then
+import { checkAdminComponents } from "nextly/runtime";
+import { registeredComponentPaths } from "../../../types/generated/plugin-admin-components.generated";
+// ...inside the layout, before it returns:
+await checkAdminComponents({ config, registeredComponentPaths });
+```
+
+Then run `npx nextly generate:types` once and commit the two generated files. The paths
+assume the default types location (`./src/types/generated/`); use the folder your
+`typescript.outputFile` names.
 
 ## UI building blocks (`@nextlyhq/ui`)
 

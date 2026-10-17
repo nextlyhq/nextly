@@ -35,6 +35,7 @@ import { Posts } from "./src/collections/posts";
 import { Tags } from "./src/collections/tags";
 import { Seo } from "./src/field-groups/seo";
 import { SITE_STYLE_DEFAULTS } from "./src/lib/site-style-defaults";
+import { missingWidgetFixturePlugin } from "./src/plugins/missing-widget-fixture/plugin";
 import { styleFixturePlugin } from "./src/plugins/style-fixture/plugin";
 import { Announcement } from "./src/singles/announcement";
 import { Homepage } from "./src/singles/homepage";
@@ -134,6 +135,11 @@ export default defineConfig({
     formBuilder({ redirectRelationships: { pages: "/{slug}" } }).plugin,
     ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1"
       ? [styleFixturePlugin]
+      : []),
+    // Refuses the admin by design (a widget whose component the committed map
+    // lacks), so only the component-map e2e spec's own server turns it on.
+    ...(process.env.NEXTLY_E2E_MISSING_WIDGET === "1"
+      ? [missingWidgetFixturePlugin]
       : []),
   ],
   typescript: {
