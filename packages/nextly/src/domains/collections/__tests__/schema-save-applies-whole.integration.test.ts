@@ -131,6 +131,12 @@ describeEachDialect("a schema save whose migration fails", dialect => {
       .publicData?.errors?.[0]?.message;
   }
 
+  function createPost(data: Record<string, unknown>) {
+    return handler()
+      .getEntryService()
+      .createEntry({ collectionName: "posts", overrideAccess: true }, data);
+  }
+
   async function postsWith(
     fields: Record<string, unknown>[],
     entries: Record<string, unknown>[]
@@ -178,6 +184,9 @@ describeEachDialect("a schema save whose migration fails", dialect => {
     );
 
     expect(saved.success, JSON.stringify(saved)).toBe(true);
+    // Enforced, not only recorded: a repeated value is refused.
+    expect((await createPost({ heading: "One" })).success).toBe(false);
+    expect((await createPost({ heading: "Three" })).success).toBe(true);
   });
 
   it("refuses a length shorter than a value an entry holds, naming it", async () => {
@@ -259,8 +268,111 @@ describeEachDialect("a schema save whose migration fails", dialect => {
       expect(saved.success, JSON.stringify(saved)).toBe(true);
       expect(await columnsOf("dc_posts")).toContain("code");
       expect(await registeredFields("posts")).toContain("code");
+      expect((await createPost({ heading: "Three", code: "X" })).success).toBe(
+        true
+      );
+      expect((await createPost({ heading: "Four", code: "X" })).success).toBe(
+        false
+      );
     }
   );
+
+  it.skipIf(dialect === "sqlite")(
+    "refuses again, rather than recording a uniqueness it cannot enforce, while the name is taken",
+    async () => {
+      // A retry before the blocking index is gone finds the new column there and an index under
+      // the unique index's name. The name proves nothing: that index stands on another column.
+      await postsWith(
+        [{ name: "heading", type: "text" }],
+        [{ heading: "One" }, { heading: "Two" }]
+      );
+      const q = (name: string) =>
+        dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
+      await query(
+        `CREATE INDEX ${q(uniqueIndexNameForColumn("dc_posts", "code"))} ON ${q("dc_posts")} (${q("id")})`
+      );
+      const fields = [
+        { name: "heading", type: "text" },
+        {
+          name: "code",
+          type: "text",
+          unique: true,
+          options: { variant: "short" },
+          validation: { maxLength: 64 },
+        },
+      ];
+
+      for (const attempt of [1, 2]) {
+        const saved = await handler().updateCollection(
+          { collectionName: "posts" },
+          { fields }
+        );
+        expect(
+          saved.success,
+          `attempt ${attempt}: ${JSON.stringify(saved)}`
+        ).toBe(false);
+      }
+      expect(await registeredFields("posts")).not.toContain("code");
+    }
+  );
+
+  it("turns Draft/Published on when the status column is already there", async () => {
+    // As a save MySQL refused part-way leaves it: the column added, the registry unchanged.
+    await postsWith([{ name: "heading", type: "text" }], [{ heading: "One" }]);
+    const q = (name: string) =>
+      dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
+    await query(
+      `ALTER TABLE ${q("dc_posts")} ADD COLUMN ${q("status")} VARCHAR(20) DEFAULT 'draft'`
+    );
+
+    const saved = await handler().updateCollection(
+      { collectionName: "posts" },
+      { fields: [{ name: "heading", type: "text" }], status: true }
+    );
+
+    expect(saved.success, JSON.stringify(saved)).toBe(true);
+  });
+
+  it("checks a field whose column is not deployed yet without reading it", async () => {
+    // Outside development a save writes its migration and runs nothing, so the registry can name
+    // a field the table does not have yet; a later save changing it plans the next migration.
+    await postsWith([{ name: "heading", type: "text" }], [{ heading: "One" }]);
+    vi.stubEnv("NODE_ENV", "production");
+    const added = await handler().updateCollection(
+      { collectionName: "posts" },
+      {
+        fields: [
+          { name: "heading", type: "text" },
+          {
+            name: "code",
+            type: "text",
+            options: { variant: "short" },
+            validation: { maxLength: 64 },
+          },
+        ],
+      }
+    );
+    expect(added.success, JSON.stringify(added)).toBe(true);
+    expect(await columnsOf("dc_posts")).not.toContain("code");
+
+    const unique = await handler().updateCollection(
+      { collectionName: "posts" },
+      {
+        fields: [
+          { name: "heading", type: "text" },
+          {
+            name: "code",
+            type: "text",
+            unique: true,
+            options: { variant: "short" },
+            validation: { maxLength: 64 },
+          },
+        ],
+      }
+    );
+
+    expect(unique.success, JSON.stringify(unique)).toBe(true);
+  });
 });
 
 // A translated collection plans its main table apart from its companion, so a save MySQL refused
@@ -359,5 +471,44 @@ describeEachDialect(
         expect(columns.map(c => c.name)).toContain("code");
       }
     );
+
+    it("adds a translated field whose companion column is already there", async () => {
+      // As a save MySQL refused part-way leaves it: the companion column added, the registry
+      // unchanged.
+      const h = current.getService(
+        "collectionsHandler"
+      ) as unknown as CollectionsHandler;
+      const created = await h.createCollection({
+        name: "posts",
+        label: "Post",
+        localized: true,
+        fields: [{ name: "heading", type: "text" }],
+      });
+      expect(created.success, JSON.stringify(created)).toBe(true);
+      const q = (name: string) =>
+        dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
+      await query(
+        `ALTER TABLE ${q("dc_posts_locales")} ADD COLUMN ${q("subtitle")} TEXT`
+      );
+
+      const saved = await h.updateCollection(
+        { collectionName: "posts" },
+        {
+          fields: [
+            { name: "heading", type: "text" },
+            { name: "subtitle", type: "text" },
+          ],
+        }
+      );
+
+      expect(saved.success, JSON.stringify(saved)).toBe(true);
+      const entry = await h
+        .getEntryService()
+        .createEntry(
+          { collectionName: "posts", overrideAccess: true },
+          { heading: "One", subtitle: "Below" }
+        );
+      expect(entry.success, JSON.stringify(entry)).toBe(true);
+    });
   }
 );

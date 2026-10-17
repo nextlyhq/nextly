@@ -38,13 +38,13 @@ import {
   readColumnNullState,
   readForeignKeyColumns,
   readIndexNames,
+  readUniqueColumns,
   tableHasRows,
 } from "../../schema/pipeline/live-table-facts";
 import {
   toSnakeCase,
   columnsThatMayHoldNull,
 } from "../../schema/services/field-column-descriptor";
-import { uniqueIndexNameForColumn } from "../../schema/services/index-name";
 import { calculateSchemaHash } from "../../schema/services/schema-hash";
 import { buildCollectionMetadataUpsert } from "../../schema/ui-schema/metadata-sql";
 import { resolveBuilderVersions } from "../../versions/builder-versions";
@@ -275,6 +275,7 @@ export class DynamicCollectionService extends BaseService {
     tableHasRows: boolean;
     foreignKeysByColumn: ReadonlyMap<string, readonly string[]>;
     indexNames: ReadonlySet<string>;
+    uniqueColumns: ReadonlySet<string>;
     columnsContainingNull: ReadonlySet<string>;
     columnsAbsentFromTable: ReadonlySet<string>;
     liveColumnTypes: ReadonlyMap<string, string>;
@@ -313,11 +314,13 @@ export class DynamicCollectionService extends BaseService {
     // anyway. Which of them a save then TIGHTENS is the generator's question;
     // it holds both field lists and this reader holds only the live table.
     const nullableColumns = columnsThatMayHoldNull(pendingFields);
-    const [hasRows, foreignKeys, indexes, holdingNull, liveTypes] =
+    const [hasRows, foreignKeys, indexes, unique, holdingNull, liveTypes] =
       await Promise.all([
         tableHasRows(db, this.adapter.dialect, tableName),
         readForeignKeyColumns(db, this.adapter.dialect, tableName),
         readIndexNames(db, this.adapter.dialect, tableName),
+        // What each unique index covers, which its name does not say.
+        readUniqueColumns(db, this.adapter.dialect, tableName),
         readColumnNullState(
           db,
           this.adapter.dialect,
@@ -348,6 +351,7 @@ export class DynamicCollectionService extends BaseService {
       tableHasRows: hasRows,
       foreignKeysByColumn: foreignKeys,
       indexNames: indexes,
+      uniqueColumns: unique,
       columnsContainingNull: holdingNull.holdingNull,
       columnsAbsentFromTable: holdingNull.absent,
       liveColumnTypes: liveTypes.get(tableName) ?? new Map<string, string>(),
@@ -846,7 +850,8 @@ export class DynamicCollectionService extends BaseService {
 
   /**
    * The fields this save adds whose columns this database already has, as the table holds them:
-   * present, and unique only where their unique index is there too. A save that MySQL, which
+   * present, and unique only where a unique index already covers the column. What an index
+   * covers is asked of the catalog: one under the expected name can stand on another column. A save that MySQL, which
    * commits each schema statement, refused part-way leaves such columns while the registry still
    * lacks the fields, so the next save plans from them rather than adding them again.
    */
@@ -854,7 +859,7 @@ export class DynamicCollectionService extends BaseService {
     tableName: string,
     oldFields: readonly FieldDefinition[],
     newFields: readonly FieldDefinition[],
-    indexNames: ReadonlySet<string>
+    uniqueColumns: ReadonlySet<string>
   ): Promise<FieldDefinition[]> {
     const known = new Set(oldFields.map(f => f.name));
     const added = newFields.filter(f => !known.has(f.name));
@@ -869,11 +874,7 @@ export class DynamicCollectionService extends BaseService {
       .map(f => ({
         ...f,
         required: false,
-        unique:
-          f.unique === true &&
-          indexNames.has(
-            uniqueIndexNameForColumn(tableName, toSnakeCase(f.name))
-          ),
+        unique: f.unique === true && uniqueColumns.has(toSnakeCase(f.name)),
       }));
   }
 
@@ -1237,16 +1238,23 @@ export class DynamicCollectionService extends BaseService {
       };
       const mainBefore = onMain(oldUserFields, collectionWasLocalized);
       const mainAfter = onMain(userDefinedFields, collectionIsLocalized);
-      const refusals = await refusalsForCollectionSave({
-        adapter: this.adapter,
-        dialect: this.adapter.dialect,
-        tableName: collection.tableName,
-        oldFields: mainBefore,
-        newFields: mainAfter,
-        rename: this.schemaService.detectFieldRename(mainBefore, mainAfter),
-        addedColumnBackfill: field =>
-          this.schemaService.addedColumnBackfill(field),
-      });
+      // A table still to be deployed holds no entries, so there is nothing to check yet.
+      const tableDeployed = await this.adapter.tableExists(
+        collection.tableName
+      );
+      const refusals = !tableDeployed
+        ? []
+        : await refusalsForCollectionSave({
+            presentColumns: new Set((await liveTable()).liveColumnTypes.keys()),
+            adapter: this.adapter,
+            dialect: this.adapter.dialect,
+            tableName: collection.tableName,
+            oldFields: mainBefore,
+            newFields: mainAfter,
+            rename: this.schemaService.detectFieldRename(mainBefore, mainAfter),
+            addedColumnBackfill: field =>
+              this.schemaService.addedColumnBackfill(field),
+          });
       if (refusals.length > 0) {
         throw NextlyError.validation({
           errors: refusals,
@@ -1351,7 +1359,7 @@ export class DynamicCollectionService extends BaseService {
           collection.tableName,
           localOldShared,
           newShared,
-          mainOptions.indexNames
+          mainOptions.uniqueColumns
         );
         const localMainSQL =
           retainedOnMain.size > 0 || alreadyOnTable.length > 0
@@ -1410,7 +1418,7 @@ export class DynamicCollectionService extends BaseService {
           collection.tableName,
           oldUserFields,
           userDefinedFields,
-          alterOptions.indexNames
+          alterOptions.uniqueColumns
         );
         if (alreadyOnTable.length > 0) {
           localMigrationSQL = this.schemaService.generateAlterTableMigration(

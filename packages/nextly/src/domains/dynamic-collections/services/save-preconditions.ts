@@ -56,6 +56,12 @@ export async function refusalsForCollectionSave(args: {
   /** A renamed field, which keeps its column and its values. */
   rename?: { from: FieldDefinition; to: FieldDefinition } | null;
   addedColumnBackfill: (field: FieldDefinition) => string | null;
+  /**
+   * The columns the live table has. Outside development a save writes its migration without
+   * running it, so the registry can name a field whose column is still to come; such a field has
+   * no entries to check yet, and reading its column would fail.
+   */
+  presentColumns: ReadonlySet<string>;
 }): Promise<Refusal[]> {
   const { adapter, dialect } = args;
   const table = quote(dialect, args.tableName);
@@ -81,6 +87,9 @@ export async function refusalsForCollectionSave(args: {
     const column = getColumnDescriptor(field, dialect, "collection");
     if (!column) continue;
     const previous = previousOf(field);
+    // A column still to be deployed holds no entries, so nothing can be in the way yet.
+    if (previous !== undefined && !args.presentColumns.has(column.name))
+      continue;
     const col = quote(dialect, column.name);
     const refusal =
       field.unique === true && previous?.unique !== true
