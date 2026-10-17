@@ -330,10 +330,8 @@ describe("generateInstrumentation", () => {
 
   it.each([
     [["mdx", "page.js"], "src/instrumentation.page.js"],
-    [["mdx", "md"], "src/instrumentation.<one of your pageExtensions>"],
     // The hook is an ES module, which a `.cjs` file cannot hold.
     [["cjs", "mjs"], "src/instrumentation.mjs"],
-    [["cjs"], "src/instrumentation.<one of your pageExtensions>"],
   ])(
     "never names a hook after an extension it cannot be written in (%j)",
     async (extensions, expected) => {
@@ -347,6 +345,31 @@ describe("generateInstrumentation", () => {
         .skipped;
 
       expect(offered.path).toBe(expected);
+    }
+  );
+
+  it.each([[["mdx", "md"]], [["cjs"]]])(
+    "says to add an extension the hook can be written in when the list has none (%j)",
+    async extensions => {
+      const cwd = await app();
+      await writeFile(
+        path.join(cwd, "next.config.mjs"),
+        `export default { pageExtensions: ${JSON.stringify(extensions)} };\n`
+      );
+
+      const [offered] = (await generateInstrumentation(cwd, { srcDir: true }))
+        .skipped;
+
+      // No configured name can load the hook, so none is offered as one.
+      expect(offered.path).toBe(
+        "src/instrumentation.<a JavaScript or TypeScript extension added to pageExtensions>"
+      );
+      expect(offered.why).toContain(
+        `none of them (${extensions.join(", ")}) can hold the hook`
+      );
+      expect(offered.why).toContain(
+        "add a JavaScript or TypeScript extension to pageExtensions"
+      );
     }
   );
 

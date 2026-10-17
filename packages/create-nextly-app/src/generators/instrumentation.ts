@@ -147,6 +147,44 @@ ${startNextly(configImport)
 }
 
 /**
+ * What to tell an app that sets `pageExtensions`, for which no hook is
+ * written: the name to create it under, and its content.
+ *
+ * A list this cannot read is named as such rather than guessed, with a hook
+ * valid under any JavaScript or TypeScript extension. A list it can read but
+ * that holds no extension the hook can be written in gets no name at all,
+ * since every name it could give is one Next.js would not load as a module:
+ * the developer is told to add an extension first.
+ */
+function pageExtensionsAdvice(
+  dir: string,
+  configImport: string,
+  configName: string,
+  extensions: readonly string[] | null
+): GeneratedFiles["skipped"][number] {
+  const sets = `${configName} sets pageExtensions, and Next.js reads the hook only under a name with one of them, so none was written`;
+  const extension = extensions === null ? null : hookExtension(extensions);
+  if (extensions !== null && extension === null) {
+    return {
+      path: path.posix.join(
+        dir,
+        "instrumentation.<a JavaScript or TypeScript extension added to pageExtensions>"
+      ),
+      why: `${sets}, and none of them (${extensions.join(", ")}) can hold the hook, which is a JavaScript or TypeScript module; add a JavaScript or TypeScript extension to pageExtensions, then create the hook under it with this content`,
+      toAdd: hookFor(configImport, null),
+    };
+  }
+  return {
+    path: path.posix.join(
+      dir,
+      `instrumentation.${extension ?? "<one of your pageExtensions>"}`
+    ),
+    why: `${sets}; create it under that name with this content`,
+    toAdd: hookFor(configImport, extension),
+  };
+}
+
+/**
  * Give an existing app the hook that starts Nextly when its server starts.
  *
  * Next.js reads the hook beside \`app/\`: in \`src/\` when the app lives there,
@@ -197,17 +235,14 @@ export async function generateInstrumentation(
 
   const relative = path.posix.join(dir, "instrumentation.ts");
   if (extensions !== "absent") {
-    // A list this cannot read, or one with no extension a hook can be
-    // written in, is named as such rather than guessed.
-    const extension = extensions === null ? null : hookExtension(extensions);
-    result.skipped.push({
-      path: path.posix.join(
+    result.skipped.push(
+      pageExtensionsAdvice(
         dir,
-        `instrumentation.${extension ?? "<one of your pageExtensions>"}`
-      ),
-      why: `${nextConfig?.name ?? "The Next.js config"} sets pageExtensions, and Next.js reads the hook only under a name with one of them, so none was written; create it under that name with this content`,
-      toAdd: hookFor(configImport, extension),
-    });
+        configImport,
+        nextConfig?.name ?? "The Next.js config",
+        extensions
+      )
+    );
     return result;
   }
 

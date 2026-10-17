@@ -33,4 +33,6 @@ Adding Nextly to an app that sets `pageExtensions` now looks for the app's
 server-start hook only under the names Next.js loads in such an app, so a
 default-named `instrumentation.ts` beside `instrumentation.page.tsx` is no
 longer taken for the hook. It also no longer asks for a `.cjs` hook, which
-cannot hold the ES module the hook is.
+cannot hold the ES module the hook is. When none of the app's page
+extensions can hold the hook, it says to add a JavaScript or TypeScript one
+first, rather than naming a file Next.js would not load.
