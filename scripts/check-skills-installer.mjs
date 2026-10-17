@@ -64,8 +64,8 @@ export const GUIDE_SOURCE = "nextlyhq/nextly#v<version>";
 /**
  * The arguments the guide's install command passes after its source, read
  * from the guide itself, so the check runs whatever the guide tells people to
- * run: change its agents or its install mode there and this follows. Quotes
- * the shell would remove are removed. Null when the guide holds no such
+ * run: change its agents or its install mode there and this follows. It is
+ * split into words as the shell would ({@link shellWords}). Null when the guide holds no such
  * command, or more than one, since then which one people run is unknown, or
  * when its source is not {@link GUIDE_SOURCE}.
  *
@@ -75,10 +75,23 @@ export const GUIDE_SOURCE = "nextlyhq/nextly#v<version>";
 export function guideArguments(text) {
   const commands = [...text.matchAll(/^npx skills add '([^']+)' (.+)$/gm)];
   if (commands.length !== 1 || commands[0][1] !== GUIDE_SOURCE) return null;
-  return commands[0][2]
-    .trim()
-    .split(/\s+/)
-    .map(arg => arg.replace(/^'(.*)'$/, "$1"));
+  return shellWords(commands[0][2]);
+}
+
+/**
+ * The words a POSIX shell makes of `line`, for the quoting the guide uses:
+ * a single-quoted run is one word with its quotes removed, spaces and all,
+ * and unquoted runs split on whitespace. Anything else a shell would expand
+ * (double quotes, escapes, variables) is not in the guide's command and is
+ * left as written.
+ *
+ * @param {string} line
+ * @returns {string[]}
+ */
+export function shellWords(line) {
+  return [...line.matchAll(/(?:'[^']*'|[^\s'])+/g)].map(found =>
+    found[0].replace(/'([^']*)'/g, "$1")
+  );
 }
 
 /**

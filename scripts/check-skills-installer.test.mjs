@@ -15,6 +15,7 @@ import {
   GUIDE,
   INSTALLER,
   guideArguments,
+  shellWords,
   installedSkills,
   installerFindings,
   reportOf,
@@ -148,6 +149,15 @@ describe("reading the command from the guide", () => {
       "--copy",
       "-y",
     ]);
+  });
+
+  // A quoted skill name may hold spaces; the shell passes it as one word.
+  it("keeps a single-quoted argument with spaces in it as one word", () => {
+    expect(shellWords("--skill 'Convex Best Practices' --agent codex")).toEqual(
+      ["--skill", "Convex Best Practices", "--agent", "codex"]
+    );
+    expect(shellWords("--skill '*'  -y")).toEqual(["--skill", "*", "-y"]);
+    expect(shellWords("--name=a' b'c")).toEqual(["--name=a bc"]);
   });
 
   // The check runs against the checkout, so a source people could not install
