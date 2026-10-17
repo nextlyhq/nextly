@@ -14,6 +14,7 @@ import { gotoAdmin } from "./support/admin";
 const OPEN_BUILDER_ACTION = /^(?:Build this page|Open Page Builder)$/;
 const HOMEPAGE_API = "/admin/api/singles/homepage";
 const BUILDER_URL = /\/admin\/singles\/homepage\/builder\?field=layout$/;
+const FORM_URL = /\/admin\/singles\/homepage$/;
 
 function heading(id: string, text: string) {
   return { id, type: "core/heading", version: 1, props: { text, level: "h2" } };
@@ -65,29 +66,44 @@ test.describe("the Page Builder's own screen", () => {
     ).toBeVisible();
   });
 
-  test("asks before Back leaves with unsaved work, and Keep Editing stays", async ({
+  test("Back keeps the change between the page's form and its builder, and asks only when it leaves the page", async ({
     page,
   }) => {
     await seed(page, [heading("stays", "Stays"), heading("goes", "Goes")]);
-    // Arrived by a click from the document's form, so Back has somewhere in
-    // the admin to go, and the page has the author's own activation as a real
-    // author's would.
-    await openBuilder(page);
+    // Arrived by clicks from elsewhere in the admin, as an author does, so the
+    // history holds somewhere off the page, then its form, then its builder.
+    await gotoAdmin(page, "/");
+    await page.locator('a[href="/admin/singles/homepage"]').first().click();
+    await expect(page).toHaveURL(FORM_URL);
+    await page.getByRole("link", { name: OPEN_BUILDER_ACTION }).click();
+    await expect(page).toHaveURL(BUILDER_URL);
     await expect(block(page, "goes")).toBeVisible({ timeout: 30_000 });
     await block(page, "goes").click();
     await page.keyboard.press("Delete");
     await expect(block(page, "goes")).toHaveCount(0);
 
-    await page.goBack();
+    // Back to the same page's form: one document, so nothing asks.
+    await page.goBack({ waitUntil: "commit" });
+    await expect(page).toHaveURL(FORM_URL);
+    await expect(
+      page.getByRole("link", { name: OPEN_BUILDER_ACTION })
+    ).toBeVisible();
+    await expect(page.getByRole("alertdialog")).toHaveCount(0);
 
-    // Asked, not gone: the unsaved removal would otherwise be lost silently.
+    // And the change is still there: Forward into the builder shows it.
+    await page.goForward({ waitUntil: "commit" });
+    await expect(page).toHaveURL(BUILDER_URL);
+    await expect(block(page, "stays")).toBeVisible({ timeout: 30_000 });
+    await expect(block(page, "goes")).toHaveCount(0);
+
+    // Back twice: the second leaves the page, and asks.
+    await page.goBack({ waitUntil: "commit" });
+    await expect(page).toHaveURL(FORM_URL);
+    await page.goBack({ waitUntil: "commit" });
     const question = page.getByRole("alertdialog");
     await expect(question).toBeVisible();
     await question.getByRole("button", { name: "Keep Editing" }).click();
-
-    await expect(page).toHaveURL(BUILDER_URL);
-    await expect(block(page, "goes")).toHaveCount(0);
-    await expect(block(page, "stays")).toBeVisible();
+    await expect(page).toHaveURL(FORM_URL);
   });
 
   test("offers work left unsaved by a reload, and restores it", async ({
