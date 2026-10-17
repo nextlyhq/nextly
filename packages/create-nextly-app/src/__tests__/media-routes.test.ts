@@ -20,6 +20,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { generateMediaRoutes } from "../generators/media-routes";
+import { generateRoutes } from "../generators/routes";
 import type { ProjectInfo } from "../types";
 
 const TEMPLATES = resolve(
@@ -330,6 +331,22 @@ describe("a route handler that already answers the URL through a dynamic segment
     for (const entry of result.skipped) {
       expect(entry.why).toMatch(/dynamic segment/);
     }
+  });
+
+  // The install writes Nextly's own admin API catch-all just before these
+  // routes, as a new project has it, and the admin media route is meant to
+  // sit beside it, taking /admin/api/media as the template's does.
+  it("writes the admin media route beside the admin API route the install just wrote", async () => {
+    await generateRoutes(cwd, project(true));
+
+    const result = await generateMediaRoutes(cwd, project(true), TEMPLATES);
+
+    expect(result.written).toEqual([
+      `src/app/${ADMIN_MEDIA}`,
+      `src/app/${PUBLIC_MEDIA}`,
+      `src/app/${HEALTH}`,
+    ]);
+    expect(result.skipped).toEqual([]);
   });
 
   // Higher up, a catch-all takes several parts at once, which a single

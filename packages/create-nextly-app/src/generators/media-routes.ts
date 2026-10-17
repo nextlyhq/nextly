@@ -6,6 +6,7 @@ import type { ProjectInfo } from "../types";
 import { resolveTemplatePath } from "../utils/template";
 
 import type { GeneratedFiles } from "./generated-files";
+import { ADMIN_API_FOLDER } from "./routes";
 
 /**
  * The routes an existing app receives, as the base template's app directory
@@ -343,7 +344,14 @@ async function answeringThroughDynamic(
   segment: string
 ): Promise<{ folder: string; reason: string } | null> {
   try {
-    return await dynamicWalk(appRoot, segment.split("/"), 0, false);
+    // Nextly's own admin API catch-all is not the app's: the install wrote it
+    // just before these routes (it refuses to run where one already was),
+    // and the admin media route is meant to sit beside it.
+    const walk: DynamicWalk = {
+      wanted: segment.split("/"),
+      own: path.join(appRoot, ...ADMIN_API_FOLDER),
+    };
+    return await dynamicWalk(walk, appRoot, 0, false);
   } catch (error) {
     if (error instanceof UnreadableFolder) {
       return { folder: error.folder, reason: UNREADABLE };
@@ -352,19 +360,34 @@ async function answeringThroughDynamic(
   }
 }
 
+/** What stays the same through one {@link answeringThroughDynamic} walk. */
+interface DynamicWalk {
+  /** The URL's parts. */
+  wanted: string[];
+  /** Nextly's own admin API catch-all, which is never counted. */
+  own: string;
+}
+
+type Finding = { folder: string; reason: string };
+
 /** One step of {@link answeringThroughDynamic}: `folder` stands for the URL's first `depth` parts. */
 async function dynamicWalk(
+  walk: DynamicWalk,
   folder: string,
-  wanted: string[],
   depth: number,
   viaDynamic: boolean
-): Promise<{ folder: string; reason: string } | null> {
-  if (depth === wanted.length && viaDynamic) {
+): Promise<Finding | null> {
+  if (depth === walk.wanted.length && viaDynamic) {
     const here = await handlerIn(folder, ROUTE_HANDLERS);
     if (here !== null) return { folder, reason: here };
   }
   for (const name of await subfolders(folder)) {
-    const found = await dynamicChild(folder, name, wanted, depth, viaDynamic);
+    const found = await dynamicChild(
+      walk,
+      path.join(folder, name),
+      depth,
+      viaDynamic
+    );
     if (found !== null) return found;
   }
   return null;
@@ -372,27 +395,37 @@ async function dynamicWalk(
 
 /** What one child folder of the walk contributes: a handler it answers through, or one deeper in it. */
 async function dynamicChild(
-  folder: string,
-  name: string,
-  wanted: string[],
+  walk: DynamicWalk,
+  child: string,
   depth: number,
   viaDynamic: boolean
-): Promise<{ folder: string; reason: string } | null> {
-  const child = path.join(folder, name);
-  if (outsideUrl(name)) return dynamicWalk(child, wanted, depth, viaDynamic);
-  if (isCatchAll(name)) {
-    // `[[...rest]]` matches no part at all, so it reaches the URL even when
-    // every part is already matched; `[...rest]` needs at least one more.
-    const reaches = depth < wanted.length || name.startsWith("[[");
-    const within = reaches ? await handlerWithin(child, ROUTE_HANDLERS) : null;
-    return within === null ? null : { folder: child, reason: within };
-  }
-  if (depth >= wanted.length) return null;
-  if (isDynamic(name)) return dynamicWalk(child, wanted, depth + 1, true);
-  if (name === wanted[depth]) {
-    return dynamicWalk(child, wanted, depth + 1, viaDynamic);
-  }
-  return null;
+): Promise<Finding | null> {
+  const name = path.basename(child);
+  if (child === walk.own) return null;
+  if (outsideUrl(name)) return dynamicWalk(walk, child, depth, viaDynamic);
+  if (isCatchAll(name)) return catchAllFinding(walk, child, depth);
+  if (depth >= walk.wanted.length) return null;
+  if (isDynamic(name)) return dynamicWalk(walk, child, depth + 1, true);
+  return name === walk.wanted[depth]
+    ? dynamicWalk(walk, child, depth + 1, viaDynamic)
+    : null;
+}
+
+/**
+ * A route handler anywhere in a catch-all folder that reaches the URL.
+ * `[[...rest]]` matches no part at all, so it reaches the URL even when every
+ * part is already matched; `[...rest]` needs at least one more.
+ */
+async function catchAllFinding(
+  walk: DynamicWalk,
+  child: string,
+  depth: number
+): Promise<Finding | null> {
+  const reaches =
+    depth < walk.wanted.length || path.basename(child).startsWith("[[");
+  if (!reaches) return null;
+  const within = await handlerWithin(child, ROUTE_HANDLERS);
+  return within === null ? null : { folder: child, reason: within };
 }
 
 /** A catch-all segment: `[...rest]` or `[[...rest]]`. */
