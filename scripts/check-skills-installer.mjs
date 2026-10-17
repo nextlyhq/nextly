@@ -52,19 +52,30 @@ export const INSTALLER = "skills@1.7.2";
 export const GUIDE = "docs/guides/coding-agents.mdx";
 
 /**
+ * The source the guide's command installs from: this repository at the
+ * release the reader fills in. This check runs the command against the
+ * checkout instead, so it holds the source to that one spelling rather than
+ * pass while the guide sends people somewhere else. `create-nextly-app`'s
+ * test of the update command holds the same text to the command the CLI
+ * prints.
+ */
+export const GUIDE_SOURCE = "nextlyhq/nextly#v<version>";
+
+/**
  * The arguments the guide's install command passes after its source, read
  * from the guide itself, so the check runs whatever the guide tells people to
  * run: change its agents or its install mode there and this follows. Quotes
  * the shell would remove are removed. Null when the guide holds no such
- * command, or more than one, since then which one people run is unknown.
+ * command, or more than one, since then which one people run is unknown, or
+ * when its source is not {@link GUIDE_SOURCE}.
  *
  * @param {string} text the guide's text
  * @returns {string[] | null}
  */
 export function guideArguments(text) {
-  const commands = [...text.matchAll(/^npx skills add '[^']+' (.+)$/gm)];
-  if (commands.length !== 1) return null;
-  return commands[0][1]
+  const commands = [...text.matchAll(/^npx skills add '([^']+)' (.+)$/gm)];
+  if (commands.length !== 1 || commands[0][1] !== GUIDE_SOURCE) return null;
+  return commands[0][2]
     .trim()
     .split(/\s+/)
     .map(arg => arg.replace(/^'(.*)'$/, "$1"));
@@ -230,7 +241,7 @@ function main(base = root) {
   const args = guideArguments(readFileSync(join(base, GUIDE), "utf8"));
   if (args === null) {
     return notChecked(
-      `${GUIDE} does not hold exactly one \`npx skills add\` command to run`
+      `${GUIDE} does not hold exactly one \`npx skills add '${GUIDE_SOURCE}'\` command to run`
     );
   }
   // The skills in `skills/`, as the repository's skill check reads them.

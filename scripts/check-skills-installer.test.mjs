@@ -150,9 +150,23 @@ describe("reading the command from the guide", () => {
     ]);
   });
 
+  // The check runs against the checkout, so a source people could not install
+  // from must not pass for the one they can.
+  it("is null for a command whose source is not this repository's release tag", () => {
+    for (const source of [
+      "nextlyhq/nextly",
+      "nextlyhq/nexlty#v<version>",
+      "nextlyhq/nextly#<version>",
+    ]) {
+      expect(
+        guideArguments(`npx skills add '${source}' --skill '*'\n`)
+      ).toBeNull();
+    }
+  });
+
   // Which command people run is unknown then, so nothing is run in its place.
   it("is null for a guide with no such command, or two", () => {
-    const one = "npx skills add 'a#v1' --skill '*'";
+    const one = "npx skills add 'nextlyhq/nextly#v<version>' --skill '*'";
     expect(guideArguments("no command here")).toBeNull();
     expect(guideArguments(`${one}\n${one}\n`)).toBeNull();
   });
