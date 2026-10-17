@@ -25,6 +25,7 @@ import { z } from "zod";
 import { isErrorResponse, requireAuthentication } from "../auth/middleware";
 import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
 import { container } from "../di";
+import { sendOutcomeMessage } from "../domains/email/send-outcome";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
 import type { EmailService } from "../services/email/email-service";
@@ -44,10 +45,20 @@ const attachmentInputSchema = z.object({
 });
 
 const sendEmailSchema = z.object({
-  to: z.string().email("A valid recipient email is required"),
+  // One address, as before, or several: every one receives the email.
+  to: z.union([
+    z.string().email("A valid recipient email is required"),
+    z
+      .array(z.string().email("A valid recipient email is required"))
+      .min(1, "At least one recipient is required"),
+  ]),
   subject: z.string().min(1, "subject is required"),
   html: z.string().min(1, "html is required"),
   plainText: z.string().optional(),
+  // The send's own sender and Reply-To. Either may carry a display name
+  // (`Name <user@example.com>`), so neither is held to the bare-address rule.
+  from: z.string().trim().min(1).optional(),
+  replyTo: z.string().trim().min(1).optional(),
   cc: z.array(z.string().email()).optional(),
   bcc: z.array(z.string().email()).optional(),
   providerId: z.string().optional(),
@@ -58,7 +69,8 @@ const sendEmailSchema = z.object({
  * POST handler for sending a raw email.
  *
  * Request body:
- * - `to` (string, required): Recipient email address
+ * - `to` (string or string[], required): Recipient email address, or several
+ * - `from` / `replyTo` (string, optional): the send's sender and Reply-To
  * - `subject` (string, required)
  * - `html` (string, required)
  * - `plainText` (string, optional)
@@ -115,6 +127,8 @@ export const POST = withErrorHandler(
     // fields. Spread onto the action
     // body so consumers that read `messageId` and `success` keep working
     // alongside the server-authored toast string.
-    return respondAction("Email queued.", { ...result });
+    // Says what happened: the send is synchronous, so by now the provider has
+    // accepted the message or it has failed. Nothing is queued.
+    return respondAction(sendOutcomeMessage(result.success), { ...result });
   }
 );

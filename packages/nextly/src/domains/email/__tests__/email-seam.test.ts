@@ -8,6 +8,7 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
+import { NextlyError } from "../../../errors";
 import {
   getFilterRegistry,
   resetFilterRegistry,
@@ -28,6 +29,17 @@ vi.mock("../../../lib/env", () => ({
     NEXT_PUBLIC_APP_URL: "http://localhost:3000",
   },
 }));
+
+// One registered kind of person, for the sends below that name one.
+vi.mock("../../../plugins/principals/registry", async importActual => {
+  const actual =
+    await importActual<typeof import("../../../plugins/principals/registry")>();
+  return {
+    ...actual,
+    getPrincipalKind: (kind: string) =>
+      kind === "accounts:account" ? { kind } : actual.getPrincipalKind(kind),
+  };
+});
 
 const logger: Logger = {
   info: vi.fn(),
@@ -1206,5 +1218,279 @@ describe("bookkeeping that fails after the provider accepted the message", () =>
     });
 
     expect(result.success).toBe(false);
+  });
+});
+
+describe("the whole envelope reaches email.beforeSend, and what it returns is checked", () => {
+  const PERSON = { kind: "accounts:account", id: "acc-1" };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resetFilterRegistry();
+  });
+
+  afterEach(() => {
+    resetFilterRegistry();
+  });
+
+  /** The public data of the refusal a send ended in. */
+  async function refusalOf(attempt: Promise<unknown>): Promise<string> {
+    const error = await attempt.then(
+      () => undefined,
+      (thrown: unknown) => thrown
+    );
+    expect(error).toBeInstanceOf(NextlyError);
+    return JSON.stringify((error as NextlyError).publicData);
+  }
+
+  it("gives a filter every recipient, from and replyTo", async () => {
+    const seen: unknown[] = [];
+    getFilterRegistry().addFilter(
+      FilterSeams.EmailBeforeSend,
+      (payload: unknown) => {
+        seen.push(structuredClone(payload));
+        return payload;
+      }
+    );
+    const { service } = buildSend();
+
+    await service.send({
+      to: ["a@b.com", "c@d.com"],
+      subject: "Hello",
+      html: "<p>x</p>",
+      replyTo: "help@b.com",
+      cc: ["cc@b.com"],
+      bcc: ["bcc@b.com"],
+    });
+
+    expect(seen).toEqual([
+      expect.objectContaining({
+        to: ["a@b.com", "c@d.com"],
+        toList: ["a@b.com", "c@d.com"],
+        from: "no-reply@test.local",
+        replyTo: "help@b.com",
+        cc: ["cc@b.com"],
+        bcc: ["bcc@b.com"],
+      }),
+    ]);
+  });
+
+  it("sends the replyTo a filter changed", async () => {
+    getFilterRegistry().addFilter(
+      FilterSeams.EmailBeforeSend,
+      (payload: { replyTo?: string }) => ({
+        ...payload,
+        replyTo: "changed@b.com",
+      })
+    );
+    const { service, adapterSend } = buildSend();
+
+    await service.send({
+      to: "a@b.com",
+      subject: "Hello",
+      html: "<p>x</p>",
+      replyTo: "help@b.com",
+    });
+
+    expect(adapterSend.mock.calls[0][0].replyTo).toBe("changed@b.com");
+  });
+
+  it("runs a handler written to the one-string payload unchanged", async () => {
+    // Written as handlers were before the list existed: reads `to` as a string
+    // and builds a fresh payload from the fields it knew about.
+    getFilterRegistry().addFilter(
+      FilterSeams.EmailBeforeSend,
+      (payload: {
+        to: string;
+        from: string;
+        subject: string;
+        html: string;
+        text?: string;
+        cc?: string[];
+        bcc?: string[];
+      }) => ({
+        to: payload.to.toLowerCase(),
+        from: payload.from,
+        subject: `For ${payload.to.split("@")[0]}`,
+        html: payload.html,
+        text: payload.text,
+        cc: payload.cc,
+        bcc: payload.bcc,
+      })
+    );
+    const { service, adapterSend } = buildSend();
+
+    const result = await service.send({
+      to: "A@b.com",
+      subject: "Hello",
+      html: "<p>x</p>",
+      replyTo: "help@b.com",
+    });
+
+    expect(result).toEqual({ success: true, messageId: "msg-1" });
+    expect(adapterSend).toHaveBeenCalledTimes(1);
+    expect(adapterSend.mock.calls[0][0]).toMatchObject({
+      to: "a@b.com",
+      subject: "For A",
+      // Left out of the payload it built, so not changed.
+      replyTo: "help@b.com",
+    });
+    expect(adapterSend.mock.calls[0][0]).not.toHaveProperty("toList");
+  });
+
+  it("sends to the list a filter set through toList", async () => {
+    getFilterRegistry().addFilter(
+      FilterSeams.EmailBeforeSend,
+      (payload: { toList?: string[] }) => ({
+        ...payload,
+        toList: [...(payload.toList ?? []), "added@b.com"],
+      })
+    );
+    const { service, adapterSend } = buildSend();
+
+    await service.send({ to: "a@b.com", subject: "Hello", html: "<p>x</p>" });
+
+    // The test adapter takes one `to` per message, so two messages.
+    expect(adapterSend.mock.calls.map(([options]) => options.to)).toEqual([
+      "a@b.com",
+      "added@b.com",
+    ]);
+  });
+
+  it("refuses a filter that adds a second `to` to a send naming a person", async () => {
+    getFilterRegistry().addFilter(
+      FilterSeams.EmailBeforeSend,
+      (payload: { to: string | string[] }) => ({
+        ...payload,
+        to: [payload.to, "other@b.com"].flat(),
+      })
+    );
+    const { service, adapterSend } = buildSend();
+
+    const refusal = await refusalOf(
+      service.send({
+        to: "a@b.com",
+        subject: "Hello",
+        html: "<p>x</p>",
+        person: PERSON,
+      })
+    );
+
+    expect(refusal).toContain("exactly one `to` address");
+    expect(adapterSend).not.toHaveBeenCalled();
+  });
+
+  it("refuses a filter that replaces the `to` of a send naming a person", async () => {
+    getFilterRegistry().addFilter(
+      FilterSeams.EmailBeforeSend,
+      (payload: object) => ({ ...payload, to: "someone-else@b.com" })
+    );
+    const { service, adapterSend } = buildSend();
+
+    const refusal = await refusalOf(
+      service.send({
+        to: "a@b.com",
+        subject: "Hello",
+        html: "<p>x</p>",
+        person: PERSON,
+      })
+    );
+
+    expect(refusal).toContain("was changed before sending");
+    expect(adapterSend).not.toHaveBeenCalled();
+  });
+
+  it("sends a person's email when a filter leaves the `to` as it was", async () => {
+    // The control for the two refusals above.
+    getFilterRegistry().addFilter(
+      FilterSeams.EmailBeforeSend,
+      (payload: object) => ({ ...payload, subject: "Changed" })
+    );
+    const { service, adapterSend } = buildSend();
+
+    await service.send({
+      to: "a@b.com",
+      subject: "Hello",
+      html: "<p>x</p>",
+      person: PERSON,
+    });
+
+    expect(adapterSend).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses a filter that adds an address that is not one", async () => {
+    getFilterRegistry().addFilter(
+      FilterSeams.EmailBeforeSend,
+      (payload: { to: string | string[] }) => ({
+        ...payload,
+        to: [payload.to, "not-an-address"].flat(),
+      })
+    );
+    const { service, adapterSend } = buildSend();
+
+    const refusal = await refusalOf(
+      service.send({ to: "a@b.com", subject: "Hello", html: "<p>x</p>" })
+    );
+
+    expect(refusal).toContain('"path":"to.1"');
+    expect(adapterSend).not.toHaveBeenCalled();
+  });
+
+  it("refuses a filter that takes the list past the adapter's limit", async () => {
+    getFilterRegistry().addFilter(
+      FilterSeams.EmailBeforeSend,
+      (payload: { to: string | string[] }) => ({
+        ...payload,
+        to: [payload.to, "b@b.com", "c@b.com"].flat(),
+      })
+    );
+    const { service, adapterSend } = buildSend();
+    const limited: EmailProviderAdapter = {
+      maxToPerMessage: 2,
+      send: adapterSend,
+    };
+    (service as unknown as { createAdapterFromRecord: unknown })[
+      "createAdapterFromRecord"
+    ] = () => limited;
+
+    const refusal = await refusalOf(
+      service.send({ to: "a@b.com", subject: "Hello", html: "<p>x</p>" })
+    );
+
+    expect(refusal).toContain("at most 2");
+    expect(adapterSend).not.toHaveBeenCalled();
+  });
+
+  it("gives email.afterSend `to` as one string for one recipient, and the list beside it", async () => {
+    const captured: Array<Record<string, unknown>> = [];
+    getFilterRegistry().addAction(
+      FilterSeams.EmailAfterSend,
+      (value: Record<string, unknown>) => {
+        captured.push(value);
+      }
+    );
+    const { service, adapterSend } = buildSend();
+    const several: EmailProviderAdapter = {
+      maxToPerMessage: 10,
+      send: adapterSend,
+    };
+
+    await service.send({ to: "a@b.com", subject: "One", html: "<p>x</p>" });
+    (service as unknown as { createAdapterFromRecord: unknown })[
+      "createAdapterFromRecord"
+    ] = () => several;
+    await service.send({
+      to: ["a@b.com", "c@d.com"],
+      subject: "Two",
+      html: "<p>x</p>",
+    });
+
+    expect(captured).toEqual([
+      expect.objectContaining({ to: "a@b.com", toList: ["a@b.com"] }),
+      expect.objectContaining({
+        to: ["a@b.com", "c@d.com"],
+        toList: ["a@b.com", "c@d.com"],
+      }),
+    ]);
   });
 });

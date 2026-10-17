@@ -55,6 +55,15 @@ import { getEmailProviderRegistry } from "./email-provider-registry";
 import type { EmailProviderService } from "./email-provider-service";
 import type { EmailTemplateService } from "./email-template-service";
 import { LOG_PROVIDER_TYPE } from "./providers/log-provider";
+import {
+  assertSendable,
+  declaredMaxTo,
+  filteredToList,
+  messagesFor,
+  toAddressList,
+  type SendEnvelope,
+  type SendMessage,
+} from "./recipients";
 import { DEFAULT_APP_NAME, renderTemplate } from "./render-template";
 import { mergeTemplateAttachments } from "./template-attachment-merge";
 import { htmlToText, validateTemplateVariables } from "./template-engine";
@@ -106,7 +115,7 @@ const SLUG_TO_TEMPLATE_KEY: Record<
  * two rows would double every count taken from this table.
  */
 function deliveryRecipients(payload: {
-  to: string;
+  to: readonly string[];
   cc?: string[];
   bcc?: string[];
 }): Array<{ to: string; recipientKind: EmailDeliveryRecipientKind }> {
@@ -130,7 +139,7 @@ function deliveryRecipients(payload: {
     recipients.push({ to: mailbox, recipientKind });
   };
 
-  add(payload.to, "to");
+  for (const address of payload.to) add(address, "to");
   for (const address of payload.cc ?? []) add(address, "cc");
   for (const address of payload.bcc ?? []) add(address, "bcc");
 
@@ -198,7 +207,8 @@ export class EmailService extends BaseService {
    * 3. Error if neither exists
    *
    * @param templateSlug - Template slug (e.g., "password-reset", "welcome")
-   * @param to - Recipient email address
+   * @param to - Recipient email address, or several: every one receives the
+   *   email (see `send`)
    * @param variables - Key-value pairs for `{{variable}}` placeholder replacement
    * @param options - Optional provider/address overrides. Per-send `from` and
    *   `replyTo` take precedence over the template's own overrides: the caller
@@ -208,7 +218,7 @@ export class EmailService extends BaseService {
    */
   async sendWithTemplate(
     templateSlug: string,
-    to: string,
+    to: string | string[],
     variables: Record<string, unknown>,
     options?: {
       providerId?: string;
@@ -310,7 +320,9 @@ export class EmailService extends BaseService {
       const result = codeFn({
         user: {
           name: (variables.userName as string) ?? null,
-          email: to,
+          // A code-first template renders for one user; with several `to`
+          // addresses it is given the first, and `send` delivers to all.
+          email: typeof to === "string" ? to : (to[0] ?? ""),
         },
         token: variables.token as string | undefined,
         url:
@@ -367,7 +379,14 @@ export class EmailService extends BaseService {
    * @returns Send result with success status and optional message ID
    */
   async send(options: {
-    to: string;
+    /**
+     * The recipient, or several. Every `to` address receives the email: in one
+     * message through a provider that takes several, else one message each,
+     * with `cc` and `bcc` on the first. Refused before any provider is
+     * contacted when empty, malformed, longer than the provider takes, or more
+     * than one alongside `person`.
+     */
+    to: string | string[];
     subject: string;
     html: string;
     plainText?: string;
@@ -397,6 +416,11 @@ export class EmailService extends BaseService {
     // A precondition, before anything is resolved or sent: a person that
     // cannot be read would leave the record unable to be erased with them.
     const person = personToRecord(options.person);
+
+    // The caller's recipients are a precondition too. They are checked again
+    // once filters have run, against the envelope that is actually sent.
+    const requestedTo = toAddressList(options.to);
+    assertSendable(requestedTo, { namesPerson: person !== null });
 
     // Resolve attachments BEFORE the provider try/catch so that
     // NextlyError (validation for caller-fixable failures, internal for
@@ -429,14 +453,26 @@ export class EmailService extends BaseService {
       ? options.plainText
       : htmlToText(options.html);
 
+    //
+    // `to` stays one string for a one-recipient send, which is every send a
+    // handler written before `toList` has seen. `replyTo` is part of the
+    // envelope too, so a filter sees and can change everything that is sent.
+    const givenTo = {
+      to: requestedTo.length === 1 ? requestedTo[0] : [...requestedTo],
+      toList: [...requestedTo],
+    };
     const filtered = await registry.applyFilters<
       EmailPayloadFilterValue,
       EmailFilterContext
     >(
       FilterSeams.EmailBeforeSend,
       {
-        to: options.to,
+        // Copies, so a handler that edits the lists in place is still seen to
+        // have changed them when its result is compared with `givenTo`.
+        to: Array.isArray(givenTo.to) ? [...givenTo.to] : givenTo.to,
+        toList: [...givenTo.toList],
         from,
+        ...(options.replyTo !== undefined ? { replyTo: options.replyTo } : {}),
         subject: options.subject,
         html: options.html,
         text: plainText,
@@ -445,6 +481,97 @@ export class EmailService extends BaseService {
       },
       { providerId: options.providerId }
     );
+
+    // Every rule again, on what the filters returned: a handler can add a
+    // recipient, remove one, or replace the address a person was named for.
+    const maxToPerMessage = declaredMaxTo(adapter);
+    const to = toAddressList(filteredToList(givenTo, filtered));
+    assertSendable(to, {
+      maxToPerMessage,
+      namesPerson: person !== null,
+      personAddress: person !== null ? requestedTo[0] : undefined,
+    });
+
+    const envelope: SendEnvelope = {
+      to,
+      from: filtered.from,
+      // A handler written before `replyTo` was in the payload may build a new
+      // object without it; leaving the key out is not a change.
+      replyTo: "replyTo" in filtered ? filtered.replyTo : options.replyTo,
+      subject: filtered.subject,
+      html: filtered.html,
+      text: filtered.text,
+      cc: filtered.cc,
+      bcc: filtered.bcc,
+    };
+
+    const outcomes: Array<{ success: boolean; messageId?: string }> = [];
+    for (const message of messagesFor(envelope, maxToPerMessage)) {
+      // In turn rather than at once: a provider that takes one `to` per
+      // message is usually one that rate-limits, and the delivery records of
+      // each message are written before the next is sent.
+      outcomes.push(
+        await this.dispatchMessage(message, {
+          adapter,
+          providerType,
+          resolvedProviderId,
+          providerId: options.providerId,
+          templateSlug: options.templateSlug,
+          person,
+          resolvedAttachments,
+        })
+      );
+    }
+
+    // One message is today's send, and its result is returned as it is.
+    if (outcomes.length === 1) return outcomes[0];
+
+    // Split into one message per `to`: successful only when every message
+    // was, identified by the first message id there is.
+    const messageId = outcomes.find(
+      outcome => outcome.messageId !== undefined
+    )?.messageId;
+    return {
+      success: outcomes.every(outcome => outcome.success),
+      ...(messageId !== undefined ? { messageId } : {}),
+    };
+  }
+
+  /**
+   * Hand one message to the provider, and record what it answered.
+   *
+   * Never throws for a provider failure: the outcome is returned, recorded
+   * per recipient, and passed to the `email.afterSend` actions, once for each
+   * message.
+   */
+  private async dispatchMessage(
+    message: SendMessage,
+    context: {
+      adapter: EmailProviderAdapter;
+      providerType: string;
+      resolvedProviderId?: string;
+      providerId?: string;
+      templateSlug?: string;
+      person: PrincipalRef | null;
+      resolvedAttachments?: ResolvedAttachment[];
+    }
+  ): Promise<{ success: boolean; messageId?: string }> {
+    const {
+      adapter,
+      providerType,
+      resolvedProviderId,
+      person,
+      resolvedAttachments,
+    } = context;
+    const registry = getFilterRegistry();
+    // `to` as one string for a one-recipient message, as the after-send
+    // actions have always received it, and as a list otherwise. Never `cc` or
+    // `bcc`: a blind copy a filter added is not the actions' to see, and an
+    // action that forwards its argument would disclose it.
+    const afterSendTo = {
+      to: message.to.length === 1 ? message.to[0] : [...message.to],
+      toList: [...message.to],
+    };
 
     const startedAt = Date.now();
     // Two variables rather than one, because they answer different questions
@@ -464,14 +591,17 @@ export class EmailService extends BaseService {
 
     try {
       const result = await adapter.send({
-        to: filtered.to,
-        from: filtered.from,
-        subject: filtered.subject,
-        html: filtered.html,
-        text: filtered.text,
-        replyTo: options.replyTo,
-        cc: filtered.cc,
-        bcc: filtered.bcc,
+        to: message.to[0],
+        // Only for a message to several people, so a one-recipient message
+        // reaches every adapter exactly as it did before `toList` existed.
+        ...(message.to.length > 1 ? { toList: [...message.to] } : {}),
+        from: message.from,
+        subject: message.subject,
+        html: message.html,
+        text: message.text,
+        replyTo: message.replyTo,
+        cc: message.cc,
+        bcc: message.bcc,
         attachments: resolvedAttachments,
       });
 
@@ -498,8 +628,8 @@ export class EmailService extends BaseService {
       // saying `sent` for a refused address is a wrong answer to the one
       // question this table exists to answer.
       const refused = refusedMailboxes(result.rejected);
-      const recipients = deliveryRecipients(filtered);
-      // A provider is handed `options.to` and may build its identifier out of
+      const recipients = deliveryRecipients(message);
+      // A provider is handed the `to` addresses and may build its identifier out of
       // it. The error string is redacted for exactly that reason, and an id
       // like `delivery-user@example.com` carries a recipient into every place
       // this value goes: the delivery row, the response both send routes
@@ -573,7 +703,7 @@ export class EmailService extends BaseService {
             person: recipient.recipientKind === "to" ? person : null,
             providerId: resolvedProviderId ?? null,
             providerType,
-            templateSlug: options.templateSlug ?? null,
+            templateSlug: context.templateSlug ?? null,
             status: delivered ? ("sent" as const) : ("failed" as const),
             messageId: safeMessageId,
             error: delivered
@@ -589,12 +719,12 @@ export class EmailService extends BaseService {
       await registry.runActions<EmailAfterSendValue, EmailFilterContext>(
         FilterSeams.EmailAfterSend,
         {
-          to: filtered.to,
-          subject: filtered.subject,
+          ...afterSendTo,
+          subject: message.subject,
           success: deliveredToCaller,
           messageId: safeMessageId ?? undefined,
         },
-        { providerId: options.providerId }
+        { providerId: context.providerId }
       );
 
       const durationMs = Date.now() - startedAt;
@@ -607,8 +737,9 @@ export class EmailService extends BaseService {
           provider: providerType,
           messageId: safeMessageId,
           durationMs,
-          ccCount: options.cc?.length ?? 0,
-          bccCount: options.bcc?.length ?? 0,
+          toCount: message.to.length,
+          ccCount: message.cc?.length ?? 0,
+          bccCount: message.bcc?.length ?? 0,
           attachmentCount: resolvedAttachments?.length ?? 0,
         });
       } else {
@@ -674,12 +805,12 @@ export class EmailService extends BaseService {
       // record of an attempt. A throw here is the case where the record
       // matters most, since it is the only durable trace of the failure.
       await this.deliveries?.recordAll(
-        deliveryRecipients(filtered).map(recipient => ({
+        deliveryRecipients(message).map(recipient => ({
           ...recipient,
           person: recipient.recipientKind === "to" ? person : null,
           providerId: resolvedProviderId ?? null,
           providerType,
-          templateSlug: options.templateSlug ?? null,
+          templateSlug: context.templateSlug ?? null,
           status: "failed" as const,
           // The NORMALISED message, never the cause. `cause` is the provider's
           // original error, and a contributed provider throws it with
@@ -701,12 +832,12 @@ export class EmailService extends BaseService {
       await registry.runActions<EmailAfterSendValue, EmailFilterContext>(
         FilterSeams.EmailAfterSend,
         {
-          to: filtered.to,
-          subject: filtered.subject,
+          ...afterSendTo,
+          subject: message.subject,
           success: false,
           messageId: undefined,
         },
-        { providerId: options.providerId }
+        { providerId: context.providerId }
       );
 
       this.logger.error("email.failed", {
