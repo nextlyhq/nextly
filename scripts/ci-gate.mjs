@@ -37,19 +37,24 @@
  * 🔴 Treating `skipped` as a pass is how a gate stops gating: a job switched
  * off by an `if:` that no longer matches reports nothing, and a check reading
  * that as success is a green light nobody chose to give. It is accepted for
- * exactly TWO reasons, each of which the workflow states rather than this
- * inferring. `changes` decided the commit cannot affect anything it would have
- * verified. Or a newer push to `main` already has a run of this workflow, whose
- * verdict includes this commit; the run skipped itself rather than repeat the
- * work, and nothing was cancelled.
+ * exactly ONE reason, which the workflow states rather than this inferring:
+ * `changes` decided the commit cannot affect anything it would have verified.
  *
- * Kept as two inputs rather than one folded flag, so the reason a skip passed
- * is the reason reported, and a run that was superseded is never described as
- * touching only inert paths.
+ * A run a newer push to `main` superseded also skips its jobs, and that is
+ * NOT a pass: nothing tested this commit, and the newer run may itself be
+ * superseded before it tests anything. `gateVerdict` refuses it with its own
+ * reason, and the catch-up workflow (`main-catch-up.yml`) tests `main`'s
+ * newest commit while `main` keeps moving.
  */
-export function skipIsAcceptable(inert, superseded = "false") {
-  return inert === "true" || superseded === "true";
+export function skipIsAcceptable(inert) {
+  return inert === "true";
 }
+
+/** Why a superseded run's gate does not pass, for the gate's message. */
+export const SUPERSEDED_REASON =
+  "a newer push to main superseded this run before its tests ran, so nothing " +
+  "tested this commit here. main-catch-up.yml runs CI on main's newest commit " +
+  "when no run has tested it.";
 
 /**
  * The verdict for a set of job results.
@@ -74,15 +79,19 @@ export function gateVerdict(results, inert, superseded = "false") {
     };
   }
 
+  // Checked before the jobs: a superseded run skipped every one of them, and
+  // its reason is the run's, not any one job's.
+  if (superseded === "true") return { ok: false, reasons: [SUPERSEDED_REASON] };
+
   const reasons = [];
   for (const [name, value] of entries) {
     const result = value?.result;
     if (result === "success") continue;
     if (result === "skipped") {
-      if (skipIsAcceptable(inert, superseded)) continue;
+      if (skipIsAcceptable(inert)) continue;
       reasons.push(
-        `${name} was skipped, and this commit is neither inert nor superseded ` +
-          "by a newer push. A job that did not run has verified nothing."
+        `${name} was skipped, and this commit is not inert. A job that did ` +
+          "not run has verified nothing."
       );
       continue;
     }
@@ -131,9 +140,7 @@ if (invokedDirectly) {
   const names = Object.keys(results);
   console.log(`ci-gate: ${names.length} job(s) reported — ${names.join(", ")}`);
   if (superseded === "true") {
-    console.log(
-      "  a newer push to main already has a run; this one skipped its jobs, and that run's verdict includes this commit."
-    );
+    console.log(`  ${SUPERSEDED_REASON}`);
   } else if (inert === "true") {
     console.log("  this commit is inert, so a skipped job is expected.");
   }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { gateVerdict, skipIsAcceptable } from "./ci-gate.mjs";
+import { SUPERSEDED_REASON, gateVerdict, skipIsAcceptable } from "./ci-gate.mjs";
 
 const ok = (name = "ci") => ({ [name]: { result: "success" } });
 
@@ -9,10 +9,9 @@ describe("skipIsAcceptable", () => {
     expect(skipIsAcceptable("true")).toBe(true);
   });
 
-  it("is true when a newer push to main already has a run", () => {
-    // The second reason. A superseded run skipped itself rather than repeat
-    // work the newer run does, and that run's verdict includes this commit.
-    expect(skipIsAcceptable("false", "true")).toBe(true);
+  it("is not true for a run a newer push superseded: that is a refusal of its own", () => {
+    // A superseded run tested nothing, and the newer run may be superseded too.
+    expect(skipIsAcceptable("false", "true")).toBe(false);
   });
 
   it("is false for everything else, including an unset flag", () => {
@@ -21,8 +20,6 @@ describe("skipIsAcceptable", () => {
     // inferred here. An absent flag is not that statement, for either.
     for (const value of [undefined, "", "false", "TRUE", "1"]) {
       expect(skipIsAcceptable(value)).toBe(false);
-      expect(skipIsAcceptable(value, value)).toBe(false);
-      expect(skipIsAcceptable("false", value)).toBe(false);
     }
   });
 });
@@ -56,25 +53,21 @@ describe("gateVerdict", () => {
     expect(verdict.reasons[0]).toContain("did not run");
   });
 
-  it("passes a skipped job when a newer push superseded this run", () => {
-    // Not inert: the commit touched code. Superseded: a newer push has a run,
-    // and this one skipped every job. The gate passes on the second reason
-    // alone, and the message it would have given names supersession, so a
-    // reader is never told the commit touched only inert paths.
-    const verdict = gateVerdict(
-      { ci: { result: "skipped" }, unit: { result: "skipped" } },
-      "false",
-      "true"
-    );
-
-    expect(verdict.ok).toBe(true);
+  it("refuses a run a newer push to main superseded, with that reason alone", () => {
+    // Its jobs all skipped and nothing tested the commit, so the gate must not
+    // read as passing to GitHub or to anything reading the commit's checks;
+    // the catch-up run tests main's newest commit instead.
+    for (const inert of ["false", "true"]) {
+      const verdict = gateVerdict({ ci: { result: "skipped" }, unit: { result: "skipped" } }, inert, "true");
+      expect(verdict).toEqual({ ok: false, reasons: [SUPERSEDED_REASON] });
+    }
   });
 
-  it("names both reasons in the refusal when neither applies", () => {
+  it("refuses a skipped job when the commit is not inert, and says why", () => {
     const verdict = gateVerdict({ ci: { result: "skipped" } }, "false", "false");
 
     expect(verdict.ok).toBe(false);
-    expect(verdict.reasons[0]).toMatch(/neither inert nor superseded/);
+    expect(verdict.reasons[0]).toMatch(/not inert/);
   });
 
   it("passes a skipped job only when the commit is inert", () => {
