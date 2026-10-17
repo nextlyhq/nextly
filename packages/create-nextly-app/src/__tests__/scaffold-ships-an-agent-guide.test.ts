@@ -40,6 +40,7 @@ import {
 
 import type { DatabaseConfig } from "../types";
 import { updateSkillsCommand } from "../generators/agent-skills";
+import { skillVersionOf } from "../lib/bundled-skills";
 import { packageVersion } from "../lib/package-version";
 import { scriptRunner } from "../utils/package-manager-commands";
 import { copyTemplate } from "../utils/template";
@@ -172,11 +173,22 @@ describe("a scaffolded project arrives with the guide", () => {
       if (projectType === "blank") {
         expect(guide).toContain(updateSkillsCommand(packageVersion()));
         expect(guide).toMatch(/0\.0\.2-alpha\.66 publish no\s+skills/);
-        // The restore command is offered only where the skills' declared
-        // release is the one the project runs, as the scaffold's own check
-        // requires; any other project is sent to the docs.
+        // The restore command is offered only where the project's skill and
+        // the project itself are both on the release the command's skills
+        // were written for, read here from the skills the bundle is built
+        // from; any other project is sent to the docs.
+        const declared = skillVersionOf(
+          await readFile(
+            path.resolve(here, "../../../../skills/nextly-install/SKILL.md"),
+            "utf8"
+          )
+        );
+        expect(declared).toMatch(/^\d+\.\d+\.\d+/);
+        const v = (declared ?? "").replace(/\./g, "\\.");
         expect(guide).toMatch(
-          /`metadata\.nextly-version` is exactly what `npx nextly --version`\s+prints[\s\S]*?Otherwise[\s\S]*?do not run the command above[\s\S]*?nextlyhq\.com\/docs\/guides\/coding-agents/
+          new RegExp(
+            `installs skills\\s+written for \`${v}\`[\\s\\S]*?\`metadata\\.nextly-version\`\\s+is exactly \`${v}\`, and \`npx nextly --version\` prints\\s+exactly \`${v}\`[\\s\\S]*?Otherwise[\\s\\S]*?do not run the command above[\\s\\S]*?nextlyhq\\.com/docs/guides/coding-agents`
+          )
         );
       }
 
