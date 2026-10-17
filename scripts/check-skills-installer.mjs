@@ -100,9 +100,9 @@ export function shellWords(line) {
 
 /**
  * The folder the pinned installer copies a project's skills into for each
- * agent the guide may name, as it was measured: `.claude/skills/` for Claude
- * Code, and the shared `.agents/skills/` for Codex and Cursor. Re-measure it
- * when the pin moves.
+ * agent the guide may name, by the installer's agent ids, as it was
+ * measured: the Claude Code copy for `claude-code`, and the shared
+ * `.agents/skills/` for the other two. Re-measure it when the pin moves.
  */
 export const AGENT_HOMES = {
   "claude-code": CLAUDE_COPY,
