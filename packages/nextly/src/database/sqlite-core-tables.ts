@@ -423,6 +423,35 @@ export function generateSqliteCoreTableStatements(): string[] {
     // without this one both cards scan the whole version history.
     `CREATE INDEX IF NOT EXISTS "nextly_versions_pending_edits_idx"
       ON "nextly_versions" ("is_autosave", "status", "version_no", "scope_slug", "updated_at", "id")`,
+    // The record of content events. Columns match
+    // schemas/content-events/sqlite.ts.
+    `CREATE TABLE IF NOT EXISTS "nextly_content_events" (
+      "id" TEXT PRIMARY KEY NOT NULL,
+      "subject_kind" TEXT NOT NULL,
+      "subject_slug" TEXT,
+      "subject_id" TEXT NOT NULL,
+      "kind" TEXT NOT NULL,
+      "actor_kind" TEXT NOT NULL,
+      "actor_id" TEXT,
+      "actor_principal_kind" TEXT,
+      "actor_name" TEXT,
+      "occurred_at" INTEGER NOT NULL,
+      "from_state" TEXT,
+      "to_state" TEXT,
+      "note" TEXT,
+      "version_no" INTEGER,
+      "payload" TEXT,
+      "definition_hash" TEXT
+    )`,
+    `CREATE INDEX IF NOT EXISTS "nextly_content_events_subject_idx"
+      ON "nextly_content_events" ("subject_kind", "subject_slug", "subject_id", "occurred_at")`,
+    `CREATE INDEX IF NOT EXISTS "nextly_content_events_kind_idx"
+      ON "nextly_content_events" ("kind", "occurred_at")`,
+    `CREATE TABLE IF NOT EXISTS "nextly_content_event_parts" (
+      "event_id" TEXT NOT NULL,
+      "part" TEXT NOT NULL,
+      PRIMARY KEY ("event_id", "part")
+    )`,
     // Content releases. Columns match schemas/releases/sqlite.ts.
     `CREATE TABLE IF NOT EXISTS "nextly_releases" (
       "id" TEXT PRIMARY KEY NOT NULL,

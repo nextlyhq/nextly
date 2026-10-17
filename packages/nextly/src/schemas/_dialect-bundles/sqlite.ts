@@ -102,3 +102,10 @@ export { nextlyJobsSqlite as nextlyJobs } from "../jobs/sqlite";
 // Each person's own notices; in the bundle for the reason the releases note
 // above gives — this map is what the push creates.
 export { nextlyNoticesSqlite as nextlyNotices } from "../notices/sqlite";
+
+// The record of content events; in the bundle so freshPushSchema creates the
+// tables on a fresh database, for the reason the release tables above give.
+export {
+  nextlyContentEventsSqlite as nextlyContentEvents,
+  nextlyContentEventPartsSqlite as nextlyContentEventParts,
+} from "../content-events/sqlite";

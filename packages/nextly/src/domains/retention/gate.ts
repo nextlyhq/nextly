@@ -82,6 +82,14 @@ export const EMAIL_RETENTION_GATE_KEY = "email.retention.lastPassAt";
 export const NOTICES_RETENTION_GATE_KEY = "notices.retention.lastPassAt";
 
 /**
+ * The record of content events' marker. It rides the activity log's window,
+ * as notices do, but is its own table with its own writer, so a pass over one
+ * says nothing about whether the other is done.
+ */
+export const CONTENT_EVENTS_RETENTION_GATE_KEY =
+  "content-events.retention.lastPassAt";
+
+/**
  * Notices' SECOND marker, for the scheduled drain, for the reason the delivery
  * log has one: write paths offer the pass capped, and a write landing just
  * after the marker came due would otherwise take the drain's full-budget turn.

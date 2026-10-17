@@ -102,3 +102,10 @@ export { nextlyJobsMysql as nextlyJobs } from "../jobs/mysql";
 // Each person's own notices; in the bundle for the reason the releases note
 // above gives — this map is what the push creates.
 export { nextlyNoticesMysql as nextlyNotices } from "../notices/mysql";
+
+// The record of content events; in the bundle so freshPushSchema creates the
+// tables on a fresh database, for the reason the release tables above give.
+export {
+  nextlyContentEventsMysql as nextlyContentEvents,
+  nextlyContentEventPartsMysql as nextlyContentEventParts,
+} from "../content-events/mysql";
