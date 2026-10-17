@@ -18,9 +18,9 @@ import { EXACT_VERSION } from "../lib/exact-version";
 import type { GeneratedFiles } from "./generated-files";
 
 /**
- * Where a project's skills go, one real copy in each. Codex reads only
- * `.agents/skills/` and Claude Code only `.claude/skills/`; Cursor and Copilot
- * read both. Copies rather than a link between them, because Git for Windows
+ * Where a project's skills go, one real copy in each. OpenAI's coding agent
+ * reads only `.agents/skills/` and Claude Code only `.claude/skills/`; Cursor
+ * and Copilot read both. Copies rather than a link between them, because Git for Windows
  * checks a symbolic link out as a text file holding its target.
  */
 export const AGENT_SKILL_HOMES = [".agents/skills", ".claude/skills"] as const;
