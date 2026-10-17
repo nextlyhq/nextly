@@ -79,6 +79,23 @@ describe("the dev log when a saved config cannot be read", () => {
     expect(message).toMatch(/previous config/i);
   });
 
+  it("counts the column the way an editor does, from 1 and in characters", async () => {
+    // esbuild reports a 0-based byte offset. Two lines, so both conversions
+    // show: the ASCII one is off by one when the column is passed through,
+    // and the "café" one is off by two, since "é" is two bytes.
+    const ascii = 'export default { collections: [ { slug: "posts" ] };';
+    const accented =
+      'export default { label: "café", collections: [ { slug: "posts" ] };';
+
+    for (const line of [ascii, accented]) {
+      const message = describeConfigReloadFailure(
+        await loadFailure(`${line}\n`)
+      );
+      // The error is at the "]" that should have been a "}".
+      expect(message).toContain(`nextly.config.ts:1:${line.indexOf("]") + 1})`);
+    }
+  });
+
   it("names a package the config imports that is not installed, and does not call it a syntax error", () => {
     // Node's own error for the import, taken from a real Node process: the
     // compiled config imports packages at runtime, where this one is missing.

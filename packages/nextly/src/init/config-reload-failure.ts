@@ -18,7 +18,12 @@ const KEPT = "The previous config stays in place.";
 /** One of esbuild's build errors, as it reports them. */
 type EsbuildMessage = {
   text: string;
-  location?: { file: string; line: number; column: number } | null;
+  location?: {
+    file: string;
+    line: number;
+    column: number;
+    lineText?: string;
+  } | null;
 };
 
 /** The build errors esbuild attached to a failure, if it was one. */
@@ -34,9 +39,17 @@ function esbuildErrors(cause: unknown): EsbuildMessage[] {
   );
 }
 
+// esbuild counts a column in bytes from 0; an editor counts characters from 1.
+// The line's own text turns the byte offset into characters, so a line with
+// non-ASCII text before the error still points at the right place.
 function where(message: EsbuildMessage): string {
   const at = message.location;
-  return at ? ` (${at.file}:${at.line}:${at.column})` : "";
+  if (!at) return "";
+  const before =
+    typeof at.lineText === "string"
+      ? Buffer.from(at.lineText).subarray(0, at.column).toString().length
+      : at.column;
+  return ` (${at.file}:${at.line}:${before + 1})`;
 }
 
 /** The dev-log line for a config that could not be read. */

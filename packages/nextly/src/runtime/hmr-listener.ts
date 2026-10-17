@@ -28,7 +28,7 @@ type WatchState = {
 };
 type HmrCache = {
   __nextly_configWatch?: WatchState;
-  __nextly_hmrReload?: boolean | Promise<void>;
+  __nextly_hmrReload?: boolean | Promise<unknown>;
 };
 
 const g = globalThis as HmrCache;
@@ -47,30 +47,49 @@ export function configWatchAllowed(
 }
 
 /**
- * Starts watching the project's config file, if it has one. Idempotent: once a
- * set is being watched (from an earlier call, or from a reload that read the
- * config and its imports), this leaves it as it is.
+ * Starts watching the project's config and the files it imports. Idempotent:
+ * once a set is being watched (from an earlier call, or from a reload that read
+ * the config and its imports), this leaves it as it is.
+ *
+ * The imports are found here rather than left to the first reload, because
+ * that reload may never come: the boot apply can be turned off, or can fail on
+ * a broken collection file, and the save that fixes it is a save of that file.
  */
 export function ensureHmrListener(
   options: { cwd?: string; env?: NodeJS.ProcessEnv } = {}
 ): void {
   const env = options.env ?? process.env;
   if (!configWatchAllowed(env) || g.__nextly_configWatch) return;
-  const cwd = options.cwd ?? process.cwd();
+  void watchScannedConfig(options);
+}
 
-  // Loaded lazily, so production, where this returns above, never loads the
-  // config loader through this module.
-  void import("../cli/utils/config-loader")
-    .then(({ findNextlyConfig }) => {
-      const configPath = findNextlyConfig(cwd);
-      if (configPath && !g.__nextly_configWatch) {
-        watchConfigFiles([configPath], env);
-      }
-    })
-    .catch(() => {
-      // Without the loader there is no config to watch; a restart still
-      // applies the schema.
-    });
+/**
+ * Adds the config and the files it imports, found by compiling it without
+ * running it, to what is watched already. For when no successful load has
+ * reported them: at startup, and after a save that could not be loaded, where
+ * the fix may be saved to a file the last good load never imported. Without a
+ * config, watches the places one would be found, so creating or restoring it
+ * reloads. Never throws.
+ */
+export async function watchScannedConfig(
+  options: { cwd?: string; env?: NodeJS.ProcessEnv } = {}
+): Promise<void> {
+  const env = options.env ?? process.env;
+  if (!configWatchAllowed(env)) return;
+  const before = g.__nextly_configWatch;
+  try {
+    // Loaded lazily, so production, where this returns above, never loads the
+    // config loader or esbuild through this module.
+    const { configFilesToWatch } = await import("./config-dependencies");
+    const files = await configFilesToWatch(options.cwd ?? process.cwd());
+    // A load that finished meanwhile reported exactly what the config imports,
+    // and that set wins over a scan.
+    if (g.__nextly_configWatch !== before) return;
+    watchConfigFiles([...(before?.files ?? []), ...files], env);
+  } catch {
+    // Without the loader there is no config to watch; a restart still applies
+    // the schema.
+  }
 }
 
 /**
@@ -84,12 +103,24 @@ export function watchLoadedConfig(
   env: NodeJS.ProcessEnv = process.env
 ): void {
   if (!configWatchAllowed(env)) return;
-  const files = [
-    ...(loaded.configPath ? [loaded.configPath] : []),
-    // esbuild reports the inputs relative to the directory it bundled from.
-    ...loaded.dependencies.map(dependency => resolve(cwd, dependency)),
-  ];
-  watchConfigFiles(files, env);
+  if (!loaded.configPath) {
+    // The load found no config. It may be gone only for a moment (a branch
+    // switch, an editor that deletes before it writes), so what is watched
+    // stays, and the places a config is found at are added: restoring it then
+    // reloads.
+    void watchScannedConfig({ cwd, env });
+    return;
+  }
+  // esbuild reports the inputs relative to the directory it bundled from,
+  // which is the config's own folder, not necessarily the project's.
+  const root = dirname(loaded.configPath);
+  watchConfigFiles(
+    [
+      loaded.configPath,
+      ...loaded.dependencies.map(dependency => resolve(root, dependency)),
+    ],
+    env
+  );
 }
 
 /**
@@ -165,13 +196,28 @@ type HmrDebounceCache = {
 };
 const debounceCache = globalThis as HmrDebounceCache;
 
+// A reload another process refused, because it held the schema lock or was
+// running a storage migration, is tried again after each of these waits in
+// turn. The other side's reload is usually over within seconds, and until this
+// process reloads it keeps serving the previous config's hooks and rules.
+const REFUSED_RETRY_DELAYS_MS = [1_000, 2_000, 4_000, 8_000, 16_000];
+let refusedRetryDelays: readonly number[] = REFUSED_RETRY_DELAYS_MS;
+
+// Test seam: shorter waits, so a test can watch the retries happen.
+export function __setRefusedRetryDelaysForTest(
+  delays: readonly number[] | null
+): void {
+  refusedRetryDelays = delays ?? REFUSED_RETRY_DELAYS_MS;
+}
+
 // Production reloader, resolved lazily on first use to avoid loading the full
 // schema pipeline at module evaluation time. Tests override it with
-// __setReloaderForTest.
-let _reloaderFn: (() => Promise<void>) | null = null;
+// __setReloaderForTest. It resolves to "refused" when another process kept it
+// from running.
+let _reloaderFn: (() => Promise<unknown>) | null = null;
 
 // Gets (or lazily loads) the reloadNextlyConfig function.
-async function getReloader(): Promise<() => Promise<void>> {
+async function getReloader(): Promise<() => Promise<unknown>> {
   if (_reloaderFn) return _reloaderFn;
   const { reloadNextlyConfig } = await import("../init/reload-config");
   return reloadNextlyConfig;
@@ -181,15 +227,21 @@ async function getReloader(): Promise<() => Promise<void>> {
 // without vi.doMock and a dynamic import inside a fake-timer callback, which
 // cannot be awaited predictably under vi.useFakeTimers(). Reset to null
 // between tests.
-export function __setReloaderForTest(fn: (() => Promise<void>) | null): void {
+export function __setReloaderForTest(
+  fn: (() => Promise<unknown>) | null
+): void {
   _reloaderFn = fn;
 }
 
-function scheduleReload(): void {
+// `retry` counts the refused attempts before this one: 0 for a save, which
+// waits out the debounce, and then one more for each retry.
+function scheduleReload(retry = 0): void {
   // Reset any pending debounce timer.
   if (debounceCache.__nextly_hmrDebounce) {
     clearTimeout(debounceCache.__nextly_hmrDebounce);
   }
+  const delay =
+    retry === 0 ? HMR_DEBOUNCE_MS : (refusedRetryDelays[retry - 1] ?? 0);
   debounceCache.__nextly_hmrDebounce = setTimeout(() => {
     delete debounceCache.__nextly_hmrDebounce;
     const reload = (async () => {
@@ -198,13 +250,27 @@ function scheduleReload(): void {
         // reload runs queues a single trailing run that reads the file again,
         // so no edit is dropped.
         const reloadFn = await getReloader();
-        await reloadFn();
+        if ((await reloadFn()) === "refused") retryRefused(retry);
       } catch {
         // Errors are already logged inside reloadNextlyConfig.
       }
     })();
     markHmrReloadInFlight(reload);
-  }, HMR_DEBOUNCE_MS);
+  }, delay);
+}
+
+function retryRefused(retry: number): void {
+  // A save made meanwhile has its own reload coming.
+  if (debounceCache.__nextly_hmrDebounce) return;
+  if (retry < refusedRetryDelays.length) {
+    scheduleReload(retry + 1);
+    return;
+  }
+  console.warn(
+    `[Nextly HMR] The saved config was not applied: the schema reload was ` +
+      `refused ${retry + 1} times in a row, for the reason logged above. Save ` +
+      `the config again once that is resolved, or restart next dev.`
+  );
 }
 
 // Test seam: what a watched file's save does, without a filesystem event.
@@ -227,7 +293,7 @@ export function consumeHmrReloadFlag(): boolean {
 
 // Marks a reload as in flight by storing its promise. When the promise
 // settles, the flag clears unless another reload was scheduled meanwhile.
-export function markHmrReloadInFlight(promise: Promise<void>): void {
+export function markHmrReloadInFlight(promise: Promise<unknown>): void {
   g.__nextly_hmrReload = promise;
   void promise.finally(() => {
     if (g.__nextly_hmrReload === promise) {

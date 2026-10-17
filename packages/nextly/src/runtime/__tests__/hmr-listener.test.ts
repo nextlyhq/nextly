@@ -2,7 +2,7 @@
 // What: under `next dev`, saving nextly.config.ts or a file it imports reloads
 // the config; nothing is watched outside development; the watched set is
 // replaced, never stacked; a burst of saves is one reload; a save during a
-// reload is not lost.
+// reload is not lost; a reload another process refused is tried again.
 // Why: this is the only thing that applies a code-first schema edit without a
 // restart. It replaced a listener on Next.js's HMR socket, which stopped
 // receiving anything when Next moved that socket, so these tests drive real
@@ -21,11 +21,14 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
+  __setRefusedRetryDelaysForTest,
   __setReloaderForTest,
   configWatchAllowed,
   ensureHmrListener,
+  scheduleReloadForTest,
   stopConfigWatch,
   watchLoadedConfig,
+  watchScannedConfig,
   watchedConfigFiles,
 } from "../hmr-listener";
 
@@ -68,7 +71,7 @@ describe("watching the config and the files it imports", () => {
   let cwd: string;
   let config: string;
   let posts: string;
-  let reload: ReturnType<typeof vi.fn<() => Promise<void>>>;
+  let reload: ReturnType<typeof vi.fn<() => Promise<unknown>>>;
 
   beforeEach(() => {
     cwd = mkdtempSync(join(tmpdir(), "nextly-config-watch-"));
@@ -77,7 +80,7 @@ describe("watching the config and the files it imports", () => {
     posts = join(cwd, "collections", "posts.ts");
     writeFileSync(config, "export default {};\n");
     writeFileSync(posts, "export const posts = {};\n");
-    reload = vi.fn(() => Promise.resolve());
+    reload = vi.fn(() => Promise.resolve<unknown>("finished"));
     __setReloaderForTest(reload);
   });
 
@@ -211,6 +214,88 @@ describe("watching the config and the files it imports", () => {
     await eventually(() => reload.mock.calls.length === 1);
   });
 
+  it("resolves the imports against the config's own folder, not the project's", async () => {
+    // A config under src/: the loader bundles from src/, so it reports the
+    // collection as "collections/posts.ts", relative to src/.
+    mkdirSync(join(cwd, "src", "collections"), { recursive: true });
+    const srcConfig = join(cwd, "src", "nextly.config.ts");
+    const srcPosts = join(cwd, "src", "collections", "posts.ts");
+    writeFileSync(srcConfig, "export default {};\n");
+    writeFileSync(srcPosts, "export const posts = {};\n");
+
+    watchLoadedConfig(
+      {
+        configPath: srcConfig,
+        dependencies: ["nextly.config.ts", "collections/posts.ts"],
+      },
+      cwd,
+      DEV
+    );
+
+    expect(watchedConfigFiles().sort()).toEqual([srcConfig, srcPosts].sort());
+    await watching();
+    writeFileSync(srcPosts, "export const posts = { edited: true };\n");
+    await eventually(() => reload.mock.calls.length === 1);
+  });
+
+  it("starts by watching the files the config imports, before any reload has read it", async () => {
+    // What a boot with the boot apply turned off looks like: no load has
+    // reported the imports, and the first edit is to a collection file.
+    writeFileSync(
+      config,
+      'import { posts } from "./collections/posts";\n' +
+        "export default { collections: [posts] };\n"
+    );
+    ensureHmrListener({ cwd, env: DEV });
+
+    await eventually(() => watchedConfigFiles().includes(posts));
+    await watching();
+    writeFileSync(posts, "export const posts = { slug: 'posts' };\n");
+    await eventually(() => reload.mock.calls.length === 1);
+  });
+
+  it("after a load fails, also watches the imported file that broke it", async () => {
+    // The last good load imported nothing. The edit that failed added an
+    // import of a collection file with an error in it, and the fix will be
+    // saved to that file.
+    watchLoadedConfig(loaded(), cwd, DEV);
+    writeFileSync(posts, "export const posts = { slug: 'posts' ;\n");
+    writeFileSync(
+      config,
+      'import { posts } from "./collections/posts";\n' +
+        "export default { collections: [posts] };\n"
+    );
+
+    await watchScannedConfig({ cwd, env: DEV });
+
+    expect(watchedConfigFiles().sort()).toEqual([config, posts].sort());
+    await watching();
+    writeFileSync(posts, "export const posts = { slug: 'posts' };\n");
+    await eventually(() => reload.mock.calls.length === 1);
+  });
+
+  it("keeps watching where the config was after a load finds none", async () => {
+    watchLoadedConfig(loaded("collections/posts.ts"), cwd, DEV);
+    rmSync(config);
+    // What a load returns while the file is gone, for example mid branch
+    // switch.
+    watchLoadedConfig({ configPath: undefined, dependencies: [] }, cwd, DEV);
+    await watching();
+
+    writeFileSync(config, "export default { restored: true };\n");
+    await eventually(() => reload.mock.calls.length === 1);
+  });
+
+  it("with no config yet, reloads once one is created", async () => {
+    rmSync(config);
+    ensureHmrListener({ cwd, env: DEV });
+
+    await eventually(() => watchedConfigFiles().includes(config));
+    await watching();
+    writeFileSync(config, "export default { created: true };\n");
+    await eventually(() => reload.mock.calls.length === 1);
+  });
+
   it("reloads again for a save made while a reload is running", async () => {
     let finishFirst!: () => void;
     reload.mockImplementationOnce(
@@ -226,5 +311,57 @@ describe("watching the config and the files it imports", () => {
     writeFileSync(config, "export default { second: true };\n");
     await eventually(() => reload.mock.calls.length === 2);
     finishFirst();
+  });
+});
+
+describe("a reload another process refused", () => {
+  let reload: ReturnType<typeof vi.fn<() => Promise<unknown>>>;
+  let warn: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    __setRefusedRetryDelaysForTest([50, 50]);
+    reload = vi.fn(() => Promise.resolve<unknown>("refused"));
+    __setReloaderForTest(reload);
+    warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    __setRefusedRetryDelaysForTest(null);
+    __setReloaderForTest(null);
+    warn.mockRestore();
+  });
+
+  it("is tried again until it runs", async () => {
+    reload.mockResolvedValueOnce("refused").mockResolvedValueOnce("finished");
+
+    scheduleReloadForTest();
+
+    await eventually(() => reload.mock.calls.length === 2);
+    await settle();
+    expect(reload).toHaveBeenCalledTimes(2);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("stops after the last retry and says the save was not applied", async () => {
+    scheduleReloadForTest();
+
+    // The save's own run and one per retry delay.
+    await eventually(() => reload.mock.calls.length === 3);
+    await eventually(() => warn.mock.calls.length === 1);
+    await settle();
+    expect(reload).toHaveBeenCalledTimes(3);
+    expect(String(warn.mock.calls[0][0])).toMatch(
+      /not applied.*refused 3 times/
+    );
+  });
+
+  it("is not retried when it ran, even if it failed", async () => {
+    reload.mockResolvedValue("finished");
+
+    scheduleReloadForTest();
+
+    await eventually(() => reload.mock.calls.length === 1);
+    await settle();
+    expect(reload).toHaveBeenCalledTimes(1);
   });
 });
