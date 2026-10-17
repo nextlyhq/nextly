@@ -85,11 +85,16 @@ const RELEASE_AUTHORITY: Record<string, "read" | "create" | "publish"> = {
   getRelease: "read",
   listReleaseMembers: "read",
   listReleaseBlockers: "read",
+  getReleaseReadiness: "read",
   createRelease: "create",
   addReleaseMember: "create",
   // Removing a member un-does part of assembling a release and can only ever
   // make LESS content go live, so it is `create` rather than `publish`.
   removeReleaseMember: "create",
+  // Switching a document's action re-assembles the release; the document's
+  // own authority for the new action, and `publish` for a scheduled release,
+  // are the service's to ask.
+  changeReleaseMemberAction: "create",
   scheduleRelease: "publish",
   cancelRelease: "publish",
   publishRelease: "publish",
@@ -755,6 +760,40 @@ const RELEASE_OPERATIONS: Record<
       hasNext: false,
       hasPrev: false,
     });
+  },
+
+  /**
+   * Every problem the release's documents have now, hard ones (which stop it
+   * from being scheduled or published now) apart from soft ones.
+   */
+  getReleaseReadiness: async ({ caller, releases, releaseId }) =>
+    respondDoc(await releases.readiness({ ...caller, releaseId })),
+
+  /**
+   * Switch a document between going live and coming down. Bound to the
+   * release in the path, as a removal is.
+   */
+  changeReleaseMemberAction: async ({
+    request,
+    caller,
+    releases,
+    releaseId,
+    memberId,
+  }) => {
+    const body = await jsonObject(request);
+    const action = body.action;
+    if (action !== "publish" && action !== "unpublish") {
+      throw badRequest("`action` must be `publish` or `unpublish`.");
+    }
+    return respondMutation(
+      "Release document updated.",
+      await releases.changeMemberAction({
+        ...caller,
+        releaseId,
+        memberId,
+        action,
+      })
+    );
   },
 
   removeReleaseMember: async ({ caller, releases, releaseId, memberId }) => {
