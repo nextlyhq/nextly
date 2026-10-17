@@ -10,6 +10,11 @@ export const nextlyI18nArchive = sqliteTable(
   {
     id: integer("id").primaryKey({ autoIncrement: true }),
     collection: text("collection").notNull(),
+    // Which kind of entity archived the row: `collection`, `single` or `fieldGroup`. A field
+    // group's slug may equal a collection's or a Single's, so the slug alone cannot say whose a
+    // row is. Rows from before this column existed were all read as collections, which is the
+    // default an existing table is given when the column is added.
+    entityKind: text("entity_kind").notNull().default("collection"),
     entryId: text("entry_id").notNull(),
     locale: text("locale").notNull(),
     field: text("field").notNull(),

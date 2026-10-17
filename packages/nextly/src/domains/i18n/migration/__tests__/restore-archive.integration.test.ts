@@ -79,6 +79,7 @@ describe("restoreI18nArchive", () => {
     const result = await restoreI18nArchive({
       adapter: makeAdapter(),
       collection: "pages",
+      kind: "collection",
       companionTableName: "dc_pages_locales",
     });
 
@@ -107,6 +108,7 @@ describe("restoreI18nArchive", () => {
     const result = await restoreI18nArchive({
       adapter: makeAdapter(),
       collection: "pages",
+      kind: "collection",
       companionTableName: "dc_pages_locales",
       locale: "de",
     });
@@ -126,6 +128,7 @@ describe("restoreI18nArchive", () => {
     const result = await restoreI18nArchive({
       adapter: makeAdapter(),
       collection: "pages",
+      kind: "collection",
       companionTableName: "dc_pages_locales",
     });
 
@@ -139,6 +142,7 @@ describe("restoreI18nArchive", () => {
     const args = {
       adapter: makeAdapter(),
       collection: "pages",
+      kind: "collection" as const,
       companionTableName: "dc_pages_locales",
     };
     await restoreI18nArchive(args);
@@ -159,6 +163,7 @@ describe("restoreI18nArchive", () => {
     await restoreI18nArchive({
       adapter: makeAdapter(),
       collection: "pages",
+      kind: "collection",
       companionTableName: "dc_pages_locales",
     });
     expect(count()).toBe(1); // audit trail preserved, restore re-runnable
@@ -166,6 +171,7 @@ describe("restoreI18nArchive", () => {
     await restoreI18nArchive({
       adapter: makeAdapter(),
       collection: "pages",
+      kind: "collection",
       companionTableName: "dc_pages_locales",
       purge: true,
     });
@@ -183,14 +189,15 @@ describe("restoreI18nArchive", () => {
 
     // Simulate a concurrent archive write landing between the restore's read and
     // its purge. The read runs through Drizzle; the companion upserts run through
-    // executeQuery afterward, so injecting on the first executeQuery call adds a
-    // fresh higher-id row for the same collection after the read but before the
-    // delete.
+    // executeQuery afterward, so injecting on the first of those adds a fresh
+    // higher-id row for the same collection after the read but before the delete.
+    // The archive's own DDL, which runs through executeQuery before the read, is
+    // passed over.
     const raceAdapter = makeAdapter();
     const baseExec = raceAdapter.executeQuery;
     let injected = false;
     raceAdapter.executeQuery = (q: string, params?: unknown[]) => {
-      if (!injected) {
+      if (!injected && !/^\s*(CREATE|ALTER)\b/i.test(q)) {
         injected = true;
         archive([["pages", "p2", "fr", "title", "Bonjour"]]);
       }
@@ -200,6 +207,7 @@ describe("restoreI18nArchive", () => {
     await restoreI18nArchive({
       adapter: raceAdapter,
       collection: "pages",
+      kind: "collection",
       companionTableName: "dc_pages_locales",
       purge: true,
     });
@@ -217,6 +225,7 @@ describe("restoreI18nArchive", () => {
     const result = await restoreI18nArchive({
       adapter: makeAdapter(),
       collection: "pages",
+      kind: "collection",
       companionTableName: "dc_pages_locales",
     });
     expect(result).toEqual({ rowsRead: 0, rowsRestored: 0, locales: [] });

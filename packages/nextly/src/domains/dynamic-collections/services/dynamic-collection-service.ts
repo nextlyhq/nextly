@@ -749,6 +749,7 @@ export class DynamicCollectionService extends BaseService {
   ): string {
     const spec = deriveCompanionSpec({
       slug,
+      kind: "collection",
       dbName: tableName,
       fields: opts.fields,
       dialect: this.adapter.dialect,
@@ -889,6 +890,7 @@ export class DynamicCollectionService extends BaseService {
       // This service owns Schema Builder collections, so the companion mirrors that builder.
       builtBy: "collection" as const,
       slug: args.slug,
+      kind: "collection" as const,
       tableName: args.tableName,
       dialect: this.adapter.dialect,
       defaultLocale: this.defaultLocale,
@@ -1183,6 +1185,7 @@ export class DynamicCollectionService extends BaseService {
         defaultLocale: this.defaultLocale,
         adapter: this.adapter,
         entity: collectionName,
+        kind: "collection",
         oldFields: oldUserFields,
         newFields: userDefinedFields,
         wasLocalized: collectionWasLocalized,

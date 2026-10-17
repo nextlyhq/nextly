@@ -162,6 +162,7 @@ for (const entry of DIALECTS) {
       const result = await teardownEntityI18n({
         adapter: adapter as never,
         slug,
+        kind: "collection",
         tableName: main,
       });
 
@@ -189,6 +190,7 @@ for (const entry of DIALECTS) {
       await teardownEntityI18n({
         adapter: adapter as never,
         slug,
+        kind: "collection",
         tableName: main,
       });
       await adapter.executeQuery(`DROP TABLE IF EXISTS ${q(main)}`);
@@ -208,6 +210,7 @@ for (const entry of DIALECTS) {
       const result = await teardownEntityI18n({
         adapter: adapter as never,
         slug,
+        kind: "collection",
         tableName: main,
       });
 

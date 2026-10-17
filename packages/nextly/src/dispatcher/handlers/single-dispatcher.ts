@@ -1225,6 +1225,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         defaultLocale: getConfigFromDI()?.localization?.defaultLocale ?? "en",
         adapter,
         entity: slug,
+        kind: "single",
         oldFields: single.fields as unknown as FieldDefinition[],
         newFields: fields as unknown as FieldDefinition[],
         wasLocalized,

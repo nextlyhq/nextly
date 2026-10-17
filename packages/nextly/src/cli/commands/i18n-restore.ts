@@ -24,7 +24,10 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Command } from "commander";
 
-import { resolveEntityTable } from "../../domains/i18n/migration/resolve-entity-table";
+import {
+  chooseRestoreEntity,
+  resolveEntityTables,
+} from "../../domains/i18n/migration/resolve-entity-table";
 import { restoreI18nArchive } from "../../domains/i18n/migration/restore-archive";
 import { loadUiSchema } from "../../domains/schema/ui-schema/loader";
 import { describeError } from "../../errors/index";
@@ -35,6 +38,11 @@ import { loadConfig } from "../utils/config-loader";
 export interface I18nRestoreCommandOptions {
   /** Entity slug to restore, as recorded in the archive's `collection` column. */
   collection?: string;
+  /**
+   * Which kind of entity the slug names: `collection`, `single` or `field-group`. Needed only when
+   * the slug names more than one, which a field group can share with a collection or a Single.
+   */
+  kind?: string;
   /** Restore only this language. Omit to restore every archived language. */
   locale?: string;
   /** Restore only this field's archived values, by its name or its column name. */
@@ -76,27 +84,29 @@ export async function runI18nRestore(
     debug: options.verbose,
   });
 
-  // Resolve the slug from the code config first, then fall back to the UI-built
-  // entities in ui-schema.json. A Builder-created collection/single/component is
-  // not in nextly.config.ts, but its disable migration still archives rows under
-  // its slug — so restore must resolve its table name from the manifest too,
-  // mirroring how migrate:create folds the manifest. Without this fallback,
-  // `--collection <ui-slug>` exits before replaying anything. An absent manifest
-  // is an empty one, so a code-only project keeps the previous behavior.
-  let entity = resolveEntityTable(configResult.config, slug);
-  if (!entity) {
-    const manifest = await loadUiSchema({
-      projectRoot: options.cwd ?? process.cwd(),
-      uiSchemaFile: configResult.config.db.uiSchemaFile,
-    });
-    entity = resolveEntityTable(manifest, slug);
-  }
-  if (!entity) {
-    logger.error(
-      `No collection, single, or component named "${slug}" was found in your config or ui-schema.json.`
-    );
+  // Resolve the slug in the code config and in the UI-built entities in ui-schema.json. A
+  // Builder-created collection/single/field group is not in nextly.config.ts, but its disable
+  // migration still archives rows under its slug — so restore must resolve its table name from
+  // the manifest too, mirroring how migrate:create folds the manifest. An absent manifest is an
+  // empty one, so a code-only project keeps the previous behavior. The config wins for a kind both
+  // know; a kind only the manifest knows is added, since a field group may share the slug.
+  const manifest = await loadUiSchema({
+    projectRoot: options.cwd ?? process.cwd(),
+    uiSchemaFile: configResult.config.db.uiSchemaFile,
+  });
+  const fromConfig = resolveEntityTables(configResult.config, slug);
+  const matches = [
+    ...fromConfig,
+    ...resolveEntityTables(manifest, slug).filter(
+      m => !fromConfig.some(c => c.kind === m.kind)
+    ),
+  ];
+  const chosen = chooseRestoreEntity(slug, matches, options.kind);
+  if ("problem" in chosen) {
+    logger.error(`${chosen.problem} Looked in your config and ui-schema.json.`);
     process.exit(1);
   }
+  const { entity } = chosen;
 
   const { companionTableName } = entity;
   logger.keyValue("Entity", `${slug} (${entity.kind})`);
@@ -109,6 +119,7 @@ export async function runI18nRestore(
       const result = await restoreI18nArchive({
         adapter: adapter as unknown as DrizzleAdapter,
         collection: slug,
+        kind: entity.kind,
         companionTableName,
         locale: options.locale,
         field: options.field,
@@ -145,7 +156,11 @@ export function registerI18nRestoreCommand(program: Command): void {
     )
     .requiredOption(
       "--collection <slug>",
-      "Collection, single, or component slug to restore"
+      "Collection, single, or field group slug to restore"
+    )
+    .option(
+      "--kind <kind>",
+      "collection, single or field-group: which entity the slug names, when more than one has it"
     )
     .option(
       "--locale <code>",

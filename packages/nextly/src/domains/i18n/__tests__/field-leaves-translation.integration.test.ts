@@ -619,6 +619,7 @@ describeEachDialect("a field that stops being translated", dialect => {
           typeof restoreI18nArchive
         >[0]["adapter"],
         collection: "posts",
+        kind: "collection",
         companionTableName: "dc_posts_locales",
         field: "heading",
       });
@@ -676,6 +677,7 @@ describeEachDialect("a field that stops being translated", dialect => {
         typeof restoreI18nArchive
       >[0]["adapter"],
       collection: "articles",
+      kind: "collection",
       companionTableName: "dc_articles_locales",
       field: "subTitle",
     });
@@ -712,6 +714,7 @@ describeEachDialect("a field that stops being translated", dialect => {
         typeof restoreI18nArchive
       >[0]["adapter"],
       collection: "posts",
+      kind: "collection",
       companionTableName: "dc_posts_locales",
       field: "heading",
       locale: "es",

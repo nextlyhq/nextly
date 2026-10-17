@@ -33,6 +33,7 @@ import {
 } from "../../api/response-shapes";
 import { assertLocalizationConfigured } from "../../domains/i18n/config/require-app-config";
 import { archiveFieldsLeavingTranslation } from "../../domains/i18n/migration/archive-preflight";
+import { ensureI18nArchive } from "../../domains/i18n/migration/ensure-archive";
 import { buildCompanionTransitionStatements } from "../../domains/i18n/migration/reconcile-companion";
 import {
   companionHasStatusColumn,
@@ -57,7 +58,6 @@ import {
 import { toRenameCandidateWire } from "../../domains/schema/pipeline/rename-candidate-wire";
 import { RegexRenameDetector } from "../../domains/schema/pipeline/rename-detector";
 import type { Resolution } from "../../domains/schema/pipeline/resolution/types";
-import { isIdempotencyError } from "../../domains/schema/pipeline/sql-statement-utils";
 import type { DesiredCollection } from "../../domains/schema/pipeline/types";
 import { DrizzleStatementExecutor } from "../../domains/schema/services/drizzle-statement-executor";
 import { generateRuntimeSchema } from "../../domains/schema/services/runtime-schema-generator";
@@ -71,10 +71,6 @@ import { getHandlerConfig } from "../../route-handler/auth-handler";
 import { withSessionCacheHeaders } from "../../routeHandler";
 import { getProductionNotifier } from "../../runtime/notifications/index";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
-import {
-  getI18nArchiveDdl,
-  getI18nArchiveIndexRepairDdl,
-} from "../../schemas/nextly-i18n-archive";
 import type { ServiceContainer } from "../../services";
 import type { CollectionsHandler } from "../../services/collections-handler";
 import { readableSlugAllowlist } from "../../services/lib/readable-slug-allowlist";
@@ -874,6 +870,7 @@ const COLLECTIONS_METHODS: Record<
         defaultLocale: getConfigFromDI()?.localization?.defaultLocale ?? "en",
         adapter,
         entity: String(p.collectionName),
+        kind: "collection",
         oldFields: (collection.fields ?? []) as unknown as FieldDefinition[],
         newFields: fields as unknown as FieldDefinition[],
         wasLocalized,
@@ -917,6 +914,7 @@ const COLLECTIONS_METHODS: Record<
             // The companion mirrors the main table, and a collection's table comes from the Schema Builder's collection creator.
             builtBy: "collection" as const,
             slug: p.collectionName,
+            kind: "collection",
             tableName,
             dialect,
             defaultLocale,
@@ -946,22 +944,7 @@ const COLLECTIONS_METHODS: Record<
           // table exists first. Run each statement individually (executeQuery is
           // single-statement on some drivers, e.g. sqlite).
           if (plan.needsArchive) {
-            for (const stmt of getI18nArchiveDdl(dialect)) {
-              await adapter.executeQuery(stmt);
-            }
-            // MySQL's table DDL cannot restore an index the table is missing, and
-            // index-only drift produces no reconcile operations, so the repair runs
-            // here. Tolerated rather than checked first: attempting it and accepting
-            // "duplicate key name" is one round trip instead of two, and the same
-            // tolerance the schema executor already applies.
-            const indexRepair = getI18nArchiveIndexRepairDdl(dialect);
-            if (indexRepair) {
-              try {
-                await adapter.executeQuery(indexRepair);
-              } catch (err) {
-                if (!isIdempotencyError(err)) throw err;
-              }
-            }
+            await ensureI18nArchive(adapter, dialect);
           }
           // 🔴 STRICT on purpose, matching the other two companion paths: tolerating a re-run
           // would make a half-finished localization ENABLE look like success, because the planner
