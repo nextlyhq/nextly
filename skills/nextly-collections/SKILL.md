@@ -8,6 +8,8 @@ description: >-
   Server Component with getNextly and find. Also use when a collection does
   not appear in the admin, a field change does not reach the database, or a
   page reading content fails to build.
+metadata:
+  nextly-version: 0.0.2-alpha.66
 ---
 
 # Define a collection in Nextly

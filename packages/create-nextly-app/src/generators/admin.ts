@@ -1,8 +1,7 @@
-import path from "path";
-
-import fs from "fs-extra";
-
 import type { ProjectInfo } from "../types";
+
+import type { GeneratedFiles } from "./generated-files";
+import { nothingYet, writeNew } from "./write-new";
 
 // Existing-project installs scaffold a blank-equivalent setup: generateConfig
 // only emits the blank template, so no plugins are registered and no plugin-
@@ -70,22 +69,20 @@ export default function AdminLayout({
 export async function generateAdminPage(
   cwd: string,
   projectInfo: ProjectInfo
-): Promise<void> {
-  const adminDir = path.join(cwd, projectInfo.appDir, "admin", "[[...params]]");
-  const pagePath = path.join(adminDir, "page.tsx");
-  const layoutPath = path.join(adminDir, "layout.tsx");
-
-  if (await fs.pathExists(pagePath)) {
-    throw new Error(
-      "Admin page already exists at admin/[[...params]]/page.tsx"
-    );
+): Promise<GeneratedFiles> {
+  const files = nothingYet();
+  const adminDir = `${projectInfo.appDir}/admin/[[...params]]`;
+  // The page and its layout are judged one by one: a layout the app has is
+  // kept even when the page is missing.
+  const layout = getAdminLayoutTemplate(projectInfo.srcDir);
+  for (const [name, text] of [
+    ["page.tsx", ADMIN_PAGE_TEMPLATE],
+    ["layout.tsx", layout],
+  ] as const) {
+    await writeNew(cwd, `${adminDir}/${name}`, text, files, {
+      why: `the app already has one; Nextly's admin needs its own ${name}, which is`,
+      toAdd: text,
+    });
   }
-
-  await fs.ensureDir(adminDir);
-  await fs.writeFile(pagePath, ADMIN_PAGE_TEMPLATE, "utf-8");
-  await fs.writeFile(
-    layoutPath,
-    getAdminLayoutTemplate(projectInfo.srcDir),
-    "utf-8"
-  );
+  return files;
 }

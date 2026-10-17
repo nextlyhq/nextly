@@ -84,10 +84,11 @@ export async function applyComponentReadAccess(
   entry: Record<string, unknown>,
   fields: readonly FieldConfig[],
   componentFields: ComponentFieldMap,
-  caller: ComponentReadCaller
+  caller: ComponentReadCaller,
+  open: WeakSet<object> = new WeakSet()
 ): Promise<void> {
   for (const field of fields) {
-    await judgeField(entry, field, componentFields, caller);
+    await judgeField(entry, field, componentFields, caller, open);
   }
 }
 
@@ -96,14 +97,21 @@ async function judgeField(
   entry: Record<string, unknown>,
   field: FieldConfig,
   componentFields: ComponentFieldMap,
-  caller: ComponentReadCaller
+  caller: ComponentReadCaller,
+  open: WeakSet<object>
 ): Promise<void> {
   const name = nameOf(field);
   const sub = subFieldsOf(field);
-  // A layout container keeps its fields on the same object.
+  // A layout container keeps its fields on the same object, so it is the one
+  // descent that recurses on the same value, and the one that can loop: a
+  // container whose fields reach itself. `open` holds the containers open on
+  // this path and releases each on the way out, so a container shared by
+  // several rows is still walked once in each.
   if (name === undefined) {
-    if (sub)
-      await applyComponentReadAccess(entry, sub, componentFields, caller);
+    if (!sub || open.has(field)) return;
+    open.add(field);
+    await applyComponentReadAccess(entry, sub, componentFields, caller, open);
+    open.delete(field);
     return;
   }
   if (isFieldGroupField(field)) {
@@ -154,17 +162,25 @@ export function nestedWithheldPaths(
   prefix = ""
 ): Set<string> {
   const paths = new Set<string>();
+  // `open`: the containers open on this value, as in `judgeField`. A descent
+  // into a row or an instance moves to another value, where a loop through
+  // the same container is no longer possible, so it starts a fresh set.
   const walk = (
     beforeObj: Record<string, unknown>,
     afterObj: Record<string, unknown>,
     level: readonly FieldConfig[],
-    at: string
+    at: string,
+    open: WeakSet<object> = new WeakSet()
   ): void => {
     for (const field of level) {
       const name = nameOf(field);
       const sub = subFieldsOf(field);
       if (name === undefined) {
-        if (sub) walk(beforeObj, afterObj, sub, at);
+        if (sub && !open.has(field)) {
+          open.add(field);
+          walk(beforeObj, afterObj, sub, at, open);
+          open.delete(field);
+        }
         continue;
       }
       const path = at === "" ? name : `${at}.${name}`;
@@ -199,13 +215,27 @@ function hasReadRule(fns: Record<string, FieldFunctions> | undefined): boolean {
   );
 }
 
+/**
+ * What a schema walk has already visited: component slugs, and the container
+ * fields themselves. A walk of the schema alone has no data to bottom out on,
+ * so any container that reaches itself, named or not, would loop.
+ */
+interface SchemaSeen {
+  slugs: Set<string>;
+  containers: WeakSet<object>;
+}
+
+function freshSeen(): SchemaSeen {
+  return { slugs: new Set(), containers: new WeakSet() };
+}
+
 function componentCarriesReadRule(
   slug: string,
   componentFields: ComponentFieldMap,
-  seen: Set<string>
+  seen: SchemaSeen
 ): boolean {
-  if (seen.has(slug)) return false;
-  seen.add(slug);
+  if (seen.slugs.has(slug)) return false;
+  seen.slugs.add(slug);
   if (hasReadRule(getFieldFunctions("fieldGroup", slug))) return true;
   return reachesComponentRule(
     componentFields.get(slug) ?? [],
@@ -222,7 +252,7 @@ function componentCarriesReadRule(
 function reachesComponentRule(
   level: readonly FieldConfig[],
   componentFields: ComponentFieldMap,
-  seen: Set<string>
+  seen: SchemaSeen
 ): boolean {
   return level.some(field => {
     if (isFieldGroupField(field)) {
@@ -231,9 +261,9 @@ function reachesComponentRule(
       );
     }
     const sub = subFieldsOf(field);
-    return (
-      sub !== undefined && reachesComponentRule(sub, componentFields, seen)
-    );
+    if (sub === undefined || seen.containers.has(field)) return false;
+    seen.containers.add(field);
+    return reachesComponentRule(sub, componentFields, seen);
   });
 }
 
@@ -250,12 +280,17 @@ export function fieldsCarryingReadRules(
 ): string[] {
   const own = getFieldFunctions(kind, slug) ?? {};
   const names: string[] = [];
+  const visited = new WeakSet<object>();
   const visit = (level: readonly FieldConfig[]): void => {
     for (const field of level) {
       const name = nameOf(field);
       if (name === undefined) {
         const sub = subFieldsOf(field);
-        if (sub) visit(sub);
+        // A schema walk: a container that reaches itself is visited once.
+        if (sub && !visited.has(field)) {
+          visited.add(field);
+          visit(sub);
+        }
       } else if (carriesReadRule(field, own[name], componentFields)) {
         names.push(name);
       }
@@ -272,5 +307,5 @@ function carriesReadRule(
   componentFields: ComponentFieldMap
 ): boolean {
   if (fn?.access?.read !== undefined || hasReadRule(fn?.fields)) return true;
-  return reachesComponentRule([field], componentFields, new Set());
+  return reachesComponentRule([field], componentFields, freshSeen());
 }

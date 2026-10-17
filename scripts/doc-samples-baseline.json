@@ -1,8 +1,8 @@
 {
   "coverage": {
     "pages": 80,
-    "samples": 452,
-    "compiled": 284
+    "samples": 454,
+    "compiled": 285
   },
   "samplesPerPage": {
     "docs/admin/branding.mdx": {
@@ -230,12 +230,12 @@
       "compiled": 5
     },
     "docs/releases/index.mdx": {
-      "samples": 1,
+      "samples": 2,
       "compiled": 1
     },
     "docs/versions/index.mdx": {
-      "samples": 1,
-      "compiled": 1
+      "samples": 2,
+      "compiled": 2
     },
     "docs/webhooks/retention.mdx": {
       "samples": 2,
@@ -361,9 +361,6 @@
       "reader-name #3 error TS2304: Cannot find name 'Page'.": 1,
       "reader-name #4 error TS2304: Cannot find name 'Page'.": 1,
       "reader-name #6 error TS2304: Cannot find name 'Page'.": 1
-    },
-    "docs/notices/index.mdx": {
-      "reader-file #0 error TS2307: Cannot find module '../../nextly.config' or its corresponding type declarations.": 1
     },
     "docs/plugins/admin-ui.mdx": {
       "#11 error TS2304: Cannot find name 'Skeleton'.": 1,
@@ -518,6 +515,9 @@
     "docs/jobs/index.mdx": {
       "reader-file #1 error TS2307: Cannot find module './jobs/send-digest' or its corresponding type declarations.": 1
     },
+    "docs/notices/index.mdx": {
+      "reader-file #0 error TS2307: Cannot find module '../../nextly.config' or its corresponding type declarations.": 1
+    },
     "docs/page-builder/index.mdx": {
       "reader-file #1 error TS2307: Cannot find module '../../../nextly.config' or its corresponding type declarations.": 1
     },
@@ -528,7 +528,7 @@
       "reader-file #2 error TS2307: Cannot find module '../../../nextly.config' or its corresponding type declarations.": 1
     },
     "docs/releases/index.mdx": {
-      "reader-file #0 error TS2307: Cannot find module '../../nextly.config' or its corresponding type declarations.": 1
+      "reader-file #1 error TS2307: Cannot find module '../../nextly.config' or its corresponding type declarations.": 1
     },
     "packages/admin/README.md": {
       "reader-file #1 error TS2307: Cannot find module '../../../../nextly.config' or its corresponding type declarations.": 1

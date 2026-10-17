@@ -65,6 +65,7 @@ import { ZodGenerator, TypeGenerator } from "../../schema";
 // Resolve the versioning config so the CLI `db:sync` path persists it too
 // (parity with the boot/HMR registry sync).
 import { resolveCollectionTableName } from "../../schema/utils/resolve-table-name";
+import { sweepDeletedEntityVersions } from "../../versions/entity-teardown";
 import { resolveVersionsConfig } from "../../versions/resolve-config";
 import { storedWebhookRecording } from "../../webhooks/builder-webhooks";
 
@@ -928,11 +929,17 @@ export class CollectionSyncService extends BaseService {
             });
 
             // Delete from registry directly via raw query to avoid
-            // re-fetch issues with getCollection/updateCollection
-            await this.adapter.delete(
-              "dynamic_collections",
-              this.whereEq("slug", slug)
-            );
+            // re-fetch issues with getCollection/updateCollection. The
+            // collection's autosaves and version pins go in the same
+            // transaction, as the registry's own delete sweeps them: nothing
+            // could release them once the collection is gone.
+            await this.adapter.transaction(async tx => {
+              await sweepDeletedEntityVersions(tx, "collection", slug);
+              await tx.delete(
+                "dynamic_collections",
+                this.whereEq("slug", slug)
+              );
+            });
 
             const capabilities = this.adapter.getCapabilities();
             const q = capabilities.dialect === "mysql" ? "`" : '"';

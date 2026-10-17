@@ -2097,6 +2097,24 @@ export class UserMutationService extends BaseService {
   }
 
   /**
+   * Delete a person's notices, inside the deletion's transaction so the two
+   * stand or fall together. `tableExists` is probed before the transaction.
+   */
+  private async eraseNotices(
+    txDb: DrizzleTransactionLike,
+    userId: string,
+    tableExists: boolean
+  ): Promise<void> {
+    // An installation that has not run `nextly migrate` has no table, and a
+    // delete against it would abort the transaction and the deletion with it.
+    if (!tableExists) return;
+    const notices = noticesTables(this.dialect).nextlyNotices as unknown as {
+      userId: Column;
+    };
+    await txDb.delete(notices).where(eq(notices.userId, userId));
+  }
+
+  /**
    * Whether a table is present, for a probe taken BEFORE the delete
    * transaction opens.
    *
@@ -2119,24 +2137,6 @@ export class UserMutationService extends BaseService {
    * ever differed by the name, and each copy was another branch in a method
    * already over its complexity budget.
    */
-  /**
-   * Delete a person's notices, inside the deletion's transaction so the two
-   * stand or fall together. `tableExists` is probed before the transaction.
-   */
-  private async eraseNotices(
-    txDb: DrizzleTransactionLike,
-    userId: string,
-    tableExists: boolean
-  ): Promise<void> {
-    // An installation that has not run `nextly migrate` has no table, and a
-    // delete against it would abort the transaction and the deletion with it.
-    if (!tableExists) return;
-    const notices = noticesTables(this.dialect).nextlyNotices as unknown as {
-      userId: Column;
-    };
-    await txDb.delete(notices).where(eq(notices.userId, userId));
-  }
-
   private async tablePresent(table: string): Promise<boolean> {
     try {
       return await this.adapter.tableExists(table);
