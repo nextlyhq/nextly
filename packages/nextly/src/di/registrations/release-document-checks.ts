@@ -184,11 +184,16 @@ async function existingDocuments(
   const existing = new Set<string>();
   for (const group of byScope.values()) {
     const [first] = group;
+    // A Single is there for a member only while its stored row is the one
+    // the member names: a Single deleted and written again holds a new
+    // document, which the member never added.
+    const singleRow =
+      first.scopeKind === "single"
+        ? await singleRowId(adapter, first.scopeSlug, logger)
+        : null;
     const found =
       first.scopeKind === "single"
-        ? (await singleRowExists(adapter, first.scopeSlug, logger))
-          ? group
-          : []
+        ? group.filter(ref => ref.entryId === singleRow)
         : await existingEntries(adapter, first.scopeSlug, group);
     for (const ref of found) existing.add(documentRefKey(ref));
   }
@@ -236,7 +241,16 @@ export async function singleRowExists(
   slug: string,
   logger: Logger
 ): Promise<boolean> {
-  if (!container.has("singleRegistryService")) return false;
+  return (await singleRowId(adapter, slug, logger)) !== null;
+}
+
+/** The id of a Single's stored row, read as {@link singleRowExists} reads it. */
+async function singleRowId(
+  adapter: Adapter,
+  slug: string,
+  logger: Logger
+): Promise<string | null> {
+  if (!container.has("singleRegistryService")) return null;
   // Resolved the way every request-scoped Single read opens: the registry row,
   // and its runtime table registered in THIS process. A worker that booted
   // before a UI-defined Single existed has the table in the database but not
@@ -251,10 +265,10 @@ export async function singleRowExists(
     logger
   );
   const table = single?.tableName;
-  if (table === undefined || !(await adapter.tableExists(table))) return false;
+  if (table === undefined || !(await adapter.tableExists(table))) return null;
   const rows = await adapter.select<{ id: string }>(table, {
     columns: ["id"],
     limit: 1,
   });
-  return rows.length > 0;
+  return rows[0] === undefined ? null : String(rows[0].id);
 }

@@ -454,6 +454,54 @@ describe.each(getConfiguredTestDialects())(
       );
     });
 
+    it("reports a Single whose document was replaced as gone", async () => {
+      const t = await boot(dialect);
+      const author = await seedPlainAuthor(t);
+      await t.nextly.updateSingle({
+        slug: "banner" as never,
+        data: { headline: "First", status: "draft" } as never,
+      });
+      const first = await t.adapter.selectOne<{ id: string }>(
+        "single_banner",
+        {}
+      );
+      if (first === null || first === undefined) throw new Error("no row");
+      const release = await t.nextly.releases.create({ title: "Banner" });
+      const member = await t.nextly.releases.addMember({
+        releaseId: release.id,
+        scopeKind: "single",
+        scopeSlug: "banner",
+        entryId: first.id,
+        locale: null,
+        action: "publish",
+        userId: author,
+      });
+      // The document is deleted and the Single written again: a new row,
+      // under the same slug, that the member never named.
+      await t.adapter.delete("single_banner", {
+        and: [{ column: "id", op: "=", value: first.id }],
+      });
+      await t.nextly.updateSingle({
+        slug: "banner" as never,
+        data: { headline: "Second", status: "draft" } as never,
+      });
+      const second = await t.adapter.selectOne<{ id: string }>(
+        "single_banner",
+        {}
+      );
+      expect(second?.id).toBeDefined();
+      expect(second?.id).not.toBe(first.id);
+
+      expect(
+        (await t.nextly.releases.readiness({ releaseId: release.id })).hard
+      ).toEqual([
+        expect.objectContaining({
+          memberId: member.id,
+          code: "DOCUMENT_GONE",
+        }),
+      ]);
+    });
+
     it("reports a document whose collection was deleted as gone, without failing the check", async () => {
       const t = await boot(dialect);
       const author = await seedPlainAuthor(t);
