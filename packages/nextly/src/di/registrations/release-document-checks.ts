@@ -16,7 +16,7 @@
  *
  * @module di/registrations/release-document-checks
  */
-import { runOutsideCallerScope } from "../../auth/caller-scope";
+import { runDetachedFromRequest } from "../../auth/caller-scope";
 import type { RBACAccessControlService } from "../../domains/auth/services/rbac-access-control-service";
 import { CollectionAccessService } from "../../domains/collections/services/collection-access-service";
 import { collectionTableName } from "../../domains/collections/services/collection-utils";
@@ -52,8 +52,10 @@ export function releaseDocumentChecks(
       const resolved = await resolveRunAs(databaseRunAs(adapter), authorId);
       return resolved.ok ? resolved.user : null;
     },
+    // Detached from the request: a read-only evaluation of a NAMED identity,
+    // the author, whom the release's run acts as on nobody's request.
     mayPerform: (user, scope, action) =>
-      runOutsideCallerScope(() =>
+      runDetachedFromRequest(() =>
         authorMayPerform(adapter, logger, user, scope, action)
       ),
     existing: refs => existingDocuments(adapter, logger, refs),

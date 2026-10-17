@@ -753,6 +753,75 @@ describe.each(getConfiguredTestDialects())(
       ).toEqual(expected);
     });
 
+    it("still holds an API key to its own grants when it changes a scheduled release", async () => {
+      // The key may assemble and run releases, and edit and publish articles,
+      // but may not take one down. The release's author may do both. Judging
+      // the author is the readiness check's business; the key's own authority
+      // for its own change is still the key's.
+      const t = await boot(dialect);
+      const { key } = await keyHolding(t, [
+        "read-content-releases",
+        "create-content-releases",
+        "publish-content-releases",
+        "read-articles",
+        "update-articles",
+        "publish-articles",
+      ]);
+      const author = await seedLiveAuthor(t);
+      const id = await entry(t, "articles");
+      const { releaseId, memberIds } = await releaseOf(t, author, [
+        { collection: "articles", id },
+      ]);
+      await t.nextly.releases.schedule({
+        id: releaseId,
+        at: LATER,
+        timezone: "UTC",
+      });
+
+      // Switching to an action the key may not perform.
+      const switched = await rest(
+        key,
+        "PATCH",
+        ["releases", releaseId, "members", memberIds[0]],
+        { action: "unpublish" }
+      );
+      expect(switched.status).toBe(403);
+      // Adding a document to come down, which the key may not do.
+      const other = await entry(t, "articles", "published");
+      const added = await rest(
+        key,
+        "POST",
+        ["releases", releaseId, "members"],
+        {
+          scopeKind: "collection",
+          scopeSlug: "articles",
+          entryId: other,
+          action: "unpublish",
+        }
+      );
+      expect(added.status).toBe(403);
+      expect(
+        (await t.nextly.releases.listMembers({ releaseId })).map(m => [
+          m.id,
+          m.action,
+        ])
+      ).toEqual([[memberIds[0], "publish"]]);
+
+      // The control: what the key may do, it does.
+      const permitted = await rest(
+        key,
+        "POST",
+        ["releases", releaseId, "members"],
+        {
+          scopeKind: "collection",
+          scopeSlug: "articles",
+          entryId: await entry(t, "articles"),
+          action: "publish",
+        }
+      );
+      expect(permitted.status).toBe(201);
+    });
+
     it("answers not found for the readiness of a release that is not there", async () => {
       const t = await boot(dialect);
       const { key } = await keyHolding(t, ["read-content-releases"]);
