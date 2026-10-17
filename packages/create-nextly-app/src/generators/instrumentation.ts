@@ -5,6 +5,7 @@ import fs from "fs-extra";
 import type { ProjectInfo } from "../types";
 
 import type { GeneratedFiles } from "./generated-files";
+import { writeNew } from "./write-new";
 
 /**
  * The names Next.js loads its instrumentation hook from: `instrumentation`
@@ -148,15 +149,12 @@ export async function generateInstrumentation(
     return result;
   }
 
-  await fs.ensureDir(path.dirname(path.join(cwd, relative)));
-  await fs.writeFile(
-    path.join(cwd, relative),
-    instrumentationHook(configImport),
-    {
-      encoding: "utf-8",
-      flag: "wx",
-    }
-  );
-  result.written.push(relative);
+  // Through writeNew, as every existing-app file is: created exclusively, and
+  // never through a folder on its path that is a link.
+  const hook = instrumentationHook(configImport);
+  await writeNew(cwd, relative, hook, result, {
+    why: "it is already there; Nextly's hook, which is",
+    toAdd: hook,
+  });
   return result;
 }

@@ -20,7 +20,8 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import fsExtra from "fs-extra";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { generateIntoExistingApp } from "../generators/existing-app";
 import type { DatabaseConfig, ProjectInfo } from "../types";
@@ -160,6 +161,56 @@ describe("adding Nextly to an existing app", () => {
       }
     }
   );
+
+  // An app keeping its code in src/ writes instrumentation.ts there too, so a
+  // linked src/ must stop that write as well as the others.
+  it("writes nothing, instrumentation included, through a linked src/ folder", async () => {
+    const outside = await mkdtemp(join(tmpdir(), "nextly-outside-"));
+    try {
+      await symlink(outside, join(dir, "src"));
+
+      await generateIntoExistingApp(
+        dir,
+        "blank",
+        { ...projectInfo, srcDir: true, appDir: "src/app" },
+        sqlite,
+        templates
+      );
+
+      expect(await readdir(outside)).toEqual([]);
+    } finally {
+      await rm(outside, { recursive: true, force: true });
+    }
+  });
+
+  // A folder that cannot be looked at is not known not to be a link, so
+  // nothing is written there, and that is said; the run goes on.
+  it("writes nothing under a folder it cannot look into, and says so", async () => {
+    const realLstat = fsExtra.lstat.bind(fsExtra);
+    const spy = vi.spyOn(fsExtra, "lstat").mockImplementation((async (
+      p: string
+    ) => {
+      if (String(p).endsWith(join("app", "admin"))) {
+        throw Object.assign(new Error("EACCES"), { code: "EACCES" });
+      }
+      return realLstat(p);
+    }) as typeof fsExtra.lstat);
+    let reported;
+    try {
+      reported = await run();
+    } finally {
+      spy.mockRestore();
+    }
+    expect(existsSync(join(dir, "app/admin/[[...params]]/page.tsx"))).toBe(
+      false
+    );
+    expect(reported.flatMap(files => files.skipped)).toContainEqual(
+      expect.objectContaining({
+        path: "app/admin/[[...params]]/page.tsx",
+        why: expect.stringMatching(/^app cannot be read/),
+      })
+    );
+  });
 
   it("reports what it wrote and what it extended", async () => {
     const reported = await run();

@@ -27,10 +27,12 @@ export async function writeNew(
   const file = path.join(cwd, ...relative.split("/"));
   const link = await linkedFolder(cwd, file);
   if (link !== null) {
-    const folder = path.relative(cwd, link).split(path.sep).join("/");
+    const folder = path.relative(cwd, link.folder).split(path.sep).join("/");
     files.skipped.push({
       path: relative,
-      why: `${folder} ${THROUGH_A_LINK}`,
+      why: link.unreadable
+        ? `${folder} cannot be read, so whether a folder in it is a symbolic link is unknown; nothing was written there`
+        : `${folder} ${THROUGH_A_LINK}`,
       toAdd: ifThere.toAdd,
     });
     return;

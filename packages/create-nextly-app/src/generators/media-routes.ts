@@ -210,10 +210,14 @@ async function writeIfUnanswered(
 ): Promise<void> {
   const { target, appRoot, segment, catchAll, text, role } = route;
   const link = await linkedFolder(cwd, target);
-  if (link !== null) {
-    result.skipped.push(skipped(cwd, link, target, text, role, THROUGH_A_LINK));
+  if (link !== null && !link.unreadable) {
+    result.skipped.push(
+      skipped(cwd, link.folder, target, text, role, THROUGH_A_LINK)
+    );
     return;
   }
+  // A folder that cannot be read is reported by the checks below, which say
+  // what that leaves unknown about the URL.
   const answering =
     (await answeringFolder(appRoot, segment, catchAll)) ??
     (await answeringPage(cwd, segment));
@@ -237,14 +241,23 @@ async function writeIfUnanswered(
 export async function linkedFolder(
   cwd: string,
   target: string
-): Promise<string | null> {
+): Promise<{ folder: string; unreadable: boolean } | null> {
   const parts = path.relative(cwd, path.dirname(target)).split(path.sep);
   let folder = cwd;
   for (const part of parts) {
+    const above = folder;
     folder = path.join(folder, part);
-    const stat = await fs.lstat(folder).catch(() => null);
-    if (stat === null) return null;
-    if (stat.isSymbolicLink()) return folder;
+    try {
+      if ((await fs.lstat(folder)).isSymbolicLink()) {
+        return { folder, unreadable: false };
+      }
+    } catch (error) {
+      // Only an absent folder ends the walk as safe. One that cannot be
+      // looked at (the folder above cannot be searched) is not known not to
+      // be a link, so it is reported, and nothing is written there.
+      if ((error as { code?: string }).code === "ENOENT") return null;
+      return { folder: above, unreadable: true };
+    }
   }
   return null;
 }
