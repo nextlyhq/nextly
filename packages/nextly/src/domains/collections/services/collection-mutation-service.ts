@@ -2091,14 +2091,10 @@ export class CollectionMutationService extends BaseService {
       params.collectionName
     );
     if ((collection as { status?: boolean }).status !== true) return [];
-    const schema = await this.fileManager.loadDynamicSchema(
-      params.collectionName
+    const existingEntry = await this.storedEntry(
+      params.collectionName,
+      params.entryId
     );
-    const [existingEntry] = await this.db
-      .select()
-      .from(schema)
-      .where(eq(schema.id, params.entryId))
-      .limit(1);
     if (!existingEntry) return [];
 
     const fields = collectionFields(collection);
@@ -2159,7 +2155,7 @@ export class CollectionMutationService extends BaseService {
       collectionHasStatus: true,
       transitionNextStatus: "published",
       sweepAllLocales: true,
-      existingEntry: existingEntry as Record<string, unknown>,
+      existingEntry,
       localizedUpdate: await this.splitLocalizedWriteData(
         params.collectionName,
         finalData,
@@ -5677,17 +5673,12 @@ export class CollectionMutationService extends BaseService {
      */
     authenticatedScope?: AuthenticatedScope;
   }): Promise<boolean> {
-    const schema = await this.fileManager.loadDynamicSchema(
-      params.collectionName
-    );
-
     // Loaded because the hooks below are shown the row as it stands, and a
     // write to a row that is not there is a not-found rather than a refusal.
-    const [existingEntry] = await this.db
-      .select()
-      .from(schema)
-      .where(eq(schema.id, params.entryId))
-      .limit(1);
+    const existingEntry = await this.storedEntry(
+      params.collectionName,
+      params.entryId
+    );
 
     // A document that is not there cannot be updated. Answered as a refusal so
     // the caller treats missing and forbidden identically, rather than letting
@@ -5707,6 +5698,20 @@ export class CollectionMutationService extends BaseService {
       authenticatedScope: params.authenticatedScope,
     });
     return denied === null;
+  }
+
+  /** The entry's stored row, or `undefined` when it is not there. */
+  private async storedEntry(
+    collectionName: string,
+    entryId: string
+  ): Promise<Record<string, unknown> | undefined> {
+    const schema = await this.fileManager.loadDynamicSchema(collectionName);
+    const [row] = await this.db
+      .select()
+      .from(schema)
+      .where(eq(schema.id, entryId))
+      .limit(1);
+    return row as Record<string, unknown> | undefined;
   }
 
   /**

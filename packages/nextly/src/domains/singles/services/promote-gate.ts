@@ -301,47 +301,12 @@ export async function promotionIssues(
     locale: draft.locale,
     values: ctx.toLogical(asRecord(draft.snapshot)),
   }));
-
-  // The shared half of what the write produces. Every language's snapshot is
-  // applied to the same main row in this order, so the shared value that
-  // survives is the last one written, and that is the value to judge. A
-  // translatable field is not shared: it goes to its own language's companion
-  // row, so it never takes part in this.
   const perLanguage = ctx.perLanguageFieldNames ?? ctx.localizedFieldNames;
-  const shared: Record<string, unknown> = {};
-  for (const { values } of logical) {
-    for (const [key, value] of Object.entries(values)) {
-      if (!perLanguage.has(key)) shared[key] = value;
-    }
-  }
+  const shared = sharedValues(logical, perLanguage);
 
   for (const { locale, values } of logical) {
-    // What this language's row will HOLD once the write lands, which is the
-    // only document either check has any business judging.
-    //
-    // Built on the live row for that language, because a snapshot carries only
-    // what its write carried: a localized Single keeps each translation on its
-    // own companion row, so a draft that edits one translated field has no
-    // property for the others and they stay exactly as they are. Judged
-    // without them, a partial draft is refused for missing required siblings
-    // the write never touches. A non-localized snapshot is a full copy of the
-    // document, so there it overlays everything and this changes nothing.
-    //
-    // Then the final shared state, then only THIS language's translations, then
-    // the caller's payload. Spreading the whole snapshot instead would put back
-    // the shared values a later language overwrote and refuse a publish whose
-    // committed document is perfectly valid.
     const live = ctx.toLogical(asRecord(await ctx.liveStoredFor(locale)));
-    const promoted: Record<string, unknown> = { ...live, ...shared };
-    for (const [key, value] of Object.entries(values)) {
-      if (perLanguage.has(key)) promoted[key] = value;
-    }
-    Object.assign(promoted, ctx.callerData ?? {});
-    // Written with the status it publishes, whatever its snapshot was saved
-    // under. Set before the field rules run as well as before validation, so a
-    // rule reading the document's status judges the one that goes live.
-    promoted.status = ctx.status;
-
+    const promoted = promotedDocument(live, shared, values, perLanguage, ctx);
     // The document the write will persist, with every field this publisher may
     // not write held at its live value. Validated as THAT document rather than
     // as the one the promotion proposed, so the check and the row agree.
@@ -350,6 +315,62 @@ export async function promotionIssues(
     if (issues.length > 0) return issues;
   }
   return [];
+}
+
+/**
+ * The shared half of what the write produces. Every language's snapshot is
+ * applied to the same main row in this order, so the shared value that
+ * survives is the last one written, and that is the value to judge. A
+ * translatable field is not shared: it goes to its own language's companion
+ * row, so it never takes part in this.
+ */
+function sharedValues(
+  logical: ReadonlyArray<{ values: Record<string, unknown> }>,
+  perLanguage: ReadonlySet<string>
+): Record<string, unknown> {
+  const shared: Record<string, unknown> = {};
+  for (const { values } of logical) {
+    for (const [key, value] of Object.entries(values)) {
+      if (!perLanguage.has(key)) shared[key] = value;
+    }
+  }
+  return shared;
+}
+
+/**
+ * What one language's row will HOLD once the write lands, which is the only
+ * document either check has any business judging.
+ *
+ * Built on the live row for that language, because a snapshot carries only
+ * what its write carried: a localized Single keeps each translation on its own
+ * companion row, so a draft that edits one translated field has no property for
+ * the others and they stay exactly as they are. Judged without them, a partial
+ * draft is refused for missing required siblings the write never touches. A
+ * non-localized snapshot is a full copy of the document, so there it overlays
+ * everything and this changes nothing.
+ *
+ * Then the final shared state, then only THIS language's translations, then the
+ * caller's payload. Spreading the whole snapshot instead would put back the
+ * shared values a later language overwrote and refuse a publish whose
+ * committed document is perfectly valid.
+ */
+function promotedDocument(
+  live: Record<string, unknown>,
+  shared: Record<string, unknown>,
+  values: Record<string, unknown>,
+  perLanguage: ReadonlySet<string>,
+  ctx: PromoteGateContext
+): Record<string, unknown> {
+  const promoted: Record<string, unknown> = { ...live, ...shared };
+  for (const [key, value] of Object.entries(values)) {
+    if (perLanguage.has(key)) promoted[key] = value;
+  }
+  Object.assign(promoted, ctx.callerData ?? {});
+  // Written with the status it publishes, whatever its snapshot was saved
+  // under. Set before the field rules run as well as before validation, so a
+  // rule reading the document's status judges the one that goes live.
+  promoted.status = ctx.status;
+  return promoted;
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
