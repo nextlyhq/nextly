@@ -169,14 +169,19 @@ describe("inviteTokenOwner", () => {
 
 /**
  * The limiter asks a lookup which account a token belongs to; the handler
- * then consumes the token. The two must agree on which tokens are live: a
- * lookup that named an owner for a token the consume refuses would charge an
- * account for nothing, and one that named nobody for a token the consume
- * accepts would count a real completion against the shared account-less
- * budget. For every kind and every state, the lookup names an owner exactly
- * when the consume succeeds.
+ * then consumes the token. The two must agree on which STORED tokens are
+ * live: a lookup that named an owner for a token the consume refuses as
+ * unknown, used or expired would charge an account for nothing, and one that
+ * named nobody for a token the consume accepts would count a real completion
+ * against the shared account-less budget. For every kind and every stored
+ * state, the lookup names an owner exactly when the consume succeeds.
+ *
+ * Deliberately not covered: a live token whose ACCOUNT the consume then
+ * refuses (deactivated, say). The lookup still names that account, which is
+ * the limiter's intent: the request counts against the account it targets,
+ * whatever the consume decides about the account afterwards.
  */
-describe("the owner lookup and the consume agree on which tokens are live", () => {
+describe("the owner lookup and the consume agree on which stored tokens are live", () => {
   type Kind = {
     name: string;
     account: { emailVerified: Date | null; isActive: boolean };
