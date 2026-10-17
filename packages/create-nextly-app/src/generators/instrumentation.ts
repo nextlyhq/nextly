@@ -68,12 +68,28 @@ ${startNextly(configImport)}
 function hookExtension(configText: string): string | null {
   const list = /pageExtensions\s*:\s*\[([^\]]*)\]/.exec(configText)?.[1];
   if (list === undefined) return null;
-  const extensions = [...list.matchAll(/["'`]([^"'`]+)["'`]/g)].map(m => m[1]);
+  // Only a list of plain string literals says for certain what Next.js will
+  // read: a spread, a condition or a name may hold anything, or nothing.
+  const literal = /(["'])([^"'`$\\]+)\1/g;
+  if (list.replace(literal, "").replace(/[\s,]/g, "") !== "") return null;
+  const extensions = [...list.matchAll(literal)].map(match => match[2]);
   return (
     extensions.find(extension => /(^|\.)tsx?$/.test(extension)) ??
     extensions[0] ??
     null
   );
+}
+
+/**
+ * The hook as `instrumentationHook` writes it, in JavaScript when it is to be
+ * saved under a JavaScript extension: the only TypeScript in it is the return
+ * type, which a `.js` or `.jsx` file cannot parse.
+ */
+function hookFor(configImport: string, extension: string | null): string {
+  const hook = instrumentationHook(configImport);
+  return extension !== null && /(^|\.)(js|jsx|mjs|cjs)$/.test(extension)
+    ? hook.replace("register(): Promise<void>", "register()")
+    : hook;
 }
 
 /** The files Next.js reads its own config from, in the order it looks. */
@@ -160,13 +176,25 @@ export async function generateInstrumentation(
     // app's page extensions, so the path offered is built from them; a list
     // this cannot read is named as such rather than guessed.
     const extension = hookExtension(nextConfig.text);
+    const hookPath = path.posix.join(
+      dir,
+      `instrumentation.${extension ?? "<one of your pageExtensions>"}`
+    );
+    // A hook already under that name belongs to the app, as one under a
+    // default name does: Nextly's start is added to it, never offered as a
+    // file to write over it.
+    if (extension !== null && (await fs.pathExists(path.join(cwd, hookPath)))) {
+      result.skipped.push({
+        path: hookPath,
+        why: "the app already has a server-start hook, so it was left as it is",
+        toAdd: linesToAdd(configImport),
+      });
+      return result;
+    }
     result.skipped.push({
-      path: path.posix.join(
-        dir,
-        `instrumentation.${extension ?? "<one of your pageExtensions>"}`
-      ),
+      path: hookPath,
       why: `${nextConfig.name} sets pageExtensions, and Next.js reads the hook only under a name with one of them, so none was written; create it under that name with this content`,
-      toAdd: instrumentationHook(configImport),
+      toAdd: hookFor(configImport, extension),
     });
     return result;
   }

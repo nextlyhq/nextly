@@ -204,6 +204,62 @@ describe("generateInstrumentation", () => {
     expect(result.skipped[0].toAdd).toBe(await readFile(blankHook, "utf-8"));
   });
 
+  it("gives a JavaScript hook when the app's page extensions are JavaScript", async () => {
+    const cwd = await app();
+    await writeFile(
+      path.join(cwd, "next.config.mjs"),
+      'export default { pageExtensions: ["page.jsx", "page.js"] };\n'
+    );
+
+    const [offered] = (await generateInstrumentation(cwd, { srcDir: true }))
+      .skipped;
+
+    expect(offered.path).toBe("src/instrumentation.page.jsx");
+    // Parsed as the file it would be saved as: TypeScript syntax fails here.
+    const { diagnostics = [] } = ts.transpileModule(offered.toAdd ?? "", {
+      reportDiagnostics: true,
+      fileName: "instrumentation.page.js",
+      compilerOptions: { allowJs: true, module: ts.ModuleKind.ESNext },
+    });
+    expect(diagnostics.map(d => d.messageText)).toEqual([]);
+    expect(offered.toAdd).toContain("export async function register()");
+  });
+
+  it("names no file when the pageExtensions list holds anything but plain strings", async () => {
+    const cwd = await app();
+    await writeFile(
+      path.join(cwd, "next.config.mjs"),
+      'const useTs = false;\nexport default { pageExtensions: [...(useTs ? ["page.tsx"] : []), "page.js"] };\n'
+    );
+
+    const result = await generateInstrumentation(cwd, { srcDir: true });
+
+    expect(result.skipped[0].path).toBe(
+      "src/instrumentation.<one of your pageExtensions>"
+    );
+  });
+
+  it("adds Nextly to a hook the app already has under its page-extension name", async () => {
+    const cwd = await app();
+    await writeFile(
+      path.join(cwd, "next.config.mjs"),
+      'export default { pageExtensions: ["page.tsx"] };\n'
+    );
+    await mkdir(path.join(cwd, "src"), { recursive: true });
+    const own = "export function register() {}\n";
+    await writeFile(path.join(cwd, "src/instrumentation.page.tsx"), own);
+
+    const [offered] = (await generateInstrumentation(cwd, { srcDir: true }))
+      .skipped;
+
+    expect(offered.path).toBe("src/instrumentation.page.tsx");
+    expect(offered.why).toContain("already has a server-start hook");
+    expect(offered.toAdd).toMatch(/^Make register\(\) async/);
+    expect(
+      await readFile(path.join(cwd, "src/instrumentation.page.tsx"), "utf-8")
+    ).toBe(own);
+  });
+
   it("names no file it cannot know when the pageExtensions list is not written out", async () => {
     const cwd = await app();
     await writeFile(
