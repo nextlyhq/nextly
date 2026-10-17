@@ -2,6 +2,12 @@ import { beforeAll, afterAll, afterEach, expect } from "vitest";
 
 import { describeAbortedTransactions } from "../plugins/aborted-transaction-sightings";
 
+import {
+  describeTransactionEscapes,
+  installTransactionEscapeObserver,
+  takeTransactionEscapes,
+} from "./transaction-escapes";
+
 beforeAll(() => {
   // Setup test environment
   console.log("🧪 Setting up nextly tests...");
@@ -47,6 +53,27 @@ process.env.DB_DIALECT ??= "sqlite";
 afterEach(() => {
   const aborted = describeAbortedTransactions();
   if (aborted) expect.fail(aborted);
+});
+
+/**
+ * Fail any test whose statements ran outside the transaction they were meant
+ * to be part of (`./transaction-escapes`).
+ *
+ * The adapters report a pool access made while the same flow holds an open
+ * transaction on PostgreSQL or MySQL; SQLite has one connection and cannot
+ * tell. `NEXTLY_TRANSACTION_ESCAPES=report` prints them instead of failing,
+ * for taking an inventory of a suite.
+ */
+installTransactionEscapeObserver();
+
+afterEach(() => {
+  const escapes = describeTransactionEscapes(takeTransactionEscapes());
+  if (!escapes) return;
+  if (process.env.NEXTLY_TRANSACTION_ESCAPES === "report") {
+    console.warn(`[transaction escapes] ${escapes}`);
+    return;
+  }
+  expect.fail(escapes);
 });
 
 afterAll(() => {

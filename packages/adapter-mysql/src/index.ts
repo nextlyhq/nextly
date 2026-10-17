@@ -505,6 +505,8 @@ export class MySqlAdapter extends DrizzleAdapter {
     const startTime = Date.now();
 
     try {
+      // Outside the calling flow's transaction, if it has one (`notePoolAccess`).
+      this.notePoolAccess();
       const [rows] = await pool.query<RowDataPacket[]>(
         sql,
         params as unknown[]
@@ -559,7 +561,11 @@ export class MySqlAdapter extends DrizzleAdapter {
     let lastError: unknown;
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      // A transaction opened inside another's work takes a second connection
+      // (`notePoolAccess`); this one's own checkout is recorded after it.
+      this.notePoolAccess();
       const connection = await pool.getConnection();
+      this.markFlowTransactionConnected();
       const startTime = Date.now();
       // Set when the ROLLBACK failed (`returnTransactionConnection`).
       let rollbackFailed = false;
@@ -751,10 +757,17 @@ export class MySqlAdapter extends DrizzleAdapter {
     // (setting 'supportBigNumbers')"). The pre-v1 `mode` option is gone.
     const onClient = (client: CallbackPool | CallbackConnection) =>
       relations ? drizzle({ client, relations }) : drizzle({ client });
-    const callbackPool = (pool as unknown as { pool: CallbackPool }).pool;
+    // The handle's own queries go to the pool, so it is handed a view of the
+    // pool that reports them (`observedPool`).
+    const callbackPool = this.observedPool(
+      (pool as unknown as { pool: CallbackPool }).pool,
+      ["query", "execute", "getConnection"]
+    );
     return this.trackFlowTransactions(
       this.pinDrizzleTransactions(onClient(callbackPool), async () => {
+        this.notePoolAccess();
         const connection = await pool.getConnection();
+        this.markFlowTransactionConnected();
         return {
           drizzle: onClient(
             (connection as unknown as { connection: CallbackConnection })

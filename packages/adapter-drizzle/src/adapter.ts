@@ -63,12 +63,27 @@ import { createDatabaseError, isDatabaseError } from "./types";
 import { buildUpdateStatement } from "./update-statement";
 
 /**
+ * Where a test harness installs the observer {@link DrizzleAdapter.notePoolAccess}
+ * reports a transaction escape to: a global registry key rather than an
+ * import, so the harness and every copy of this package agree on it.
+ */
+const TRANSACTION_ESCAPE_OBSERVER = Symbol.for(
+  "nextly.transactionEscapeObserver"
+);
+
+/**
  * A transaction an async flow runs inside, as that flow sees it: its own, or
  * one it was started from inside.
  */
 interface FlowTransaction {
   /** False once the transaction's work has settled. */
   open: boolean;
+  /**
+   * True once the transaction holds a connection of its own. From then on
+   * anything the flow takes from the pool runs outside the transaction
+   * ({@link notePoolAccess}); before it, the checkout is the transaction's own.
+   */
+  connected: boolean;
   /** The transaction the flow that opened this one was itself inside. */
   enclosing: FlowTransaction | undefined;
 }
@@ -477,6 +492,7 @@ export abstract class DrizzleAdapter {
   protected runInFlowTransaction<T>(run: () => Promise<T>): Promise<T> {
     const scope: FlowTransaction = {
       open: true,
+      connected: false,
       enclosing: this.flowTransactions.getStore(),
     };
     return this.flowTransactions.run(scope, async () => {
@@ -485,6 +501,79 @@ export abstract class DrizzleAdapter {
       } finally {
         scope.open = false;
       }
+    });
+  }
+
+  /**
+   * Record that the calling flow's transaction now holds its own connection.
+   *
+   * A pooled dialect calls this right after checking out the connection a
+   * transaction runs on, so {@link notePoolAccess} can tell that checkout,
+   * which belongs to the transaction, from any later one, which escapes it.
+   */
+  protected markFlowTransactionConnected(): void {
+    const scope = this.flowTransactions.getStore();
+    if (scope !== undefined) scope.connected = true;
+  }
+
+  /**
+   * Called by a pooled dialect before it takes anything from its pool: a
+   * query, or a connection checkout.
+   *
+   * While the calling flow is inside a transaction that already holds its own
+   * connection, a pool access runs on another connection: outside the
+   * transaction, blind to its uncommitted writes, not undone by its rollback,
+   * and able to stall a small pool. Such an access is reported to the
+   * observer a test harness installs under
+   * `Symbol.for("nextly.transactionEscapeObserver")`, with the stack that
+   * names its call site. With no observer installed, which is every
+   * production process, this is one property read.
+   */
+  protected notePoolAccess(): void {
+    const observe = (globalThis as Record<symbol, unknown>)[
+      TRANSACTION_ESCAPE_OBSERVER
+    ];
+    if (typeof observe !== "function") return;
+    for (
+      let at = this.flowTransactions.getStore();
+      at !== undefined;
+      at = at.enclosing
+    ) {
+      if (at.open && at.connected) {
+        observe({ dialect: this.dialect, stack: new Error().stack ?? "" });
+        return;
+      }
+    }
+  }
+
+  /**
+   * `pool`, with {@link notePoolAccess} called before each of `methods`, for
+   * handing to code that queries the pool directly, such as Drizzle's handle.
+   * Everything else, `instanceof` included, reaches the pool unchanged.
+   *
+   * @param pool - The driver's pool
+   * @param methods - The pool methods that take a connection
+   * @returns A view of `pool` that reports those calls
+   */
+  protected observedPool<P extends object>(
+    pool: P,
+    methods: readonly string[]
+  ): P {
+    return new Proxy(pool, {
+      get: (target, property, receiver) => {
+        const value: unknown = Reflect.get(target, property, receiver);
+        if (
+          typeof property !== "string" ||
+          !methods.includes(property) ||
+          typeof value !== "function"
+        ) {
+          return value;
+        }
+        return (...args: unknown[]) => {
+          this.notePoolAccess();
+          return Reflect.apply(value, target, args);
+        };
+      },
     });
   }
 
