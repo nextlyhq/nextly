@@ -1,10 +1,8 @@
-import path from "path";
-
-import fs from "fs-extra";
-
 import type { ProjectInfo, ProjectType } from "../types";
 
+import type { GeneratedFiles } from "./generated-files";
 import { typesOutputFile } from "./types";
+import { nothingYet, writeNew } from "./write-new";
 
 // ============================================================
 // Project Type Templates
@@ -90,19 +88,16 @@ export async function generateConfig(
   cwd: string,
   projectType: ProjectType,
   projectInfo: ProjectInfo
-): Promise<void> {
-  const configPath = path.join(cwd, "nextly.config.ts");
-
-  // Check if config already exists
-  if (await fs.pathExists(configPath)) {
-    throw new Error(
-      "nextly.config.ts already exists. Please remove it first or run in a fresh project."
-    );
-  }
-
-  const template = buildConfigTemplate(
-    projectType,
-    typesOutputFile(projectInfo)
+): Promise<GeneratedFiles> {
+  const files = nothingYet();
+  // A config the app already has is its own, from an earlier run or written
+  // by hand: it is kept, and Nextly uses it.
+  await writeNew(
+    cwd,
+    "nextly.config.ts",
+    buildConfigTemplate(projectType, typesOutputFile(projectInfo)),
+    files,
+    { why: "the app already has one, and Nextly uses it as it is" }
   );
-  await fs.writeFile(configPath, template, "utf-8");
+  return files;
 }

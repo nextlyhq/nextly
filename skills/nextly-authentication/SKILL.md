@@ -6,6 +6,8 @@ description: >-
   other apps and scripts, checking the signed-in user in your own server
   code, and extra fields on users. Also use when asked to add login or
   sign-up to a Nextly site, so the answer matches what Nextly provides.
+metadata:
+  nextly-version: 0.0.2-alpha.66
 ---
 
 # Authentication and access in Nextly
