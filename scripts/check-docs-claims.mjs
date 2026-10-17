@@ -1078,6 +1078,27 @@ function templateMount(repoRoot, tracked, refuse) {
   )}`;
 }
 
+/**
+ * The mount the generator's source builds, as `{ mount }`, or `{ problem }` when
+ * it cannot be told. Every occurrence of either spelling must name the same
+ * mount: a stale one (in a comment, say) standing in for the path the code
+ * builds would let the docs be checked against the wrong address.
+ */
+function readGeneratorMount(source) {
+  const mounts = [
+    ...new Set(GENERATOR_MOUNT_SPELLINGS.flatMap(read => read(source)).map(parts => `/${parts.join("/")}`)),
+  ];
+  if (mounts.length === 0) {
+    return { problem: "no longer builds the catch-all route path in the shape this reads, so the mount it generates is unknown" };
+  }
+  if (mounts.length > 1) {
+    return {
+      problem: `spells the catch-all route path in more than one way (${mounts.join(", ")}), so the mount it generates is unknown`,
+    };
+  }
+  return mounts[0] === "/" ? { problem: "builds a catch-all route path with no leading segments" } : { mount: mounts[0] };
+}
+
 /** The mount the generator builds when scaffolding into an existing project. */
 function generatorMount(repoRoot, refuse) {
   let source;
@@ -1087,31 +1108,9 @@ function generatorMount(repoRoot, refuse) {
     refuse(GENERATOR_SOURCE, "could not be read, so the mount it generates is unknown");
     return null;
   }
-  // Every occurrence of either spelling must name the same mount: a stale one
-  // (in a comment, say) standing in for the path the code builds would let
-  // the docs be checked against the wrong address.
-  const found = GENERATOR_MOUNT_SPELLINGS.flatMap(read => read(source));
-  if (found.length === 0) {
-    refuse(
-      GENERATOR_SOURCE,
-      "no longer builds the catch-all route path in the shape this reads, so the mount it generates is unknown"
-    );
-    return null;
-  }
-  const distinct = [...new Set(found.map(parts => `/${parts.join("/")}`))];
-  if (distinct.length > 1) {
-    refuse(
-      GENERATOR_SOURCE,
-      `spells the catch-all route path in more than one way (${distinct.join(", ")}), so the mount it generates is unknown`
-    );
-    return null;
-  }
-  const segments = found[0];
-  if (segments.length === 0) {
-    refuse(GENERATOR_SOURCE, "builds a catch-all route path with no leading segments");
-    return null;
-  }
-  return `/${segments.join("/")}`;
+  const { mount, problem } = readGeneratorMount(source);
+  if (problem !== undefined) refuse(GENERATOR_SOURCE, problem);
+  return mount ?? null;
 }
 
 function pluginRouteMount(repoRoot, tracked, findings, isExempt) {
