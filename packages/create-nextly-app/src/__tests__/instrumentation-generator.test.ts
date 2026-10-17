@@ -260,6 +260,69 @@ describe("generateInstrumentation", () => {
     ).toBe(own);
   });
 
+  it("reads pageExtensions from the config it exports, not from a comment", async () => {
+    const cwd = await app();
+    await writeFile(
+      path.join(cwd, "next.config.mjs"),
+      '/* pageExtensions: ["page.js"] */\nexport default { pageExtensions: ["page.ts"] };\n'
+    );
+
+    const [offered] = (await generateInstrumentation(cwd, { srcDir: true }))
+      .skipped;
+
+    expect(offered.path).toBe("src/instrumentation.page.ts");
+  });
+
+  it("writes the default hook when pageExtensions appears only in a comment", async () => {
+    const cwd = await app();
+    await writeFile(
+      path.join(cwd, "next.config.mjs"),
+      '// pageExtensions: ["page.tsx"]\nexport default {};\n'
+    );
+
+    const result = await generateInstrumentation(cwd, { srcDir: true });
+
+    expect(result.written).toEqual(["src/instrumentation.ts"]);
+  });
+
+  it("finds a hook the app has under any of its page extensions", async () => {
+    const cwd = await app();
+    await writeFile(
+      path.join(cwd, "next.config.mjs"),
+      'export default { pageExtensions: ["page.tsx", "page.ts"] };\n'
+    );
+    await mkdir(path.join(cwd, "src"), { recursive: true });
+    await writeFile(
+      path.join(cwd, "src/instrumentation.page.ts"),
+      "export function register() {}\n"
+    );
+
+    const [offered] = (await generateInstrumentation(cwd, { srcDir: true }))
+      .skipped;
+
+    expect(offered.path).toBe("src/instrumentation.page.ts");
+    expect(offered.toAdd).toMatch(/^Make register\(\) async/);
+  });
+
+  it.each([
+    [["mdx", "page.js"], "src/instrumentation.page.js"],
+    [["mdx", "md"], "src/instrumentation.<one of your pageExtensions>"],
+  ])(
+    "never names a hook after a content extension (%j)",
+    async (extensions, expected) => {
+      const cwd = await app();
+      await writeFile(
+        path.join(cwd, "next.config.mjs"),
+        `export default { pageExtensions: ${JSON.stringify(extensions)} };\n`
+      );
+
+      const [offered] = (await generateInstrumentation(cwd, { srcDir: true }))
+        .skipped;
+
+      expect(offered.path).toBe(expected);
+    }
+  );
+
   it("names no file it cannot know when the pageExtensions list is not written out", async () => {
     const cwd = await app();
     await writeFile(

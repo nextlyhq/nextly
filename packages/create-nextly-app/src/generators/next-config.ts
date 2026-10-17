@@ -699,6 +699,32 @@ function exportedConfig(body: Statement[]): ObjectExpression | string {
   return typeof exported === "string" ? exported : configObject(exported, body);
 }
 
+/**
+ * The strings the exported config lists under `key`, in order; `"absent"`
+ * when the config it exports does not set `key`; or null when that cannot be
+ * known: the file does not parse, its export cannot be followed, the value is
+ * not an array of strings written in place, or a spread in the object may set
+ * it unseen. Every step that reads a setting from the app's config asks here,
+ * so a commented-out or nested occurrence is never taken for the real one.
+ */
+export function configStringList(
+  source: string,
+  file: string,
+  key: string
+): string[] | "absent" | null {
+  const body = parseBody(source, file);
+  if (!body) return null;
+  const object = exportedConfig(body);
+  if (typeof object === "string") return null;
+  if (object.properties.some(property => property.type === "SpreadElement")) {
+    return null;
+  }
+  const value = propertyValue(object, key);
+  if (value === undefined) return "absent";
+  const names = literalNames(value);
+  return names ? [...names] : null;
+}
+
 /** The edits that put every required package in the config's list, or why it cannot be changed. */
 function planEdits(source: string, file: string, required: string[]): Plan {
   const body = parseBody(source, file);
