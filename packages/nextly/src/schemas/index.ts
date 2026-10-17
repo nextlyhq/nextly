@@ -85,6 +85,7 @@ import { userFieldDefinitionsPg } from "./user-field-definitions/postgres";
 import { userFieldDefinitionsSqlite } from "./user-field-definitions/sqlite";
 import { userTables } from "./users";
 import { versionPinsTables } from "./version-pins";
+import { versionViewsTables } from "./version-views";
 import { versionsTables } from "./versions";
 import { webhookTables } from "./webhooks";
 import { widgetLayoutTables } from "./widget-layout";
@@ -245,6 +246,10 @@ export function getCoreSchema(
     // unlike the migration ledger), so declaring it here is sufficient:
     // core-reconcile creates it on fresh and existing databases.
     ...Object.values(versionsTables(dialect)),
+    // `nextly_version_views` — each person's "last looked at" marker per
+    // document and part. Nothing marks before the table exists, so
+    // core-reconcile creating it is sufficient, as for `nextly_versions`.
+    ...Object.values(versionViewsTables(dialect)),
     // The record of content events and the parts each one involved. Nothing
     // records into them before they exist, so core-reconcile creating them is
     // sufficient, as for `nextly_versions`.
@@ -376,6 +381,7 @@ export const CORE_TABLE_NAMES: readonly string[] = [
   "nextly_schema_events",
   "nextly_i18n_archive",
   "nextly_versions",
+  "nextly_version_views",
   "nextly_content_events",
   "nextly_content_event_parts",
   "nextly_releases",

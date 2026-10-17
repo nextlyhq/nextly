@@ -122,7 +122,8 @@ import {
   getVersionDiffForDocument,
   getVersionForDocument,
   restoreVersionForDocument,
-  listVersionsForDocument,
+  respondVersionPage,
+  markVersionSeenForDocument,
   setVersionLabelForDocument,
   userFromParams,
   autosaveForDocument,
@@ -232,19 +233,15 @@ export const COLLECTION_VERSION_METHODS: Record<
   MethodHandler<CollectionsHandlerType>
 > = {
   listEntryVersions: {
-    execute: async (_svc, p) => {
-      const result = await listVersionsForDocument({
-        scopeKind: "collection",
-        slug: String(p.collectionName ?? ""),
-        entryId: String(p.entryId ?? ""),
-        user: userFromParams(p),
-        authenticatedScope: readAuthenticatedScope(p),
-        limit: p.limit !== undefined ? Number(p.limit) : undefined,
-        cursor: p.cursor !== undefined ? Number(p.cursor) : undefined,
-        locale: p.locale !== undefined ? String(p.locale) : undefined,
-      });
-      return respondList(result.items, result.meta);
-    },
+    execute: async (_svc, p) =>
+      respondVersionPage(
+        {
+          scopeKind: "collection",
+          slug: String(p.collectionName ?? ""),
+          entryId: String(p.entryId ?? ""),
+        },
+        p
+      ),
   },
   setEntryVersionLabel: {
     execute: async (_svc, p, body) => {
@@ -260,6 +257,19 @@ export const COLLECTION_VERSION_METHODS: Record<
         params: p,
       });
       return respondMutation("Version renamed.", row);
+    },
+  },
+  markEntryVersionSeen: {
+    execute: async (_svc, p) => {
+      const seen = await markVersionSeenForDocument({
+        scopeKind: "collection",
+        slug: String(p.collectionName ?? ""),
+        entryId: String(p.entryId ?? ""),
+        user: userFromParams(p),
+        authenticatedScope: readAuthenticatedScope(p),
+        versionNo: Number(p.versionNo),
+      });
+      return respondMutation("Marked as seen.", seen);
     },
   },
   restoreEntryVersion: {
@@ -364,7 +374,9 @@ export const COLLECTION_VERSION_METHODS: Record<
         authenticatedScope: readAuthenticatedScope(p),
         ...readComparisonParams(p),
       });
-      return respondDoc(diff);
+      // Private to the caller: a comparison from where this person last
+      // looked differs from one person to the next.
+      return withSessionCacheHeaders(respondDoc(diff));
     },
   },
 };

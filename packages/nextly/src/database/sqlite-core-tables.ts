@@ -423,6 +423,29 @@ export function generateSqliteCoreTableStatements(): string[] {
     // without this one both cards scan the whole version history.
     `CREATE INDEX IF NOT EXISTS "nextly_versions_pending_edits_idx"
       ON "nextly_versions" ("is_autosave", "status", "version_no", "scope_slug", "updated_at", "id")`,
+    // "Last looked at" markers. Columns match schemas/version-views/sqlite.ts.
+    `CREATE TABLE IF NOT EXISTS "nextly_version_views" (
+      "id" TEXT PRIMARY KEY NOT NULL,
+      "user_id" TEXT NOT NULL,
+      "scope_kind" TEXT NOT NULL,
+      "scope_slug" TEXT NOT NULL,
+      "entry_id" TEXT NOT NULL,
+      "part" TEXT,
+      "view_key" TEXT NOT NULL,
+      "version_no" INTEGER NOT NULL,
+      "previous_version_no" INTEGER,
+      "viewed_at" INTEGER NOT NULL,
+      "visit_started_at" INTEGER NOT NULL,
+      "created_at" INTEGER NOT NULL
+    )`,
+    // Over "view_key" alone: the digest is what one marker per person,
+    // document and part is enforced on.
+    `CREATE UNIQUE INDEX IF NOT EXISTS "nextly_version_views_key_uidx"
+      ON "nextly_version_views" ("view_key")`,
+    `CREATE INDEX IF NOT EXISTS "nextly_version_views_doc_idx"
+      ON "nextly_version_views" ("scope_kind", "scope_slug", "entry_id")`,
+    `CREATE INDEX IF NOT EXISTS "nextly_version_views_user_idx"
+      ON "nextly_version_views" ("user_id")`,
     // The record of content events. Columns match
     // schemas/content-events/sqlite.ts.
     `CREATE TABLE IF NOT EXISTS "nextly_content_events" (
