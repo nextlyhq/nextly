@@ -69,7 +69,9 @@ async function boot(readableRows: boolean): Promise<TestNextly> {
           update: () => true,
         },
         fields: [
-          text({ name: "title" }),
+          // Labelled, so the grouped answer below can show the label reaching it from a real
+          // registry: a field the answer describes carries the label a reader sees.
+          text({ name: "title", label: "Job title" }),
           text({ name: "salary", access: { read: () => false } }),
         ],
       }),
@@ -188,12 +190,15 @@ describe("a grouped widget query against a real instance", () => {
       editor
     );
 
+    // The answer describes the field it was grouped by, so a card can head and label its
+    // bars, and the description is the source's own: its label and its kind.
     expect(result).toEqual({
       op: "groupBy",
       buckets: [
         { value: "alice", count: 1 },
         { value: "bob", count: 1 },
       ],
+      field: { name: "title", label: "Job title", type: "string" },
     });
   });
 
