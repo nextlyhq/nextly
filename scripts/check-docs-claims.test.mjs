@@ -11,6 +11,7 @@ import {
   renderedProse,
   runChecks,
   splitRefAndPath,
+  generatorMountIn,
 } from "./check-docs-claims.mjs";
 
 /**
@@ -3054,5 +3055,28 @@ describe("documented-key-prefix repair", () => {
         },
       ])
     ).toThrow(/refusing to rewrite/);
+  });
+});
+
+describe("the mount create-nextly-app's route generator builds", () => {
+  /*
+   * The docs name the address plugin routes answer at, and the check holds it
+   * to the mount the generator writes into an existing app. So the reader has
+   * to follow how the generator spells that path, and refuse rather than guess
+   * when it cannot.
+   */
+  it("reads the generator as it is", async () => {
+    const source = await readFile(new URL("../packages/create-nextly-app/src/generators/routes.ts", import.meta.url), "utf-8");
+    expect(generatorMountIn(source)).toEqual({ mount: "/admin/api" });
+  });
+
+  it("joins every segment before the catch-all", () => {
+    expect(generatorMountIn("`${projectInfo.appDir}/a/b/c/[[...params]]/route.ts`")).toEqual({ mount: "/a/b/c" });
+  });
+
+  it("refuses a shape it does not read, including one with no segment before the catch-all", () => {
+    for (const source of ['path.join(cwd, projectInfo.appDir, "admin", "api", "[[...params]]", "route.ts")', "`${projectInfo.appDir}/[[...params]]/route.ts`", ""]) {
+      expect(generatorMountIn(source), source).toHaveProperty("problem");
+    }
   });
 });

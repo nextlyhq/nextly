@@ -1035,9 +1035,11 @@ const NAMESPACE_SOURCE = "packages/nextly/src/plugins/routes/route-path.ts";
 const TEMPLATE_APP_DIR = "templates/base/src/app/";
 const TEMPLATE_CATCH_ALL = "/[[...params]]/route.ts";
 const GENERATOR_SOURCE = "packages/create-nextly-app/src/generators/routes.ts";
+// The generator spells the route as one template string under the app
+// directory: `${projectInfo.appDir}/admin/api/[[...params]]/route.ts`. The
+// segments before the catch-all are the mount.
 const GENERATOR_MOUNT =
-  /path\.join\(\s*cwd,\s*projectInfo\.appDir,\s*((?:"[^"]*",\s*)+)"\[\[\.\.\.params\]\]"/;
-const QUOTED_SEGMENT = /"([^"]*)"/g;
+  /`\$\{projectInfo\.appDir\}\/((?:[^`/]+\/)+)\[\[\.\.\.params\]\]\/route\.ts`/;
 
 /** The mount the base template hard-codes by where its route file sits. */
 function templateMount(repoRoot, tracked, refuse) {
@@ -1076,20 +1078,27 @@ function generatorMount(repoRoot, refuse) {
     refuse(GENERATOR_SOURCE, "could not be read, so the mount it generates is unknown");
     return null;
   }
+  const mount = generatorMountIn(source);
+  if (mount.problem) {
+    refuse(GENERATOR_SOURCE, mount.problem);
+    return null;
+  }
+  return mount.mount;
+}
+
+/**
+ * The mount a generator source builds its catch-all route at, or why it
+ * cannot be read: the leading segments of the route's path, joined.
+ *
+ * @returns {{ mount: string } | { problem: string }}
+ */
+export function generatorMountIn(source) {
   const declared = GENERATOR_MOUNT.exec(source);
   if (declared === null) {
-    refuse(
-      GENERATOR_SOURCE,
-      "no longer builds the catch-all route path in the shape this reads, so the mount it generates is unknown"
-    );
-    return null;
+    return { problem: "no longer builds the catch-all route path in the shape this reads, so the mount it generates is unknown" };
   }
-  const segments = [...declared[1].matchAll(QUOTED_SEGMENT)].map(m => m[1]);
-  if (segments.length === 0) {
-    refuse(GENERATOR_SOURCE, "builds a catch-all route path with no leading segments");
-    return null;
-  }
-  return `/${segments.join("/")}`;
+  const segments = declared[1].split("/").filter(Boolean);
+  return { mount: `/${segments.join("/")}` };
 }
 
 function pluginRouteMount(repoRoot, tracked, findings, isExempt) {
