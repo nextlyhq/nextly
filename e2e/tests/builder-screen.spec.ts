@@ -65,6 +65,31 @@ test.describe("the Page Builder's own screen", () => {
     ).toBeVisible();
   });
 
+  test("asks before Back leaves with unsaved work, and Keep Editing stays", async ({
+    page,
+  }) => {
+    await seed(page, [heading("stays", "Stays"), heading("goes", "Goes")]);
+    // Arrived by a click from the document's form, so Back has somewhere in
+    // the admin to go, and the page has the author's own activation as a real
+    // author's would.
+    await openBuilder(page);
+    await expect(block(page, "goes")).toBeVisible({ timeout: 30_000 });
+    await block(page, "goes").click();
+    await page.keyboard.press("Delete");
+    await expect(block(page, "goes")).toHaveCount(0);
+
+    await page.goBack();
+
+    // Asked, not gone: the unsaved removal would otherwise be lost silently.
+    const question = page.getByRole("alertdialog");
+    await expect(question).toBeVisible();
+    await question.getByRole("button", { name: "Keep Editing" }).click();
+
+    await expect(page).toHaveURL(BUILDER_URL);
+    await expect(block(page, "goes")).toHaveCount(0);
+    await expect(block(page, "stays")).toBeVisible();
+  });
+
   test("offers work left unsaved by a reload, and restores it", async ({
     page,
   }) => {
