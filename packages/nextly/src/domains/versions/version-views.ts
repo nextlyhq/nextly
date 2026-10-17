@@ -28,7 +28,6 @@ import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
 import { VERSION_VIEWS_TABLE } from "../../schemas/version-views";
 import type { VersionScopeKind } from "../../schemas/versions/types";
-import { isUniqueViolation } from "../../shared/lib/unique-violation";
 
 import type { VersionsDbApi } from "./db-api";
 import type { VersionRef } from "./versions-repository";
@@ -52,7 +51,10 @@ export interface VersionViewMarker {
   versionNo: number;
   /** The furthest version looked at in the visit before it. */
   previousVersionNo: number | null;
+  /** The latest mark's time. */
   viewedAt: Date;
+  /** When the current visit began. */
+  visitStartedAt: Date;
 }
 
 interface ViewRow {
@@ -60,6 +62,7 @@ interface ViewRow {
   versionNo: number;
   previousVersionNo: number | null;
   viewedAt: Date | string | number;
+  visitStartedAt: Date | string | number;
   part?: string | null;
 }
 
@@ -94,6 +97,7 @@ function toMarker(row: ViewRow): VersionViewMarker {
     previousVersionNo:
       row.previousVersionNo === null ? null : Number(row.previousVersionNo),
     viewedAt: toDate(row.viewedAt),
+    visitStartedAt: toDate(row.visitStartedAt),
   };
 }
 
@@ -111,22 +115,52 @@ export function lastLookedAt(
   return gap >= VISIT_GAP_MS ? marker.versionNo : marker.previousVersionNo;
 }
 
-/** The marker after a mark of `versionNo` at `now`. */
+/**
+ * The marker after a mark of `versionNo` at `now`.
+ *
+ * Marks can arrive out of order: two requests take the marker's lock in an
+ * order their times need not follow. A mark timestamped before the latest one
+ * joins the visit it belongs to and moves no time backwards: within the
+ * current visit it can only raise the visit's furthest version, and before it
+ * (the current visit began after it) it can only raise the previous visit's.
+ */
 export function nextMarker(
   marker: VersionViewMarker | undefined,
   versionNo: number,
   now: Date
 ): VersionViewMarker {
   if (!marker) {
-    return { versionNo, previousVersionNo: null, viewedAt: now };
+    return {
+      versionNo,
+      previousVersionNo: null,
+      viewedAt: now,
+      visitStartedAt: now,
+    };
+  }
+  if (now < marker.viewedAt) {
+    if (now >= marker.visitStartedAt) {
+      return { ...marker, versionNo: Math.max(marker.versionNo, versionNo) };
+    }
+    return {
+      ...marker,
+      previousVersionNo: Math.max(
+        marker.previousVersionNo ?? versionNo,
+        versionNo
+      ),
+    };
   }
   if (now.getTime() - marker.viewedAt.getTime() >= VISIT_GAP_MS) {
     // A new visit: the one that ended becomes the previous visit.
-    return { versionNo, previousVersionNo: marker.versionNo, viewedAt: now };
+    return {
+      versionNo,
+      previousVersionNo: marker.versionNo,
+      viewedAt: now,
+      visitStartedAt: now,
+    };
   }
   return {
+    ...marker,
     versionNo: Math.max(marker.versionNo, versionNo),
-    previousVersionNo: marker.previousVersionNo,
     viewedAt: now,
   };
 }
@@ -135,58 +169,52 @@ function keyWhere(key: string) {
   return { and: [{ column: "viewKey", op: "=" as const, value: key }] };
 }
 
-/** A handle that opens a transaction: the adapter. */
-export interface TransactionOpener {
-  transaction<T>(work: (tx: TransactionContext) => Promise<T>): Promise<T>;
-}
-
 /**
- * Record that the person was shown `versionNo` of a part. Idempotent: the
- * same mark again leaves the same versions.
+ * Record that the person was shown `versionNo` of a part, on the caller's
+ * transaction: the caller takes the locks that order the mark against the
+ * deletions that sweep markers. Idempotent within a visit: the same mark again
+ * leaves the same versions.
  *
- * The marker row is read with a locking read, so two marks of one marker (the
- * admin showing a list and a comparison at once) apply one after the other
- * and neither's forward move is lost. Two first marks that race both insert;
- * the loser's unique violation sends it round once more, to update the row
- * the winner made.
+ * The marker row is read with a locking read, so two marks of one marker (a
+ * list and a comparison shown at once) apply one after the other and neither's
+ * forward move is lost. Two first marks that race both insert; the loser's
+ * unique violation fails its transaction, which the caller runs once more to
+ * update the row the winner made.
  */
 export async function markVersionSeen(
-  adapter: TransactionOpener,
+  tx: TransactionContext,
   target: VersionViewTarget,
   versionNo: number,
   now: Date = new Date()
 ): Promise<void> {
   const key = versionViewKey(target);
-  const attempt = () =>
-    adapter.transaction(async tx => {
-      const row = await tx.selectOne<ViewRow>(VIEWS_TABLE, {
-        columns: ["id", "versionNo", "previousVersionNo", "viewedAt"],
-        where: keyWhere(key),
-        forUpdate: true,
-      });
-      const next = nextMarker(row ? toMarker(row) : undefined, versionNo, now);
-      if (row) {
-        await tx.update(VIEWS_TABLE, { ...next }, keyWhere(key));
-        return;
-      }
-      await tx.insert(VIEWS_TABLE, {
-        id: crypto.randomUUID(),
-        userId: target.userId,
-        scopeKind: target.ref.scopeKind,
-        scopeSlug: target.ref.scopeSlug,
-        entryId: target.ref.entryId,
-        part: target.part,
-        viewKey: key,
-        ...next,
-        createdAt: now,
-      });
-    });
-  try {
-    await attempt();
-  } catch (error) {
-    if (!isUniqueViolation(error)) throw error;
-    await attempt();
+  const row = await tx.selectOne<ViewRow>(VIEWS_TABLE, {
+    columns: [
+      "id",
+      "versionNo",
+      "previousVersionNo",
+      "viewedAt",
+      "visitStartedAt",
+    ],
+    where: keyWhere(key),
+    forUpdate: true,
+  });
+  const next = nextMarker(row ? toMarker(row) : undefined, versionNo, now);
+  if (row) {
+    await tx.update(VIEWS_TABLE, { ...next }, keyWhere(key));
+    return;
   }
+  await tx.insert(VIEWS_TABLE, {
+    id: crypto.randomUUID(),
+    userId: target.userId,
+    scopeKind: target.ref.scopeKind,
+    scopeSlug: target.ref.scopeSlug,
+    entryId: target.ref.entryId,
+    part: target.part,
+    viewKey: key,
+    ...next,
+    createdAt: now,
+  });
 }
 
 /** The version the person last looked at in one part, as of `now`. */
@@ -196,7 +224,13 @@ export async function readLastLookedAt(
   now: Date = new Date()
 ): Promise<number | null> {
   const [row] = await db.select<ViewRow>(VIEWS_TABLE, {
-    columns: ["id", "versionNo", "previousVersionNo", "viewedAt"],
+    columns: [
+      "id",
+      "versionNo",
+      "previousVersionNo",
+      "viewedAt",
+      "visitStartedAt",
+    ],
     where: keyWhere(versionViewKey(target)),
     limit: 1,
   });
@@ -215,7 +249,14 @@ export async function lastLookedAtByPart(
   now: Date = new Date()
 ): Promise<Map<string | null, number>> {
   const rows = await db.select<ViewRow>(VIEWS_TABLE, {
-    columns: ["id", "part", "versionNo", "previousVersionNo", "viewedAt"],
+    columns: [
+      "id",
+      "part",
+      "versionNo",
+      "previousVersionNo",
+      "viewedAt",
+      "visitStartedAt",
+    ],
     where: {
       and: [
         { column: "userId", op: "=" as const, value: userId },
@@ -234,35 +275,23 @@ export async function lastLookedAtByPart(
 }
 
 /**
- * Mark the row of a history page where "You last looked here" sits, in each
- * part: the newest row of the part at or below the version the person last
- * looked at, which is that version, or the nearest older one still kept when
- * retention removed it.
- *
- * A page lists versions newest first, below `cursor` when it is not the first,
- * so a marker at or above the cursor sits on an earlier page and is left to
- * it. Reads nothing and writes nothing: the markers are passed in.
+ * Mark the rows of a history page where "You last looked here" sits: in each
+ * part, the row of that part's divider version (`dividerByPart`, the version
+ * the person last looked at, or the nearest older one kept). Marked by number,
+ * so the divider sits on whichever page holds its row, however the parts
+ * interleave. Reads nothing and writes nothing.
  */
 export function markLastViewed<
   T extends { versionNo: number | null; locale: string | null },
 >(
   rows: readonly T[],
-  lookedByPart: ReadonlyMap<string | null, number>,
-  cursor?: number
+  dividerByPart: ReadonlyMap<string | null, number>
 ): (T & { lastViewed?: true })[] {
-  const marked = new Set<number>();
-  for (const [part, looked] of lookedByPart) {
-    if (cursor !== undefined && looked >= cursor) continue;
-    const index = rows.findIndex(
-      row =>
-        (row.locale ?? null) === part &&
-        typeof row.versionNo === "number" &&
-        row.versionNo <= looked
-    );
-    if (index >= 0) marked.add(index);
-  }
-  return rows.map((row, index) =>
-    marked.has(index) ? { ...row, lastViewed: true as const } : row
+  return rows.map(row =>
+    typeof row.versionNo === "number" &&
+    dividerByPart.get(row.locale ?? null) === row.versionNo
+      ? { ...row, lastViewed: true as const }
+      : row
   );
 }
 

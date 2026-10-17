@@ -22,7 +22,7 @@ import { attachVersionAuthors } from "../domains/versions/author-hydration";
 import { NextlyError } from "../errors/nextly-error";
 import type { VersionScopeKind } from "../schemas/versions/types";
 
-import { respondList, withSessionCacheHeaders } from "./response-shapes";
+import { privateToSession, respondList } from "./response-shapes";
 import {
   requireRouteVersionReadAccess,
   withLastViewedMarks,
@@ -93,8 +93,10 @@ function parsePositiveInt(
  * Rows carry only an author id as stored, so each is resolved to a display name
  * before returning.
  */
-export const GET = withErrorHandler(
-  async (request: Request, context: RouteContext) => {
+// Private to the session, refusals included: the page marks where this person
+// last looked.
+export const GET = privateToSession(
+  withErrorHandler(async (request: Request, context: RouteContext) => {
     const { kind, slug, id } = await context.params;
     const scopeKind = parseScopeKind(kind);
 
@@ -147,18 +149,14 @@ export const GET = withErrorHandler(
       ref: { scopeKind, scopeSlug: slug, entryId: id },
       user: caller.user,
       authenticatedScope: caller.authenticatedScope,
-      cursor,
     });
-    // Private to the caller: the page marks where this person last looked.
-    return withSessionCacheHeaders(
-      respondList(items, {
-        total: rows.length,
-        page: 1,
-        limit,
-        totalPages: 1,
-        hasNext,
-        hasPrev: cursor !== undefined,
-      })
-    );
-  }
+    return respondList(items, {
+      total: rows.length,
+      page: 1,
+      limit,
+      totalPages: 1,
+      hasNext,
+      hasPrev: cursor !== undefined,
+    });
+  })
 );

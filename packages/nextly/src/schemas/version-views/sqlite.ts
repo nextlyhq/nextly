@@ -38,6 +38,9 @@ export const nextlyVersionViewsSqlite = sqliteTable(
     // seconds, so a millisecond column would read a mark as 1970 and end every
     // visit at once. A second is far finer than the visit gap.
     viewedAt: integer("viewed_at", { mode: "timestamp" }).notNull(),
+    visitStartedAt: integer("visit_started_at", {
+      mode: "timestamp",
+    }).notNull(),
 
     createdAt: integer("created_at", { mode: "timestamp" })
       .$defaultFn(() => new Date())

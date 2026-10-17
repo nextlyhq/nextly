@@ -45,16 +45,19 @@ import {
   discardWorkingDraft,
   type DiscardScopeKind,
 } from "../../domains/versions/discard-working-draft";
+import { lockDocument, lockPerson } from "../../domains/versions/history-locks";
 import { restoreVersion } from "../../domains/versions/restore-version";
 import {
   resolveComponentFieldMap,
   stripPasswordsThroughComponents,
 } from "../../domains/versions/tag-component-types";
 import { markVersionSeen } from "../../domains/versions/version-views";
+import { VersionsRepository } from "../../domains/versions/versions-repository";
 import type { VersionRow } from "../../domains/versions/versions-repository";
 import { NextlyError } from "../../errors/nextly-error";
 import type { VersionScopeKind } from "../../schemas/versions/types";
 import { stripPasswordFieldValues } from "../../shared/lib/password-fields";
+import { isUniqueViolation } from "../../shared/lib/unique-violation";
 import { readAuthenticatedScope } from "../helpers/authenticated-actor";
 import type { Params } from "../types";
 
@@ -256,7 +259,6 @@ export async function listVersionsForDocument(
       },
       user: args.user,
       authenticatedScope: args.authenticatedScope,
-      cursor: args.cursor,
     }),
     meta: {
       total: items.length,
@@ -400,25 +402,38 @@ export async function markVersionSeenForDocument(
     scopeSlug: args.slug,
     entryId: args.entryId,
   };
-  const version = (
-    await getService("versionsService").listPartVersions(ref)
-  ).find(v => v.versionNo === args.versionNo);
-  if (!version) {
-    throw NextlyError.notFound({
-      logContext: {
-        reason: "mark-seen-version-missing",
-        ...ref,
-        versionNo: args.versionNo,
-      },
+  const notFound = (reason: string) =>
+    NextlyError.notFound({
+      logContext: { reason, ...ref, versionNo: args.versionNo },
     });
+  // One transaction holding the locks the sweeps of markers take: the
+  // person's account row (account deletion), then the entity's registry row
+  // and the document's row (entity and document deletion). A mark either
+  // commits first and is swept, or waits and finds what it marks gone.
+  const mark = () =>
+    getService("adapter").transaction(async tx => {
+      if (!(await lockPerson(tx, userId)))
+        throw notFound("mark-seen-person-gone");
+      if (!(await lockDocument(tx, ref)))
+        throw notFound("mark-seen-document-gone");
+      const part = await new VersionsRepository(tx).findPartOfVersion(
+        ref,
+        args.versionNo
+      );
+      if (part === undefined) throw notFound("mark-seen-version-missing");
+      await markVersionSeen(tx, { userId, ref, part }, args.versionNo);
+      return part;
+    });
+  let locale: string | null;
+  try {
+    locale = await mark();
+  } catch (error) {
+    // Two first marks of one marker raced, and this one lost the insert: the
+    // row now exists, so once more updates it.
+    if (!isUniqueViolation(error)) throw error;
+    locale = await mark();
   }
-
-  await markVersionSeen(
-    getService("adapter"),
-    { userId, ref, part: version.locale },
-    args.versionNo
-  );
-  return { versionNo: args.versionNo, locale: version.locale };
+  return { versionNo: args.versionNo, locale };
 }
 
 /**

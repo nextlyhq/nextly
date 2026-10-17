@@ -48,7 +48,10 @@ import {
   lastLookedAtByPart,
   markLastViewed,
 } from "../domains/versions/version-views";
-import type { VersionRef } from "../domains/versions/versions-repository";
+import {
+  VersionsRepository,
+  type VersionRef,
+} from "../domains/versions/versions-repository";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
 import type {
@@ -773,17 +776,21 @@ export async function withLastViewedMarks<
     ref: VersionRef;
     user: UserContext | undefined;
     authenticatedScope?: AuthenticatedScope;
-    cursor?: number;
   }
 ): Promise<(T & { lastViewed?: true })[]> {
   const personId = readingPersonId(args.user, args.authenticatedScope);
   if (personId === null) return rows;
-  const looked = await lastLookedAtByPart(
-    getService("adapter"),
-    personId,
-    args.ref
-  );
-  return markLastViewed(rows, looked, args.cursor);
+  const adapter = getService("adapter");
+  const looked = await lastLookedAtByPart(adapter, personId, args.ref);
+  // Each part's divider, found in the database: the version looked at, or the
+  // nearest older one kept, whichever page it falls on.
+  const repo = new VersionsRepository(adapter);
+  const dividers = new Map<string | null, number>();
+  for (const [part, versionNo] of looked) {
+    const divider = await repo.findNearestKeptInPart(args.ref, part, versionNo);
+    if (divider !== undefined) dividers.set(part, divider);
+  }
+  return markLastViewed(rows, dividers);
 }
 
 /**

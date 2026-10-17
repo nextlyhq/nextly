@@ -15,6 +15,7 @@ vi.mock("../versions-access", async importOriginal => ({
   compareDocumentVersions: compare,
 }));
 
+import { NextlyError } from "../../errors";
 import { GET } from "../versions-diff";
 
 function call(query: string) {
@@ -54,6 +55,22 @@ describe("GET versions diff", () => {
         query: expect.objectContaining({ to: 6, baseline: "previous" }),
       })
     );
+  });
+
+  it("answers privately to the session, its refusals included", async () => {
+    // A comparison from where this person last looked differs from one
+    // person to the next, and so does its NO_BASELINE.
+    expect(
+      (await call("to=6&baseline=previous")).headers.get("cache-control")
+    ).toMatch(/private/);
+    compare.mockRejectedValueOnce(
+      NextlyError.validation({
+        errors: [{ path: "baseline", code: "NO_BASELINE", message: "none" }],
+      })
+    );
+    const refused = await call("to=6&baseline=last-viewed");
+    expect(refused.status).toBe(400);
+    expect(refused.headers.get("cache-control")).toMatch(/private/);
   });
 
   it("still compares an explicit pair", async () => {

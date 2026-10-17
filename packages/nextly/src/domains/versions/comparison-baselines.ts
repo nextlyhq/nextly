@@ -63,6 +63,14 @@ export interface BaselineSubstitute {
   replaces: number;
 }
 
+/**
+ * A baseline that has nothing to compare with, and says why from what it
+ * read: the reason travels with the decision rather than being read again.
+ */
+export interface BaselineRefusal {
+  unavailable: string;
+}
+
 /** What a baseline resolved to: a version, and the one it stands in for. */
 export interface BaselineChoice {
   versionNo: number;
@@ -91,8 +99,9 @@ export interface ComparisonBaseline {
   ):
     | number
     | BaselineSubstitute
+    | BaselineRefusal
     | null
-    | Promise<number | BaselineSubstitute | null>;
+    | Promise<number | BaselineSubstitute | BaselineRefusal | null>;
   /**
    * Why there is nothing to compare with, in the reader's terms, when the
    * baseline resolves to nothing or to the target itself (`found`, with the
@@ -149,7 +158,8 @@ export async function resolveComparisonBaseline(
   name: string,
   context: BaselineContext
 ): Promise<number | null> {
-  return (await chooseComparisonBaseline(name, context))?.versionNo ?? null;
+  const choice = await chooseComparisonBaseline(name, context);
+  return choice !== null && "versionNo" in choice ? choice.versionNo : null;
 }
 
 /**
@@ -160,7 +170,7 @@ export async function resolveComparisonBaseline(
 async function chooseComparisonBaseline(
   name: string,
   context: BaselineContext
-): Promise<BaselineChoice | null> {
+): Promise<BaselineChoice | BaselineRefusal | null> {
   const baseline = requireBaseline(name);
   const resolved = await baseline.resolve(narrowToPart(context));
   if (resolved === null) return null;
@@ -245,38 +255,38 @@ registerComparisonBaseline({
   // `version-views`). When retention has removed it, the nearest older version
   // still kept stands in, and the comparison names the one removed.
   resolve: async ({ ref, part, userId, versions }) => {
-    if (userId === null) return null;
+    if (userId === null) {
+      return {
+        unavailable:
+          "Only a signed-in person has a version they last looked at.",
+      };
+    }
     const looked = await readLastLookedAt(getService("adapter"), {
       userId,
       ref,
       part,
     });
-    if (looked === null) return null;
+    if (looked === null) {
+      return {
+        unavailable:
+          "You have not looked at this part of the document on an earlier visit, so there is no version you last looked at.",
+      };
+    }
     if (versions.some(v => v.versionNo === looked)) return looked;
     const kept = versions.find(v => v.versionNo < looked);
-    return kept ? { versionNo: kept.versionNo, replaces: looked } : null;
+    return kept
+      ? { versionNo: kept.versionNo, replaces: looked }
+      : {
+          unavailable:
+            "The version you last looked at was removed, and no older version is kept.",
+        };
   },
-  unavailable: async ({ ref, part, userId }, found) => {
-    if (userId === null) {
-      return "Only a signed-in person has a version they last looked at.";
-    }
-    // The nearest older version kept, standing in for one retention removed,
-    // can be the target itself: that is not the version they looked at.
-    if (found?.replaces !== undefined) {
-      return "The version you last looked at was removed, and the nearest older version kept is this one.";
-    }
-    if (found !== null) {
-      return "This is the version you last looked at, so nothing has changed since.";
-    }
-    const looked = await readLastLookedAt(getService("adapter"), {
-      userId,
-      ref,
-      part,
-    });
-    return looked === null
-      ? "You have not looked at this part of the document on an earlier visit, so there is no version you last looked at."
-      : "The version you last looked at was removed, and no older version is kept.";
-  },
+  // Only reached with a version in hand that is the target itself; every
+  // other refusal came from `resolve`, with the reason it read.
+  unavailable: (_context, found) =>
+    found?.replaces !== undefined
+      ? "The version you last looked at was removed, and the nearest older version kept is this one."
+      : "This is the version you last looked at, so nothing has changed since.",
 });
 
 /** What a comparison request names, before its pair is resolved. */
@@ -353,6 +363,9 @@ export async function resolveComparisonPair(
     live,
   };
   const choice = await chooseComparisonBaseline(name, context);
+  if (choice !== null && "unavailable" in choice) {
+    throw noBaseline(choice.unavailable);
+  }
   if (choice === null || choice.versionNo === target) {
     throw noBaseline(await unavailableMessage(name, context, choice));
   }

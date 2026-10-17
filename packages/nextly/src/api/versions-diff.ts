@@ -20,7 +20,7 @@
 import { NextlyError } from "../errors/nextly-error";
 import type { VersionScopeKind } from "../schemas/versions/types";
 
-import { respondDoc, withSessionCacheHeaders } from "./response-shapes";
+import { privateToSession, respondDoc } from "./response-shapes";
 import {
   assertComparisonRequest,
   compareDocumentVersions,
@@ -95,8 +95,10 @@ function parseScopeKind(kind: string): VersionScopeKind {
  * snapshot is redacted for the caller inside the shared core before the diff is
  * computed, so a diff never reveals a field a normal read would hide.
  */
-export const GET = withErrorHandler(
-  async (request: Request, context: RouteContext) => {
+// Private to the session, refusals included: a comparison from where this
+// person last looked, and its NO_BASELINE, differ from one person to the next.
+export const GET = privateToSession(
+  withErrorHandler(async (request: Request, context: RouteContext) => {
     const { kind, slug, id } = await context.params;
     const scopeKind = parseScopeKind(kind);
 
@@ -124,8 +126,6 @@ export const GET = withErrorHandler(
       query,
     });
 
-    // Private to the caller: a comparison from where this person last looked
-    // differs from one person to the next.
-    return withSessionCacheHeaders(respondDoc(diff));
-  }
+    return respondDoc(diff);
+  })
 );

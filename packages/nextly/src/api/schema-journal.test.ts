@@ -144,9 +144,7 @@ describe("getSchemaJournal", () => {
       hasMore: false,
     });
 
-    await getSchemaJournal(
-      makeReq("http://x/api/schema/journal?limit=50")
-    );
+    await getSchemaJournal(makeReq("http://x/api/schema/journal?limit=50"));
 
     expect(readJournal).toHaveBeenCalledWith(
       expect.objectContaining({ limit: 50 })
@@ -244,9 +242,7 @@ describe("getSchemaJournal", () => {
       hasMore: false,
     });
 
-    await getSchemaJournal(
-      makeReq("http://x/api/schema/journal?limit=20.7")
-    );
+    await getSchemaJournal(makeReq("http://x/api/schema/journal?limit=20.7"));
 
     expect(readJournal).toHaveBeenCalledWith(
       expect.objectContaining({ limit: 20 })

@@ -39,6 +39,7 @@ export const nextlyVersionViewsMysql = mysqlTable(
     versionNo: int("version_no").notNull(),
     previousVersionNo: int("previous_version_no"),
     viewedAt: datetime("viewed_at", { fsp: 3 }).notNull(),
+    visitStartedAt: datetime("visit_started_at", { fsp: 3 }).notNull(),
 
     createdAt: datetime("created_at", { fsp: 3 })
       .$defaultFn(() => new Date())

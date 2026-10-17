@@ -126,7 +126,11 @@ describe("respondBulk", () => {
   });
 
   it("emits empty errors[] on all-success (always present, never omitted)", async () => {
-    const res = respondBulk("Updated 2 entries.", [{ id: "a" }, { id: "b" }], []);
+    const res = respondBulk(
+      "Updated 2 entries.",
+      [{ id: "a" }, { id: "b" }],
+      []
+    );
     const body = (await bodyOf(res)) as { errors: unknown };
     expect(body.errors).toEqual([]);
     // Predictable shape: `errors` is always an array, even when empty.

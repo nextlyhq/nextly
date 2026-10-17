@@ -381,7 +381,9 @@ describe("restoreVersion (integration)", () => {
       user: superAdmin,
     });
 
-    const beforeRestore = (await rows()).find(r => r.label === "Before restore");
+    const beforeRestore = (await rows()).find(
+      r => r.label === "Before restore"
+    );
     expect(beforeRestore).toBeDefined();
     // The German translation was draft, so its pre-restore snapshot says so.
     expect(beforeRestore?.snapshot.status).toBe("draft");
@@ -460,7 +462,9 @@ describe("restoreVersion (integration)", () => {
       user: superAdmin,
     });
 
-    const beforeRestore = (await rows()).find(r => r.label === "Before restore");
+    const beforeRestore = (await rows()).find(
+      r => r.label === "Before restore"
+    );
     expect(beforeRestore).toBeDefined();
     // The reference is stored as the author's id, not an expanded { id, name }.
     expect(beforeRestore?.snapshot.byline?.author).toBe(authorId);

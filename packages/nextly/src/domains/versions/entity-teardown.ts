@@ -19,11 +19,8 @@
 import type { VersionScopeKind } from "../../schemas/versions/types";
 
 import type { VersionsDbApi } from "./db-api";
-import {
-  REGISTRY_TABLES,
-  deletePinsForDocument,
-  deletePinsForEntity,
-} from "./version-pins";
+import { REGISTRY_TABLES } from "./history-locks";
+import { deletePinsForDocument, deletePinsForEntity } from "./version-pins";
 import { deleteViewsForDocument, deleteViewsForEntity } from "./version-views";
 import { VersionsRepository, type VersionRef } from "./versions-repository";
 

@@ -435,6 +435,7 @@ export function generateSqliteCoreTableStatements(): string[] {
       "version_no" INTEGER NOT NULL,
       "previous_version_no" INTEGER,
       "viewed_at" INTEGER NOT NULL,
+      "visit_started_at" INTEGER NOT NULL,
       "created_at" INTEGER NOT NULL
     )`,
     // Over "view_key" alone: the digest is what one marker per person,

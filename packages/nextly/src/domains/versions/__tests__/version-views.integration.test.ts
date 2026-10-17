@@ -22,9 +22,13 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
+
 import { UserMutationService } from "../../users/services/user-mutation-service";
 import { VISIT_GAP_MS, readLastLookedAt } from "../version-views";
 import { VersionsRepository } from "../versions-repository";
+
+import { untilSomeoneWaitsOnALock } from "./helpers/lock-wait";
 
 let current: TestNextly | undefined;
 
@@ -69,6 +73,19 @@ async function documentWithHistory(
     ],
     localization: { locales: ["en", "es"], defaultLocale: "en" },
   });
+  // The people who look: real accounts, as a signed-in person always has one,
+  // and a mark locks it.
+  const now = new Date();
+  for (const person of [ANA, MARTA]) {
+    await current.adapter.insert("users", {
+      id: person.id,
+      email: person.email,
+      name: person.id,
+      isActive: true,
+      createdAt: now,
+      updatedAt: now,
+    });
+  }
   const created = await current
     .getService("collectionsHandler")
     .createEntry(
@@ -168,6 +185,43 @@ async function documentWithHistory(
     markers,
     compareSinceLooked,
   };
+}
+
+/**
+ * Hold a deletion's lock (`lock`), start a mark, wait until the mark is
+ * blocked on that lock, then let the deletion finish (`finish`) and commit.
+ * The mark must be refused as not found: it waited, and found what it marks
+ * gone.
+ */
+async function raceAgainst(
+  dialect: TestDialect,
+  lock: (tx: TransactionContext) => Promise<void>,
+  finish: (tx: TransactionContext) => Promise<void>,
+  mark: () => Promise<unknown>
+) {
+  let release!: () => void;
+  const held = new Promise<void>(resolve => {
+    release = resolve;
+  });
+  let locked!: () => void;
+  const lockTaken = new Promise<void>(resolve => {
+    locked = resolve;
+  });
+  const deleting = current!.adapter.transaction(async tx => {
+    await lock(tx);
+    locked();
+    await held;
+    await finish(tx);
+  });
+  await lockTaken;
+  const marking = refusal(mark());
+  try {
+    await untilSomeoneWaitsOnALock(current!.adapter, dialect);
+  } finally {
+    release();
+  }
+  await deleting;
+  expect(await marking).toMatchObject({ code: "NOT_FOUND" });
 }
 
 /** A refusal's `code` and first error code, whatever threw it. */
@@ -442,6 +496,110 @@ describe.each(getConfiguredTestDialects())(
       }
       expect(await doc.markers()).toEqual(before);
     });
+
+    it("marks the nearest kept row of the part on whichever page it falls, however the parts interleave", async () => {
+      // v1 en, v2-v5 es, v6 en, v7 es.
+      const doc = await documentWithHistory(dialect, [
+        "en",
+        "es",
+        "es",
+        "es",
+        "es",
+        "en",
+        "es",
+      ]);
+      await doc.mark(ANA, 6);
+      await doc.leave(ANA);
+      // Retention removed v6: v1, three pages down, stands in for it.
+      await current!.adapter.delete("nextly_versions", {
+        and: [
+          { column: "entryId", op: "=", value: doc.entryId },
+          { column: "versionNo", op: "=", value: 6 },
+        ],
+      });
+
+      const marked: (number | null)[] = [];
+      let cursor: number | undefined;
+      do {
+        const page = await listVersionsForDocument({
+          ...doc.at,
+          user: ANA,
+          limit: 2,
+          cursor,
+        });
+        marked.push(
+          ...page.items
+            .filter(row => (row as { lastViewed?: true }).lastViewed)
+            .map(row => row.versionNo)
+        );
+        const last = page.items[page.items.length - 1];
+        cursor =
+          page.meta.hasNext && last?.versionNo ? last.versionNo : undefined;
+      } while (cursor !== undefined);
+      expect(marked).toEqual([1]);
+    });
+
+    it.skipIf(dialect === "sqlite")(
+      "refuses a mark that waited on a deletion of its document, and leaves no marker",
+      async () => {
+        const doc = await documentWithHistory(dialect, ["en", "en"]);
+        const posts = await current!
+          .getService("collectionRegistryService")
+          .getCollectionBySlug("posts");
+        await raceAgainst(
+          dialect,
+          async tx => {
+            await tx.selectOne(posts!.tableName, {
+              where: { and: [{ column: "id", op: "=", value: doc.entryId }] },
+              forUpdate: true,
+            });
+          },
+          async tx => {
+            await tx.delete(posts!.tableName, {
+              and: [{ column: "id", op: "=", value: doc.entryId }],
+            });
+            await tx.delete("nextly_version_views", {
+              and: [{ column: "entryId", op: "=", value: doc.entryId }],
+            });
+          },
+          () => doc.mark(ANA, 1)
+        );
+        expect(await doc.markers()).toEqual([]);
+      }
+    );
+
+    it.skipIf(dialect === "sqlite")(
+      "refuses a mark that waited on its person's account deletion, and leaves no marker",
+      async () => {
+        const doc = await documentWithHistory(dialect, ["en", "en"]);
+        const now = new Date();
+        await current!.adapter.insert("users", {
+          id: "leaving",
+          email: "leaving@x.test",
+          name: "Leaving",
+          isActive: true,
+          createdAt: now,
+          updatedAt: now,
+        });
+        const where = {
+          and: [{ column: "id", op: "=" as const, value: "leaving" }],
+        };
+        await raceAgainst(
+          dialect,
+          async tx => {
+            await tx.selectOne("users", { where, forUpdate: true });
+          },
+          async tx => {
+            await tx.delete("nextly_version_views", {
+              and: [{ column: "userId", op: "=", value: "leaving" }],
+            });
+            await tx.delete("users", where);
+          },
+          () => doc.mark({ id: "leaving", email: "leaving@x.test" }, 1)
+        );
+        expect(await doc.markers()).toEqual([]);
+      }
+    );
 
     it("removes markers with the document, the collection and the person", async () => {
       const doc = await documentWithHistory(dialect, ["en", "en"]);

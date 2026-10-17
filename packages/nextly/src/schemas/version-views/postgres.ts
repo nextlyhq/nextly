@@ -54,6 +54,11 @@ export const nextlyVersionViewsPg = pgTable(
     // When the person last looked; a look long enough after it starts a new
     // visit.
     viewedAt: timestamp("viewed_at", { withTimezone: true }).notNull(),
+    // When the current visit began: a mark that arrives late, timestamped
+    // before it, belongs to the visit before.
+    visitStartedAt: timestamp("visit_started_at", {
+      withTimezone: true,
+    }).notNull(),
 
     createdAt: timestamp("created_at", { withTimezone: true })
       .$defaultFn(() => new Date())
