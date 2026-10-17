@@ -51,12 +51,14 @@ checkout or CI. A production build whose map lacks a dashboard widget's componen
 the admin: its server log names the plugin, the widget and the command that fixes it, and the
 public site keeps serving. Other components missing from the map are logged.
 
-After a map change in development, the first render can still draw the new widget's card
-empty: the map is rewritten while that request is already being served. Next reloads the
-map straight after, and the card draws with its component.
+After a map change in development, the request that finds the map out of date is already
+being served when the map is rewritten, so that one render can still draw the new widget's
+card empty. The rewritten map is what the next render loads.
 
-**An app made from an older template** has neither line, and keeps drawing a missing
-component as an empty card, with a console warning, until it adds them. Two lines do it:
+**The check runs once the admin layout calls it.** New apps import the map in their admin
+page; the layout's call is two lines to add. An app made from an older template has neither,
+and keeps drawing a missing component as an empty card, with a console warning, until it adds
+them:
 
 ```tsx
 // src/app/admin/[[...params]]/page.tsx: with the other imports

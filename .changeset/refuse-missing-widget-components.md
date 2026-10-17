@@ -31,4 +31,4 @@
 
 A dashboard widget whose component the admin can't load no longer draws an empty card: in development the generated
 component map is rewritten, and in production the admin refuses, naming the widget and the command to run.
-Existing apps add two lines to opt in (`checkAdminComponents` from `nextly/runtime`, experimental); see the admin UI docs.
+Apps opt in by calling `checkAdminComponents` (from `nextly/runtime`, experimental) in their admin layout; see the admin UI docs.
