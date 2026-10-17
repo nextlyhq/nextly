@@ -241,9 +241,14 @@ type PreparedQuery =
  * not. A collection the caller may not read cost a permission decision before it was refused,
  * and an invented name was refused at once, so how long a batch took said which of its names
  * were real. Taking the decision for the invented name too -- in the same bounded rounds, through
- * the same memo -- makes the two paths do the same thing, and its verdict is thrown away: the
+ * the same memo -- makes the two paths take the same steps, and its verdict is thrown away: the
  * slot has already failed. Timing is not asserted anywhere, because a test of it would be flaky;
  * what is asserted is that both paths ask.
+ *
+ * What this does NOT make equal is the decision's own cost. A collection with a code-defined read
+ * rule runs that rule, and a rule may do slow work; an invented name has no rule to run. So a
+ * slow rule can still show in a batch's timing which names are real. Closing that would mean
+ * padding every answer to a fixed cost, which no other read path in the API does either.
  *
  * Only for the two kinds that are read as an entity. A `system:` or `plugin:` source takes no
  * read decision when it exists either, so asking one for it here would make it the odd one out.

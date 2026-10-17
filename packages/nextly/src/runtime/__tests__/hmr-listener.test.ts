@@ -311,6 +311,32 @@ describe("watching the config and the files it imports", () => {
     await eventually(() => reload.mock.calls.length === 1);
   });
 
+  it("after a load fails on an import into a folder that does not exist yet, follows it as it is created", async () => {
+    watchLoadedConfig(loaded(), cwd, DEV);
+    const folder = join(cwd, "collections", "new");
+    const created = join(folder, "post.ts");
+    writeFileSync(
+      config,
+      'import { post } from "./collections/new/post";\n' +
+        "export default { collections: [post] };\n"
+    );
+
+    // No folder to watch the file in yet: the folder's creation is watched.
+    await watchScannedConfig({ cwd, env: DEV });
+    expect(watchedConfigFiles()).toContain(folder);
+    await watching();
+    mkdirSync(folder);
+    await eventually(() => reload.mock.calls.length === 1);
+
+    // That reload still fails, since the file is not there yet, and its scan
+    // now watches inside the new folder.
+    await watchScannedConfig({ cwd, env: DEV });
+    expect(watchedConfigFiles()).toContain(created);
+    await watching();
+    writeFileSync(created, "export const post = { slug: 'post' };\n");
+    await eventually(() => reload.mock.calls.length === 1);
+  });
+
   it("keeps watching where the config was after a load finds none", async () => {
     watchLoadedConfig(loaded("collections/posts.ts"), cwd, DEV);
     rmSync(config);

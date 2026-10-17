@@ -28,7 +28,11 @@ vi.mock("../../di", () => ({
       case "singleRegistryService":
         return { getSingleBySlug: getSingleBySlugSpy };
       case "adapter":
-        return { selectOne: selectOneSpy };
+        // `select` answers the "last looked at" read with no markers.
+        return {
+          selectOne: selectOneSpy,
+          select: vi.fn().mockResolvedValue([]),
+        };
       case "collectionService":
         return { getCollection: vi.fn().mockResolvedValue({ fields: [] }) };
       case "versionsService":
@@ -247,7 +251,10 @@ describe("version list pagination meta", () => {
         ? { list: listSpy, get: vi.fn() }
         : name === "collectionsHandler"
           ? { getEntry: getEntrySpy }
-          : {}) as typeof di.getService);
+          : name === "adapter"
+            ? // The caller has no "last looked at" markers.
+              { select: vi.fn().mockResolvedValue([]) }
+            : {}) as typeof di.getService);
   });
 
   function ctx() {

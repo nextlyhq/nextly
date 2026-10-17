@@ -787,6 +787,57 @@ export class VersionsRepository {
     return typeof top === "number" ? top : 0;
   }
 
+  /**
+   * The part (language, or null for none) of one durable version, or
+   * undefined when the document has no such version. Reads that one row's
+   * language only.
+   */
+  async findPartOfVersion(
+    ref: VersionRef,
+    versionNo: number
+  ): Promise<string | null | undefined> {
+    const rows = await this.db.select<{ locale: string | null }>(TABLE, {
+      columns: ["locale"],
+      where: {
+        and: [
+          ...this.docWhere(ref),
+          { column: "isAutosave", op: "=", value: false },
+          { column: "versionNo", op: "=", value: versionNo },
+        ],
+      },
+      limit: 1,
+    });
+    return rows.length === 0 ? undefined : (rows[0]?.locale ?? null);
+  }
+
+  /**
+   * The newest durable version of one part at or below `versionNo`: that
+   * version, or the nearest older one still kept when retention removed it.
+   * Undefined when the part keeps none.
+   */
+  async findNearestKeptInPart(
+    ref: VersionRef,
+    locale: string | null,
+    versionNo: number
+  ): Promise<number | undefined> {
+    const rows = await this.db.select<{ versionNo: number }>(TABLE, {
+      columns: ["versionNo"],
+      where: {
+        and: [
+          ...this.docWhere(ref),
+          { column: "isAutosave", op: "=", value: false },
+          { column: "versionNo", op: "<=", value: versionNo },
+          locale === null
+            ? { column: "locale", op: "IS NULL" }
+            : { column: "locale", op: "=", value: locale },
+        ],
+      },
+      orderBy: [{ column: "versionNo", direction: "desc" }],
+      limit: 1,
+    });
+    return rows[0]?.versionNo;
+  }
+
   /** Fetch one durable version by its number, snapshot included. */
   async findByVersionNo(
     ref: VersionRef,
