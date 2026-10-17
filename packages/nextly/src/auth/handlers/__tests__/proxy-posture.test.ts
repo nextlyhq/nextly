@@ -29,6 +29,15 @@ describe("edgeProxyWarning", () => {
     ).toBeNull();
   });
 
+  it("is silent on Vercel when the auth limiter is off", () => {
+    expect(
+      edgeProxyWarning(
+        { security: { authRateLimit: { requestsPerHour: 0 } } },
+        { VERCEL: "1" }
+      )
+    ).toBeNull();
+  });
+
   it("is silent off a known rewriting edge", () => {
     expect(edgeProxyWarning({}, {})).toBeNull();
     expect(edgeProxyWarning({}, { VERCEL: "0" })).toBeNull();
@@ -122,6 +131,14 @@ describe("the request-time fallback warning", () => {
     expect(reports(loaded)).toHaveLength(1);
     expect(JSON.stringify(reports(loaded)[0])).toContain("security.trustProxy");
     expect(JSON.stringify(reports(loaded)[0])).toContain("TRUSTED_PROXY_IPS");
+    // The header proves no proxy: the advice says so, and when to leave
+    // trustProxy off.
+    expect(JSON.stringify(reports(loaded)[0])).toContain(
+      "A client can send these headers itself"
+    );
+    expect(JSON.stringify(reports(loaded)[0])).toContain(
+      "Otherwise leave it off"
+    );
   });
 
   it("is logged once when the proxy's own hops are all that the header names", async () => {

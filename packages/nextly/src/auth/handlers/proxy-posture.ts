@@ -17,6 +17,8 @@ import { getNextlyLogger } from "../../observability/logger";
 import { carriesClientIpHeader } from "../../utils/get-trusted-client-ip";
 import { readProxyTrustSettings } from "../../utils/proxy-trust";
 
+import { readAuthRateLimit } from "./deps-bridge";
+
 /** The environment variables a platform is recognised by. */
 type PlatformEnv = Readonly<Record<string, string | undefined>>;
 
@@ -43,6 +45,9 @@ export function edgeProxyWarning(
   env: PlatformEnv = process.env
 ): string | null {
   if (readProxyTrustSettings(() => config).trustProxy) return null;
+  // A budget of zero turns the auth limiter off, so there is no counting to
+  // describe; the same reader the router's budget comes from says so.
+  if (readAuthRateLimit(() => config).requestsPerHour <= 0) return null;
   const edge = REWRITING_EDGES.find(candidate => candidate.runsHere(env));
   if (!edge) return null;
   return (
@@ -61,10 +66,12 @@ let fallbackReported = false;
 /**
  * Note an auth request the limiter could not resolve a client address for.
  *
- * Logs once per process, and only for a request that came through a proxy
- * (it carries a client-address header): those are the requests a setting
- * would move off the fallback. A request with no such header was never
- * going to resolve, and says nothing about the settings.
+ * Logs once per process, and only for a request that carries a
+ * client-address header: those are the requests a setting could move off
+ * the fallback. The header alone does not show a proxy sent it, since a
+ * client can set it too, so the message says to trust it only behind a
+ * proxy every request passes through. A request with no such header was
+ * never going to resolve, and says nothing about the settings.
  */
 export function noteUnresolvedAuthRequest(request: Request): void {
   if (fallbackReported || !carriesClientIpHeader(request)) return;
@@ -75,8 +82,11 @@ export function noteUnresolvedAuthRequest(request: Request): void {
       "Auth requests are arriving with proxy client-address headers that " +
       "could not be used, so the auth rate limit is counting them by the " +
       "account each names, under a shared ceiling, rather than per client. " +
-      "Set security.trustProxy: true, and list the proxy's own addresses in " +
-      "TRUSTED_PROXY_IPS when it adds a hop of its own. Logged once per process.",
+      "A client can send these headers itself, so they do not show a proxy " +
+      "is in front: only if every request reaches the app through a proxy " +
+      "you control that sets them, set security.trustProxy: true, and list " +
+      "any hops in front of that proxy in TRUSTED_PROXY_IPS. Otherwise leave " +
+      "it off. Logged once per process.",
     settings: ["security.trustProxy", "TRUSTED_PROXY_IPS"],
   });
 }

@@ -57,6 +57,14 @@ describe("the edge proxy warning at boot", () => {
     expect(said[0]).toContain("security.trustProxy: true");
   });
 
+  it("says nothing when the auth limiter is off", async () => {
+    vi.stubEnv("VERCEL", "1");
+    const said = await bootWarnings({
+      security: { authRateLimit: { requestsPerHour: 0 } },
+    });
+    expect(said.filter(w => w.includes("security.trustProxy"))).toEqual([]);
+  });
+
   it("says nothing when security.trustProxy is set", async () => {
     vi.stubEnv("VERCEL", "1");
     const said = await bootWarnings({ security: { trustProxy: true } });
