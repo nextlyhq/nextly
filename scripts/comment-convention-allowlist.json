@@ -1014,14 +1014,6 @@
     "count": 3,
     "digests": ["4b8a85bc737116f6", "88cc9af4e10532f7", "c2df31454df025bd"]
   },
-  "packages/nextly/src/runtime/__tests__/hmr-listener.test.ts": {
-    "count": 1,
-    "digests": ["fca8604933acb121"]
-  },
-  "packages/nextly/src/runtime/hmr-listener.ts": {
-    "count": 1,
-    "digests": ["7711896dcaa838e7"]
-  },
   "packages/nextly/src/runtime/notifications/__tests__/build-event.test.ts": {
     "count": 1,
     "digests": ["fae09c6df2b1ab48"]
