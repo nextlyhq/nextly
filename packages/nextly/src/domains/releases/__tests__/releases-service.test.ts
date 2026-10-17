@@ -21,6 +21,8 @@ import type {
   ReleasesServiceDeps,
 } from "../services/releases-service";
 
+import { READY_CHECKS } from "./helpers/ready-checks";
+
 const ADMIN = { userId: "u1" };
 const ANON = { userId: null };
 
@@ -100,6 +102,7 @@ function service(over?: {
     logger: {
       warn: vi.fn((_message: string, _meta?: Record<string, unknown>) => {}),
     },
+    checks: READY_CHECKS,
   };
   return { svc: new ReleasesService(deps), repo, deps };
 }

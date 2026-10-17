@@ -364,7 +364,7 @@ function groupMembersByDocument(
  */
 function releaseMovedConflict(
   releaseId: string,
-  change: "add-member" | "remove-member"
+  change: "add-member" | "remove-member" | "change-member-action"
 ): NextlyError {
   return NextlyError.conflict({
     logContext: { reason: "release-moved-since-judged", releaseId, change },
@@ -1218,14 +1218,95 @@ export class ReleasesRepository {
     }
 
     // After the commit, as for an add.
-    invalidateTransitionCacheFor(this.db);
-    if (removed !== undefined && this.revalidator !== undefined) {
-      try {
-        const intent = releaseRevalidationIntent([removed]);
-        if (intent !== null) await this.revalidator.flush([intent]);
-      } catch {
-        // Best-effort, as everywhere else this flushes.
+    await this.flushMember(removed);
+  }
+
+  /**
+   * Switch a member between going live and coming down, in one transaction
+   * with a bump of the release's revision, and only while the release is in
+   * one of `allowedStates` — the fence an add and a removal take, for the same
+   * reason: a release committed after the caller judged it refuses the switch.
+   *
+   * The member is read again under the release's lock, so the answer is the
+   * row as stored rather than as the caller last saw it. When it already has
+   * `action`, nothing is written and the stored row is the answer: a caller
+   * that read the old action, while another switch committed, is told what
+   * the member now holds, and is not told a switch it asked for happened when
+   * the stored row says otherwise.
+   *
+   * The member's key does not change, since it names the document and not
+   * what happens to it.
+   *
+   * @throws NextlyError CONFLICT when the release is not there or not in
+   *   `allowedStates`, and NOT_FOUND when the member has gone since it was
+   *   read; nothing is written then.
+   */
+  async changeMemberAction(
+    member: Pick<ReleaseMemberRow, "id" | "releaseId">,
+    action: ReleaseMemberAction,
+    allowedStates: readonly ReleaseState[]
+  ): Promise<ReleaseMemberRow> {
+    const where: VersionsWhere = {
+      and: [
+        { column: "id", op: "=", value: member.id },
+        { column: "releaseId", op: "=", value: member.releaseId },
+      ],
+    };
+    let fenceMissed = false;
+    let outcome: { row: ReleaseMemberRow; wrote: boolean } | undefined;
+    try {
+      outcome = await this.db.transaction(async tx => {
+        await tx.lockRow(RELEASES, member.releaseId);
+        const [stored] = await tx.select<ReleaseMemberRow>(MEMBERS, { where });
+        if (stored === undefined) return undefined;
+        if (stored.action === action) return { row: stored, wrote: false };
+        if (
+          (await this.advanceRevision(tx, member.releaseId, allowedStates)) ===
+          null
+        ) {
+          fenceMissed = true;
+          throw releaseMovedConflict(member.releaseId, "change-member-action");
+        }
+        await tx.updateCount(MEMBERS, { action }, where);
+        return { row: { ...stored, action }, wrote: true };
+      });
+    } catch (error) {
+      if (fenceMissed) {
+        throw releaseMovedConflict(member.releaseId, "change-member-action");
       }
+      throw error;
+    }
+    if (outcome === undefined) {
+      // Removed between the caller's read and this write.
+      throw NextlyError.notFound({
+        logContext: {
+          reason: "release-member-not-found",
+          memberId: member.id,
+          releaseId: member.releaseId,
+        },
+      });
+    }
+    // After the commit: the document's cached pages were bounded by the
+    // action it had. Nothing to drop when nothing was written.
+    if (outcome.wrote) await this.flushMember(outcome.row);
+    return outcome.row;
+  }
+
+  /**
+   * Drop what a member's document had cached under its release, after a
+   * change to the member has committed. Best-effort and never throws, as
+   * everywhere else this flushes.
+   */
+  private async flushMember(
+    member: ReleaseMemberRow | undefined
+  ): Promise<void> {
+    invalidateTransitionCacheFor(this.db);
+    if (member === undefined || this.revalidator === undefined) return;
+    try {
+      const intent = releaseRevalidationIntent([member]);
+      if (intent !== null) await this.revalidator.flush([intent]);
+    } catch {
+      // Best-effort, as everywhere else this flushes.
     }
   }
 

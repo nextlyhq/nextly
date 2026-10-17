@@ -15,6 +15,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { ReleaseState } from "../../../schemas/releases/types";
 import { ReleasesService } from "../services/releases-service";
 import type { ReleasesServiceDeps } from "../services/releases-service";
+import { READY_CHECKS } from "./helpers/ready-checks";
 
 const ACTOR = { userId: "u1" };
 
@@ -63,6 +64,7 @@ function service(members: M[], liveAuthorIds: string[], state = "blocked") {
     canActOnDocument: vi.fn(async () => true),
     // Running a release is not what these cases are about.
     runDrainNow: vi.fn(async () => undefined),
+    checks: READY_CHECKS,
     // Every target is there and has a lifecycle; the checks have their own tests.
     targets: {
       readDocument: async (target: { entryId: string }) => ({
@@ -172,6 +174,7 @@ describe("as an instrument", () => {
       canActOnDocument: vi.fn(async () => true),
       // Running a release is not what these cases are about.
       runDrainNow: vi.fn(async () => undefined),
+      checks: READY_CHECKS,
       // Every target is there and has a lifecycle; the checks have their own tests.
       targets: {
         readDocument: async (target: { entryId: string }) => ({
@@ -336,6 +339,7 @@ describe("the blocker verdict and the write share a fence", () => {
       canActOnDocument: vi.fn(async () => true),
       // Running a release is not what these cases are about.
       runDrainNow: vi.fn(async () => undefined),
+      checks: READY_CHECKS,
       // Every target is there and has a lifecycle; the checks have their own tests.
       targets: {
         readDocument: async (target: { entryId: string }) => ({

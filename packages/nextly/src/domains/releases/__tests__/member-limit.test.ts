@@ -16,6 +16,7 @@ import {
   ReleasesService,
 } from "../services/releases-service";
 import type { ReleasesServiceDeps } from "../services/releases-service";
+import { READY_CHECKS } from "./helpers/ready-checks";
 
 const ACTOR = { userId: "u1" };
 
@@ -55,6 +56,7 @@ function service(held: number) {
     canActOnDocument: vi.fn(async () => true),
     // Running a release is not what these cases are about.
     runDrainNow: vi.fn(async () => undefined),
+    checks: READY_CHECKS,
     // Every target is there and has a lifecycle; the checks have their own tests.
     targets: {
       readDocument: async (target: { entryId: string }) => ({

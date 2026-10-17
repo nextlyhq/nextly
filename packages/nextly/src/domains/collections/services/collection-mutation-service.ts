@@ -18,7 +18,7 @@ import type {
   TransactionContext,
   WhereCondition,
 } from "@nextlyhq/adapter-drizzle/types";
-import { eq, ne, and, like, ilike } from "drizzle-orm";
+import { eq, ne, and, like, ilike, inArray } from "drizzle-orm";
 
 // `OperationType` was removed during the PR 4 migration — this module no longer
 // references it, so we import only `BeforeOperationArgs`.
@@ -84,6 +84,7 @@ import { detachData } from "../../../shared/lib/detach";
 import {
   validateEntryData,
   type EntryWriteContext,
+  type ValidationIssue,
 } from "../../../shared/lib/entry-validation";
 import { applyFieldDefaults } from "../../../shared/lib/field-defaults";
 import {
@@ -158,6 +159,7 @@ import { resolveDraftHold } from "../../versions/draft-hold";
 import { storeDraftSave } from "../../versions/draft-save";
 import { isDraftSplitEligible } from "../../versions/draft-split-eligibility";
 import { sweepDeletedDocument } from "../../versions/entity-teardown";
+import { languagesHoldingWorkingDrafts } from "../../versions/held-working-drafts";
 import {
   buildRestorePayload,
   type ComponentSchemas,
@@ -172,7 +174,10 @@ import {
 } from "../../versions/tag-component-types";
 import { VersionCaptureService } from "../../versions/version-capture-service";
 import { withVersionConflictRetry } from "../../versions/version-conflict";
-import { VersionsRepository } from "../../versions/versions-repository";
+import {
+  VersionsRepository,
+  type VersionRow,
+} from "../../versions/versions-repository";
 import { workingDraftLocale } from "../../versions/working-draft-locale";
 import { expandComponentFields } from "../../webhooks/expand-component-fields";
 import { projectFields } from "../../webhooks/project-fields";
@@ -476,6 +481,113 @@ interface UpdateEntryWriteOptions {
   identifyMissingEntry: boolean;
   /** Message for a failure that carries no code of its own. */
   failureMessage: string;
+}
+
+/** What judging what a lifecycle write puts live needs: see `goingLiveIssues`. */
+interface GoingLiveArgs {
+  collectionName: string;
+  entryId: string;
+  /** The write locale; `undefined` for the unlocalized write. */
+  locale: string | undefined;
+  user: UserContext | undefined;
+  fields: FieldDefinition[];
+  /** The caller's payload, after hooks, shaped for the row. */
+  finalData: Record<string, unknown>;
+  componentFieldData: Record<string, unknown>;
+  manyToManyData: Record<string, string[]>;
+  manyToManyFields: FieldDefinition[];
+  splitComponentSchemas: ComponentSchemas | null;
+  /** How a working draft is restored, or `null` when none can be promoted. */
+  promoteRestoreCtx: RestoreSchemaContext | null;
+  /** Where the entry's working draft is read from. */
+  drafts: Pick<VersionsRepository, "findWorkingDraft">;
+  draftLocaleKey: string | null;
+  collectionHasStatus: boolean;
+  /** The status the write will persist, if it names one. */
+  transitionNextStatus: unknown;
+  /** Whether the write moves every language at once. */
+  sweepAllLocales: boolean;
+  existingEntry: Record<string, unknown>;
+  /** The write's locale split, or `null` for a collection without one. */
+  localizedUpdate: {
+    writeLocale: string;
+    localizedFieldValues?: Record<string, unknown>;
+    hasStatus?: boolean;
+  } | null;
+}
+
+/**
+ * How a promoted working draft is restored onto the live row: which system
+ * columns the row has, and how its components and languages are read.
+ */
+function promoteRestoreContext(args: {
+  collection: unknown;
+  fields: FieldDefinition[];
+  collectionHasStatus: boolean;
+  splitComponentSchemas: ComponentSchemas | null;
+  documentLocalized: boolean;
+}): RestoreSchemaContext {
+  const isPlugin =
+    (
+      (args.collection as Record<string, unknown>).admin as
+        | Record<string, unknown>
+        | undefined
+    )?.isPlugin === true;
+  return {
+    hasStatus: args.collectionHasStatus,
+    hasSlug: !isPlugin || args.fields.some(f => f.name === "slug"),
+    hasTitle: !isPlugin || args.fields.some(f => f.name === "title"),
+    componentSchemas: args.splitComponentSchemas ?? undefined,
+    documentLocalized: args.documentLocalized,
+    // A working draft always knows which language it holds: it is keyed by
+    // that language, and a write that cannot name one does not store a draft
+    // at all. So the snapshot's locale is never the unknown one here, and its
+    // translatable values need not be held back.
+    localeUnknown: false,
+  };
+}
+
+/** What judging the languages a publish puts live needs. */
+interface LanguagesGoLiveArgs {
+  collectionName: string;
+  entryId: string;
+  row: Record<string, unknown>;
+  patch: Record<string, unknown>;
+  writeLocale: string | undefined;
+  writeLocaleValues: Record<string, unknown>;
+  /** Whether each language keeps its own status, in the companion. */
+  perLocaleStatus: boolean;
+  everyLanguage: boolean;
+  /**
+   * Whether the write locale's document goes live by promoting its pending
+   * draft, which the promotion has already judged as it goes live.
+   */
+  writeLocalePromoted: boolean;
+  fields: FieldDefinition[];
+  user: UserContext | undefined;
+  /**
+   * The transaction the publish runs in, when it is judged under its row
+   * lock. Every read then runs on it; absent, they run on the pool.
+   */
+  tx?: TransactionContext;
+}
+
+/** What judging one document against its collection's rules needs. */
+interface EntryValidationArgs {
+  data: Record<string, unknown>;
+  fields: FieldDefinition[];
+  collectionName: string;
+  mode: "create" | "update";
+  user: UserContext | undefined;
+  /** What `localizedRequiredContext` resolved for a localized write. */
+  localeCtx?: {
+    localizedFieldNames: ReadonlySet<string>;
+    enforceLocalizedRequired: boolean;
+  };
+  /** The stored entry's id, on an update. */
+  id?: string;
+  /** The write's own transaction, where it runs inside one. */
+  tx?: TransactionContext;
 }
 
 interface CreateEntryWriteParams {
@@ -1353,23 +1465,21 @@ export class CollectionMutationService extends BaseService {
    * path cannot hand a validator a different connection from the one its write
    * runs on.
    */
-  private async assertEntryValid(args: {
-    data: Record<string, unknown>;
-    fields: FieldDefinition[];
-    collectionName: string;
-    mode: "create" | "update";
-    user: UserContext | undefined;
-    /** What {@link localizedRequiredContext} resolved for a localized write. */
-    localeCtx?: {
-      localizedFieldNames: ReadonlySet<string>;
-      enforceLocalizedRequired: boolean;
-    };
-    /** The stored entry's id, on an update. */
-    id?: string;
-    /** The write's own transaction, where it runs inside one. */
-    tx?: TransactionContext;
-  }): Promise<void> {
-    const issues = await validateEntryData(
+  private async assertEntryValid(args: EntryValidationArgs): Promise<void> {
+    const issues = await this.entryIssues(args);
+    if (issues.length > 0) {
+      throw NextlyError.validation({ errors: issues });
+    }
+  }
+
+  /**
+   * What {@link assertEntryValid} refuses a write with, without refusing it:
+   * every violation, or none.
+   */
+  private async entryIssues(
+    args: EntryValidationArgs
+  ): Promise<ValidationIssue[]> {
+    return validateEntryData(
       this.validationView(args.data, args.fields),
       attachFieldValidators("collection", args.collectionName, args.fields),
       {
@@ -1384,9 +1494,6 @@ export class CollectionMutationService extends BaseService {
         ),
       }
     );
-    if (issues.length > 0) {
-      throw NextlyError.validation({ errors: issues });
-    }
   }
 
   /**
@@ -1959,29 +2066,374 @@ export class CollectionMutationService extends BaseService {
    * language's `required` rules where it is the default. A language whose
    * pending draft the promotion has just judged is not judged twice.
    */
-  private async assertLanguagesGoLiveValid(args: {
+  private async assertLanguagesGoLiveValid(
+    args: LanguagesGoLiveArgs
+  ): Promise<void> {
+    const issues = await this.languagesGoLiveIssues(args);
+    if (issues.length > 0) {
+      throw NextlyError.validation({ errors: issues });
+    }
+  }
+
+  /**
+   * What a publish of each of these entries, as a release performs it, would
+   * be refused with by validation, keyed by entry id, judged now and without
+   * writing: the release's own write — the status alone, every language at
+   * once, as `user` — taken through {@link goingLiveIssues}, the judgement the
+   * write itself makes.
+   *
+   * Batched: the collection, its schema, the rows and the working drafts are
+   * read once for all the entries, and each entry is then judged on its own.
+   * The write's hooks are not run, since they may reach outside this process;
+   * a hook that rewrites the document is judged at the write itself. An entry
+   * that is not there, or a collection with no draft/published lifecycle,
+   * answers with nothing to report.
+   *
+   * @experimental
+   */
+  async releasePublishIssues(params: {
     collectionName: string;
-    entryId: string;
-    row: Record<string, unknown>;
-    patch: Record<string, unknown>;
-    writeLocale: string | undefined;
-    writeLocaleValues: Record<string, unknown>;
-    /** Whether each language keeps its own status, in the companion. */
-    perLocaleStatus: boolean;
-    everyLanguage: boolean;
-    /**
-     * Whether the write locale's document goes live by promoting its pending
-     * draft, which the promotion has already judged as it goes live.
-     */
-    writeLocalePromoted: boolean;
-    fields: FieldDefinition[];
-    user: UserContext | undefined;
-    /**
-     * The transaction the publish runs in, when it is judged under its row
-     * lock. Every read then runs on it; absent, they run on the pool.
-     */
-    tx?: TransactionContext;
-  }): Promise<void> {
+    entryIds: readonly string[];
+    user: UserContext;
+  }): Promise<Map<string, ValidationIssue[]>> {
+    const issues = new Map<string, ValidationIssue[]>(
+      params.entryIds.map(id => [id, []])
+    );
+    if (params.entryIds.length === 0) return issues;
+    const collection = await this.releaseCollection(params.collectionName);
+    if ((collection as { status?: boolean } | null)?.status !== true) {
+      return issues;
+    }
+    const shared = await this.releaseWriteContext(
+      collection,
+      params.collectionName
+    );
+    const rows = await this.storedEntries(
+      params.collectionName,
+      params.entryIds
+    );
+    const drafts =
+      shared.promoteRestoreCtx === null
+        ? new Map<string, VersionRow>()
+        : await new VersionsRepository(this.adapter).findWorkingDraftsOf(
+            { scopeKind: "collection", scopeSlug: params.collectionName },
+            [...rows.keys()],
+            shared.draftLocaleKey
+          );
+    for (const [entryId, existingEntry] of rows) {
+      issues.set(
+        entryId,
+        await this.goingLiveIssues({
+          ...shared,
+          collectionName: params.collectionName,
+          entryId,
+          user: params.user,
+          existingEntry,
+          // Served from the batch's one read, by the entry it was asked for.
+          drafts: {
+            findWorkingDraft: ref => Promise.resolve(drafts.get(ref.entryId)),
+          },
+        })
+      );
+    }
+    return issues;
+  }
+
+  /**
+   * What a release's write judges with that is the same for every entry of
+   * the collection: its fields, the payload it writes, and how a working
+   * draft would be promoted and keyed.
+   */
+  private async releaseWriteContext(
+    collection: unknown,
+    collectionName: string
+  ): Promise<
+    Omit<
+      GoingLiveArgs,
+      "collectionName" | "entryId" | "user" | "existingEntry" | "drafts"
+    >
+  > {
+    const fields = collectionFields(collection);
+    const finalData: Record<string, unknown> = { status: "published" };
+    const manyToManyFields = fields.filter(
+      f => f.type === "relationship" && f.options?.relationType === "manyToMany"
+    );
+    const { manyToManyData, componentFieldData } = this.shapeWriteParts(
+      finalData,
+      fields,
+      manyToManyFields,
+      collection
+    );
+    const versionsConfig = (collection as Record<string, unknown>).versions as
+      | ResolvedVersionsConfig
+      | null
+      | undefined;
+    const documentLocalized =
+      (collection as { localized?: boolean }).localized === true;
+    // As the write resolves them: the components only once the cheap
+    // disqualifiers pass, and the split from the shared predicate.
+    const splitComponentSchemas =
+      versionsConfig?.drafts?.enabled === true && !hasPasswordField(fields)
+        ? await resolveComponentSchemas(fields as unknown as FieldConfig[])
+        : null;
+    const splitEnabled = isDraftSplitEligible({
+      collectionHasStatus: true,
+      draftsVersioningEnabled: versionsConfig?.drafts?.enabled === true,
+      fields: fields as unknown as FieldConfig[],
+      componentSchemas: splitComponentSchemas,
+    });
+    return {
+      // Every language: the wildcard resolves to the unlocalized write.
+      locale: undefined,
+      fields,
+      finalData,
+      componentFieldData,
+      manyToManyData,
+      manyToManyFields,
+      splitComponentSchemas,
+      promoteRestoreCtx: splitEnabled
+        ? promoteRestoreContext({
+            collection,
+            fields,
+            collectionHasStatus: true,
+            splitComponentSchemas,
+            documentLocalized,
+          })
+        : null,
+      draftLocaleKey: this.wildcardDraftLocale(collection),
+      collectionHasStatus: true,
+      transitionNextStatus: "published",
+      sweepAllLocales: true,
+      localizedUpdate: await this.splitLocalizedWriteData(
+        collectionName,
+        finalData,
+        undefined,
+        false
+      ),
+    };
+  }
+
+  /**
+   * The slot a document-wide write's own working draft is kept under: the
+   * wildcard carries no request locale by the time it is written.
+   */
+  private wildcardDraftLocale(collection: unknown): string | null {
+    return workingDraftLocale({
+      documentLocalized:
+        (collection as { localized?: boolean }).localized === true,
+      requestLocale: null,
+      defaultLocale: this.localization?.defaultLocale ?? null,
+    });
+  }
+
+  /**
+   * For each of these entries, the other languages whose unreleased work a
+   * release's document-wide write would be refused over, keyed by entry id,
+   * read now from the pool in one query: the same rule the write asks under
+   * its row lock.
+   *
+   * @experimental
+   */
+  async releaseHeldDraftLocales(params: {
+    collectionName: string;
+    entryIds: readonly string[];
+  }): Promise<Map<string, string[]>> {
+    const held = new Map<string, string[]>(params.entryIds.map(id => [id, []]));
+    if (params.entryIds.length === 0) return held;
+    const collection = await this.releaseCollection(params.collectionName);
+    if (collection === null || !this.keepsWorkingDrafts(collection)) {
+      return held;
+    }
+    const drafted = await new VersionsRepository(
+      this.adapter
+    ).findPendingChangeLocales("collection", params.collectionName, [
+      ...new Set(params.entryIds),
+    ]);
+    for (const entryId of params.entryIds) {
+      held.set(
+        entryId,
+        this.heldLanguages(collection, drafted.get(entryId) ?? [])
+      );
+    }
+    return held;
+  }
+
+  /**
+   * The collection a release's member names, or `null` once it has been
+   * deleted. A deleted collection holds no drafts and no document to publish:
+   * the member is a document that is gone, which the release's existence
+   * check reports, so the readiness answer must not fail over it.
+   */
+  private async releaseCollection(
+    collectionName: string
+  ): Promise<object | null> {
+    try {
+      return (await this.collectionService.getCollection(
+        collectionName
+      )) as object;
+    } catch (error) {
+      if (NextlyError.isCode(error, "NOT_FOUND")) return null;
+      throw error;
+    }
+  }
+
+  /** Whether the collection keeps working drafts at all. */
+  private keepsWorkingDrafts(collection: unknown): boolean {
+    return (
+      (collection as { versions?: { drafts?: { enabled?: boolean } } }).versions
+        ?.drafts?.enabled === true
+    );
+  }
+
+  /**
+   * The configured languages, other than a document-wide write's own, among
+   * those holding a working draft, through `languagesHoldingWorkingDrafts`.
+   */
+  private heldLanguages(
+    collection: unknown,
+    draftLocales: Iterable<string | null>
+  ): string[] {
+    return languagesHoldingWorkingDrafts({
+      draftLocales,
+      writeDraftLocale: this.wildcardDraftLocale(collection),
+      configuredLocales: this.localization?.locales.map(l => l.code) ?? [],
+    });
+  }
+
+  /**
+   * What a write moving an entry's lifecycle would be refused with by
+   * validation of what it puts live, or nothing.
+   *
+   * Two judgements, made before the write's transaction opens, the first
+   * deciding whether the second is needed:
+   *
+   *   - A promoted working draft, against the CURRENT schema. The caller's
+   *     own validation ran on its payload only, which for a publish is just
+   *     `{ status }`; promotion folds the whole accumulated draft into the live
+   *     row, so a draft field the schema has since made stricter (a tightened
+   *     `minLength`/`max`/`pattern`/`options`, or an emptied value that is now
+   *     required) would otherwise reach the live row unchecked. The draft is
+   *     read advisory rather than under the promotion's row lock — validators
+   *     are pure of the write connection, but a lock taken here would be a
+   *     second one against a small pool — and judged in the SAME merged shape
+   *     the in-transaction fold persists (`buildRestorePayload` output with the
+   *     caller's fields on top). The fold stays authoritative for the write;
+   *     this only gates it.
+   *   - A publish that promotes no draft puts the STORED row live, with the
+   *     caller's fields on top: a first publication, a republish after an
+   *     unpublish, or every language at once. Each language is judged as it
+   *     goes live, as the promotion judges its draft.
+   *
+   * One implementation for the write, which throws on what this returns, and
+   * for a release's readiness, which reports it.
+   */
+  private async goingLiveIssues(
+    args: GoingLiveArgs
+  ): Promise<ValidationIssue[]> {
+    let promotesDraft = false;
+    if (args.promoteRestoreCtx !== null) {
+      const advisoryDraft = await args.drafts.findWorkingDraft(
+        {
+          scopeKind: "collection",
+          scopeSlug: args.collectionName,
+          entryId: args.entryId,
+        },
+        args.draftLocaleKey
+      );
+      if (advisoryDraft) {
+        promotesDraft = true;
+        const issues = await this.promotedDraftIssues(
+          args,
+          advisoryDraft.snapshot,
+          args.promoteRestoreCtx
+        );
+        if (issues.length > 0) return issues;
+      }
+    }
+    if (
+      !args.collectionHasStatus ||
+      args.transitionNextStatus !== "published" ||
+      (promotesDraft && !args.sweepAllLocales)
+    ) {
+      return [];
+    }
+    return this.languagesGoLiveIssues({
+      collectionName: args.collectionName,
+      entryId: args.entryId,
+      row: args.existingEntry,
+      patch: args.finalData,
+      writeLocale: args.localizedUpdate?.writeLocale,
+      // The locale split moved the caller's translatable values out of
+      // `finalData`; they are part of what goes live in the write locale.
+      writeLocaleValues: args.localizedUpdate?.localizedFieldValues ?? {},
+      perLocaleStatus: args.localizedUpdate?.hasStatus === true,
+      everyLanguage: args.sweepAllLocales,
+      // The promotion above judged this language's draft as it goes live.
+      writeLocalePromoted: promotesDraft,
+      fields: args.fields,
+      user: args.user,
+    });
+  }
+
+  /** The violations of the document a promoted working draft would write. */
+  private async promotedDraftIssues(
+    args: GoingLiveArgs,
+    snapshot: unknown,
+    restoreCtx: RestoreSchemaContext
+  ): Promise<ValidationIssue[]> {
+    const { payload: draftInput } = buildRestorePayload(
+      snapshot,
+      args.fields as unknown as FieldConfig[],
+      restoreCtx
+    );
+    // The full document the promotion will persist, so the validation judges
+    // the real final values. `shapeWriteParts` has already pulled the
+    // caller's component and m2m fields out of `finalData`; folding them back
+    // in covers component and m2m fields, not only columns. In the LOGICAL
+    // shape the validator reads: `finalData` is column-encoded, so a group the
+    // caller sent with the publish arrives as text, and validated as text it
+    // is refused as "must be an object". Parsed by the same function that
+    // builds the live row, so the two sides are one representation.
+    const merged = this.deserializeJsonFieldsForSnapshot(
+      this.assemblePromotedDocument(
+        draftInput,
+        args.finalData,
+        args.componentFieldData,
+        args.manyToManyData,
+        args.fields,
+        args.manyToManyFields,
+        args.splitComponentSchemas
+      ),
+      args.fields
+    );
+    // Judged as ASSEMBLED, with nothing removed. A field this publisher may
+    // not write is not a schema violation: the gate that judges permission
+    // refuses a promotion that changes one, under the row lock where it can
+    // compare against what is live. Filtering here would validate a document
+    // that is never written either way, and report a denied required field as
+    // missing rather than as forbidden.
+    return this.entryIssues({
+      data: merged,
+      fields: args.fields,
+      collectionName: args.collectionName,
+      mode: "update",
+      user: args.user,
+      localeCtx: await this.localizedRequiredContext(
+        args.collectionName,
+        args.locale
+      ),
+      id: args.entryId,
+    });
+  }
+
+  /**
+   * What {@link assertLanguagesGoLiveValid} refuses a publish with, without
+   * refusing it: the violations of the first language going live that has
+   * any, or none.
+   */
+  private async languagesGoLiveIssues(
+    args: LanguagesGoLiveArgs
+  ): Promise<ValidationIssue[]> {
     const connection = args.tx ?? {
       getDrizzle: <T = unknown>() => this.db as T,
     };
@@ -1989,7 +2441,7 @@ export class CollectionMutationService extends BaseService {
       locale => !(args.writeLocalePromoted && locale === args.writeLocale)
     );
     for (const locale of languages) {
-      await this.assertEntryValid({
+      const issues = await this.entryIssues({
         data: await this.storedDocumentGoingLive({
           row: args.row,
           patch:
@@ -2014,7 +2466,11 @@ export class CollectionMutationService extends BaseService {
         id: args.entryId,
         ...(args.tx === undefined ? {} : { tx: args.tx }),
       });
+      // The first language at fault, as a publish is refused on it: the
+      // languages after it are not judged.
+      if (issues.length > 0) return issues;
     }
+    return [];
   }
 
   /**
@@ -5350,17 +5806,12 @@ export class CollectionMutationService extends BaseService {
      */
     authenticatedScope?: AuthenticatedScope;
   }): Promise<boolean> {
-    const schema = await this.fileManager.loadDynamicSchema(
-      params.collectionName
-    );
-
     // Loaded because the hooks below are shown the row as it stands, and a
     // write to a row that is not there is a not-found rather than a refusal.
-    const [existingEntry] = await this.db
-      .select()
-      .from(schema)
-      .where(eq(schema.id, params.entryId))
-      .limit(1);
+    const existingEntry = await this.storedEntry(
+      params.collectionName,
+      params.entryId
+    );
 
     // A document that is not there cannot be updated. Answered as a refusal so
     // the caller treats missing and forbidden identically, rather than letting
@@ -5380,6 +5831,35 @@ export class CollectionMutationService extends BaseService {
       authenticatedScope: params.authenticatedScope,
     });
     return denied === null;
+  }
+
+  /** The stored rows of these entries that are there, keyed by id. */
+  private async storedEntries(
+    collectionName: string,
+    entryIds: readonly string[]
+  ): Promise<Map<string, Record<string, unknown>>> {
+    const schema = await this.fileManager.loadDynamicSchema(collectionName);
+    const rows = (await this.db
+      .select()
+      .from(schema)
+      .where(inArray(schema.id, [...new Set(entryIds)]))) as Array<
+      Record<string, unknown>
+    >;
+    return new Map(rows.map(row => [String(row.id), row]));
+  }
+
+  /** The entry's stored row, or `undefined` when it is not there. */
+  private async storedEntry(
+    collectionName: string,
+    entryId: string
+  ): Promise<Record<string, unknown> | undefined> {
+    const schema = await this.fileManager.loadDynamicSchema(collectionName);
+    const [row] = await this.db
+      .select()
+      .from(schema)
+      .where(eq(schema.id, entryId))
+      .limit(1);
+    return row as Record<string, unknown> | undefined;
   }
 
   /**
@@ -6573,136 +7053,41 @@ export class CollectionMutationService extends BaseService {
       const promoteGrants = promoteRulesCouldRun
         ? await resolvedCallerGrants(params.user, params.authenticatedScope)
         : undefined;
-      const isPluginForRestore =
-        (
-          (collection as Record<string, unknown>).admin as
-            | Record<string, unknown>
-            | undefined
-        )?.isPlugin === true;
-      const promoteRestoreCtx: RestoreSchemaContext | null = promotePossible
-        ? {
-            hasStatus: collectionHasStatus,
-            hasSlug: !isPluginForRestore || fields.some(f => f.name === "slug"),
-            hasTitle:
-              !isPluginForRestore || fields.some(f => f.name === "title"),
-            componentSchemas: splitComponentSchemas ?? undefined,
+      const promoteRestoreCtx = promotePossible
+        ? promoteRestoreContext({
+            collection,
+            fields,
+            collectionHasStatus,
+            splitComponentSchemas,
             documentLocalized,
-            // A working draft always knows which language it holds: it is keyed
-            // by that language, and a write that cannot name one does not store
-            // a draft at all. So the snapshot's locale is never the unknown one
-            // here, and its translatable values need not be held back.
-            localeUnknown: false,
-          }
+          })
         : null;
 
-      // Revalidate the promoted draft against the CURRENT schema before the
-      // transaction opens. The caller validation above ran on the caller's
-      // payload only, which for a publish is just `{ status }`; promote then
-      // folds the whole accumulated draft into the live write, so a draft field
-      // the schema has since made stricter (a tightened `minLength`/`max`/
-      // `pattern`/`options`, or an emptied value that is now required) would
-      // otherwise reach the live row unchecked. Read the draft advisory rather
-      // than under the promote's row lock — validators are pure of the write
-      // connection, but a lock taken here would be a second one against a small
-      // pool — and validate the SAME merged shape the in-transaction fold
-      // persists (`buildRestorePayload` output with the caller's fields on top).
-      // The fold below stays authoritative for the write; this only gates it.
-      let promotesDraft = false;
-      if (promotePossible && promoteRestoreCtx) {
-        const advisoryDraft = await new VersionsRepository(
-          this.adapter
-        ).findWorkingDraft(
-          {
-            scopeKind: "collection",
-            scopeSlug: params.collectionName,
-            entryId: params.entryId,
-          },
-          draftLocaleKey
-        );
-        if (advisoryDraft) {
-          promotesDraft = true;
-          const { payload: draftInput } = buildRestorePayload(
-            advisoryDraft.snapshot,
-            fields as unknown as FieldConfig[],
-            promoteRestoreCtx
-          );
-          // Assemble the full document the promotion will persist so both the
-          // access filter and the validation below judge the real final values.
-          // The caller gate above ran on the caller's payload only (a publish
-          // sends just the status), and `shapeWriteParts` has already pulled the
-          // caller's component and m2m fields out of `finalData`; folding them back
-          // in gates a denied value at every depth (top-level, or nested in a
-          // group/repeater/component) and covers component and m2m fields, not only
-          // columns. The authoritative pass runs again on the locked draft in the
-          // transaction (see the promote block).
-          // In the LOGICAL shape the validator reads. `finalData` has already
-          // been through `shapeWriteParts`, which encodes every JSON-backed field
-          // to its column string, so a group the caller sent with the publish
-          // arrives here as text, and validated as text it is refused as "must
-          // be an object". Parsed by the same function that builds the live row,
-          // so the two sides are one representation.
-          const merged = this.deserializeJsonFieldsForSnapshot(
-            this.assemblePromotedDocument(
-              draftInput,
-              finalData,
-              componentFieldData,
-              manyToManyData,
-              fields,
-              manyToManyFields,
-              splitComponentSchemas
-            ),
-            fields
-          );
-          // Validated as ASSEMBLED, with nothing removed. A field this
-          // publisher may not write is not a schema violation: the gate that
-          // judges permission refuses a promotion that changes one, under the
-          // row lock where it can compare against what is live. Filtering here
-          // would validate a document that is never written either way, and
-          // report a denied required field as missing rather than as forbidden.
-          const localeCtx = await this.localizedRequiredContext(
-            params.collectionName,
-            params.locale
-          );
-          await this.assertEntryValid({
-            data: merged,
-            fields,
-            collectionName: params.collectionName,
-            mode: "update",
-            user: params.user,
-            localeCtx,
-            id: params.entryId,
-          });
-        }
-      }
-
-      // A publish that promotes no draft puts the STORED row live, with the
-      // caller's fields on top: a first publication, a republish after an
-      // unpublish, or every language at once. The caller validation above saw
-      // only the patch, which for a publish by status alone is `{ status }`, so
-      // validate each language as it goes live, as the promotion above does
-      // with its draft. Advisory, off the row lock, for the same reason as
-      // that one.
-      if (
-        collectionHasStatus &&
-        transitionNextStatus === "published" &&
-        (!promotesDraft || sweepAllLocales)
-      ) {
-        await this.assertLanguagesGoLiveValid({
-          collectionName: params.collectionName,
-          entryId: params.entryId,
-          row: existingEntry as Record<string, unknown>,
-          patch: finalData,
-          writeLocale: localizedUpdate?.writeLocale,
-          // The locale split moved the caller's translatable values out of
-          // `finalData`; they are part of what goes live in the write locale.
-          writeLocaleValues: localizedUpdate?.localizedFieldValues ?? {},
-          perLocaleStatus: localizedUpdate?.hasStatus === true,
-          everyLanguage: sweepAllLocales,
-          // The promotion above judged this language's draft as it goes live.
-          writeLocalePromoted: promotesDraft,
-          fields,
-          user: params.user,
-        });
+      // What goes live is judged before the transaction opens: a promoted
+      // working draft against the CURRENT schema, and otherwise each language
+      // as it goes live. See `goingLiveIssues`.
+      const goingLive = await this.goingLiveIssues({
+        collectionName: params.collectionName,
+        entryId: params.entryId,
+        locale: params.locale,
+        user: params.user,
+        fields,
+        finalData,
+        componentFieldData,
+        manyToManyData,
+        manyToManyFields,
+        splitComponentSchemas,
+        promoteRestoreCtx,
+        draftLocaleKey,
+        collectionHasStatus,
+        transitionNextStatus,
+        sweepAllLocales,
+        existingEntry: existingEntry as Record<string, unknown>,
+        localizedUpdate,
+        drafts: new VersionsRepository(this.adapter),
+      });
+      if (goingLive.length > 0) {
+        throw NextlyError.validation({ errors: goingLive });
       }
 
       // Retry the whole content+capture transaction on a version_no allocation
@@ -6795,60 +7180,24 @@ export class CollectionMutationService extends BaseService {
           await tx.lockRow(tableName, params.entryId);
 
           // A wildcard must not decide the fate of work somebody saved and has
-          // not released yet — asked UNDER THE LOCK, because the answer changes.
-          //
-          // Another language may be holding a pending edit, and moving the whole
-          // document's lifecycle would publish that language while its edit
-          // stayed unreleased — marking a translation live against values its
-          // author had already replaced. Releasing those edits here instead is
-          // not the smaller problem it looks: a pending edit stores the whole
-          // document as it looked when it was saved, not the fields its author
-          // touched, so two languages' edits cannot be merged without inventing
-          // a rule for which shared value wins — and every such rule silently
-          // discards somebody's work in some ordering.
-          //
-          // Asked here rather than before the transaction because a draft save
-          // serialises on this same parent lock: a check that ran earlier can be
+          // not released yet (`languagesHoldingWorkingDrafts` says why) — asked
+          // UNDER THE LOCK, because the answer changes: a draft save serialises
+          // on this same parent lock, so a check that ran earlier can be
           // overtaken by a save that commits first, and the release would then
           // proceed over work it never saw. The refusal travels out on the
           // same out-of-band result the transition gate uses, since the adapter
           // re-wraps a thrown sentinel before the catch can identify it.
-          const configuredLocalesForHold = new Set(
-            this.localization?.locales.map(l => l.code) ?? []
-          );
-          if (
-            sweepAllLocales &&
-            (collection as { versions?: { drafts?: { enabled?: boolean } } })
-              .versions?.drafts?.enabled === true
-          ) {
-            const heldBy = (
-              await new VersionsRepository(tx).findAllWorkingDrafts({
-                scopeKind: "collection",
-                scopeSlug: params.collectionName,
-                entryId: params.entryId,
-              })
-            )
-              .map(draft => draft.locale)
-              .filter(
-                (locale): locale is string =>
-                  locale !== null && locale !== draftLocaleKey
-              )
-              // Only a language the app still configures can block this write.
-              //
-              // A draft left behind by a language that was REMOVED from the
-              // configuration would otherwise refuse every wildcard publish and
-              // takedown forever, and the remedy this refusal recommends —
-              // publish or discard it — cannot be carried out, because reads and
-              // writes reject that locale. A scheduled takedown would then leave
-              // the document live indefinitely with no route out through the
-              // API: a refusal that cannot be satisfied is worse than the
-              // ambiguity it was added to avoid.
-              //
-              // The stale draft is left where it is rather than cleaned up here.
-              // A write asked to move a lifecycle has no business deleting
-              // somebody's stored work as a side effect, and the row is the only
-              // record that the work existed.
-              .filter(locale => configuredLocalesForHold.has(locale));
+          if (sweepAllLocales && this.keepsWorkingDrafts(collection)) {
+            const heldBy = this.heldLanguages(
+              collection,
+              (
+                await new VersionsRepository(tx).findAllWorkingDrafts({
+                  scopeKind: "collection",
+                  scopeSlug: params.collectionName,
+                  entryId: params.entryId,
+                })
+              ).map(draft => draft.locale)
+            );
             if (heldBy.length > 0) {
               transitionDeniedResult = {
                 success: false,

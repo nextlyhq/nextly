@@ -577,6 +577,35 @@ export class VersionsRepository {
   }
 
   /**
+   * THE working draft in one locale of each of many documents in one scope,
+   * keyed by entry id: what {@link findWorkingDraft} answers for each, in one
+   * query rather than one per document.
+   */
+  async findWorkingDraftsOf(
+    scope: Pick<VersionRef, "scopeKind" | "scopeSlug">,
+    entryIds: readonly string[],
+    locale: string | null
+  ): Promise<Map<string, VersionRow>> {
+    const byEntry = new Map<string, VersionRow>();
+    if (entryIds.length === 0) return byEntry;
+    const rows = await this.db.select<VersionRow>(TABLE, {
+      where: {
+        and: [
+          { column: "scopeKind", op: "=", value: scope.scopeKind },
+          { column: "scopeSlug", op: "=", value: scope.scopeSlug },
+          { column: "entryId", op: "IN", value: [...new Set(entryIds)] },
+          ...WORKING_DRAFT_SHAPE,
+          this.localeCondition(locale),
+        ],
+      },
+    });
+    for (const row of rows) {
+      if (!byEntry.has(row.entryId)) byEntry.set(row.entryId, row);
+    }
+    return byEntry;
+  }
+
+  /**
    * Which languages hold a pending change, for many documents at once.
    *
    * One query for a whole page of documents rather than one per document: the
