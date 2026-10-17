@@ -1035,9 +1035,19 @@ const NAMESPACE_SOURCE = "packages/nextly/src/plugins/routes/route-path.ts";
 const TEMPLATE_APP_DIR = "templates/base/src/app/";
 const TEMPLATE_CATCH_ALL = "/[[...params]]/route.ts";
 const GENERATOR_SOURCE = "packages/create-nextly-app/src/generators/routes.ts";
-const GENERATOR_MOUNT =
-  /path\.join\(\s*cwd,\s*projectInfo\.appDir,\s*((?:"[^"]*",\s*)+)"\[\[\.\.\.params\]\]"/;
-const QUOTED_SEGMENT = /"([^"]*)"/g;
+// The generator builds the route's path in one of two spellings: path.join of
+// quoted segments, or a template string after the app directory. Each reader
+// returns the segments between the app directory and the catch-all, or null.
+const GENERATOR_MOUNT_SPELLINGS = [
+  source => {
+    const m = /path\.join\(\s*cwd,\s*projectInfo\.appDir,\s*((?:"[^"]*",\s*)+)"\[\[\.\.\.params\]\]"/.exec(source);
+    return m === null ? null : [...m[1].matchAll(/"([^"]*)"/g)].map(q => q[1]);
+  },
+  source => {
+    const m = /`\$\{projectInfo\.appDir\}((?:\/[^/`$]+)*)\/\[\[\.\.\.params\]\]\/route\.ts`/.exec(source);
+    return m === null ? null : m[1].split("/").filter(Boolean);
+  },
+];
 
 /** The mount the base template hard-codes by where its route file sits. */
 function templateMount(repoRoot, tracked, refuse) {
@@ -1076,15 +1086,14 @@ function generatorMount(repoRoot, refuse) {
     refuse(GENERATOR_SOURCE, "could not be read, so the mount it generates is unknown");
     return null;
   }
-  const declared = GENERATOR_MOUNT.exec(source);
-  if (declared === null) {
+  const segments = GENERATOR_MOUNT_SPELLINGS.map(read => read(source)).find(found => found !== null);
+  if (segments === undefined) {
     refuse(
       GENERATOR_SOURCE,
       "no longer builds the catch-all route path in the shape this reads, so the mount it generates is unknown"
     );
     return null;
   }
-  const segments = [...declared[1].matchAll(QUOTED_SEGMENT)].map(m => m[1]);
   if (segments.length === 0) {
     refuse(GENERATOR_SOURCE, "builds a catch-all route path with no leading segments");
     return null;

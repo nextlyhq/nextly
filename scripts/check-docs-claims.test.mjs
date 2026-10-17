@@ -3056,3 +3056,44 @@ describe("documented-key-prefix repair", () => {
     ).toThrow(/refusing to rewrite/);
   });
 });
+
+describe("plugin-route-mount", () => {
+  // The mount is read from two places that must agree: where the base template keeps its
+  // catch-all route, and the path create-nextly-app builds when it adds Nextly to an existing
+  // app. Either spelling of that path is readable.
+  const tree = generator => ({
+    "templates/base/src/app/admin/api/[[...params]]/route.ts":
+      'import { createDynamicHandlers } from "nextly/runtime";\n',
+    "packages/create-nextly-app/src/generators/routes.ts": generator,
+    "packages/nextly/src/plugins/routes/route-path.ts":
+      'export const PLUGIN_NAMESPACE_SEGMENT = "plugins";\n',
+    "docs/plugins/routes.mdx": "A plugin route answers at `/admin/api/plugins/@acme/thing/hello`.\n",
+  });
+  const asTemplateString =
+    "await writeNew(cwd, `${projectInfo.appDir}/admin/api/[[...params]]/route.ts`, T);\n";
+  const asPathJoin =
+    'const routePath = path.join(\n  cwd,\n  projectInfo.appDir,\n  "admin",\n  "api",\n  "[[...params]]",\n  "route.ts"\n);\n';
+
+  it("reads the mount from a generator that builds the path as a template string", async () => {
+    expect(await checksFor(tree(asTemplateString))).not.toContain("plugin-route-mount-unreadable");
+  });
+
+  it("reads the mount from a generator that builds the path with path.join", async () => {
+    expect(await checksFor(tree(asPathJoin))).not.toContain("plugin-route-mount-unreadable");
+  });
+
+  it("fails closed on a generator whose path it cannot read", async () => {
+    expect(await checksFor(tree("const routePath = buildPath(cwd);\n"))).toContain(
+      "plugin-route-mount-unreadable"
+    );
+  });
+
+  it("reports a generator that mounts somewhere other than the template", async () => {
+    const findings = await findingsFor(
+      tree("await writeNew(cwd, `${projectInfo.appDir}/cms/api/[[...params]]/route.ts`, T);\n")
+    );
+    expect(findings.find(f => f.check === "plugin-route-mount-unreadable")?.message).toContain(
+      "generates /cms/api while the template mounts at /admin/api"
+    );
+  });
+});
