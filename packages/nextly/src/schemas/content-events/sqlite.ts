@@ -28,6 +28,9 @@ export const nextlyContentEventsSqlite = sqliteTable(
     subjectId: text("subject_id").notNull(),
 
     kind: text("kind").notNull(),
+    endsSubject: integer("ends_subject", { mode: "boolean" })
+      .notNull()
+      .default(false),
 
     actorKind: text("actor_kind").$type<ContentEventActorKind>().notNull(),
     actorId: text("actor_id"),
@@ -50,9 +53,12 @@ export const nextlyContentEventsSqlite = sqliteTable(
       table.subjectKind,
       table.subjectSlug,
       table.subjectId,
+      table.id
+    ),
+    index("nextly_content_events_ends_idx").on(
+      table.endsSubject,
       table.occurredAt
     ),
-    index("nextly_content_events_kind_idx").on(table.kind, table.occurredAt),
   ]
 );
 

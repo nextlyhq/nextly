@@ -3,9 +3,11 @@
  *
  * A subject's events (a document's or a release's) are kept while the subject
  * exists, whatever the activity log's window. Its deletion is itself an event,
- * of a kind that ends its subject; once that event is older than the activity
- * log's window, every event of the subject is removed with its parts, in
- * bounded batches.
+ * stored as one that ends its subject; once that event is older than the
+ * activity log's window, the subject's events up to and including it are
+ * removed with their parts, oldest first, in bounded batches. A subject
+ * recreated under the same id keeps the events of its new life, which come
+ * after the deletion.
  *
  * @module domains/content-events/prune
  */
@@ -15,27 +17,29 @@ import {
   CONTENT_EVENT_PARTS_TABLE,
 } from "../../schemas/content-events";
 import type { Logger } from "../../shared/types";
+import type { NoticesPruneDb } from "../notices/notices-service";
 import { warnQuietly } from "../retention/safe-log";
-import type { VersionsDbApi, VersionsWhereCondition } from "../versions/db-api";
-
-import { subjectEndingKinds } from "./kinds";
+import type { VersionsWhereCondition } from "../versions/db-api";
 
 /** Rows touched per statement: small enough to keep each delete short. */
 const CONTENT_EVENT_PRUNE_BATCH = 500;
 
-/** What the prune needs of the database: reads and deletes, nothing more. */
-export interface ContentEventsPruneDb
-  extends Pick<VersionsDbApi, "select" | "delete"> {
-  tableExists?(table: string): Promise<boolean>;
-}
+/**
+ * What the prune needs of the database: a plain read and a delete, in the
+ * shape every activity-window pruner takes, so the write paths' adapter and
+ * the scheduled drain's both satisfy it.
+ */
+export type ContentEventsPruneDb = NoticesPruneDb;
 
-interface SubjectRow {
+interface EndedSubject {
+  /** The deletion event: the last event of the life it ended. */
+  id: string;
   subjectKind: string;
   subjectSlug: string | null;
   subjectId: string;
 }
 
-function subjectWhere(subject: SubjectRow): VersionsWhereCondition[] {
+function subjectWhere(subject: EndedSubject): VersionsWhereCondition[] {
   return [
     { column: "subjectKind", op: "=", value: subject.subjectKind },
     subject.subjectSlug === null
@@ -45,17 +49,44 @@ function subjectWhere(subject: SubjectRow): VersionsWhereCondition[] {
   ];
 }
 
-/**
- * Remove one batch of a subject's events and their parts. Returns how many
- * events were removed; fewer than a batch means the subject is done.
- */
-async function deleteSubjectBatch(
+/** The oldest deletion event past `before`, if any. */
+async function oldestEndedSubject(
   db: ContentEventsPruneDb,
-  subject: SubjectRow
+  before: Date
+): Promise<EndedSubject | undefined> {
+  const [ended] = await db.select<EndedSubject>(CONTENT_EVENTS_TABLE, {
+    columns: ["id", "subjectKind", "subjectSlug", "subjectId"],
+    where: {
+      and: [
+        { column: "endsSubject", op: "=", value: true },
+        { column: "occurredAt", op: "<", value: before },
+      ],
+    },
+    orderBy: [{ column: "occurredAt", direction: "asc" }],
+    limit: 1,
+  });
+  return ended;
+}
+
+/**
+ * Remove one batch of the ended life's events and their parts, oldest first,
+ * so the deletion event goes in the last batch and a subject left part-done is
+ * found again by the next pass. Returns how many events were removed.
+ */
+async function deleteEndedBatch(
+  db: ContentEventsPruneDb,
+  ended: EndedSubject
 ): Promise<number> {
   const rows = await db.select<{ id: string }>(CONTENT_EVENTS_TABLE, {
     columns: ["id"],
-    where: { and: subjectWhere(subject) },
+    where: {
+      and: [
+        ...subjectWhere(ended),
+        // Ids are time-ordered: the ended life, not one that came after.
+        { column: "id", op: "<=", value: ended.id },
+      ],
+    },
+    orderBy: [{ column: "id", direction: "asc" }],
     limit: CONTENT_EVENT_PRUNE_BATCH,
   });
   if (rows.length === 0) return 0;
@@ -70,83 +101,52 @@ async function deleteSubjectBatch(
   return ids.length;
 }
 
-/** The subject whose deletion is the oldest one past `before`, if any. */
-async function oldestEndedSubject(
-  db: ContentEventsPruneDb,
-  endings: string[],
-  before: Date
-): Promise<SubjectRow | undefined> {
-  const [ended] = await db.select<SubjectRow>(CONTENT_EVENTS_TABLE, {
-    columns: ["subjectKind", "subjectSlug", "subjectId"],
-    where: {
-      and: [
-        { column: "kind", op: "IN", value: endings },
-        { column: "occurredAt", op: "<", value: before },
-      ],
-    },
-    orderBy: [{ column: "occurredAt", direction: "asc" }],
-    limit: 1,
-  });
-  return ended;
-}
-
-/**
- * A subject's events, its deletion event among them, batch by batch, within
- * `budget` batches. A subject left part-done is finished by the next pass.
- */
-async function deleteSubject(
-  db: ContentEventsPruneDb,
-  subject: SubjectRow,
-  budget: number
-): Promise<{ removed: number; batches: number }> {
-  let removed = 0;
-  let batches = 0;
-  while (batches < budget) {
-    batches += 1;
-    const count = await deleteSubjectBatch(db, subject);
-    removed += count;
-    if (count < CONTENT_EVENT_PRUNE_BATCH) break;
-  }
-  return { removed, batches };
-}
-
 /**
  * Remove the events of subjects deleted more than `maxAgeMs` ago, at most
- * `maxBatches` batches.
+ * `maxBatches` batches, stopping between batches at `deadline`.
  *
  * Never throws: a retention pass is offered by ordinary writes, and a failure
  * here must not reach the write that offered it.
+ *
+ * @returns how many events were removed, and whether a batch was started: a
+ *   pass that started none did no work, and its caller should give its turn
+ *   back.
  */
 export async function pruneContentEventsSafely(
-  deps: { db: ContentEventsPruneDb; now?: () => Date; logger?: Logger },
+  deps: {
+    db: ContentEventsPruneDb;
+    now?: () => Date;
+    logger?: Logger;
+    deadline?: Date;
+  },
   maxAgeMs: number,
   maxBatches: number
-): Promise<{ removed: number }> {
+): Promise<{ removed: number; started: boolean }> {
   const now = deps.now ?? (() => new Date());
   const before = new Date(now().getTime() - maxAgeMs);
-  const endings = subjectEndingKinds();
   let removed = 0;
+  let started = false;
   try {
-    if (endings.length === 0) return { removed };
     // A database from before the record has nothing to prune.
     if (
       deps.db.tableExists &&
       !(await deps.db.tableExists(CONTENT_EVENTS_TABLE))
     ) {
-      return { removed };
+      return { removed, started: true };
     }
-    let batches = 0;
-    while (batches < maxBatches) {
-      const ended = await oldestEndedSubject(deps.db, endings, before);
+    for (let batch = 0; batch < maxBatches; batch += 1) {
+      if (deps.deadline !== undefined && now() >= deps.deadline) break;
+      started = true;
+      const ended = await oldestEndedSubject(deps.db, before);
       if (!ended) break;
-      const done = await deleteSubject(deps.db, ended, maxBatches - batches);
-      batches += done.batches;
-      removed += done.removed;
+      removed += await deleteEndedBatch(deps.db, ended);
     }
   } catch (error) {
+    // A failure is a pass that ran: retrying at once would fail the same way.
+    started = true;
     warnQuietly(deps.logger, "Content events retention pass failed", {
       error: error instanceof Error ? error.message : "unknown error",
     });
   }
-  return { removed };
+  return { removed, started };
 }

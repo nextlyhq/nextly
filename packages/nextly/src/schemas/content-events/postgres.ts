@@ -14,6 +14,7 @@
 // fallow-ignore-file code-duplication
 
 import {
+  boolean,
   index,
   integer,
   jsonb,
@@ -43,6 +44,9 @@ export const nextlyContentEventsPg = pgTable(
 
     // A registered event kind.
     kind: varchar("kind", { length: 64 }).notNull(),
+    // Whether the event records its subject's deletion, stored with it so
+    // retention never depends on which kinds are registered now.
+    endsSubject: boolean("ends_subject").notNull().default(false),
 
     // Who or what did it, and how they were named then: the event still reads
     // correctly after the person or key is gone.
@@ -70,15 +74,19 @@ export const nextlyContentEventsPg = pgTable(
     definitionHash: varchar("definition_hash", { length: 64 }),
   },
   table => [
-    // A subject's history, newest first, and the retention lookup by subject.
+    // A subject's history, newest first and paged by id, and the retention
+    // sweep of a subject's events by id.
     index("nextly_content_events_subject_idx").on(
       table.subjectKind,
       table.subjectSlug,
       table.subjectId,
+      table.id
+    ),
+    // Retention finds deletion events by age.
+    index("nextly_content_events_ends_idx").on(
+      table.endsSubject,
       table.occurredAt
     ),
-    // Retention finds deletion events by kind and age.
-    index("nextly_content_events_kind_idx").on(table.kind, table.occurredAt),
   ]
 );
 

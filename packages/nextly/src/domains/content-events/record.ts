@@ -21,7 +21,7 @@ import { uuidV7 } from "../../utils/uuid-v7";
 import type { VersionsDbApi } from "../versions/db-api";
 
 import type { ContentEventActor } from "./actor";
-import { contentEventKind } from "./kinds";
+import { contentEventKind, type ContentEventKind } from "./kinds";
 
 /** What an event is about. */
 export type ContentEventSubject =
@@ -67,16 +67,54 @@ function refuse(message: string, logContext: Record<string, unknown>): never {
   throw NextlyError.invalidInput({ message, logContext });
 }
 
+/** The registered kind, or a refusal naming the unknown one. */
+function registeredKind(name: string): ContentEventKind {
+  const kind = contentEventKind(name);
+  if (!kind) {
+    refuse(`"${name}" is not a registered content event kind.`, { kind: name });
+  }
+  return kind;
+}
+
+/**
+ * The longest each bounded field may be: the columns MySQL keeps as
+ * `varchar`. Checked on every dialect, so an event one dialect would refuse or
+ * cut short is refused everywhere, before anything is written.
+ */
+const FIELD_LIMITS = {
+  subjectSlug: 255,
+  subjectId: 255,
+  actorId: 255,
+  actorName: 255,
+  actorPrincipalKind: 64,
+  fromState: 64,
+  toState: 64,
+  definitionHash: 64,
+} as const;
+
+type BoundedFields = Record<keyof typeof FIELD_LIMITS, string | null>;
+
+function checkLengths(fields: BoundedFields): void {
+  for (const field of Object.keys(FIELD_LIMITS) as (keyof BoundedFields)[]) {
+    const value = fields[field];
+    const limit = FIELD_LIMITS[field];
+    if (value !== null && value.length > limit) {
+      refuse(
+        `A content event's ${field} must be at most ${limit} characters.`,
+        {
+          field,
+          length: value.length,
+        }
+      );
+    }
+  }
+}
+
 /** The payload, checked against its kind; refuses one its kind does not take. */
 function checkedPayload(
+  kind: ContentEventKind,
   input: ContentEventInput
 ): Record<string, unknown> | null {
-  const kind = contentEventKind(input.kind);
-  if (!kind) {
-    refuse(`"${input.kind}" is not a registered content event kind.`, {
-      kind: input.kind,
-    });
-  }
   const payload = input.payload ?? null;
   if (!kind.payload) {
     if (payload !== null) {
@@ -133,29 +171,37 @@ export async function recordContentEvent(
   tx: VersionsDbApi,
   input: ContentEventInput
 ): Promise<{ id: string }> {
-  const payload = checkedPayload(input);
+  const kind = registeredKind(input.kind);
+  const payload = checkedPayload(kind, input);
   const parts = partValues(input);
-  const id = uuidV7();
   const { actor, subject } = input;
+  const bounded: BoundedFields = {
+    subjectSlug: subject.kind === "release" ? null : subject.slug,
+    subjectId: subject.id,
+    actorId: actor.kind === "system" ? null : actor.id,
+    actorName: actor.name ?? null,
+    actorPrincipalKind: actor.kind === "principal" ? actor.principalKind : null,
+    fromState: input.fromState ?? null,
+    toState: input.toState ?? null,
+    definitionHash: input.definitionHash ?? null,
+  };
+  checkLengths(bounded);
+  const id = uuidV7();
   await tx.insert(CONTENT_EVENTS_TABLE, {
     id,
     subjectKind: subject.kind,
-    subjectSlug: subject.kind === "release" ? null : subject.slug,
-    subjectId: subject.id,
-    kind: input.kind,
+    kind: kind.name,
+    // Stored with the event, so retention never depends on which kinds are
+    // registered when it runs.
+    endsSubject: kind.endsSubject === true,
     actorKind: actor.kind,
-    actorId: actor.kind === "system" ? null : actor.id,
-    actorPrincipalKind: actor.kind === "principal" ? actor.principalKind : null,
-    actorName: actor.name ?? null,
     occurredAt: new Date(),
-    fromState: input.fromState ?? null,
-    toState: input.toState ?? null,
     note: input.note ?? null,
     versionNo: input.versionNo ?? null,
     // Encoded for the JSON column as every write path encodes one: a raw
     // object reaches MySQL as text it rejects.
     payload: toJsonColumnValue(payload),
-    definitionHash: input.definitionHash ?? null,
+    ...bounded,
   });
   for (const part of parts) {
     await tx.insert(CONTENT_EVENT_PARTS_TABLE, { eventId: id, part });

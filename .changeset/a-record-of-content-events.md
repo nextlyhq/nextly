@@ -29,14 +29,16 @@
 "@nextlyhq/ui": patch
 ---
 
-Nextly keeps a record of content events: what happened to a document or a
-release, who or what did it (a person, an API key, a plugin-defined person, a
-release or the system, with the name they had then), when, and optionally the
-state before and after, a note, the version, a small kind-specific payload and
-a definition hash. The languages and shared fields an event involved are kept
-as parts, so history can be filtered and paged by language. Event kinds are
-registered by the core features that write them, and an event is written in
-the same transaction as the change it records. A subject's events are kept
+Nextly gains a record of content events, ready for the features that write
+to it: what happened to a document or a release, who or what did it (a
+person, an API key, a plugin-defined person, a release or the system, with
+the name they had then), when, and optionally the state before and after, a
+note, the version, a small kind-specific payload and a definition hash. The
+languages and shared fields an event involved are kept as parts, so history
+can be filtered and paged by language. Event kinds are registered by the core
+features that write them, and an event is written in the same transaction as
+the change it records. Nothing writes events yet. A subject's events are kept
 while it exists, and removed once the activity log's retention window has
-passed since its deletion. Two new core tables, `nextly_content_events` and
+passed since its deletion, by the write paths' retention pass and the
+scheduled drain alike. Two new core tables, `nextly_content_events` and
 `nextly_content_event_parts`, are created by `nextly migrate`.

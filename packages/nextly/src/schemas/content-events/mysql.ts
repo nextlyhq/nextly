@@ -7,6 +7,7 @@
 // fallow-ignore-file code-duplication
 
 import {
+  boolean,
   datetime,
   index,
   int,
@@ -32,6 +33,7 @@ export const nextlyContentEventsMysql = mysqlTable(
     subjectId: varchar("subject_id", { length: 255 }).notNull(),
 
     kind: varchar("kind", { length: 64 }).notNull(),
+    endsSubject: boolean("ends_subject").notNull().default(false),
 
     actorKind: varchar("actor_kind", { length: 16 })
       .$type<ContentEventActorKind>()
@@ -54,9 +56,12 @@ export const nextlyContentEventsMysql = mysqlTable(
       table.subjectKind,
       table.subjectSlug,
       table.subjectId,
+      table.id
+    ),
+    index("nextly_content_events_ends_idx").on(
+      table.endsSubject,
       table.occurredAt
     ),
-    index("nextly_content_events_kind_idx").on(table.kind, table.occurredAt),
   ]
 );
 

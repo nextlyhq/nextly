@@ -14,7 +14,6 @@ import {
   registerContentEventKind,
   renderContentEvent,
   resetContentEventKinds,
-  subjectEndingKinds,
 } from "../kinds";
 import { recordContentEvent, type ContentEventInput } from "../record";
 
@@ -97,14 +96,28 @@ describe("content event kinds", () => {
     ).toThrow(/already registered/);
   });
 
-  it("lists the kinds that end their subject", () => {
+  it("takes a reloaded kind's new payload schema, as a development reload builds one", async () => {
     registerContentEventKind({
-      name: "deleted",
-      label: "Deleted",
-      endsSubject: true,
+      name: "named",
+      label: "Named {name}",
+      payload: z.object({ name: z.string() }),
     });
-    registerContentEventKind({ name: "saved", label: "Saved" });
-    expect(subjectEndingKinds()).toEqual(["deleted"]);
+    // The same kind, its schema rebuilt: accepted, and the newest one is used.
+    expect(() =>
+      registerContentEventKind({
+        name: "named",
+        label: "Named {name}",
+        payload: z.object({ name: z.string().max(3) }),
+      })
+    ).not.toThrow();
+    const { tx } = capturingTx();
+    await expect(
+      recordContentEvent(tx, {
+        ...base,
+        kind: "named",
+        payload: { name: "toolong" },
+      })
+    ).rejects.toMatchObject({ code: "INVALID_INPUT" });
   });
 });
 
@@ -183,6 +196,36 @@ describe("recordContentEvent refuses before writing", () => {
       ).rejects.toMatchObject({ code: "INVALID_INPUT" });
     }
     expect(inserts).toEqual([]);
+  });
+
+  it("a bounded field longer than its column holds on any dialect", async () => {
+    const { tx, inserts } = capturingTx();
+    await expect(
+      recordContentEvent(tx, {
+        ...base,
+        actor: { kind: "person", id: "u1", name: "x".repeat(256) },
+      })
+    ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+    await expect(
+      recordContentEvent(tx, { ...base, toState: "x".repeat(65) })
+    ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+    expect(inserts).toEqual([]);
+  });
+
+  it("stores whether the event ends its subject, from its kind", async () => {
+    registerContentEventKind({
+      name: "deleted",
+      label: "Deleted",
+      endsSubject: true,
+    });
+    const { tx, inserts } = capturingTx();
+    await recordContentEvent(tx, { ...base, kind: "deleted", payload: null });
+    await recordContentEvent(tx, base);
+    expect(
+      inserts
+        .filter(i => i.table === "nextly_content_events")
+        .map(i => i.row.endsSubject)
+    ).toEqual([true, false]);
   });
 
   it("writes each part once, and the shared marker", async () => {

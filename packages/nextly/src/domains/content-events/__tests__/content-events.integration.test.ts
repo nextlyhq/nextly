@@ -319,5 +319,99 @@ describe.each(getConfiguredTestDialects())(
       const events = new Set((await t.events()).map(e => e.id));
       expect((await t.parts()).every(p => events.has(p.eventId))).toBe(true);
     });
+
+    it("keeps the events of a subject recreated after its deletion", async () => {
+      const t = await setup(dialect);
+      const actor = { kind: "system" } as const;
+      const old = await t.record({
+        subject: doc("again"),
+        kind: "saved",
+        actor,
+      });
+      const end = await t.record({
+        subject: doc("again"),
+        kind: "test-deleted",
+        actor,
+      });
+      await t.age(old.id, 120);
+      await t.age(end.id, 100);
+      // Created again under the same id, after the deletion.
+      const reborn = await t.record({
+        subject: doc("again"),
+        kind: "saved",
+        actor,
+      });
+
+      await pruneContentEventsSafely(
+        { db: current!.adapter, logger: silentLogger },
+        90 * DAY_MS,
+        10
+      );
+
+      expect((await t.events()).map(e => e.id)).toEqual([reborn.id]);
+    });
+
+    it("prunes a deleted subject whose deletion kind is no longer registered", async () => {
+      const t = await setup(dialect);
+      const end = await t.record({
+        subject: doc("retired"),
+        kind: "test-deleted",
+        actor: { kind: "system" },
+      });
+      await t.age(end.id, 100);
+      // The kind is gone from the registry; the event says what it was.
+      resetContentEventKinds();
+
+      await pruneContentEventsSafely(
+        { db: current!.adapter, logger: silentLogger },
+        90 * DAY_MS,
+        10
+      );
+
+      expect(await t.events()).toEqual([]);
+    });
+
+    it("finishes a large deleted subject over passes, its deletion event last", async () => {
+      const t = await setup(dialect);
+      const actor = { kind: "system" } as const;
+      // One more event than a batch, then the deletion.
+      await current!.adapter.transaction(async tx => {
+        for (let i = 0; i < 501; i += 1) {
+          await recordContentEvent(tx, {
+            subject: doc("big"),
+            kind: "saved",
+            actor,
+          });
+        }
+      });
+      const end = await t.record({
+        subject: doc("big"),
+        kind: "test-deleted",
+        actor,
+      });
+      await current!.adapter.update(
+        "nextly_content_events",
+        { occurredAt: new Date(Date.now() - 100 * DAY_MS) },
+        { and: [{ column: "subjectId", op: "=", value: "big" }] }
+      );
+
+      // One batch: the oldest 500 go, and the deletion event stays to be found.
+      await pruneContentEventsSafely(
+        { db: current!.adapter, logger: silentLogger },
+        90 * DAY_MS,
+        1
+      );
+      const left = await t.events();
+      expect(left).toHaveLength(2);
+      expect(left.map(e => e.id)).toContain(end.id);
+
+      await pruneContentEventsSafely(
+        { db: current!.adapter, logger: silentLogger },
+        90 * DAY_MS,
+        1
+      );
+      expect(await t.events()).toEqual([]);
+      expect(await t.parts()).toEqual([]);
+    });
   }
 );

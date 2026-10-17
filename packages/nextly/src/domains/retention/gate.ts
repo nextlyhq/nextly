@@ -100,6 +100,14 @@ export const NOTICES_RETENTION_DRAIN_GATE_KEY =
   "notices.retention.lastDrainPassAt";
 
 /**
+ * Content events' second marker, for the scheduled drain, for the reason
+ * notices have one: a quiet install keeps running only the drain, and without
+ * it would keep deleted subjects' events past their window.
+ */
+export const CONTENT_EVENTS_RETENTION_DRAIN_GATE_KEY =
+  "content-events.retention.lastDrainPassAt";
+
+/**
  * The delivery log's SECOND marker, for the scheduled drain.
  *
  * Gated twice for the reason the audit trails are, and it is the same failure:

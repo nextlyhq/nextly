@@ -50,8 +50,9 @@ const kinds = new Map<string, ContentEventKind>();
  * Refuses a name that is not kebab-case or is too long for its column, and a
  * name already taken by a different kind: two features writing one name
  * differently would make history read either. Registering the same kind again
- * (same name, label and payload schema) is accepted, as a module reloaded in
- * development does.
+ * (same name, label and ending flag) is accepted and takes its payload schema
+ * from the new registration: a module reloaded in development builds a new,
+ * equivalent schema object.
  *
  * @experimental
  */
@@ -66,9 +67,9 @@ export function registerContentEventKind(kind: ContentEventKind): void {
   if (
     existing &&
     existing.label === kind.label &&
-    existing.payload === kind.payload &&
-    existing.endsSubject === kind.endsSubject
+    Boolean(existing.endsSubject) === Boolean(kind.endsSubject)
   ) {
+    kinds.set(kind.name, kind);
     return;
   }
   if (existing) {
@@ -83,13 +84,6 @@ export function registerContentEventKind(kind: ContentEventKind): void {
 /** The registered kind of this name, or undefined. */
 export function contentEventKind(name: string): ContentEventKind | undefined {
   return kinds.get(name);
-}
-
-/** The kinds that record a subject's deletion. */
-export function subjectEndingKinds(): string[] {
-  return [...kinds.values()]
-    .filter(kind => kind.endsSubject)
-    .map(kind => kind.name);
 }
 
 /** Every registered kind's name. */
