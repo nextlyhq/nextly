@@ -137,6 +137,40 @@ describe("generateInstrumentation", () => {
     expect(result.written).toEqual(["src/instrumentation.ts"]);
   });
 
+  it("says what to add as code that compiles, so pasting it into a synchronous hook cannot break the build", async () => {
+    const cwd = await app();
+    await mkdir(path.join(cwd, "src"), { recursive: true });
+    await writeFile(
+      path.join(cwd, "src/instrumentation.ts"),
+      "export function register() {}\n"
+    );
+
+    const { skipped } = await generateInstrumentation(cwd, { srcDir: true });
+
+    const code = skipped[0].toAdd?.slice(
+      skipped[0].toAdd.indexOf("export async function")
+    );
+    expect(code).toMatch(/^export async function register\(\)/);
+    expect(syntaxErrors(code ?? "")).toEqual([]);
+  });
+
+  it("writes no hook when the app sets pageExtensions, and gives the whole hook to add under the right name", async () => {
+    const cwd = await app();
+    await writeFile(
+      path.join(cwd, "next.config.mjs"),
+      'export default { pageExtensions: ["page.tsx", "page.ts"] };\n'
+    );
+
+    const result = await generateInstrumentation(cwd, { srcDir: true });
+
+    expect(result.written).toEqual([]);
+    expect(await fs.pathExists(path.join(cwd, "src/instrumentation.ts"))).toBe(
+      false
+    );
+    expect(result.skipped[0].why).toContain("pageExtensions");
+    expect(result.skipped[0].toAdd).toBe(await readFile(blankHook, "utf-8"));
+  });
+
   it.each([
     ["an installed Next.js 14", "14.2.3"],
     ["a Next.js version that cannot be read", null],
