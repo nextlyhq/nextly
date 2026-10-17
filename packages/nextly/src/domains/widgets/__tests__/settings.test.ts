@@ -616,3 +616,59 @@ describe("the content settings: a collection, and a filter, sort or grouping ove
     ).toEqual({ collection: "posts", order: "title" });
   });
 });
+
+describe("the quick setting: at most one sits on the card", () => {
+  const range: AnyWidgetSetting = {
+    name: "range",
+    type: "select",
+    options: [
+      { label: "Last 7 days", value: "7d" },
+      { label: "Last 30 days", value: "30d" },
+    ],
+    defaultValue: "30d",
+  };
+  const style: AnyWidgetSetting = {
+    name: "style",
+    type: "select",
+    options: [
+      { label: "Line", value: "line" },
+      { label: "Bars", value: "bars" },
+    ],
+    defaultValue: "line",
+  };
+
+  it("accepts one quick setting, or none", () => {
+    expect(widgetSettingsProblems([{ ...range, quick: true }, style])).toEqual(
+      []
+    );
+    expect(widgetSettingsProblems([range, style])).toEqual([]);
+    expect(widgetSettingsProblem([{ ...range, quick: true }])).toBeUndefined();
+  });
+
+  it("refuses a widget that marks two settings quick, naming both", () => {
+    expect(
+      widgetSettingsProblems([
+        { ...range, quick: true },
+        { ...style, quick: true },
+      ])
+    ).toEqual([
+      'settings "range", "style" are all marked quick; a widget may mark at most one',
+    ]);
+    // Registration reads the same rule.
+    expect(() =>
+      validateWidgetSettings(
+        [
+          { ...range, quick: true },
+          { ...style, quick: true },
+        ],
+        "core/x"
+      )
+    ).toThrow(/at most one/);
+  });
+
+  it("refuses a quick mark that is not true or false", () => {
+    expect(
+      widgetSettingsProblems([{ ...range, quick: "yes" } as never])
+    ).toEqual(['setting "range" has quick "yes"; expected true or false']);
+  });
+});

@@ -57,6 +57,8 @@ export interface SettingDeclaration<
   readonly defaultValue?: Value;
   /** The setting this one depends on, and is reset with. */
   readonly of?: On;
+  /** Whether it sits on the card's header (at most one per widget). */
+  readonly quick?: boolean;
   readonly [settingValue]?: Value;
 }
 
@@ -149,6 +151,16 @@ function declare<Value, Kind extends string, On extends string = never>(
     : { type, defaultValue, ...rest };
 }
 
+/**
+ * Marks a setting as the card's quick one, or leaves it unmarked.
+ *
+ * Offered only by builders whose control fits a card's header (a choice or an
+ * on/off), and written only when true, so an unmarked setting's declaration is
+ * exactly what it was before quick settings existed.
+ */
+const quickFlag = (quick: boolean | undefined) =>
+  quick === true ? { quick: true } : {};
+
 /** A fixed set of values, as a select definition lists its options. */
 function choices<Option extends string>(values: readonly Option[]) {
   return values.map(value => ({ label: value, value }));
@@ -183,20 +195,34 @@ export const settings = {
       max: MAX_WIDGET_ROWS,
     }),
   /** Date range: a select of the four ranges, the last 30 days by default. */
-  dateRange: ({ default: start = "30d" }: { default?: DateRange } = {}) =>
+  dateRange: ({
+    default: start = "30d",
+    quick,
+  }: { default?: DateRange; quick?: boolean } = {}) =>
     declare<DateRange, "select">("select", {
       default: start,
       options: choices(DATE_RANGES),
+      ...quickFlag(quick),
     }),
   /** Chart style: a select of line or bars, a line by default. */
-  chartStyle: ({ default: start = "line" }: { default?: ChartStyle } = {}) =>
+  chartStyle: ({
+    default: start = "line",
+    quick,
+  }: { default?: ChartStyle; quick?: boolean } = {}) =>
     declare<ChartStyle, "select">("select", {
       default: start,
       options: choices(CHART_STYLES),
+      ...quickFlag(quick),
     }),
   /** Only mine: a checkbox, off by default. */
-  onlyMine: ({ default: start = false }: { default?: boolean } = {}) =>
-    declare<boolean, "checkbox">("checkbox", { default: start }),
+  onlyMine: ({
+    default: start = false,
+    quick,
+  }: { default?: boolean; quick?: boolean } = {}) =>
+    declare<boolean, "checkbox">("checkbox", {
+      default: start,
+      ...quickFlag(quick),
+    }),
 
   /** A setting of the widget's own: a line of text. */
   text: (options: { default: string }) =>
@@ -205,8 +231,11 @@ export const settings = {
   number: (options: { default: number; min?: number; max?: number }) =>
     declare<number, "number">("number", options),
   /** A setting of the widget's own: on or off, a checkbox. */
-  toggle: (options: { default: boolean }) =>
-    declare<boolean, "checkbox">("checkbox", options),
+  toggle: ({ quick, ...options }: { default: boolean; quick?: boolean }) =>
+    declare<boolean, "checkbox">("checkbox", {
+      ...options,
+      ...quickFlag(quick),
+    }),
   /**
    * A setting of the widget's own: one of a fixed set.
    *
@@ -217,9 +246,11 @@ export const settings = {
   select: <const Option extends string>(options: {
     options: readonly Option[];
     default: NoInfer<Option>;
+    quick?: boolean;
   }) =>
     declare<Option, "select">("select", {
       default: options.default,
       options: choices(options.options),
+      ...quickFlag(options.quick),
     }),
 };

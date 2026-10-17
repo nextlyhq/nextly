@@ -58,6 +58,14 @@ export interface WidgetSettingBase {
    * where the renderer reads, not only where the compiler agrees.
    */
   admin?: { description?: string };
+  /**
+   * Whether the setting sits on the card itself, changeable without opening
+   * the settings sheet, as Over time's date range does. At most one per widget.
+   *
+   * A top-level key the field configs do not have, deliberately: it is read by
+   * the card's header, never by `FieldRenderer`, which ignores it.
+   */
+  quick?: boolean;
 }
 
 /**
@@ -387,8 +395,27 @@ export function widgetSettingsProblems(settings: unknown): string[] {
     if (problem === undefined) wellFormed.push(setting as AnyWidgetSetting);
     else problems.push(problem);
   }
-  // Both kinds in one answer, so one restart names every fault.
-  return [...problems, ...dependencyProblems(wellFormed, settings)];
+  // Every kind in one answer, so one restart names every fault.
+  return [
+    ...problems,
+    ...dependencyProblems(wellFormed, settings),
+    ...quickProblems(wellFormed),
+  ];
+}
+
+/**
+ * Why a widget's settings mark too many as quick, or nothing when they do not.
+ *
+ * A card's header holds one quick setting: two would each take the
+ * header's one place, and which one a person saw would depend on the order
+ * they were declared in.
+ */
+function quickProblems(settings: readonly AnyWidgetSetting[]): string[] {
+  const quick = settings.filter(setting => setting.quick === true);
+  if (quick.length <= 1) return [];
+  return [
+    `settings ${quick.map(setting => `"${setting.name}"`).join(", ")} are all marked quick; a widget may mark at most one`,
+  ];
 }
 
 /**
@@ -449,10 +476,11 @@ function settingProblem(
   if (typeof setting !== "object" || setting === null) {
     return SETTING_NOT_AN_OBJECT;
   }
-  const { name, type, defaultValue, ...rest } = setting as {
+  const { name, type, defaultValue, quick, ...rest } = setting as {
     name?: unknown;
     type?: unknown;
     defaultValue?: unknown;
+    quick?: unknown;
     options?: unknown;
     min?: unknown;
     max?: unknown;
@@ -470,6 +498,9 @@ function settingProblem(
 
   if (!isSettingType(type)) {
     return `setting "${name}" has type ${describeValue(type)}; expected one of ${Object.keys(USABLE_AS).join(", ")}`;
+  }
+  if (quick !== undefined && typeof quick !== "boolean") {
+    return `setting "${name}" has quick ${describeValue(quick)}; expected true or false`;
   }
 
   return problemForType(type, rest, defaultValue, name);
