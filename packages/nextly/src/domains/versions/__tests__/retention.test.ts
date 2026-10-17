@@ -65,6 +65,13 @@ describe("selectVersionsToPrune", () => {
     expect(selectVersionsToPrune(input, 3)).toEqual(["b", "a"]);
   });
 
+  it("keeps a pinned version beyond the cap, and prunes the rest as before", () => {
+    const input = [5, 4, 3, 2, 1].map(no => version(no));
+    expect(selectVersionsToPrune(input, 2, [], [1])).toEqual(["v3", "v2"]);
+    // Without the pin the same pass removes it.
+    expect(selectVersionsToPrune(input, 2)).toEqual(["v3", "v2", "v1"]);
+  });
+
   it("never prunes the newest version even at cap 0", () => {
     const input = rows(["b", 2, "draft"], ["a", 1, "draft"]);
     expect(selectVersionsToPrune(input, 0)).toEqual(["a"]);

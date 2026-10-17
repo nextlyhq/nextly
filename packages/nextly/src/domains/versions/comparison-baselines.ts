@@ -44,6 +44,11 @@ export interface BaselineContext {
   userId: string | null;
   /** The part's durable versions, newest first. */
   versions: readonly PartVersion[];
+  /**
+   * Whether the part is served now. A withdrawal records a draft version, so
+   * the history alone still shows the last publish as if it were live.
+   */
+  live: boolean;
 }
 
 /**
@@ -127,7 +132,10 @@ export async function resolveComparisonBaseline(
   });
 }
 
-/** The part's latest published version: what its readers are served. */
+/**
+ * The part's latest published version. What its readers are served only while
+ * the part is live; see `BaselineContext.live`.
+ */
 export function latestPublished(
   versions: readonly PartVersion[]
 ): PartVersion | undefined {
@@ -157,7 +165,9 @@ registerComparisonBaseline({
 registerComparisonBaseline({
   name: "published",
   label: "Currently published",
-  resolve: ({ versions }) => latestPublished(versions)?.versionNo ?? null,
+  // Nothing is currently published in a part that has been withdrawn.
+  resolve: ({ versions, live }) =>
+    live ? (latestPublished(versions)?.versionNo ?? null) : null,
 });
 
 registerComparisonBaseline({
@@ -185,6 +195,8 @@ export interface ComparisonRequest {
    * over for older versions as if it did not exist.
    */
   workingDraftParts?: readonly (string | null)[];
+  /** Whether a part is served now: read from the document, not its history. */
+  partIsLive: (part: string | null) => Promise<boolean>;
 }
 
 /** The pair a request resolves to, and the baseline that chose `from`. */
@@ -198,8 +210,8 @@ export interface ResolvedComparison {
  * Turn a request into the two versions to compare.
  *
  * Defaults, when the request names no target or no baseline:
- * - a part with a current draft and a published version opens on the draft
- *   against what is published;
+ * - a live part with a current draft and a published version opens on the
+ *   draft against what is published;
  * - otherwise the target is compared with the version before it.
  *
  * A part's first version has nothing before it, so that request is refused
@@ -238,9 +250,10 @@ export async function resolveComparisonPair(
       logContext: { reason: "comparison-no-versions", part },
     });
   }
+  const live = await request.partIsLive(part);
   const name =
     request.baseline ??
-    (target === draft?.versionNo && latestPublished(inPart)
+    (target === draft?.versionNo && live && latestPublished(inPart)
       ? "published"
       : "previous");
 
@@ -250,6 +263,7 @@ export async function resolveComparisonPair(
     target,
     userId: request.userId,
     versions,
+    live,
   });
   if (from === null || from === target) {
     throw NextlyError.validation({
@@ -257,7 +271,10 @@ export async function resolveComparisonPair(
         {
           path: "baseline",
           code: "NO_BASELINE",
-          message: `Version ${target} has no "${name}" version to compare with.`,
+          message:
+            name === "published" && !live
+              ? "Nothing is published in this language now, so there is no published version to compare with."
+              : `Version ${target} has no "${name}" version to compare with.`,
         },
       ],
     });

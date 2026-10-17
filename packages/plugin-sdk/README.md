@@ -102,7 +102,7 @@ export default defineConfig({
   `setup`s run before any `init`; load order is a topological sort over `dependsOn`.
 - **`ctx` (in `init`/`destroy`)** gives you: `services` (managed, secure-by-default
   data access — pass `{ as: "system" }` to elevate), `db` (typed, owner-checked access to your own tables;
-  `db.raw` is the Drizzle builder), _Needs the release after 0.0.2-alpha.66._
+  `db.raw` is the Drizzle builder),
   `hooks` (in-transaction, modify/abort), `events` (post-commit, observe-only),
   `filters`/`actions` (typed seams), `self` (your entities' resolved slugs after any
   host `.rename()`), `logger`, `config`, and `nextlyVersion`.

@@ -34,6 +34,8 @@ import {
 
 import { registerBuiltInSources } from "./built-in-sources";
 import { deferredEntities } from "./deferred-entities";
+import { keptOffDashboard, recordKeptOffDashboard } from "./kept-off-dashboard";
+import type { WidgetFieldChoice } from "./sources";
 
 /**
  * The slice of a `dynamic_collections` row this needs.
@@ -105,6 +107,58 @@ function storedAtThisLevel(container: UnvalidatedContainer): boolean {
   return container.type === "group";
 }
 
+/** One field as a widget source is built from it. */
+interface ReadableField {
+  name: string;
+  type: string;
+  label?: string;
+  hasMany?: boolean;
+  localized?: boolean;
+  choices?: WidgetFieldChoice[];
+}
+
+/** The field types that store one of a fixed set of values, each with a label. */
+const CHOICE_FIELD_TYPES: ReadonlySet<string> = new Set(["select", "radio"]);
+
+/**
+ * A choice field's options as value and label pairs, so a widget shows "Needs review" where the
+ * row stores `needs_review`.
+ *
+ * Read from stored config, so each option is checked rather than trusted: one with no string
+ * value, or no usable label, is left out, and a field left with none carries nothing -- the
+ * renderer then prints the stored value, as it did for every choice before this.
+ */
+function choicesOf(
+  type: string,
+  options: unknown
+): { choices?: WidgetFieldChoice[] } {
+  if (!CHOICE_FIELD_TYPES.has(type) || !Array.isArray(options)) return {};
+  // The first option for a value wins, as the entry form shows it: a value named twice in stored
+  // config must not make the whole source refuse to register.
+  const choices = firstOfEachValue(options.flatMap(namedChoice));
+  return choices.length > 0 ? { choices } : {};
+}
+
+/** The choices with each value kept once, the first time it appears. */
+function firstOfEachValue(choices: WidgetFieldChoice[]): WidgetFieldChoice[] {
+  const byValue = new Map<string, WidgetFieldChoice>();
+  for (const choice of choices) {
+    if (!byValue.has(choice.value)) byValue.set(choice.value, choice);
+  }
+  return [...byValue.values()];
+}
+
+/** One stored option as a choice, or nothing when it has no string value or no usable label. */
+function namedChoice(option: unknown): WidgetFieldChoice[] {
+  if (typeof option !== "object" || option === null) return [];
+  const { value, label } = option as { value?: unknown; label?: unknown };
+  const named =
+    typeof value === "string" &&
+    typeof label === "string" &&
+    label.trim() !== "";
+  return named ? [{ value, label }] : [];
+}
+
 /**
  * The fields stored at this collection's own level, with presentational groups
  * flattened, keeping only entries that carry both a name and a type.
@@ -118,20 +172,8 @@ function storedAtThisLevel(container: UnvalidatedContainer): boolean {
  * level. That walk is also iterative and cycle-guarded, so a group that
  * contains itself terminates instead of overflowing the stack.
  */
-export function readableFields(fields: unknown): Array<{
-  name: string;
-  type: string;
-  label?: string;
-  hasMany?: boolean;
-  localized?: boolean;
-}> {
-  const usable: Array<{
-    name: string;
-    type: string;
-    label?: string;
-    hasMany?: boolean;
-    localized?: boolean;
-  }> = [];
+export function readableFields(fields: unknown): ReadableField[] {
+  const usable: ReadableField[] = [];
   for (const raw of addressableFields(fields, {
     descendInto: storedAtThisLevel,
   })) {
@@ -141,6 +183,7 @@ export function readableFields(fields: unknown): Array<{
       label?: unknown;
       hasMany?: unknown;
       localized?: unknown;
+      options?: unknown;
     };
     if (typeof field.name === "string" && typeof field.type === "string") {
       // The label is carried when the field has a usable one, and omitted
@@ -169,6 +212,7 @@ export function readableFields(fields: unknown): Array<{
         // widget that fails on every load.
         ...(field.localized === true && { localized: true }),
         ...(label && { label }),
+        ...choicesOf(field.type, field.options),
       });
     }
   }
@@ -363,9 +407,13 @@ export async function refreshCollectionSources(): Promise<boolean> {
   const collections = await readRegisteredCollections();
   if (!collections) return false;
 
+  // A collection kept off the dashboard gets no source, so no card is generated for it and a
+  // query naming it is refused exactly as an unknown name is -- for a super-admin too.
   const named = collections.filter(
     (collection): collection is RegisteredCollection & { slug: string } =>
-      typeof collection.slug === "string" && collection.slug !== ""
+      typeof collection.slug === "string" &&
+      collection.slug !== "" &&
+      !keptOffDashboard(collection)
   );
 
   registerBuiltInSources(
@@ -388,5 +436,9 @@ export async function refreshCollectionSources(): Promise<boolean> {
       status: collection.status === true,
     }))
   );
+  // Recorded only once the sources above were replaced, from the same read: a rebuild the
+  // registry refuses keeps the previous sources AND the previous record, so the sources and the
+  // other surfaces that ask this record always describe one snapshot.
+  recordKeptOffDashboard("collection", collections);
   return true;
 }

@@ -35,10 +35,17 @@ type Seed = {
 };
 
 /**
- * A translated collection whose first version (v1, English, draft) comes from
- * a real create; the rest of the history is seeded in order, from v2.
+ * A translated collection whose first version (v1, English) comes from a real
+ * create; the rest of the history is seeded in order, from v2. The create
+ * publishes unless `live` is false, so what the history says is published is
+ * what the document serves: `title` is not translated, so every language is
+ * served by the main row.
  */
-async function documentWithHistory(dialect: TestDialect, seeds: Seed[]) {
+async function documentWithHistory(
+  dialect: TestDialect,
+  seeds: Seed[],
+  { live = true }: { live?: boolean } = {}
+) {
   current = await createTestNextly({
     dialect,
     collections: [
@@ -55,7 +62,7 @@ async function documentWithHistory(dialect: TestDialect, seeds: Seed[]) {
   const handler = current.getService("collectionsHandler");
   const created = await handler.createEntry(
     { collectionName: "posts", overrideAccess: true, locale: "en" },
-    { title: "v1", status: "draft" }
+    { title: "v1", status: live ? "published" : "draft" }
   );
   const id = (created.data as { id: string }).id;
   const repo = new VersionsRepository(
@@ -105,7 +112,7 @@ async function refusal(promise: Promise<unknown>) {
   return error as NextlyError;
 }
 
-// v1 en draft (the create), then:
+// v1 en published (the create), then:
 const history: Seed[] = [
   { status: "published", locale: "en", title: "en published" }, // v2
   { status: "draft", locale: "de", title: "de draft" }, // v3
@@ -133,9 +140,24 @@ describe.each(getConfiguredTestDialects())(
       const id = await documentWithHistory(dialect, history);
       const en = await compare(id, { to: 6, baseline: "published" });
       expect(en).toMatchObject({ from: 2, to: 6 });
-      // German's own published version, not English's.
+      // German's history says v5 was published, but German has never been
+      // served: its translation was never published for real.
+      const unserved = await refusal(
+        compare(id, { to: 3, baseline: "published" })
+      );
+      expect(JSON.stringify(unserved.publicData)).toContain("NO_BASELINE");
+      // Published for real (v7): German's own published version, not English's.
+      await current!.getService("collectionsHandler").updateEntry(
+        {
+          collectionName: "posts",
+          entryId: id,
+          overrideAccess: true,
+          locale: "de",
+        },
+        { title: "de live", status: "published" }
+      );
       const de = await compare(id, { to: 3, baseline: "published" });
-      expect(de).toMatchObject({ from: 5, to: 3, locale: "de" });
+      expect(de).toMatchObject({ from: 7, to: 3, locale: "de" });
     });
 
     it("compares with the current draft of the same part", async () => {
@@ -160,10 +182,14 @@ describe.each(getConfiguredTestDialects())(
     });
 
     it("opens on a version against the one before it while nothing is published", async () => {
-      const id = await documentWithHistory(dialect, [
-        { status: "draft", locale: "en", title: "second" }, // v2
-        { status: "draft", locale: "en", title: "third" }, // v3
-      ]);
+      const id = await documentWithHistory(
+        dialect,
+        [
+          { status: "draft", locale: "en", title: "second" }, // v2
+          { status: "draft", locale: "en", title: "third" }, // v3
+        ],
+        { live: false }
+      );
       const diff = await compare(id, { locale: "en" });
       expect(diff).toMatchObject({
         from: 2,
@@ -252,6 +278,157 @@ describe.each(getConfiguredTestDialects())(
       const error = await refusal(compare(id, { locale: "en" }));
       expect(JSON.stringify(error.publicData)).toContain("NO_BASELINE");
       expect(JSON.stringify(error.publicData)).toContain("Save it once");
+    });
+
+    it("has no published baseline once the document is withdrawn", async () => {
+      // Real writes, so the live row is what a reader is actually served.
+      current = await createTestNextly({
+        dialect,
+        collections: [
+          defineCollection({
+            slug: "notes",
+            status: true,
+            versions: true,
+            fields: [text({ name: "title" })],
+          }),
+        ],
+      });
+      const handler = current.getService("collectionsHandler");
+      const created = await handler.createEntry(
+        { collectionName: "notes", overrideAccess: true },
+        { title: "Live", status: "published" }
+      );
+      const id = (created.data as { id: string }).id;
+      // Withdrawn: the live row is a draft now, and nothing is served.
+      await handler.updateEntry(
+        { collectionName: "notes", entryId: id, overrideAccess: true },
+        { status: "draft" }
+      );
+      const notes = (args: { to?: number; baseline?: string }) =>
+        getVersionDiffForDocument({
+          scopeKind: "collection",
+          slug: "notes",
+          entryId: id,
+          user: superAdmin,
+          ...args,
+        });
+
+      const error = await refusal(notes({ to: 2, baseline: "published" }));
+      expect(JSON.stringify(error.publicData)).toContain("NO_BASELINE");
+      // The default no longer offers the withdrawn version as what is live.
+      expect(await notes({})).toMatchObject({
+        from: 1,
+        to: 2,
+        baseline: { name: "previous", versionNo: 1 },
+      });
+    });
+
+    it("judges what is published per language", async () => {
+      current = await createTestNextly({
+        dialect,
+        collections: [
+          defineCollection({
+            slug: "notes",
+            localized: true,
+            status: true,
+            versions: true,
+            fields: [text({ name: "title", localized: true })],
+          }),
+        ],
+        localization: { locales: ["en", "de"], defaultLocale: "en" },
+      });
+      const handler = current.getService("collectionsHandler");
+      const created = await handler.createEntry(
+        { collectionName: "notes", overrideAccess: true, locale: "en" },
+        { title: "EN", status: "published" }
+      ); // v1, en published
+      const id = (created.data as { id: string }).id;
+      const at = (locale: string) => ({
+        collectionName: "notes",
+        entryId: id,
+        overrideAccess: true,
+        locale,
+      });
+      await handler.updateEntry(at("de"), { title: "DE", status: "published" }); // v2
+      await handler.updateEntry(at("de"), { status: "draft" }); // v3, de withdrawn
+      await handler.updateEntry(at("en"), { title: "EN held" }); // v4, en draft
+      const notes = (args: {
+        to?: number;
+        baseline?: string;
+        locale?: string;
+      }) =>
+        getVersionDiffForDocument({
+          scopeKind: "collection",
+          slug: "notes",
+          entryId: id,
+          user: superAdmin,
+          ...args,
+        });
+
+      // German is withdrawn, so it has nothing published to compare with...
+      const de = await refusal(notes({ to: 3, baseline: "published" }));
+      expect(JSON.stringify(de.publicData)).toContain("NO_BASELINE");
+      // ...while English, still live, does.
+      expect(await notes({ locale: "en" })).toMatchObject({
+        from: 1,
+        to: 4,
+        baseline: { name: "published", versionNo: 1 },
+      });
+    });
+
+    it("has no published baseline for a translation while the document is a draft", async () => {
+      // German is published while the document itself never was: a public
+      // reader is served nothing, so nothing is published in German either.
+      current = await createTestNextly({
+        dialect,
+        collections: [
+          defineCollection({
+            slug: "notes",
+            localized: true,
+            status: true,
+            versions: true,
+            fields: [text({ name: "title", localized: true })],
+          }),
+        ],
+        localization: { locales: ["en", "de"], defaultLocale: "en" },
+      });
+      const handler = current.getService("collectionsHandler");
+      const created = await handler.createEntry(
+        { collectionName: "notes", overrideAccess: true, locale: "en" },
+        { title: "EN", status: "draft" }
+      ); // v1, en draft
+      const id = (created.data as { id: string }).id;
+      await handler.updateEntry(
+        {
+          collectionName: "notes",
+          entryId: id,
+          overrideAccess: true,
+          locale: "de",
+        },
+        { title: "DE", status: "published" }
+      ); // v2, de published
+      await handler.updateEntry(
+        {
+          collectionName: "notes",
+          entryId: id,
+          overrideAccess: true,
+          locale: "de",
+        },
+        { title: "DE edited" }
+      ); // v3: the document is a draft, so the save is not held; German stays published
+
+      const de = await refusal(
+        getVersionDiffForDocument({
+          scopeKind: "collection",
+          slug: "notes",
+          entryId: id,
+          user: superAdmin,
+          // v2, so a "published" answer would be v3 rather than itself.
+          to: 2,
+          baseline: "published",
+        })
+      );
+      expect(JSON.stringify(de.publicData)).toContain("NO_BASELINE");
     });
 
     it("refuses a pair and a baseline together, and an unknown baseline", async () => {

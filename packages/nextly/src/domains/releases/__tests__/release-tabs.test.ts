@@ -25,6 +25,7 @@ const scheduledAt = (at: Date): ReleaseRow => ({
   scheduledAt: at,
   timezone: "UTC",
   state: "scheduled",
+  kind: "release",
   publishedAt: null,
   createdBy: null,
   createdAt: at,

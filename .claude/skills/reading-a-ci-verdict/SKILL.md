@@ -164,8 +164,8 @@ Integration's three legs have a third reason to skip on a pull request: they
 run there only while it carries the `run-integration` label (the `changes`
 job's `requested` output; its summary says so). A pull request without the
 label reads `skipped` on all three legs and has tested no database; the merge
-queue runs them before it merges. To test a dialect before the queue, add the
-label.
+queue runs them before it merges, unless the change is documentation-only,
+which skips them everywhere. To test a dialect before the queue, add the label.
 
 Measured on `59d84ddc0`, 39 check-runs: **33 `completed/skipped`**, 3 `success`,
 3 `failure`. Even with every job now finished, a rollup dominated five-to-one by

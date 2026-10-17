@@ -51,6 +51,7 @@ describe("comparison baselines", () => {
         part: "en",
         target: 9,
         userId: null,
+        live: true,
         versions: versions(
           [9, "draft", "en"],
           [5, "published", "en"],
@@ -78,6 +79,26 @@ describe("comparison baselines", () => {
     }
   });
 
+  it("has nothing currently published in a part that is not live", async () => {
+    // A withdrawn part keeps its last published version in its history.
+    const history = versions([9, "draft", "en"], [5, "published", "en"]);
+    const context = { ref, part: "en", target: 9, userId: null };
+    await expect(
+      resolveComparisonBaseline("published", {
+        ...context,
+        live: true,
+        versions: history,
+      })
+    ).resolves.toBe(5);
+    await expect(
+      resolveComparisonBaseline("published", {
+        ...context,
+        live: false,
+        versions: history,
+      })
+    ).resolves.toBeNull();
+  });
+
   it("only offers versions of the part being compared", async () => {
     // A German version is never another language's "previous".
     await expect(
@@ -86,6 +107,7 @@ describe("comparison baselines", () => {
         part: "en",
         target: 9,
         userId: null,
+        live: true,
         versions: versions(
           [9, "draft", "en"],
           [8, "draft", "de"],

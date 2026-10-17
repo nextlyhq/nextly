@@ -33,6 +33,11 @@
       "import": "./dist/schema-name.mjs",
       "require": "./dist/schema-name.cjs"
     },
+    "./text-match": {
+      "types": "./dist/text-match.d.ts",
+      "import": "./dist/text-match.mjs",
+      "require": "./dist/text-match.cjs"
+    },
     "./version-check": {
       "types": "./dist/version-check.d.ts",
       "import": "./dist/version-check.mjs",

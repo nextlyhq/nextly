@@ -42,6 +42,8 @@ import { useCollections } from "@admin/hooks/queries/useCollections";
 import { useCurrentUserPermissions } from "@admin/hooks/useCurrentUserPermissions";
 import { collectionSingularLabel } from "@admin/lib/collection-label";
 
+import { keptOffDashboard } from "./kept-off-dashboard";
+
 /**
  * How many shortcuts are drawn before the rest are counted.
  *
@@ -82,8 +84,12 @@ export function QuickCreate() {
 
   const creatable = useMemo(() => {
     const items = data?.items ?? [];
-    return items.filter(collection =>
-      hasPermission(`create-${collection.name}`)
+    // A collection kept off the dashboard (internal, or hidden from the navigation) is never a
+    // shortcut here, whatever the reader may create in it.
+    return items.filter(
+      collection =>
+        !keptOffDashboard(collection) &&
+        hasPermission(`create-${collection.name}`)
     );
   }, [data?.items, hasPermission]);
 

@@ -24,9 +24,10 @@
  * reader is not holding stay where they are, the held card follows the
  * pointer unscaled, and the list reorders once, on drop.
  *
- * The handle carries the drag listeners rather than the whole cell, so a reader
- * can still select text in a card, click a link inside it, and press the
- * controls above it while editing.
+ * The handle carries the drag listeners rather than the whole cell, so the
+ * card's other controls -- its width and its menu -- stay pressable while
+ * editing. The card's own links and controls are out of reach then
+ * (`CustomizingFence`): customising is about the arrangement.
  *
  * @module components/features/widgets/edit/SortableWidgetCell
  */

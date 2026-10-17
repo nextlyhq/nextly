@@ -148,3 +148,36 @@ describe("EditUserPage on your own account", () => {
     expect(navigateTo).toHaveBeenCalled();
   });
 });
+
+/** The update the page handed the mutation, as the request will carry it. */
+function sentUpdates(): Record<string, unknown> {
+  // The mutation's first argument: `{ userId, updates }`.
+  const variables = mutate.mock.calls[0]?.[0] as {
+    updates: Record<string, unknown>;
+  };
+  return JSON.parse(JSON.stringify(variables.updates)) as Record<
+    string,
+    unknown
+  >;
+}
+
+// What the page actually submits: its resolver's parsed values, through its
+// own mapping, to the mutation. A space at either end can be a password's
+// symbol, and the server hashes the password it receives.
+describe("EditUserPage's request", () => {
+  it("sends a new password exactly as typed, spaces at its ends included", async () => {
+    state.editedId = OTHER;
+
+    await save({ password: " Passw0rd-Edge " });
+
+    expect(sentUpdates().password).toBe(" Passw0rd-Edge ");
+  });
+
+  it("sends no password at all when the field is left empty", async () => {
+    state.editedId = OTHER;
+
+    await save({});
+
+    expect(sentUpdates()).not.toHaveProperty("password");
+  });
+});

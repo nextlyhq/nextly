@@ -52,6 +52,7 @@ import { BaseService } from "../../../shared/base-service";
 import {
   generatedTypesFile,
   generatedZodDir,
+  retireOldDefaultTypesFile,
 } from "../../../shared/lib/generated-output-paths";
 import {
   toSingularLabel,
@@ -64,6 +65,7 @@ import { ZodGenerator, TypeGenerator } from "../../schema";
 // Resolve the versioning config so the CLI `db:sync` path persists it too
 // (parity with the boot/HMR registry sync).
 import { resolveCollectionTableName } from "../../schema/utils/resolve-table-name";
+import { sweepDeletedEntityVersions } from "../../versions/entity-teardown";
 import { resolveVersionsConfig } from "../../versions/resolve-config";
 import { storedWebhookRecording } from "../../webhooks/builder-webhooks";
 
@@ -85,7 +87,7 @@ export interface SyncOptions {
   generateZodSchemas?: boolean;
 
   /**
-   * Generate TypeScript types (payload-types.ts).
+   * Generate TypeScript types (to `typescript.outputFile`).
    * @default false (opt-in: only generate when explicitly requested)
    */
   generateTypes?: boolean;
@@ -927,11 +929,17 @@ export class CollectionSyncService extends BaseService {
             });
 
             // Delete from registry directly via raw query to avoid
-            // re-fetch issues with getCollection/updateCollection
-            await this.adapter.delete(
-              "dynamic_collections",
-              this.whereEq("slug", slug)
-            );
+            // re-fetch issues with getCollection/updateCollection. The
+            // collection's autosaves and version pins go in the same
+            // transaction, as the registry's own delete sweeps them: nothing
+            // could release them once the collection is gone.
+            await this.adapter.transaction(async tx => {
+              await sweepDeletedEntityVersions(tx, "collection", slug);
+              await tx.delete(
+                "dynamic_collections",
+                this.whereEq("slug", slug)
+              );
+            });
 
             const capabilities = this.adapter.getCapabilities();
             const q = capabilities.dialect === "mysql" ? "`" : '"';
@@ -1048,6 +1056,13 @@ export class CollectionSyncService extends BaseService {
       // Write types file
       writeFileSync(outputPath, typesFile.code, "utf-8");
       this.logger.debug(`Generated types: ${outputPath}`);
+
+      // The same settling `generate:types` does, after the new file exists,
+      // so a sync in an app with the old default's file leaves one
+      // declaration of the generated types, not two that clash.
+      for (const notice of retireOldDefaultTypesFile(opts.cwd, outputFile)) {
+        this.logger.warn(notice);
+      }
     }
 
     return outputPath;

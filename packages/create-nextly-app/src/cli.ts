@@ -48,6 +48,10 @@ program
   )
   .option("--skip-install", "Skip dependency installation (for local testing)")
   .option(
+    "--no-skills",
+    "Do not add the Nextly skills for coding agents to the project"
+  )
+  .option(
     "--use-yalc",
     "Use yalc for local package installation (development only)"
   )
@@ -77,6 +81,8 @@ Examples:
         localTemplate?: string;
         skipInstall?: boolean;
         useYalc?: boolean;
+        // Commander sets it from --no-skills: true unless that is passed.
+        skills?: boolean;
       }
     ) => {
       // Initialize telemetry. Cheap, no network. Prints one-time banner if needed.
@@ -141,6 +147,7 @@ Examples:
           localTemplatePath: options.localTemplate,
           skipInstall: options.skipInstall,
           useYalc: options.useYalc,
+          skills: options.skills,
           projectNameFromArg: projectName,
           installInCwd,
         });

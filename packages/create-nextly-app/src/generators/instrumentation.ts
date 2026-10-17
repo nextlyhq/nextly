@@ -5,7 +5,7 @@ import fs from "fs-extra";
 import type { ProjectInfo } from "../types";
 
 import type { GeneratedFiles } from "./generated-files";
-import { nextConfigFileToChange, nextMajor } from "./next-config";
+import { writeNew } from "./write-new";
 
 /**
  * The names Next.js loads its instrumentation hook from: `instrumentation`
@@ -103,43 +103,6 @@ ${startNextly(configImport)
 }`;
 }
 
-/** The key Next.js 14 needs before it runs an instrumentation hook. */
-const OPT_IN = "experimental: { instrumentationHook: true }";
-
-/**
- * What to tell an app about Next.js 14's opt-in, or null when it needs none.
- *
- * The major is the installed one, read the way the config patcher reads it,
- * so a range such as `latest` or `^14 || ^15` is not guessed at. When even
- * that cannot tell, the advice is given for the case it applies to. An app
- * with no config gets a whole one to create, since a key alone is not a file.
- */
-function hookOptIn(
-  major: number | null,
-  nextConfig: { name: string } | null,
-  configFile: string
-): GeneratedFiles["skipped"][number] | null {
-  if (major !== null && major !== 14) return null;
-  const when =
-    major === 14
-      ? "Next.js 14 runs instrumentation.ts only when the config opts in"
-      : "the installed Next.js version could not be read, and Next.js 14 runs instrumentation.ts only when the config opts in";
-  if (!nextConfig) {
-    // The same file the Next config step names for Nextly's packages, so
-    // following both pieces of advice makes one config, not two.
-    return {
-      path: configFile,
-      why: `${when}, and the app has no Next.js config; on Next.js 14, create this file, which is also where Nextly's packages go`,
-      toAdd: `/** @type {import('next').NextConfig} */\nexport default {\n  ${OPT_IN},\n};\n`,
-    };
-  }
-  return {
-    path: nextConfig.name,
-    why: `${when}, and the config was left as it is`,
-    toAdd: `On Next.js 14, add instrumentationHook: true inside the config's experimental object, beside any keys it already has, or add the object when there is none:\n\n${OPT_IN},`,
-  };
-}
-
 /**
  * Give an existing app the hook that starts Nextly when its server starts.
  *
@@ -148,8 +111,10 @@ function hookOptIn(
  * never rewritten; it is reported as skipped with what to add. So is the case
  * where the app sets \`pageExtensions\`: Next.js then reads the hook only under a
  * name with one of those extensions, which this does not guess. The config file
- * itself is never edited: on Next.js 14, which runs the hook only with
- * \`experimental.instrumentationHook\`, the line to add is reported instead.
+ * itself is never edited here. Next.js 14 runs the hook only with
+ * `experimental.instrumentationHook`, which the Next config step gives in the
+ * same `experimental` object as Nextly's packages (`patchNextConfig`), so two
+ * steps never hand the developer two objects for one key.
  */
 export async function generateInstrumentation(
   cwd: string,
@@ -161,13 +126,6 @@ export async function generateInstrumentation(
     : "./nextly.config";
   const result: GeneratedFiles = { written: [], changed: [], skipped: [] };
   const nextConfig = await readNextConfig(cwd);
-
-  const optIn = hookOptIn(
-    await nextMajor(cwd),
-    nextConfig,
-    await nextConfigFileToChange(cwd)
-  );
-  if (optIn) result.skipped.push(optIn);
 
   for (const name of HOOK_NAMES) {
     const relative = path.posix.join(dir, name);
@@ -191,15 +149,12 @@ export async function generateInstrumentation(
     return result;
   }
 
-  await fs.ensureDir(path.dirname(path.join(cwd, relative)));
-  await fs.writeFile(
-    path.join(cwd, relative),
-    instrumentationHook(configImport),
-    {
-      encoding: "utf-8",
-      flag: "wx",
-    }
-  );
-  result.written.push(relative);
+  // Through writeNew, as every existing-app file is: created exclusively, and
+  // never through a folder on its path that is a link.
+  const hook = instrumentationHook(configImport);
+  await writeNew(cwd, relative, hook, result, {
+    why: "it is already there; Nextly's hook, which is",
+    toAdd: hook,
+  });
   return result;
 }

@@ -70,8 +70,6 @@ import type { TrustBound } from "../../../services/collections/trust-grant";
 import { narrows } from "../../../services/collections/trust-grant";
 import type { FieldGroupDataService } from "../../../services/field-groups/field-group-data-service";
 import type { Logger } from "../../../services/shared";
-import type { AddressableField } from "../../../shared/addressable-fields";
-import { addressableFields } from "../../../shared/addressable-fields";
 import { BaseService } from "../../../shared/base-service";
 import {
   convertTimestampsToCamelCase,
@@ -118,10 +116,7 @@ import type { SupportedDialect } from "../../../types/database";
 import { willRecordMutationActivity } from "../../audit/record-activity";
 import type { DynamicCollectionService } from "../../dynamic-collections";
 import { readComponentSubtrees } from "../../field-groups/read-component-subtrees";
-import {
-  fieldGroupSlugList,
-  extractFieldGroupReferences,
-} from "../../field-groups/storage/field-group-field-type";
+import { fieldGroupSlugList } from "../../field-groups/storage/field-group-field-type";
 import { readFieldGroupType } from "../../field-groups/storage/field-group-type-key";
 import {
   COMPANION_LOCALE_COLUMN,
@@ -133,6 +128,7 @@ import {
   companionRowExists,
   populateCompanionFields,
   populateCompanionFieldsAllLocales,
+  readCompanionLocaleStatus,
   readCompanionLocaleStatusAll,
   isBlank,
 } from "../../i18n/companion-join";
@@ -157,6 +153,7 @@ import {
 } from "../../i18n/runtime/companion-readiness";
 import { assembleDocument } from "../../versions/assemble-document";
 import { captureInTx } from "../../versions/capture-in-tx";
+import { mergeComponentPatches } from "../../versions/draft-components";
 import { resolveDraftHold } from "../../versions/draft-hold";
 import { storeDraftSave } from "../../versions/draft-save";
 import { isDraftSplitEligible } from "../../versions/draft-split-eligibility";
@@ -174,6 +171,7 @@ import {
 } from "../../versions/tag-component-types";
 import { VersionCaptureService } from "../../versions/version-capture-service";
 import { withVersionConflictRetry } from "../../versions/version-conflict";
+import { deletePinsForDocument } from "../../versions/version-pins";
 import { VersionsRepository } from "../../versions/versions-repository";
 import { workingDraftLocale } from "../../versions/working-draft-locale";
 import { expandComponentFields } from "../../webhooks/expand-component-fields";
@@ -1551,6 +1549,9 @@ export class CollectionMutationService extends BaseService {
     // column on a collection without it fails the whole write, so every read of
     // it must be gated on this.
     hasStatus: boolean;
+    // The companion's runtime Drizzle table, for reads of the locale's own row
+    // (its `_status`) through the shared typed reader.
+    companionTable: unknown;
   } | null> {
     if (!this.localization) return null;
     const companion = await this.fileManager.loadCompanionSchema(
@@ -1700,6 +1701,7 @@ export class CollectionMutationService extends BaseService {
       companionData,
       localizedFieldValues,
       hasStatus: companion.hasStatus,
+      companionTable: companion.table,
     };
   }
 
@@ -2393,30 +2395,27 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
-   * The write locale's per-locale `_status`, or null when the companion row has
-   * none.
-   *
-   * Read with raw `tx.execute` (matching upsertCompanionRow / publishAllLocales):
-   * the companion `_locales` table is not in the Drizzle schema, and the CRUD
-   * helpers camelCase result keys, which would rename `_status`.
+   * The write locale's committed per-locale `_status`, or null when its
+   * companion row has none. Through the shared typed reader on the write
+   * transaction's Drizzle handle, so it sees the transaction's own writes and
+   * is ordered behind the main-row lock taken before it.
    */
-  private async readCompanionStatus(
+  private readLocaleStatus(
     tx: TransactionContext,
-    companionTableName: string,
-    entryId: string,
-    locale: string
+    localizedUpdate: {
+      companionTable: unknown;
+      companionTableName: string;
+      writeLocale: string;
+    },
+    entryId: string
   ): Promise<string | null> {
-    const isMysqlDialect = this.dialect === "mysql";
-    const quote = (id: string) => (isMysqlDialect ? `\`${id}\`` : `"${id}"`);
-    const placeholder = (i: number) =>
-      this.dialect === "postgresql" ? `$${i}` : "?";
-    const rows = await tx.execute<{ _status?: unknown }>(
-      `SELECT ${quote("_status")} FROM ${quote(companionTableName)} ` +
-        `WHERE ${quote("_parent")} = ${placeholder(1)} AND ${quote("_locale")} = ${placeholder(2)} LIMIT 1`,
-      [entryId, locale]
+    return readCompanionLocaleStatus(
+      tx.getDrizzle<Parameters<typeof readCompanionLocaleStatus>[0]>(),
+      localizedUpdate.companionTable,
+      entryId,
+      localizedUpdate.writeLocale,
+      cachedCompanionReadiness(this.adapter, localizedUpdate.companionTableName)
     );
-    const status = rows[0]?._status;
-    return typeof status === "string" ? status : null;
   }
 
   /**
@@ -2510,7 +2509,7 @@ export class CollectionMutationService extends BaseService {
     // Caller scalars win over the draft; the caller's single-component patches
     // merge onto the draft's components (a patch wins per sub-field); the caller's
     // m2m replaces the draft's.
-    const mergedComponents = this.mergeSingleComponentPatches(
+    const mergedComponents = mergeComponentPatches(
       draftComponents,
       callerComponentData,
       fields as unknown as FieldConfig[],
@@ -2562,67 +2561,6 @@ export class CollectionMutationService extends BaseService {
     rehydrateSystemTimestamps(payload);
     rehydrateSnapshotDates(payload, fields, componentSchemas);
     return payload;
-  }
-
-  /**
-   * Overlay `patch` onto `base`, recursively merging single (non-repeatable)
-   * component objects instead of replacing them.
-   *
-   * A patch-shaped save carries only the sub-fields it changed, so replacing a
-   * component's whole object would drop sub-fields an earlier save set. Recurses
-   * according to the resolved component schemas so a component nested inside a
-   * component is merged at every depth. A dynamic zone (array), a repeatable
-   * component, and a scalar are replaced whole (patch wins).
-   */
-  private mergeSingleComponentPatches(
-    base: Record<string, unknown>,
-    patch: Record<string, unknown>,
-    fields: FieldConfig[],
-    componentSchemas: ComponentSchemas | null
-  ): Record<string, unknown> {
-    // Flatten unnamed presentational groups (matching `tagComponentTypes`): a
-    // single component declared inside such a group stores its value at the
-    // enclosing level, so without flattening the lookup would miss it and treat
-    // it as a scalar, replacing rather than merging a nested component patch.
-    const byName = new Map<string, AddressableField>();
-    for (const f of addressableFields(fields)) {
-      const name = (f as { name?: unknown }).name;
-      if (typeof name === "string") byName.set(name, f);
-    }
-    const out: Record<string, unknown> = { ...base };
-    for (const [key, patchVal] of Object.entries(patch)) {
-      const field = byName.get(key);
-      // Through the shared extractor: a migrated definition names its fixed
-      // slug under `fieldGroup`, and a merge that misses it would REPLACE the
-      // whole object, dropping sibling sub-fields an earlier save set.
-      const refs = field ? extractFieldGroupReferences(field) : {};
-      const slug =
-        field &&
-        refs.single !== undefined &&
-        (field as { repeatable?: unknown }).repeatable !== true
-          ? refs.single
-          : undefined;
-      const baseVal = out[key];
-      if (
-        slug !== undefined &&
-        baseVal !== null &&
-        typeof baseVal === "object" &&
-        !Array.isArray(baseVal) &&
-        patchVal !== null &&
-        typeof patchVal === "object" &&
-        !Array.isArray(patchVal)
-      ) {
-        out[key] = this.mergeSingleComponentPatches(
-          baseVal as Record<string, unknown>,
-          patchVal as Record<string, unknown>,
-          componentSchemas?.get(slug)?.fields ?? [],
-          componentSchemas
-        );
-      } else {
-        out[key] = patchVal;
-      }
-    }
-    return out;
   }
 
   /**
@@ -5795,7 +5733,7 @@ export class CollectionMutationService extends BaseService {
     // nested single components) rather than overwriting them, so
     // disjoint sub-field edits coalesce at any depth. A dynamic zone, a
     // repeatable component, and a scalar are replaced whole.
-    const draftDocument = this.mergeSingleComponentPatches(
+    const draftDocument = mergeComponentPatches(
       draftBase,
       patchFields,
       fields as unknown as FieldConfig[],
@@ -6982,11 +6920,10 @@ export class CollectionMutationService extends BaseService {
             // status, and querying it otherwise fails the whole write.
             committedLocaleStatus =
               localizedUpdate && localizedUpdate.hasStatus
-                ? await this.readCompanionStatus(
+                ? await this.readLocaleStatus(
                     tx,
-                    localizedUpdate.companionTableName,
-                    params.entryId,
-                    localizedUpdate.writeLocale
+                    localizedUpdate,
+                    params.entryId
                   )
                 : null;
             const previousCompanionStatus = committedLocaleStatus;
@@ -7485,11 +7422,10 @@ export class CollectionMutationService extends BaseService {
             localizedUpdate &&
             typeof localizedUpdate.companionData._status === "string"
           ) {
-            localizedPreviousStatus = await this.readCompanionStatus(
+            localizedPreviousStatus = await this.readLocaleStatus(
               tx,
-              localizedUpdate.companionTableName,
-              params.entryId,
-              localizedUpdate.writeLocale
+              localizedUpdate,
+              params.entryId
             );
           }
 
@@ -8786,6 +8722,14 @@ export class CollectionMutationService extends BaseService {
           entryId: params.entryId,
         });
 
+        // So do the versions features have pinned against retention: nothing
+        // could release them once the document is gone.
+        await deletePinsForDocument(tx, {
+          scopeKind: "collection",
+          scopeSlug: params.collectionName,
+          entryId: params.entryId,
+        });
+
         // The removed document's final state ships as `data`; there is no
         // post-delete state, so `previous` is null (mirroring create, which
         // carries only `data`). `locale` is set only for a localized collection,
@@ -9909,11 +9853,10 @@ export class CollectionMutationService extends BaseService {
         // Gated on `hasStatus`: companion `_status` exists only on collections
         // migrated for per-locale status, and querying it otherwise fails the
         // whole write.
-        previousCompanionStatus = await this.readCompanionStatus(
+        previousCompanionStatus = await this.readLocaleStatus(
           tx,
-          localizedUpdate.companionTableName,
-          entryId,
-          localizedUpdate.writeLocale
+          localizedUpdate,
+          entryId
         );
         // A write moves the published state in two places, and the gate must
         // fire if EITHER makes a transition the caller cannot make. The main
@@ -10798,6 +10741,13 @@ export class CollectionMutationService extends BaseService {
 
       // Recovery points go with it; see the single-delete path.
       await new VersionsRepository(tx).deleteAutosaves({
+        scopeKind: "collection",
+        scopeSlug: params.collectionName,
+        entryId,
+      });
+
+      // Pins go with it; see the single-delete path.
+      await deletePinsForDocument(tx, {
         scopeKind: "collection",
         scopeSlug: params.collectionName,
         entryId,

@@ -621,6 +621,7 @@ export class SingleQueryService extends BaseService {
 
     const overlayInput = {
       ...draftDocumentFacts(singleMeta),
+      entityKind: "single" as const,
       fields: singleMeta.fields,
       includeWorkingDraft: options.includeWorkingDraft === true,
       requestedStatus: options.status,

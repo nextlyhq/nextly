@@ -224,6 +224,18 @@ describe("Integration on request", () => {
     expect(request.permissions).toEqual({ contents: "read" });
     expect(jobs[0].permissions).toEqual({ contents: "read", actions: "write" });
   });
+
+  it("keys the request by the label too, so another label never cancels a waiting request", () => {
+    const group = String(request.concurrency.group);
+    const groupFor = (label, run) =>
+      group.replace(/\$\{\{([\s\S]*?)\}\}/g, (_, expression) =>
+        String(evaluate(conditionTokens(expression), expression, { "github.event.pull_request.number": 7, "github.event.label.name": label, "github.run_id": run, "github.sha": `sha-${run}` }))
+      );
+    expect(groupFor("run-integration", 1)).not.toBe(groupFor("enhancement", 1));
+    // Two separate requests for the same pull request share one group, so the later replaces the earlier.
+    expect(groupFor("run-integration", 1)).toBe(groupFor("run-integration", 2));
+    expect(request.concurrency["cancel-in-progress"]).toBe(true);
+  });
 });
 
 describe("conditions that skip the queue's run", () => {

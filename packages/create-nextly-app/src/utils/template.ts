@@ -4,6 +4,7 @@ import { fileURLToPath } from "url";
 import fs from "fs-extra";
 
 import { buildNextConfigTemplate } from "../generators/next-config";
+import { EXACT_VERSION } from "../lib/exact-version";
 import { getAvailableTemplateNames } from "../lib/templates";
 import type {
   DatabaseConfig,
@@ -151,6 +152,17 @@ async function walkSourceFiles(root: string): Promise<string[]> {
 export function projectUsesFormBuilder(projectType: ProjectType): boolean {
   return PROJECT_TYPES_WITH_FORM_BUILDER.has(projectType);
 }
+
+/**
+ * What a scaffold with the form builder installs for it: the plugin, and its
+ * peer `@nextlyhq/plugin-sdk`. npm, pnpm and Bun add a missing peer on their
+ * own; Yarn does not, and under Plug'n'Play the plugin then cannot load the
+ * SDK, so the app's config fails to load. Both install paths read this list.
+ */
+export const FORM_BUILDER_PACKAGES = [
+  "@nextlyhq/plugin-form-builder",
+  "@nextlyhq/plugin-sdk",
+] as const;
 
 /** The npm dist-tag a scaffold installs `nextly` + `@nextlyhq/*` from. */
 export type NextlyDistTag = "latest" | "alpha";
@@ -858,18 +870,20 @@ export function resolveTemplatePath(localTemplatePath?: string): string {
  */
 function buildPlaceholderMap(options: {
   database?: DatabaseConfig;
-  databaseUrl?: string;
   /** Plugin package name → fills `{{pluginName}}` (plugin template, D44). */
   pluginName?: string;
   /** Plugin's `nextly` compat range → fills `{{nextlyRange}}` (D44). */
   nextlyRange?: string;
 }): Record<string, string> {
-  const { database, databaseUrl, pluginName, nextlyRange } = options;
+  const { database, pluginName, nextlyRange } = options;
 
   const map: Record<string, string> = {};
   if (database) {
     map["{{databaseDialect}}"] = database.type;
-    map["{{databaseUrl}}"] = databaseUrl || database.envExample;
+    // The token fills only .env.example, which a project commits, so it is the
+    // database's generic example: a URL typed during setup carries a password
+    // and belongs in .env, which the env generator writes.
+    map["{{databaseUrl}}"] = database.envExample;
   }
   if (pluginName) map["{{pluginName}}"] = pluginName;
   if (nextlyRange) map["{{nextlyRange}}"] = nextlyRange;
@@ -1187,8 +1201,9 @@ export async function generatePackageJson(
     // resolve to an uninstalled package — `next dev` would then fail
     // with "Cannot find package '@nextlyhq/plugin-form-builder'".
     if (projectUsesFormBuilder(projectType)) {
-      dependencies["@nextlyhq/plugin-form-builder"] =
-        versions["@nextlyhq/plugin-form-builder"] || "latest";
+      for (const pkg of FORM_BUILDER_PACKAGES) {
+        dependencies[pkg] = versions[pkg] || "latest";
+      }
     }
   }
 
@@ -1301,9 +1316,6 @@ export async function generatePackageJson(
  * from the registry: `^1.2.3` or `^0.0.2-alpha.66`.
  */
 const CARET_VERSION = /^\^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
-
-/** One complete version, as a package.json `version` holds it: `0.0.2-alpha.66`. */
-const EXACT_VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
 
 /**
  * This CLI's version, and whether the scaffold pins to it. See
@@ -1723,7 +1735,6 @@ export interface CopyTemplateOptions {
   projectType: ProjectType;
   targetDir: string;
   database: DatabaseConfig;
-  databaseUrl?: string;
   useYalc?: boolean;
   /** Schema approach for content templates (code-first, visual) */
   approach?: ProjectApproach;
@@ -1784,7 +1795,6 @@ export async function copyTemplate(
     projectType,
     targetDir,
     database,
-    databaseUrl,
     useYalc = false,
     approach,
     templateSource,
@@ -1854,9 +1864,21 @@ export async function copyTemplate(
     );
   }
 
+  // An example env file already in the target (scaffolding over a folder that
+  // has files) is the env generator's to merge, never the copy's to replace.
+  const targetExample = path.join(targetDir, ".env.example");
+  // lstat, not pathExists: pathExists follows a link, and calls a dangling
+  // one absent, which the copy would then replace.
+  const keepTargetExample = await fs
+    .lstat(targetExample)
+    .then(() => true)
+    .catch(() => false);
   await fs.copy(baseDir, targetDir, {
     filter: _src => {
       const basename = path.basename(_src);
+      if (keepTargetExample && _src === path.join(baseDir, ".env.example")) {
+        return false;
+      }
       return !SKIP_FILES.has(basename);
     },
   });
@@ -1980,7 +2002,7 @@ export async function copyTemplate(
   // The placeholder map is built here rather than at step 9 because a merge into a file the
   // developer already had must render the incoming text itself; step 9 then skips what it
   // merged, so their prose is never rewritten.
-  const placeholders = buildPlaceholderMap({ database, databaseUrl });
+  const placeholders = buildPlaceholderMap({ database });
   if (approach) {
     placeholders["{{approach}}"] = approach;
   }
@@ -1989,6 +2011,8 @@ export async function copyTemplate(
     placeholders,
     packageManager
   );
+  // The person's own example file is theirs: a token in their text stays.
+  if (keepTargetExample) alreadyRendered.add(".env.example");
 
   // Step 6d: Undo the side effect of the workspace file above for the pnpm versions that
   // read it as a workspace declaration. Only for pnpm, because npm warns about the setting

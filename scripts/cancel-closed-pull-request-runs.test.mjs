@@ -113,27 +113,65 @@ describe("the command a workflow step runs", () => {
     expect(calls).not.toContain("POST");
   });
 
-  it("refuses to cancel from a list shorter than the total GitHub reports for it", async () => {
+  it("cancels what a short list holds, and still fails when the lists stay shorter than GitHub's totals", async () => {
     const posts = [];
     const fetchImpl = async (url, { method = "GET" } = {}) => {
       if (method === "POST") {
-        posts.push(url);
+        posts.push(Number(url.split("/").at(-2)));
         return { ok: true, status: 202 };
       }
-      return { ok: true, status: 200, json: async () => ({ total_count: 5, workflow_runs: url.includes("status=queued&") && url.includes("event=pull_request&") ? [run(1)] : [] }) };
+      const queued = url.includes("status=queued&") && url.includes("event=pull_request&");
+      return { ok: true, status: 200, json: async () => ({ total_count: queued ? 5 : 0, workflow_runs: queued ? [run(1)] : [] }) };
     };
     expect(await main(env, { fetchImpl })).toBe(1);
-    expect(posts).toEqual([]);
+    expect(posts).toEqual([1]);
   });
 
-  it("refuses past the API's 1,000-run window, which a full page through page 10 cannot see beyond", async () => {
-    const page = Array.from({ length: 100 }, (_, at) => run(1000 + at));
+  it("succeeds when a list that came back short is whole on the next scan", async () => {
+    // A run arrived while the first scan read the queued list, so its total was one ahead.
+    let queuedReads = 0;
+    const posts = [];
+    const fetchImpl = async (url, { method = "GET" } = {}) => {
+      if (method === "POST") {
+        posts.push(Number(url.split("/").at(-2)));
+        return { ok: true, status: 202 };
+      }
+      const queued = url.includes("status=queued&") && url.includes("event=pull_request&");
+      if (queued) queuedReads += 1;
+      const total = queued ? (queuedReads === 1 ? 2 : 1) : 0;
+      return { ok: true, status: 200, json: async () => ({ total_count: total, workflow_runs: queued ? [run(1)] : [] }) };
+    };
+    expect(await main(env, { fetchImpl })).toBe(0);
+    expect(posts).toEqual([1]);
+  });
+
+  it("keeps scanning while the lists are short, even when a scan finds nothing new", async () => {
+    // Short on the first two scans, whole on the third: only then may it report success.
+    let queuedReads = 0;
     const fetchImpl = async (url, { method = "GET" } = {}) => {
       if (method === "POST") return { ok: true, status: 202 };
+      const queued = url.includes("status=queued&") && url.includes("event=pull_request&");
+      if (queued) queuedReads += 1;
+      const total = queued ? (queuedReads <= 2 ? 2 : 1) : 0;
+      return { ok: true, status: 200, json: async () => ({ total_count: total, workflow_runs: queued ? [run(1)] : [] }) };
+    };
+    expect(await main(env, { fetchImpl })).toBe(0);
+    expect(queuedReads).toBe(3);
+  });
+
+  it("fails past the API's 1,000-run window, which a full page through page 10 cannot see beyond, having cancelled what it could see", async () => {
+    const page = Array.from({ length: 100 }, (_, at) => run(1000 + at));
+    let posts = 0;
+    const fetchImpl = async (url, { method = "GET" } = {}) => {
+      if (method === "POST") {
+        posts += 1;
+        return { ok: true, status: 202 };
+      }
       const full = url.includes("status=queued&") && url.includes("event=pull_request&");
       return { ok: true, status: 200, json: async () => ({ total_count: full ? 1500 : 0, workflow_runs: full ? page : [] }) };
     };
     expect(await main(env, { fetchImpl })).toBe(1);
+    expect(posts).toBe(100);
   });
 
   it("scans again, so a run that moved between states while the list was read is still cancelled", async () => {

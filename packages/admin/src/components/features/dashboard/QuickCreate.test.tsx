@@ -35,6 +35,7 @@ interface TestCollection {
   name: string;
   label?: string;
   labels?: { singular: string; plural: string };
+  admin?: { hidden?: boolean };
 }
 
 function collection(
@@ -87,6 +88,25 @@ describe("the quick-create card", () => {
     // The control: `pages` IS in the list the server returned, so its absence
     // is this filter acting rather than the fixture never offering it.
     expect(screen.queryByTestId("quick-create-pages")).toBeNull();
+  });
+
+  it("offers no shortcut for a collection kept off the dashboard, even one the reader may create in", () => {
+    // `internal: true` is stored as `admin.hidden`, so the page builder's usage index stands for
+    // both. The reader holds the create grant, so only the dashboard rule removes it.
+    mockCollections.mockReturnValue(
+      listing([
+        collection({ name: "posts" }),
+        collection({ name: "nx_pb_class_usage", admin: { hidden: true } }),
+      ])
+    );
+    mockPermissions.mockReturnValue(
+      granting(["create-posts", "create-nx_pb_class_usage"])
+    );
+
+    render(<QuickCreate />);
+
+    expect(screen.getByTestId("quick-create-posts")).toBeInTheDocument();
+    expect(screen.queryByTestId("quick-create-nx_pb_class_usage")).toBeNull();
   });
 
   it("names the entity the way its form does", () => {

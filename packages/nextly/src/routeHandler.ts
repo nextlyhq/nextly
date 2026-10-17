@@ -66,6 +66,7 @@ import {
 } from "./api/image-sizes";
 import { listJobsRoute } from "./api/jobs-list-route";
 import { runJobsRoute } from "./api/jobs-run-route";
+import { getNoticeCount, getNotices, markNoticesRead } from "./api/notices";
 import { mintPreviewLink, revokePreviewLinks } from "./api/preview-links";
 import { resolveEntryPreviewUrl } from "./api/preview-url";
 import { handleReleaseRequest } from "./api/releases";
@@ -382,6 +383,7 @@ const DIRECT_DISPATCH_SERVICES = new Set<string>([
   "apiKeys",
   "webhooks",
   "releases",
+  "notices",
   "jobs",
   "generalSettings",
   "previewLinks",
@@ -563,6 +565,32 @@ async function handleDocumentLockRequest(
       // `{ error }` body is unreadable exactly when someone is debugging.
       throw NextlyError.notFound({
         logContext: { service: "documentLock", method },
+      });
+  }
+}
+
+// ============================================================================
+// Notices Direct Dispatch
+// ============================================================================
+
+/** The signed-in person's notices. */
+async function handleNoticesRequest(
+  req: Request,
+  method: string
+): Promise<Response> {
+  switch (method) {
+    case "getNotices":
+      return getNotices(req);
+    case "getNoticeCount":
+      return getNoticeCount(req);
+    case "markNoticesRead":
+      return markNoticesRead(req);
+    default:
+      // Thrown, not answered by hand, so the shared handler supplies the
+      // canonical envelope, request id and status, as for the jobs routes.
+      throw NextlyError.notFound({
+        message: `Unknown notices operation: ${method}`,
+        logContext: { reason: "unknown-notices-operation", method },
       });
   }
 }
@@ -1362,6 +1390,13 @@ async function handleServiceRequest(
   // has no body for.
   if (service === "translations") {
     return handleTranslationsRequest(req, method);
+  }
+
+  // ==================== NOTICES DIRECT DISPATCH ====================
+  // Owns its auth (requireAuthentication, refusing API keys) and reads its own
+  // body, so it intercepts before `req.text()` for the reason dashboard does.
+  if (service === "notices") {
+    return handleNoticesRequest(req, method);
   }
 
   // ==================== SCHEMA DIRECT DISPATCH (F10 PR 4) ====================

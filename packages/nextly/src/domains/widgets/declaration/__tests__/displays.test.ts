@@ -30,7 +30,16 @@ const SAMPLES: { [D in CoreDisplay]: Canonical<D> } = {
     items: [{ title: "A" }],
     fields: [{ name: "title", label: "Title", type: "string" }],
   },
-  bars: { buckets: [{ value: "paid", count: 1 }], truncated: false },
+  bars: {
+    buckets: [{ value: "paid", count: 1 }],
+    truncated: false,
+    field: {
+      name: "status",
+      label: "Status",
+      type: "string",
+      choices: [{ value: "paid", label: "Paid" }],
+    },
+  },
   timeseries: { points: [{ start: "2026-10-01", count: 1 }], interval: "day" },
 };
 
@@ -67,6 +76,35 @@ describe("the data core's displays draw, checked at run time", () => {
       }
     }
   );
+
+  it("bars: refuses each property of the grouped field given the wrong kind", () => {
+    const field = SAMPLES.bars.field;
+    for (const key of Object.keys(field)) {
+      expect(
+        displayDataProblem("bars", {
+          ...SAMPLES.bars,
+          field: { ...field, [key]: WRONG_KIND },
+        }),
+        `bars.field.${key}`
+      ).toContain(`field.${key}`);
+    }
+  });
+
+  it("refuses a choice a card could not show, on a list's column and on a grouped field", () => {
+    const blank = [{ value: "paid", label: "  " }];
+    expect(
+      displayDataProblem("list", {
+        ...SAMPLES.list,
+        fields: [{ name: "status", choices: blank }],
+      })
+    ).toContain("fields.0.choices.0.label");
+    expect(
+      displayDataProblem("bars", {
+        ...SAMPLES.bars,
+        field: { name: "status", choices: [{ value: 1, label: "Paid" }] },
+      })
+    ).toContain("field.choices.0.value");
+  });
 
   it("refuses a list's column that names no field", () => {
     expect(
