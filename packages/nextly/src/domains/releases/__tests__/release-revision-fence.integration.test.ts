@@ -98,13 +98,17 @@ async function singleWithOneMember(
  * The service over a given repository. Only the repository is reached by the
  * moves under test for a trusted caller; the other collaborators refuse, so a
  * path that reached one would fail loudly rather than pass by accident.
+ *
+ * The one exception is the lifecycle: scheduling asks it of every member as a
+ * readiness check, so it answers as the posts collection does — it has one —
+ * and a refusal here is the fence's, not a check failing on a stand-in.
  */
 function serviceOver(repository: ReleasesRepository): ReleasesService {
   return new ReleasesService({
     repository,
     targets: {
       readDocument: async () => null,
-      declaresLifecycle: async () => false,
+      declaresLifecycle: async () => true,
     },
     canManageReleases: async () => false,
     canActOnDocument: async () => false,
