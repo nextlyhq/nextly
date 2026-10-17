@@ -25,16 +25,15 @@ const prompts = vi.hoisted(() => ({
   warn: vi.fn(),
   cancel: vi.fn(),
 }));
-// Stands in for the scaffold: a project on this CLI's own release, which is
-// what the skills are written for.
+// Stands in for the scaffold: a project on the release the test's skills
+// say they were checked against, so they are written.
 const copyTemplate = vi.hoisted(() =>
   vi.fn(async (options: { targetDir: string }) => {
     const { mkdir, writeFile } = await import("node:fs/promises");
-    const { packageVersion } = await import("../lib/package-version");
     await mkdir(options.targetDir, { recursive: true });
     await writeFile(
       `${options.targetDir}/package.json`,
-      JSON.stringify({ dependencies: { nextly: packageVersion() } })
+      JSON.stringify({ dependencies: { nextly: "9.9.9-skills" } })
     );
   })
 );
@@ -112,9 +111,10 @@ vi.mock("../generators/agent-skills", async importOriginal => {
 });
 
 import { createNextly } from "../create-nextly";
-import { packageVersion } from "../lib/package-version";
 
-const SKILL_TEXT = "---\nname: nextly-install\n---\nInstall Nextly.\n";
+/** The release the test's bundle declares, apart from this CLI's own on purpose. */
+const SKILLS_VERSION = "9.9.9-skills";
+const SKILL_TEXT = `---\nname: nextly-install\nmetadata:\n  nextly-version: ${SKILLS_VERSION}\n---\nInstall Nextly.\n`;
 
 let dir: string;
 
@@ -172,9 +172,9 @@ describe("createNextly and the skills for coding agents", () => {
 
     expect(skillsAsked()).toBe(0);
     expect(await skillsIn(path.join(dir, "my-app"))).toEqual(both);
-    expect(prompts.info).toHaveBeenCalledWith(
-      "Added skills for coding agents to .agents/skills and .claude/skills: nextly-install"
-    );
+    const said = prompts.info.mock.calls.map(([message]) => String(message));
+    expect(said).toContain("Wrote .agents/skills/nextly-install");
+    expect(said).toContain("Wrote .claude/skills/nextly-install");
   });
 
   it("asks, and adds nothing when the answer is no", async () => {
@@ -245,7 +245,7 @@ describe("createNextly and the skills for coding agents", () => {
     await writeFile(
       path.join(app, "package.json"),
       JSON.stringify({
-        dependencies: { next: "16.0.0", nextly: packageVersion() },
+        dependencies: { next: "16.0.0", nextly: SKILLS_VERSION },
       })
     );
 
@@ -294,9 +294,32 @@ describe("createNextly and the skills for coding agents", () => {
     expect(warned).toContainEqual(
       expect.stringMatching(
         new RegExp(
-          `nextly 0\\.0\\.1.*written for ${packageVersion().replace(/\./g, "\\.")}.*nextlyhq\\.com/docs/guides/coding-agents`
+          `nextly 0\\.0\\.1.*written for ${SKILLS_VERSION.replace(/\./g, "\\.")}.*nextlyhq\\.com/docs/guides/coding-agents`
         )
       )
+    );
+  });
+
+  // The skills name the release they were checked against; a bundle that does
+  // not cannot say which projects they suit, so the run stops before writing.
+  it("stops before anything is scaffolded when the skills name no release", async () => {
+    await writeFile(
+      path.join(state.bundle, "nextly-install/SKILL.md"),
+      "---\nname: nextly-install\n---\nInstall Nextly.\n"
+    );
+
+    await expect(
+      createNextly({
+        cwd: dir,
+        defaults: true,
+        projectNameFromArg: "my-app",
+        skipInstall: true,
+      })
+    ).rejects.toThrow("process.exit(1)");
+
+    expect(copyTemplate).not.toHaveBeenCalled();
+    expect(String(prompts.cancel.mock.calls[0]?.[0])).toMatch(
+      /metadata\.nextly-version/
     );
   });
 });

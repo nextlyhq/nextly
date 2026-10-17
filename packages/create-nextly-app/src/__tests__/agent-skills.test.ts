@@ -21,7 +21,6 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   AGENT_SKILL_HOMES,
   type BundledSkill,
-  describeWrittenSkills,
   projectNextlyVersion,
   readBundledSkills,
   skillsVersionMismatch,
@@ -224,27 +223,6 @@ describe("writeAgentSkills", () => {
   });
 });
 
-describe("describeWrittenSkills", () => {
-  it("names each skill once, with the homes it went to", () => {
-    expect(
-      describeWrittenSkills({
-        written: [
-          ".agents/skills/nextly-install",
-          ".agents/skills/nextly-deploy",
-          ".claude/skills/nextly-install",
-        ],
-        changed: [],
-        skipped: [],
-      })
-    ).toBe(
-      "Added skills for coding agents to .agents/skills and .claude/skills: nextly-install, nextly-deploy"
-    );
-    expect(
-      describeWrittenSkills({ written: [], changed: [], skipped: [] })
-    ).toBeNull();
-  });
-});
-
 // The command is printed by this CLI and written in two places people read;
 // all three must be the one the CLI prints, or an edit to it reaches only one.
 describe("the update command, wherever it is written", () => {
@@ -278,6 +256,17 @@ describe("projectNextlyVersion", () => {
     });
 
     expect(await projectNextlyVersion(app())).toBe("0.0.2-alpha.9");
+  });
+
+  it("reads a package a workspace hoisted to a folder above", async () => {
+    await write("package.json", { dependencies: { nextly: "^1.2.3" } });
+    await mkdir(path.join(dir, "node_modules/nextly"), { recursive: true });
+    await writeFile(
+      path.join(dir, "node_modules/nextly/package.json"),
+      JSON.stringify({ version: "1.2.3" })
+    );
+
+    expect(await projectNextlyVersion(app())).toBe("1.2.3");
   });
 
   it("names no release for a range, a dist-tag, or nothing at all", async () => {

@@ -9,7 +9,7 @@ import pc from "picocolors";
 import { generateAdminPage } from "./generators/admin";
 import {
   type BundledSkill,
-  describeWrittenSkills,
+  bundledSkillsVersion,
   projectNextlyVersion,
   readBundledSkills,
   skillsVersionMismatch,
@@ -391,6 +391,9 @@ export async function createNextly(
   // written, so a broken bundle stops the run while the project is untouched.
 
   let agentSkills: BundledSkill[] = [];
+  // The release the bundled skills were checked against, from their own
+  // frontmatter; which projects get them is decided by it.
+  let agentSkillsVersion = "";
   if (projectType !== "plugin" && options.skills !== false) {
     let addSkills = true;
     if (!defaults) {
@@ -408,6 +411,7 @@ export async function createNextly(
     if (addSkills) {
       try {
         agentSkills = await readBundledSkills();
+        agentSkillsVersion = bundledSkillsVersion(agentSkills);
       } catch (error) {
         p.cancel((error as Error).message);
         process.exit(1);
@@ -590,8 +594,8 @@ export async function createNextly(
     // What the existing-app generators did that the developer should know about.
     const reported: GeneratedFiles[] = [];
     // Its written folders are said in one line, below, rather than one each.
-    let skillsReport: GeneratedFiles | null = null;
-    let skillsMismatch: string | null = null;
+    // Said once the spinner stops, after what was written and left alone.
+    const warnings: string[] = [];
     try {
       if (!isFreshProject) {
         // Existing project: generate Nextly config files
@@ -613,28 +617,24 @@ export async function createNextly(
         await generateEnv(cwd, envDatabase);
       }
       if (agentSkills.length > 0) {
-        // Written only into a project on this CLI's own release, which is
-        // what they were checked against; after the install, so the release
-        // read is the one installed.
-        skillsMismatch = skillsVersionMismatch(
+        // Written only into a project on the release the skills were checked
+        // against; after the install, so the release read is the one
+        // installed.
+        const mismatch = skillsVersionMismatch(
           await projectNextlyVersion(cwd),
-          packageVersion()
+          agentSkillsVersion
         );
-        if (skillsMismatch === null) {
-          skillsReport = await writeAgentSkills(
-            cwd,
-            agentSkills,
-            packageVersion()
+        if (mismatch === null) {
+          reported.push(
+            await writeAgentSkills(cwd, agentSkills, agentSkillsVersion)
           );
-          reported.push({ ...skillsReport, written: [] });
+        } else {
+          warnings.push(mismatch);
         }
       }
       s.stop("Environment configured");
       // After the spinner stops, so the line is not drawn over.
       if (nextConfigPatch) printNextConfigPatch(nextConfigPatch);
-      const skillsLine = skillsReport && describeWrittenSkills(skillsReport);
-      if (skillsLine) p.log.info(skillsLine);
-      if (skillsMismatch) p.log.warn(skillsMismatch);
       for (const files of reported) {
         for (const written of files.written) p.log.info(`Wrote ${written}`);
         for (const { path: changed, added } of files.changed)
@@ -644,6 +644,7 @@ export async function createNextly(
           if (toAdd) p.log.message(toAdd);
         }
       }
+      for (const warning of warnings) p.log.warn(warning);
     } catch (error) {
       s.stop("Failed to generate configuration");
       telemetry.capture("scaffold_failed", {

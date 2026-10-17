@@ -3,7 +3,8 @@ import { lstat, mkdir, readdir, readFile, rm, writeFile } from "fs/promises";
 import path from "path";
 import { fileURLToPath } from "url";
 
-import { EXACT_VERSION } from "../utils/template";
+import { skillsVersion } from "../lib/bundled-skills";
+import { EXACT_VERSION } from "../lib/exact-version";
 
 import type { GeneratedFiles } from "./generated-files";
 
@@ -98,6 +99,23 @@ async function filesIn(
 }
 
 /**
+ * The release the bundled skills were checked against, from their own
+ * frontmatter. Read with the bundle, before anything is written, so a bundle
+ * that declares none, or disagrees with itself, stops the run untouched.
+ */
+export function bundledSkillsVersion(skills: BundledSkill[]): string {
+  return skillsVersion(
+    skills.map(skill => ({
+      name: skill.name,
+      text:
+        skill.files
+          .find(file => file.path === "SKILL.md")
+          ?.content.toString("utf8") ?? "",
+    }))
+  );
+}
+
+/**
  * The command that brings a project's skills up to `version`, for both
  * homes at once. It replaces the folders it installs, edits included, and
  * `--copy` makes it write real files into `.claude/skills/` as this CLI does,
@@ -116,10 +134,8 @@ export function updateSkillsCommand(version: string): string {
 export async function projectNextlyVersion(
   projectRoot: string
 ): Promise<string | null> {
-  const installed = await readJson(
-    path.join(projectRoot, "node_modules", "nextly", "package.json")
-  );
-  if (typeof installed?.version === "string") return installed.version;
+  const installed = await installedNextlyVersion(projectRoot);
+  if (installed !== null) return installed;
   const manifest = await readJson(path.join(projectRoot, "package.json"));
   for (const field of ["dependencies", "devDependencies"] as const) {
     const declared = (manifest?.[field] as Record<string, unknown> | undefined)
@@ -129,6 +145,27 @@ export async function projectNextlyVersion(
     }
   }
   return null;
+}
+
+/**
+ * The version of the `nextly` Node.js would load from `projectRoot`: the
+ * first `node_modules/nextly` in it or a folder above, as a workspace that
+ * hoists its dependencies puts it. Null when there is none, as under Yarn
+ * Plug'n'Play, which keeps no such folder.
+ */
+async function installedNextlyVersion(
+  projectRoot: string
+): Promise<string | null> {
+  let folder = path.resolve(projectRoot);
+  for (;;) {
+    const manifest = await readJson(
+      path.join(folder, "node_modules", "nextly", "package.json")
+    );
+    if (typeof manifest?.version === "string") return manifest.version;
+    const parent = path.dirname(folder);
+    if (parent === folder) return null;
+    folder = parent;
+  }
 }
 
 /** A JSON file's object, or null when it is missing or not an object. */
@@ -241,20 +278,4 @@ async function whyNotWritable(
       return "the project already has a skill of this name, so it was left as it is";
   }
   return null;
-}
-
-/**
- * One line naming the skills written, in place of a line per folder: on a
- * new project every skill is written to both homes, and eight lines saying
- * so would bury the rest of the report.
- */
-export function describeWrittenSkills(report: GeneratedFiles): string | null {
-  if (report.written.length === 0) return null;
-  const names = [
-    ...new Set(report.written.map(folder => path.posix.basename(folder))),
-  ];
-  const homes = AGENT_SKILL_HOMES.filter(home =>
-    report.written.some(folder => folder.startsWith(`${home}/`))
-  );
-  return `Added skills for coding agents to ${homes.join(" and ")}: ${names.join(", ")}`;
 }

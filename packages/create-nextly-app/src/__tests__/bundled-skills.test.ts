@@ -18,7 +18,13 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 // The check the build itself calls, from the repository's scripts.
 import { userSkillSeparation } from "../../../../scripts/agent-skills.mjs";
-import { copyBundledSkills, skillsToBundle } from "../lib/bundled-skills";
+import {
+  copyBundledSkills,
+  skillsToBundle,
+  skillsVersion,
+  skillsVersionIn,
+  skillVersionOf,
+} from "../lib/bundled-skills";
 
 const repository = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -117,5 +123,46 @@ describe("copyBundledSkills", () => {
       /has no SKILL\.md/
     );
     expect(await readdir(dest)).toEqual(["kept"]);
+  });
+});
+
+const declaring = (version: string) =>
+  `---\nname: x\ndescription: y\nmetadata:\n  nextly-version: ${version}\n---\nText.\n`;
+
+describe("the release a skill was checked against", () => {
+  it("is read from metadata.nextly-version, and only as one exact version", () => {
+    expect(skillVersionOf(declaring("0.0.2-alpha.66"))).toBe("0.0.2-alpha.66");
+    expect(skillVersionOf(declaring("^0.0.2"))).toBeNull();
+    expect(skillVersionOf("---\nname: x\n---\nText.\n")).toBeNull();
+    expect(skillVersionOf("No frontmatter at all.\n")).toBeNull();
+  });
+
+  it("is one release for the whole set, or the set is refused", () => {
+    expect(
+      skillsVersion([
+        { name: "a", text: declaring("1.0.0") },
+        { name: "b", text: declaring("1.0.0") },
+      ])
+    ).toBe("1.0.0");
+    expect(() =>
+      skillsVersion([
+        { name: "a", text: declaring("1.0.0") },
+        { name: "b", text: declaring("1.0.1") },
+      ])
+    ).toThrow(/different nextly releases.*a 1\.0\.0, b 1\.0\.1/);
+    expect(() =>
+      skillsVersion([
+        { name: "a", text: declaring("1.0.0") },
+        { name: "b", text: "---\nname: b\n---\n" },
+      ])
+    ).toThrow(/b declares no metadata\.nextly-version/);
+  });
+
+  // The build asks this of the repository's own skills, so they must agree.
+  it("is declared by every skill this repository bundles", () => {
+    const names = skillsToBundle(userSkillSeparation(repository));
+    expect(skillsVersionIn(path.join(repository, "skills"), names)).toMatch(
+      /^\d+\.\d+\.\d+/
+    );
   });
 });

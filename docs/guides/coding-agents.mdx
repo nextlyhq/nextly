@@ -29,6 +29,8 @@ npx create-nextly-app@alpha my-app --no-skills
 
 Running `create-nextly-app` inside an existing Next.js app asks the same question. A skill folder the project already has is left exactly as it is, and the output says which ones were skipped.
 
+The skills are added only when the project's `nextly` is the release they were checked against. Each skill names that release in its `metadata.nextly-version`. A project that installs another release, for example because npm's `latest` tag lags the `create-nextly-app` you ran, gets no skills. Instead, the output names both versions, and you can add matching skills as described below.
+
 ## Adding or updating the skills
 
 To add the skills to a project that has none, or to bring them up to the Nextly version you now run, first read that version:
