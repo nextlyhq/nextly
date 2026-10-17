@@ -224,6 +224,7 @@ installed and removed with two commands, run while the plugin is in your config:
 
 ```bash
 nextly plugins install <name>                # apply its pending modules, then onInstall
+nextly plugins install --all                 # the same for every enabled plugin, dependencies first
 nextly plugins uninstall <name>              # onUninstall, then every module's DOWN
 nextly plugins uninstall <name> --keep-data  # onUninstall only; the tables stay, orphaned
 ```

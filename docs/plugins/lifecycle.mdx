@@ -152,6 +152,8 @@ which calls `onInstall` again, and an uninstall that stopped part-way is finishe
 running it again, which calls `onUninstall` again. A plugin counts as installed only
 once `nextly plugins install` has finished on that database: a production boot
 refuses it before then, and so does the install of a plugin that depends on it.
+`nextly plugins install --all` installs every enabled plugin in your config, its
+dependencies first, and stops at the first that fails.
 
 ## Inspecting
 
