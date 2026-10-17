@@ -310,6 +310,57 @@ export async function readIndexNames(
 }
 
 /**
+ * The columns a UNIQUE index covers on its own, whatever the index is called.
+ *
+ * An index's name says nothing about what it enforces: one under a unique index's expected name can
+ * stand on another column, and a unique index under another name can cover this one. A save that
+ * has to know whether a column's values are already held unique, after one MySQL refused part-way
+ * say, asks the catalog what each index covers rather than which names it holds. Single-column
+ * indexes only, because a unique field is enforced by one; the primary key counts.
+ */
+export async function readUniqueColumns(
+  db: unknown,
+  dialect: SupportedDialect,
+  tableName: string
+): Promise<Set<string>> {
+  const columns = new Set<string>();
+
+  if (dialect === "postgresql") {
+    const result = (await (db as PgMysqlExecute).execute(
+      sql`SELECT a.attname AS column_name
+          FROM pg_index i
+          JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = i.indkey[0]
+          WHERE i.indrelid = to_regclass(${tableName}) AND i.indisunique AND i.indnatts = 1`
+    )) as { rows: { column_name: string }[] };
+    for (const row of result.rows) columns.add(row.column_name);
+    return columns;
+  }
+
+  if (dialect === "mysql") {
+    const rows = mysqlRows<{ COLUMN_NAME: string }>(
+      await (db as PgMysqlExecute).execute(
+        sql`SELECT MIN(COLUMN_NAME) AS COLUMN_NAME FROM information_schema.STATISTICS
+            WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ${tableName} AND NON_UNIQUE = 0
+            GROUP BY INDEX_NAME HAVING COUNT(*) = 1`
+      )
+    );
+    for (const row of rows) columns.add(row.COLUMN_NAME);
+    return columns;
+  }
+
+  const indexes = (await (db as SqliteAll).all(
+    sql`PRAGMA index_list(${sql.identifier(tableName)})`
+  )) as { name: string; unique: number }[];
+  for (const index of indexes.filter(i => Number(i.unique) === 1)) {
+    const covered = (await (db as SqliteAll).all(
+      sql`PRAGMA index_info(${sql.identifier(index.name)})`
+    )) as { name: string }[];
+    if (covered.length === 1 && covered[0]) columns.add(covered[0].name);
+  }
+  return columns;
+}
+
+/**
  * The foreign-key constraints the table carries, keyed by the column they are attached to.
  *
  * Presence of a key is the fact every caller needs; the names matter only to MySQL, which is

@@ -39,6 +39,7 @@ import type {
   ForeignKeySpec,
   ReferentialAction,
 } from "../../schema/pipeline/diff/types";
+import { builderDropColumnSql } from "../../schema/pipeline/sql-templates/common-statements";
 import {
   addForeignKeySql,
   changeForeignKeyActionStatements,
@@ -485,6 +486,80 @@ export class DynamicCollectionSchemaService {
       : `CREATE UNIQUE INDEX IF NOT EXISTS ${name} ON ${target};`;
   }
 
+  /** The refusal for a unique field on a column type this dialect cannot key. */
+  private uniquenessNotEnforceable(
+    tableName: string,
+    field: FieldDefinition
+  ): NextlyError {
+    return NextlyError.validation({
+      errors: [
+        {
+          path: `fields.${field.name}`,
+          code: "UNIQUE_NOT_ENFORCEABLE_ON_DIALECT",
+          message:
+            `"${field.name}" is marked unique, but ${this.dialect} cannot enforce ` +
+            `uniqueness on a ${field.type} column. Store the value in a short-variant ` +
+            `text field, which becomes a bounded VARCHAR the server can key, or remove ` +
+            `the unique flag.`,
+        },
+      ],
+      logContext: {
+        tableName,
+        field: field.name,
+        type: field.type,
+        dialect: this.dialect,
+      },
+    });
+  }
+
+  /**
+   * The index statements for kept fields whose `unique` flag changed.
+   *
+   * Turning it on creates the field's unique index, unless one already covers the column: a save
+   * that MySQL refused part-way can have created it, and its name alone proves nothing, so what
+   * the live table's unique indexes cover is asked (`uniqueColumns`). Turning it off drops the
+   * field's unique index where the table has one. Recording the flag without either would leave
+   * the registry claiming a uniqueness the table does not enforce, or enforcing one it no longer
+   * claims.
+   */
+  private uniquenessToggleStatements(
+    tableName: string,
+    pairs: readonly { previous: FieldDefinition; field: FieldDefinition }[],
+    options:
+      | {
+          uniqueColumns?: ReadonlySet<string>;
+          indexNames?: ReadonlySet<string>;
+        }
+      | undefined
+  ): string[] {
+    const statements: string[] = [];
+    for (const { previous, field } of pairs) {
+      if (previous.unique === field.unique || !fieldProducesColumn(field))
+        continue;
+      const column = toSnakeCase(field.name);
+      if (field.unique === true) {
+        if (options?.uniqueColumns?.has(column)) continue;
+        if (this.plannedUniqueIndexName(tableName, field) === null) {
+          if (column === "slug") continue;
+          throw this.uniquenessNotEnforceable(tableName, field);
+        }
+        statements.push(this.uniqueIndexSql(tableName, column));
+        continue;
+      }
+      const present = this.uniqueIndexNameCandidates(tableName, column).find(
+        name => options?.indexNames?.has(name) === true
+      );
+      if (present === undefined) continue;
+      if (this.dialect === "postgresql") {
+        statements.push(
+          `ALTER TABLE ${this.quoteIdentifier(tableName)} DROP CONSTRAINT IF EXISTS ${this.quoteIdentifier(present)};`
+        );
+      }
+      statements.push(this.dropIndexSql(tableName, present));
+    }
+    return statements;
+  }
+
   /**
    * Whether this dialect can carry the uniqueness as a NAMED index on this column.
    *
@@ -786,6 +861,18 @@ export class DynamicCollectionSchemaService {
    * A relationship is the case with no answer: every id the generator could write references a
    * row that does not exist, and `DEFAULT NULL` does not satisfy `NOT NULL` on any dialect.
    */
+  /**
+   * The literal an added column gives the rows that already exist, or null when they get NULL:
+   * a required column's backfill, or a stated default. The same answer the ADD below writes, for a
+   * precondition that has to know before the statement runs (two rows given one value cannot take
+   * a unique index).
+   */
+  addedColumnBackfill(field: FieldDefinition): string | null {
+    return field.required || field.default !== undefined
+      ? this.requiredColumnBackfill(field)
+      : null;
+  }
+
   private requiredColumnBackfill(field: FieldDefinition): string | null {
     const literal =
       field.default !== undefined
@@ -1226,6 +1313,13 @@ ${allColumnDefs.join(",\n")}
        */
       indexNames?: ReadonlySet<string>;
       /**
+       * The columns a single-column UNIQUE index covers, read from the live table by
+       * `readUniqueColumns`. Consulted before a kept field is made unique, so an index that
+       * already enforces it (left by a save MySQL refused part-way) is not created twice, and an
+       * index that merely holds the expected name on another column is not taken for it.
+       */
+      uniqueColumns?: ReadonlySet<string>;
+      /**
        * Physical table name per referenced field-group slug, resolved from the
        * REGISTRY by the caller. A field group's data table is whatever the
        * registry says it is — the storage migration renames comp_ tables to
@@ -1299,6 +1393,10 @@ ${allColumnDefs.join(",\n")}
       );
 
       for (const column of lifecycleColumns) {
+        // A column this table already has is not added again: a save that MySQL, which commits
+        // each schema statement, refused part-way can have added it while the registry still
+        // records the lifecycle as off, and adding a column twice fails on every dialect.
+        if (hasStatus && options?.liveColumnTypes?.has(column.name)) continue;
         statements.push(
           hasStatus
             ? `ALTER TABLE ${this.quoteIdentifier(tableName)} ADD COLUMN ${renderSystemColumnSql(column, name => this.quoteIdentifier(name))};`
@@ -1467,25 +1565,7 @@ ${allColumnDefs.join(",\n")}
         // TEXT/BLOB either way, and cannot index JSON at all. Saying so is the only honest
         // outcome, and saying it first is what keeps the table untouched.
         if (field.unique && !this.uniquenessCanBeAnIndex(type)) {
-          throw NextlyError.validation({
-            errors: [
-              {
-                path: `fields.${field.name}`,
-                code: "UNIQUE_NOT_ENFORCEABLE_ON_DIALECT",
-                message:
-                  `"${field.name}" is marked unique, but ${this.dialect} cannot enforce ` +
-                  `uniqueness on a ${field.type} column. Store the value in a short-variant ` +
-                  `text field, which becomes a bounded VARCHAR the server can key, or remove ` +
-                  `the unique flag.`,
-              },
-            ],
-            logContext: {
-              tableName,
-              field: field.name,
-              type: field.type,
-              dialect: this.dialect,
-            },
-          });
+          throw this.uniquenessNotEnforceable(tableName, field);
         }
         statements.push(
           `ALTER TABLE ${this.quoteIdentifier(tableName)} ADD COLUMN ${this.quoteIdentifier(addColName)} ${type} ${nullable} ${defaultVal};`.trim()
@@ -1689,16 +1769,13 @@ ${allColumnDefs.join(",\n")}
           statements.push(this.dropIndexSql(tableName, uniquePresent));
         }
 
-        // SQLite doesn't support IF EXISTS on DROP COLUMN
-        if (this.dialect === "sqlite") {
-          statements.push(
-            `ALTER TABLE ${this.quoteIdentifier(tableName)} DROP COLUMN ${this.quoteIdentifier(dropCol)};`
-          );
-        } else {
-          statements.push(
-            `ALTER TABLE ${this.quoteIdentifier(tableName)} DROP COLUMN IF EXISTS ${this.quoteIdentifier(dropCol)};`
-          );
-        }
+        statements.push(
+          builderDropColumnSql(
+            this.dialect,
+            this.quoteIdentifier(tableName),
+            this.quoteIdentifier(dropCol)
+          )
+        );
       }
     }
 
@@ -1904,6 +1981,19 @@ ${allColumnDefs.join(",\n")}
         }
       }
     }
+
+    // A field kept whose `unique` flag changed: its index, which neither the column rewrite above
+    // nor the add and remove loops create or drop.
+    statements.push(
+      ...this.uniquenessToggleStatements(
+        tableName,
+        newFields.flatMap(field => {
+          const previous = previousDefinitionOf(field);
+          return previous ? [{ previous, field }] : [];
+        }),
+        options
+      )
+    );
 
     // The keys whose new action is `SET NULL`, now that the columns they sit
     // on have been relaxed above.
@@ -2443,9 +2533,12 @@ ${allColumnDefs.join(",\n")}
     fields: FieldDefinition[]
   ): {
     indexNames: Set<string>;
+    uniqueColumns: Set<string>;
     foreignKeysByColumn: Map<string, string[]>;
   } {
     const indexNames = new Set<string>();
+    // The key and the system slug index are unique on every generated table.
+    const uniqueColumns = new Set<string>(["id", "slug"]);
     const foreignKeysByColumn = new Map<string, string[]>();
     // The system indexes every generated table carries, named as `generateMigrationSQL` names
     // them, so a system column removed by an edit is not treated as unindexed.
@@ -2469,14 +2562,17 @@ ${allColumnDefs.join(",\n")}
       // The UNIQUE index is a separate object from the plain one and is emitted under its own
       // rule, so it has to be predicted through that rule rather than inferred from this one.
       const uniqueName = this.plannedUniqueIndexName(tableName, field);
-      if (uniqueName !== null) indexNames.add(uniqueName);
+      if (uniqueName !== null) {
+        indexNames.add(uniqueName);
+        uniqueColumns.add(column);
+      }
       if (field.type === "relationship" && field.options?.target) {
         foreignKeysByColumn.set(column, [
           this.relationshipKeyName(tableName, column),
         ]);
       }
     }
-    return { indexNames, foreignKeysByColumn };
+    return { indexNames, uniqueColumns, foreignKeysByColumn };
   }
 
   /**
