@@ -39,6 +39,9 @@ import {
 } from "vitest";
 
 import type { DatabaseConfig } from "../types";
+import { updateSkillsCommand } from "../generators/agent-skills";
+import { skillVersionOf } from "../lib/bundled-skills";
+import { packageVersion } from "../lib/package-version";
 import { scriptRunner } from "../utils/package-manager-commands";
 import { copyTemplate } from "../utils/template";
 
@@ -164,6 +167,30 @@ describe("a scaffolded project arrives with the guide", () => {
       // negative match on "undefined" is no good either: the guide legitimately explains that a
       // missing field yields `undefined`. Naming the expected command separates the cases.
       expect(guide).toContain(`${scriptRunner("npm")} dev`);
+      // The skills command names this CLI's own release, whose tag publishes the
+      // skills it bundles; a tag up to 0.0.2-alpha.66 holds none for apps, and
+      // the guide says so rather than leave an agent to try one.
+      if (projectType === "blank") {
+        expect(guide).toContain(updateSkillsCommand(packageVersion()));
+        expect(guide).toMatch(/0\.0\.2-alpha\.66 publish no\s+skills/);
+        // The restore command is offered only where the project's skill and
+        // the project itself are both on the release the command's skills
+        // were written for, read here from the skills the bundle is built
+        // from; any other project is sent to the docs.
+        const declared = skillVersionOf(
+          await readFile(
+            path.resolve(here, "../../../../skills/nextly-install/SKILL.md"),
+            "utf8"
+          )
+        );
+        expect(declared).toMatch(/^\d+\.\d+\.\d+/);
+        const v = (declared ?? "").replace(/\./g, "\\.");
+        expect(guide).toMatch(
+          new RegExp(
+            `installs skills\\s+written for \`${v}\`[\\s\\S]*?\`metadata\\.nextly-version\`\\s+is exactly \`${v}\`, and \`npx nextly --version\` prints\\s+exactly \`${v}\`[\\s\\S]*?Otherwise[\\s\\S]*?do not run the command above[\\s\\S]*?nextlyhq\\.com/docs/guides/coding-agents`
+          )
+        );
+      }
 
       // CLAUDE.md is the pointer that makes the guide reachable; an empty or mismatched one
       // reads as present while sending the agent nowhere.

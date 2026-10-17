@@ -166,7 +166,7 @@ function assertSlot(slot: string): void {
  * here, so its versions cannot be pinned yet: a pin on one is refused as a
  * document that does not exist.
  */
-const REGISTRY_TABLES: Partial<Record<VersionScopeKind, string>> = {
+export const REGISTRY_TABLES: Partial<Record<VersionScopeKind, string>> = {
   collection: "dynamic_collections",
   single: "dynamic_singles",
 };

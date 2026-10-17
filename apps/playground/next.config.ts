@@ -21,6 +21,12 @@ import type { NextConfig } from "next";
 
 const isDev = process.env.NODE_ENV === "development";
 
+/** The local worker limit a bounded run sets, or `undefined` when there is none. */
+function localWorkerLimit(): number | undefined {
+  const limit = Number(process.env.NEXTLY_LOCAL_MAX_WORKERS);
+  return Number.isInteger(limit) && limit > 0 ? limit : undefined;
+}
+
 // Workspace packages that benefit from Turbopack source bundling in dev
 // (HMR fires when their source files change). Loaded by Next.js itself
 // at compile time, never via a dynamic `import(variable)` call.
@@ -107,6 +113,12 @@ const nextConfig: NextConfig = {
   ],
   experimental: {
     esmExternals: true,
+    // Page data is collected by a pool of one worker per CPU unless this is
+    // set, and that pool runs inside one turbo task: a local run bounded to
+    // two workers still started seven, and ran out of memory. The local
+    // worker limit (scripts/bounded.mjs) sets it; unset, as in CI, Next keeps
+    // its own default.
+    cpus: localWorkerLimit(),
   },
   turbopack: {
     resolveAlias: {

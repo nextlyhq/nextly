@@ -3,8 +3,10 @@ import { fileURLToPath } from "url";
 
 import fs from "fs-extra";
 
+import { bundledSkillsVersionOrNull } from "../generators/agent-skills";
 import { buildNextConfigTemplate } from "../generators/next-config";
 import { EXACT_VERSION } from "../lib/exact-version";
+import { packageVersion } from "../lib/package-version";
 import { getAvailableTemplateNames } from "../lib/templates";
 import type {
   DatabaseConfig,
@@ -510,6 +512,14 @@ function guidePlaceholders(
   return {
     "{{runCommand}}": scriptRunner(packageManager),
     "{{execCommand}}": binaryRunner(packageManager),
+    // The release whose tag publishes the skills this CLI bundles, for the
+    // guide's command that adds or restores them. Not the release the skills
+    // were checked against, whose tag may carry no user skills at all.
+    "{{skillsTag}}": packageVersion(),
+    // The release the skills at that tag declare, which the guide requires the
+    // project to run before it offers that command. "unknown" is never a
+    // version, so a copy without a readable bundle offers no restore.
+    "{{skillsVersion}}": bundledSkillsVersionOrNull() ?? "unknown",
   };
 }
 

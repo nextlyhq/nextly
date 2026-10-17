@@ -1,17 +1,26 @@
-import { existsSync } from "fs";
-import { lstat, mkdir, readdir, readFile, rm, writeFile } from "fs/promises";
+import { existsSync, readdirSync } from "fs";
+import {
+  chmod,
+  lstat,
+  mkdir,
+  readdir,
+  readFile,
+  rm,
+  stat,
+  writeFile,
+} from "fs/promises";
 import path from "path";
 import { fileURLToPath } from "url";
 
-import { skillsVersion } from "../lib/bundled-skills";
+import { skillsVersion, skillsVersionIn } from "../lib/bundled-skills";
 import { EXACT_VERSION } from "../lib/exact-version";
 
 import type { GeneratedFiles } from "./generated-files";
 
 /**
- * Where a project's skills go, one real copy in each. Codex reads only
- * `.agents/skills/` and Claude Code only `.claude/skills/`; Cursor and Copilot
- * read both. Copies rather than a link between them, because Git for Windows
+ * Where a project's skills go, one real copy in each. OpenAI's coding agent
+ * reads only `.agents/skills/` and Claude Code only `.claude/skills/`; Cursor
+ * and Copilot read both. Copies rather than a link between them, because Git for Windows
  * checks a symbolic link out as a text file holding its target.
  */
 export const AGENT_SKILL_HOMES = [".agents/skills", ".claude/skills"] as const;
@@ -20,7 +29,11 @@ export const AGENT_SKILL_HOMES = [".agents/skills", ".claude/skills"] as const;
 export interface BundledSkill {
   name: string;
   /** Paths relative to the skill's folder, with their bytes. */
-  files: { path: string; content: Buffer }[];
+  /**
+   * Paths relative to the skill's folder, with their bytes and permission
+   * bits: a helper script a skill runs directly must stay executable.
+   */
+  files: { path: string; content: Buffer; mode: number }[];
 }
 
 /**
@@ -93,6 +106,7 @@ async function filesIn(
       files.push({
         path: relative,
         content: await readFile(path.join(dir, relative)),
+        mode: (await stat(path.join(dir, relative))).mode & 0o777,
       });
   }
   return files;
@@ -113,6 +127,25 @@ export function bundledSkillsVersion(skills: BundledSkill[]): string {
           ?.content.toString("utf8") ?? "",
     }))
   );
+}
+
+/**
+ * The release the bundled skills declare, for the agent guide: the skills at
+ * this CLI's own tag are these same files, so this is the release that tag's
+ * skills were written for. Null when this copy carries no readable bundle,
+ * which leaves the guide nothing to offer a restore against; a scaffold run
+ * with --no-skills from such a copy must still succeed.
+ */
+export function bundledSkillsVersionOrNull(dir?: string): string | null {
+  try {
+    const skillsDir = dir ?? resolveSkillsPath();
+    const names = readdirSync(skillsDir, { withFileTypes: true })
+      .filter(entry => entry.isDirectory())
+      .map(entry => entry.name);
+    return skillsVersionIn(skillsDir, names);
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -206,14 +239,15 @@ const SKILLS_DOCS = "https://nextlyhq.com/docs/guides/coding-agents";
 /**
  * Copies the skills into the project, in both homes. A skill folder the
  * project already has is left exactly as it is, since it may hold the
- * developer's own changes, and the report says how to replace it on purpose.
- * Nothing is written through a symbolic link, which could put the files
- * outside the project.
+ * developer's own changes, and the report says how to replace it on purpose:
+ * from `releaseTag`, the release whose tag publishes this bundle. Nothing is
+ * written through a symbolic link, which could put the files outside the
+ * project.
  */
 export async function writeAgentSkills(
   projectRoot: string,
   skills: BundledSkill[],
-  version: string
+  releaseTag: string
 ): Promise<GeneratedFiles> {
   const report: GeneratedFiles = { written: [], changed: [], skipped: [] };
   for (const home of AGENT_SKILL_HOMES) {
@@ -223,7 +257,7 @@ export async function writeAgentSkills(
       if (blocked) {
         report.skipped.push({
           path: folder,
-          why: `${blocked}. To replace it with this release's version, run: ${updateSkillsCommand(version)}`,
+          why: `${blocked}. To replace it with this release's version, run: ${updateSkillsCommand(releaseTag)} (if that release's tag is not published yet, ${SKILLS_DOCS} says how to add skills for any release)`,
         });
         continue;
       }
@@ -237,6 +271,9 @@ export async function writeAgentSkills(
           const filePath = path.join(target, file.path);
           await mkdir(path.dirname(filePath), { recursive: true });
           await writeFile(filePath, file.content, { flag: "wx" });
+          // After the write, since a creation mode passes through the
+          // process's umask and can lose an executable bit on the way.
+          await chmod(filePath, file.mode);
         }
       } catch (error) {
         // The folder is this run's own, made just above. Left half-written,

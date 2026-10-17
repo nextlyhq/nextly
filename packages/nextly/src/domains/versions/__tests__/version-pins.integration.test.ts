@@ -48,6 +48,31 @@ afterEach(async () => {
   current = undefined;
 });
 
+/**
+ * Resolve once another session in this test database is waiting on a lock:
+ * the point at which the work a test races is known to be blocked, rather than
+ * assumed to be after a delay. A delay passes vacuously when the blocked side
+ * is merely slow to start; this fails instead, by timing out, when nothing
+ * ever waits, which is what a missing lock looks like.
+ */
+async function untilSomeoneWaitsOnALock(dialect: TestDialect): Promise<void> {
+  const sql =
+    dialect === "postgresql"
+      ? "SELECT count(*)::int AS n FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock'"
+      : // `innodb_trx` does not list every waiting session; the lock-wait view
+        // does, with the waiter's database.
+        "SELECT COUNT(*) AS n FROM performance_schema.data_lock_waits w JOIN performance_schema.threads t ON t.thread_id = w.REQUESTING_THREAD_ID WHERE t.processlist_db = DATABASE()";
+  const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline) {
+    const rows = await current!.adapter.executeQuery<{ n: number | string }>(
+      sql
+    );
+    if (Number(rows[0]?.n ?? 0) > 0) return;
+    await new Promise(resolve => setTimeout(resolve, 20));
+  }
+  throw new Error("no session started waiting on a lock within 10s");
+}
+
 /** A document with a cap of 3 versions, saved once (version 1). */
 async function cappedDocument(dialect: TestDialect) {
   current = await createTestNextly({
@@ -244,8 +269,7 @@ describe.each(getConfiguredTestDialects())(
             order.push("pinned");
           });
 
-        // Long enough for a pin that does not wait to finish.
-        await new Promise(resolve => setTimeout(resolve, 500));
+        await untilSomeoneWaitsOnALock(dialect);
         release();
         await Promise.all([save, pin]);
 
@@ -294,7 +318,7 @@ describe.each(getConfiguredTestDialects())(
             order.push("released");
           });
 
-        await new Promise(resolve => setTimeout(resolve, 500));
+        await untilSomeoneWaitsOnALock(dialect);
         finish();
         await Promise.all([pinning, releasing]);
 
@@ -341,7 +365,7 @@ describe.each(getConfiguredTestDialects())(
             (error: unknown) => error
           );
 
-        await new Promise(resolve => setTimeout(resolve, 500));
+        await untilSomeoneWaitsOnALock(dialect);
         finish();
         await deleting;
         const refused = await pinning;
@@ -390,7 +414,7 @@ describe.each(getConfiguredTestDialects())(
             (error: unknown) => error
           );
 
-        await new Promise(resolve => setTimeout(resolve, 500));
+        await untilSomeoneWaitsOnALock(dialect);
         finish();
         await deleting;
         const refused = await pinning;
@@ -427,6 +451,67 @@ describe.each(getConfiguredTestDialects())(
       ).toBeFalsy();
       expect(await versionPins.list(current!.adapter, doc.ref)).toEqual([]);
     });
+
+    /**
+     * A pin that holds the collection's registry row (the lock `pin` takes
+     * first) while the registry's delete runs, then pins and commits. The
+     * delete must still leave no pin, and must not deadlock with the pin.
+     */
+    async function pinWhileDeleting(
+      doc: Awaited<ReturnType<typeof cappedDocument>>,
+      versionNo: number
+    ) {
+      let finish!: () => void;
+      const held = new Promise<void>(resolve => {
+        finish = resolve;
+      });
+      let locked!: () => void;
+      const lockTaken = new Promise<void>(resolve => {
+        locked = resolve;
+      });
+      const pinning = doc.inTx(async tx => {
+        await tx.selectOne("dynamic_collections", {
+          where: { and: [{ column: "slug", op: "=", value: "notes" }] },
+          forUpdate: true,
+        });
+        locked();
+        await held;
+        await workflows.pin(tx, { ref: doc.ref, slot: "approved", versionNo });
+      });
+      await lockTaken;
+      const deleting = current!
+        .getService("collectionRegistryService")
+        .deleteCollection("notes", { force: true });
+      await untilSomeoneWaitsOnALock(dialect);
+      finish();
+      return Promise.allSettled([pinning, deleting]);
+    }
+
+    it.skipIf(dialect === "sqlite")(
+      "leaves no pin when a pin holds the registry row as its entity is deleted",
+      async () => {
+        const doc = await cappedDocument(dialect);
+        const [pinned, deleted] = await pinWhileDeleting(doc, 1);
+        expect(pinned.status).toBe("fulfilled");
+        expect(deleted.status).toBe("fulfilled");
+        expect(await versionPins.list(current!.adapter, doc.ref)).toEqual([]);
+      }
+    );
+
+    it.skipIf(dialect === "sqlite")(
+      "does not deadlock when a pin moves its slot as its entity is deleted",
+      async () => {
+        const doc = await cappedDocument(dialect);
+        await doc.save(1); // version 2
+        await doc.inTx(tx =>
+          workflows.pin(tx, { ref: doc.ref, slot: "approved", versionNo: 1 })
+        );
+        const [pinned, deleted] = await pinWhileDeleting(doc, 2);
+        expect(pinned.status).toBe("fulfilled");
+        expect(deleted.status).toBe("fulfilled");
+        expect(await versionPins.list(current!.adapter, doc.ref)).toEqual([]);
+      }
+    );
 
     it("removes a collection's pins when the collection is deleted", async () => {
       const doc = await cappedDocument(dialect);

@@ -611,7 +611,10 @@ export async function createNextly(
         );
         if (mismatch === null) {
           reported.push(
-            await writeAgentSkills(cwd, agentSkills, agentSkillsVersion)
+            // The update command names this CLI's release, whose tag publishes
+            // this bundle; the release the skills were checked against may
+            // be an older one whose tag carries no user skills.
+            await writeAgentSkills(cwd, agentSkills, packageVersion())
           );
         } else {
           warnings.push(mismatch);
