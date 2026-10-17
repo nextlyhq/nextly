@@ -30,6 +30,11 @@ import {
 } from "../domains/singles/services/single-document-access";
 import type { UserContext } from "../domains/singles/types";
 import { resolveComparisonPair } from "../domains/versions/comparison-baselines";
+import {
+  applyComponentReadAccess,
+  fieldsCarryingReadRules,
+  nestedWithheldPaths,
+} from "../domains/versions/component-read-access";
 import { computeVersionDiff } from "../domains/versions/diff";
 import type { VersionDiff } from "../domains/versions/diff";
 import { hydrateDiffReferences } from "../domains/versions/diff-references";
@@ -46,7 +51,10 @@ import type {
   VersionScopeKind,
 } from "../schemas/versions/types";
 import { resolveRoleSlugs } from "../services/lib/permissions";
-import { applyFieldReadAccess } from "../shared/lib/field-level-registry";
+import {
+  applyFieldReadAccess,
+  callerAccessGrants,
+} from "../shared/lib/field-level-registry";
 import { stripPasswordFieldValues } from "../shared/lib/password-fields";
 
 import { requireRouteCollectionAccess } from "./route-auth";
@@ -344,16 +352,25 @@ function interpretReadResult(success: boolean, statusCode: number): boolean {
  * the surrounding gate has already established the caller may read the
  * document, and redaction is a narrowing pass on top of that.
  *
- * Returns the top-level keys the read rules removed, so a comparison can say a
- * field is hidden from this reader rather than leave it out unexplained.
- * Password values are stripped too, but are not reported: a comparison never
- * shows a password field at all.
+ * Every read rule applies, the entity's own and, through
+ * `applyComponentReadAccess`, each component's on the instances it holds, at
+ * any depth. A scoped API key is judged on its own grants, as the document
+ * read judges it.
+ *
+ * Returns what the read rules removed: top-level keys, and dotted paths below
+ * them (`banner.secret`), so a comparison can say a field is hidden from this
+ * reader rather than leave it out unexplained. Password values are stripped
+ * too, but are not reported: a comparison never shows a password field at all.
+ *
+ * Fails closed: if the rules cannot be evaluated, every field carrying a read
+ * rule is withheld rather than the snapshot returned as stored.
  */
 export async function redactSnapshotForUser(
   snapshot: unknown,
   scopeKind: VersionScopeKind,
   slug: string,
-  user: UserContext
+  user: UserContext,
+  authenticatedScope?: AuthenticatedScope
 ): Promise<ReadonlySet<string>> {
   const withheld = new Set<string>();
   if (typeof snapshot !== "object" || snapshot === null) return withheld;
@@ -380,22 +397,14 @@ export async function redactSnapshotForUser(
       },
     });
   }
+  // Through component REFERENCES as well. A `component` field carries only a
+  // slug, so a walker given the top-level list alone sees a leaf: a password
+  // declared inside a referenced component would be handed back even though
+  // the live read hides it. Same reasoning as the field converted to
+  // `password` after the fact -- the CURRENT schema decides, wherever the
+  // field is declared. The same map takes the read rules into components.
+  const componentFields = await currentComponentFields(fields);
   if (fields.length > 0) {
-    // Through component REFERENCES as well. A `component` field carries only a
-    // slug, so a walker given the top-level list alone sees a leaf: a password
-    // declared inside a referenced component would be handed back even though
-    // the live read hides it. Same reasoning as the field converted to
-    // `password` after the fact -- the CURRENT schema decides, wherever the
-    // field is declared.
-    const dataService = container.has("fieldGroupDataService")
-      ? container.get<FieldGroupDataService>("fieldGroupDataService")
-      : null;
-    const componentFields = dataService
-      ? await resolveComponentFieldMap(fields, componentSlug =>
-          dataService.getComponentFields(componentSlug)
-        )
-      : new Map<string, FieldConfig[]>();
-
     stripPasswordsThroughComponents(
       entry,
       fields,
@@ -404,18 +413,71 @@ export async function redactSnapshotForUser(
     );
   }
 
+  const before = structuredClone(entry);
   const readable = new Set(Object.keys(entry));
-  await applyFieldReadAccess({
-    kind: scopeKind,
-    slug,
-    entry,
+  const caller = {
     user,
-    overrideAccess: false,
-  });
+    authenticatedScope,
+    grants: callerAccessGrants(user, authenticatedScope),
+  };
+  try {
+    await applyFieldReadAccess({
+      kind: scopeKind,
+      slug,
+      entry,
+      user,
+      authenticatedScope,
+      grants: caller.grants,
+      overrideAccess: false,
+    });
+    await applyComponentReadAccess(entry, fields, componentFields, caller);
+  } catch (error) {
+    // Rules that could not be evaluated decide nothing, so nothing they guard
+    // is shown: every field carrying a read rule is withheld, and named.
+    for (const key of fieldsCarryingReadRules(
+      scopeKind,
+      fields,
+      componentFields,
+      slug
+    )) {
+      delete entry[key];
+    }
+    getService("logger").warn(
+      "Version redaction could not evaluate read rules",
+      {
+        scopeKind,
+        scopeSlug: slug,
+        error: error instanceof Error ? error.message : String(error),
+      }
+    );
+  }
   for (const key of readable) {
     if (!(key in entry)) withheld.add(key);
   }
+  for (const path of nestedWithheldPaths(
+    before,
+    entry,
+    fields,
+    componentFields
+  )) {
+    withheld.add(path);
+  }
   return withheld;
+}
+
+/** The current schemas of the components `fields` reach, by slug. */
+async function currentComponentFields(
+  fields: FieldConfig[]
+): Promise<Map<string, FieldConfig[]>> {
+  if (fields.length === 0) return new Map();
+  const dataService = container.has("fieldGroupDataService")
+    ? container.get<FieldGroupDataService>("fieldGroupDataService")
+    : null;
+  return dataService
+    ? resolveComponentFieldMap(fields, componentSlug =>
+        dataService.getComponentFields(componentSlug)
+      )
+    : new Map<string, FieldConfig[]>();
 }
 
 /**
@@ -831,13 +893,15 @@ export async function diffDocumentVersions(args: {
     fromRow.snapshot,
     args.scopeKind,
     args.slug,
-    args.user
+    args.user,
+    args.authenticatedScope
   );
   const withheldTo = await redactSnapshotForUser(
     toRow.snapshot,
     args.scopeKind,
     args.slug,
-    args.user
+    args.user,
+    args.authenticatedScope
   );
 
   // Page scope has no HTTP diff surface; collection and single are the only
@@ -852,6 +916,8 @@ export async function diffDocumentVersions(args: {
     {
       modifiedOnly: args.modifiedOnly,
       withheld: new Set([...withheldFrom, ...withheldTo]),
+      // `redactSnapshotForUser` ran each component's own read rules.
+      componentRulesApplied: true,
       entity: lookupKind,
     }
   );

@@ -92,6 +92,29 @@ export const ACTIVITY_LOG_INDEXES = [
   { name: "idx_activity_log_user_id", columns: ["userId", "createdAt"] },
 ] as const satisfies readonly CoreIndex<string>[];
 
+export const NOTICES_INDEXES = [
+  // Once per occurrence: the digest of person, kind, subject and occurrence.
+  { name: "nextly_notices_dedupe_uidx", columns: ["dedupeKey"], unique: true },
+  // A person's unread list and count, in the order it pages: newest first,
+  // ties by id.
+  {
+    name: "nextly_notices_user_idx",
+    columns: ["userId", "readAt", "createdAt", "id"],
+  },
+  // A person's whole list, in the order it pages: newest first, ties by id.
+  {
+    name: "nextly_notices_inbox_idx",
+    columns: ["userId", "createdAt", "id"],
+  },
+  // Which notices are about a subject, so a deleted subject reads as gone.
+  {
+    name: "nextly_notices_subject_idx",
+    columns: ["subjectType", "subjectId"],
+  },
+  // Retention removes the oldest first.
+  { name: "nextly_notices_created_idx", columns: ["createdAt"] },
+] as const satisfies readonly CoreIndex<string>[];
+
 type PgIndexColumn = Parameters<ReturnType<typeof pgIndex>["on"]>[0];
 type MysqlIndexColumn = Parameters<ReturnType<typeof mysqlIndex>["on"]>[0];
 type SqliteIndexColumn = Parameters<ReturnType<typeof sqliteIndex>["on"]>[0];

@@ -7,6 +7,8 @@ description: >-
   requires, media storage that survives restarts, and checking the live site.
   Also use when a deployed Nextly app has missing tables, refuses to start,
   or loses uploaded files.
+metadata:
+  nextly-version: 0.0.2-alpha.66
 ---
 
 # Deploy a Nextly project
@@ -39,11 +41,11 @@ which this skill does not cover.
 To switch a project from SQLite to PostgreSQL:
 
 Nextly's packages are released together, so install each `@nextlyhq/*`
-package at exactly the version of `nextly` the project runs. `npx nextly
---version` prints it, for example `0.0.2-alpha.66`:
+package at exactly the version of `nextly` the project runs, which `npx nextly
+--version` prints:
 
 ```bash
-npm install @nextlyhq/adapter-postgres@0.0.2-alpha.66 pg   # pnpm add / yarn add / bun add
+npm install "@nextlyhq/adapter-postgres@$(npx nextly --version)" pg   # pnpm add / yarn add / bun add
 npm ls nextly @nextlyhq/adapter-postgres     # or pnpm ls / yarn why; both at the same version
 ```
 

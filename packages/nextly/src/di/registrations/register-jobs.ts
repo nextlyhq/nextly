@@ -150,9 +150,10 @@ export function registerJobServices(ctx: RegistrationContext): void {
 
   // Collected EAGERLY, here, rather than inside the registry factory below.
   // `registerSingleton` stores a factory and runs it on first `get`, and the
-  // only production caller of `get("jobRegistry")` is a drain — so a duplicate
-  // slug or a reserved namespace would let boot and every enqueue succeed, and
-  // then fail every drain, instead of refusing to start. A collision is a
+  // production callers of `get("jobRegistry")` all run after boot — a drain,
+  // and the releases service when it is first built — so a duplicate slug or
+  // a reserved namespace would let boot and every enqueue succeed, and then
+  // fail every drain, instead of refusing to start. A collision is a
   // configuration error, and a configuration error should stop the boot that
   // introduced it.
   const declaredJobs = collectJobs(ctx.config, ctx.config.plugins ?? []);

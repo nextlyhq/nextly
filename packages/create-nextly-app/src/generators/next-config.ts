@@ -19,6 +19,8 @@ import fs from "fs-extra";
 
 import type { DatabaseConfig } from "../types";
 
+import type { GeneratedFiles } from "./generated-files";
+
 /**
  * Packages that are always externalized by the scaffolded Next.js config.
  *
@@ -115,6 +117,11 @@ export type NextConfigPatch =
        * top-level `serverExternalPackages` of Next.js 15 and later.
        */
       spelling?: "legacy" | "either";
+      /**
+       * The app has no Next config yet, so `file` is the one to create and
+       * the advice is a whole file rather than a key to add.
+       */
+      create?: true;
     };
 
 /**
@@ -810,7 +817,7 @@ function versionBlock(
     };
   return major < FIRST_TOP_LEVEL_MAJOR
     ? {
-        reason: `the app runs Next.js ${major}, which reads the list as experimental.serverComponentsExternalPackages`,
+        reason: `the app runs Next.js ${major}, which reads the list as experimental.serverComponentsExternalPackages and runs instrumentation.ts only with experimental.instrumentationHook`,
         spelling: "legacy",
       }
     : null;
@@ -882,6 +889,7 @@ export async function patchNextConfig(
       file: file ?? (await nextConfigFileToChange(cwd)),
       packages: required,
       ...blocked,
+      ...(file ? {} : { create: true as const }),
     };
   }
   if (!file) return createNextConfig(cwd, database);
@@ -894,45 +902,73 @@ export async function patchNextConfig(
   return { kind: "written", file, added: edited.added };
 }
 
-/** The option to add by hand, in the spelling the app's Next.js reads. */
+/**
+ * What to add by hand, in the spelling the app's Next.js reads.
+ *
+ * On Next.js 14 the package list and the instrumentation opt-in are keys of
+ * one `experimental` object, so they are given as one: two `experimental`
+ * properties, pasted as given, leave only the second. The instrumentation
+ * hook Nextly starts from needs the opt-in there, and no other step says so.
+ * `wrap` turns each spelling into what to paste: the key itself, or a whole
+ * config file when the app has none.
+ */
 function optionText(
   packages: string[],
-  spelling: "legacy" | "either" | undefined
+  spelling: "legacy" | "either" | undefined,
+  wrap: (option: string) => string = option => option
 ): string {
   const list = packages.map(name => JSON.stringify(name)).join(", ");
-  const current = `  ${PROPERTY}: [${list}],`;
-  const legacy = `  experimental: { serverComponentsExternalPackages: [${list}] },`;
+  const current = wrap(`  ${PROPERTY}: [${list}],`);
+  const legacy = wrap(
+    `  experimental: { instrumentationHook: true, serverComponentsExternalPackages: [${list}] },`
+  );
   if (spelling === "legacy") return legacy;
   return spelling === "either"
     ? `On Next.js 15 or later:\n\n${current}\n\nOn Next.js 14:\n\n${legacy}`
     : current;
 }
 
-/** The line the CLI prints for a patch: what changed, or exactly what to add and where. */
-export function nextConfigReport(patch: NextConfigPatch): {
-  level: "info" | "warn";
-  message: string;
-} {
+/**
+ * A whole config holding `option`, for an app that has none. ESM in `.mjs`,
+ * which loads whatever the package's own "type" says.
+ */
+function wholeConfig(option: string): string {
+  return `/** @type {import('next').NextConfig} */\nexport default {\n${option}\n};\n`;
+}
+
+/**
+ * What a patch did, in the shape every existing-app step reports in: the
+ * packages added, or, when the file could not be changed safely, exactly what
+ * to add and where. Nothing is said for a config that already lists them all.
+ */
+export function nextConfigFiles(patch: NextConfigPatch): GeneratedFiles {
+  const files: GeneratedFiles = { written: [], changed: [], skipped: [] };
   switch (patch.kind) {
     case "written":
-      return {
-        level: "info",
-        message: `${patch.file}: added ${patch.added.join(", ")} to ${PROPERTY}`,
-      };
+      files.changed.push({
+        path: patch.file,
+        added: [`${PROPERTY}: ${patch.added.join(", ")}`],
+      });
+      break;
     case "created":
-      return {
-        level: "info",
-        message: `${patch.file}: created, with ${PROPERTY} listing ${patch.added.join(", ")}`,
-      };
+      files.written.push(patch.file);
+      break;
     case "unchanged":
-      return {
-        level: "info",
-        message: `${patch.file} already lists every package Nextly needs in ${PROPERTY}`,
-      };
+      break;
     case "manual":
-      return {
-        level: "warn",
-        message: `Nextly's packages were not added to ${patch.file}: ${patch.reason}. Add them to the config object it exports, keeping any packages already listed:\n\n${optionText(patch.packages, patch.spelling)}`,
-      };
+      files.skipped.push(
+        patch.create
+          ? {
+              path: patch.file,
+              why: `Nextly's packages were not added: ${patch.reason}, and the app has no Next.js config. Create ${patch.file} with:`,
+              toAdd: optionText(patch.packages, patch.spelling, wholeConfig),
+            }
+          : {
+              path: patch.file,
+              why: `Nextly's packages were not added: ${patch.reason}. Add them to the config object it exports, keeping any packages and experimental keys already there`,
+              toAdd: optionText(patch.packages, patch.spelling),
+            }
+      );
   }
+  return files;
 }

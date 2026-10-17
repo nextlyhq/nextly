@@ -16,6 +16,7 @@ import type { VersionStatus } from "../../schemas/versions/types";
 import type { VersionsDbApi } from "./db-api";
 import { selectVersionsToPrune } from "./retention";
 import { VersionConflictError, isUniqueViolation } from "./version-conflict";
+import { pinnedVersionNos } from "./version-pins";
 import { VersionsRepository, type VersionRef } from "./versions-repository";
 
 /** Input to capture a durable version. */
@@ -120,10 +121,15 @@ export class VersionCaptureService {
           },
         });
       }
-      const staleIds = selectVersionsToPrune(durable, input.maxPerDoc, [
-        isRestore ? versionNo - 1 : null,
-        input.sourceVersionNo,
-      ]);
+      // Read on this transaction, after the save's document lock: a pin takes
+      // the same lock, so it either is read here or waits for this pass.
+      const pinned = await pinnedVersionNos(db, input.ref);
+      const staleIds = selectVersionsToPrune(
+        durable,
+        input.maxPerDoc,
+        [isRestore ? versionNo - 1 : null, input.sourceVersionNo],
+        pinned
+      );
       if (staleIds.length > 0) {
         await repo.deletePrunedVersions(staleIds);
       }

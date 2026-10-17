@@ -29,6 +29,10 @@ import {
 import type { CollectionsHandler } from "../../../services/collections-handler";
 import { ReleasesRepository } from "../../releases/releases-repository";
 import { seedLiveAuthor } from "../../releases/__tests__/helpers/live-author";
+import {
+  ANY_EDITABLE_STATE,
+  scheduleAsItStands,
+} from "../../releases/__tests__/helpers/release-writes";
 
 let current: TestNextly | undefined;
 
@@ -81,18 +85,21 @@ async function draftInScheduledRelease(t: TestNextly): Promise<void> {
 
   const repo = new ReleasesRepository(t.adapter);
   const release = await repo.createRelease({ title: "Go live" });
-  await repo.addMember({
-    releaseId: release.id,
-    scopeKind: "collection",
-    scopeSlug: SLUG,
-    entryId: id,
-    locale: null,
-    action: "publish",
-    // The read path projects a due member only when its author still exists
-    // and is active, matching the write path that runs AS them.
-    createdBy: await seedLiveAuthor(t),
-  });
-  await repo.scheduleRelease(release.id, SCHEDULED, "UTC");
+  await repo.addMember(
+    {
+      releaseId: release.id,
+      scopeKind: "collection",
+      scopeSlug: SLUG,
+      entryId: id,
+      locale: null,
+      action: "publish",
+      // The read path projects a due member only when its author still exists
+      // and is active, matching the write path that runs AS them.
+      createdBy: await seedLiveAuthor(t),
+    },
+    ANY_EDITABLE_STATE
+  );
+  await scheduleAsItStands(repo, release.id, SCHEDULED, "UTC");
 }
 
 /** The window the assertions read, wide enough to contain `OCCURRED`. */

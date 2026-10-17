@@ -853,6 +853,19 @@ export type {
   DraftSplitDisabledReason,
 } from "./domains/versions/draft-split-eligibility";
 
+// Version pins: a feature registers itself as a holder once, then points named
+// slots at a document's versions, and retention never removes a version a slot
+// points at. Pins run on the caller's core transaction.
+// @experimental
+export {
+  registerVersionPinHolder,
+  versionPins,
+  type VersionPin,
+  type VersionPinHolder,
+  type VersionPinHolderDefinition,
+} from "./domains/versions/version-pins";
+export type { VersionRef } from "./domains/versions/versions-repository";
+
 // Which fields a level addresses, with presentational groups flattened.
 // Exported because a plugin that walks a collection's fields was otherwise
 // reaching into core's file layout, and a second copy of this walk is a second

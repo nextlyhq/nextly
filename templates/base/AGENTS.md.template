@@ -186,6 +186,22 @@ page that does not exist. Neither is version-stamped: they describe the CURRENT
 release, so check the version above before trusting a detail against an older
 pin.
 
+## Skills for Nextly tasks
+
+If this project has `.agents/skills/`, it holds skills for common Nextly
+tasks, and `.claude/skills/` holds the same files for Claude Code. Load the
+one that matches a task before starting it. They were written for the Nextly
+release this project was created with.
+
+To bring them up to the release now installed, or to add them to a project
+without them, run this with the version `{{execCommand}} nextly --version` prints:
+
+```bash
+npx skills add 'nextlyhq/nextly#v<version>' --skill '*' --agent claude-code codex cursor --copy -y
+```
+
+It rewrites both folders, so edits made to a skill there are replaced.
+
 ## Conventions worth keeping
 
 - Server components read content directly; do not build an API route to fetch

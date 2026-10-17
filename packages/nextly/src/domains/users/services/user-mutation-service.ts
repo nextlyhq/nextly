@@ -62,6 +62,7 @@ import {
   liveColumnsOf,
   retiredTablesNamedForErasure,
 } from "../../../init/retired-auth-tables";
+import { NOTICES_TABLE, noticesTables } from "../../../schemas/notices";
 import { PLUGIN_SETTINGS_TABLE } from "../../../schemas/plugin-settings/table-name";
 import {
   layoutRowId,
@@ -2096,6 +2097,24 @@ export class UserMutationService extends BaseService {
   }
 
   /**
+   * Delete a person's notices, inside the deletion's transaction so the two
+   * stand or fall together. `tableExists` is probed before the transaction.
+   */
+  private async eraseNotices(
+    txDb: DrizzleTransactionLike,
+    userId: string,
+    tableExists: boolean
+  ): Promise<void> {
+    // An installation that has not run `nextly migrate` has no table, and a
+    // delete against it would abort the transaction and the deletion with it.
+    if (!tableExists) return;
+    const notices = noticesTables(this.dialect).nextlyNotices as unknown as {
+      userId: Column;
+    };
+    await txDb.delete(notices).where(eq(notices.userId, userId));
+  }
+
+  /**
    * Whether a table is present, for a probe taken BEFORE the delete
    * transaction opens.
    *
@@ -2541,6 +2560,13 @@ export class UserMutationService extends BaseService {
     // the SQLite fallback bootstrap created a subset of the core tables.
     const widgetLayoutExists = await this.tablePresent(WIDGET_LAYOUT_TABLE);
 
+    // A person's notices are theirs alone and carry their account's id and
+    // snapshots of what they worked on, so they go with the account. Probed
+    // out here for the reason the tables above are: an installation that has
+    // not run `nextly migrate` has no notices table, and a delete against it
+    // would abort the transaction and the deletion with it.
+    const noticesExist = await this.tablePresent(NOTICES_TABLE);
+
     // Who last edited a plugin's settings, probed out here for the reason the
     // three above are: a failed statement aborts an open Postgres transaction
     // and there would be no way back.
@@ -2665,6 +2691,8 @@ export class UserMutationService extends BaseService {
         // key — two derivations of one identifier agree until one is edited,
         // and the failure here is silent: the delete matches no row, the
         // account goes, and the layout stays.
+        await this.eraseNotices(txDb, String(userId), noticesExist);
+
         if (widgetLayoutExists) {
           const layoutTable = widgetLayoutTables(this.dialect)
             .nextlyWidgetLayout as unknown as { id: Column };

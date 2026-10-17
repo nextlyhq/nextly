@@ -44,6 +44,11 @@ describe("releases routes", () => {
     expect(parseRestRoute(["releases", "r1", "cancel"], "POST").method).toBe(
       "cancelRelease"
     );
+    // Publish now is its own route: it is refused in states scheduling
+    // accepts, so it cannot be a schedule with "now" in the body.
+    expect(parseRestRoute(["releases", "r1", "publish"], "POST")).toMatchObject(
+      { method: "publishRelease", routeParams: { releaseId: "r1" } }
+    );
     expect(parseRestRoute(["releases", "r1", "members"], "POST").method).toBe(
       "addReleaseMember"
     );

@@ -54,7 +54,7 @@ export {
   type ZodGeneratorOptions,
 } from "./services/zod-generator";
 
-// TypeScript type generator for payload-types.ts (Collections and Singles)
+// TypeScript type generator for the generated types file (Collections and Singles)
 export {
   TypeGenerator,
   type GeneratedTypeInterface,

@@ -11,6 +11,7 @@
 
 import type {
   ReleaseBlockerReason,
+  ReleaseCapabilities,
   ReleaseMemberAction,
   ReleaseState,
 } from "nextly/schemas";
@@ -49,13 +50,12 @@ export type { ReleaseBlockerReason, ReleaseMemberAction, ReleaseState };
  * `addMember` and `removeMember` are NECESSARY rather than sufficient — putting
  * a particular document in also needs that document's own publish authority,
  * which the server checks at the write. They say what to OFFER.
+ *
+ * The server's own type, re-exported from `nextly/schemas` rather than
+ * restated, so a capability the server starts sending is one this type
+ * already has.
  */
-export interface ReleaseCapabilities {
-  schedule: boolean;
-  cancel: boolean;
-  addMember: boolean;
-  removeMember: boolean;
-}
+export type { ReleaseCapabilities };
 
 export interface Release {
   id: string;

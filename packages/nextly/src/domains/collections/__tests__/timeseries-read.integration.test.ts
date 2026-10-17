@@ -442,9 +442,11 @@ describe.each(getConfiguredTestDialects())(
       const h = await boot(dialect, [{ occurredAt: daysAgo(0), label: "a" }]);
 
       let ran = 0;
+      // A `beforeRead` handler's return value is the filter the read runs, so
+      // one that changes nothing hands its filter back.
       const handler: HookHandler = (args: unknown) => {
         ran += 1;
-        return args;
+        return (args as { data?: unknown }).data;
       };
       registerHook("beforeRead", EVENTS, handler);
       try {
@@ -471,7 +473,7 @@ describe.each(getConfiguredTestDialects())(
       let ran = 0;
       const handler: HookHandler = (args: unknown) => {
         ran += 1;
-        return args;
+        return (args as { data?: unknown }).data;
       };
       registerHook("beforeRead", EVENTS, handler);
       try {
@@ -653,7 +655,7 @@ describe.each(getConfiguredTestDialects())(
       let ran = 0;
       const handler: HookHandler = (args: unknown) => {
         ran += 1;
-        return args;
+        return (args as { data?: unknown }).data;
       };
       registerHook("beforeRead", EVENTS, handler);
       try {

@@ -99,7 +99,15 @@ export const GET = withErrorHandler(
       parsed
     );
 
-    await redactSnapshotForUser(row.snapshot, scopeKind, slug, user);
+    // What the read rules withheld is named beside the snapshot, so a reader is
+    // told a value is held back rather than shown a version that lacks it.
+    const withheld = await redactSnapshotForUser(
+      row.snapshot,
+      scopeKind,
+      slug,
+      user,
+      authenticatedScope
+    );
 
     // Resolve relationship and upload ids to display labels (access-checked),
     // after redaction, so the preview shows labels rather than ids.
@@ -112,6 +120,6 @@ export const GET = withErrorHandler(
       row.locale
     );
 
-    return respondDoc(row);
+    return respondDoc({ ...row, withheld: [...withheld] });
   }
 );
