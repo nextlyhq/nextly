@@ -112,17 +112,13 @@ export function getI18nArchiveIndexRepairDdl(dialect: Dialect): string | null {
  * when the column is there; MySQL and SQLite have no such form and report a duplicate column,
  * which the caller tolerates.
  */
+const KIND_UPGRADE_DDL: Record<Dialect, string> = {
+  postgresql: `ALTER TABLE "nextly_i18n_archive" ADD COLUMN IF NOT EXISTS "entity_kind" VARCHAR(20) NOT NULL DEFAULT 'collection'`,
+  mysql:
+    "ALTER TABLE `nextly_i18n_archive` ADD COLUMN `entity_kind` VARCHAR(20) NOT NULL DEFAULT 'collection'",
+  sqlite: `ALTER TABLE "nextly_i18n_archive" ADD COLUMN "entity_kind" TEXT NOT NULL DEFAULT 'collection'`,
+};
+
 export function getI18nArchiveKindUpgradeDdl(dialect: Dialect): string {
-  switch (dialect) {
-    case "postgresql":
-      return `ALTER TABLE "nextly_i18n_archive" ADD COLUMN IF NOT EXISTS "entity_kind" VARCHAR(20) NOT NULL DEFAULT 'collection'`;
-    case "mysql":
-      return "ALTER TABLE `nextly_i18n_archive` ADD COLUMN `entity_kind` VARCHAR(20) NOT NULL DEFAULT 'collection'";
-    case "sqlite":
-      return `ALTER TABLE "nextly_i18n_archive" ADD COLUMN "entity_kind" TEXT NOT NULL DEFAULT 'collection'`;
-    default: {
-      const _exhaustive: never = dialect;
-      throw new Error(`Unsupported dialect: ${String(_exhaustive)}`);
-    }
-  }
+  return KIND_UPGRADE_DDL[dialect];
 }

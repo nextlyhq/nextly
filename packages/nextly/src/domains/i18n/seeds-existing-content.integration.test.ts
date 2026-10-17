@@ -68,7 +68,6 @@ describe.each(getConfiguredTestDialects())(
         {
           builtBy: "codeFirst" as const,
           slug: "seedsrc",
-          kind: "collection" as const,
           tableName: "dc_seedsrc",
           fields: [{ name: "title", type: "text", localized: true }],
           dialect,
@@ -99,7 +98,6 @@ describe.each(getConfiguredTestDialects())(
         {
           builtBy: "codeFirst" as const,
           slug: "seedsrc",
-          kind: "collection" as const,
           tableName: "dc_seedsrc",
           fields: [{ name: "title", type: "text", localized: true }],
           dialect,
@@ -125,7 +123,6 @@ describe.each(getConfiguredTestDialects())(
         {
           builtBy: "codeFirst" as const,
           slug: "seedsrc",
-          kind: "collection" as const,
           tableName: "dc_seedsrc",
           fields: [{ name: "title", type: "text", localized: true }],
           dialect,
@@ -151,7 +148,6 @@ describe.each(getConfiguredTestDialects())(
         {
           builtBy: "codeFirst" as const,
           slug: "seedsrc",
-          kind: "collection" as const,
           tableName: "dc_seedsrc",
           fields: [{ name: "title", type: "text", localized: true }],
           dialect,
@@ -182,7 +178,6 @@ describe.each(getConfiguredTestDialects())(
         {
           builtBy: "codeFirst" as const,
           slug: "seedsrc",
-          kind: "collection" as const,
           tableName: "dc_seedsrc",
           fields: [{ name: "title", type: "text", localized: true }],
           dialect,
