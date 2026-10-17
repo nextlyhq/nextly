@@ -101,6 +101,18 @@ vi.mock("../../cli/utils/config-loader", () => ({
   clearConfigCache: clearConfigCacheSpy,
 }));
 
+// The dev watcher is told which files each load read, and to look again after
+// a load fails. Mocked so this file can assert those calls; the watcher's own
+// behaviour is tested in runtime/__tests__/hmr-listener.test.ts.
+const { watchLoadedConfigSpy, watchScannedConfigSpy } = vi.hoisted(() => ({
+  watchLoadedConfigSpy: vi.fn(),
+  watchScannedConfigSpy: vi.fn(() => Promise.resolve()),
+}));
+vi.mock("../../runtime/hmr-listener", () => ({
+  watchLoadedConfig: watchLoadedConfigSpy,
+  watchScannedConfig: watchScannedConfigSpy,
+}));
+
 // Mock PushSchemaPipeline. The constructor records the deps object so
 // tests can assert wiring (e.g., that the injected dispatcher actually
 // arrives). apply() routes to its own spy.
@@ -357,6 +369,37 @@ describe("reloadNextlyConfig", () => {
   // database has some tables under pre-rename names and some under post-rename
   // ones, and the apply below runs DDL plus a pre-cleanup that issues UPDATE and
   // DELETE — work that cannot be reasoned about against half-renamed storage.
+  it("tells the dev watcher which files a load read", async () => {
+    const loaded = {
+      config: { collections: [] },
+      configPath: "/project/nextly.config.ts",
+      dependencies: ["nextly.config.ts", "collections/posts.ts"],
+    };
+    loadConfigSpy.mockResolvedValue(loaded);
+    watchLoadedConfigSpy.mockClear();
+
+    const { reloadNextlyConfig } = await import("../reload-config");
+    await reloadNextlyConfig({ resolver: buildResolver() });
+
+    expect(watchLoadedConfigSpy).toHaveBeenCalledWith(loaded);
+  });
+
+  it("asks the dev watcher to look again when the config cannot be loaded", async () => {
+    // The fix may be saved to a file the last good load never imported.
+    loadConfigSpy.mockRejectedValue(new Error("the config refused to load"));
+    watchScannedConfigSpy.mockClear();
+    const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    try {
+      const { reloadNextlyConfig } = await import("../reload-config");
+      await reloadNextlyConfig({ resolver: buildResolver() });
+    } finally {
+      consoleWarn.mockRestore();
+    }
+
+    expect(watchScannedConfigSpy).toHaveBeenCalledTimes(1);
+  });
+
   it("abandons the reload while a field-group migration is in flight", async () => {
     loadConfigSpy.mockResolvedValue({
       config: {
@@ -386,7 +429,9 @@ describe("reloadNextlyConfig", () => {
     });
 
     const { reloadNextlyConfig } = await import("../reload-config");
-    await reloadNextlyConfig({ resolver });
+    // "refused" is what tells the dev watcher to try again once the migration
+    // is over; a plain return would leave the save unapplied.
+    await expect(reloadNextlyConfig({ resolver })).resolves.toBe("refused");
 
     expect(pipelineApplySpy).not.toHaveBeenCalled();
     // 🔴 The warning's REASON is matched, not just the fact that one was logged. A marker the
@@ -1994,7 +2039,7 @@ describe("reloadNextlyConfig", () => {
       reloadNextlyConfig({
         resolver: buildResolver({ withAdapter: false }),
       })
-    ).resolves.toBeUndefined();
+    ).resolves.toBe("finished");
   });
 
   it("aborts (no pipeline call) and logs error when batched introspect fails", async () => {

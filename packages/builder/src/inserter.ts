@@ -36,6 +36,7 @@ import {
   placementVerdict,
   composedRootTypes,
   readableDefinition,
+  registryBlockSource,
   resolveComponentInstances,
   COMPONENT_INSTANCE_TYPE,
   type AnyBlockDefinition,
@@ -1133,15 +1134,13 @@ export function nodeForEntry(
 }
 
 /**
- * The registry as a block-definition source.
+ * The registry as a block-definition source, re-exported from the engine.
  *
- * Reads the DEFINITION rather than the node, because a container inserted from
- * the palette has no `slots` key until something is put in it — which is
- * precisely the container that needs filling.
+ * Defined there rather than here because the save validator reads the same
+ * source to check a locked slot's children, and two readings of one registry
+ * agree only until one of them changes.
  */
-export function registryBlockSource(): SlotDefaultSource {
-  return { get: type => getBlock(type) };
-}
+export { registryBlockSource };
 
 /**
  * The definitions an insert expands declared starting children from, given the

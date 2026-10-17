@@ -28,17 +28,48 @@ const blankHook = path.resolve(
 const NEXT = "16.0.0";
 
 /** Syntax errors in a TypeScript module, as the compiler reports them. */
-function syntaxErrors(source: string): string[] {
-  const { diagnostics = [] } = ts.transpileModule(source, {
-    reportDiagnostics: true,
-    compilerOptions: {
-      module: ts.ModuleKind.ESNext,
+/**
+ * The type errors a hook body has, checked as a program rather than only
+ * transpiled, so an `await` outside an async function, a name never declared
+ * or a call with the wrong arguments all show. Nextly's own modules are
+ * declared by the shape the body uses them in: this package does not depend
+ * on nextly, and the real API is compiled against the same body by the
+ * scaffold jobs, which build the blank template whose hook shares it.
+ */
+async function typeErrors(source: string): Promise<string[]> {
+  const root = await mkdtemp(path.join(tmpdir(), "hook-types-"));
+  try {
+    await mkdir(path.join(root, "src"), { recursive: true });
+    const hook = path.join(root, "src/instrumentation.ts");
+    const declarations = path.join(root, "nextly.d.ts");
+    await writeFile(hook, source);
+    await writeFile(
+      path.join(root, "nextly.config.ts"),
+      "export default {};\n"
+    );
+    await writeFile(
+      declarations,
+      [
+        'declare module "nextly/runtime" { export function registerNextCacheRevalidator(): void; }',
+        'declare module "nextly" { export function createRegister(config: unknown): () => Promise<void>; }',
+        "declare const process: { env: Record<string, string | undefined> };",
+      ].join("\n")
+    );
+    const program = ts.createProgram([hook, declarations], {
+      strict: true,
+      noEmit: true,
       target: ts.ScriptTarget.ES2022,
-    },
-  });
-  return diagnostics.map(d =>
-    ts.flattenDiagnosticMessageText(d.messageText, "\n")
-  );
+      module: ts.ModuleKind.ESNext,
+      moduleResolution: ts.ModuleResolutionKind.Bundler,
+      types: [],
+      skipLibCheck: true,
+    });
+    return ts
+      .getPreEmitDiagnostics(program)
+      .map(d => ts.flattenDiagnosticMessageText(d.messageText, "\n"));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 }
 
 let project: string | undefined;
@@ -136,6 +167,264 @@ describe("generateInstrumentation", () => {
 
     expect(result.written).toEqual(["src/instrumentation.ts"]);
   });
+
+  it("says what to add as code that compiles, so pasting it into a synchronous hook cannot break the build", async () => {
+    const cwd = await app();
+    await mkdir(path.join(cwd, "src"), { recursive: true });
+    await writeFile(
+      path.join(cwd, "src/instrumentation.ts"),
+      "export function register() {}\n"
+    );
+
+    const { skipped } = await generateInstrumentation(cwd, { srcDir: true });
+
+    const code = skipped[0].toAdd?.slice(
+      skipped[0].toAdd.indexOf("export async function")
+    );
+    expect(code).toMatch(/^export async function register\(\)/);
+    expect(await typeErrors(code ?? "")).toEqual([]);
+  });
+
+  it("writes no hook when the app sets pageExtensions, and gives the whole hook to add under the right name", async () => {
+    const cwd = await app();
+    await writeFile(
+      path.join(cwd, "next.config.mjs"),
+      'export default { pageExtensions: ["page.tsx", "page.ts"] };\n'
+    );
+
+    const result = await generateInstrumentation(cwd, { srcDir: true });
+
+    expect(result.written).toEqual([]);
+    expect(await fs.pathExists(path.join(cwd, "src/instrumentation.ts"))).toBe(
+      false
+    );
+    // Under a name Next.js reads: one of the app's own page extensions.
+    expect(result.skipped[0].path).toBe("src/instrumentation.page.tsx");
+    expect(result.skipped[0].why).toContain("pageExtensions");
+    expect(result.skipped[0].toAdd).toBe(await readFile(blankHook, "utf-8"));
+  });
+
+  it("gives a JavaScript hook when the app's page extensions are JavaScript", async () => {
+    const cwd = await app();
+    await writeFile(
+      path.join(cwd, "next.config.mjs"),
+      'export default { pageExtensions: ["page.jsx", "page.js"] };\n'
+    );
+
+    const [offered] = (await generateInstrumentation(cwd, { srcDir: true }))
+      .skipped;
+
+    expect(offered.path).toBe("src/instrumentation.page.jsx");
+    // Parsed as the file it would be saved as: TypeScript syntax fails here.
+    const { diagnostics = [] } = ts.transpileModule(offered.toAdd ?? "", {
+      reportDiagnostics: true,
+      fileName: "instrumentation.page.js",
+      compilerOptions: { allowJs: true, module: ts.ModuleKind.ESNext },
+    });
+    expect(diagnostics.map(d => d.messageText)).toEqual([]);
+    expect(offered.toAdd).toContain("export async function register()");
+  });
+
+  it("names no file when the pageExtensions list holds anything but plain strings", async () => {
+    const cwd = await app();
+    await writeFile(
+      path.join(cwd, "next.config.mjs"),
+      'const useTs = false;\nexport default { pageExtensions: [...(useTs ? ["page.tsx"] : []), "page.js"] };\n'
+    );
+
+    const result = await generateInstrumentation(cwd, { srcDir: true });
+
+    expect(result.skipped[0].path).toBe(
+      "src/instrumentation.<one of your pageExtensions>"
+    );
+  });
+
+  it("adds Nextly to a hook the app already has under its page-extension name", async () => {
+    const cwd = await app();
+    await writeFile(
+      path.join(cwd, "next.config.mjs"),
+      'export default { pageExtensions: ["page.tsx"] };\n'
+    );
+    await mkdir(path.join(cwd, "src"), { recursive: true });
+    const own = "export function register() {}\n";
+    await writeFile(path.join(cwd, "src/instrumentation.page.tsx"), own);
+
+    const [offered] = (await generateInstrumentation(cwd, { srcDir: true }))
+      .skipped;
+
+    expect(offered.path).toBe("src/instrumentation.page.tsx");
+    expect(offered.why).toContain("already has a server-start hook");
+    expect(offered.toAdd).toMatch(/^Make register\(\) async/);
+    expect(
+      await readFile(path.join(cwd, "src/instrumentation.page.tsx"), "utf-8")
+    ).toBe(own);
+  });
+
+  it("reads pageExtensions from the config it exports, not from a comment", async () => {
+    const cwd = await app();
+    await writeFile(
+      path.join(cwd, "next.config.mjs"),
+      '/* pageExtensions: ["page.js"] */\nexport default { pageExtensions: ["page.ts"] };\n'
+    );
+
+    const [offered] = (await generateInstrumentation(cwd, { srcDir: true }))
+      .skipped;
+
+    expect(offered.path).toBe("src/instrumentation.page.ts");
+  });
+
+  it("writes the default hook when pageExtensions appears only in a comment", async () => {
+    const cwd = await app();
+    await writeFile(
+      path.join(cwd, "next.config.mjs"),
+      '// pageExtensions: ["page.tsx"]\nexport default {};\n'
+    );
+
+    const result = await generateInstrumentation(cwd, { srcDir: true });
+
+    expect(result.written).toEqual(["src/instrumentation.ts"]);
+  });
+
+  it("finds a hook the app has under any of its page extensions", async () => {
+    const cwd = await app();
+    await writeFile(
+      path.join(cwd, "next.config.mjs"),
+      'export default { pageExtensions: ["page.tsx", "page.ts"] };\n'
+    );
+    await mkdir(path.join(cwd, "src"), { recursive: true });
+    await writeFile(
+      path.join(cwd, "src/instrumentation.page.ts"),
+      "export function register() {}\n"
+    );
+
+    const [offered] = (await generateInstrumentation(cwd, { srcDir: true }))
+      .skipped;
+
+    expect(offered.path).toBe("src/instrumentation.page.ts");
+    expect(offered.toAdd).toMatch(/^Make register\(\) async/);
+  });
+
+  it("adds Nextly to the hook Next.js loads, not to a default-named one beside it", async () => {
+    const cwd = await app();
+    await writeFile(
+      path.join(cwd, "next.config.mjs"),
+      'export default { pageExtensions: ["page.tsx"] };\n'
+    );
+    await mkdir(path.join(cwd, "src"), { recursive: true });
+    // With pageExtensions set, Next.js loads only `instrumentation.page.tsx`.
+    await writeFile(
+      path.join(cwd, "src/instrumentation.ts"),
+      "export function register() {}\n"
+    );
+    await writeFile(
+      path.join(cwd, "src/instrumentation.page.tsx"),
+      "export function register() {}\n"
+    );
+
+    const [offered] = (await generateInstrumentation(cwd, { srcDir: true }))
+      .skipped;
+
+    expect(offered.path).toBe("src/instrumentation.page.tsx");
+    expect(offered.toAdd).toMatch(/^Make register\(\) async/);
+  });
+
+  it.each([
+    [["mdx", "page.js"], "src/instrumentation.page.js"],
+    // The hook is an ES module, which a `.cjs` file cannot hold.
+    [["cjs", "mjs"], "src/instrumentation.mjs"],
+  ])(
+    "never names a hook after an extension it cannot be written in (%j)",
+    async (extensions, expected) => {
+      const cwd = await app();
+      await writeFile(
+        path.join(cwd, "next.config.mjs"),
+        `export default { pageExtensions: ${JSON.stringify(extensions)} };\n`
+      );
+
+      const [offered] = (await generateInstrumentation(cwd, { srcDir: true }))
+        .skipped;
+
+      expect(offered.path).toBe(expected);
+    }
+  );
+
+  it.each([[["mdx", "md"]], [["cjs"]]])(
+    "says to add an extension the hook can be written in when the list has none (%j)",
+    async extensions => {
+      const cwd = await app();
+      await writeFile(
+        path.join(cwd, "next.config.mjs"),
+        `export default { pageExtensions: ${JSON.stringify(extensions)} };\n`
+      );
+
+      const [offered] = (await generateInstrumentation(cwd, { srcDir: true }))
+        .skipped;
+
+      // No configured name can load the hook, so none is offered as one.
+      expect(offered.path).toBe(
+        "src/instrumentation.<a JavaScript or TypeScript extension added to pageExtensions>"
+      );
+      expect(offered.why).toContain(
+        `none of them (${extensions.join(", ")}) can hold the hook`
+      );
+      expect(offered.why).toContain(
+        "add a JavaScript or TypeScript extension to pageExtensions"
+      );
+    }
+  );
+
+  it("names no file it cannot know when the pageExtensions list is not written out, and offers a hook valid as JavaScript too", async () => {
+    const cwd = await app();
+    await writeFile(
+      path.join(cwd, "next.config.mjs"),
+      "const extensions = ['page.js'];\nexport default { pageExtensions: extensions };\n"
+    );
+
+    const result = await generateInstrumentation(cwd, { srcDir: true });
+
+    expect(result.written).toEqual([]);
+    expect(result.skipped[0].path).toBe(
+      "src/instrumentation.<one of your pageExtensions>"
+    );
+    // The extension may be a JavaScript one, so the content must parse as JS.
+    const { diagnostics = [] } = ts.transpileModule(
+      result.skipped[0].toAdd ?? "",
+      {
+        reportDiagnostics: true,
+        fileName: "instrumentation.page.js",
+        compilerOptions: { allowJs: true, module: ts.ModuleKind.ESNext },
+      }
+    );
+    expect(diagnostics.map(d => d.messageText)).toEqual([]);
+  });
+
+  it.each([
+    [
+      "a getter",
+      'export default { get pageExtensions() { return ["page.tsx"]; } };\n',
+    ],
+    [
+      "a computed key",
+      'const key = "pageExtensions";\nexport default { [key]: ["page.tsx"] };\n',
+    ],
+    [
+      "a wrapper call",
+      'const withPages = c => ({ ...c, pageExtensions: ["page.tsx"] });\nexport default withPages({});\n',
+    ],
+  ])(
+    "writes no default hook when pageExtensions may come from %s",
+    async (_, config) => {
+      const cwd = await app();
+      await writeFile(path.join(cwd, "next.config.mjs"), config);
+
+      const result = await generateInstrumentation(cwd, { srcDir: true });
+
+      expect(result.written).toEqual([]);
+      expect(result.skipped[0].path).toBe(
+        "src/instrumentation.<one of your pageExtensions>"
+      );
+    }
+  );
 
   it.each([
     ["an installed Next.js 14", "14.2.3"],

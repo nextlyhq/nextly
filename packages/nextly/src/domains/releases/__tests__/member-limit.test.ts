@@ -43,12 +43,10 @@ function service(held: number) {
       createdAt: new Date(),
     }))
   );
-  const touchIfAssemblable = vi.fn(async () => true);
   const deps = {
     repository: {
       listMembers,
       addMember,
-      touchIfAssemblable,
       liveAuthors: vi.fn(async () => new Set(["u1"])),
       removeMember: vi.fn(async () => true),
       findReleases: vi.fn(async () => [{ id: "r1", state: "draft" }]),
@@ -65,7 +63,7 @@ function service(held: number) {
       declaresLifecycle: async () => true,
     },
   };
-  return { svc: new ReleasesService(deps), addMember, touchIfAssemblable };
+  return { svc: new ReleasesService(deps), addMember };
 }
 
 describe("a release has a size bound", () => {
@@ -73,17 +71,14 @@ describe("a release has a size bound", () => {
     // The case this exists for is not a person: it is a script adding in a
     // loop, which otherwise builds a release the detail page cannot render and
     // no single drain pass can settle.
-    const { svc, addMember, touchIfAssemblable } = service(MAX_RELEASE_MEMBERS);
+    const { svc, addMember } = service(MAX_RELEASE_MEMBERS);
     await expect(svc.addMember("r1", INPUT, ACTOR)).rejects.toMatchObject({
       code: "CONFLICT",
     });
-    // Refused before the MEMBER write...
+    // Refused before the write. The repository's `addMember` is the only
+    // statement that changes anything — the member and the release's revision
+    // bump are one transaction — so not reaching it means nothing changed.
     expect(addMember).not.toHaveBeenCalled();
-    // ...and before the RELEASE write, which is the half the first assertion
-    // cannot see. `touchIfAssemblable` updates the release's `updatedAt`, so a
-    // check ordered after it leaves a refused add having changed the row — and
-    // a test that watches only the insert reports that as clean.
-    expect(touchIfAssemblable).not.toHaveBeenCalled();
   });
 
   it("accepts the LAST document that fits", async () => {

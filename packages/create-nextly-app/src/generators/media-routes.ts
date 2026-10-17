@@ -6,6 +6,7 @@ import type { ProjectInfo } from "../types";
 import { resolveTemplatePath } from "../utils/template";
 
 import type { GeneratedFiles } from "./generated-files";
+import { ADMIN_API_FOLDER } from "./routes";
 
 /**
  * The routes an existing app receives, as the base template's app directory
@@ -67,7 +68,8 @@ const CONFIG_IMPORT =
 
 const LEFT_AS_IT_IS = "already holds routes; left as it is";
 
-const THROUGH_A_LINK = "is a symbolic link; nothing was written through it";
+export const THROUGH_A_LINK =
+  "is a symbolic link; nothing was written through it";
 
 /**
  * A file Next.js answers requests through: a route or a page, in the source
@@ -85,6 +87,40 @@ const MAYBE_HANDLER_FILE = /^(route|page)\.[^.]+$/;
 
 const UNREADABLE =
   "cannot be read, so whether it already answers this URL is unknown; left as it is";
+
+/**
+ * A route handler file, without pages: what a dynamic segment answering an
+ * API URL holds. A catch-all PAGE beside static API routes is how a site is
+ * usually built, so pages reached through a dynamic segment are not counted.
+ */
+const ROUTE_FILE = /^route\.(tsx|ts|jsx|js)$/;
+
+/** A route handler file in an extension the app may or may not route. */
+const MAYBE_ROUTE_FILE = /^route\.[^.]+$/;
+
+const THROUGH_A_DYNAMIC_SEGMENT =
+  "already answers this URL through a dynamic segment, and a route written here would take those requests from it; left as it is";
+
+/** Which files count as answering a URL in a folder, and the reason given when one does. */
+interface HandlerKind {
+  sure: RegExp;
+  maybe: RegExp;
+  reason: string;
+}
+
+/** A route or a page, at a folder that maps to the URL. */
+const ANY_HANDLERS: HandlerKind = {
+  sure: HANDLER_FILE,
+  maybe: MAYBE_HANDLER_FILE,
+  reason: LEFT_AS_IT_IS,
+};
+
+/** A route handler only, reached through a dynamic segment. */
+const ROUTE_HANDLERS: HandlerKind = {
+  sure: ROUTE_FILE,
+  maybe: MAYBE_ROUTE_FILE,
+  reason: THROUGH_A_DYNAMIC_SEGMENT,
+};
 
 /**
  * The Pages Router folders Next.js reads. An app may use both routers, but
@@ -209,12 +245,24 @@ async function writeIfUnanswered(
 ): Promise<void> {
   const { target, appRoot, segment, catchAll, text, role } = route;
   const link = await linkedFolder(cwd, target);
+  // A link, or a folder that cannot be read (so not known not to be a
+  // link), leaves the route unwritten, whatever the checks below would find.
   if (link !== null) {
-    result.skipped.push(skipped(cwd, link, target, text, role, THROUGH_A_LINK));
+    result.skipped.push(
+      skipped(
+        cwd,
+        link.folder,
+        target,
+        text,
+        role,
+        link.unreadable ? UNREADABLE : THROUGH_A_LINK
+      )
+    );
     return;
   }
   const answering =
     (await answeringFolder(appRoot, segment, catchAll)) ??
+    (await answeringThroughDynamic(appRoot, segment)) ??
     (await answeringPage(cwd, segment));
   if (answering !== null) {
     result.skipped.push(
@@ -233,17 +281,32 @@ async function writeIfUnanswered(
  * through one would put the route wherever the link points, which may be
  * outside the project.
  */
-async function linkedFolder(
+export async function linkedFolder(
   cwd: string,
   target: string
-): Promise<string | null> {
-  const parts = path.relative(cwd, path.dirname(target)).split(path.sep);
+): Promise<{ folder: string; unreadable: boolean } | null> {
+  // From the folder below the project's own: a project reached through a
+  // link is the app's choice, and judging the root for a file directly in it
+  // but not for the rest would skip one file while writing others.
+  const parts = path
+    .relative(cwd, path.dirname(target))
+    .split(path.sep)
+    .filter(part => part !== "");
   let folder = cwd;
   for (const part of parts) {
+    const above = folder;
     folder = path.join(folder, part);
-    const stat = await fs.lstat(folder).catch(() => null);
-    if (stat === null) return null;
-    if (stat.isSymbolicLink()) return folder;
+    try {
+      if ((await fs.lstat(folder)).isSymbolicLink()) {
+        return { folder, unreadable: false };
+      }
+    } catch (error) {
+      // Only an absent folder ends the walk as safe. One that cannot be
+      // looked at (the folder above cannot be searched) is not known not to
+      // be a link, so it is reported, and nothing is written there.
+      if ((error as { code?: string }).code === "ENOENT") return null;
+      return { folder: above, unreadable: true };
+    }
   }
   return null;
 }
@@ -293,6 +356,109 @@ async function answeringFolder(
     }
     throw error;
   }
+}
+
+/**
+ * The first route handler that already answers `segment` through a dynamic
+ * segment, with why; or null when none does. A catch-all folder on the way
+ * (`[...rest]`, `[[...rest]]`) takes the rest of the URL, and a single dynamic
+ * one (`[name]`) takes one part of it, so a route handler in either, at the
+ * depth that reaches the URL, already serves it: a static route written there
+ * would take those requests from it. Fails closed as the app check does.
+ */
+async function answeringThroughDynamic(
+  appRoot: string,
+  segment: string
+): Promise<{ folder: string; reason: string } | null> {
+  try {
+    // Nextly's admin API catch-all is not the app's own handler for these
+    // URLs: the install writes Nextly's there just before these routes, or,
+    // where the app already had one, says to put Nextly's in its place.
+    // Either way the admin media route is meant to sit beside it.
+    const walk: DynamicWalk = {
+      wanted: segment.split("/"),
+      own: path.join(appRoot, ...ADMIN_API_FOLDER),
+    };
+    return await dynamicWalk(walk, appRoot, 0, false);
+  } catch (error) {
+    if (error instanceof UnreadableFolder) {
+      return { folder: error.folder, reason: UNREADABLE };
+    }
+    throw error;
+  }
+}
+
+/** What stays the same through one {@link answeringThroughDynamic} walk. */
+interface DynamicWalk {
+  /** The URL's parts. */
+  wanted: string[];
+  /** Nextly's own admin API catch-all, which is never counted. */
+  own: string;
+}
+
+type Finding = { folder: string; reason: string };
+
+/** One step of {@link answeringThroughDynamic}: `folder` stands for the URL's first `depth` parts. */
+async function dynamicWalk(
+  walk: DynamicWalk,
+  folder: string,
+  depth: number,
+  viaDynamic: boolean
+): Promise<Finding | null> {
+  if (depth === walk.wanted.length && viaDynamic) {
+    const here = await handlerIn(folder, ROUTE_HANDLERS);
+    if (here !== null) return { folder, reason: here };
+  }
+  for (const name of await subfolders(folder)) {
+    const found = await dynamicChild(
+      walk,
+      path.join(folder, name),
+      depth,
+      viaDynamic
+    );
+    if (found !== null) return found;
+  }
+  return null;
+}
+
+/** What one child folder of the walk contributes: a handler it answers through, or one deeper in it. */
+async function dynamicChild(
+  walk: DynamicWalk,
+  child: string,
+  depth: number,
+  viaDynamic: boolean
+): Promise<Finding | null> {
+  const name = path.basename(child);
+  if (child === walk.own) return null;
+  if (outsideUrl(name)) return dynamicWalk(walk, child, depth, viaDynamic);
+  if (isCatchAll(name)) return catchAllFinding(walk, child, depth);
+  if (depth >= walk.wanted.length) return null;
+  if (isDynamic(name)) return dynamicWalk(walk, child, depth + 1, true);
+  return name === walk.wanted[depth]
+    ? dynamicWalk(walk, child, depth + 1, viaDynamic)
+    : null;
+}
+
+/**
+ * A route handler anywhere in a catch-all folder that reaches the URL.
+ * `[[...rest]]` matches no part at all, so it reaches the URL even when every
+ * part is already matched; `[...rest]` needs at least one more.
+ */
+async function catchAllFinding(
+  walk: DynamicWalk,
+  child: string,
+  depth: number
+): Promise<Finding | null> {
+  const reaches =
+    depth < walk.wanted.length || path.basename(child).startsWith("[[");
+  if (!reaches) return null;
+  const within = await handlerWithin(child, ROUTE_HANDLERS);
+  return within === null ? null : { folder: child, reason: within };
+}
+
+/** A catch-all segment: `[...rest]` or `[[...rest]]`. */
+function isCatchAll(name: string): boolean {
+  return name.startsWith("[...") || name.startsWith("[[...");
 }
 
 /**
@@ -427,25 +593,31 @@ async function subfolders(folder: string): Promise<string[]> {
 
 /**
  * Why a folder itself answers requests, or null when it does not: a handler
- * Next.js routes by default, or a route file it might route.
+ * of `kind` Next.js routes by default, or a file of that kind it might route.
  */
-async function handlerIn(folder: string): Promise<string | null> {
+async function handlerIn(
+  folder: string,
+  kind: HandlerKind = ANY_HANDLERS
+): Promise<string | null> {
   // A linked route file is still a route Next.js serves.
   const files = (await entriesOf(folder))
     .filter(entry => entry.isFile() || entry.isSymbolicLink())
     .map(entry => entry.name)
     .sort();
-  if (files.some(name => HANDLER_FILE.test(name))) return LEFT_AS_IT_IS;
-  const maybe = files.find(name => MAYBE_HANDLER_FILE.test(name));
+  if (files.some(name => kind.sure.test(name))) return kind.reason;
+  const maybe = files.find(name => kind.maybe.test(name));
   return maybe === undefined ? null : unsure(maybe);
 }
 
-/** Why a folder, or any routable folder inside it, answers requests, or null. */
-async function handlerWithin(folder: string): Promise<string | null> {
-  const here = await handlerIn(folder);
+/** Why a folder, or any routable folder inside it, holds a handler of `kind`, or null. */
+async function handlerWithin(
+  folder: string,
+  kind: HandlerKind = ANY_HANDLERS
+): Promise<string | null> {
+  const here = await handlerIn(folder, kind);
   if (here !== null) return here;
   for (const name of await subfolders(folder)) {
-    const deeper = await handlerWithin(path.join(folder, name));
+    const deeper = await handlerWithin(path.join(folder, name), kind);
     if (deeper !== null) return deeper;
   }
   return null;

@@ -38,7 +38,7 @@ import {
   calculateSchemaHash,
   schemaHashesMatch,
 } from "../../schema/services/schema-hash";
-import { sweepDeletedEntityVersions } from "../../versions/entity-teardown";
+import { deleteEntityRegistryRow } from "../../versions/entity-teardown";
 import {
   clearWebhookRecording,
   setWebhookRecording,
@@ -516,10 +516,9 @@ export class CollectionRegistryService extends BaseRegistryService<
       // one caller and miss three.
       //
       // What is swept, and what is deliberately kept, is for
-      // `sweepDeletedEntityVersions` to say.
+      // `deleteEntityRegistryRow` to say.
       const count = await this.adapter.transaction(async tx => {
-        await sweepDeletedEntityVersions(tx, "collection", slug);
-        return tx.delete(this.registryTableName, this.whereEq("slug", slug));
+        return deleteEntityRegistryRow(tx, "collection", slug);
       });
 
       if (count === 0) {

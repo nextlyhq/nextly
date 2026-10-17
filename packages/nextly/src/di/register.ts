@@ -34,6 +34,7 @@ import {
   buildAuthRouterDeps,
   challengeBudgetWarning,
 } from "../auth/handlers/deps-bridge";
+import { edgeProxyWarning } from "../auth/handlers/proxy-posture";
 import type { CollectionConfig } from "../collections/config/define-collection";
 import type {
   SanitizedApiKeysConfig,
@@ -814,6 +815,12 @@ async function registerServicesOnce(
   const resolvedBasePath = basePath ?? process.cwd();
 
   logRegisteredPlugins(transformedConfig, resolvedLogger);
+
+  // Said once per boot, whatever plugins are present: an app on an edge that
+  // reports the client, with security.trustProxy unset, rate-limits sign-in
+  // without client addresses and nothing else would tell its operator.
+  const edgeWarning = edgeProxyWarning(transformedConfig);
+  if (edgeWarning) resolvedLogger.warn?.(edgeWarning);
 
   // ----------------------------------------
   // Layer 1: Create and Connect Adapter

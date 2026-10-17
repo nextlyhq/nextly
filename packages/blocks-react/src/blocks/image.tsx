@@ -214,12 +214,12 @@ export const image = defineBlock<ImageProps, PageContext>({
   baseStyles: IMAGE_BASE_STYLES,
   parts: IMAGE_PARTS,
   props: {
-    mediaId: { type: "media" },
-    src: { type: "url" },
-    alt: { type: "text" },
+    mediaId: { role: "content", type: "media" },
+    src: { role: "content", type: "url" },
+    alt: { role: "content", type: "text" },
     decorative: { type: "checkbox" },
     loading: { type: "select", options: [...IMAGE_LOADING] },
-    caption: { type: "text" },
+    caption: { role: "content", type: "text" },
   },
   defaultProps: { alt: "", loading: "lazy" },
   // Both candidates, in the order the render prefers them: the resolved media

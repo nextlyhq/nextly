@@ -17,7 +17,9 @@
 import {
   DOCUMENT_FORMAT_VERSION,
   DOCUMENT_KINDS,
+  type BlockDocument,
   type BreakpointSet,
+  type IssueCode,
 } from "@nextlyhq/blocks-engine";
 import type {
   PluginFieldInstance,
@@ -31,6 +33,10 @@ import { emptyBlockDocument } from "./blocks-document";
 import type { BlocksFieldOptions } from "./blocks-options";
 import { blocksOptionsOf } from "./blocks-options";
 import { validateBlocksValue } from "./blocks-validator";
+import { storedFormsOf } from "./lock-baselines";
+
+/** The engine's issue for a child of a contentOnly slot changed besides content. */
+const CONTENT_ONLY_BREAK: IssueCode = "locked-slot-content-only";
 
 /** The field type id. Was a built-in token; now this plugin's to own. */
 export const BLOCKS_TYPE = "blocks";
@@ -88,16 +94,17 @@ export function blocksFieldType(
      * document travels in the message.
      */
     validate: (value, args) => {
-      const issues = validateBlocksValue(
-        value,
-        args.path,
-        typeof args.field.label === "string" ? args.field.label : args.path,
-        policyOf(args.field),
-        // The set this factory was built with; the empty set otherwise, which
-        // the engine treats permissively (a breakpoint reference warns).
-        breakpoints ?? siteBreakpoints()
-      );
-      if (issues.length > 0) return issues;
+      const judge = (stored?: readonly BlockDocument[]) =>
+        validateBlocksValue(
+          value,
+          args.path,
+          typeof args.field.label === "string" ? args.field.label : args.path,
+          policyOf(args.field),
+          // The set this factory was built with; the empty set otherwise,
+          // which the engine treats permissively (a breakpoint reference warns).
+          breakpoints ?? siteBreakpoints(),
+          stored
+        );
       // Composed only once the document is well formed: the composition walks
       // the tree the rules above vouched for, and a malformed one would report
       // the shape problem a second time in the composition's words.
@@ -105,11 +112,26 @@ export function blocksFieldType(
       // Answered synchronously wherever there is nothing to compose — no store
       // installed, or no entry write to read the library through — so a caller
       // judging a value on its own gets the answer it always got.
-      const setup = composition?.();
-      if (setup === undefined || args.write === undefined) return true;
-      return compositionIssues(value, args, setup).then(composed =>
-        composed.length === 0 ? true : composed
-      );
+      const composed = () => {
+        const setup = composition?.();
+        if (setup === undefined || args.write === undefined) return true;
+        return compositionIssues(value, args, setup).then(found =>
+          found.length === 0 ? true : found
+        );
+      };
+      const issues = judge();
+      if (issues.length === 0) return composed();
+      // A contentOnly slot may keep what the document's stored version already
+      // holds, so a part a block's changed defaults left behind is not refused
+      // with nobody having changed it. Read only once such a break is found.
+      if (!issues.some(issue => issue.code === CONTENT_ONLY_BREAK)) {
+        return issues;
+      }
+      return storedFormsOf(args.write, args.path).then(stored => {
+        if (stored.length === 0) return issues;
+        const again = judge(stored);
+        return again.length > 0 ? again : composed();
+      });
     },
 
     /**

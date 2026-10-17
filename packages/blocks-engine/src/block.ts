@@ -51,10 +51,27 @@ export interface PropSchema {
    * inspector still edits it.
    */
   inline?: boolean;
+  /**
+   * What the prop is to an author. `"content"` marks what the block SAYS: its
+   * text, its media, its links. Inside a slot locked `"contentOnly"` these are
+   * the only props that can change; every other prop, and the block's styles,
+   * classes, visibility and custom CSS, stay as the block started.
+   *
+   * WordPress's spelling, from its block attributes' `role: "content"`, so a
+   * block author who knows one knows the other. Left out, the prop is design or
+   * configuration. Registration refuses any other value, naming the prop.
+   */
+  role?: "content";
   [option: string]: unknown;
 }
 
-/** How much of a slot is locked against editing. */
+/**
+ * How firmly a slot's children are fixed.
+ *
+ * The values are WordPress's `templateLock` names. `false` is a slot declaring
+ * itself unlocked, which is not the same as declaring nothing: see
+ * {@link SlotSpec.lock}.
+ */
 export type SlotLock = "all" | "insert" | "contentOnly" | false;
 
 /** One named child region a container block exposes. */
@@ -86,9 +103,30 @@ export interface SlotSpec {
    */
   defaultBlock?: readonly { type: string; props?: Record<string, unknown> }[];
   /**
-   * Editing restriction for this slot, inherited by its children:
-   * `"all"` locks everything, `"insert"` forbids adding/removing children,
-   * `"contentOnly"` allows editing values but not structure.
+   * Whether this slot's children are fixed to the ones it starts with, as
+   * WordPress's `templateLock` means it.
+   *
+   * A locked slot holds exactly the children {@link defaultBlock} gives it when
+   * the block is inserted, and a locked slot declaring no starting children
+   * holds none.
+   *
+   * - `"insert"` fixes which children it holds, and lets them be reordered.
+   * - `"all"` fixes which children it holds and their order. Their content and
+   *   design stay editable.
+   * - `"contentOnly"` fixes which children it holds and their order, and
+   *   everything about them but their content: only the props their blocks
+   *   declare with `role: "content"` can change.
+   * - `false` declares the slot unlocked.
+   *
+   * Checked when a document is validated with a definitions source, which is
+   * how a save is judged, so a stored document cannot hold a locked slot in any
+   * other arrangement whoever wrote it. Changing what a locked slot starts with
+   * therefore changes the block's stored shape: bump `version` and migrate the
+   * nodes already stored.
+   *
+   * Inherited: a slot that declares no lock takes the lock of the slot its
+   * block sits in. `false` stops that, except beneath `"contentOnly"`, which a
+   * slot inside it cannot loosen.
    */
   lock?: SlotLock;
 }

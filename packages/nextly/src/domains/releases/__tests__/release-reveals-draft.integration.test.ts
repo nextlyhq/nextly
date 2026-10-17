@@ -25,6 +25,10 @@ import {
 import type { CollectionsHandler } from "../../../services/collections-handler";
 import { ReleasesRepository } from "../releases-repository";
 import { seedLiveAuthor } from "./helpers/live-author";
+import {
+  ANY_EDITABLE_STATE,
+  scheduleAsItStands,
+} from "./helpers/release-writes";
 
 let current: TestNextly | undefined;
 
@@ -67,19 +71,22 @@ async function draftInRelease(
 
   const repo = new ReleasesRepository(t.adapter);
   const release = await repo.createRelease({ title: "Go live" });
-  await repo.addMember({
-    releaseId: release.id,
-    scopeKind: "collection",
-    scopeSlug: SLUG,
-    entryId: id,
-    locale: null,
-    action: "publish",
-    // A live author: the read path projects a due member only when its author
-    // still exists and is active, matching the write path that runs AS them.
-    createdBy: await seedLiveAuthor(t),
-  });
+  await repo.addMember(
+    {
+      releaseId: release.id,
+      scopeKind: "collection",
+      scopeSlug: SLUG,
+      entryId: id,
+      locale: null,
+      action: "publish",
+      // A live author: the read path projects a due member only when its author
+      // still exists and is active, matching the write path that runs AS them.
+      createdBy: await seedLiveAuthor(t),
+    },
+    ANY_EDITABLE_STATE
+  );
   if (scheduledAt !== null) {
-    await repo.scheduleRelease(release.id, scheduledAt, "UTC");
+    await scheduleAsItStands(repo, release.id, scheduledAt, "UTC");
   }
   return id;
 }
@@ -103,17 +110,20 @@ async function publishedInTakedown(
 
   const repo = new ReleasesRepository(t.adapter);
   const release = await repo.createRelease({ title: "Take it down" });
-  await repo.addMember({
-    releaseId: release.id,
-    scopeKind: "collection",
-    scopeSlug: SLUG,
-    entryId: id,
-    locale: null,
-    action: "unpublish",
-    createdBy: await seedLiveAuthor(t),
-  });
+  await repo.addMember(
+    {
+      releaseId: release.id,
+      scopeKind: "collection",
+      scopeSlug: SLUG,
+      entryId: id,
+      locale: null,
+      action: "unpublish",
+      createdBy: await seedLiveAuthor(t),
+    },
+    ANY_EDITABLE_STATE
+  );
   if (scheduledAt !== null) {
-    await repo.scheduleRelease(release.id, scheduledAt, "UTC");
+    await scheduleAsItStands(repo, release.id, scheduledAt, "UTC");
   }
   return id;
 }

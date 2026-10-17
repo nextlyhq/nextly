@@ -19,6 +19,10 @@ const posix = (p: unknown) => String(p).replaceAll("\\", "/");
 vi.mock("fs-extra", () => ({
   default: {
     pathExists: vi.fn(),
+    // Nothing on any path is a link: these cases scaffold into plain folders.
+    lstat: vi.fn(async () => {
+      throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+    }),
     readJson: vi.fn(),
     writeFile: vi.fn(),
     appendFile: vi.fn(),
