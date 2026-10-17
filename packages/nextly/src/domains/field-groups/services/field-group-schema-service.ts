@@ -65,6 +65,7 @@ import { env } from "../../../lib/env";
 import { STORAGE_FORMAT } from "../../../schemas/storage-format";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
 import type { ExtensionColumn } from "../../schema/extension/types";
+import { builderDropColumnSql } from "../../schema/pipeline/sql-templates/common-statements";
 import {
   DEFAULT_DECIMAL_PRECISION,
   DEFAULT_DECIMAL_SCALE,
@@ -416,15 +417,13 @@ export class FieldGroupSchemaService {
       if (newFieldMap.has(name)) continue;
 
       const columnName = this.toSnakeCase(name);
-      if (this.dialect === "sqlite") {
-        statements.push(
-          `ALTER TABLE ${this.q}${tableName}${this.q} DROP COLUMN ${this.q}${columnName}${this.q};`
-        );
-      } else {
-        statements.push(
-          `ALTER TABLE ${this.q}${tableName}${this.q} DROP COLUMN IF EXISTS ${this.q}${columnName}${this.q};`
-        );
-      }
+      statements.push(
+        builderDropColumnSql(
+          this.dialect,
+          `${this.q}${tableName}${this.q}`,
+          `${this.q}${columnName}${this.q}`
+        )
+      );
     }
 
     // SQLite doesn't support ALTER COLUMN, so skip modification detection there.

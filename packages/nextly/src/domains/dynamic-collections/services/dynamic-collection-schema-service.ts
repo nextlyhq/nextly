@@ -39,6 +39,7 @@ import type {
   ForeignKeySpec,
   ReferentialAction,
 } from "../../schema/pipeline/diff/types";
+import { builderDropColumnSql } from "../../schema/pipeline/sql-templates/common-statements";
 import {
   addForeignKeySql,
   changeForeignKeyActionStatements,
@@ -1689,16 +1690,13 @@ ${allColumnDefs.join(",\n")}
           statements.push(this.dropIndexSql(tableName, uniquePresent));
         }
 
-        // SQLite doesn't support IF EXISTS on DROP COLUMN
-        if (this.dialect === "sqlite") {
-          statements.push(
-            `ALTER TABLE ${this.quoteIdentifier(tableName)} DROP COLUMN ${this.quoteIdentifier(dropCol)};`
-          );
-        } else {
-          statements.push(
-            `ALTER TABLE ${this.quoteIdentifier(tableName)} DROP COLUMN IF EXISTS ${this.quoteIdentifier(dropCol)};`
-          );
-        }
+        statements.push(
+          builderDropColumnSql(
+            this.dialect,
+            this.quoteIdentifier(tableName),
+            this.quoteIdentifier(dropCol)
+          )
+        );
       }
     }
 
