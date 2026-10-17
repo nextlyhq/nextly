@@ -5,6 +5,7 @@
  */
 import type {
   AuthInput,
+  AuthLimitAnswer,
   AuthOutcome,
   AuthStrategy,
   Challenge,
@@ -15,6 +16,7 @@ import type {
 
 type _AuthSurface = [
   AuthInput,
+  AuthLimitAnswer,
   AuthOutcome,
   AuthStrategy,
   Challenge,
@@ -26,4 +28,26 @@ type _AuthSurface = [
 // Exercise the discriminated union so a regression in AuthOutcome surfaces here.
 const _outcome: AuthOutcome = { type: "pass" };
 void _outcome;
+
+// A strategy may answer the sign-in limiter, synchronously or not, and one
+// written before it could still type-checks: the member is optional.
+const _keyed: AuthStrategy = {
+  name: "username",
+  authenticate: () => Promise.resolve({ type: "pass" }),
+  limitKey: ({ body }) =>
+    typeof body.username === "string"
+      ? { handles: true, key: body.username }
+      : { handles: false },
+};
+const _unkeyed: AuthStrategy = {
+  name: "legacy",
+  authenticate: () => Promise.resolve({ type: "pass" }),
+};
+const _answer: Promise<AuthLimitAnswer> = Promise.resolve({
+  handles: true,
+  key: null,
+});
+void _keyed;
+void _unkeyed;
+void _answer;
 export type { _AuthSurface };

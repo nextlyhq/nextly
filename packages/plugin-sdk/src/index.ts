@@ -644,6 +644,7 @@ export {
  */
 export type {
   AuthInput,
+  AuthLimitAnswer,
   AuthOutcome,
   AuthStrategy,
   Challenge,

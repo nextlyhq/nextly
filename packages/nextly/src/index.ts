@@ -802,6 +802,7 @@ export type {
 // challenge protocol. @experimental until a first-party plugin exercises it (D55).
 export type {
   AuthInput,
+  AuthLimitAnswer,
   AuthOutcome,
   AuthStrategy,
   Challenge,

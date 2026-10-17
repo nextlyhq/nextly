@@ -46,10 +46,45 @@ export type AuthOutcome =
   | { type: "fail"; reason?: string }
   | { type: "pass" };
 
+/**
+ * @experimental What a strategy tells the sign-in rate limit about a request,
+ * before any strategy authenticates it:
+ * - `{ handles: false }` → not this strategy's request; the next is asked
+ * - `{ handles: true, key }` → this strategy's; the request is limited under
+ *   `key`, or against the budget shared by requests naming no account when
+ *   `key` is `null` or empty
+ */
+export type AuthLimitAnswer =
+  | { handles: false }
+  | { handles: true; key: string | null };
+
 /** @experimental A pluggable authentication strategy (app opt-in). */
 export interface AuthStrategy {
   name: string;
   authenticate(input: AuthInput, ctx: PluginContext): Promise<AuthOutcome>;
+  /**
+   * @experimental Name the identity a sign-in targets, so the auth rate limit
+   * keys a request whose client address cannot be read on what this strategy
+   * reads rather than on any `email` the body carries.
+   *
+   * Asked in chain order, before any strategy authenticates; the first that
+   * handles a request decides its key, whatever later strategies would say.
+   * The key comes from the request alone, never from whether an account
+   * matches it, and is normalised as this strategy's own lookup normalises
+   * it: a known and an unknown identity are then limited alike, and spellings
+   * the lookup treats as one share one budget. For a credential that names no
+   * identity before it is looked up, such as an OAuth code, name the
+   * credential itself. An answer that throws or rejects counts the request
+   * against the budget shared by requests naming no account.
+   *
+   * A strategy without it leaves the limiter unable to tell which strategy
+   * will handle a request, so the chain is keyed on the request's `email`,
+   * and the server names the strategy at startup.
+   */
+  limitKey?(input: {
+    request: Request;
+    body: Record<string, unknown>;
+  }): AuthLimitAnswer | Promise<AuthLimitAnswer>;
 }
 
 /** @experimental Resolves a challenge given the client's response (e.g. a TOTP code). */
