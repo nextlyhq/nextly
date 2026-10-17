@@ -832,6 +832,31 @@ describe("computeVersionDiff — round-2 hardening", () => {
     expect(JSON.stringify(hidden)).not.toMatch(/"A"|"B"/);
   });
 
+  it("marks the comparison incomplete for a field withheld below the top level", () => {
+    const meta = field({
+      name: "meta",
+      type: "group",
+      fields: [
+        field({ name: "title", type: "text" }),
+        field({ name: "secret", type: "text" }),
+      ],
+    });
+    // Redaction removed `meta.secret` from both sides; the title changed.
+    const before = { meta: { title: "a" } };
+    const after = { meta: { title: "b" } };
+    const withheld = new Set(["meta.secret"]);
+    for (const modifiedOnly of [false, true]) {
+      const diff = computeVersionDiff(before, after, [meta], {
+        withheld,
+        modifiedOnly,
+      });
+      // The changed title is still shown; the withheld field is not claimed
+      // to be unchanged.
+      expect(diff.hasChanges).toBe(true);
+      expect(diff.incomplete).toBe(true);
+    }
+  });
+
   it("keeps a top-level field declaring a read rule (redaction handles those)", () => {
     const fields = [
       field({ name: "title", type: "text" }),

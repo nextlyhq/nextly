@@ -11,6 +11,8 @@
  */
 import { describe, expect, it, vi } from "vitest";
 
+import { NextlyError } from "../../../errors";
+import { RELEASE_ASSEMBLABLE_FROM } from "../../../schemas/releases/types";
 import { releaseMemberKey } from "../release-member-key";
 import { RELEASE_LIST_ORDERS } from "../releases-repository";
 import { ReleasesService } from "../services/releases-service";
@@ -37,7 +39,7 @@ function repository() {
           revision?: number;
           scheduledAt?: Date | null;
         }>
-      > => [{ id: "r1", state: "draft" }]
+      > => [{ id: "r1", state: "draft", revision: 0 }]
     ),
     // The list's paged read, which `find` routes every non-document query to.
     findReleasePage: vi.fn(async () => ({ rows: [], total: 0 })),
@@ -45,10 +47,10 @@ function repository() {
     listMembers: vi.fn(
       async (): Promise<Array<{ id: string; memberKey?: string }>> => []
     ),
-    addMember: vi.fn(async () => ({ id: "m1" })),
-    removeMember: vi.fn(async () => undefined),
-    touchIfAssemblable: vi.fn(async () => true),
-    restoreMember: vi.fn(async () => undefined),
+    // Each write takes the states the service judged it may land on as its
+    // last argument, which the cases below read back from the call.
+    addMember: vi.fn(async (..._args: unknown[]) => ({ id: "m1" })),
+    removeMember: vi.fn(async (..._args: unknown[]) => undefined),
     findMember: vi.fn(
       async (): Promise<{ id: string; releaseId: string } | undefined> => ({
         id: "m1",
@@ -56,7 +58,7 @@ function repository() {
       })
     ),
     liveAuthors: vi.fn(async (ids: string[]) => new Set(ids)),
-    scheduleRelease: vi.fn(async () => true),
+    scheduleRelease: vi.fn(async (..._args: unknown[]) => true),
     cancelRelease: vi.fn(async () => true),
     // The `containing` listing's own read. Present so a test can drive that
     // branch to completion rather than dying on a missing collaborator, which
@@ -232,7 +234,8 @@ describe("ReleasesService add-time document check", () => {
       ADMIN
     );
     expect(repo.addMember).toHaveBeenCalledWith(
-      expect.objectContaining({ createdBy: "u1", releaseId: "r1" })
+      expect.objectContaining({ createdBy: "u1", releaseId: "r1" }),
+      expect.anything()
     );
   });
 
@@ -314,8 +317,6 @@ describe("ReleasesService refuses members that would act on nothing", () => {
     // mistyped id would insert a row no drain can ever find: a 201 for a member
     // that belongs to nothing.
     const { svc, repo } = service({ holds: ["create"] });
-    repo.touchIfAssemblable.mockResolvedValueOnce(false);
-    // Persistent, not once: the release is read for its kind before the claim.
     repo.findReleases.mockResolvedValue([]);
     await expect(svc.addMember("nope", MEMBER, ADMIN)).rejects.toMatchObject({
       code: "NOT_FOUND",
@@ -325,7 +326,6 @@ describe("ReleasesService refuses members that would act on nothing", () => {
 
   it("refuses a member on a release that will never run again", async () => {
     const { svc, repo } = service({ holds: ["create"] });
-    repo.touchIfAssemblable.mockResolvedValueOnce(false);
     repo.findReleases.mockResolvedValueOnce([{ id: "r1", state: "published" }]);
     await expect(svc.addMember("r1", MEMBER, ADMIN)).rejects.toMatchObject({
       code: "CONFLICT",
@@ -436,7 +436,6 @@ describe("ReleasesService keeps a single-document release to one document", () =
       message: expect.stringMatching(/ordinary release/),
     });
     expect(repo.addMember).not.toHaveBeenCalled();
-    expect(repo.touchIfAssemblable).not.toHaveBeenCalled();
   });
 
   it("lets an ordinary release holding a document take another", async () => {
@@ -499,7 +498,6 @@ describe("ReleasesService protects a committed release", () => {
     // publisher already committed to — the escalation the publish authority
     // exists to prevent, arriving after the decision instead of before it.
     const { svc, repo } = service({ holds: ["create"] });
-    repo.touchIfAssemblable.mockResolvedValueOnce(false);
     repo.findReleases.mockResolvedValue([{ id: "r1", state: "scheduled" }]);
     await expect(svc.addMember("r1", MEMBER, ADMIN)).rejects.toMatchObject({
       code: "FORBIDDEN",
@@ -512,10 +510,11 @@ describe("ReleasesService protects a committed release", () => {
     // not about the state. Without this, freezing membership outright would
     // pass the test above and be wrong.
     const { svc, repo } = service({ holds: ["create", "publish"] });
-    repo.touchIfAssemblable.mockResolvedValueOnce(false);
     repo.findReleases.mockResolvedValue([{ id: "r1", state: "scheduled" }]);
     await svc.addMember("r1", MEMBER, ADMIN);
-    expect(repo.addMember).toHaveBeenCalled();
+    // And the write is fenced on states that admit the scheduled release, or
+    // it would refuse the add the judgement allowed.
+    expect(repo.addMember.mock.calls[0]?.[1]).toContain("scheduled");
   });
 
   it("refuses an unusable schedule instant before touching the release", async () => {
@@ -544,28 +543,44 @@ describe("ReleasesService protects a committed release", () => {
   });
 });
 
-describe("ReleasesService closes the window around a committed release", () => {
-  it("undoes the member when the release is scheduled during the insert", async () => {
-    // The claim cannot cover the insert itself: a publisher can schedule
-    // between the two, and the drain reads membership at the instant. Detected
-    // after the write and COMPENSATED — a member that should not be there is
-    // removable, while a publish that already happened is not.
+describe("ReleasesService fences a membership change on its judgement", () => {
+  /** The states the last write of this kind was fenced on. */
+  function fencedOn(write: { mock: { calls: unknown[][] } }): unknown {
+    return write.mock.calls.at(-1)?.at(-1);
+  }
+
+  it("fences an add judged against a draft on the assembling states alone", async () => {
+    // A publisher can schedule between the judgement and the write, and the
+    // drain reads membership at the instant. The write's fence is what refuses
+    // the member then; a fence that admitted `scheduled` would let a caller who
+    // never passed the publish gate add to a committed launch.
     const { svc, repo } = service({ holds: ["create"] });
-    repo.touchIfAssemblable
-      .mockResolvedValueOnce(true) // the claim succeeds: still a draft
-      .mockResolvedValueOnce(false); // scheduled while we were inserting
+    await svc.addMember("r1", MEMBER, ADMIN);
+    expect(fencedOn(repo.addMember)).toEqual(RELEASE_ASSEMBLABLE_FROM);
+  });
+
+  it("fences it there even for a caller who may publish", async () => {
+    // The judgement was formed on a draft, so the publish authority was never
+    // asked: what may land is what was judged, not what the caller could have
+    // been allowed.
+    const { svc, repo, deps } = service({ holds: ["create", "publish"] });
+    await svc.addMember("r1", MEMBER, ADMIN);
+    expect(fencedOn(repo.addMember)).toEqual(RELEASE_ASSEMBLABLE_FROM);
+    expect(deps.canManageReleases).not.toHaveBeenCalledWith("u1", "publish");
+  });
+
+  it("answers a release that moved after the judgement as a conflict, undoing nothing", async () => {
+    // The repository refuses inside the transaction, before anything is
+    // written, so there is no member to take back out.
+    const { svc, repo } = service({ holds: ["create"] });
+    repo.addMember.mockRejectedValueOnce(
+      NextlyError.conflict({
+        logContext: { reason: "release-moved-since-judged" },
+      })
+    );
     await expect(svc.addMember("r1", MEMBER, ADMIN)).rejects.toMatchObject({
       code: "CONFLICT",
     });
-    expect(repo.removeMember).toHaveBeenCalledWith("m1");
-  });
-
-  it("does not re-check for a caller who may publish", async () => {
-    // For them adding to a scheduled release is allowed, so there is nothing to
-    // undo — and a second fence call would refuse a legitimate write.
-    const { svc, repo } = service({ holds: ["create", "publish"] });
-    await svc.addMember("r1", MEMBER, ADMIN);
-    expect(repo.touchIfAssemblable).toHaveBeenCalledTimes(1);
     expect(repo.removeMember).not.toHaveBeenCalled();
   });
 
@@ -574,8 +589,6 @@ describe("ReleasesService closes the window around a committed release", () => {
     // content live. The earlier reasoning — that removal can only make less go
     // live — was wrong in exactly that direction.
     const { svc, repo } = service({ holds: ["create"] });
-    repo.touchIfAssemblable.mockResolvedValueOnce(false);
-    // Persistent, not once: the release is read for its kind before the claim.
     repo.findReleases.mockResolvedValue([{ id: "r1", state: "scheduled" }]);
     await expect(svc.removeMember("m1", ADMIN)).rejects.toMatchObject({
       code: "FORBIDDEN",
@@ -1186,29 +1199,65 @@ describe("ReleasesService carries the key scope into the DOCUMENT check", () => 
   });
 });
 
-describe("ReleasesService closes the window around a REMOVAL too", () => {
-  it("puts the member back when the release is scheduled during the delete", async () => {
+describe("ReleasesService fences a REMOVAL on its judgement too", () => {
+  /** The states the last removal was fenced on. */
+  function fencedOn(write: { mock: { calls: unknown[][] } }): unknown {
+    return write.mock.calls.at(-1)?.at(-1);
+  }
+
+  it("fences a removal judged against a draft on the assembling states alone", async () => {
     // Removing an `unpublish` member cancels a committed takedown, so a
-    // publisher scheduling between the claim and the delete would have their
-    // decision undone by a caller who never passed the publish gate.
+    // publisher scheduling between the judgement and the delete would have
+    // their decision undone by a caller who never passed the publish gate.
     const { svc, repo } = service({ holds: ["create"] });
-    repo.touchIfAssemblable
-      .mockResolvedValueOnce(true) // the claim succeeds
-      .mockResolvedValueOnce(false); // scheduled while we were deleting
-    await expect(svc.removeMember("m1", ADMIN)).rejects.toMatchObject({
-      code: "CONFLICT",
-    });
-    // Restored with the ORIGINAL row, so the undo is invisible to anything
-    // holding that id.
-    expect(repo.restoreMember).toHaveBeenCalledWith(
-      expect.objectContaining({ id: "m1" })
+    await svc.removeMember("m1", ADMIN);
+    expect(repo.removeMember).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "m1", releaseId: "r1" }),
+      RELEASE_ASSEMBLABLE_FROM
     );
   });
 
-  it("does not re-check for a caller who may publish", async () => {
+  it("lets a publisher's removal land on a scheduled ordinary release", async () => {
+    // The control: the fence follows the authority the judgement asked for.
     const { svc, repo } = service({ holds: ["create", "publish"] });
+    repo.findReleases.mockResolvedValue([
+      { id: "r1", state: "scheduled", kind: "release" },
+    ]);
     await svc.removeMember("m1", ADMIN);
-    expect(repo.touchIfAssemblable).toHaveBeenCalledTimes(1);
-    expect(repo.restoreMember).not.toHaveBeenCalled();
+    expect(fencedOn(repo.removeMember)).toContain("scheduled");
+  });
+
+  it("answers a release that moved after the judgement as a conflict", async () => {
+    const { svc, repo } = service({ holds: ["create"] });
+    repo.removeMember.mockRejectedValueOnce(
+      NextlyError.conflict({
+        logContext: { reason: "release-moved-since-judged" },
+      })
+    );
+    await expect(svc.removeMember("m1", ADMIN)).rejects.toMatchObject({
+      code: "CONFLICT",
+    });
+  });
+});
+
+describe("ReleasesService fences a schedule on the revision it read", () => {
+  it("hands the write the revision the read carried", async () => {
+    // A membership change landing after the read bumps the revision, so the
+    // write misses rather than scheduling contents nobody checked.
+    const { svc, repo } = service({ holds: ["publish"] });
+    repo.findReleases.mockResolvedValue([
+      { id: "r1", state: "draft", revision: 7 },
+    ]);
+    await svc.schedule("r1", new Date(Date.now() + 86_400_000), "UTC", ADMIN);
+    expect(repo.scheduleRelease.mock.calls[0]?.[4]).toBe(7);
+  });
+
+  it("refuses a release that is not there as unschedulable, writing nothing", async () => {
+    const { svc, repo } = service({ holds: ["publish"] });
+    repo.findReleases.mockResolvedValue([]);
+    await expect(
+      svc.schedule("r1", new Date(Date.now() + 86_400_000), "UTC", ADMIN)
+    ).rejects.toMatchObject({ code: "CONFLICT" });
+    expect(repo.scheduleRelease).not.toHaveBeenCalled();
   });
 });

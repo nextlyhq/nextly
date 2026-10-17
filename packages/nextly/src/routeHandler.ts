@@ -570,16 +570,9 @@ async function handleDocumentLockRequest(
 }
 
 // ============================================================================
-// Translations Direct Dispatch
+// Notices Direct Dispatch
 // ============================================================================
 
-/**
- * Delegate a translation-worklist request to its handler.
- *
- * One method today. Kept as a switch rather than a direct call so a second
- * read (a per-language count, say) lands beside it instead of growing another
- * dispatch branch above.
- */
 /** The signed-in person's notices. */
 async function handleNoticesRequest(
   req: Request,
@@ -602,6 +595,17 @@ async function handleNoticesRequest(
   }
 }
 
+// ============================================================================
+// Translations Direct Dispatch
+// ============================================================================
+
+/**
+ * Delegate a translation-worklist request to its handler.
+ *
+ * One method today. Kept as a switch rather than a direct call so a second
+ * read (a per-language count, say) lands beside it instead of growing another
+ * dispatch branch above.
+ */
 async function handleTranslationsRequest(
   req: Request,
   method: string

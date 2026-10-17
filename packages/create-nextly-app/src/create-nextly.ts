@@ -6,6 +6,14 @@ import { classifyError } from "@nextlyhq/telemetry";
 import fs from "fs-extra";
 import pc from "picocolors";
 
+import {
+  type BundledSkill,
+  bundledSkillsVersion,
+  projectNextlyVersion,
+  readBundledSkills,
+  skillsVersionMismatch,
+  writeAgentSkills,
+} from "./generators/agent-skills";
 import { generateEnv } from "./generators/env";
 import { generateIntoExistingApp } from "./generators/existing-app";
 import type { GeneratedFiles } from "./generators/generated-files";
@@ -356,6 +364,41 @@ export async function createNextly(
     databaseUrl = url?.trim() || database.connectionUrl;
   }
 
+  // --- Step 7: Skills for coding agents ---
+  //
+  // Asked for an app, new or existing; a plugin is a library and the skills
+  // are about building an app. Read now, before anything is installed or
+  // written, so a broken bundle stops the run while the project is untouched.
+
+  let agentSkills: BundledSkill[] = [];
+  // The release the bundled skills were checked against, from their own
+  // frontmatter; which projects get them is decided by it.
+  let agentSkillsVersion = "";
+  if (projectType !== "plugin" && options.skills !== false) {
+    let addSkills = true;
+    if (!defaults) {
+      const answer = await p.confirm({
+        message:
+          "Add Nextly skills for coding agents (Claude Code, Codex, Cursor)?",
+        initialValue: true,
+      });
+      if (p.isCancel(answer)) {
+        p.cancel("Cancelled.");
+        return;
+      }
+      addSkills = answer;
+    }
+    if (addSkills) {
+      try {
+        agentSkills = await readBundledSkills();
+        agentSkillsVersion = bundledSkillsVersion(agentSkills);
+      } catch (error) {
+        p.cancel((error as Error).message);
+        process.exit(1);
+      }
+    }
+  }
+
   // --- Scaffold project from template ---
 
   // A new project's package manager, settled here before any file is written
@@ -530,6 +573,8 @@ export async function createNextly(
     s.start("Setting up environment...");
     // What the existing-app steps did, for the one report printed below.
     const reported: GeneratedFiles[] = [];
+    // Said once the spinner stops, after what was written and left alone.
+    const warnings: string[] = [];
     try {
       if (!isFreshProject) {
         // Existing project: Nextly's files, each written only where nothing
@@ -556,13 +601,29 @@ export async function createNextly(
           : database;
         envResult = await generateEnv(cwd, envDatabase);
       }
+      if (agentSkills.length > 0) {
+        // Written only into a project on the release the skills were checked
+        // against; after the install, so the release read is the one
+        // installed.
+        const mismatch = skillsVersionMismatch(
+          await projectNextlyVersion(cwd),
+          agentSkillsVersion
+        );
+        if (mismatch === null) {
+          reported.push(
+            await writeAgentSkills(cwd, agentSkills, agentSkillsVersion)
+          );
+        } else {
+          warnings.push(mismatch);
+        }
+      }
       s.stop("Environment configured");
-      // One report for every step, the env files included, after the spinner
-      // stops so its lines are not drawn over. Paths, keys and packages only:
-      // nothing in it ever carries an env value.
+      // One report for every step, the env files and the skills included,
+      // after the spinner stops so its lines are not drawn over. Paths, keys
+      // and packages only: nothing in it ever carries an env value.
       reportGeneratedFiles(
         envResult ? [...reported, envResult.files] : reported,
-        envResult?.warnings
+        [...(envResult?.warnings ?? []), ...warnings]
       );
     } catch (error) {
       s.stop("Failed to generate configuration");

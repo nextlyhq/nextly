@@ -12,10 +12,7 @@
  */
 import { describe, expect, it, vi } from "vitest";
 
-import {
-  RELEASE_SCHEDULABLE_FROM,
-  type ReleaseState,
-} from "../../../schemas/releases/types";
+import type { ReleaseState } from "../../../schemas/releases/types";
 import { ReleasesService } from "../services/releases-service";
 import type { ReleasesServiceDeps } from "../services/releases-service";
 
@@ -52,7 +49,7 @@ function service(members: M[], liveAuthorIds: string[], state = "blocked") {
       _id: string,
       _at: Date,
       _tz: string,
-      from: readonly ReleaseState[] = RELEASE_SCHEDULABLE_FROM
+      from: readonly ReleaseState[]
     ) => from.includes(state as ReleaseState)
   );
   const deps = {
@@ -293,9 +290,10 @@ describe("the blocker verdict and the write share a fence", () => {
    * service passed. Asserting on the argument instead would pass for any list
    * that merely looked plausible.
    *
-   * The `from` default is the repository's own, so a service that passes no
-   * fence at all behaves here exactly as it did before this was fixed — which
-   * is what makes the two racing cases below fail on that version.
+   * Only the STATE half of the fence is modelled: the drain moves the state,
+   * and a revision the stub always accepts is what isolates these cases to
+   * that half. The revision half has its own interleavings, against a real
+   * database, in `release-revision-fence.integration.test.ts`.
    */
   function racing(
     atRead: string,
@@ -312,7 +310,7 @@ describe("the blocker verdict and the write share a fence", () => {
         _id: string,
         _at: Date,
         _tz: string,
-        from: readonly ReleaseState[] = RELEASE_SCHEDULABLE_FROM
+        from: readonly ReleaseState[]
       ) => from.includes(atWrite)
     );
     const deps = {
