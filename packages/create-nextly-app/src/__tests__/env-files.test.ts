@@ -84,6 +84,27 @@ describe("a new project's env files", () => {
     expect(await read(".env.example")).not.toContain("S3cr3tPassw0rd");
   });
 
+  // Next.js expands `$word` in an env file, to an empty string when nothing
+  // sets it, so a `$` in a password written as typed would lose its rest.
+  // `\$` is the spelling it keeps as a `$`.
+  it.each([
+    ["a new .env", undefined],
+    ["an existing .env", "MINE=1\n"],
+  ])(
+    "writes a typed URL's literal $ so it survives expansion, in %s",
+    async (_, existing) => {
+      if (existing !== undefined) await writeFile(join(dir, ".env"), existing);
+      const typed = "postgresql://app:pa$word@db.internal:5432/app";
+
+      await generateEnv(dir, { ...postgresWithRealUrl, connectionUrl: typed });
+
+      expect(await read(".env")).toContain(
+        "DATABASE_URL=postgresql://app:pa\\$word@"
+      );
+      expect((await keysOf(".env")).get("DATABASE_URL")).toBe(typed);
+    }
+  );
+
   it("writes the values Nextly reads, in both files", async () => {
     await generateEnv(dir, sqlite);
 
@@ -360,6 +381,37 @@ export SOME_APP_KEY="kept as it is"
     );
   });
 
+  // Next.js keeps the environment the app runs in when it expands a file, so
+  // a DIALECT set there wins over the file's: the dialect is known only there.
+  it("adds no URL beside a DB_DIALECT read from another variable, even one the file sets", async () => {
+    await writeFile(
+      join(dir, ".env"),
+      "DIALECT=postgresql\nDB_DIALECT=$DIALECT\n"
+    );
+
+    const { warnings } = await generateEnv(dir, postgresWithRealUrl);
+
+    expect(readEnvKeys(await read(".env")).defined.has("DATABASE_URL")).toBe(
+      false
+    );
+    expect(warnings.join("\n")).toMatch(
+      /DB_DIALECT in \.env is set from another variable/
+    );
+  });
+
+  // The runtime drops an empty DB_DIALECT and reads the database from the URL,
+  // so the URL is what the file lacks.
+  it("adds the chosen database's URL beside an empty DB_DIALECT", async () => {
+    await writeFile(join(dir, ".env"), "DB_DIALECT=\n");
+
+    const { warnings } = await generateEnv(dir, sqlite);
+
+    expect(readEnvKeys(await read(".env")).defined.get("DATABASE_URL")).toBe(
+      sqlite.connectionUrl
+    );
+    expect(warnings.join("\n")).not.toMatch(/DB_DIALECT/);
+  });
+
   // Some Windows editors start a file with a byte order mark. dotenv reads
   // the first line through it; missing that line appended a second one,
   // which then won.
@@ -440,10 +492,13 @@ export SOME_APP_KEY="kept as it is"
   it("merges into a .env that appears after it was checked", async () => {
     await writeFile(join(dir, ".env"), "MINE=kept\n");
     const realLstat = fsExtra.lstat.bind(fsExtra);
+    // The check finds nothing; the file is there by the time it is written.
+    let checked = false;
     const spy = vi.spyOn(fsExtra, "lstat").mockImplementation((async (
       p: string
     ) => {
-      if (String(p).endsWith(`${"/"}.env`)) {
+      if (String(p).endsWith(`${"/"}.env`) && !checked) {
+        checked = true;
         throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
       }
       return realLstat(p);
@@ -455,6 +510,39 @@ export SOME_APP_KEY="kept as it is"
     }
 
     expect(await read(".env")).toMatch(/^MINE=kept\n/);
+  });
+
+  // What appeared since the check may be a link, which a merge would follow
+  // into a file shared outside the project.
+  it("leaves a .env that appears as a link after it was checked as it is", async () => {
+    const shared = await mkdtemp(join(tmpdir(), "nextly-shared-"));
+    try {
+      await writeFile(join(shared, "env"), "SHARED=1\n");
+      const realWriteFile = fsExtra.writeFile.bind(fsExtra);
+      const spy = vi.spyOn(fsExtra, "writeFile").mockImplementation((async (
+        p: string,
+        ...rest: unknown[]
+      ) => {
+        if (String(p) === join(dir, ".env")) {
+          await symlink(join(shared, "env"), p);
+        }
+        return (realWriteFile as (...a: unknown[]) => Promise<void>)(
+          p,
+          ...rest
+        );
+      }) as typeof fsExtra.writeFile);
+      let files;
+      try {
+        ({ files } = await generateEnv(dir, sqlite));
+      } finally {
+        spy.mockRestore();
+      }
+
+      expect(await readFile(join(shared, "env"), "utf8")).toBe("SHARED=1\n");
+      expect(files.skipped.map(f => f.path)).toContain(".env");
+    } finally {
+      await rm(shared, { recursive: true, force: true });
+    }
   });
 
   it("changes nothing and reports nothing on a second run", async () => {
@@ -600,6 +688,88 @@ NEXT_PUBLIC_SITE_URL=http://localhost:3000
     } finally {
       await rm(shared, { recursive: true, force: true });
     }
+  });
+
+  // A placeholder word inside a value does not make it a placeholder: these
+  // are real credentials that happen to contain one.
+  it.each([
+    ["NEXTLY_SECRET", "NEXTLY_SECRET=real-example-production-secret-123456"],
+    [
+      "DATABASE_URL",
+      "DATABASE_URL=postgresql://app:myexamplecredential@db:5432/app",
+    ],
+  ])(
+    "warns about a credential in %s that contains a placeholder word",
+    async (key, line) => {
+      await writeFile(join(dir, ".env.example"), `${line}\n`);
+
+      const { warnings } = await generateEnv(dir, sqlite);
+
+      const said = warnings.join("\n");
+      expect(said).toMatch(new RegExp(`\\.env\\.example holds .*${key}`));
+      expect(said).not.toMatch(/real-example|myexamplecredential/);
+    }
+  );
+
+  // The forms an example file uses to say "put yours here".
+  it.each([
+    "your-secret-here",
+    "change-me",
+    "changeme",
+    "replace_me",
+    "<your secret>",
+    "xxxxxxxx",
+    "placeholder",
+  ])("does not warn about the placeholder %s", async value => {
+    await writeFile(
+      join(dir, ".env.example"),
+      `NEXTLY_SECRET=${value}\nDATABASE_URL=postgresql://user:${encodeURIComponent(value)}@localhost:5432/app\n`
+    );
+
+    const { warnings } = await generateEnv(dir, sqlite);
+
+    expect(warnings.join("\n")).not.toMatch(/holds/);
+  });
+
+  // The fallback is in the committed file word for word, and it is the value
+  // whenever the variable is unset where the app runs.
+  it.each([
+    [
+      "NEXTLY_SECRET",
+      "NEXTLY_SECRET=${HOST_SECRET:-prod-secret-0123456789abcdef0123456789}",
+      "prod-secret-0123",
+    ],
+    [
+      "DATABASE_URL",
+      "DATABASE_URL=${HOST_DB:-postgresql://app:S3cr3tPassw0rd@db:5432/app}",
+      "S3cr3tPassw0rd",
+    ],
+  ])(
+    "warns about a credential in %s's fallback, without printing it",
+    async (key, line, credential) => {
+      await writeFile(join(dir, ".env.example"), `${line}\n`);
+
+      const { warnings } = await generateEnv(dir, sqlite);
+
+      const said = warnings.join("\n");
+      expect(said).toMatch(new RegExp(`\\.env\\.example holds .*${key}`));
+      expect(said).not.toContain(credential);
+    }
+  );
+
+  // pg reads `?password=` as the password, though `URL.password` is empty.
+  it("warns about a password in an example URL's query, without printing it", async () => {
+    await writeFile(
+      join(dir, ".env.example"),
+      "DATABASE_URL=postgresql://db.internal/app?user=alice&password=S3cr3tPassw0rd\n"
+    );
+
+    const { warnings } = await generateEnv(dir, sqlite);
+
+    expect(warnings.join("\n")).toMatch(
+      /\.env\.example holds a database password/
+    );
+    expect(warnings.join("\n")).not.toContain("S3cr3tPassw0rd");
   });
 
   it("does not warn about the generic example values", async () => {
@@ -852,6 +1022,110 @@ describe("keeping .env out of git", () => {
     }
   });
 
+  // A .gitignore another process writes between the check and the write is
+  // merged into, never replaced.
+  it("keeps the lines of a .gitignore that appears after it was checked", async () => {
+    const realWriteFile = fsExtra.writeFile.bind(fsExtra);
+    let appeared = false;
+    const spy = vi.spyOn(fsExtra, "writeFile").mockImplementation((async (
+      p: string,
+      ...rest: unknown[]
+    ) => {
+      if (String(p) === join(dir, ".gitignore") && !appeared) {
+        appeared = true;
+        await writeFile(p, "node_modules\n");
+      }
+      return (realWriteFile as (...a: unknown[]) => Promise<void>)(p, ...rest);
+    }) as typeof fsExtra.writeFile);
+    try {
+      await generateEnv(dir, sqlite);
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(appeared).toBe(true);
+    expect(await read(".gitignore")).toMatch(/^node_modules\n[\s\S]*^\.env$/m);
+  });
+
+  // What appeared may be a link, which an append would follow into a file
+  // shared outside the project.
+  it("leaves a .gitignore that appears as a link after it was checked as it is", async () => {
+    const shared = await mkdtemp(join(tmpdir(), "nextly-shared-"));
+    try {
+      await writeFile(join(shared, "gitignore"), "node_modules\n");
+      const realWriteFile = fsExtra.writeFile.bind(fsExtra);
+      const spy = vi.spyOn(fsExtra, "writeFile").mockImplementation((async (
+        p: string,
+        ...rest: unknown[]
+      ) => {
+        if (String(p) === join(dir, ".gitignore")) {
+          await symlink(join(shared, "gitignore"), p);
+        }
+        return (realWriteFile as (...a: unknown[]) => Promise<void>)(
+          p,
+          ...rest
+        );
+      }) as typeof fsExtra.writeFile);
+      let files;
+      try {
+        ({ files } = await generateEnv(dir, sqlite));
+      } finally {
+        spy.mockRestore();
+      }
+
+      expect(await readFile(join(shared, "gitignore"), "utf8")).toBe(
+        "node_modules\n"
+      );
+      expect(files.skipped.map(f => f.path)).toContain(".gitignore");
+      expect(readEnvKeys(await read(".env")).defined.has("NEXTLY_SECRET")).toBe(
+        false
+      );
+    } finally {
+      await rm(shared, { recursive: true, force: true });
+    }
+  });
+
+  // Git reports a configured excludes file by the path it was given, which
+  // can be relative and named .gitignore. Only a .gitignore in .env's folder
+  // or a folder above it, inside the repository, travels with the project.
+  it("adds .env to .gitignore when only a relative excludes file named .gitignore ignores it", async () => {
+    execFileSync("git", ["init", "-q"], { cwd: dir });
+    await mkdir(join(dir, "config"));
+    await writeFile(join(dir, "config", ".gitignore"), ".env\n");
+    execFileSync("git", ["config", "core.excludesFile", "config/.gitignore"], {
+      cwd: dir,
+    });
+    await writeFile(join(dir, ".gitignore"), "node_modules\n");
+
+    await generateEnv(dir, sqlite);
+
+    expect(await read(".gitignore")).toMatch(/^\.env$/m);
+  });
+
+  // An app inside a monorepo is kept out of git by a .gitignore at the
+  // repository's top, in a folder between, or in its own folder; git names
+  // each by its path from the top.
+  it.each(["", "apps/", "apps/web/"])(
+    "trusts a rule in the repository's %s.gitignore for an app in apps/web",
+    async folder => {
+      execFileSync("git", ["init", "-q"], { cwd: dir });
+      const app = join(dir, "apps", "web");
+      await mkdir(app, { recursive: true });
+      const gitignore = join(dir, folder, ".gitignore");
+      await writeFile(gitignore, ".env\n");
+
+      await generateEnv(app, sqlite);
+
+      expect(await readFile(gitignore, "utf8")).toBe(".env\n");
+      expect(existsSync(join(app, ".gitignore"))).toBe(folder === "apps/web/");
+      expect(
+        readEnvKeys(await readFile(join(app, ".env"), "utf8")).defined.has(
+          "NEXTLY_SECRET"
+        )
+      ).toBe(true);
+    }
+  );
+
   // core.excludesFile may itself be named .gitignore; it stays on this
   // machine all the same.
   it("adds .env to .gitignore when only a global excludes file named .gitignore ignores it", async () => {
@@ -1001,6 +1275,12 @@ describe("readEnvKeys", () => {
     // `\$C` is an escaped dollar, not a reference; `${MISSING}` is one the
     // file cannot fill, so N is known only where the app runs.
     expect([...readEnvKeys("N=$A-${MISSING}\nA=1").unresolved]).toEqual(["N"]);
+    // A reference is noted even when the file fills it, since the environment
+    // the app runs in can fill it differently; `\$` is no reference.
+    expect([...readEnvKeys("N=$A-x\nA=1\nO=\\$A").referencing]).toEqual(["N"]);
+    expect(
+      readEnvKeys("N=${A:-lit}-${B-two}-${C:-$D}").fallbacks.get("N")
+    ).toEqual(["lit", "two"]);
     expect([...mentioned].sort()).toEqual([
       "A",
       "B",
@@ -1017,5 +1297,22 @@ describe("readEnvKeys", () => {
       "M",
       "N",
     ]);
+  });
+
+  // Each case is read as Next.js 16.3.5's env loader read it.
+  it("reads lone carriage returns as line breaks, as dotenv does", () => {
+    expect(
+      Object.fromEntries(readEnvKeys("A=1\rNEXTLY_SECRET=abc\rB=2").defined)
+    ).toEqual({ A: "1", NEXTLY_SECRET: "abc", B: "2" });
+  });
+
+  // dotenv's grammar keeps a quote right after a backslash inside the value,
+  // however many backslashes come before it.
+  it("keeps a quote after an even run of backslashes inside the value", () => {
+    const { defined } = readEnvKeys('NOTE="a\\\\"\nNEXTLY_SECRET=inside\n"\n');
+
+    expect(Object.fromEntries(defined)).toEqual({
+      NOTE: 'a\\\\"\nNEXTLY_SECRET=inside\n',
+    });
   });
 });

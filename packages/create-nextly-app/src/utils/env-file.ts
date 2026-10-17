@@ -15,34 +15,28 @@
  *   (`# KEY=…`), for a note that documents a setting rather than setting it.
  *
  * - References are expanded as Next.js expands them (`$NAME`, `${NAME}`,
- *   `${NAME:-default}`, with `\\/**
- * Reads which keys an env file defines, line by line, the way dotenv does.
- *
- * One reader for every question about an env file the generator asks, so the
- * `.env` merge and the `.env.example` merge cannot disagree about whether a key
- * is there. Matching the text `DATABASE_URL` anywhere in the file, as the
- * generator once did, took `DATABASE_URL_BACKUP` or a commented line for the
- * key, and then wrote none of the values the app actually lacked.
- *
- * - `defined` holds the keys a line assigns, with the value as dotenv reads
- *   it: `export KEY=` counts, a quoted value (single, double or backtick) is
- *   unquoted and may hold `#`, and an unquoted value ends at the first `#`,
- *   spaced or not, where dotenv's own line pattern ends it.
- * - `mentioned` also holds keys named only in a commented assignment
- *   (`# KEY=…`), for a note that documents a setting rather than setting it.
- *
- a literal dollar), except in single quotes,
+ *   `${NAME:-default}`, with `\$` a literal dollar), except in single quotes,
  *   from the keys this file defines. A value referring to one it does not
  *   define is filled in where the app runs, so it is `unresolved`: unknown
  *   here, and judged by nothing.
+ * - `referencing` holds every key whose value refers to another variable,
+ *   filled in here or not: Next.js keeps the values of the environment the
+ *   app runs in when it expands a file, so even a variable this file sets
+ *   can be different there, and no decision rests on such a value.
+ * - `fallbacks` holds, for each key, the literal text its references fall
+ *   back to (`${NAME:-text}`): it is in the file word for word, and it is the
+ *   value wherever the variable is unset, so it is judged as written.
  *
- * The horizontal-space classes are `[ \t]`, never `\s`, and each line is matched
+ * Line breaks are `\n`, `\r\n` or a lone `\r`, as dotenv reads them. The
+ * horizontal-space classes are `[ \t]`, never `\s`, and each line is matched
  * on its own, so a file full of blank lines is read in linear time.
  */
 export interface EnvKeys {
   defined: Map<string, string>;
   mentioned: Set<string>;
   unresolved: Set<string>;
+  referencing: Set<string>;
+  fallbacks: Map<string, string[]>;
 }
 
 // `KEY=value`, or dotenv's other form, `KEY: value` (a colon, then a space).
@@ -53,8 +47,9 @@ export function readEnvKeys(text: string): EnvKeys {
   const raw = new Map<string, RawValue>();
   const mentioned = new Set<string>();
   // A byte order mark, which some editors write first, is not part of the
-  // first line: dotenv reads that line through it.
-  const lines = text.replace(/^\uFEFF/, "").split(/\r?\n/);
+  // first line: dotenv reads that line through it. dotenv also turns every
+  // `\r\n` and lone `\r` into `\n` before it reads a line.
+  const lines = text.replace(/^\uFEFF/, "").split(/\r\n?|\n/);
   for (let i = 0; i < lines.length; i++) {
     const match = ASSIGNMENT.exec(lines[i]);
     if (!match) continue;
@@ -110,7 +105,28 @@ export function readEnvKeys(text: string): EnvKeys {
     const value = resolve(key, new Set());
     defined.set(key, value ?? partial.get(key) ?? entry.value);
   }
-  return { defined, mentioned, unresolved };
+  return { defined, mentioned, unresolved, ...referencesIn(raw) };
+}
+
+/** The keys whose values refer to another variable, and the literal fallbacks. */
+function referencesIn(
+  raw: Map<string, RawValue>
+): Pick<EnvKeys, "referencing" | "fallbacks"> {
+  const referencing = new Set<string>();
+  const fallbacks = new Map<string, string[]>();
+  for (const [key, entry] of raw) {
+    if (!entry.expands) continue;
+    const references = [...entry.value.matchAll(REFERENCE)].filter(
+      ([whole]) => whole !== "\\$"
+    );
+    if (references.length > 0) referencing.add(key);
+    // A fallback that itself refers to a variable is not literal text.
+    const literal = references
+      .map(reference => reference[3])
+      .filter((text): text is string => !!text && !text.includes("$"));
+    if (literal.length > 0) fallbacks.set(key, literal);
+  }
+  return { referencing, fallbacks };
 }
 
 /**
@@ -128,11 +144,15 @@ function closingLine(lines: string[], i: number, firstLine: string): number {
   return i;
 }
 
-/** The first `quote` from `from` that a backslash does not escape, or -1. */
+/**
+ * The first `quote` from `from` that does not come right after a backslash,
+ * or -1. dotenv's grammar (`"(?:\\"|[^"])*"`) keeps a backslash-quote inside
+ * the value however many backslashes come before it, so `\\"` does not close
+ * one either.
+ */
 function closingQuote(text: string, quote: string, from: number): number {
   for (let i = from; i < text.length; i++) {
-    if (text[i] === "\\") i++;
-    else if (text[i] === quote) return i;
+    if (text[i] === quote && text[i - 1] !== "\\") return i;
   }
   return -1;
 }
