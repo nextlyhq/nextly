@@ -56,6 +56,7 @@ describe("companion lifecycle (real SQLite)", () => {
     const spec = deriveCompanionSpec({
       builtBy: "codeFirst" as const,
       slug: "pages",
+      kind: "collection" as const,
       dbName: "dc_pages",
       fields: PAGES_FIELDS,
       dialect: "sqlite",
@@ -103,6 +104,7 @@ describe("companion lifecycle (real SQLite)", () => {
     const spec = deriveCompanionSpec({
       builtBy: "codeFirst" as const,
       slug: "docs",
+      kind: "collection" as const,
       dbName: "dc_docs",
       fields: PAGES_FIELDS,
       dialect: "sqlite",
@@ -141,6 +143,7 @@ describe("companion lifecycle (real SQLite)", () => {
     const spec = deriveCompanionSpec({
       builtBy: "codeFirst" as const,
       slug: "pages",
+      kind: "collection" as const,
       dbName: "dc_pages",
       fields: PAGES_FIELDS,
       dialect: "sqlite",

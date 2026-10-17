@@ -16,6 +16,8 @@ function makeAdapter(
 ) {
   return {
     dialect,
+    // Forgetting the transition record reads the dialect the way every service does.
+    getCapabilities: () => ({ dialect }),
     executeQuery: vi.fn().mockResolvedValue([]),
     tableExists: vi.fn(async (name: string) => tableExists(name)),
     getDrizzle: vi.fn().mockReturnValue({
@@ -82,6 +84,7 @@ describe("teardownEntityI18n dialect SQL", () => {
     const result = await teardownEntityI18n({
       adapter,
       slug: "pages",
+      kind: "collection",
       tableName: "dc_pages",
     });
 

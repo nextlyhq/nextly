@@ -1,5 +1,17 @@
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
+import type { I18nTransitionKind } from "./transition-state";
+
+/**
+ * Whose values an archive row holds: the entity's slug and its kind. A field group's slug may equal
+ * a collection's or a Single's, so the slug alone cannot say which entity a row belongs to, and a
+ * restore or a deletion keyed by it alone reaches another entity's values.
+ */
+export interface ArchiveOwner {
+  slug: string;
+  kind: I18nTransitionKind;
+}
+
 /**
  * Every storage kind a localized column may declare.
  *
@@ -63,6 +75,12 @@ export interface CompanionMigrationSpec {
   dialect: SupportedDialect;
   /** collection slug (for archive rows + file header). */
   collection: string;
+  /**
+   * Which kind of entity `collection` names, recorded with its archive rows. A spec that only
+   * describes the companion (a query table, a seed) has no rows to record and may leave it out;
+   * one whose statements archive is refused without it (`archiveOwnerOf`).
+   */
+  kind?: I18nTransitionKind;
   /** physical main table, e.g. "dc_pages". */
   mainTable: string;
   /** physical companion table, e.g. "dc_pages_locales". */

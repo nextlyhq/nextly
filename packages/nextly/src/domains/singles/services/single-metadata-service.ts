@@ -730,6 +730,7 @@ export class SingleMetadataService {
       defaultLocale: defaultLocale,
       adapter: this.adapter,
       entity: input.slug,
+      kind: "single",
       oldFields: (input.existing.fields ?? []) as unknown as FieldDefinition[],
       newFields: input.fields,
       wasLocalized: input.wasLocalized,

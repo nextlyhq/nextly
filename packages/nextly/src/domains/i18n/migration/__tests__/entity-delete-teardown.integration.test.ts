@@ -73,11 +73,15 @@ async function createLocalizedEntity(mainTable: string): Promise<void> {
   );
 }
 
-/** Seeds archive rows for a slug so purge-scoping is observable. */
-async function seedArchive(slug: string, entryId: string): Promise<void> {
+/** Seeds archive rows for an entity so purge-scoping is observable. */
+async function seedArchive(
+  slug: string,
+  entryId: string,
+  kind: "collection" | "fieldGroup" = "collection"
+): Promise<void> {
   await adapter.executeQuery(
-    `INSERT INTO "nextly_i18n_archive" ("collection","entry_id","locale","field","value") VALUES (?,?,?,?,?)`,
-    [slug, entryId, "fr", "body", "Bonjour"]
+    `INSERT INTO "nextly_i18n_archive" ("collection","entity_kind","entry_id","locale","field","value") VALUES (?,?,?,?,?,?)`,
+    [slug, kind, entryId, "fr", "body", "Bonjour"]
   );
 }
 
@@ -238,8 +242,8 @@ describe("FieldGroupRegistryService.deleteComponent (real SQLite)", () => {
   it("removes the companion table and archive rows along with the main table", async () => {
     await registerComponent("seo");
     await registerComponent("hero");
-    await seedArchive("seo", "s1");
-    await seedArchive("hero", "h1");
+    await seedArchive("seo", "s1", "fieldGroup");
+    await seedArchive("hero", "h1", "fieldGroup");
 
     await service.deleteComponent("seo");
 

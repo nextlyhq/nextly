@@ -532,6 +532,7 @@ export const COMPONENTS_METHODS: Record<
               getConfigFromDI()?.localization?.defaultLocale ?? "en",
             adapter,
             entity: slug,
+            kind: "fieldGroup",
             oldFields: (component.fields ?? []) as unknown as FieldDefinition[],
             newFields: fields as unknown as FieldDefinition[],
             wasLocalized,

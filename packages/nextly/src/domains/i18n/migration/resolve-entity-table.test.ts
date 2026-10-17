@@ -4,9 +4,18 @@
 
 import { describe, expect, it } from "vitest";
 
-import { resolveEntityTable } from "./resolve-entity-table";
+import {
+  chooseRestoreEntity,
+  resolveEntityTables,
+} from "./resolve-entity-table";
 
-describe("resolveEntityTable", () => {
+/** The one entity a slug names, for the cases below where it names one. */
+const resolveEntityTable = (
+  config: Parameters<typeof resolveEntityTables>[0],
+  slug: string
+) => resolveEntityTables(config, slug)[0] ?? null;
+
+describe("resolveEntityTables", () => {
   it("maps a collection slug to dc_<slug>_locales", () => {
     const r = resolveEntityTable({ collections: [{ slug: "pages" }] }, "pages");
     expect(r).toEqual({
@@ -29,7 +38,7 @@ describe("resolveEntityTable", () => {
   it("maps a component slug to comp_<slug>_locales", () => {
     const r = resolveEntityTable({ components: [{ slug: "seo" }] }, "seo");
     expect(r?.companionTableName).toBe("comp_seo_locales");
-    expect(r?.kind).toBe("component");
+    expect(r?.kind).toBe("fieldGroup");
   });
 
   // `i18n:restore` tries the authored config first and the persisted UI-schema
@@ -41,7 +50,7 @@ describe("resolveEntityTable", () => {
     expect(r).toEqual({
       tableName: "comp_seo",
       companionTableName: "comp_seo_locales",
-      kind: "component",
+      kind: "fieldGroup",
     });
   });
 
@@ -85,7 +94,76 @@ describe("resolveEntityTable", () => {
       singles: [{ slug: "site-settings" }],
       components: [{ slug: "seo" }],
     };
-    expect(resolveEntityTable(config, "seo")?.kind).toBe("component");
+    expect(resolveEntityTable(config, "seo")?.kind).toBe("fieldGroup");
     expect(resolveEntityTable(config, "site-settings")?.kind).toBe("single");
+  });
+});
+
+describe("a slug more than one kind of entity uses", () => {
+  // Collections and Singles share one namespace of slugs, but a field group's registry is its own.
+  const config = {
+    collections: [{ slug: "hero" }],
+    fieldGroups: [{ slug: "hero" }],
+  };
+
+  it("resolves to every entity that has it", () => {
+    expect(resolveEntityTables(config, "hero").map(e => e.kind)).toEqual([
+      "collection",
+      "fieldGroup",
+    ]);
+  });
+
+  it("is refused for a restore that does not say which, naming the kinds", () => {
+    expect(
+      chooseRestoreEntity("hero", resolveEntityTables(config, "hero"))
+    ).toEqual({
+      problem:
+        '"hero" names a collection and a field group. Say which with --kind collection or --kind field-group.',
+    });
+  });
+
+  it("restores the kind the restore names", () => {
+    expect(
+      chooseRestoreEntity(
+        "hero",
+        resolveEntityTables(config, "hero"),
+        "field-group"
+      )
+    ).toEqual({
+      entity: {
+        tableName: "comp_hero",
+        companionTableName: "comp_hero_locales",
+        kind: "fieldGroup",
+      },
+    });
+  });
+
+  it("is refused when the named kind does not have the slug", () => {
+    expect(
+      chooseRestoreEntity("hero", resolveEntityTables(config, "hero"), "single")
+    ).toEqual({ problem: 'No single named "hero" was found.' });
+  });
+
+  it("needs no kind when one entity has the slug", () => {
+    expect(
+      chooseRestoreEntity(
+        "hero",
+        resolveEntityTables({ singles: [{ slug: "hero" }] }, "hero")
+      )
+    ).toEqual({
+      entity: {
+        tableName: "single_hero",
+        companionTableName: "single_hero_locales",
+        kind: "single",
+      },
+    });
+  });
+
+  it("is refused for an unknown kind", () => {
+    expect(
+      chooseRestoreEntity("hero", resolveEntityTables(config, "hero"), "page")
+    ).toEqual({
+      problem: '--kind must be collection, single or field-group, not "page".',
+    });
   });
 });

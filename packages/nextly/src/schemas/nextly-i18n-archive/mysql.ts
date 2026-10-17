@@ -17,6 +17,13 @@ export const nextlyI18nArchive = mysqlTable(
   {
     id: bigint("id", { mode: "number" }).autoincrement().primaryKey(),
     collection: varchar("collection", { length: 191 }).notNull(),
+    // Which kind of entity archived the row: `collection`, `single` or `fieldGroup`. A field
+    // group's slug may equal a collection's or a Single's, so the slug alone cannot say whose a
+    // row is. Rows from before this column existed were all read as collections, which is the
+    // default an existing table is given when the column is added.
+    entityKind: varchar("entity_kind", { length: 20 })
+      .notNull()
+      .default("collection"),
     entryId: varchar("entry_id", { length: 191 }).notNull(),
     locale: varchar("locale", { length: 20 }).notNull(),
     field: varchar("field", { length: 191 }).notNull(),

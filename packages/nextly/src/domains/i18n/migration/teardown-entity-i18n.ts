@@ -24,12 +24,13 @@
  */
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 
 import { nextlyI18nArchiveTables } from "../../../schemas/nextly-i18n-archive";
 import { affectedRowCount } from "../../auth/services/auth-service";
 
 import { q } from "./ddl-types";
+import { ensureI18nArchive } from "./ensure-archive";
 import type { I18nTransitionKind } from "./transition-state";
 
 /** The shared archive table, scoped per entity by its `collection` column. */
@@ -112,6 +113,8 @@ export async function teardownEntityI18n(
   args: TeardownEntityI18nArgs
 ): Promise<TeardownEntityI18nResult> {
   const { adapter, slug, tableName } = args;
+  // Known exactly when the slug is: the identity type offers both or neither.
+  const kind = args.slug === null ? undefined : args.kind;
   const companionTable = `${tableName}_locales`;
 
   // Guarded so a non-localized entity (no companion was ever created) is a no-op rather
@@ -141,14 +144,27 @@ export async function teardownEntityI18n(
   // caller could not identify the entity, and the archive is keyed by slug, so there is no
   // safe row set to delete.
   let archiveRowsPurged = 0;
-  if (slug !== null && (await adapter.tableExists(ARCHIVE_TABLE))) {
+  if (
+    slug !== null &&
+    kind !== undefined &&
+    (await adapter.tableExists(ARCHIVE_TABLE))
+  ) {
+    // An archive from before rows recorded their kind has no column to scope by until it is
+    // brought up to date, which reads its rows as the collections they were.
+    await ensureI18nArchive(adapter, adapter.dialect);
     const db = adapter.getDrizzle<ArchiveDeleteCapableDb>();
     const { nextlyI18nArchive } = nextlyI18nArchiveTables(adapter.dialect);
-    // Scoped to this slug only — the archive is shared, so an unscoped delete would wipe
-    // every other entity's recoverable translations.
+    // Scoped to this entity only, by kind as well as slug — the archive is shared, an unscoped
+    // delete would wipe every other entity's recoverable translations, and a field group may
+    // carry a collection's or a Single's slug.
     const result = await db
       .delete(nextlyI18nArchive)
-      .where(eq(nextlyI18nArchive.collection, slug));
+      .where(
+        and(
+          eq(nextlyI18nArchive.collection, slug),
+          eq(nextlyI18nArchive.entityKind, kind)
+        )
+      );
     // Each driver reports the count in a different place, and mysql2 nests it inside a
     // result tuple, so the shared dialect-aware reader owns that knowledge.
     archiveRowsPurged = affectedRowCount(result, adapter.dialect);

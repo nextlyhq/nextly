@@ -10,6 +10,7 @@ import { ddlType, lit, q } from "./ddl-types";
 import { deriveCompanionSpec } from "./derive-companion-spec";
 import { fieldToLocalizedColumnSpec } from "./field-to-column-spec";
 import {
+  archiveOwnerOf,
   buildFieldLeavesTranslationArchiveStatement,
   buildFieldLeavesTranslationStatements,
   buildLocalizationDownStatements,
@@ -20,6 +21,7 @@ import {
   COMPANION_UPDATED_AT_COLUMN,
   companionUpdatedAtDdl,
 } from "./generate-up";
+import type { I18nTransitionKind } from "./transition-state";
 
 /** Minimal field shape the companion reconciler needs. Structurally compatible with FieldDefinition. */
 export interface CompanionFieldLike {
@@ -31,6 +33,11 @@ export interface CompanionFieldLike {
 export interface ReconcileCompanionArgs {
   /** Collection slug (used for the companion spec / index names). */
   slug: string;
+  /**
+   * Which kind of entity `slug` names, recorded with the archive rows this change writes. Needed
+   * only with `sharedAfter`, the one case that archives here; refused without it there.
+   */
+  kind?: I18nTransitionKind;
   /** Main data table name, e.g. `dc_posts`. The companion is `<tableName>_locales`. */
   tableName: string;
   /** Translatable fields present BEFORE this change (already resolved as localized). */
@@ -250,6 +257,7 @@ export function buildCompanionReconcileStatements(
 ): string[] {
   const {
     slug,
+    kind,
     tableName,
     oldLocalized,
     newLocalized,
@@ -265,6 +273,7 @@ export function buildCompanionReconcileStatements(
     // fields, in which case there is nothing to create yet.
     const spec = deriveCompanionSpec({
       slug,
+      kind,
       dbName: tableName,
       fields: newLocalized,
       dialect,
@@ -317,7 +326,7 @@ export function buildCompanionReconcileStatements(
             companionTable,
             defaultLocale: args.defaultLocale,
           },
-          slug,
+          archiveOwnerOf(slug, kind),
           col.name,
           { archive: args.sharedAfterArchived !== true }
         )
@@ -405,6 +414,8 @@ export function buildCompanionReconcileStatements(
 /** Which localization transition a reconcile is performing. */
 export interface CompanionTransitionArgs {
   slug: string;
+  /** Which kind of entity `slug` names, recorded with the archive rows this change writes. */
+  kind: I18nTransitionKind;
   tableName: string;
   dialect: SupportedDialect;
   /**
@@ -492,6 +503,7 @@ export interface CompanionTransitionPlan {
  */
 export function buildLeavingFieldsArchiveStatements(args: {
   slug: string;
+  kind: I18nTransitionKind;
   tableName: string;
   dialect: SupportedDialect;
   builtBy: ColumnOrigin;
@@ -515,7 +527,7 @@ export function buildLeavingFieldsArchiveStatements(args: {
                 companionTable,
                 defaultLocale: args.defaultLocale,
               },
-              args.slug,
+              { slug: args.slug, kind: args.kind },
               col.name
             ),
           ]
@@ -543,6 +555,7 @@ export function buildCompanionTransitionStatements(
 ): CompanionTransitionPlan {
   const {
     slug,
+    kind,
     tableName,
     dialect,
     builtBy,
@@ -566,6 +579,7 @@ export function buildCompanionTransitionStatements(
     const localizedNew = newFields.filter(f => isFieldLocalized(f, true));
     const spec = deriveCompanionSpec({
       slug,
+      kind,
       dbName: tableName,
       fields: localizedNew,
       dialect,
@@ -580,6 +594,7 @@ export function buildCompanionTransitionStatements(
       return {
         statements: buildCompanionReconcileStatements({
           slug,
+          kind,
           tableName,
           builtBy,
           oldLocalized: [],
@@ -619,6 +634,7 @@ export function buildCompanionTransitionStatements(
     const localizedOld = oldFields.filter(f => isFieldLocalized(f, true));
     const spec = deriveCompanionSpec({
       slug,
+      kind,
       dbName: tableName,
       fields: localizedOld,
       dialect,
@@ -666,6 +682,7 @@ export function buildCompanionTransitionStatements(
     const beforeMain = archiveFirst
       ? buildLeavingFieldsArchiveStatements({
           slug,
+          kind,
           tableName,
           dialect,
           builtBy,
@@ -678,6 +695,7 @@ export function buildCompanionTransitionStatements(
       beforeMain,
       statements: buildCompanionReconcileStatements({
         slug,
+        kind,
         tableName,
         builtBy,
         oldLocalized,

@@ -10,6 +10,7 @@ import type { CompanionMigrationSpec } from "./types";
 const spec: CompanionMigrationSpec = {
   dialect: "sqlite",
   collection: "pages",
+  kind: "collection",
   mainTable: "dc_pages",
   companionTable: "dc_pages_locales",
   defaultLocale: "en",

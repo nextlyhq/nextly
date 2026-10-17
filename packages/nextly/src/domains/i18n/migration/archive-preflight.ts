@@ -13,13 +13,9 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { NextlyError } from "../../../errors/nextly-error";
-import {
-  getI18nArchiveDdl,
-  getI18nArchiveIndexRepairDdl,
-} from "../../../schemas/nextly-i18n-archive/ddl";
-import { isIdempotencyError } from "../../schema/pipeline/sql-statement-utils";
 import type { ColumnOrigin } from "../../schema/services/field-column-descriptor";
 
+import { ensureI18nArchive } from "./ensure-archive";
 import {
   type LeavingFieldLike,
   refusalsForFieldsLeavingTranslation,
@@ -28,6 +24,7 @@ import {
   buildLeavingFieldsArchiveStatements,
   fieldsLeavingTranslation,
 } from "./reconcile-companion";
+import type { I18nTransitionKind } from "./transition-state";
 
 /**
  * Creates the archive table when it is missing, then runs the given archive writes.
@@ -42,19 +39,7 @@ async function writeArchiveFirst(
 ): Promise<void> {
   const dialect = adapter.getCapabilities().dialect;
   try {
-    for (const statement of getI18nArchiveDdl(dialect)) {
-      await adapter.executeQuery(statement);
-    }
-    // MySQL's table DDL cannot restore an index the table is missing; the repair is tolerated
-    // when the index is already there, as the schema executor tolerates it.
-    const indexRepair = getI18nArchiveIndexRepairDdl(dialect);
-    if (indexRepair) {
-      try {
-        await adapter.executeQuery(indexRepair);
-      } catch (error) {
-        if (!isIdempotencyError(error)) throw error;
-      }
-    }
+    await ensureI18nArchive(adapter, dialect);
     for (const statement of writes) {
       await adapter.executeQuery(statement);
     }
@@ -104,6 +89,8 @@ export async function archiveFieldsLeavingTranslation(args: {
   adapter: DrizzleAdapter;
   /** The collection, Single or field group being changed. */
   entity: string;
+  /** Which of the three it is, recorded with its archive rows. */
+  kind: I18nTransitionKind;
   /** Its main table; the companion is `<tableName>_locales`. */
   tableName: string;
   /** Which builder made the entity's table, which decides a column's bounds. */
@@ -145,6 +132,7 @@ export async function archiveFieldsLeavingTranslation(args: {
     args.entity,
     buildLeavingFieldsArchiveStatements({
       slug: args.entity,
+      kind: args.kind,
       tableName: args.tableName,
       dialect,
       builtBy: args.builtBy,

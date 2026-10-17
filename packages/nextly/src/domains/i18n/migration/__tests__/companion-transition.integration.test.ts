@@ -94,6 +94,7 @@ describe("buildCompanionTransitionStatements — enable", () => {
     const plan = buildCompanionTransitionStatements({
       builtBy: "codeFirst" as const,
       slug: "hero",
+      kind: "collection" as const,
       tableName: "single_hero",
       dialect: "sqlite",
       defaultLocale: "en",
@@ -132,6 +133,7 @@ describe("buildCompanionTransitionStatements — enable", () => {
     const plan = buildCompanionTransitionStatements({
       builtBy: "codeFirst" as const,
       slug: "hero",
+      kind: "collection" as const,
       tableName: "single_hero",
       dialect: "sqlite",
       defaultLocale: "en",
@@ -177,6 +179,7 @@ describe("buildCompanionTransitionStatements — enable", () => {
     const plan = buildCompanionTransitionStatements({
       builtBy: "codeFirst" as const,
       slug: "hero",
+      kind: "collection" as const,
       tableName: "single_hero",
       dialect: "sqlite",
       defaultLocale: "en",
@@ -208,6 +211,7 @@ describe("buildCompanionTransitionStatements — enable", () => {
     const plan = buildCompanionTransitionStatements({
       builtBy: "codeFirst" as const,
       slug: "hero",
+      kind: "collection" as const,
       tableName: "single_hero",
       dialect: "sqlite",
       defaultLocale: "en",
@@ -236,6 +240,7 @@ describe("buildCompanionTransitionStatements — disable", () => {
     const enable = buildCompanionTransitionStatements({
       builtBy: "codeFirst" as const,
       slug: "hero",
+      kind: "collection" as const,
       tableName: "single_hero",
       dialect: "sqlite",
       defaultLocale: "en",
@@ -258,6 +263,7 @@ describe("buildCompanionTransitionStatements — disable", () => {
     const plan = buildCompanionTransitionStatements({
       builtBy: "codeFirst" as const,
       slug: "hero",
+      kind: "collection" as const,
       tableName: "single_hero",
       dialect: "sqlite",
       defaultLocale: "en",
@@ -332,6 +338,7 @@ describe("buildCompanionTransitionStatements — a field stops being translated"
     const enable = buildCompanionTransitionStatements({
       builtBy: "codeFirst" as const,
       slug: "hero",
+      kind: "collection" as const,
       tableName: "single_hero",
       dialect: "sqlite",
       defaultLocale: "en",
@@ -357,6 +364,7 @@ describe("buildCompanionTransitionStatements — a field stops being translated"
     return buildCompanionTransitionStatements({
       builtBy: "codeFirst" as const,
       slug: "hero",
+      kind: "collection" as const,
       tableName: "single_hero",
       dialect: "sqlite",
       defaultLocale: "en",
@@ -436,6 +444,7 @@ describe("buildCompanionTransitionStatements — a field stops being translated"
     const plan = buildCompanionTransitionStatements({
       builtBy: "codeFirst" as const,
       slug: "hero",
+      kind: "collection" as const,
       tableName: "single_hero",
       dialect: "sqlite",
       defaultLocale: "en",
@@ -483,6 +492,7 @@ describe("buildCompanionTransitionStatements — disable with Draft/Published", 
   const withStatus = (over: StatusCase): CompanionTransitionArgs => ({
     builtBy: "codeFirst",
     slug: "hero",
+    kind: "collection" as const,
     tableName: "single_hero",
     dialect: "sqlite" as const,
     defaultLocale: "en",

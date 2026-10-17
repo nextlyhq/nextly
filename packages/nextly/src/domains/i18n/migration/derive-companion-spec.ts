@@ -5,6 +5,7 @@ import { resolveCollectionTableName } from "../../schema/utils/resolve-table-nam
 import { isFieldLocalized } from "../classify-fields";
 
 import { fieldToLocalizedColumnSpec } from "./field-to-column-spec";
+import type { I18nTransitionKind } from "./transition-state";
 import type { CompanionMigrationSpec, LocalizedColumnSpec } from "./types";
 
 interface FieldLike {
@@ -15,6 +16,11 @@ interface FieldLike {
 
 interface DeriveArgs {
   slug: string;
+  /**
+   * Which kind of entity `slug` names, recorded with the archive rows its migrations write. Needed
+   * only where the spec's statements archive; see `CompanionMigrationSpec.kind`.
+   */
+  kind?: I18nTransitionKind;
   dbName?: string;
   fields: FieldLike[];
   dialect: SupportedDialect;
@@ -63,6 +69,7 @@ export function deriveCompanionSpec(
   return {
     dialect: args.dialect,
     collection: args.slug,
+    ...(args.kind !== undefined ? { kind: args.kind } : {}),
     mainTable,
     companionTable: `${mainTable}_locales`,
     defaultLocale: args.defaultLocale,

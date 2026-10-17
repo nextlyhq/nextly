@@ -30,6 +30,9 @@ import {
   upsertCompanionRow,
 } from "../runtime/companion-io";
 
+import { ensureI18nArchive } from "./ensure-archive";
+import type { I18nTransitionKind } from "./transition-state";
+
 /**
  * The slice of Drizzle this helper drives: one scoped SELECT and one scoped DELETE. Declaring
  * only what is used keeps the dialect-specific database type out of the port, so no `any` is
@@ -55,6 +58,12 @@ export interface RestoreArchiveArgs {
   adapter: CompanionIntrospectAdapter;
   /** Entity slug exactly as the disable migration recorded it in `archive.collection`. */
   collection: string;
+  /**
+   * Which kind of entity `collection` names. A field group's slug may equal a collection's or a
+   * Single's, so only rows of this kind are read: another entity's values belong in another
+   * companion.
+   */
+  kind: I18nTransitionKind;
   /** Physical companion table to replay into, e.g. `dc_pages_locales`. */
   companionTableName: string;
   /** Restrict the replay to one language. Omit to restore every archived language. */
@@ -134,15 +143,19 @@ async function refuseFieldsNotTranslatedNow(
 export async function restoreI18nArchive(
   args: RestoreArchiveArgs
 ): Promise<RestoreArchiveResult> {
-  const { adapter, collection, companionTableName, locale } = args;
+  const { adapter, collection, kind, companionTableName, locale } = args;
   // The archive keeps a field's values under its column name. The conversion is the column
   // descriptor's, and a column name passes through it unchanged.
   const field = args.field !== undefined ? toSnakeCase(args.field) : undefined;
+  // An archive from before rows recorded their kind is brought up to date first, which reads its
+  // rows as the collections they were; one that was never written is created empty.
+  await ensureI18nArchive(adapter, adapter.dialect);
   const db = adapter.getDrizzle<ArchiveReadWriteDb>();
   const { nextlyI18nArchive } = nextlyI18nArchiveTables(adapter.dialect);
 
   const where = and(
     eq(nextlyI18nArchive.collection, collection),
+    eq(nextlyI18nArchive.entityKind, kind),
     ...(locale !== undefined ? [eq(nextlyI18nArchive.locale, locale)] : []),
     ...(field !== undefined ? [eq(nextlyI18nArchive.field, field)] : [])
   );

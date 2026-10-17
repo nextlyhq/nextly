@@ -14,6 +14,7 @@ describe("getI18nArchiveDdl", () => {
     expect(cols).toEqual([
       "id",
       "collection",
+      "entity_kind",
       "entry_id",
       "locale",
       "field",

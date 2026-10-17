@@ -82,7 +82,7 @@ To bring those values back, make the field translated again, then restore that f
 npx nextly i18n:restore --collection posts --field title
 ```
 
-`--collection` takes the slug of a collection, Single or field group, and `--field` takes the field's name or its column name. `--locale es` restores one language only. The archive keeps the values until you remove them: add `--purge` to a restore to delete the rows it replayed. Deleting the collection, Single or field group also removes its archived values.
+`--collection` takes the slug of a collection, Single or field group, and `--field` takes the field's name or its column name. `--locale es` restores one language only. A field group can share its slug with a collection or a Single, and each one's archived values stay its own: when the slug names more than one, say which with `--kind collection`, `--kind single` or `--kind field-group`. The archive keeps the values until you remove them: add `--purge` to a restore to delete the rows it replayed. Deleting the collection, Single or field group also removes its archived values.
 
 ## Fallback chains
 

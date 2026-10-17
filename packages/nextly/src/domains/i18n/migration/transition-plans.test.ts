@@ -15,6 +15,7 @@ import { buildCompanionTransitionPlans } from "./reconcile-companion";
 const disable = {
   builtBy: "codeFirst" as const,
   slug: "posts",
+  kind: "collection" as const,
   tableName: "dc_posts",
   dialect: "postgresql" as const,
   defaultLocale: "en",
