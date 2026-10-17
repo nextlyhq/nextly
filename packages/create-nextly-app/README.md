@@ -49,8 +49,6 @@ More templates (portfolio, e-commerce, SaaS admin) are planned.
 
 ### Plugin template
 
-> **Needs the release after 0.0.2-alpha.66.** The 0.0.2-alpha.66 CLI offers only `blank` and `blog`.
-
 `--template plugin` creates a library to publish on npm rather than an app, so
 it skips the schema-approach and database questions. Run from inside a
 Next.js app, it still creates the plugin in its own directory.
