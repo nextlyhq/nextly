@@ -26,6 +26,10 @@ on:
   # merges it only if the required checks pass there too.
   merge_group:
     types: [checks_requested]
+  # main-catch-up.yml starts a run on main's newest commit when no run has
+  # tested it; a dispatched run tests everything (`scripts/change-scope.mjs`
+  # has no narrower rule for it).
+  workflow_dispatch:
 
 # Read-only: the job never writes through the GITHUB_TOKEN.
 permissions:

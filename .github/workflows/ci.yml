@@ -11,6 +11,10 @@ on:
   # event would leave the queue waiting for a result that never comes.
   merge_group:
     types: [checks_requested]
+  # main-catch-up.yml starts a run on main's newest commit when no run has
+  # tested it; a dispatched run tests everything (`scripts/change-scope.mjs`
+  # has no narrower rule for it).
+  workflow_dispatch:
 
 # Every job only reads the repo; nothing here writes, comments, or tags.
 # Restricting the token caps what a compromised dependency or action
