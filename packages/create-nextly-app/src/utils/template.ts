@@ -1878,11 +1878,16 @@ export async function copyTemplate(
   // has files) is the env generator's to merge, never the copy's to replace.
   const targetExample = path.join(targetDir, ".env.example");
   // lstat, not pathExists: pathExists follows a link, and calls a dangling
-  // one absent, which the copy would then replace.
-  const keepTargetExample = await fs
-    .lstat(targetExample)
-    .then(() => true)
-    .catch(() => false);
+  // one absent, which the copy would then replace. Only "absent" is absent:
+  // a file that could not be looked at may well be there, so any other
+  // failure stops the copy rather than let it replace the file.
+  const keepTargetExample = await fs.lstat(targetExample).then(
+    () => true,
+    (error: unknown) => {
+      if ((error as { code?: string }).code === "ENOENT") return false;
+      throw error;
+    }
+  );
   await fs.copy(baseDir, targetDir, {
     filter: _src => {
       const basename = path.basename(_src);
