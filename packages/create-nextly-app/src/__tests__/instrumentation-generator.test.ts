@@ -323,11 +323,11 @@ describe("generateInstrumentation", () => {
     }
   );
 
-  it("names no file it cannot know when the pageExtensions list is not written out", async () => {
+  it("names no file it cannot know when the pageExtensions list is not written out, and offers a hook valid as JavaScript too", async () => {
     const cwd = await app();
     await writeFile(
       path.join(cwd, "next.config.mjs"),
-      "const extensions = ['page.tsx'];\nexport default { pageExtensions: extensions };\n"
+      "const extensions = ['page.js'];\nexport default { pageExtensions: extensions };\n"
     );
 
     const result = await generateInstrumentation(cwd, { srcDir: true });
@@ -336,7 +336,45 @@ describe("generateInstrumentation", () => {
     expect(result.skipped[0].path).toBe(
       "src/instrumentation.<one of your pageExtensions>"
     );
+    // The extension may be a JavaScript one, so the content must parse as JS.
+    const { diagnostics = [] } = ts.transpileModule(
+      result.skipped[0].toAdd ?? "",
+      {
+        reportDiagnostics: true,
+        fileName: "instrumentation.page.js",
+        compilerOptions: { allowJs: true, module: ts.ModuleKind.ESNext },
+      }
+    );
+    expect(diagnostics.map(d => d.messageText)).toEqual([]);
   });
+
+  it.each([
+    [
+      "a getter",
+      'export default { get pageExtensions() { return ["page.tsx"]; } };\n',
+    ],
+    [
+      "a computed key",
+      'const key = "pageExtensions";\nexport default { [key]: ["page.tsx"] };\n',
+    ],
+    [
+      "a wrapper call",
+      'const withPages = c => ({ ...c, pageExtensions: ["page.tsx"] });\nexport default withPages({});\n',
+    ],
+  ])(
+    "writes no default hook when pageExtensions may come from %s",
+    async (_, config) => {
+      const cwd = await app();
+      await writeFile(path.join(cwd, "next.config.mjs"), config);
+
+      const result = await generateInstrumentation(cwd, { srcDir: true });
+
+      expect(result.written).toEqual([]);
+      expect(result.skipped[0].path).toBe(
+        "src/instrumentation.<one of your pageExtensions>"
+      );
+    }
+  );
 
   it.each([
     ["an installed Next.js 14", "14.2.3"],

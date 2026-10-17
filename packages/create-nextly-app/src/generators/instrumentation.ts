@@ -76,15 +76,17 @@ function hookExtension(extensions: readonly string[]): string | null {
 }
 
 /**
- * The hook as `instrumentationHook` writes it, in JavaScript when it is to be
- * saved under a JavaScript extension: the only TypeScript in it is the return
- * type, which a `.js` or `.jsx` file cannot parse.
+ * The hook as `instrumentationHook` writes it, with its return type kept only
+ * for a hook to be saved under a TypeScript extension. Its one piece of
+ * TypeScript is that annotation; without it the hook is valid JavaScript and
+ * valid TypeScript alike, which is what a JavaScript extension, or one this
+ * could not read, needs.
  */
 function hookFor(configImport: string, extension: string | null): string {
   const hook = instrumentationHook(configImport);
-  return extension !== null && /(^|\.)(js|jsx|mjs|cjs)$/.test(extension)
-    ? hook.replace("register(): Promise<void>", "register()")
-    : hook;
+  return extension !== null && /(^|\.)tsx?$/.test(extension)
+    ? hook
+    : hook.replace("register(): Promise<void>", "register()");
 }
 
 /** The files Next.js reads its own config from, in the order it looks. */
