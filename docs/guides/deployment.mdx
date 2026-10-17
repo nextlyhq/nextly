@@ -186,7 +186,7 @@ location / {
 
 Caddy's `reverse_proxy` sets `X-Forwarded-For` to the address it received the request from, with no extra configuration, when requests reach Caddy directly.
 
-Nextly reads `X-Forwarded-For` from the right, so with one proxy the last address is the client's. When something else sits in front of that proxy, such as a load balancer or CDN, its addresses appear in the header too. List them in `TRUSTED_PROXY_IPS` (comma-separated CIDR ranges) so Nextly skips them and reaches the client:
+Nextly reads `X-Forwarded-For` from the right, so with one proxy the last address is the client's. When something else sits in front of that proxy, such as a load balancer or CDN, its addresses appear in the header too. List them in `TRUSTED_PROXY_IPS` (comma-separated IPv4 CIDR ranges or addresses, and exact IPv6 addresses; an IPv6 range such as `2001:db8::/32` is not supported and is ignored) so Nextly skips them and reaches the client:
 
 ```bash
 TRUSTED_PROXY_IPS=10.0.0.0/8,192.168.1.10

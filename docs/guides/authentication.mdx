@@ -328,6 +328,8 @@ Sign-in is keyed on the `email` its body carries, which is what the built-in pas
 
 Each account, and the account-less budget, gets the configured budget (30 an hour by default). All of these requests together are also held to a ceiling of 100 times that budget (3,000 an hour by default), so inventing addresses buys no extra attempts. A request whose address can be read never counts against the ceiling.
 
+These counts are kept per server process unless the app configures a shared `rateLimit.store`, such as one backed by Redis ([`rateLimit`](/docs/configuration/nextly-config#ratelimit)). On Vercel, or any deployment with more than one instance, each instance otherwise counts on its own, so every budget and the ceiling are multiplied by the number of instances. Configure a shared store wherever the limits must hold as written.
+
 What happens when each is spent, answered with `429` and a `Retry-After` header until the oldest counted request leaves the window (an hour by default):
 
 - **An account's budget:** requests naming that account are refused. Every other account signs in as normal.
