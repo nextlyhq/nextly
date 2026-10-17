@@ -11,6 +11,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const granted = vi.hoisted(() => new Set<string>());
+const superAdmins = vi.hoisted(() => new Set<string>());
+
+// The API-key list's own question, answered by user id here.
+vi.mock("../../lib/permissions", async importOriginal => ({
+  ...(await importOriginal<typeof import("../../lib/permissions")>()),
+  isSuperAdmin: vi.fn(async (userId: string) => superAdmins.has(userId)),
+}));
 
 vi.mock("../../../auth/middleware", async importOriginal => {
   const actual =
@@ -57,7 +64,11 @@ vi.mock("../../../auth/middleware", async importOriginal => {
 
 import type { AuthContext } from "../../../auth/middleware";
 import { _resolveAuthorizationForTest as routeGate } from "../../../routeHandler";
-import { readableAdminCounts, type AdminCount } from "../admin-counts";
+import {
+  apiKeyCountScope,
+  readableAdminCounts,
+  type AdminCount,
+} from "../admin-counts";
 
 const CALLER = {
   userId: "u1",
@@ -102,6 +113,7 @@ async function listAdmits(
 
 beforeEach(() => {
   granted.clear();
+  superAdmins.clear();
 });
 
 describe("each count asks what its list endpoint asks", () => {
@@ -157,6 +169,22 @@ describe("the two counts served by their own handlers", () => {
         grant === "read-api-keys" || grant === "update-api-keys"
       );
     }
+  });
+});
+
+describe("whose keys the API-key count covers", () => {
+  it("is every key for a super-admin, whose key list is every key", async () => {
+    superAdmins.add("u1");
+    expect(await apiKeyCountScope(CALLER)).toEqual({ kind: "all" });
+  });
+
+  it("is the caller's own for anyone else, as its key list is", async () => {
+    // 🔴 Holding read-api-keys is not enough to see other people's keys.
+    granted.add("read-api-keys");
+    expect(await apiKeyCountScope(CALLER)).toEqual({
+      kind: "owner",
+      userId: "u1",
+    });
   });
 });
 

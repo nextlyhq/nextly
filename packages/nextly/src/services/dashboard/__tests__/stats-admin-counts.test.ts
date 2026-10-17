@@ -22,7 +22,11 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import { container } from "../../../di/container";
 import type { Logger } from "../../shared";
-import { ADMIN_COUNTS, type AdminCount } from "../admin-counts";
+import {
+  ADMIN_COUNTS,
+  type AdminCount,
+  type ApiKeyCountScope,
+} from "../admin-counts";
 import { DashboardService } from "../dashboard-service";
 import { someResources, type ReadCaller } from "../readable-resources";
 
@@ -64,14 +68,26 @@ function makeLogger(): Logger {
   return { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
 }
 
-async function statsFor(counts: Iterable<AdminCount> | undefined) {
+async function statsFor(
+  counts: Iterable<AdminCount> | undefined,
+  /** Whose keys to count; `null` leaves it unsaid. */
+  apiKeysOf: ApiKeyCountScope | null = { kind: "all" }
+) {
   const adapter = makeAdapter();
   const stats = await new DashboardService(adapter, makeLogger()).getStats({
     scope: someResources([]),
     caller: CALLER,
     ...(counts === undefined ? {} : { counts: new Set(counts) }),
+    ...(apiKeysOf === null ? {} : { apiKeysOf }),
   });
   return { stats, adapter };
+}
+
+/** The `api_keys` queries `getStats` ran, with their bound params. */
+function apiKeyQueries(adapter: DrizzleAdapter): Array<[string, unknown[]]> {
+  const calls = (adapter.executeQuery as unknown as ReturnType<typeof vi.fn>)
+    .mock.calls as Array<[string, unknown[]]>;
+  return calls.filter(([sql]) => sql.includes('"api_keys"'));
 }
 
 beforeEach(() => {
@@ -121,6 +137,34 @@ describe("a caller who may read only some", () => {
     // work the decision exists to prevent.
     expect(countedTables(adapter)).toEqual(["users"]);
     expect(fieldGroupList).not.toHaveBeenCalled();
+  });
+});
+
+describe("the API-key count", () => {
+  it("counts only the caller's own keys when its list shows only those", async () => {
+    // 🔴 The API-key list shows a caller who is not a super-admin its own keys
+    // alone; a count over every user's keys would disclose the rest.
+    const { stats, adapter } = await statsFor(["apiKeys"], {
+      kind: "owner",
+      userId: "user-9",
+    });
+    expect(stats.apiKeys).toBe(7);
+    const [query] = apiKeyQueries(adapter);
+    expect(query?.[0]).toContain('"user_id"');
+    expect(query?.[1]).toContain("user-9");
+  });
+
+  it("counts every key for a caller whose list is every key", async () => {
+    const { adapter } = await statsFor(["apiKeys"], { kind: "all" });
+    const [query] = apiKeyQueries(adapter);
+    expect(query?.[0]).not.toContain('"user_id"');
+  });
+
+  it("is left out when nobody said whose keys to count", async () => {
+    // The refusal is the default, as for the counts themselves.
+    const { stats, adapter } = await statsFor(["apiKeys"], null);
+    expect(stats).not.toHaveProperty("apiKeys");
+    expect(apiKeyQueries(adapter)).toEqual([]);
   });
 });
 

@@ -30,7 +30,7 @@ import { entryHeading } from "../../lib/entry-heading";
 import { BaseService } from "../base-service";
 import type { Logger } from "../shared";
 
-import type { AdminCount } from "./admin-counts";
+import type { AdminCount, ApiKeyCountScope } from "./admin-counts";
 import {
   filterByResource,
   someResources,
@@ -169,8 +169,15 @@ export class DashboardService extends BaseService {
      * an omitted scope means nothing: the default must be the refusal.
      */
     counts?: ReadonlySet<AdminCount>;
+    /**
+     * Whose API keys the key count covers, as `apiKeyCountScope` decides.
+     * Omitted, the key count is left out: whose keys a caller may count is
+     * not something to assume.
+     */
+    apiKeysOf?: ApiKeyCountScope;
   }): Promise<DashboardStatsResponse> {
     const counts = options.counts ?? new Set<AdminCount>();
+    const apiKeysOf = options.apiKeysOf;
     // An omitted scope denies rather than allows. A caller that forgets to
     // pass one gets an empty dashboard, which is visible and reportable; the
     // old default returned everything, which was not.
@@ -226,7 +233,9 @@ export class DashboardService extends BaseService {
       ifAllowed("fieldGroups", () =>
         this.countRegistryItems("fieldGroupRegistryService")
       ),
-      ifAllowed("apiKeys", () => this.countActiveApiKeys()),
+      apiKeysOf === undefined
+        ? Promise.resolve(undefined)
+        : ifAllowed("apiKeys", () => this.countActiveApiKeys(apiKeysOf)),
       this.getContentStatusBreakdown(
         collections,
         collectionCounts,
@@ -476,39 +485,16 @@ export class DashboardService extends BaseService {
     }
   }
 
-  private async countActiveApiKeys(): Promise<number> {
+  /**
+   * Active, unexpired API keys: every user's, or one owner's, which is what
+   * that caller's key list shows.
+   */
+  private async countActiveApiKeys(owner: ApiKeyCountScope): Promise<number> {
     try {
-      const q = this.dialect === "mysql" ? "`" : '"';
-      // Phase A follow-up (2026-05-01): raw SQL queries can't bind a Date
-      // directly on SQLite (better-sqlite3 throws "can only bind numbers,
-      // strings, bigints, buffers, and null"). PG and MySQL drivers
-      // convert natively, but SQLite is strict. Format up-front per
-      // dialect so the bind value is always a primitive. See companion
-      // fix in `permission-cache-service.ts:222` (Phase A original).
-      const now = this.dateForRawBind();
-      const ph1 = this.dialect === "postgresql" ? "$1" : "?";
-      const ph2 = this.dialect === "postgresql" ? "$2" : "?";
-      const isActiveLiteral =
-        this.dialect === "sqlite"
-          ? "1"
-          : this.dialect === "mysql"
-            ? "1"
-            : "true";
-
-      const sql =
-        `SELECT COUNT(*) as count FROM ${q}api_keys${q} ` +
-        `WHERE ${q}is_active${q} = ${ph1} ` +
-        `AND (${q}expires_at${q} IS NULL OR ${q}expires_at${q} > ${ph2})`;
-
-      const params: SqlParam[] =
-        this.dialect === "postgresql"
-          ? [true, now]
-          : [isActiveLiteral === "1" ? 1 : true, now];
-
+      const { sql, params } = this.activeApiKeyQuery(owner);
       const result = await this.adapter.executeQuery<{
         count: number | string;
       }>(sql, params);
-
       return Number(result[0]?.count ?? 0);
     } catch (error) {
       this.logger.error("Failed to count active API keys", {
@@ -516,6 +502,34 @@ export class DashboardService extends BaseService {
       });
       return 0;
     }
+  }
+
+  /**
+   * The SQL and binds counting active, unexpired keys, narrowed to one owner
+   * unless the scope is every user's.
+   *
+   * The binds are primitives on every dialect. SQLite cannot bind a Date or a
+   * boolean (better-sqlite3 refuses them), so the time is formatted up front
+   * and "active" is bound as 1 everywhere but PostgreSQL, whose column is a
+   * real boolean.
+   */
+  private activeApiKeyQuery(owner: ApiKeyCountScope): {
+    sql: string;
+    params: SqlParam[];
+  } {
+    const q = this.dialect === "mysql" ? "`" : '"';
+    const at = (n: number) => (this.dialect === "postgresql" ? `$${n}` : "?");
+    const active: SqlParam = this.dialect === "postgresql" ? true : 1;
+    const params: SqlParam[] = [active, this.dateForRawBind()];
+    let sql =
+      `SELECT COUNT(*) as count FROM ${q}api_keys${q} ` +
+      `WHERE ${q}is_active${q} = ${at(1)} ` +
+      `AND (${q}expires_at${q} IS NULL OR ${q}expires_at${q} > ${at(2)})`;
+    if (owner.kind === "owner") {
+      sql += ` AND ${q}user_id${q} = ${at(3)}`;
+      params.push(owner.userId);
+    }
+    return { sql, params };
   }
 
   /**

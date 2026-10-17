@@ -29,7 +29,10 @@ import { conditionProbe } from "../domains/widgets/condition-probe";
 import { onboardingSteps } from "../domains/widgets/onboarding";
 import { getCachedNextly } from "../init";
 import type { ActivityLogService } from "../services/dashboard/activity-log-service";
-import { readableAdminCounts } from "../services/dashboard/admin-counts";
+import {
+  apiKeyCountScope,
+  readableAdminCounts,
+} from "../services/dashboard/admin-counts";
 import type { DashboardService } from "../services/dashboard/dashboard-service";
 import {
   someResources,
@@ -153,7 +156,11 @@ export const getDashboardStats = withErrorHandler(async (req: Request) => {
   // its own grant exactly as the users, roles, media and API-key endpoints
   // judge it.
   const counts = await readableAdminCounts(auth);
-  const stats = await service.getStats({ scope, caller, counts });
+  // Whose keys the key count covers, as the API-key list decides it.
+  const apiKeysOf = counts.has("apiKeys")
+    ? await apiKeyCountScope(auth)
+    : undefined;
+  const stats = await service.getStats({ scope, caller, counts, apiKeysOf });
 
   // Bare-object read: stats is the dashboard summary itself; no envelope.
   // Spread into a fresh literal so respondData's `Record<string, unknown>`

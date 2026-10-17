@@ -93,6 +93,8 @@ describe.each(getConfiguredTestDialects())(
     let contentOnly: Caller;
     /** An API key whose role holds `read-roles` alone. */
     let rolesKey: string;
+    /** A key administrator who is not a super-admin, owning exactly one key. */
+    let keyAdmin: Caller;
 
     interface Caller {
       id: string;
@@ -212,6 +214,14 @@ describe.each(getConfiguredTestDialects())(
         roleId: await role("roles-reader", ["read-roles"]),
         expiresIn: "never",
       }));
+      const keyAdminRole = await role("key-admin", ["read-api-keys"]);
+      keyAdmin = await withRole("key-admin@example.com", keyAdminRole);
+      await apiKeys().createApiKey(keyAdmin.id, {
+        name: "key admin's own",
+        tokenType: "role-based",
+        roleId: keyAdminRole,
+        expiresIn: "never",
+      });
     });
 
     afterAll(async () => {
@@ -248,6 +258,19 @@ describe.each(getConfiguredTestDialects())(
       expect(
         carried(await stats({ authorization: `Bearer ${rolesKey}` }))
       ).toEqual(["permissions", "roles"]);
+    });
+
+    it("counts for a key administrator only the keys they could list", async () => {
+      // 🔴 The API-key list shows a caller who is not a super-admin their OWN
+      // keys only, so the count follows it: the super-admin owns two keys
+      // here and this caller one, and an installation-wide count would
+      // disclose the two it cannot see.
+      const own = await stats(await sessionHeaders(keyAdmin));
+      expect(carried(own)).toEqual(["apiKeys"]);
+      expect(own.apiKeys).toBe(1);
+      // The control: the super-admin, whose list is every key, counts them all.
+      const all = await stats(await sessionHeaders(admin));
+      expect(Number(all.apiKeys)).toBeGreaterThan(1);
     });
 
     it("answers a refused caller the same whether or not the rows exist", async () => {
