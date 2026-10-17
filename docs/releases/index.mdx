@@ -105,8 +105,8 @@ it again. Publish now refuses it until then, so the fix is checked before anythi
 ## Listing releases
 
 <Callout type="info">
-  Tabs, search and paging are **experimental**: their names and shapes may
-  change before the releases list is finished.
+  Tabs, search, the day filter and paging are **experimental**: their names and
+  shapes may change before the releases list is finished.
 </Callout>
 
 The list is paged on the server, so its total and every page cover every release on the
@@ -153,6 +153,7 @@ without a tab come latest first.
 | `page`                              | The page, from 1                                                           |
 | `limit`                             | Rows per page, 50 by default and at most 200                               |
 | `scheduledAfter`, `scheduledBefore` | A window on the scheduled time, as ISO 8601 instants                       |
+| `day`, `timezone`                   | `2026-03-29` in an IANA zone such as `Europe/Berlin`. Both or neither      |
 
 The answer is the standard list envelope. `meta.total` is the number of releases matching,
 across all pages. The page and the total are read one after the other, as on every paged list. A
@@ -219,16 +220,89 @@ const overdue = await nextly.releases.count({
 read every release, ask for each page in turn, up to `meta.totalPages` (at most 200 per
 page).
 
-`count()` takes the same tab, state, kind, window and search as `find()`, and gives the same
-number as its `meta.total` without reading the releases.
+`count()` takes the same tab, state, kind, window, search and day as `find()`, and gives the
+same number as its `meta.total` without reading the releases.
+
+The day filter returns the releases whose time falls on that day in that zone, in every
+state, soonest first unless you pass an `order`. It is how a calendar's "+N more" reads a
+day in full:
+
+```ts
+const { items, meta } = await nextly.releases.find({
+  day: { date: "2026-03-29", timezone: "Europe/Berlin" },
+});
+```
 
 Filtering by `containing` (one document's releases) still works, and still comes soonest
-first, in the order the releases will apply to that document. `tab`, `search` and `order`
-are refused alongside it.
+first, in the order the releases will apply to that document. `tab`, `search`, `order`
+and `day` are refused alongside it.
 
 A release's documents (`GET /api/releases/:id/members`, `nextly.releases.listMembers()`)
 come back in the order they were added. Asking for the documents or the blocking reasons of a release that does not exist
 answers `404`, not an empty list.
+
+## The calendar
+
+<Callout type="info">
+  The calendar read is **experimental**: its name and shape may change before
+  the releases list is finished.
+</Callout>
+
+A calendar read covers a window of days, at most six weeks, in a time zone you name. The
+zone decides which day each release falls on: a release at 23:30 in New York is on the next
+day in London. Days follow the zone's own clock, so a day is 23 hours long when the clocks go
+forward and 25 when they go back.
+
+A release is on the day its time falls on, whatever its state. A published release shows on
+the day it went out, a stopped one on the day it was due, and a cancelled one that had been
+scheduled on the day it would have run. A draft has no time and is on no day.
+
+Every day of the window comes back, in order, empty days included. Each day has the complete
+count of its releases, by state, and its first three releases in time order. To read the rest
+of a day, filter the list to it with the same date and zone (see the day filter above); its
+first three releases are the three the calendar sent.
+
+Over REST, `GET /api/releases/calendar` takes `from` and `to` (dates such as `2026-03-01`,
+both included), `timezone`, and optionally `kind`. From the Direct API:
+
+```ts
+const calendar = await nextly.releases.calendar({
+  from: "2026-03-01",
+  to: "2026-04-11",
+  timezone: "Europe/Berlin",
+});
+```
+
+Both answer the same object, with one entry per day:
+
+```json
+{
+  "timezone": "Europe/Berlin",
+  "from": "2026-03-01",
+  "to": "2026-04-11",
+  "days": [
+    {
+      "date": "2026-03-29",
+      "total": 5,
+      "counts": {
+        "draft": 0,
+        "scheduled": 3,
+        "published": 1,
+        "cancelled": 0,
+        "blocked": 1
+      },
+      "releases": [
+        { "id": "…", "title": "Spring launch", "state": "published" }
+      ]
+    }
+  ]
+}
+```
+
+A window longer than 42 days, one whose `to` is before its `from`, a date that does not exist
+and a zone the server does not know are refused with `400`. Reading the calendar needs the
+same permission as reading the list. It reads the time and state of every release in the
+window, then the three each day shows, so it costs two queries whatever the window holds.
 
 ## Scheduling stores a time; a job runner applies it
 
