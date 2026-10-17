@@ -3082,6 +3082,42 @@ describe("plugin-route-mount", () => {
     expect(await checksFor(tree(asPathJoin))).not.toContain("plugin-route-mount-unreadable");
   });
 
+  it("reads the mount from a template string that joins a constant folder", async () => {
+    // The folder is named once, as a constant other generators reuse, and joined into the path.
+    const asFolderConstant =
+      'export const ADMIN_API_FOLDER = ["admin", "api", "[[...params]]"] as const;\n' +
+      'await writeNew(cwd, `${projectInfo.appDir}/${ADMIN_API_FOLDER.join("/")}/route.ts`, T);\n';
+    expect(await checksFor(tree(asFolderConstant))).not.toContain("plugin-route-mount-unreadable");
+  });
+
+  it("reports the mount a constant folder spells when it differs from the template", async () => {
+    const findings = await findingsFor(
+      tree(
+        'const FOLDER = ["cms", "api", "[[...params]]"] as const;\n' +
+          'await writeNew(cwd, `${projectInfo.appDir}/${FOLDER.join("/")}/route.ts`, T);\n'
+      )
+    );
+    expect(findings.find(f => f.check === "plugin-route-mount-unreadable")?.message).toContain(
+      "generates /cms/api while the template mounts at /admin/api"
+    );
+  });
+
+  it("fails closed on a folder that is not a constant of strings", async () => {
+    // A `let` can be reassigned and an array without `as const` changed before the write, and a
+    // computed item is not known here.
+    for (const declaration of [
+      'let FOLDER = ["admin", "api", "[[...params]]"] as const;\n',
+      'const FOLDER = ["admin", "api", "[[...params]]"];\n',
+      'const FOLDER = ["admin", segment, "[[...params]]"] as const;\n',
+    ]) {
+      expect(
+        await checksFor(
+          tree(declaration + 'await writeNew(cwd, `${projectInfo.appDir}/${FOLDER.join("/")}/route.ts`, T);\n')
+        )
+      ).toContain("plugin-route-mount-unreadable");
+    }
+  });
+
   it("fails closed on a generator whose path it cannot read", async () => {
     expect(await checksFor(tree("const routePath = buildPath(cwd);\n"))).toContain(
       "plugin-route-mount-unreadable"
