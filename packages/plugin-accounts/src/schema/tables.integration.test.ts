@@ -142,10 +142,23 @@ describe.each(getConfiguredTestDialects())(
   }
 );
 
+/*
+ * A production boot over a database accounts was never installed on.
+ *
+ * In production only the install creates accounts' tables (`nextly plugins
+ * install`, which applies the migration modules and records the install).
+ * Core refuses a configured plugin with no install record before anything
+ * else at boot, on every dialect, so that is the refusal such a database gets.
+ *
+ * The schema-version gate, which refuses an INSTALLED database behind the
+ * schema accounts declares, is reached only past this one, so it is pinned by
+ * `install.integration.test.ts`, which makes such a database with the real
+ * commands.
+ */
 describe.each(getConfiguredTestDialects())(
   "the accounts plugin at a production boot (%s)",
   (dialect: TestDialect) => {
-    it("refuses a database whose accounts schema is behind the plugin's", async () => {
+    it("refuses a database accounts was never installed on", async () => {
       // What a production boot requires before it reaches the schema gate. A
       // throwaway secret for this boot alone, never a real one.
       const production: Record<string, string> = {
@@ -173,7 +186,7 @@ describe.each(getConfiguredTestDialects())(
         }
       }
       expect(NextlyError.is(failure) ? failure.code : String(failure)).toBe(
-        "PLUGIN_SCHEMA_BEHIND"
+        "PLUGIN_NOT_INSTALLED"
       );
     });
   }
