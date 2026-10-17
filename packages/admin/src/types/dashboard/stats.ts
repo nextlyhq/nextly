@@ -12,7 +12,8 @@
  */
 export interface ContentStats {
   totalEntries: number;
-  totalMedia: number;
+  /** Missing when the server withheld it; draw nothing for it. */
+  totalMedia?: number;
   contentTypes: number;
   recentChanges24h: number;
 }
@@ -37,17 +38,21 @@ export interface CollectionCount {
 
 /**
  * Dashboard statistics data returned from GET /api/dashboard/stats.
+ *
+ * Six fields arrive only when this person may read what they count (users,
+ * roles, permissions, media, field groups, API keys). A component reading one
+ * draws nothing for it when it is missing; a 0 there would be a wrong answer.
  */
 export interface DashboardStats {
   content: ContentStats;
   status: ContentStatus;
   collectionCounts: CollectionCount[];
-  users: number;
-  roles: number;
-  permissions: number;
-  fieldGroups: number;
+  users?: number;
+  roles?: number;
+  permissions?: number;
+  fieldGroups?: number;
   singles: number;
-  apiKeys: number;
+  apiKeys?: number;
 }
 
 /**
