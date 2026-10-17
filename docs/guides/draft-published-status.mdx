@@ -122,7 +122,7 @@ const published = await nextly.find({
 const all = await nextly.find({ collection: "posts" });
 ```
 
-The `nextly` proxy above assumes Nextly is already initialised in the process. A project starts it before the server serves a request with a `src/instrumentation.ts` that calls `createRegister(config)()` in `register()`, which the `blank` and `blog` scaffolds ship and an existing app adds as part of [installation](/docs/getting-started/installation#4-set-up-admin-routes). *Needs the release after 0.0.2-alpha.66:* on 0.0.2-alpha.66 neither scaffold's hook starts Nextly. Where nothing has started it, in a standalone script or an app without the hook, the proxy throws `Nextly services not initialized` the moment it is the first Nextly code a worker runs.
+The `nextly` proxy above assumes Nextly is already initialised in the process. A project starts it before the server serves a request with a `src/instrumentation.ts` that calls `createRegister(config)()` in `register()`, which the `blank` and `blog` scaffolds ship and an existing app adds as part of [installation](/docs/getting-started/installation#4-set-up-admin-routes). Where nothing has started it, in a standalone script or an app without the hook, the proxy throws `Nextly services not initialized` the moment it is the first Nextly code a worker runs.
 
 Use `await getNextly({ config })` unless you know the process has been initialised. It initialises rather than assuming, so it is correct in both cases; the proxy is the lighter import for code that provably runs after initialisation.
 

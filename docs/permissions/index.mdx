@@ -3,8 +3,6 @@ title: Roles and Permissions
 description: Control who can do what, down to individual fields.
 ---
 
-> **Parts of this page need the release after 0.0.2-alpha.66.** Read the warning under [Related rows](#related-rows) before relying on it: 0.0.2-alpha.66 does not check related rows the way that section describes.
-
 Access control answers three questions, at three levels of detail: what a role may do,
 which documents it may do it to, and which fields inside those documents it may see or
 change.
@@ -81,13 +79,9 @@ A plugin-defined signed-in person, such as a shop's customer, is different: they
 hold no grants, so a rule is the only way in. A rule sees them as `principal`
 beside a `null` `user`; a collection with no rule for the operation refuses them,
 and a rule set to `true` admits them as it admits any visitor. See
-[Signed-in people of your own kind](/docs/plugins/signed-in-people#let-a-person-read-and-write-your-collections). *Needs the release after 0.0.2-alpha.66.*
+[Signed-in people of your own kind](/docs/plugins/signed-in-people#let-a-person-read-and-write-your-collections).
 
 ## Related rows
-
-<Callout type="warn">
-**Needs the release after 0.0.2-alpha.66.** **0.0.2-alpha.66 has only part of this protection.** On 0.0.2-alpha.66 only the related collection's own `access.read` rule is checked. A related collection with no read rule, `users` and media included, is populated for every caller, visitors and API keys too, with no grant needed. Until the next release, read with `depth: 0` wherever a visitor or a narrowly scoped key can reach the result, or give the related collection an `access.read` rule.
-</Callout>
 
 A populated relationship is read with the same check as reading the related collection
 directly. Reading `posts` at a depth that populates `author` returns the author only to a

@@ -3,10 +3,6 @@ title: Limit store
 description: Where limits keep their counts, how to share them between instances, and the contract for an app's own store.
 ---
 
-<Callout type="warn">
-**Needs the release after 0.0.2-alpha.66.** 0.0.2-alpha.66 has no `LimitStore`; its rate limits take the older `RateLimitStore`.
-</Callout>
-
 Limits count attempts: sign-ins, password resets, codes sent. The **limit store** is where those counts are kept. `rateLimit.store` selects it, and every limit built on the limit store contract counts there.
 
 Core's own sign-in and API limits do not count in it yet. They keep counting as before: in each process, or in an app's store of the earlier `RateLimitStore` contract.

@@ -117,8 +117,6 @@ It also has `createCollection`, `listCollections`, `getCollection`,
 
 ## Each service is a facade
 
-> **Needs the release after 0.0.2-alpha.66.**
-
 Every service reaches your plugin as a frozen facade: an object holding only
 the methods meant for plugins, each calling the service's own method. The
 service's database adapter, Drizzle handle, sub-services and logger are not on
@@ -257,8 +255,6 @@ if (warnings) {
 
 ## Collection transactions
 
-> **Needs the release after 0.0.2-alpha.66.** On 0.0.2-alpha.66, `withTransaction` hands its work the adapter's own transaction.
-
 `collections.withTransaction` runs its work in one transaction, and the
 `*InTransaction` methods write inside it. The work receives a
 `PluginCollectionTransaction`, an opaque token: pass it as the first argument
@@ -328,8 +324,6 @@ with no password that is not verified, such as an imported account whose owner s
 password by reset, stays allowed.
 
 ## When to drop to `ctx.db`
-
-> **Needs the release after 0.0.2-alpha.66.** On 0.0.2-alpha.66 `ctx.db` is the Drizzle instance itself.
 
 `ctx.db` is the **`@experimental`** database surface — unmanaged: it bypasses
 validation, hooks, RBAC, and events. Reach for it only for things the services
