@@ -13,12 +13,11 @@ import { BuilderSchemaChangeDialogs } from "../BuilderSchemaChangeDialogs";
 import type { SchemaChangeConfirmation } from "../types";
 
 const REQUIRED_REFUSAL = {
-  reason:
-    '"heading" is required, so it cannot stop being translated in the same change.',
+  reason: "A required field can't stop being translated in the same change.",
   steps: [
     "Turn off Required and save.",
-    "Make the field shared and save.",
-    "Turn Required back on.",
+    "Turn off Localized and save.",
+    "Turn Required back on and save.",
   ],
 };
 
@@ -168,8 +167,10 @@ describe("BuilderSchemaChangeDialogs", () => {
       })
     );
 
-    expect(screen.getByText(/needs three steps/)).toBeInTheDocument();
-    expect(screen.getByText(/"heading" is required/)).toBeInTheDocument();
+    expect(screen.getByText("Needs three steps")).toBeInTheDocument();
+    expect(
+      screen.getByText(/A required field can't stop being translated/)
+    ).toBeInTheDocument();
     // The steps as an ordered list, in the order they have to be taken.
     expect(
       screen.getAllByRole("listitem").map(item => item.textContent)

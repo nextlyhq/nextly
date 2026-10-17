@@ -40,10 +40,8 @@ const STEP_COUNTS = ["", "one step", "two steps", "three steps", "four steps"];
  * forward to follow, not an error to read past.
  */
 function RefusalSteps({
-  name,
   refusal,
 }: {
-  name: string;
   refusal: NonNullable<SchemaPreviewLeavingTranslation["refusal"]>;
 }) {
   const count =
@@ -53,9 +51,8 @@ function RefusalSteps({
       <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning-600 dark:text-warning-500" />
       <div className="space-y-1.5">
         <p>
-          <strong>
-            &ldquo;{name}&rdquo; needs {count}
-          </strong>
+          {/* The field is named on the badge row above, so the lead does not repeat it. */}
+          <strong>Needs {count}</strong>
         </p>
         <p>{refusal.reason}</p>
         <ol className="list-decimal space-y-0.5 pl-5">
@@ -108,11 +105,12 @@ export function LeavingTranslationNotice({
           className="space-y-1.5 text-sm [&+&]:border-t [&+&]:border-border [&+&]:pt-3"
         >
           <div className="flex items-center gap-2.5">
-            <Badge variant="primary">no longer translated</Badge>
+            {/* The Builder's control is "Localized", so the badge and the steps say the same. */}
+            <Badge variant="primary">no longer localized</Badge>
             <strong>{field.name}</strong>
           </div>
           {field.refusal ? (
-            <RefusalSteps name={field.name} refusal={field.refusal} />
+            <RefusalSteps refusal={field.refusal} />
           ) : (
             <>
               <p className="text-muted-foreground">

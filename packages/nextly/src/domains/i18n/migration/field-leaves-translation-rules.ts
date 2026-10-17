@@ -77,13 +77,12 @@ function reshapedRefusal(
   return refusal(
     `fields.${name}`,
     "RESHAPED_FIELD_LEAVES_TRANSLATION",
-    `"${name}" changes how it is stored (its type, length or precision) in the same change ` +
-      `that stops it being translated.`,
     surface === "builder"
-      ? [
-          "Make the field shared and save.",
-          "Change how it is stored, and save again.",
-        ]
+      ? "Its type, length or precision changes in the same change that stops it being translated."
+      : `"${name}" changes how it is stored (its type, length or precision) in the same change ` +
+          `that stops it being translated.`,
+    surface === "builder"
+      ? ["Turn off Localized and save.", "Change how it is stored and save."]
       : [
           "Set `localized: false` and run `nextly migrate:create`.",
           "Change how it is stored, and run it again.",
@@ -100,8 +99,11 @@ function constrainedRefusal(
   return refusal(
     `fields.${name}`,
     "CONSTRAINED_FIELD_LEAVES_TRANSLATION",
-    `"${name}" is ${constraints.join(" and ")}, so it cannot stop being translated in the same ` +
-      `${builder ? "change" : "migration"}.`,
+    // The Builder shows the reason beside the field it is about, so it does not name it again; a
+    // migration's refusal is read on its own and does.
+    builder
+      ? `A ${constraints.join(" and ")} field can't stop being translated in the same change.`
+      : `"${name}" is ${constraints.join(" and ")}, so it cannot stop being translated in the same migration.`,
     builder
       ? builderConstraintSteps(constraints)
       : codeConstraintSteps(constraints)
@@ -171,10 +173,11 @@ function builderConstraintSteps(constraints: readonly Constraint[]): string[] {
   const settings = constraints
     .map(c => (c === "required" ? "Required" : "Unique"))
     .join(" and ");
+  // Each step names the Builder control it uses, and ends where the author saves.
   return [
     `Turn off ${settings} and save.`,
-    "Make the field shared and save.",
-    `Turn ${settings} back on.`,
+    "Turn off Localized and save.",
+    `Turn ${settings} back on and save.`,
   ];
 }
 
