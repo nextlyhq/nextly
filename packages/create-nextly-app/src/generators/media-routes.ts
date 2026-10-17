@@ -24,9 +24,8 @@ import { ADMIN_API_FOLDER } from "./routes";
  * route groups `(name)` and slots `@name` out of the URL wherever they sit,
  * and never routes a private folder `_name`, so the folders that answer a URL
  * are found by that rule rather than by name. `catchAll` marks the optional
- * catch-alls: they also clash with a dynamic child (`[id]`, `[...rest]`) that
- * holds a handler, but not with a concrete child such as `sign/`, which
- * Next.js sorts ahead of the catch-all.
+ * catch-alls, which serve everything below their URL too: a child folder
+ * holding a handler is weighed by {@link childFinding}.
  *
  * `role` says what Nextly's route does there, for a media route the app
  * already has something in place of; the report then carries the route to
@@ -98,6 +97,27 @@ const ROUTE_FILE = /^route\.(tsx|ts|jsx|js)$/;
 /** A route handler file in an extension the app may or may not route. */
 const MAYBE_ROUTE_FILE = /^route\.[^.]+$/;
 
+/**
+ * The fixed first parts below a media URL that Nextly's media handler serves
+ * (`nextly/api/media-handlers`): bulk deletes and folders. Every other part
+ * is a media item's id.
+ */
+export const NEXTLY_MEDIA_PATHS = ["bulk", "folders"];
+
+const BESIDE_AN_OPTIONAL_CATCH_ALL =
+  "holds another optional catch-all route, which Next.js refuses to build beside Nextly's as ambiguous; left as it is";
+
+const BESIDE_A_REQUIRED_CATCH_ALL =
+  "holds a required catch-all route, which Next.js builds beside Nextly's optional catch-all and then fails every request at this URL; left as it is";
+
+const TAKES_ITEMS =
+  "holds a dynamic route one part below this URL, which Next.js matches first, so it would take the requests for a media item by its id, and for its folders, that Nextly's route serves; left as it is";
+
+/** Why a concrete child named for one of Nextly's own media paths is left alone. */
+function takesPath(name: string): string {
+  return `holds a route at ${name}/, which would take the ${name} requests Nextly's route serves; left as it is`;
+}
+
 const THROUGH_A_DYNAMIC_SEGMENT =
   "already answers this URL through a dynamic segment, and a route written here would take those requests from it; left as it is";
 
@@ -148,24 +168,60 @@ class UnreadableFolder extends Error {
   }
 }
 
+/** Each route's template text, by its path under the app folder, as {@link readMediaRouteTemplates} read it. */
+export type MediaRouteTemplates = ReadonlyMap<string, string>;
+
 /**
- * Write the media and health routes into an existing app, from the template
- * in `templatesDir` (the CLI's bundled templates by default).
+ * Read every route the existing-app path writes from the templates in
+ * `templatesDir` (the CLI's bundled templates by default), refusing a missing
+ * file or a route that no longer imports the config, and naming it.
+ *
+ * It is called before anything is installed or written in the app, so a
+ * template folder that cannot supply the routes stops the run with the app
+ * as it was, rather than part-way, where a retry would find the config the
+ * first attempt wrote.
+ */
+export async function readMediaRouteTemplates(
+  templatesDir: string = resolveTemplatePath()
+): Promise<MediaRouteTemplates> {
+  const texts = new Map<string, string>();
+  for (const route of ROUTES) {
+    const relative = `base/src/app/${route.path}`;
+    let text: string;
+    try {
+      text = await fs.readFile(path.join(templatesDir, relative), "utf-8");
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code ?? "unreadable";
+      throw new Error(
+        `The templates at ${templatesDir} have no readable ${relative} (${code}), so Nextly's routes cannot be added. Nothing was installed or written; check the --local-template path if one was given.`
+      );
+    }
+    if (route.importsConfig && !CONFIG_IMPORT.test(text)) {
+      throw new Error(
+        `The template's ${route.path} does not import the Nextly config, so no route that finds it can be written. Nothing was installed or written.`
+      );
+    }
+    texts.set(route.path, text);
+  }
+  return texts;
+}
+
+/**
+ * Write the media and health routes into an existing app, from the templates
+ * {@link readMediaRouteTemplates} read.
  *
  * A route whose URL the app already answers is never written: the folder
  * that answers it is reported as skipped, exactly as it was, and for a media
  * route the report says what Nextly's route does there and carries it to add
- * by hand. Nothing is written through a linked folder. Every route is read
- * and prepared before any is written, so a template whose route no longer
- * imports the config is refused with nothing written.
+ * by hand. Nothing is written through a linked folder.
  */
 export async function generateMediaRoutes(
   cwd: string,
   projectInfo: ProjectInfo,
-  templatesDir: string = resolveTemplatePath()
+  templates: MediaRouteTemplates
 ): Promise<GeneratedFiles> {
-  const prepared = await Promise.all(
-    ROUTES.map(route => prepareRoute(cwd, projectInfo, templatesDir, route))
+  const prepared = ROUTES.map(route =>
+    prepareRoute(cwd, projectInfo, templates, route)
   );
   const result: GeneratedFiles = { written: [], changed: [], skipped: [] };
   for (const route of prepared) {
@@ -179,26 +235,29 @@ interface PreparedRoute {
   target: string;
   appRoot: string;
   segment: string;
-  catchAll: boolean;
+  /** The optional catch-all's own folder, such as `[[...path]]`, or null for a route that is not one. */
+  catchAll: string | null;
   text: string;
   role: ((file: string) => string) | null;
 }
 
 /** One route's destination in the project and its text, with the config import made relative. */
-async function prepareRoute(
+function prepareRoute(
   cwd: string,
   projectInfo: ProjectInfo,
-  templatesDir: string,
+  templates: MediaRouteTemplates,
   route: (typeof ROUTES)[number]
-): Promise<PreparedRoute> {
-  const source = path.join(templatesDir, "base", "src", "app", route.path);
-  const text = await fs.readFile(source, "utf-8");
+): PreparedRoute {
+  const text = templates.get(route.path);
+  if (text === undefined) {
+    throw new Error(`No template was read for ${route.path}.`);
+  }
   const target = path.join(cwd, projectInfo.appDir, route.path);
   return {
     target,
     appRoot: path.join(cwd, projectInfo.appDir),
     segment: route.segment,
-    catchAll: route.catchAll,
+    catchAll: route.catchAll ? path.basename(path.dirname(route.path)) : null,
     text: route.importsConfig
       ? withRelativeConfigImport(text, cwd, target, route.path)
       : text,
@@ -337,16 +396,16 @@ function isDynamic(name: string): boolean {
 async function answeringFolder(
   appRoot: string,
   segment: string,
-  catchAll: boolean
+  catchAll: string | null
 ): Promise<{ folder: string; reason: string } | null> {
   try {
     for (const folder of await foldersAt(appRoot, segment)) {
       const here = await handlerIn(folder);
       if (here !== null) return { folder, reason: here };
-      if (!catchAll) continue;
-      for (const child of (await subfolders(folder)).filter(isDynamic)) {
-        const within = await handlerWithin(path.join(folder, child));
-        if (within !== null) return { folder, reason: within };
+      if (catchAll === null) continue;
+      for (const child of await subfolders(folder)) {
+        const found = await childFinding(folder, child, catchAll);
+        if (found !== null) return found;
       }
     }
     return null;
@@ -356,6 +415,52 @@ async function answeringFolder(
     }
     throw error;
   }
+}
+
+/**
+ * The child folders that leave an optional catch-all unwritten, first match
+ * first, each with why, as Next.js 16 builds and serves them beside one: it
+ * refuses a second optional catch-all at build time, fails every request
+ * when a required one is beside it, and matches a single dynamic segment or
+ * a concrete name ahead of the catch-all.
+ */
+const CHILD_SHAPES: {
+  matches: (child: string) => boolean;
+  reason: (child: string) => string;
+}[] = [
+  {
+    matches: child => child.startsWith("[[..."),
+    reason: () => BESIDE_AN_OPTIONAL_CATCH_ALL,
+  },
+  {
+    matches: child => child.startsWith("[..."),
+    reason: () => BESIDE_A_REQUIRED_CATCH_ALL,
+  },
+  { matches: isDynamic, reason: () => TAKES_ITEMS },
+  { matches: child => NEXTLY_MEDIA_PATHS.includes(child), reason: takesPath },
+];
+
+/**
+ * Why a child folder of an optional catch-all's URL leaves the catch-all
+ * unwritten, or null when it may sit beside it. `own` is the catch-all's own
+ * folder name. Only a child holding a handler counts, and only one of
+ * {@link CHILD_SHAPES}. Any other concrete child, such as `sign/`, Next.js
+ * matches ahead of the catch-all, and it answers URLs Nextly's route does
+ * not.
+ */
+async function childFinding(
+  folder: string,
+  child: string,
+  own: string
+): Promise<Finding | null> {
+  // The app's own copy of the catch-all is the route itself, not one beside it.
+  const shape = CHILD_SHAPES.find(({ matches }) => matches(child));
+  const reason = child === own ? LEFT_AS_IT_IS : (shape?.reason(child) ?? null);
+  if (reason === null) return null;
+  const within = await handlerWithin(path.join(folder, child));
+  if (within === null) return null;
+  // A file Next.js may not route at all is reported as such, not as a clash.
+  return { folder, reason: within === LEFT_AS_IT_IS ? reason : within };
 }
 
 /**

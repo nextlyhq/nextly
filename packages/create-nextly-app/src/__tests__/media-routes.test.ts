@@ -19,14 +19,19 @@ import { fileURLToPath } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { generateMediaRoutes } from "../generators/media-routes";
+import {
+  NEXTLY_MEDIA_PATHS,
+  generateMediaRoutes,
+  readMediaRouteTemplates,
+} from "../generators/media-routes";
 import { generateRoutes } from "../generators/routes";
 import type { ProjectInfo } from "../types";
 
-const TEMPLATES = resolve(
+const TEMPLATES_DIR = resolve(
   dirname(fileURLToPath(import.meta.url)),
   "../../../../templates"
 );
+const TEMPLATES = await readMediaRouteTemplates(TEMPLATES_DIR);
 
 const ADMIN_MEDIA = "admin/api/media/[[...path]]/route.ts";
 const PUBLIC_MEDIA = "api/media/[[...path]]/route.ts";
@@ -70,7 +75,7 @@ function withoutConfigSpecifier(text: string): string {
 }
 
 const template = (path: string) =>
-  readFileSync(join(TEMPLATES, "base/src/app", path), "utf8");
+  readFileSync(join(TEMPLATES_DIR, "base/src/app", path), "utf8");
 const written = (appDir: string, path: string) =>
   readFileSync(join(cwd, appDir, path), "utf8");
 
@@ -676,9 +681,9 @@ describe("a template that no longer imports the config", () => {
         );
       }
 
-      await expect(
-        generateMediaRoutes(cwd, project(true), templates)
-      ).rejects.toThrow(/does not import the Nextly config/);
+      await expect(readMediaRouteTemplates(templates)).rejects.toThrow(
+        /does not import the Nextly config/
+      );
       // The broken route is the second; the first, which is fine, must not
       // have been written ahead of the refusal either.
       expect(() => readFileSync(join(cwd, "src/app", ADMIN_MEDIA))).toThrow();
@@ -686,5 +691,86 @@ describe("a template that no longer imports the config", () => {
     } finally {
       rmSync(templates, { recursive: true, force: true });
     }
+  });
+});
+
+describe("a child folder at a media route's URL", () => {
+  const child = (name: string) => {
+    const file = join(cwd, "src/app/api/media", name, "route.ts");
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, "export const GET = () => new Response();\n");
+  };
+  const publicSkip = async () => {
+    const result = await generateMediaRoutes(cwd, project(true), TEMPLATES);
+    expect(result.written).toEqual([
+      `src/app/${ADMIN_MEDIA}`,
+      `src/app/${HEALTH}`,
+    ]);
+    expect(result.skipped.map(entry => entry.path)).toEqual([
+      "src/app/api/media",
+    ]);
+    return result.skipped[0]?.why ?? "";
+  };
+
+  /*
+   * Next.js builds `[id]` beside `[[...path]]`, but matches the more specific
+   * `[id]` first, so it would take every `/api/media/<id>` request, which
+   * Nextly's route serves (an item by its id): the route is reported, not
+   * written into a media library that would half work.
+   */
+  it("leaves the catch-all beside a single dynamic child, saying it would take the item requests", async () => {
+    child("[id]");
+    expect(await publicSkip()).toMatch(
+      /^holds a dynamic route one part below this URL, which Next\.js matches first, so it would take the requests for a media item by its id/
+    );
+  });
+
+  /*
+   * Measured on Next.js 16: a second optional catch-all fails the build as an
+   * ambiguous route, and a required one builds but fails every request at
+   * this URL ("You cannot use both an required and optional catch-all route
+   * at the same level").
+   */
+  it.each([
+    [
+      "[[...rest]]",
+      /^holds another optional catch-all route, which Next\.js refuses to build beside Nextly's/,
+    ],
+    [
+      "[...rest]",
+      /^holds a required catch-all route, which Next\.js builds beside Nextly's optional catch-all and then fails every request/,
+    ],
+  ])(
+    "leaves the catch-all beside a %s child, saying why",
+    async (name, reason) => {
+      child(name);
+      expect(await publicSkip()).toMatch(reason);
+    }
+  );
+
+  it.each(NEXTLY_MEDIA_PATHS)(
+    "leaves the catch-all beside a %s/ child, which would take requests Nextly's route serves",
+    async name => {
+      child(name);
+      expect(await publicSkip()).toMatch(
+        new RegExp(
+          `^holds a route at ${name}/, which would take the ${name} requests`
+        )
+      );
+    }
+  );
+
+  // The paths are the handler's own: drift between the two would let a
+  // child take requests nobody listed.
+  it("names exactly the fixed first parts Nextly's media handler serves", () => {
+    const handler = readFileSync(
+      join(TEMPLATES_DIR, "../packages/nextly/src/api/media-handlers.ts"),
+      "utf8"
+    );
+    const served = [...handler.matchAll(/segments\[0\] === "([^"]+)"/g)].map(
+      found => found[1]
+    );
+    expect(served.length).toBeGreaterThan(0);
+    expect([...new Set(served)].sort()).toEqual([...NEXTLY_MEDIA_PATHS].sort());
   });
 });

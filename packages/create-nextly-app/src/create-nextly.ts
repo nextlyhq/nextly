@@ -17,6 +17,10 @@ import {
 import { generateEnv } from "./generators/env";
 import { generateIntoExistingApp } from "./generators/existing-app";
 import type { GeneratedFiles } from "./generators/generated-files";
+import {
+  type MediaRouteTemplates,
+  readMediaRouteTemplates,
+} from "./generators/media-routes";
 import { reportGeneratedFiles } from "./generators/report";
 import { installDependencies } from "./installers/dependencies";
 import {
@@ -528,6 +532,29 @@ export async function createNextly(
     }
   }
 
+  // --- Read what the existing-app path writes ---
+
+  // Every template the existing-app path writes from is read now, before the
+  // install and before any file: a missing or incomplete --local-template
+  // otherwise stopped the run part-way, with the config already written, so
+  // a retry failed on it.
+  let mediaRouteTemplates: MediaRouteTemplates | undefined;
+  if (!isFreshProject) {
+    try {
+      mediaRouteTemplates = await readMediaRouteTemplates(
+        resolveTemplatePath(options.localTemplatePath)
+      );
+    } catch (error) {
+      telemetry.capture("scaffold_failed", {
+        stage: "config",
+        error_code: classifyError(error, "config"),
+        duration_ms: Date.now() - overallStartedAt,
+      });
+      p.cancel((error as Error).message);
+      process.exit(1);
+    }
+  }
+
   // --- Install dependencies ---
 
   if (skipInstall) {
@@ -579,13 +606,16 @@ export async function createNextly(
       if (!isFreshProject) {
         // Existing project: Nextly's files, each written only where nothing
         // is, and the Next config extended.
+        if (mediaRouteTemplates === undefined) {
+          throw new Error("The route templates were not read before writing.");
+        }
         reported.push(
           ...(await generateIntoExistingApp(
             cwd,
             projectType,
             projectInfo,
             database,
-            resolveTemplatePath(options.localTemplatePath)
+            mediaRouteTemplates
           ))
         );
       }
