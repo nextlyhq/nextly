@@ -29,8 +29,5 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-`nextly/config` now exports the dashboard's width vocabulary: `WIDGET_WIDTHS`
-(the five widths in their ranking), `isWidgetWidth`, `widthFromSize` (a
-declared size's width) and the `WidgetWidth` type. The admin reads its widths
-from these instead of keeping its own copy, so the two cannot drift apart.
-What the dashboard draws is unchanged.
+`nextly/config` now exports the dashboard's widths (`WIDGET_WIDTHS`, `isWidgetWidth`,
+`widthFromSize` and the `WidgetWidth` type), and the admin reads them instead of keeping its own copy.

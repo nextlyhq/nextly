@@ -13,11 +13,7 @@ import { describe, expect, it } from "vitest";
 import { PasswordSchema } from "../../../nextly/src/schemas/_zod/validation";
 import { passwordSchema } from "../lib/validation";
 
-import {
-  createUserFormSchema,
-  editUserFormSchema,
-  editUserUpdates,
-} from "./userform";
+import { createUserFormSchema, editUserFormSchema } from "./userform";
 
 /** A password of `length` characters that meets every other rule. */
 const ofLength = (length: number) => "Aa1!".padEnd(length, "a");
@@ -114,32 +110,6 @@ describe("the forms' other password states", () => {
   });
 });
 
-// The edit page builds its request with `editUserUpdates`, from the values
-// its resolver hands `onSubmit`: what `editUserFormSchema` parsed, not what
-// was typed. So the request is built here the same way, and read as the
-// JSON sent, which keeps `null` where an omitted field disappears.
-const sentBy = (fields: Record<string, unknown>) =>
-  JSON.parse(
-    JSON.stringify(
-      editUserUpdates(
-        editUserFormSchema.parse({
-          ...account,
-          avatarUrl: "",
-          active: true,
-          ...fields,
-        })
-      )
-    )
-  ) as Record<string, unknown>;
-
-describe("the edit page's request", () => {
-  it("sends a password with a space at either end exactly as typed", () => {
-    expect(sentBy({ password: " Passw0rd-Edge " }).password).toBe(
-      " Passw0rd-Edge "
-    );
-  });
-
-  it("sends no password when the field is left empty", () => {
-    expect(sentBy({ password: "" })).not.toHaveProperty("password");
-  });
-});
+// What the edit page sends, a password exactly as typed and none for an empty
+// field, is asserted where the page itself submits: in
+// src/pages/dashboard/users/edit.test.tsx, which observes the mutation.

@@ -14,10 +14,17 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
   getServerExternalPackages,
-  nextConfigReport,
+  nextConfigFiles,
   patchNextConfig,
+  type NextConfigPatch,
 } from "../generators/next-config";
 import type { DatabaseConfig } from "../types";
+
+/** What the run says about a config it left alone: why, then the text to add. */
+const said = (patch: NextConfigPatch): string =>
+  nextConfigFiles(patch)
+    .skipped.map(({ path, why, toAdd }) => `${path}: ${why}\n\n${toAdd ?? ""}`)
+    .join("\n");
 
 const postgres: DatabaseConfig = {
   type: "postgresql",
@@ -286,10 +293,10 @@ describe("a config it cannot change safely", () => {
 
       expect(result.kind).toBe("manual");
       expect(await read("next.config.mjs")).toBe(text);
-      const report = nextConfigReport(result);
-      expect(report.level).toBe("warn");
-      expect(report.message).toContain("next.config.mjs");
-      expect(report.message).toContain(
+      expect(nextConfigFiles(result).skipped).toHaveLength(1);
+      const message = said(result);
+      expect(message).toContain("next.config.mjs");
+      expect(message).toContain(
         `serverExternalPackages: [${quoted(REQUIRED).join(", ")}]`
       );
     });
@@ -378,7 +385,7 @@ describe("configs it can still change safely", () => {
     const result = await patchNextConfig(dir, postgres);
 
     expect(result.kind).toBe("manual");
-    expect(nextConfigReport(result).message).toContain(
+    expect(said(result)).toContain(
       "nextly also appears in its transpilePackages"
     );
   });
@@ -405,7 +412,7 @@ describe("an app on Next.js 14", () => {
       spelling: "legacy",
     });
     expect(await read("next.config.mjs")).toBe(text);
-    expect(nextConfigReport(result).message).toContain(
+    expect(said(result)).toContain(
       `experimental: { instrumentationHook: true, serverComponentsExternalPackages: [${quoted(REQUIRED).join(", ")}] },`
     );
   });
@@ -424,7 +431,7 @@ describe("an app on Next.js 14", () => {
     });
     await expect(read("next.config.ts")).rejects.toThrow();
     await expect(read("next.config.mjs")).rejects.toThrow();
-    const { message } = nextConfigReport(result);
+    const message = said(result);
     expect(message).toContain("Create next.config.mjs with:");
     expect(message).toContain("export default {");
   });
@@ -434,7 +441,7 @@ describe("an app on Next.js 14", () => {
     await next14();
     await write("next.config.mjs", "export default {};\n");
 
-    const { message } = nextConfigReport(await patchNextConfig(dir, postgres));
+    const message = said(await patchNextConfig(dir, postgres));
 
     expect(message.match(/experimental:/g)).toHaveLength(1);
     expect(message).toContain("instrumentationHook: true");
@@ -485,7 +492,7 @@ describe("an app whose Next.js is not installed", () => {
 
       expect(result).toMatchObject({ kind: "manual", spelling: "either" });
       expect(await read("next.config.mjs")).toBe(config);
-      const { message } = nextConfigReport(result);
+      const message = said(result);
       expect(message).toContain(
         `serverExternalPackages: [${quoted(REQUIRED).join(", ")}],`
       );
@@ -538,26 +545,35 @@ describe("an app with no Next config", () => {
   });
 });
 
-describe("what the CLI prints", () => {
-  it("names each package it added and the file", () => {
-    const report = nextConfigReport({
-      kind: "written",
-      file: "next.config.ts",
-      added: ["nextly", "pg"],
-    });
-    expect(report).toEqual({
-      level: "info",
-      message: "next.config.ts: added nextly, pg to serverExternalPackages",
-    });
+describe("what the run reports", () => {
+  it("names the file and each package it added", () => {
+    expect(
+      nextConfigFiles({
+        kind: "written",
+        file: "next.config.ts",
+        added: ["nextly", "pg"],
+      }).changed
+    ).toEqual([
+      {
+        path: "next.config.ts",
+        added: ["serverExternalPackages: nextly, pg"],
+      },
+    ]);
   });
 
-  it("says nothing was needed when every package was listed", () => {
+  it("names a config it created as written", () => {
     expect(
-      nextConfigReport({ kind: "unchanged", file: "next.config.ts" })
-    ).toEqual({
-      level: "info",
-      message:
-        "next.config.ts already lists every package Nextly needs in serverExternalPackages",
-    });
+      nextConfigFiles({
+        kind: "created",
+        file: "next.config.ts",
+        added: ["nextly"],
+      }).written
+    ).toEqual(["next.config.ts"]);
+  });
+
+  it("says nothing when every package was already listed", () => {
+    expect(
+      nextConfigFiles({ kind: "unchanged", file: "next.config.ts" })
+    ).toEqual({ written: [], changed: [], skipped: [] });
   });
 });

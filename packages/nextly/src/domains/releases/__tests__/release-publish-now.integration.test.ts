@@ -35,6 +35,10 @@ import { RELEASES_DRAIN_JOB } from "../releases-drain-job";
 import { ReleasesRepository } from "../releases-repository";
 
 import { deactivate, seedLiveAuthor } from "./helpers/live-author";
+import {
+  ANY_EDITABLE_STATE,
+  scheduleAsItStands,
+} from "./helpers/release-writes";
 
 let current: TestNextly | undefined;
 
@@ -137,15 +141,18 @@ async function releaseOf(
   const repo = new ReleasesRepository(t.adapter);
   const release = await repo.createRelease({ title, createdBy: author });
   for (const entryId of entryIds) {
-    await repo.addMember({
-      releaseId: release.id,
-      scopeKind: "collection",
-      scopeSlug: SLUG,
-      entryId,
-      locale: null,
-      action: "publish",
-      createdBy: author,
-    });
+    await repo.addMember(
+      {
+        releaseId: release.id,
+        scopeKind: "collection",
+        scopeSlug: SLUG,
+        entryId,
+        locale: null,
+        action: "publish",
+        createdBy: author,
+      },
+      ANY_EDITABLE_STATE
+    );
   }
   return release.id;
 }
@@ -190,7 +197,8 @@ describe.each(getConfiguredTestDialects())(
       const a = await draft(t, "First");
       const b = await draft(t, "Second");
       const id = await releaseOf(t, author, [a, b]);
-      await new ReleasesRepository(t.adapter).scheduleRelease(
+      await scheduleAsItStands(
+        new ReleasesRepository(t.adapter),
         id,
         new Date(Date.now() + 7 * DAY),
         "Europe/Berlin"
@@ -218,7 +226,8 @@ describe.each(getConfiguredTestDialects())(
       const author = await seedLiveAuthor(t);
       const a = await draft(t, "Once");
       const id = await releaseOf(t, author, [a]);
-      await new ReleasesRepository(t.adapter).scheduleRelease(
+      await scheduleAsItStands(
+        new ReleasesRepository(t.adapter),
         id,
         new Date(Date.now() + 7 * DAY),
         "UTC"
@@ -263,7 +272,12 @@ describe.each(getConfiguredTestDialects())(
       const a = await draft(t, "Due");
       const id = await releaseOf(t, author, [a]);
       const due = new Date(Date.now() - 60_000);
-      await new ReleasesRepository(t.adapter).scheduleRelease(id, due, "UTC");
+      await scheduleAsItStands(
+        new ReleasesRepository(t.adapter),
+        id,
+        due,
+        "UTC"
+      );
       const [before] = await new ReleasesRepository(t.adapter).findReleases({
         ids: [id],
       });
@@ -287,7 +301,8 @@ describe.each(getConfiguredTestDialects())(
       const author = await seedLiveAuthor(t);
       const a = await draft(t, "Waits");
       const id = await releaseOf(t, author, [a]);
-      await new ReleasesRepository(t.adapter).scheduleRelease(
+      await scheduleAsItStands(
+        new ReleasesRepository(t.adapter),
         id,
         new Date(Date.now() + 7 * DAY),
         "UTC"
@@ -336,15 +351,18 @@ describe.each(getConfiguredTestDialects())(
       const a = await draft(t, "Fine");
       const b = await draft(t, "Stuck");
       const id = await releaseOf(t, author, [a]);
-      await new ReleasesRepository(t.adapter).addMember({
-        releaseId: id,
-        scopeKind: "collection",
-        scopeSlug: SLUG,
-        entryId: b,
-        locale: null,
-        action: "publish",
-        createdBy: gone,
-      });
+      await new ReleasesRepository(t.adapter).addMember(
+        {
+          releaseId: id,
+          scopeKind: "collection",
+          scopeSlug: SLUG,
+          entryId: b,
+          locale: null,
+          action: "publish",
+          createdBy: gone,
+        },
+        ANY_EDITABLE_STATE
+      );
       await deactivate(t, gone);
 
       await expect(t.nextly.releases.publishNow({ id })).rejects.toMatchObject({
@@ -366,7 +384,8 @@ describe.each(getConfiguredTestDialects())(
       const theirs = await draft(t, "Theirs");
       const id = await releaseOf(t, author, [mine]);
       const other = await releaseOf(t, author, [theirs], "Other");
-      await new ReleasesRepository(t.adapter).scheduleRelease(
+      await scheduleAsItStands(
+        new ReleasesRepository(t.adapter),
         other,
         new Date(Date.now() - DAY),
         "UTC"
@@ -419,7 +438,7 @@ describe.each(getConfiguredTestDialects())(
       const stoppedDoc = await draft(t, "S");
       const stopped = await releaseOf(t, author, [stoppedDoc]);
       const at = new Date(Date.now() - DAY);
-      await repo.scheduleRelease(stopped, at, "UTC");
+      await scheduleAsItStands(repo, stopped, at, "UTC");
       await repo.blockReleases([{ id: stopped, scheduledAt: at }]);
 
       for (const [id, state] of [
@@ -446,7 +465,7 @@ describe.each(getConfiguredTestDialects())(
 
       const stopped = await releaseOf(t, author, [await draft(t, "S")]);
       const at = new Date(Date.now() - DAY);
-      await repo.scheduleRelease(stopped, at, "UTC");
+      await scheduleAsItStands(repo, stopped, at, "UTC");
       await repo.blockReleases([{ id: stopped, scheduledAt: at }]);
       const [stoppedMember] = await repo.listMembers(stopped);
       await t.nextly.releases.removeMember({

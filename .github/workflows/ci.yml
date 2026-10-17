@@ -384,7 +384,7 @@ jobs:
         id: install
         run: pnpm install --frozen-lockfile
 
-      # F1 PR 5: enforce that drizzle-kit stays exact-pinned in
+      # Enforce that drizzle-kit stays exact-pinned in
       # `packages/nextly/package.json` `dependencies` (no caret/tilde,
       # not in peerDependencies). Cheap, and runs first because it is cheap -
       # but it no longer STOPS the job, per the note above `install`.
@@ -488,7 +488,7 @@ jobs:
       # generated before a package joined it is complete against the config it was
       # read from and short against the current one.
       #
-      # Scoped to the changesets THIS pull request adds or edits. Several hundred
+      # Scoped to the changeset files the diff adds or edits. Several hundred
       # are pending on `main`, most written before the group grew; rewriting them
       # to satisfy a rule they predate would churn the eventual changelog for no
       # gain.
