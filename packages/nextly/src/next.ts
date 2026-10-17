@@ -20,6 +20,10 @@
  * ```
  */
 
+// A type only, erased from the output: the check's module is loaded on first
+// call (see `checkAdminComponents` below).
+import type { AdminComponentCheckInput } from "./domains/widgets/declaration/component-map-check";
+
 /**
  * Packages that must be loaded from node_modules at runtime
  * instead of being bundled by Next.js.
@@ -138,4 +142,37 @@ export function withNextly<T extends Record<string, unknown>>(
       },
     },
   };
+}
+
+/**
+ * @experimental Checks the app's generated component map before the admin is
+ * served. Call it from the admin's server layout, with the list the map's
+ * strings-only companion exports:
+ *
+ * ```tsx
+ * // src/app/admin/[[...params]]/layout.tsx
+ * import { checkAdminComponents } from "nextly/next";
+ * import { registeredComponentPaths } from "../../../types/generated/plugin-admin-components.generated";
+ * import config from "../../../../nextly.config";
+ *
+ * export default async function AdminLayout({ children }) {
+ *   await checkAdminComponents({ config, registeredComponentPaths });
+ *   return children;
+ * }
+ * ```
+ *
+ * In development a map that is out of date is written again. In production
+ * the admin is refused while a dashboard widget's component is missing from
+ * it, naming each widget and the command that fixes it.
+ *
+ * Loaded on first call, not with this module: `next.config.ts` imports this
+ * entry for `withNextly`, and must not start Nextly's runtime to do it.
+ */
+export async function checkAdminComponents(
+  input: AdminComponentCheckInput
+): Promise<void> {
+  const { checkAdminComponents: check } = await import(
+    "./domains/widgets/declaration/component-map-check"
+  );
+  await check(input);
 }
