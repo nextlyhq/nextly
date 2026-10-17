@@ -6,7 +6,15 @@
  * lands on disk: a nextly.config.ts or admin route already there stopped the
  * whole run, and the admin layout was written over whatever the app had.
  */
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -128,6 +136,30 @@ describe("adding Nextly to an existing app", () => {
       true
     );
   });
+
+  // A folder on a file's path that is a link would take the write wherever
+  // the link points, maybe outside the project; the exclusive create guards
+  // only the file's own name.
+  it.each(["app/admin", "types/generated"])(
+    "writes nothing through %s when it is a symbolic link",
+    async folder => {
+      const outside = await mkdtemp(join(tmpdir(), "nextly-outside-"));
+      try {
+        await mkdir(dirname(join(dir, folder)), { recursive: true });
+        await symlink(outside, join(dir, folder));
+
+        const reported = await run();
+
+        expect(await readdir(outside)).toEqual([]);
+        const skipped = reported.flatMap(files =>
+          files.skipped.map(s => s.path)
+        );
+        expect(skipped.some(left => left.startsWith(folder))).toBe(true);
+      } finally {
+        await rm(outside, { recursive: true, force: true });
+      }
+    }
+  );
 
   it("reports what it wrote and what it extended", async () => {
     const reported = await run();

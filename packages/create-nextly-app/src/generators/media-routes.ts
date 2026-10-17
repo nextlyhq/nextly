@@ -67,7 +67,8 @@ const CONFIG_IMPORT =
 
 const LEFT_AS_IT_IS = "already holds routes; left as it is";
 
-const THROUGH_A_LINK = "is a symbolic link; nothing was written through it";
+export const THROUGH_A_LINK =
+  "is a symbolic link; nothing was written through it";
 
 /**
  * A file Next.js answers requests through: a route or a page, in the source
@@ -233,7 +234,7 @@ async function writeIfUnanswered(
  * through one would put the route wherever the link points, which may be
  * outside the project.
  */
-async function linkedFolder(
+export async function linkedFolder(
   cwd: string,
   target: string
 ): Promise<string | null> {
