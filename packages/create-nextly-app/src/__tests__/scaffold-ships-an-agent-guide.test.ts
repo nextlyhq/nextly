@@ -175,7 +175,7 @@ describe("a scaffolded project arrives with the guide", () => {
         // A project that got no skills (its Nextly did not match them) is sent
         // to the docs, not to the command that would add them anyway.
         expect(guide).toMatch(
-          /has no `\.agents\/skills\/`[\s\S]*?nextlyhq\.com\/docs\/guides\/coding-agents/
+          /has no `\.agents\/skills\/nextly-install\/`[\s\S]*?nextlyhq\.com\/docs\/guides\/coding-agents/
         );
       }
 
