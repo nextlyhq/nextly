@@ -350,14 +350,26 @@ function parsePath(path: string): ParsedPath {
  *
  * The one list the map, its exported path list and the check that reads the
  * list are all built from. Where two contributions name the same path, the
- * first declared keeps it, as the registry keeps the first registration.
+ * first declared keeps it, as the registry keeps the first registration, unless
+ * a later one is a dashboard widget's.
+ *
+ * 🔴 A widget's use wins over any other. One path may serve a page and a
+ * widget alike, and the check refuses only over a missing widget component:
+ * kept as the page's, that path would only be warned about, and production
+ * would serve the widget with an empty card.
  */
 export function componentImportMapEntries(
   plugins: readonly PluginDefinition[]
 ): ComponentMapEntry[] {
   const byPath = new Map<string, ComponentMapEntry>();
   const add = (each: ComponentMapEntry) => {
-    if (!byPath.has(each.path)) byPath.set(each.path, each);
+    const kept = byPath.get(each.path);
+    if (
+      kept === undefined ||
+      (each.use === "widget" && kept.use !== "widget")
+    ) {
+      byPath.set(each.path, each);
+    }
   };
   for (const plugin of plugins)
     collectAdminComponentEntries(plugin).forEach(add);

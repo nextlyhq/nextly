@@ -236,11 +236,14 @@ export async function runGenerateTypes(
   // declares nothing in code, yet still renders plugin admin components — its
   // plugins' pages and settings, and a document view offered on a field type.
   // Without the map a bundled admin cannot resolve them and draws an empty
-  // slot. Beside the types file actually written, which follows the app's
-  // layout.
+  // slot. Beside the CONFIGURED types file, fitted to the app's layout, and
+  // not beside an `--output` override: the admin page imports the map from one
+  // place, and the admin's check rewrites it in development and names it in
+  // production from the config, so a map written elsewhere would be one nothing
+  // reads.
   const writtenImportMapPath = await settleImportMap(
     configResult.config.plugins ?? [],
-    typesFileForLayout,
+    generatedTypesFile(manifestCwd, configResult.config.typescript.outputFile),
     manifestCwd
   );
   if (writtenImportMapPath) {

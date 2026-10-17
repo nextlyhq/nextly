@@ -771,4 +771,33 @@ describe("the map's entries: each component with who declared it and what it is 
       { path: "@shared/admin#Page", owner: 'plugin "@a/one"', use: "page" },
     ]);
   });
+
+  it("keeps a path as a widget's when a widget uses it after a page does", () => {
+    // Declared first as a page, then by a dashboard widget: only a widget's
+    // missing component is refused, so the widget's use is the one kept.
+    const both = {
+      name: "@acme/shop",
+      version: "1.0.0",
+      nextly: "*",
+      contributes: {
+        admin: { pages: [{ path: "x", component: "@acme/shop/admin#Shared" }] },
+        dashboard: {
+          widgets: [
+            {
+              id: "acme/shared",
+              display: { component: "@acme/shop/admin#Shared" },
+            },
+          ],
+        },
+      },
+    } as unknown as PluginDefinition;
+    expect(componentImportMapEntries([both])).toEqual([
+      {
+        path: "@acme/shop/admin#Shared",
+        owner: 'plugin "@acme/shop"',
+        use: "widget",
+        widget: "acme/shared",
+      },
+    ]);
+  });
 });

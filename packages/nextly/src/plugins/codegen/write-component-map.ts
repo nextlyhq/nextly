@@ -45,11 +45,19 @@ export async function writeComponentMapFiles(
   return { paths, changed };
 }
 
-/** A file's content, or `undefined` when there is none to read. */
+/**
+ * A file's content, or `undefined` when there is no file.
+ *
+ * 🔴 Only a missing file reads as none. Writing replaces the whole file, so a
+ * file that exists but could not be read (no read permission, an I/O error) is
+ * one this would otherwise truncate unseen: the failure is thrown instead, and
+ * nothing is written.
+ */
 async function currentContent(file: string): Promise<string | undefined> {
   try {
     return await readFile(file, "utf-8");
-  } catch {
-    return undefined;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
   }
 }

@@ -3,7 +3,15 @@
  * `generate:types` and the admin's development check writes them, and only
  * when their content changes, since Next reloads the admin when they do.
  */
-import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -80,4 +88,28 @@ describe("writing the component map", () => {
     const changed = await writeComponentMapFiles([], types, cwd);
     expect(changed.changed).toEqual(first.paths);
   });
+
+  // POSIX permissions, which Windows does not apply, and which root ignores.
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "refuses, writing nothing, over a file it cannot read",
+    async () => {
+      const cwd = await app();
+      const folder = join(cwd, "src/types/generated");
+      await mkdir(folder, { recursive: true });
+      const map = join(folder, COMPONENT_IMPORT_MAP_FILENAME);
+      await writeFile(map, "// edited by hand\n", "utf-8");
+      // Writable but not readable: what the writer cannot compare, it must not
+      // replace.
+      await chmod(map, 0o200);
+      await expect(
+        writeComponentMapFiles(
+          [shop],
+          "./src/types/generated/nextly-types.ts",
+          cwd
+        )
+      ).rejects.toMatchObject({ code: "EACCES" });
+      await chmod(map, 0o600);
+      expect(await readFile(map, "utf-8")).toBe("// edited by hand\n");
+    }
+  );
 });

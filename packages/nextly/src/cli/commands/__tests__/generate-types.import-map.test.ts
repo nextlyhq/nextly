@@ -84,14 +84,34 @@ const viewPlugin = definePlugin({
   },
 });
 
-async function run(cwd: string): Promise<void> {
+async function run(cwd: string, output = OUTPUT): Promise<void> {
   await runGenerateTypes(
-    { cwd, output: OUTPUT, quiet: true, zod: false },
+    { cwd, output, quiet: true, zod: false },
     createContext({ quiet: true, cwd })
   );
 }
 
 describe("the import map for an app with no code-defined schema", () => {
+  it("is written beside the configured types file, whatever --output names", async () => {
+    // The admin page imports the map from one place, and the admin's check
+    // rewrites and names it from the config: a map written beside an override
+    // would be one nothing reads.
+    const cwd = await workspace();
+    loadConfig.mockResolvedValue(schemaFreeConfig([viewPlugin]));
+
+    await run(cwd, "./elsewhere/types.ts");
+
+    expect(
+      await readFile(
+        join(cwd, dirname(OUTPUT), COMPONENT_IMPORT_MAP_FILENAME),
+        "utf-8"
+      )
+    ).toContain('"@acme/builder/admin#Builder"');
+    await expect(
+      readFile(join(cwd, "elsewhere", COMPONENT_IMPORT_MAP_FILENAME), "utf-8")
+    ).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("is written, carrying a field-type document view's component", async () => {
     const cwd = await workspace();
     loadConfig.mockResolvedValue(schemaFreeConfig([viewPlugin]));
