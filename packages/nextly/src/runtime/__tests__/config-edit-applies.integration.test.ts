@@ -73,7 +73,6 @@ describe.each(getConfiguredTestDialects())(
     let handle: TestNextly;
     let dir: string;
     let collectionFile: string;
-    let previousNodeEnv: string | undefined;
 
     /** The column names the database reports for the notes table. */
     async function columns(): Promise<string[]> {
@@ -104,13 +103,12 @@ describe.each(getConfiguredTestDialects())(
       loaded.configPath = configFile;
       loaded.dependencies = [configFile, collectionFile];
       // The watcher runs only under next dev.
-      previousNodeEnv = process.env.NODE_ENV;
-      process.env.NODE_ENV = "development";
+      vi.stubEnv("NODE_ENV", "development");
     });
 
     afterEach(async () => {
       stopConfigWatch();
-      process.env.NODE_ENV = previousNodeEnv;
+      vi.unstubAllEnvs();
       await handle?.adapter.executeQuery(`DROP TABLE IF EXISTS ${TABLE}`);
       await handle?.destroy();
       rmSync(dir, { recursive: true, force: true });
