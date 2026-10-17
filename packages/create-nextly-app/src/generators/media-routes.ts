@@ -6,7 +6,7 @@ import type { ProjectInfo } from "../types";
 import { resolveTemplatePath } from "../utils/template";
 
 import type { GeneratedFiles } from "./generated-files";
-import { appPageExtensions, moduleExtension } from "./instrumentation";
+import { appPageExtensions, moduleExtension } from "./page-extensions";
 import { ADMIN_API_FOLDER } from "./routes";
 
 /**
@@ -340,7 +340,7 @@ async function writeIfUnanswered(
   const answering =
     (await answeringFolder(appRoot, segment, catchAll)) ??
     (await answeringThroughDynamic(appRoot, segment)) ??
-    (await answeringPage(cwd, segment));
+    (await answeringPage(cwd, segment, catchAll !== null));
   if (answering !== null) {
     result.skipped.push(
       skipped(cwd, answering.folder, target, text, role, answering.reason)
@@ -586,18 +586,23 @@ function isCatchAll(name: string): boolean {
 
 /**
  * The first Pages Router file or folder that answers `segment`, or might,
- * with why; or null when none does. It fails closed as the app check does: a
- * file named for the URL's last part in any extension, that part's folder
- * holding anything, a dynamic route anywhere on the way, a linked folder on
- * the way, or a folder that cannot be read all leave the route unwritten.
+ * with why; or null when none does. `below` says the route also serves every
+ * URL under `segment`, as an optional catch-all does. It fails closed as the
+ * app check does: what cannot be judged (a link, an unreadable folder) leaves
+ * the route unwritten.
  */
 async function answeringPage(
   cwd: string,
-  segment: string
+  segment: string,
+  below: boolean
 ): Promise<PageFinding | null> {
   try {
     for (const dir of PAGES_DIRS) {
-      const found = await pageAt(path.join(cwd, dir), segment.split("/"));
+      const found = await pageAt(path.join(cwd, dir), {
+        parts: segment.split("/"),
+        below,
+        throughDynamic: false,
+      });
       if (found !== null) return found;
     }
     return null;
@@ -612,60 +617,102 @@ async function answeringPage(
 /** A page that answers, or might, and why. */
 type PageFinding = { folder: string; reason: string };
 
-/** What in one Pages Router folder answers the URL made of `parts`, walking it part by part. */
+/**
+ * Where a Pages Router walk stands: the URL's parts still to match, whether
+ * the route also serves every URL below it, and whether a dynamic folder was
+ * passed on the way, after which a page only may answer the URL.
+ */
+interface PageWalk {
+  parts: string[];
+  below: boolean;
+  throughDynamic: boolean;
+}
+
+/** What in one Pages Router folder answers the rest of the walk's URL. */
 async function pageAt(
-  pagesRoot: string,
-  parts: string[]
-): Promise<PageFinding | null> {
-  let folder = pagesRoot;
-  for (const [index, part] of parts.entries()) {
-    const entries = await entriesOf(folder);
-    const dynamic = dynamicPage(folder, entries);
-    if (dynamic !== null) return dynamic;
-    if (index === parts.length - 1) return lastPartPage(folder, entries, part);
-    const next = entries.find(entry => entry.name === part);
-    if (next === undefined) return null;
-    // A link is not followed, so what it leads to cannot be judged.
-    if (!next.isDirectory()) {
-      return {
-        folder: path.join(folder, next.name),
-        reason: A_PAGE_MAY_ANSWER,
-      };
-    }
-    folder = path.join(folder, next.name);
-  }
-  return null;
-}
-
-/**
- * A dynamic page or folder in `folder`, which can match the URL's part at
- * this depth, and a catch-all the rest of the URL with it.
- */
-function dynamicPage(folder: string, entries: fs.Dirent[]): PageFinding | null {
-  const dynamic = entries.find(entry => isDynamic(entry.name));
-  return dynamic === undefined
-    ? null
-    : { folder: path.join(folder, dynamic.name), reason: A_PAGE_MAY_ANSWER };
-}
-
-/**
- * The page for the URL's last part: `health.ts` in any extension, or a
- * `health/` that holds anything (its `index` page answers the URL, and what
- * else is there cannot be judged for certain).
- */
-async function lastPartPage(
   folder: string,
-  entries: fs.Dirent[],
-  part: string
+  walk: PageWalk
 ): Promise<PageFinding | null> {
-  for (const entry of entries) {
-    if (entry.name !== part && !entry.name.startsWith(`${part}.`)) continue;
-    const at = path.join(folder, entry.name);
-    if (!entry.isDirectory() || (await entriesOf(at)).length > 0) {
-      return { folder: at, reason: A_PAGE_ANSWERS };
-    }
+  for (const entry of await entriesOf(folder)) {
+    const found = await pageEntry(folder, entry, walk);
+    if (found !== null) return found;
   }
   return null;
+}
+
+/**
+ * What one entry of a Pages Router folder answers of the walk's URL. A catch-all page or folder takes one part or more, so it
+ * may answer whatever remains. A single dynamic page, `[slug].tsx`, takes
+ * exactly one part, as a page named for the part does, so either answers
+ * only the URL's last part; a folder of either kind is walked with the rest.
+ * A link is not followed, so what it leads to cannot be judged.
+ */
+async function pageEntry(
+  folder: string,
+  entry: fs.Dirent,
+  walk: PageWalk
+): Promise<PageFinding | null> {
+  const at = path.join(folder, entry.name);
+  if (isCatchAll(entry.name)) return { folder: at, reason: A_PAGE_MAY_ANSWER };
+  if (!takesPart(entry, walk.parts[0])) return null;
+  if (!entry.isFile() && !entry.isDirectory()) {
+    return { folder: at, reason: A_PAGE_MAY_ANSWER };
+  }
+  return matchedPage(at, entry.isFile(), walk);
+}
+
+/** Whether an entry takes the URL part `part`: a dynamic one takes any, another only its own name. */
+function takesPart(entry: fs.Dirent, part: string | undefined): boolean {
+  if (isDynamic(entry.name)) return true;
+  const stem = entry.isDirectory() ? entry.name : entry.name.split(".")[0];
+  return stem === part;
+}
+
+/**
+ * What an entry that took the walk's next part answers: a page answers the
+ * URL when that part was its last, and a folder is judged as the URL's
+ * folder then, or walked with the rest.
+ */
+async function matchedPage(
+  at: string,
+  isFile: boolean,
+  walk: PageWalk
+): Promise<PageFinding | null> {
+  const rest = walk.parts.slice(1);
+  const throughDynamic = walk.throughDynamic || isDynamic(path.basename(at));
+  const reason = throughDynamic ? A_PAGE_MAY_ANSWER : A_PAGE_ANSWERS;
+  if (rest.length > 0) {
+    return isFile ? null : pageAt(at, { ...walk, parts: rest, throughDynamic });
+  }
+  return isFile
+    ? { folder: at, reason }
+    : folderAnswers(at, reason, walk.below);
+}
+
+/**
+ * Whether the folder for the URL's last part answers it. Its `index` page
+ * does, in any extension, and so does an optional catch-all in it, which also
+ * matches no part at all; another page there answers a longer URL. For a
+ * route that also serves every URL below, any page in the folder answers one
+ * of those.
+ */
+async function folderAnswers(
+  folder: string,
+  reason: string,
+  below: boolean
+): Promise<PageFinding | null> {
+  const entries = await entriesOf(folder);
+  if (below) return entries.length > 0 ? { folder, reason } : null;
+  const index = entries.find(
+    entry => !entry.isDirectory() && entry.name.split(".")[0] === "index"
+  );
+  if (index !== undefined) {
+    return { folder: path.join(folder, index.name), reason };
+  }
+  const optional = entries.find(entry => entry.name.startsWith("[[..."));
+  return optional === undefined
+    ? null
+    : { folder: path.join(folder, optional.name), reason: A_PAGE_MAY_ANSWER };
 }
 
 /**

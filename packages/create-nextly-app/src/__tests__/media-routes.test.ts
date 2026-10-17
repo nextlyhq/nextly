@@ -836,3 +836,76 @@ describe("an app that sets pageExtensions", () => {
     nothingWritten();
   });
 });
+
+describe("which Pages Router pages answer a route's URL", () => {
+  const page = (file: string) => {
+    mkdirSync(dirname(join(cwd, file)), { recursive: true });
+    writeFileSync(join(cwd, file), "export default function handler() {}\n");
+  };
+  const run = () => generateMediaRoutes(cwd, project(false), TEMPLATES);
+  const all = [`app/${ADMIN_MEDIA}`, `app/${PUBLIC_MEDIA}`, `app/${HEALTH}`];
+
+  // `[slug].tsx` takes exactly one part, so it answers `/about` and never a
+  // URL of two parts or more such as `/api/health`.
+  it("writes every route beside a single dynamic page at the top", async () => {
+    page("pages/[slug].tsx");
+
+    const result = await run();
+
+    expect(result.skipped).toEqual([]);
+    expect(result.written).toEqual(all);
+  });
+
+  // A dynamic folder takes one part and is walked with the rest of the URL.
+  it("follows a dynamic folder with the rest of the URL", async () => {
+    page("pages/[section]/media.ts");
+
+    const result = await run();
+
+    expect(result.written).toEqual([`app/${ADMIN_MEDIA}`, `app/${HEALTH}`]);
+    expect(result.skipped.map(entry => entry.path)).toEqual([
+      "pages/[section]/media.ts",
+    ]);
+    expect(result.skipped[0]?.why).toMatch(/^is a dynamic Pages Router route/);
+  });
+
+  // `health/details.ts` is `/api/health/details`; only the folder's `index`
+  // page, in any extension, or an optional catch-all in it is `/api/health`.
+  it("writes the health route beside a page below its URL", async () => {
+    page("pages/api/health/details.ts");
+
+    const result = await run();
+
+    expect(result.skipped).toEqual([]);
+    expect(result.written).toEqual(all);
+  });
+
+  it.each([
+    ["pages/api/health/index.ts", /^is a Pages Router route at the same URL/],
+    ["pages/api/health/index.mdx", /^is a Pages Router route at the same URL/],
+    ["pages/api/health/[[...rest]].ts", /^is a dynamic Pages Router route/],
+  ])("leaves the health route where %s answers its URL", async (file, why) => {
+    page(file);
+
+    const result = await run();
+
+    expect(result.written).toEqual([
+      `app/${ADMIN_MEDIA}`,
+      `app/${PUBLIC_MEDIA}`,
+    ]);
+    expect(result.skipped.map(entry => entry.path)).toEqual([file]);
+    expect(result.skipped[0]?.why).toMatch(why);
+  });
+
+  // The media routes serve every URL below theirs, so any page there competes.
+  it("leaves a media route beside any page below its URL", async () => {
+    page("pages/api/media/details.ts");
+
+    const result = await run();
+
+    expect(result.written).toEqual([`app/${ADMIN_MEDIA}`, `app/${HEALTH}`]);
+    expect(result.skipped.map(entry => entry.path)).toEqual([
+      "pages/api/media",
+    ]);
+  });
+});

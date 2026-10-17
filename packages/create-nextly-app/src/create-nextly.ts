@@ -82,6 +82,21 @@ function cwdProjectName(cwd: string): string {
 }
 
 /**
+ * Stop a run that failed while setting up the app's files: record where it
+ * failed, say why, and exit. One place for it, since both the check of the
+ * templates before anything is written and the writing itself end this way.
+ */
+function stopAtConfig(error: unknown, startedAt: number): never {
+  telemetry.capture("scaffold_failed", {
+    stage: "config",
+    error_code: classifyError(error, "config"),
+    duration_ms: Date.now() - startedAt,
+  });
+  p.cancel((error as Error).message);
+  process.exit(1);
+}
+
+/**
  * Main entry point for scaffolding Nextly in a Next.js project.
  *
  * Two flows:
@@ -545,13 +560,7 @@ export async function createNextly(
         resolveTemplatePath(options.localTemplatePath)
       );
     } catch (error) {
-      telemetry.capture("scaffold_failed", {
-        stage: "config",
-        error_code: classifyError(error, "config"),
-        duration_ms: Date.now() - overallStartedAt,
-      });
-      p.cancel((error as Error).message);
-      process.exit(1);
+      stopAtConfig(error, overallStartedAt);
     }
   }
 
@@ -660,13 +669,7 @@ export async function createNextly(
       );
     } catch (error) {
       s.stop("Failed to generate configuration");
-      telemetry.capture("scaffold_failed", {
-        stage: "config",
-        error_code: classifyError(error, "config"),
-        duration_ms: Date.now() - overallStartedAt,
-      });
-      p.cancel((error as Error).message);
-      process.exit(1);
+      stopAtConfig(error, overallStartedAt);
     }
   }
 
