@@ -34,6 +34,7 @@ import {
   buildAuthRouterDeps,
   challengeBudgetWarning,
 } from "../auth/handlers/deps-bridge";
+import { edgeProxyWarning } from "../auth/handlers/proxy-posture";
 import type { CollectionConfig } from "../collections/config/define-collection";
 import type {
   SanitizedApiKeysConfig,
@@ -70,6 +71,7 @@ import type { AnyJobDefinition } from "../domains/jobs/job-registry";
 import type { LimitStore } from "../domains/limits/limit-store";
 import { selectLimitStore } from "../domains/limits/select-limit-store";
 import type { MetaService } from "../domains/meta";
+import type { NoticesService } from "../domains/notices/notices-service";
 import { pluginSettingsSecrets } from "../domains/plugins/settings-service";
 import type { PreviewConfig } from "../domains/preview/route-config";
 import { resolvePreviewRoute } from "../domains/preview/route-config";
@@ -267,6 +269,7 @@ import {
   registerDashboardServices,
   registerEmailServices,
   registerJobServices,
+  registerNoticeServices,
   registerReleaseServices,
   registerMediaServices,
   registerMetaServices,
@@ -516,6 +519,8 @@ export interface ServiceMap {
   rbacAccessControlService: RBACAccessControlService;
   /** Content releases: the authorization boundary the Direct API namespace reaches. */
   releasesService: ReleasesService;
+  /** Each admin user's notices, recorded by other areas through `record`. */
+  noticesService: NoticesService;
   apiKeyService: ApiKeyService;
   /** Webhook endpoint management, resolved by the webhooks REST handlers. */
   webhookEndpointService: WebhookEndpointService;
@@ -645,6 +650,9 @@ export function registerDomainServices(ctx: RegistrationContext): void {
   // what this service schedules. Order is not load-bearing — both resolve their
   // dependencies from the container — but keeping them adjacent means a reader
   // meets the two halves of releases together.
+  // Before releases, so a feature that records notices (releases will, for a
+  // release that stops or runs late) can register its kinds against it.
+  registerNoticeServices(ctx);
   registerReleaseServices(ctx);
 }
 
@@ -807,6 +815,12 @@ async function registerServicesOnce(
   const resolvedBasePath = basePath ?? process.cwd();
 
   logRegisteredPlugins(transformedConfig, resolvedLogger);
+
+  // Said once per boot, whatever plugins are present: an app on an edge that
+  // reports the client, with security.trustProxy unset, rate-limits sign-in
+  // without client addresses and nothing else would tell its operator.
+  const edgeWarning = edgeProxyWarning(transformedConfig);
+  if (edgeWarning) resolvedLogger.warn?.(edgeWarning);
 
   // ----------------------------------------
   // Layer 1: Create and Connect Adapter

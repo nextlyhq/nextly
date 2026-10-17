@@ -13,11 +13,7 @@ import { describe, expect, it } from "vitest";
 import { PasswordSchema } from "../../../nextly/src/schemas/_zod/validation";
 import { passwordSchema } from "../lib/validation";
 
-import {
-  createUserFormSchema,
-  editUserFormSchema,
-  editUserUpdates,
-} from "./userform";
+import { createUserFormSchema, editUserFormSchema } from "./userform";
 
 /** A password of `length` characters that meets every other rule. */
 const ofLength = (length: number) => "Aa1!".padEnd(length, "a");
@@ -114,25 +110,6 @@ describe("the forms' other password states", () => {
   });
 });
 
-// The edit page builds its request with `editUserUpdates`, so this is the
-// password the server receives. The server's own round trip proves it hashes
-// what arrives; this proves what arrives is what the admin typed.
-describe("the edit page's request", () => {
-  it("sends a password with a space at either end exactly as typed", () => {
-    const password = " Passw0rd-Edge ";
-    expect(editUserFormSchema.safeParse({ ...account, password }).success).toBe(
-      true
-    );
-
-    expect(
-      editUserUpdates({ ...account, password, avatarUrl: "", active: true })
-        .password
-    ).toBe(password);
-  });
-
-  it("sends no password when the field is left empty", () => {
-    expect(
-      editUserUpdates({ ...account, password: "", avatarUrl: "", active: true })
-    ).not.toHaveProperty("password", expect.anything());
-  });
-});
+// What the edit page sends, a password exactly as typed and none for an empty
+// field, is asserted where the page itself submits: in
+// src/pages/dashboard/users/edit.test.tsx, which observes the mutation.

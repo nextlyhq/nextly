@@ -3,7 +3,10 @@ import { fileURLToPath } from "url";
 
 import fs from "fs-extra";
 
+import { bundledSkillsVersionOrNull } from "../generators/agent-skills";
 import { buildNextConfigTemplate } from "../generators/next-config";
+import { EXACT_VERSION } from "../lib/exact-version";
+import { packageVersion } from "../lib/package-version";
 import { getAvailableTemplateNames } from "../lib/templates";
 import type {
   DatabaseConfig,
@@ -509,6 +512,14 @@ function guidePlaceholders(
   return {
     "{{runCommand}}": scriptRunner(packageManager),
     "{{execCommand}}": binaryRunner(packageManager),
+    // The release whose tag publishes the skills this CLI bundles, for the
+    // guide's command that adds or restores them. Not the release the skills
+    // were checked against, whose tag may carry no user skills at all.
+    "{{skillsTag}}": packageVersion(),
+    // The release the skills at that tag declare, which the guide requires the
+    // project to run before it offers that command. "unknown" is never a
+    // version, so a copy without a readable bundle offers no restore.
+    "{{skillsVersion}}": bundledSkillsVersionOrNull() ?? "unknown",
   };
 }
 
@@ -869,18 +880,20 @@ export function resolveTemplatePath(localTemplatePath?: string): string {
  */
 function buildPlaceholderMap(options: {
   database?: DatabaseConfig;
-  databaseUrl?: string;
   /** Plugin package name → fills `{{pluginName}}` (plugin template, D44). */
   pluginName?: string;
   /** Plugin's `nextly` compat range → fills `{{nextlyRange}}` (D44). */
   nextlyRange?: string;
 }): Record<string, string> {
-  const { database, databaseUrl, pluginName, nextlyRange } = options;
+  const { database, pluginName, nextlyRange } = options;
 
   const map: Record<string, string> = {};
   if (database) {
     map["{{databaseDialect}}"] = database.type;
-    map["{{databaseUrl}}"] = databaseUrl || database.envExample;
+    // The token fills only .env.example, which a project commits, so it is the
+    // database's generic example: a URL typed during setup carries a password
+    // and belongs in .env, which the env generator writes.
+    map["{{databaseUrl}}"] = database.envExample;
   }
   if (pluginName) map["{{pluginName}}"] = pluginName;
   if (nextlyRange) map["{{nextlyRange}}"] = nextlyRange;
@@ -1314,9 +1327,6 @@ export async function generatePackageJson(
  */
 const CARET_VERSION = /^\^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
 
-/** One complete version, as a package.json `version` holds it: `0.0.2-alpha.66`. */
-const EXACT_VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
-
 /**
  * This CLI's version, and whether the scaffold pins to it. See
  * CopyTemplateOptions.releaseVersion.
@@ -1735,7 +1745,6 @@ export interface CopyTemplateOptions {
   projectType: ProjectType;
   targetDir: string;
   database: DatabaseConfig;
-  databaseUrl?: string;
   useYalc?: boolean;
   /** Schema approach for content templates (code-first, visual) */
   approach?: ProjectApproach;
@@ -1796,7 +1805,6 @@ export async function copyTemplate(
     projectType,
     targetDir,
     database,
-    databaseUrl,
     useYalc = false,
     approach,
     templateSource,
@@ -1866,9 +1874,26 @@ export async function copyTemplate(
     );
   }
 
+  // An example env file already in the target (scaffolding over a folder that
+  // has files) is the env generator's to merge, never the copy's to replace.
+  const targetExample = path.join(targetDir, ".env.example");
+  // lstat, not pathExists: pathExists follows a link, and calls a dangling
+  // one absent, which the copy would then replace. Only "absent" is absent:
+  // a file that could not be looked at may well be there, so any other
+  // failure stops the copy rather than let it replace the file.
+  const keepTargetExample = await fs.lstat(targetExample).then(
+    () => true,
+    (error: unknown) => {
+      if ((error as { code?: string }).code === "ENOENT") return false;
+      throw error;
+    }
+  );
   await fs.copy(baseDir, targetDir, {
     filter: _src => {
       const basename = path.basename(_src);
+      if (keepTargetExample && _src === path.join(baseDir, ".env.example")) {
+        return false;
+      }
       return !SKIP_FILES.has(basename);
     },
   });
@@ -1992,7 +2017,7 @@ export async function copyTemplate(
   // The placeholder map is built here rather than at step 9 because a merge into a file the
   // developer already had must render the incoming text itself; step 9 then skips what it
   // merged, so their prose is never rewritten.
-  const placeholders = buildPlaceholderMap({ database, databaseUrl });
+  const placeholders = buildPlaceholderMap({ database });
   if (approach) {
     placeholders["{{approach}}"] = approach;
   }
@@ -2001,6 +2026,8 @@ export async function copyTemplate(
     placeholders,
     packageManager
   );
+  // The person's own example file is theirs: a token in their text stays.
+  if (keepTargetExample) alreadyRendered.add(".env.example");
 
   // Step 6d: Undo the side effect of the workspace file above for the pnpm versions that
   // read it as a workspace declaration. Only for pnpm, because npm warns about the setting

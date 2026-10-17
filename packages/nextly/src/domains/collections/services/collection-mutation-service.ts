@@ -171,6 +171,7 @@ import {
 } from "../../versions/tag-component-types";
 import { VersionCaptureService } from "../../versions/version-capture-service";
 import { withVersionConflictRetry } from "../../versions/version-conflict";
+import { deletePinsForDocument } from "../../versions/version-pins";
 import { VersionsRepository } from "../../versions/versions-repository";
 import { workingDraftLocale } from "../../versions/working-draft-locale";
 import { expandComponentFields } from "../../webhooks/expand-component-fields";
@@ -8721,6 +8722,14 @@ export class CollectionMutationService extends BaseService {
           entryId: params.entryId,
         });
 
+        // So do the versions features have pinned against retention: nothing
+        // could release them once the document is gone.
+        await deletePinsForDocument(tx, {
+          scopeKind: "collection",
+          scopeSlug: params.collectionName,
+          entryId: params.entryId,
+        });
+
         // The removed document's final state ships as `data`; there is no
         // post-delete state, so `previous` is null (mirroring create, which
         // carries only `data`). `locale` is set only for a localized collection,
@@ -10732,6 +10741,13 @@ export class CollectionMutationService extends BaseService {
 
       // Recovery points go with it; see the single-delete path.
       await new VersionsRepository(tx).deleteAutosaves({
+        scopeKind: "collection",
+        scopeSlug: params.collectionName,
+        entryId,
+      });
+
+      // Pins go with it; see the single-delete path.
+      await deletePinsForDocument(tx, {
         scopeKind: "collection",
         scopeSlug: params.collectionName,
         entryId,

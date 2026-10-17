@@ -167,6 +167,9 @@ describe("the derived policy list", () => {
     expect(keys).toEqual([
       "audit.retention.lastPassAt",
       "email.retention.lastPassAt",
+      // Notices follow the activity log's window, so the audit policy brings
+      // their pass too.
+      "notices.retention.lastPassAt",
       "secrets.retention.lastPassAt",
       "webhooks.retention.lastPassAt",
     ]);

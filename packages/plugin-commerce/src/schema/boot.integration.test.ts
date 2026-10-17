@@ -1,12 +1,16 @@
 /**
- * A production boot refuses a database that has not applied commerce's
- * migrations.
+ * A production boot refuses a database commerce was never installed on.
  *
  * In development the push creates commerce's tables at boot, so nothing is
- * ever behind there. In production only the migration modules create them,
- * and a database that has not run them would fail at the first cart request
- * instead. Core's gate refuses it at boot, but only for a plugin that
- * declares a `schemaVersion`, which is what this pins for commerce.
+ * ever missing there. In production only the install creates them
+ * (`nextly plugins install`, which applies the migration modules and records
+ * the install), and a database without them would fail at the first cart
+ * request instead. Core refuses a configured plugin with no install record
+ * before anything else at boot, on every dialect.
+ *
+ * The schema-version gate, which refuses an installed database behind the
+ * schema commerce declares, is reached only past this one, so it is pinned by
+ * the upgrade test, which makes such a database with the real commands.
  *
  * @module schema/boot.integration.test
  */
@@ -23,7 +27,7 @@ import { commerce } from "../plugin";
 describe.each(getConfiguredTestDialects())(
   "commerce at a production boot (%s)",
   (dialect: TestDialect) => {
-    it("refuses a database whose commerce schema is behind the plugin's", async () => {
+    it("refuses a database commerce was never installed on", async () => {
       // What a production boot requires before it reaches the schema gate. A
       // throwaway secret for this boot alone, never a real one.
       const production: Record<string, string> = {
@@ -51,7 +55,7 @@ describe.each(getConfiguredTestDialects())(
         }
       }
       expect(NextlyError.is(failure) ? failure.code : String(failure)).toBe(
-        "PLUGIN_SCHEMA_BEHIND"
+        "PLUGIN_NOT_INSTALLED"
       );
     });
   }

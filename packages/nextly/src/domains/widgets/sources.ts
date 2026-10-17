@@ -368,7 +368,8 @@ function validateFieldAnnotations(
       `${sourceId}: field "${name}" has a bucketable flag that is not a boolean`
     );
   }
-  if (field.choices !== undefined) validateChoices(sourceId, name, field.choices);
+  if (field.choices !== undefined)
+    validateChoices(sourceId, name, field.choices);
 }
 
 /**
@@ -386,9 +387,14 @@ function validateChoices(
   }
   const seen = new Set<string>();
   for (const raw of choices as unknown[]) {
-    const { value, label } = (raw ?? {}) as { value?: unknown; label?: unknown };
+    const { value, label } = (raw ?? {}) as {
+      value?: unknown;
+      label?: unknown;
+    };
     if (typeof value !== "string") {
-      fail(`${sourceId}: field "${name}" has a choice whose value is not a string`);
+      fail(
+        `${sourceId}: field "${name}" has a choice whose value is not a string`
+      );
     }
     if (typeof label !== "string" || label.trim() === "") {
       fail(
@@ -396,7 +402,9 @@ function validateChoices(
       );
     }
     if (seen.has(value)) {
-      fail(`${sourceId}: field "${name}" names the choice "${String(value)}" twice`);
+      fail(
+        `${sourceId}: field "${name}" names the choice "${String(value)}" twice`
+      );
     }
     seen.add(value);
   }

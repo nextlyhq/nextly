@@ -87,6 +87,7 @@ import {
   createAccessNamespace,
   createApiKeysNamespace,
   createJobsNamespace,
+  createNoticesNamespace,
   createReleasesNamespace,
   createFieldGroupsNamespace,
   createEmailNamespace,
@@ -101,6 +102,7 @@ import {
   type AccessNamespace,
   type ApiKeysNamespace,
   type JobsNamespace,
+  type NoticesNamespace,
   type ReleasesNamespace,
   type FieldGroupsNamespace,
   type EmailNamespace,
@@ -267,6 +269,8 @@ export class Nextly implements NextlyContext {
   public readonly apiKeys: ApiKeysNamespace;
   public readonly jobs: JobsNamespace;
   public readonly releases: ReleasesNamespace;
+  /** @experimental A person's own notices. */
+  public readonly notices: NoticesNamespace;
   /** @experimental Recognising a plugin's kind of signed-in person. */
   public readonly principals: NextlyPrincipals;
 
@@ -296,6 +300,7 @@ export class Nextly implements NextlyContext {
     this.apiKeys = createApiKeysNamespace(this);
     this.jobs = createJobsNamespace();
     this.releases = createReleasesNamespace(this);
+    this.notices = createNoticesNamespace();
     this.principals = createNextlyPrincipals();
 
     // The instance its callers reach: only the collection and Single
@@ -911,6 +916,15 @@ export const nextly = {
       requireNextly().principals.byId(kind, id),
   },
 
+  notices: {
+    find: (args: Parameters<NoticesNamespace["find"]>[0]) =>
+      requireNextly().notices.find(args),
+    count: (args: Parameters<NoticesNamespace["count"]>[0]) =>
+      requireNextly().notices.count(args),
+    markRead: (args: Parameters<NoticesNamespace["markRead"]>[0]) =>
+      requireNextly().notices.markRead(args),
+  },
+
   releases: {
     create: (args: Parameters<ReleasesNamespace["create"]>[0]) =>
       requireNextly().releases.create(args),
@@ -930,6 +944,8 @@ export const nextly = {
       requireNextly().releases.schedule(args),
     cancel: (args: Parameters<ReleasesNamespace["cancel"]>[0]) =>
       requireNextly().releases.cancel(args),
+    publishNow: (args: Parameters<ReleasesNamespace["publishNow"]>[0]) =>
+      requireNextly().releases.publishNow(args),
   },
 
   users: {

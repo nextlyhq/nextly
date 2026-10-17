@@ -181,6 +181,8 @@ function buildNextlyInstance(
     // stops at the class is absent from the documented `await getNextly()`
     // path, which is the one the REST handlers use.
     releases: directAPI.releases,
+    // A person's own notices, forwarded for the same reason.
+    notices: directAPI.notices,
 
     // RBAC namespaces
     roles: directAPI.roles,

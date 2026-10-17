@@ -200,21 +200,23 @@ describe("API-key scope coverage on delete + version-label gates", () => {
     await expect(
       handler.bulkDeleteByQuery({
         collectionName: "posts",
-        where: { and: [{ column: "title", op: "=", value: "t" }] },
+        where: { title: { equals: "t" } },
         user: { id: "admin", roles: ["super-admin"] },
         authenticatedScope: {
           actorType: "apiKey",
           permissions: ["delete-posts"],
         },
       })
-    ).rejects.toThrow();
+      // The access refusal itself, not any error: a malformed filter is
+      // refused too, and would otherwise satisfy this for the wrong reason.
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
 
     // The same super-admin as a session caller (no scope) bypasses the rule and
     // deletes the still-present row — proving the scope, not the role, decides
     // and that the denied attempt left the row intact.
     const allowed = await handler.bulkDeleteByQuery({
       collectionName: "posts",
-      where: { and: [{ column: "title", op: "=", value: "t" }] },
+      where: { title: { equals: "t" } },
       user: { id: "admin", roles: ["super-admin"] },
     });
     expect(allowed.successCount).toBe(1);

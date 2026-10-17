@@ -84,7 +84,12 @@ describe("the singles card", () => {
     singlesHook.mockReturnValue(
       listing([
         { id: "1", slug: "homepage", label: "Homepage" },
-        { id: "2", slug: "nx_pb_flags", label: "Flags", admin: { hidden: true } },
+        {
+          id: "2",
+          slug: "nx_pb_flags",
+          label: "Flags",
+          admin: { hidden: true },
+        },
       ])
     );
     render(<SinglesQuickLinks />);
@@ -98,13 +103,22 @@ describe("the singles card", () => {
     // exist, so "No Singles yet" would be false: the card points at the full list instead.
     singlesHook.mockReturnValue(
       listing(
-        [{ id: "1", slug: "nx_pb_flags", label: "Flags", admin: { hidden: true } }],
+        [
+          {
+            id: "1",
+            slug: "nx_pb_flags",
+            label: "Flags",
+            admin: { hidden: true },
+          },
+        ],
         { hasNext: true }
       )
     );
     render(<SinglesQuickLinks />);
 
     expect(screen.queryByText("No Singles yet")).toBeNull();
-    expect(screen.getByRole("link", { name: "Open Singles" })).toBeInTheDocument();
+    expect(
+      screen.getByRole("link", { name: "Open Singles" })
+    ).toBeInTheDocument();
   });
 });

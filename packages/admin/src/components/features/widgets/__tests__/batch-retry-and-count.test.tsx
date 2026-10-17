@@ -143,7 +143,10 @@ describe("Retry past the per-request cap", () => {
     const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
     try {
       const failed = { ok: false, error: "An unexpected error occurred." };
-      const ids = Array.from({ length: 31 }, (_, i) => `c${String(i).padStart(2, "0")}`);
+      const ids = Array.from(
+        { length: 31 },
+        (_, i) => `c${String(i).padStart(2, "0")}`
+      );
       const cards = ids.map(id => metric(id, `collection:${id}`));
       vi.mocked(protectedApi.post).mockImplementation((_url, body) =>
         Promise.resolve({

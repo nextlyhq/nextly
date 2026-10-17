@@ -5,7 +5,8 @@ import fs from "fs-extra";
 import type { ProjectInfo } from "../types";
 
 import type { GeneratedFiles } from "./generated-files";
-import { nextConfigFileToChange, nextMajor } from "./next-config";
+import { configStringList } from "./next-config";
+import { writeNew } from "./write-new";
 
 /**
  * The names Next.js loads its instrumentation hook from: `instrumentation`
@@ -61,6 +62,35 @@ ${startNextly(configImport)}
 `;
 }
 
+/**
+ * The page extension to name a new hook with: a TypeScript one first, since
+ * the hook is TypeScript, then a JavaScript one; never a content extension
+ * such as `mdx`, which Next.js would compile as content, and never `cjs`,
+ * since the hook is an ES module and a `.cjs` file cannot hold one. Null when
+ * the list holds no extension a hook can be written in.
+ */
+function hookExtension(extensions: readonly string[]): string | null {
+  return (
+    extensions.find(extension => /(^|\.)tsx?$/.test(extension)) ??
+    extensions.find(extension => /(^|\.)(js|jsx|mjs)$/.test(extension)) ??
+    null
+  );
+}
+
+/**
+ * The hook as `instrumentationHook` writes it, with its return type kept only
+ * for a hook to be saved under a TypeScript extension. Its one piece of
+ * TypeScript is that annotation; without it the hook is valid JavaScript and
+ * valid TypeScript alike, which is what a JavaScript extension, or one this
+ * could not read, needs.
+ */
+function hookFor(configImport: string, extension: string | null): string {
+  const hook = instrumentationHook(configImport);
+  return extension !== null && /(^|\.)tsx?$/.test(extension)
+    ? hook
+    : hook.replace("register(): Promise<void>", "register()");
+}
+
 /** The files Next.js reads its own config from, in the order it looks. */
 const NEXT_CONFIG_NAMES = [
   "next.config.js",
@@ -79,6 +109,19 @@ async function readNextConfig(
     if (await fs.pathExists(file)) {
       return { name, text: await fs.readFile(file, "utf-8") };
     }
+  }
+  return null;
+}
+
+/** The first of `names` the app already has beside `app/`, or null. */
+async function existingHook(
+  cwd: string,
+  dir: string,
+  names: readonly string[]
+): Promise<string | null> {
+  for (const name of names) {
+    const relative = path.posix.join(dir, name);
+    if (await fs.pathExists(path.join(cwd, relative))) return relative;
   }
   return null;
 }
@@ -103,40 +146,41 @@ ${startNextly(configImport)
 }`;
 }
 
-/** The key Next.js 14 needs before it runs an instrumentation hook. */
-const OPT_IN = "experimental: { instrumentationHook: true }";
-
 /**
- * What to tell an app about Next.js 14's opt-in, or null when it needs none.
+ * What to tell an app that sets `pageExtensions`, for which no hook is
+ * written: the name to create it under, and its content.
  *
- * The major is the installed one, read the way the config patcher reads it,
- * so a range such as `latest` or `^14 || ^15` is not guessed at. When even
- * that cannot tell, the advice is given for the case it applies to. An app
- * with no config gets a whole one to create, since a key alone is not a file.
+ * A list this cannot read is named as such rather than guessed, with a hook
+ * valid under any JavaScript or TypeScript extension. A list it can read but
+ * that holds no extension the hook can be written in gets no name at all,
+ * since every name it could give is one Next.js would not load as a module:
+ * the developer is told to add an extension first.
  */
-function hookOptIn(
-  major: number | null,
-  nextConfig: { name: string } | null,
-  configFile: string
-): GeneratedFiles["skipped"][number] | null {
-  if (major !== null && major !== 14) return null;
-  const when =
-    major === 14
-      ? "Next.js 14 runs instrumentation.ts only when the config opts in"
-      : "the installed Next.js version could not be read, and Next.js 14 runs instrumentation.ts only when the config opts in";
-  if (!nextConfig) {
-    // The same file the Next config step names for Nextly's packages, so
-    // following both pieces of advice makes one config, not two.
+function pageExtensionsAdvice(
+  dir: string,
+  configImport: string,
+  configName: string,
+  extensions: readonly string[] | null
+): GeneratedFiles["skipped"][number] {
+  const sets = `${configName} sets pageExtensions, and Next.js reads the hook only under a name with one of them, so none was written`;
+  const extension = extensions === null ? null : hookExtension(extensions);
+  if (extensions !== null && extension === null) {
     return {
-      path: configFile,
-      why: `${when}, and the app has no Next.js config; on Next.js 14, create this file, which is also where Nextly's packages go`,
-      toAdd: `/** @type {import('next').NextConfig} */\nexport default {\n  ${OPT_IN},\n};\n`,
+      path: path.posix.join(
+        dir,
+        "instrumentation.<a JavaScript or TypeScript extension added to pageExtensions>"
+      ),
+      why: `${sets}, and none of them (${extensions.join(", ")}) can hold the hook, which is a JavaScript or TypeScript module; add a JavaScript or TypeScript extension to pageExtensions, then create the hook under it with this content`,
+      toAdd: hookFor(configImport, null),
     };
   }
   return {
-    path: nextConfig.name,
-    why: `${when}, and the config was left as it is`,
-    toAdd: `On Next.js 14, add instrumentationHook: true inside the config's experimental object, beside any keys it already has, or add the object when there is none:\n\n${OPT_IN},`,
+    path: path.posix.join(
+      dir,
+      `instrumentation.${extension ?? "<one of your pageExtensions>"}`
+    ),
+    why: `${sets}; create it under that name with this content`,
+    toAdd: hookFor(configImport, extension),
   };
 }
 
@@ -148,8 +192,10 @@ function hookOptIn(
  * never rewritten; it is reported as skipped with what to add. So is the case
  * where the app sets \`pageExtensions\`: Next.js then reads the hook only under a
  * name with one of those extensions, which this does not guess. The config file
- * itself is never edited: on Next.js 14, which runs the hook only with
- * \`experimental.instrumentationHook\`, the line to add is reported instead.
+ * itself is never edited here. Next.js 14 runs the hook only with
+ * `experimental.instrumentationHook`, which the Next config step gives in the
+ * same `experimental` object as Nextly's packages (`patchNextConfig`), so two
+ * steps never hand the developer two objects for one key.
  */
 export async function generateInstrumentation(
   cwd: string,
@@ -161,45 +207,51 @@ export async function generateInstrumentation(
     : "./nextly.config";
   const result: GeneratedFiles = { written: [], changed: [], skipped: [] };
   const nextConfig = await readNextConfig(cwd);
+  // Read from the config the app exports, as the Next config step reads it:
+  // a commented-out or nested `pageExtensions` sets nothing.
+  const extensions = nextConfig
+    ? configStringList(nextConfig.text, nextConfig.name, "pageExtensions")
+    : "absent";
 
-  const optIn = hookOptIn(
-    await nextMajor(cwd),
-    nextConfig,
-    await nextConfigFileToChange(cwd)
-  );
-  if (optIn) result.skipped.push(optIn);
-
-  for (const name of HOOK_NAMES) {
-    const relative = path.posix.join(dir, name);
-    if (await fs.pathExists(path.join(cwd, relative))) {
-      result.skipped.push({
-        path: relative,
-        why: "the app already has a server-start hook, so it was left as it is",
-        toAdd: linesToAdd(configImport),
-      });
-      return result;
-    }
-  }
-
-  const relative = path.posix.join(dir, "instrumentation.ts");
-  if (nextConfig?.text.includes("pageExtensions")) {
+  // With pageExtensions set, Next.js reads the hook only as
+  // `instrumentation.<extension>` for one of them, so a default-named file
+  // beside it is one Next.js never loads. A hook under a configured name
+  // belongs to the app: Nextly's start is added to it, never offered as a file
+  // to write beside or over it. A list this cannot read leaves the defaults as
+  // the only names it knows.
+  const names =
+    extensions === "absent" || extensions === null
+      ? HOOK_NAMES
+      : extensions.map(extension => `instrumentation.${extension}`);
+  const existing = await existingHook(cwd, dir, names);
+  if (existing) {
     result.skipped.push({
-      path: relative,
-      why: `${nextConfig.name} sets pageExtensions, and Next.js reads the hook only under a name with one of them, so none was written; create it under that name with this content`,
-      toAdd: instrumentationHook(configImport),
+      path: existing,
+      why: "the app already has a server-start hook, so it was left as it is",
+      toAdd: linesToAdd(configImport),
     });
     return result;
   }
 
-  await fs.ensureDir(path.dirname(path.join(cwd, relative)));
-  await fs.writeFile(
-    path.join(cwd, relative),
-    instrumentationHook(configImport),
-    {
-      encoding: "utf-8",
-      flag: "wx",
-    }
-  );
-  result.written.push(relative);
+  const relative = path.posix.join(dir, "instrumentation.ts");
+  if (extensions !== "absent") {
+    result.skipped.push(
+      pageExtensionsAdvice(
+        dir,
+        configImport,
+        nextConfig?.name ?? "The Next.js config",
+        extensions
+      )
+    );
+    return result;
+  }
+
+  // Through writeNew, as every existing-app file is: created exclusively, and
+  // never through a folder on its path that is a link.
+  const hook = instrumentationHook(configImport);
+  await writeNew(cwd, relative, hook, result, {
+    why: "it is already there; Nextly's hook, which is",
+    toAdd: hook,
+  });
   return result;
 }

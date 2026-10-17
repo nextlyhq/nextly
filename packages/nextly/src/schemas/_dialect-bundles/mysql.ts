@@ -91,6 +91,14 @@ export {
   nextlyReleaseMembersMysql as nextlyReleaseMembers,
 } from "../releases/mysql";
 
+// Version pins; in the bundle so freshPushSchema creates the table on a fresh
+// database, for the reason the release tables above give.
+export { nextlyVersionPinsMysql as nextlyVersionPins } from "../version-pins/mysql";
+
 // Background jobs; see the releases note above for why the bundle entry is
 // required and not merely tidy.
 export { nextlyJobsMysql as nextlyJobs } from "../jobs/mysql";
+
+// Each person's own notices; in the bundle for the reason the releases note
+// above gives — this map is what the push creates.
+export { nextlyNoticesMysql as nextlyNotices } from "../notices/mysql";

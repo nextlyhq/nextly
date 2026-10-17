@@ -13,15 +13,22 @@
  *
  * @module api/__tests__/releases-route-authority.test
  */
+import { NextlyError } from "../../errors";
+import { RELEASE_STATES } from "../../schemas/releases/types";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { requireAnyPermission, isErrorResponse, getCachedNextly } = vi.hoisted(
-  () => ({
+const { requireAnyPermission, isErrorResponse, getCachedNextly, logger } =
+  vi.hoisted(() => ({
     requireAnyPermission: vi.fn(),
     isErrorResponse: vi.fn(() => false),
     getCachedNextly: vi.fn(),
-  })
-);
+    logger: {
+      debug: vi.fn(),
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+    },
+  }));
 
 vi.mock("../../auth/middleware", () => ({
   requireAnyPermission,
@@ -31,6 +38,12 @@ vi.mock("../../auth/middleware/to-nextly-error", () => ({
   toNextlyAuthError: (e: unknown) => e,
 }));
 vi.mock("../../init", () => ({ getCachedNextly }));
+// The application logger the route reports to, observed rather than resolved
+// from the container the case below stubs.
+vi.mock("../../dispatcher/helpers/di", async importOriginal => ({
+  ...(await importOriginal<typeof import("../../dispatcher/helpers/di")>()),
+  getLoggerFromDI: () => logger,
+}));
 vi.mock("../../di", () => ({
   container: {
     has: () => true,
@@ -130,6 +143,18 @@ function namespace() {
       ]),
       schedule: vi.fn(async () => undefined),
       cancel: vi.fn(async () => undefined),
+      // Answers the release as it stands after the run, so a case can say
+      // which way it went.
+      publishNow: vi.fn(
+        async (): Promise<{
+          id: string;
+          state: string;
+          scheduledAt?: Date | null;
+        }> => ({
+          id: "r1",
+          state: "published",
+        })
+      ),
     },
   };
 }
@@ -189,6 +214,15 @@ describe("release route authority", () => {
     // and would have to hand it to a publisher to be told.
     expect(await authorityFor("listReleaseBlockers")).toEqual({
       action: "read",
+      resource: "content-releases",
+    });
+  });
+
+  it("demands publish to publish now", async () => {
+    // Running a release puts content live, the same power scheduling needs.
+    // Anything less would let someone who may only assemble releases ship one.
+    expect(await authorityFor("publishRelease")).toEqual({
+      action: "publish",
       resource: "content-releases",
     });
   });
@@ -804,5 +838,140 @@ describe("the detail read explains a BLOCKED release", () => {
     const { api, body } = await detail("scheduled");
     expect(api.releases.blockingReasons).not.toHaveBeenCalled();
     expect(body.blockedBy).toBeUndefined();
+  });
+});
+
+describe("publish now over REST", () => {
+  async function publish() {
+    const res = await handleReleaseRequest(
+      new Request("https://example.test/api/releases/r1/publish", {
+        method: "POST",
+      }),
+      "publishRelease",
+      { releaseId: "r1" }
+    );
+    return {
+      res,
+      body: (await res.json()) as {
+        message: string;
+        item: { id: string; state: string; can?: unknown };
+      },
+    };
+  }
+
+  it("runs the release it names and answers it as it now stands", async () => {
+    const { res, body } = await publish();
+    expect(res.status).toBe(200);
+    expect(api.releases.publishNow).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "r1" })
+    );
+    expect(body.message).toBe("Release published.");
+    expect(body.item).toMatchObject({ id: "r1", state: "published" });
+    // With what the caller may do next, as every other release answer carries.
+    expect(body.item.can).toBeDefined();
+  });
+
+  it("does not call a release published while some of it is still going out", async () => {
+    // A large release can outlast the request, and another run of the drain
+    // may already hold it; either way the runner finishes it. Saying
+    // "published" then would tell the person it is done when it is not.
+    api.releases.publishNow.mockResolvedValueOnce({
+      id: "r1",
+      state: "scheduled",
+    });
+    const { body } = await publish();
+    expect(body.message).not.toBe("Release published.");
+    expect(body.message).toMatch(/going out/);
+  });
+
+  it("names the new instant of a release rescheduled for later while it was being sent", async () => {
+    // Moved to the future by another request after Publish now judged it due:
+    // the drain leaves it until then, so "shortly" would be untrue.
+    const later = new Date(Date.now() + 60 * 60 * 1000);
+    api.releases.publishNow.mockResolvedValueOnce({
+      id: "r1",
+      state: "scheduled",
+      scheduledAt: later,
+    });
+    const { body } = await publish();
+    expect(body.message).toContain(later.toISOString());
+    expect(body.message).not.toMatch(/going out;|shortly/);
+  });
+
+  it("still says a due release is going out", async () => {
+    api.releases.publishNow.mockResolvedValueOnce({
+      id: "r1",
+      state: "scheduled",
+      scheduledAt: new Date(Date.now() - 1000),
+    });
+    const { body } = await publish();
+    expect(body.message).toMatch(/going out/);
+  });
+
+  it("says a release cancelled after the move was cancelled, not that it is going out", async () => {
+    // Called off between the move and the answer: nothing more of it goes
+    // out, and a message promising the rest would be untrue.
+    api.releases.publishNow.mockResolvedValueOnce({
+      id: "r1",
+      state: "cancelled",
+    });
+    const { body } = await publish();
+    expect(body.message).toMatch(/cancelled/);
+    expect(body.message).not.toMatch(/going out|published/);
+  });
+
+  it.each(
+    RELEASE_STATES.filter(state => state !== "scheduled").map(state => [state])
+  )(
+    "says only a scheduled release is going out, never a %s one",
+    async state => {
+      // Every state the answer can carry has its own sentence, so no state
+      // falls into the one that promises the rest is on its way.
+      api.releases.publishNow.mockResolvedValueOnce({ id: "r1", state });
+      const { body } = await publish();
+      expect(body.message).not.toMatch(/going out/);
+    }
+  );
+
+  it("says a release that stopped part-way stopped, not that it is going out", async () => {
+    api.releases.publishNow.mockResolvedValueOnce({
+      id: "r1",
+      state: "blocked",
+    });
+    const { body } = await publish();
+    expect(body.message).toMatch(/stopped/);
+    expect(body.message).not.toMatch(/going out/);
+  });
+
+  it("answers a publish that happened even when reading its capabilities fails, and logs why", async () => {
+    // The capabilities are decoration on a write that has already committed.
+    // Any failure to read them, not only a refusal, must not turn a release
+    // that went out into a failed request the person then retries.
+    api.releases.capabilities.mockRejectedValueOnce(
+      new Error("capabilities read failed")
+    );
+    const { res, body } = await publish();
+    expect(res.status).toBe(200);
+    expect(body.item).toMatchObject({ id: "r1", state: "published" });
+    expect(body.item.can).toBeUndefined();
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        releaseId: "r1",
+        error: "capabilities read failed",
+      })
+    );
+  });
+
+  it("answers a publish that happened even when the caller may not read capabilities", async () => {
+    // A key scoped to publish releases has no read grant. The run has already
+    // written; refusing now would report it as not having happened.
+    api.releases.capabilities.mockRejectedValueOnce(
+      NextlyError.forbidden({ logContext: { reason: "no-read" } })
+    );
+    const { res, body } = await publish();
+    expect(res.status).toBe(200);
+    expect(body.item).toMatchObject({ id: "r1", state: "published" });
+    expect(body.item.can).toBeUndefined();
   });
 });

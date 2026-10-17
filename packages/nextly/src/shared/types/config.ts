@@ -74,7 +74,10 @@ export interface TypeScriptConfig {
    * Path to the generated TypeScript file.
    * Can be absolute or relative to the project root.
    *
-   * @default './src/types/generated/payload-types.ts'
+   * Left unset, an existing `payload-types.ts` beside the default, the name
+   * earlier versions used, is turned into a re-export of the new file.
+   *
+   * @default './src/types/generated/nextly-types.ts'
    */
   outputFile?: string;
 
@@ -996,7 +999,7 @@ export interface SanitizedNextlyConfig {
  * Default TypeScript configuration values.
  */
 export const DEFAULT_TYPESCRIPT_CONFIG: Required<TypeScriptConfig> = {
-  outputFile: "./src/types/generated/payload-types.ts",
+  outputFile: "./src/types/generated/nextly-types.ts",
   declare: true,
 };
 

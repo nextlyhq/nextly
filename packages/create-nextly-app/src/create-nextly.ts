@@ -6,19 +6,18 @@ import { classifyError } from "@nextlyhq/telemetry";
 import fs from "fs-extra";
 import pc from "picocolors";
 
-import { generateAdminPage } from "./generators/admin";
-import { generateConfig } from "./generators/config";
-import { generateEnv } from "./generators/env";
-import type { GeneratedFiles } from "./generators/generated-files";
-import { generateInstrumentation } from "./generators/instrumentation";
-import { generateMediaRoutes } from "./generators/media-routes";
 import {
-  nextConfigReport,
-  patchNextConfig,
-  type NextConfigPatch,
-} from "./generators/next-config";
-import { generateRoutes } from "./generators/routes";
-import { generateTypesDirectory } from "./generators/types";
+  type BundledSkill,
+  bundledSkillsVersion,
+  projectNextlyVersion,
+  readBundledSkills,
+  skillsVersionMismatch,
+  writeAgentSkills,
+} from "./generators/agent-skills";
+import { generateEnv } from "./generators/env";
+import { generateIntoExistingApp } from "./generators/existing-app";
+import type { GeneratedFiles } from "./generators/generated-files";
+import { reportGeneratedFiles } from "./generators/report";
 import { installDependencies } from "./installers/dependencies";
 import {
   resolveTemplateSource,
@@ -47,6 +46,7 @@ import type {
   CreateNextlyOptions,
   DatabaseConfig,
   DatabaseType,
+  EnvGenerationResult,
   PackageManager,
   ProjectApproach,
   ProjectType,
@@ -58,7 +58,7 @@ import {
 } from "./utils/detect";
 import { emptyDirectory, isDirectoryNotEmpty } from "./utils/fs";
 import { scriptRunner } from "./utils/package-manager-commands";
-import { copyTemplate } from "./utils/template";
+import { copyTemplate, resolveTemplatePath } from "./utils/template";
 
 /**
  * Pick a safe project name when the user has chosen "install in cwd".
@@ -75,18 +75,6 @@ function cwdProjectName(cwd: string): string {
     return DEFAULT_PROJECT_NAME;
   }
   return basename;
-}
-
-/**
- * Tell the developer what adding Nextly did to their Next config: the
- * packages it added, or exactly what to add by hand when it could not change
- * the file safely. One place prints it, so the line can move into a combined
- * report without the patch knowing.
- */
-function printNextConfigPatch(patch: NextConfigPatch): void {
-  const report = nextConfigReport(patch);
-  if (report.level === "warn") p.log.warn(report.message);
-  else p.log.info(report.message);
 }
 
 /**
@@ -376,6 +364,41 @@ export async function createNextly(
     databaseUrl = url?.trim() || database.connectionUrl;
   }
 
+  // --- Step 7: Skills for coding agents ---
+  //
+  // Asked for an app, new or existing; a plugin is a library and the skills
+  // are about building an app. Read now, before anything is installed or
+  // written, so a broken bundle stops the run while the project is untouched.
+
+  let agentSkills: BundledSkill[] = [];
+  // The release the bundled skills were checked against, from their own
+  // frontmatter; which projects get them is decided by it.
+  let agentSkillsVersion = "";
+  if (projectType !== "plugin" && options.skills !== false) {
+    let addSkills = true;
+    if (!defaults) {
+      const answer = await p.confirm({
+        message:
+          "Add Nextly skills for coding agents (Claude Code, Codex, Cursor)?",
+        initialValue: true,
+      });
+      if (p.isCancel(answer)) {
+        p.cancel("Cancelled.");
+        return;
+      }
+      addSkills = answer;
+    }
+    if (addSkills) {
+      try {
+        agentSkills = await readBundledSkills();
+        agentSkillsVersion = bundledSkillsVersion(agentSkills);
+      } catch (error) {
+        p.cancel((error as Error).message);
+        process.exit(1);
+      }
+    }
+  }
+
   // --- Scaffold project from template ---
 
   // A new project's package manager, settled here before any file is written
@@ -426,7 +449,6 @@ export async function createNextly(
         projectType,
         targetDir,
         database,
-        databaseUrl,
         useYalc,
         approach,
         templateSource,
@@ -544,44 +566,68 @@ export async function createNextly(
 
   // --- Generate configuration files ---
 
+  let envResult: EnvGenerationResult | undefined;
+
   {
     const s = p.spinner();
     s.start("Setting up environment...");
-    let nextConfigPatch: NextConfigPatch | null = null;
-    // What the existing-app generators did that the developer should know about.
+    // What the existing-app steps did, for the one report printed below.
     const reported: GeneratedFiles[] = [];
+    // Said once the spinner stops, after what was written and left alone.
+    const warnings: string[] = [];
     try {
       if (!isFreshProject) {
-        // Existing project: generate Nextly config files
-        await generateConfig(cwd, projectType, projectInfo);
-        await generateRoutes(cwd, projectInfo);
-        await generateAdminPage(cwd, projectInfo);
-        await generateMediaRoutes(cwd, projectInfo);
-        reported.push(await generateInstrumentation(cwd, projectInfo));
-        await generateTypesDirectory(cwd, projectInfo);
-        nextConfigPatch = await patchNextConfig(cwd, database);
+        // Existing project: Nextly's files, each written only where nothing
+        // is, and the Next config extended.
+        reported.push(
+          ...(await generateIntoExistingApp(
+            cwd,
+            projectType,
+            projectInfo,
+            database,
+            resolveTemplatePath(options.localTemplatePath)
+          ))
+        );
       }
 
       // App flows generate a root .env. A plugin is a library — its env lives
       // in the embedded dev/ playground (dev/.env.example), so skip it here.
+      // A URL the person typed goes to .env only; .env.example keeps the
+      // database's generic example, since a project commits that file and a
+      // typed URL carries its password.
       if (projectType !== "plugin") {
         const envDatabase = databaseUrl
-          ? { ...database, connectionUrl: databaseUrl, envExample: databaseUrl }
+          ? { ...database, connectionUrl: databaseUrl }
           : database;
-        await generateEnv(cwd, envDatabase);
+        envResult = await generateEnv(cwd, envDatabase);
       }
-      s.stop("Environment configured");
-      // After the spinner stops, so the line is not drawn over.
-      if (nextConfigPatch) printNextConfigPatch(nextConfigPatch);
-      for (const files of reported) {
-        for (const written of files.written) p.log.info(`Wrote ${written}`);
-        for (const { path: changed, added } of files.changed)
-          p.log.info(`Updated ${changed}: ${added.join(", ")}`);
-        for (const { path: skipped, why, toAdd } of files.skipped) {
-          p.log.warn(`Left ${skipped} as it was: ${why}`);
-          if (toAdd) p.log.message(toAdd);
+      if (agentSkills.length > 0) {
+        // Written only into a project on the release the skills were checked
+        // against; after the install, so the release read is the one
+        // installed.
+        const mismatch = skillsVersionMismatch(
+          await projectNextlyVersion(cwd),
+          agentSkillsVersion
+        );
+        if (mismatch === null) {
+          reported.push(
+            // The update command names this CLI's release, whose tag publishes
+            // this bundle; the release the skills were checked against may
+            // be an older one whose tag carries no user skills.
+            await writeAgentSkills(cwd, agentSkills, packageVersion())
+          );
+        } else {
+          warnings.push(mismatch);
         }
       }
+      s.stop("Environment configured");
+      // One report for every step, the env files and the skills included,
+      // after the spinner stops so its lines are not drawn over. Paths, keys
+      // and packages only: nothing in it ever carries an env value.
+      reportGeneratedFiles(
+        envResult ? [...reported, envResult.files] : reported,
+        [...(envResult?.warnings ?? []), ...warnings]
+      );
     } catch (error) {
       s.stop("Failed to generate configuration");
       telemetry.capture("scaffold_failed", {

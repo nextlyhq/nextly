@@ -26,6 +26,8 @@ import type { AuthenticatedScope } from "../auth/authenticated-scope";
 import { runWithCallerScope } from "../auth/caller-scope";
 import { isErrorResponse, requireAnyPermission } from "../auth/middleware";
 import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
+import { getLoggerFromDI } from "../dispatcher/helpers/di";
+import { isDueAt } from "../domains/releases/release-due";
 import {
   isReleaseTab,
   RELEASE_ATTENTION_REASONS,
@@ -43,7 +45,6 @@ import {
   DEFAULT_RELEASE_PAGE_SIZE,
   MAX_RELEASE_PAGE_SIZE,
   RELEASES_RESOURCE,
-  type ReleaseCapabilities,
 } from "../domains/releases/services/releases-service";
 import { NextlyError } from "../errors";
 import { getCachedNextly } from "../init";
@@ -52,6 +53,7 @@ import {
   isReleaseState,
   RELEASE_KINDS,
   RELEASE_STATES,
+  type ReleaseCapabilities,
   type ReleaseKind,
   type ReleaseState,
 } from "../schemas/releases/types";
@@ -90,6 +92,7 @@ const RELEASE_AUTHORITY: Record<string, "read" | "create" | "publish"> = {
   removeReleaseMember: "create",
   scheduleRelease: "publish",
   cancelRelease: "publish",
+  publishRelease: "publish",
 };
 
 /**
@@ -478,8 +481,84 @@ async function withCapabilities(
       cancel: false,
       addMember: false,
       removeMember: false,
+      publishNow: false,
     },
   }));
+}
+
+/**
+ * What a Publish now answer says, by the state the run left the release in.
+ *
+ * One sentence per state, in a record keyed by every state, so a state added
+ * later is a compile error here rather than a release told it is going out.
+ *
+ * A release still `scheduled` is due and is being sent out by the runner: the
+ * run here ran out of time or could not write a document yet, or another run
+ * of the drain already held it. The wording holds for each, since none of its
+ * documents may be live yet. A `cancelled` one was called off after it was
+ * moved to now, and nothing more of it goes out.
+ */
+const PUBLISH_NOW_MESSAGES: Record<ReleaseState, string> = {
+  published: "Release published.",
+  blocked:
+    "Release stopped part-way. Fix the documents blocking it, then schedule it again.",
+  scheduled:
+    "Release is going out; any of its documents not yet live will follow shortly.",
+  cancelled:
+    "Release was cancelled before it went out; nothing more from it will be sent.",
+  draft: "Release has not been sent; it is still a draft.",
+};
+
+/**
+ * The Publish now answer for the release the run left.
+ *
+ * A `scheduled` release is going out only once its instant has come, by the
+ * drain's own rule. One rescheduled for later while Publish now ran waits for
+ * that instant, and the drain leaves it alone until then, so promising the
+ * rest shortly would be untrue: the answer names the instant instead.
+ */
+function publishNowMessage(release: ReleaseRow, now: Date): string {
+  if (
+    release.state === "scheduled" &&
+    release.scheduledAt instanceof Date &&
+    !isDueAt(release.scheduledAt, now)
+  ) {
+    return `Release was rescheduled for ${release.scheduledAt.toISOString()} while it was being sent; it will go out then.`;
+  }
+  return PUBLISH_NOW_MESSAGES[release.state];
+}
+
+/**
+ * A release with its capabilities, for an answer given AFTER a write.
+ *
+ * The capabilities are decoration on a write that has already committed, so
+ * no failure to read them may fail the request: that would report a write
+ * that happened as one that did not, and invite a retry of it. The release is
+ * answered without them instead. A refusal is expected — a key scoped to
+ * publish releases has no read grant — and is not reported; any other
+ * failure is logged through the application logger, the way this layer
+ * reports work that goes wrong without failing the request.
+ */
+async function decorateAfterWrite(
+  release: ReleaseRow,
+  caller: ReleaseContext["caller"],
+  releases: ReleaseContext["releases"]
+): Promise<ReleaseRow | (ReleaseRow & { can: ReleaseCapabilities })> {
+  try {
+    const [item] = await withCapabilities([release], caller, releases);
+    return item;
+  } catch (error) {
+    if (!(NextlyError.is(error) && error.code === "FORBIDDEN")) {
+      getLoggerFromDI()?.error(
+        "A release's capabilities could not be read after a write",
+        {
+          releaseId: release.id,
+          error: error instanceof Error ? error.message : String(error),
+        }
+      );
+    }
+    return release;
+  }
 }
 
 /**
@@ -707,6 +786,17 @@ const RELEASE_OPERATIONS: Record<
     // Not `{ cancelled: true }`: the response-shape contract refuses
     // boolean-only bodies, because a caller cannot grow against them.
     return respondAction("Release cancelled.", { releaseId });
+  },
+
+  publishRelease: async ({ caller, releases, releaseId }) => {
+    const release = await releases.publishNow({ ...caller, id: releaseId });
+    // The release as it stands after the run, and a message that says which
+    // way it went: a release still `scheduled` has documents the runner will
+    // finish, and a `blocked` one stopped and will not go on until fixed.
+    return respondMutation(
+      publishNowMessage(release, new Date()),
+      await decorateAfterWrite(release, caller, releases)
+    );
   },
 };
 

@@ -39,6 +39,7 @@ bun create nextly-app@alpha my-app --template blank
 - **Default `next.config.ts`** whose `serverExternalPackages` lists Nextly's server packages and the adapter and driver for the database you chose. See [Project Structure](/docs/getting-started/project-structure) for the full list and what each entry does.
 - **Default `.env.example`** with `DB_DIALECT`, `DATABASE_URL`, `NEXTLY_SECRET` and `NEXT_PUBLIC_APP_URL`. Media is stored on local disk until you configure a storage adapter.
 - **`AGENTS.md` and `CLAUDE.md`** with instructions for coding agents working in the project.
+- **Skills for coding agents** in `.agents/skills/` and `.claude/skills/`, unless you pass `--no-skills`, answer no, or the project installs a different `nextly` release than the skills were checked against. See [Coding agents](/docs/guides/coding-agents).
 - **Generated `nextly-types.ts`** stub under `src/types/generated/` so type generation has a destination on first run.
 
 ## File tree
@@ -75,6 +76,8 @@ my-app/
 │       └── generated/
 │           └── nextly-types.ts
 ├── public/
+├── .agents/skills/
+├── .claude/skills/
 ├── .env
 ├── .env.example
 ├── AGENTS.md

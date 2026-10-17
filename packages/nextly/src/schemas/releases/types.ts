@@ -127,14 +127,15 @@ export type ReleaseBlockerReason =
 /**
  * Scheduling is a MOVE TO an instant, not a one-time commitment.
  *
- * `scheduled` is included so an instant can be corrected, and `cancelled` so a
- * launch called off can be reinstated. `published` is excluded because the drain
- * would re-apply the members against documents that have changed since.
+ * `scheduled` is included so an instant can be corrected. `published` and
+ * `cancelled` are excluded: both are FINAL, the record of what happened to a
+ * launch. Re-scheduling a published release would make the drain re-apply its
+ * members against documents that have changed since, and a cancelled one is
+ * retried by making a new release, so the list of finished releases stays true.
  */
 export const RELEASE_SCHEDULABLE_FROM: readonly ReleaseState[] = [
   "draft",
   "scheduled",
-  "cancelled",
   // A blocked release is fixed and then rescheduled. Excluding it would leave
   // the operator who has just removed the offending member with nothing to do.
   "blocked",
@@ -161,10 +162,36 @@ export const RELEASE_CANCELLABLE_FROM: readonly ReleaseState[] = [
  */
 export const RELEASE_ASSEMBLABLE_FROM: readonly ReleaseState[] = [
   "draft",
-  "cancelled",
+  // Not `cancelled`: a cancelled release is final, like a published one, and
+  // changing what it held would rewrite the record of a launch called off.
   // Editable BECAUSE it is blocked: the fix is usually to remove the member
   // whose author is gone, and a release nobody can edit cannot be unblocked.
   "blocked",
+];
+
+/**
+ * The states Publish now runs a release from.
+ *
+ * Only a release that has not run and is not stopped. A stopped release is
+ * fixed and then scheduled again, so the fix is checked before it goes out; a
+ * published or cancelled one is final and is never run again.
+ *
+ * @experimental
+ */
+export const RELEASE_PUBLISHABLE_NOW_FROM: readonly ReleaseState[] = [
+  "draft",
+  "scheduled",
+];
+
+/**
+ * The FINAL states: a release in one of them has run or was called off, and
+ * takes no further change. To try again, a new release is made.
+ *
+ * @experimental
+ */
+export const RELEASE_FINAL_STATES: readonly ReleaseState[] = [
+  "published",
+  "cancelled",
 ];
 
 /**
@@ -238,3 +265,34 @@ export const RELEASE_SCHEDULABLE_FROM_UNBLOCKED: readonly ReleaseState[] =
 export const RELEASE_SCHEDULABLE_FROM_BLOCKED: readonly ReleaseState[] = [
   "blocked",
 ];
+
+/**
+ * What a caller may do to one release, as the server sees it.
+ *
+ * Declared beside the lifecycle vocabulary and published through
+ * `nextly/schemas`, so the admin renders its controls from this type rather
+ * than a copy of it: a capability added here reaches the admin's type at once.
+ *
+ * Sent WITH the release rather than derived by the reader. Payload computes the
+ * same thing per document for its edit view, and Sanity gates each release
+ * action by its own permission id so scheduling can be granted without
+ * publishing — in both, the answer depends on authority the client does not
+ * hold, so a client that computed it would be guessing.
+ */
+export interface ReleaseCapabilities {
+  /** Set or move this release's instant. */
+  schedule: boolean;
+  /** Call it off — which is also how an unwanted draft is abandoned. */
+  cancel: boolean;
+  /** Put a document in it. Necessary, not sufficient: see `capabilities`. */
+  addMember: boolean;
+  /** Take a document out of it. Necessary, not sufficient. */
+  removeMember: boolean;
+  /**
+   * Run it now. True only for a draft or scheduled release: a stopped one is
+   * fixed and scheduled again, and a published or cancelled one is final.
+   *
+   * @experimental
+   */
+  publishNow: boolean;
+}

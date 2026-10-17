@@ -1,3 +1,5 @@
+import type { GeneratedFiles } from "./generators/generated-files";
+
 /**
  * Project type / template selection.
  * "blog" is the first content template added for alpha.
@@ -100,12 +102,20 @@ export interface CreateNextlyOptions {
   localTemplatePath?: string;
   /** Git branch for template download from GitHub (defaults to "main") */
   branch?: string;
+  /**
+   * Whether to add the Nextly skills for coding agents to the project.
+   * False skips them without asking; otherwise the developer is asked, and
+   * defaults mode adds them.
+   */
+  skills?: boolean;
 }
 
 /**
- * Result of environment file generation
+ * Result of environment file generation: what was written, extended or left
+ * alone, and what the person should change in a value that was already there.
+ * Neither ever holds an env value.
  */
 export interface EnvGenerationResult {
-  created: boolean;
-  updated: boolean;
+  files: GeneratedFiles;
+  warnings: string[];
 }

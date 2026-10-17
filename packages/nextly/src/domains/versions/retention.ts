@@ -41,6 +41,8 @@ export interface PrunableVersion {
  *   keep it;
  * - every row that records a restore, and the version it was made from, so
  *   "restored from" never points at a version that is gone;
+ * - every version a feature has pinned (`pinnedVersionNos`): a feature holds
+ *   it for as long as it needs it, whatever the limit;
  * - the version numbers the caller names for this pass.
  *
  * The newest `maxPerDoc` rows stay; of the older rows, only the protected ones
@@ -62,12 +64,17 @@ export function selectVersionsToPrune(
    * on the same grounds: the new row records it as its source, and pruning it
    * in the same transaction leaves that lineage pointing at nothing.
    */
-  protectVersionNos?: readonly (number | null | undefined)[]
+  protectVersionNos?: readonly (number | null | undefined)[],
+  /** Version numbers a feature has pinned; see `version-pins`. */
+  pinnedVersionNos?: readonly number[]
 ): string[] {
   if (maxPerDoc === false) return [];
   if (rows.length <= maxPerDoc) return [];
 
-  const protectedIds = protectedVersionIds(rows, protectVersionNos ?? []);
+  const protectedIds = protectedVersionIds(rows, [
+    ...(protectVersionNos ?? []),
+    ...(pinnedVersionNos ?? []),
+  ]);
   return rows
     .slice(Math.max(maxPerDoc, 0))
     .filter(r => !protectedIds.has(r.id))

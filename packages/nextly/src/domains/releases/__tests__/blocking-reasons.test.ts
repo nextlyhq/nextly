@@ -12,10 +12,7 @@
  */
 import { describe, expect, it, vi } from "vitest";
 
-import {
-  RELEASE_SCHEDULABLE_FROM,
-  type ReleaseState,
-} from "../../../schemas/releases/types";
+import type { ReleaseState } from "../../../schemas/releases/types";
 import { ReleasesService } from "../services/releases-service";
 import type { ReleasesServiceDeps } from "../services/releases-service";
 
@@ -52,7 +49,7 @@ function service(members: M[], liveAuthorIds: string[], state = "blocked") {
       _id: string,
       _at: Date,
       _tz: string,
-      from: readonly ReleaseState[] = RELEASE_SCHEDULABLE_FROM
+      from: readonly ReleaseState[]
     ) => from.includes(state as ReleaseState)
   );
   const deps = {
@@ -64,6 +61,8 @@ function service(members: M[], liveAuthorIds: string[], state = "blocked") {
     } as unknown as ReleasesServiceDeps["repository"],
     canManageReleases: vi.fn(async () => true),
     canActOnDocument: vi.fn(async () => true),
+    // Running a release is not what these cases are about.
+    runDrainNow: vi.fn(async () => undefined),
     // Every target is there and has a lifecycle; the checks have their own tests.
     targets: {
       readDocument: async (target: { entryId: string }) => ({
@@ -171,6 +170,8 @@ describe("as an instrument", () => {
       repository: {} as ReleasesServiceDeps["repository"],
       canManageReleases: vi.fn(async () => false),
       canActOnDocument: vi.fn(async () => true),
+      // Running a release is not what these cases are about.
+      runDrainNow: vi.fn(async () => undefined),
       // Every target is there and has a lifecycle; the checks have their own tests.
       targets: {
         readDocument: async (target: { entryId: string }) => ({
@@ -253,11 +254,14 @@ describe("scheduling a blocked release", () => {
 
     await expect(svc.schedule("r1", AT, "UTC", ACTOR)).rejects.toMatchObject({
       code: "CONFLICT",
+      // The honest answer: it already happened, and the way forward is a new
+      // release — not advice to fix documents in a release that is final.
+      publicMessage: expect.stringContaining("already been published"),
     });
-    // Refused by the FENCE, which is the honest answer, and reached because no
-    // blocker was derived on the way.
-    expect(scheduleRelease).toHaveBeenCalled();
+    // Refused from the state it was read in, before any blocker is derived and
+    // before the write is attempted.
     expect(liveAuthors).not.toHaveBeenCalled();
+    expect(scheduleRelease).not.toHaveBeenCalled();
   });
 
   it("still schedules a release whose members are all runnable", async () => {
@@ -286,9 +290,10 @@ describe("the blocker verdict and the write share a fence", () => {
    * service passed. Asserting on the argument instead would pass for any list
    * that merely looked plausible.
    *
-   * The `from` default is the repository's own, so a service that passes no
-   * fence at all behaves here exactly as it did before this was fixed — which
-   * is what makes the two racing cases below fail on that version.
+   * Only the STATE half of the fence is modelled: the drain moves the state,
+   * and a revision the stub always accepts is what isolates these cases to
+   * that half. The revision half has its own interleavings, against a real
+   * database, in `release-revision-fence.integration.test.ts`.
    */
   function racing(
     atRead: string,
@@ -305,7 +310,7 @@ describe("the blocker verdict and the write share a fence", () => {
         _id: string,
         _at: Date,
         _tz: string,
-        from: readonly ReleaseState[] = RELEASE_SCHEDULABLE_FROM
+        from: readonly ReleaseState[]
       ) => from.includes(atWrite)
     );
     const deps = {
@@ -329,6 +334,8 @@ describe("the blocker verdict and the write share a fence", () => {
       } as unknown as ReleasesServiceDeps["repository"],
       canManageReleases: vi.fn(async () => true),
       canActOnDocument: vi.fn(async () => true),
+      // Running a release is not what these cases are about.
+      runDrainNow: vi.fn(async () => undefined),
       // Every target is there and has a lifecycle; the checks have their own tests.
       targets: {
         readDocument: async (target: { entryId: string }) => ({

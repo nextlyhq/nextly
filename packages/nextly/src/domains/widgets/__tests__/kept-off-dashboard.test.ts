@@ -29,7 +29,10 @@ vi.mock("../built-in-sources", async importOriginal => {
 import { container } from "../../../di/container";
 import { setNextlyLogger } from "../../../observability/logger";
 import { refreshCollectionSources } from "../collection-sources";
-import { isKeptOffDashboard, recordKeptOffDashboard } from "../kept-off-dashboard";
+import {
+  isKeptOffDashboard,
+  recordKeptOffDashboard,
+} from "../kept-off-dashboard";
 import { clearSources, listSources } from "../sources";
 
 function registryHolds(rows: Array<{ slug: string; admin?: unknown }>): void {
@@ -37,7 +40,10 @@ function registryHolds(rows: Array<{ slug: string; admin?: unknown }>): void {
     if (name === "collectionRegistryService") {
       return {
         getAllCollections: async () =>
-          rows.map(row => ({ ...row, fields: [{ name: "title", type: "text" }] })),
+          rows.map(row => ({
+            ...row,
+            fields: [{ name: "title", type: "text" }],
+          })),
       };
     }
     throw new Error(`unexpected container.get("${name}") in this test`);
@@ -64,19 +70,29 @@ afterEach(() => {
 describe("the kept-off record and the sources describe one refresh", () => {
   it("keeps the previous record when a refresh fails to publish its sources", async () => {
     // A refresh that publishes: "secret" is hidden and gets no source.
-    registryHolds([{ slug: "posts" }, { slug: "secret", admin: { hidden: true } }]);
+    registryHolds([
+      { slug: "posts" },
+      { slug: "secret", admin: { hidden: true } },
+    ]);
     await refreshCollectionSources();
     expect(isKeptOffDashboard("collection", "secret")).toBe(true);
-    expect(listSources().map(source => source.id)).toEqual(["collection:posts"]);
+    expect(listSources().map(source => source.id)).toEqual([
+      "collection:posts",
+    ]);
 
     // The next registry read hides "posts" instead, and its sources are refused: the previous
     // sources stand, so the record must stand too -- or "posts" would still have a source while
     // every other surface left it out.
-    registryHolds([{ slug: "posts", admin: { hidden: true } }, { slug: "secret" }]);
+    registryHolds([
+      { slug: "posts", admin: { hidden: true } },
+      { slug: "secret" },
+    ]);
     refuseNext.value = true;
     await refreshCollectionSources().catch(() => undefined);
 
-    expect(listSources().map(source => source.id)).toEqual(["collection:posts"]);
+    expect(listSources().map(source => source.id)).toEqual([
+      "collection:posts",
+    ]);
     expect(isKeptOffDashboard("collection", "posts")).toBe(false);
     expect(isKeptOffDashboard("collection", "secret")).toBe(true);
   });

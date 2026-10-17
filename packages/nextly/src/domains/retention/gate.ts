@@ -75,6 +75,23 @@ export const AUDIT_RETENTION_DRAIN_GATE_KEY = "audit.retention.lastDrainPassAt";
 export const EMAIL_RETENTION_GATE_KEY = "email.retention.lastPassAt";
 
 /**
+ * Notices are gated on their own marker. They follow the activity log's
+ * window, but are a different table with a different writer, so a pass over
+ * one says nothing about whether the other is done.
+ */
+export const NOTICES_RETENTION_GATE_KEY = "notices.retention.lastPassAt";
+
+/**
+ * Notices' SECOND marker, for the scheduled drain, for the reason the delivery
+ * log has one: write paths offer the pass capped, and a write landing just
+ * after the marker came due would otherwise take the drain's full-budget turn.
+ * The drain is also the one trigger that keeps running after a site stops
+ * writing, so without it a quiet install keeps notices past their window.
+ */
+export const NOTICES_RETENTION_DRAIN_GATE_KEY =
+  "notices.retention.lastDrainPassAt";
+
+/**
  * The delivery log's SECOND marker, for the scheduled drain.
  *
  * Gated twice for the reason the audit trails are, and it is the same failure:

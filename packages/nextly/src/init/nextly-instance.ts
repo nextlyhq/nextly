@@ -16,6 +16,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { ServiceMap } from "../di/register";
 import type { FieldGroupsNamespace } from "../direct-api/namespaces/index";
 import type { JobsNamespace } from "../direct-api/namespaces/jobs";
+import type { NoticesNamespace } from "../direct-api/namespaces/notices";
 import type { ReleasesNamespace } from "../direct-api/namespaces/releases";
 import type {
   AuthResult,
@@ -951,6 +952,19 @@ export interface Nextly {
    * ```
    */
   releases: ReleasesNamespace;
+
+  /**
+   * A person's own notices — read, count and mark read, for the person named.
+   *
+   * @example
+   * ```typescript
+   * const { items } = await nextly.notices.find({ userId, unread: true });
+   * await nextly.notices.markRead({ userId, all: true });
+   * ```
+   *
+   * @experimental
+   */
+  notices: NoticesNamespace;
 
   roles: {
     find: (args?: FindRolesArgs) => Promise<ListResult<Role>>;

@@ -384,7 +384,7 @@ jobs:
         id: install
         run: pnpm install --frozen-lockfile
 
-      # F1 PR 5: enforce that drizzle-kit stays exact-pinned in
+      # Enforce that drizzle-kit stays exact-pinned in
       # `packages/nextly/package.json` `dependencies` (no caret/tilde,
       # not in peerDependencies). Cheap, and runs first because it is cheap -
       # but it no longer STOPS the job, per the note above `install`.
@@ -488,7 +488,7 @@ jobs:
       # generated before a package joined it is complete against the config it was
       # read from and short against the current one.
       #
-      # Scoped to the changesets THIS pull request adds or edits. Several hundred
+      # Scoped to the changeset files the diff adds or edits. Several hundred
       # are pending on `main`, most written before the group grew; rewriting them
       # to satisfy a rule they predate would churn the eventual changelog for no
       # gain.
@@ -1541,6 +1541,68 @@ jobs:
         with:
           path: .turbo
           key: turbo-v2-${{ runner.os }}-${{ github.job }}-${{ github.sha }}
+
+  # A schema edit saved during `next dev` reaches the database without a restart,
+  # on a port from `-p` or `PORT`. Each case starts
+  # the playground's own dev server and edits its dev-reload probe, so it runs
+  # apart from `Browser tests`, whose server would otherwise reload under its
+  # specs.
+  #
+  # Scoped to what it checks: the watcher and the reload it triggers, the config
+  # loader, the playground's config and probe, the spec, and the lockfile, since
+  # a Next.js upgrade is what broke this before. Any other commit skips it within
+  # a minute rather than paying three dev-server boots.
+  dev-reload:
+    name: Dev reload applies a saved schema edit
+    needs: [ci]
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # The merge base has to be present for the scope's diff; anything the
+          # comparison cannot read runs the job (`scripts/change-scope.mjs`).
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+
+      - name: Decide
+        id: decide
+        env:
+          SCOPE_TITLE: Dev reload scope
+          # Every path is inert EXCEPT these: an inclusion list, as
+          # `generated-code-compiles.yml` uses for its one pipeline.
+          INERT_PATHS: '^(?!(packages/nextly/src/runtime/(hmr-listener|config-dependencies)\.ts|packages/nextly/src/init\.ts|packages/nextly/src/init/(boot-apply|reload-config)\.ts|packages/nextly/src/route-handler/auth-handler\.ts|packages/nextly/src/init/config-reload-failure\.ts|packages/nextly/src/cli/utils/(config-loader|config-bundler|esbuild-loader)\.ts|apps/playground/nextly\.config\.ts|apps/playground/next\.config\.ts|apps/playground/src/collections/dev-reload-probe\.ts|e2e/dev-reload/.*|e2e/playwright\.dev-reload\.config\.ts|e2e/package\.json|pnpm-lock\.yaml|\.github/workflows/ci\.yml)$)'
+        run: node scripts/change-scope.mjs
+
+      - name: Setup pnpm
+        if: steps.decide.outputs.inert != 'true'
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Setup Node.js with the pnpm cache
+        if: steps.decide.outputs.inert != 'true'
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install dependencies
+        if: steps.decide.outputs.inert != 'true'
+        run: pnpm install --frozen-lockfile
+
+      - name: Build packages
+        if: steps.decide.outputs.inert != 'true'
+        run: pnpm turbo build --filter='./packages/*'
+
+      - name: Run the dev-reload check
+        if: steps.decide.outputs.inert != 'true'
+        run: pnpm --filter @nextlyhq/e2e test:e2e:dev-reload
 
   # Cross-platform smoke test for the scaffolder. Catches Windows path
   # separator bugs and macOS-specific issues that only surface in fresh

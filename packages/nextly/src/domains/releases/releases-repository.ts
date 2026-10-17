@@ -16,9 +16,7 @@
 import { NextlyError } from "../../errors";
 import type { CacheRevalidator } from "../../revalidation/types";
 import {
-  RELEASE_ASSEMBLABLE_FROM,
   RELEASE_CANCELLABLE_FROM,
-  RELEASE_SCHEDULABLE_FROM,
   RELEASE_STATES_AFFECTING_CONTENT,
   type ReleaseMemberAction,
   type ReleaseKind,
@@ -105,13 +103,35 @@ export type ReleasesDbApi = Omit<VersionsDbApi, "select"> & {
 /**
  * The database surface a release transition needs INSIDE a transaction.
  *
- * One method, because the atomic path performs exactly one kind of statement: a
- * fenced compare-and-set. Kept separate from {@link ReleasesDbApi} rather than
+ * The statements the atomic paths perform, and no others: a fenced
+ * compare-and-set on the release, the read of the revision that compare-and-set
+ * is fenced on, and the member write it guards. Each is declared in the
+ * adapter's `TransactionContext` shape, narrowed to the where clause and
+ * options this repository uses, so the transaction context satisfies it
+ * without adapting. Kept separate from {@link ReleasesDbApi} rather than
  * reusing it, because a transaction context genuinely cannot do everything the
- * adapter can — declaring the wider type here would promise a caller reads and
- * revalidation that are either unavailable or actively wrong before the commit.
+ * adapter can — declaring the wider type here would promise a caller counts,
+ * nested transactions and revalidation that are either unavailable or actively
+ * wrong before the commit.
  */
 export interface ReleasesTxApi {
+  /**
+   * Hold one row's lock until the transaction ends. Taken on the release
+   * before its revision is read, so two membership changes to one release
+   * queue behind each other rather than both reading the same revision and
+   * the second missing its own fence.
+   */
+  lockRow(table: string, id: string): Promise<void>;
+  select<T = unknown>(
+    table: string,
+    options?: VersionsSelectOptions
+  ): Promise<T[]>;
+  insert<T = unknown>(
+    table: string,
+    data: Record<string, unknown>,
+    options?: { returning?: string[] | "*" }
+  ): Promise<T>;
+  delete(table: string, where: VersionsWhere): Promise<number>;
   updateCount(
     table: string,
     data: Record<string, unknown>,
@@ -275,7 +295,7 @@ export interface ReleaseMemberRow {
    * 1 for the member of a single-document release, null otherwise: the column
    * the database holds unique per release, so a single release cannot take a
    * second member. Written by {@link ReleasesRepository.addMember} from the
-   * release's kind, and kept as it was by a restore.
+   * release's kind.
    */
   singleSlot: number | null;
   createdBy: string | null;
@@ -334,6 +354,21 @@ function groupMembersByDocument(
     grouped.set(member.entryId, bucket);
   }
   return grouped;
+}
+
+/**
+ * A membership change refused because its release is no longer in a state the
+ * caller judged it could land on — scheduled, published or cancelled since —
+ * or is not there at all. A conflict rather than a refusal of authority: a
+ * retry judges the release as it now is.
+ */
+function releaseMovedConflict(
+  releaseId: string,
+  change: "add-member" | "remove-member"
+): NextlyError {
+  return NextlyError.conflict({
+    logContext: { reason: "release-moved-since-judged", releaseId, change },
+  });
 }
 
 export function documentRefKey(ref: DocumentRef): string {
@@ -456,7 +491,6 @@ export class ReleasesRepository {
     return row;
   }
 
-  /** Move a release to `scheduled`, which is what makes reads consult it. */
   /**
    * Commit a release to an instant, and say whether it moved.
    *
@@ -466,6 +500,18 @@ export class ReleasesRepository {
    * nobody asked it to touch. `draft` and `cancelled` are both legitimate
    * sources — the second is how a called-off launch is put back on.
    *
+   * And fenced on `expectedRevision`, the release's `revision` as the caller
+   * read it. The revision is a counter every scheduling move and every
+   * membership change raises by one, so it names one version of the release's
+   * schedule AND its contents together. The state fence cannot tell two callers
+   * apart when the state did not change: a draft whose only member was removed
+   * after the caller judged it is still a draft, and a state-only update would
+   * schedule it empty. The revision moved, so this update matches nothing.
+   * Every schedule therefore bumps it, and is a compare-and-set on the value
+   * read. The caller supplies that value because the adapter has no increment
+   * expression: `revision + 1` cannot be written as an update, only as the
+   * number one more than a revision somebody read.
+   *
    * Answering `false` rather than throwing follows `markReleasePublished`: the
    * repository reports what the fence did, and the caller decides whether a
    * refusal is a conflict for its transport.
@@ -474,7 +520,8 @@ export class ReleasesRepository {
     id: string,
     at: Date,
     timezone: string,
-    from: readonly ReleaseState[] = RELEASE_SCHEDULABLE_FROM
+    from: readonly ReleaseState[],
+    expectedRevision: number
   ): Promise<boolean> {
     const affected = await this.db.updateCount(
       RELEASES,
@@ -482,11 +529,19 @@ export class ReleasesRepository {
         scheduledAt: at,
         timezone,
         state: "scheduled" satisfies ReleaseState,
+        // Always moves, so MySQL — which counts CHANGED rows rather than
+        // matched ones — reports a reschedule to the same instant as the write
+        // it is, not as a fence miss.
+        revision: expectedRevision + 1,
         updatedAt: new Date(),
+        ...(expectedRevision === undefined
+          ? {}
+          : { revision: expectedRevision + 1 }),
       },
       {
         and: [
           { column: "id", op: "=", value: id },
+          { column: "revision", op: "=", value: expectedRevision },
           // The fence IS the declaration, not a copy of it: the admin decides
           // which controls to offer from the same list, so a change here cannot
           // leave a button offering a move the database refuses.
@@ -578,25 +633,21 @@ export class ReleasesRepository {
     try {
       await this.db.transaction(async tx => {
         for (const entry of ordered) {
-          const affected = await tx.updateCount(
-            RELEASES,
+          // Each row locked, its revision read and bumped, in id order: a
+          // block is a scheduling move like any other, so a schedule judged
+          // before it misses on the revision rather than overwriting it.
+          const moved = await this.advanceRevision(
+            tx,
+            entry.id,
+            ["scheduled"],
             {
-              state: "blocked" satisfies ReleaseState,
-              // Always moves, which MySQL requires of a compare-and-set: it
-              // counts CHANGED rows rather than matched ones. `state` moves
-              // here too, so this is belt and braces rather than the only
-              // thing keeping the fence honest.
-              updatedAt: new Date(),
-            },
-            {
-              and: [
-                { column: "id", op: "=", value: entry.id },
-                { column: "state", op: "=", value: "scheduled" },
+              set: { state: "blocked" satisfies ReleaseState },
+              where: [
                 { column: "scheduledAt", op: "=", value: entry.scheduledAt },
               ],
             }
           );
-          if (affected === 0) {
+          if (moved === null) {
             fenceMissed = true;
             throw NextlyError.conflict({
               logContext: {
@@ -638,23 +689,21 @@ export class ReleasesRepository {
    * Fenced away from `published` for the same reason scheduling is: that
    * release already happened, and marking it cancelled would describe history
    * that did not occur while leaving the published content in place.
+   *
+   * And it bumps the revision, under the release's lock. `cancelled` is a
+   * state a schedule may leave, so a state fence alone would let a schedule
+   * judged before this cancel put the launch straight back on; the revision
+   * moved, so that schedule misses instead.
    */
   async cancelRelease(id: string): Promise<boolean> {
-    const affected = await this.db.updateCount(
-      RELEASES,
-      {
-        state: "cancelled" satisfies ReleaseState,
-        updatedAt: new Date(),
-      },
-      {
-        and: [
-          { column: "id", op: "=", value: id },
-          { column: "state", op: "IN", value: [...RELEASE_CANCELLABLE_FROM] },
-        ],
-      }
+    const moved = await this.db.transaction(tx =>
+      this.advanceRevision(tx, id, RELEASE_CANCELLABLE_FROM, {
+        set: { state: "cancelled" satisfies ReleaseState },
+      })
     );
-    if (affected === 0) return false;
-    // Cancelling changes what a read returns just as scheduling does: a page
+    if (moved === null) return false;
+    // AFTER THE COMMIT, for the reason `blockReleases` gives. Cancelling
+    // changes what a read returns just as scheduling does: a page
     // cached with a lifetime derived from this release is now bounded by an
     // instant that will never arrive.
     await this.revalidateMembersOf(id);
@@ -662,31 +711,67 @@ export class ReleasesRepository {
   }
 
   /**
-   * Touch a release ONLY if it is still assemblable, and say whether it was.
+   * Inside `tx`, raise this release's revision by one — only while it is in
+   * one of `allowedStates` — and answer its kind, or `null` when it is not
+   * there or not in those states.
    *
-   * One conditional UPDATE rather than a read followed by a decision. A caller
-   * that reads `draft`, decides, and then writes can be overtaken by a publisher
-   * scheduling in between — and the write then lands on a committed launch
-   * without ever passing the publish gate. Folding the check into the statement
-   * removes that window from the check itself; see `addMember` in the service
-   * for how the remaining window around the member write is closed.
+   * The ONE way a release row moves inside a transaction: every membership
+   * change, cancel, block and publish goes through here, so every one of them
+   * bumps the revision a schedule is fenced on. `move.set` is what the move
+   * writes besides the revision — a new state, a publish instant — and
+   * `move.where` narrows the fence further, as the drain's block does with the
+   * instant it planned against.
    *
-   * `updateCount` rather than `update({ returning })` for the reason
-   * `markReleasePublished` gives: MySQL has no RETURNING and the adapter
-   * emulates it by re-selecting on a predicate the write invalidates.
+   * The release row is locked first, so the revision read here is the one the
+   * update compares against: two moves of one release queue rather than miss
+   * each other's fence. The update is a compare-and-set on that revision and
+   * on the state, so a schedule that committed in between makes it match
+   * nothing; and once it has matched, the row lock it holds until the commit
+   * makes a schedule judged against the old revision wait and then miss.
+   * SQLite takes no row lock, and needs none: it serializes writers.
+   *
+   * `updateCount` rather than `update({ returning })`: MySQL has no RETURNING,
+   * and the adapter emulates it by re-selecting on a predicate this very write
+   * invalidates. The revision always moves, which is also what MySQL —
+   * counting changed rows rather than matched ones — needs of a
+   * compare-and-set.
    */
-  async touchIfAssemblable(id: string): Promise<boolean> {
-    const affected = await this.db.updateCount(
+  private async advanceRevision(
+    tx: ReleasesTxApi,
+    releaseId: string,
+    allowedStates: readonly ReleaseState[],
+    move: {
+      set?: Record<string, unknown>;
+      where?: readonly VersionsWhereCondition[];
+    } = {}
+  ): Promise<{ kind: ReleaseKind } | null> {
+    await tx.lockRow(RELEASES, releaseId);
+    const [release] = await tx.select<{ revision: number; kind: ReleaseKind }>(
       RELEASES,
-      { updatedAt: new Date() },
+      {
+        columns: ["revision", "kind"],
+        where: { and: [{ column: "id", op: "=", value: releaseId }] },
+      }
+    );
+    if (release === undefined) return null;
+    const affected = await tx.updateCount(
+      RELEASES,
+      // The revision last, so no `set` can write a value of its own there.
+      {
+        updatedAt: new Date(),
+        ...move.set,
+        revision: release.revision + 1,
+      },
       {
         and: [
-          { column: "id", op: "=", value: id },
-          { column: "state", op: "IN", value: [...RELEASE_ASSEMBLABLE_FROM] },
+          { column: "id", op: "=", value: releaseId },
+          { column: "revision", op: "=", value: release.revision },
+          { column: "state", op: "IN", value: [...allowedStates] },
+          ...(move.where ?? []),
         ],
       }
     );
-    return affected > 0;
+    return affected === 0 ? null : { kind: release.kind };
   }
 
   /** One member by id, so a caller can learn which release it belongs to. */
@@ -897,26 +982,23 @@ export class ReleasesRepository {
    * it, calling a release off during its own materialisation would still mark
    * it published.
    *
-   * `updateCount` rather than `update({ returning })` for the reason the jobs
-   * repository gives: MySQL has no RETURNING, and the adapter emulates it by
-   * re-selecting on a predicate this very write invalidates.
+   * Through `advanceRevision`, so publishing bumps the revision as every other
+   * move of the release does. A schedule judged before it is already refused
+   * by its state fence, which never admits `published`; the bump keeps "every
+   * move raises the revision" true without an exception a later reader would
+   * have to know about.
    */
   async markReleasePublished(id: string, at: Date): Promise<boolean> {
-    const affected = await this.db.updateCount(
-      RELEASES,
-      {
-        state: "published" satisfies ReleaseState,
-        publishedAt: at,
-        updatedAt: at,
-      },
-      {
-        and: [
-          { column: "id", op: "=", value: id },
-          { column: "state", op: "=", value: "scheduled" },
-        ],
-      }
+    const moved = await this.db.transaction(tx =>
+      this.advanceRevision(tx, id, ["scheduled"], {
+        set: {
+          state: "published" satisfies ReleaseState,
+          publishedAt: at,
+          updatedAt: at,
+        },
+      })
     );
-    return affected > 0;
+    return moved !== null;
   }
 
   /**
@@ -1007,33 +1089,74 @@ export class ReleasesRepository {
     });
   }
 
-  async addMember(input: NewReleaseMember): Promise<ReleaseMemberRow> {
-    // The slot comes from the release's stored kind, read here rather than
-    // taken from the caller, so no path that adds a member can leave a single
-    // release's member without it — and so unprotected.
-    const [release] = await this.db.select<{ kind: ReleaseKind }>(RELEASES, {
-      columns: ["kind"],
-      where: { and: [{ column: "id", op: "=", value: input.releaseId }] },
-      limit: 1,
-    });
-    const row: ReleaseMemberRow = {
-      // Time-ordered, so members added within one second — one stored
-      // instant on SQLite — still list in the order they were added, which
-      // `listMembers` promises by breaking creation-time ties on the id.
-      id: uuidV7(),
-      releaseId: input.releaseId,
-      scopeKind: input.scopeKind,
-      scopeSlug: input.scopeSlug,
-      entryId: input.entryId,
-      locale: input.locale,
-      action: input.action,
-      memberKey: releaseMemberKey(input.releaseId, input),
-      singleSlot: release?.kind === "single" ? 1 : null,
-      createdBy: input.createdBy ?? null,
-      createdAt: new Date(),
-    };
-    // Client-side id and no RETURNING, for the reason `createRelease` gives.
-    await this.db.insert(MEMBERS, { ...row }, { returning: [] });
+  /**
+   * Put a document into a release, in one transaction with a bump of the
+   * release's revision, and only while the release is in one of
+   * `allowedStates`.
+   *
+   * The states are the CALLER'S judgement of what this change may land on —
+   * the assembling states alone, or the committed ones too for a caller who
+   * may publish — and the fence makes that judgement hold at the write: a
+   * release scheduled after it was judged refuses the member rather than
+   * gaining one nobody with the authority approved. The revision bump is what
+   * a schedule judged before this add then misses on.
+   *
+   * @throws NextlyError CONFLICT when the release is not there or not in
+   *   `allowedStates`; nothing is written then. A unique violation from the
+   *   insert rolls the revision back with it and propagates as the driver
+   *   reported it, for the caller to say which index refused.
+   */
+  async addMember(
+    input: NewReleaseMember,
+    allowedStates: readonly ReleaseState[]
+  ): Promise<ReleaseMemberRow> {
+    // Tells a fence miss from a database failure, as in `blockReleases`: the
+    // flag decides, not the shape of the error.
+    let fenceMissed = false;
+    let row: ReleaseMemberRow;
+    try {
+      row = await this.db.transaction(async tx => {
+        const release = await this.advanceRevision(
+          tx,
+          input.releaseId,
+          allowedStates
+        );
+        if (release === null) {
+          fenceMissed = true;
+          throw releaseMovedConflict(input.releaseId, "add-member");
+        }
+        const member: ReleaseMemberRow = {
+          // Time-ordered, so members added within one second — one stored
+          // instant on SQLite — still list in the order they were added, which
+          // `listMembers` promises by breaking creation-time ties on the id.
+          id: uuidV7(),
+          releaseId: input.releaseId,
+          scopeKind: input.scopeKind,
+          scopeSlug: input.scopeSlug,
+          entryId: input.entryId,
+          locale: input.locale,
+          action: input.action,
+          memberKey: releaseMemberKey(input.releaseId, input),
+          // From the release's stored kind, read under the same lock rather
+          // than taken from the caller, so no path that adds a member can
+          // leave a single release's member without its slot — and so
+          // unprotected.
+          singleSlot: release.kind === "single" ? 1 : null,
+          createdBy: input.createdBy ?? null,
+          createdAt: new Date(),
+        };
+        // Client-side id and no RETURNING, for the reason `createRelease`
+        // gives.
+        await tx.insert(MEMBERS, { ...member }, { returning: [] });
+        return member;
+      });
+    } catch (error) {
+      if (fenceMissed) {
+        throw releaseMovedConflict(input.releaseId, "add-member");
+      }
+      throw error;
+    }
+    // AFTER THE COMMIT, never inside it, for the reason `blockReleases` gives.
     // Membership can change AFTER a release is scheduled, and then this
     // document's cached pages are bounded by a schedule that did not include
     // it. Flushed here for the same reason scheduling flushes: a bound computed
@@ -1043,31 +1166,58 @@ export class ReleasesRepository {
   }
 
   /**
-   * Put a removed member back, exactly as it was.
+   * Take a member out of its release, in one transaction with a bump of the
+   * release's revision, and only while the release is in one of
+   * `allowedStates`.
    *
-   * The compensating half of a bounded removal. Restoring with the ORIGINAL row
-   * — same id, same `createdAt`, same recorded author — is what makes the undo
-   * invisible: a caller that retries sees the member it expected rather than a
-   * new one, and anything holding the old id still resolves.
+   * Takes the member's release as well as its id, so the release is locked
+   * before anything is read: every read in the transaction then sees what the
+   * lock holder committed. A member never moves between releases, so the pair
+   * the caller read is still the member's.
+   *
+   * A member already gone is not an error: the caller's intent is satisfied.
+   * The revision still moves then, which at worst sends a schedule judged
+   * before it round again.
+   *
+   * @throws NextlyError CONFLICT when the release is not there or not in
+   *   `allowedStates`; nothing is deleted then.
    */
-  async restoreMember(row: ReleaseMemberRow): Promise<void> {
-    await this.db.insert(MEMBERS, { ...row }, { returning: [] });
-    await this.revalidateMembersOf(row.releaseId);
-  }
+  async removeMember(
+    member: Pick<ReleaseMemberRow, "id" | "releaseId">,
+    allowedStates: readonly ReleaseState[]
+  ): Promise<void> {
+    let fenceMissed = false;
+    let removed: ReleaseMemberRow | undefined;
+    try {
+      removed = await this.db.transaction(async tx => {
+        if (
+          (await this.advanceRevision(tx, member.releaseId, allowedStates)) ===
+          null
+        ) {
+          fenceMissed = true;
+          throw releaseMovedConflict(member.releaseId, "remove-member");
+        }
+        const where: VersionsWhere = {
+          and: [
+            { column: "id", op: "=", value: member.id },
+            { column: "releaseId", op: "=", value: member.releaseId },
+          ],
+        };
+        // The row is read BEFORE the delete: afterwards there is nothing left
+        // to say which document's tags to flush, and the projection that
+        // release was producing would stay cached with no write to clear it.
+        const [row] = await tx.select<ReleaseMemberRow>(MEMBERS, { where });
+        if (row !== undefined) await tx.delete(MEMBERS, where);
+        return row;
+      });
+    } catch (error) {
+      if (fenceMissed) {
+        throw releaseMovedConflict(member.releaseId, "remove-member");
+      }
+      throw error;
+    }
 
-  async removeMember(memberId: string): Promise<void> {
-    // The row is read BEFORE the delete: afterwards there is nothing left to
-    // say which document's tags to flush, and the projection that release was
-    // producing would stay cached with no write to clear it.
-    const rows = await this.db.select<ReleaseMemberRow>(MEMBERS, {
-      where: { and: [{ column: "id", op: "=", value: memberId }] },
-    });
-    const removed = rows[0];
-
-    await this.db.delete(MEMBERS, {
-      and: [{ column: "id", op: "=", value: memberId }],
-    });
-
+    // After the commit, as for an add.
     invalidateTransitionCacheFor(this.db);
     if (removed !== undefined && this.revalidator !== undefined) {
       try {
