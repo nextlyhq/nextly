@@ -158,13 +158,30 @@ describe("reading the plugins a config registers", () => {
     ).toEqual(["@nextlyhq/plugin-form-builder", "@nextlyhq/plugin-seo"]);
   });
 
-  // Read as no plugins, the build would install none the runtime registers.
-  it("refuses a plugins list it cannot read in place", () => {
+  // Read as no plugins, the build would install none the runtime registers,
+  // so a list this cannot read in full stops the scaffold, naming the file.
+  it.each([
+    [
+      "a variable",
+      "const enabled = [formBuilderPlugin];\nexport default defineConfig({ plugins: enabled });",
+    ],
+    [
+      "a call",
+      "export default defineConfig({ plugins: list(formBuilderPlugin) });",
+    ],
+    [
+      "a spread",
+      "const base = [formBuilderPlugin];\nexport default defineConfig({ plugins: [...base] });",
+    ],
+  ])("refuses a plugins list held in %s, naming the file", (_how, body) => {
     expect(() =>
       configuredPlugins(
-        'import { formBuilderPlugin } from "@nextlyhq/plugin-form-builder";\nconst enabled = [formBuilderPlugin];\nexport default defineConfig({ plugins: enabled });\n'
+        `import { formBuilderPlugin } from "@nextlyhq/plugin-form-builder";\n${body}\n`,
+        "templates/blog/configs/codefirst.config.ts"
       )
-    ).toThrow(/cannot be read/);
+    ).toThrow(
+      /^templates\/blog\/configs\/codefirst\.config\.ts sets `plugins` to something other than a list written in place/
+    );
   });
 
   it("refuses a config it cannot parse", () => {

@@ -144,11 +144,21 @@ export async function projectHasSearchIndexScript(
  *
  * Exported for the test that holds every template's config to its build.
  */
-export function configuredPlugins(configText: string): string[] {
-  const program = parse(configText, {
-    sourceType: "module",
-    plugins: ["typescript", "jsx"],
-  }).program;
+export function configuredPlugins(
+  configText: string,
+  file = "nextly.config.ts"
+): string[] {
+  let program: Node;
+  try {
+    program = parse(configText, {
+      sourceType: "module",
+      plugins: ["typescript", "jsx"],
+    }).program;
+  } catch (error) {
+    throw new Error(
+      `${file} cannot be parsed (${(error as Error).message}), so the plugins its build must install cannot be read.`
+    );
+  }
   const fromPackage = new Map<string, string>();
   for (const statement of program.body) {
     if (statement.type !== "ImportDeclaration") continue;
@@ -164,7 +174,7 @@ export function configuredPlugins(configText: string): string[] {
     }
   }
   const found: string[] = [];
-  for (const name of identifiersInPluginLists(program)) {
+  for (const name of identifiersInPluginLists(program, file)) {
     const pkg = fromPackage.get(name);
     if (pkg !== undefined && !found.includes(pkg)) found.push(pkg);
   }
@@ -172,10 +182,10 @@ export function configuredPlugins(configText: string): string[] {
 }
 
 /** Every identifier inside the value of each `plugins: [...]` property, in source order. */
-function identifiersInPluginLists(program: Node): string[] {
+function identifiersInPluginLists(program: Node, file: string): string[] {
   const names: string[] = [];
   walkNodes(program, node => {
-    if (!isPluginList(node)) return;
+    if (!isPluginList(node, file)) return;
     walkNodes(node.value, inner => {
       if (inner.type === "Identifier") names.push(inner.name);
     });
@@ -185,21 +195,25 @@ function identifiersInPluginLists(program: Node): string[] {
 
 /**
  * A `plugins: [...]` property, by an identifier or a string key. A `plugins`
- * property written any other way, such as a variable holding the list, is
+ * property written any other way, such as a variable holding the list, a call
+ * or a spread inside it, is
  * refused rather than read as no plugins: the build would then install none
  * while the runtime registers them, and the production boot would refuse.
  * Every template writes its list in place, which the test of their builds
  * holds them to.
  */
-function isPluginList(node: Node): node is ObjectProperty {
+function isPluginList(node: Node, file: string): node is ObjectProperty {
   if (node.type !== "ObjectProperty") return false;
   const key = node.key;
   const named =
     (key.type === "Identifier" && key.name === "plugins") ||
     (key.type === "StringLiteral" && key.value === "plugins");
-  if (named && node.value.type !== "ArrayExpression") {
+  const inPlace =
+    node.value.type === "ArrayExpression" &&
+    node.value.elements.every(element => element?.type !== "SpreadElement");
+  if (named && !inPlace) {
     throw new Error(
-      "The template's nextly.config.ts sets `plugins` to something other than a list written in place, so the plugins its build must install cannot be read."
+      `${file} sets \`plugins\` to something other than a list written in place (a variable, a call or a spread), so the plugins its build must install cannot be read.`
     );
   }
   return named;
@@ -238,7 +252,7 @@ async function projectPlugins(targetDir?: string): Promise<string[]> {
   if (targetDir === undefined) return [];
   const config = path.join(targetDir, "nextly.config.ts");
   return (await fs.pathExists(config))
-    ? configuredPlugins(await fs.readFile(config, "utf-8"))
+    ? configuredPlugins(await fs.readFile(config, "utf-8"), config)
     : [];
 }
 
