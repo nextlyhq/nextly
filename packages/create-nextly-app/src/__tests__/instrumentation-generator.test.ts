@@ -28,17 +28,48 @@ const blankHook = path.resolve(
 const NEXT = "16.0.0";
 
 /** Syntax errors in a TypeScript module, as the compiler reports them. */
-function syntaxErrors(source: string): string[] {
-  const { diagnostics = [] } = ts.transpileModule(source, {
-    reportDiagnostics: true,
-    compilerOptions: {
-      module: ts.ModuleKind.ESNext,
+/**
+ * The type errors a hook body has, checked as a program rather than only
+ * transpiled, so an `await` outside an async function, a name never declared
+ * or a call with the wrong arguments all show. Nextly's own modules are
+ * declared by the shape the body uses them in: this package does not depend
+ * on nextly, and the real API is compiled against the same body by the
+ * scaffold jobs, which build the blank template whose hook shares it.
+ */
+async function typeErrors(source: string): Promise<string[]> {
+  const root = await mkdtemp(path.join(tmpdir(), "hook-types-"));
+  try {
+    await mkdir(path.join(root, "src"), { recursive: true });
+    const hook = path.join(root, "src/instrumentation.ts");
+    const declarations = path.join(root, "nextly.d.ts");
+    await writeFile(hook, source);
+    await writeFile(
+      path.join(root, "nextly.config.ts"),
+      "export default {};\n"
+    );
+    await writeFile(
+      declarations,
+      [
+        'declare module "nextly/runtime" { export function registerNextCacheRevalidator(): void; }',
+        'declare module "nextly" { export function createRegister(config: unknown): () => Promise<void>; }',
+        "declare const process: { env: Record<string, string | undefined> };",
+      ].join("\n")
+    );
+    const program = ts.createProgram([hook, declarations], {
+      strict: true,
+      noEmit: true,
       target: ts.ScriptTarget.ES2022,
-    },
-  });
-  return diagnostics.map(d =>
-    ts.flattenDiagnosticMessageText(d.messageText, "\n")
-  );
+      module: ts.ModuleKind.ESNext,
+      moduleResolution: ts.ModuleResolutionKind.Bundler,
+      types: [],
+      skipLibCheck: true,
+    });
+    return ts
+      .getPreEmitDiagnostics(program)
+      .map(d => ts.flattenDiagnosticMessageText(d.messageText, "\n"));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 }
 
 let project: string | undefined;
@@ -151,7 +182,7 @@ describe("generateInstrumentation", () => {
       skipped[0].toAdd.indexOf("export async function")
     );
     expect(code).toMatch(/^export async function register\(\)/);
-    expect(syntaxErrors(code ?? "")).toEqual([]);
+    expect(await typeErrors(code ?? "")).toEqual([]);
   });
 
   it("writes no hook when the app sets pageExtensions, and gives the whole hook to add under the right name", async () => {
@@ -167,8 +198,25 @@ describe("generateInstrumentation", () => {
     expect(await fs.pathExists(path.join(cwd, "src/instrumentation.ts"))).toBe(
       false
     );
+    // Under a name Next.js reads: one of the app's own page extensions.
+    expect(result.skipped[0].path).toBe("src/instrumentation.page.tsx");
     expect(result.skipped[0].why).toContain("pageExtensions");
     expect(result.skipped[0].toAdd).toBe(await readFile(blankHook, "utf-8"));
+  });
+
+  it("names no file it cannot know when the pageExtensions list is not written out", async () => {
+    const cwd = await app();
+    await writeFile(
+      path.join(cwd, "next.config.mjs"),
+      "const extensions = ['page.tsx'];\nexport default { pageExtensions: extensions };\n"
+    );
+
+    const result = await generateInstrumentation(cwd, { srcDir: true });
+
+    expect(result.written).toEqual([]);
+    expect(result.skipped[0].path).toBe(
+      "src/instrumentation.<one of your pageExtensions>"
+    );
   });
 
   it.each([

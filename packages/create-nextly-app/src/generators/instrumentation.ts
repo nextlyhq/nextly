@@ -60,6 +60,22 @@ ${startNextly(configImport)}
 `;
 }
 
+/**
+ * The page extension to name the hook with, read from the `pageExtensions`
+ * array a config spells literally, or null when it cannot be read that way.
+ * A TypeScript one is preferred, since the hook is TypeScript.
+ */
+function hookExtension(configText: string): string | null {
+  const list = /pageExtensions\s*:\s*\[([^\]]*)\]/.exec(configText)?.[1];
+  if (list === undefined) return null;
+  const extensions = [...list.matchAll(/["'`]([^"'`]+)["'`]/g)].map(m => m[1]);
+  return (
+    extensions.find(extension => /(^|\.)tsx?$/.test(extension)) ??
+    extensions[0] ??
+    null
+  );
+}
+
 /** The files Next.js reads its own config from, in the order it looks. */
 const NEXT_CONFIG_NAMES = [
   "next.config.js",
@@ -140,8 +156,15 @@ export async function generateInstrumentation(
 
   const relative = path.posix.join(dir, "instrumentation.ts");
   if (nextConfig?.text.includes("pageExtensions")) {
+    // Next.js reads the hook as `instrumentation.<extension>` for one of the
+    // app's page extensions, so the path offered is built from them; a list
+    // this cannot read is named as such rather than guessed.
+    const extension = hookExtension(nextConfig.text);
     result.skipped.push({
-      path: relative,
+      path: path.posix.join(
+        dir,
+        `instrumentation.${extension ?? "<one of your pageExtensions>"}`
+      ),
       why: `${nextConfig.name} sets pageExtensions, and Next.js reads the hook only under a name with one of them, so none was written; create it under that name with this content`,
       toAdd: instrumentationHook(configImport),
     });
