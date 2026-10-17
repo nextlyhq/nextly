@@ -396,3 +396,79 @@ describe("a form the guard cannot read, on another owner's table, is refused", (
     ).not.toThrow();
   });
 });
+
+describe("a change to a column or constraint the same migration adds", () => {
+  it("allows changing a column the same migration added to a plugin table", () => {
+    expect(() =>
+      guard(
+        [
+          "ALTER TABLE fx__notes ADD COLUMN app_extra int",
+          "ALTER TABLE fx__notes ALTER COLUMN app_extra SET NOT NULL",
+        ],
+        "app",
+        "postgresql"
+      )
+    ).not.toThrow();
+  });
+
+  it("allows validating a constraint the same migration added to a plugin table", () => {
+    expect(() =>
+      guard(
+        [
+          "ALTER TABLE fx__notes ADD CONSTRAINT app_chk CHECK (true) NOT VALID",
+          "ALTER TABLE fx__notes VALIDATE CONSTRAINT app_chk",
+        ],
+        "app",
+        "postgresql"
+      )
+    ).not.toThrow();
+  });
+
+  it("still refuses a change to a plugin column the migration did not add", () => {
+    expect(
+      refusal(() =>
+        guard(
+          [
+            "ALTER TABLE fx__notes ADD COLUMN app_extra int",
+            "ALTER TABLE fx__notes ALTER COLUMN body SET NOT NULL",
+          ],
+          "app",
+          "postgresql"
+        )
+      )
+    ).toMatchObject({ table: "fx__notes", column: "body" });
+  });
+});
+
+describe("the rare forms are refused by design", () => {
+  it("refuses ALTER TABLE that names an index, with a message to use ALTER INDEX", () => {
+    expect(() =>
+      assertNoForeignDrops({
+        statements: ["ALTER TABLE idx_status SET TABLESPACE other"],
+        stream: "app",
+        owners,
+        elementOwners,
+        dialect: "postgresql",
+        source: "0010_under_test",
+        liveTables: new Set([...owners.keys(), "users"]),
+        liveIndexTables: new Map([["idx_status", "fx__notes"]]),
+      })
+    ).toThrow();
+  });
+
+  it.each<string>([
+    "ALTER TABLE app_notes ALTER KEY idx_status IGNORED",
+    "ALTER TABLE app_notes ALTER KEY IF EXISTS idx_status IGNORED",
+  ])("refuses a MariaDB ALTER KEY on a plugin index: %s", sql => {
+    expect(refusal(() => guard([sql], "app", "mysql"))).toMatchObject({
+      element: "idx_status",
+      belongsTo: "plugin:fx",
+    });
+  });
+
+  it("leaves the app's own index's ALTER KEY alone", () => {
+    expect(() =>
+      guard(["ALTER TABLE app_notes ALTER KEY app_idx IGNORED"], "app", "mysql")
+    ).not.toThrow();
+  });
+});

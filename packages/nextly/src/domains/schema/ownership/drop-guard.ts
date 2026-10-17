@@ -396,6 +396,18 @@ const MODELLED_CLAUSE_WORDS = new Set([
   "DETACH",
 ]);
 
+/** The words an ADD clause starts with that add no column. */
+const ELEMENT_ADD_WORDS = new Set([
+  "PRIMARY",
+  "FOREIGN",
+  "UNIQUE",
+  "CHECK",
+  "INDEX",
+  "KEY",
+  "PARTITION",
+  "EXCLUDE",
+]);
+
 /** The act a refusal of an unmodelled form takes. */
 const UNMODELLED_ACT = "use a form the guard cannot read";
 
@@ -403,6 +415,7 @@ const ALTERED_ELEMENT_KINDS = new Map<string, TakenElementKind>([
   ["CONSTRAINT", "constraint"],
   ["CHECK", "check"],
   ["INDEX", "index"],
+  ["KEY", "index"],
 ]);
 
 /**
@@ -711,6 +724,10 @@ class DropReader {
    * fails closed on them: a foreign one is refused, naming it.
    */
   readonly unmodelled: string[] = [];
+  /** Columns this list adds to a table, which it may then change. */
+  readonly addedColumns: TakenColumn[] = [];
+  /** Constraints this list adds to a table, which it may then change. */
+  readonly addedElements: TakenElement[] = [];
   /**
    * Indexes and constraints this list drops or renames away, with the table
    * named by the name it had before the list renamed it.
@@ -855,6 +872,25 @@ class DropReader {
     this.columns.push({
       table: this.renamedFrom.get(table.name) ?? table.name,
       column,
+    });
+  }
+
+  /** Records a column this list adds to a table. */
+  addColumn(table: TableRef, column: string): void {
+    if (table.local && this.created.has(table.name)) return;
+    this.addedColumns.push({
+      table: this.renamedFrom.get(table.name) ?? table.name,
+      column,
+    });
+  }
+
+  /** Records a constraint this list adds to a table. */
+  addElement(table: TableRef, name: string, kind: TakenElementKind): void {
+    if (table.local && this.created.has(table.name)) return;
+    this.addedElements.push({
+      table: this.renamedFrom.get(table.name) ?? table.name,
+      name,
+      kind,
     });
   }
 
@@ -1616,6 +1652,7 @@ class StatementWalk {
     const table = this.qualifiedName(tableAt);
     const clausesAt = this.pastDescendants(table?.next ?? tableAt + 1);
     for (const clause of this.clauseStarts(clausesAt)) {
+      this.readAddedClause(table, clause);
       this.readColumnClause(table, clause);
       this.readColumnChangeClause(table, clause);
       this.readTableStorageClause(table, clause);
@@ -1847,6 +1884,35 @@ class StatementWalk {
   }
 
   /**
+   * One ALTER TABLE clause starting at `at` that adds a column or a named
+   * constraint, which the same list may then change.
+   */
+  private readAddedClause(table: TableRef | undefined, at: number): void {
+    if (table === undefined || this.word(at) !== "ADD") return;
+    const first = this.word(at + 1) ?? "";
+    if (first === "CONSTRAINT") {
+      const name = this.nameAt(at + 2);
+      if (name !== undefined) this.reader.addElement(table, name, "constraint");
+      return;
+    }
+    if (ELEMENT_ADD_WORDS.has(first)) return;
+    const k = first === "COLUMN" ? at + 2 : at + 1;
+    const column = this.addedColumnNameAt(k);
+    if (column !== undefined) this.reader.addColumn(table, column);
+  }
+
+  /** The column named at `k`, past `IF NOT EXISTS` when it is there. */
+  private addedColumnNameAt(at: number): string | undefined {
+    const k =
+      this.word(at) === "IF" &&
+      this.word(at + 1) === "NOT" &&
+      this.word(at + 2) === "EXISTS"
+        ? at + 3
+        : at;
+    return this.nameAt(k);
+  }
+
+  /**
    * One ALTER TABLE clause starting at `at` in a form this reader does not
    * model: any clause whose first word is not one it reads. The table is
    * recorded, so a foreign one is refused.
@@ -1898,7 +1964,7 @@ class StatementWalk {
   ): void {
     const kind = this.changedElementKindAt(at);
     if (kind === undefined) return;
-    const element = this.elementNamedAt(at + 2, kind);
+    const element = this.elementNamedAt(this.skipIfExists(at + 2), kind);
     if (element === null || table === undefined) {
       this.refuse("an index or constraint change whose names cannot be read");
     }
@@ -2813,6 +2879,8 @@ type Reading = Pick<
   | "elements"
   | "alteredElements"
   | "unmodelled"
+  | "addedColumns"
+  | "addedElements"
   | "rebuilt"
   | "relationRenames"
   | "changed"
@@ -4249,24 +4317,8 @@ export function assertNoForeignDrops(args: {
       act: "drop or rename",
     });
   }
-  for (const { table, column } of read.alteredColumns) {
-    if (overridden(args, table, column)) continue;
-    refuseUnlessHeld(holders.column(table, column), {
-      ...args,
-      table,
-      column,
-      act: "change in place",
-    });
-  }
-  for (const element of read.alteredElements) {
-    const table = element.table ?? args.liveIndexTables?.get(element.name);
-    refuseUnlessHeld(holders.element(element, table, args.liveIndexTables), {
-      ...args,
-      table,
-      element: element.name,
-      act: "change in place",
-    });
-  }
+  refuseInPlaceChanges(read, holders, args);
+  refuseTablesNamingIndexes(read, args);
   for (const table of read.unmodelled) {
     refuseUnlessHeld(holders.table(table), {
       ...args,
@@ -4607,6 +4659,101 @@ function knownNames(
       (entry): entry is [string, string] => entry[1] !== undefined
     )
   );
+}
+
+/** Refuses each in-place change to a column or element the stream does not hold. */
+function refuseInPlaceChanges(
+  read: Reading,
+  holders: OwnershipView,
+  args: {
+    stream: MigrationStream;
+    source: string;
+    liveIndexTables?: ReadonlyMap<string, string>;
+    columnOverrides?: ReadonlyArray<{ table: string; column: string }>;
+  }
+): void {
+  const added = addedKeys(read);
+  for (const { table, column } of read.alteredColumns) {
+    if (overridden(args, table, column)) continue;
+    if (added.columns.has(columnKey(table, column))) continue;
+    refuseUnlessHeld(holders.column(table, column), {
+      ...args,
+      table,
+      column,
+      act: "change in place",
+    });
+  }
+  for (const element of read.alteredElements) {
+    const table = element.table ?? args.liveIndexTables?.get(element.name);
+    if (
+      table !== undefined &&
+      added.elements.has(columnKey(table, element.name))
+    ) {
+      continue;
+    }
+    refuseUnlessHeld(holders.element(element, table, args.liveIndexTables), {
+      ...args,
+      table,
+      element: element.name,
+      act: "change in place",
+    });
+  }
+}
+
+/** The columns and elements the reading's own list adds, by table and name. */
+function addedKeys(read: Reading): {
+  columns: Set<string>;
+  elements: Set<string>;
+} {
+  return {
+    columns: new Set(
+      read.addedColumns.map(item => columnKey(item.table, item.column))
+    ),
+    elements: new Set(
+      read.addedElements.map(item => columnKey(item.table ?? "", item.name))
+    ),
+  };
+}
+
+/** Refuses an ALTER TABLE, of storage or unmodelled, that names an index. */
+function refuseTablesNamingIndexes(
+  read: Reading,
+  args: {
+    stream: MigrationStream;
+    source: string;
+    liveIndexTables?: ReadonlyMap<string, string>;
+  }
+): void {
+  for (const { table, act } of read.changed) {
+    if (act === "change the storage of") refuseIndexNamed(table, args);
+  }
+  for (const table of read.unmodelled) refuseIndexNamed(table, args);
+}
+
+/**
+ * Refuses an ALTER TABLE that names an index: PostgreSQL accepts index
+ * changes through ALTER TABLE, and this guard does not route them to the
+ * index's owner, so they are refused by design.
+ */
+function refuseIndexNamed(
+  table: string,
+  args: {
+    stream: MigrationStream;
+    source: string;
+    liveIndexTables?: ReadonlyMap<string, string>;
+  }
+): void {
+  if (args.liveIndexTables?.has(table.toLowerCase()) !== true) return;
+  throw new NextlyError({
+    code: "DROP_OF_FOREIGN_TABLE",
+    publicMessage: `A migration runs ALTER TABLE on ${table}, which is an index. The schema guard refuses this form, and it has been refused, and nothing was applied. Rewrite the statement as ALTER INDEX.`,
+    logContext: {
+      table,
+      changedBy: args.stream,
+      belongsTo: null,
+      source: args.source,
+    },
+  });
 }
 
 /** Whether the app has recorded its override of this column's storage. */
