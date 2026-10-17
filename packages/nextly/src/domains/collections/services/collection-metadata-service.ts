@@ -388,6 +388,30 @@ export class CollectionMetadataService extends BaseService {
     try {
       const artifacts = await this.collectionService.generateCollection(data);
 
+      // A save applies whole or fails whole: in development the migration runs before anything is
+      // recorded, so a change the database refuses leaves no file, no registry row and nothing
+      // reported as applied.
+      if (this.isDevelopment()) {
+        try {
+          // The artefact carries the registry-row upsert so the committed file
+          // recreates it where the Builder has never run. This database gets
+          // that row from `registerCollection` below, and it refuses a slug
+          // that already exists -- so what runs HERE is the DDL alone.
+          await this.fileManager.runMigration(
+            artifacts.localMigrationSQL ?? artifacts.migrationSQL
+          );
+        } catch (migrationError: unknown) {
+          return errorToMetadataResult(
+            migrationError,
+            {
+              statusCode: 500,
+              defaultMessage: "The collection's table could not be created",
+            },
+            this.dialect
+          );
+        }
+      }
+
       // Persist the SQL migration. The Drizzle `.ts` schema is no longer
       // written — the runtime builds it from dynamic_collections metadata,
       // matching singles/components (see CollectionFileManager.saveMigration).
@@ -398,13 +422,6 @@ export class CollectionMetadataService extends BaseService {
 
       if (this.isDevelopment()) {
         try {
-          // The artefact carries the registry-row upsert so the committed file
-          // recreates it where the Builder has never run. This database gets
-          // that row from `registerCollection` below, and it refuses a slug
-          // that already exists -- so what runs HERE is the DDL alone.
-          await this.fileManager.runMigration(
-            artifacts.localMigrationSQL ?? artifacts.migrationSQL
-          );
           // Verify table was actually created before marking as applied
           const tableExists = await this.adapter.tableExists(
             artifacts.tableName
@@ -758,11 +775,9 @@ export class CollectionMetadataService extends BaseService {
       // `.ts` schema is written — the runtime regenerates it from the
       // dynamic_collections metadata, matching singles/components.
       if (updateArtifacts.migrationSQL) {
-        await this.fileManager.saveMigration(
-          updateArtifacts.migrationSQL,
-          updateArtifacts.migrationFileName!
-        );
-
+        // A save applies whole or fails whole: in development the migration runs before anything is
+        // recorded, so a change the database refuses leaves no file, an unchanged registry and
+        // nothing reported as applied.
         if (this.isDevelopment()) {
           try {
             // The file is what a fresh database will replay; this is what THIS one needs. They
@@ -772,6 +787,25 @@ export class CollectionMetadataService extends BaseService {
             await this.fileManager.runMigration(
               updateArtifacts.localMigrationSQL ?? updateArtifacts.migrationSQL
             );
+          } catch (migrationError: unknown) {
+            return errorToMetadataResult(
+              migrationError,
+              {
+                statusCode: 500,
+                defaultMessage: "The schema change could not be applied",
+              },
+              this.dialect
+            );
+          }
+        }
+
+        await this.fileManager.saveMigration(
+          updateArtifacts.migrationSQL,
+          updateArtifacts.migrationFileName!
+        );
+
+        if (this.isDevelopment()) {
+          try {
             // The companion may have just been dropped or reshaped by that migration, and a
             // `ready` verdict outlives the table it describes: for up to its TTL, concurrent
             // requests on this same process would keep querying a relation that is gone instead of
