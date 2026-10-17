@@ -210,6 +210,11 @@ describe("adding Nextly to an existing app", () => {
         why: expect.stringMatching(/^app cannot be read/),
       })
     );
+    // The media routes under app/admin stop there too, whatever their own
+    // checks would find.
+    expect(
+      existsSync(join(dir, "app/admin/api/media/[[...path]]/route.ts"))
+    ).toBe(false);
   });
 
   it("reports what it wrote and what it extended", async () => {

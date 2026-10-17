@@ -210,14 +210,21 @@ async function writeIfUnanswered(
 ): Promise<void> {
   const { target, appRoot, segment, catchAll, text, role } = route;
   const link = await linkedFolder(cwd, target);
-  if (link !== null && !link.unreadable) {
+  // A link, or a folder that cannot be read (so not known not to be a
+  // link), leaves the route unwritten, whatever the checks below would find.
+  if (link !== null) {
     result.skipped.push(
-      skipped(cwd, link.folder, target, text, role, THROUGH_A_LINK)
+      skipped(
+        cwd,
+        link.folder,
+        target,
+        text,
+        role,
+        link.unreadable ? UNREADABLE : THROUGH_A_LINK
+      )
     );
     return;
   }
-  // A folder that cannot be read is reported by the checks below, which say
-  // what that leaves unknown about the URL.
   const answering =
     (await answeringFolder(appRoot, segment, catchAll)) ??
     (await answeringPage(cwd, segment));
