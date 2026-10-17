@@ -190,6 +190,7 @@ describe("a grouped widget query against a real instance", () => {
 
     expect(result).toEqual({
       op: "groupBy",
+      field: { name: "title", type: "string" },
       buckets: [
         { value: "alice", count: 1 },
         { value: "bob", count: 1 },
