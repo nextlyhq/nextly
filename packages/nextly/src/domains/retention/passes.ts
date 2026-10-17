@@ -22,10 +22,7 @@ import {
   activeAuditRetention,
   type ResolvedAuditRetentionConfig,
 } from "../audit/retention-config";
-import {
-  pruneContentEventsSafely,
-  type ContentEventsPruneDb,
-} from "../content-events/prune";
+import { pruneContentEventsSafely } from "../content-events/prune";
 import { pruneEmailDataSafely, type EmailPruneAdapter } from "../email/prune";
 import {
   activeEmailRetention,
@@ -55,8 +52,7 @@ export interface RetentionPassInput {
     PruneDeps["adapter"] &
     EmailPruneAdapter &
     OneTimeSecretsPruneAdapter &
-    NoticesPruneDb &
-    ContentEventsPruneDb;
+    NoticesPruneDb;
   webhookPolicy?: ResolvedWebhookRetentionConfig | null;
   auditPolicy?: ResolvedAuditRetentionConfig;
   /**
