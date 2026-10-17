@@ -446,6 +446,36 @@ export function generateSqliteCoreTableStatements(): string[] {
       ON "nextly_version_views" ("scope_kind", "scope_slug", "entry_id")`,
     `CREATE INDEX IF NOT EXISTS "nextly_version_views_user_idx"
       ON "nextly_version_views" ("user_id")`,
+    // The record of content events. Columns match
+    // schemas/content-events/sqlite.ts.
+    `CREATE TABLE IF NOT EXISTS "nextly_content_events" (
+      "id" TEXT PRIMARY KEY NOT NULL,
+      "subject_kind" TEXT NOT NULL,
+      "subject_slug" TEXT,
+      "subject_id" TEXT NOT NULL,
+      "kind" TEXT NOT NULL,
+      "ends_subject" INTEGER NOT NULL DEFAULT 0,
+      "actor_kind" TEXT NOT NULL,
+      "actor_id" TEXT,
+      "actor_principal_kind" TEXT,
+      "actor_name" TEXT,
+      "occurred_at" INTEGER NOT NULL,
+      "from_state" TEXT,
+      "to_state" TEXT,
+      "note" TEXT,
+      "version_no" INTEGER,
+      "payload" TEXT,
+      "definition_hash" TEXT
+    )`,
+    `CREATE INDEX IF NOT EXISTS "nextly_content_events_subject_idx"
+      ON "nextly_content_events" ("subject_kind", "subject_slug", "subject_id", "id")`,
+    `CREATE INDEX IF NOT EXISTS "nextly_content_events_ends_idx"
+      ON "nextly_content_events" ("ends_subject", "occurred_at")`,
+    `CREATE TABLE IF NOT EXISTS "nextly_content_event_parts" (
+      "event_id" TEXT NOT NULL,
+      "part" TEXT NOT NULL,
+      PRIMARY KEY ("event_id", "part")
+    )`,
     // Content releases. Columns match schemas/releases/sqlite.ts.
     `CREATE TABLE IF NOT EXISTS "nextly_releases" (
       "id" TEXT PRIMARY KEY NOT NULL,

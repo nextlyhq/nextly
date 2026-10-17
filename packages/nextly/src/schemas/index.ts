@@ -27,6 +27,7 @@ import { drizzleTableToTableSpec } from "./_internal/drizzle-to-tablespec";
 import { apiKeyTables } from "./api-keys";
 import { auditTables } from "./audit";
 import { authTokenTables } from "./auth-tokens";
+import { contentEventsTables } from "./content-events";
 import {
   DELETED_PRINCIPALS_TABLE,
   deletedPrincipalsTables,
@@ -249,6 +250,10 @@ export function getCoreSchema(
     // document and part. Nothing marks before the table exists, so
     // core-reconcile creating it is sufficient, as for `nextly_versions`.
     ...Object.values(versionViewsTables(dialect)),
+    // The record of content events and the parts each one involved. Nothing
+    // records into them before they exist, so core-reconcile creating them is
+    // sufficient, as for `nextly_versions`.
+    ...Object.values(contentEventsTables(dialect)),
     // The release tables are first-class managed system tables, declared here
     // for the same reason `nextly_versions` is: nothing records into them
     // before they exist, so core-reconcile creating them on fresh and existing
@@ -377,6 +382,8 @@ export const CORE_TABLE_NAMES: readonly string[] = [
   "nextly_i18n_archive",
   "nextly_versions",
   "nextly_version_views",
+  "nextly_content_events",
+  "nextly_content_event_parts",
   "nextly_releases",
   "nextly_release_members",
   "nextly_version_pins",
