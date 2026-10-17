@@ -172,10 +172,11 @@ describe("a scaffolded project arrives with the guide", () => {
       if (projectType === "blank") {
         expect(guide).toContain(updateSkillsCommand(packageVersion()));
         expect(guide).toMatch(/0\.0\.2-alpha\.66 publish no\s+skills/);
-        // A project that got no skills (its Nextly did not match them) is sent
-        // to the docs, not to the command that would add them anyway.
+        // The restore command is offered only where the skills' declared
+        // release is the one the project runs, as the scaffold's own check
+        // requires; any other project is sent to the docs.
         expect(guide).toMatch(
-          /has no `\.agents\/skills\/nextly-install\/`[\s\S]*?nextlyhq\.com\/docs\/guides\/coding-agents/
+          /`metadata\.nextly-version` is exactly what `npx nextly --version`\s+prints[\s\S]*?Otherwise[\s\S]*?do not run the command above[\s\S]*?nextlyhq\.com\/docs\/guides\/coding-agents/
         );
       }
 
