@@ -65,13 +65,14 @@ ${startNextly(configImport)}
 /**
  * The page extension to name a new hook with: a TypeScript one first, since
  * the hook is TypeScript, then a JavaScript one; never a content extension
- * such as `mdx`, which Next.js would compile as content. Null when the list
- * holds no extension a hook can be written in.
+ * such as `mdx`, which Next.js would compile as content, and never `cjs`,
+ * since the hook is an ES module and a `.cjs` file cannot hold one. Null when
+ * the list holds no extension a hook can be written in.
  */
 function hookExtension(extensions: readonly string[]): string | null {
   return (
     extensions.find(extension => /(^|\.)tsx?$/.test(extension)) ??
-    extensions.find(extension => /(^|\.)(js|jsx|mjs|cjs)$/.test(extension)) ??
+    extensions.find(extension => /(^|\.)(js|jsx|mjs)$/.test(extension)) ??
     null
   );
 }
@@ -174,15 +175,17 @@ export async function generateInstrumentation(
     ? configStringList(nextConfig.text, nextConfig.name, "pageExtensions")
     : "absent";
 
-  // Next.js also reads the hook as `instrumentation.<extension>` for any of
-  // the app's page extensions. A hook under any of them belongs to the app, as
-  // one under a default name does: Nextly's start is added to it, never
-  // offered as a file to write beside or over it.
-  const configured =
+  // With pageExtensions set, Next.js reads the hook only as
+  // `instrumentation.<extension>` for one of them, so a default-named file
+  // beside it is one Next.js never loads. A hook under a configured name
+  // belongs to the app: Nextly's start is added to it, never offered as a file
+  // to write beside or over it. A list this cannot read leaves the defaults as
+  // the only names it knows.
+  const names =
     extensions === "absent" || extensions === null
-      ? []
+      ? HOOK_NAMES
       : extensions.map(extension => `instrumentation.${extension}`);
-  const existing = await existingHook(cwd, dir, [...HOOK_NAMES, ...configured]);
+  const existing = await existingHook(cwd, dir, names);
   if (existing) {
     result.skipped.push({
       path: existing,
