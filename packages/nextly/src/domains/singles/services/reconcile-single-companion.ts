@@ -56,6 +56,11 @@ export interface ReconcileSingleCompanionArgs {
    */
   wasStatus: boolean;
   adapter: DrizzleAdapter;
+  /**
+   * Fields joining translation whose companion columns the caller added and filled before the main
+   * table changed (`moveValuesOfFieldsJoiningTranslation`). Their ADD is not repeated.
+   */
+  joinedBefore?: readonly string[];
 }
 
 export async function reconcileSingleCompanion(
@@ -104,6 +109,7 @@ export async function reconcileSingleCompanion(
     companionExists,
     companionHasStatus,
     wasStatus,
+    joinedBefore: args.joinedBefore,
     // Which translatable columns the main table still carries. A disable must not re-add one that
     // is already there, and must still restore it: presence says the column exists, never that its
     // value is current, because every localized write went to the companion alone.
