@@ -3113,6 +3113,19 @@ describe("plugin-route-mount", () => {
     ).toContain("plugin-route-mount-unreadable");
   });
 
+  it("reads past comment markers that sit inside strings", async () => {
+    // "/*" and "*/" in string data are not a comment, and must not hide the call between them.
+    expect(
+      await checksFor(
+        tree(
+          'const open = "/*";\n' +
+            "await writeNew(cwd, `${projectInfo.appDir}/admin/api/[[...params]]/route.ts`, T);\n" +
+            'const close = "*/";\n'
+        )
+      )
+    ).not.toContain("plugin-route-mount-unreadable");
+  });
+
   it("reports a generator that mounts somewhere other than the template", async () => {
     const findings = await findingsFor(
       tree("await writeNew(cwd, `${projectInfo.appDir}/cms/api/[[...params]]/route.ts`, T);\n")

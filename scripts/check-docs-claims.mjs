@@ -29,6 +29,7 @@ import {
 import { basename, dirname, extname, join, relative, sep } from "node:path";
 
 import { compile } from "@mdx-js/mdx";
+import ts from "typescript";
 
 import { splitFrontmatter } from "./check-docs-compile.mjs";
 import {
@@ -1036,19 +1037,59 @@ const TEMPLATE_APP_DIR = "templates/base/src/app/";
 const TEMPLATE_CATCH_ALL = "/[[...params]]/route.ts";
 const GENERATOR_SOURCE = "packages/create-nextly-app/src/generators/routes.ts";
 // The generator builds the route's path in one of two spellings: path.join of
-// quoted segments, or a template string after the app directory. Each reader
-// returns the segments between the app directory and the catch-all for every
-// occurrence of its spelling in the file.
-const GENERATOR_MOUNT_SPELLINGS = [
-  source =>
-    [...source.matchAll(/path\.join\(\s*cwd,\s*projectInfo\.appDir,\s*((?:"[^"]*",\s*)+)"\[\[\.\.\.params\]\]"/g)].map(m =>
-      [...m[1].matchAll(/"([^"]*)"/g)].map(q => q[1])
-    ),
-  source =>
-    [...source.matchAll(/writeNew\(\s*cwd,\s*`\$\{projectInfo\.appDir\}((?:\/[^/`$]+)*)\/\[\[\.\.\.params\]\]\/route\.ts`/g)].map(m =>
-      m[1].split("/").filter(Boolean)
-    ),
-];
+// quoted segments, or a template string after the app directory given to
+// writeNew. Both are read from the syntax tree, where a comment is no code and a
+// string's contents are only a string.
+const CATCH_ALL_SEGMENT = "[[...params]]";
+const CATCH_ALL_TAIL = /^((?:\/[^/]+)*)\/\[\[\.\.\.params\]\]\/route\.ts$/;
+const isCwd = (node, file) => node !== undefined && node.getText(file) === "cwd";
+const isAppDir = (node, file) =>
+  ts.isPropertyAccessExpression(node) && `${node.expression.getText(file)}.${node.name.text}` === "projectInfo.appDir";
+const isCatchAll = node => ts.isStringLiteral(node) && node.text === CATCH_ALL_SEGMENT;
+
+/** The string segments before a `"[[...params]]"` argument, or null when there is none or one is not a string. */
+function literalSegmentsBeforeCatchAll(args) {
+  const end = args.findIndex(isCatchAll);
+  const before = args.slice(0, end);
+  return end >= 0 && before.every(ts.isStringLiteral) ? before.map(segment => segment.text) : null;
+}
+
+/** `path.join(cwd, projectInfo.appDir, "a", "b", "[[...params]]", ...)`: the segments before the catch-all. */
+function pathJoinSegments(args, file) {
+  return isCwd(args[0], file) && isAppDir(args[1], file) ? literalSegmentsBeforeCatchAll(args.slice(2)) : null;
+}
+
+/** A template string that is exactly `${projectInfo.appDir}` followed by literal text. */
+function isAppDirTemplate(node, file) {
+  const checks = [
+    () => node !== undefined && ts.isTemplateExpression(node),
+    () => node.head.text === "" && node.templateSpans.length === 1,
+    () => isAppDir(node.templateSpans[0].expression, file),
+  ];
+  return checks.every(check => check());
+}
+
+/** `writeNew(cwd, \`${projectInfo.appDir}/a/b/[[...params]]/route.ts\`, ...)`: the segments before the catch-all. */
+function writeNewSegments(args, file) {
+  if (!(isCwd(args[0], file) && isAppDirTemplate(args[1], file))) return null;
+  const tail = CATCH_ALL_TAIL.exec(args[1].templateSpans[0].literal.text);
+  return tail === null ? null : tail[1].split("/").filter(Boolean);
+}
+
+/** The segments of every catch-all route path the generator's code builds. */
+function generatorMountSegments(source) {
+  const file = ts.createSourceFile("routes.ts", source, ts.ScriptTarget.Latest, false, ts.ScriptKind.TS);
+  const readers = { "path.join": pathJoinSegments, writeNew: writeNewSegments };
+  const found = [];
+  const visit = node => {
+    const read = ts.isCallExpression(node) ? readers[node.expression.getText(file)] : undefined;
+    const segments = read ? read(node.arguments, file) : null;
+    if (segments !== null) found.push(segments);
+    ts.forEachChild(node, visit);
+  };
+  visit(file);
+  return found;
+}
 
 /** The mount the base template hard-codes by where its route file sits. */
 function templateMount(repoRoot, tracked, refuse) {
@@ -1081,16 +1122,11 @@ function templateMount(repoRoot, tracked, refuse) {
 /**
  * The mount the generator's source builds, as `{ mount }`, or `{ problem }` when
  * it cannot be told. Every occurrence of either spelling must name the same
- * mount: a stale one (in a comment, say) standing in for the path the code
- * builds would let the docs be checked against the wrong address.
+ * mount: a stale one (an unused call left behind, say) standing in for the
+ * path the code builds would let the docs be checked against the wrong address.
  */
 function readGeneratorMount(source) {
-  // Read the code only: a path left in a comment says nothing about what the
-  // generator builds now, and must not pass for it.
-  const code = source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
-  const mounts = [
-    ...new Set(GENERATOR_MOUNT_SPELLINGS.flatMap(read => read(code)).map(parts => `/${parts.join("/")}`)),
-  ];
+  const mounts = [...new Set(generatorMountSegments(source).map(parts => `/${parts.join("/")}`))];
   if (mounts.length === 0) {
     return { problem: "no longer builds the catch-all route path in the shape this reads, so the mount it generates is unknown" };
   }
