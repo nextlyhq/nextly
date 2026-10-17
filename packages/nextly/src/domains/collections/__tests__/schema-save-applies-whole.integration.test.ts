@@ -262,3 +262,102 @@ describeEachDialect("a schema save whose migration fails", dialect => {
     }
   );
 });
+
+// A translated collection plans its main table apart from its companion, so a save MySQL refused
+// part-way has to be finished from the live main table on that branch too.
+describeEachDialect(
+  "a translated collection's schema save refused part-way",
+  dialect => {
+    let current: TestNextly;
+
+    beforeEach(async () => {
+      vi.stubEnv("NODE_ENV", "development");
+      current = await createTestNextly({
+        dialect,
+        collections: [],
+        localization: { locales: ["en", "es"], defaultLocale: "en" },
+      });
+    });
+
+    afterEach(async () => {
+      await current.destroy();
+      vi.unstubAllEnvs();
+    });
+
+    async function query<T>(sql: string): Promise<T[]> {
+      return (
+        current.adapter as unknown as {
+          executeQuery<R>(statement: string): Promise<R[]>;
+        }
+      ).executeQuery<T>(sql);
+    }
+
+    // Not on SQLite, for the reason given above.
+    it.skipIf(dialect === "sqlite")(
+      "finishes the change when it is saved again",
+      async () => {
+        const h = current.getService(
+          "collectionsHandler"
+        ) as unknown as CollectionsHandler;
+        const created = await h.createCollection({
+          name: "posts",
+          label: "Post",
+          localized: true,
+          fields: [{ name: "heading", type: "text" }],
+        });
+        expect(created.success, JSON.stringify(created)).toBe(true);
+        for (const heading of ["One", "Two"]) {
+          const entry = await h
+            .getEntryService()
+            .createEntry(
+              { collectionName: "posts", overrideAccess: true },
+              { heading }
+            );
+          expect(entry.success, JSON.stringify(entry)).toBe(true);
+        }
+        const q = (name: string) =>
+          dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
+        const blocking = uniqueIndexNameForColumn("dc_posts", "code");
+        await query(
+          `CREATE INDEX ${q(blocking)} ON ${q("dc_posts")} (${q("id")})`
+        );
+        // A shared field, so its column is the main table's.
+        const fields = [
+          { name: "heading", type: "text" },
+          {
+            name: "code",
+            type: "text",
+            localized: false,
+            unique: true,
+            options: { variant: "short" },
+            validation: { maxLength: 64 },
+          },
+        ];
+
+        const refused = await h.updateCollection(
+          { collectionName: "posts" },
+          { fields }
+        );
+        expect(refused.success, JSON.stringify(refused)).toBe(false);
+
+        await query(
+          dialect === "mysql"
+            ? `DROP INDEX ${q(blocking)} ON ${q("dc_posts")}`
+            : `DROP INDEX ${q(blocking)}`
+        );
+        const saved = await h.updateCollection(
+          { collectionName: "posts" },
+          { fields }
+        );
+
+        expect(saved.success, JSON.stringify(saved)).toBe(true);
+        const columns = await query<{ name: string }>(
+          dialect === "mysql"
+            ? `SELECT COLUMN_NAME AS name FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'dc_posts'`
+            : `SELECT column_name AS name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'dc_posts'`
+        );
+        expect(columns.map(c => c.name)).toContain("code");
+      }
+    );
+  }
+);
