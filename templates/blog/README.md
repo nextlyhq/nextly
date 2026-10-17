@@ -197,7 +197,7 @@ On platforms other than Vercel, set a `Content-Type: application/wasm` header fo
 
 The homepage and footer newsletter forms submit to the `@nextlyhq/plugin-form-builder` plugin. Submissions are stored in the `form-submissions` collection and visible at `/admin/collections/form-submissions`.
 
-A production boot refuses a configured plugin that has not been installed on its database. Before the first production deploy, run `nextly migrate` and then `nextly plugins install @nextlyhq/plugin-form-builder` against the production database, once. Development only warns. See [Installing](https://nextlyhq.com/docs/guides/production-migrations#installing).
+A production boot refuses a configured plugin that has not been installed on its database; development only warns. The `build` script installs it for you, after migrating and against the database the build targets (`nextly migrate && nextly plugins install @nextlyhq/plugin-form-builder && next build`), so a deploy that builds against the production database needs no extra step. If you deploy without building against that database, run the same two `nextly` commands there before the first production boot. See [Installing](https://nextlyhq.com/docs/guides/production-migrations#installing).
 
 The seed creates a form with slug `newsletter` on first run. If the seed skipped it (or you removed it), create a new Form at `/admin/collections/forms` with slug `newsletter` and the plugin + frontend will start working.
 

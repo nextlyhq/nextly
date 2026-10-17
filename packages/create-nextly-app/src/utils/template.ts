@@ -131,6 +131,53 @@ export async function projectHasSearchIndexScript(
 }
 
 /**
+ * The plugins a Nextly config registers, by package name: each binding it
+ * imports from a `@nextlyhq/plugin-*` package (the SDK aside) that its
+ * `plugins: [...]` list names. First-party plugins register under their
+ * package name, which is what `nextly plugins install` takes.
+ *
+ * Exported for the test that holds every template's config to its build.
+ */
+export function configuredPlugins(configText: string): string[] {
+  const list = /\bplugins\s*:\s*\[([^\]]*)\]/.exec(configText)?.[1] ?? "";
+  const found: string[] = [];
+  for (const [, names, pkg] of configText.matchAll(
+    /import\s*\{([^}]*)\}\s*from\s*"(@nextlyhq\/plugin-[^"]+)"/g
+  )) {
+    if (pkg === "@nextlyhq/plugin-sdk" || found.includes(pkg)) continue;
+    const bindings = names
+      .split(",")
+      .map(
+        part =>
+          part
+            .trim()
+            .split(/\s+as\s+/)
+            .pop() ?? ""
+      )
+      .filter(Boolean);
+    if (bindings.some(binding => new RegExp(`\\b${binding}\\b`).test(list))) {
+      found.push(pkg);
+    }
+  }
+  return found;
+}
+
+/**
+ * The plugins the scaffolded PROJECT's config registers, read from the
+ * finished project as {@link projectHasSearchIndexScript} is: a template
+ * offers more than one config (the blog's visual one registers none), so
+ * only the file the copy wrote can say. None when there is no config, or
+ * no project on disk to ask.
+ */
+async function projectPlugins(targetDir?: string): Promise<string[]> {
+  if (targetDir === undefined) return [];
+  const config = path.join(targetDir, "nextly.config.ts");
+  return (await fs.pathExists(config))
+    ? configuredPlugins(await fs.readFile(config, "utf-8"))
+    : [];
+}
+
+/**
  * Every file under `root` that could carry an import specifier.
  *
  * Async, and through the same `fs-extra` surface the rest of this module uses,
@@ -1248,6 +1295,11 @@ export async function generatePackageJson(
   const shipsSearchIndex = targetDir
     ? await projectHasSearchIndexScript(targetDir)
     : false;
+  // A production boot refuses a configured plugin that has not been
+  // installed on its database, so the build installs each one the project's
+  // config registers, against the database it migrates. The install is safe
+  // to repeat, so every build can run it.
+  const plugins = await projectPlugins(targetDir);
 
   // Pagefind builds the static index behind /search. DECLARED only where the
   // builder ships, because the index script invokes it through `node`, which
@@ -1272,8 +1324,9 @@ export async function generatePackageJson(
       // prompts, and child supervision. `nextly dev` is gone; the only
       // supported dev command is the standard `next dev`.
       dev: "next dev --turbopack",
-      // Build: migrate the database, compile Next.js, and generate the Pagefind
-      // search index for the templates that ship its builder.
+      // Build: migrate the database, install the plugins the config
+      // registers, compile Next.js, and generate the Pagefind search index for
+      // the templates that ship its builder.
       //
       // Whether that last step appears is decided HERE, from the files the
       // scaffold actually received, rather than by a shell conditional in the
@@ -1287,9 +1340,12 @@ export async function generatePackageJson(
       // And `|| true` turned a failed index build into a successful one. The
       // search page then ships pointing at an index that was never written,
       // which fails in the browser rather than in CI.
-      build: shipsSearchIndex
-        ? "nextly migrate && next build && node scripts/build-search-index.mjs"
-        : "nextly migrate && next build",
+      build: [
+        "nextly migrate",
+        ...plugins.map(plugin => `nextly plugins install ${plugin}`),
+        "next build",
+        ...(shipsSearchIndex ? ["node scripts/build-search-index.mjs"] : []),
+      ].join(" && "),
       // Offered only where the file exists. A script that always fails is worse
       // than an absent one: it reads as a supported command.
       ...(shipsSearchIndex

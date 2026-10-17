@@ -29,9 +29,9 @@
 "@nextlyhq/ui": patch
 ---
 
-A comparison can start from the version you last looked at. The admin marks
-a version as seen with `PUT …/versions/{n}/seen` when it shows one, for
-signed-in people only (API keys and the system are refused), and no read
+A comparison can start from the version you last looked at. A client marks
+a version as seen with `PUT …/versions/{n}/seen` (people only); the admin
+doesn't send it yet. API keys and the system are refused, and no read
 records anything. Marks count by visit: a mark more than 30 minutes after a
 marker's last one starts a new visit, and "last looked at" is the furthest
 version of the previous visit, kept per person, document and language. The
