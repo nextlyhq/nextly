@@ -218,7 +218,9 @@ export class SingleEntryService extends BaseService {
    *
    * @experimental
    */
-  async releaseHeldDraftLocales(params: { slug: string }): Promise<string[]> {
+  async releaseHeldDraftLocales(
+    params: Parameters<SingleMutationService["releaseHeldDraftLocales"]>[0]
+  ): ReturnType<SingleMutationService["releaseHeldDraftLocales"]> {
     return this.mutationService.releaseHeldDraftLocales(params);
   }
 

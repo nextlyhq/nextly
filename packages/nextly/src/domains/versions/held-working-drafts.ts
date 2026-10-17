@@ -17,11 +17,14 @@
  *
  * @module domains/versions/held-working-drafts
  */
-import type { VersionRef, VersionsRepository } from "./versions-repository";
-
 /**
- * The configured languages other than `writeDraftLocale` that hold a working
- * draft of this document; empty when the document keeps no drafts.
+ * The configured languages other than `writeDraftLocale` among those holding a
+ * working draft of one document (`draftLocales`, as stored: `null` is the
+ * unlocalized slot).
+ *
+ * Pure, so the write asks it of the drafts it reads under its row lock and a
+ * release's readiness asks it of drafts read for a whole batch of documents at
+ * once: the reads differ, the rule does not.
  *
  * Only a language the app still configures can block the write. A draft left
  * behind by a language that was REMOVED would otherwise refuse every
@@ -30,23 +33,17 @@ import type { VersionRef, VersionsRepository } from "./versions-repository";
  * and writes reject that locale. The stale draft is left where it is: a write
  * asked to move a lifecycle has no business deleting somebody's stored work.
  */
-export async function languagesHoldingWorkingDrafts(args: {
-  versions: Pick<VersionsRepository, "findAllWorkingDrafts">;
-  ref: VersionRef;
-  /** Whether the collection or Single keeps working drafts at all. */
-  draftsEnabled: boolean;
+export function languagesHoldingWorkingDrafts(args: {
+  draftLocales: Iterable<string | null>;
   /** The slot the write's own working draft is stored under. */
   writeDraftLocale: string | null;
   configuredLocales: readonly string[];
-}): Promise<string[]> {
-  if (!args.draftsEnabled) return [];
+}): string[] {
   const configured = new Set(args.configuredLocales);
-  return (await args.versions.findAllWorkingDrafts(args.ref))
-    .map(draft => draft.locale)
-    .filter(
-      (locale): locale is string =>
-        locale !== null &&
-        locale !== args.writeDraftLocale &&
-        configured.has(locale)
-    );
+  return [...args.draftLocales].filter(
+    (locale): locale is string =>
+      locale !== null &&
+      locale !== args.writeDraftLocale &&
+      configured.has(locale)
+  );
 }

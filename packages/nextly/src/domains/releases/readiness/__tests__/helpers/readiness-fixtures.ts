@@ -50,6 +50,22 @@ export function member(
   };
 }
 
+/**
+ * A per-scope batch read answering each entry id on its own: what the ports
+ * that read a scope's documents together return, built from one answer per
+ * document.
+ */
+export function perEntry<T>(
+  answer: (entryId: string) => T
+): (
+  scope: unknown,
+  entryIds: readonly string[],
+  ...rest: unknown[]
+) => Promise<Map<string, T>> {
+  return async (_scope, entryIds) =>
+    new Map(entryIds.map(id => [id, answer(id)]));
+}
+
 export function reads(
   over: Partial<ReleaseCheckReads> = {}
 ): ReleaseCheckReads {
@@ -58,8 +74,8 @@ export function reads(
     actingAs: async id => ({ id, roles: [] }),
     mayPerform: async () => true,
     existing: async refs => new Set(refs.map(documentRefKey)),
-    publishProblems: async () => [],
-    heldDraftLocales: async () => [],
+    publishProblems: perEntry(() => []),
+    heldDraftLocales: perEntry(() => []),
     scheduledMemberships: async () => new Map(),
     ...over,
   };

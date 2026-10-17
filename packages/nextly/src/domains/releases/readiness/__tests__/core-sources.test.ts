@@ -22,7 +22,7 @@ import {
 } from "../core-sources";
 import { clearReleaseCheckSourcesForTests } from "../check-sources";
 
-import { member, reads, release } from "./helpers/readiness-fixtures";
+import { member, perEntry, reads, release } from "./helpers/readiness-fixtures";
 
 async function run<Code extends string>(
   source: ReleaseCheckSource<Code>,
@@ -147,8 +147,8 @@ describe("core.exists", () => {
 
 describe("core.held-drafts", () => {
   it("reports a document held in another language, going live or coming down", async () => {
-    const heldDraftLocales = vi.fn(async (ref: { entryId: string }) =>
-      ref.entryId === "entry-fine" ? [] : ["de", "fr"]
+    const heldDraftLocales = vi.fn(
+      perEntry(id => (id === "entry-fine" ? [] : ["de", "fr"]))
     );
     const found = await run(
       CORE_HELD_DRAFTS_SOURCE,
@@ -174,17 +174,23 @@ describe("core.held-drafts", () => {
         detail: { locales: ["de", "fr"] },
       },
     ]);
-    expect(heldDraftLocales).toHaveBeenCalledTimes(3);
+    // One read for the scope, for the three members that move every language.
+    expect(heldDraftLocales).toHaveBeenCalledTimes(1);
+    expect(heldDraftLocales.mock.calls[0]?.[1]).toEqual([
+      "entry-goes-live",
+      "entry-comes-down",
+      "entry-fine",
+    ]);
   });
 });
 
 describe("core.required-fields", () => {
   it("reports a missing required value apart from any other failure", async () => {
     const found = await run(CORE_REQUIRED_FIELDS_SOURCE, [member("a")], {
-      publishProblems: async () => [
+      publishProblems: perEntry(() => [
         { path: "title", code: "REQUIRED", message: "Title is required." },
         { path: "slug", code: "PATTERN", message: "Slug is malformed." },
-      ],
+      ]),
     });
     expect(found).toEqual([
       {
@@ -198,10 +204,10 @@ describe("core.required-fields", () => {
 
   it("reports a field the author may no longer write apart from a failing one", async () => {
     const found = await run(CORE_REQUIRED_FIELDS_SOURCE, [member("a")], {
-      publishProblems: async () => [
+      publishProblems: perEntry(() => [
         { path: "guarded", code: "FORBIDDEN", message: "Not yours." },
         { path: "slug", code: "PATTERN", message: "Slug is malformed." },
-      ],
+      ]),
     });
     expect(found).toEqual([
       {
@@ -214,9 +220,11 @@ describe("core.required-fields", () => {
   });
 
   it("never judges a document coming down, so invalid content can be taken down", async () => {
-    const publishProblems = vi.fn(async () => [
-      { path: "title", code: "REQUIRED", message: "Title is required." },
-    ]);
+    const publishProblems = vi.fn(
+      perEntry(() => [
+        { path: "title", code: "REQUIRED", message: "Title is required." },
+      ])
+    );
     const found = await run(
       CORE_REQUIRED_FIELDS_SOURCE,
       [member("comes-down", { action: "unpublish" }), member("goes-live")],
@@ -225,13 +233,51 @@ describe("core.required-fields", () => {
     expect(found.map(f => f.memberId)).toEqual(["goes-live"]);
     expect(publishProblems).toHaveBeenCalledTimes(1);
     expect(publishProblems).toHaveBeenCalledWith(
-      expect.objectContaining({ entryId: "entry-goes-live" }),
+      expect.objectContaining({ scopeSlug: "posts" }),
+      ["entry-goes-live"],
       { id: "author", roles: [] }
     );
   });
 
   it("reports nothing for a document that passes", async () => {
     expect(await run(CORE_REQUIRED_FIELDS_SOURCE, [member("a")])).toEqual([]);
+  });
+});
+
+describe("reads batched by scope", () => {
+  /** Twelve members, alternating between two collections. */
+  const twelve = Array.from({ length: 12 }, (_, i) =>
+    member(`m${i}`, { scopeSlug: i % 2 === 0 ? "posts" : "pages" })
+  );
+
+  it("asks for held drafts once per scope, naming that scope's members", async () => {
+    const heldDraftLocales = vi.fn(perEntry(() => []));
+    await run(CORE_HELD_DRAFTS_SOURCE, twelve, { heldDraftLocales });
+    expect(heldDraftLocales).toHaveBeenCalledTimes(2);
+    expect(
+      heldDraftLocales.mock.calls.map(([scope, ids]) => [
+        (scope as { scopeSlug: string }).scopeSlug,
+        ids.length,
+      ])
+    ).toEqual([
+      ["posts", 6],
+      ["pages", 6],
+    ]);
+  });
+
+  it("asks for publish problems once per scope and author", async () => {
+    const publishProblems = vi.fn(perEntry(() => []));
+    const twoAuthors = twelve.map((m, i) =>
+      i < 4 ? { ...m, createdBy: "other" } : m
+    );
+    await run(CORE_REQUIRED_FIELDS_SOURCE, twoAuthors, { publishProblems });
+    // (author, posts), (other, posts), (author, pages), (other, pages).
+    expect(publishProblems).toHaveBeenCalledTimes(4);
+    expect(
+      publishProblems.mock.calls
+        .map(([, ids]) => ids.length)
+        .reduce((a, b) => a + b, 0)
+    ).toBe(12);
   });
 });
 

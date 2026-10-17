@@ -11,14 +11,17 @@
  */
 import { registerCoreReleaseCheckSources } from "../../readiness/core-sources";
 import type { ReleaseDocumentChecks } from "../../services/releases-service";
+import { perEntry } from "../../readiness/__tests__/helpers/readiness-fixtures";
 import { documentRefKey } from "../../releases-repository";
 
 registerCoreReleaseCheckSources();
+
+export { perEntry };
 
 export const READY_CHECKS: ReleaseDocumentChecks = {
   actingAs: async authorId => ({ id: authorId, roles: [] }),
   mayPerform: async () => true,
   existing: async refs => new Set(refs.map(documentRefKey)),
-  publishProblems: async () => [],
-  heldDraftLocales: async () => [],
+  publishProblems: perEntry(() => []),
+  heldDraftLocales: perEntry(() => []),
 };

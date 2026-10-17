@@ -59,26 +59,55 @@ export function releaseDocumentChecks(
         authorMayPerform(adapter, logger, user, scope, action)
       ),
     existing: refs => existingDocuments(adapter, logger, refs),
-    heldDraftLocales: ref =>
-      ref.scopeKind === "single"
-        ? singleEntries().releaseHeldDraftLocales({ slug: ref.scopeSlug })
-        : collections().releaseHeldDraftLocales({
-            collectionName: ref.scopeSlug,
-            entryId: ref.entryId,
-          }),
+    heldDraftLocales: async (scope, entryIds) => {
+      if (scope.scopeKind !== "single") {
+        return collections().releaseHeldDraftLocales({
+          collectionName: scope.scopeSlug,
+          entryIds,
+        });
+      }
+      const single = await singleEntries().releaseHeldDraftLocales({
+        slug: scope.scopeSlug,
+      });
+      return forSingleRow(entryIds, single, found => found.locales, []);
+    },
     // Detached from the request, for the reason `mayPerform` is: the field
     // rules a publish meets are evaluated, read-only, for the NAMED author.
-    publishProblems: (ref, user) =>
-      runDetachedFromRequest(() =>
-        ref.scopeKind === "single"
-          ? singleEntries().releasePublishIssues({ slug: ref.scopeSlug, user })
-          : collections().releasePublishIssues({
-              collectionName: ref.scopeSlug,
-              entryId: ref.entryId,
-              user,
-            })
-      ),
+    publishProblems: (scope, entryIds, user) =>
+      runDetachedFromRequest(async () => {
+        if (scope.scopeKind !== "single") {
+          return collections().releasePublishIssues({
+            collectionName: scope.scopeSlug,
+            entryIds,
+            user,
+          });
+        }
+        const single = await singleEntries().releasePublishIssues({
+          slug: scope.scopeSlug,
+          user,
+        });
+        return forSingleRow(entryIds, single, found => found.issues, []);
+      }),
   };
+}
+
+/**
+ * A Single's answer, keyed by the members' entry ids: only a member naming the
+ * Single's current row is answered about it; any other names a document that
+ * is no longer there, which `core.exists` reports.
+ */
+function forSingleRow<A extends { entryId: string }, T>(
+  entryIds: readonly string[],
+  answer: A | null,
+  pick: (found: A) => T,
+  none: T
+): Map<string, T> {
+  return new Map(
+    entryIds.map(id => [
+      id,
+      answer !== null && answer.entryId === id ? pick(answer) : none,
+    ])
+  );
 }
 
 /** Resolved per call, so this does not depend on registration order. */

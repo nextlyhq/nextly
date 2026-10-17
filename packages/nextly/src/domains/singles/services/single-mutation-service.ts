@@ -350,46 +350,57 @@ export class SingleMutationService extends BaseService {
   /**
    * The other languages whose unreleased work a release's document-wide write
    * of this Single would be refused over, read now from the pool: the same
-   * rule the write asks under its row lock. Empty for a Single with no stored
-   * document.
+   * rule the write asks under its row lock. Answered with the id of the row
+   * it was asked of, so a caller can tell the Single's document from one it
+   * held before; `null` for a Single with no stored document.
    *
    * @experimental
    */
-  async releaseHeldDraftLocales(params: { slug: string }): Promise<string[]> {
+  async releaseHeldDraftLocales(params: {
+    slug: string;
+  }): Promise<{ entryId: string; locales: string[] } | null> {
     const singleMeta = await resolveSingleForRequest(
       this.adapter,
       this.singleRegistryService,
       params.slug,
       this.logger
     );
-    if (!singleMeta) return [];
+    if (!singleMeta) return null;
     const row = await this.adapter.selectOne<SingleDocument>(
       singleMeta.tableName,
       {}
     );
-    if (!row) return [];
-    return this.languagesHoldingDrafts(
-      new VersionsRepository(this.adapter),
-      singleMeta,
-      params.slug,
-      row.id
-    );
+    if (!row) return null;
+    return {
+      entryId: row.id,
+      locales: await this.languagesHoldingDrafts(
+        new VersionsRepository(this.adapter),
+        singleMeta,
+        params.slug,
+        row.id
+      ),
+    };
   }
 
   /**
    * The configured languages other than a document-wide write's own holding a
-   * working draft of this Single, through `languagesHoldingWorkingDrafts`.
+   * working draft of this Single, through `languagesHoldingWorkingDrafts`;
+   * none, without a read, when the Single keeps no drafts.
    */
-  private languagesHoldingDrafts(
+  private async languagesHoldingDrafts(
     versions: VersionsRepository,
     singleMeta: DynamicSingleRecord,
     slug: string,
     entryId: string
   ): Promise<string[]> {
+    if (singleMeta.versions?.drafts?.enabled !== true) return [];
+    const drafts = await versions.findAllWorkingDrafts({
+      scopeKind: "single",
+      scopeSlug: slug,
+      entryId,
+    });
     return languagesHoldingWorkingDrafts({
-      versions,
-      ref: { scopeKind: "single", scopeSlug: slug, entryId },
-      draftsEnabled: singleMeta.versions?.drafts?.enabled === true,
+      draftLocales: drafts.map(draft => draft.locale),
       writeDraftLocale: workingDraftLocale({
         documentLocalized: singleMeta.localized === true,
         // A wildcard carries no request locale by the time it reaches the
@@ -412,22 +423,23 @@ export class SingleMutationService extends BaseService {
    * with their grants, so a pending change to a field they may no longer
    * write is reported as the write refuses it, by the gate's own refusal
    * (each field at fault, coded `FORBIDDEN`). The write's hooks are not run,
-   * since they may reach outside this process. A Single with no stored
-   * document, or no draft/published lifecycle, answers with nothing to report.
+   * since they may reach outside this process. Answered with the id of the
+   * row it was asked of; `null` for a Single with no stored document or no
+   * draft/published lifecycle.
    *
    * @experimental
    */
   async releasePublishIssues(params: {
     slug: string;
     user: UserContext;
-  }): Promise<ValidationIssue[]> {
+  }): Promise<{ entryId: string; issues: ValidationIssue[] } | null> {
     const singleMeta = await resolveSingleForRequest(
       this.adapter,
       this.singleRegistryService,
       params.slug,
       this.logger
     );
-    if (singleMeta?.status !== true) return [];
+    if (singleMeta?.status !== true) return null;
     const meta = singleMeta;
     const fieldConfigs = meta.fields ?? [];
     const companion =
@@ -466,7 +478,7 @@ export class SingleMutationService extends BaseService {
     // the live document through one.
     return this.adapter.transaction(async tx => {
       const row = await tx.selectOne<SingleDocument>(meta.tableName, {});
-      if (!row) return [];
+      if (!row) return null;
       const { draftLocale, eligible } = resolveDraftHold({
         collectionHasStatus: true,
         draftsVersioningEnabled: meta.versions?.drafts?.enabled === true,
@@ -499,7 +511,7 @@ export class SingleMutationService extends BaseService {
       const localizedFieldNames = new Set(
         (companion?.localizedFields ?? []).map(f => f.name)
       );
-      return forbiddenAsIssues(() =>
+      const issues = await forbiddenAsIssues(() =>
         promotionIssues(drafts, {
           ...promoteCallerFor({
             tx,
@@ -534,6 +546,7 @@ export class SingleMutationService extends BaseService {
           enforceLocalizedRequired: true,
         })
       );
+      return { entryId: row.id, issues };
     });
   }
 

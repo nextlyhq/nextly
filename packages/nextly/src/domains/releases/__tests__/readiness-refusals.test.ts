@@ -22,7 +22,7 @@ import type {
 } from "../services/releases-service";
 import { ReleasesService } from "../services/releases-service";
 
-import { READY_CHECKS } from "./helpers/ready-checks";
+import { READY_CHECKS, perEntry } from "./helpers/ready-checks";
 
 const ACTOR = { userId: "editor" };
 
@@ -109,9 +109,9 @@ function service(over: {
 
 /** A document going live that fails validation for a missing title. */
 const MISSING_TITLE: Partial<ReleaseDocumentChecks> = {
-  publishProblems: async () => [
+  publishProblems: perEntry(() => [
     { path: "title", code: "REQUIRED", message: "Title is required." },
-  ],
+  ]),
 };
 
 /** An author who may publish but not unpublish. */
@@ -124,10 +124,11 @@ describe("readiness", () => {
     const { svc, repo } = service({
       members: [memberRow("m1"), memberRow("m2")],
       checks: {
-        publishProblems: async ref =>
-          ref.entryId === "entry-m2"
+        publishProblems: perEntry(id =>
+          id === "entry-m2"
             ? [{ path: "title", code: "REQUIRED", message: "Required." }]
-            : [],
+            : []
+        ),
       },
     });
     repo.findDueMembersFor.mockResolvedValueOnce(
@@ -256,14 +257,15 @@ describe("adding a document to a scheduled release", () => {
   });
 
   it("checks the new document as its author, the caller", async () => {
-    const publishProblems = vi.fn(async () => []);
+    const publishProblems = vi.fn(perEntry(() => []));
     const { svc, repo } = service({
       state: "scheduled",
       checks: { publishProblems },
     });
     await svc.addMember("r1", ADD, ACTOR);
     expect(publishProblems).toHaveBeenCalledWith(
-      expect.objectContaining({ entryId: "e9" }),
+      expect.objectContaining({ scopeSlug: "posts" }),
+      ["e9"],
       { id: "editor", roles: [] }
     );
     expect(repo.addMember).toHaveBeenCalledTimes(1);

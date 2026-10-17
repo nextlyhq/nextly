@@ -103,19 +103,26 @@ export interface ReleaseCheckReads {
   /** Which of these documents still exist, as `documentRefKey` keys. */
   existing(refs: readonly DocumentRef[]): Promise<ReadonlySet<string>>;
   /**
-   * What a publish of this document as this person would be refused with by
-   * validation, judged without writing. Empty when it would pass, or when the
-   * document is not there.
+   * What a publish of each of these documents of one scope, as this person,
+   * would be refused with, judged without writing, keyed by entry id: read
+   * for the scope once rather than per document. Empty for a document that
+   * would pass, or that is not there.
    */
   publishProblems(
-    ref: DocumentRef,
+    scope: ReleaseCheckScope,
+    entryIds: readonly string[],
     user: UserContext
-  ): Promise<readonly ValidationIssue[]>;
+  ): Promise<ReadonlyMap<string, readonly ValidationIssue[]>>;
   /**
-   * The other languages holding unreleased work that would make the release's
-   * document-wide write of this document refuse, whatever its action.
+   * For each of these documents of one scope, the other languages holding
+   * unreleased work that would make the release's document-wide write refuse,
+   * whatever its action, keyed by entry id: read for the scope once rather
+   * than per document.
    */
-  heldDraftLocales(ref: DocumentRef): Promise<readonly string[]>;
+  heldDraftLocales(
+    scope: ReleaseCheckScope,
+    entryIds: readonly string[]
+  ): Promise<ReadonlyMap<string, readonly string[]>>;
   /**
    * The scheduled releases' members for these documents, keyed by
    * `documentRefKey`, this release's own included.

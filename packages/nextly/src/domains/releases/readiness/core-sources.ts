@@ -23,6 +23,7 @@
  */
 import { NextlyError } from "../../../errors";
 import type { ReleaseBlockerReason } from "../../../schemas/releases/types";
+import type { ValidationIssue } from "../../../shared/lib/entry-validation";
 import type { UserContext } from "../../collections/services/collection-types";
 import { documentRefKey, type ReleaseMemberRow } from "../releases-repository";
 import {
@@ -80,6 +81,28 @@ function runnable(
   );
 }
 
+/** The scope a member's document lives in, as one key. */
+function scopeKey(member: ReleaseMemberRow): string {
+  return `${member.scopeKind}:${member.scopeSlug}`;
+}
+
+/**
+ * Members grouped by a key, in the order each group is first met, each group
+ * in member order. A key may be a list of parts, joined unambiguously.
+ */
+function groupedBy<M>(
+  members: readonly M[],
+  keyOf: (member: M) => string | ReadonlyArray<string | null>
+): M[][] {
+  const groups = new Map<string, M[]>();
+  for (const member of members) {
+    const key = keyOf(member);
+    const flat = typeof key === "string" ? key : JSON.stringify(key);
+    groups.set(flat, [...(groups.get(flat) ?? []), member]);
+  }
+  return [...groups.values()];
+}
+
 /**
  * The run's identity for each author, looked up once per check. `null` for an
  * author with nobody to act as, which `core.author` reports.
@@ -135,21 +158,13 @@ export const CORE_PERMISSION_SOURCE = defineReleaseCheckSource({
   codes: ["AUTHOR_MAY_NOT_ACT"],
   async check(batch, ctx) {
     const actingAs = identities(ctx);
-    const groups = new Map<
-      string,
-      Array<ReleaseMemberRow & { createdBy: string }>
-    >();
-    for (const member of runnable(batch)) {
-      const key = JSON.stringify([
-        member.createdBy,
-        member.scopeKind,
-        member.scopeSlug,
-        member.action,
-      ]);
-      groups.set(key, [...(groups.get(key) ?? []), member]);
-    }
     const findings: ReleaseCheckFinding<"AUTHOR_MAY_NOT_ACT">[] = [];
-    for (const members of groups.values()) {
+    const groups = groupedBy(runnable(batch), member => [
+      member.createdBy,
+      scopeKey(member),
+      member.action,
+    ]);
+    for (const members of groups) {
       const [first] = members;
       const user = await actingAs(first.createdBy);
       if (user === null) continue;
@@ -187,14 +202,21 @@ export const CORE_HELD_DRAFTS_SOURCE = defineReleaseCheckSource({
   codes: ["DRAFT_HELD_IN_LOCALE"],
   async check(batch, ctx) {
     const findings: ReleaseCheckFinding<"DRAFT_HELD_IN_LOCALE">[] = [];
-    for (const member of runnable(batch)) {
-      const locales = await ctx.reads.heldDraftLocales(member);
-      if (locales.length === 0) continue;
-      findings.push({
-        memberId: member.id,
-        code: "DRAFT_HELD_IN_LOCALE",
-        detail: { locales: [...locales] },
-      });
+    // One read per scope for every member of the batch in it.
+    for (const members of groupedBy(runnable(batch), scopeKey)) {
+      const held = await ctx.reads.heldDraftLocales(
+        members[0],
+        members.map(member => member.entryId)
+      );
+      for (const member of members) {
+        const locales = held.get(member.entryId) ?? [];
+        if (locales.length === 0) continue;
+        findings.push({
+          memberId: member.id,
+          code: "DRAFT_HELD_IN_LOCALE",
+          detail: { locales: [...locales] },
+        });
+      }
     }
     return findings;
   },
@@ -233,23 +255,42 @@ export const CORE_REQUIRED_FIELDS_SOURCE = defineReleaseCheckSource({
   async check(batch, ctx) {
     const actingAs = identities(ctx);
     const findings: ReleaseCheckFinding<FieldFinding>[] = [];
-    for (const member of runnable(batch)) {
-      if (member.action !== "publish") continue;
-      const user = await actingAs(member.createdBy);
+    const goingLive = runnable(batch).filter(m => m.action === "publish");
+    // One read per author and scope: a publish is judged as its author, and a
+    // scope's schema, rows and drafts are read once for its members.
+    for (const members of groupedBy(goingLive, m => [
+      m.createdBy,
+      scopeKey(m),
+    ])) {
+      const user = await actingAs(members[0].createdBy);
       if (user === null) continue;
-      const issues = await ctx.reads.publishProblems(member, user);
-      for (const code of FIELD_FINDINGS) {
-        const fields = issues
-          .filter(issue => fieldFindingFor(issue.code) === code)
-          .map(issue => issue.path);
-        if (fields.length > 0) {
-          findings.push({ memberId: member.id, code, detail: { fields } });
-        }
+      const issues = await ctx.reads.publishProblems(
+        members[0],
+        members.map(member => member.entryId),
+        user
+      );
+      for (const member of members) {
+        findings.push(
+          ...fieldFindings(member.id, issues.get(member.entryId) ?? [])
+        );
       }
     }
     return findings;
   },
 });
+
+/** One member's refused fields, as findings, one per kind of refusal. */
+function fieldFindings(
+  memberId: string,
+  issues: readonly ValidationIssue[]
+): ReleaseCheckFinding<FieldFinding>[] {
+  return FIELD_FINDINGS.flatMap(code => {
+    const fields = issues
+      .filter(issue => fieldFindingFor(issue.code) === code)
+      .map(issue => issue.path);
+    return fields.length === 0 ? [] : [{ memberId, code, detail: { fields } }];
+  });
+}
 
 /**
  * Other scheduled releases holding each member's document, and which of the

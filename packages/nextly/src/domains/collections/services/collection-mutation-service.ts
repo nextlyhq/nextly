@@ -18,7 +18,7 @@ import type {
   TransactionContext,
   WhereCondition,
 } from "@nextlyhq/adapter-drizzle/types";
-import { eq, ne, and, like, ilike } from "drizzle-orm";
+import { eq, ne, and, like, ilike, inArray } from "drizzle-orm";
 
 // `OperationType` was removed during the PR 4 migration — this module no longer
 // references it, so we import only `BeforeOperationArgs`.
@@ -174,7 +174,10 @@ import {
 import { VersionCaptureService } from "../../versions/version-capture-service";
 import { withVersionConflictRetry } from "../../versions/version-conflict";
 import { deletePinsForDocument } from "../../versions/version-pins";
-import { VersionsRepository } from "../../versions/versions-repository";
+import {
+  VersionsRepository,
+  type VersionRow,
+} from "../../versions/versions-repository";
 import { workingDraftLocale } from "../../versions/working-draft-locale";
 import { expandComponentFields } from "../../webhooks/expand-component-fields";
 import { projectFields } from "../../webhooks/project-fields";
@@ -496,6 +499,8 @@ interface GoingLiveArgs {
   splitComponentSchemas: ComponentSchemas | null;
   /** How a working draft is restored, or `null` when none can be promoted. */
   promoteRestoreCtx: RestoreSchemaContext | null;
+  /** Where the entry's working draft is read from. */
+  drafts: Pick<VersionsRepository, "findWorkingDraft">;
   draftLocaleKey: string | null;
   collectionHasStatus: boolean;
   /** The status the write will persist, if it names one. */
@@ -2071,11 +2076,14 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
-   * What a publish of this entry, as a release performs it, would be refused
-   * with by validation, judged now and without writing: the release's own
-   * write — the status alone, every language at once, as `user` — taken
-   * through {@link goingLiveIssues}, the judgement the write itself makes.
+   * What a publish of each of these entries, as a release performs it, would
+   * be refused with by validation, keyed by entry id, judged now and without
+   * writing: the release's own write — the status alone, every language at
+   * once, as `user` — taken through {@link goingLiveIssues}, the judgement the
+   * write itself makes.
    *
+   * Batched: the collection, its schema, the rows and the working drafts are
+   * read once for all the entries, and each entry is then judged on its own.
    * The write's hooks are not run, since they may reach outside this process;
    * a hook that rewrites the document is judged at the write itself. An entry
    * that is not there, or a collection with no draft/published lifecycle,
@@ -2085,19 +2093,66 @@ export class CollectionMutationService extends BaseService {
    */
   async releasePublishIssues(params: {
     collectionName: string;
-    entryId: string;
+    entryIds: readonly string[];
     user: UserContext;
-  }): Promise<ValidationIssue[]> {
+  }): Promise<Map<string, ValidationIssue[]>> {
+    const issues = new Map<string, ValidationIssue[]>(
+      params.entryIds.map(id => [id, []])
+    );
+    if (params.entryIds.length === 0) return issues;
     const collection = await this.collectionService.getCollection(
       params.collectionName
     );
-    if ((collection as { status?: boolean }).status !== true) return [];
-    const existingEntry = await this.storedEntry(
-      params.collectionName,
-      params.entryId
+    if ((collection as { status?: boolean }).status !== true) return issues;
+    const shared = await this.releaseWriteContext(
+      collection,
+      params.collectionName
     );
-    if (!existingEntry) return [];
+    const rows = await this.storedEntries(
+      params.collectionName,
+      params.entryIds
+    );
+    const drafts =
+      shared.promoteRestoreCtx === null
+        ? new Map<string, VersionRow>()
+        : await new VersionsRepository(this.adapter).findWorkingDraftsOf(
+            { scopeKind: "collection", scopeSlug: params.collectionName },
+            [...rows.keys()],
+            shared.draftLocaleKey
+          );
+    for (const [entryId, existingEntry] of rows) {
+      issues.set(
+        entryId,
+        await this.goingLiveIssues({
+          ...shared,
+          collectionName: params.collectionName,
+          entryId,
+          user: params.user,
+          existingEntry,
+          // Served from the batch's one read, by the entry it was asked for.
+          drafts: {
+            findWorkingDraft: ref => Promise.resolve(drafts.get(ref.entryId)),
+          },
+        })
+      );
+    }
+    return issues;
+  }
 
+  /**
+   * What a release's write judges with that is the same for every entry of
+   * the collection: its fields, the payload it writes, and how a working
+   * draft would be promoted and keyed.
+   */
+  private async releaseWriteContext(
+    collection: unknown,
+    collectionName: string
+  ): Promise<
+    Omit<
+      GoingLiveArgs,
+      "collectionName" | "entryId" | "user" | "existingEntry" | "drafts"
+    >
+  > {
     const fields = collectionFields(collection);
     const finalData: Record<string, unknown> = { status: "published" };
     const manyToManyFields = fields.filter(
@@ -2127,12 +2182,9 @@ export class CollectionMutationService extends BaseService {
       fields: fields as unknown as FieldConfig[],
       componentSchemas: splitComponentSchemas,
     });
-    return this.goingLiveIssues({
-      collectionName: params.collectionName,
-      entryId: params.entryId,
+    return {
       // Every language: the wildcard resolves to the unlocalized write.
       locale: undefined,
-      user: params.user,
       fields,
       finalData,
       componentFieldData,
@@ -2148,72 +2200,83 @@ export class CollectionMutationService extends BaseService {
             documentLocalized,
           })
         : null,
-      draftLocaleKey: workingDraftLocale({
-        documentLocalized,
-        requestLocale: null,
-        defaultLocale: this.localization?.defaultLocale ?? null,
-      }),
+      draftLocaleKey: this.wildcardDraftLocale(collection),
       collectionHasStatus: true,
       transitionNextStatus: "published",
       sweepAllLocales: true,
-      existingEntry,
       localizedUpdate: await this.splitLocalizedWriteData(
-        params.collectionName,
+        collectionName,
         finalData,
         undefined,
         false
       ),
+    };
+  }
+
+  /**
+   * The slot a document-wide write's own working draft is kept under: the
+   * wildcard carries no request locale by the time it is written.
+   */
+  private wildcardDraftLocale(collection: unknown): string | null {
+    return workingDraftLocale({
+      documentLocalized:
+        (collection as { localized?: boolean }).localized === true,
+      requestLocale: null,
+      defaultLocale: this.localization?.defaultLocale ?? null,
     });
   }
 
   /**
-   * The other languages whose unreleased work a release's document-wide write
-   * of this entry would be refused over, read now from the pool: the same
-   * rule the write asks under its row lock.
+   * For each of these entries, the other languages whose unreleased work a
+   * release's document-wide write would be refused over, keyed by entry id,
+   * read now from the pool in one query: the same rule the write asks under
+   * its row lock.
    *
    * @experimental
    */
   async releaseHeldDraftLocales(params: {
     collectionName: string;
-    entryId: string;
-  }): Promise<string[]> {
+    entryIds: readonly string[];
+  }): Promise<Map<string, string[]>> {
+    const held = new Map<string, string[]>(params.entryIds.map(id => [id, []]));
+    if (params.entryIds.length === 0) return held;
     const collection = await this.collectionService.getCollection(
       params.collectionName
     );
-    return this.languagesHoldingDrafts(
-      new VersionsRepository(this.adapter),
-      collection,
-      params.collectionName,
-      params.entryId,
-      // The slot a document-wide write's own draft is kept under: the
-      // wildcard carries no request locale by the time it is written.
-      workingDraftLocale({
-        documentLocalized:
-          (collection as { localized?: boolean }).localized === true,
-        requestLocale: null,
-        defaultLocale: this.localization?.defaultLocale ?? null,
-      })
+    if (!this.keepsWorkingDrafts(collection)) return held;
+    const drafted = await new VersionsRepository(
+      this.adapter
+    ).findPendingChangeLocales("collection", params.collectionName, [
+      ...new Set(params.entryIds),
+    ]);
+    for (const entryId of params.entryIds) {
+      held.set(
+        entryId,
+        this.heldLanguages(collection, drafted.get(entryId) ?? [])
+      );
+    }
+    return held;
+  }
+
+  /** Whether the collection keeps working drafts at all. */
+  private keepsWorkingDrafts(collection: unknown): boolean {
+    return (
+      (collection as { versions?: { drafts?: { enabled?: boolean } } }).versions
+        ?.drafts?.enabled === true
     );
   }
 
   /**
-   * The configured languages other than the write's own holding a working
-   * draft of this entry, through `languagesHoldingWorkingDrafts`.
+   * The configured languages, other than a document-wide write's own, among
+   * those holding a working draft, through `languagesHoldingWorkingDrafts`.
    */
-  private languagesHoldingDrafts(
-    versions: VersionsRepository,
+  private heldLanguages(
     collection: unknown,
-    collectionName: string,
-    entryId: string,
-    writeDraftLocale: string | null
-  ): Promise<string[]> {
+    draftLocales: Iterable<string | null>
+  ): string[] {
     return languagesHoldingWorkingDrafts({
-      versions,
-      ref: { scopeKind: "collection", scopeSlug: collectionName, entryId },
-      draftsEnabled:
-        (collection as { versions?: { drafts?: { enabled?: boolean } } })
-          .versions?.drafts?.enabled === true,
-      writeDraftLocale,
+      draftLocales,
+      writeDraftLocale: this.wildcardDraftLocale(collection),
       configuredLocales: this.localization?.locales.map(l => l.code) ?? [],
     });
   }
@@ -2250,9 +2313,7 @@ export class CollectionMutationService extends BaseService {
   ): Promise<ValidationIssue[]> {
     let promotesDraft = false;
     if (args.promoteRestoreCtx !== null) {
-      const advisoryDraft = await new VersionsRepository(
-        this.adapter
-      ).findWorkingDraft(
+      const advisoryDraft = await args.drafts.findWorkingDraft(
         {
           scopeKind: "collection",
           scopeSlug: args.collectionName,
@@ -5753,6 +5814,21 @@ export class CollectionMutationService extends BaseService {
     return denied === null;
   }
 
+  /** The stored rows of these entries that are there, keyed by id. */
+  private async storedEntries(
+    collectionName: string,
+    entryIds: readonly string[]
+  ): Promise<Map<string, Record<string, unknown>>> {
+    const schema = await this.fileManager.loadDynamicSchema(collectionName);
+    const rows = (await this.db
+      .select()
+      .from(schema)
+      .where(inArray(schema.id, [...new Set(entryIds)]))) as Array<
+      Record<string, unknown>
+    >;
+    return new Map(rows.map(row => [String(row.id), row]));
+  }
+
   /** The entry's stored row, or `undefined` when it is not there. */
   private async storedEntry(
     collectionName: string,
@@ -6989,6 +7065,7 @@ export class CollectionMutationService extends BaseService {
         sweepAllLocales,
         existingEntry: existingEntry as Record<string, unknown>,
         localizedUpdate,
+        drafts: new VersionsRepository(this.adapter),
       });
       if (goingLive.length > 0) {
         throw NextlyError.validation({ errors: goingLive });
@@ -7091,13 +7168,16 @@ export class CollectionMutationService extends BaseService {
           // proceed over work it never saw. The refusal travels out on the
           // same out-of-band result the transition gate uses, since the adapter
           // re-wraps a thrown sentinel before the catch can identify it.
-          if (sweepAllLocales) {
-            const heldBy = await this.languagesHoldingDrafts(
-              new VersionsRepository(tx),
+          if (sweepAllLocales && this.keepsWorkingDrafts(collection)) {
+            const heldBy = this.heldLanguages(
               collection,
-              params.collectionName,
-              params.entryId,
-              draftLocaleKey
+              (
+                await new VersionsRepository(tx).findAllWorkingDrafts({
+                  scopeKind: "collection",
+                  scopeSlug: params.collectionName,
+                  entryId: params.entryId,
+                })
+              ).map(draft => draft.locale)
             );
             if (heldBy.length > 0) {
               transitionDeniedResult = {

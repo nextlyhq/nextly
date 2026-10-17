@@ -313,9 +313,9 @@ export class CollectionsHandler {
    */
   async releasePublishIssues(params: {
     collectionName: string;
-    entryId: string;
+    entryIds: readonly string[];
     user: UserContext;
-  }): Promise<ValidationIssue[]> {
+  }): Promise<Map<string, ValidationIssue[]>> {
     return this.entryService.releasePublishIssues(params);
   }
 
@@ -328,8 +328,8 @@ export class CollectionsHandler {
    */
   async releaseHeldDraftLocales(params: {
     collectionName: string;
-    entryId: string;
-  }): Promise<string[]> {
+    entryIds: readonly string[];
+  }): Promise<Map<string, string[]>> {
     return this.entryService.releaseHeldDraftLocales(params);
   }
 
