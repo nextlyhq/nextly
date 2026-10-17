@@ -37,6 +37,7 @@ import {
 } from "../delivery-record";
 import { EmailErrorCode } from "../errors";
 import { describeProviderFailure } from "../provider-definition";
+import { CODE_TEMPLATE_KEYS } from "../template-ownership";
 import type {
   EmailAttachmentInput,
   EmailConfig,
@@ -68,23 +69,6 @@ export interface EmailAttachmentSource {
   findMedia: (mediaId: string) => Promise<AttachmentMediaRecord | null>;
   readBytes: (storagePath: string) => Promise<Buffer>;
 }
-
-// ============================================================
-// Slug-to-code-template key mapping
-// ============================================================
-
-/**
- * Maps DB template slugs to `EmailConfig.templates` keys.
- * Used for code-first template fallback resolution.
- */
-const SLUG_TO_TEMPLATE_KEY: Record<
-  string,
-  keyof NonNullable<EmailConfig["templates"]>
-> = {
-  welcome: "welcome",
-  "password-reset": "passwordReset",
-  "email-verification": "emailVerification",
-};
 
 // ============================================================
 // Email Service
@@ -193,9 +177,10 @@ export class EmailService extends BaseService {
    * Send an email using a named template.
    *
    * Resolution order for templates:
-   * 1. DB template (by slug) — interpolates variables, composes with layout
-   * 2. Code-first template override from `defineConfig({ email: { templates } })`
-   * 3. Error if neither exists
+   * 1. The site's override of the template, when it has one
+   * 2. The site's code version, from `defineConfig({ email: { templates } })`
+   * 3. The owner's version, as stored
+   * 4. Error if none exists
    *
    * @param templateSlug - Template slug (e.g., "password-reset", "welcome")
    * @param to - Recipient email address
@@ -229,10 +214,14 @@ export class EmailService extends BaseService {
     const fromOverride = options?.from?.trim() || undefined;
     const replyToOverride = options?.replyTo?.trim() || undefined;
 
-    // 1. Try DB template first
+    // The stored template, and whether the site's code version comes first:
+    // it does unless the site has overridden the template.
+    const codeFn = this.codeTemplateFor(templateSlug);
     let dbTemplate: EmailTemplateRecord | null = null;
+    let preferCode = true;
     try {
-      dbTemplate = await this.templateService.getTemplateBySlug(templateSlug);
+      ({ template: dbTemplate, preferCode } =
+        await this.templateService.resolveForSend(templateSlug));
     } catch (error) {
       this.logger.warn(
         "Failed to look up email template from DB — will try code-first fallback",
@@ -243,7 +232,7 @@ export class EmailService extends BaseService {
       );
     }
 
-    if (dbTemplate && dbTemplate.isActive) {
+    if (dbTemplate && dbTemplate.isActive && !(codeFn && preferCode)) {
       // Surface missing required variables without blocking the send — the
       // authoring UI validates at edit time, and existing sends must not
       // start failing on data that previously rendered (blank).
@@ -300,12 +289,7 @@ export class EmailService extends BaseService {
       });
     }
 
-    // 2. Try code-first template override
-    const templateKey = SLUG_TO_TEMPLATE_KEY[templateSlug];
-    const codeFn = templateKey
-      ? this.emailConfig?.templates?.[templateKey]
-      : undefined;
-
+    // The site's code version.
     if (codeFn) {
       const result = codeFn({
         user: {
@@ -872,9 +856,10 @@ export class EmailService extends BaseService {
     let providerId: string | undefined;
 
     try {
-      const template =
-        await this.templateService.getTemplateBySlug(templateSlug);
-      if (template?.isActive) {
+      const { template, preferCode } =
+        await this.templateService.resolveForSend(templateSlug);
+      const codeWins = preferCode && !!this.codeTemplateFor(templateSlug);
+      if (template?.isActive && !codeWins) {
         providerId = template.providerId ?? undefined;
       }
     } catch {
@@ -888,6 +873,12 @@ export class EmailService extends BaseService {
     } catch {
       return false;
     }
+  }
+
+  /** The site's code version of a template, from `email.templates`, if it sets one. */
+  private codeTemplateFor(slug: string) {
+    const key = CODE_TEMPLATE_KEYS[slug];
+    return key ? this.emailConfig?.templates?.[key] : undefined;
   }
 
   // ============================================================

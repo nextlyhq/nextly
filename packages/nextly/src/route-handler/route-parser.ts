@@ -1659,6 +1659,18 @@ function parseEmailProviderRoutes(
 // Email Template Routes Parser
 // ============================================================================
 
+/** The template ownership routes, by their URL token. */
+const EMAIL_TEMPLATE_OWNERSHIP_ROUTES: Record<
+  string,
+  { httpMethod: "GET" | "PATCH"; method: string }
+> = {
+  override: { httpMethod: "PATCH", method: "overrideTemplate" },
+  reset: { httpMethod: "PATCH", method: "resetTemplate" },
+  compare: { httpMethod: "GET", method: "compareTemplate" },
+  "apply-update": { httpMethod: "PATCH", method: "applyOwnerUpdate" },
+  "undo-update": { httpMethod: "PATCH", method: "undoOwnerUpdate" },
+};
+
 /**
  * Parse Email Template routes
  *
@@ -1672,6 +1684,11 @@ function parseEmailProviderRoutes(
  * - DELETE /api/email-templates/[id] → delete template
  * - POST /api/email-templates/preview → render unsaved fields (draft)
  * - POST /api/email-templates/[id]/preview → preview with sample data
+ * - PATCH /api/email-templates/[id]/override → override an owned template
+ * - PATCH /api/email-templates/[id]/reset → return it to its owner's version
+ * - GET /api/email-templates/[id]/compare → the owner's changes since the override
+ * - PATCH /api/email-templates/[id]/apply-update → apply a review of them
+ * - PATCH /api/email-templates/[id]/undo-update → undo that review
  */
 function parseEmailTemplateRoutes(
   id: string | undefined,
@@ -1727,6 +1744,21 @@ function parseEmailTemplateRoutes(
       service: "emailTemplates",
       operation: "single",
       method: "previewTemplate",
+      routeParams,
+    };
+  }
+
+  // The ownership steps. Each changes the template, so each is a PATCH and
+  // needs the update permission, as an edit does; the comparison only reads.
+  const ownership = id
+    ? EMAIL_TEMPLATE_OWNERSHIP_ROUTES[subresource ?? ""]
+    : undefined;
+  if (id && ownership && httpMethod === ownership.httpMethod) {
+    routeParams.templateId = id;
+    return {
+      service: "emailTemplates",
+      operation: ownership.httpMethod === "GET" ? "single" : "update",
+      method: ownership.method,
       routeParams,
     };
   }

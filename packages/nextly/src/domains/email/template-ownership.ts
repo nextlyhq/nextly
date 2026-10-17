@@ -1,0 +1,353 @@
+/**
+ * Who owns each email template, and what each owner's current version is.
+ *
+ * Core owns its built-in templates and the default layout; a running plugin
+ * owns what it contributes; the site owns everything else. At boot the email
+ * domain builds one registry of every owned template's current default and
+ * reconciles the stored rows against it: an owner's template that the site has
+ * not overridden follows the owner, and one the site has overridden keeps the
+ * site's version along with a copy of the owner's version it started from.
+ *
+ * Ownership is decided here, on the server, from what core and the running
+ * plugins declare. The admin only displays it.
+ */
+
+import { createHash } from "crypto";
+
+import type { PluginEmailTemplate } from "../../plugins/contributions";
+import type {
+  EmailTemplateInsert,
+  EmailTemplateOwner,
+  EmailTemplateVariable,
+  EmailTemplateVersion,
+} from "../../schemas/email-templates/types";
+
+import type { EmailConfig } from "./types";
+
+/** An owner as the registry records it: a plugin there is always running. */
+export type RegisteredOwner =
+  | { kind: "core" }
+  | { kind: "plugin"; name: string };
+
+/** One owned template's current default. */
+export interface OwnedTemplate {
+  slug: string;
+  owner: RegisteredOwner;
+  /** The full default the owner ships, as it would be inserted. */
+  defaults: EmailTemplateInsert;
+  /** The versioned part of `defaults`. */
+  version: EmailTemplateVersion;
+  /** `versionDigest(version)`, computed once. */
+  digest: string;
+}
+
+export interface TemplateOwnerRegistry {
+  /** Every owned template, by slug. */
+  owned: ReadonlyMap<string, OwnedTemplate>;
+  /** Slugs the site's code sets through `email.templates` in `defineConfig()`. */
+  setInCode: ReadonlySet<string>;
+  /**
+   * Whether the running plugins and the site's code were known when this was
+   * built. Until they are, only core's templates are registered, and a
+   * plugin's template cannot be told from one of a plugin that is gone.
+   */
+  complete: boolean;
+}
+
+/**
+ * The core slugs `email.templates` in `defineConfig()` can set, and the config
+ * key for each. One table, read by the send path to find a site's code version
+ * and by the registry to know which templates are set in code.
+ */
+export const CODE_TEMPLATE_KEYS: Readonly<
+  Record<string, keyof NonNullable<EmailConfig["templates"]>>
+> = {
+  welcome: "welcome",
+  "password-reset": "passwordReset",
+  "email-verification": "emailVerification",
+};
+
+/**
+ * Slug prefixes of first-party plugins' templates, so a template left behind
+ * by one of them can be recognised while the plugin is not running. A plugin
+ * that is running declares its own templates, so this is needed only for one
+ * that is absent; a third-party plugin's leftover templates count as the
+ * site's until that plugin runs again and claims them.
+ */
+export const KNOWN_PLUGIN_TEMPLATE_PREFIXES: ReadonlyArray<{
+  prefix: string;
+  plugin: string;
+}> = [{ prefix: "accounts-", plugin: "@nextlyhq/plugin-accounts" }];
+
+/** The plugin a leftover template belongs to, by its slug, or null. */
+export function absentPluginFor(slug: string): string | null {
+  const match = KNOWN_PLUGIN_TEMPLATE_PREFIXES.find(entry =>
+    slug.startsWith(entry.prefix)
+  );
+  return match ? match.plugin : null;
+}
+
+/** The versioned part of a template. */
+export function versionOf(template: {
+  subject: string;
+  htmlContent: string;
+  plainTextContent?: string | null;
+  preheader?: string | null;
+}): EmailTemplateVersion {
+  return {
+    subject: template.subject,
+    htmlContent: template.htmlContent,
+    plainTextContent: template.plainTextContent ?? null,
+    preheader: template.preheader ?? null,
+  };
+}
+
+const LINE_ENDINGS = /\r\n?/g;
+
+/**
+ * Remove trailing whitespace from each line of HTML, except inside `<pre>`,
+ * where it is part of what the reader sees.
+ */
+function trimHtmlLineEnds(html: string): string {
+  let depth = 0;
+  return html
+    .split("\n")
+    .map(line => {
+      const startsInside = depth > 0;
+      depth = Math.max(
+        0,
+        depth +
+          (line.match(/<pre\b/gi) ?? []).length -
+          (line.match(/<\/pre>/gi) ?? []).length
+      );
+      // A line that starts or ends inside a <pre> keeps its whitespace.
+      return startsInside || depth > 0 ? line : line.replace(/[ \t]+$/, "");
+    })
+    .join("\n");
+}
+
+/**
+ * A version as compared: line endings unified everywhere, and trailing
+ * whitespace dropped only where it cannot change what is delivered, which is
+ * outside `<pre>` in the HTML and never in the plain-text body. An empty
+ * optional field and a missing one are the same.
+ */
+export function normalizeVersion(
+  version: EmailTemplateVersion
+): EmailTemplateVersion {
+  const text = (value: string | null): string | null => {
+    const unified = value?.replace(LINE_ENDINGS, "\n") ?? "";
+    return unified === "" ? null : unified;
+  };
+  return {
+    subject: version.subject.replace(LINE_ENDINGS, "\n").trimEnd(),
+    htmlContent: trimHtmlLineEnds(
+      version.htmlContent.replace(LINE_ENDINGS, "\n")
+    ),
+    plainTextContent: text(version.plainTextContent),
+    preheader: text(version.preheader)?.trimEnd() || null,
+  };
+}
+
+/** A stable digest of a version, as compared. */
+export function versionDigest(version: EmailTemplateVersion): string {
+  const v = normalizeVersion(version);
+  return createHash("sha256")
+    .update(
+      JSON.stringify([
+        v.subject,
+        v.htmlContent,
+        v.plainTextContent,
+        v.preheader,
+      ])
+    )
+    .digest("hex");
+}
+
+/** Whether two versions would deliver the same email. */
+export function sameVersion(
+  a: EmailTemplateVersion,
+  b: EmailTemplateVersion
+): boolean {
+  return versionDigest(a) === versionDigest(b);
+}
+
+function owned(
+  owner: RegisteredOwner,
+  defaults: EmailTemplateInsert
+): OwnedTemplate {
+  const version = versionOf(defaults);
+  return {
+    slug: defaults.slug,
+    owner,
+    defaults,
+    version,
+    digest: versionDigest(version),
+  };
+}
+
+/** A plugin's contribution, in the shape core inserts. */
+function pluginDefaults(template: PluginEmailTemplate): EmailTemplateInsert {
+  return {
+    name: template.name,
+    slug: template.slug,
+    kind: "template",
+    subject: template.subject,
+    htmlContent: template.htmlContent,
+    plainTextContent: template.plainTextContent ?? null,
+    variables: (template.variables ?? null) as EmailTemplateVariable[] | null,
+    useLayout: template.useLayout ?? true,
+    description: template.description ?? null,
+  };
+}
+
+export interface RegistryInput {
+  /** Core's built-in templates and layouts. */
+  builtIns: ReadonlyArray<EmailTemplateInsert>;
+  /** Each running plugin, with the templates it contributes. */
+  plugins: ReadonlyArray<{
+    name: string;
+    templates: ReadonlyArray<PluginEmailTemplate>;
+  }>;
+  /** `email.templates` from `defineConfig()`. */
+  codeTemplates?: EmailConfig["templates"];
+  /** Whether `plugins` and `codeTemplates` are what is running (see TemplateOwnerRegistry.complete). */
+  complete: boolean;
+}
+
+export interface RegistryConflict {
+  slug: string;
+  /** The owner that kept the slug. */
+  kept: RegisteredOwner;
+  /** The plugin whose contribution was ignored. */
+  ignored: string;
+}
+
+/**
+ * Build the registry from what core ships and the running plugins contribute.
+ *
+ * Core is registered first, so a plugin cannot take over one of core's slugs;
+ * between two plugins the first one listed keeps a slug both contribute. Each
+ * such collision is returned, so the caller can say which contribution was
+ * ignored rather than dropping it silently.
+ */
+export function buildTemplateOwnerRegistry(input: RegistryInput): {
+  registry: TemplateOwnerRegistry;
+  conflicts: RegistryConflict[];
+} {
+  const map = new Map<string, OwnedTemplate>();
+  const conflicts: RegistryConflict[] = [];
+
+  for (const template of input.builtIns) {
+    map.set(template.slug, owned({ kind: "core" }, template));
+  }
+  for (const plugin of input.plugins) {
+    for (const template of plugin.templates) {
+      const existing = map.get(template.slug);
+      if (existing) {
+        conflicts.push({
+          slug: template.slug,
+          kept: existing.owner,
+          ignored: plugin.name,
+        });
+        continue;
+      }
+      map.set(
+        template.slug,
+        owned({ kind: "plugin", name: plugin.name }, pluginDefaults(template))
+      );
+    }
+  }
+
+  const setInCode = new Set<string>();
+  for (const [slug, key] of Object.entries(CODE_TEMPLATE_KEYS)) {
+    if (input.codeTemplates?.[key]) setInCode.add(slug);
+  }
+
+  return {
+    registry: { owned: map, setInCode, complete: input.complete },
+    conflicts,
+  };
+}
+
+/** The stored owner columns, as written. */
+export interface StoredOwner {
+  ownerKind: string | null;
+  ownerName: string | null;
+}
+
+/**
+ * A stored row's owner as callers see it.
+ *
+ * Read from the stored columns once the boot reconciliation has written them.
+ * A row it has not reached yet (the reconciliation runs after the server
+ * starts answering) is read from the registry, so a core or plugin template is
+ * never reported as the site's in the meantime.
+ *
+ * Before the running plugins are known (an incomplete registry), a plugin's
+ * template counts as installed: that is the reading that refuses a delete,
+ * which is the safe way to be wrong.
+ */
+export function ownerOf(
+  slug: string,
+  stored: StoredOwner,
+  registry: TemplateOwnerRegistry
+): EmailTemplateOwner {
+  const registered = registry.owned.get(slug)?.owner ?? null;
+  const kind = stored.ownerKind ?? registered?.kind ?? absentKind(slug);
+  if (kind === "core") return { kind: "core" };
+  if (kind === "plugin") {
+    const name =
+      stored.ownerName ??
+      (registered?.kind === "plugin" ? registered.name : null) ??
+      absentPluginFor(slug) ??
+      "unknown";
+    const installed = registry.complete
+      ? registered?.kind === "plugin" && registered.name === name
+      : true;
+    return { kind: "plugin", name, installed };
+  }
+  return { kind: "site" };
+}
+
+function absentKind(slug: string): "plugin" | "site" {
+  return absentPluginFor(slug) ? "plugin" : "site";
+}
+
+/** The stored columns for an owner. */
+export function storedOwner(
+  owner: RegisteredOwner | EmailTemplateOwner
+): StoredOwner {
+  return {
+    ownerKind: owner.kind,
+    ownerName: owner.kind === "plugin" ? owner.name : null,
+  };
+}
+
+/**
+ * Whether two stored values are equal, whatever order their object keys come
+ * back in. PostgreSQL's `jsonb` returns keys in an order of its own, so the
+ * same declared variables read back differently from how they were written.
+ */
+export function sameStoredValue(a: unknown, b: unknown): boolean {
+  return stable(a) === stable(b);
+}
+
+function stable(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stable).join(",")}]`;
+  if (value && typeof value === "object") {
+    return `{${Object.keys(value)
+      .sort()
+      .map(
+        key =>
+          `${JSON.stringify(key)}:${stable((value as Record<string, unknown>)[key])}`
+      )
+      .join(",")}}`;
+  }
+  return JSON.stringify(value ?? null);
+}
+
+/** Whether an owner's template is one the site may not delete. */
+export function isProtectedOwner(owner: EmailTemplateOwner): boolean {
+  return owner.kind === "core" || (owner.kind === "plugin" && owner.installed);
+}
