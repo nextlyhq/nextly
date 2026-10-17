@@ -30,15 +30,82 @@ export interface LeavingTranslationRefusal {
   code:
     | "RESHAPED_FIELD_LEAVES_TRANSLATION"
     | "CONSTRAINED_FIELD_LEAVES_TRANSLATION";
+  /** Why the field cannot leave translation in this change, as one sentence. */
+  reason: string;
+  /** The changes that get there instead, in order, each one sentence. */
+  steps: string[];
+  /** `reason` and `steps` as one paragraph, for a surface that shows a single message. */
   message: string;
 }
 
-/** The settings a field cannot carry while it stops being translated. */
-function constraintsOf(field: LeavingFieldLike): ("required" | "unique")[] {
+/**
+ * A refusal whose message is derived from its reason and steps, so a surface that lists the
+ * steps and one that prints the message cannot say different things.
+ */
+function refusal(
+  path: string,
+  code: LeavingTranslationRefusal["code"],
+  reason: string,
+  steps: string[]
+): LeavingTranslationRefusal {
+  return { path, code, reason, steps, message: [reason, ...steps].join(" ") };
+}
+
+type Surface = "builder" | "code";
+type Constraint = "required" | "unique";
+
+/**
+ * The settings a field cannot carry while it stops being translated: its own flags, and
+ * `unique` when a unique index covers it without the flag.
+ */
+function constraintsOf(
+  field: LeavingFieldLike,
+  uniqueIndexed: ReadonlySet<string> | undefined
+): Constraint[] {
+  const unique =
+    field.unique === true || uniqueIndexed?.has(field.name) === true;
   return [
     ...(field.required === true ? (["required"] as const) : []),
-    ...(field.unique === true ? (["unique"] as const) : []),
+    ...(unique ? (["unique"] as const) : []),
   ];
+}
+
+function reshapedRefusal(
+  name: string,
+  surface: Surface
+): LeavingTranslationRefusal {
+  return refusal(
+    `fields.${name}`,
+    "RESHAPED_FIELD_LEAVES_TRANSLATION",
+    `"${name}" changes how it is stored (its type, length or precision) in the same change ` +
+      `that stops it being translated.`,
+    surface === "builder"
+      ? [
+          "Make the field shared and save.",
+          "Change how it is stored, and save again.",
+        ]
+      : [
+          "Set `localized: false` and run `nextly migrate:create`.",
+          "Change how it is stored, and run it again.",
+        ]
+  );
+}
+
+function constrainedRefusal(
+  name: string,
+  constraints: readonly Constraint[],
+  surface: Surface
+): LeavingTranslationRefusal {
+  const builder = surface === "builder";
+  return refusal(
+    `fields.${name}`,
+    "CONSTRAINED_FIELD_LEAVES_TRANSLATION",
+    `"${name}" is ${constraints.join(" and ")}, so it cannot stop being translated in the same ` +
+      `${builder ? "change" : "migration"}.`,
+    builder
+      ? builderConstraintSteps(constraints)
+      : codeConstraintSteps(constraints)
+  );
 }
 
 /**
@@ -67,7 +134,7 @@ export function refusalsForFieldsLeavingTranslation(args: {
   dialect: SupportedDialect;
   /** Which builder made the entity's table, which decides a column's bounds. */
   builtBy: ColumnOrigin;
-  surface: "builder" | "code";
+  surface: Surface;
 }): LeavingTranslationRefusal[] {
   const refusals: LeavingTranslationRefusal[] = [];
   const columnOf = (field: LeavingFieldLike) =>
@@ -89,57 +156,33 @@ export function refusalsForFieldsLeavingTranslation(args: {
     if (!args.leaving.has(field.name)) continue;
     const previous = previousColumnOf(field);
     if (previous !== undefined && shape(previous) !== shape(columnOf(field))) {
-      refusals.push({
-        path: `fields.${field.name}`,
-        code: "RESHAPED_FIELD_LEAVES_TRANSLATION",
-        message:
-          `"${field.name}" changes how it is stored (its type, length or precision) in the same ` +
-          `change that stops it being translated. Make it shared and save first, then change it.`,
-      });
+      refusals.push(reshapedRefusal(field.name, args.surface));
       continue;
     }
-    const constraints = constraintsOf(field);
-    if (
-      args.uniqueIndexed?.has(field.name) &&
-      !constraints.includes("unique")
-    ) {
-      constraints.push("unique");
+    const constraints = constraintsOf(field, args.uniqueIndexed);
+    if (constraints.length > 0) {
+      refusals.push(constrainedRefusal(field.name, constraints, args.surface));
     }
-    if (constraints.length === 0) continue;
-    refusals.push({
-      path: `fields.${field.name}`,
-      code: "CONSTRAINED_FIELD_LEAVES_TRANSLATION",
-      message:
-        args.surface === "builder"
-          ? builderConstraintMessage(field.name, constraints)
-          : codeConstraintMessage(field.name, constraints),
-    });
   }
   return refusals;
 }
 
-function builderConstraintMessage(
-  name: string,
-  constraints: readonly ("required" | "unique")[]
-): string {
+function builderConstraintSteps(constraints: readonly Constraint[]): string[] {
   const settings = constraints
     .map(c => (c === "required" ? "Required" : "Unique"))
     .join(" and ");
-  return (
-    `"${name}" is ${constraints.join(" and ")}, so it cannot stop being translated in the same ` +
-    `change. Turn off ${settings} and save, make the field shared and save, then turn ` +
-    `${settings} back on.`
-  );
+  return [
+    `Turn off ${settings} and save.`,
+    "Make the field shared and save.",
+    `Turn ${settings} back on.`,
+  ];
 }
 
-function codeConstraintMessage(
-  name: string,
-  constraints: readonly ("required" | "unique")[]
-): string {
+function codeConstraintSteps(constraints: readonly Constraint[]): string[] {
   const flags = constraints.map(c => `\`${c}\``).join(" and ");
-  return (
-    `"${name}" is ${constraints.join(" and ")}, so it cannot stop being translated in the same ` +
-    `migration. Remove ${flags} from the field and run \`nextly migrate:create\`, set ` +
-    `\`localized: false\` and run it again, then put ${flags} back and run it once more.`
-  );
+  return [
+    `Remove ${flags} from the field and run \`nextly migrate:create\`.`,
+    "Set `localized: false` and run it again.",
+    `Put ${flags} back and run it once more.`,
+  ];
 }

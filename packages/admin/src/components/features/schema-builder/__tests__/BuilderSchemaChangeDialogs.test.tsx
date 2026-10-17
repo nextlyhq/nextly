@@ -12,6 +12,16 @@ import type { SchemaPreviewResponse } from "@admin/services/schemaApi";
 import { BuilderSchemaChangeDialogs } from "../BuilderSchemaChangeDialogs";
 import type { SchemaChangeConfirmation } from "../types";
 
+const REQUIRED_REFUSAL = {
+  reason:
+    '"heading" is required, so it cannot stop being translated in the same change.',
+  steps: [
+    "Turn off Required and save.",
+    "Make the field shared and save.",
+    "Turn Required back on.",
+  ],
+};
+
 function preview(
   overrides: Partial<SchemaPreviewResponse> = {}
 ): SchemaPreviewResponse {
@@ -143,8 +153,7 @@ describe("BuilderSchemaChangeDialogs", () => {
             defaultLocale: "en",
             restoreCommand:
               "nextly i18n:restore --collection posts --field heading",
-            refusal:
-              '"heading" is required, so it cannot stop being translated in the same change.',
+            refusal: REQUIRED_REFUSAL,
           },
         ],
         classification: "interactive",
@@ -159,7 +168,12 @@ describe("BuilderSchemaChangeDialogs", () => {
       })
     );
 
+    expect(screen.getByText(/needs three steps/)).toBeInTheDocument();
     expect(screen.getByText(/"heading" is required/)).toBeInTheDocument();
+    // The steps as an ordered list, in the order they have to be taken.
+    expect(
+      screen.getAllByRole("listitem").map(item => item.textContent)
+    ).toEqual(REQUIRED_REFUSAL.steps);
     expect(screen.queryByText(/nextly i18n:restore/)).not.toBeInTheDocument();
     expect(
       screen.getByText("Schema Change Needs Another Step")
@@ -172,9 +186,56 @@ describe("BuilderSchemaChangeDialogs", () => {
     expect(
       screen.queryByText(/is required but table has/)
     ).not.toBeInTheDocument();
+    // Nothing in the change could be saved, so the only way out is Close.
+    expect(screen.getByRole("button", { name: "Close" })).toBeEnabled();
     expect(
-      screen.getByRole("button", { name: /apply changes|save changes/i })
-    ).toBeDisabled();
+      screen.queryByRole("button", { name: /apply changes|save changes/i })
+    ).not.toBeInTheDocument();
+  });
+
+  it("keeps Save, disabled and not as a danger, when another change could be saved", () => {
+    renderDialogs(
+      preview({
+        hasDestructiveChanges: true,
+        classification: "destructive",
+        changes: {
+          added: [
+            {
+              name: "subtitle",
+              type: "text",
+              required: false,
+              hasDefault: false,
+              classification: "safe",
+            },
+          ],
+          removed: [],
+          changed: [],
+          unchanged: [],
+        },
+        leavingTranslation: [
+          {
+            name: "heading",
+            byLocale: {},
+            total: 0,
+            defaultLocale: "en",
+            restoreCommand:
+              "nextly i18n:restore --collection posts --field heading",
+            refusal: REQUIRED_REFUSAL,
+          },
+        ],
+      })
+    );
+
+    const save = screen.getByRole("button", { name: "Save Changes" });
+    expect(save).toBeDisabled();
+    expect(save.className).toMatch(/\bbg-primary\b/);
+    expect(save.className).not.toMatch(/bg-destructive/);
+    expect(
+      screen.getByText("Fix the field above to save.")
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Close" })
+    ).not.toBeInTheDocument();
   });
 
   it("copies the restore command", async () => {

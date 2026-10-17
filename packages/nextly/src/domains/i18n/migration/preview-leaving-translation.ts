@@ -33,8 +33,11 @@ export interface LeavingTranslationPreview {
   defaultLocale: string;
   /** The command that brings the archived values back once the field is translated again. */
   restoreCommand: string;
-  /** Why the change will be refused, when it will be; Apply is not offered then. */
-  refusal?: string;
+  /**
+   * Why the change will be refused, and the changes that get there instead, when it will be;
+   * Apply is not offered then.
+   */
+  refusal?: { reason: string; steps: string[] };
 }
 
 /**
@@ -70,7 +73,10 @@ export async function previewFieldsLeavingTranslation(args: {
       dialect: args.dialect,
       builtBy: args.builtBy,
       surface: "builder",
-    }).map(refusal => [refusal.path.replace(/^fields\./, ""), refusal.message])
+    }).map(refusal => [
+      refusal.path.replace(/^fields\./, ""),
+      { reason: refusal.reason, steps: refusal.steps },
+    ])
   );
 
   const previews: LeavingTranslationPreview[] = [];

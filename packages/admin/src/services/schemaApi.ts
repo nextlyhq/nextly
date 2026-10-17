@@ -82,8 +82,11 @@ export interface SchemaPreviewLeavingTranslation {
   /** The language whose value becomes the shared one. */
   defaultLocale: string;
   restoreCommand: string;
-  /** Why the change will be refused; Apply is not offered then. */
-  refusal?: string;
+  /**
+   * Why the change will be refused, and the changes that get there instead, when it will be;
+   * Apply is not offered then.
+   */
+  refusal?: { reason: string; steps: string[] };
 }
 
 // Full response from the preview endpoint

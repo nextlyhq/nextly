@@ -7,7 +7,7 @@
 
 import { Badge, Button } from "@nextlyhq/ui";
 
-import { Check, Copy } from "@admin/components/icons";
+import { AlertTriangle, Check, Copy } from "@admin/components/icons";
 import { useCopyToClipboard } from "@admin/hooks/useCopyToClipboard";
 import type { SchemaPreviewLeavingTranslation } from "@admin/services/schemaApi";
 
@@ -32,11 +32,48 @@ function movesSentence(field: SchemaPreviewLeavingTranslation): string {
   return `${list} ${field.total === 1 ? "value moves" : "values move"} to the archive.`;
 }
 
+const STEP_COUNTS = ["", "one step", "two steps", "three steps", "four steps"];
+
+/**
+ * Why a field cannot leave translation in this change, and the steps that get there instead.
+ * Set in the body's own colour with one warning icon rather than all in red: it is a way
+ * forward to follow, not an error to read past.
+ */
+function RefusalSteps({
+  name,
+  refusal,
+}: {
+  name: string;
+  refusal: NonNullable<SchemaPreviewLeavingTranslation["refusal"]>;
+}) {
+  const count =
+    STEP_COUNTS[refusal.steps.length] ?? `${refusal.steps.length} steps`;
+  return (
+    <div className="flex items-start gap-2">
+      <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning-600 dark:text-warning-500" />
+      <div className="space-y-1.5">
+        <p>
+          <strong>
+            &ldquo;{name}&rdquo; needs {count}
+          </strong>
+        </p>
+        <p>{refusal.reason}</p>
+        <ol className="list-decimal space-y-0.5 pl-5">
+          {refusal.steps.map(step => (
+            <li key={step}>{step}</li>
+          ))}
+        </ol>
+      </div>
+    </div>
+  );
+}
+
 function RestoreCommand({ command }: { command: string }) {
   const { copied, copy } = useCopyToClipboard(command);
   return (
     <div className="flex items-center gap-2">
-      <code className="flex-1 overflow-x-auto rounded-sm border border-border bg-primary/5 px-2 py-1.5 font-mono text-xs whitespace-pre-wrap break-words">
+      {/* On one line, scrolled rather than wrapped: a command broken across lines reads as two. */}
+      <code className="min-w-0 flex-1 overflow-x-auto whitespace-pre rounded-sm border border-border bg-primary/5 px-2 py-1.5 font-mono text-xs">
         {command}
       </code>
       <Button
@@ -71,13 +108,11 @@ export function LeavingTranslationNotice({
           className="space-y-1.5 text-sm [&+&]:border-t [&+&]:border-border [&+&]:pt-3"
         >
           <div className="flex items-center gap-2.5">
-            <Badge variant={field.refusal ? "destructive" : "primary"}>
-              no longer translated
-            </Badge>
+            <Badge variant="primary">no longer translated</Badge>
             <strong>{field.name}</strong>
           </div>
           {field.refusal ? (
-            <p className="text-xs text-destructive">{field.refusal}</p>
+            <RefusalSteps name={field.name} refusal={field.refusal} />
           ) : (
             <>
               <p className="text-muted-foreground">

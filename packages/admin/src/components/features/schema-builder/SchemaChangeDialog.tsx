@@ -18,6 +18,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
   Badge,
+  buttonVariants,
   Input,
   Label,
 } from "@nextlyhq/ui";
@@ -131,6 +132,14 @@ export function SchemaChangeDialog({
   });
   const canApply =
     (classification !== "interactive" || allResolved) && !refused;
+  // When nothing in the change could be saved, there is no Save to disable: the dialog offers
+  // only Close. When something could, Save stays (disabled) with what to fix beside it.
+  const nothingSaveable =
+    refused &&
+    !hasChanges &&
+    candidatesByDrop.size === 0 &&
+    promptedFields.length === 0 &&
+    leavingTranslation.every(field => field.refusal);
 
   const updateResolution = (fieldName: string, resolution: FieldResolution) => {
     setResolutions(prev => ({ ...prev, [fieldName]: resolution }));
@@ -176,25 +185,11 @@ export function SchemaChangeDialog({
   return (
     <AlertDialog open={open} onOpenChange={onOpenChange}>
       <AlertDialogContent className="max-w-lg">
-        <AlertDialogHeader>
-          <AlertDialogTitle>
-            {refused
-              ? "Schema Change Needs Another Step"
-              : classification === "interactive"
-                ? "Schema Changes Need Input"
-                : hasDestructiveChanges
-                  ? "Schema Changes Detected"
-                  : "Save Collection"}
-          </AlertDialogTitle>
-          {/* A refused change applies nothing, so the description must not promise it will. */}
-          <AlertDialogDescription>
-            {refused
-              ? "This change cannot be saved to "
-              : "The following changes will be applied to "}
-            <strong className="text-foreground">{collectionName}</strong>
-            {refused ? " in one step." : "."}
-          </AlertDialogDescription>
-        </AlertDialogHeader>
+        <SchemaChangeDialogHeader
+          collectionName={collectionName}
+          title={dialogTitle(refused, classification, hasDestructiveChanges)}
+          refused={refused}
+        />
 
         {/* Changes list */}
         {hasChanges && (
@@ -424,30 +419,121 @@ export function SchemaChangeDialog({
           </Alert>
         )}
 
-        <AlertDialogFooter>
-          <AlertDialogCancel disabled={isApplying}>Cancel</AlertDialogCancel>
-          <AlertDialogAction
-            onClick={e => {
-              // Prevent auto-close so we show the overlay during apply
-              e.preventDefault();
-              onConfirm(buildResolutions(), buildRenameResolutions());
-            }}
-            disabled={isApplying || !canApply}
-            className={
-              // The `-solid` emphasis fill, paired with an on-color ink that flips: `text-destructive-foreground` is white on the light fill and BLACK on the lighter dark-mode fill (6.90:1). One ink cannot clear 4.5:1 on both, which is why the token flips rather than the fill compensating. The LIGHT pairing is 3.84:1 and does NOT clear it: the fill takes the reference red, and that failure is recorded in packages/ui/src/styles/contrast/accepted.ts rather than fixed here.
-              hasDestructiveChanges
-                ? "bg-destructive-solid text-destructive-foreground hover:bg-destructive-600"
-                : ""
-            }
-          >
-            {isApplying
-              ? "Applying..."
-              : hasDestructiveChanges
-                ? "Apply Changes"
-                : "Save Changes"}
-          </AlertDialogAction>
-        </AlertDialogFooter>
+        <SchemaChangeDialogFooter
+          nothingSaveable={nothingSaveable}
+          refusedCount={refusedNames.size}
+          emphasisDestructive={hasDestructiveChanges && !refused}
+          isApplying={isApplying}
+          canApply={canApply}
+          onClose={() => onOpenChange(false)}
+          onApply={() =>
+            onConfirm(buildResolutions(), buildRenameResolutions())
+          }
+        />
       </AlertDialogContent>
     </AlertDialog>
+  );
+}
+
+function dialogTitle(
+  refused: boolean,
+  classification: SchemaChangeDialogProps["classification"],
+  hasDestructiveChanges: boolean
+): string {
+  if (refused) return "Schema Change Needs Another Step";
+  if (classification === "interactive") return "Schema Changes Need Input";
+  return hasDestructiveChanges ? "Schema Changes Detected" : "Save Collection";
+}
+
+function SchemaChangeDialogHeader({
+  collectionName,
+  title,
+  refused,
+}: {
+  collectionName: string;
+  title: string;
+  refused: boolean;
+}) {
+  return (
+    <AlertDialogHeader>
+      <AlertDialogTitle>{title}</AlertDialogTitle>
+      {/* A refused change applies nothing, so the description must not promise it will. */}
+      <AlertDialogDescription>
+        {refused
+          ? "This change cannot be saved to "
+          : "The following changes will be applied to "}
+        <strong className="text-foreground">{collectionName}</strong>
+        {refused ? " in one step." : "."}
+      </AlertDialogDescription>
+    </AlertDialogHeader>
+  );
+}
+
+// `AlertDialogAction` is a danger button by default, which suits a delete but not a save or a
+// close. The hover fill is pinned as well: tailwind-merge drops the default's background but
+// keeps its `hover:bg-destructive-600`, which `hover:opacity-90` does not conflict with.
+const PRIMARY_ACTION = `${buttonVariants({ variant: "primary" })} hover:bg-primary`;
+
+/**
+ * When nothing in the change could be saved there is no Save to disable, so the footer offers
+ * only Close. When something could, Save stays, disabled, with what to fix beside it.
+ */
+function SchemaChangeDialogFooter({
+  nothingSaveable,
+  refusedCount,
+  emphasisDestructive,
+  isApplying,
+  canApply,
+  onClose,
+  onApply,
+}: {
+  nothingSaveable: boolean;
+  refusedCount: number;
+  emphasisDestructive: boolean;
+  isApplying: boolean;
+  canApply: boolean;
+  onClose: () => void;
+  onApply: () => void;
+}) {
+  if (nothingSaveable) {
+    return (
+      <AlertDialogFooter>
+        <AlertDialogAction className={PRIMARY_ACTION} onClick={onClose}>
+          Close
+        </AlertDialogAction>
+      </AlertDialogFooter>
+    );
+  }
+  return (
+    <AlertDialogFooter>
+      {refusedCount > 0 && (
+        <p className="text-xs text-muted-foreground sm:mr-auto sm:self-center">
+          {refusedCount === 1
+            ? "Fix the field above to save."
+            : "Fix the fields above to save."}
+        </p>
+      )}
+      <AlertDialogCancel disabled={isApplying}>Cancel</AlertDialogCancel>
+      <AlertDialogAction
+        onClick={e => {
+          // Prevent auto-close so we show the overlay during apply
+          e.preventDefault();
+          onApply();
+        }}
+        disabled={isApplying || !canApply}
+        className={
+          // The `-solid` emphasis fill, paired with an on-color ink that flips: `text-destructive-foreground` is white on the light fill and BLACK on the lighter dark-mode fill (6.90:1). One ink cannot clear 4.5:1 on both, which is why the token flips rather than the fill compensating. The LIGHT pairing is 3.84:1 and does NOT clear it: the fill takes the reference red, and that failure is recorded in packages/ui/src/styles/contrast/accepted.ts rather than fixed here.
+          emphasisDestructive
+            ? "bg-destructive-solid text-destructive-foreground hover:bg-destructive-600"
+            : PRIMARY_ACTION
+        }
+      >
+        {isApplying
+          ? "Applying..."
+          : emphasisDestructive
+            ? "Apply Changes"
+            : "Save Changes"}
+      </AlertDialogAction>
+    </AlertDialogFooter>
   );
 }

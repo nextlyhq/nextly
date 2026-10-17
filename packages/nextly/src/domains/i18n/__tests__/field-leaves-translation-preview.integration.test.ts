@@ -37,7 +37,7 @@ interface LeavingTranslation {
   total: number;
   defaultLocale: string;
   restoreCommand: string;
-  refusal?: string;
+  refusal?: { reason: string; steps: string[] };
 }
 
 interface Preview {
@@ -197,9 +197,15 @@ describeEachDialect("the preview of a field leaving translation", dialect => {
       )
     );
 
-    expect(preview.leavingTranslation?.[0]?.refusal).toMatch(
-      /"heading" is required/
-    );
+    expect(preview.leavingTranslation?.[0]?.refusal).toEqual({
+      reason:
+        '"heading" is required, so it cannot stop being translated in the same change.',
+      steps: [
+        "Turn off Required and save.",
+        "Make the field shared and save.",
+        "Turn Required back on.",
+      ],
+    });
   });
 
   it("counts a Single's values", async () => {
