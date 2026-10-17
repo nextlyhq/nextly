@@ -8,8 +8,9 @@
  *   GET /api/dashboard/activity       to recent activity log entries
  *
  * All endpoints require authentication (any logged-in user can view the
- * dashboard). No specific permission is needed. The dashboard is the
- * landing page for all authenticated admin users.
+ * dashboard). No specific permission is needed to call them, because the
+ * dashboard is the landing page for all authenticated admin users; what each
+ * one answers is scoped to what the caller may read.
  *
  * All three endpoints expose object-shaped reads with named fields, so they
  * use `respondData` (bare body, no envelope).
@@ -28,6 +29,7 @@ import { conditionProbe } from "../domains/widgets/condition-probe";
 import { onboardingSteps } from "../domains/widgets/onboarding";
 import { getCachedNextly } from "../init";
 import type { ActivityLogService } from "../services/dashboard/activity-log-service";
+import { readableAdminCounts } from "../services/dashboard/admin-counts";
 import type { DashboardService } from "../services/dashboard/dashboard-service";
 import {
   someResources,
@@ -127,7 +129,9 @@ async function resolveReadableResources(
  * GET /api/dashboard/stats
  *
  * Returns aggregated content statistics, draft/published breakdown,
- * per-collection entry counts, and admin metrics.
+ * per-collection entry counts, and admin metrics. Each admin metric (users,
+ * roles, permissions, media, field groups, active API keys) is present only
+ * for a caller its own list endpoint admits, and absent otherwise.
  *
  * Caching: `private, no-store` so the response never leaks across user
  * sessions in shared caches. `Vary: Cookie` reinforces this for any
@@ -145,7 +149,11 @@ export const getDashboardStats = withErrorHandler(async (req: Request) => {
   // numbers describe rows it may actually see.
   const caller = await readCaller(auth);
   const scope = await resolveReadableResources(caller);
-  const stats = await service.getStats({ scope, caller });
+  // Decided on the authenticated caller itself, so an API key is judged on
+  // its own grant exactly as the users, roles, media and API-key endpoints
+  // judge it.
+  const counts = await readableAdminCounts(auth);
+  const stats = await service.getStats({ scope, caller, counts });
 
   // Bare-object read: stats is the dashboard summary itself; no envelope.
   // Spread into a fresh literal so respondData's `Record<string, unknown>`
