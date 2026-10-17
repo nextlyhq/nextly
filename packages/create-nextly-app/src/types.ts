@@ -1,3 +1,5 @@
+import type { GeneratedFiles } from "./generators/generated-files";
+
 /**
  * Project type / template selection.
  * "blog" is the first content template added for alpha.
@@ -103,9 +105,11 @@ export interface CreateNextlyOptions {
 }
 
 /**
- * Result of environment file generation
+ * Result of environment file generation: what was written, extended or left
+ * alone, and what the person should change in a value that was already there.
+ * Neither ever holds an env value.
  */
 export interface EnvGenerationResult {
-  created: boolean;
-  updated: boolean;
+  files: GeneratedFiles;
+  warnings: string[];
 }

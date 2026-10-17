@@ -60,6 +60,7 @@ import { LIMIT_STORE_TABLE, limitStoreTables } from "./limit-store";
 import { mediaTables } from "./media";
 import { nextlyI18nArchiveTables } from "./nextly-i18n-archive";
 import { nextlyMetaTables } from "./nextly-meta";
+import { noticesTables } from "./notices";
 import {
   ONE_TIME_SECRETS_TABLE,
   oneTimeSecretsTables,
@@ -82,6 +83,7 @@ import { userFieldDefinitionsMysql } from "./user-field-definitions/mysql";
 import { userFieldDefinitionsPg } from "./user-field-definitions/postgres";
 import { userFieldDefinitionsSqlite } from "./user-field-definitions/sqlite";
 import { userTables } from "./users";
+import { versionPinsTables } from "./version-pins";
 import { versionsTables } from "./versions";
 import { webhookTables } from "./webhooks";
 import { widgetLayoutTables } from "./widget-layout";
@@ -249,6 +251,10 @@ export function getCoreSchema(
     // — a table absent from this snapshot is never created by db:sync, and the
     // SQLite bootstrap fallback would hide that on one dialect only.
     ...Object.values(releasesTables(dialect)),
+    // `nextly_version_pins` — the versions a feature holds against retention.
+    // Here for the same reason as the release tables: nothing pins before the
+    // table exists, so core-reconcile creating it is sufficient.
+    ...Object.values(versionPinsTables(dialect)),
     ...Object.values(jobsTables(dialect)),
     ...Object.values(webhookTables(dialect)),
     // `nextly_widget_layout` — one row per reader who has arranged the
@@ -257,6 +263,9 @@ export function getCoreSchema(
     // never created on a real installation however completely its own module
     // declares it.
     ...Object.values(widgetLayoutTables(dialect)),
+    // `nextly_notices` — each person's own notices. In the snapshot for the
+    // reason every table above is: it is the set `nextly migrate` creates.
+    ...Object.values(noticesTables(dialect)),
   ];
 
   const fieldGroupRegistry = fieldGroupRegistryFor(dialect, options);
@@ -364,10 +373,12 @@ export const CORE_TABLE_NAMES: readonly string[] = [
   "nextly_versions",
   "nextly_releases",
   "nextly_release_members",
+  "nextly_version_pins",
   "nextly_jobs",
   "nextly_events",
   "nextly_webhooks",
   "nextly_webhook_deliveries",
+  "nextly_notices",
 ] as const;
 
 /**
@@ -451,4 +462,5 @@ export type {
   ReleaseKind,
   ReleaseMemberAction,
   ReleaseBlockerReason,
+  ReleaseCapabilities,
 } from "./releases/types";

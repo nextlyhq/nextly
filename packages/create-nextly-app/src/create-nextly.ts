@@ -17,6 +17,7 @@ import {
   patchNextConfig,
   type NextConfigPatch,
 } from "./generators/next-config";
+import { reportEnvFiles } from "./generators/report-env-files";
 import { generateRoutes } from "./generators/routes";
 import { generateTypesDirectory } from "./generators/types";
 import { installDependencies } from "./installers/dependencies";
@@ -47,6 +48,7 @@ import type {
   CreateNextlyOptions,
   DatabaseConfig,
   DatabaseType,
+  EnvGenerationResult,
   PackageManager,
   ProjectApproach,
   ProjectType,
@@ -58,7 +60,7 @@ import {
 } from "./utils/detect";
 import { emptyDirectory, isDirectoryNotEmpty } from "./utils/fs";
 import { scriptRunner } from "./utils/package-manager-commands";
-import { copyTemplate } from "./utils/template";
+import { copyTemplate, resolveTemplatePath } from "./utils/template";
 
 /**
  * Pick a safe project name when the user has chosen "install in cwd".
@@ -426,7 +428,6 @@ export async function createNextly(
         projectType,
         targetDir,
         database,
-        databaseUrl,
         useYalc,
         approach,
         templateSource,
@@ -544,6 +545,8 @@ export async function createNextly(
 
   // --- Generate configuration files ---
 
+  let envResult: EnvGenerationResult | undefined;
+
   {
     const s = p.spinner();
     s.start("Setting up environment...");
@@ -556,7 +559,15 @@ export async function createNextly(
         await generateConfig(cwd, projectType, projectInfo);
         await generateRoutes(cwd, projectInfo);
         await generateAdminPage(cwd, projectInfo);
-        await generateMediaRoutes(cwd, projectInfo);
+        // The template's own media and health routes, so an app Nextly is
+        // added to gets the admin's media route a new project has.
+        reported.push(
+          await generateMediaRoutes(
+            cwd,
+            projectInfo,
+            resolveTemplatePath(options.localTemplatePath)
+          )
+        );
         reported.push(await generateInstrumentation(cwd, projectInfo));
         await generateTypesDirectory(cwd, projectInfo);
         nextConfigPatch = await patchNextConfig(cwd, database);
@@ -564,14 +575,18 @@ export async function createNextly(
 
       // App flows generate a root .env. A plugin is a library — its env lives
       // in the embedded dev/ playground (dev/.env.example), so skip it here.
+      // A URL the person typed goes to .env only; .env.example keeps the
+      // database's generic example, since a project commits that file and a
+      // typed URL carries its password.
       if (projectType !== "plugin") {
         const envDatabase = databaseUrl
-          ? { ...database, connectionUrl: databaseUrl, envExample: databaseUrl }
+          ? { ...database, connectionUrl: databaseUrl }
           : database;
-        await generateEnv(cwd, envDatabase);
+        envResult = await generateEnv(cwd, envDatabase);
       }
       s.stop("Environment configured");
-      // After the spinner stops, so the line is not drawn over.
+      // Said after the spinner, so each line stays on screen. Keys and file
+      // names only: nothing here ever carries an env value.
       if (nextConfigPatch) printNextConfigPatch(nextConfigPatch);
       for (const files of reported) {
         for (const written of files.written) p.log.info(`Wrote ${written}`);
@@ -582,6 +597,7 @@ export async function createNextly(
           if (toAdd) p.log.message(toAdd);
         }
       }
+      if (envResult) reportEnvFiles(envResult);
     } catch (error) {
       s.stop("Failed to generate configuration");
       telemetry.capture("scaffold_failed", {

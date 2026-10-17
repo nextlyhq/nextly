@@ -1,8 +1,8 @@
 {
   "coverage": {
-    "pages": 79,
-    "samples": 451,
-    "compiled": 283
+    "pages": 80,
+    "samples": 452,
+    "compiled": 284
   },
   "samplesPerPage": {
     "docs/admin/branding.mdx": {
@@ -140,6 +140,10 @@
     "docs/localization/index.mdx": {
       "samples": 3,
       "compiled": 3
+    },
+    "docs/notices/index.mdx": {
+      "samples": 1,
+      "compiled": 1
     },
     "docs/page-builder/index.mdx": {
       "samples": 3,
@@ -357,6 +361,9 @@
       "reader-name #3 error TS2304: Cannot find name 'Page'.": 1,
       "reader-name #4 error TS2304: Cannot find name 'Page'.": 1,
       "reader-name #6 error TS2304: Cannot find name 'Page'.": 1
+    },
+    "docs/notices/index.mdx": {
+      "reader-file #0 error TS2307: Cannot find module '../../nextly.config' or its corresponding type declarations.": 1
     },
     "docs/plugins/admin-ui.mdx": {
       "#11 error TS2304: Cannot find name 'Skeleton'.": 1,

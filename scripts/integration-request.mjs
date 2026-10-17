@@ -64,8 +64,8 @@ export async function requested({ event, payload = {}, repository, token, fetchI
 }
 
 /**
- * What adding the label should do to the newest Integration run of the
- * pull request's head: nothing while that run has yet to read the labels, wait
+ * What adding the label should do to the newest Integration run of a
+ * labelled pull request's head: nothing while that run has yet to read the labels, wait
  * while it is finishing, re-run it once its legs have all skipped, and nothing
  * when they ran.
  *

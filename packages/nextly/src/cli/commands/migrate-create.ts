@@ -468,6 +468,7 @@ export async function runMigrateCreate(
       migrationsDir,
       appStream,
       defaultLocale: configResult.config.localization?.defaultLocale,
+      onWarning: message => logger.warn(message),
       collections,
       singles,
       components,

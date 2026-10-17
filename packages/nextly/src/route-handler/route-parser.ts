@@ -2061,6 +2061,18 @@ const RELEASE_ROUTES: ReleaseRoute[] = [
     operation: "update",
     method: "cancelRelease",
   },
+  // Publish now: a run of its own rather than a schedule with "now" in the
+  // body, because it is refused in states scheduling accepts (a stopped
+  // release is scheduled again, never run as it is), and a route is something
+  // an audit log can see.
+  {
+    id: true,
+    subresource: "publish",
+    subId: false,
+    verb: "POST",
+    operation: "update",
+    method: "publishRelease",
+  },
   // A READ, and deliberately its own route rather than a field on the detail.
   // Answering it costs an identity lookup over every member, which the detail
   // read must not pay to tell the overwhelming majority of callers that nothing
@@ -2374,6 +2386,36 @@ function parseWebhookRoutes(
 // ============================================================================
 // Dashboard Routes
 // ============================================================================
+
+/**
+ * Parse the notices routes: the signed-in person's own notices.
+ *
+ *   GET  /api/notices        → getNotices
+ *   GET  /api/notices/count  → getNoticeCount
+ *   POST /api/notices/read   → markNoticesRead
+ *
+ * The handler owns its own auth: the person is always the signed-in user, so
+ * no route carries a user.
+ */
+function parseNoticeRoutes(
+  id: string | undefined,
+  extra: readonly unknown[],
+  httpMethod: string,
+  routeParams: Record<string, string>
+): ParsedRoute | null {
+  // Only the three documented paths: a trailing segment is a different path,
+  // and `POST /api/notices/read/anything` must not mark anything read.
+  if (extra.some(segment => segment !== undefined)) return null;
+  const routes: Record<string, { operation: OperationType; method: string }> = {
+    "GET ": { operation: "list", method: "getNotices" },
+    "GET count": { operation: "count", method: "getNoticeCount" },
+    "POST read": { operation: "update", method: "markNoticesRead" },
+  };
+  const route = routes[`${httpMethod} ${id ?? ""}`];
+  return route === undefined
+    ? null
+    : { service: "notices", ...route, routeParams };
+}
 
 /**
  * Parse the translation worklist route.
@@ -2884,6 +2926,17 @@ export function parseRestRoute(
   // Handle the background job trigger
   if (resource === "jobs") {
     const result = parseJobRoutes(id, subresource, httpMethod, routeParams);
+    if (result) return result;
+  }
+
+  // Handle the signed-in person's notices
+  if (resource === "notices") {
+    const result = parseNoticeRoutes(
+      id,
+      [subresource, subId, ...additionalParams],
+      httpMethod,
+      routeParams
+    );
     if (result) return result;
   }
 

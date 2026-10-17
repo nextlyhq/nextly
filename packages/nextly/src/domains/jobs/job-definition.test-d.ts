@@ -1,3 +1,4 @@
+import type { JobInput } from "../../direct-api/types/jobs";
 import type { PluginContributions } from "../../plugins/contributions";
 import type { NextlyConfig } from "../../shared/types/config";
 
@@ -61,11 +62,41 @@ assertType<
   >
 >(true);
 
-// The handler stays contravariant: a typed job is not a default
-// `JobDefinition`, whose handler takes any job input, so it cannot be widened
-// to one and then handed `null`. And an entry of a list takes only `never`, so
-// nothing but the runner, with the input stored for it, can call it.
+// The handler stays contravariant on `JobDefinition`: a typed job is not a
+// default `JobDefinition`, whose handler takes any job input, so it cannot be
+// widened to one and then handed `null`. Only a list's entry type compares
+// its handler bivariantly, which is what lets typed and inline jobs share one.
 assertType<
   Exact<[typeof typedJob] extends [JobDefinition] ? true : false, false>
 >(true);
-assertType<Exact<Parameters<AnyJobDefinition["handler"]>[0], never>>(true);
+assertType<Exact<Parameters<AnyJobDefinition["handler"]>[0], JobInput>>(true);
+
+// A job written inline, as the object `defineJob` returns rather than through
+// it, keeps its handler's input typed as any job input, as it was before
+// typed jobs fit the lists. Underscore-prefixed: read only as a type.
+export const _inline: NextlyConfig = {
+  jobs: [
+    {
+      slug: "acme:inline",
+      retry: { maxAttempts: 1 },
+      sweep: false,
+      handler: _input => {
+        assertType<Exact<typeof _input, JobInput>>(true);
+        return Promise.resolve();
+      },
+    },
+  ],
+};
+export const _inlineContributed: PluginContributions = {
+  jobs: [
+    {
+      slug: "acme:inline",
+      retry: { maxAttempts: 1 },
+      sweep: false,
+      handler: _input => {
+        assertType<Exact<typeof _input, JobInput>>(true);
+        return Promise.resolve();
+      },
+    },
+  ],
+};

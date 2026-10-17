@@ -80,7 +80,7 @@ jobs:
     permissions:
       contents: read
       actions: read
-      # The pull request's labels, read when this job runs.
+      # A pull request's labels, read when this job runs.
       pull-requests: read
     outputs:
       superseded: ${{ steps.newer.outputs.superseded }}

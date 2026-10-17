@@ -534,6 +534,9 @@ export class ReleasesRepository {
         // it is, not as a fence miss.
         revision: expectedRevision + 1,
         updatedAt: new Date(),
+        ...(expectedRevision === undefined
+          ? {}
+          : { revision: expectedRevision + 1 }),
       },
       {
         and: [

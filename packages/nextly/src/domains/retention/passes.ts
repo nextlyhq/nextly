@@ -29,12 +29,15 @@ import {
   type ResolvedEmailRetentionConfig,
 } from "../email/retention-config";
 import type { EmailConfig } from "../email/types";
+import type { NoticesPruneDb } from "../notices/notices-service";
+import { pruneNoticesSafely } from "../notices/prune";
 import { pruneWebhookDataSafely, type PruneDeps } from "../webhooks/prune";
 import type { ResolvedWebhookRetentionConfig } from "../webhooks/retention-config";
 
 import {
   AUDIT_RETENTION_GATE_KEY,
   EMAIL_RETENTION_GATE_KEY,
+  NOTICES_RETENTION_GATE_KEY,
   ONE_TIME_SECRETS_RETENTION_GATE_KEY,
   WEBHOOK_RETENTION_GATE_KEY,
   type RetentionGateStore,
@@ -46,7 +49,8 @@ export interface RetentionPassInput {
   adapter: AuditPruneAdapter &
     PruneDeps["adapter"] &
     EmailPruneAdapter &
-    OneTimeSecretsPruneAdapter;
+    OneTimeSecretsPruneAdapter &
+    NoticesPruneDb;
   webhookPolicy?: ResolvedWebhookRetentionConfig | null;
   auditPolicy?: ResolvedAuditRetentionConfig;
   /**
@@ -112,6 +116,26 @@ export function buildRetentionPasses(
           { adapter: input.adapter, now: input.now, logger: input.logger },
           policy,
           maxBatches
+        );
+      },
+    });
+  }
+
+  // Notices are kept as long as the activity log keeps its records, so they
+  // ride the same policy, read per run for the same reason. A window of
+  // `false` keeps them forever, as it keeps the activity log.
+  if (audit) {
+    passes.push({
+      key: NOTICES_RETENTION_GATE_KEY,
+      intervalMs: () =>
+        activeAuditRetention(input.auditPolicy)?.intervalMs ?? audit.intervalMs,
+      run: async maxBatches => {
+        const policy = activeAuditRetention(input.auditPolicy);
+        if (!policy || policy.activityMaxAgeMs === false) return;
+        await pruneNoticesSafely(
+          { db: input.adapter, now: input.now, logger: input.logger },
+          policy.activityMaxAgeMs,
+          maxBatches ?? policy.maxBatchesPerRun
         );
       },
     });

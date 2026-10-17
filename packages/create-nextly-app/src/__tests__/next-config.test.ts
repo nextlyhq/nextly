@@ -406,19 +406,39 @@ describe("an app on Next.js 14", () => {
     });
     expect(await read("next.config.mjs")).toBe(text);
     expect(nextConfigReport(result).message).toContain(
-      `experimental: { serverComponentsExternalPackages: [${quoted(REQUIRED).join(", ")}] },`
+      `experimental: { instrumentationHook: true, serverComponentsExternalPackages: [${quoted(REQUIRED).join(", ")}] },`
     );
   });
 
-  it("writes no config of its own either, and says what to add", async () => {
+  it("writes no config of its own either, and gives the whole file to create", async () => {
     await mkdir(path.join(dir, "node_modules/next"), { recursive: true });
     await next14();
 
     const result = await patchNextConfig(dir, postgres);
 
-    expect(result).toMatchObject({ kind: "manual", spelling: "legacy" });
+    expect(result).toMatchObject({
+      kind: "manual",
+      spelling: "legacy",
+      file: "next.config.mjs",
+      create: true,
+    });
     await expect(read("next.config.ts")).rejects.toThrow();
     await expect(read("next.config.mjs")).rejects.toThrow();
+    const { message } = nextConfigReport(result);
+    expect(message).toContain("Create next.config.mjs with:");
+    expect(message).toContain("export default {");
+  });
+
+  it("gives Next.js 14 one experimental object, so pasting it as given keeps both keys", async () => {
+    await mkdir(path.join(dir, "node_modules/next"), { recursive: true });
+    await next14();
+    await write("next.config.mjs", "export default {};\n");
+
+    const { message } = nextConfigReport(await patchNextConfig(dir, postgres));
+
+    expect(message.match(/experimental:/g)).toHaveLength(1);
+    expect(message).toContain("instrumentationHook: true");
+    expect(message).toContain("serverComponentsExternalPackages");
   });
 });
 
@@ -470,7 +490,7 @@ describe("an app whose Next.js is not installed", () => {
         `serverExternalPackages: [${quoted(REQUIRED).join(", ")}],`
       );
       expect(message).toContain(
-        `experimental: { serverComponentsExternalPackages: [${quoted(REQUIRED).join(", ")}] },`
+        `experimental: { instrumentationHook: true, serverComponentsExternalPackages: [${quoted(REQUIRED).join(", ")}] },`
       );
     });
   }

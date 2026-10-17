@@ -107,6 +107,8 @@ function serviceOver(repository: ReleasesRepository): ReleasesService {
     },
     canManageReleases: async () => false,
     canActOnDocument: async () => false,
+    // No move under test runs a release.
+    runDrainNow: async () => undefined,
   });
 }
 

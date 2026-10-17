@@ -34,6 +34,7 @@ can put new pages live and retire old ones in the same moment.
 | Add members | Each member names a document and an action, `publish` or `unpublish`        |
 | Schedule    | The release is given a time. Blocking problems are checked first            |
 | Apply       | On a background-jobs pass after that time, every member's action is applied |
+| Publish now | A draft or scheduled release is run at once instead of waiting for its time |
 | Cancel      | An unapplied release can be cancelled                                       |
 
 A document is checked when it is added, the same way over REST and from the Direct API. It
@@ -64,6 +65,42 @@ scheduled before its document is added. Once it's scheduled, its document can't 
 cancel the release instead. Releases made before kinds existed read as
 `release`; `nextly migrate` adds the column without rewriting them. The `kind` option is
 experimental.
+
+## Publish now
+
+<Callout type="info">
+  Publish now is **experimental**: its name and answer may change before
+  releases are finished.
+</Callout>
+
+Publish now runs a draft or scheduled release straight away. It makes the same checks as
+scheduling, so a release that would stop part-way is refused before any document is written.
+Then it moves the release to the current time, unless its time has already come, and starts
+the job runner's releases run at once, the same run a scheduled time gets: every document is
+written as the person who added it, and the release goes out together.
+
+|            |                                             |
+| ---------- | ------------------------------------------- |
+| REST       | `POST /api/releases/:id/publish`            |
+| Direct API | `nextly.releases.publishNow({ id })`        |
+| Permission | The same as scheduling: publishing releases |
+
+The answer is the release as it then stands. Usually that is `published`, or `blocked` if a
+document stopped it part-way. It is still `scheduled` when a very large release outlasts the
+request, when a releases run was already in progress, or when the run could not be started:
+the release is then due, and goes out with that run or the job runner's next pass.
+
+Like any releases run, it sends out every release whose time has come, not only this one, so
+a release that was already overdue goes out with it.
+
+## Releases that ran are final
+
+A **published** release is the record of what went live, and a **cancelled** one the record
+of a launch called off. Neither changes again: no documents are added or removed, it is not
+scheduled again, and Publish now refuses it. To try again, create a new release.
+
+A **stopped** release has not run. Remove or fix the documents that stopped it, then schedule
+it again. Publish now refuses it until then, so the fix is checked before anything goes out.
 
 ## Listing releases
 

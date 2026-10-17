@@ -53,7 +53,7 @@ const invalid = await nextly.find({ collection: "nonexistent" });
 // Type error: collection slug not in the generated union.
 ```
 
-The generator writes a `payload-types.ts` (or whatever path you set in `typescript.outputFile`) that augments the runtime's `GeneratedTypes` interface via `declare module "nextly"`. See [Configuration → typescript](/docs/configuration/nextly-config) for the config surface.
+The generator writes a `nextly-types.ts` (or whatever path you set in `typescript.outputFile`) that augments the runtime's `GeneratedTypes` interface via `declare module "nextly"`. See [Configuration → typescript](/docs/configuration/nextly-config) for the config surface.
 
 ## Access control
 

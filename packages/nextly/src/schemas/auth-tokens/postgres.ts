@@ -45,6 +45,9 @@ export const passwordResetTokens = pgTable(
     ),
     index("prt_expires_idx").on(t.expires),
     index("prt_used_at_idx").on(t.usedAt),
+    // Tokens are looked up by their hash alone. The unique index above leads
+    // with the identifier, so it cannot serve that lookup.
+    index("prt_token_hash_idx").on(t.tokenHash),
   ]
 );
 
@@ -95,6 +98,8 @@ export const emailVerificationTokens = pgTable(
       t.tokenHash
     ),
     index("evt_expires_idx").on(t.expires),
+    // Looked up by hash alone, as the reset token is.
+    index("evt_token_hash_idx").on(t.tokenHash),
   ]
 );
 

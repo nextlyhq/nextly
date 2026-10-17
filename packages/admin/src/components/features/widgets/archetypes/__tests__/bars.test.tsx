@@ -246,7 +246,9 @@ describe("a breakdown names its groups as a person reads them", () => {
     );
 
     const table = screen.getByRole("table");
-    expect(within(table).getByRole("row", { name: /archived/ })).toBeInTheDocument();
+    expect(
+      within(table).getByRole("row", { name: /archived/ })
+    ).toBeInTheDocument();
     // The null bucket is named by what it means, as before the labels existed.
     expect(
       within(table).getByRole("row", { name: /no value stored/ })

@@ -37,3 +37,9 @@ refuse, rather than leaving a single-document release scheduled with nothing.
 A release's capabilities now say what a single-document release allows: no
 scheduling while it is empty, no second document, and no removing its document
 once scheduled.
+
+For code calling `ReleasesRepository` directly: `scheduleRelease`'s
+`expectedRevision` (added as optional with Publish now) is now required, and
+`from` no longer has a default. A schedule fenced only on state cannot tell
+that a release changed under it, so every scheduling move must name the
+revision it read: read the release, then pass its `revision`.

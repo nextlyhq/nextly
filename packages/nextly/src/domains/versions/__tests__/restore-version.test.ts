@@ -28,6 +28,10 @@ const {
 vi.mock("../../../shared/lib/field-level-registry", () => ({
   applyFieldWriteAccess: vi.fn(),
   applyFieldReadAccess: vi.fn(),
+  callerAccessGrants: vi.fn(
+    () => () => Promise.resolve({ permissions: [], roles: [] })
+  ),
+  getFieldFunctions: vi.fn(),
 }));
 
 vi.mock("../../../di", () => ({

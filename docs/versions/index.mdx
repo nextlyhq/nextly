@@ -73,15 +73,39 @@ change.
 
 A comparison can name two versions (`?from=4&to=6`), or a version and a **baseline** the
 server works out (`?to=6&baseline=previous`). The baselines are `previous` (the version
-before it in the same language), `published` (that language's latest published version)
-and `draft` (that language's current draft). With no `from` and no `baseline`, the
-comparison opens on the current draft against what is published when both exist, and
-otherwise on a version against the one before it (`?locale=` picks the language when no
-version is named). A language's first version has nothing before it, so that comparison is
-refused with `NO_BASELINE`. The response says which baseline it used. Baselines are
-experimental.
+before it in the same language), `published` (what that language serves now: its latest
+published version, while it is published) and `draft` (that language's current draft).
+With no `from` and no `baseline`, the comparison opens on the current draft against what is
+published when the language is published and has a draft, and otherwise on a version
+against the one before it (`?locale=` picks the language when no version is named).
+
+Some comparisons have nothing to start from, and are refused with `NO_BASELINE`:
+
+- a language's first version has nothing before it;
+- a language that has been unpublished, or a translation never published, has nothing
+  published to compare with, even though its history records an earlier publish.
+
+The response says which baseline it used. Baselines are experimental.
 
 Secret fields are masked in diffs. A password field's history never shows its values.
+
+### Field read rules in history
+
+Every field-level `access.read` rule applies to history as it applies to reading the
+document: a version, a comparison and a restore show a reader only what the rules let
+them read. That includes rules on fields inside groups and repeaters, and rules declared
+on a component's own fields, which are judged on each instance the version holds, at any
+depth. An API key is judged on its own grants, not its owner's.
+
+- A version read lists what it held back in `withheld`, by field name, or by a dotted
+  path below the top level (`banner.secret`).
+- A comparison shows a held-back field as `hidden` in its place, with neither value.
+- A restore never writes back a field the restorer may not read; it is reported in
+  `droppedFields`.
+
+History fails closed. A rule that throws hides its own field. If the rules cannot be
+evaluated at all, a version read withholds every field that carries one, and a restore is
+refused.
 
 ## Restoring
 
@@ -126,9 +150,62 @@ keeps:
   language (a document without languages, or a publish of every language at once);
 - every named version, including the "Before restore" version a restore records;
 - every version that records a restore, and the version it was restored from.
+- every version a feature has pinned (see [Pinning a version](#pinning-a-version)).
 
 So a run of saves in one language never removes another language's published version, and
 "restored from" always points at a version that still exists.
+
+## Pinning a version
+
+<Callout type="warn">Experimental: the names and shapes below may change before they are stable.</Callout>
+
+A feature that refers to a version, such as the version an approval names, pins it so
+retention keeps it for as long as the feature needs it, whatever the limit.
+
+A feature registers itself once, as it loads, under a kebab-case name and a label a reader
+would recognise. It then points named slots at a document's versions. A slot holds one
+version: pointing it at another frees the one it left, so a feature never has to remember
+to release the old one. A version stays while any slot of any feature points at it, so one
+feature releasing never frees what another still holds.
+
+```ts
+import {
+  registerVersionPinHolder,
+  versionPins,
+  type TransactionContext,
+  type VersionRef,
+} from "nextly";
+
+registerVersionPinHolder({ name: "legal-review", label: "Legal review" });
+
+const legal = versionPins.holder("legal-review");
+
+// Record the approval and pin the version it names in one transaction.
+export async function approve(
+  tx: TransactionContext,
+  ref: VersionRef,
+  versionNo: number
+) {
+  await legal.pin(tx, { ref, slot: "approved", versionNo });
+}
+
+// The document no longer needs review: free every slot this feature holds on it.
+export async function clearReview(tx: TransactionContext, ref: VersionRef) {
+  await legal.releaseAll(tx, ref);
+}
+```
+
+- `pin`, `release` and `releaseAll` run on the transaction you pass, so a pin commits or
+  rolls back with the change it records. `pin` refuses a version the document does not have,
+  and waits for a save of the same document already under way.
+- `versionPins.holder` refuses a name nothing registered, and `registerVersionPinHolder`
+  refuses a name another feature registered. Registering the same name and label again
+  changes nothing.
+- `versionPins.list(db, ref)` reads every slot on a document, of every feature.
+- Deleting a document, or a Single, removes its pins.
+
+A plugin's `ctx.db.transaction` hands it a handle to its own tables, not the
+`TransactionContext` above, so a plugin cannot pin through it.
 
 ## Related
 
