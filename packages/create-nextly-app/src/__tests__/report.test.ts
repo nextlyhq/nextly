@@ -20,6 +20,7 @@ vi.mock("@clack/prompts", () => ({ log }));
 
 import { generateEnv } from "../generators/env";
 import { generateIntoExistingApp } from "../generators/existing-app";
+import { readMediaRouteTemplates } from "../generators/media-routes";
 import { reportGeneratedFiles } from "../generators/report";
 import { readEnvKeys } from "../utils/env-file";
 
@@ -104,13 +105,15 @@ describe("reportGeneratedFiles", () => {
         connectionUrl: "postgresql://app:S3cr3tPassw0rd@db.internal:5432/app",
         envExample: "postgresql://user:password@localhost:5432/nextly",
       };
-      const templates = join(
-        dirname(fileURLToPath(import.meta.url)),
-        "..",
-        "..",
-        "..",
-        "..",
-        "templates"
+      const templates = await readMediaRouteTemplates(
+        join(
+          dirname(fileURLToPath(import.meta.url)),
+          "..",
+          "..",
+          "..",
+          "..",
+          "templates"
+        )
       );
 
       const reported = await generateIntoExistingApp(

@@ -929,6 +929,12 @@ interface SelectionFootprint {
   readonly rootTypes: ReadonlySet<string>;
   readonly depth: number;
   readonly componentDepth: number;
+  /**
+   * The locks the selection itself breaks, placed with no values of its own,
+   * by fault identity. A variant's value for an exposure a lock holds changes
+   * what every placement picking it draws, with nothing else moved.
+   */
+  readonly lockFaults: ReadonlySet<string>;
 }
 
 /** The footprint of `document` stored as `self`, selection by selection. */
@@ -947,8 +953,9 @@ async function footprintOf(
   const selections = new Map<string, SelectionFootprint>();
   let complete = true;
   for (const variant of [undefined, ...(variantNamesIn(document) ?? [])]) {
+    const host = hostPlacing(self, variant);
     const composed = await composeWithReads({
-      host: hostPlacing(self, variant),
+      host,
       library,
       read,
       limits: setup.limits,
@@ -967,6 +974,11 @@ async function footprintOf(
       rootTypes: new Set(nodes.map(root => root.type)),
       depth: deepest(nodes, setup),
       componentDepth: componentDepth ?? MAX_COMPOSED_DEPTH + 1,
+      lockFaults: new Set(
+        faultsIn(host, composed.composition, setup)
+          .filter(fault => LOCK_FAULTS.has(fault.code))
+          .map(faultIdentity)
+      ),
     });
   }
   return {
@@ -1165,6 +1177,9 @@ function selectionWorsens(
   if (after.componentDepth > before.componentDepth) return true;
   for (const type of after.rootTypes) {
     if (!before.rootTypes.has(type)) return true;
+  }
+  for (const fault of after.lockFaults) {
+    if (!before.lockFaults.has(fault)) return true;
   }
   return false;
 }

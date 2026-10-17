@@ -58,10 +58,28 @@ async function importedFiles(configPath: string): Promise<string[]> {
     // A file that does not compile stops the scan. The files its errors name
     // are where the fix will be saved, and so is a local import that does not
     // exist yet: creating it is the fix.
-    return failedFiles(error)
-      .map(file => resolve(root, file))
-      .filter(file => existsSync(dirname(file)));
+    return failedFiles(error).flatMap(file => {
+      const watchable = createdFirst(resolve(root, file));
+      return watchable ? [watchable] : [];
+    });
   }
+}
+
+/**
+ * The path whose appearance is the first step towards `file` existing: the
+ * file itself when its folder exists, otherwise the first missing folder on
+ * its way, in the nearest folder that does exist. Creating that folder reloads,
+ * and the reload's scan then watches the next step from inside it. Undefined
+ * when no folder on the way exists.
+ */
+function createdFirst(file: string): string | undefined {
+  let path = file;
+  while (!existsSync(dirname(path))) {
+    const parent = dirname(path);
+    if (parent === path) return undefined;
+    path = parent;
+  }
+  return path;
 }
 
 // What esbuild tries for an import written without an extension, in its
