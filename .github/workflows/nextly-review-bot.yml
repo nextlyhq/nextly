@@ -99,7 +99,7 @@ jobs:
       # Only the command parser, from the workflow's own commit, so the decision
       # below can be made before anything is cloned. The full checkout follows
       # once we know a review was actually asked for.
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # The workflow's own commit is the default branch's: a comment runs
           # the default branch's workflow, and a dispatch from anywhere else is
@@ -226,7 +226,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           sparse-checkout: .github/scripts
@@ -235,7 +235,7 @@ jobs:
 
       - name: Take the review bot's App identity, to react
         id: app
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           client-id: ${{ vars.REVIEW_BOT_CLIENT_ID }}
           private-key: ${{ secrets.REVIEW_BOT_PRIVATE_KEY }}
@@ -275,7 +275,7 @@ jobs:
       # the gate had a job of its own, this one reused that partial clone
       # (`--filter=blob:none`) and fetched each file on first read, which
       # failed once its credentials were gone (2026-09-29).
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # The PR head itself, not the merge ref: the review protocol judges
           # the code at a specific head SHA and reports findings against it.
@@ -482,7 +482,7 @@ jobs:
 
       - name: Run review agent
         id: agent
-        uses: anthropics/claude-code-action@756cc22e19660d20e8cc9496b4f242475a7f7790 # v1.0.235
+        uses: anthropics/claude-code-action@a26b07d8c778b0c43f64618e5fd29fd0f8af72e8 # v1.0.250
         env:
           # z.ai's Anthropic-compatible endpoint; the key goes in via
           # anthropic_api_key below and is exported as ANTHROPIC_AUTH_TOKEN.
@@ -681,7 +681,7 @@ jobs:
       # rest of what it wrote stays on this runner. `.nextly-review` is a hidden
       # directory, which the action leaves out unless told to include it.
       - name: Hand the payload to the post job
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: review-payload
           path: |
@@ -705,7 +705,7 @@ jobs:
     steps:
       # The gateway as the workflow's own commit has it, never the reviewed
       # branch's copy.
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           sparse-checkout: |
@@ -716,7 +716,7 @@ jobs:
           persist-credentials: false
 
       - name: Take the agent's payload
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: review-payload
           path: ${{ runner.temp }}/payload
@@ -726,7 +726,7 @@ jobs:
       # one minted before it expired at posting time.
       - name: Take the review bot's App identity
         id: app
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           client-id: ${{ vars.REVIEW_BOT_CLIENT_ID }}
           private-key: ${{ secrets.REVIEW_BOT_PRIVATE_KEY }}
@@ -887,7 +887,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           sparse-checkout: .github/scripts
@@ -896,7 +896,7 @@ jobs:
 
       - name: Take the review bot's App identity, to react
         id: app
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           client-id: ${{ vars.REVIEW_BOT_CLIENT_ID }}
           private-key: ${{ secrets.REVIEW_BOT_PRIVATE_KEY }}
