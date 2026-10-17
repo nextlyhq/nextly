@@ -1,5 +1,13 @@
 import { existsSync } from "fs";
-import { lstat, mkdir, readdir, readFile, rm, writeFile } from "fs/promises";
+import {
+  lstat,
+  mkdir,
+  readdir,
+  readFile,
+  rm,
+  stat,
+  writeFile,
+} from "fs/promises";
 import path from "path";
 import { fileURLToPath } from "url";
 
@@ -20,7 +28,11 @@ export const AGENT_SKILL_HOMES = [".agents/skills", ".claude/skills"] as const;
 export interface BundledSkill {
   name: string;
   /** Paths relative to the skill's folder, with their bytes. */
-  files: { path: string; content: Buffer }[];
+  /**
+   * Paths relative to the skill's folder, with their bytes and permission
+   * bits: a helper script a skill runs directly must stay executable.
+   */
+  files: { path: string; content: Buffer; mode: number }[];
 }
 
 /**
@@ -93,6 +105,7 @@ async function filesIn(
       files.push({
         path: relative,
         content: await readFile(path.join(dir, relative)),
+        mode: (await stat(path.join(dir, relative))).mode & 0o777,
       });
   }
   return files;
@@ -206,14 +219,15 @@ const SKILLS_DOCS = "https://nextlyhq.com/docs/guides/coding-agents";
 /**
  * Copies the skills into the project, in both homes. A skill folder the
  * project already has is left exactly as it is, since it may hold the
- * developer's own changes, and the report says how to replace it on purpose.
- * Nothing is written through a symbolic link, which could put the files
- * outside the project.
+ * developer's own changes, and the report says how to replace it on purpose:
+ * from `releaseTag`, the release whose tag publishes this bundle. Nothing is
+ * written through a symbolic link, which could put the files outside the
+ * project.
  */
 export async function writeAgentSkills(
   projectRoot: string,
   skills: BundledSkill[],
-  version: string
+  releaseTag: string
 ): Promise<GeneratedFiles> {
   const report: GeneratedFiles = { written: [], changed: [], skipped: [] };
   for (const home of AGENT_SKILL_HOMES) {
@@ -223,7 +237,7 @@ export async function writeAgentSkills(
       if (blocked) {
         report.skipped.push({
           path: folder,
-          why: `${blocked}. To replace it with this release's version, run: ${updateSkillsCommand(version)}`,
+          why: `${blocked}. To replace it with this release's version, run: ${updateSkillsCommand(releaseTag)}`,
         });
         continue;
       }
@@ -236,7 +250,10 @@ export async function writeAgentSkills(
         for (const file of skill.files) {
           const filePath = path.join(target, file.path);
           await mkdir(path.dirname(filePath), { recursive: true });
-          await writeFile(filePath, file.content, { flag: "wx" });
+          await writeFile(filePath, file.content, {
+            flag: "wx",
+            mode: file.mode,
+          });
         }
       } catch (error) {
         // The folder is this run's own, made just above. Left half-written,

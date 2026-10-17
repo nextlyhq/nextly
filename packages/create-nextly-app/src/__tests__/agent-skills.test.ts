@@ -4,11 +4,13 @@
  * never over a skill folder the project already has.
  */
 import {
+  chmod,
   mkdir,
   mkdtemp,
   readFile,
   readdir,
   rm,
+  stat,
   symlink,
   writeFile,
 } from "node:fs/promises";
@@ -83,6 +85,27 @@ describe("readBundledSkills", () => {
       },
       { name: "b-skill", files: [["SKILL.md", "b"]] },
     ]);
+  });
+
+  // A skill may ship a helper script its instructions run directly, so the
+  // executable bit travels with the bytes.
+  it("keeps each file's mode, an executable script's included", async () => {
+    const root = await bundle({
+      "a-skill/SKILL.md": "a",
+      "a-skill/scripts/run.sh": "#!/bin/sh\n",
+    });
+    await chmod(path.join(root, "a-skill/scripts/run.sh"), 0o755);
+    const project = path.join(dir, "app");
+    await mkdir(project);
+
+    await writeAgentSkills(project, await readBundledSkills(root), "1.2.3");
+
+    for (const home of AGENT_SKILL_HOMES) {
+      const mode = (
+        await stat(path.join(project, home, "a-skill/scripts/run.sh"))
+      ).mode;
+      expect(mode & 0o777).toBe(0o755);
+    }
   });
 
   it("refuses a folder without a SKILL.md, naming it", async () => {
