@@ -1527,6 +1527,11 @@ async function applyReloadHolding(
     });
     clearConfigCache();
     const result = await loadConfig();
+    // Watch exactly what this read: the config and every file it imported. Set
+    // before the checks below, which may still refuse the edit; the fix for a
+    // refusal is another save of one of these same files.
+    const { watchLoadedConfig } = await import("../runtime/hmr-listener");
+    watchLoadedConfig(result);
     newConfig = (
       result as {
         config?: {
@@ -1597,33 +1602,12 @@ async function applyReloadHolding(
     // working set back so the retained config keeps the behavior it was
     // validated with.
     undoOptimisticReloadWork();
-    // NextlyError wraps the underlying loader/bundler error in
-    // `cause` (and surfaces a generic public message like "Failed to
-    // load Nextly configuration."). Surface BOTH the public message
-    // and the cause so an operator can actually diagnose the
-    // problem instead of seeing the bare wrapper text.
-    const msg = err instanceof Error ? err.message : String(err);
-    const cause =
-      err instanceof Error && err.cause instanceof Error
-        ? err.cause.message
-        : err instanceof Error && typeof err.cause === "string"
-          ? err.cause
-          : undefined;
-    const logContext =
-      err && typeof err === "object" && "logContext" in err
-        ? JSON.stringify(err.logContext)
-        : undefined;
-    const detail = cause
-      ? `${msg} (cause: ${cause})`
-      : logContext
-        ? `${msg} (context: ${logContext})`
-        : msg;
-
-    console.warn(
-      `[Nextly HMR] Could not reload nextly.config.ts: ${detail}. ` +
-        `Keeping the previously-loaded config. Fix the syntax error and ` +
-        `save again to retry.`
+    // Says what failed and what to do about it, by the failure's own kind: a
+    // syntax error, an import that cannot be found, or esbuild missing.
+    const { describeConfigReloadFailure } = await import(
+      "./config-reload-failure"
     );
+    console.warn(describeConfigReloadFailure(err));
     return;
   }
   // The loader returned without a config: the swap already happened inside it,
