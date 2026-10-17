@@ -1045,7 +1045,7 @@ const GENERATOR_MOUNT_SPELLINGS = [
       [...m[1].matchAll(/"([^"]*)"/g)].map(q => q[1])
     ),
   source =>
-    [...source.matchAll(/`\$\{projectInfo\.appDir\}((?:\/[^/`$]+)*)\/\[\[\.\.\.params\]\]\/route\.ts`/g)].map(m =>
+    [...source.matchAll(/writeNew\(\s*cwd,\s*`\$\{projectInfo\.appDir\}((?:\/[^/`$]+)*)\/\[\[\.\.\.params\]\]\/route\.ts`/g)].map(m =>
       m[1].split("/").filter(Boolean)
     ),
 ];
@@ -1085,8 +1085,11 @@ function templateMount(repoRoot, tracked, refuse) {
  * builds would let the docs be checked against the wrong address.
  */
 function readGeneratorMount(source) {
+  // Read the code only: a path left in a comment says nothing about what the
+  // generator builds now, and must not pass for it.
+  const code = source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
   const mounts = [
-    ...new Set(GENERATOR_MOUNT_SPELLINGS.flatMap(read => read(source)).map(parts => `/${parts.join("/")}`)),
+    ...new Set(GENERATOR_MOUNT_SPELLINGS.flatMap(read => read(code)).map(parts => `/${parts.join("/")}`)),
   ];
   if (mounts.length === 0) {
     return { problem: "no longer builds the catch-all route path in the shape this reads, so the mount it generates is unknown" };

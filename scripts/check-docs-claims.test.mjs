@@ -3089,16 +3089,28 @@ describe("plugin-route-mount", () => {
   });
 
   it("fails closed on a generator that spells two different mounts", async () => {
-    // A stale path.join in a comment must not stand in for the path the code builds.
+    // A stale path.join left in the code must not stand in for the path it builds.
     const findings = await findingsFor(
       tree(
-        `// was: path.join(cwd, projectInfo.appDir, "admin", "api", "[[...params]]", "route.ts")\n` +
+        `const unused = path.join(cwd, projectInfo.appDir, "admin", "api", "[[...params]]", "route.ts");\n` +
           "await writeNew(cwd, `${projectInfo.appDir}/cms/api/[[...params]]/route.ts`, T);\n"
       )
     );
     expect(findings.find(f => f.check === "plugin-route-mount-unreadable")?.message).toContain(
       "more than one way"
     );
+  });
+
+  it("fails closed when only a comment still spells the path", async () => {
+    // The code builds the path some new way; a comment left behind must not pass for it.
+    expect(
+      await checksFor(
+        tree(
+          "// was: await writeNew(cwd, `${projectInfo.appDir}/admin/api/[[...params]]/route.ts`, T);\n" +
+            "await writeNew(cwd, buildRoutePath(projectInfo.appDir), T);\n"
+        )
+      )
+    ).toContain("plugin-route-mount-unreadable");
   });
 
   it("reports a generator that mounts somewhere other than the template", async () => {
