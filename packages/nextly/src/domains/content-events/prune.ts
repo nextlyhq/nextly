@@ -23,7 +23,9 @@ import { subjectEndingKinds } from "./kinds";
 /** Rows touched per statement: small enough to keep each delete short. */
 const CONTENT_EVENT_PRUNE_BATCH = 500;
 
-export interface ContentEventsPruneDb extends VersionsDbApi {
+/** What the prune needs of the database: reads and deletes, nothing more. */
+export interface ContentEventsPruneDb
+  extends Pick<VersionsDbApi, "select" | "delete"> {
   tableExists?(table: string): Promise<boolean>;
 }
 
