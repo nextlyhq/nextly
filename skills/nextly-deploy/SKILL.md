@@ -8,7 +8,7 @@ description: >-
   Also use when a deployed Nextly app has missing tables, refuses to start,
   or loses uploaded files.
 metadata:
-  nextly-version: 0.0.2-alpha.66
+  nextly-version: 0.0.2-alpha.67
 ---
 
 # Deploy a Nextly project
@@ -18,7 +18,7 @@ Nextly adds: a production database, migrations applied before the new code
 serves traffic, a few environment variables, and media storage that is not
 the local disk on serverless hosts.
 
-Checked against `nextly` 0.0.2-alpha.66 with Next.js 16.4 and PostgreSQL 17:
+Checked against `nextly` 0.0.2-alpha.67 with Next.js 16.4 and PostgreSQL 17:
 the steps below were run end to end, from an empty database to a published
 post in a production build. Run `npx nextly --version`; if it prints a newer
 version, prefer <https://nextlyhq.com/docs/guides/deployment> where it

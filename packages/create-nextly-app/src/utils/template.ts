@@ -5,6 +5,7 @@ import fs from "fs-extra";
 
 import { buildNextConfigTemplate } from "../generators/next-config";
 import { EXACT_VERSION } from "../lib/exact-version";
+import { packageVersion } from "../lib/package-version";
 import { getAvailableTemplateNames } from "../lib/templates";
 import type {
   DatabaseConfig,
@@ -510,6 +511,10 @@ function guidePlaceholders(
   return {
     "{{runCommand}}": scriptRunner(packageManager),
     "{{execCommand}}": binaryRunner(packageManager),
+    // The release whose tag publishes the skills this CLI bundles, for the
+    // guide's command that adds or restores them. Not the release the skills
+    // were checked against, whose tag may carry no user skills at all.
+    "{{skillsTag}}": packageVersion(),
   };
 }
 
