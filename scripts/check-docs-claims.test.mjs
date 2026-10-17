@@ -3088,6 +3088,19 @@ describe("plugin-route-mount", () => {
     );
   });
 
+  it("fails closed on a generator that spells two different mounts", async () => {
+    // A stale path.join in a comment must not stand in for the path the code builds.
+    const findings = await findingsFor(
+      tree(
+        `// was: path.join(cwd, projectInfo.appDir, "admin", "api", "[[...params]]", "route.ts")\n` +
+          "await writeNew(cwd, `${projectInfo.appDir}/cms/api/[[...params]]/route.ts`, T);\n"
+      )
+    );
+    expect(findings.find(f => f.check === "plugin-route-mount-unreadable")?.message).toContain(
+      "more than one way"
+    );
+  });
+
   it("reports a generator that mounts somewhere other than the template", async () => {
     const findings = await findingsFor(
       tree("await writeNew(cwd, `${projectInfo.appDir}/cms/api/[[...params]]/route.ts`, T);\n")

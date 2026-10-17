@@ -1037,16 +1037,17 @@ const TEMPLATE_CATCH_ALL = "/[[...params]]/route.ts";
 const GENERATOR_SOURCE = "packages/create-nextly-app/src/generators/routes.ts";
 // The generator builds the route's path in one of two spellings: path.join of
 // quoted segments, or a template string after the app directory. Each reader
-// returns the segments between the app directory and the catch-all, or null.
+// returns the segments between the app directory and the catch-all for every
+// occurrence of its spelling in the file.
 const GENERATOR_MOUNT_SPELLINGS = [
-  source => {
-    const m = /path\.join\(\s*cwd,\s*projectInfo\.appDir,\s*((?:"[^"]*",\s*)+)"\[\[\.\.\.params\]\]"/.exec(source);
-    return m === null ? null : [...m[1].matchAll(/"([^"]*)"/g)].map(q => q[1]);
-  },
-  source => {
-    const m = /`\$\{projectInfo\.appDir\}((?:\/[^/`$]+)*)\/\[\[\.\.\.params\]\]\/route\.ts`/.exec(source);
-    return m === null ? null : m[1].split("/").filter(Boolean);
-  },
+  source =>
+    [...source.matchAll(/path\.join\(\s*cwd,\s*projectInfo\.appDir,\s*((?:"[^"]*",\s*)+)"\[\[\.\.\.params\]\]"/g)].map(m =>
+      [...m[1].matchAll(/"([^"]*)"/g)].map(q => q[1])
+    ),
+  source =>
+    [...source.matchAll(/`\$\{projectInfo\.appDir\}((?:\/[^/`$]+)*)\/\[\[\.\.\.params\]\]\/route\.ts`/g)].map(m =>
+      m[1].split("/").filter(Boolean)
+    ),
 ];
 
 /** The mount the base template hard-codes by where its route file sits. */
@@ -1086,14 +1087,26 @@ function generatorMount(repoRoot, refuse) {
     refuse(GENERATOR_SOURCE, "could not be read, so the mount it generates is unknown");
     return null;
   }
-  const segments = GENERATOR_MOUNT_SPELLINGS.map(read => read(source)).find(found => found !== null);
-  if (segments === undefined) {
+  // Every occurrence of either spelling must name the same mount: a stale one
+  // (in a comment, say) standing in for the path the code builds would let
+  // the docs be checked against the wrong address.
+  const found = GENERATOR_MOUNT_SPELLINGS.flatMap(read => read(source));
+  if (found.length === 0) {
     refuse(
       GENERATOR_SOURCE,
       "no longer builds the catch-all route path in the shape this reads, so the mount it generates is unknown"
     );
     return null;
   }
+  const distinct = [...new Set(found.map(parts => `/${parts.join("/")}`))];
+  if (distinct.length > 1) {
+    refuse(
+      GENERATOR_SOURCE,
+      `spells the catch-all route path in more than one way (${distinct.join(", ")}), so the mount it generates is unknown`
+    );
+    return null;
+  }
+  const segments = found[0];
   if (segments.length === 0) {
     refuse(GENERATOR_SOURCE, "builds a catch-all route path with no leading segments");
     return null;
