@@ -52,6 +52,7 @@ import { BaseService } from "../../../shared/base-service";
 import {
   generatedTypesFile,
   generatedZodDir,
+  retireOldDefaultTypesFile,
 } from "../../../shared/lib/generated-output-paths";
 import {
   toSingularLabel,
@@ -85,7 +86,7 @@ export interface SyncOptions {
   generateZodSchemas?: boolean;
 
   /**
-   * Generate TypeScript types (payload-types.ts).
+   * Generate TypeScript types (to `typescript.outputFile`).
    * @default false (opt-in: only generate when explicitly requested)
    */
   generateTypes?: boolean;
@@ -1048,6 +1049,13 @@ export class CollectionSyncService extends BaseService {
       // Write types file
       writeFileSync(outputPath, typesFile.code, "utf-8");
       this.logger.debug(`Generated types: ${outputPath}`);
+
+      // The same settling `generate:types` does, after the new file exists,
+      // so a sync in an app with the old default's file leaves one
+      // declaration of the generated types, not two that clash.
+      for (const notice of retireOldDefaultTypesFile(opts.cwd, outputFile)) {
+        this.logger.warn(notice);
+      }
     }
 
     return outputPath;

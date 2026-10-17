@@ -91,7 +91,7 @@ export interface MutationResult<T> {
  * this interface via module declaration:
  *
  * ```typescript
- * // In generated payload-types.ts:
+ * // In generated nextly-types.ts:
  * declare module "nextly" {
  *   export interface GeneratedTypes extends Config {}
  * }

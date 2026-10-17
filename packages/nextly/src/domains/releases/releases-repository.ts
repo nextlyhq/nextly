@@ -474,7 +474,13 @@ export class ReleasesRepository {
     id: string,
     at: Date,
     timezone: string,
-    from: readonly ReleaseState[] = RELEASE_SCHEDULABLE_FROM
+    from: readonly ReleaseState[] = RELEASE_SCHEDULABLE_FROM,
+    /**
+     * The revision the caller read, when it must be the ONLY one to move this
+     * release from that read. The state fence cannot tell two callers apart
+     * when both read `scheduled`; the revision can, and moving bumps it.
+     */
+    expectedRevision?: number
   ): Promise<boolean> {
     const affected = await this.db.updateCount(
       RELEASES,
@@ -483,10 +489,22 @@ export class ReleasesRepository {
         timezone,
         state: "scheduled" satisfies ReleaseState,
         updatedAt: new Date(),
+        ...(expectedRevision === undefined
+          ? {}
+          : { revision: expectedRevision + 1 }),
       },
       {
         and: [
           { column: "id", op: "=", value: id },
+          ...(expectedRevision === undefined
+            ? []
+            : [
+                {
+                  column: "revision",
+                  op: "=" as const,
+                  value: expectedRevision,
+                },
+              ]),
           // The fence IS the declaration, not a copy of it: the admin decides
           // which controls to offer from the same list, so a change here cannot
           // leave a button offering a move the database refuses.

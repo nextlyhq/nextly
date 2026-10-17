@@ -47,6 +47,7 @@ import {
 } from "../../shared/lib/run-adapter-transaction";
 import type { AuthUser } from "../../types/auth";
 import { readProxyTrustSettings } from "../../utils/proxy-trust";
+import { normalizeAccountEmail } from "../credentials/account-email";
 import { passwordCredentialDeps } from "../credentials/credential-deps";
 import { verifyCredentials } from "../credentials/verify-credentials";
 import { ChallengeRegistry } from "../pipeline/challenge";
@@ -326,7 +327,7 @@ export function buildAuthRouterDeps(
       const users = await db
         .select({ id: schema.users.id })
         .from(schema.users)
-        .where(eq(schema.users.email, data.email.trim().toLowerCase()))
+        .where(eq(schema.users.email, normalizeAccountEmail(data.email)))
         .limit(1);
 
       return {
@@ -365,6 +366,20 @@ export function buildAuthRouterDeps(
         newPassword
       );
       return { email: result.email };
+    },
+
+    // Read-only lookups the auth limiter counts a token request against; each
+    // leaves its token usable for the handler that consumes it.
+    findTokenOwner: async (kind, token) => {
+      const authService = getService("authService");
+      switch (kind) {
+        case "reset":
+          return await authService.resetTokenOwner(token);
+        case "verification":
+          return await authService.verificationTokenOwner(token);
+        case "invite":
+          return await authService.inviteTokenOwner(token);
+      }
     },
 
     acceptInvite: async (token, newPassword) => {

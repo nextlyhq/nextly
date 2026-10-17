@@ -8,7 +8,7 @@
  *
  * - First-time setup (permissions seeded automatically; demo content via admin UI)
  * - Config-file watching (`--watch` re-syncs on nextly.config.ts changes)
- * - Type generation (`--types` emits payload-types.ts)
+ * - Type generation (`--types` writes the generated types file)
  *
  * ## Auto-Sync Mode (Development Only)
  *
@@ -57,6 +57,8 @@
  * ```
  */
 
+import { basename } from "node:path";
+
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Command } from "commander";
 
@@ -68,6 +70,7 @@ import { getFieldGroupRegistryAliases } from "../../domains/field-groups/storage
 import { runWithFieldTypes } from "../../domains/schema/field-types/field-type-scope";
 import { describeError } from "../../errors/index";
 import { assertPluginFieldDeclarations } from "../../shared/lib/assert-plugin-field-declarations";
+import { DEFAULT_TYPESCRIPT_CONFIG } from "../../shared/types/config";
 import {
   createContext,
   type CommandContext,
@@ -115,7 +118,7 @@ export interface DbSyncCommandOptions {
   watch?: boolean;
 
   /**
-   * Generate TypeScript types (payload-types.ts)
+   * Generate TypeScript types (to `typescript.outputFile`)
    * @default false (types are not generated unless explicitly requested)
    */
   types?: boolean;
@@ -465,7 +468,11 @@ export function registerDbSyncCommand(program: Command): void {
     .alias("sync")
     .description("Sync database schema with nextly.config.ts.")
     .option("-w, --watch", "Watch for config file changes", false)
-    .option("--types", "Generate TypeScript types (payload-types.ts)", false)
+    .option(
+      "--types",
+      `Generate TypeScript types (to typescript.outputFile, ${basename(DEFAULT_TYPESCRIPT_CONFIG.outputFile)} by default)`,
+      false
+    )
     .option(
       "--schemas",
       "Generate Zod validation schema files to src/db/schemas/zod/",

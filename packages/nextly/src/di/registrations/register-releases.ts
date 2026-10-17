@@ -18,7 +18,10 @@
 import { apiKeyWriteAllowed } from "../../auth/authenticated-scope";
 import { nextly } from "../../direct-api/nextly";
 import type { RBACAccessControlService } from "../../domains/auth/services/rbac-access-control-service";
+import type { JobRegistry } from "../../domains/jobs/job-registry";
+import { runSweepNow } from "../../domains/jobs/jobs-runner";
 import type { ReleaseTargetCaller } from "../../domains/releases/release-targets";
+import { RELEASES_DRAIN_JOB } from "../../domains/releases/releases-drain-job";
 import { ReleasesRepository } from "../../domains/releases/releases-repository";
 import {
   RELEASES_RESOURCE,
@@ -121,6 +124,31 @@ export function registerReleaseServices({
 
         canManageReleases: (userId, authority) =>
           hasPermission(userId, authority, RELEASES_RESOURCE),
+
+        // Publish now runs the runner's OWN releases drain job, through the
+        // jobs runner and under its claim, rather than a pass of its own: two
+        // runs of the engine on a shared document can only be kept apart by
+        // one claim. The job reports its own outcome (`register-jobs`), so a
+        // document that could not be written now is logged exactly as a
+        // scheduled run logs it.
+        //
+        // The registry is resolved HERE, once, while this registration's
+        // factory builds the service, rather than on each Publish now.
+        // Services can be cleared and registered again while a Publish now
+        // from this registration is still running; resolving per call would
+        // then pair this adapter with the next registration's registry, whose
+        // drain writes through another adapter. It cannot cycle: building the
+        // job registry resolves the document-lock and webhook services, never
+        // this one.
+        runDrainNow: drainNowWith(
+          adapter,
+          container.has("jobRegistry")
+            ? container.get<JobRegistry>("jobRegistry")
+            : undefined
+        ),
+        // Publish now answers a drain it could not start with the release as
+        // it stands; this is where that failure is reported.
+        logger,
 
         // The document's OWN authority, asked with the same operation the
         // ordinary write path uses. Adding a document to a release is a deferred
@@ -225,6 +253,23 @@ export function contentReadAccess(
     // `actor` from the instance's defaults, and a caller with no key of its
     // own would be judged by a default key's grants.
     actor: caller.authenticatedScope,
+  };
+}
+
+/**
+ * Publish now's drain run, bound to one registration's adapter and registry.
+ *
+ * A boot that registered no job registry has nothing to run the drain with,
+ * so nothing runs and the release is left scheduled: it is due, and whatever
+ * runs this installation's releases sends it out on its next pass.
+ */
+function drainNowWith(
+  adapter: RegistrationContext["adapter"],
+  registry: JobRegistry | undefined
+): (options: { maxDurationMs: number }) => Promise<unknown> {
+  return async ({ maxDurationMs }) => {
+    if (registry === undefined) return;
+    await runSweepNow(adapter, registry, RELEASES_DRAIN_JOB, { maxDurationMs });
   };
 }
 

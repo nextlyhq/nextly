@@ -10,6 +10,7 @@ import type { RateLimitStore } from "../../middleware/rate-limit";
 import type { AuthUser } from "../../types/auth";
 import {
   clearPendingCookie,
+  presentedPendingToken,
   readPendingCookie,
   setPendingCookie,
 } from "../cookies/pending-cookie";
@@ -711,10 +712,7 @@ export async function handleChallengeResolve(
     // page could have kept — see auth/cookies/pending-cookie.
     const cookieToken = readPendingCookie(request);
     usedCookie = typeof body.pendingToken !== "string" && cookieToken !== null;
-    const pendingTokenInput =
-      typeof body.pendingToken === "string"
-        ? body.pendingToken
-        : (cookieToken ?? "");
+    const pendingTokenInput = presentedPendingToken(body, request);
     const challengeResponse = (body.response ?? {}) as Record<string, unknown>;
 
     let pending;

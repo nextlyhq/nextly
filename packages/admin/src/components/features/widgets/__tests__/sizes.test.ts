@@ -7,6 +7,10 @@
  * The classes are asserted as the RENDERED text, because Tailwind builds a
  * rule only for class text it finds in source.
  */
+import {
+  WIDGET_WIDTHS as CORE_WIDGET_WIDTHS,
+  widthFromSize as coreWidthFromSize,
+} from "nextly/config";
 import { describe, expect, it } from "vitest";
 
 import type { WidgetWidth } from "@admin/types/dashboard/widgets";
@@ -184,5 +188,42 @@ describe("legacySizeToWidgetSize", () => {
 
   it("defaults an undeclared size to full width", () => {
     expect(legacySizeToWidgetSize(undefined)).toBe("full");
+  });
+});
+
+describe("the width vocabulary is core's", () => {
+  it("is the five widths in core's ranking, as nextly/config publishes them", () => {
+    expect([...CORE_WIDGET_WIDTHS]).toEqual([
+      "quarter",
+      "third",
+      "half",
+      "twoThirds",
+      "full",
+    ]);
+    // The same list, not an equal copy: a width added or renamed in core
+    // reaches the admin with nothing here to update.
+    expect(WIDGET_WIDTHS).toBe(CORE_WIDGET_WIDTHS);
+  });
+
+  it("gives every width core has a span, a name and a label, and none it lacks", () => {
+    const core = [...CORE_WIDGET_WIDTHS].sort();
+    expect(Object.keys(WIDTH_SPAN_CLASSES).sort()).toEqual(core);
+    expect(Object.keys(WIDTH_NAMES).sort()).toEqual(core);
+  });
+
+  it("reads a declared size as core does", () => {
+    for (const size of [
+      "sm",
+      "md",
+      "lg",
+      "xl",
+      "full",
+      "enormous",
+      undefined,
+    ]) {
+      expect(widthFromDeclaredSize(size), String(size)).toBe(
+        coreWidthFromSize(size)
+      );
+    }
   });
 });

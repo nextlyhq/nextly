@@ -753,6 +753,7 @@ async function generateAllFiles(
       components: componentRecords,
       userFields: userFieldRecords,
       moduleAugmentation: true,
+      warn: message => logger.warn(message),
     });
     result.typesFile = typesFilePath;
     logger.debug(`Written types: ${typesFilePath}`);

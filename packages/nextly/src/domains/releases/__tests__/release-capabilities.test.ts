@@ -34,6 +34,8 @@ function service(holds: ReleaseAuthority[]) {
     repository: {} as ReleasesServiceDeps["repository"],
     canManageReleases,
     canActOnDocument: vi.fn(async () => true),
+    // Running a release is not what these cases are about.
+    runDrainNow: vi.fn(async () => undefined),
     // Every target is there and has a lifecycle; the checks have their own tests.
     targets: {
       readDocument: async (target: { entryId: string }) => ({
@@ -55,7 +57,7 @@ function release(state: ReleaseState, id = "r1") {
 const ALL = ["read", "create", "publish"] as ReleaseAuthority[];
 
 describe("capabilities, for a caller holding everything", () => {
-  it("allows scheduling from every state the fence admits, not only draft", async () => {
+  it("allows scheduling from the states the fence admits, and not a cancelled one", async () => {
     const { svc } = service(ALL);
     const can = await svc.capabilities(
       [
@@ -66,10 +68,11 @@ describe("capabilities, for a caller holding everything", () => {
       ACTOR
     );
     expect(can.get("a")?.schedule).toBe(true);
-    // An instant can be MOVED, and a cancelled launch reinstated. Both were
-    // impossible in the version this replaced.
+    // An instant can be MOVED, which the version this replaced could not do.
     expect(can.get("b")?.schedule).toBe(true);
-    expect(can.get("c")?.schedule).toBe(true);
+    // A cancelled release is final, like a published one: it is retried by
+    // making a new release, so the list of finished launches stays true.
+    expect(can.get("c")?.schedule).toBe(false);
   });
 
   it("refuses scheduling a published release", async () => {

@@ -64,6 +64,8 @@ function service(members: M[], liveAuthorIds: string[], state = "blocked") {
     } as unknown as ReleasesServiceDeps["repository"],
     canManageReleases: vi.fn(async () => true),
     canActOnDocument: vi.fn(async () => true),
+    // Running a release is not what these cases are about.
+    runDrainNow: vi.fn(async () => undefined),
     // Every target is there and has a lifecycle; the checks have their own tests.
     targets: {
       readDocument: async (target: { entryId: string }) => ({
@@ -171,6 +173,8 @@ describe("as an instrument", () => {
       repository: {} as ReleasesServiceDeps["repository"],
       canManageReleases: vi.fn(async () => false),
       canActOnDocument: vi.fn(async () => true),
+      // Running a release is not what these cases are about.
+      runDrainNow: vi.fn(async () => undefined),
       // Every target is there and has a lifecycle; the checks have their own tests.
       targets: {
         readDocument: async (target: { entryId: string }) => ({
@@ -253,11 +257,14 @@ describe("scheduling a blocked release", () => {
 
     await expect(svc.schedule("r1", AT, "UTC", ACTOR)).rejects.toMatchObject({
       code: "CONFLICT",
+      // The honest answer: it already happened, and the way forward is a new
+      // release — not advice to fix documents in a release that is final.
+      publicMessage: expect.stringContaining("already been published"),
     });
-    // Refused by the FENCE, which is the honest answer, and reached because no
-    // blocker was derived on the way.
-    expect(scheduleRelease).toHaveBeenCalled();
+    // Refused from the state it was read in, before any blocker is derived and
+    // before the write is attempted.
     expect(liveAuthors).not.toHaveBeenCalled();
+    expect(scheduleRelease).not.toHaveBeenCalled();
   });
 
   it("still schedules a release whose members are all runnable", async () => {
@@ -329,6 +336,8 @@ describe("the blocker verdict and the write share a fence", () => {
       } as unknown as ReleasesServiceDeps["repository"],
       canManageReleases: vi.fn(async () => true),
       canActOnDocument: vi.fn(async () => true),
+      // Running a release is not what these cases are about.
+      runDrainNow: vi.fn(async () => undefined),
       // Every target is there and has a lifecycle; the checks have their own tests.
       targets: {
         readDocument: async (target: { entryId: string }) => ({

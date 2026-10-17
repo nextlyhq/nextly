@@ -54,6 +54,8 @@ import {
   RELEASE_ASSEMBLABLE_FROM,
   RELEASE_ASSEMBLABLE_WITH_PUBLISH_FROM,
   RELEASE_CANCELLABLE_FROM,
+  RELEASE_FINAL_STATES,
+  RELEASE_PUBLISHABLE_NOW_FROM,
   RELEASE_SCHEDULABLE_FROM,
   RELEASE_SCHEDULABLE_FROM_BLOCKED,
   RELEASE_SCHEDULABLE_FROM_UNBLOCKED,
@@ -65,9 +67,12 @@ import {
   type ReleaseKind,
   type ReleaseMemberAction,
   type ReleaseState,
+  type ReleaseCapabilities,
 } from "../../../schemas/releases/types";
 import type { VersionScopeKind } from "../../../schemas/versions/types";
+import type { Logger } from "../../../services/shared";
 import { isUniqueViolation } from "../../../shared/lib/unique-violation";
+import { isDueAt } from "../release-due";
 import { releaseMemberKey } from "../release-member-key";
 import {
   RELEASE_ATTENTION_REASONS,
@@ -165,26 +170,6 @@ export interface ReleaseActor {
   userRoles?: string[];
 }
 
-/**
- * What a caller may do to one release, as the server sees it.
- *
- * Sent WITH the release rather than derived by the reader. Payload computes the
- * same thing per document for its edit view, and Sanity gates each release
- * action by its own permission id so scheduling can be granted without
- * publishing — in both, the answer depends on authority the client does not
- * hold, so a client that computed it would be guessing.
- */
-export interface ReleaseCapabilities {
-  /** Set or move this release's instant. */
-  schedule: boolean;
-  /** Call it off — which is also how an unwanted draft is abandoned. */
-  cancel: boolean;
-  /** Put a document in it. Necessary, not sufficient: see `capabilities`. */
-  addMember: boolean;
-  /** Take a document out of it. Necessary, not sufficient. */
-  removeMember: boolean;
-}
-
 export interface ReleasesServiceDeps {
   repository: ReleasesRepository;
   /**
@@ -226,6 +211,68 @@ export interface ReleasesServiceDeps {
     authenticatedScope?: AuthenticatedScope;
     userRoles?: string[];
   }) => Promise<boolean>;
+  /**
+   * Run the releases drain job now, through the jobs runner, if no runner
+   * already holds it.
+   *
+   * The runner's own job, claimed under its lease exactly as a scheduled pass
+   * claims it, so a run started here can never overlap the scheduled drain or
+   * another one started here: every run of the release engine goes through
+   * that one claim. When another runner holds it, nothing runs and this
+   * resolves anyway; that runner, or the next pass, sends out what is due.
+   * `maxDurationMs` is the pass's budget, as for any pass.
+   *
+   * Injected because the runner, its registry and the identity reads the drain
+   * writes with are wiring the domain does not hold.
+   */
+  runDrainNow: (options: { maxDurationMs: number }) => Promise<unknown>;
+  /**
+   * Where Publish now reports a drain it could not start. Optional: without
+   * one the failure goes unreported, and the release is still answered as it
+   * stands.
+   */
+  logger?: Pick<Logger, "warn">;
+}
+
+/**
+ * How long Publish now may spend running the drain before it answers.
+ *
+ * A request has a time limit the runner's pass does not, and a release past
+ * this budget is not lost: it is already due, so the runner finishes it on its
+ * next pass, and the answer says it is still going out.
+ */
+const PUBLISH_NOW_BUDGET_MS = 15_000;
+
+/**
+ * The refusal for a change to a release that has finished, saying what to do
+ * instead.
+ *
+ * A published or cancelled release is the record of a launch, and it takes no
+ * further change. The person meant to do something real, so the message names
+ * the way to do it: a new release.
+ */
+function finishedReleaseRefusal(
+  release: { id: string; state: ReleaseState },
+  attempted: string
+): NextlyError {
+  // Each state named, rather than "not published means cancelled": a caller
+  // reaching here with a state that is not final would otherwise be told a
+  // release it can still fix is cancelled.
+  const message =
+    release.state === "published"
+      ? "This release has already been published, so it cannot be changed or run again. Create a new release to schedule these documents again."
+      : release.state === "cancelled"
+        ? "This release is cancelled; create a new release to schedule these documents again."
+        : "This release cannot be changed in its current state.";
+  return NextlyError.conflict({
+    message,
+    logContext: {
+      reason: "release-is-final",
+      releaseId: release.id,
+      state: release.state,
+      attempted,
+    },
+  });
 }
 
 /**
@@ -854,6 +901,9 @@ export class ReleasesService {
               mayPublish && RELEASE_CANCELLABLE_FROM.includes(release.state),
             addMember: editable,
             removeMember: editable,
+            publishNow:
+              mayPublish &&
+              RELEASE_PUBLISHABLE_NOW_FROM.includes(release.state),
           },
         ];
       })
@@ -1428,15 +1478,10 @@ export class ReleasesService {
       await this.authorize(actor, "publish");
       return;
     }
-    // Published or cancelled: never materialised again, so this is work that
-    // cannot happen rather than work someone is not allowed to do.
-    throw NextlyError.conflict({
-      logContext: {
-        reason: "release-not-mutable",
-        releaseId,
-        state: parent.state,
-      },
-    });
+    // Published or cancelled: final, so this is work that cannot happen
+    // rather than work someone is not allowed to do — and the refusal says
+    // what to do instead.
+    throw finishedReleaseRefusal(parent, "change-members");
   }
 
   /** Whether this user holds ANY of these authorities. */
@@ -1576,20 +1621,11 @@ export class ReleasesService {
     // there are any. Scheduling is not a hot path, and the alternative is
     // spending it at the instant instead, when nobody is watching.
     const [current] = await this.deps.repository.findReleases({ ids: [id] });
-    const wasBlocked = current?.state === "blocked";
-    await this.assertNothingBlocks(id, current?.state);
-    // A single-document release is one document scheduled on its own: with
-    // none it would run and publish nothing, and read as done.
-    if (
-      current?.kind === "single" &&
-      (await this.deps.repository.listMembers(id)).length === 0
-    ) {
-      throw NextlyError.conflict({
-        message:
-          "A single-document release needs its document before it can be scheduled. Add it, then schedule.",
-        logContext: { reason: "single-release-empty", releaseId: id },
-      });
+    if (current !== undefined && RELEASE_FINAL_STATES.includes(current.state)) {
+      throw finishedReleaseRefusal(current, "schedule");
     }
+    const wasBlocked = current?.state === "blocked";
+    await this.assertReadyToRun(id, current);
 
     // FENCED ON THE STATE THE VERDICT ABOVE WAS FORMED AGAINST, which is what
     // makes the check and the write one decision rather than two.
@@ -1635,6 +1671,33 @@ export class ReleasesService {
   }
 
   /**
+   * Refuse a release that could not run as it stands: one whose members carry
+   * something nothing can run, or a single-document release with no document.
+   *
+   * The one precondition scheduling and Publish now both make before they
+   * write, so a release either may run at its instant or may run now, never
+   * one and not the other.
+   */
+  private async assertReadyToRun(
+    id: string,
+    current: ReleaseRow | undefined
+  ): Promise<void> {
+    await this.assertNothingBlocks(id, current?.state);
+    // A single-document release is one document scheduled on its own: with
+    // none it would run and publish nothing, and read as done.
+    if (
+      current?.kind === "single" &&
+      (await this.deps.repository.listMembers(id)).length === 0
+    ) {
+      throw NextlyError.conflict({
+        message:
+          "A single-document release needs its document before it can be scheduled. Add it, then schedule.",
+        logContext: { reason: "single-release-empty", releaseId: id },
+      });
+    }
+  }
+
+  /**
    * Refuse a release whose members carry something nothing can run.
    *
    * Only for a state the fence could actually accept. A terminal state —
@@ -1672,6 +1735,133 @@ export class ReleasesService {
         state,
       },
     });
+  }
+
+  /**
+   * Run a release now, with the same checks and the same all-together run as
+   * at a scheduled time.
+   *
+   * Publish now is a scheduled run that does not wait, not a second way of
+   * publishing: the release is scheduled for this moment, and then the
+   * runner's own releases drain job is run at once, under the same claim a
+   * scheduled pass takes. Like any pass, it sends out every release that is
+   * due, this one among them, and settles releases sharing a document
+   * together. A release already scheduled at or before now is due as it
+   * stands, so it is not moved: the drain's claim is what keeps two runs
+   * apart, and moving a due release again would make a drain already running
+   * it leave it unfinished for the next pass.
+   *
+   * Answers the release as it stands afterwards: `published`; `blocked` when
+   * a document stopped it part-way; or still `scheduled` when the budget ran
+   * out, a document could not be written yet, another runner was already
+   * running the drain (or it is waiting to retry), or the drain could not be
+   * started. A `scheduled` release is due, so that runner or the next pass
+   * finishes it.
+   *
+   * @experimental
+   */
+  async publishNow(id: string, actor: ReleaseActor): Promise<ReleaseRow> {
+    await this.authorize(actor, "publish");
+    const current = await this.publishableNow(id);
+    // The same refusal scheduling makes, before anything is written, so a
+    // release that would stop part-way, or a single-document release with no
+    // document, sends nothing out and is not marked published.
+    await this.assertReadyToRun(id, current);
+    await this.moveToNowUnlessDue(current);
+    await this.runDrainForPublishNow(id);
+    const [after] = await this.deps.repository.findReleases({ ids: [id] });
+    return after ?? current;
+  }
+
+  /**
+   * The release Publish now may run, read once, or the refusal saying why
+   * not: absent, final, or stopped.
+   */
+  private async publishableNow(id: string): Promise<ReleaseRow> {
+    const [current] = await this.deps.repository.findReleases({ ids: [id] });
+    if (current === undefined) {
+      throw NextlyError.notFound({
+        logContext: { reason: "release-not-found", releaseId: id },
+      });
+    }
+    if (RELEASE_FINAL_STATES.includes(current.state)) {
+      throw finishedReleaseRefusal(current, "publish-now");
+    }
+    if (!RELEASE_PUBLISHABLE_NOW_FROM.includes(current.state)) {
+      // Stopped. It is fixed and scheduled again, so the fix is checked before
+      // it goes out, rather than run as it is.
+      throw NextlyError.conflict({
+        message:
+          "This release is stopped. Fix or remove the documents blocking it, then schedule it again.",
+        logContext: {
+          reason: "release-stopped",
+          releaseId: id,
+          state: current.state,
+        },
+      });
+    }
+    return current;
+  }
+
+  /**
+   * Make the release due for Publish now: move it to this moment, unless its
+   * instant has already come.
+   *
+   * A scheduled release whose instant has come is already due, and is not
+   * moved. Moving it would change the instant a drain that is running it
+   * checks before marking it published, and that drain would then leave it
+   * for the next pass; the drain's claim, not the move, keeps two runs apart.
+   * Due by the same rule the drain selects releases with (`isDueAt`), so a
+   * release left unmoved here is one the drain will pick up.
+   */
+  private async moveToNowUnlessDue(current: ReleaseRow): Promise<void> {
+    const now = new Date();
+    const alreadyDue =
+      current.state === "scheduled" &&
+      current.scheduledAt instanceof Date &&
+      isDueAt(current.scheduledAt, now);
+    if (alreadyDue) return;
+    // Fenced on the state the checks were made against, so a release
+    // cancelled or stopped in between is not run — and on its revision, so of
+    // two overlapping requests (a double click, a retry) only one moves it;
+    // the other is refused before anything is written.
+    const moved = await this.deps.repository.scheduleRelease(
+      current.id,
+      now,
+      // The zone the author chose stays part of the record.
+      current.timezone ?? "UTC",
+      [current.state],
+      current.revision
+    );
+    if (!moved) {
+      throw NextlyError.conflict({
+        logContext: {
+          reason: "release-moved-during-publish-now",
+          releaseId: current.id,
+        },
+      });
+    }
+  }
+
+  /**
+   * Run the releases drain for Publish now, never failing the request.
+   *
+   * The drain is the one runner of releases; running it here rather than a
+   * pass of our own is what keeps this from overlapping the scheduled drain
+   * or another Publish now on a shared document. The release is due by now,
+   * so the runner sends it whether or not this run started: a drain that
+   * could not be started is logged, and the release is answered as it
+   * stands, as when another runner holds the drain.
+   */
+  private async runDrainForPublishNow(releaseId: string): Promise<void> {
+    try {
+      await this.deps.runDrainNow({ maxDurationMs: PUBLISH_NOW_BUDGET_MS });
+    } catch (error) {
+      this.deps.logger?.warn("Publish now could not run the releases drain", {
+        releaseId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 
   async cancel(id: string, actor: ReleaseActor): Promise<void> {

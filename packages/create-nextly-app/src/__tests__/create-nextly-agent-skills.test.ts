@@ -80,25 +80,10 @@ vi.mock("../utils/detect", async importOriginal => ({
     appDir: "src/app",
   })),
 }));
-// The existing-app generators write files the skills do not depend on.
 vi.mock("../generators/env", () => ({ generateEnv: vi.fn(async () => {}) }));
-vi.mock("../generators/config", () => ({ generateConfig: vi.fn() }));
-vi.mock("../generators/routes", () => ({ generateRoutes: vi.fn() }));
-vi.mock("../generators/admin", () => ({ generateAdminPage: vi.fn() }));
-vi.mock("../generators/media-routes", () => ({
-  generateMediaRoutes: vi.fn(),
-}));
-vi.mock("../generators/types", () => ({ generateTypesDirectory: vi.fn() }));
-vi.mock("../generators/instrumentation", () => ({
-  generateInstrumentation: vi.fn(async () => ({
-    written: [],
-    changed: [],
-    skipped: [],
-  })),
-}));
-vi.mock("../generators/next-config", () => ({
-  patchNextConfig: vi.fn(async () => null),
-  nextConfigReport: vi.fn(() => []),
+// The existing-app steps write files the skills do not depend on.
+vi.mock("../generators/existing-app", () => ({
+  generateIntoExistingApp: vi.fn(async () => []),
 }));
 // The real reader, pointed at the test's bundle in place of the CLI's.
 vi.mock("../generators/agent-skills", async importOriginal => {

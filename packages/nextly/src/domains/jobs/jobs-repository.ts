@@ -372,10 +372,25 @@ export class JobsRepository {
     });
   }
 
-  async findDue(input: { now: Date; limit: number }): Promise<JobRow[]> {
+  /**
+   * Jobs a runner may claim now, oldest first.
+   *
+   * `ids` narrows the answer to those rows and changes nothing else: a row
+   * named there is returned only when it is due and unheld by the same rule as
+   * any other, which is what lets one job be run on demand without a second
+   * definition of "due".
+   */
+  async findDue(input: {
+    now: Date;
+    limit: number;
+    ids?: readonly string[];
+  }): Promise<JobRow[]> {
     return this.db.select<JobRow>(JOBS, {
       where: {
         and: [
+          ...(input.ids === undefined
+            ? []
+            : [{ column: "id", op: "IN" as const, value: [...input.ids] }]),
           { column: "state", op: "=", value: "pending" },
           // `runAt` is the schedule and `nextAttemptAt` is the retry. Either
           // being unset means "no constraint from that side", which is why each

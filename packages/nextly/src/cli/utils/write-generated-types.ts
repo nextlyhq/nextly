@@ -20,7 +20,10 @@ import type { DynamicCollectionRecord } from "../../schemas/dynamic-collections/
 import type { DynamicFieldGroupRecord } from "../../schemas/dynamic-field-groups/types";
 import type { DynamicSingleRecord } from "../../schemas/dynamic-singles/types";
 import type { UserFieldDefinitionRecord } from "../../schemas/user-field-definitions/types";
-import { generatedTypesFile } from "../../shared/lib/generated-output-paths";
+import {
+  generatedTypesFile,
+  retireOldDefaultTypesFile,
+} from "../../shared/lib/generated-output-paths";
 
 export interface WriteGeneratedTypesOptions {
   cwd: string;
@@ -35,6 +38,11 @@ export interface WriteGeneratedTypesOptions {
   userFields: UserFieldDefinitionRecord[];
   /** Whether to write the `declare module "nextly"` augmentation. */
   moduleAugmentation: boolean;
+  /**
+   * Tells the developer about a `payload-types.ts` the old default left
+   * beside the file. Required, so no command writing types can drop it.
+   */
+  warn: (message: string) => void;
 }
 
 /** Generates the types file, writes it, and returns the path it was written to. */
@@ -65,5 +73,12 @@ export async function writeGeneratedTypesFile(
   const typesFilePath = generatedTypesFile(options.cwd, options.outputFile);
   await mkdir(dirname(typesFilePath), { recursive: true });
   await writeFile(typesFilePath, typesFile.code, "utf-8");
+  // After the new file exists, so the re-export never points at nothing.
+  for (const notice of retireOldDefaultTypesFile(
+    options.cwd,
+    options.outputFile
+  )) {
+    options.warn(notice);
+  }
   return typesFilePath;
 }
