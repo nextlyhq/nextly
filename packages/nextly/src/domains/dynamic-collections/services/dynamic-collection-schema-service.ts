@@ -787,6 +787,18 @@ export class DynamicCollectionSchemaService {
    * A relationship is the case with no answer: every id the generator could write references a
    * row that does not exist, and `DEFAULT NULL` does not satisfy `NOT NULL` on any dialect.
    */
+  /**
+   * The literal an added column gives the rows that already exist, or null when they get NULL:
+   * a required column's backfill, or a stated default. The same answer the ADD below writes, for a
+   * precondition that has to know before the statement runs (two rows given one value cannot take
+   * a unique index).
+   */
+  addedColumnBackfill(field: FieldDefinition): string | null {
+    return field.required || field.default !== undefined
+      ? this.requiredColumnBackfill(field)
+      : null;
+  }
+
   private requiredColumnBackfill(field: FieldDefinition): string | null {
     const literal =
       field.default !== undefined

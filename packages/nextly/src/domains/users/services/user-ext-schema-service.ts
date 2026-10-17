@@ -92,7 +92,6 @@ import {
   getFieldType,
   isPluginFieldTypeOnSurface,
 } from "../../schema/field-types/field-type-registry";
-import { builderDropColumnSql } from "../../schema/pipeline/sql-templates/common-statements";
 import { sqliteTimestampColumns } from "../../schema/services/runtime-schema-generator";
 import { calculateSchemaHash } from "../../schema/services/schema-hash";
 
@@ -687,13 +686,15 @@ export class UserExtSchemaService {
       if (newFieldMap.has(name)) continue;
 
       const columnName = this.toSnakeCase(name);
-      statements.push(
-        builderDropColumnSql(
-          this.dialect,
-          `${this.q}${TABLE_NAME}${this.q}`,
-          `${this.q}${columnName}${this.q}`
-        )
-      );
+      if (this.dialect === "sqlite") {
+        statements.push(
+          `ALTER TABLE ${this.q}${TABLE_NAME}${this.q} DROP COLUMN ${this.q}${columnName}${this.q};`
+        );
+      } else {
+        statements.push(
+          `ALTER TABLE ${this.q}${TABLE_NAME}${this.q} DROP COLUMN IF EXISTS ${this.q}${columnName}${this.q};`
+        );
+      }
     }
 
     // Find modified fields (skip for SQLite — doesn't support ALTER COLUMN)

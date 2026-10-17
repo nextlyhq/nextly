@@ -10,6 +10,7 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 import { describeEachDialect } from "../../../plugins/__tests__/helpers/dialect-matrix";
+import { uniqueIndexNameForColumn } from "../../schema/services/index-name";
 import {
   createTestNextly,
   type TestDialect,
@@ -116,7 +117,148 @@ describeEachDialect("a schema save whose migration fails", dialect => {
     );
 
     expect(saved.success, JSON.stringify(saved)).toBe(false);
+    // Refused before any statement runs, with the same reason on every dialect.
+    expect(refusalOf(saved)).toMatch(
+      /^2 entries would share the value '' for code, which must be unique\./
+    );
     expect(await columnsOf("dc_posts")).not.toContain("code");
     expect(await registeredFields("posts")).toEqual(fieldsBefore);
   });
+
+  /** The first field refusal a failed save carries. */
+  function refusalOf(saved: unknown): string | undefined {
+    return (saved as { publicData?: { errors?: { message: string }[] } })
+      .publicData?.errors?.[0]?.message;
+  }
+
+  async function postsWith(
+    fields: Record<string, unknown>[],
+    entries: Record<string, unknown>[]
+  ): Promise<void> {
+    const created = await handler().createCollection({
+      name: "posts",
+      label: "Post",
+      fields,
+    });
+    expect(created.success, JSON.stringify(created)).toBe(true);
+    for (const data of entries) {
+      const entry = await handler()
+        .getEntryService()
+        .createEntry({ collectionName: "posts", overrideAccess: true }, data);
+      expect(entry.success, JSON.stringify(entry)).toBe(true);
+    }
+  }
+
+  it("refuses making a field unique while entries share a value, naming it", async () => {
+    await postsWith(
+      [{ name: "heading", type: "text" }],
+      [{ heading: "Same" }, { heading: "Same" }, { heading: "Other" }]
+    );
+
+    const saved = await handler().updateCollection(
+      { collectionName: "posts" },
+      { fields: [{ name: "heading", type: "text", unique: true }] }
+    );
+
+    expect(saved.success, JSON.stringify(saved)).toBe(false);
+    expect(refusalOf(saved)).toMatch(
+      /^2 entries share the value 'Same' for heading, which must be unique\./
+    );
+  });
+
+  it("makes a field unique when its entries' values already differ", async () => {
+    await postsWith(
+      [{ name: "heading", type: "text" }],
+      [{ heading: "One" }, { heading: "Two" }]
+    );
+
+    const saved = await handler().updateCollection(
+      { collectionName: "posts" },
+      { fields: [{ name: "heading", type: "text", unique: true }] }
+    );
+
+    expect(saved.success, JSON.stringify(saved)).toBe(true);
+  });
+
+  it("refuses a length shorter than a value an entry holds, naming it", async () => {
+    const short = (maxLength: number) => ({
+      name: "heading",
+      type: "text",
+      options: { variant: "short" },
+      validation: { maxLength },
+    });
+    await postsWith(
+      [short(20)],
+      [{ heading: "Long enough" }, { heading: "Hi" }]
+    );
+
+    const saved = await handler().updateCollection(
+      { collectionName: "posts" },
+      { fields: [short(5)] }
+    );
+
+    expect(saved.success, JSON.stringify(saved)).toBe(false);
+    expect(refusalOf(saved)).toMatch(
+      /^1 entry holds a heading longer than 5 characters, the new length\./
+    );
+  });
+
+  // Not on SQLite, whose unique index is created `IF NOT EXISTS`: a name already taken is skipped
+  // there rather than refused, so this save cannot be made to fail part-way the same way.
+  it.skipIf(dialect === "sqlite")(
+    "finishes a change the database refused part-way when it is saved again",
+    async () => {
+      // Something no precondition foresees: an index already holding the name the new unique
+      // index takes. PostgreSQL rolls the whole save back; MySQL has added the column by then,
+      // since it commits each schema statement, and the next save has to finish from there.
+      await postsWith(
+        [{ name: "heading", type: "text" }],
+        [{ heading: "One" }, { heading: "Two" }]
+      );
+      const q = (name: string) =>
+        dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
+      const blocking = uniqueIndexNameForColumn("dc_posts", "code");
+      await query(
+        `CREATE INDEX ${q(blocking)} ON ${q("dc_posts")} (${q("id")})`
+      );
+      const fields = [
+        { name: "heading", type: "text" },
+        // Short, so MySQL can index it.
+        {
+          name: "code",
+          type: "text",
+          unique: true,
+          options: { variant: "short" },
+          validation: { maxLength: 64 },
+        },
+      ];
+
+      const refused = await handler().updateCollection(
+        { collectionName: "posts" },
+        { fields }
+      );
+
+      expect(refused.success, JSON.stringify(refused)).toBe(false);
+      expect(refused.message).toMatch(
+        dialect === "mysql"
+          ? /^The database refused statement \d+ of \d+ of this schema change\./
+          : /^The database refused this schema change, so nothing was changed\./
+      );
+      expect(await registeredFields("posts")).not.toContain("code");
+
+      await query(
+        dialect === "mysql"
+          ? `DROP INDEX ${q(blocking)} ON ${q("dc_posts")}`
+          : `DROP INDEX ${q(blocking)}`
+      );
+      const saved = await handler().updateCollection(
+        { collectionName: "posts" },
+        { fields }
+      );
+
+      expect(saved.success, JSON.stringify(saved)).toBe(true);
+      expect(await columnsOf("dc_posts")).toContain("code");
+      expect(await registeredFields("posts")).toContain("code");
+    }
+  );
 });
