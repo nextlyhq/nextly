@@ -39,8 +39,9 @@ with a typed code, and name system fields and choice values the way people read 
   stays reachable there.
 - A widget slot refused with the shared "unavailable source or unsupported op" sentence now
   carries `code: "unavailable"`, so a card can show its "not available" state without matching
-  the sentence. An unknown collection or Single name now takes the same read decision a forbidden
-  one does, so the two paths do the same work as well as giving the same answer.
+  the sentence. An unknown collection or Single name now takes a read decision as a forbidden one
+  does, rather than being refused before any, so a batch no longer skips that step for the names
+  that are not real.
 - System columns carry labels (ID, Created, Updated, Status, First published). Status, select and
   radio fields carry their value labels as `choices` on widget sources and on list result fields,
   and a `groupBy` result now describes its grouped field.

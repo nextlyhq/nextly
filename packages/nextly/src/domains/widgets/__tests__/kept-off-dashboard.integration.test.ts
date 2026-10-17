@@ -28,8 +28,14 @@ import {
   createTestNextly,
   type TestNextly,
 } from "../../../plugins/test-nextly";
-import { allResources } from "../../../services/dashboard/readable-resources";
-import type { ReadCaller } from "../../../services/dashboard/readable-resources";
+import {
+  allResources,
+  someResources,
+} from "../../../services/dashboard/readable-resources";
+import type {
+  ReadableResources,
+  ReadCaller,
+} from "../../../services/dashboard/readable-resources";
 import { refreshCollectionWidgets } from "../collection-widgets";
 import { validateWidgetQuery } from "../query";
 import {
@@ -87,22 +93,7 @@ describeEachDialect(
       });
 
       // The FIRST user is the install's super-admin.
-      const nextly = handle.nextly as unknown as {
-        users: {
-          create: (a: { data: Record<string, unknown> }) => Promise<{
-            item: { id: string };
-          }>;
-        };
-      };
-      const owner = await nextly.users.create({
-        data: {
-          email: "owner@example.com",
-          password: "Password123!",
-          name: "Owner",
-          isActive: true,
-        },
-      });
-      superAdmin = { user: { id: owner.item.id, roles: ["super-admin"] } };
+      superAdmin = await firstUser(handle);
 
       // A cold process: what is published below is the refresh's own work.
       clearSources();
@@ -190,5 +181,110 @@ describeEachDialect(
       expect(stats.collectionCounts.map(row => row.slug)).toEqual([POSTS]);
       expect(stats.singles).toBe(1);
     });
+
+    it("leaves its activity out of the recent-changes figure, and keeps the shown content's", async () => {
+      // One change to the shown collection and three to the two hidden ones, so a figure that
+      // counted them would read 4, and one that dropped everything would read 0.
+      await logChanges(handle!, superAdmin, [
+        POSTS,
+        CLASS_USAGE,
+        PATTERNS,
+        PATTERNS,
+      ]);
+
+      expect(await recentChanges(handle!, allResources(), superAdmin)).toBe(1);
+      // A scope that names a hidden collection as well binds the scope's names and the hidden
+      // ones in one query, which is where PostgreSQL's numbered placeholders could be misbound.
+      expect(
+        await recentChanges(
+          handle!,
+          someResources([POSTS, PATTERNS]),
+          superAdmin
+        )
+      ).toBe(1);
+    });
   }
 );
+
+describeEachDialect(
+  "the recent-changes figure with nothing kept off the dashboard",
+  dialect => {
+    let handle: TestNextly | undefined;
+
+    afterEach(async () => {
+      await handle?.destroy();
+      handle = undefined;
+    });
+
+    it("counts every collection's activity, with no exclusion to bind", async () => {
+      handle = await createTestNextly({
+        dialect,
+        collections: [
+          defineCollection({ slug: POSTS, fields: [text({ name: "title" })] }),
+          defineCollection({
+            slug: "pages",
+            fields: [text({ name: "title" })],
+          }),
+        ],
+      });
+      const owner = await firstUser(handle);
+      await logChanges(handle, owner, [POSTS, "pages"]);
+
+      expect(await recentChanges(handle, allResources(), owner)).toBe(2);
+    });
+  }
+);
+
+/** The install's first user, its super-admin. */
+async function firstUser(handle: TestNextly): Promise<ReadCaller> {
+  const nextly = handle.nextly as unknown as {
+    users: {
+      create: (a: { data: Record<string, unknown> }) => Promise<{
+        item: { id: string };
+      }>;
+    };
+  };
+  const owner = await nextly.users.create({
+    data: {
+      email: "owner@example.com",
+      password: "Password123!",
+      name: "Owner",
+      isActive: true,
+    },
+  });
+  return { user: { id: owner.item.id, roles: ["super-admin"] } };
+}
+
+/** One logged change per collection named, through the service that records them. */
+async function logChanges(
+  handle: TestNextly,
+  actor: ReadCaller,
+  collections: readonly string[]
+): Promise<void> {
+  const activityLog = handle.getService("activityLogService");
+  for (const collection of collections) {
+    await activityLog.logActivity({
+      actorType: "user",
+      userId: String(actor.user.id),
+      action: "create",
+      collection,
+      entryTitle: `A change to ${collection}`,
+    });
+  }
+}
+
+/** The dashboard's "changed in the last 24 hours" figure, as `getStats` reports it. */
+async function recentChanges(
+  handle: TestNextly,
+  scope: ReadableResources,
+  caller: ReadCaller
+): Promise<number> {
+  const dashboard = handle.getService("dashboardService") as unknown as {
+    getStats: (o: {
+      scope: ReadableResources;
+      caller: ReadCaller;
+    }) => Promise<{ content: { recentChanges24h: number } }>;
+  };
+  const stats = await dashboard.getStats({ scope, caller });
+  return stats.content.recentChanges24h;
+}

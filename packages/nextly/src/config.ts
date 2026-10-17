@@ -362,6 +362,7 @@ export {
 } from "./domains/collections/query/timeseries-interval";
 export type { TimeseriesInterval } from "./domains/collections/query/timeseries-interval";
 export type {
+  WidgetFieldChoice,
   WidgetOp,
   WidgetSourceField,
   WidgetSourceFieldType,
