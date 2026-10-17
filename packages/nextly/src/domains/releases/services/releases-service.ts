@@ -53,6 +53,7 @@ import { NextlyError } from "../../../errors";
 import {
   RELEASE_ASSEMBLABLE_FROM,
   RELEASE_ASSEMBLABLE_WITH_PUBLISH_FROM,
+  RELEASE_MEMBER_LIMIT,
   RELEASE_CANCELLABLE_FROM,
   RELEASE_FINAL_STATES,
   RELEASE_PUBLISHABLE_NOW_FROM,
@@ -119,27 +120,6 @@ export const MAX_RELEASE_TITLE_LENGTH = 255;
  * than constraining a real caller.
  */
 export const MAX_RELEASE_TIMEZONE_LENGTH = 64;
-
-/**
- * How many documents one release may hold.
- *
- * A bound rather than a policy. Nothing about the model stops a release growing
- * without limit, and three things degrade together as it does: `listMembers` is
- * unpaged and the detail page renders all of it, the drain performs members one
- * at a time inside a wall-clock budget, and a blocked release derives its
- * reasons over every member on every read.
- *
- * A thousand is chosen to sit well above any release somebody assembles
- * deliberately — a site relaunch is tens of documents, not hundreds — while
- * still catching the case this exists for: a script adding in a loop, which
- * otherwise builds a release nothing can display and no single pass can settle.
- *
- * NOT an atomic invariant, and the code says so rather than implying otherwise:
- * two concurrent adds can both read a count below the cap. That is acceptable
- * because the failure it prevents is unbounded growth, not the thousand-and-
- * first row.
- */
-export const MAX_RELEASE_MEMBERS = 1000;
 
 /**
  * Who is asking, and whether to ask at all.
@@ -671,6 +651,49 @@ function oneDocumentRule(
   return { mayRun: held > 0, mayTakeAnother: held === 0 };
 }
 
+/**
+ * How many more documents a release holding `held` may take: none once it
+ * holds the limit, or more than the limit (a release made before it). Not an
+ * atomic invariant: two adds racing past the count can both land, which the
+ * limit tolerates because what it prevents is unbounded growth, not the
+ * one-over row. The add refusal and `capabilities` both ask this.
+ */
+function roomFor(held: number): number {
+  return Math.max(0, RELEASE_MEMBER_LIMIT - held);
+}
+
+/**
+ * The refusal for adding to a release holding `held` documents, or null when
+ * one more fits. It says how many fit, which is none here; a release made
+ * before the limit and over it is told it can still shrink and still runs.
+ */
+function memberLimitRefusal(
+  releaseId: string,
+  held: number
+): NextlyError | null {
+  if (roomFor(held) > 0) return null;
+  return NextlyError.conflict({
+    message:
+      held > RELEASE_MEMBER_LIMIT
+        ? `This release holds ${held} documents, more than the ${RELEASE_MEMBER_LIMIT} a release can hold now, so no more fit. Documents can still be removed, and it still runs as scheduled.`
+        : `This release holds ${RELEASE_MEMBER_LIMIT} documents, the most a release can hold, so no more fit. Remove one, or start another release.`,
+    logContext: {
+      reason: "release-member-limit",
+      releaseId,
+      held,
+      limit: RELEASE_MEMBER_LIMIT,
+    },
+  });
+}
+
+/**
+ * Whether a release holding `held` documents may take one more: the
+ * one-document rule for a single release, and the limit for every release.
+ */
+function takesAnother(kind: ReleaseKind, held: number): boolean {
+  return oneDocumentRule(kind, held).mayTakeAnother && roomFor(held) > 0;
+}
+
 function assertWholeNumber(name: string, value: number, min: number): void {
   // A SAFE integer, not merely an integer: `1e308` is an integer to
   // `Number.isInteger`, and the offset worked out from it is `Infinity`, which
@@ -931,7 +954,7 @@ export class ReleasesService {
 
     const mayPublish = await this.holds(actor, "publish");
     const mayCreate = await this.holds(actor, "create");
-    const held = await this.heldBySingleReleases(releases);
+    const held = await this.heldBy(releases);
 
     return new Map(
       releases.map(release => {
@@ -954,7 +977,9 @@ export class ReleasesService {
               rule.mayRun,
             cancel:
               mayPublish && RELEASE_CANCELLABLE_FROM.includes(release.state),
-            addMember: mayChange("add") && rule.mayTakeAnother,
+            addMember:
+              mayChange("add") &&
+              takesAnother(release.kind, held.get(release.id) ?? 0),
             removeMember: mayChange("remove"),
             publishNow:
               mayPublish &&
@@ -967,22 +992,24 @@ export class ReleasesService {
   }
 
   /**
-   * How many documents each single-document release among these holds, keyed
-   * by release id. One query for all of them, and none when there are none:
-   * an ordinary release's controls do not depend on what it holds.
+   * How many documents each release among these holds, keyed by release id,
+   * for the ones whose controls depend on it: a single-document release, and
+   * any release that can still take a document, which the limit may have
+   * filled. One query for all of them, and none when there are none: a
+   * release that ran is final and takes nothing whatever it holds.
    */
-  private async heldBySingleReleases(
+  private async heldBy(
     releases: readonly ReleaseRow[]
   ): Promise<Map<string, number>> {
-    const singles = releases
-      .filter(release => release.kind === "single")
+    const counted = releases
+      .filter(
+        release =>
+          release.kind === "single" ||
+          RELEASE_ASSEMBLABLE_FROM.includes(release.state) ||
+          RELEASE_ASSEMBLABLE_WITH_PUBLISH_FROM.includes(release.state)
+      )
       .map(release => release.id);
-    const held = new Map<string, number>();
-    if (singles.length === 0) return held;
-    for (const member of await this.deps.repository.listMembersOf(singles)) {
-      held.set(member.releaseId, (held.get(member.releaseId) ?? 0) + 1);
-    }
-    return held;
+    return this.deps.repository.memberCountsOf(counted);
   }
 
   /**
@@ -1415,7 +1442,8 @@ export class ReleasesService {
           // would be an identity they could borrow at a future instant.
           createdBy: actor.userId,
         },
-        allowedStates
+        allowedStates,
+        held => memberLimitRefusal(releaseId, held)
       );
     } catch (error) {
       // The `memberKey` unique index is what stops one document being scheduled
@@ -1645,18 +1673,16 @@ export class ReleasesService {
     });
   }
 
+  /**
+   * The early answer, before any other work: the guarantee is the same rule
+   * asked again under the release-row lock when the member is written.
+   */
   private async assertRoomForOneMore(releaseId: string): Promise<void> {
-    const held = await this.deps.repository.listMembers(releaseId);
-    if (held.length < MAX_RELEASE_MEMBERS) return;
-    throw NextlyError.conflict({
-      message: `A release can hold at most ${MAX_RELEASE_MEMBERS} documents. Remove something, or schedule this release and start another.`,
-      logContext: {
-        reason: "release-member-limit",
-        releaseId,
-        held: held.length,
-        limit: MAX_RELEASE_MEMBERS,
-      },
-    });
+    const held =
+      (await this.deps.repository.memberCountsOf([releaseId])).get(releaseId) ??
+      0;
+    const refusal = memberLimitRefusal(releaseId, held);
+    if (refusal !== null) throw refusal;
   }
 
   private async requireLiveAuthor(userId: string | null): Promise<void> {
