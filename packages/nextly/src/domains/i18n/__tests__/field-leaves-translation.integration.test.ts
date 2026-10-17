@@ -482,13 +482,16 @@ describeEachDialect("a field that stops being translated", dialect => {
       );
 
       // The save path reports the refusal in its result, the dialog path throws it; either way it
-      // names the field and why.
+      // names the field (by its path, beside which the Builder shows the reason) and why.
       const reported =
         refusal instanceof Error
           ? `${refusal.message} ${JSON.stringify((refusal as { publicData?: unknown }).publicData ?? null)}`
           : String(refusal);
       expect(reported).toMatch(/CONSTRAINED_FIELD_LEAVES_TRANSLATION/);
-      expect(reported).toMatch(/code\W* is (required|unique)/);
+      expect(reported).toMatch(/fields\.code/);
+      expect(reported).toMatch(
+        /A (required|unique) field can't stop being translated in the same change/
+      );
 
       expect(await columnsOf("dc_posts")).not.toContain("code");
       const kept = await query<{ code: string }>(
