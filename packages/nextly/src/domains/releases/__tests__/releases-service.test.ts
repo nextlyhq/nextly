@@ -47,6 +47,10 @@ function repository() {
     listMembers: vi.fn(
       async (): Promise<Array<{ id: string; memberKey?: string }>> => []
     ),
+    // What a release holds, for the member limit; empty unless a case sets it.
+    memberCountsOf: vi.fn(
+      async (_ids: readonly string[]) => new Map<string, number>()
+    ),
     // Each write takes the states the service judged it may land on as its
     // last argument, which the cases below read back from the call.
     addMember: vi.fn(async (..._args: unknown[]) => ({ id: "m1" })),

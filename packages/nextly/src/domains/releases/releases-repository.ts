@@ -1078,6 +1078,30 @@ export class ReleasesRepository {
    * dialect this supports, and "no releases" is an ordinary state, not a
    * caller's mistake.
    */
+  /**
+   * How many members each of these releases holds, keyed by release id; a
+   * release holding none is absent. One query that reads the release column
+   * only, since the port has no grouped count, and none when there are no ids.
+   */
+  async memberCountsOf(
+    releaseIds: readonly string[]
+  ): Promise<Map<string, number>> {
+    const counts = new Map<string, number>();
+    if (releaseIds.length === 0) return counts;
+    const rows = await this.db.select<{ releaseId: string }>(MEMBERS, {
+      columns: ["releaseId"],
+      where: {
+        and: [
+          { column: "releaseId", op: "IN", value: [...new Set(releaseIds)] },
+        ],
+      },
+    });
+    for (const row of rows) {
+      counts.set(row.releaseId, (counts.get(row.releaseId) ?? 0) + 1);
+    }
+    return counts;
+  }
+
   async listMembersOf(releaseIds: string[]): Promise<ReleaseMemberRow[]> {
     if (releaseIds.length === 0) return [];
     return this.db.select<ReleaseMemberRow>(MEMBERS, {

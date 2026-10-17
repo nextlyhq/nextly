@@ -296,3 +296,14 @@ export interface ReleaseCapabilities {
    */
   publishNow: boolean;
 }
+
+/**
+ * The most documents one release holds.
+ *
+ * Sized so a full release publishes within one pass of the job that runs
+ * releases, on every dialect: a release is settled all together, so one
+ * that no pass can finish holds its documents back. A release made before
+ * the limit and holding more keeps running and can shrink, but takes no new
+ * document.
+ */
+export const RELEASE_MEMBER_LIMIT = 200;

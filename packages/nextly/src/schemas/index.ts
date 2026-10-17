@@ -464,3 +464,6 @@ export type {
   ReleaseBlockerReason,
   ReleaseCapabilities,
 } from "./releases/types";
+// The one value a client needs to say a release is full or over the limit,
+// from the declaration the server refuses with rather than a copy of it.
+export { RELEASE_MEMBER_LIMIT } from "./releases/types";
