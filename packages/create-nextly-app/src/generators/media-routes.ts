@@ -285,7 +285,13 @@ export async function linkedFolder(
   cwd: string,
   target: string
 ): Promise<{ folder: string; unreadable: boolean } | null> {
-  const parts = path.relative(cwd, path.dirname(target)).split(path.sep);
+  // From the folder below the project's own: a project reached through a
+  // link is the app's choice, and judging the root for a file directly in it
+  // but not for the rest would skip one file while writing others.
+  const parts = path
+    .relative(cwd, path.dirname(target))
+    .split(path.sep)
+    .filter(part => part !== "");
   let folder = cwd;
   for (const part of parts) {
     const above = folder;

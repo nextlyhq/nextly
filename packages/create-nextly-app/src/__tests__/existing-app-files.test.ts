@@ -217,6 +217,31 @@ describe("adding Nextly to an existing app", () => {
     ).toBe(false);
   });
 
+  // A project reached through a symbolic link is the app's own choice: every
+  // file is judged below the root alike, so the config is written with the
+  // routes that import it, not skipped while they are written.
+  it("writes every file into a project reached through a symbolic link", async () => {
+    const elsewhere = await mkdtemp(join(tmpdir(), "nextly-via-"));
+    try {
+      const linked = join(elsewhere, "app-link");
+      await symlink(dir, linked);
+
+      await generateIntoExistingApp(
+        linked,
+        "blank",
+        projectInfo,
+        sqlite,
+        templates
+      );
+
+      for (const file of NEXTLY_FILES) {
+        expect(existsSync(join(dir, file)), file).toBe(true);
+      }
+    } finally {
+      await rm(elsewhere, { recursive: true, force: true });
+    }
+  });
+
   it("reports what it wrote and what it extended", async () => {
     const reported = await run();
 
