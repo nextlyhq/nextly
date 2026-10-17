@@ -694,6 +694,8 @@ NEXT_PUBLIC_SITE_URL=http://localhost:3000
   // are real credentials that happen to contain one.
   it.each([
     ["NEXTLY_SECRET", "NEXTLY_SECRET=real-example-production-secret-123456"],
+    // A word that merely begins like one ("enter").
+    ["NEXTLY_SECRET", "NEXTLY_SECRET=enterprise-production-secret-0123456789"],
     [
       "DATABASE_URL",
       "DATABASE_URL=postgresql://app:myexamplecredential@db:5432/app",
@@ -781,20 +783,24 @@ NEXT_PUBLIC_SITE_URL=http://localhost:3000
     }
   );
 
-  // pg reads `?password=` as the password, though `URL.password` is empty.
-  it("warns about a password in an example URL's query, without printing it", async () => {
-    await writeFile(
-      join(dir, ".env.example"),
-      "DATABASE_URL=postgresql://db.internal/app?user=alice&password=S3cr3tPassw0rd\n"
-    );
+  // pg reads `?password=` as the password, though `URL.password` is empty,
+  // and decodes the parameter's name first, as every URL parser does.
+  it.each(["password", "p%61ssword"])(
+    "warns about a password in an example URL's query as %s, without printing it",
+    async param => {
+      await writeFile(
+        join(dir, ".env.example"),
+        `DATABASE_URL=postgresql://db.internal/app?user=alice&${param}=S3cr3tPassw0rd\n`
+      );
 
-    const { warnings } = await generateEnv(dir, sqlite);
+      const { warnings } = await generateEnv(dir, sqlite);
 
-    expect(warnings.join("\n")).toMatch(
-      /\.env\.example holds a database password/
-    );
-    expect(warnings.join("\n")).not.toContain("S3cr3tPassw0rd");
-  });
+      expect(warnings.join("\n")).toMatch(
+        /\.env\.example holds a database password/
+      );
+      expect(warnings.join("\n")).not.toContain("S3cr3tPassw0rd");
+    }
+  );
 
   it("does not warn about the generic example values", async () => {
     await writeFile(
