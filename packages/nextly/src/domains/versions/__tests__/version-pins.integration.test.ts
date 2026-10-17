@@ -18,6 +18,7 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import { untilSomeoneWaitsOnALock } from "./helpers/lock-wait";
 import {
   pinnedVersionNos,
   registerVersionPinHolder,
@@ -244,9 +245,11 @@ describe.each(getConfiguredTestDialects())(
             order.push("pinned");
           });
 
-        // Long enough for a pin that does not wait to finish.
-        await new Promise(resolve => setTimeout(resolve, 500));
-        release();
+        try {
+          await untilSomeoneWaitsOnALock(current!.adapter, dialect);
+        } finally {
+          release();
+        }
         await Promise.all([save, pin]);
 
         expect(order).toEqual(["save finished", "pinned"]);
@@ -294,8 +297,11 @@ describe.each(getConfiguredTestDialects())(
             order.push("released");
           });
 
-        await new Promise(resolve => setTimeout(resolve, 500));
-        finish();
+        try {
+          await untilSomeoneWaitsOnALock(current!.adapter, dialect);
+        } finally {
+          finish();
+        }
         await Promise.all([pinning, releasing]);
 
         expect(order).toEqual(["pin finished", "released"]);
@@ -341,8 +347,11 @@ describe.each(getConfiguredTestDialects())(
             (error: unknown) => error
           );
 
-        await new Promise(resolve => setTimeout(resolve, 500));
-        finish();
+        try {
+          await untilSomeoneWaitsOnALock(current!.adapter, dialect);
+        } finally {
+          finish();
+        }
         await deleting;
         const refused = await pinning;
 
@@ -390,8 +399,11 @@ describe.each(getConfiguredTestDialects())(
             (error: unknown) => error
           );
 
-        await new Promise(resolve => setTimeout(resolve, 500));
-        finish();
+        try {
+          await untilSomeoneWaitsOnALock(current!.adapter, dialect);
+        } finally {
+          finish();
+        }
         await deleting;
         const refused = await pinning;
 
@@ -458,9 +470,11 @@ describe.each(getConfiguredTestDialects())(
       const deleting = current!
         .getService("collectionRegistryService")
         .deleteCollection("notes", { force: true });
-      // Long enough for a delete that does not wait to reach its sweep.
-      await new Promise(resolve => setTimeout(resolve, 500));
-      finish();
+      try {
+        await untilSomeoneWaitsOnALock(current!.adapter, dialect);
+      } finally {
+        finish();
+      }
       return Promise.allSettled([pinning, deleting]);
     }
 

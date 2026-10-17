@@ -157,6 +157,7 @@ import { mergeComponentPatches } from "../../versions/draft-components";
 import { resolveDraftHold } from "../../versions/draft-hold";
 import { storeDraftSave } from "../../versions/draft-save";
 import { isDraftSplitEligible } from "../../versions/draft-split-eligibility";
+import { sweepDeletedDocument } from "../../versions/entity-teardown";
 import {
   buildRestorePayload,
   type ComponentSchemas,
@@ -171,7 +172,6 @@ import {
 } from "../../versions/tag-component-types";
 import { VersionCaptureService } from "../../versions/version-capture-service";
 import { withVersionConflictRetry } from "../../versions/version-conflict";
-import { deletePinsForDocument } from "../../versions/version-pins";
 import { VersionsRepository } from "../../versions/versions-repository";
 import { workingDraftLocale } from "../../versions/working-draft-locale";
 import { expandComponentFields } from "../../webhooks/expand-component-fields";
@@ -8722,9 +8722,10 @@ export class CollectionMutationService extends BaseService {
           entryId: params.entryId,
         });
 
-        // So do the versions features have pinned against retention: nothing
-        // could release them once the document is gone.
-        await deletePinsForDocument(tx, {
+        // So do the versions features have pinned against retention, and each
+        // person's "last looked at" marker: nothing could release or read
+        // either once the document is gone.
+        await sweepDeletedDocument(tx, {
           scopeKind: "collection",
           scopeSlug: params.collectionName,
           entryId: params.entryId,
@@ -10746,8 +10747,8 @@ export class CollectionMutationService extends BaseService {
         entryId,
       });
 
-      // Pins go with it; see the single-delete path.
-      await deletePinsForDocument(tx, {
+      // Pins and markers go with it; see the single-delete path.
+      await sweepDeletedDocument(tx, {
         scopeKind: "collection",
         scopeSlug: params.collectionName,
         entryId,

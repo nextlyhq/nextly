@@ -461,12 +461,11 @@ function popStateHandler(track: PopStateTrack): (event: PopStateEvent) => void {
       return;
     }
 
-    // 🔴 Kept from every other listener, the admin's router above all. It
-    // was mounted long before this page, so it hears `popstate` first unless
-    // this listener runs in the capture phase, which on the target runs
-    // before every non-capturing one. Heard, the router drew the page the
-    // reader is being asked about leaving for, and this page -- its unsaved
-    // work and this question -- was gone before any answer.
+    // 🔴 Kept from every other listener, the routers above all. Heard, a
+    // router draws the page the reader is being asked about leaving for, and
+    // this page -- its unsaved work and this question -- is gone before any
+    // answer. This handler runs ahead of them only because it is called from
+    // the listener added at module load (`popStateGuards`).
     event.stopImmediatePropagation();
 
     const steps = undoTraversal(from);
@@ -478,6 +477,54 @@ function popStateHandler(track: PopStateTrack): (event: PopStateEvent) => void {
     );
   };
 }
+
+/**
+ * The guards' one `popstate` listener, registered when this module loads, and
+ * the handlers of the guards mounted now, in the order they mounted.
+ *
+ * 🔴 Registered once, at module load, rather than by each guard as it mounts.
+ * In Chromium a `popstate` on `window` reaches its listeners in the order they
+ * were ADDED, whatever their capture flag, so a guard that added its own
+ * listener when it mounted came after the host's router, which adds its
+ * listener when the app mounts. During `popstate` React renders
+ * synchronously, so the router drew the page Back was going to and unmounted
+ * this one, taking the guard's listener with it, before the guard was asked:
+ * a Back with unsaved changes left without a word. The admin's module has to
+ * load before any page can draw it, so a listener added here is ahead of every
+ * router by construction.
+ *
+ * Kept on `globalThis` so a module evaluated again (a hot reload) reuses the
+ * one listener and its list rather than adding a second.
+ */
+const POP_STATE_GUARDS = Symbol.for("nextly.admin.unsavedChanges.popstate");
+
+function popStateGuards(): Array<(event: PopStateEvent) => void> {
+  const holder = globalThis as unknown as Record<
+    symbol,
+    Array<(event: PopStateEvent) => void> | undefined
+  >;
+  const existing = holder[POP_STATE_GUARDS];
+  if (existing) return existing;
+  const guards: Array<(event: PopStateEvent) => void> = [];
+  holder[POP_STATE_GUARDS] = guards;
+  if (typeof window !== "undefined") {
+    window.addEventListener(
+      "popstate",
+      event => {
+        // Each mounted guard in turn, until one holds the move: holding it
+        // stops the event, and nothing after should hear a held Back.
+        for (const guard of [...guards]) {
+          guard(event);
+          if (event.cancelBubble) return;
+        }
+      },
+      { capture: true }
+    );
+  }
+  return guards;
+}
+
+popStateGuards();
 
 // ============================================================================
 // Hook
@@ -672,7 +719,10 @@ export function useUnsavedChanges({
     // Apply interceptors
     window.history.pushState = interceptPushState;
     window.history.replaceState = interceptReplaceState;
-    window.addEventListener("popstate", handlePopState, { capture: true });
+    // Back and Forward are heard through the one listener added at module
+    // load; see `popStateGuards` for why a listener added here is too late.
+    const guards = popStateGuards();
+    guards.push(handlePopState);
     window.addEventListener("beforeunload", handleBeforeUnload);
 
     // Cleanup
@@ -684,9 +734,8 @@ export function useUnsavedChanges({
       if (originalReplaceState.current) {
         window.history.replaceState = originalReplaceState.current;
       }
-      window.removeEventListener("popstate", handlePopState, {
-        capture: true,
-      });
+      const at = guards.indexOf(handlePopState);
+      if (at !== -1) guards.splice(at, 1);
       window.removeEventListener("beforeunload", handleBeforeUnload);
     };
   }, [isDirty, disabled]);

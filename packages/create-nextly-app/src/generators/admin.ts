@@ -1,6 +1,11 @@
 import type { ProjectInfo } from "../types";
 
 import type { GeneratedFiles } from "./generated-files";
+import {
+  TSX_FILE,
+  appPageExtensions,
+  pageExtensionsSkip,
+} from "./page-extensions";
 import { nothingYet, writeNew } from "./write-new";
 
 // Existing-project installs scaffold a blank-equivalent setup: generateConfig
@@ -75,6 +80,27 @@ export async function generateAdminPage(
   // The page and its layout are judged one by one: a layout the app has is
   // kept even when the page is missing.
   const layout = getAdminLayoutTemplate(projectInfo.srcDir);
+  // Where the app sets pageExtensions, Next.js would never serve page.tsx or
+  // layout.tsx: each is reported under a name it would serve, which these
+  // files, TypeScript with JSX, need to end in tsx, and neither is written.
+  const pages = await appPageExtensions(cwd);
+  if (pages.extensions !== "absent") {
+    const { configName, extensions } = pages;
+    for (const [name, text] of [
+      ["page", ADMIN_PAGE_TEMPLATE],
+      ["layout", layout],
+    ] as const) {
+      files.skipped.push(
+        pageExtensionsSkip(
+          `${adminDir}/${name}`,
+          text,
+          { configName, extensions },
+          TSX_FILE
+        )
+      );
+    }
+    return files;
+  }
   for (const [name, text] of [
     ["page.tsx", ADMIN_PAGE_TEMPLATE],
     ["layout.tsx", layout],

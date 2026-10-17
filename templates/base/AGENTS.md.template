@@ -193,8 +193,12 @@ tasks, and `.claude/skills/` holds the same files for Claude Code. Load the
 one that matches a task before starting it. They were written for the Nextly
 release this project was created with.
 
-If this project has `.agents/skills/nextly-install/`, the skills were added
-when it was created; restore them as they were released by running:
+Each skill names the Nextly release it was checked against in its
+frontmatter, as `metadata.nextly-version`. The command below installs skills
+written for `{{skillsVersion}}`. Restore them as they were released only when
+`.agents/skills/nextly-install/SKILL.md` exists, its `metadata.nextly-version`
+is exactly `{{skillsVersion}}`, and `{{execCommand}} nextly --version` prints
+exactly `{{skillsVersion}}`:
 
 ```bash
 npx skills add 'nextlyhq/nextly#v{{skillsTag}}' --skill '*' --agent claude-code codex cursor --copy -y
@@ -206,10 +210,10 @@ whose tag publishes these skills. Releases up to 0.0.2-alpha.66 publish no
 skills for building apps: installing from one of those tags brings the skills
 Nextly's own contributors use, so never put an older version in its place.
 
-If it has no `.agents/skills/nextly-install/`, the skills were left out on purpose:
-declined, or written for a different Nextly release than this project runs.
-Do not add them with the command above; see
-<https://nextlyhq.com/docs/guides/coding-agents> for skills that match.
+Otherwise, with no skills or with skills for a different release than this
+project runs, do not run the command above: it would install skills written
+for another release. See <https://nextlyhq.com/docs/guides/coding-agents> for
+skills that match.
 
 ## Conventions worth keeping
 
