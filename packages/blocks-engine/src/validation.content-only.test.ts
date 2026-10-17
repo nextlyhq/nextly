@@ -101,6 +101,25 @@ beforeEach(() => {
           },
         },
       },
+      // At version 2, so a stored node of version 1 is one reading migrates.
+      {
+        ...base,
+        name: "acme/badge",
+        version: 2,
+        migrate: { 1: (props: Record<string, unknown>) => props },
+        props: { label: { type: "text", role: "content" } },
+        defaultProps: { label: "New" },
+      },
+      {
+        ...base,
+        name: "acme/sealed-badge",
+        slots: {
+          badge: {
+            defaultBlock: [{ type: "acme/badge" }],
+            lock: "contentOnly",
+          },
+        },
+      },
       // Locks a slot holding a card, whose own slot declares nothing and so
       // inherits contentOnly two levels down.
       {
@@ -293,3 +312,143 @@ describe("a slot with no lock", () => {
 function codesOf(issues: readonly { code: string }[]): string[] {
   return issues.map(issue => issue.code);
 }
+
+describe("a contentOnly slot judged with the document's stored version", () => {
+  // A block's defaults can change after pages store it, so a stored child may
+  // differ from today's starting child though nobody changed it. What the
+  // stored version already holds at the same position is kept; a create, with
+  // no stored version, is judged against the starting children alone.
+  const clone = <T>(value: T): T => structuredClone(value);
+
+  /** A sealed card whose headline the stored version holds aligned right. */
+  function storedRight() {
+    const { card, headline } = sealed();
+    headline.props.align = "right";
+    return { stored: page(clone(card)), card, headline };
+  }
+
+  it("keeps a value the stored version already holds at the same position", () => {
+    const { stored, card } = storedRight();
+    expect(issuesOf(page(card), { stored: [stored] })).toEqual([]);
+    // The control: without the stored version the same document is refused.
+    expect(issuesOf(page(card)).map(issue => issue.code)).toEqual([
+      "locked-slot-content-only",
+    ]);
+  });
+
+  it("accepts a part put back as it started, which is the repair", () => {
+    const { stored, card, headline } = storedRight();
+    headline.props.align = "center";
+    expect(issuesOf(page(card), { stored: [stored] })).toEqual([]);
+  });
+
+  it("refuses a change to a third value", () => {
+    const { stored, card, headline } = storedRight();
+    headline.props.align = "justify";
+    expect(issuesOf(page(card), { stored: [stored] })).toEqual([
+      expect.objectContaining({
+        code: "locked-slot-content-only",
+        path: "/nodes/0/slots/body/0",
+      }),
+    ]);
+  });
+
+  it("keeps what any stored form holds, a draft's or the live one's", () => {
+    const { stored, card } = storedRight();
+    const live = page(clone(sealed().card));
+    live.nodes[0]!.id = card.id;
+    expect(issuesOf(page(card), { stored: [live, stored] })).toEqual([]);
+  });
+
+  it("lends no stored design to a block moved in from outside the slot", () => {
+    // The stored page holds a right-aligned headline at the top level, where
+    // nothing locks it. Moved into the sealed slot in place of the starting
+    // headline, it is measured against what the stored slot held there.
+    const { card } = sealed();
+    const loose = placed("acme/headline");
+    loose.props.align = "right";
+    const stored = page(clone(card), clone(loose));
+    card.slots!.body![0] = loose;
+    expect(
+      issuesOf(page(card), { stored: [stored] }).map(issue => issue.path)
+    ).toEqual(["/nodes/0/slots/body/0"]);
+  });
+
+  it("lends none through a lock a nested slot inherits", () => {
+    // The shelf's card inherits contentOnly. A card from outside the shelf,
+    // holding a right-aligned headline, takes the starting card's place.
+    const shelf = placed("acme/sealed-shelf");
+    const outside = placed("acme/card");
+    childOf(outside, "body", 0).props.align = "right";
+    const stored = page(clone(shelf), clone(outside));
+    shelf.slots!.main![0] = outside;
+    expect(
+      issuesOf(page(shelf), { stored: [stored] }).map(issue => issue.path)
+    ).toEqual(["/nodes/0/slots/main/0/slots/body/0"]);
+  });
+
+  it("keeps a stored value two levels beneath the lock", () => {
+    const shelf = placed("acme/sealed-shelf");
+    childOf(childOf(shelf, "main", 0), "body", 0).props.align = "right";
+    expect(issuesOf(page(shelf), { stored: [page(clone(shelf))] })).toEqual([]);
+  });
+
+  it("measures a slot whose holder the stored version does not have against its starting blocks", () => {
+    const { stored, card } = storedRight();
+    card.id = "a-new-card";
+    expect(
+      issuesOf(page(card), { stored: [stored] }).map(issue => issue.code)
+    ).toEqual(["locked-slot-content-only"]);
+  });
+});
+
+describe("a contentOnly slot's blocks and how they render", () => {
+  // A version ahead of its block's, or `migrationFailed`, makes the renderer
+  // draw a placeholder in the block's place: changing either changes whether
+  // the block is drawn at all, which is not an edit of its content.
+  function badge() {
+    const holder = placed("acme/sealed-badge");
+    return { holder, badge: childOf(holder, "badge", 0) };
+  }
+
+  it("refuses a version ahead of its block's", () => {
+    const { holder, badge: node } = badge();
+    node.version = 3;
+    const issues = issuesOf(page(holder));
+    expect(issues.map(issue => issue.code)).toEqual([
+      "locked-slot-content-only",
+    ]);
+    expect(issues[0]!.message).toContain("version");
+  });
+
+  it("accepts an older version, which reading migrates", () => {
+    const { holder, badge: node } = badge();
+    node.version = 1;
+    expect(issuesOf(page(holder))).toEqual([]);
+  });
+
+  it("refuses a block newly marked as failing its migration", () => {
+    const { holder, badge: node } = badge();
+    const stored = page(structuredClone(holder));
+    node.migrationFailed = true;
+    const issues = issuesOf(page(holder), { stored: [stored] });
+    expect(issues.map(issue => issue.code)).toEqual([
+      "locked-slot-content-only",
+    ]);
+    expect(issues[0]!.message).toContain("migrationFailed");
+  });
+
+  it("keeps a block the stored version already marks as failing its migration", () => {
+    const { holder, badge: node } = badge();
+    node.migrationFailed = true;
+    const stored = page(structuredClone(holder));
+    expect(issuesOf(page(holder), { stored: [stored] })).toEqual([]);
+  });
+
+  it("keeps a stored block at a version ahead of its block's, unchanged", () => {
+    const { holder, badge: node } = badge();
+    node.version = 3;
+    const stored = page(structuredClone(holder));
+    expect(issuesOf(page(holder), { stored: [stored] })).toEqual([]);
+  });
+});

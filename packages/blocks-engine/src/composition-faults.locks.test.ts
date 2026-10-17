@@ -355,3 +355,45 @@ describe("a placement inside a component's locked slot", () => {
     ).toEqual([]);
   });
 });
+
+describe("a placement judged with what its page already holds", () => {
+  // The composed page's stored forms, and the page with its placements as
+  // their components hold them, are what a caller passes as baselines: a part
+  // one of them already holds is kept, so a block whose defaults changed does
+  // not freeze every page that places it.
+  function judgeAgainst(host: BlockDocument, baselines: readonly unknown[]) {
+    const composition = resolveComponentInstances(
+      host,
+      new Map([["promo", promo()]])
+    );
+    return compositionFaults(host, composition, {
+      nesting: registryNestingSource(),
+      definitions: registryBlockSource(),
+      baselines,
+    });
+  }
+
+  function composedOf(host: BlockDocument) {
+    return resolveComponentInstances(host, new Map([["promo", promo()]]))
+      .document;
+  }
+
+  const moved = () =>
+    placement({
+      props: { componentId: "promo", overrides: { side: "right" } },
+    });
+
+  it("keeps a value a baseline already holds at the same place", () => {
+    expect(judgeAgainst(moved(), [composedOf(moved())])).toEqual([]);
+    // The control: without it the same placement is refused.
+    expect(judgeAgainst(moved(), []).map(f => f.code)).toEqual([
+      "locked-slot-content-only",
+    ]);
+  });
+
+  it("refuses a value neither the starting block nor any baseline holds", () => {
+    expect(
+      judgeAgainst(moved(), [composedOf(placement())]).map(f => f.code)
+    ).toEqual(["locked-slot-content-only"]);
+  });
+});

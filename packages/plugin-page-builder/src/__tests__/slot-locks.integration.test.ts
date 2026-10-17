@@ -40,6 +40,15 @@ const base = {
 };
 
 /**
+ * The defaults of a headline whose block author changes them after pages
+ * store it. Held here so a case can change them as a new release would.
+ */
+const DRIFTING_DEFAULTS: Record<string, unknown> = {
+  text: "Title",
+  align: "left",
+};
+
+/**
  * The blocks under test, registered once per process: the registry refuses a
  * name registered twice, and it outlives each booted instance.
  */
@@ -62,6 +71,25 @@ function registerLockedBlocks(): void {
         slots: {
           body: {
             defaultBlock: [{ type: "acme/headline" }],
+            lock: "contentOnly",
+          },
+        },
+      },
+      {
+        ...base,
+        name: "acme/drifting-headline",
+        props: {
+          text: { type: "text", role: "content" },
+          align: { type: "select" },
+        },
+        defaultProps: DRIFTING_DEFAULTS,
+      },
+      {
+        ...base,
+        name: "acme/drifting-card",
+        slots: {
+          body: {
+            defaultBlock: [{ type: "acme/drifting-headline" }],
             lock: "contentOnly",
           },
         },
@@ -207,6 +235,45 @@ describe.each(getConfiguredTestDialects())(
         ]);
       }
     );
+
+    it("keeps what a block's changed defaults left behind, accepts the repair, and refuses a third value", async () => {
+      const t = await boot();
+      const card = placed("acme/drifting-card");
+      const saved = await savePage(t, [card]);
+      const id = String(saved.item.id);
+      const withAlign = (align: string) => {
+        const next = structuredClone(card);
+        next.slots!.body![0]!.props.align = align;
+        return pageOf([next]);
+      };
+      const update = (content: unknown) =>
+        t.nextly.update({
+          collection: "pages",
+          id,
+          data: { content },
+          overrideAccess: true,
+        });
+
+      // A new release of the headline aligns it centre by default. The page
+      // still holds "left", which nobody changed.
+      DRIFTING_DEFAULTS.align = "center";
+      try {
+        // CONTROL: a page never stored holding "left" is now refused, so the
+        // changed default is what every save below is measured against.
+        expect(
+          issuesOf(await refusalOf(savePage(t, [card]))).map(i => i.code)
+        ).toEqual(["locked-slot-content-only"]);
+
+        await expect(update(pageOf([card]))).resolves.toBeDefined();
+        const third = issuesOf(await refusalOf(update(withAlign("right"))));
+        expect(third.map(issue => issue.code)).toEqual([
+          "locked-slot-content-only",
+        ]);
+        await expect(update(withAlign("center"))).resolves.toBeDefined();
+      } finally {
+        DRIFTING_DEFAULTS.align = "left";
+      }
+    });
 
     it("refuses an import that skips hooks and breaks a lock", async () => {
       const t = await boot();

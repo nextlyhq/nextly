@@ -39,6 +39,11 @@ import { boundedOwnKeys } from "./safe-record";
 import { slotLockBreaks, slotLockOf, typeOfChild } from "./slot-lock";
 import type { ActiveSlotLock } from "./slot-lock";
 import { startingChildrenSource } from "./starting-children";
+import {
+  counterpartsOf,
+  storedFormsOf,
+  type StoredForms,
+} from "./stored-counterparts";
 import type { TokenKind } from "./style/catalog-types";
 import { breakpointContexts } from "./style/compile-page";
 import { MAX_NAMED_CLASS_NAME_LENGTH } from "./style/named-class";
@@ -192,6 +197,15 @@ export interface ValidationContext {
    * not look.
    */
   definitions?: SlotDefaultSource;
+  /**
+   * The document's stored forms, a draft's and the live one's, where the
+   * caller has them: what a `"contentOnly"` slot already holds is kept rather
+   * than refused (`stored-counterparts`).
+   *
+   * Absent for a document never stored, and for a value judged on its own:
+   * every locked slot is then measured against its starting children alone.
+   */
+  stored?: readonly BlockDocument[];
 }
 
 /**
@@ -700,6 +714,11 @@ interface QueuedNode {
    * declaration again per node would walk outside the bounded loop.
    */
   lock: ActiveSlotLock | undefined;
+  /**
+   * The node as the document's stored forms hold it in this place, carried
+   * down the queue for the reason `lock` is.
+   */
+  counterparts: readonly Readonly<Record<string, unknown>>[];
 }
 
 /**
@@ -721,6 +740,12 @@ function validateNodeForest(
   maxNodes: number
 ): void {
   const queue: QueuedNode[] = [];
+  // Only a lock reads the stored forms, so there is nothing to index without
+  // the definitions locks are declared in.
+  const stored =
+    state.ctx.definitions === undefined
+      ? undefined
+      : storedFormsOf(state.ctx.stored, maxNodes);
   for (let i = 0; i < nodes.length && queue.length <= maxNodes; i++) {
     queue.push({
       node: nodes[i],
@@ -729,10 +754,11 @@ function validateNodeForest(
       hidden: false,
       // A top-level node sits in no slot, so no lock reaches it.
       lock: undefined,
+      counterparts: counterpartsOf(nodes[i], undefined, stored),
     });
   }
   for (let i = 0; i < queue.length && i < maxNodes; i++) {
-    const { node, path, placement, hidden, lock } = queue[i];
+    const { node, path, placement, hidden, lock, counterparts } = queue[i];
     // Asked HERE rather than in a pass of its own, so the read is inside the
     // budget and happens on a node this loop has reached. Gating is inherited,
     // because the renderer prunes a gated node's whole subtree.
@@ -743,12 +769,12 @@ function validateNodeForest(
     const gated = hidden || (isPlainRecord(node) && isConditionGated(node));
     validateNode(node, path, state, gated);
     checkNesting(node, path, placement, state);
-    checkLockedSlots(node, path, lock, state);
+    checkLockedSlots(node, path, { lock, counterparts }, state);
     enqueueChildren(
-      { node, path, gated, lock },
+      { node, path, gated, lock, counterparts },
       queue,
       maxNodes,
-      state.ctx.definitions
+      { definitions: state.ctx.definitions, stored }
     );
   }
 }
@@ -767,12 +793,17 @@ function enqueueChildren(
     path: string;
     gated: boolean;
     lock: ActiveSlotLock | undefined;
+    counterparts: readonly Readonly<Record<string, unknown>>[];
   },
   queue: QueuedNode[],
   maxNodes: number,
-  definitions: SlotDefaultSource | undefined
+  sources: {
+    definitions: SlotDefaultSource | undefined;
+    stored: StoredForms | undefined;
+  }
 ): void {
   const { node, path, gated } = parent;
+  const { definitions, stored } = sources;
   if (!isPlainRecord(node) || !isPlainRecord(node.slots)) return;
   // The container's placement for every child beneath it, read once.
   //
@@ -806,6 +837,16 @@ function enqueueChildren(
         placement: childPlacement,
         hidden: gated,
         lock,
+        counterparts: counterpartsOf(
+          children[c],
+          {
+            holders: parent.counterparts,
+            slot,
+            index: c,
+            contentOnly: lock === "contentOnly",
+          },
+          stored
+        ),
       });
     }
   }
@@ -925,7 +966,10 @@ function messageForRefusal(
 function checkLockedSlots(
   node: BlockNode,
   path: string,
-  inherited: ActiveSlotLock | undefined,
+  at: {
+    lock: ActiveSlotLock | undefined;
+    counterparts: readonly Readonly<Record<string, unknown>>[];
+  },
   state: NodeCheckState
 ): void {
   const definitions = state.ctx.definitions;
@@ -935,7 +979,13 @@ function checkLockedSlots(
   const raw: unknown = node;
   if (!isPlainRecord(raw)) return;
   const type = raw.type;
-  const breaks = slotLockBreaks(node, inherited, definitions, startingChildren);
+  const breaks = slotLockBreaks(
+    node,
+    at.lock,
+    definitions,
+    startingChildren,
+    at.counterparts
+  );
   for (const found of breaks) {
     const slotPath = pointer(pointer(path, "slots"), found.slot);
     state.issues.push(

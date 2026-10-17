@@ -18,6 +18,12 @@
  * a write arriving through the API, an import or an agent reaches validation
  * with no previous version at all.
  *
+ * Under `"contentOnly"`, a caller that has the document's stored version may
+ * hand it in too, and a part the stored version already holds at the same
+ * position is then kept rather than refused (`stored-counterparts`). A block's
+ * defaults can change after pages store it, and a stored child that nobody
+ * changed would otherwise be refused for differing from today's defaults.
+ *
  * ## Inheritance
  *
  * A slot that declares no lock takes the lock of the slot its block sits in,
@@ -33,6 +39,7 @@ import type { BlockNode } from "./document";
 import { isBlockType } from "./document";
 import { isPlainRecord } from "./plain-record";
 import { ownEntry } from "./safe-record";
+import { positionalCounterparts } from "./stored-counterparts";
 import type { SlotDefaultSource } from "./tree";
 
 /** A lock that fixes a slot's children. `false` and no declaration fix nothing. */
@@ -172,10 +179,16 @@ export function contentPropsOf(props: unknown): ReadonlySet<string> {
  * Measured against the STARTING child, which is the child inserting the block
  * creates, and not against an earlier version of the document: a write through
  * the API, an import or an agent arrives with no earlier version, and a rule
- * about edits would let such a write store any design it liked.
+ * about edits would let such a write store any design it liked. A caller with
+ * the stored version measures against its counterpart as well, and counts as
+ * changed only what differs from both.
+ *
+ * A version ahead of the baseline's and `migrationFailed` count too: either
+ * makes the renderer draw a placeholder in the block's place. An older version
+ * does not, since reading migrates it.
  *
  * @param held - the stored child
- * @param starting - the child it started as
+ * @param starting - the child it is measured against
  * @param content - the props its block declares as content
  * @returns each change, worded for an issue message; empty when only content
  *   changed
@@ -185,31 +198,63 @@ export function nonContentChanges(
   starting: Record<string, unknown>,
   content: ReadonlySet<string>
 ): string[] {
-  const changes: string[] = [];
-  const heldProps = recordOrEmpty(held.props);
-  const startingProps = recordOrEmpty(starting.props);
-  for (const name of unionOfKeys(heldProps, startingProps)) {
-    if (content.has(name)) continue;
-    if (!sameValue(heldProps[name], startingProps[name])) {
-      changes.push(`prop "${name}"`);
-    }
-  }
+  const changes = changedNotContent(held.props, starting.props, content).map(
+    name => `prop "${name}"`
+  );
   // A binding replaces a prop's value with data, so binding a prop that is not
   // content changes the design as surely as setting it does.
-  const heldBindings = recordOrEmpty(held.bindings);
-  const startingBindings = recordOrEmpty(starting.bindings);
-  for (const name of unionOfKeys(heldBindings, startingBindings)) {
-    if (content.has(name)) continue;
-    if (!sameValue(heldBindings[name], startingBindings[name])) {
-      changes.push(`the binding on "${name}"`);
-    }
+  for (const name of changedNotContent(
+    held.bindings,
+    starting.bindings,
+    content
+  )) {
+    changes.push(`the binding on "${name}"`);
   }
   for (const part of PINNED_PARTS) {
     if (!sameValue(emptyAsAbsent(held[part]), emptyAsAbsent(starting[part]))) {
       changes.push(part);
     }
   }
+  return [...changes, ...renderStateChanges(held, starting)];
+}
+
+/** The keys of two records, other than content, whose values differ. */
+function changedNotContent(
+  held: unknown,
+  starting: unknown,
+  content: ReadonlySet<string>
+): string[] {
+  const a = recordOrEmpty(held);
+  const b = recordOrEmpty(starting);
+  return [...unionOfKeys(a, b)].filter(
+    name => !content.has(name) && !sameValue(a[name], b[name])
+  );
+}
+
+/** What changed about whether the block renders, rather than how. */
+function renderStateChanges(
+  held: Record<string, unknown>,
+  starting: Record<string, unknown>
+): string[] {
+  const changes: string[] = [];
+  if (isAheadOf(held.version, starting.version)) changes.push("version");
+  if ((held.migrationFailed === true) !== (starting.migrationFailed === true)) {
+    changes.push("migrationFailed");
+  }
   return changes;
+}
+
+/**
+ * Whether a node's version is one its baseline's is not, other than an older
+ * one, which reading migrates forward.
+ */
+function isAheadOf(version: unknown, baseline: unknown): boolean {
+  if (version === baseline) return false;
+  return !(
+    typeof version === "number" &&
+    typeof baseline === "number" &&
+    version < baseline
+  );
 }
 
 function recordOrEmpty(value: unknown): Record<string, unknown> {
@@ -250,6 +295,25 @@ function sameList(a: unknown, b: unknown): boolean {
     a.length === b.length &&
     a.every((entry, index) => sameValue(entry, b[index]))
   );
+}
+
+/**
+ * What a child changed besides content from its starting child AND from every
+ * stored counterpart: a part equal to any one of them is kept, not changed.
+ */
+function changesFromEvery(
+  child: Record<string, unknown>,
+  starting: Record<string, unknown>,
+  kept: readonly Readonly<Record<string, unknown>>[],
+  content: ReadonlySet<string>
+): string[] {
+  let changes = nonContentChanges(child, starting, content);
+  for (const baseline of kept) {
+    if (changes.length === 0) break;
+    const also = new Set(nonContentChanges(child, baseline, content));
+    changes = changes.filter(change => also.has(change));
+  }
+  return changes;
 }
 
 /**
@@ -331,12 +395,16 @@ export type LockBreak =
  * @param definitions - the block definitions, for each slot's declaration
  * @param startingChildren - the children an insert of `type` starts `slot`
  *   with, which the caller may cache
+ * @param counterparts - the node as the document's stored forms hold it in
+ *   this place, whose locked slots' children a `"contentOnly"` lock lets it
+ *   keep; empty where there is no stored version to keep
  */
 export function slotLockBreaks(
   node: unknown,
   inherited: ActiveSlotLock | undefined,
   definitions: SlotDefaultSource,
-  startingChildren: (type: string, slot: string) => readonly BlockNode[]
+  startingChildren: (type: string, slot: string) => readonly BlockNode[],
+  counterparts: readonly Readonly<Record<string, unknown>>[] = []
 ): LockBreak[] {
   if (!isPlainRecord(node) || !isBlockType(node.type)) return [];
   const type = node.type;
@@ -353,7 +421,13 @@ export function slotLockBreaks(
     if (children !== undefined && !Array.isArray(children)) continue;
     breaks.push(
       ...oneSlotBreaks(
-        { slot, lock, children, startingNodes: startingChildren(type, slot) },
+        {
+          slot,
+          lock,
+          children,
+          startingNodes: startingChildren(type, slot),
+          counterparts,
+        },
         definitions
       )
     );
@@ -368,6 +442,7 @@ function oneSlotBreaks(
     lock: ActiveSlotLock;
     children: readonly unknown[] | undefined;
     startingNodes: readonly BlockNode[];
+    counterparts: readonly Readonly<Record<string, unknown>>[];
   },
   definitions: SlotDefaultSource
 ): LockBreak[] {
@@ -390,33 +465,43 @@ function oneSlotBreaks(
       },
     ];
   }
-  return at.lock === "contentOnly"
-    ? contentBreaks(at.slot, held, at.startingNodes, definitions)
-    : [];
+  return at.lock === "contentOnly" ? contentBreaks(at, held, definitions) : [];
 }
 
 /**
  * Each child of a `"contentOnly"` slot that changed anything besides its
- * content, compared with the starting child in its own position.
+ * content, compared with the starting child in its own position, and with
+ * what the stored forms keep in that position where the caller has them.
  *
  * Reached only once the slot holds its starting children in their order. The
  * children's own slots are judged when their node is: they inherit
  * `"contentOnly"`, which nothing beneath it can loosen.
  */
 function contentBreaks(
-  slot: string,
+  at: {
+    slot: string;
+    startingNodes: readonly BlockNode[];
+    counterparts: readonly Readonly<Record<string, unknown>>[];
+  },
   held: readonly unknown[],
-  startingNodes: readonly BlockNode[],
   definitions: SlotDefaultSource
 ): LockBreak[] {
+  const { slot, startingNodes } = at;
   const breaks: LockBreak[] = [];
   held.forEach((child, index) => {
     const starting = startingNodes[index];
     if (!isPlainRecord(child) || starting === undefined) return;
     const content = contentPropsOf(definitions.get(starting.type)?.props);
-    const changes = nonContentChanges(
+    const kept = positionalCounterparts(
+      at.counterparts,
+      slot,
+      index,
+      starting.type
+    );
+    const changes = changesFromEvery(
       child,
       starting as unknown as Record<string, unknown>,
+      kept,
       content
     );
     if (changes.length > 0) {

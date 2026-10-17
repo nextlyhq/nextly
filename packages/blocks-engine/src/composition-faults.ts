@@ -53,6 +53,11 @@ import type {
 import { boundedOwnKeys, ownEntry } from "./safe-record";
 import { slotLockBreaks, slotLockOf, type ActiveSlotLock } from "./slot-lock";
 import { startingChildrenSource } from "./starting-children";
+import {
+  counterpartsOf,
+  storedFormsOf,
+  type StoredForms,
+} from "./stored-counterparts";
 import { walkNodes, type SlotDefaultSource } from "./tree";
 import { isNodeType } from "./validation";
 
@@ -91,6 +96,14 @@ export interface CompositionFaultOptions {
    * are not judged, as for validation.
    */
   definitions?: SlotDefaultSource;
+  /**
+   * Composed documents whose values a `"contentOnly"` lock lets this one keep:
+   * the host's stored forms composed, and the host with each placement as its
+   * component holds it. A part one of them already holds at the same place is
+   * no change (`stored-counterparts`). Absent, every locked slot is measured
+   * against its starting children alone.
+   */
+  baselines?: readonly unknown[];
 }
 
 /**
@@ -117,6 +130,8 @@ interface Visit {
   readonly through: string | undefined;
   /** The lock of the slot this node sits in, or undefined where none applies. */
   readonly lock: ActiveSlotLock | undefined;
+  /** The node as the baselines hold it in this place. */
+  readonly counterparts: readonly Readonly<Record<string, unknown>>[];
 }
 
 /** What every visit reports into, built once per judgement. */
@@ -127,6 +142,7 @@ interface Judge {
   readonly startingChildren:
     | ((type: string, slot: string) => readonly BlockNode[])
     | undefined;
+  readonly baselines: StoredForms | undefined;
   report(code: CompositionFaultCode, instanceId: string, detail: Detail): void;
 }
 
@@ -155,6 +171,10 @@ export function compositionFaults(
       definitions === undefined
         ? undefined
         : startingChildrenSource(definitions, options.nesting),
+    baselines:
+      definitions === undefined
+        ? undefined
+        : storedFormsOf(options.baselines, limits.maxNodes),
     report: (code, instanceId, detail) => {
       // One per placement and rule: a definition breaking a rule at forty nodes
       // is one thing for its author to fix, and forty messages spend the field's
@@ -184,6 +204,7 @@ export function compositionFaults(
     through: undefined,
     // A top-level node sits in no slot, so no lock reaches it.
     lock: undefined,
+    counterparts: counterpartsOf(node, undefined, judge.baselines),
   }));
   // Bounded by the document cap. The resolver holds a composition to it, so on
   // its output this never cuts the walk short; it stands for a caller handing in
@@ -276,14 +297,14 @@ function reportComposedRules(
   // the definition: its own slots inherit that lock, so content it holds is
   // held to it as much as the definition's own.
   if (reached.composed || visit.lock !== undefined) {
-    reportLockBreaks(node, visit.lock, reached.through, judge);
+    reportLockBreaks(node, visit, reached.through, judge);
   }
 }
 
 /** Each way a composed node's locked slots break their locks. */
 function reportLockBreaks(
   node: ResolvedBlockNode,
-  inherited: ActiveSlotLock | undefined,
+  visit: Visit,
   through: string,
   judge: Judge
 ): void {
@@ -292,9 +313,10 @@ function reportLockBreaks(
   }
   const breaks = slotLockBreaks(
     node,
-    inherited,
+    visit.lock,
     judge.definitions,
-    judge.startingChildren
+    judge.startingChildren,
+    visit.counterparts
   );
   for (const found of breaks) {
     judge.report(
@@ -329,16 +351,27 @@ function enqueueSlots(
   for (const slot of names) {
     const children = ownEntry(slots, slot);
     if (!Array.isArray(children)) continue;
-    for (const child of children) {
+    const lock = slotLockOf(judge.definitions, node.type, slot, visit.lock);
+    children.forEach((child: unknown, index) => {
       pending.push({
         node: child,
         depth: visit.depth + 1,
         where: { kind: "slot", parentType: node.type, slot },
         containerComposed: composed,
         through,
-        lock: slotLockOf(judge.definitions, node.type, slot, visit.lock),
+        lock,
+        counterparts: counterpartsOf(
+          child,
+          {
+            holders: visit.counterparts,
+            slot,
+            index,
+            contentOnly: lock === "contentOnly",
+          },
+          judge.baselines
+        ),
       });
-    }
+    });
   }
 }
 

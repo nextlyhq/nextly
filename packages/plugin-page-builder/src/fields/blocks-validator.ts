@@ -87,7 +87,12 @@ export function validateBlocksValue(
   path: string,
   label: string,
   options: BlocksValidationOptions,
-  breakpoints: BreakpointSet = siteBreakpoints()
+  breakpoints: BreakpointSet = siteBreakpoints(),
+  /**
+   * The document's stored forms, whose values a `"contentOnly"` slot lets it
+   * keep. Absent for a create and for a value judged on its own.
+   */
+  stored?: readonly BlockDocument[]
 ): Issue[] {
   // An absent document is an empty field. Required-ness is the shared rules'
   // to enforce, exactly as for every other type.
@@ -153,6 +158,7 @@ export function validateBlocksValue(
     // requires is what an insert creates. An unpopulated registry declares no
     // locks, so it refuses nothing, for the reason given for nesting above.
     definitions: registryBlockSource(),
+    ...(stored === undefined ? {} : { stored }),
   });
   // Errors only, which means the breakpoint set threaded in here decides
   // nothing about a document — and that is the correct behaviour today, not an

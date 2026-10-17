@@ -56,3 +56,15 @@ a heading's text and link, a paragraph's and a rich text's text, an image's
 picture, alt text and caption, a button's label and link, a quote, a list's
 items, an embed's address and title, an accordion item's title and a form's
 submit label.
+
+Inside a `contentOnly` slot a save may keep any value the page already stores in
+the same place, or put it back as the block now starts; only a third value is
+refused. So changing a block's `defaultProps` doesn't lock existing pages out,
+and a page placing a component keeps what the component itself holds. A page
+saved for the first time, and a single, are measured against the starting
+blocks alone. Whether a block renders is held too: a version ahead of its
+definition's, or `migrationFailed`, can't be newly set there.
+
+`nextly generate` refuses a slot `lock` outside the four and a prop `role`
+other than `"content"`, as registration does, so a block manifest is never
+written for blocks the app would refuse at boot.

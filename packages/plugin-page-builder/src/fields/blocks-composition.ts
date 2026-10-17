@@ -79,6 +79,9 @@ import {
   type ReadComposition,
 } from "../composition-reading";
 
+import { isForest } from "./blocks-document";
+import { lockBaselines, storedFormsOf } from "./lock-baselines";
+
 /** The issue shape core's validation envelope carries. */
 interface Issue {
   path: string;
@@ -254,9 +257,20 @@ export async function compositionIssues(
   if (!setup.composesDocuments) return report.issues;
 
   const tally = hostTally(self ?? "", setup);
+  // Read once for the save, and only if a lock is found broken.
+  let storedRead: Promise<readonly BlockDocument[]> | undefined;
+  const stored = () => (storedRead ??= storedFormsOf(write, args.path));
   for (const draft of formsChangedBy(nextStatus)) {
     const read = documentReader(source, draft);
-    await judgeOwnComposition({ document, self, read, setup, work, report });
+    await judgeOwnComposition({
+      document,
+      self,
+      read,
+      setup,
+      work,
+      report,
+      stored,
+    });
     if (self !== undefined) {
       await judgeHosts({
         self,
@@ -409,15 +423,18 @@ async function judgeOwnComposition(args: {
   setup: CompositionSetup;
   work: WorkAllowance;
   report: Report;
+  /** The document's stored forms, read only once a lock is found broken. */
+  stored: () => Promise<readonly BlockDocument[]>;
 }): Promise<void> {
   const { document, self, read, setup, work, report } = args;
+  // A component's own document under its own id, so a placement leading back
+  // to it meets what is being saved.
+  const library = heldLibrary(
+    self === undefined ? undefined : new Map([[self, document]])
+  );
   const composed = await composeWithReads({
     host: document,
-    // A component's own document under its own id, so a placement leading back
-    // to it meets what is being saved.
-    library: heldLibrary(
-      self === undefined ? undefined : new Map([[self, document]])
-    ),
+    library,
     read,
     limits: setup.limits,
     work,
@@ -426,7 +443,22 @@ async function judgeOwnComposition(args: {
     report.add("COMPOSITION_UNCHECKED", OUTGROWN);
     return;
   }
-  for (const fault of faultsIn(document, composed.composition, setup)) {
+  let faults = faultsIn(document, composed.composition, setup);
+  // A broken lock is judged again against what the page and its components
+  // already hold, which a part may keep; composed only now, so a save breaking
+  // no lock composes nothing more.
+  if (faults.some(fault => LOCK_FAULTS.has(fault.code))) {
+    const baselines = await lockBaselines({
+      document,
+      stored: await args.stored(),
+      library,
+      read,
+      limits: setup.limits,
+      work,
+    });
+    faults = faultsIn(document, composed.composition, setup, baselines);
+  }
+  for (const fault of faults) {
     report.add(fault.code, fault.message);
   }
 }
@@ -440,9 +472,11 @@ const OUTGROWN =
 function faultsIn(
   host: BlockDocument,
   composition: Parameters<typeof compositionFaults>[1],
-  setup: CompositionSetup
+  setup: CompositionSetup,
+  baselines?: readonly unknown[]
 ): readonly CompositionFault[] {
   return compositionFaults(host, composition, {
+    ...(baselines === undefined ? {} : { baselines }),
     limits: setup.limits,
     // Read through to the live registry, as the field's own nesting rule is.
     nesting: registryNestingSource(),
@@ -601,7 +635,7 @@ function hostsOf(
   }));
 }
 
-/** Record one fault against its document, once per field, placement and rule. */
+/** Record one fault against its document, once per field and fault identity. */
 function addDamage(
   damaged: Map<string, HostDamage>,
   host: HostRef,
@@ -613,12 +647,11 @@ function addDamage(
     faults: [],
   };
   entry.fields.add(host.field);
-  // Once per field, placement and rule: a publish judges both forms, and they
-  // usually agree.
+  // Once per field and fault, as the before/after comparison identifies
+  // faults: a publish judges both forms, and they usually agree, while two
+  // locked slots broken at one placement are two slots to repair.
   const same = (f: HostFault & { field: string }) =>
-    f.field === host.field &&
-    f.code === fault.code &&
-    f.instanceId === fault.instanceId;
+    f.field === host.field && faultIdentity(f) === faultIdentity(fault);
   if (!entry.faults.some(same))
     entry.faults.push({ ...fault, field: host.field });
   damaged.set(documentKey(host), entry);
@@ -1134,13 +1167,4 @@ function selectionWorsens(
     if (!before.rootTypes.has(type)) return true;
   }
   return false;
-}
-
-/** Whether a value carries a forest the composition can walk. */
-function isForest(value: unknown): boolean {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    Array.isArray((value as { nodes?: unknown }).nodes)
-  );
 }
