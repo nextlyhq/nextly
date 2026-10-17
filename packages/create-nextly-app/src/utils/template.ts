@@ -6,6 +6,7 @@ import fs from "fs-extra";
 import { bundledSkillsVersionOrNull } from "../generators/agent-skills";
 import { buildNextConfigTemplate } from "../generators/next-config";
 import { EXACT_VERSION } from "../lib/exact-version";
+import { nextlySource, type NextlySource } from "../lib/nextly-release";
 import { packageVersion } from "../lib/package-version";
 import { getAvailableTemplateNames } from "../lib/templates";
 import type {
@@ -166,36 +167,12 @@ export const FORM_BUILDER_PACKAGES = [
   "@nextlyhq/plugin-sdk",
 ] as const;
 
-/** The npm dist-tag a scaffold installs `nextly` + `@nextlyhq/*` from. */
-export type NextlyDistTag = "latest" | "alpha";
-
 /**
- * Templates that render CMS content through `nextly/runtime` cache helpers
- * (`cachedFind` / `nextlyTags`) install `nextly` + `@nextlyhq/*` from the
- * `alpha` dist-tag rather than `latest`. Those helpers ship on the active
- * alpha channel, and during the alpha the conservative `latest` tag can lag
- * behind it — a content scaffold pinned to `latest` would then install a
- * `nextly` missing the helpers its pages import, and fail to build. Non-content
- * scaffolds (blank, plugin) stay on `latest`.
+ * An npm dist-tag a version is read from: `alpha` for Nextly's packages when a
+ * source given on purpose asks for the active release line (see
+ * {@link NextlySource}), `latest` for Next.js's own packages only.
  */
-const CONTENT_TEMPLATE_TYPES: ReadonlySet<ProjectType> = new Set([
-  "blog",
-  // The plugin template installs `@nextlyhq/eslint-plugin` for the design-token
-  // rules, and that package exists on `alpha` only — `latest` is the conservative
-  // tag and lags the active release line. Pinned to `latest` a plugin scaffold
-  // would resolve a version of it that predates the rules, exactly as a content
-  // scaffold would resolve a `nextly` missing the helpers its pages import.
-  "plugin",
-]);
-
-/**
- * The npm dist-tag a scaffold of `projectType` installs `nextly` + `@nextlyhq/*`
- * from: content templates track `alpha` (see {@link CONTENT_TEMPLATE_TYPES}),
- * everything else tracks `latest`.
- */
-export function templateNextlyChannel(projectType: ProjectType): NextlyDistTag {
-  return CONTENT_TEMPLATE_TYPES.has(projectType) ? "alpha" : "latest";
-}
+export type NpmDistTag = "latest" | "alpha";
 
 // ============================================================
 // Text File Extensions (for placeholder replacement)
@@ -1053,18 +1030,18 @@ const NEXTLY_PACKAGES = [
 ];
 
 /** Cache so we only fetch once per channel per CLI run. */
-const resolvedNextlyVersions = new Map<NextlyDistTag, Record<string, string>>();
+const resolvedNextlyVersions = new Map<NpmDistTag, Record<string, string>>();
 
 /**
  * Fetch a package's version for the given dist-tag from the npm registry.
  * On any failure (non-OK response, timeout, missing tag, thrown error) it
  * returns the requested dist-tag NAME itself (e.g. "alpha") — a valid npm
- * install spec — so a content template pinned to `alpha` never silently drops
- * to `latest`, which lacks the runtime helpers its pages import.
+ * install spec — so a project on the alpha line never silently drops to
+ * `latest`.
  */
 async function fetchLatestVersion(
   pkg: string,
-  channel: NextlyDistTag = "latest"
+  channel: NpmDistTag = "latest"
 ): Promise<string> {
   try {
     const res = await fetch(
@@ -1084,8 +1061,8 @@ async function fetchLatestVersion(
  * Resolve all @nextlyhq/* package versions in parallel for the given dist-tag
  * channel. Results are cached per channel for the lifetime of the CLI process.
  */
-export async function resolveNextlyVersions(
-  channel: NextlyDistTag = "latest"
+async function resolveNextlyVersions(
+  channel: NpmDistTag
 ): Promise<Record<string, string>> {
   const cached = resolvedNextlyVersions.get(channel);
   if (cached) return cached;
@@ -1098,6 +1075,25 @@ export async function resolveNextlyVersions(
   const versions = Object.fromEntries(entries);
   resolvedNextlyVersions.set(channel, versions);
   return versions;
+}
+
+/**
+ * The version each Nextly package resolves to for `source`: the one answer a
+ * scaffold's package.json and a plugin's definePlugin range both read. A
+ * release is every package at exactly that version, with no registry lookup;
+ * the alpha line is read from the registry, a caret range over the version
+ * `alpha` names; yalc resolves nothing, since it links local builds.
+ */
+async function nextlyVersions(
+  source: NextlySource
+): Promise<Record<string, string>> {
+  if (source.kind === "yalc") return {};
+  if (source.kind === "release") {
+    return Object.fromEntries(
+      NEXTLY_PACKAGES.map(pkg => [pkg, source.cliVersion] as const)
+    );
+  }
+  return resolveNextlyVersions("alpha");
 }
 
 /** Cache for runtime-resolved package versions (next, eslint-config-next). */
@@ -1129,12 +1125,13 @@ async function resolveRuntimeVersions(): Promise<Record<string, string>> {
 /**
  * Generate a `package.json` string for a fresh Nextly project.
  *
- * Fetches latest @nextlyhq/* versions from npm so you don't need to
- * republish create-nextly-app when other packages are updated.
+ * Nextly's packages come from `source`: on the default paths this CLI's own
+ * release, exactly (see {@link NextlySource}).
  *
  * @param projectName - The project name (used as package name)
  * @param database - Database configuration (adapter + driver)
- * @param useYalc - When true, omits @nextlyhq/* packages (they'll be yalc-added)
+ * @param source - Where the Nextly packages come from; with yalc they are left
+ *   out, to be yalc-added
  * @param projectType - Selected template. Determines optional plugin deps
  *   (e.g. `@nextlyhq/plugin-form-builder` ships only with `blog`).
  * @param templateDirs - The directories being copied for this scaffold. The
@@ -1144,7 +1141,7 @@ async function resolveRuntimeVersions(): Promise<Record<string, string>> {
 export async function generatePackageJson(
   projectName: string,
   database: DatabaseConfig,
-  useYalc: boolean = false,
+  source: NextlySource = nextlySource({ cliVersion: packageVersion() }),
   projectType: ProjectType = "blank",
   templateDirs: readonly string[] = [],
   /**
@@ -1158,11 +1155,7 @@ export async function generatePackageJson(
 ): Promise<string> {
   // Plugins are a publishable library, not an app — different package.json.
   if (projectType === "plugin") {
-    return generatePluginPackageJson(
-      projectName,
-      useYalc,
-      templateNextlyChannel(projectType)
-    );
+    return generatePluginPackageJson(projectName, source);
   }
 
   // Fetch latest Next.js (and eslint-config-next) version from npm
@@ -1192,19 +1185,18 @@ export async function generatePackageJson(
     dependencies[font] = FONT_PACKAGE_RANGE;
   }
 
-  if (!useYalc) {
-    // Content templates (blog) track the `alpha` dist-tag so they always get a
-    // nextly that has the `nextly/runtime` cache helpers their pages import;
-    // other scaffolds track `latest`.
-    const versions = await resolveNextlyVersions(
-      templateNextlyChannel(projectType)
+  if (source.kind !== "yalc") {
+    // A lookup that fails falls back to the tag itself, `alpha`, never to
+    // `latest`.
+    const versions = await nextlyVersions(source);
+    const version = (pkg: string): string => versions[pkg] || "alpha";
+    dependencies["nextly"] = version("nextly");
+    dependencies["@nextlyhq/admin"] = version("@nextlyhq/admin");
+    dependencies["@nextlyhq/ui"] = version("@nextlyhq/ui");
+    dependencies["@nextlyhq/adapter-drizzle"] = version(
+      "@nextlyhq/adapter-drizzle"
     );
-    dependencies["nextly"] = versions["nextly"];
-    dependencies["@nextlyhq/admin"] = versions["@nextlyhq/admin"];
-    dependencies["@nextlyhq/ui"] = versions["@nextlyhq/ui"] || "latest";
-    dependencies["@nextlyhq/adapter-drizzle"] =
-      versions["@nextlyhq/adapter-drizzle"];
-    dependencies[database.adapter] = versions[database.adapter] || "latest";
+    dependencies[database.adapter] = version(database.adapter);
     // Form builder plugin is only included for templates that register
     // it in nextly.config.ts (currently just `blog`). Including it in
     // the blank scaffold would leave imports in the admin page that
@@ -1212,7 +1204,7 @@ export async function generatePackageJson(
     // with "Cannot find package '@nextlyhq/plugin-form-builder'".
     if (projectUsesFormBuilder(projectType)) {
       for (const pkg of FORM_BUILDER_PACKAGES) {
-        dependencies[pkg] = versions[pkg] || "latest";
+        dependencies[pkg] = version(pkg);
       }
     }
   }
@@ -1328,42 +1320,6 @@ export async function generatePackageJson(
 const CARET_VERSION = /^\^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
 
 /**
- * This CLI's version, and whether the scaffold pins to it. See
- * CopyTemplateOptions.releaseVersion.
- */
-interface PluginRelease {
-  releaseVersion?: string;
-  pinToRelease?: boolean;
-}
-
-/**
- * The version each Nextly package resolves to in a scaffolded plugin: the one
- * answer its package.json and its definePlugin range both read.
- *
- * A plugin copied from the template bundled in this CLI gets the packages
- * released with this CLI. The family versions in lockstep, so this CLI's own
- * version names every one of them, and a bundled template is never paired with
- * packages newer than the ones it was released with: running an older CLI
- * gives that release's template and that release's packages together. A
- * template resolved live instead tracks its channel on the registry, and
- * --use-yalc resolves nothing, since it links local builds.
- */
-async function pluginNextlyVersions(
-  useYalc: boolean,
-  channel: NextlyDistTag,
-  release: PluginRelease
-): Promise<Record<string, string>> {
-  if (useYalc) return {};
-  const { releaseVersion, pinToRelease } = release;
-  if (pinToRelease && releaseVersion && EXACT_VERSION.test(releaseVersion)) {
-    return Object.fromEntries(
-      NEXTLY_PACKAGES.map(pkg => [pkg, releaseVersion] as const)
-    );
-  }
-  return resolveNextlyVersions(channel);
-}
-
-/**
  * The range a scaffolded plugin declares for a Nextly package it supports.
  *
  * A semver range, never a dist-tag: pnpm 11 rejects a tag in peerDependencies
@@ -1397,16 +1353,9 @@ function pluginPeerRange(
  * versions the scaffold installs that core from: a range resolved from another
  * source can exclude the very core the playground boots.
  */
-async function resolvePluginNextlyRange(
-  useYalc: boolean,
-  release: PluginRelease
-): Promise<string> {
-  const versions = await pluginNextlyVersions(
-    useYalc,
-    templateNextlyChannel("plugin"),
-    release
-  );
-  return pluginPeerRange(versions["nextly"], release.releaseVersion);
+async function resolvePluginNextlyRange(source: NextlySource): Promise<string> {
+  const versions = await nextlyVersions(source);
+  return pluginPeerRange(versions["nextly"], source.cliVersion);
 }
 
 /**
@@ -1416,25 +1365,12 @@ async function resolvePluginNextlyRange(
  */
 async function generatePluginPackageJson(
   projectName: string,
-  useYalc: boolean,
-  /**
-   * The dist-tag every `nextly` + `@nextlyhq/*` range resolves from.
-   *
-   * Passed in rather than defaulted here, because a default would be a second
-   * answer to a question {@link templateNextlyChannel} already owns, and the
-   * two would agree only until the routing changed. A plugin resolved from
-   * `latest` installs `@nextlyhq/eslint-plugin`'s 0.0.0 bootstrap placeholder,
-   * which has no `main` and no `exports` — so the scaffold succeeds and the
-   * author's first `pnpm lint` fails on the config that imports it.
-   */
-  channel: NextlyDistTag,
-  /** This CLI's version, and whether to pin to it; see {@link pluginNextlyVersions}. */
-  release: PluginRelease = {}
+  source: NextlySource
 ): Promise<string> {
-  const versions = await pluginNextlyVersions(useYalc, channel, release);
+  const versions = await nextlyVersions(source);
   const runtimeVersions = await resolveRuntimeVersions();
   /*
-   * The fallback is the TEMPLATE's channel rather than `latest`.
+   * The fallback is the `alpha` tag, never `latest`.
    *
    * `--use-yalc` empties the version map on purpose, so every range here falls
    * back to a bare dist-tag — and the yalc installer then links a FIXED list
@@ -1445,12 +1381,12 @@ async function generatePluginPackageJson(
    * `exports`, so the install succeeds and `pnpm lint` fails on the config
    * that imports it.
    */
-  const range = (pkg: string): string => versions[pkg] ?? channel;
+  const range = (pkg: string): string => versions[pkg] ?? "alpha";
 
   // Peers go through pluginPeerRange, which never declares a dist-tag. Dev
   // dependencies keep the tag `range` falls back to, which is valid there.
   const peerRange = (pkg: string): string =>
-    pluginPeerRange(range(pkg), release.releaseVersion);
+    pluginPeerRange(range(pkg), source.cliVersion);
 
   const peerDependencies: Record<string, string> = {
     nextly: peerRange("nextly"),
@@ -1771,17 +1707,10 @@ export interface CopyTemplateOptions {
    */
   allowExistingTarget?: boolean;
   /**
-   * This CLI's version. The whole Nextly family versions in lockstep with it,
-   * so a plugin scaffold anchors its peer ranges on it when nothing else is
-   * known (offline, --use-yalc). Other templates ignore it.
+   * Where the project's Nextly packages come from. Left out, it is the
+   * default path's: this CLI's own release, or yalc with `useYalc`.
    */
-  releaseVersion?: string;
-  /**
-   * Set when the template is the copy bundled in this CLI: a plugin scaffold
-   * then pins every Nextly package to `releaseVersion`, so the template and the
-   * packages come from the same release.
-   */
-  pinToRelease?: boolean;
+  nextlySource?: NextlySource;
 }
 
 /**
@@ -1810,9 +1739,10 @@ export async function copyTemplate(
     templateSource,
     packageManager,
     allowExistingTarget = false,
-    releaseVersion,
-    pinToRelease,
   } = options;
+  const source =
+    options.nextlySource ??
+    nextlySource({ cliVersion: packageVersion(), useYalc });
 
   // Guard against silently overwriting an existing subdirectory. Skip
   // when targeting cwd (the installer handles emptiness checks there)
@@ -1851,10 +1781,8 @@ export async function copyTemplate(
       projectName,
       typeDir,
       targetDir,
-      useYalc,
       packageManager,
-      releaseVersion,
-      pinToRelease,
+      source,
     });
     return;
   }
@@ -1991,7 +1919,7 @@ export async function copyTemplate(
   const packageJsonContent = await generatePackageJson(
     projectName,
     database,
-    useYalc,
+    source,
     projectType,
     [baseDir, typeDir],
     targetDir
@@ -2064,20 +1992,10 @@ async function copyPluginTemplate(opts: {
   projectName: string;
   typeDir: string;
   targetDir: string;
-  useYalc: boolean;
   packageManager: PackageManager;
-  releaseVersion?: string;
-  pinToRelease?: boolean;
+  source: NextlySource;
 }): Promise<void> {
-  const {
-    projectName,
-    typeDir,
-    targetDir,
-    useYalc,
-    packageManager,
-    releaseVersion,
-    pinToRelease,
-  } = opts;
+  const { projectName, typeDir, targetDir, packageManager, source } = opts;
 
   if (!(await fs.pathExists(typeDir))) {
     throw new Error(
@@ -2094,13 +2012,9 @@ async function copyPluginTemplate(opts: {
     },
   });
 
-  // Generate the plugin package.json, pinned to this CLI's release when the
-  // template is the one bundled in it.
   const packageJsonContent = await generatePluginPackageJson(
     projectName,
-    useYalc,
-    templateNextlyChannel("plugin"),
-    { releaseVersion, pinToRelease }
+    source
   );
   await fs.writeFile(
     path.join(targetDir, "package.json"),
@@ -2132,10 +2046,7 @@ async function copyPluginTemplate(opts: {
   // The plugin scaffold is a git repository too, and npm strips its ignore file the same way. It
   // carries its own agent guide — a publishable library rather than an app, so the base guide
   // would describe the wrong project — and that guide is restored by the same table.
-  const nextlyRange = await resolvePluginNextlyRange(useYalc, {
-    releaseVersion,
-    pinToRelease,
-  });
+  const nextlyRange = await resolvePluginNextlyRange(source);
   const placeholders = buildPlaceholderMap({
     pluginName: projectName,
     nextlyRange,

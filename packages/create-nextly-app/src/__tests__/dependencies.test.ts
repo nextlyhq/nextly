@@ -15,6 +15,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { installDependencies } from "../installers/dependencies";
+import type { NextlySource } from "../lib/nextly-release";
 import type { DatabaseConfig, ProjectInfo } from "../types";
 
 const execa = vi.hoisted(() => vi.fn().mockResolvedValue({ stdout: "" }));
@@ -30,6 +31,9 @@ vi.mock("../installers/native-build-approvals", () => ({
 }));
 
 const projectInfo = { packageManager: "pnpm" } as ProjectInfo;
+// Where the Nextly packages come from: linked local builds, or a release.
+const YALC: NextlySource = { kind: "yalc", cliVersion: "0.0.2-alpha.40" };
+const RELEASE: NextlySource = { kind: "release", cliVersion: "0.0.2-alpha.40" };
 const database = { adapter: "@nextlyhq/adapter-postgres" } as DatabaseConfig;
 
 /** Every package name passed to the package manager across all calls. */
@@ -57,7 +61,7 @@ describe("installDependencies (existing project)", () => {
       "/tmp/project",
       projectInfo,
       database,
-      /* useYalc */ true,
+      YALC,
       /* isFreshProject */ false
     );
 
@@ -72,7 +76,7 @@ describe("installDependencies (existing project)", () => {
       "/tmp/project",
       projectInfo,
       database,
-      true,
+      YALC,
       false
     );
 
@@ -87,22 +91,53 @@ describe("installDependencies (existing project)", () => {
       "/tmp/project",
       projectInfo,
       database,
-      false,
+      RELEASE,
       false
     );
 
-    const installed = installedFromRegistry();
-    for (const pkg of [
-      "nextly",
-      "@nextlyhq/admin",
-      "@nextlyhq/ui",
-      "lucide-react",
-      "@tanstack/react-query",
-      "@nextlyhq/adapter-postgres",
-    ]) {
-      expect(installed).toContain(pkg);
-    }
+    // Nextly's packages at the release, recorded exactly (npm would record
+    // `nextly@X` as `^X`); the others as before, at what the registry has.
+    const adds = execa.mock.calls
+      .filter(
+        ([cmd, args]: [string, string[]]) => cmd === "pnpm" && args[0] === "add"
+      )
+      .map(([, args]: [string, string[]]) => args.slice(1));
+    expect(adds).toContainEqual([
+      "--save-exact",
+      "nextly@0.0.2-alpha.40",
+      "@nextlyhq/admin@0.0.2-alpha.40",
+      "@nextlyhq/adapter-drizzle@0.0.2-alpha.40",
+      "@nextlyhq/ui@0.0.2-alpha.40",
+      "@nextlyhq/adapter-postgres@0.0.2-alpha.40",
+    ]);
+    expect(adds).toContainEqual(["@tanstack/react-query", "lucide-react"]);
     expect(execa.mock.calls.filter(([cmd]) => cmd === "yalc")).toHaveLength(0);
+  });
+});
+
+describe("installDependencies (existing project, a source given on purpose)", () => {
+  beforeEach(() => {
+    execa.mockClear();
+  });
+
+  // --local-template on an existing app takes the active release line, by
+  // its tag, recorded as the package manager records a tag.
+  it("adds Nextly's packages from the alpha tag, not pinned", async () => {
+    await installDependencies(
+      "/tmp/project",
+      projectInfo,
+      database,
+      { kind: "alpha", cliVersion: "0.0.2-alpha.40" },
+      false
+    );
+
+    const adds = execa.mock.calls
+      .filter(
+        ([cmd, args]: [string, string[]]) => cmd === "pnpm" && args[0] === "add"
+      )
+      .map(([, args]: [string, string[]]) => args.slice(1));
+    expect(adds).toContainEqual(expect.arrayContaining(["nextly@alpha"]));
+    expect(adds.flat()).not.toContain("--save-exact");
   });
 });
 
@@ -125,7 +160,7 @@ describe("installDependencies (existing project, what reading the config needs)"
       "/tmp/project",
       { packageManager } as ProjectInfo,
       database,
-      false,
+      RELEASE,
       false
     );
 
@@ -166,7 +201,7 @@ describe("installDependencies (existing project, what reading the config needs)"
         dir,
         { packageManager: "npm" } as ProjectInfo,
         database,
-        false,
+        RELEASE,
         false
       );
 
@@ -266,7 +301,7 @@ describe("installDependencies (fresh plugin scaffold)", () => {
       "/tmp/plugin",
       projectInfo,
       database,
-      /* useYalc */ true,
+      YALC,
       /* isFreshProject */ true,
       "plugin"
     );
@@ -283,7 +318,7 @@ describe("installDependencies (fresh plugin scaffold)", () => {
       "/tmp/blog",
       projectInfo,
       database,
-      /* useYalc */ true,
+      YALC,
       /* isFreshProject */ true,
       "blog"
     );
@@ -297,7 +332,7 @@ describe("installDependencies (fresh plugin scaffold)", () => {
       "/tmp/app",
       projectInfo,
       database,
-      true,
+      YALC,
       true,
       "blank"
     );

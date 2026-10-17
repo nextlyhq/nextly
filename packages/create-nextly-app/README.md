@@ -35,6 +35,12 @@ The CLI walks you through:
 4. Database (`sqlite`, `postgresql`, or `mysql`)
 5. Database connection string (skipped for SQLite)
 
+### Which release a project gets
+
+A project gets the release of Nextly its CLI belongs to: `create-nextly-app@<version>` declares `nextly` and every `@nextlyhq/*` package at exactly `<version>`, so the templates, the agent guide and the skills it writes match what is installed. To start on another release, run that release's CLI; to upgrade later, move every Nextly package to the new version together.
+
+Adding Nextly to an app that already has a Nextly package at another version, or declared as a range, stops before changing anything and says what to set. With `--branch` or `--local-template`, the packages come from the `alpha` tag, the active release line, and `--use-yalc` links local builds.
+
 After scaffolding, `pnpm dev` runs the project. Visit [http://localhost:3000/admin/setup](http://localhost:3000/admin/setup) to create the first admin user.
 
 ## Templates
