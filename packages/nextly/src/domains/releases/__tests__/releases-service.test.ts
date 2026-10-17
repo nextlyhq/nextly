@@ -44,6 +44,8 @@ function repository() {
     // The list's paged read, which `find` routes every non-document query to.
     findReleasePage: vi.fn(async () => ({ rows: [], total: 0 })),
     countReleases: vi.fn(async () => 0),
+    // The calendar's read. Answers nothing; a case asserts what it was ASKED.
+    findReleaseCalendar: vi.fn(async (_query: unknown) => []),
     listMembers: vi.fn(
       async (): Promise<Array<{ id: string; memberKey?: string }>> => []
     ),
@@ -893,6 +895,138 @@ describe("ReleasesService.find pages the list", () => {
       )
     ).rejects.toMatchObject({ code: "INVALID_INPUT" });
     expect(repo.findDueMembersFor).not.toHaveBeenCalled();
+  });
+});
+
+describe("ReleasesService narrows the list to one day in a zone", () => {
+  const BERLIN_SPRING = { date: "2026-03-29", timezone: "Europe/Berlin" };
+
+  it("asks the database for that day's instants in that zone, soonest first", async () => {
+    // The day the clocks go forward in Berlin, so a span of 24 hours from
+    // midnight, or midnight in UTC, both name instants a calendar in Berlin
+    // puts on another day.
+    const { svc, repo } = service({ holds: ["read"] });
+    await svc.find({ day: BERLIN_SPRING }, ADMIN);
+    expect(repo.findReleasePage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scheduledWithin: {
+          start: new Date("2026-03-28T23:00:00Z"),
+          end: new Date("2026-03-29T22:00:00Z"),
+        },
+        // In the day's own order, so the releases a calendar shows on the day
+        // are the first rows here.
+        order: "soonest",
+      })
+    );
+  });
+
+  it("counts a day with the same span", async () => {
+    const { svc, repo } = service({ holds: ["read"] });
+    await svc.count({ day: BERLIN_SPRING }, ADMIN);
+    expect(repo.countReleases).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scheduledWithin: {
+          start: new Date("2026-03-28T23:00:00Z"),
+          end: new Date("2026-03-29T22:00:00Z"),
+        },
+      })
+    );
+  });
+
+  it.each([
+    ["a day that is not an object", { day: "2026-03-29" }],
+    ["a day with no zone", { day: { date: "2026-03-29" } }],
+    [
+      "a day in an unknown zone",
+      { day: { date: "2026-03-29", timezone: "Mars/Olympus" } },
+    ],
+    [
+      "a day that does not exist",
+      { day: { date: "2026-02-30", timezone: "UTC" } },
+    ],
+  ])("refuses %s before reading anything", async (_, query) => {
+    const { svc, repo } = service({ holds: ["read"] });
+    await expect(
+      svc.find(query as unknown as Parameters<typeof svc.find>[0], ADMIN)
+    ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+    expect(repo.findReleasePage).not.toHaveBeenCalled();
+  });
+
+  it("refuses a day alongside `containing`", async () => {
+    const { svc, repo } = service({ holds: ["read"] });
+    await expect(
+      svc.find(
+        {
+          containing: {
+            scopeKind: "collection",
+            scopeSlug: "posts",
+            entryId: "e1",
+            locale: null,
+          },
+          day: BERLIN_SPRING,
+        } as unknown as Parameters<typeof svc.find>[0],
+        ADMIN
+      )
+    ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+    expect(repo.findDueMembersFor).not.toHaveBeenCalled();
+  });
+});
+
+describe("ReleasesService.calendar", () => {
+  const WINDOW = {
+    from: "2026-03-01",
+    to: "2026-04-11",
+    timezone: "Europe/Berlin",
+  };
+
+  it("reads each day of the window in the zone, with three releases a day", async () => {
+    const { svc, repo } = service({ holds: ["read"] });
+    const calendar = await svc.calendar({ ...WINDOW, kind: "release" }, ADMIN);
+    expect(calendar).toMatchObject({ ...WINDOW, days: [] });
+
+    const asked = repo.findReleaseCalendar.mock.calls[0]?.[0] as {
+      days: { date: string; start: Date; end: Date }[];
+      kind?: string;
+      perDay: number;
+    };
+    expect(asked.kind).toBe("release");
+    expect(asked.perDay).toBe(3);
+    expect(asked.days).toHaveLength(42);
+    expect(asked.days[0]).toEqual({
+      date: "2026-03-01",
+      start: new Date("2026-02-28T23:00:00Z"),
+      end: new Date("2026-03-01T23:00:00Z"),
+    });
+    // After the clocks went forward, a Berlin day starts at 22:00 UTC.
+    expect(asked.days[41]).toEqual({
+      date: "2026-04-11",
+      start: new Date("2026-04-10T22:00:00Z"),
+      end: new Date("2026-04-11T22:00:00Z"),
+    });
+  });
+
+  it.each([
+    ["a window longer than six weeks", { ...WINDOW, to: "2026-04-12" }],
+    ["a window that ends before it starts", { ...WINDOW, to: "2026-02-28" }],
+    ["an unknown zone", { ...WINDOW, timezone: "Europe/Berln" }],
+    ["an unknown kind", { ...WINDOW, kind: "singles" }],
+  ])("refuses %s without reading", async (_, query) => {
+    const { svc, repo } = service({ holds: ["read"] });
+    await expect(
+      svc.calendar(
+        query as unknown as Parameters<typeof svc.calendar>[0],
+        ADMIN
+      )
+    ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+    expect(repo.findReleaseCalendar).not.toHaveBeenCalled();
+  });
+
+  it("refuses a caller who may not read releases, before judging the window", async () => {
+    const { svc, repo } = service({ holds: [] });
+    await expect(
+      svc.calendar({ ...WINDOW, to: "2027-01-01" }, ADMIN)
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(repo.findReleaseCalendar).not.toHaveBeenCalled();
   });
 });
 
