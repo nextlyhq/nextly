@@ -29,7 +29,14 @@ function repository() {
     scheduleReleaseOk: true,
     findReleases: vi.fn(
       async (): Promise<
-        Array<{ id: string; state: string; kind?: string }>
+        Array<{
+          id: string;
+          state: string;
+          kind?: string;
+          timezone?: string;
+          revision?: number;
+          scheduledAt?: Date | null;
+        }>
       > => [{ id: "r1", state: "draft" }]
     ),
     // The list's paged read, which `find` routes every non-document query to.
@@ -85,6 +92,12 @@ function service(over?: {
         authenticatedScope?: unknown;
       }) => over?.mayActOnDocument !== false
     ),
+    runDrainNow: vi.fn(
+      async (_options: { maxDurationMs: number }) => undefined
+    ),
+    logger: {
+      warn: vi.fn((_message: string, _meta?: Record<string, unknown>) => {}),
+    },
   };
   return { svc: new ReleasesService(deps), repo, deps };
 }
@@ -891,6 +904,215 @@ describe("ReleasesService.count", () => {
       code: "FORBIDDEN",
     });
     expect(repo.countReleases).not.toHaveBeenCalled();
+  });
+});
+
+describe("ReleasesService.publishNow", () => {
+  it("schedules the release for this moment, then runs the drain within the budget", async () => {
+    // Scheduled for later, so it is moved first, fenced on the state and the
+    // revision it was read at: the run is the drain's ordinary run of a due
+    // release rather than a second way to publish. Then the runner's drain
+    // job, bounded by the request's budget; the answer is the release as the
+    // drain left it.
+    const { svc, repo, deps } = service({ holds: ["publish"] });
+    repo.findReleases
+      .mockResolvedValueOnce([
+        {
+          id: "r1",
+          state: "scheduled",
+          timezone: "Asia/Karachi",
+          revision: 4,
+          scheduledAt: new Date(Date.now() + 60 * 60 * 1000),
+        },
+      ])
+      .mockResolvedValueOnce([
+        { id: "r1", state: "published", timezone: "Asia/Karachi", revision: 6 },
+      ]);
+    const before = Date.now();
+    const answer = await svc.publishNow("r1", ADMIN);
+
+    const [id, at, zone, from, revision] = repo.scheduleRelease.mock
+      .calls[0] as unknown as [string, Date, string, string[], number];
+    expect(id).toBe("r1");
+    expect(at.getTime()).toBeGreaterThanOrEqual(before);
+    expect(zone).toBe("Asia/Karachi");
+    expect(from).toEqual(["scheduled"]);
+    expect(revision).toBe(4);
+    expect(deps.runDrainNow).toHaveBeenCalledTimes(1);
+    expect(deps.runDrainNow).toHaveBeenCalledWith({ maxDurationMs: 15_000 });
+    // After the move, never before it: a drain run first would find the
+    // release not yet due and send nothing.
+    expect(repo.scheduleRelease.mock.invocationCallOrder[0]).toBeLessThan(
+      deps.runDrainNow.mock.invocationCallOrder[0]
+    );
+    expect(answer.state).toBe("published");
+  });
+
+  it("runs the drain for a release already due without moving it", async () => {
+    // Its instant has come, so it is due as it stands. Moving it again would
+    // change the instant a drain already running it checks before marking it
+    // published, and that drain would leave it for the next pass.
+    const { svc, repo, deps } = service({ holds: ["publish"] });
+    repo.findReleases.mockResolvedValue([
+      {
+        id: "r1",
+        state: "scheduled",
+        revision: 2,
+        scheduledAt: new Date(Date.now() - 60_000),
+      },
+    ]);
+    await svc.publishNow("r1", ADMIN);
+    expect(repo.scheduleRelease).not.toHaveBeenCalled();
+    expect(deps.runDrainNow).toHaveBeenCalledWith({ maxDurationMs: 15_000 });
+  });
+
+  it("still moves a draft to now before running the drain", async () => {
+    // The control for the case above: only a release already due is left
+    // where it is.
+    const { svc, repo, deps } = service({ holds: ["publish"] });
+    repo.findReleases.mockResolvedValue([
+      { id: "r1", state: "draft", revision: 0, scheduledAt: null },
+    ]);
+    await svc.publishNow("r1", ADMIN);
+    expect(repo.scheduleRelease).toHaveBeenCalledTimes(1);
+    expect(deps.runDrainNow).toHaveBeenCalledTimes(1);
+  });
+
+  it("answers the release as it stands when the drain could not be started, and logs it", async () => {
+    // The move has happened and the release is due, so the runner sends it
+    // whatever happened here. Failing the request would report a release that
+    // is going out as one that is not.
+    const { svc, repo, deps } = service({ holds: ["publish"] });
+    repo.findReleases
+      .mockResolvedValueOnce([{ id: "r1", state: "draft", revision: 0 }])
+      .mockResolvedValueOnce([{ id: "r1", state: "scheduled", revision: 1 }]);
+    deps.runDrainNow.mockRejectedValueOnce(new Error("jobs table is gone"));
+
+    const answer = await svc.publishNow("r1", ADMIN);
+
+    expect(answer).toMatchObject({ id: "r1", state: "scheduled", revision: 1 });
+    expect(deps.logger.warn).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({
+        releaseId: "r1",
+        error: "jobs table is gone",
+      })
+    );
+  });
+
+  it("answers scheduled when the drain sent nothing, rather than published", async () => {
+    // Another runner held the drain, or the budget ran out: the release is
+    // due and going out, and saying it is published would be untrue.
+    const { svc, repo } = service({ holds: ["publish"] });
+    repo.findReleases.mockResolvedValue([
+      { id: "r1", state: "scheduled", revision: 1 },
+    ]);
+    const answer = await svc.publishNow("r1", ADMIN);
+    expect(answer.state).toBe("scheduled");
+  });
+
+  it.each([
+    ["published", "Create a new release"],
+    ["cancelled", "create a new release"],
+    ["blocked", "schedule it again"],
+  ])(
+    "refuses a %s release, saying what to do instead, before writing anything",
+    async (state, advice) => {
+      const { svc, repo, deps } = service({ holds: ["publish"] });
+      repo.findReleases.mockResolvedValue([{ id: "r1", state }]);
+      await expect(svc.publishNow("r1", ADMIN)).rejects.toMatchObject({
+        code: "CONFLICT",
+        publicMessage: expect.stringContaining(advice),
+      });
+      expect(repo.scheduleRelease).not.toHaveBeenCalled();
+      expect(deps.runDrainNow).not.toHaveBeenCalled();
+    }
+  );
+
+  it("refuses a caller who may assemble releases but not publish them", async () => {
+    // Running a release is the act that puts content live, the same power
+    // scheduling needs.
+    const { svc, repo, deps } = service({ holds: ["create", "read"] });
+    await expect(svc.publishNow("r1", ADMIN)).rejects.toMatchObject({
+      code: "FORBIDDEN",
+    });
+    expect(repo.scheduleRelease).not.toHaveBeenCalled();
+    expect(deps.runDrainNow).not.toHaveBeenCalled();
+  });
+
+  it("does not run a release that moved between the read and the write", async () => {
+    // Cancelled by someone else in that window, or moved by a second request
+    // that read the same revision: the fenced write matches nothing, and the
+    // request is refused with nothing run on its behalf.
+    const { svc, repo, deps } = service({ holds: ["publish"] });
+    repo.findReleases.mockResolvedValue([{ id: "r1", state: "draft" }]);
+    repo.scheduleRelease.mockResolvedValueOnce(false);
+    await expect(svc.publishNow("r1", ADMIN)).rejects.toMatchObject({
+      code: "CONFLICT",
+    });
+    expect(deps.runDrainNow).not.toHaveBeenCalled();
+  });
+
+  it.each(["draft", "scheduled"])(
+    "refuses a %s single-document release with no document, as scheduling does",
+    async state => {
+      // Run now, it would publish nothing and read as done: final, with
+      // nothing in it. The same refusal scheduling makes, before any write.
+      const { svc, repo, deps } = service({ holds: ["publish"] });
+      repo.findReleases.mockResolvedValue([
+        { id: "r1", state, kind: "single", revision: 0 },
+      ]);
+      repo.listMembers.mockResolvedValue([]);
+      await expect(svc.publishNow("r1", ADMIN)).rejects.toMatchObject({
+        code: "CONFLICT",
+        publicMessage: expect.stringContaining(
+          "A single-document release needs its document"
+        ),
+      });
+      expect(repo.scheduleRelease).not.toHaveBeenCalled();
+      expect(deps.runDrainNow).not.toHaveBeenCalled();
+    }
+  );
+
+  it("answers not found for a release that does not exist", async () => {
+    const { svc, repo, deps } = service({ holds: ["publish"] });
+    repo.findReleases.mockResolvedValue([]);
+    await expect(svc.publishNow("nope", ADMIN)).rejects.toMatchObject({
+      code: "NOT_FOUND",
+    });
+    expect(deps.runDrainNow).not.toHaveBeenCalled();
+  });
+});
+
+describe("a finished release offers nothing to change", () => {
+  it.each(["published", "cancelled"])(
+    "offers no schedule, membership change or publish now on a %s release",
+    async state => {
+      // The admin draws its controls from these, so a finished release that
+      // still offered one would show a button the server then refuses.
+      const { svc } = service({ holds: ["publish", "create", "read"] });
+      const can = await svc.capabilities([{ id: "r1", state } as never], ADMIN);
+      expect(can.get("r1")).toEqual({
+        schedule: false,
+        cancel: false,
+        addMember: false,
+        removeMember: false,
+        publishNow: false,
+      });
+    }
+  );
+
+  it("still lets a stopped release be fixed and rescheduled, but not run as it is", async () => {
+    const { svc } = service({ holds: ["publish", "create", "read"] });
+    const can = await svc.capabilities(
+      [{ id: "r1", state: "blocked" } as never],
+      ADMIN
+    );
+    expect(can.get("r1")).toMatchObject({
+      schedule: true,
+      removeMember: true,
+      publishNow: false,
+    });
   });
 });
 

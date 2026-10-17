@@ -33,6 +33,8 @@ export interface FreshDatabase {
   exec(statement: string): Promise<void>;
   /** The column names a table currently has, in the live database. */
   columnsOf(table: string): Promise<string[]>;
+  /** The index names a table currently has, in the live database. */
+  indexesOf(table: string): Promise<string[]>;
 }
 
 /** Every dialect that has a URL in this run, with SQLite always present. */
@@ -238,6 +240,12 @@ export async function withFreshDatabase(
                 name: string;
               }>
             ).map(column => column.name),
+          indexesOf: async table =>
+            (
+              sqlite.prepare(`PRAGMA index_list(${table})`).all() as Array<{
+                name: string;
+              }>
+            ).map(index => index.name),
         });
       } finally {
         sqlite.close();
@@ -265,6 +273,13 @@ export async function withFreshDatabase(
                   [table]
                 )
               ).rows.map(row => row.column_name),
+            indexesOf: async table =>
+              (
+                await pool.query<{ indexname: string }>(
+                  "SELECT indexname FROM pg_indexes WHERE schemaname = 'public' AND tablename = $1",
+                  [table]
+                )
+              ).rows.map(row => row.indexname),
           });
         } finally {
           await pool.end();
@@ -297,6 +312,17 @@ export async function withFreshDatabase(
                 );
               return (rows as Array<{ column_name: string }>).map(
                 row => row.column_name
+              );
+            },
+            indexesOf: async table => {
+              const [rows] = await pool
+                .promise()
+                .query(
+                  "SELECT DISTINCT index_name AS index_name FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = ?",
+                  [table]
+                );
+              return (rows as Array<{ index_name: string }>).map(
+                row => row.index_name
               );
             },
           });

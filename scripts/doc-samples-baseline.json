@@ -1,8 +1,8 @@
 {
   "coverage": {
-    "pages": 79,
-    "samples": 452,
-    "compiled": 283
+    "pages": 80,
+    "samples": 454,
+    "compiled": 285
   },
   "samplesPerPage": {
     "docs/admin/branding.mdx": {
@@ -141,6 +141,10 @@
       "samples": 3,
       "compiled": 3
     },
+    "docs/notices/index.mdx": {
+      "samples": 1,
+      "compiled": 1
+    },
     "docs/page-builder/index.mdx": {
       "samples": 3,
       "compiled": 3
@@ -230,8 +234,8 @@
       "compiled": 1
     },
     "docs/versions/index.mdx": {
-      "samples": 1,
-      "compiled": 1
+      "samples": 2,
+      "compiled": 2
     },
     "docs/webhooks/retention.mdx": {
       "samples": 2,
@@ -510,6 +514,9 @@
     },
     "docs/jobs/index.mdx": {
       "reader-file #1 error TS2307: Cannot find module './jobs/send-digest' or its corresponding type declarations.": 1
+    },
+    "docs/notices/index.mdx": {
+      "reader-file #0 error TS2307: Cannot find module '../../nextly.config' or its corresponding type declarations.": 1
     },
     "docs/page-builder/index.mdx": {
       "reader-file #1 error TS2307: Cannot find module '../../../nextly.config' or its corresponding type declarations.": 1

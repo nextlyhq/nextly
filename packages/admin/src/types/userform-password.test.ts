@@ -114,25 +114,32 @@ describe("the forms' other password states", () => {
   });
 });
 
-// The edit page builds its request with `editUserUpdates`, so this is the
-// password the server receives. The server's own round trip proves it hashes
-// what arrives; this proves what arrives is what the admin typed.
+// The edit page builds its request with `editUserUpdates`, from the values
+// its resolver hands `onSubmit`: what `editUserFormSchema` parsed, not what
+// was typed. So the request is built here the same way, and read as the
+// JSON sent, which keeps `null` where an omitted field disappears.
+const sentBy = (fields: Record<string, unknown>) =>
+  JSON.parse(
+    JSON.stringify(
+      editUserUpdates(
+        editUserFormSchema.parse({
+          ...account,
+          avatarUrl: "",
+          active: true,
+          ...fields,
+        })
+      )
+    )
+  ) as Record<string, unknown>;
+
 describe("the edit page's request", () => {
   it("sends a password with a space at either end exactly as typed", () => {
-    const password = " Passw0rd-Edge ";
-    expect(editUserFormSchema.safeParse({ ...account, password }).success).toBe(
-      true
+    expect(sentBy({ password: " Passw0rd-Edge " }).password).toBe(
+      " Passw0rd-Edge "
     );
-
-    expect(
-      editUserUpdates({ ...account, password, avatarUrl: "", active: true })
-        .password
-    ).toBe(password);
   });
 
   it("sends no password when the field is left empty", () => {
-    expect(
-      editUserUpdates({ ...account, password: "", avatarUrl: "", active: true })
-    ).not.toHaveProperty("password", expect.anything());
+    expect(sentBy({ password: "" })).not.toHaveProperty("password");
   });
 });

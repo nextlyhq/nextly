@@ -1,4 +1,5 @@
 import { LIMIT_STORE_TABLE } from "../schemas/limit-store/table-name";
+import { NOTICES_TABLE } from "../schemas/notices/table-name";
 import { RBAC_EPOCH_TABLE } from "../schemas/rbac-epoch/table-name";
 import { SCHEMA_OWNERS_TABLE } from "../schemas/schema-owners/table-name";
 import { SPENT_CHALLENGES_TABLE } from "../schemas/spent-challenges/table-name";
@@ -69,6 +70,8 @@ export function generateSqliteCoreTableStatements(): string[] {
       ON "password_reset_tokens" ("expires")`,
     `CREATE INDEX IF NOT EXISTS "prt_used_at_idx"
       ON "password_reset_tokens" ("used_at")`,
+    `CREATE INDEX IF NOT EXISTS "prt_token_hash_idx"
+      ON "password_reset_tokens" ("token_hash")`,
     `CREATE TABLE IF NOT EXISTS "email_verification_tokens" (
       "id" INTEGER PRIMARY KEY AUTOINCREMENT,
       "identifier" TEXT NOT NULL,
@@ -79,6 +82,8 @@ export function generateSqliteCoreTableStatements(): string[] {
     )`,
     `CREATE INDEX IF NOT EXISTS "evt_expires_idx"
       ON "email_verification_tokens" ("expires")`,
+    `CREATE INDEX IF NOT EXISTS "evt_token_hash_idx"
+      ON "email_verification_tokens" ("token_hash")`,
     `CREATE TABLE IF NOT EXISTS "refresh_tokens" (
       "id" TEXT PRIMARY KEY,
       "user_id" TEXT NOT NULL REFERENCES "users"("id") ON DELETE CASCADE,
@@ -465,6 +470,25 @@ export function generateSqliteCoreTableStatements(): string[] {
       ON "nextly_release_members" ("scope_kind", "scope_slug", "entry_id", "locale")`,
     `CREATE INDEX IF NOT EXISTS "nextly_release_members_release_idx"
       ON "nextly_release_members" ("release_id")`,
+    // Version pins. Columns match schemas/version-pins/sqlite.ts.
+    `CREATE TABLE IF NOT EXISTS "nextly_version_pins" (
+      "id" TEXT PRIMARY KEY NOT NULL,
+      "scope_kind" TEXT NOT NULL,
+      "scope_slug" TEXT NOT NULL,
+      "entry_id" TEXT NOT NULL,
+      "holder" TEXT NOT NULL,
+      "slot" TEXT NOT NULL,
+      "version_no" INTEGER NOT NULL,
+      "pin_key" TEXT NOT NULL,
+      "created_at" INTEGER NOT NULL,
+      "updated_at" INTEGER NOT NULL
+    )`,
+    // Over "pin_key" alone, for the reason "member_key" above is: the digest
+    // is what one slot per document per holder is enforced on.
+    `CREATE UNIQUE INDEX IF NOT EXISTS "nextly_version_pins_key_uidx"
+      ON "nextly_version_pins" ("pin_key")`,
+    `CREATE INDEX IF NOT EXISTS "nextly_version_pins_doc_idx"
+      ON "nextly_version_pins" ("scope_kind", "scope_slug", "entry_id")`,
     // Background jobs. Columns match schemas/jobs/sqlite.ts.
     `CREATE TABLE IF NOT EXISTS "nextly_jobs" (
       "id" TEXT PRIMARY KEY NOT NULL,
@@ -585,6 +609,31 @@ export function generateSqliteCoreTableStatements(): string[] {
     )`,
     `CREATE INDEX IF NOT EXISTS "nsc_expires_at_idx"
       ON "${SPENT_CHALLENGES_TABLE}" ("expires_at")`,
+    // Each person's own notices. Columns match schemas/notices/sqlite.ts; each
+    // index is its own statement so a database built by an earlier boot still
+    // gains it.
+    `CREATE TABLE IF NOT EXISTS "${NOTICES_TABLE}" (
+      "id" TEXT PRIMARY KEY NOT NULL,
+      "user_id" TEXT NOT NULL REFERENCES "users"("id") ON DELETE CASCADE,
+      "kind" TEXT NOT NULL,
+      "subject_type" TEXT NOT NULL,
+      "subject_id" TEXT NOT NULL,
+      "occurrence" TEXT NOT NULL,
+      "dedupe_key" TEXT NOT NULL,
+      "data" TEXT,
+      "created_at" INTEGER NOT NULL,
+      "read_at" INTEGER
+    )`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS "nextly_notices_dedupe_uidx"
+      ON "${NOTICES_TABLE}" ("dedupe_key")`,
+    `CREATE INDEX IF NOT EXISTS "nextly_notices_user_idx"
+      ON "${NOTICES_TABLE}" ("user_id", "read_at", "created_at", "id")`,
+    `CREATE INDEX IF NOT EXISTS "nextly_notices_inbox_idx"
+      ON "${NOTICES_TABLE}" ("user_id", "created_at", "id")`,
+    `CREATE INDEX IF NOT EXISTS "nextly_notices_subject_idx"
+      ON "${NOTICES_TABLE}" ("subject_type", "subject_id")`,
+    `CREATE INDEX IF NOT EXISTS "nextly_notices_created_idx"
+      ON "${NOTICES_TABLE}" ("created_at")`,
     `CREATE TABLE IF NOT EXISTS "nextly_widget_layout" (
       "id" TEXT PRIMARY KEY NOT NULL,
       "scope_kind" TEXT NOT NULL,

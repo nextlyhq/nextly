@@ -15,7 +15,7 @@ import ts from "typescript";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { generateInstrumentation } from "../generators/instrumentation";
-import { patchNextConfig } from "../generators/next-config";
+import { nextConfigReport, patchNextConfig } from "../generators/next-config";
 import type { DatabaseConfig } from "../types";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -125,131 +125,6 @@ describe("generateInstrumentation", () => {
     }
   );
 
-  it("says what to add as code that compiles, so pasting it into a synchronous hook cannot break the build", async () => {
-    const cwd = await app();
-    await mkdir(path.join(cwd, "src"), { recursive: true });
-    await writeFile(
-      path.join(cwd, "src/instrumentation.ts"),
-      "export function register() {}\n"
-    );
-
-    const { skipped } = await generateInstrumentation(cwd, { srcDir: true });
-
-    const code = skipped[0].toAdd?.slice(
-      skipped[0].toAdd.indexOf("export async function")
-    );
-    expect(code).toMatch(/^export async function register\(\)/);
-    expect(syntaxErrors(code ?? "")).toEqual([]);
-  });
-
-  it("writes no hook when the app sets pageExtensions, and gives the whole hook to add under the right name", async () => {
-    const cwd = await app();
-    await writeFile(
-      path.join(cwd, "next.config.mjs"),
-      'export default { pageExtensions: ["page.tsx", "page.ts"] };\n'
-    );
-
-    const result = await generateInstrumentation(cwd, { srcDir: true });
-
-    expect(result.written).toEqual([]);
-    expect(await fs.pathExists(path.join(cwd, "src/instrumentation.ts"))).toBe(
-      false
-    );
-    expect(result.skipped[0].why).toContain("pageExtensions");
-    expect(result.skipped[0].toAdd).toBe(await readFile(blankHook, "utf-8"));
-  });
-
-  it("on an installed Next.js 14 writes the hook and says how to opt in, leaving the config as it was", async () => {
-    // The manifest says only `latest`; the installed copy says 14.
-    const cwd = await app("14.2.3");
-    await writeFile(
-      path.join(cwd, "package.json"),
-      JSON.stringify({ dependencies: { next: "latest" } })
-    );
-    const config = "module.exports = {};\n";
-    await writeFile(path.join(cwd, "next.config.js"), config);
-
-    const result = await generateInstrumentation(cwd, { srcDir: true });
-
-    expect(result.written).toEqual(["src/instrumentation.ts"]);
-    expect(result.skipped).toEqual([
-      expect.objectContaining({
-        path: "next.config.js",
-        toAdd: expect.stringContaining(
-          "inside the config's experimental object, beside any keys it already has"
-        ),
-      }),
-    ]);
-    expect(await readFile(path.join(cwd, "next.config.js"), "utf-8")).toBe(
-      config
-    );
-  });
-
-  it("asks for no opt-in when the installed Next.js is 15, whatever the manifest's range admits", async () => {
-    const cwd = await app("15.0.3");
-    await writeFile(
-      path.join(cwd, "package.json"),
-      JSON.stringify({ dependencies: { next: "^14 || ^15" } })
-    );
-
-    const result = await generateInstrumentation(cwd, { srcDir: true });
-
-    expect(result.skipped).toEqual([]);
-  });
-
-  it.each(["15.0.0", "16.1.0"])(
-    "asks for no opt-in on Next.js %s",
-    async version => {
-      const result = await generateInstrumentation(await app(version), {
-        srcDir: true,
-      });
-      expect(result.skipped).toEqual([]);
-    }
-  );
-
-  it("says what Next.js 14 would need when the version cannot be read", async () => {
-    const cwd = await app(null);
-    await writeFile(
-      path.join(cwd, "package.json"),
-      JSON.stringify({ dependencies: { next: "latest" } })
-    );
-    await writeFile(path.join(cwd, "next.config.mjs"), "export default {};\n");
-
-    const result = await generateInstrumentation(cwd, { srcDir: true });
-
-    expect(result.skipped).toEqual([
-      expect.objectContaining({
-        path: "next.config.mjs",
-        why: expect.stringContaining("could not be read"),
-        toAdd: expect.stringMatching(/^On Next\.js 14, /),
-      }),
-    ]);
-  });
-
-  it.each(["commonjs", "module"])(
-    "gives a whole config to create when a Next.js 14 app has none, which loads in a %s project",
-    async type => {
-      const cwd = await app("14.2.3");
-      await writeFile(path.join(cwd, "package.json"), JSON.stringify({ type }));
-
-      const result = await generateInstrumentation(cwd, { srcDir: true });
-
-      const [optIn] = result.skipped;
-      expect(optIn.path).toBe("next.config.mjs");
-      expect(await fs.pathExists(path.join(cwd, "next.config.mjs"))).toBe(
-        false
-      );
-      // Created as told, then loaded the way Node loads it: the opt-in is
-      // what the config exports, whatever the package type.
-      const created = path.join(cwd, "next.config.mjs");
-      await writeFile(created, optIn.toAdd ?? "");
-      const loaded = (await import(pathToFileURL(created).href)) as {
-        default: { experimental?: { instrumentationHook?: boolean } };
-      };
-      expect(loaded.default.experimental?.instrumentationHook).toBe(true);
-    }
-  );
-
   it("does not mistake a file Next.js never loads as the hook for one it does", async () => {
     // `.mjs` is not one of Next's default page extensions, so such a file is
     // not a hook and the app still needs one.
@@ -262,21 +137,67 @@ describe("generateInstrumentation", () => {
     expect(result.written).toEqual(["src/instrumentation.ts"]);
   });
 
-  it("names the same config as the Next config step when a Next.js 14 app has none, so following both makes one file", async () => {
-    const cwd = await app("14.2.3");
-    const sqlite: DatabaseConfig = {
-      type: "sqlite",
-      adapter: "@nextlyhq/adapter-sqlite",
-      databaseDriver: "better-sqlite3",
-      connectionUrl: "file:./data/nextly.db",
-      envExample: "file:./data/nextly.db",
-    };
+  it.each([
+    ["an installed Next.js 14", "14.2.3"],
+    ["a Next.js version that cannot be read", null],
+    ["Next.js 15", "15.0.3"],
+  ] as const)(
+    "on %s writes the hook and says nothing about the Next config, which the Next config step owns",
+    async (_, version) => {
+      const cwd = await app(version);
+      const config = "module.exports = {};\n";
+      await writeFile(path.join(cwd, "next.config.js"), config);
 
-    // The order the scaffolder runs them in.
-    const hook = await generateInstrumentation(cwd, { srcDir: true });
-    const patch = await patchNextConfig(cwd, sqlite);
+      const result = await generateInstrumentation(cwd, { srcDir: true });
 
-    expect(patch.kind).toBe("manual");
-    expect(hook.skipped.map(entry => entry.path)).toEqual([patch.file]);
-  });
+      expect(result.written).toEqual(["src/instrumentation.ts"]);
+      expect(result.skipped).toEqual([]);
+      expect(await readFile(path.join(cwd, "next.config.js"), "utf-8")).toBe(
+        config
+      );
+    }
+  );
+
+  it.each(["commonjs", "module"])(
+    "on a Next.js 14 app with no config, following the advice makes one config that opts in and lists the packages, in a %s project",
+    async type => {
+      const cwd = await app("14.2.3");
+      await writeFile(path.join(cwd, "package.json"), JSON.stringify({ type }));
+      const sqlite: DatabaseConfig = {
+        type: "sqlite",
+        adapter: "@nextlyhq/adapter-sqlite",
+        databaseDriver: "better-sqlite3",
+        connectionUrl: "file:./data/nextly.db",
+        envExample: "file:./data/nextly.db",
+      };
+
+      // The order the scaffolder runs them in.
+      const hook = await generateInstrumentation(cwd, { srcDir: true });
+      const patch = await patchNextConfig(cwd, sqlite);
+
+      // One piece of advice about the config, from one step.
+      expect(hook.skipped).toEqual([]);
+      expect(patch).toMatchObject({
+        kind: "manual",
+        file: "next.config.mjs",
+        create: true,
+      });
+      const { message } = nextConfigReport(patch);
+      const created = path.join(cwd, "next.config.mjs");
+      await writeFile(created, message.slice(message.indexOf("/** @type")));
+      // Loaded the way Node loads it: both keys survive, in one object.
+      const loaded = (await import(pathToFileURL(created).href)) as {
+        default: {
+          experimental?: {
+            instrumentationHook?: boolean;
+            serverComponentsExternalPackages?: string[];
+          };
+        };
+      };
+      expect(loaded.default.experimental?.instrumentationHook).toBe(true);
+      expect(
+        loaded.default.experimental?.serverComponentsExternalPackages
+      ).toEqual(expect.arrayContaining(["@nextlyhq/adapter-sqlite"]));
+    }
+  );
 });

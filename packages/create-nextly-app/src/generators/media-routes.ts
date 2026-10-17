@@ -3,110 +3,474 @@ import path from "path";
 import fs from "fs-extra";
 
 import type { ProjectInfo } from "../types";
+import { resolveTemplatePath } from "../utils/template";
 
-// ============================================================
-// Media Route Template (Single Catch-All)
-// ============================================================
+import type { GeneratedFiles } from "./generated-files";
 
 /**
- * Single catch-all handler for all media operations.
+ * The routes an existing app receives, as the base template's app directory
+ * holds them. They are read from the template rather than kept as strings
+ * here, so an app Nextly is added to gets the same files a new project does:
+ *
+ * - the admin's media route, `admin/api/media/...`, where the admin uploads,
+ *   lists and deletes media, every request checked against the signed-in
+ *   caller's media permissions (`requireAuth: true` in the template);
+ * - the public media route, `api/media/...`, which serves reads only;
+ * - the health check.
+ *
+ * `segment` is the URL each route answers. A handler already answering it
+ * means the app has its own route there, which is left alone. Next.js leaves
+ * route groups `(name)` and slots `@name` out of the URL wherever they sit,
+ * and never routes a private folder `_name`, so the folders that answer a URL
+ * are found by that rule rather than by name. `catchAll` marks the optional
+ * catch-alls: they also clash with a dynamic child (`[id]`, `[...rest]`) that
+ * holds a handler, but not with a concrete child such as `sign/`, which
+ * Next.js sorts ahead of the catch-all.
+ *
+ * `role` says what Nextly's route does there, for a media route the app
+ * already has something in place of; the report then carries the route to
+ * add by hand.
  */
+const ROUTES = [
+  {
+    path: "admin/api/media/[[...path]]/route.ts",
+    segment: "admin/api/media",
+    catchAll: true,
+    importsConfig: true,
+    role: (file: string) =>
+      `The admin's media library needs Nextly's route at ${file}, where it uploads, edits and deletes media for signed-in users with media permissions`,
+  },
+  {
+    path: "api/media/[[...path]]/route.ts",
+    segment: "api/media",
+    catchAll: true,
+    importsConfig: true,
+    role: (file: string) =>
+      `Nextly's public media route at ${file} serves media files to visitors, read-only`,
+  },
+  {
+    path: "api/health/route.ts",
+    segment: "api/health",
+    catchAll: false,
+    importsConfig: false,
+    role: null,
+  },
+] as const;
+
 /**
- * Generate the import path for nextly.config based on whether src/ directory is used.
- * - With src/: src/app/api/media/[[...path]]/route.ts → "../../../../../nextly.config"
- * - Without src/: app/api/media/[[...path]]/route.ts → "../../../../nextly.config"
+ * The import that brings in the Nextly config: the template spells it through
+ * the `@nextly-config` alias or a path relative to its own layout, neither of
+ * which an existing app is guaranteed to resolve.
  */
-function getConfigImportPath(useSrcDir: boolean): string {
-  return useSrcDir
-    ? "../../../../../nextly.config"
-    : "../../../../nextly.config";
+const CONFIG_IMPORT =
+  /(import\s+\w+\s+from\s+")([^"]*(?:@nextly-config|nextly\.config))(";)/;
+
+const LEFT_AS_IT_IS = "already holds routes; left as it is";
+
+const THROUGH_A_LINK = "is a symbolic link; nothing was written through it";
+
+/**
+ * A file Next.js answers requests through: a route or a page, in the source
+ * extensions it routes by default (`pageExtensions`). An app that configures
+ * other extensions is read as if it had not.
+ */
+const HANDLER_FILE = /^(route|page)\.(tsx|ts|jsx|js)$/;
+
+/**
+ * A route or page file in some other single extension. Next.js routes it only
+ * when the app adds that extension to `pageExtensions`, which is not read
+ * here (the app's config is never evaluated), so it cannot be ruled out.
+ */
+const MAYBE_HANDLER_FILE = /^(route|page)\.[^.]+$/;
+
+const UNREADABLE =
+  "cannot be read, so whether it already answers this URL is unknown; left as it is";
+
+/**
+ * The Pages Router folders Next.js reads. An app may use both routers, but
+ * Next.js refuses to build a page and an app route at one URL, so a page
+ * there leaves the route unwritten. Both places are looked in, whichever the
+ * app folder sits beside: a page in either is one Next.js might serve.
+ */
+const PAGES_DIRS = ["pages", "src/pages"];
+
+const A_PAGE_ANSWERS =
+  "is a Pages Router route at the same URL, and Next.js refuses to build two routes for one URL; left as it is";
+
+const A_PAGE_MAY_ANSWER =
+  "is a dynamic Pages Router route that may answer the same URL, and Next.js refuses to build two routes for one URL; left as it is";
+
+/** Why a folder is left alone because one of its files might be a route. */
+function unsure(file: string): string {
+  return `holds ${file}, which Next.js routes only if the app configures that extension; left as it is`;
 }
 
-const MEDIA_CATCH_ALL_TEMPLATE = (configImportPath: string) => `/**
- * Media API Routes (Catch-All Handler)
- *
- * This single route handles all media operations:
- *
- * Media Files:
- * - GET    /api/media                        - List media with pagination
- * - POST   /api/media                        - Upload new media file
- * - GET    /api/media/:id                    - Get media by ID
- * - PATCH  /api/media/:id                    - Update media metadata
- * - DELETE /api/media/:id                    - Delete media file
- * - PATCH  /api/media/:id/move               - Move media to folder
- *
- * Folders:
- * - GET    /api/media/folders                - List folders
- * - POST   /api/media/folders                - Create folder
- * - GET    /api/media/folders/:id            - Get folder by ID
- * - PATCH  /api/media/folders/:id            - Update folder
- * - DELETE /api/media/folders/:id            - Delete folder
- * - GET    /api/media/folders/:id/contents   - Get folder contents
- * - GET    /api/media/folders/root/contents  - Get root folder contents
- */
-
-import { createMediaHandlers } from "nextly/api/media-handlers";
-
-import nextlyConfig from "${configImportPath}";
-
-// Pass config to ensure storage plugins work across all worker processes
-const handlers = createMediaHandlers({ config: nextlyConfig });
-
-export const GET = handlers.GET;
-export const POST = handlers.POST;
-export const PATCH = handlers.PATCH;
-export const DELETE = handlers.DELETE;
-`;
-
-const HEALTH_ROUTE_TEMPLATE = `/**
- * Health Check Endpoint
- *
- * GET /api/health - Check if the API is running
- */
-
-export { GET, HEAD } from "nextly/api/health";
-`;
-
-// ============================================================
-// Generator Function
-// ============================================================
+/** A folder that exists but could not be listed: what it holds is unknown. */
+class UnreadableFolder extends Error {
+  constructor(readonly folder: string) {
+    super(`cannot read ${folder}`);
+  }
+}
 
 /**
- * Generate the media API routes for Nextly.
- * Uses a single catch-all route pattern.
+ * Write the media and health routes into an existing app, from the template
+ * in `templatesDir` (the CLI's bundled templates by default).
  *
- * Creates:
- * - /api/media/[[...path]]/route.ts - All media and folder operations
- * - /api/health/route.ts - Health check endpoint
+ * A route whose URL the app already answers is never written: the folder
+ * that answers it is reported as skipped, exactly as it was, and for a media
+ * route the report says what Nextly's route does there and carries it to add
+ * by hand. Nothing is written through a linked folder. Every route is read
+ * and prepared before any is written, so a template whose route no longer
+ * imports the config is refused with nothing written.
  */
 export async function generateMediaRoutes(
   cwd: string,
-  projectInfo: ProjectInfo
-): Promise<void> {
-  const apiDir = path.join(cwd, projectInfo.appDir, "api");
+  projectInfo: ProjectInfo,
+  templatesDir: string = resolveTemplatePath()
+): Promise<GeneratedFiles> {
+  const prepared = await Promise.all(
+    ROUTES.map(route => prepareRoute(cwd, projectInfo, templatesDir, route))
+  );
+  const result: GeneratedFiles = { written: [], changed: [], skipped: [] };
+  for (const route of prepared) {
+    await writeIfUnanswered(cwd, route, result);
+  }
+  return result;
+}
 
-  // Check if any media route already exists
-  const mediaDir = path.join(apiDir, "media");
-  if (await fs.pathExists(mediaDir)) {
+/** A route ready to write: its file, the app folder, the URL it answers, its text, and what it does. */
+interface PreparedRoute {
+  target: string;
+  appRoot: string;
+  segment: string;
+  catchAll: boolean;
+  text: string;
+  role: ((file: string) => string) | null;
+}
+
+/** One route's destination in the project and its text, with the config import made relative. */
+async function prepareRoute(
+  cwd: string,
+  projectInfo: ProjectInfo,
+  templatesDir: string,
+  route: (typeof ROUTES)[number]
+): Promise<PreparedRoute> {
+  const source = path.join(templatesDir, "base", "src", "app", route.path);
+  const text = await fs.readFile(source, "utf-8");
+  const target = path.join(cwd, projectInfo.appDir, route.path);
+  return {
+    target,
+    appRoot: path.join(cwd, projectInfo.appDir),
+    segment: route.segment,
+    catchAll: route.catchAll,
+    text: route.importsConfig
+      ? withRelativeConfigImport(text, cwd, target, route.path)
+      : text,
+    role: route.role,
+  };
+}
+
+/**
+ * The route's text with its config import pointing at the project's
+ * `nextly.config` by a path relative to where the route is written, so it
+ * resolves with or without a `src/` folder and with no import alias at all.
+ */
+function withRelativeConfigImport(
+  text: string,
+  cwd: string,
+  target: string,
+  routePath: string
+): string {
+  if (!CONFIG_IMPORT.test(text)) {
     throw new Error(
-      "Media API routes already exist at api/media. Please remove them first."
+      `The template's ${routePath} does not import the Nextly config, so no route that finds it can be written.`
     );
   }
-
-  // Generate the catch-all media route
-  const mediaRoutePath = path.join(apiDir, "media", "[[...path]]", "route.ts");
-  const configImportPath = getConfigImportPath(
-    projectInfo.appDir.startsWith("src")
+  const specifier = toPosix(
+    path.relative(path.dirname(target), path.join(cwd, "nextly.config"))
   );
-  await fs.ensureDir(path.dirname(mediaRoutePath));
-  await fs.writeFile(
-    mediaRoutePath,
-    MEDIA_CATCH_ALL_TEMPLATE(configImportPath),
-    "utf-8"
+  return text.replace(
+    CONFIG_IMPORT,
+    (_match, head: string, _old: string, tail: string) =>
+      `${head}${specifier}${tail}`
   );
+}
 
-  // Generate health check route
-  const healthRoutePath = path.join(apiDir, "health", "route.ts");
-  await fs.ensureDir(path.dirname(healthRoutePath));
-  await fs.writeFile(healthRoutePath, HEALTH_ROUTE_TEMPLATE, "utf-8");
+/**
+ * Write a route only where nothing answers its URL yet, and never through a
+ * linked folder; otherwise report what was left alone. The write itself
+ * refuses an existing file too (`wx`), so one that appears between the check
+ * and the write is not replaced either.
+ */
+async function writeIfUnanswered(
+  cwd: string,
+  route: PreparedRoute,
+  result: GeneratedFiles
+): Promise<void> {
+  const { target, appRoot, segment, catchAll, text, role } = route;
+  const link = await linkedFolder(cwd, target);
+  if (link !== null) {
+    result.skipped.push(skipped(cwd, link, target, text, role, THROUGH_A_LINK));
+    return;
+  }
+  const answering =
+    (await answeringFolder(appRoot, segment, catchAll)) ??
+    (await answeringPage(cwd, segment));
+  if (answering !== null) {
+    result.skipped.push(
+      skipped(cwd, answering.folder, target, text, role, answering.reason)
+    );
+    return;
+  }
+  await fs.ensureDir(path.dirname(target));
+  await fs.writeFile(target, text, { encoding: "utf-8", flag: "wx" });
+  result.written.push(toPosix(path.relative(cwd, target)));
+}
+
+/**
+ * The first existing folder between the project and the route's own that is
+ * a symbolic link, the app folder and `src/` included, or null. Writing
+ * through one would put the route wherever the link points, which may be
+ * outside the project.
+ */
+async function linkedFolder(
+  cwd: string,
+  target: string
+): Promise<string | null> {
+  const parts = path.relative(cwd, path.dirname(target)).split(path.sep);
+  let folder = cwd;
+  for (const part of parts) {
+    folder = path.join(folder, part);
+    const stat = await fs.lstat(folder).catch(() => null);
+    if (stat === null) return null;
+    if (stat.isSymbolicLink()) return folder;
+  }
+  return null;
+}
+
+/** A folder name Next.js leaves out of the URL: a route group or a parallel-route slot. */
+function outsideUrl(name: string): boolean {
+  return /^\(.*\)$/.test(name) || name.startsWith("@");
+}
+
+/** A folder Next.js never routes, with everything inside it. */
+function isPrivate(name: string): boolean {
+  return name.startsWith("_");
+}
+
+/** A dynamic segment: `[id]`, `[...rest]` or `[[...rest]]`. */
+function isDynamic(name: string): boolean {
+  return name.startsWith("[");
+}
+
+/**
+ * The first folder in the app that answers `segment`, or might, with why; or
+ * null when nothing does. A handler directly in a folder that maps to the
+ * URL answers it; for a catch-all, so does a handler anywhere under a dynamic
+ * child of such a folder. Whatever cannot be judged for certain (a route file
+ * in an extension the app might route, a folder that cannot be read) counts
+ * as answering, so the route is never written beside it.
+ */
+async function answeringFolder(
+  appRoot: string,
+  segment: string,
+  catchAll: boolean
+): Promise<{ folder: string; reason: string } | null> {
+  try {
+    for (const folder of await foldersAt(appRoot, segment)) {
+      const here = await handlerIn(folder);
+      if (here !== null) return { folder, reason: here };
+      if (!catchAll) continue;
+      for (const child of (await subfolders(folder)).filter(isDynamic)) {
+        const within = await handlerWithin(path.join(folder, child));
+        if (within !== null) return { folder, reason: within };
+      }
+    }
+    return null;
+  } catch (error) {
+    if (error instanceof UnreadableFolder) {
+      return { folder: error.folder, reason: UNREADABLE };
+    }
+    throw error;
+  }
+}
+
+/**
+ * The first Pages Router file or folder that answers `segment`, or might,
+ * with why; or null when none does. It fails closed as the app check does: a
+ * file named for the URL's last part in any extension, that part's folder
+ * holding anything, a dynamic route anywhere on the way, a linked folder on
+ * the way, or a folder that cannot be read all leave the route unwritten.
+ */
+async function answeringPage(
+  cwd: string,
+  segment: string
+): Promise<PageFinding | null> {
+  try {
+    for (const dir of PAGES_DIRS) {
+      const found = await pageAt(path.join(cwd, dir), segment.split("/"));
+      if (found !== null) return found;
+    }
+    return null;
+  } catch (error) {
+    if (error instanceof UnreadableFolder) {
+      return { folder: error.folder, reason: UNREADABLE };
+    }
+    throw error;
+  }
+}
+
+/** A page that answers, or might, and why. */
+type PageFinding = { folder: string; reason: string };
+
+/** What in one Pages Router folder answers the URL made of `parts`, walking it part by part. */
+async function pageAt(
+  pagesRoot: string,
+  parts: string[]
+): Promise<PageFinding | null> {
+  let folder = pagesRoot;
+  for (const [index, part] of parts.entries()) {
+    const entries = await entriesOf(folder);
+    const dynamic = dynamicPage(folder, entries);
+    if (dynamic !== null) return dynamic;
+    if (index === parts.length - 1) return lastPartPage(folder, entries, part);
+    const next = entries.find(entry => entry.name === part);
+    if (next === undefined) return null;
+    // A link is not followed, so what it leads to cannot be judged.
+    if (!next.isDirectory()) {
+      return {
+        folder: path.join(folder, next.name),
+        reason: A_PAGE_MAY_ANSWER,
+      };
+    }
+    folder = path.join(folder, next.name);
+  }
+  return null;
+}
+
+/**
+ * A dynamic page or folder in `folder`, which can match the URL's part at
+ * this depth, and a catch-all the rest of the URL with it.
+ */
+function dynamicPage(folder: string, entries: fs.Dirent[]): PageFinding | null {
+  const dynamic = entries.find(entry => isDynamic(entry.name));
+  return dynamic === undefined
+    ? null
+    : { folder: path.join(folder, dynamic.name), reason: A_PAGE_MAY_ANSWER };
+}
+
+/**
+ * The page for the URL's last part: `health.ts` in any extension, or a
+ * `health/` that holds anything (its `index` page answers the URL, and what
+ * else is there cannot be judged for certain).
+ */
+async function lastPartPage(
+  folder: string,
+  entries: fs.Dirent[],
+  part: string
+): Promise<PageFinding | null> {
+  for (const entry of entries) {
+    if (entry.name !== part && !entry.name.startsWith(`${part}.`)) continue;
+    const at = path.join(folder, entry.name);
+    if (!entry.isDirectory() || (await entriesOf(at)).length > 0) {
+      return { folder: at, reason: A_PAGE_ANSWERS };
+    }
+  }
+  return null;
+}
+
+/**
+ * Every folder in the app whose URL is `segment`: its path with route groups
+ * and slots taken out, in any position, the last included. The walk descends
+ * only while the URL so far is a prefix of the one wanted, skips private
+ * folders, and does not follow links.
+ */
+async function foldersAt(appRoot: string, segment: string): Promise<string[]> {
+  const wanted = segment.split("/");
+  const found: string[] = [];
+  const visit = async (folder: string, url: string[]): Promise<void> => {
+    const complete = url.length === wanted.length;
+    if (complete) found.push(folder);
+    for (const name of await subfolders(folder)) {
+      if (outsideUrl(name)) {
+        await visit(path.join(folder, name), url);
+      } else if (!complete && name === wanted[url.length]) {
+        await visit(path.join(folder, name), [...url, name]);
+      }
+    }
+  };
+  await visit(appRoot, []);
+  return found;
+}
+
+/**
+ * What a folder holds. A folder that does not exist holds nothing; one that
+ * exists but cannot be listed is refused, since what it holds is unknown.
+ */
+async function entriesOf(folder: string): Promise<fs.Dirent[]> {
+  try {
+    return await fs.readdir(folder, { withFileTypes: true });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw new UnreadableFolder(folder);
+  }
+}
+
+/** The routable folders directly inside one, by name, in a stable order: not private, not links. */
+async function subfolders(folder: string): Promise<string[]> {
+  const entries = await entriesOf(folder);
+  return entries
+    .filter(entry => entry.isDirectory() && !isPrivate(entry.name))
+    .map(entry => entry.name)
+    .sort();
+}
+
+/**
+ * Why a folder itself answers requests, or null when it does not: a handler
+ * Next.js routes by default, or a route file it might route.
+ */
+async function handlerIn(folder: string): Promise<string | null> {
+  // A linked route file is still a route Next.js serves.
+  const files = (await entriesOf(folder))
+    .filter(entry => entry.isFile() || entry.isSymbolicLink())
+    .map(entry => entry.name)
+    .sort();
+  if (files.some(name => HANDLER_FILE.test(name))) return LEFT_AS_IT_IS;
+  const maybe = files.find(name => MAYBE_HANDLER_FILE.test(name));
+  return maybe === undefined ? null : unsure(maybe);
+}
+
+/** Why a folder, or any routable folder inside it, answers requests, or null. */
+async function handlerWithin(folder: string): Promise<string | null> {
+  const here = await handlerIn(folder);
+  if (here !== null) return here;
+  for (const name of await subfolders(folder)) {
+    const deeper = await handlerWithin(path.join(folder, name));
+    if (deeper !== null) return deeper;
+  }
+  return null;
+}
+
+/** The report for a folder left alone: for a media route, what Nextly's route does and the text to add. */
+function skipped(
+  cwd: string,
+  left: string,
+  target: string,
+  text: string,
+  role: PreparedRoute["role"],
+  reason: string
+): GeneratedFiles["skipped"][number] {
+  const folder = toPosix(path.relative(cwd, left));
+  if (role === null) return { path: folder, why: reason };
+  const file = toPosix(path.relative(cwd, target));
+  return {
+    path: folder,
+    why: `${reason}. ${role(file)}: put the content below there, replacing or merging what handles those requests now`,
+    toAdd: text,
+  };
+}
+
+/** A path in `/` form, as an import specifier and the report both spell it. */
+function toPosix(p: string): string {
+  return p.split(path.sep).join("/");
 }
