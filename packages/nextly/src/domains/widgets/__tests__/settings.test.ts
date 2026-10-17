@@ -11,10 +11,14 @@ import { describe, expect, it } from "vitest";
 
 import { NextlyError } from "../../../errors/nextly-error";
 import {
+  type AnyWidgetSetting,
   applyWidgetSettings,
+  CONTENT_SETTING_NOT_DRAWN,
   MAX_WIDGET_SETTINGS,
   resolveWidgetSettings,
   validateWidgetSettings,
+  widgetSettingsProblem,
+  widgetSettingsProblems,
   type WidgetSetting,
 } from "../settings";
 
@@ -468,5 +472,122 @@ describe("applyWidgetSettings drives only the knobs it declares", () => {
     expect(applyWidgetSettings(base, [limit], { limit: 100000 }).limit).toBe(
       100000
     );
+  });
+});
+
+describe("the content settings: a collection, and a filter, sort or grouping over it", () => {
+  const content: AnyWidgetSetting[] = [
+    { name: "collection", type: "collection" },
+    { name: "where", type: "filter", of: "collection" },
+    {
+      name: "order",
+      type: "sort",
+      of: "collection",
+      defaultValue: "-updatedAt",
+    },
+    { name: "by", type: "groupBy", of: "collection" },
+  ];
+
+  it("passes every rule, each type with its key as its name", () => {
+    // The rule set the declaration's channel reads: all eight types, one table.
+    expect(widgetSettingsProblems(content)).toEqual([]);
+    for (const setting of content) {
+      const set =
+        setting.type === "collection" ? [setting] : [content[0], setting];
+      expect(widgetSettingsProblems(set), setting.type).toEqual([]);
+    }
+  });
+
+  it("refuses a dependency that names no Collection setting of the widget", () => {
+    expect(
+      widgetSettingsProblems([
+        { name: "collection", type: "collection" },
+        { name: "by", type: "groupBy", of: "colection" },
+        // A setting of another type is not a Collection setting either.
+        { name: "count", type: "number" },
+        { name: "order", type: "sort", of: "count" },
+      ])
+    ).toEqual([
+      'setting "by" depends on "colection", which is not a Collection setting of this widget',
+      'setting "order" depends on "count", which is not a Collection setting of this widget',
+    ]);
+  });
+
+  it("refuses a starting value its type cannot hold", () => {
+    const [blank] = widgetSettingsProblems([
+      { name: "collection", type: "collection", defaultValue: " " },
+    ]);
+    expect(blank).toContain('setting "collection" is typed "collection"');
+    const [list] = widgetSettingsProblems([
+      { name: "collection", type: "collection" },
+      {
+        name: "where",
+        type: "filter",
+        of: "collection",
+        defaultValue: ["not", "conditions"] as never,
+      },
+    ]);
+    expect(list).toContain('setting "where" is typed "filter"');
+  });
+
+  it("is refused at registration, naming its mark and what to use instead", () => {
+    // Registration publishes to the settings sheet, which draws field settings
+    // only; a declared widget, offered to no sheet yet, may hold these.
+    for (const setting of content) {
+      const set =
+        setting.type === "collection" ? [setting] : [content[0], setting];
+      const problem = widgetSettingsProblem(set);
+      expect(problem, setting.type).toContain(CONTENT_SETTING_NOT_DRAWN);
+      expect(problem).toContain(
+        "use a text, number, checkbox or select setting until the sheet supports"
+      );
+    }
+    expect(() => validateWidgetSettings(content, "core/x")).toThrow(
+      CONTENT_SETTING_NOT_DRAWN
+    );
+    // The control: the field settings beside it register as before.
+    expect(widgetSettingsProblem([limit, compact])).toBeUndefined();
+  });
+
+  it("reads a stored value its type can hold, and the starting value otherwise", () => {
+    expect(
+      resolveWidgetSettings(content, {
+        collection: "posts",
+        where: { status: { equals: "draft" } },
+        order: "title",
+        by: "status",
+      })
+    ).toEqual({
+      collection: "posts",
+      where: { status: { equals: "draft" } },
+      order: "title",
+      by: "status",
+    });
+    // A blank name and a list are not values of these types.
+    expect(
+      resolveWidgetSettings(content, {
+        collection: "posts",
+        where: ["status"],
+        order: " ",
+      })
+    ).toEqual({ collection: "posts", order: "-updatedAt" });
+  });
+
+  it("hides a dependent setting while its Collection setting has no value", () => {
+    // Nothing to sort, so the stored sort is not handed on; its starting
+    // value is, as for any setting without a usable value.
+    expect(
+      resolveWidgetSettings(content, { order: "title", by: "status" })
+    ).toEqual({
+      order: "-updatedAt",
+    });
+    // Declared AFTER its dependents, the Collection setting is still read
+    // first, so the order of the declaration does not decide what is hidden.
+    expect(
+      resolveWidgetSettings([...content].reverse(), {
+        collection: "posts",
+        order: "title",
+      })
+    ).toEqual({ collection: "posts", order: "title" });
   });
 });

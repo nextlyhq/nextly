@@ -30,7 +30,11 @@ import { getSource } from "../sources";
 
 import { buildCardQuery } from "./card-query";
 import { type DeclaredWidget, listDeclaredWidgets } from "./declared-widgets";
-import { displayOpProblem, isCoreDisplay } from "./displays";
+import {
+  displayOpProblem,
+  displaySelectProblem,
+  isCoreDisplay,
+} from "./displays";
 import {
   widgetDeclarationsRefused,
   type WidgetDeclarationFault,
@@ -119,7 +123,9 @@ function startingQueryFault(
   // holds: the types refuse the pairing, and plain JavaScript is refused here.
   const { display } = declared.declaration;
   if (isCoreDisplay(display)) {
-    const mismatch = displayOpProblem(display, query.op);
+    const mismatch =
+      displayOpProblem(display, query.op) ??
+      displaySelectProblem(display, query.select);
     if (mismatch !== undefined) return mismatch;
   }
   return contentFault(declared, query, content);

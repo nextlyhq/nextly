@@ -16,7 +16,7 @@
 import { expectTypeOf } from "vitest";
 
 import type { FieldConfig } from "../../../collections/fields/types";
-import type { WidgetSetting } from "../settings";
+import type { AnyWidgetSetting, WidgetSetting } from "../settings";
 
 // Each variant, named individually: a union asserted as a whole passes when
 // only one member matches, which is exactly the drift worth catching.
@@ -74,3 +74,23 @@ expectTypeOf<TextField>().not.toBeNever();
 expectTypeOf<NumberField>().not.toBeNever();
 expectTypeOf<CheckboxField>().not.toBeNever();
 expectTypeOf<SelectField>().not.toBeNever();
+
+/*
+ * The other side of the same promise. The content settings (`collection`,
+ * `filter`, `sort`, `groupBy`) are core's rules' too, but no field config draws
+ * a collection picker or a filter builder, so they stay out of the published
+ * `WidgetSetting` that the settings sheet hands to `FieldRenderer`. Joined to it
+ * before the sheet draws them, every assertion above would still pass while a
+ * registered widget's sheet crashed. Each is checked absent, and present in
+ * the wider type the rules read, so neither side can drift alone.
+ */
+expectTypeOf<Extract<WidgetSetting, { type: "collection" }>>().toBeNever();
+expectTypeOf<Extract<WidgetSetting, { type: "filter" }>>().toBeNever();
+expectTypeOf<Extract<WidgetSetting, { type: "sort" }>>().toBeNever();
+expectTypeOf<Extract<WidgetSetting, { type: "groupBy" }>>().toBeNever();
+expectTypeOf<
+  Extract<AnyWidgetSetting, { type: "collection" }>
+>().not.toBeNever();
+expectTypeOf<Extract<AnyWidgetSetting, { type: "filter" }>>().not.toBeNever();
+expectTypeOf<Extract<AnyWidgetSetting, { type: "sort" }>>().not.toBeNever();
+expectTypeOf<Extract<AnyWidgetSetting, { type: "groupBy" }>>().not.toBeNever();

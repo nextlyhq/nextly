@@ -22,6 +22,7 @@
 
 import { getNextlyLogger } from "../../../observability/logger";
 import type { WidgetQuery } from "../query";
+import type { WidgetWidth } from "../widths";
 
 import { buildCardQuery } from "./card-query";
 import {
@@ -52,6 +53,11 @@ export interface DeclaredWidget {
 /** The fields of a declaration this module reads, checked at startup. */
 interface DeclaredWidgetShape {
   readonly id: string;
+  /**
+   * The widths the widget allows, in core's own words, gaps included: what
+   * publishing it to the registry carries through as its allowed widths.
+   */
+  readonly widths: readonly WidgetWidth[];
   readonly settings?: Readonly<Record<string, Record<string, unknown>>>;
   readonly data: unknown;
   readonly display?: unknown;

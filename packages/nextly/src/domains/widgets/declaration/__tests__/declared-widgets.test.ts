@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NextlyError } from "../../../../errors/nextly-error";
 import * as loggerModule from "../../../../observability/logger";
 import { clearWidgets, getWidget } from "../../registry";
+import { isWidgetWidth } from "../../widths";
 import {
   cardQueryFor,
   clearDeclaredWidgets,
@@ -15,6 +16,7 @@ import {
   registerWidgetDeclarations,
   resetLegacyIdWarnings,
 } from "../declared-widgets";
+import { defineWidget } from "../define-widget";
 import { ordersByState, recentOrders, revenue } from "./plugin/widgets";
 
 const SHOP = 'plugin "@acme/shop"';
@@ -61,6 +63,27 @@ describe("registering declared widgets", () => {
       cardQueryFor("acme/recent-orders", { collection: "orders", items: 3 })
     ).toMatchObject({ source: "collection:orders", op: "list", limit: 3 });
     expect(cardQueryFor("acme/unknown", {})).toBeUndefined();
+  });
+
+  it("keeps a declared set of widths with gaps, in core's own words", () => {
+    // Two widths that are not neighbours: no smallest-to-largest range could
+    // say this, and the set is read back exactly as declared, in the
+    // vocabulary a stored placement and the admin use.
+    const gapped = defineWidget({
+      id: "acme/gapped",
+      title: "Gapped",
+      description: "Allowed at a quarter or at two thirds, nothing between",
+      category: "Test",
+      widths: ["quarter", "twoThirds"],
+      width: "quarter",
+      data: async () => ({ total: 3 }),
+      display: "metric",
+    });
+    registerWidgetDeclarations([{ owner: SHOP, declarations: [gapped] }]);
+    const widths = declaredWidget("acme/gapped")?.declaration.widths;
+    expect(widths).toEqual(["quarter", "twoThirds"]);
+    // Every one is a width the arrangement itself stores.
+    expect(widths?.every(isWidgetWidth)).toBe(true);
   });
 
   it("registers nothing when any declaration cannot work, and names every fault", () => {
