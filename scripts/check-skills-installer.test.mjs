@@ -3,13 +3,27 @@
  * needs the network, so it is watched in its own CI job; what is decided here
  * is whether a given report and set of folders pass.
  */
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { delimiter, dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
 import { describe, expect, it } from "vitest";
 
 import {
+  GUIDE,
   INSTALLER,
+  guideArguments,
   installedSkills,
   installerFindings,
+  reportOf,
 } from "./check-skills-installer.mjs";
+
+const SCRIPT = fileURLToPath(
+  new URL("./check-skills-installer.mjs", import.meta.url)
+);
+const ROOT = join(dirname(SCRIPT), "..");
 
 const installed = names => names.map(name => ({ name, status: "installed" }));
 const both = names => ({ ".agents/skills": names, ".claude/skills": names });
@@ -119,4 +133,96 @@ describe("the installer it runs", () => {
   it("is one exact release, never a range or a tag", () => {
     expect(INSTALLER).toMatch(/^skills@\d+\.\d+\.\d+$/);
   });
+});
+
+describe("reading the command from the guide", () => {
+  it("takes the arguments after the source, without the quotes the shell removes", () => {
+    const text =
+      "Install:\n\n```bash\nnpx skills add 'nextlyhq/nextly#v<version>' --skill '*' --agent claude-code codex --copy -y\n```\n";
+    expect(guideArguments(text)).toEqual([
+      "--skill",
+      "*",
+      "--agent",
+      "claude-code",
+      "codex",
+      "--copy",
+      "-y",
+    ]);
+  });
+
+  // Which command people run is unknown then, so nothing is run in its place.
+  it("is null for a guide with no such command, or two", () => {
+    const one = "npx skills add 'a#v1' --skill '*'";
+    expect(guideArguments("no command here")).toBeNull();
+    expect(guideArguments(`${one}\n${one}\n`)).toBeNull();
+  });
+
+  it("finds the command in the guide as it stands", () => {
+    expect(guideArguments(readFileSync(join(ROOT, GUIDE), "utf8"))).toContain(
+      "--skill"
+    );
+  });
+});
+
+describe("reading the installer's run", () => {
+  const report = entries => JSON.stringify(entries);
+
+  // A failed install still names the skill that failed, which is the answer.
+  it("reads the report of a run that failed", () => {
+    const run = {
+      status: 1,
+      stdout: report([{ name: "nextly-install", status: "failed" }]),
+    };
+    expect(reportOf(run)).toEqual([
+      { name: "nextly-install", status: "failed" },
+    ]);
+  });
+
+  it("gives no answer for a failed run that reports every skill installed, or prints no report", () => {
+    expect(
+      reportOf({
+        status: 1,
+        stdout: report([{ name: "nextly-install", status: "installed" }]),
+      })
+    ).toBeNull();
+    expect(reportOf({ status: 1, stdout: "" })).toBeNull();
+    expect(
+      reportOf({ status: null, error: new Error("spawn npx ENOENT") })
+    ).toBeNull();
+  });
+});
+
+describe("the command itself", () => {
+  /*
+   * Run as CI runs it, with an `npx` first on the PATH that exits 127 and
+   * prints nothing, so it must say it could not check and exit 2. A module
+   * whose entry guard never fired would exit 0 having printed nothing, which
+   * a green job could not tell from a pass. The stand-in is a shell script,
+   * which Windows does not run by that name.
+   */
+  it.skipIf(process.platform === "win32")(
+    "runs from the command line and reports an installer that gave no answer",
+    () => {
+      const bin = mkdtempSync(join(tmpdir(), "skills-installer-path-"));
+      try {
+        writeFileSync(join(bin, "npx"), "#!/bin/sh\nexit 127\n", {
+          mode: 0o755,
+        });
+        const run = spawnSync(process.execPath, [SCRIPT], {
+          cwd: ROOT,
+          env: {
+            ...process.env,
+            PATH: `${bin}${delimiter}${process.env.PATH ?? ""}`,
+          },
+          encoding: "utf8",
+        });
+        expect(run.stderr).toContain(
+          `skills installer: NOT CHECKED — ${INSTALLER} exited 127`
+        );
+        expect(run.status).toBe(2);
+      } finally {
+        rmSync(bin, { recursive: true, force: true });
+      }
+    }
+  );
 });

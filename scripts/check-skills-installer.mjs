@@ -20,6 +20,7 @@ import { spawnSync } from "node:child_process";
 import {
   existsSync,
   mkdtempSync,
+  readFileSync,
   readdirSync,
   rmSync,
   writeFileSync,
@@ -47,6 +48,28 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
  */
 export const INSTALLER = "skills@1.7.2";
 
+/** The coding-agents guide, whose install command this runs. */
+export const GUIDE = "docs/guides/coding-agents.mdx";
+
+/**
+ * The arguments the guide's install command passes after its source, read
+ * from the guide itself, so the check runs whatever the guide tells people to
+ * run: change its agents or its install mode there and this follows. Quotes
+ * the shell would remove are removed. Null when the guide holds no such
+ * command, or more than one, since then which one people run is unknown.
+ *
+ * @param {string} text the guide's text
+ * @returns {string[] | null}
+ */
+export function guideArguments(text) {
+  const commands = [...text.matchAll(/^npx skills add '[^']+' (.+)$/gm)];
+  if (commands.length !== 1) return null;
+  return commands[0][1]
+    .trim()
+    .split(/\s+/)
+    .map(arg => arg.replace(/^'(.*)'$/, "$1"));
+}
+
 /**
  * The folders the guide's command installs into, which are the same two this
  * repository keeps its own skills in: the shared `.agents/skills/` and the
@@ -59,7 +82,7 @@ const INSTALLED_HOMES = [SKILLS_HOME, CLAUDE_COPY];
  * the output is not the array of `{ name, status }` it prints, so a changed
  * format is reported as unreadable rather than read as no skills.
  *
- * @param {string} stdout
+ * @param {string | undefined} stdout absent when the installer never started
  * @returns {{ name: string, status: string }[] | null}
  */
 export function installedSkills(stdout) {
@@ -130,12 +153,13 @@ function foldersIn(dir) {
 }
 
 /**
- * Runs the guide's command in `project`, aimed at this checkout instead of the
- * repository on GitHub. INSTALL_INTERNAL_SKILLS would show the contributor
- * skills on purpose, so it is removed; telemetry is off, since this is no
- * real install.
+ * Runs the guide's command in `project`, with `args` from the guide, aimed at
+ * this checkout instead of the repository on GitHub, and with `--json` added
+ * so its report can be read. INSTALL_INTERNAL_SKILLS would show the
+ * contributor skills on purpose, so it is removed; telemetry is off, since
+ * this is no real install.
  */
-function runInstaller(base, project) {
+function runInstaller(base, project, args) {
   const env = {
     ...process.env,
     CI: "1",
@@ -145,21 +169,7 @@ function runInstaller(base, project) {
   delete env.INSTALL_INTERNAL_SKILLS;
   return spawnSync(
     "npx",
-    [
-      "--yes",
-      INSTALLER,
-      "add",
-      base,
-      "--skill",
-      "*",
-      "--agent",
-      "claude-code",
-      "codex",
-      "cursor",
-      "--copy",
-      "-y",
-      "--json",
-    ],
+    ["--yes", INSTALLER, "add", base, ...args, "--json"],
     {
       cwd: project,
       env,
@@ -170,14 +180,31 @@ function runInstaller(base, project) {
   );
 }
 
+/**
+ * What the installer reported, or null when its run gave no answer this can
+ * read. The report is read whatever the exit status, since a failed install
+ * still names the skill that failed; but a non-zero exit with every skill
+ * reported installed is a failure the report does not explain.
+ */
+export function reportOf(run) {
+  const reported = installedSkills(run.stdout);
+  const unexplained =
+    run.status !== 0 && reported?.every(entry => entry.status === "installed");
+  return reported === null || unexplained ? null : reported;
+}
+
 /** Says the installer could not be asked, and why, as exit status 2. */
-function notChecked(run) {
-  const why = run.error
-    ? `could not start (${run.error.message})`
-    : `exited ${run.status}, or printed no report this reads`;
-  console.error(`skills installer: NOT CHECKED — ${INSTALLER} ${why}`);
-  console.error((run.stderr ?? "").slice(-2000));
+function notChecked(why, stderr = "") {
+  console.error(`skills installer: NOT CHECKED — ${why}`);
+  if (stderr) console.error(stderr.slice(-2000));
   return 2;
+}
+
+/** Why a run that {@link reportOf} could not read gave no answer. */
+function unanswered(run) {
+  return run.error
+    ? `${INSTALLER} could not start (${run.error.message})`
+    : `${INSTALLER} exited ${run.status}, and printed no report this reads that explains it`;
 }
 
 /** Prints the verdict, first so a reader's `head` cannot cut it off, and returns the exit status. */
@@ -200,6 +227,12 @@ function verdict(findings, expected) {
 }
 
 function main(base = root) {
+  const args = guideArguments(readFileSync(join(base, GUIDE), "utf8"));
+  if (args === null) {
+    return notChecked(
+      `${GUIDE} does not hold exactly one \`npx skills add\` command to run`
+    );
+  }
   // The skills in `skills/`, as the repository's skill check reads them.
   const expected = [...userSkillSeparation(base).user].sort();
   const project = mkdtempSync(join(tmpdir(), "skills-installer-"));
@@ -208,9 +241,9 @@ function main(base = root) {
       join(project, "package.json"),
       '{ "name": "skills-installer-check", "private": true }\n'
     );
-    const run = runInstaller(base, project);
-    const reported = run.status === 0 ? installedSkills(run.stdout) : null;
-    if (reported === null) return notChecked(run);
+    const run = runInstaller(base, project, args);
+    const reported = reportOf(run);
+    if (reported === null) return notChecked(unanswered(run), run.stderr);
     const written = Object.fromEntries(
       INSTALLED_HOMES.map(home => [home, foldersIn(join(project, home))])
     );
