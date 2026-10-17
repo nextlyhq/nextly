@@ -87,6 +87,40 @@ const UNREADABLE =
   "cannot be read, so whether it already answers this URL is unknown; left as it is";
 
 /**
+ * A route handler file, without pages: what a dynamic segment answering an
+ * API URL holds. A catch-all PAGE beside static API routes is how a site is
+ * usually built, so pages reached through a dynamic segment are not counted.
+ */
+const ROUTE_FILE = /^route\.(tsx|ts|jsx|js)$/;
+
+/** A route handler file in an extension the app may or may not route. */
+const MAYBE_ROUTE_FILE = /^route\.[^.]+$/;
+
+const THROUGH_A_DYNAMIC_SEGMENT =
+  "already answers this URL through a dynamic segment, and a route written here would take those requests from it; left as it is";
+
+/** Which files count as answering a URL in a folder, and the reason given when one does. */
+interface HandlerKind {
+  sure: RegExp;
+  maybe: RegExp;
+  reason: string;
+}
+
+/** A route or a page, at a folder that maps to the URL. */
+const ANY_HANDLERS: HandlerKind = {
+  sure: HANDLER_FILE,
+  maybe: MAYBE_HANDLER_FILE,
+  reason: LEFT_AS_IT_IS,
+};
+
+/** A route handler only, reached through a dynamic segment. */
+const ROUTE_HANDLERS: HandlerKind = {
+  sure: ROUTE_FILE,
+  maybe: MAYBE_ROUTE_FILE,
+  reason: THROUGH_A_DYNAMIC_SEGMENT,
+};
+
+/**
  * The Pages Router folders Next.js reads. An app may use both routers, but
  * Next.js refuses to build a page and an app route at one URL, so a page
  * there leaves the route unwritten. Both places are looked in, whichever the
@@ -215,6 +249,7 @@ async function writeIfUnanswered(
   }
   const answering =
     (await answeringFolder(appRoot, segment, catchAll)) ??
+    (await answeringThroughDynamic(appRoot, segment)) ??
     (await answeringPage(cwd, segment));
   if (answering !== null) {
     result.skipped.push(
@@ -293,6 +328,76 @@ async function answeringFolder(
     }
     throw error;
   }
+}
+
+/**
+ * The first route handler that already answers `segment` through a dynamic
+ * segment, with why; or null when none does. A catch-all folder on the way
+ * (`[...rest]`, `[[...rest]]`) takes the rest of the URL, and a single dynamic
+ * one (`[name]`) takes one part of it, so a route handler in either, at the
+ * depth that reaches the URL, already serves it: a static route written there
+ * would take those requests from it. Fails closed as the app check does.
+ */
+async function answeringThroughDynamic(
+  appRoot: string,
+  segment: string
+): Promise<{ folder: string; reason: string } | null> {
+  try {
+    return await dynamicWalk(appRoot, segment.split("/"), 0, false);
+  } catch (error) {
+    if (error instanceof UnreadableFolder) {
+      return { folder: error.folder, reason: UNREADABLE };
+    }
+    throw error;
+  }
+}
+
+/** One step of {@link answeringThroughDynamic}: `folder` stands for the URL's first `depth` parts. */
+async function dynamicWalk(
+  folder: string,
+  wanted: string[],
+  depth: number,
+  viaDynamic: boolean
+): Promise<{ folder: string; reason: string } | null> {
+  if (depth === wanted.length && viaDynamic) {
+    const here = await handlerIn(folder, ROUTE_HANDLERS);
+    if (here !== null) return { folder, reason: here };
+  }
+  for (const name of await subfolders(folder)) {
+    const found = await dynamicChild(folder, name, wanted, depth, viaDynamic);
+    if (found !== null) return found;
+  }
+  return null;
+}
+
+/** What one child folder of the walk contributes: a handler it answers through, or one deeper in it. */
+async function dynamicChild(
+  folder: string,
+  name: string,
+  wanted: string[],
+  depth: number,
+  viaDynamic: boolean
+): Promise<{ folder: string; reason: string } | null> {
+  const child = path.join(folder, name);
+  if (outsideUrl(name)) return dynamicWalk(child, wanted, depth, viaDynamic);
+  if (isCatchAll(name)) {
+    // `[[...rest]]` matches no part at all, so it reaches the URL even when
+    // every part is already matched; `[...rest]` needs at least one more.
+    const reaches = depth < wanted.length || name.startsWith("[[");
+    const within = reaches ? await handlerWithin(child, ROUTE_HANDLERS) : null;
+    return within === null ? null : { folder: child, reason: within };
+  }
+  if (depth >= wanted.length) return null;
+  if (isDynamic(name)) return dynamicWalk(child, wanted, depth + 1, true);
+  if (name === wanted[depth]) {
+    return dynamicWalk(child, wanted, depth + 1, viaDynamic);
+  }
+  return null;
+}
+
+/** A catch-all segment: `[...rest]` or `[[...rest]]`. */
+function isCatchAll(name: string): boolean {
+  return name.startsWith("[...") || name.startsWith("[[...");
 }
 
 /**
@@ -427,25 +532,31 @@ async function subfolders(folder: string): Promise<string[]> {
 
 /**
  * Why a folder itself answers requests, or null when it does not: a handler
- * Next.js routes by default, or a route file it might route.
+ * of `kind` Next.js routes by default, or a file of that kind it might route.
  */
-async function handlerIn(folder: string): Promise<string | null> {
+async function handlerIn(
+  folder: string,
+  kind: HandlerKind = ANY_HANDLERS
+): Promise<string | null> {
   // A linked route file is still a route Next.js serves.
   const files = (await entriesOf(folder))
     .filter(entry => entry.isFile() || entry.isSymbolicLink())
     .map(entry => entry.name)
     .sort();
-  if (files.some(name => HANDLER_FILE.test(name))) return LEFT_AS_IT_IS;
-  const maybe = files.find(name => MAYBE_HANDLER_FILE.test(name));
+  if (files.some(name => kind.sure.test(name))) return kind.reason;
+  const maybe = files.find(name => kind.maybe.test(name));
   return maybe === undefined ? null : unsure(maybe);
 }
 
-/** Why a folder, or any routable folder inside it, answers requests, or null. */
-async function handlerWithin(folder: string): Promise<string | null> {
-  const here = await handlerIn(folder);
+/** Why a folder, or any routable folder inside it, holds a handler of `kind`, or null. */
+async function handlerWithin(
+  folder: string,
+  kind: HandlerKind = ANY_HANDLERS
+): Promise<string | null> {
+  const here = await handlerIn(folder, kind);
   if (here !== null) return here;
   for (const name of await subfolders(folder)) {
-    const deeper = await handlerWithin(path.join(folder, name));
+    const deeper = await handlerWithin(path.join(folder, name), kind);
     if (deeper !== null) return deeper;
   }
   return null;

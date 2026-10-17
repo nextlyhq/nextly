@@ -309,6 +309,89 @@ describe("where Next.js sees the same URL", () => {
   });
 });
 
+describe("a route handler that already answers the URL through a dynamic segment", () => {
+  // A catch-all route handler takes every URL below it, and a dynamic one the
+  // URL at its depth. A route written beside either would take those requests
+  // from the handler the app already has, so it is left out and reported.
+  it("writes nothing under a catch-all route handler that takes the URL", async () => {
+    mkdirSync(join(cwd, "src/app/api/[...rest]"), { recursive: true });
+    writeFileSync(
+      join(cwd, "src/app/api/[...rest]/route.ts"),
+      "export const GET = () => new Response();\n"
+    );
+
+    const result = await generateMediaRoutes(cwd, project(true), TEMPLATES);
+
+    expect(result.written).toEqual([`src/app/${ADMIN_MEDIA}`]);
+    expect(result.skipped.map(entry => entry.path)).toEqual([
+      "src/app/api/[...rest]",
+      "src/app/api/[...rest]",
+    ]);
+    for (const entry of result.skipped) {
+      expect(entry.why).toMatch(/dynamic segment/);
+    }
+  });
+
+  // Higher up, a catch-all takes several parts at once, which a single
+  // dynamic segment cannot: only the catch-all reading reaches these URLs.
+  it("writes nothing under a catch-all route handler at the app's root", async () => {
+    mkdirSync(join(cwd, "app/[...rest]"), { recursive: true });
+    writeFileSync(
+      join(cwd, "app/[...rest]/route.ts"),
+      "export const GET = () => new Response();\n"
+    );
+
+    const result = await generateMediaRoutes(cwd, project(false), TEMPLATES);
+
+    expect(result.written).toEqual([]);
+    expect(result.skipped.map(entry => entry.path)).toEqual([
+      "app/[...rest]",
+      "app/[...rest]",
+      "app/[...rest]",
+    ]);
+  });
+
+  it("writes nothing beside a dynamic route handler at the URL's last segment", async () => {
+    mkdirSync(join(cwd, "app/api/[name]"), { recursive: true });
+    writeFileSync(
+      join(cwd, "app/api/[name]/route.ts"),
+      "export const GET = () => new Response();\n"
+    );
+
+    const result = await generateMediaRoutes(cwd, project(false), TEMPLATES);
+
+    expect(result.written).toEqual([`app/${ADMIN_MEDIA}`]);
+    expect(result.skipped.map(entry => entry.path)).toEqual([
+      "app/api/[name]",
+      "app/api/[name]",
+    ]);
+  });
+
+  // The controls: pages through dynamic segments are the usual shape of a
+  // site, and static API routes beside them are how Next.js apps are built.
+  it("still writes every route beside a catch-all page and a localised page tree", async () => {
+    mkdirSync(join(cwd, "app/(frontend)/[...slug]"), { recursive: true });
+    writeFileSync(
+      join(cwd, "app/(frontend)/[...slug]/page.tsx"),
+      "export default () => null;\n"
+    );
+    mkdirSync(join(cwd, "app/[locale]/about"), { recursive: true });
+    writeFileSync(
+      join(cwd, "app/[locale]/about/page.tsx"),
+      "export default () => null;\n"
+    );
+
+    const result = await generateMediaRoutes(cwd, project(false), TEMPLATES);
+
+    expect(result.skipped).toEqual([]);
+    expect(result.written).toEqual([
+      `app/${ADMIN_MEDIA}`,
+      `app/${PUBLIC_MEDIA}`,
+      `app/${HEALTH}`,
+    ]);
+  });
+});
+
 describe("a project that also uses the Pages Router", () => {
   // Next.js serves both routers in one app, but refuses to build when a page
   // and an app route answer the same URL. So a Pages Router endpoint at a
