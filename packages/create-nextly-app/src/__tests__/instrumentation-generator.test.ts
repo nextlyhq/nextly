@@ -15,7 +15,7 @@ import ts from "typescript";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { generateInstrumentation } from "../generators/instrumentation";
-import { nextConfigReport, patchNextConfig } from "../generators/next-config";
+import { nextConfigFiles, patchNextConfig } from "../generators/next-config";
 import type { DatabaseConfig } from "../types";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -182,7 +182,8 @@ describe("generateInstrumentation", () => {
         file: "next.config.mjs",
         create: true,
       });
-      const { message } = nextConfigReport(patch);
+      // The whole file the run says to create, as it prints it to add.
+      const message = nextConfigFiles(patch).skipped[0]?.toAdd ?? "";
       const created = path.join(cwd, "next.config.mjs");
       await writeFile(created, message.slice(message.indexOf("/** @type")));
       // Loaded the way Node loads it: both keys survive, in one object.

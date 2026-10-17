@@ -344,9 +344,10 @@ async function answeringThroughDynamic(
   segment: string
 ): Promise<{ folder: string; reason: string } | null> {
   try {
-    // Nextly's own admin API catch-all is not the app's: the install wrote it
-    // just before these routes (it refuses to run where one already was),
-    // and the admin media route is meant to sit beside it.
+    // Nextly's admin API catch-all is not the app's own handler for these
+    // URLs: the install writes Nextly's there just before these routes, or,
+    // where the app already had one, says to put Nextly's in its place.
+    // Either way the admin media route is meant to sit beside it.
     const walk: DynamicWalk = {
       wanted: segment.split("/"),
       own: path.join(appRoot, ...ADMIN_API_FOLDER),
