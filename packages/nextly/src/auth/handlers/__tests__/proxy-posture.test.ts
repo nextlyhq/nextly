@@ -21,6 +21,10 @@ describe("edgeProxyWarning", () => {
     const warning = edgeProxyWarning({}, { VERCEL: "1" });
     expect(warning).toContain("Vercel");
     expect(warning).toContain("security.trustProxy: true");
+    // Trusting the edge's header is right only when nothing sits in front.
+    expect(warning).toContain(
+      "If another proxy or CDN sits in front of Vercel"
+    );
   });
 
   it("is silent on Vercel once security.trustProxy is set", () => {

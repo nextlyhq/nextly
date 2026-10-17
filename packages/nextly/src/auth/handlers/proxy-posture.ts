@@ -55,8 +55,12 @@ export function edgeProxyWarning(
     "client address is read from a request. The auth rate limit then counts " +
     "each request against the account it names, under a ceiling every such " +
     `request shares, rather than per client. ${edge.name}'s edge overwrites ` +
-    "x-forwarded-for with the client's own address, so set " +
-    "security.trustProxy: true to make client addresses resolvable here."
+    "x-forwarded-for with the address of whoever reached it: when that is " +
+    "the client, set security.trustProxy: true to make client addresses " +
+    `resolvable here. If another proxy or CDN sits in front of ${edge.name}, ` +
+    "that address is the proxy's, and every client would share one budget, " +
+    `so pass the client's address through ${edge.name}'s Trusted Proxy ` +
+    "support first, or leave the setting off."
   );
 }
 
