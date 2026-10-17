@@ -29,4 +29,4 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
-The agent guide a new project gets now offers the command that restores its Nextly skills only when `.agents/skills/nextly-install/SKILL.md` declares, as `metadata.nextly-version`, exactly the release `nextly --version` prints. A project created over a folder that kept skills from an earlier install could otherwise be told to restore skills written for a different release.
+The agent guide a new project gets now offers the command that restores its Nextly skills only when the project's nextly-install skill declares, as `metadata.nextly-version`, the release the skills at that command's tag were written for, and `nextly --version` prints that same release. A project created over a folder that kept skills from an earlier install could otherwise be told to restore skills written for a different release.
