@@ -127,6 +127,18 @@ function tokenExpired(row: { expires: Date }): boolean {
   return row.expires < new Date();
 }
 
+/** A reset or verification token row, as the consume and the lookup read it. */
+interface StoredTokenRow {
+  id: number;
+  identifier: string;
+  expires: Date;
+}
+
+/** How a reset or verification token is stored: the SHA-256 of the raw token. */
+function storedTokenHash(token: string): string {
+  return createHash("sha256").update(token).digest("hex");
+}
+
 export class AuthService extends BaseService {
   private readonly TOKEN_EXPIRY_HOURS = 24;
 
@@ -1262,8 +1274,8 @@ export class AuthService extends BaseService {
   /** The unused password-reset token stored for `token`, if any. */
   private async findUnusedResetToken(
     token: string
-  ): Promise<{ id: number; identifier: string; expires: Date } | undefined> {
-    const tokenHash = createHash("sha256").update(token).digest("hex");
+  ): Promise<StoredTokenRow | undefined> {
+    const tokenHash = storedTokenHash(token);
     try {
       return await this.db.query.passwordResetTokens.findFirst({
         where: {
@@ -1281,8 +1293,8 @@ export class AuthService extends BaseService {
   /** The email-verification token stored for `token`, if any. */
   private async findVerificationToken(
     token: string
-  ): Promise<{ id: number; identifier: string; expires: Date } | undefined> {
-    const tokenHash = createHash("sha256").update(token).digest("hex");
+  ): Promise<StoredTokenRow | undefined> {
+    const tokenHash = storedTokenHash(token);
     try {
       return await this.db.query.emailVerificationTokens.findFirst({
         where: { tokenHash: requireFilterValue(tokenHash, "tokenHash") },
