@@ -16,6 +16,7 @@
  */
 
 import { apiKeyWriteAllowed } from "../../auth/authenticated-scope";
+import { runDetachedFromRequest } from "../../auth/caller-scope";
 import { nextly } from "../../direct-api/nextly";
 import type { RBACAccessControlService } from "../../domains/auth/services/rbac-access-control-service";
 import type { JobRegistry } from "../../domains/jobs/job-registry";
@@ -274,13 +275,21 @@ export function contentReadAccess(
  * so nothing runs and the release is left scheduled: it is due, and whatever
  * runs this installation's releases sends it out on its next pass.
  */
-function drainNowWith(
+export function drainNowWith(
   adapter: RegistrationContext["adapter"],
   registry: JobRegistry | undefined
 ): (options: { maxDurationMs: number }) => Promise<unknown> {
   return async ({ maxDurationMs }) => {
     if (registry === undefined) return;
-    await runSweepNow(adapter, registry, RELEASES_DRAIN_JOB, { maxDurationMs });
+    // Outside the request's caller scope. The drain writes each document as
+    // the member's author, and the access gate reads a pinned scope when a
+    // write names none: left in place, an API key that asked for Publish now
+    // would be judged in each author's stead, refusing a document its author
+    // may publish or admitting one they may not. A scheduled pass runs on
+    // nobody's request, and Publish now's run must be judged the same way.
+    await runDetachedFromRequest(() =>
+      runSweepNow(adapter, registry, RELEASES_DRAIN_JOB, { maxDurationMs })
+    );
   };
 }
 

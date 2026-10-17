@@ -822,6 +822,32 @@ describe.each(getConfiguredTestDialects())(
       expect(permitted.status).toBe(201);
     });
 
+    it("runs Publish now's documents as their author, not as the API key that asked", async () => {
+      // The key may run releases and may not write articles; the author may
+      // publish them. The drain writes each document as its author, as it does
+      // at a scheduled time on nobody's request, so the release goes out.
+      const t = await boot(dialect);
+      const { key } = await keyHolding(t, [
+        "read-content-releases",
+        "publish-content-releases",
+      ]);
+      const author = await seedLiveAuthor(t);
+      const id = await entry(t, "articles");
+      const { releaseId } = await releaseOf(t, author, [
+        { collection: "articles", id },
+      ]);
+
+      const answer = await rest(
+        key,
+        "POST",
+        ["releases", releaseId, "publish"],
+        {}
+      );
+      expect(answer.status).toBe(200);
+      expect((answer.json.item as { state: string }).state).toBe("published");
+      expect(await storedStatus(t, id)).toBe("published");
+    });
+
     it("answers not found for the readiness of a release that is not there", async () => {
       const t = await boot(dialect);
       const { key } = await keyHolding(t, ["read-content-releases"]);

@@ -42,4 +42,5 @@ never validated. `PATCH /api/releases/:id/members/:memberId` and
 `nextly.releases.changeMemberAction()` switch a document between going live and
 coming down, checking the new action as the document's author in a scheduled
 release. The blocking reasons are now derived from the same checks. All of this
-is experimental.
+is experimental. Publish now judges each member by its author, as the scheduled
+run does.
