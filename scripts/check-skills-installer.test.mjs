@@ -13,9 +13,11 @@ import { describe, expect, it } from "vitest";
 
 import {
   GUIDE,
+  AGENT_HOMES,
   INSTALLER,
   guideArguments,
   shellWords,
+  installedHomes,
   installedSkills,
   installerFindings,
   reportOf,
@@ -160,6 +162,18 @@ describe("reading the command from the guide", () => {
     expect(shellWords("--name=a' b'c")).toEqual(["--name=a bc"]);
   });
 
+  // A shell reads these differently from the plain words this splits, or
+  // refuses them, so the check runs nothing rather than a different command.
+  it.each([
+    ['--skill "Convex Best Practices"'],
+    ["--skill \\* -y"],
+    ["--skill $NAME"],
+    ["--skill `name`"],
+    ["--skill '* --agent codex"],
+  ])("refuses %s", line => {
+    expect(shellWords(line)).toBeNull();
+  });
+
   // The check runs against the checkout, so a source people could not install
   // from must not pass for the one they can.
   it("is null for a command whose source is not this repository's release tag", () => {
@@ -249,4 +263,42 @@ describe("the command itself", () => {
       }
     }
   );
+});
+
+describe("the folders the guide's command installs into", () => {
+  it("are those of the agents it names, each once", () => {
+    expect(
+      installedHomes([
+        "--skill",
+        "*",
+        "--agent",
+        "claude-code",
+        "codex",
+        "cursor",
+        "--copy",
+        "-y",
+      ])
+    ).toEqual([".agents/skills", ".claude/skills"]);
+    expect(installedHomes(["--agent", "claude-code", "--copy"])).toEqual([
+      ".claude/skills",
+    ]);
+  });
+
+  // Each is a command this cannot hold to what it wrote, so it is not run.
+  it.each([
+    ["without --copy, which links the skills", ["--agent", "codex", "-y"]],
+    ["naming no agent", ["--skill", "*", "--copy"]],
+    [
+      "naming an agent it does not know",
+      ["--agent", "codex", "windsurf", "--copy"],
+    ],
+  ])("are unknown for a command %s", (_why, args) => {
+    expect(installedHomes(args)).toBeNull();
+  });
+
+  it("are known for every agent the guide names now", () => {
+    const args = guideArguments(readFileSync(join(ROOT, GUIDE), "utf8")) ?? [];
+    expect(installedHomes(args)).not.toBeNull();
+    expect(Object.keys(AGENT_HOMES).length).toBeGreaterThan(0);
+  });
 });

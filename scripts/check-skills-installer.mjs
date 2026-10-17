@@ -65,9 +65,10 @@ export const GUIDE_SOURCE = "nextlyhq/nextly#v<version>";
  * The arguments the guide's install command passes after its source, read
  * from the guide itself, so the check runs whatever the guide tells people to
  * run: change its agents or its install mode there and this follows. It is
- * split into words as the shell would ({@link shellWords}). Null when the guide holds no such
- * command, or more than one, since then which one people run is unknown, or
- * when its source is not {@link GUIDE_SOURCE}.
+ * split into words as the shell would ({@link shellWords}). Null when the
+ * guide holds no such command, or more than one, since then which one people
+ * run is unknown; when its source is not {@link GUIDE_SOURCE}; or when its
+ * words cannot be read.
  *
  * @param {string} text the guide's text
  * @returns {string[] | null}
@@ -79,27 +80,61 @@ export function guideArguments(text) {
 }
 
 /**
- * The words a POSIX shell makes of `line`, for the quoting the guide uses:
- * a single-quoted run is one word with its quotes removed, spaces and all,
- * and unquoted runs split on whitespace. Anything else a shell would expand
- * (double quotes, escapes, variables) is not in the guide's command and is
- * left as written.
+ * The words a POSIX shell makes of `line`, for the one kind of quoting the
+ * guide uses: a single-quoted run is one word with its quotes removed,
+ * spaces and all, and unquoted runs split on whitespace. Null for anything
+ * else a shell would read differently (a double quote, a backslash, `$`, a
+ * backtick) and for an unclosed single quote, which a shell refuses: the
+ * check then runs nothing rather than a command people do not run.
  *
  * @param {string} line
- * @returns {string[]}
+ * @returns {string[] | null}
  */
 export function shellWords(line) {
+  const quotes = line.split("'").length - 1;
+  if (/["\\$`]/.test(line) || quotes % 2 !== 0) return null;
   return [...line.matchAll(/(?:'[^']*'|[^\s'])+/g)].map(found =>
     found[0].replace(/'([^']*)'/g, "$1")
   );
 }
 
 /**
- * The folders the guide's command installs into, which are the same two this
- * repository keeps its own skills in: the shared `.agents/skills/` and the
- * Claude Code copy in `.claude/skills/`.
+ * The folder the pinned installer copies a project's skills into for each
+ * agent the guide may name, as it was measured: `.claude/skills/` for Claude
+ * Code, and the shared `.agents/skills/` for Codex and Cursor. Re-measure it
+ * when the pin moves.
  */
-const INSTALLED_HOMES = [SKILLS_HOME, CLAUDE_COPY];
+export const AGENT_HOMES = {
+  "claude-code": CLAUDE_COPY,
+  codex: SKILLS_HOME,
+  cursor: SKILLS_HOME,
+};
+
+/**
+ * The folders the guide's command installs into, derived from its own
+ * `--agent` list, or null for a command this cannot check: one without
+ * `--copy`, which links the skills rather than copying them, one naming no
+ * agents, or one naming an agent outside {@link AGENT_HOMES}.
+ *
+ * @param {string[]} args the guide's arguments
+ * @returns {string[] | null}
+ */
+export function installedHomes(args) {
+  const agents = agentsIn(args);
+  if (!args.includes("--copy") || agents.length === 0) return null;
+  if (!agents.every(agent => Object.hasOwn(AGENT_HOMES, agent))) return null;
+  return [...new Set(agents.map(agent => AGENT_HOMES[agent]))].sort();
+}
+
+/** The words after `--agent`, up to the next option. */
+function agentsIn(args) {
+  const start = args.indexOf("--agent") + 1;
+  if (start === 0) return [];
+  const end = args.findIndex(
+    (arg, index) => index >= start && arg.startsWith("-")
+  );
+  return args.slice(start, end === -1 ? args.length : end);
+}
 
 /**
  * The installer's `--json` report, read into one entry per skill. Null when
@@ -232,10 +267,10 @@ function unanswered(run) {
 }
 
 /** Prints the verdict, first so a reader's `head` cannot cut it off, and returns the exit status. */
-function verdict(findings, expected) {
+function verdict(findings, expected, homes) {
   if (findings.length === 0) {
     console.log(
-      `skills installer: OK — ${INSTALLER} installed exactly ${USER_SKILLS_HOME}/ (${expected.join(", ")}) into ${INSTALLED_HOMES.join(" and ")}`
+      `skills installer: OK — ${INSTALLER} installed exactly ${USER_SKILLS_HOME}/ (${expected.join(", ")}) into ${homes.join(" and ")}`
     );
     return 0;
   }
@@ -257,6 +292,12 @@ function main(base = root) {
       `${GUIDE} does not hold exactly one \`npx skills add '${GUIDE_SOURCE}'\` command to run`
     );
   }
+  const homes = installedHomes(args);
+  if (homes === null) {
+    return notChecked(
+      `${GUIDE}'s command installs in a way this check does not know: it knows --copy for the agents ${Object.keys(AGENT_HOMES).join(", ")}`
+    );
+  }
   // The skills in `skills/`, as the repository's skill check reads them.
   const expected = [...userSkillSeparation(base).user].sort();
   const project = mkdtempSync(join(tmpdir(), "skills-installer-"));
@@ -269,11 +310,12 @@ function main(base = root) {
     const reported = reportOf(run);
     if (reported === null) return notChecked(unanswered(run), run.stderr);
     const written = Object.fromEntries(
-      INSTALLED_HOMES.map(home => [home, foldersIn(join(project, home))])
+      homes.map(home => [home, foldersIn(join(project, home))])
     );
     return verdict(
       installerFindings({ expected, reported, written }),
-      expected
+      expected,
+      homes
     );
   } finally {
     rmSync(project, { recursive: true, force: true });
