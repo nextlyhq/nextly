@@ -113,51 +113,59 @@ describe("readBundledSkills", () => {
 
   // A skill may ship a helper script its instructions run directly, so the
   // executable bit travels with the bytes.
-  it("keeps each file's mode, an executable script's included", async () => {
-    const root = await bundle({
-      "a-skill/SKILL.md": "a",
-      "a-skill/scripts/run.sh": "#!/bin/sh\n",
-    });
-    await chmod(path.join(root, "a-skill/scripts/run.sh"), 0o755);
-    const project = path.join(dir, "app");
-    await mkdir(project);
+  // Windows has no Unix permission bits to keep: it reports 0o666 whatever
+  // was set, so these two run only where the bits exist.
+  it.skipIf(process.platform === "win32")(
+    "keeps each file's mode, an executable script's included",
+    async () => {
+      const root = await bundle({
+        "a-skill/SKILL.md": "a",
+        "a-skill/scripts/run.sh": "#!/bin/sh\n",
+      });
+      await chmod(path.join(root, "a-skill/scripts/run.sh"), 0o755);
+      const project = path.join(dir, "app");
+      await mkdir(project);
 
-    await writeAgentSkills(project, await readBundledSkills(root), "1.2.3");
+      await writeAgentSkills(project, await readBundledSkills(root), "1.2.3");
 
-    for (const home of AGENT_SKILL_HOMES) {
-      const mode = (
-        await stat(path.join(project, home, "a-skill/scripts/run.sh"))
-      ).mode;
-      expect(mode & 0o777).toBe(0o755);
+      for (const home of AGENT_SKILL_HOMES) {
+        const mode = (
+          await stat(path.join(project, home, "a-skill/scripts/run.sh"))
+        ).mode;
+        expect(mode & 0o777).toBe(0o755);
+      }
     }
-  });
+  );
 
   // A restrictive umask filters the mode a file is created with, so the
   // bits are applied again after the write.
-  it("keeps an executable script executable under a umask that strips it", async () => {
-    const root = await bundle({
-      "a-skill/SKILL.md": "a",
-      "a-skill/scripts/run.sh": "#!/bin/sh\n",
-    });
-    await chmod(path.join(root, "a-skill/scripts/run.sh"), 0o755);
-    const skills = await readBundledSkills(root);
-    const project = path.join(dir, "app");
-    await mkdir(project);
+  it.skipIf(process.platform === "win32")(
+    "keeps an executable script executable under a umask that strips it",
+    async () => {
+      const root = await bundle({
+        "a-skill/SKILL.md": "a",
+        "a-skill/scripts/run.sh": "#!/bin/sh\n",
+      });
+      await chmod(path.join(root, "a-skill/scripts/run.sh"), 0o755);
+      const skills = await readBundledSkills(root);
+      const project = path.join(dir, "app");
+      await mkdir(project);
 
-    // Strips group and other execute; owner execute stays, so folders
-    // remain usable, as any working umask leaves them.
-    const before = process.umask(0o011);
-    try {
-      await writeAgentSkills(project, skills, "1.2.3");
-    } finally {
-      process.umask(before);
+      // Strips group and other execute; owner execute stays, so folders
+      // remain usable, as any working umask leaves them.
+      const before = process.umask(0o011);
+      try {
+        await writeAgentSkills(project, skills, "1.2.3");
+      } finally {
+        process.umask(before);
+      }
+
+      const mode = (
+        await stat(path.join(project, ".agents/skills/a-skill/scripts/run.sh"))
+      ).mode;
+      expect(mode & 0o777).toBe(0o755);
     }
-
-    const mode = (
-      await stat(path.join(project, ".agents/skills/a-skill/scripts/run.sh"))
-    ).mode;
-    expect(mode & 0o777).toBe(0o755);
-  });
+  );
 
   it("refuses a folder without a SKILL.md, naming it", async () => {
     const root = await bundle({
