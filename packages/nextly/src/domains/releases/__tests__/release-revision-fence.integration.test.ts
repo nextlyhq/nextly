@@ -30,6 +30,7 @@ import { ReleasesRepository } from "../releases-repository";
 import { ReleasesService } from "../services/releases-service";
 
 import { seedLiveAuthor } from "./helpers/live-author";
+import { READY_CHECKS } from "./helpers/ready-checks";
 
 let current: TestNextly | undefined;
 
@@ -109,6 +110,7 @@ function serviceOver(repository: ReleasesRepository): ReleasesService {
     canActOnDocument: async () => false,
     // No move under test runs a release.
     runDrainNow: async () => undefined,
+    checks: READY_CHECKS,
   });
 }
 

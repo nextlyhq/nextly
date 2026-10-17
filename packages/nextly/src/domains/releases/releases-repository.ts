@@ -364,7 +364,7 @@ function groupMembersByDocument(
  */
 function releaseMovedConflict(
   releaseId: string,
-  change: "add-member" | "remove-member"
+  change: "add-member" | "remove-member" | "change-member-action"
 ): NextlyError {
   return NextlyError.conflict({
     logContext: { reason: "release-moved-since-judged", releaseId, change },
@@ -1218,14 +1218,86 @@ export class ReleasesRepository {
     }
 
     // After the commit, as for an add.
-    invalidateTransitionCacheFor(this.db);
-    if (removed !== undefined && this.revalidator !== undefined) {
-      try {
-        const intent = releaseRevalidationIntent([removed]);
-        if (intent !== null) await this.revalidator.flush([intent]);
-      } catch {
-        // Best-effort, as everywhere else this flushes.
+    await this.flushMember(removed);
+  }
+
+  /**
+   * Switch a member between going live and coming down, in one transaction
+   * with a bump of the release's revision, and only while the release is in
+   * one of `allowedStates` — the fence an add and a removal take, for the same
+   * reason: a release committed after the caller judged it refuses the switch.
+   *
+   * The member's key does not change, since it names the document and not
+   * what happens to it.
+   *
+   * @throws NextlyError CONFLICT when the release is not there or not in
+   *   `allowedStates`, and NOT_FOUND when the member has gone since it was
+   *   read; nothing is written then.
+   */
+  async changeMemberAction(
+    member: Pick<ReleaseMemberRow, "id" | "releaseId">,
+    action: ReleaseMemberAction,
+    allowedStates: readonly ReleaseState[]
+  ): Promise<ReleaseMemberRow> {
+    let fenceMissed = false;
+    let changed: ReleaseMemberRow | undefined;
+    try {
+      changed = await this.db.transaction(async tx => {
+        if (
+          (await this.advanceRevision(tx, member.releaseId, allowedStates)) ===
+          null
+        ) {
+          fenceMissed = true;
+          throw releaseMovedConflict(member.releaseId, "change-member-action");
+        }
+        const where: VersionsWhere = {
+          and: [
+            { column: "id", op: "=", value: member.id },
+            { column: "releaseId", op: "=", value: member.releaseId },
+          ],
+        };
+        await tx.updateCount(MEMBERS, { action }, where);
+        const [row] = await tx.select<ReleaseMemberRow>(MEMBERS, { where });
+        return row;
+      });
+    } catch (error) {
+      if (fenceMissed) {
+        throw releaseMovedConflict(member.releaseId, "change-member-action");
       }
+      throw error;
+    }
+    if (changed === undefined) {
+      // Removed between the caller's read and this write. The revision moved
+      // with nothing else, which at worst sends a schedule round again.
+      throw NextlyError.notFound({
+        logContext: {
+          reason: "release-member-not-found",
+          memberId: member.id,
+          releaseId: member.releaseId,
+        },
+      });
+    }
+    // After the commit: the document's cached pages were bounded by the
+    // action it had.
+    await this.flushMember(changed);
+    return changed;
+  }
+
+  /**
+   * Drop what a member's document had cached under its release, after a
+   * change to the member has committed. Best-effort and never throws, as
+   * everywhere else this flushes.
+   */
+  private async flushMember(
+    member: ReleaseMemberRow | undefined
+  ): Promise<void> {
+    invalidateTransitionCacheFor(this.db);
+    if (member === undefined || this.revalidator === undefined) return;
+    try {
+      const intent = releaseRevalidationIntent([member]);
+      if (intent !== null) await this.revalidator.flush([intent]);
+    } catch {
+      // Best-effort, as everywhere else this flushes.
     }
   }
 

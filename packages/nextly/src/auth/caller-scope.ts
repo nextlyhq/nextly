@@ -45,6 +45,17 @@ export function runWithCallerScope<T>(
 }
 
 /**
+ * Run `operation` with no caller scope pinned, whatever the request pinned.
+ *
+ * For work done on behalf of someone other than the request's caller, such as
+ * judging a release's author: inherited, the request's API key would be
+ * judged in the author's place.
+ */
+export function runOutsideCallerScope<T>(operation: () => T): T {
+  return callerScope.exit(operation);
+}
+
+/**
  * The scope pinned for the request currently running, if any.
  *
  * Returns `undefined` where nothing pinned one — a job, the CLI, a direct
