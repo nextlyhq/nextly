@@ -112,6 +112,19 @@ async function readNextConfig(
   return null;
 }
 
+/** The first of `names` the app already has beside `app/`, or null. */
+async function existingHook(
+  cwd: string,
+  dir: string,
+  names: readonly string[]
+): Promise<string | null> {
+  for (const name of names) {
+    const relative = path.posix.join(dir, name);
+    if (await fs.pathExists(path.join(cwd, relative))) return relative;
+  }
+  return null;
+}
+
 /**
  * What to add to a hook the app already has. Written as the whole function,
  * because the statements await: a `register()` that is not `async` has to
@@ -155,41 +168,32 @@ export async function generateInstrumentation(
     : "./nextly.config";
   const result: GeneratedFiles = { written: [], changed: [], skipped: [] };
   const nextConfig = await readNextConfig(cwd);
-
-  for (const name of HOOK_NAMES) {
-    const relative = path.posix.join(dir, name);
-    if (await fs.pathExists(path.join(cwd, relative))) {
-      result.skipped.push({
-        path: relative,
-        why: "the app already has a server-start hook, so it was left as it is",
-        toAdd: linesToAdd(configImport),
-      });
-      return result;
-    }
-  }
-
-  const relative = path.posix.join(dir, "instrumentation.ts");
   // Read from the config the app exports, as the Next config step reads it:
   // a commented-out or nested `pageExtensions` sets nothing.
   const extensions = nextConfig
     ? configStringList(nextConfig.text, nextConfig.name, "pageExtensions")
     : "absent";
+
+  // Next.js also reads the hook as `instrumentation.<extension>` for any of
+  // the app's page extensions. A hook under any of them belongs to the app, as
+  // one under a default name does: Nextly's start is added to it, never
+  // offered as a file to write beside or over it.
+  const configured =
+    extensions === "absent" || extensions === null
+      ? []
+      : extensions.map(extension => `instrumentation.${extension}`);
+  const existing = await existingHook(cwd, dir, [...HOOK_NAMES, ...configured]);
+  if (existing) {
+    result.skipped.push({
+      path: existing,
+      why: "the app already has a server-start hook, so it was left as it is",
+      toAdd: linesToAdd(configImport),
+    });
+    return result;
+  }
+
+  const relative = path.posix.join(dir, "instrumentation.ts");
   if (extensions !== "absent") {
-    // Next.js reads the hook as `instrumentation.<extension>` for any of the
-    // app's page extensions. A hook under any of them belongs to the app, as
-    // one under a default name does: Nextly's start is added to it, never
-    // offered as a file to write beside or over it.
-    for (const configured of extensions ?? []) {
-      const existing = path.posix.join(dir, `instrumentation.${configured}`);
-      if (await fs.pathExists(path.join(cwd, existing))) {
-        result.skipped.push({
-          path: existing,
-          why: "the app already has a server-start hook, so it was left as it is",
-          toAdd: linesToAdd(configImport),
-        });
-        return result;
-      }
-    }
     // A list this cannot read, or one with no extension a hook can be
     // written in, is named as such rather than guessed.
     const extension = extensions === null ? null : hookExtension(extensions);
