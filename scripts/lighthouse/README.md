@@ -27,6 +27,8 @@ export NEXTLY_SECRET="lighthouse-nightly-secret-not-a-real-deployment-key"
 export NEXT_PUBLIC_APP_URL="http://localhost:3111"
 
 pnpm --filter playground exec tsx scripts/seed.ts
+# A production boot refuses a configured plugin no install has recorded.
+pnpm --filter playground exec tsx scripts/install-plugins.ts
 pnpm --filter playground exec next build
 PORT=3111 pnpm --filter playground exec next start &
 
