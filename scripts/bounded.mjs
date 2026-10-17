@@ -873,6 +873,12 @@ function boundedEnv(limits) {
     ...process.env,
     // turbo's own variable, so it reaches every nested invocation.
     TURBO_CONCURRENCY: String(limits.concurrency),
+    // The worker limit, under the name that overrides it, for every tool with
+    // a worker pool of its own. Next.js collecting page data otherwise starts
+    // one worker per CPU inside a task turbo counts as one, which is what took
+    // a bounded run past the machine's memory. turbo passes it on to tasks
+    // (`globalPassThroughEnv`), and the playground's build reads it.
+    NEXTLY_LOCAL_MAX_WORKERS: String(limits.maxWorkers),
     // Streamed output rather than the interactive UI. The run is in a session
     // of its own, without the terminal as its controlling one, and the UI puts
     // that terminal into raw mode — a run stopped by the watch would leave it

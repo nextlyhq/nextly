@@ -4,6 +4,8 @@ import { fileURLToPath } from "url";
 import fs from "fs-extra";
 
 import { buildNextConfigTemplate } from "../generators/next-config";
+import { EXACT_VERSION } from "../lib/exact-version";
+import { packageVersion } from "../lib/package-version";
 import { getAvailableTemplateNames } from "../lib/templates";
 import type {
   DatabaseConfig,
@@ -509,6 +511,10 @@ function guidePlaceholders(
   return {
     "{{runCommand}}": scriptRunner(packageManager),
     "{{execCommand}}": binaryRunner(packageManager),
+    // The release whose tag publishes the skills this CLI bundles, for the
+    // guide's command that adds or restores them. Not the release the skills
+    // were checked against, whose tag may carry no user skills at all.
+    "{{skillsTag}}": packageVersion(),
   };
 }
 
@@ -1315,9 +1321,6 @@ export async function generatePackageJson(
  * from the registry: `^1.2.3` or `^0.0.2-alpha.66`.
  */
 const CARET_VERSION = /^\^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
-
-/** One complete version, as a package.json `version` holds it: `0.0.2-alpha.66`. */
-const EXACT_VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
 
 /**
  * This CLI's version, and whether the scaffold pins to it. See

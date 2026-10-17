@@ -166,3 +166,96 @@ describe("inviteTokenOwner", () => {
     expect(await auth.inviteTokenOwner(expired)).toBeNull();
   });
 });
+
+/**
+ * The limiter asks a lookup which account a token belongs to; the handler
+ * then consumes the token. The two must agree on which STORED tokens are
+ * live: a lookup that named an owner for a token the consume refuses as
+ * unknown, used or expired would charge an account for nothing, and one that
+ * named nobody for a token the consume accepts would count a real completion
+ * against the shared account-less budget. For every kind and every stored
+ * state, the lookup names an owner exactly when the consume succeeds.
+ *
+ * Deliberately not covered: a live token whose ACCOUNT the consume then
+ * refuses (deactivated, say). The lookup still names that account, which is
+ * the limiter's intent: the request counts against the account it targets,
+ * whatever the consume decides about the account afterwards.
+ */
+describe("the owner lookup and the consume agree on which stored tokens are live", () => {
+  type Kind = {
+    name: string;
+    account: { emailVerified: Date | null; isActive: boolean };
+    mint: (auth: AuthService) => Promise<string>;
+    owner: (auth: AuthService, token: string) => Promise<string | null>;
+    consume: (auth: AuthService, token: string) => Promise<unknown>;
+    expire: (db: TestDb) => Promise<unknown>;
+  };
+  const kinds: Kind[] = [
+    {
+      name: "reset",
+      account: { emailVerified: new Date(), isActive: true },
+      mint: async auth =>
+        minted(
+          await auth.generatePasswordResetToken(EMAIL, { disableEmail: true })
+        ),
+      owner: (auth, token) => auth.resetTokenOwner(token),
+      consume: (auth, token) => auth.resetPasswordWithToken(token, STRONG),
+      expire: db =>
+        db
+          .update(passwordResetTokens)
+          .set({ expires: PAST })
+          .where(eq(passwordResetTokens.identifier, EMAIL)),
+    },
+    {
+      name: "verification",
+      account: { emailVerified: null, isActive: true },
+      mint: async auth =>
+        minted(
+          await auth.generateEmailVerificationToken(EMAIL, {
+            disableEmail: true,
+          })
+        ),
+      owner: (auth, token) => auth.verificationTokenOwner(token),
+      consume: (auth, token) => auth.verifyEmail(token),
+      expire: db =>
+        db
+          .update(emailVerificationTokens)
+          .set({ expires: PAST })
+          .where(eq(emailVerificationTokens.identifier, EMAIL)),
+    },
+    {
+      name: "invite",
+      account: { emailVerified: null, isActive: false },
+      mint: async auth => (await auth.generateInviteToken(USER_ID)).token,
+      owner: (auth, token) => auth.inviteTokenOwner(token),
+      consume: (auth, token) => auth.acceptInvite(token, STRONG),
+      expire: db =>
+        db
+          .update(userInviteTokens)
+          .set({ expires: PAST })
+          .where(eq(userInviteTokens.userId, USER_ID)),
+    },
+  ];
+  const states = ["live", "used", "expired", "unknown"] as const;
+
+  for (const kind of kinds) {
+    for (const state of states) {
+      it(`${kind.name} token, ${state}`, async () => {
+        const { auth, db } = await setup(kind.account);
+        let token = "f".repeat(64);
+        if (state !== "unknown") token = await kind.mint(auth);
+        if (state === "used") await kind.consume(auth, token);
+        if (state === "expired") await kind.expire(db);
+
+        const owner = await kind.owner(auth, token);
+        const consumed = await kind.consume(auth, token).then(
+          () => true,
+          () => false
+        );
+
+        expect(owner !== null).toBe(consumed);
+        expect(consumed).toBe(state === "live");
+      });
+    }
+  }
+});

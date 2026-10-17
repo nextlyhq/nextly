@@ -19,6 +19,12 @@ export const OPTIONS = handlers.OPTIONS;
 `;
 
 /**
+ * The folder, under the app folder, that holds Nextly's admin API catch-all.
+ * The admin media route is written beside it, as a new project has it.
+ */
+export const ADMIN_API_FOLDER = ["admin", "api", "[[...params]]"] as const;
+
+/**
  * Generate the API route handler for Nextly.
  * Creates the catch-all route at /admin/api/[[...params]]/route.ts
  */
@@ -31,7 +37,7 @@ export async function generateRoutes(
   // its content is given to add by hand.
   await writeNew(
     cwd,
-    `${projectInfo.appDir}/admin/api/[[...params]]/route.ts`,
+    `${projectInfo.appDir}/${ADMIN_API_FOLDER.join("/")}/route.ts`,
     API_ROUTE_TEMPLATE,
     files,
     {
