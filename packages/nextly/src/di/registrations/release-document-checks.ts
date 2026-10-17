@@ -66,14 +66,18 @@ export function releaseDocumentChecks(
             collectionName: ref.scopeSlug,
             entryId: ref.entryId,
           }),
-    publishProblems: async (ref, user) =>
-      ref.scopeKind === "single"
-        ? singleEntries().releasePublishIssues({ slug: ref.scopeSlug, user })
-        : collections().releasePublishIssues({
-            collectionName: ref.scopeSlug,
-            entryId: ref.entryId,
-            user,
-          }),
+    // Detached from the request, for the reason `mayPerform` is: the field
+    // rules a publish meets are evaluated, read-only, for the NAMED author.
+    publishProblems: (ref, user) =>
+      runDetachedFromRequest(() =>
+        ref.scopeKind === "single"
+          ? singleEntries().releasePublishIssues({ slug: ref.scopeSlug, user })
+          : collections().releasePublishIssues({
+              collectionName: ref.scopeSlug,
+              entryId: ref.entryId,
+              user,
+            })
+      ),
   };
 }
 

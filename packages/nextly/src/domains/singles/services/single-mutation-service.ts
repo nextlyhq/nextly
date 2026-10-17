@@ -408,10 +408,12 @@ export class SingleMutationService extends BaseService {
    * same promotion gate the write judges with. Its pending change when it has
    * one; otherwise the stored document, when it is not live already.
    *
-   * Field rules are not applied: the write judges those against the row it
-   * locks. Nor are the write's hooks run, since they may reach outside this
-   * process. A Single with no stored document, or no draft/published
-   * lifecycle, answers with nothing to report.
+   * Judged for `user` as the write judges its caller: field rules applied
+   * with their grants, so a pending change to a field they may no longer
+   * write is reported as the write refuses it, by the gate's own refusal
+   * (each field at fault, coded `FORBIDDEN`). The write's hooks are not run,
+   * since they may reach outside this process. A Single with no stored
+   * document, or no draft/published lifecycle, answers with nothing to report.
    *
    * @experimental
    */
@@ -456,6 +458,10 @@ export class SingleMutationService extends BaseService {
       meta.versions?.drafts?.enabled === true
         ? await resolveComponentSchemas(fieldConfigs)
         : null;
+    // The caller's grants, resolved before the transaction opens, as the
+    // write resolves them: a pooled read issued while the transaction holds a
+    // connection waits for that connection on a small pool.
+    const grants = await resolvedCallerGrants(params.user, undefined);
     // Read in a transaction of its own, which writes nothing: the gate reads
     // the live document through one.
     return this.adapter.transaction(async tx => {
@@ -493,38 +499,41 @@ export class SingleMutationService extends BaseService {
       const localizedFieldNames = new Set(
         (companion?.localizedFields ?? []).map(f => f.name)
       );
-      return promotionIssues(drafts, {
-        ...promoteCallerFor({
-          tx,
-          slug: params.slug,
-          defaultLocale: this.localization?.defaultLocale ?? null,
-          fields: fieldConfigs,
-          // Validation only; see above.
-          options: { user: params.user, overrideAccess: true },
-        }),
-        entryId: row.id,
-        toLogical: doc =>
-          this.queryService.deserializeJsonFields(
-            { id: row.id, updatedAt: row.updatedAt, ...doc },
-            meta.fields
-          ),
-        liveStoredFor: gateLocale =>
-          liveStoredDocument({
+      return forbiddenAsIssues(() =>
+        promotionIssues(drafts, {
+          ...promoteCallerFor({
             tx,
-            row,
-            locale: gateLocale,
-            companion,
-            companionExists,
-            fieldGroupDataService: this.fieldGroupDataService,
-            parentTable: meta.tableName,
-            fieldConfigs,
             slug: params.slug,
+            defaultLocale: this.localization?.defaultLocale ?? null,
+            fields: fieldConfigs,
+            // The caller the release's write has: the member's author, checked.
+            options: { user: params.user, overrideAccess: false },
+            grants,
           }),
-        status: "published",
-        localizedFieldNames,
-        // Every language goes live, so none falls back to another.
-        enforceLocalizedRequired: true,
-      });
+          entryId: row.id,
+          toLogical: doc =>
+            this.queryService.deserializeJsonFields(
+              { id: row.id, updatedAt: row.updatedAt, ...doc },
+              meta.fields
+            ),
+          liveStoredFor: gateLocale =>
+            liveStoredDocument({
+              tx,
+              row,
+              locale: gateLocale,
+              companion,
+              companionExists,
+              fieldGroupDataService: this.fieldGroupDataService,
+              parentTable: meta.tableName,
+              fieldConfigs,
+              slug: params.slug,
+            }),
+          status: "published",
+          localizedFieldNames,
+          // Every language goes live, so none falls back to another.
+          enforceLocalizedRequired: true,
+        })
+      );
     });
   }
 
@@ -3272,5 +3281,32 @@ export class SingleMutationService extends BaseService {
       locale,
       cachedCompanionReadiness(this.adapter, companion.companionTableName)
     );
+  }
+}
+
+/**
+ * The issues a promotion is refused with, whether the gate returns them or
+ * throws them.
+ *
+ * The gate returns what the schema refuses and throws when a field rule
+ * forbids the change, since a publish must not go on past a forbidden field.
+ * A readiness check reports both, so the thrown refusal's own issues are read
+ * back rather than restated.
+ */
+async function forbiddenAsIssues(
+  judge: () => Promise<ValidationIssue[]>
+): Promise<ValidationIssue[]> {
+  try {
+    return await judge();
+  } catch (error) {
+    const data = NextlyError.is(error) ? error.publicData : undefined;
+    if (
+      NextlyError.isCode(error, "VALIDATION_ERROR") &&
+      data !== undefined &&
+      "errors" in data
+    ) {
+      return data.errors;
+    }
+    throw error;
   }
 }

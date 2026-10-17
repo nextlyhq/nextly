@@ -10,7 +10,8 @@
  *   core.permission      hard  the author may no longer perform the action
  *   core.exists          hard  the document is gone
  *   core.held-drafts     hard  another language holds unreleased work
- *   core.required-fields hard  a document going live would fail validation
+ *   core.required-fields hard  a document going live would fail its publish's
+ *                              validation or field rules
  *   core.other-release   soft  another scheduled release holds the document
  *
  * `core.author` and `core.permission` are two sources rather than one so the
@@ -199,46 +200,51 @@ export const CORE_HELD_DRAFTS_SOURCE = defineReleaseCheckSource({
   },
 });
 
-/** The validation code a missing required value is reported with. */
-const REQUIRED = "REQUIRED";
+/** What a refused publish's issues are reported as, in this order. */
+const FIELD_FINDINGS = [
+  "REQUIRED_FIELD_MISSING",
+  "FIELD_NOT_PERMITTED",
+  "FIELD_INVALID",
+] as const;
+type FieldFinding = (typeof FIELD_FINDINGS)[number];
 
 /**
- * Whether each document going live would pass the validation its publish
- * meets. A document coming down is not judged here.
+ * The finding one refused field is reported under: a missing required value,
+ * which an author fixes by filling the field in; a field the author may no
+ * longer write, which a pending change edits; or any other failure.
+ */
+function fieldFindingFor(issueCode: string): FieldFinding {
+  if (issueCode === "REQUIRED") return "REQUIRED_FIELD_MISSING";
+  if (issueCode === "FORBIDDEN") return "FIELD_NOT_PERMITTED";
+  return "FIELD_INVALID";
+}
+
+/**
+ * Whether each document going live would pass what its publish judges: the
+ * validation, and the field rules a pending change meets. A document coming
+ * down is not judged here.
  *
- * Judged as the author, since a field's rule may read who is writing. A
- * missing required value is told apart from any other failure, because it is
- * the one an author fixes by filling a field in.
+ * Judged as the author, the person the publish is made as.
  */
 export const CORE_REQUIRED_FIELDS_SOURCE = defineReleaseCheckSource({
   key: "core.required-fields",
   severity: "hard",
-  codes: ["REQUIRED_FIELD_MISSING", "FIELD_INVALID"],
+  codes: FIELD_FINDINGS,
   async check(batch, ctx) {
     const actingAs = identities(ctx);
-    const findings: ReleaseCheckFinding<
-      "REQUIRED_FIELD_MISSING" | "FIELD_INVALID"
-    >[] = [];
+    const findings: ReleaseCheckFinding<FieldFinding>[] = [];
     for (const member of runnable(batch)) {
       if (member.action !== "publish") continue;
       const user = await actingAs(member.createdBy);
       if (user === null) continue;
       const issues = await ctx.reads.publishProblems(member, user);
-      const missing = issues.filter(issue => issue.code === REQUIRED);
-      const invalid = issues.filter(issue => issue.code !== REQUIRED);
-      if (missing.length > 0) {
-        findings.push({
-          memberId: member.id,
-          code: "REQUIRED_FIELD_MISSING",
-          detail: { fields: missing.map(issue => issue.path) },
-        });
-      }
-      if (invalid.length > 0) {
-        findings.push({
-          memberId: member.id,
-          code: "FIELD_INVALID",
-          detail: { fields: invalid.map(issue => issue.path) },
-        });
+      for (const code of FIELD_FINDINGS) {
+        const fields = issues
+          .filter(issue => fieldFindingFor(issue.code) === code)
+          .map(issue => issue.path);
+        if (fields.length > 0) {
+          findings.push({ memberId: member.id, code, detail: { fields } });
+        }
       }
     }
     return findings;

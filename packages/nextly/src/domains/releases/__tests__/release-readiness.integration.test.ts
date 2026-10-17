@@ -76,6 +76,27 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
       }),
     ],
     singles: [
+      // A field only the editor-in-chief may write.
+      defineSingle({
+        slug: "flags",
+        status: true,
+        versions: { drafts: true },
+        access: {
+          read: () => true,
+          update: () => true,
+          publish: () => true,
+          unpublish: () => true,
+        },
+        fields: [
+          text({ name: "label" }),
+          text({
+            name: "guarded",
+            access: {
+              update: ({ req }) => req.user?.email === "chief@example.com",
+            },
+          }),
+        ],
+      }),
       defineSingle({
         slug: "banner",
         status: true,
@@ -315,6 +336,51 @@ describe.each(getConfiguredTestDialects())(
           detail: { fields: ["headline"] },
         }),
       ]);
+    });
+
+    it("reports a pending change to a field the author may not write, and refuses to schedule", async () => {
+      const t = await boot(dialect);
+      const author = await seedPlainAuthor(t);
+      await t.nextly.updateSingle({
+        slug: "flags" as never,
+        data: { label: "Live", status: "published" } as never,
+      });
+      // A trusted edit holds a change to the guarded field as pending work.
+      await t.nextly.updateSingle({
+        slug: "flags" as never,
+        data: { guarded: "secret" } as never,
+      });
+      const row = await t.adapter.selectOne<{ id: string }>("single_flags", {});
+      if (row === null || row === undefined) throw new Error("no flags row");
+      const release = await t.nextly.releases.create({ title: "Flags" });
+      const member = await t.nextly.releases.addMember({
+        releaseId: release.id,
+        scopeKind: "single",
+        scopeSlug: "flags",
+        entryId: row.id,
+        locale: null,
+        action: "publish",
+        userId: author,
+      });
+
+      expect(
+        (await t.nextly.releases.readiness({ releaseId: release.id })).hard
+      ).toEqual([
+        expect.objectContaining({
+          memberId: member.id,
+          code: "FIELD_NOT_PERMITTED",
+          detail: { fields: ["guarded"] },
+        }),
+      ]);
+      expect(
+        await problemsOf(
+          t.nextly.releases.schedule({
+            id: release.id,
+            at: LATER,
+            timezone: "UTC",
+          })
+        )
+      ).toEqual([{ memberId: member.id, code: "FIELD_NOT_PERMITTED" }]);
     });
 
     it("checks every document of a large release, and refuses it for a problem in the last one", async () => {

@@ -196,6 +196,23 @@ describe("core.required-fields", () => {
     ]);
   });
 
+  it("reports a field the author may no longer write apart from a failing one", async () => {
+    const found = await run(CORE_REQUIRED_FIELDS_SOURCE, [member("a")], {
+      publishProblems: async () => [
+        { path: "guarded", code: "FORBIDDEN", message: "Not yours." },
+        { path: "slug", code: "PATTERN", message: "Slug is malformed." },
+      ],
+    });
+    expect(found).toEqual([
+      {
+        memberId: "a",
+        code: "FIELD_NOT_PERMITTED",
+        detail: { fields: ["guarded"] },
+      },
+      { memberId: "a", code: "FIELD_INVALID", detail: { fields: ["slug"] } },
+    ]);
+  });
+
   it("never judges a document coming down, so invalid content can be taken down", async () => {
     const publishProblems = vi.fn(async () => [
       { path: "title", code: "REQUIRED", message: "Title is required." },

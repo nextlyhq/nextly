@@ -299,6 +299,7 @@ that publish.
 | `DOCUMENT_GONE`          | no longer exists                                                                                                                       |
 | `DRAFT_HELD_IN_LOCALE`   | has unreleased work saved in another language (`detail.locales` names them), which a release moving every language will not decide for |
 | `REQUIRED_FIELD_MISSING` | is going live, and a required field is empty (`detail.fields` names them)                                                              |
+| `FIELD_NOT_PERMITTED`    | is going live with a pending change to a field its author may no longer write (`detail.fields` names them)                             |
 | `FIELD_INVALID`          | is going live, and another of its fields fails validation                                                                              |
 
 A document **coming down** is never validated, so invalid content can always be taken down.
