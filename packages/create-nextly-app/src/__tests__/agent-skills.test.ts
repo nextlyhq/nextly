@@ -23,6 +23,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   AGENT_SKILL_HOMES,
   type BundledSkill,
+  bundledSkillsVersionOrNull,
   projectNextlyVersion,
   readBundledSkills,
   skillsVersionMismatch,
@@ -59,6 +60,29 @@ async function bundle(files: Record<string, string>): Promise<string> {
   }
   return root;
 }
+
+describe("bundledSkillsVersionOrNull", () => {
+  const declaring = (version: string): string =>
+    `---\nname: x\nmetadata:\n  nextly-version: ${version}\n---\n`;
+
+  it("is the one release every bundled skill declares", async () => {
+    const root = await bundle({
+      "a-skill/SKILL.md": declaring("0.0.2-alpha.70"),
+      "b-skill/SKILL.md": declaring("0.0.2-alpha.70"),
+    });
+    expect(bundledSkillsVersionOrNull(root)).toBe("0.0.2-alpha.70");
+  });
+
+  // The guide then offers no restore, rather than one tied to a guess.
+  it("is null for skills that disagree, and for a missing bundle", async () => {
+    const root = await bundle({
+      "a-skill/SKILL.md": declaring("0.0.2-alpha.70"),
+      "b-skill/SKILL.md": declaring("0.0.2-alpha.71"),
+    });
+    expect(bundledSkillsVersionOrNull(root)).toBeNull();
+    expect(bundledSkillsVersionOrNull(path.join(dir, "absent"))).toBeNull();
+  });
+});
 
 describe("readBundledSkills", () => {
   it("reads every skill folder with all its files, nested ones too", async () => {
