@@ -150,6 +150,24 @@ class InterleavedRemoval extends ReleasesRepository {
   }
 }
 
+/** Runs `before` once, immediately before the action switch's own write. */
+class InterleavedSwitch extends ReleasesRepository {
+  ran = 0;
+  constructor(
+    db: TestNextly["adapter"],
+    private readonly before: () => Promise<unknown>
+  ) {
+    super(db);
+  }
+  override async changeMemberAction(
+    ...args: Parameters<ReleasesRepository["changeMemberAction"]>
+  ): ReturnType<ReleasesRepository["changeMemberAction"]> {
+    this.ran += 1;
+    await this.before();
+    return super.changeMemberAction(...args);
+  }
+}
+
 async function readRelease(repo: ReleasesRepository, id: string) {
   const [row] = await repo.findReleases({ ids: [id] });
   if (row === undefined) throw new Error("the release is gone");
@@ -202,6 +220,71 @@ describe.each(getConfiguredTestDialects())(
       const members = await repo.listMembers(releaseId);
       expect(members.map(member => member.id)).toEqual([memberId]);
       expect((await readRelease(repo, releaseId)).state).toBe("scheduled");
+    });
+
+    it("refuses an action switch judged against a draft once the release is scheduled", async () => {
+      const t = await boot(dialect);
+      const { releaseId, memberId } = await singleWithOneMember(t);
+      // The schedule commits AFTER the service has judged the release a draft
+      // — so it neither asked for the publish authority nor checked the new
+      // action — and BEFORE the switch writes.
+      const repo = new InterleavedSwitch(t.adapter, () =>
+        t.nextly.releases.schedule({
+          id: releaseId,
+          at: FUTURE,
+          timezone: "UTC",
+        })
+      );
+
+      await expect(
+        serviceOver(repo).changeMemberAction(
+          memberId,
+          "unpublish",
+          TRUSTED,
+          releaseId
+        )
+      ).rejects.toMatchObject({ code: "CONFLICT" });
+
+      expect(repo.ran).toBe(1);
+      expect(
+        (await repo.listMembers(releaseId)).map(member => member.action)
+      ).toEqual(["publish"]);
+      expect((await readRelease(repo, releaseId)).state).toBe("scheduled");
+    });
+
+    it("bumps the revision when an action is switched, so a schedule judged before it misses", async () => {
+      const t = await boot(dialect);
+      const repo = new ReleasesRepository(t.adapter);
+      const release = await repo.createRelease({ title: "Spring" });
+      const member = await repo.addMember(
+        {
+          releaseId: release.id,
+          scopeKind: "collection",
+          scopeSlug: "posts",
+          entryId: await post(t, "one"),
+          locale: null,
+          action: "publish",
+        },
+        RELEASE_ASSEMBLABLE_FROM
+      );
+      expect((await readRelease(repo, release.id)).revision).toBe(1);
+
+      const switched = await repo.changeMemberAction(
+        member,
+        "unpublish",
+        RELEASE_ASSEMBLABLE_FROM
+      );
+      expect(switched).toMatchObject({ id: member.id, action: "unpublish" });
+      expect((await readRelease(repo, release.id)).revision).toBe(2);
+      expect(
+        await repo.scheduleRelease(
+          release.id,
+          FUTURE,
+          "UTC",
+          RELEASE_SCHEDULABLE_FROM,
+          1
+        )
+      ).toBe(false);
     });
 
     it("refuses removing the member of a scheduled single release, and keeps it", async () => {

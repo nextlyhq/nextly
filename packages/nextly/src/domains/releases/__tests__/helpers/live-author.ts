@@ -41,6 +41,20 @@ export async function seedLiveAuthor(t: TestNextly): Promise<string> {
 }
 
 /**
+ * Create an active user who is NOT the instance's super admin, and return its
+ * id. The first user an instance creates is its super admin, whom every access
+ * rule admits; an author whose access has to be judged must be somebody else,
+ * so one is created first when none exists yet.
+ */
+export async function seedPlainAuthor(t: TestNextly): Promise<string> {
+  const users = (await t.nextly.users.find({ limit: 1 })) as unknown as {
+    items?: unknown[];
+  };
+  if ((users.items ?? []).length === 0) await seedLiveAuthor(t);
+  return seedLiveAuthor(t);
+}
+
+/**
  * Set a user's active flag directly.
  *
  * Written to the column rather than through a service, so the fixture states the
