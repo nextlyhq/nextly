@@ -262,12 +262,15 @@ describe("runWebhookDrain (real SQLite)", () => {
     // The gate was consulted exactly once (after the queue quiesced); the
     // declined claim leaves nothing pruned this call.
     expect(claims).toBe(1);
+    // Every pass the drain runs reports its count, the notices sweep's
+    // included, so the whole shape is asserted rather than a subset of it.
     expect(result.pruned).toEqual({
       events: 0,
       deliveries: 0,
       activity: 0,
       auth: 0,
       emailDeliveries: 0,
+      notices: 0,
       oneTimeSecrets: 0,
     });
   });
@@ -290,6 +293,7 @@ describe("runWebhookDrain (real SQLite)", () => {
       activity: 0,
       auth: 0,
       emailDeliveries: 0,
+      notices: 0,
       oneTimeSecrets: 0,
     });
   });
