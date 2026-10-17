@@ -22,12 +22,14 @@
  *   missing component (a page, a view, a field-type editor) is logged, since
  *   those draw empty today and refusing them is the plugin platform's call.
  *
- * Server code only: it writes files and boots Nextly.
+ * Server code only: it writes files and boots Nextly. Not marked with the
+ * `server-only` package, which throws in plain Node and so would break every
+ * test and tool that loads `nextly/runtime`: the boot it imports carries the
+ * browser guard (`services/lib/permissions.ts`), and the client-bundle
+ * boundary keeps it out of every client-safe entry.
  *
  * @module domains/widgets/declaration/component-map-check
  */
-
-import "server-only";
 
 import { dirname } from "node:path";
 

@@ -25,7 +25,6 @@ import { resolve } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("server-only", () => ({}));
 vi.mock("../../../../init", () => ({ getNextly: vi.fn(async () => ({})) }));
 const bundleAndRequire = vi.hoisted(() => vi.fn());
 vi.mock("../../../../cli/utils/config-bundler", () => ({ bundleAndRequire }));
