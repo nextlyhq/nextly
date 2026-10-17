@@ -213,6 +213,16 @@ export class SingleEntryService extends BaseService {
   }
 
   /**
+   * The languages whose unreleased work a release's document-wide write of
+   * this Single would be refused over. See the mutation service.
+   *
+   * @experimental
+   */
+  async releaseHeldDraftLocales(params: { slug: string }): Promise<string[]> {
+    return this.mutationService.releaseHeldDraftLocales(params);
+  }
+
+  /**
    * Publish every language of a Single at once.
    *
    * The main row's status and every companion `_status` move in one

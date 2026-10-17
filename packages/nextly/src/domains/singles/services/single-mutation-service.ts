@@ -41,6 +41,7 @@ import {
   readRevalidateConfig,
 } from "../../../revalidation/intent-builders";
 import type { RevalidationIntent } from "../../../revalidation/types";
+import type { DynamicSingleRecord } from "../../../schemas/dynamic-singles/types";
 import { expansionAccess } from "../../../services/collections/trust-bound";
 import {
   assumedBound,
@@ -113,6 +114,7 @@ import {
 } from "../../versions/draft-components";
 import { resolveDraftHold } from "../../versions/draft-hold";
 import { storeDraftSave } from "../../versions/draft-save";
+import { languagesHoldingWorkingDrafts } from "../../versions/held-working-drafts";
 import { resolveComponentSchemas } from "../../versions/restore-version";
 import {
   resolveComponentFieldMap,
@@ -342,6 +344,60 @@ export class SingleMutationService extends BaseService {
           defaultLocale: this.localization?.defaultLocale ?? null,
         })
       );
+    });
+  }
+
+  /**
+   * The other languages whose unreleased work a release's document-wide write
+   * of this Single would be refused over, read now from the pool: the same
+   * rule the write asks under its row lock. Empty for a Single with no stored
+   * document.
+   *
+   * @experimental
+   */
+  async releaseHeldDraftLocales(params: { slug: string }): Promise<string[]> {
+    const singleMeta = await resolveSingleForRequest(
+      this.adapter,
+      this.singleRegistryService,
+      params.slug,
+      this.logger
+    );
+    if (!singleMeta) return [];
+    const row = await this.adapter.selectOne<SingleDocument>(
+      singleMeta.tableName,
+      {}
+    );
+    if (!row) return [];
+    return this.languagesHoldingDrafts(
+      new VersionsRepository(this.adapter),
+      singleMeta,
+      params.slug,
+      row.id
+    );
+  }
+
+  /**
+   * The configured languages other than a document-wide write's own holding a
+   * working draft of this Single, through `languagesHoldingWorkingDrafts`.
+   */
+  private languagesHoldingDrafts(
+    versions: VersionsRepository,
+    singleMeta: DynamicSingleRecord,
+    slug: string,
+    entryId: string
+  ): Promise<string[]> {
+    return languagesHoldingWorkingDrafts({
+      versions,
+      ref: { scopeKind: "single", scopeSlug: slug, entryId },
+      draftsEnabled: singleMeta.versions?.drafts?.enabled === true,
+      writeDraftLocale: workingDraftLocale({
+        documentLocalized: singleMeta.localized === true,
+        // A wildcard carries no request locale by the time it reaches the
+        // write: it was resolved away so the body never sees it as one.
+        requestLocale: null,
+        defaultLocale: this.localization?.defaultLocale ?? null,
+      }),
+      configuredLocales: this.localization?.locales.map(l => l.code) ?? [],
     });
   }
 
@@ -1320,37 +1376,13 @@ export class SingleMutationService extends BaseService {
             // a draft save serialises on this same row, so a check that ran
             // before the transaction can be overtaken by one that commits
             // first, and the release would proceed over work it never saw.
-            if (
-              sweepAllLocales &&
-              singleMeta.versions?.drafts?.enabled === true
-            ) {
-              const writeDraftLocale = workingDraftLocale({
-                documentLocalized: singleMeta.localized === true,
-                // A wildcard carries no request locale by the time it reaches
-                // here: it was resolved away so the body never sees it as one.
-                requestLocale: null,
-                defaultLocale: this.localization?.defaultLocale ?? null,
-              });
-              const heldBy = (
-                await new VersionsRepository(tx).findAllWorkingDrafts({
-                  scopeKind: "single",
-                  scopeSlug: slug,
-                  entryId: existingDoc.id,
-                })
-              )
-                .map(draft => draft.locale)
-                .filter(
-                  (locale): locale is string =>
-                    locale !== null && locale !== writeDraftLocale
-                )
-                // Only a configured language can block — see the collection
-                // path for why a removed one would make this refusal
-                // unsatisfiable rather than merely cautious.
-                .filter(locale =>
-                  new Set(
-                    this.localization?.locales.map(l => l.code) ?? []
-                  ).has(locale)
-                );
+            if (sweepAllLocales) {
+              const heldBy = await this.languagesHoldingDrafts(
+                new VersionsRepository(tx),
+                singleMeta,
+                slug,
+                existingDoc.id
+              );
               if (heldBy.length > 0) {
                 transitionDeniedResult = {
                   success: false,

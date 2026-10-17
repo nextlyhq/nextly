@@ -9,6 +9,7 @@
  *   core.author          hard  who the run acts as: none, gone, or a locale
  *   core.permission      hard  the author may no longer perform the action
  *   core.exists          hard  the document is gone
+ *   core.held-drafts     hard  another language holds unreleased work
  *   core.required-fields hard  a document going live would fail validation
  *   core.other-release   soft  another scheduled release holds the document
  *
@@ -174,6 +175,30 @@ export const CORE_EXISTS_SOURCE = defineReleaseCheckSource({
   },
 });
 
+/**
+ * Whether another language holds unreleased work that the release's
+ * document-wide write would be refused over, going live or coming down alike:
+ * the write will not decide the fate of work nobody has released.
+ */
+export const CORE_HELD_DRAFTS_SOURCE = defineReleaseCheckSource({
+  key: "core.held-drafts",
+  severity: "hard",
+  codes: ["DRAFT_HELD_IN_LOCALE"],
+  async check(batch, ctx) {
+    const findings: ReleaseCheckFinding<"DRAFT_HELD_IN_LOCALE">[] = [];
+    for (const member of runnable(batch)) {
+      const locales = await ctx.reads.heldDraftLocales(member);
+      if (locales.length === 0) continue;
+      findings.push({
+        memberId: member.id,
+        code: "DRAFT_HELD_IN_LOCALE",
+        detail: { locales: [...locales] },
+      });
+    }
+    return findings;
+  },
+});
+
 /** The validation code a missing required value is reported with. */
 const REQUIRED = "REQUIRED";
 
@@ -274,6 +299,7 @@ export const CORE_RELEASE_CHECK_SOURCES: readonly ReleaseCheckSource[] = [
   CORE_AUTHOR_SOURCE,
   CORE_PERMISSION_SOURCE,
   CORE_EXISTS_SOURCE,
+  CORE_HELD_DRAFTS_SOURCE,
   CORE_REQUIRED_FIELDS_SOURCE,
   CORE_OTHER_RELEASE_SOURCE,
 ];

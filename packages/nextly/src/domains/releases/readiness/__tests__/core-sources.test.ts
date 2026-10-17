@@ -12,6 +12,7 @@ import type { ReleaseCheckSource } from "../check-sources";
 import {
   CORE_AUTHOR_SOURCE,
   CORE_EXISTS_SOURCE,
+  CORE_HELD_DRAFTS_SOURCE,
   CORE_OTHER_RELEASE_SOURCE,
   CORE_PERMISSION_SOURCE,
   CORE_RELEASE_CHECK_SOURCES,
@@ -141,6 +142,39 @@ describe("core.exists", () => {
         ),
     });
     expect(found).toEqual([{ memberId: "gone", code: "DOCUMENT_GONE" }]);
+  });
+});
+
+describe("core.held-drafts", () => {
+  it("reports a document held in another language, going live or coming down", async () => {
+    const heldDraftLocales = vi.fn(async (ref: { entryId: string }) =>
+      ref.entryId === "entry-fine" ? [] : ["de", "fr"]
+    );
+    const found = await run(
+      CORE_HELD_DRAFTS_SOURCE,
+      [
+        member("goes-live"),
+        member("comes-down", { action: "unpublish" }),
+        member("fine"),
+        // One language only: core.author's to report, and not a write that
+        // moves every language.
+        member("locale", { locale: "de" }),
+      ],
+      { heldDraftLocales }
+    );
+    expect(found).toEqual([
+      {
+        memberId: "goes-live",
+        code: "DRAFT_HELD_IN_LOCALE",
+        detail: { locales: ["de", "fr"] },
+      },
+      {
+        memberId: "comes-down",
+        code: "DRAFT_HELD_IN_LOCALE",
+        detail: { locales: ["de", "fr"] },
+      },
+    ]);
+    expect(heldDraftLocales).toHaveBeenCalledTimes(3);
   });
 });
 

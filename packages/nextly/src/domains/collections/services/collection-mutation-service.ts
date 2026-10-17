@@ -158,6 +158,7 @@ import { mergeComponentPatches } from "../../versions/draft-components";
 import { resolveDraftHold } from "../../versions/draft-hold";
 import { storeDraftSave } from "../../versions/draft-save";
 import { isDraftSplitEligible } from "../../versions/draft-split-eligibility";
+import { languagesHoldingWorkingDrafts } from "../../versions/held-working-drafts";
 import {
   buildRestorePayload,
   type ComponentSchemas,
@@ -2162,6 +2163,58 @@ export class CollectionMutationService extends BaseService {
         undefined,
         false
       ),
+    });
+  }
+
+  /**
+   * The other languages whose unreleased work a release's document-wide write
+   * of this entry would be refused over, read now from the pool: the same
+   * rule the write asks under its row lock.
+   *
+   * @experimental
+   */
+  async releaseHeldDraftLocales(params: {
+    collectionName: string;
+    entryId: string;
+  }): Promise<string[]> {
+    const collection = await this.collectionService.getCollection(
+      params.collectionName
+    );
+    return this.languagesHoldingDrafts(
+      new VersionsRepository(this.adapter),
+      collection,
+      params.collectionName,
+      params.entryId,
+      // The slot a document-wide write's own draft is kept under: the
+      // wildcard carries no request locale by the time it is written.
+      workingDraftLocale({
+        documentLocalized:
+          (collection as { localized?: boolean }).localized === true,
+        requestLocale: null,
+        defaultLocale: this.localization?.defaultLocale ?? null,
+      })
+    );
+  }
+
+  /**
+   * The configured languages other than the write's own holding a working
+   * draft of this entry, through `languagesHoldingWorkingDrafts`.
+   */
+  private languagesHoldingDrafts(
+    versions: VersionsRepository,
+    collection: unknown,
+    collectionName: string,
+    entryId: string,
+    writeDraftLocale: string | null
+  ): Promise<string[]> {
+    return languagesHoldingWorkingDrafts({
+      versions,
+      ref: { scopeKind: "collection", scopeSlug: collectionName, entryId },
+      draftsEnabled:
+        (collection as { versions?: { drafts?: { enabled?: boolean } } })
+          .versions?.drafts?.enabled === true,
+      writeDraftLocale,
+      configuredLocales: this.localization?.locales.map(l => l.code) ?? [],
     });
   }
 
@@ -7031,60 +7084,21 @@ export class CollectionMutationService extends BaseService {
           await tx.lockRow(tableName, params.entryId);
 
           // A wildcard must not decide the fate of work somebody saved and has
-          // not released yet — asked UNDER THE LOCK, because the answer changes.
-          //
-          // Another language may be holding a pending edit, and moving the whole
-          // document's lifecycle would publish that language while its edit
-          // stayed unreleased — marking a translation live against values its
-          // author had already replaced. Releasing those edits here instead is
-          // not the smaller problem it looks: a pending edit stores the whole
-          // document as it looked when it was saved, not the fields its author
-          // touched, so two languages' edits cannot be merged without inventing
-          // a rule for which shared value wins — and every such rule silently
-          // discards somebody's work in some ordering.
-          //
-          // Asked here rather than before the transaction because a draft save
-          // serialises on this same parent lock: a check that ran earlier can be
+          // not released yet (`languagesHoldingWorkingDrafts` says why) — asked
+          // UNDER THE LOCK, because the answer changes: a draft save serialises
+          // on this same parent lock, so a check that ran earlier can be
           // overtaken by a save that commits first, and the release would then
           // proceed over work it never saw. The refusal travels out on the
           // same out-of-band result the transition gate uses, since the adapter
           // re-wraps a thrown sentinel before the catch can identify it.
-          const configuredLocalesForHold = new Set(
-            this.localization?.locales.map(l => l.code) ?? []
-          );
-          if (
-            sweepAllLocales &&
-            (collection as { versions?: { drafts?: { enabled?: boolean } } })
-              .versions?.drafts?.enabled === true
-          ) {
-            const heldBy = (
-              await new VersionsRepository(tx).findAllWorkingDrafts({
-                scopeKind: "collection",
-                scopeSlug: params.collectionName,
-                entryId: params.entryId,
-              })
-            )
-              .map(draft => draft.locale)
-              .filter(
-                (locale): locale is string =>
-                  locale !== null && locale !== draftLocaleKey
-              )
-              // Only a language the app still configures can block this write.
-              //
-              // A draft left behind by a language that was REMOVED from the
-              // configuration would otherwise refuse every wildcard publish and
-              // takedown forever, and the remedy this refusal recommends —
-              // publish or discard it — cannot be carried out, because reads and
-              // writes reject that locale. A scheduled takedown would then leave
-              // the document live indefinitely with no route out through the
-              // API: a refusal that cannot be satisfied is worse than the
-              // ambiguity it was added to avoid.
-              //
-              // The stale draft is left where it is rather than cleaned up here.
-              // A write asked to move a lifecycle has no business deleting
-              // somebody's stored work as a side effect, and the row is the only
-              // record that the work existed.
-              .filter(locale => configuredLocalesForHold.has(locale));
+          if (sweepAllLocales) {
+            const heldBy = await this.languagesHoldingDrafts(
+              new VersionsRepository(tx),
+              collection,
+              params.collectionName,
+              params.entryId,
+              draftLocaleKey
+            );
             if (heldBy.length > 0) {
               transitionDeniedResult = {
                 success: false,

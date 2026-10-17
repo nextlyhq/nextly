@@ -20,4 +20,5 @@ export const READY_CHECKS: ReleaseDocumentChecks = {
   mayPerform: async () => true,
   existing: async refs => new Set(refs.map(documentRefKey)),
   publishProblems: async () => [],
+  heldDraftLocales: async () => [],
 };

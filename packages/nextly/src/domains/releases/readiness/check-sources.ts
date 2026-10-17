@@ -112,6 +112,11 @@ export interface ReleaseCheckReads {
     user: UserContext
   ): Promise<readonly ValidationIssue[]>;
   /**
+   * The other languages holding unreleased work that would make the release's
+   * document-wide write of this document refuse, whatever its action.
+   */
+  heldDraftLocales(ref: DocumentRef): Promise<readonly string[]>;
+  /**
    * The scheduled releases' members for these documents, keyed by
    * `documentRefKey`, this release's own included.
    */

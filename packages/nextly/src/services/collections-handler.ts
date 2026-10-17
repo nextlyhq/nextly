@@ -319,6 +319,20 @@ export class CollectionsHandler {
     return this.entryService.releasePublishIssues(params);
   }
 
+  /**
+   * The languages whose unreleased work a release's document-wide write of
+   * this entry would be refused over, on the instance that serves collection
+   * writes.
+   *
+   * @experimental
+   */
+  async releaseHeldDraftLocales(params: {
+    collectionName: string;
+    entryId: string;
+  }): Promise<string[]> {
+    return this.entryService.releaseHeldDraftLocales(params);
+  }
+
   private resolveUserParam<
     T extends {
       userId?: string;

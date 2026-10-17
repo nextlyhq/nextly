@@ -59,6 +59,7 @@ export function reads(
     mayPerform: async () => true,
     existing: async refs => new Set(refs.map(documentRefKey)),
     publishProblems: async () => [],
+    heldDraftLocales: async () => [],
     scheduledMemberships: async () => new Map(),
     ...over,
   };

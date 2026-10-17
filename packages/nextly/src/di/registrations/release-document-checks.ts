@@ -59,6 +59,13 @@ export function releaseDocumentChecks(
         authorMayPerform(adapter, logger, user, scope, action)
       ),
     existing: refs => existingDocuments(adapter, logger, refs),
+    heldDraftLocales: ref =>
+      ref.scopeKind === "single"
+        ? singleEntries().releaseHeldDraftLocales({ slug: ref.scopeSlug })
+        : collections().releaseHeldDraftLocales({
+            collectionName: ref.scopeSlug,
+            entryId: ref.entryId,
+          }),
     publishProblems: async (ref, user) =>
       ref.scopeKind === "single"
         ? singleEntries().releasePublishIssues({ slug: ref.scopeSlug, user })

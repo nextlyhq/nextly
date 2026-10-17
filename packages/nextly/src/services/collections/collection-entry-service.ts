@@ -615,6 +615,19 @@ export class CollectionEntryService extends BaseService {
     return this.mutationService.releasePublishIssues(params);
   }
 
+  /**
+   * The languages whose unreleased work a release's document-wide write of
+   * this entry would be refused over. See the mutation service.
+   *
+   * @experimental
+   */
+  async releaseHeldDraftLocales(params: {
+    collectionName: string;
+    entryId: string;
+  }): Promise<string[]> {
+    return this.mutationService.releaseHeldDraftLocales(params);
+  }
+
   async updateEntry(
     params: {
       collectionName: string;
