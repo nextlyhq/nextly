@@ -54,6 +54,10 @@ afterEach(async () => {
  * assumed to be after a delay. A delay passes vacuously when the blocked side
  * is merely slow to start; this fails instead, by timing out, when nothing
  * ever waits, which is what a missing lock looks like.
+ *
+ * Callers release the transaction they hold in a `finally`: a barrier that
+ * fails would otherwise leave it open, and the teardown waiting on it would
+ * hang and hide the failure.
  */
 async function untilSomeoneWaitsOnALock(dialect: TestDialect): Promise<void> {
   const sql =
@@ -269,8 +273,11 @@ describe.each(getConfiguredTestDialects())(
             order.push("pinned");
           });
 
-        await untilSomeoneWaitsOnALock(dialect);
-        release();
+        try {
+          await untilSomeoneWaitsOnALock(dialect);
+        } finally {
+          release();
+        }
         await Promise.all([save, pin]);
 
         expect(order).toEqual(["save finished", "pinned"]);
@@ -318,8 +325,11 @@ describe.each(getConfiguredTestDialects())(
             order.push("released");
           });
 
-        await untilSomeoneWaitsOnALock(dialect);
-        finish();
+        try {
+          await untilSomeoneWaitsOnALock(dialect);
+        } finally {
+          finish();
+        }
         await Promise.all([pinning, releasing]);
 
         expect(order).toEqual(["pin finished", "released"]);
@@ -365,8 +375,11 @@ describe.each(getConfiguredTestDialects())(
             (error: unknown) => error
           );
 
-        await untilSomeoneWaitsOnALock(dialect);
-        finish();
+        try {
+          await untilSomeoneWaitsOnALock(dialect);
+        } finally {
+          finish();
+        }
         await deleting;
         const refused = await pinning;
 
@@ -414,8 +427,11 @@ describe.each(getConfiguredTestDialects())(
             (error: unknown) => error
           );
 
-        await untilSomeoneWaitsOnALock(dialect);
-        finish();
+        try {
+          await untilSomeoneWaitsOnALock(dialect);
+        } finally {
+          finish();
+        }
         await deleting;
         const refused = await pinning;
 
@@ -482,8 +498,11 @@ describe.each(getConfiguredTestDialects())(
       const deleting = current!
         .getService("collectionRegistryService")
         .deleteCollection("notes", { force: true });
-      await untilSomeoneWaitsOnALock(dialect);
-      finish();
+      try {
+        await untilSomeoneWaitsOnALock(dialect);
+      } finally {
+        finish();
+      }
       return Promise.allSettled([pinning, deleting]);
     }
 
