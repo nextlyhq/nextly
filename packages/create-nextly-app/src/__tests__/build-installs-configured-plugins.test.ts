@@ -158,6 +158,15 @@ describe("reading the plugins a config registers", () => {
     ).toEqual(["@nextlyhq/plugin-form-builder", "@nextlyhq/plugin-seo"]);
   });
 
+  // Read as no plugins, the build would install none the runtime registers.
+  it("refuses a plugins list it cannot read in place", () => {
+    expect(() =>
+      configuredPlugins(
+        'import { formBuilderPlugin } from "@nextlyhq/plugin-form-builder";\nconst enabled = [formBuilderPlugin];\nexport default defineConfig({ plugins: enabled });\n'
+      )
+    ).toThrow(/cannot be read/);
+  });
+
   it("refuses a config it cannot parse", () => {
     expect(() => configuredPlugins("export default {")).toThrow();
   });

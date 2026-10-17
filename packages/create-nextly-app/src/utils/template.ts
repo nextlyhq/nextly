@@ -183,16 +183,26 @@ function identifiersInPluginLists(program: Node): string[] {
   return names;
 }
 
-/** A `plugins: [...]` property, by an identifier or a string key. */
+/**
+ * A `plugins: [...]` property, by an identifier or a string key. A `plugins`
+ * property written any other way, such as a variable holding the list, is
+ * refused rather than read as no plugins: the build would then install none
+ * while the runtime registers them, and the production boot would refuse.
+ * Every template writes its list in place, which the test of their builds
+ * holds them to.
+ */
 function isPluginList(node: Node): node is ObjectProperty {
-  if (node.type !== "ObjectProperty" || node.value.type !== "ArrayExpression") {
-    return false;
-  }
+  if (node.type !== "ObjectProperty") return false;
   const key = node.key;
-  return (
+  const named =
     (key.type === "Identifier" && key.name === "plugins") ||
-    (key.type === "StringLiteral" && key.value === "plugins")
-  );
+    (key.type === "StringLiteral" && key.value === "plugins");
+  if (named && node.value.type !== "ArrayExpression") {
+    throw new Error(
+      "The template's nextly.config.ts sets `plugins` to something other than a list written in place, so the plugins its build must install cannot be read."
+    );
+  }
+  return named;
 }
 
 /** Calls `visit` on `root` and every syntax node below it, parents first. */
