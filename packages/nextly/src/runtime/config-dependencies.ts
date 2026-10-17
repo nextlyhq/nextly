@@ -9,7 +9,7 @@
 // imported file, where the fix will be saved to that file.
 
 import { existsSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 import { nodeModulesExternalPlugin } from "../cli/utils/config-bundler";
 import {
@@ -56,17 +56,40 @@ async function importedFiles(configPath: string): Promise<string[]> {
     );
   } catch (error) {
     // A file that does not compile stops the scan. The files its errors name
-    // are where the fix will be saved.
-    return failedFiles(error).map(file => resolve(root, file));
+    // are where the fix will be saved, and so is a local import that does not
+    // exist yet: creating it is the fix.
+    return failedFiles(error)
+      .map(file => resolve(root, file))
+      .filter(file => existsSync(dirname(file)));
   }
 }
+
+// What esbuild tries for an import written without an extension, in its
+// default order, and the same names as a folder's index file.
+const RESOLVE_EXTENSIONS = [".tsx", ".ts", ".jsx", ".js", ".css", ".json"];
 
 function failedFiles(error: unknown): string[] {
   const errors = (error as { errors?: unknown } | null)?.errors;
   if (!Array.isArray(errors)) return [];
   return errors.flatMap(entry => {
-    const file = (entry as { location?: { file?: unknown } | null })?.location
-      ?.file;
-    return typeof file === "string" && file ? [file] : [];
+    const { text, location } = entry as {
+      text?: unknown;
+      location?: { file?: unknown } | null;
+    };
+    const file = location?.file;
+    if (typeof file !== "string" || !file) return [];
+    // esbuild reports an import it cannot find at the importing line.
+    const missing =
+      typeof text === "string"
+        ? /^Could not resolve "(\.{1,2}\/[^"]+)"/.exec(text)?.[1]
+        : undefined;
+    if (!missing) return [file];
+    const target = join(dirname(file), missing);
+    return [
+      file,
+      target,
+      ...RESOLVE_EXTENSIONS.map(extension => target + extension),
+      ...RESOLVE_EXTENSIONS.map(extension => join(target, `index${extension}`)),
+    ];
   });
 }

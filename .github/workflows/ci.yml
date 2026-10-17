@@ -1578,7 +1578,7 @@ jobs:
           SCOPE_TITLE: Dev reload scope
           # Every path is inert EXCEPT these: an inclusion list, as
           # `generated-code-compiles.yml` uses for its one pipeline.
-          INERT_PATHS: '^(?!(packages/nextly/src/runtime/hmr-listener\.ts|packages/nextly/src/init/reload-config\.ts|packages/nextly/src/init/config-reload-failure\.ts|packages/nextly/src/cli/utils/(config-loader|config-bundler|esbuild-loader)\.ts|apps/playground/nextly\.config\.ts|apps/playground/next\.config\.ts|apps/playground/src/collections/dev-reload-probe\.ts|e2e/dev-reload/.*|e2e/playwright\.dev-reload\.config\.ts|e2e/package\.json|pnpm-lock\.yaml|\.github/workflows/ci\.yml)$)'
+          INERT_PATHS: '^(?!(packages/nextly/src/runtime/(hmr-listener|config-dependencies)\.ts|packages/nextly/src/init\.ts|packages/nextly/src/init/(boot-apply|reload-config)\.ts|packages/nextly/src/route-handler/auth-handler\.ts|packages/nextly/src/init/config-reload-failure\.ts|packages/nextly/src/cli/utils/(config-loader|config-bundler|esbuild-loader)\.ts|apps/playground/nextly\.config\.ts|apps/playground/next\.config\.ts|apps/playground/src/collections/dev-reload-probe\.ts|e2e/dev-reload/.*|e2e/playwright\.dev-reload\.config\.ts|e2e/package\.json|pnpm-lock\.yaml|\.github/workflows/ci\.yml)$)'
         run: node scripts/change-scope.mjs
 
       - name: Setup pnpm

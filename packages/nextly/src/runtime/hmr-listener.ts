@@ -34,14 +34,16 @@ type HmrCache = {
 const g = globalThis as HmrCache;
 
 /**
- * Whether this process may watch and apply config edits: `next dev` only.
- * Never in production, in tests, or while `next build` collects page data, and
- * not when `NEXTLY_DISABLE_HMR=1` turns it off.
+ * Whether this process may watch and apply config edits: `next dev` only,
+ * which sets `NODE_ENV=development`. Any other value, or none, refuses: a
+ * one-off script that boots Nextly must not start applying schema edits. Never
+ * while `next build` collects page data either, and not when
+ * `NEXTLY_DISABLE_HMR=1` turns it off.
  */
 export function configWatchAllowed(
   env: NodeJS.ProcessEnv = process.env
 ): boolean {
-  if (env.NODE_ENV === "production" || env.NODE_ENV === "test") return false;
+  if (env.NODE_ENV !== "development") return false;
   if (env.NEXT_PHASE === "phase-production-build") return false;
   return env.NEXTLY_DISABLE_HMR !== "1";
 }
@@ -153,6 +155,9 @@ function watchConfigFiles(
           scheduleReload();
         }
       });
+      // The dev server keeps the process alive on its own; a watcher must not
+      // be what keeps a script that booted Nextly from exiting.
+      watcher.unref();
       watcher.on("error", error => {
         console.warn(
           `[Nextly] Stopped watching ${dir} for config edits: ${error.message}. ` +

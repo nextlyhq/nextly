@@ -54,6 +54,10 @@ describe("configWatchAllowed: next dev only", () => {
   it.each([
     ["production", { NODE_ENV: "production" }],
     ["tests", { NODE_ENV: "test" }],
+    // A script that boots Nextly without setting NODE_ENV, or with a value of
+    // its own, is not next dev.
+    ["NODE_ENV unset", {}],
+    ["a nonstandard NODE_ENV", { NODE_ENV: "staging" }],
     [
       "next build",
       { NODE_ENV: "development", NEXT_PHASE: "phase-production-build" },
@@ -187,6 +191,20 @@ describe("watching the config and the files it imports", () => {
     await eventually(() => reload.mock.calls.length === 1);
   });
 
+  it("does not keep the process alive by watching", () => {
+    // A script that booted Nextly in development must still exit when it is
+    // done; the dev server keeps itself alive without the watcher's help.
+    const handles = () =>
+      process.getActiveResourcesInfo().filter(name => name === "FSEventWrap")
+        .length;
+    const before = handles();
+
+    watchLoadedConfig(loaded("collections/posts.ts"), cwd, DEV);
+
+    expect(watchedConfigFiles()).toContain(posts);
+    expect(handles()).toBe(before);
+  });
+
   it("does not watch packages under node_modules", () => {
     watchLoadedConfig(
       loaded("collections/posts.ts", "node_modules/some-plugin/index.js"),
@@ -271,6 +289,25 @@ describe("watching the config and the files it imports", () => {
     expect(watchedConfigFiles().sort()).toEqual([config, posts].sort());
     await watching();
     writeFileSync(posts, "export const posts = { slug: 'posts' };\n");
+    await eventually(() => reload.mock.calls.length === 1);
+  });
+
+  it("after a load fails on an import that does not exist yet, reloads once it is created", async () => {
+    // esbuild reports the missing import at the importing line, so the file to
+    // be created has to be read from the error itself.
+    watchLoadedConfig(loaded(), cwd, DEV);
+    const created = join(cwd, "collections", "new.ts");
+    writeFileSync(
+      config,
+      'import { added } from "./collections/new";\n' +
+        "export default { collections: [added] };\n"
+    );
+
+    await watchScannedConfig({ cwd, env: DEV });
+
+    expect(watchedConfigFiles()).toContain(created);
+    await watching();
+    writeFileSync(created, "export const added = { slug: 'added' };\n");
     await eventually(() => reload.mock.calls.length === 1);
   });
 
