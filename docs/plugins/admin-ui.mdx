@@ -43,7 +43,7 @@ types (D60):
 - `plugin-admin-imports.generated.ts` imports and registers every plugin admin component, and
   the app's admin page imports it.
 - `plugin-admin-components.generated.ts` lists the same paths as plain strings, and the admin's
-  server layout passes them to `checkAdminComponents` from `nextly/next`.
+  server layout passes them to `checkAdminComponents` from `nextly/runtime`.
 
 The app commits both. `nextly generate:types` writes them, and `next dev` rewrites them when
 they fall behind the config. `NEXTLY_GENERATED_FILES_WRITE=0` turns that off, for a read-only
@@ -65,7 +65,7 @@ import "../../../types/generated/plugin-admin-imports.generated";
 
 ```tsx
 // src/app/admin/[[...params]]/layout.tsx: make the layout async, then
-import { checkAdminComponents } from "nextly/next";
+import { checkAdminComponents } from "nextly/runtime";
 import { registeredComponentPaths } from "../../../types/generated/plugin-admin-components.generated";
 // ...inside the layout, before it returns:
 await checkAdminComponents({ config, registeredComponentPaths });

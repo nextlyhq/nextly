@@ -1,5 +1,5 @@
 import { getBrandingCss } from "nextly/config";
-import { checkAdminComponents } from "nextly/next";
+import { checkAdminComponents } from "nextly/runtime";
 
 import config from "../../../../nextly.config";
 import { registeredComponentPaths } from "../../../types/plugin-admin-components.generated";

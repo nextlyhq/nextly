@@ -1,4 +1,4 @@
-import { checkAdminComponents } from "nextly/next";
+import { checkAdminComponents } from "nextly/runtime";
 
 import config from "../../../../nextly.config";
 import { registeredComponentPaths } from "../../../types/generated/plugin-admin-components.generated";
