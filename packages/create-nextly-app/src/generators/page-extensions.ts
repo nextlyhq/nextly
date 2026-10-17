@@ -2,6 +2,7 @@ import path from "path";
 
 import fs from "fs-extra";
 
+import type { GeneratedFiles } from "./generated-files";
 import { configStringList } from "./next-config";
 
 /**
@@ -61,4 +62,65 @@ async function readNextConfig(
     }
   }
   return null;
+}
+
+/**
+ * The page extension for a file of TypeScript with JSX, such as a page or a
+ * layout: one ending in `tsx`. Null when the list holds none.
+ */
+export function tsxExtension(extensions: readonly string[]): string | null {
+  return extensions.find(extension => /(^|\.)tsx$/.test(extension)) ?? null;
+}
+
+/** What a file's content needs of its extension: how to pick one, and what to call it. */
+export interface ExtensionNeed {
+  pick: (extensions: readonly string[]) => string | null;
+  holds: string;
+}
+
+/** A JavaScript or TypeScript module without JSX, such as a route. */
+export const MODULE_FILE: ExtensionNeed = {
+  pick: moduleExtension,
+  holds: "a JavaScript or TypeScript extension",
+};
+
+/** TypeScript with JSX, such as a page or a layout. */
+export const TSX_FILE: ExtensionNeed = {
+  pick: tsxExtension,
+  holds: "an extension ending in tsx",
+};
+
+/**
+ * The report for a file an app that sets `pageExtensions` gets in place of
+ * the file: the name to create it under and its content. Next.js routes a
+ * file there only under a name with one of the app's extensions, and the app
+ * may already have the file under such a name, which the existing-app steps
+ * do not look for, so nothing is written. A list that cannot be read, or that
+ * holds no extension the content needs, gives a placeholder name and says
+ * which.
+ *
+ * @param base the file's path without its extension, as reported, such as
+ *   `app/admin/[[...params]]/page`
+ */
+export function pageExtensionsSkip(
+  base: string,
+  text: string,
+  pages: { configName: string; extensions: readonly string[] | null },
+  need: ExtensionNeed
+): GeneratedFiles["skipped"][number] {
+  const { configName, extensions } = pages;
+  const extension = extensions === null ? null : need.pick(extensions);
+  const sets = `${configName} sets pageExtensions, and Next.js routes a file there only under a name with one of them, so none was written`;
+  if (extensions !== null && extension === null) {
+    return {
+      path: `${base}.<${need.holds} added to pageExtensions>`,
+      why: `${sets}, and none of them (${extensions.join(", ")}) is ${need.holds}; add one to pageExtensions, then, unless the app already has this file, create it under that name with this content`,
+      toAdd: text,
+    };
+  }
+  return {
+    path: `${base}.${extension ?? "<one of your pageExtensions>"}`,
+    why: `${sets}; unless the app already has this file, create it under that name with this content`,
+    toAdd: text,
+  };
 }

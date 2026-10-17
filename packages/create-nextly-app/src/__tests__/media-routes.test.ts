@@ -804,7 +804,7 @@ describe("an app that sets pageExtensions", () => {
       "src/app/api/health/route.page.tsx",
     ]);
     expect(result.skipped[0]?.why).toMatch(
-      /^next\.config\.ts sets pageExtensions, and Next\.js routes a route file only under a name with one of them/
+      /^next\.config\.ts sets pageExtensions, and Next\.js routes a file there only under a name with one of them/
     );
     expect(result.skipped[2]?.toAdd).toBe(template(HEALTH));
     nothingWritten();
@@ -831,7 +831,7 @@ describe("an app that sets pageExtensions", () => {
 
     expect(result.written).toEqual([]);
     expect(result.skipped[2]?.why).toContain(
-      "none of them (md, mdx) can hold the route"
+      "none of them (md, mdx) is a JavaScript or TypeScript extension"
     );
     nothingWritten();
   });

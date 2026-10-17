@@ -6,7 +6,11 @@ import type { ProjectInfo } from "../types";
 import { resolveTemplatePath } from "../utils/template";
 
 import type { GeneratedFiles } from "./generated-files";
-import { appPageExtensions, moduleExtension } from "./page-extensions";
+import {
+  MODULE_FILE,
+  appPageExtensions,
+  pageExtensionsSkip,
+} from "./page-extensions";
 import { ADMIN_API_FOLDER } from "./routes";
 
 /**
@@ -237,7 +241,14 @@ export async function generateMediaRoutes(
       written: [],
       changed: [],
       skipped: prepared.map(route =>
-        pageExtensionsSkip(cwd, route, configName, extensions)
+        pageExtensionsSkip(
+          toPosix(
+            path.relative(cwd, path.join(path.dirname(route.target), "route"))
+          ),
+          route.text,
+          { configName, extensions },
+          MODULE_FILE
+        )
       ),
     };
   }
@@ -791,44 +802,6 @@ async function handlerWithin(
     if (deeper !== null) return deeper;
   }
   return null;
-}
-
-/**
- * The report for one route in an app that sets `pageExtensions`: the name to
- * create it under, from the extension the hook would take
- * ({@link moduleExtension}), and its content. A list that cannot be read, or
- * holds no JavaScript or TypeScript extension, gives a placeholder name and
- * says which.
- */
-function pageExtensionsSkip(
-  cwd: string,
-  route: PreparedRoute,
-  configName: string,
-  extensions: readonly string[] | null
-): GeneratedFiles["skipped"][number] {
-  const extension = extensions === null ? null : moduleExtension(extensions);
-  const file = toPosix(
-    path.relative(
-      cwd,
-      path.join(
-        path.dirname(route.target),
-        `route.${extension ?? placeholder(extensions)}`
-      )
-    )
-  );
-  const sets = `${configName} sets pageExtensions, and Next.js routes a route file only under a name with one of them, so none was written`;
-  const why =
-    extensions !== null && extension === null
-      ? `${sets}, and none of them (${extensions.join(", ")}) can hold the route, which is a JavaScript or TypeScript module; add one to pageExtensions, then, unless the app already answers this URL, create the route under it with this content`
-      : `${sets}; unless the app already answers this URL, create the route under that name with this content`;
-  return { path: file, why, toAdd: route.text };
-}
-
-/** The extension a report names when it cannot name one: a list it could not read, or one with no module extension. */
-function placeholder(extensions: readonly string[] | null): string {
-  return extensions === null
-    ? "<one of your pageExtensions>"
-    : "<a JavaScript or TypeScript extension added to pageExtensions>";
 }
 
 /** The report for a folder left alone: for a media route, what Nextly's route does and the text to add. */
