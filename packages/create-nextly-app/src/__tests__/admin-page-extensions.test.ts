@@ -89,6 +89,35 @@ describe("the admin route and page in an app that sets pageExtensions", () => {
     expect(await written()).toEqual([]);
   });
 
+  // A declaration file's suffix holds types only, and TypeScript refuses
+  // code in it, so it is passed over for the next extension that can.
+  it("never names a file with a declaration file's suffix", async () => {
+    await config(
+      'export default { pageExtensions: ["d.ts", "page.js", "page.tsx"] };\n'
+    );
+
+    const skipped = await run();
+
+    expect(skipped.map(entry => entry.path)).toEqual([
+      "app/admin/api/[[...params]]/route.page.tsx",
+      "app/admin/[[...params]]/page.page.tsx",
+      "app/admin/[[...params]]/layout.page.tsx",
+    ]);
+  });
+
+  // The Next config step reads and extends only the names Next.js loads, so
+  // a next.config.cjs, which it passes over, sets nothing here either.
+  it("reads no pageExtensions from a next.config.cjs", async () => {
+    await writeFile(
+      join(cwd, "next.config.cjs"),
+      'module.exports = { pageExtensions: ["page.tsx"] };\n'
+    );
+
+    expect((await generateRoutes(cwd, info)).written).toEqual([
+      "app/admin/api/[[...params]]/route.ts",
+    ]);
+  });
+
   it("gives placeholder names for a list it cannot read", async () => {
     await config(
       'const extensions = ["page.tsx"];\nexport default { pageExtensions: extensions };\n'

@@ -102,13 +102,6 @@ const ROUTE_FILE = /^route\.(tsx|ts|jsx|js)$/;
 /** A route handler file in an extension the app may or may not route. */
 const MAYBE_ROUTE_FILE = /^route\.[^.]+$/;
 
-/**
- * The fixed first parts below a media URL that Nextly's media handler serves
- * (`nextly/api/media-handlers`): bulk deletes and folders. Every other part
- * is a media item's id.
- */
-export const NEXTLY_MEDIA_PATHS = ["bulk", "folders"];
-
 const BESIDE_AN_OPTIONAL_CATCH_ALL =
   "holds another optional catch-all route, which Next.js refuses to build beside Nextly's as ambiguous; left as it is";
 
@@ -118,9 +111,14 @@ const BESIDE_A_REQUIRED_CATCH_ALL =
 const TAKES_ITEMS =
   "holds a dynamic route one part below this URL, which Next.js matches first, so it would take the requests for a media item by its id, and for its folders, that Nextly's route serves; left as it is";
 
-/** Why a concrete child named for one of Nextly's own media paths is left alone. */
+/**
+ * Why a concrete child holding a route is left alone. Next.js matches it
+ * ahead of the catch-all, and whether Nextly's media handler serves that
+ * path too (as it does `folders/` and `bulk/`) is the handler's to say: a
+ * list kept here would drift from it, so any concrete child counts.
+ */
 function takesPath(name: string): string {
-  return `holds a route at ${name}/, which would take the ${name} requests Nextly's route serves; left as it is`;
+  return `holds a route at ${name}/, which Next.js matches ahead of Nextly's catch-all, so it would take any ${name} requests Nextly's route serves; left as it is`;
 }
 
 const THROUGH_A_DYNAMIC_SEGMENT =
@@ -451,7 +449,7 @@ async function answeringFolder(
  * first, each with why, as Next.js 16 builds and serves them beside one: it
  * refuses a second optional catch-all at build time, fails every request
  * when a required one is beside it, and matches a single dynamic segment or
- * a concrete name ahead of the catch-all.
+ * a concrete name ahead of the catch-all. Every other child is concrete.
  */
 const CHILD_SHAPES: {
   matches: (child: string) => boolean;
@@ -466,16 +464,14 @@ const CHILD_SHAPES: {
     reason: () => BESIDE_A_REQUIRED_CATCH_ALL,
   },
   { matches: isDynamic, reason: () => TAKES_ITEMS },
-  { matches: child => NEXTLY_MEDIA_PATHS.includes(child), reason: takesPath },
+  { matches: () => true, reason: takesPath },
 ];
 
 /**
  * Why a child folder of an optional catch-all's URL leaves the catch-all
  * unwritten, or null when it may sit beside it. `own` is the catch-all's own
- * folder name. Only a child holding a handler counts, and only one of
- * {@link CHILD_SHAPES}. Any other concrete child, such as `sign/`, Next.js
- * matches ahead of the catch-all, and it answers URLs Nextly's route does
- * not.
+ * folder name. Only a child holding a handler counts; why, for each shape,
+ * is in {@link CHILD_SHAPES}.
  */
 async function childFinding(
   folder: string,

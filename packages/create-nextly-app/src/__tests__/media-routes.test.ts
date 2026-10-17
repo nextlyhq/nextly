@@ -20,7 +20,6 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
-  NEXTLY_MEDIA_PATHS,
   generateMediaRoutes,
   readMediaRouteTemplates,
 } from "../generators/media-routes";
@@ -632,32 +631,32 @@ describe("what Next.js does and does not route", () => {
     }
   );
 
-  // A concrete child URL sorts ahead of an optional catch-all, so the two
-  // coexist; a dynamic child at the same level does not.
-  it("writes a catch-all beside a concrete child route, and not beside a dynamic one", async () => {
+  // A concrete child Next.js matches ahead of the catch-all, so it may take
+  // requests Nextly's route serves; a child holding no route takes nothing.
+  it("leaves a catch-all beside a concrete child route, and writes it beside a folder with none", async () => {
     mkdirSync(join(cwd, "src/app/api/media/sign"), { recursive: true });
     writeFileSync(
       join(cwd, "src/app/api/media/sign/route.ts"),
       "export const POST = () => new Response();\n"
     );
-    mkdirSync(join(cwd, "src/app/admin/api/media/(files)/[id]/thumb"), {
-      recursive: true,
-    });
+    mkdirSync(join(cwd, "src/app/admin/api/media/assets"), { recursive: true });
     writeFileSync(
-      join(cwd, "src/app/admin/api/media/(files)/[id]/thumb/route.ts"),
-      "export const GET = () => new Response();\n"
+      join(cwd, "src/app/admin/api/media/assets/logo.svg"),
+      "<svg/>"
     );
 
     const result = await generateMediaRoutes(cwd, project(true), TEMPLATES);
 
     expect(result.written).toEqual([
-      `src/app/${PUBLIC_MEDIA}`,
+      `src/app/${ADMIN_MEDIA}`,
       `src/app/${HEALTH}`,
     ]);
-    // The folder named is the one holding the dynamic child: the route group.
     expect(result.skipped.map(entry => entry.path)).toEqual([
-      "src/app/admin/api/media/(files)",
+      "src/app/api/media",
     ]);
+    expect(result.skipped[0]?.why).toMatch(
+      /^holds a route at sign\/, which Next\.js matches ahead of Nextly's catch-all/
+    );
     expect(
       readFileSync(join(cwd, "src/app/api/media/sign/route.ts"), "utf8")
     ).toContain("POST");
@@ -748,31 +747,16 @@ describe("a child folder at a media route's URL", () => {
     }
   );
 
-  it.each(NEXTLY_MEDIA_PATHS)(
+  // Nextly's own fixed paths are among them, and need no list kept here.
+  it.each(["folders", "bulk"])(
     "leaves the catch-all beside a %s/ child, which would take requests Nextly's route serves",
     async name => {
       child(name);
       expect(await publicSkip()).toMatch(
-        new RegExp(
-          `^holds a route at ${name}/, which would take the ${name} requests`
-        )
+        new RegExp(`^holds a route at ${name}/, which Next\\.js matches ahead`)
       );
     }
   );
-
-  // The paths are the handler's own: drift between the two would let a
-  // child take requests nobody listed.
-  it("names exactly the fixed first parts Nextly's media handler serves", () => {
-    const handler = readFileSync(
-      join(TEMPLATES_DIR, "../packages/nextly/src/api/media-handlers.ts"),
-      "utf8"
-    );
-    const served = [...handler.matchAll(/segments\[0\] === "([^"]+)"/g)].map(
-      found => found[1]
-    );
-    expect(served.length).toBeGreaterThan(0);
-    expect([...new Set(served)].sort()).toEqual([...NEXTLY_MEDIA_PATHS].sort());
-  });
 });
 
 describe("an app that sets pageExtensions", () => {

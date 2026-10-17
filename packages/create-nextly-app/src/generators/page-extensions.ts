@@ -3,7 +3,7 @@ import path from "path";
 import fs from "fs-extra";
 
 import type { GeneratedFiles } from "./generated-files";
-import { configStringList } from "./next-config";
+import { configStringList, findConfigFile } from "./next-config";
 
 /**
  * The page extension to name a new module file with, a hook or a route: a
@@ -14,21 +14,22 @@ import { configStringList } from "./next-config";
  * module can be written in.
  */
 export function moduleExtension(extensions: readonly string[]): string | null {
+  const usable = writable(extensions);
   return (
-    extensions.find(extension => /(^|\.)tsx?$/.test(extension)) ??
-    extensions.find(extension => /(^|\.)(js|jsx|mjs)$/.test(extension)) ??
+    usable.find(extension => /(^|\.)tsx?$/.test(extension)) ??
+    usable.find(extension => /(^|\.)(js|jsx|mjs)$/.test(extension)) ??
     null
   );
 }
 
-/** The files Next.js reads its own config from, in the order it looks. */
-const NEXT_CONFIG_NAMES = [
-  "next.config.js",
-  "next.config.mjs",
-  "next.config.ts",
-  "next.config.mts",
-  "next.config.cjs",
-];
+/**
+ * The extensions a file with code in it can be written under: not a
+ * declaration file's (`d.ts`, `d.mts`, `d.cts`), which TypeScript reads as
+ * types only and refuses code in.
+ */
+function writable(extensions: readonly string[]): readonly string[] {
+  return extensions.filter(extension => !/(^|\.)d\.[cm]?tsx?$/.test(extension));
+}
 
 /**
  * The `pageExtensions` the app's Next.js config sets, as every existing-app
@@ -51,17 +52,17 @@ export async function appPageExtensions(cwd: string): Promise<{
   };
 }
 
-/** The text of the app's Next.js config, or null when it has none. */
+/**
+ * The text of the app's Next.js config, or null when it has none, from the
+ * file the Next config step reads and extends ({@link findConfigFile}).
+ */
 async function readNextConfig(
   cwd: string
 ): Promise<{ name: string; text: string } | null> {
-  for (const name of NEXT_CONFIG_NAMES) {
-    const file = path.join(cwd, name);
-    if (await fs.pathExists(file)) {
-      return { name, text: await fs.readFile(file, "utf-8") };
-    }
-  }
-  return null;
+  const name = await findConfigFile(cwd);
+  return name === null
+    ? null
+    : { name, text: await fs.readFile(path.join(cwd, name), "utf-8") };
 }
 
 /**
@@ -69,7 +70,9 @@ async function readNextConfig(
  * layout: one ending in `tsx`. Null when the list holds none.
  */
 export function tsxExtension(extensions: readonly string[]): string | null {
-  return extensions.find(extension => /(^|\.)tsx$/.test(extension)) ?? null;
+  return (
+    writable(extensions).find(extension => /(^|\.)tsx$/.test(extension)) ?? null
+  );
 }
 
 /** What a file's content needs of its extension: how to pick one, and what to call it. */
