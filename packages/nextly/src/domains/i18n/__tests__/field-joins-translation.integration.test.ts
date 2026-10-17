@@ -304,4 +304,47 @@ describeEachDialect("a shared field that becomes translated", dialect => {
     expect((await companionHeadings("dc_posts", id)).en).toBe("Hello");
     expect(await readCollection(id)).toBe("Hello");
   });
+
+  it("keeps later entries writable when a Required field becomes translated", async () => {
+    // A Required shared field is NOT NULL on the main table. Once it is translated its value lives
+    // in the companion and the main insert no longer names it, so a column left behind on main
+    // would refuse every later entry.
+    const created = await handler().createCollection({
+      name: "posts",
+      label: "Post",
+      localized: true,
+      fields: [
+        { name: "heading", type: "text", localized: false, required: true },
+        { name: "views", type: "number" },
+      ],
+    });
+    expect(created.success, JSON.stringify(created)).toBe(true);
+    const entries = handler().getEntryService();
+    const first = await entries.createEntry(
+      { collectionName: "posts", overrideAccess: true, locale: "en" },
+      { heading: "Hello", views: 1 }
+    );
+    expect(first.success, JSON.stringify(first)).toBe(true);
+    const firstId = String((first.data as { id: unknown }).id);
+
+    const saved = await handler().updateCollection(
+      { collectionName: "posts" },
+      {
+        fields: [
+          { name: "heading", type: "text", required: true },
+          { name: "views", type: "number" },
+        ],
+      }
+    );
+    expect(saved.success, JSON.stringify(saved)).toBe(true);
+
+    const later = await entries.createEntry(
+      { collectionName: "posts", overrideAccess: true, locale: "en" },
+      { heading: "Later", views: 2 }
+    );
+    expect(later.success, JSON.stringify(later)).toBe(true);
+    const laterId = String((later.data as { id: unknown }).id);
+    expect(await readCollection(laterId)).toBe("Later");
+    expect(await readCollection(firstId)).toBe("Hello");
+  });
 });

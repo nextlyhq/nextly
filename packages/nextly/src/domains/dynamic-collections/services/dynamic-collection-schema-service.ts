@@ -1689,16 +1689,14 @@ ${allColumnDefs.join(",\n")}
           statements.push(this.dropIndexSql(tableName, uniquePresent));
         }
 
-        // SQLite doesn't support IF EXISTS on DROP COLUMN
-        if (this.dialect === "sqlite") {
-          statements.push(
-            `ALTER TABLE ${this.quoteIdentifier(tableName)} DROP COLUMN ${this.quoteIdentifier(dropCol)};`
-          );
-        } else {
-          statements.push(
-            `ALTER TABLE ${this.quoteIdentifier(tableName)} DROP COLUMN IF EXISTS ${this.quoteIdentifier(dropCol)};`
-          );
-        }
+        // Only PostgreSQL accepts IF EXISTS on DROP COLUMN. SQLite has no such form, and neither
+        // has MySQL (MariaDB does): there the statement fails and the column stays, which for a
+        // NOT NULL one refuses every later insert.
+        statements.push(
+          this.dialect === "postgresql"
+            ? `ALTER TABLE ${this.quoteIdentifier(tableName)} DROP COLUMN IF EXISTS ${this.quoteIdentifier(dropCol)};`
+            : `ALTER TABLE ${this.quoteIdentifier(tableName)} DROP COLUMN ${this.quoteIdentifier(dropCol)};`
+        );
       }
     }
 

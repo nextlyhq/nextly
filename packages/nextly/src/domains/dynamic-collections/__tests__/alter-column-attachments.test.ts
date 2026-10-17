@@ -979,6 +979,20 @@ describe("removing a column that a foreign key references", () => {
     expect(sql).not.toContain("DROP CONSTRAINT");
   });
 
+  it("drops a removed column on mysql with a statement mysql accepts", () => {
+    // MySQL has no `DROP COLUMN IF EXISTS` (MariaDB does), so that form fails on every
+    // removal and the column stays behind; a NOT NULL one then refuses every later insert.
+    const sql = unquote(
+      service("mysql").generateAlterTableMigration(
+        TABLE,
+        [{ name: "note", type: "text" }],
+        []
+      )
+    );
+    expect(sql).toContain("ALTER TABLE dc_probe DROP COLUMN note");
+    expect(sql).not.toMatch(/DROP COLUMN IF EXISTS/);
+  });
+
   it("refuses on sqlite, where the constraint cannot be removed without rebuilding the table", () => {
     const reported = refusalMessages(() =>
       service("sqlite").generateAlterTableMigration(
