@@ -701,7 +701,7 @@ export async function compareDocumentVersions(args: {
 }): Promise<VersionDiff> {
   const { query } = args;
   let pair: { from: number; to: number };
-  let baseline: { name: string; versionNo: number } | undefined;
+  let baseline: VersionDiff["baseline"];
   if (query.from !== undefined && query.to !== undefined) {
     pair = { from: query.from, to: query.to };
   } else {

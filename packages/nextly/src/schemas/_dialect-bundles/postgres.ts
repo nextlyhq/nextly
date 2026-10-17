@@ -120,3 +120,7 @@ export {
 // gives — getCoreSchema makes a table diffable, this map is what apply
 // actually pushes.
 export { nextlyJobsPg as nextlyJobs } from "../jobs/postgres";
+
+// Version view markers; in the bundle so freshPushSchema creates the table on
+// a fresh database, for the reason the release tables above give.
+export { nextlyVersionViewsPg as nextlyVersionViews } from "../version-views/postgres";
