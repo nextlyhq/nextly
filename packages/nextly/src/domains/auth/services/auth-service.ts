@@ -632,40 +632,78 @@ export class AuthService extends BaseService {
     try {
       const passwordHash = await hashPasswordBcrypt(newPassword);
 
-      // The own-password write `changePassword` makes: conditional on the
-      // account not being deactivated, in the same statement that sets the
-      // password, and ending every session the account holds. An
-      // administrator may have switched the account off while the new
-      // password was being hashed, and the read above would not have seen
-      // it; the credentials stay frozen in that window too. Whoever asked
-      // for the reset may not be the only one holding a session, so the
-      // reset ends them all on every path that resets.
-      const reset = await new UserAccountService(
-        this.adapter,
-        this.logger
-      ).changeOwnPasswordHash(targetUser.id, passwordHash);
-      if (!reset) {
+      let consumed = false;
+      await this.withTransaction(async txRaw => {
+        const tx = txRaw as TransactionLike;
+        const now = new Date();
+
+        // Consume the reset token conditionally: only if not yet used and not
+        // expired. Decided at the write so racing resets cannot both succeed.
+        const claim = await tx
+          .update(this.tables.passwordResetTokens)
+          .set({
+            usedAt: now,
+          })
+          .where(
+            and(
+              eq(this.tables.passwordResetTokens.id, resetToken.id),
+              isNull(this.tables.passwordResetTokens.usedAt),
+              gt(this.tables.passwordResetTokens.expires, now)
+            )
+          );
+
+        if (affectedRowCount(claim, this.dialect) !== 1) {
+          return;
+        }
+        consumed = true;
+
+        // The own-password write: conditional on the account not being
+        // deactivated, in the same statement that sets the password, and
+        // ending every session the account holds. In the same transaction as
+        // the token consumption, so a failing write after consumption commits
+        // neither and leaves no spent token beside an unchanged password.
+        const reset = await updateUserEndingSessions(
+          tx,
+          this.tables,
+          this.dialect,
+          {
+            userId: targetUser.id,
+            set: passwordColumns(passwordHash),
+            unlessDeactivated: true,
+          }
+        );
+        if (reset !== 1) {
+          throw NextlyError.validation({
+            errors: [
+              {
+                path: "token",
+                code: "INVALID",
+                message: "The reset link is invalid.",
+              },
+            ],
+            logContext: {
+              reason: "reset-token-deactivated",
+              tokenId: resetToken.id,
+            },
+          });
+        }
+      });
+
+      if (!consumed) {
         throw NextlyError.validation({
           errors: [
             {
               path: "token",
               code: "INVALID",
-              message: "The reset link is invalid.",
+              message: "The reset link is invalid or has already been used.",
             },
           ],
           logContext: {
-            reason: "reset-token-deactivated",
+            reason: "reset-token-not-found-or-used",
             tokenId: resetToken.id,
           },
         });
       }
-
-      await this.db
-        .update(this.tables.passwordResetTokens)
-        .set({
-          usedAt: new Date(),
-        })
-        .where(eq(this.tables.passwordResetTokens.id, resetToken.id));
     } catch (error) {
       if (NextlyError.is(error)) throw error;
       // Normalise raw driver errors before mapping.
