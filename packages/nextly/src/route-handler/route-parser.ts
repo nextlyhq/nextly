@@ -1981,8 +1981,12 @@ function parseApiKeyRoutes(
  * `api/releases`, beside the handler that enforces it.
  */
 interface ReleaseRoute {
-  /** Whether the path carries a release id. */
-  id: boolean;
+  /**
+   * Whether the path carries a release id, or the word a read of the whole
+   * set is named by in that place. Release ids are UUIDs, so a word never
+   * names a release.
+   */
+  id: boolean | string;
   /** The segment after the id, or `null` for none. */
   subresource: string | null;
   /** Whether the path carries a fourth segment, such as a member id. */
@@ -2008,6 +2012,16 @@ const RELEASE_ROUTES: ReleaseRoute[] = [
     verb: "POST",
     operation: "create",
     method: "createRelease",
+  },
+  // The calendar, a read of every release in a window of days. Before the
+  // route that reads one release by id, so the word is not taken for an id.
+  {
+    id: "calendar",
+    subresource: null,
+    subId: false,
+    verb: "GET",
+    operation: "list",
+    method: "releaseCalendar",
   },
   {
     id: true,
@@ -2111,14 +2125,17 @@ function parseReleaseRoutes(
 
   const route = RELEASE_ROUTES.find(
     candidate =>
-      candidate.id === Boolean(id) &&
+      (typeof candidate.id === "string"
+        ? candidate.id === id
+        : candidate.id === Boolean(id)) &&
       candidate.subresource === (subresource ?? null) &&
       candidate.subId === Boolean(subId) &&
       candidate.verb === httpMethod
   );
   if (!route) return null;
 
-  if (id) routeParams.releaseId = id;
+  // A word in the id's place names the route, not a release.
+  if (id && route.id === true) routeParams.releaseId = id;
   if (subId) routeParams.memberId = subId;
 
   return {

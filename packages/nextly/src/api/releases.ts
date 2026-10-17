@@ -21,12 +21,15 @@
  * @module api/releases
  */
 
+import { z } from "zod";
+
 import { apiKeyScopeFrom } from "../auth/authenticated-scope";
 import type { AuthenticatedScope } from "../auth/authenticated-scope";
 import { runWithCallerScope } from "../auth/caller-scope";
 import { isErrorResponse, requireAnyPermission } from "../auth/middleware";
 import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
 import { getLoggerFromDI } from "../dispatcher/helpers/di";
+import { isKnownTimeZone } from "../domains/releases/release-calendar";
 import { isDueAt } from "../domains/releases/release-due";
 import {
   isReleaseTab,
@@ -45,6 +48,7 @@ import {
   DEFAULT_RELEASE_PAGE_SIZE,
   MAX_RELEASE_PAGE_SIZE,
   RELEASES_RESOURCE,
+  type ReleaseDayFilter,
 } from "../domains/releases/services/releases-service";
 import { NextlyError } from "../errors";
 import { getCachedNextly } from "../init";
@@ -60,11 +64,13 @@ import {
 
 import {
   respondAction,
+  respondData,
   respondDoc,
   respondList,
   respondMutation,
 } from "./response-shapes";
 import { withErrorHandler } from "./with-error-handler";
+import { nextlyValidationFromZod } from "./zod-to-nextly-error";
 
 /**
  * The release authority each method needs, declared once.
@@ -82,6 +88,7 @@ import { withErrorHandler } from "./with-error-handler";
  */
 const RELEASE_AUTHORITY: Record<string, "read" | "create" | "publish"> = {
   listReleases: "read",
+  releaseCalendar: "read",
   getRelease: "read",
   listReleaseMembers: "read",
   listReleaseBlockers: "read",
@@ -243,9 +250,7 @@ const ISO_INSTANT =
  */
 function requireTimezone(body: Record<string, unknown>): string {
   const zone = requireString(body, "timezone");
-  try {
-    new Intl.DateTimeFormat("en-US", { timeZone: zone });
-  } catch {
+  if (!isKnownTimeZone(zone)) {
     throw badRequest(
       "`timezone` must be an IANA time zone, such as Europe/Berlin.",
       {
@@ -383,6 +388,57 @@ function optionalInstant(value: string | null, key: string): Date | undefined {
   if (value === null) return undefined;
   return requireInstant({ [key]: value }, key);
 }
+
+/**
+ * The list's day filter as a query string carries it: `day` and `timezone`,
+ * both or neither.
+ *
+ * Only their presence is decided here. Whether the date exists and the zone is
+ * known is the service's question, asked the same way of a Direct API caller.
+ */
+const DAY_PARAMS = z.object({
+  day: z.string({
+    error: "`day` is required with `timezone`: a date such as 2026-03-29.",
+  }),
+  timezone: z.string({
+    error:
+      "`timezone` is required with `day`: an IANA time zone such as Europe/Berlin.",
+  }),
+});
+
+/**
+ * The day to narrow the list to, or none.
+ *
+ * Half a filter is refused rather than dropped: a `day` without its zone has
+ * no instants, and ignoring it would answer with every release.
+ */
+function dayParam(params: URLSearchParams): ReleaseDayFilter | undefined {
+  const day = params.get("day");
+  const timezone = params.get("timezone");
+  if (day === null && timezone === null) return undefined;
+  const parsed = DAY_PARAMS.safeParse({
+    day: day ?? undefined,
+    timezone: timezone ?? undefined,
+  });
+  if (!parsed.success) throw nextlyValidationFromZod(parsed.error);
+  return { date: parsed.data.day, timezone: parsed.data.timezone };
+}
+
+/**
+ * A calendar read's window as a query string carries it. Every field is
+ * required; what each must hold is the service's to check.
+ */
+const CALENDAR_PARAMS = z.object({
+  from: z.string({
+    error: "`from` is required: the first day, such as 2026-03-01.",
+  }),
+  to: z.string({
+    error: "`to` is required: the last day, such as 2026-04-11.",
+  }),
+  timezone: z.string({
+    error: "`timezone` is required: an IANA time zone, such as Europe/Berlin.",
+  }),
+});
 
 /**
  * What every release operation is handed.
@@ -603,6 +659,7 @@ const RELEASE_OPERATIONS: Record<
       // get the same releases.
       search: params.get("search") ?? undefined,
       order: releaseOrderParam(params.get("order")),
+      day: dayParam(params),
     };
     const { containing } = containingRef(params);
     if (containing !== undefined) {
@@ -625,6 +682,25 @@ const RELEASE_OPERATIONS: Record<
     // The service's own page and total, so `meta.total` is every release the
     // query matches, not the rows this page holds.
     return respondList(items, found.meta);
+  },
+
+  releaseCalendar: async ({ request, caller, releases }) => {
+    const params = new URL(request.url).searchParams;
+    const parsed = CALENDAR_PARAMS.safeParse({
+      from: params.get("from") ?? undefined,
+      to: params.get("to") ?? undefined,
+      timezone: params.get("timezone") ?? undefined,
+    });
+    if (!parsed.success) throw nextlyValidationFromZod(parsed.error);
+    // A calendar is one answer about a window, not a page of rows, so it is
+    // the bare read its Direct API method returns.
+    return respondData(
+      await releases.calendar({
+        ...caller,
+        ...parsed.data,
+        kind: releaseKindParam(params.get("kind")),
+      })
+    );
   },
 
   getRelease: async ({ caller, releases, releaseId }) => {

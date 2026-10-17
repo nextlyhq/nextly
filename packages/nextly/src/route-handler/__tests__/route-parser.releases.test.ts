@@ -26,6 +26,21 @@ describe("releases routes", () => {
     });
   });
 
+  it("reads the calendar by name, never as a release id", () => {
+    // `calendar` sits where an id goes. Matched as an id it would be read as
+    // the release "calendar" and answer 404 to every calendar read.
+    const route = parseRestRoute(["releases", "calendar"], "GET");
+    expect(route).toMatchObject({
+      service: "releases",
+      method: "releaseCalendar",
+    });
+    expect(route.routeParams?.releaseId).toBeUndefined();
+    // Read only: nothing else answers at that path.
+    expect(parseRestRoute(["releases", "calendar"], "POST").method).not.toBe(
+      "releaseCalendar"
+    );
+  });
+
   it("reads one release by id", () => {
     expect(parseRestRoute(["releases", "r1"], "GET")).toMatchObject({
       service: "releases",
