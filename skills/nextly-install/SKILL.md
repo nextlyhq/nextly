@@ -23,9 +23,9 @@ Checked against `nextly` 0.0.2-alpha.67 with Next.js 16.4. Run
 
 ## Before you start
 
-- Next.js 15 or 16 with the App Router (`app/` or `src/app/`). On Next.js 14
-  the generator leaves the Next config alone and prints the `experimental`
-  block to add instead (`serverComponentsExternalPackages` and
+- Next.js 14, 15 or 16 with the App Router (`app/` or `src/app/`). On
+  Next.js 14 the generator leaves the Next config alone and prints the
+  `experimental` block to add instead (`serverComponentsExternalPackages` and
   `instrumentationHook`).
 - Node.js `^20.19.0 || ^22.12.0 || >=24.0.0`. Node 23 is not supported.
 - A clean git working tree, so every change below is visible in one diff.
@@ -46,18 +46,23 @@ skips the questions and uses SQLite at `./data/nextly.db`. `--database
 postgresql` or `--database mysql` picks another; with `-y` as well, `.env` gets
 a placeholder `DATABASE_URL` to replace before starting.
 
-It installs with the app's own package manager. Inside a monorepo, it installs
-with the workspace's package manager, from the workspace root. On pnpm it
-approves the native build scripts Nextly needs (`better-sqlite3`, `esbuild`,
-`sharp`) in `pnpm-workspace.yaml`, at the workspace root in a monorepo.
+It installs with the app's own package manager (inside a monorepo, the
+workspace's), adding the packages to the app's own `package.json`. On pnpm 10
+and later it approves the native build scripts Nextly needs (`better-sqlite3`,
+`esbuild`, `sharp`) in the setting that pnpm version reads: `pnpm-workspace.yaml`
+from pnpm 10.6, `package.json` before it. In a monorepo the approvals go at the
+workspace root.
 
 Develop on the database you will run in production. Migrations are written in
 the dialect of the database you develop against (the `nextly-deploy` skill),
 and SQLite is not suitable for serverless hosting.
 
-What it changes. A file the app already has is kept as it is and reported as
-skipped, with what Nextly needs in it; `.env` and `.env.example` get only the
-keys they lack. Read its report, then review the rest in `git diff`:
+What it changes. It edits `package.json`, the Next config and pnpm's settings
+in place, and adds to `.env` and `.env.example` only the keys they lack. A file
+it would create that the app already has (`nextly.config.ts`,
+`instrumentation.ts`, the admin's files and the routes) is kept as it is and
+reported as skipped, with what Nextly needs in it. Read its report, then review
+the rest in `git diff`:
 
 | File                                           | What                                                                                                                                                 |
 | ---------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -90,9 +95,11 @@ npm run dev
 ```
 
 Open `http://localhost:3000/admin/setup` and create the first account; it gets
-the Super Admin role. The first request creates Nextly's own tables. Then sign
-in at `/admin`. Open the admin at the address in `NEXT_PUBLIC_APP_URL`
-(`localhost`, not `127.0.0.1`): a form posted from another address is refused.
+the Super Admin role. Nextly creates its own tables when the server starts,
+from `instrumentation.ts`; without that hook, on the first request. Then sign in
+at `/admin`. Keep to one address for the admin: a form posted from an origin
+other than the one serving the request is refused, unless that origin is listed
+in `NEXTLY_ALLOWED_ORIGINS`.
 
 ## Check it worked
 
