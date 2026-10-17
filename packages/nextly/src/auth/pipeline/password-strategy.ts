@@ -1,3 +1,4 @@
+import { NextlyError } from "../../errors/nextly-error";
 import type { AuthUser } from "../../types/auth";
 
 import type { AuthOutcome, AuthStrategy } from "./types";
@@ -82,6 +83,20 @@ export function createPasswordStrategy(
         email,
         password,
       });
+      // The two are judged together under the lock. A proof naming its
+      // password version without its epoch would leave the epoch to a later
+      // read, which a reset in the same second as the proof already moved.
+      if (passwordUpdatedAt !== undefined && sessionEpoch === undefined) {
+        throw NextlyError.internal({
+          logContext: {
+            userId: String(user.id),
+            reason: "password-proof-without-session-epoch",
+            remedy:
+              "a password strategy's verify must return sessionEpoch " +
+              "whenever it returns passwordUpdatedAt",
+          },
+        });
+      }
       if (passwordUpdatedAt !== undefined) {
         provenPasswordVersions.set(user, passwordUpdatedAt);
       }

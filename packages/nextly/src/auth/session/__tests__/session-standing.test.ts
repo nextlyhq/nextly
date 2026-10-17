@@ -59,8 +59,12 @@ describe("the documented bound", () => {
     // The docs state the bound, and the spec caps it at ten seconds. The
     // cache's lifetime is what spends it, so it must fit with room for a
     // request already in flight when the change landed.
+    // Half, so a request that was past the check when the change landed
+    // still finishes inside the bound.
     expect(SESSION_CUTOFF_SECONDS).toBeLessThanOrEqual(10);
-    expect(SESSION_STANDING_TTL_MS).toBeLessThan(SESSION_CUTOFF_SECONDS * 1000);
+    expect(SESSION_STANDING_TTL_MS).toBeLessThanOrEqual(
+      (SESSION_CUTOFF_SECONDS * 1000) / 2
+    );
   });
 });
 
@@ -197,6 +201,57 @@ describe("createSessionStandingCache", () => {
     expect(read).toHaveBeenCalledTimes(1);
   });
 
+  it("reads again for a newer token that joined a read already running", async () => {
+    // The running read may have queried before the change that signed this
+    // token's epoch, on another instance. Taking its answer would refuse the
+    // session just issued, and GET /auth/session would clear its cookie.
+    let release: (value: SessionStanding) => void = () => {};
+    const read = vi
+      .fn<(userId: string) => Promise<SessionStanding | null>>()
+      .mockImplementationOnce(
+        () =>
+          new Promise<SessionStanding>(resolve => {
+            release = resolve;
+          })
+      )
+      .mockResolvedValue({ isActive: true, sessionEpoch: 1 });
+    const cache = createSessionStandingCache({ read });
+
+    const older = cache.standing("u1", 0);
+    const newer = cache.standing("u1", 1);
+    release(ACTIVE);
+
+    expect(await older).toEqual(ACTIVE);
+    expect(await newer).toEqual({ isActive: true, sessionEpoch: 1 });
+    expect(read).toHaveBeenCalledTimes(2);
+  });
+
+  it("reads again for a token that joined a read answering inactive", async () => {
+    // The account was deactivated when the running read queried and has been
+    // reactivated since. Reactivation leaves the epoch where it was, so the
+    // token signed after it carries the same epoch the inactive answer has.
+    // Taking that answer would refuse a session the account may now use.
+    let release: (value: SessionStanding) => void = () => {};
+    const read = vi
+      .fn<(userId: string) => Promise<SessionStanding | null>>()
+      .mockImplementationOnce(
+        () =>
+          new Promise<SessionStanding>(resolve => {
+            release = resolve;
+          })
+      )
+      .mockResolvedValue(ACTIVE);
+    const cache = createSessionStandingCache({ read });
+
+    const older = cache.standing("u1", 0);
+    const newer = cache.standing("u1", 0);
+    release({ isActive: false, sessionEpoch: 0 });
+
+    expect(await older).toEqual({ isActive: false, sessionEpoch: 0 });
+    expect(await newer).toEqual(ACTIVE);
+    expect(read).toHaveBeenCalledTimes(2);
+  });
+
   it("keeps no answer from a read that failed", async () => {
     // A failure to read is not an answer. Cached, it would refuse every
     // request for the lifetime, or worse, hold an earlier answer past it.
@@ -328,8 +383,10 @@ describe("createSessionStandingCache", () => {
     await cache.standing("a", 0);
     await cache.standing("b", 0);
     await cache.standing("c", 0);
-    // `a` was the oldest, so it went to make room and is read again.
+    // `a` was the oldest, so it went to make room and is read again; `c` is
+    // still answered from memory, so only the oldest went, not the lot.
     await cache.standing("a", 0);
+    await cache.standing("c", 0);
 
     expect(read.mock.calls.map(call => call[0])).toEqual(["a", "b", "c", "a"]);
   });
@@ -347,13 +404,13 @@ describe("standingAdmits", () => {
     [
       "a token at the account's current epoch",
       { isActive: true, sessionEpoch: 3 },
-      { sev: 3 },
+      { nx_sev: 3 },
       true,
     ],
     [
       "a token from before the account's last change",
       { isActive: true, sessionEpoch: 3 },
-      { sev: 2 },
+      { nx_sev: 2 },
       false,
     ],
     ["an inactive account", { isActive: false, sessionEpoch: 0 }, {}, false],
@@ -365,22 +422,50 @@ describe("standingAdmits", () => {
     expect(standingAdmits(standing, claims)).toBe(admitted);
   });
 
+  it("reads a token carrying an app's own `sev` claim as one from before the epoch", () => {
+    // Tokens signed before the upgrade may carry a custom claim of that name;
+    // it says nothing about the epoch, so such a token reads as epoch zero.
+    expect(
+      standingAdmits({ isActive: true, sessionEpoch: 0 }, { sev: "gold" })
+    ).toBe(true);
+  });
+
+  it("judges an inactive account on its epoch alone when asked to", () => {
+    // How the account-state route reports `disabled` for a token whose
+    // sessions were never ended, while still refusing one they were.
+    const inactive = { isActive: false, sessionEpoch: 2 };
+    expect(standingAdmits(inactive, { nx_sev: 2 }, { activeOnly: false })).toBe(
+      true
+    );
+    expect(standingAdmits(inactive, { nx_sev: 1 }, { activeOnly: false })).toBe(
+      false
+    );
+    expect(standingAdmits(null, { nx_sev: 0 }, { activeOnly: false })).toBe(
+      false
+    );
+  });
+
   it.each([["3"], [-1], [1.5], [null]])(
     "refuses a token whose epoch claim is %j",
     sev => {
       // Only core signs the claim, so a malformed one is not a token core
       // issued; reading it as epoch zero would admit it.
-      expect(standingAdmits({ isActive: true, sessionEpoch: 0 }, { sev })).toBe(
-        false
-      );
+      expect(
+        standingAdmits({ isActive: true, sessionEpoch: 0 }, { nx_sev: sev })
+      ).toBe(false);
     }
   );
 });
 
-/** An adapter whose users table holds one row, `standing`, for every id. */
+/**
+ * An adapter whose users table holds one row, `standing`, for every id.
+ *
+ * PostgreSQL, where the read runs directly; on SQLite it is queued behind any
+ * open transaction, which the integration suite covers on a real database.
+ */
 function adapterHolding(standing: SessionStanding) {
   return {
-    getCapabilities: () => ({ dialect: "sqlite" }),
+    getCapabilities: () => ({ dialect: "postgresql" }),
     getDrizzle: () => ({
       select: () => ({
         from: () => ({
@@ -405,7 +490,7 @@ describe("sessionTokenIsCurrent across a change of database", () => {
     // booting a fresh database, bring another adapter. An answer the old one
     // gave is about a row the new one may not hold, and served from the
     // cache it would decide this database's sessions for the whole lifetime.
-    const claims = { sub: "u1", sev: 0 };
+    const claims = { sub: "u1", nx_sev: 0 };
     ready.registered = true;
     container.registerSingleton("adapter", () => adapterHolding(ACTIVE));
     expect(await sessionTokenIsCurrent(claims)).toBe(true);
@@ -475,7 +560,7 @@ describe("readSessionStanding before services are registered", () => {
     ready.registered = true;
     const limit = vi.fn(async () => [{ isActive: true, sessionEpoch: 0 }]);
     container.registerSingleton("adapter", () => ({
-      getCapabilities: () => ({ dialect: "sqlite" }),
+      getCapabilities: () => ({ dialect: "postgresql" }),
       getDrizzle: () => ({
         select: () => ({ from: () => ({ where: () => ({ limit }) }) }),
       }),

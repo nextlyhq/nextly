@@ -73,6 +73,7 @@ describe("Direct API - Auth Operations", () => {
         isActive: true,
         mustChangePassword: false,
         failedLoginAttempts: 0,
+        sessionEpoch: 0,
         lockedUntil: null,
         ...change,
       };

@@ -73,7 +73,7 @@ describe("buildClaims", () => {
       sessionEpoch: 4,
     });
 
-    expect(claims.sev).toBe(4);
+    expect(claims.nx_sev).toBe(4);
   });
 
   it("signs epoch zero when the caller gives none", () => {
@@ -88,7 +88,25 @@ describe("buildClaims", () => {
       roleIds: [],
     });
 
-    expect(claims.sev).toBe(0);
+    expect(claims.nx_sev).toBe(0);
+  });
+
+  it("leaves a custom field named `sev` to the app", () => {
+    // An app's own claim of that name predates the epoch. Reserving it would
+    // drop the field from every new session, and reading it as the epoch would
+    // refuse every session signed before the upgrade.
+    const claims = buildClaims({
+      userId: "user_123",
+      email: "test@example.com",
+      name: "Test",
+      image: null,
+      roleIds: [],
+      sessionEpoch: 4,
+      customFields: { sev: "gold" },
+    });
+
+    expect(claims.sev).toBe("gold");
+    expect(claims.nx_sev).toBe(4);
   });
 
   it("lets no custom field replace the session epoch", () => {
@@ -101,10 +119,10 @@ describe("buildClaims", () => {
       image: null,
       roleIds: [],
       sessionEpoch: 4,
-      customFields: { sev: 0 },
+      customFields: { nx_sev: 0 },
     });
 
-    expect(claims.sev).toBe(4);
+    expect(claims.nx_sev).toBe(4);
   });
 });
 
