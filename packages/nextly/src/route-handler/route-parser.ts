@@ -779,8 +779,28 @@ function parseCollectionEntryVersionRoutes(
     return null;
   }
 
-  // `versions/{versionNo}/restore` is a write, and the only path here deeper
-  // than a version number.
+  // `versions/{versionNo}/seen` records that the caller was shown the version.
+  // PUT because it is idempotent, and authorized as a read of one entry
+  // (`single`): it changes only the caller's own "last looked at" marker,
+  // never the document or its history, so reading the document is what it
+  // needs.
+  if (
+    additionalParams.length === 3 &&
+    additionalParams[2] === "seen" &&
+    httpMethod === "PUT"
+  ) {
+    routeParams.collectionName = id;
+    routeParams.entryId = subId;
+    routeParams.versionNo = additionalParams[1] ?? "";
+    return {
+      service: "collections",
+      operation: "single",
+      method: "markEntryVersionSeen",
+      routeParams,
+    };
+  }
+
+  // `versions/{versionNo}/restore` is a write.
   if (
     additionalParams.length === 3 &&
     additionalParams[2] === "restore" &&
@@ -954,6 +974,15 @@ const SINGLE_VERSION_SUBRESOURCES = new Map<
   ],
 ]);
 
+/** Actions on one version of a Single (`versions/{versionNo}/{action}`). */
+const SINGLE_VERSION_ACTIONS = new Map<
+  string,
+  { operation: OperationType; method: string }
+>([
+  ["restore POST", { operation: "update", method: "restoreSingleVersion" }],
+  ["seen PUT", { operation: "single", method: "markSingleVersionSeen" }],
+]);
+
 function parseSingleVersionRoutes(
   id: string | undefined,
   subresource: string | undefined,
@@ -966,23 +995,19 @@ function parseSingleVersionRoutes(
     return null;
   }
 
-  // `versions/{versionNo}/restore` is a write, and the only path here deeper
-  // than a version number.
-  if (
-    subId &&
-    additionalParams.length === 1 &&
-    additionalParams[0] === "restore" &&
-    httpMethod === "POST"
-  ) {
-    routeParams.slug = id;
-    routeParams.versionNo = subId;
-    return {
-      service: "singles",
-      // Restoring writes the document, so it is authorized as an update.
-      operation: "update",
-      method: "restoreSingleVersion",
-      routeParams,
-    };
+  // `versions/{versionNo}/{action}`: an action on one version, matched from
+  // the table above. Restoring writes the document, so it is an update;
+  // marking a version seen changes only the caller's own marker, so it is a
+  // read of the document (see the collection parser).
+  if (subId && additionalParams.length === 1) {
+    const action = SINGLE_VERSION_ACTIONS.get(
+      `${additionalParams[0]} ${httpMethod.toUpperCase()}`
+    );
+    if (action) {
+      routeParams.slug = id;
+      routeParams.versionNo = subId;
+      return { service: "singles", ...action, routeParams };
+    }
   }
 
   // The named sub-resources of a Single's history, matched from the table above

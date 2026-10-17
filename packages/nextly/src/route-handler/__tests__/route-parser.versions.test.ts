@@ -469,6 +469,35 @@ describe("version label routes", () => {
     ).toBeUndefined();
   });
 
+  it("routes marking a version seen, as a read of the document", () => {
+    expect(
+      parseRestRoute(
+        ["collections", "posts", "entries", "e1", "versions", "3", "seen"],
+        "PUT"
+      )
+    ).toMatchObject({
+      service: "collections",
+      operation: "single",
+      method: "markEntryVersionSeen",
+      routeParams: { collectionName: "posts", entryId: "e1", versionNo: "3" },
+    });
+    expect(
+      parseRestRoute(["singles", "masthead", "versions", "3", "seen"], "PUT")
+    ).toMatchObject({
+      service: "singles",
+      operation: "single",
+      method: "markSingleVersionSeen",
+      routeParams: { slug: "masthead", versionNo: "3" },
+    });
+    // Only PUT marks; a GET of the same path is not a read that writes.
+    expect(
+      parseRestRoute(
+        ["collections", "posts", "entries", "e1", "versions", "3", "seen"],
+        "GET"
+      ).method
+    ).toBeUndefined();
+  });
+
   it("leaves other methods on a version alone", () => {
     expect(
       parseRestRoute(
@@ -505,6 +534,7 @@ describe("version routes resolve to a per-document permission", () => {
       "DELETE",
     ],
     [["collections", "posts", "entries", "e1", "versions", "autosave"], "PUT"],
+    [["collections", "posts", "entries", "e1", "versions", "3", "seen"], "PUT"],
   ];
 
   const SINGLE_ROUTES: ReadonlyArray<[string[], string]> = [
@@ -514,6 +544,7 @@ describe("version routes resolve to a per-document permission", () => {
     [["singles", "settings", "versions", "3"], "PATCH"],
     [["singles", "settings", "versions", "3", "restore"], "POST"],
     [["singles", "settings", "versions", "autosave"], "PUT"],
+    [["singles", "settings", "versions", "3", "seen"], "PUT"],
     // Publishing every language writes the document, so it must resolve to
     // `update-{slug}` rather than falling through to manage-settings.
     [["singles", "settings", "publish-all"], "POST"],

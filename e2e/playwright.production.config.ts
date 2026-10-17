@@ -62,12 +62,18 @@ export default defineConfig({
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
 
   webServer: {
-    // Reset, then seed, then BUILD, then serve. The seed runs against the same
-    // database the built server will open, and it is what creates the user this
-    // suite signs in as — there is no dev auto-login to fall back on.
+    // Reset, then seed, then install, then BUILD, then serve. The seed runs
+    // against the same database the built server will open, and it is what
+    // creates the user this suite signs in as — there is no dev auto-login to
+    // fall back on. A production boot refuses a configured plugin that
+    // `nextly plugins install` has not recorded on the database, so each plugin
+    // the playground configures is installed, as a deployment would, before
+    // the server starts. The script reads which plugins those are from the
+    // playground's config, so one added there is installed here too.
     command: [
       "node e2e/scripts/reset-e2e-db.mjs",
       "pnpm --filter playground exec tsx scripts/seed.ts",
+      "pnpm --filter playground exec tsx scripts/install-plugins.ts",
       "pnpm --filter playground exec next build",
       "pnpm --filter playground exec next start",
     ].join(" && "),
