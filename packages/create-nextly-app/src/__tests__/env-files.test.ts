@@ -757,6 +757,30 @@ NEXT_PUBLIC_SITE_URL=http://localhost:3000
     }
   );
 
+  // What Next.js makes of a value when nothing sets its variables is what the
+  // committed file gives every deployment that sets none, so that is judged:
+  // a default inside the URL makes a whole URL with a password, and a `-`
+  // default, which Next.js does not expand, leaves its text in the value.
+  it.each([
+    [
+      "DATABASE_URL",
+      "DATABASE_URL=postgresql://user:${DB_PASSWORD:-S3cr3tPassw0rd}@db:5432/app",
+      "S3cr3tPassw0rd",
+    ],
+    ["NEXTLY_SECRET", "NEXTLY_SECRET=${HOST-your-secret-here}", "your-secret"],
+  ])(
+    "warns about %s as Next.js expands it, without printing it",
+    async (key, line, credential) => {
+      await writeFile(join(dir, ".env.example"), `${line}\n`);
+
+      const { warnings } = await generateEnv(dir, sqlite);
+
+      const said = warnings.join("\n");
+      expect(said).toMatch(new RegExp(`\\.env\\.example holds .*${key}`));
+      expect(said).not.toContain(credential);
+    }
+  );
+
   // pg reads `?password=` as the password, though `URL.password` is empty.
   it("warns about a password in an example URL's query, without printing it", async () => {
     await writeFile(
@@ -1126,6 +1150,38 @@ describe("keeping .env out of git", () => {
     }
   );
 
+  // Git reads a .gitignore that is a symbolic link only as a configured
+  // excludes file, never as the repository's own, so its rule stays on this
+  // machine even where its path is above the project.
+  it("adds .env to .gitignore when only a linked .gitignore above it, set as the excludes file, ignores it", async () => {
+    const shared = await mkdtemp(join(tmpdir(), "nextly-shared-"));
+    try {
+      await writeFile(join(shared, "gitignore"), ".env\n");
+      execFileSync("git", ["init", "-q"], { cwd: dir });
+      const app = join(dir, "apps", "web");
+      await mkdir(app, { recursive: true });
+      await symlink(join(shared, "gitignore"), join(dir, "apps", ".gitignore"));
+      execFileSync("git", ["config", "core.excludesFile", "apps/.gitignore"], {
+        cwd: dir,
+      });
+      // The rule git reports is the linked file's, by its path above the app.
+      expect(
+        execFileSync("git", ["check-ignore", "-v", "--no-index", ".env"], {
+          cwd: app,
+          encoding: "utf8",
+        })
+      ).toMatch(/^apps\/\.gitignore:1:/);
+
+      await generateEnv(app, sqlite);
+
+      expect(await readFile(join(app, ".gitignore"), "utf8")).toMatch(
+        /^\.env$/m
+      );
+    } finally {
+      await rm(shared, { recursive: true, force: true });
+    }
+  });
+
   // core.excludesFile may itself be named .gitignore; it stays on this
   // machine all the same.
   it("adds .env to .gitignore when only a global excludes file named .gitignore ignores it", async () => {
@@ -1270,17 +1326,18 @@ describe("readEnvKeys", () => {
       K: "backtick # quoted",
       L: "two\nlines",
       M: "kept\\nraw",
-      N: "1-two-$C-${MISSING}",
+      // As Next.js expands it when nothing sets MISSING.
+      N: "1-two-$C-",
     });
     // `\$C` is an escaped dollar, not a reference; `${MISSING}` is one the
     // file cannot fill, so N is known only where the app runs.
     expect([...readEnvKeys("N=$A-${MISSING}\nA=1").unresolved]).toEqual(["N"]);
     // A reference is noted even when the file fills it, since the environment
-    // the app runs in can fill it differently; `\$` is no reference.
-    expect([...readEnvKeys("N=$A-x\nA=1\nO=\\$A").referencing]).toEqual(["N"]);
-    expect(
-      readEnvKeys("N=${A:-lit}-${B-two}-${C:-$D}").fallbacks.get("N")
-    ).toEqual(["lit", "two"]);
+    // the app runs in can fill it differently, and in single quotes too, which
+    // Next.js expands; `\$` is no reference.
+    expect([...readEnvKeys("N=$A-x\nA=1\nO=\\$A\nP='$A'").referencing]).toEqual(
+      ["N", "P"]
+    );
     expect([...mentioned].sort()).toEqual([
       "A",
       "B",
@@ -1297,6 +1354,33 @@ describe("readEnvKeys", () => {
       "M",
       "N",
     ]);
+  });
+
+  // The app's values never reach this process's environment, which the git
+  // and install commands it starts would inherit, and this process's own
+  // environment is not the app's.
+  it("neither reads nor writes this process's environment", () => {
+    vi.stubEnv("NEXTLY_READER_HOST_ONLY", "from-this-process");
+    try {
+      const { defined } = readEnvKeys(
+        "A=${NEXTLY_READER_HOST_ONLY:-from-file}\nNEXTLY_READER_FILE_ONLY=secret\n"
+      );
+
+      expect(defined.get("A")).toBe("from-file");
+      expect(process.env.NEXTLY_READER_FILE_ONLY).toBeUndefined();
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  // dotenv-expand recurses into a value that names itself until the stack
+  // runs out, and Next.js then loads nothing from the file. Its values are
+  // unknown here, and the read still finishes.
+  it("finishes on a value that refers to itself, and knows it only where the app runs", () => {
+    const { defined, unresolved } = readEnvKeys("A=$A\nB=ok\n");
+
+    expect(unresolved.has("A")).toBe(true);
+    expect(defined.get("B")).toBe("ok");
   });
 
   // Each case is read as Next.js 16.3.5's env loader read it.

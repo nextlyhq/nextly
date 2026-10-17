@@ -551,29 +551,23 @@ function unreadableUrls(name: string, defined: Map<string, string>): string[] {
 }
 
 /**
- * A real-looking secret already in a file a project commits. What the file
- * settles is judged, and so is each reference's literal fallback: it is in
- * the committed file word for word, and it is the value wherever the
- * variable is unset.
+ * A real-looking secret already in a file a project commits. Each value is
+ * judged as Next.js expands it when the environment the app runs in sets
+ * none of its variables, unresolved or not: that is what the committed file
+ * gives every such deployment, a reference's default included.
  */
 function checkExampleValues(name: string, keys: EnvKeys): string[] {
-  const known = knownValues(keys);
-  const written = (key: RequiredKey): string[] => {
-    const value = known.get(key);
-    return [
-      ...(value === undefined ? [] : [value]),
-      ...(keys.fallbacks.get(key) ?? []),
-    ];
-  };
   // A copied example file has to work as a .env.
-  const warnings: string[] = unreadableUrls(name, known);
-  if (written("NEXTLY_SECRET").some(secret => !isPlaceholder(secret))) {
+  const warnings: string[] = unreadableUrls(name, knownValues(keys));
+  const secret = keys.defined.get("NEXTLY_SECRET");
+  if (secret !== undefined && !isPlaceholder(secret)) {
     warnings.push(
       `${name} holds a value for NEXTLY_SECRET. An example file should hold a placeholder: ` +
         "empty it, and if the file was ever committed, replace the secret itself."
     );
   }
-  if (written("DATABASE_URL").some(hasRealPassword)) {
+  const url = keys.defined.get("DATABASE_URL");
+  if (url !== undefined && hasRealPassword(url)) {
     warnings.push(
       `${name} holds a database password in DATABASE_URL. An example file should hold a ` +
         "placeholder: replace it, and if the file was ever committed, change the password."
@@ -689,13 +683,18 @@ async function isEnvIgnored(cwd: string): Promise<boolean> {
       { cwd, env: GIT_ENV }
     );
     // Where this folder is in the repository, to tell which .gitignore files
-    // are its own or above it.
-    const { stdout: prefix } = await execa(
+    // are its own or above it, and where they are on disk.
+    const { stdout: where } = await execa(
       "git",
-      ["rev-parse", "--show-prefix"],
+      ["rev-parse", "--show-toplevel", "--show-prefix"],
       { cwd, env: GIT_ENV }
     );
-    return ignoredByProjectRule(stdout, prefix);
+    const [top, prefix = ""] = where.split("\n");
+    const source = projectRuleSource(stdout, prefix);
+    // Git reads a .gitignore that is a symbolic link only as a configured
+    // excludes file, never as the repository's own, so a rule found in one
+    // stays on this machine.
+    return source !== undefined && (await isPlainFile(path.join(top, source)));
   } catch (error) {
     // 1: inside a repository, and not ignored. Any other failure inside one
     // leaves it uncertain, so not ignored. Outside a repository, the
@@ -711,9 +710,15 @@ async function isEnvIgnored(cwd: string): Promise<boolean> {
   return gitignoreIgnores(await fs.readFile(file, "utf-8"), ".env");
 }
 
+/** A regular file, not a link: any failure to look says no. */
+async function isPlainFile(file: string): Promise<boolean> {
+  const stat = await fs.lstat(file).catch(() => null);
+  return stat !== null && stat.isFile();
+}
+
 /**
- * Whether git's deciding rule for `.env` (`check-ignore -v`:
- * `<source>:<line>:<pattern><TAB><path>`) ignores it from a `.gitignore`.
+ * The `.gitignore` git's deciding rule for `.env` comes from (`check-ignore
+ * -v`: `<source>:<line>:<pattern><TAB><path>`), when it ignores it from one.
  * Only a `.gitignore` travels with the project: `.git/info/exclude` and a
  * global excludes file belong to one machine, so on another the secret would
  * be stageable. With `-v`, git also reports a deciding `!` rule, which
@@ -726,19 +731,22 @@ async function isEnvIgnored(cwd: string): Promise<boolean> {
  * repository: `prefix` is that folder's path from the top
  * (`git rev-parse --show-prefix`, such as `apps/web/`).
  */
-function ignoredByProjectRule(verbose: string, prefix: string): boolean {
+function projectRuleSource(
+  verbose: string,
+  prefix: string
+): string | undefined {
   const match = /^(.*):\d+:(.*)\t/.exec(verbose);
-  if (!match) return false;
+  if (!match) return undefined;
   const [, source, pattern] = match;
   const folder = path.posix.dirname(source);
   const above = folder === "." ? "" : `${folder}/`;
-  return (
+  const fromProject =
     !path.isAbsolute(source) &&
     path.posix.basename(source) === ".gitignore" &&
     !above.startsWith("../") &&
     prefix.startsWith(above) &&
-    !pattern.startsWith("!")
-  );
+    !pattern.startsWith("!");
+  return fromProject ? source : undefined;
 }
 
 /**
