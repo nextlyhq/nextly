@@ -201,6 +201,18 @@ export class SingleEntryService extends BaseService {
   }
 
   /**
+   * What a release's publish of this Single would be refused with by
+   * validation, judged without writing. See the mutation service.
+   *
+   * @experimental
+   */
+  async releasePublishIssues(
+    params: Parameters<SingleMutationService["releasePublishIssues"]>[0]
+  ): ReturnType<SingleMutationService["releasePublishIssues"]> {
+    return this.mutationService.releasePublishIssues(params);
+  }
+
+  /**
    * Publish every language of a Single at once.
    *
    * The main row's status and every companion `_status` move in one

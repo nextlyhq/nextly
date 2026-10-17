@@ -52,7 +52,10 @@ import {
   SYSTEM_TIMESTAMP_KEYS,
   convertTimestampsToCamelCase,
 } from "../../../shared/lib/case-conversion";
-import { validateEntryData } from "../../../shared/lib/entry-validation";
+import {
+  validateEntryData,
+  type ValidationIssue,
+} from "../../../shared/lib/entry-validation";
 import {
   applyFieldReadAccess,
   applyFieldWriteAccess,
@@ -128,6 +131,7 @@ import type {
   SingleDocument,
   SingleResult,
   UpdateSingleOptions,
+  UserContext,
 } from "../types";
 
 import {
@@ -139,6 +143,7 @@ import {
   assertDraftsMayBePromoted,
   liveStoredDocument,
   promoteCallerFor,
+  promotionIssues,
   type PromoteGateContext,
 } from "./promote-gate";
 import {
@@ -337,6 +342,133 @@ export class SingleMutationService extends BaseService {
           defaultLocale: this.localization?.defaultLocale ?? null,
         })
       );
+    });
+  }
+
+  /**
+   * What a publish of this Single, as a release performs it, would be refused
+   * with by validation, judged now and without writing: the release's own
+   * write — the status alone, every language at once, as `user` — through the
+   * same promotion gate the write judges with. Its pending change when it has
+   * one; otherwise the stored document, when it is not live already.
+   *
+   * Field rules are not applied: the write judges those against the row it
+   * locks. Nor are the write's hooks run, since they may reach outside this
+   * process. A Single with no stored document, or no draft/published
+   * lifecycle, answers with nothing to report.
+   *
+   * @experimental
+   */
+  async releasePublishIssues(params: {
+    slug: string;
+    user: UserContext;
+  }): Promise<ValidationIssue[]> {
+    const singleMeta = await resolveSingleForRequest(
+      this.adapter,
+      this.singleRegistryService,
+      params.slug,
+      this.logger
+    );
+    if (singleMeta?.status !== true) return [];
+    const meta = singleMeta;
+    const fieldConfigs = meta.fields ?? [];
+    const companion =
+      this.localization && meta.localized === true
+        ? buildCompanionSchema({
+            slug: params.slug,
+            tableName: meta.tableName,
+            fields: meta.fields as { name: string; type: string }[],
+            dialect: this.adapter.dialect,
+            status: true,
+          })
+        : null;
+    // The wildcard resolves to the unlocalized write, whose language is the
+    // default one where the Single keeps translations.
+    const writeLocale =
+      companion && this.localization
+        ? resolveRequestedLocale(this.localization, undefined)
+        : undefined;
+    const companionExists =
+      companion !== null &&
+      writeLocale !== undefined &&
+      (await resolveCompanionReadiness(this.adapter, {
+        companionTableName: companion.companionTableName,
+        mainTableName: meta.tableName,
+        localizedColumns: companion.localizedFields.map(f => f.column),
+      })) === "ready";
+    const componentSchemas =
+      meta.versions?.drafts?.enabled === true
+        ? await resolveComponentSchemas(fieldConfigs)
+        : null;
+    // Read in a transaction of its own, which writes nothing: the gate reads
+    // the live document through one.
+    return this.adapter.transaction(async tx => {
+      const row = await tx.selectOne<SingleDocument>(meta.tableName, {});
+      if (!row) return [];
+      const { draftLocale, eligible } = resolveDraftHold({
+        collectionHasStatus: true,
+        draftsVersioningEnabled: meta.versions?.drafts?.enabled === true,
+        documentLocalized: meta.localized === true,
+        entityKind: "single",
+        fields: fieldConfigs,
+        componentSchemas,
+        namedStatus: "published",
+        liveStatus: row.status,
+        requestLocale: writeLocale ?? null,
+        defaultLocale: this.localization?.defaultLocale ?? null,
+      });
+      const pending = eligible
+        ? await new VersionsRepository(tx).findWorkingDraft(
+            { scopeKind: "single", scopeSlug: params.slug, entryId: row.id },
+            draftLocale
+          )
+        : undefined;
+      const drafts = pending
+        ? [{ locale: draftLocale ?? null, snapshot: pending.snapshot }]
+        : (await this.writeLocaleIsLive(tx, {
+              mainStatus: row.status,
+              liveStatus: row.status,
+              companion: companionExists ? companion : null,
+              entryId: row.id,
+              writeLocale,
+            }))
+          ? []
+          : [{ locale: draftLocale ?? writeLocale ?? null, snapshot: {} }];
+      const localizedFieldNames = new Set(
+        (companion?.localizedFields ?? []).map(f => f.name)
+      );
+      return promotionIssues(drafts, {
+        ...promoteCallerFor({
+          tx,
+          slug: params.slug,
+          defaultLocale: this.localization?.defaultLocale ?? null,
+          fields: fieldConfigs,
+          // Validation only; see above.
+          options: { user: params.user, overrideAccess: true },
+        }),
+        entryId: row.id,
+        toLogical: doc =>
+          this.queryService.deserializeJsonFields(
+            { id: row.id, updatedAt: row.updatedAt, ...doc },
+            meta.fields
+          ),
+        liveStoredFor: gateLocale =>
+          liveStoredDocument({
+            tx,
+            row,
+            locale: gateLocale,
+            companion,
+            companionExists,
+            fieldGroupDataService: this.fieldGroupDataService,
+            parentTable: meta.tableName,
+            fieldConfigs,
+            slug: params.slug,
+          }),
+        status: "published",
+        localizedFieldNames,
+        // Every language goes live, so none falls back to another.
+        enforceLocalizedRequired: true,
+      });
     });
   }
 

@@ -50,6 +50,7 @@ import type {
   CacheRevalidator,
   RevalidationIntent,
 } from "../../revalidation/types";
+import type { ValidationIssue } from "../../shared/lib/entry-validation";
 import type { PaginatedResponse } from "../../types/pagination";
 import { BaseService } from "../base-service";
 import type { CollectionFileManager } from "../collection-file-manager";
@@ -598,6 +599,20 @@ export class CollectionEntryService extends BaseService {
     authenticatedScope?: AuthenticatedScope;
   }): Promise<boolean> {
     return this.mutationService.canUpdateEntry(params);
+  }
+
+  /**
+   * What a release's publish of this entry would be refused with by
+   * validation, judged without writing. See the mutation service.
+   *
+   * @experimental
+   */
+  async releasePublishIssues(params: {
+    collectionName: string;
+    entryId: string;
+    user: UserContext;
+  }): Promise<ValidationIssue[]> {
+    return this.mutationService.releasePublishIssues(params);
   }
 
   async updateEntry(
