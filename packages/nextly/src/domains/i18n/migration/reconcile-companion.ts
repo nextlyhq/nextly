@@ -102,6 +102,13 @@ export interface ReconcileCompanionArgs {
    * changed, so only the copy of the default language's value and the drop are emitted here.
    */
   sharedAfterArchived?: boolean;
+  /**
+   * Companion columns THIS database already carries for fields the change adds as translated. A
+   * save that MySQL, which commits each schema statement, refused part-way leaves such a column
+   * while the registry still lacks the field, so the next save must not add it again. Describes
+   * one database only: a migration file is planned without it (`buildCompanionTransitionPlans`).
+   */
+  presentOnCompanion?: readonly string[];
 }
 
 /**
@@ -245,6 +252,30 @@ function buildUpdatedAtBackfill(args: {
   ];
 }
 
+/**
+ * The ADDs for translated fields new to an existing companion, skipping any column this database
+ * already has (`presentOnCompanion`), so a re-save after a part-applied one does not add it twice.
+ */
+function addedCompanionColumnStatements(
+  args: ReconcileCompanionArgs,
+  oldNames: ReadonlySet<string>,
+  companionTable: string
+): string[] {
+  const { dialect, builtBy } = args;
+  const present = new Set(args.presentOnCompanion ?? []);
+  return args.newLocalized
+    .filter(f => !oldNames.has(f.name))
+    .map(f => fieldToLocalizedColumnSpec(f, dialect, builtBy))
+    .filter(
+      (col): col is NonNullable<typeof col> =>
+        col != null && !present.has(col.name)
+    )
+    .map(
+      col =>
+        `ALTER TABLE ${q(companionTable, dialect)} ADD COLUMN ${q(col.name, dialect)} ${ddlType(col, dialect)}`
+    );
+}
+
 export function buildCompanionReconcileStatements(
   args: ReconcileCompanionArgs
 ): string[] {
@@ -280,17 +311,11 @@ export function buildCompanionReconcileStatements(
   // Companion already exists — diff the localized columns and ADD/DROP the delta.
   const oldNames = new Set(oldLocalized.map(f => f.name));
   const newNames = new Set(newLocalized.map(f => f.name));
-  const stmts: string[] = [];
-
-  for (const f of newLocalized) {
-    if (oldNames.has(f.name)) continue;
-    const col = fieldToLocalizedColumnSpec(f, dialect, builtBy);
-    if (col) {
-      stmts.push(
-        `ALTER TABLE ${q(companionTable, dialect)} ADD COLUMN ${q(col.name, dialect)} ${ddlType(col, dialect)}`
-      );
-    }
-  }
+  const stmts: string[] = addedCompanionColumnStatements(
+    args,
+    oldNames,
+    companionTable
+  );
   const sharedAfter = new Set(args.sharedAfter ?? []);
   for (const f of oldLocalized) {
     if (newNames.has(f.name)) continue;
@@ -459,6 +484,8 @@ export interface CompanionTransitionArgs {
   wasStatus: boolean;
   /** Whether the existing companion physically has `_status` (see ReconcileCompanionArgs). */
   companionHasStatus?: boolean;
+  /** Companion columns this database already has for added translated fields (see ReconcileCompanionArgs). */
+  presentOnCompanion?: readonly string[];
   /**
    * Return the archive writes of fields leaving translation in `beforeMain`, for a caller that runs
    * them before it alters the main table, rather than among the companion statements after it.
@@ -692,6 +719,7 @@ export function buildCompanionTransitionStatements(
         defaultLocale,
         sharedAfter,
         sharedAfterArchived: archiveFirst,
+        presentOnCompanion: args.presentOnCompanion,
       }),
       needsArchive: sharedAfter.length > 0,
       companionDropped: false,
@@ -714,7 +742,8 @@ export function buildCompanionTransitionStatements(
  *
  * Both plans come from one call site so the artefact cannot accidentally be built from local
  * introspection. `local` is omitted when the two agree — every case but a disable meeting retained
- * columns — so a caller holding one plan cannot pick the wrong one.
+ * columns, or a re-save meeting companion columns a refused save left — so a caller holding one
+ * plan cannot pick the wrong one.
  */
 export function buildCompanionTransitionPlans(
   args: CompanionTransitionArgs & {
@@ -725,8 +754,11 @@ export function buildCompanionTransitionPlans(
   const artefact = buildCompanionTransitionStatements({
     ...args,
     existingMainColumns: undefined,
+    presentOnCompanion: undefined,
   });
-  if (!args.existingMainColumns?.length) return { artefact };
+  if (!args.existingMainColumns?.length && !args.presentOnCompanion?.length) {
+    return { artefact };
+  }
 
   const local = buildCompanionTransitionStatements(args);
   const same =

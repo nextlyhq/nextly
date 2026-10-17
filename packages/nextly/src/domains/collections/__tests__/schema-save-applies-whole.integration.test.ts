@@ -173,14 +173,17 @@ describeEachDialect("a schema save whose migration fails", dialect => {
   });
 
   it("makes a field unique when its entries' values already differ", async () => {
-    await postsWith(
-      [{ name: "heading", type: "text" }],
-      [{ heading: "One" }, { heading: "Two" }]
-    );
+    // Short, so MySQL can index it: an unbounded text column is refused as unkeyable there.
+    const heading = {
+      name: "heading",
+      type: "text",
+      options: { variant: "short" },
+    };
+    await postsWith([heading], [{ heading: "One" }, { heading: "Two" }]);
 
     const saved = await handler().updateCollection(
       { collectionName: "posts" },
-      { fields: [{ name: "heading", type: "text", unique: true }] }
+      { fields: [{ ...heading, unique: true }] }
     );
 
     expect(saved.success, JSON.stringify(saved)).toBe(true);

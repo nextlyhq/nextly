@@ -897,6 +897,32 @@ export class DynamicCollectionService extends BaseService {
     return retained;
   }
 
+  /**
+   * Which fields this save makes translated already have their companion column here. The same
+   * presence question as for the main table, asked of the companion: a save MySQL refused
+   * part-way can have added the column, and the next save plans from it.
+   */
+  private async joiningColumnsOnCompanion(
+    companionTable: string | null,
+    args: {
+      newFields: FieldDefinition[];
+      isLocalized: boolean;
+      wasLocalized: boolean;
+    },
+    localizedOldNames: ReadonlySet<string>
+  ): Promise<string[]> {
+    if (companionTable === null || !args.wasLocalized) return [];
+    const joining = new Set(
+      resolveLocalizedFieldNames(args.newFields, args.isLocalized)
+    );
+    const added = args.newFields.filter(
+      f => joining.has(f.name) && !localizedOldNames.has(f.name)
+    );
+    return (
+      await localizedColumnsOnMain(this.adapter, companionTable, added)
+    ).map(c => c.name);
+  }
+
   private async buildCompanionTransitionSQL(args: {
     slug: string;
     tableName: string;
@@ -958,6 +984,11 @@ export class DynamicCollectionService extends BaseService {
         args.tableName,
         args.oldFields.filter(f => localizedOldNames.has(f.name))
       ).then(cols => cols.map(c => c.name)),
+      presentOnCompanion: await this.joiningColumnsOnCompanion(
+        companionExists ? companionTable : null,
+        args,
+        localizedOldNames
+      ),
     });
 
     // Separate statements with the migration-file breakpoint marker (not blank lines): the file
