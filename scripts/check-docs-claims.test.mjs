@@ -3058,116 +3058,40 @@ describe("documented-key-prefix repair", () => {
 });
 
 describe("plugin-route-mount", () => {
-  // The mount is read from two places that must agree: where the base template keeps its
-  // catch-all route, and the path create-nextly-app builds when it adds Nextly to an existing
-  // app. Either spelling of that path is readable.
-  const tree = generator => ({
-    "templates/base/src/app/admin/api/[[...params]]/route.ts":
-      'import { createDynamicHandlers } from "nextly/runtime";\n',
-    "packages/create-nextly-app/src/generators/routes.ts": generator,
-    "packages/nextly/src/plugins/routes/route-path.ts":
-      'export const PLUGIN_NAMESPACE_SEGMENT = "plugins";\n',
-    "docs/plugins/routes.mdx": "A plugin route answers at `/admin/api/plugins/@acme/thing/hello`.\n",
-  });
-  const asTemplateString =
-    "await writeNew(cwd, `${projectInfo.appDir}/admin/api/[[...params]]/route.ts`, T);\n";
-  const asPathJoin =
-    'const routePath = path.join(\n  cwd,\n  projectInfo.appDir,\n  "admin",\n  "api",\n  "[[...params]]",\n  "route.ts"\n);\n';
-
-  it("reads the mount from a generator that builds the path as a template string", async () => {
-    expect(await checksFor(tree(asTemplateString))).not.toContain("plugin-route-mount-unreadable");
+  // The mount is read from where the base template keeps its catch-all route. That an existing
+  // app gets the same route from create-nextly-app's generator is that package's own test, which
+  // runs the generator, so nothing here depends on how the generator's source spells the path.
+  const tree = (route = "templates/base/src/app/admin/api/[[...params]]/route.ts", docs = "/admin/api") => ({
+    [route]: 'import { createDynamicHandlers } from "nextly/runtime";\n',
+    "packages/nextly/src/plugins/routes/route-path.ts": 'export const PLUGIN_NAMESPACE_SEGMENT = "plugins";\n',
+    "docs/plugins/routes.mdx": `A plugin route answers at \`${docs}/plugins/@acme/thing/hello\`.\n`,
   });
 
-  it("reads the mount from a generator that builds the path with path.join", async () => {
-    expect(await checksFor(tree(asPathJoin))).not.toContain("plugin-route-mount-unreadable");
+  it("checks the docs against the template's mount", async () => {
+    const checks = await checksFor(tree());
+    expect(checks).not.toContain("plugin-route-mount-unreadable");
+    expect(checks).not.toContain("plugin-route-mount");
   });
 
-  it("reads the mount from a template string that joins a constant folder", async () => {
-    // The folder is named once, as a constant other generators reuse, and joined into the path.
-    const asFolderConstant =
-      'export const ADMIN_API_FOLDER = ["admin", "api", "[[...params]]"] as const;\n' +
-      'await writeNew(cwd, `${projectInfo.appDir}/${ADMIN_API_FOLDER.join("/")}/route.ts`, T);\n';
-    expect(await checksFor(tree(asFolderConstant))).not.toContain("plugin-route-mount-unreadable");
-  });
-
-  it("reports the mount a constant folder spells when it differs from the template", async () => {
-    const findings = await findingsFor(
-      tree(
-        'const FOLDER = ["cms", "api", "[[...params]]"] as const;\n' +
-          'await writeNew(cwd, `${projectInfo.appDir}/${FOLDER.join("/")}/route.ts`, T);\n'
-      )
-    );
-    expect(findings.find(f => f.check === "plugin-route-mount-unreadable")?.message).toContain(
-      "generates /cms/api while the template mounts at /admin/api"
+  it("follows the template when its route moves", async () => {
+    const findings = await findingsFor(tree("templates/base/src/app/cms/api/[[...params]]/route.ts"));
+    expect(findings.find(f => f.check === "plugin-route-mount")?.message).toContain(
+      "the handler is mounted at /cms/api"
     );
   });
 
-  it("fails closed on a folder that is not a constant of strings", async () => {
-    // A `let` can be reassigned and an array without `as const` changed before the write, and a
-    // computed item is not known here.
-    for (const declaration of [
-      'let FOLDER = ["admin", "api", "[[...params]]"] as const;\n',
-      'const FOLDER = ["admin", "api", "[[...params]]"];\n',
-      'const FOLDER = ["admin", segment, "[[...params]]"] as const;\n',
-    ]) {
-      expect(
-        await checksFor(
-          tree(declaration + 'await writeNew(cwd, `${projectInfo.appDir}/${FOLDER.join("/")}/route.ts`, T);\n')
-        )
-      ).toContain("plugin-route-mount-unreadable");
-    }
+  it("does not read the generator's source", async () => {
+    // A generator whose path no reader could follow must not make the mount unreadable.
+    const checks = await checksFor({
+      ...tree(),
+      "packages/create-nextly-app/src/generators/routes.ts": "await writeNew(cwd, buildRoutePath(projectInfo.appDir), T);\n",
+    });
+    expect(checks).not.toContain("plugin-route-mount-unreadable");
   });
 
-  it("fails closed on a generator whose path it cannot read", async () => {
-    expect(await checksFor(tree("const routePath = buildPath(cwd);\n"))).toContain(
-      "plugin-route-mount-unreadable"
-    );
-  });
-
-  it("fails closed on a generator that spells two different mounts", async () => {
-    // A stale path.join left in the code must not stand in for the path it builds.
-    const findings = await findingsFor(
-      tree(
-        `const unused = path.join(cwd, projectInfo.appDir, "admin", "api", "[[...params]]", "route.ts");\n` +
-          "await writeNew(cwd, `${projectInfo.appDir}/cms/api/[[...params]]/route.ts`, T);\n"
-      )
-    );
-    expect(findings.find(f => f.check === "plugin-route-mount-unreadable")?.message).toContain(
-      "more than one way"
-    );
-  });
-
-  it("fails closed when only a comment still spells the path", async () => {
-    // The code builds the path some new way; a comment left behind must not pass for it.
-    expect(
-      await checksFor(
-        tree(
-          "// was: await writeNew(cwd, `${projectInfo.appDir}/admin/api/[[...params]]/route.ts`, T);\n" +
-            "await writeNew(cwd, buildRoutePath(projectInfo.appDir), T);\n"
-        )
-      )
-    ).toContain("plugin-route-mount-unreadable");
-  });
-
-  it("reads past comment markers that sit inside strings", async () => {
-    // "/*" and "*/" in string data are not a comment, and must not hide the call between them.
-    expect(
-      await checksFor(
-        tree(
-          'const open = "/*";\n' +
-            "await writeNew(cwd, `${projectInfo.appDir}/admin/api/[[...params]]/route.ts`, T);\n" +
-            'const close = "*/";\n'
-        )
-      )
-    ).not.toContain("plugin-route-mount-unreadable");
-  });
-
-  it("reports a generator that mounts somewhere other than the template", async () => {
-    const findings = await findingsFor(
-      tree("await writeNew(cwd, `${projectInfo.appDir}/cms/api/[[...params]]/route.ts`, T);\n")
-    );
-    expect(findings.find(f => f.check === "plugin-route-mount-unreadable")?.message).toContain(
-      "generates /cms/api while the template mounts at /admin/api"
-    );
+  it("fails closed when the template holds no route to read the mount from", async () => {
+    const files = tree();
+    delete files["templates/base/src/app/admin/api/[[...params]]/route.ts"];
+    expect(await checksFor(files)).toContain("plugin-route-mount-unreadable");
   });
 });

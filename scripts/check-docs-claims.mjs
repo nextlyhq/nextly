@@ -29,7 +29,6 @@ import {
 import { basename, dirname, extname, join, relative, sep } from "node:path";
 
 import { compile } from "@mdx-js/mdx";
-import ts from "typescript";
 
 import { splitFrontmatter } from "./check-docs-compile.mjs";
 import {
@@ -1018,11 +1017,12 @@ function metaReachability(repoRoot, tracked, findings) {
  * generated project. It is the first thing a plugin author hits.
  *
  * Everything this compares against is DERIVED on each run: the namespace
- * segment from its one declaration, and the mount from BOTH places that decide
- * it, since `create-nextly-app` scaffolds into an empty project from the
- * template and into an existing one from its own generator. Two sources that
- * disagree mean the docs cannot state one answer, so this refuses instead of
- * picking a side.
+ * segment from its one declaration, and the mount from where the base template
+ * keeps its catch-all route. `create-nextly-app` writes the same route into an
+ * existing app from its own generator, and its test `admin-api-mount.test.ts`
+ * runs that generator and holds the file it writes to the template's, so the
+ * two cannot disagree. The generator's source is not read here: how it spells
+ * the path changes with the code, and only where the file lands matters.
  *
  * Comments in published source are read too. The wrong claim started in a
  * `@public` JSDoc, so a guard that watched only Markdown would leave the
@@ -1035,102 +1035,6 @@ const NAMESPACE_DECLARATION =
 const NAMESPACE_SOURCE = "packages/nextly/src/plugins/routes/route-path.ts";
 const TEMPLATE_APP_DIR = "templates/base/src/app/";
 const TEMPLATE_CATCH_ALL = "/[[...params]]/route.ts";
-const GENERATOR_SOURCE = "packages/create-nextly-app/src/generators/routes.ts";
-// The generator builds the route's path in one of two spellings: path.join of
-// quoted segments, or a template string after the app directory given to
-// writeNew, whose folders may be a constant joined in (`${FOLDER.join("/")}`).
-// Both are read from the syntax tree, where a comment is no code and a string's
-// contents are only a string.
-const CATCH_ALL_SEGMENT = "[[...params]]";
-const CATCH_ALL_TAIL = /^((?:\/[^/]+)*)\/\[\[\.\.\.params\]\]\/route\.ts$/;
-const isCwd = (node, file) => node !== undefined && node.getText(file) === "cwd";
-const isAppDir = (node, file) =>
-  ts.isPropertyAccessExpression(node) && `${node.expression.getText(file)}.${node.name.text}` === "projectInfo.appDir";
-const isCatchAll = node => ts.isStringLiteral(node) && node.text === CATCH_ALL_SEGMENT;
-
-/** The string segments before a `"[[...params]]"` argument, or null when there is none or one is not a string. */
-function literalSegmentsBeforeCatchAll(args) {
-  const end = args.findIndex(isCatchAll);
-  const before = args.slice(0, end);
-  return end >= 0 && before.every(ts.isStringLiteral) ? before.map(segment => segment.text) : null;
-}
-
-/** `path.join(cwd, projectInfo.appDir, "a", "b", "[[...params]]", ...)`: the segments before the catch-all. */
-function pathJoinSegments(args, file) {
-  return isCwd(args[0], file) && isAppDir(args[1], file) ? literalSegmentsBeforeCatchAll(args.slice(2)) : null;
-}
-
-/** The items of `["a", "b"] as const`, or null for anything else: without `as const` the array can be changed before it is read. */
-function readonlyStringItems(node) {
-  const checks = [
-    () => node !== undefined && ts.isAsExpression(node) && ts.isConstTypeReference(node.type),
-    () => ts.isArrayLiteralExpression(node.expression) && node.expression.elements.every(ts.isStringLiteral),
-  ];
-  return checks.every(check => check()) ? node.expression.elements.map(item => item.text) : null;
-}
-
-/** Every top-level `const NAME = ["a", "b"] as const`, by name: the folders a path can join in. */
-function constantFolders(file) {
-  const constants = file.statements.filter(
-    statement => ts.isVariableStatement(statement) && (statement.declarationList.flags & ts.NodeFlags.Const) !== 0
-  );
-  const folders = new Map();
-  for (const declaration of constants.flatMap(statement => statement.declarationList.declarations)) {
-    const items = readonlyStringItems(declaration.initializer);
-    if (ts.isIdentifier(declaration.name) && items !== null) folders.set(declaration.name.text, items);
-  }
-  return folders;
-}
-
-/** `NAME.join("/")` over one of the constant folders: its items joined, or null. */
-function joinedFolder(node, folders, file) {
-  const checks = [
-    () => ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression),
-    () => node.expression.name.text === "join" && node.arguments.length === 1,
-    () => ts.isStringLiteral(node.arguments[0]) && folders.has(node.expression.expression.getText(file)),
-  ];
-  return checks.every(check => check())
-    ? folders.get(node.expression.expression.getText(file)).join(node.arguments[0].text)
-    : null;
-}
-
-/** The text after `${projectInfo.appDir}` in a template string, with each folder joined in spelled out; null when one is not readable. */
-function textAfterAppDir(node, file, folders) {
-  const checks = [
-    () => node !== undefined && ts.isTemplateExpression(node),
-    () => node.head.text === "" && isAppDir(node.templateSpans[0].expression, file),
-  ];
-  if (!checks.every(check => check())) return null;
-  const [first, ...rest] = node.templateSpans;
-  const joined = rest.map(span => joinedFolder(span.expression, folders, file));
-  return joined.includes(null)
-    ? null
-    : first.literal.text + rest.map((span, index) => joined[index] + span.literal.text).join("");
-}
-
-/** `writeNew(cwd, \`${projectInfo.appDir}/a/b/[[...params]]/route.ts\`, ...)`: the segments before the catch-all. */
-function writeNewSegments(args, file, folders) {
-  const text = isCwd(args[0], file) ? textAfterAppDir(args[1], file, folders) : null;
-  const tail = text === null ? null : CATCH_ALL_TAIL.exec(text);
-  return tail === null ? null : tail[1].split("/").filter(Boolean);
-}
-
-/** The segments of every catch-all route path the generator's code builds. */
-function generatorMountSegments(source) {
-  const file = ts.createSourceFile("routes.ts", source, ts.ScriptTarget.Latest, false, ts.ScriptKind.TS);
-  const readers = { "path.join": pathJoinSegments, writeNew: writeNewSegments };
-  const folders = constantFolders(file);
-  const found = [];
-  const visit = node => {
-    const read = ts.isCallExpression(node) ? readers[node.expression.getText(file)] : undefined;
-    const segments = read ? read(node.arguments, file, folders) : null;
-    if (segments !== null) found.push(segments);
-    ts.forEachChild(node, visit);
-  };
-  visit(file);
-  return found;
-}
-
 /** The mount the base template hard-codes by where its route file sits. */
 function templateMount(repoRoot, tracked, refuse) {
   const candidates = tracked
@@ -1159,39 +1063,6 @@ function templateMount(repoRoot, tracked, refuse) {
   )}`;
 }
 
-/**
- * The mount the generator's source builds, as `{ mount }`, or `{ problem }` when
- * it cannot be told. Every occurrence of either spelling must name the same
- * mount: a stale one (an unused call left behind, say) standing in for the
- * path the code builds would let the docs be checked against the wrong address.
- */
-function readGeneratorMount(source) {
-  const mounts = [...new Set(generatorMountSegments(source).map(parts => `/${parts.join("/")}`))];
-  if (mounts.length === 0) {
-    return { problem: "no longer builds the catch-all route path in the shape this reads, so the mount it generates is unknown" };
-  }
-  if (mounts.length > 1) {
-    return {
-      problem: `spells the catch-all route path in more than one way (${mounts.join(", ")}), so the mount it generates is unknown`,
-    };
-  }
-  return mounts[0] === "/" ? { problem: "builds a catch-all route path with no leading segments" } : { mount: mounts[0] };
-}
-
-/** The mount the generator builds when scaffolding into an existing project. */
-function generatorMount(repoRoot, refuse) {
-  let source;
-  try {
-    source = readFileSync(join(repoRoot, GENERATOR_SOURCE), "utf-8");
-  } catch {
-    refuse(GENERATOR_SOURCE, "could not be read, so the mount it generates is unknown");
-    return null;
-  }
-  const { mount, problem } = readGeneratorMount(source);
-  if (problem !== undefined) refuse(GENERATOR_SOURCE, problem);
-  return mount ?? null;
-}
-
 function pluginRouteMount(repoRoot, tracked, findings, isExempt) {
   const refuse = (file, message) => {
     findings.push({
@@ -1205,15 +1076,7 @@ function pluginRouteMount(repoRoot, tracked, findings, isExempt) {
   // Fails closed on every input. Checking the docs against a mount this could
   // not establish would report "no findings" for a question it never asked.
   const fromTemplate = templateMount(repoRoot, tracked, refuse);
-  const fromGenerator = generatorMount(repoRoot, refuse);
-  if (fromTemplate === null || fromGenerator === null) return;
-  if (fromTemplate !== fromGenerator) {
-    refuse(
-      GENERATOR_SOURCE,
-      `generates ${fromGenerator} while the template mounts at ${fromTemplate}; a scaffolded project's plugin routes would answer at two different addresses, so the docs cannot name one`
-    );
-    return;
-  }
+  if (fromTemplate === null) return;
 
   let namespace;
   try {
