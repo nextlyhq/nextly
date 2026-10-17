@@ -2100,10 +2100,10 @@ export class CollectionMutationService extends BaseService {
       params.entryIds.map(id => [id, []])
     );
     if (params.entryIds.length === 0) return issues;
-    const collection = await this.collectionService.getCollection(
-      params.collectionName
-    );
-    if ((collection as { status?: boolean }).status !== true) return issues;
+    const collection = await this.releaseCollection(params.collectionName);
+    if ((collection as { status?: boolean } | null)?.status !== true) {
+      return issues;
+    }
     const shared = await this.releaseWriteContext(
       collection,
       params.collectionName
@@ -2240,10 +2240,10 @@ export class CollectionMutationService extends BaseService {
   }): Promise<Map<string, string[]>> {
     const held = new Map<string, string[]>(params.entryIds.map(id => [id, []]));
     if (params.entryIds.length === 0) return held;
-    const collection = await this.collectionService.getCollection(
-      params.collectionName
-    );
-    if (!this.keepsWorkingDrafts(collection)) return held;
+    const collection = await this.releaseCollection(params.collectionName);
+    if (collection === null || !this.keepsWorkingDrafts(collection)) {
+      return held;
+    }
     const drafted = await new VersionsRepository(
       this.adapter
     ).findPendingChangeLocales("collection", params.collectionName, [
@@ -2256,6 +2256,25 @@ export class CollectionMutationService extends BaseService {
       );
     }
     return held;
+  }
+
+  /**
+   * The collection a release's member names, or `null` once it has been
+   * deleted. A deleted collection holds no drafts and no document to publish:
+   * the member is a document that is gone, which the release's existence
+   * check reports, so the readiness answer must not fail over it.
+   */
+  private async releaseCollection(
+    collectionName: string
+  ): Promise<object | null> {
+    try {
+      return (await this.collectionService.getCollection(
+        collectionName
+      )) as object;
+    } catch (error) {
+      if (NextlyError.isCode(error, "NOT_FOUND")) return null;
+      throw error;
+    }
   }
 
   /** Whether the collection keeps working drafts at all. */

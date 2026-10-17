@@ -67,6 +67,18 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
         },
         fields: [text({ name: "title" })],
       }),
+      // Deleted part-way through a case, with a release still naming it.
+      defineCollection({
+        slug: "scratch",
+        status: true,
+        access: {
+          read: () => true,
+          update: () => true,
+          publish: () => true,
+          unpublish: () => true,
+        },
+        fields: [text({ name: "title" })],
+      }),
       // No rule for taking a memo down: who may is decided by grants alone.
       defineCollection({
         slug: "memos",
@@ -116,7 +128,7 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
 /** A document, stored through the ordinary write. */
 async function entry(
   t: TestNextly,
-  collection: "articles" | "notices" | "memos",
+  collection: "articles" | "notices" | "memos" | "scratch",
   status: "draft" | "published" = "draft"
 ): Promise<string> {
   const handler = t.getService("collectionsHandler") as CollectionsHandler;
@@ -150,7 +162,7 @@ async function releaseOf(
   t: TestNextly,
   author: string,
   documents: Array<{
-    collection: "articles" | "notices" | "memos";
+    collection: "articles" | "notices" | "memos" | "scratch";
     id: string;
     action?: "publish" | "unpublish";
   }>
@@ -381,6 +393,40 @@ describe.each(getConfiguredTestDialects())(
           })
         )
       ).toEqual([{ memberId: member.id, code: "FIELD_NOT_PERMITTED" }]);
+    });
+
+    it("reports a document whose collection was deleted as gone, without failing the check", async () => {
+      const t = await boot(dialect);
+      const author = await seedPlainAuthor(t);
+      const id = await entry(t, "scratch");
+      const { releaseId, memberIds } = await releaseOf(t, author, [
+        { collection: "scratch", id },
+      ]);
+      await (
+        t.getService("collectionRegistryService") as {
+          deleteCollection: (
+            slug: string,
+            options: { force: boolean }
+          ) => Promise<unknown>;
+        }
+      ).deleteCollection("scratch", { force: true });
+
+      const found = await t.nextly.releases.readiness({ releaseId });
+      expect(found.hard).toContainEqual(
+        expect.objectContaining({
+          memberId: memberIds[0],
+          code: "DOCUMENT_GONE",
+        })
+      );
+      expect(
+        await problemsOf(
+          t.nextly.releases.schedule({
+            id: releaseId,
+            at: LATER,
+            timezone: "UTC",
+          })
+        )
+      ).toContainEqual({ memberId: memberIds[0], code: "DOCUMENT_GONE" });
     });
 
     it("checks every document of a large release, and refuses it for a problem in the last one", async () => {
