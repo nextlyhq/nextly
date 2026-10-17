@@ -93,13 +93,14 @@ The response says which baseline it used. Baselines are experimental.
 Nextly remembers, per person, document and language, the version each person last looked
 at, so a comparison can show what changed since then (`?to=9&baseline=last-viewed`).
 
-- **Only an explicit mark records it.** The admin sends `PUT …/versions/{n}/seen` when it
-  shows a version or a comparison to a signed-in person (on a collection entry,
+- **Only an explicit mark records it.** A client that shows a version or a comparison to a
+  signed-in person sends `PUT …/versions/{n}/seen` (on a collection entry,
   `/collections/{slug}/entries/{id}/versions/{n}/seen`; on a Single,
   `/singles/{slug}/versions/{n}/seen`). Reading a version, a comparison or the history
   records nothing, so a prefetch or a second tab never moves it. The mark needs read access
   to the document, and an API key or the system is refused: only a person's own screen
-  says what they saw.
+  says what they saw. The admin's history screens do not send it yet, so until they do,
+  `last-viewed` answers only for a client that marks what it shows.
 - **It counts by visit.** A mark more than 30 minutes after that marker's last one starts a
   new visit. "Last looked at" is the furthest version of the previous visit, and within a
   visit the marker only moves forward. Each language, and each document, keeps its own

@@ -95,12 +95,13 @@ export interface ComparisonBaseline {
     | Promise<number | BaselineSubstitute | null>;
   /**
    * Why there is nothing to compare with, in the reader's terms, when the
-   * baseline resolves to nothing or to the target itself (`found`). Without
-   * one, the reader is told the version has no such baseline.
+   * baseline resolves to nothing or to the target itself (`found`, with the
+   * version it stood in for when it substituted one). Without one, the reader
+   * is told the version has no such baseline.
    */
   unavailable?(
     context: BaselineContext,
-    found: number | null
+    found: BaselineChoice | null
   ): string | Promise<string>;
 }
 
@@ -259,6 +260,11 @@ registerComparisonBaseline({
     if (userId === null) {
       return "Only a signed-in person has a version they last looked at.";
     }
+    // The nearest older version kept, standing in for one retention removed,
+    // can be the target itself: that is not the version they looked at.
+    if (found?.replaces !== undefined) {
+      return "The version you last looked at was removed, and the nearest older version kept is this one.";
+    }
     if (found !== null) {
       return "This is the version you last looked at, so nothing has changed since.";
     }
@@ -348,9 +354,7 @@ export async function resolveComparisonPair(
   };
   const choice = await chooseComparisonBaseline(name, context);
   if (choice === null || choice.versionNo === target) {
-    throw noBaseline(
-      await unavailableMessage(name, context, choice?.versionNo ?? null)
-    );
+    throw noBaseline(await unavailableMessage(name, context, choice));
   }
   return {
     from: choice.versionNo,
@@ -412,7 +416,7 @@ function defaultBaseline(
 async function unavailableMessage(
   name: string,
   context: BaselineContext,
-  found: number | null
+  found: BaselineChoice | null
 ): Promise<string> {
   const baseline = requireBaseline(name);
   return baseline.unavailable

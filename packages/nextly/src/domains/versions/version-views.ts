@@ -293,13 +293,3 @@ export async function deleteViewsForEntity(
     ],
   });
 }
-
-/** Remove a person's markers, when the person is deleted. */
-export async function deleteViewsForUser(
-  db: VersionsDbApi,
-  userId: string
-): Promise<void> {
-  await db.delete(VIEWS_TABLE, {
-    and: [{ column: "userId", op: "=" as const, value: userId }],
-  });
-}

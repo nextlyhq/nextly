@@ -399,6 +399,25 @@ describe.each(getConfiguredTestDialects())(
       });
     });
 
+    it("says the version looked at was removed when the one standing in for it is the target", async () => {
+      const doc = await documentWithHistory(dialect, ["en", "en", "en"]);
+      await doc.mark(ANA, 3);
+      await doc.leave(ANA);
+      await current!.adapter.delete("nextly_versions", {
+        and: [
+          { column: "entryId", op: "=", value: doc.entryId },
+          { column: "versionNo", op: "=", value: 3 },
+        ],
+      });
+
+      // Version 2 stands in for the removed 3, and is the target itself.
+      const refused = await refusal(doc.compareSinceLooked(ANA, 2));
+      expect(refused?.publicData?.errors?.[0]).toMatchObject({
+        code: "NO_BASELINE",
+        message: expect.stringMatching(/was removed/),
+      });
+    });
+
     it("marks where a person last looked in the history list, and records nothing", async () => {
       const doc = await documentWithHistory(dialect, ["en", "en", "en", "en"]);
       await doc.mark(ANA, 2);

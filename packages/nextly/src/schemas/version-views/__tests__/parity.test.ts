@@ -7,6 +7,9 @@
  * @module schemas/version-views/__tests__/parity.test
  */
 import { Column, is, type Table } from "drizzle-orm";
+import { getTableConfig as mysqlTableConfig } from "drizzle-orm/mysql-core";
+import { getTableConfig as pgTableConfig } from "drizzle-orm/pg-core";
+import { getTableConfig as sqliteTableConfig } from "drizzle-orm/sqlite-core";
 import { describe, expect, it } from "vitest";
 
 import { CORE_TABLE_NAMES, getCoreSchema } from "../../index";
@@ -28,13 +31,29 @@ describe("nextly_version_views is identical across dialects", () => {
     expect(columnNames(sl.nextlyVersionViewsSqlite)).toEqual(canonical);
   });
 
-  it("carries the view_key digest the one-marker rule is enforced on", () => {
-    for (const table of [
-      pg.nextlyVersionViewsPg,
-      my.nextlyVersionViewsMysql,
-      sl.nextlyVersionViewsSqlite,
-    ]) {
-      expect(columnNames(table)).toContain("viewKey:view_key");
+  it("enforces one marker per person, document and part with a unique index on view_key alone", () => {
+    // The index itself, not the column: a dialect that kept the column and
+    // lost the unique index would let two first marks of one marker both
+    // insert, and a read would then find either.
+    const indexes = [
+      pgTableConfig(pg.nextlyVersionViewsPg).indexes,
+      mysqlTableConfig(my.nextlyVersionViewsMysql).indexes,
+      sqliteTableConfig(sl.nextlyVersionViewsSqlite).indexes,
+    ];
+    for (const declared of indexes) {
+      const onViewKey = declared
+        .map(index => index.config)
+        .filter(config =>
+          config.columns.every(
+            column => "name" in column && column.name === "view_key"
+          )
+        );
+      expect(onViewKey).toEqual([
+        expect.objectContaining({
+          name: "nextly_version_views_key_uidx",
+          unique: true,
+        }),
+      ]);
     }
   });
 });
