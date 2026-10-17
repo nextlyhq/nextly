@@ -454,6 +454,54 @@ describe("a component save judged against the locks inside its hosts", () => {
     expect(messages.join(" ")).toContain('"acme/fixed-shelf"');
   });
 
+  it("judges the hosts of a variant whose value for a stored locked exposure changes", async () => {
+    // The component already stores an exposure of the text's "tone" inside
+    // its sealed slot. Its variant "loud" sets nothing for it; the save gives
+    // the variant a value, so every page picking the variant draws the sealed
+    // text changed, with no root, depth, exposure or slot moved.
+    const sealed = (tone?: string) =>
+      component([node("s1", "acme/sealed", { body: [node("t1")] })], {
+        exposed: [
+          {
+            id: "tone",
+            label: "Tone",
+            nodeId: "t1",
+            propPath: "tone",
+            type: "select",
+            options: [{ value: "loud", label: "Loud" }],
+          },
+        ],
+        variants: {
+          loud: {
+            label: "Loud",
+            overrides: tone === undefined ? {} : { tone },
+          },
+        },
+      });
+    const { readStored } = storeOf({
+      [COMPONENTS]: { promo: { published: sealed() } },
+      pages: {
+        home: {
+          published: page([
+            {
+              ...placing("i1", "promo"),
+              props: { componentId: "promo", variant: "loud" },
+            },
+          ]),
+        },
+      },
+    });
+    const { hostsOf } = listing([hostPage]);
+
+    const issues = await judge(
+      sealed("loud"),
+      write(readStored, COMPONENTS, "promo"),
+      { hostsOf, status: "published" }
+    );
+
+    expect(codes(issues)).toEqual(["COMPONENT_HOST_BROKEN"]);
+  });
+
   it("warns about a host whose lock was already broken and is made no worse, naming the host and the rule", async () => {
     // The page's stored value for "tone" already changes design inside the
     // sealed slot. The save adds an unrelated exposure, which is reason enough
@@ -735,6 +783,24 @@ describe("a page judged as a reader receives it", () => {
         codes(
           await judge(
             placed({ tone: "quiet" }),
+            write(readStored, "pages", "p1")
+          )
+        )
+      ).toEqual(["locked-slot-content-only"]);
+    });
+
+    it("refuses as for a page never stored when the stored page cannot be read, as a localized field's cannot", async () => {
+      // A read that is refused, as core refuses a localized field, leaves no
+      // stored value to keep: the page is measured against the starting
+      // blocks alone, so the lock refuses rather than lets the value through.
+      const { readStored } = storeOf({
+        [COMPONENTS]: { sealed: { published: toned() } },
+        pages: { p1: { published: "unreadable" } },
+      });
+      expect(
+        codes(
+          await judge(
+            placed({ tone: "loud" }),
             write(readStored, "pages", "p1")
           )
         )

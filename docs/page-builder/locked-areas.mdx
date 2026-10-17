@@ -87,7 +87,8 @@ migrate the pages already stored.
 Changing a block's `defaultProps` doesn't lock existing pages out. Inside a
 `"contentOnly"` slot, a save may keep any value the page already stores in the same
 place, or put it back as the block now starts. Only a third value is refused. A page
-saved for the first time, and a single, are measured against the starting blocks alone.
+saved for the first time, a single, and a localized blocks field are measured against
+the starting blocks alone.
 A page placing a component keeps what the component itself holds.
 
 ## Components and locks
