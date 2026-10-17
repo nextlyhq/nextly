@@ -774,3 +774,65 @@ describe("a child folder at a media route's URL", () => {
     expect([...new Set(served)].sort()).toEqual([...NEXTLY_MEDIA_PATHS].sort());
   });
 });
+
+describe("an app that sets pageExtensions", () => {
+  const config = (text: string) =>
+    writeFileSync(join(cwd, "next.config.ts"), text);
+  const nothingWritten = () => {
+    for (const route of [ADMIN_MEDIA, PUBLIC_MEDIA, HEALTH]) {
+      const folder = dirname(join(cwd, "src/app", route));
+      expect(() => readdirSync(folder)).toThrow();
+    }
+  };
+
+  /*
+   * Next.js routes `route.page.tsx` there and never `route.ts`, and the app
+   * may already have routes under such names, so each route is reported with
+   * the name to create and its content, and none is written.
+   */
+  it("writes no route, and names each under the extension the app routes", async () => {
+    config(
+      'const config = { pageExtensions: ["page.tsx", "page.ts"] };\nexport default config;\n'
+    );
+
+    const result = await generateMediaRoutes(cwd, project(true), TEMPLATES);
+
+    expect(result.written).toEqual([]);
+    expect(result.skipped.map(entry => entry.path)).toEqual([
+      "src/app/admin/api/media/[[...path]]/route.page.tsx",
+      "src/app/api/media/[[...path]]/route.page.tsx",
+      "src/app/api/health/route.page.tsx",
+    ]);
+    expect(result.skipped[0]?.why).toMatch(
+      /^next\.config\.ts sets pageExtensions, and Next\.js routes a route file only under a name with one of them/
+    );
+    expect(result.skipped[2]?.toAdd).toBe(template(HEALTH));
+    nothingWritten();
+  });
+
+  it("gives a placeholder name for a list it cannot read", async () => {
+    config(
+      'const extensions = ["page.tsx"];\nexport default { pageExtensions: extensions };\n'
+    );
+
+    const result = await generateMediaRoutes(cwd, project(true), TEMPLATES);
+
+    expect(result.written).toEqual([]);
+    expect(result.skipped[2]?.path).toBe(
+      "src/app/api/health/route.<one of your pageExtensions>"
+    );
+    nothingWritten();
+  });
+
+  it("says to add a module extension when the list holds none", async () => {
+    config('export default { pageExtensions: ["md", "mdx"] };\n');
+
+    const result = await generateMediaRoutes(cwd, project(true), TEMPLATES);
+
+    expect(result.written).toEqual([]);
+    expect(result.skipped[2]?.why).toContain(
+      "none of them (md, mdx) can hold the route"
+    );
+    nothingWritten();
+  });
+});

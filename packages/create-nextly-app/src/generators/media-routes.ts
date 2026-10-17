@@ -6,6 +6,7 @@ import type { ProjectInfo } from "../types";
 import { resolveTemplatePath } from "../utils/template";
 
 import type { GeneratedFiles } from "./generated-files";
+import { appPageExtensions, moduleExtension } from "./instrumentation";
 import { ADMIN_API_FOLDER } from "./routes";
 
 /**
@@ -214,6 +215,12 @@ export async function readMediaRouteTemplates(
  * that answers it is reported as skipped, exactly as it was, and for a media
  * route the report says what Nextly's route does there and carries it to add
  * by hand. Nothing is written through a linked folder.
+ *
+ * An app that sets `pageExtensions` routes a route file only under a name with
+ * one of them, and may already have routes under such names, which the checks
+ * here do not recognise. So nothing is written there: each route is reported
+ * with the name to create it under and its content, as the server-start hook
+ * is for such an app.
  */
 export async function generateMediaRoutes(
   cwd: string,
@@ -223,6 +230,17 @@ export async function generateMediaRoutes(
   const prepared = ROUTES.map(route =>
     prepareRoute(cwd, projectInfo, templates, route)
   );
+  const pages = await appPageExtensions(cwd);
+  if (pages.extensions !== "absent") {
+    const { configName, extensions } = pages;
+    return {
+      written: [],
+      changed: [],
+      skipped: prepared.map(route =>
+        pageExtensionsSkip(cwd, route, configName, extensions)
+      ),
+    };
+  }
   const result: GeneratedFiles = { written: [], changed: [], skipped: [] };
   for (const route of prepared) {
     await writeIfUnanswered(cwd, route, result);
@@ -726,6 +744,44 @@ async function handlerWithin(
     if (deeper !== null) return deeper;
   }
   return null;
+}
+
+/**
+ * The report for one route in an app that sets `pageExtensions`: the name to
+ * create it under, from the extension the hook would take
+ * ({@link moduleExtension}), and its content. A list that cannot be read, or
+ * holds no JavaScript or TypeScript extension, gives a placeholder name and
+ * says which.
+ */
+function pageExtensionsSkip(
+  cwd: string,
+  route: PreparedRoute,
+  configName: string,
+  extensions: readonly string[] | null
+): GeneratedFiles["skipped"][number] {
+  const extension = extensions === null ? null : moduleExtension(extensions);
+  const file = toPosix(
+    path.relative(
+      cwd,
+      path.join(
+        path.dirname(route.target),
+        `route.${extension ?? placeholder(extensions)}`
+      )
+    )
+  );
+  const sets = `${configName} sets pageExtensions, and Next.js routes a route file only under a name with one of them, so none was written`;
+  const why =
+    extensions !== null && extension === null
+      ? `${sets}, and none of them (${extensions.join(", ")}) can hold the route, which is a JavaScript or TypeScript module; add one to pageExtensions, then, unless the app already answers this URL, create the route under it with this content`
+      : `${sets}; unless the app already answers this URL, create the route under that name with this content`;
+  return { path: file, why, toAdd: route.text };
+}
+
+/** The extension a report names when it cannot name one: a list it could not read, or one with no module extension. */
+function placeholder(extensions: readonly string[] | null): string {
+  return extensions === null
+    ? "<one of your pageExtensions>"
+    : "<a JavaScript or TypeScript extension added to pageExtensions>";
 }
 
 /** The report for a folder left alone: for a media route, what Nextly's route does and the text to add. */
