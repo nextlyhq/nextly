@@ -26,6 +26,7 @@ import {
   doublePrecision as pgDoublePrecision,
   numeric as pgNumeric,
   index as pgIndex,
+  uuid as pgUuid,
 } from "drizzle-orm/pg-core";
 import {
   sqliteTable,
@@ -68,6 +69,7 @@ import type { ExtensionColumn } from "../../schema/extension/types";
 import {
   DEFAULT_DECIMAL_PRECISION,
   DEFAULT_DECIMAL_SCALE,
+  usesJunctionTable,
 } from "../../schema/services/field-column-descriptor";
 import {
   MAX_INDEX_NAME_LENGTH,
@@ -582,7 +584,11 @@ export class FieldGroupSchemaService {
     };
 
     for (const field of this.columnFields(fields)) {
-      const column = this.mapFieldToPostgresColumn(this.asMappableField(field));
+      // A many-to-many keeps its ids on the component row as a uuid, the type the creating SQL writes.
+      // It is decided on the original field: the mappable copy has lost its options.
+      const column = usesJunctionTable(field)
+        ? pgUuid(this.toSnakeCase(field.name))
+        : this.mapFieldToPostgresColumn(this.asMappableField(field));
       if (column) {
         columns[field.name] = column;
       }
