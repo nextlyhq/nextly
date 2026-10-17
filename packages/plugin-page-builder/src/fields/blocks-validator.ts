@@ -21,6 +21,7 @@
 import type { BlockDocument, BreakpointSet } from "@nextlyhq/blocks-engine";
 import {
   DOCUMENT_VERDICT_CODES,
+  registryBlockSource,
   registryNestingSource,
   validateDocument,
   walkNodes,
@@ -86,7 +87,12 @@ export function validateBlocksValue(
   path: string,
   label: string,
   options: BlocksValidationOptions,
-  breakpoints: BreakpointSet = siteBreakpoints()
+  breakpoints: BreakpointSet = siteBreakpoints(),
+  /**
+   * The document's stored forms, whose values a `"contentOnly"` slot lets it
+   * keep. Absent for a create and for a value judged on its own.
+   */
+  stored?: readonly BlockDocument[]
 ): Issue[] {
   // An absent document is an empty field. Required-ness is the shared rules'
   // to enforce, exactly as for every other type.
@@ -143,6 +149,16 @@ export function validateBlocksValue(
     // reaches exactly the blocks something has contributed, and no document is
     // refused for a declaration nobody made.
     nesting: registryNestingSource(),
+    // A block that locks one of its slots fixes which children that slot
+    // holds, and this is the path that holds every writer to it: the editor,
+    // the API, an import and an agent all reach a save through here, and none
+    // of them brings the document's previous version for a rule about edits to
+    // be judged against. The engine checks the slot against the same
+    // definitions an insert expands its starting children from, so what a save
+    // requires is what an insert creates. An unpopulated registry declares no
+    // locks, so it refuses nothing, for the reason given for nesting above.
+    definitions: registryBlockSource(),
+    ...(stored === undefined ? {} : { stored }),
   });
   // Errors only, which means the breakpoint set threaded in here decides
   // nothing about a document — and that is the correct behaviour today, not an

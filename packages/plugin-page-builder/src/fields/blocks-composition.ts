@@ -40,14 +40,20 @@
  */
 import {
   compositionFaults,
+  contentOnlyExposures,
   MAX_COMPOSED_DEPTH,
+  nodeLocks,
+  registryBlockSource,
   registryNestingSource,
   resolveComponentInstances,
   variantNamesIn,
   type BlockDocument,
   type BlockNode,
+  type ComponentDocument,
   type CompositionFault,
   type DocumentLimits,
+  type LockedExposure,
+  type NodeLock,
   type WorkAllowance,
 } from "@nextlyhq/blocks-engine";
 import type {
@@ -72,6 +78,9 @@ import {
   type ComponentSource,
   type ReadComposition,
 } from "../composition-reading";
+
+import { isForest } from "./blocks-document";
+import { lockBaselines, storedFormsOf } from "./lock-baselines";
 
 /** The issue shape core's validation envelope carries. */
 interface Issue {
@@ -142,6 +151,18 @@ export interface CompositionSetup {
    */
   readonly onHostsBroken?: (broken: BrokenHosts) => void;
   /**
+   * Told of the exposures a component already stores that drive something a
+   * `contentOnly` lock holds. Kept, not refused, so the server log is where
+   * an operator learns of them.
+   */
+  readonly onLockedExposures?: (found: LockedExposures) => void;
+  /**
+   * Told of the hosts whose lock was already broken before a component save
+   * and is no worse after it. Kept, not refused, so the server log is where an
+   * operator learns of them.
+   */
+  readonly onHostsStillBroken?: (found: StillBrokenHosts) => void;
+  /**
    * Whether documents are composed against this store at all. `false` where
    * the renderer draws components from somewhere no collection can stand for
    * (a route's own `resolveComponents`): composing against this store would
@@ -150,6 +171,24 @@ export interface CompositionSetup {
    */
   readonly composesDocuments: boolean;
 }
+
+/**
+ * A component's stored exposures that drive something a `contentOnly` lock
+ * holds, for the server log. Kept rather than refused, so an edit unrelated to
+ * them still saves; each one is the designer's to remove, or the lock's to
+ * loosen.
+ */
+export interface LockedExposures {
+  readonly componentId: string;
+  readonly exposures: readonly LockedExposure[];
+}
+
+/**
+ * The hosts a component save found already breaking a lock and left no
+ * worse, for the server log. Not this save's to refuse; each one is the
+ * host's to repair.
+ */
+export type StillBrokenHosts = BrokenHosts;
 
 /** The hosts a refused component save would have broken, for the server log. */
 export interface BrokenHosts {
@@ -191,6 +230,9 @@ export async function compositionIssues(
   const source = storedComponentSource(write, setup.store);
   const self = componentSaved(write, args.path, setup.store);
   const report = issueReport(args.path);
+  if (savesComponent(write, args.path, setup.store)) {
+    await judgeLockedExposures(document, write, setup, report);
+  }
   // ONE allowance for every composition this save performs, the loop check
   // included, so the bound is on the save rather than on each check.
   const work: WorkAllowance = { left: MOST_COMPOSED_NODES };
@@ -215,9 +257,20 @@ export async function compositionIssues(
   if (!setup.composesDocuments) return report.issues;
 
   const tally = hostTally(self ?? "", setup);
+  // Read once for the save, and only if a lock is found broken.
+  let storedRead: Promise<readonly BlockDocument[]> | undefined;
+  const stored = () => (storedRead ??= storedFormsOf(write, args.path));
   for (const draft of formsChangedBy(nextStatus)) {
     const read = documentReader(source, draft);
-    await judgeOwnComposition({ document, self, read, setup, work, report });
+    await judgeOwnComposition({
+      document,
+      self,
+      read,
+      setup,
+      work,
+      report,
+      stored,
+    });
     if (self !== undefined) {
       await judgeHosts({
         self,
@@ -234,6 +287,100 @@ export async function compositionIssues(
   }
   tally.flush(report);
   return report.issues;
+}
+
+/**
+ * Whether this value is a component's own document, created or updated.
+ *
+ * Wider than {@link componentSaved}, which only answers for a save that has an
+ * id: an exposure a new component makes is as new as one an edit adds.
+ */
+function savesComponent(
+  write: PluginFieldWrite,
+  path: string,
+  store: ComponentStoreAddress
+): boolean {
+  return (
+    write.kind === "collection" &&
+    write.slug === store.collection &&
+    path === store.field
+  );
+}
+
+/**
+ * Refuse an exposure this save adds that drives something a `contentOnly` lock
+ * holds, and report the ones the component already stored.
+ *
+ * Refused where it is MADE, so the designer meets the lock in the component
+ * rather than on every page that places it. One the stored version already
+ * held is kept: refusing it would make the component unsavable for an edit
+ * unrelated to it. "Added" covers a lock that tightens around an exposure too,
+ * by moving its node into a locked slot: before the save it was not among
+ * these. A lock tightened by a block's own new definition reaches both sides
+ * of the comparison, so it warns rather than refuses.
+ */
+async function judgeLockedExposures(
+  document: BlockDocument,
+  write: PluginFieldWrite,
+  setup: CompositionSetup,
+  report: ReturnType<typeof issueReport>
+): Promise<void> {
+  const sources = {
+    definitions: registryBlockSource(),
+    nesting: registryNestingSource(),
+  };
+  const after = contentOnlyExposures(document as ComponentDocument, sources);
+  if (after.length === 0) return;
+  const stored = await storedOwnDocument(write, setup.store);
+  const before = new Set(
+    (stored === undefined
+      ? []
+      : contentOnlyExposures(stored as ComponentDocument, sources)
+    ).map(exposureKey)
+  );
+  const kept = after.filter(entry => before.has(exposureKey(entry)));
+  for (const entry of after) {
+    if (before.has(exposureKey(entry))) continue;
+    report.add(
+      "COMPONENT_EXPOSURE_LOCKED",
+      lockedExposureMessage(entry, write.id)
+    );
+  }
+  if (kept.length > 0 && write.id !== undefined) {
+    setup.onLockedExposures?.({ componentId: write.id, exposures: kept });
+  }
+}
+
+/** An exposure as the comparison knows it: what it drives, wherever it is. */
+function exposureKey(entry: LockedExposure): string {
+  return [entry.exposureId, entry.nodeId, entry.propPath].join("\u0000");
+}
+
+/** The component's own document as stored before this save, if it has one. */
+async function storedOwnDocument(
+  write: PluginFieldWrite,
+  store: ComponentStoreAddress
+): Promise<BlockDocument | undefined> {
+  if (write.id === undefined) return undefined;
+  const read = await write.readStored({
+    collection: store.collection,
+    id: write.id,
+    field: store.field,
+    form: "draft",
+  });
+  return read.kind === "value" && isForest(read.value)
+    ? (read.value as BlockDocument)
+    : undefined;
+}
+
+/** The refusal for one exposure, naming what to do about it. */
+function lockedExposureMessage(
+  entry: LockedExposure,
+  componentId?: string
+): string {
+  const component =
+    componentId === undefined ? "This component" : `Component "${componentId}"`;
+  return `${component} exposes "${entry.label}" (${entry.propPath}), which sits in the "${entry.slot}" slot of a "${entry.holderType}" locked "contentOnly", where only content can change. Expose a content field instead, remove this exposure, or loosen the lock on that slot.`;
 }
 
 /** The component's id when this value is a component's own document. */
@@ -276,15 +423,18 @@ async function judgeOwnComposition(args: {
   setup: CompositionSetup;
   work: WorkAllowance;
   report: Report;
+  /** The document's stored forms, read only once a lock is found broken. */
+  stored: () => Promise<readonly BlockDocument[]>;
 }): Promise<void> {
   const { document, self, read, setup, work, report } = args;
+  // A component's own document under its own id, so a placement leading back
+  // to it meets what is being saved.
+  const library = heldLibrary(
+    self === undefined ? undefined : new Map([[self, document]])
+  );
   const composed = await composeWithReads({
     host: document,
-    // A component's own document under its own id, so a placement leading back
-    // to it meets what is being saved.
-    library: heldLibrary(
-      self === undefined ? undefined : new Map([[self, document]])
-    ),
+    library,
     read,
     limits: setup.limits,
     work,
@@ -293,7 +443,22 @@ async function judgeOwnComposition(args: {
     report.add("COMPOSITION_UNCHECKED", OUTGROWN);
     return;
   }
-  for (const fault of faultsIn(document, composed.composition, setup)) {
+  let faults = faultsIn(document, composed.composition, setup);
+  // A broken lock is judged again against what the page and its components
+  // already hold, which a part may keep; composed only now, so a save breaking
+  // no lock composes nothing more.
+  if (faults.some(fault => LOCK_FAULTS.has(fault.code))) {
+    const baselines = await lockBaselines({
+      document,
+      stored: await args.stored(),
+      library,
+      read,
+      limits: setup.limits,
+      work,
+    });
+    faults = faultsIn(document, composed.composition, setup, baselines);
+  }
+  for (const fault of faults) {
     report.add(fault.code, fault.message);
   }
 }
@@ -307,12 +472,18 @@ const OUTGROWN =
 function faultsIn(
   host: BlockDocument,
   composition: Parameters<typeof compositionFaults>[1],
-  setup: CompositionSetup
+  setup: CompositionSetup,
+  baselines?: readonly unknown[]
 ): readonly CompositionFault[] {
   return compositionFaults(host, composition, {
+    ...(baselines === undefined ? {} : { baselines }),
     limits: setup.limits,
     // Read through to the live registry, as the field's own nesting rule is.
     nesting: registryNestingSource(),
+    // The locks the blocks' slots declare hold in the composed page too: a
+    // placement's values and slot content land inside the component's nodes,
+    // which neither document shows on its own.
+    definitions: registryBlockSource(),
   });
 }
 
@@ -411,6 +582,7 @@ function hostTally(componentId: string, setup: CompositionSetup) {
   // Keyed by DOCUMENT: the index lists one host per field, and a page placing
   // the component in two fields is still one page an operator has to open.
   const broken = new Map<string, HostDamage>();
+  const stillBroken = new Map<string, HostDamage>();
   return {
     host(host: HostRef, reason: string): void {
       unjudged.add(documentKey(host));
@@ -421,21 +593,10 @@ function hostTally(componentId: string, setup: CompositionSetup) {
       reasons.add(reason);
     },
     broke(host: HostRef, fault: HostFault): void {
-      const entry = broken.get(documentKey(host)) ?? {
-        host,
-        fields: new Set<string>(),
-        faults: [],
-      };
-      entry.fields.add(host.field);
-      // Once per field, placement and rule: a publish judges both forms, and
-      // they usually agree.
-      const same = (f: HostFault & { field: string }) =>
-        f.field === host.field &&
-        f.code === fault.code &&
-        f.instanceId === fault.instanceId;
-      if (!entry.faults.some(same))
-        entry.faults.push({ ...fault, field: host.field });
-      broken.set(documentKey(host), entry);
+      addDamage(broken, host, fault);
+    },
+    stillBroken(host: HostRef, fault: HostFault): void {
+      addDamage(stillBroken, host, fault);
     },
     flush(report: Report): void {
       if (broken.size > 0) {
@@ -443,14 +604,12 @@ function hostTally(componentId: string, setup: CompositionSetup) {
           "COMPONENT_HOST_BROKEN",
           brokenMessage([...broken.values()], setup)
         );
-        setup.onHostsBroken?.({
+        setup.onHostsBroken?.({ componentId, hosts: hostsOf(broken) });
+      }
+      if (stillBroken.size > 0) {
+        setup.onHostsStillBroken?.({
           componentId,
-          hosts: [...broken.values()].map(({ host, fields, faults }) => ({
-            slug: host.slug,
-            id: host.id,
-            fields: [...fields],
-            messages: faults.map(f => f.message),
-          })),
+          hosts: hostsOf(stillBroken),
         });
       }
       if (unjudged.size === 0 && !listIncomplete) return;
@@ -462,6 +621,40 @@ function hostTally(componentId: string, setup: CompositionSetup) {
       });
     },
   };
+}
+
+/** Each damaged document, as the server log names it. */
+function hostsOf(
+  damaged: ReadonlyMap<string, HostDamage>
+): BrokenHosts["hosts"] {
+  return [...damaged.values()].map(({ host, fields, faults }) => ({
+    slug: host.slug,
+    id: host.id,
+    fields: [...fields],
+    messages: faults.map(f => f.message),
+  }));
+}
+
+/** Record one fault against its document, once per field and fault identity. */
+function addDamage(
+  damaged: Map<string, HostDamage>,
+  host: HostRef,
+  fault: HostFault
+): void {
+  const entry = damaged.get(documentKey(host)) ?? {
+    host,
+    fields: new Set<string>(),
+    faults: [],
+  };
+  entry.fields.add(host.field);
+  // Once per field and fault, as the before/after comparison identifies
+  // faults: a publish judges both forms, and they usually agree, while two
+  // locked slots broken at one placement are two slots to repair.
+  const same = (f: HostFault & { field: string }) =>
+    f.field === host.field && faultIdentity(f) === faultIdentity(fault);
+  if (!entry.faults.some(same))
+    entry.faults.push({ ...fault, field: host.field });
+  damaged.set(documentKey(host), entry);
 }
 
 /** One document, whichever of its fields placed the component. */
@@ -517,6 +710,10 @@ function ruleBroken(code: string, setup: CompositionSetup): string {
       return "components would be nested inside one another too deeply";
     case "cycle":
       return "a component would end up containing itself";
+    case "locked-slot-altered":
+      return "a locked slot would hold other blocks than it starts with";
+    case "locked-slot-content-only":
+      return "a locked slot that allows only content changes would have its design or settings changed";
     default:
       return "a block would sit where it is not allowed to";
   }
@@ -650,15 +847,35 @@ function reportWhatBroke(args: {
     });
   }
   const had = new Set(
-    faultsIn(stored, before.composition, setup).map(
-      f => `${f.code}\u0000${f.instanceId}`
-    )
+    faultsIn(stored, before.composition, setup).map(faultIdentity)
   );
   for (const fault of faultsIn(stored, after.composition, setup)) {
-    if (had.has(`${fault.code}\u0000${fault.instanceId}`)) continue;
+    if (had.has(faultIdentity(fault))) {
+      // Broken before this save and no worse after it: not this save's to
+      // refuse, and still worth an operator's attention when it is a lock.
+      if (LOCK_FAULTS.has(fault.code)) tally.stillBroken(host, fault);
+      continue;
+    }
     tally.broke(host, fault);
   }
 }
+
+/**
+ * A fault as the before/after comparison knows it: its rule and placement,
+ * and, for a lock, the slot and what changed, which its message names. Two
+ * locked slots broken at one placement are two faults, so a save that breaks a
+ * second is not taken for one leaving the first as it was.
+ */
+function faultIdentity(fault: HostFault): string {
+  const base = `${fault.code}\u0000${fault.instanceId}`;
+  return LOCK_FAULTS.has(fault.code) ? `${base}\u0000${fault.message}` : base;
+}
+
+/** The faults that are a lock broken in the composed host. */
+const LOCK_FAULTS: ReadonlySet<string> = new Set([
+  "locked-slot-altered",
+  "locked-slot-content-only",
+]);
 
 /**
  * A host's stored document in one form: the document, `undefined` where there
@@ -722,6 +939,10 @@ async function footprintOf(
   setup: CompositionSetup,
   work: WorkAllowance
 ): Promise<Footprint> {
+  // The lock each node sits under, by the rule a save enforces. Part of what
+  // a placement's values and slot content are held to, so moving a node under
+  // a lock, everything else kept, is a change a host can be judged against.
+  const locks = nodeLocks(document.nodes, registryBlockSource());
   const library = heldLibrary(new Map([[self, document]]));
   const selections = new Map<string, SelectionFootprint>();
   let complete = true;
@@ -751,8 +972,8 @@ async function footprintOf(
   return {
     complete,
     selections,
-    slots: exposedSlots(document, setup),
-    exposures: exposedProperties(document),
+    slots: exposedSlots(document, setup, locks),
+    exposures: exposedProperties(document, locks),
   };
 }
 
@@ -810,9 +1031,13 @@ function componentDepthOf(
   return MAX_COMPOSED_DEPTH + 1;
 }
 
-/** Each exposed property, keyed by its id, as `nodeId|propPath|type`. */
+/**
+ * Each exposed property, keyed by its id, as `nodeId|propPath|type|lock`, the
+ * lock being the one its node sits under.
+ */
 function exposedProperties(
-  document: BlockDocument
+  document: BlockDocument,
+  locks: ReadonlyMap<string, NodeLock>
 ): ReadonlyMap<string, string> {
   const declared = (document as { exposed?: unknown }).exposed;
   const out = new Map<string, string>();
@@ -821,20 +1046,22 @@ function exposedProperties(
     if (typeof entry?.id !== "string") continue;
     out.set(
       entry.id,
-      `${String(entry.nodeId)}|${String(entry.propPath)}|${String(entry.type)}`
+      `${String(entry.nodeId)}|${String(entry.propPath)}|${String(entry.type)}|${lockOf(locks, entry.nodeId)}`
     );
   }
   return out;
 }
 
 /**
- * Each exposed slot, keyed by its id, as `nodeId|type|slot|depth` of its
+ * Each exposed slot, keyed by its id, as `nodeId|type|slot|depth|lock` of its
  * holder. The node is part of it: two holders of one type, slot and depth can
- * still draw what lands in them differently.
+ * still draw what lands in them differently. So is the lock it sits under,
+ * which its slot passes on to what a placement puts there.
  */
 function exposedSlots(
   document: BlockDocument,
-  setup: CompositionSetup
+  setup: CompositionSetup,
+  locks: ReadonlyMap<string, NodeLock>
 ): ReadonlyMap<string, string> {
   const declared = (document as { slots?: unknown }).slots;
   const out = new Map<string, string>();
@@ -860,10 +1087,17 @@ function exposedSlots(
       id,
       holder === undefined
         ? "?"
-        : `${nodeId}|${holder.type}|${name}|${holder.depth}`
+        : `${nodeId}|${holder.type}|${name}|${holder.depth}|${lockOf(locks, nodeId)}`
     );
   }
   return out;
+}
+
+/** The lock a node sits under, as a footprint records it. */
+function lockOf(locks: ReadonlyMap<string, NodeLock>, nodeId: unknown): string {
+  return (
+    (typeof nodeId === "string" ? locks.get(nodeId)?.lock : undefined) ?? "-"
+  );
 }
 
 /**
@@ -933,13 +1167,4 @@ function selectionWorsens(
     if (!before.rootTypes.has(type)) return true;
   }
   return false;
-}
-
-/** Whether a value carries a forest the composition can walk. */
-function isForest(value: unknown): boolean {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    Array.isArray((value as { nodes?: unknown }).nodes)
-  );
 }

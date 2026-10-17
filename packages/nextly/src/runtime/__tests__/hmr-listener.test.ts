@@ -1,279 +1,404 @@
-// Tests for the HMR WebSocket listener.
-// What: verifies env gates, idempotency, event-shape detection (Next 15
-// vs Next 16), and the reload-flag lifecycle.
-// Why: the listener is the single in-process code-first trigger after the
-// wrapper goes away in PR 4. The behaviors covered here are exactly the
-// ones a future Next.js minor could break (serverComponentChanges payload
-// format) so dedicated unit coverage matters.
+// Tests for the dev-time config watcher.
+// What: under `next dev`, saving nextly.config.ts or a file it imports reloads
+// the config; nothing is watched outside development; the watched set is
+// replaced, never stacked; a burst of saves is one reload; a save during a
+// reload is not lost; a reload another process refused is tried again.
+// Why: this is the only thing that applies a code-first schema edit without a
+// restart. It replaced a listener on Next.js's HMR socket, which stopped
+// receiving anything when Next moved that socket, so these tests drive real
+// file saves rather than any message format.
 
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import {
+  mkdirSync,
+  mkdtempSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
-// Hoisted spy: vi.mock factories run before module-scope code, so the spy
-// must come from vi.hoisted to be visible in the factory closure.
-const { wsConstructorSpy } = vi.hoisted(() => ({
-  wsConstructorSpy: vi.fn<(url: string) => void>(),
-}));
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-class FakeWebSocket {
-  onmessage: ((event: { data: string }) => void) | null = null;
-  onerror: (() => void) | null = null;
-  constructor(url: string) {
-    wsConstructorSpy(url);
+import {
+  __setRefusedRetryDelaysForTest,
+  __setReloaderForTest,
+  configWatchAllowed,
+  ensureHmrListener,
+  scheduleReloadForTest,
+  stopConfigWatch,
+  watchLoadedConfig,
+  watchScannedConfig,
+  watchedConfigFiles,
+} from "../hmr-listener";
+
+const DEV = { NODE_ENV: "development" } as NodeJS.ProcessEnv;
+
+/** Polls until `check` holds, or fails after `ms`. */
+async function eventually(check: () => boolean, ms = 10_000): Promise<void> {
+  const deadline = Date.now() + ms;
+  while (!check()) {
+    if (Date.now() > deadline) throw new Error("condition never held");
+    await new Promise(r => setTimeout(r, 25));
   }
 }
 
-vi.mock("ws", () => ({
-  WebSocket: FakeWebSocket,
-}));
+/** Long enough for a watcher event and the 300ms debounce to have fired. */
+const settle = () => new Promise(r => setTimeout(r, 1000));
 
-// Helper to type the global cache slots without `as any`.
-type HmrCacheShape = {
-  __nextly_hmrWs?: { onmessage?: (event: { data: string }) => void };
-  __nextly_hmrReload?: boolean | Promise<void>;
-};
+describe("configWatchAllowed: next dev only", () => {
+  it("allows development", () => {
+    expect(configWatchAllowed(DEV)).toBe(true);
+  });
 
-function getHmrCache(): HmrCacheShape {
-  return globalThis as HmrCacheShape;
-}
+  it.each([
+    ["production", { NODE_ENV: "production" }],
+    ["tests", { NODE_ENV: "test" }],
+    // A script that boots Nextly without setting NODE_ENV, or with a value of
+    // its own, is not next dev.
+    ["NODE_ENV unset", {}],
+    ["a nonstandard NODE_ENV", { NODE_ENV: "staging" }],
+    [
+      "next build",
+      { NODE_ENV: "development", NEXT_PHASE: "phase-production-build" },
+    ],
+    [
+      "NEXTLY_DISABLE_HMR=1",
+      { NODE_ENV: "development", NEXTLY_DISABLE_HMR: "1" },
+    ],
+  ])("refuses %s", (_label, env) => {
+    expect(configWatchAllowed(env as NodeJS.ProcessEnv)).toBe(false);
+  });
+});
 
-describe("hmr-listener", () => {
-  const originalEnv = { ...process.env };
+describe("watching the config and the files it imports", () => {
+  let cwd: string;
+  let config: string;
+  let posts: string;
+  let reload: ReturnType<typeof vi.fn<() => Promise<unknown>>>;
 
   beforeEach(() => {
-    vi.resetModules();
-    wsConstructorSpy.mockReset();
-    const g = getHmrCache();
-    g.__nextly_hmrWs = undefined;
-    g.__nextly_hmrReload = undefined;
-    process.env = { ...originalEnv };
+    cwd = mkdtempSync(join(tmpdir(), "nextly-config-watch-"));
+    mkdirSync(join(cwd, "collections"));
+    config = join(cwd, "nextly.config.ts");
+    posts = join(cwd, "collections", "posts.ts");
+    writeFileSync(config, "export default {};\n");
+    writeFileSync(posts, "export const posts = {};\n");
+    reload = vi.fn(() => Promise.resolve<unknown>("finished"));
+    __setReloaderForTest(reload);
   });
 
   afterEach(() => {
-    process.env = { ...originalEnv };
+    stopConfigWatch();
+    __setReloaderForTest(null);
+    rmSync(cwd, { recursive: true, force: true });
   });
 
-  describe("ensureHmrListener env gates and idempotency", () => {
-    it("opens a WebSocket on first call in dev", async () => {
-      process.env.NODE_ENV = "development";
-      process.env.PORT = "3000";
-      const { ensureHmrListener } = await import("../hmr-listener");
-      ensureHmrListener();
-      expect(wsConstructorSpy).toHaveBeenCalledTimes(1);
-      expect(wsConstructorSpy).toHaveBeenCalledWith(
-        "ws://localhost:3000/_next/webpack-hmr"
-      );
-    });
+  /**
+   * Lets a new watcher settle, then forgets any reload it caused. macOS reports
+   * file events through FSEvents, which can miss a write made in the instant a
+   * watch begins and can also report the setup's own writes from just before
+   * it, which would schedule a reload no save of the test's made. A person
+   * saving a file is never that quick, so neither happens in use.
+   */
+  const watching = async () => {
+    await new Promise(r => setTimeout(r, 800));
+    reload.mockClear();
+  };
 
-    it("is idempotent: repeat calls do not open additional WebSockets", async () => {
-      process.env.NODE_ENV = "development";
-      const { ensureHmrListener } = await import("../hmr-listener");
-      ensureHmrListener();
-      ensureHmrListener();
-      ensureHmrListener();
-      expect(wsConstructorSpy).toHaveBeenCalledTimes(1);
-    });
-
-    it("does NOT open a WebSocket in production", async () => {
-      process.env.NODE_ENV = "production";
-      const { ensureHmrListener } = await import("../hmr-listener");
-      ensureHmrListener();
-      expect(wsConstructorSpy).not.toHaveBeenCalled();
-    });
-
-    it("does NOT open a WebSocket in test", async () => {
-      process.env.NODE_ENV = "test";
-      const { ensureHmrListener } = await import("../hmr-listener");
-      ensureHmrListener();
-      expect(wsConstructorSpy).not.toHaveBeenCalled();
-    });
-
-    it("respects NEXTLY_DISABLE_HMR=1 escape hatch", async () => {
-      process.env.NODE_ENV = "development";
-      process.env.NEXTLY_DISABLE_HMR = "1";
-      const { ensureHmrListener } = await import("../hmr-listener");
-      ensureHmrListener();
-      expect(wsConstructorSpy).not.toHaveBeenCalled();
-    });
-
-    it("respects NEXTLY_HMR_URL_OVERRIDE", async () => {
-      process.env.NODE_ENV = "development";
-      process.env.NEXTLY_HMR_URL_OVERRIDE = "ws://example.test:9999/custom";
-      const { ensureHmrListener } = await import("../hmr-listener");
-      ensureHmrListener();
-      expect(wsConstructorSpy).toHaveBeenCalledWith(
-        "ws://example.test:9999/custom"
-      );
-    });
-
-    it("uses wss:// when USE_HTTPS=true", async () => {
-      process.env.NODE_ENV = "development";
-      process.env.USE_HTTPS = "true";
-      process.env.PORT = "3001";
-      const { ensureHmrListener } = await import("../hmr-listener");
-      ensureHmrListener();
-      expect(wsConstructorSpy).toHaveBeenCalledWith(
-        "wss://localhost:3001/_next/webpack-hmr"
-      );
-    });
-
-    it("incorporates __NEXT_ASSET_PREFIX into the URL", async () => {
-      process.env.NODE_ENV = "development";
-      process.env.PORT = "3000";
-      process.env.__NEXT_ASSET_PREFIX = "/my-app";
-      const { ensureHmrListener } = await import("../hmr-listener");
-      ensureHmrListener();
-      expect(wsConstructorSpy).toHaveBeenCalledWith(
-        "ws://localhost:3000/my-app/_next/webpack-hmr"
-      );
-    });
+  /** What a successful load of this project reports. */
+  const loaded = (...dependencies: string[]) => ({
+    configPath: config,
+    dependencies: ["nextly.config.ts", ...dependencies],
   });
 
-  describe("reload flag lifecycle", () => {
-    it("consumeHmrReloadFlag returns false when no event has fired", async () => {
-      process.env.NODE_ENV = "development";
-      const { ensureHmrListener, consumeHmrReloadFlag } = await import(
-        "../hmr-listener"
-      );
-      ensureHmrListener();
-      expect(consumeHmrReloadFlag()).toBe(false);
-    });
+  it("reloads when the config is saved", async () => {
+    watchLoadedConfig(loaded("collections/posts.ts"), cwd, DEV);
+    await watching();
 
-    // Note: two tests previously here asserted `consumeHmrReloadFlag() === true`
-    // synchronously after firing an event. They were pre-existing failures —
-    // the production code at `markHmrReloadInFlight` only ever stores a
-    // Promise in `g.__nextly_hmrReload`, never `true`, so the `=== true`
-    // branch in `consumeHmrReloadFlag` is unreachable. Removed in the Phase 1
-    // PR after the dead-code path was identified during code review.
+    writeFileSync(config, "export default { collections: [] };\n");
 
-    it("does NOT flip the flag for unrelated events", async () => {
-      process.env.NODE_ENV = "development";
-      const { ensureHmrListener, consumeHmrReloadFlag } = await import(
-        "../hmr-listener"
-      );
-      ensureHmrListener();
-      const ws = getHmrCache().__nextly_hmrWs;
-      ws?.onmessage?.({
-        data: JSON.stringify({ type: "clientComponentChanges" }),
-      });
-      ws?.onmessage?.({ data: JSON.stringify({ type: "addedPage" }) });
-      expect(consumeHmrReloadFlag()).toBe(false);
-    });
-
-    it("ignores events while a reload is in flight", async () => {
-      process.env.NODE_ENV = "development";
-      const { ensureHmrListener, consumeHmrReloadFlag, markHmrReloadInFlight } =
-        await import("../hmr-listener");
-      ensureHmrListener();
-      let resolveInFlight!: () => void;
-      const inFlight = new Promise<void>(resolve => {
-        resolveInFlight = resolve;
-      });
-      markHmrReloadInFlight(inFlight);
-      const ws = getHmrCache().__nextly_hmrWs;
-      ws?.onmessage?.({
-        data: JSON.stringify({ type: "serverComponentChanges" }),
-      });
-      expect(consumeHmrReloadFlag()).toBe(false);
-      resolveInFlight();
-      await inFlight;
-    });
-
-    it("ignores malformed event payloads (non-JSON)", async () => {
-      process.env.NODE_ENV = "development";
-      const { ensureHmrListener, consumeHmrReloadFlag } = await import(
-        "../hmr-listener"
-      );
-      ensureHmrListener();
-      const ws = getHmrCache().__nextly_hmrWs;
-      ws?.onmessage?.({ data: "not json" });
-      ws?.onmessage?.({ data: "{}" });
-      expect(consumeHmrReloadFlag()).toBe(false);
-    });
-
-    it("ignores non-string event payloads", async () => {
-      process.env.NODE_ENV = "development";
-      const { ensureHmrListener, consumeHmrReloadFlag } = await import(
-        "../hmr-listener"
-      );
-      ensureHmrListener();
-      const ws = getHmrCache().__nextly_hmrWs;
-      // Cast safe: the runtime onmessage tolerates non-string event.data;
-      // the test exercises that defensive branch.
-      ws?.onmessage?.({ data: 12345 as unknown as string });
-      expect(consumeHmrReloadFlag()).toBe(false);
-    });
+    await eventually(() => reload.mock.calls.length === 1);
   });
 
-  describe("debounce", () => {
-    let reloadSpy: ReturnType<typeof vi.fn>;
-    beforeEach(async () => {
-      vi.useFakeTimers();
-      reloadSpy = vi.fn(async () => {});
-      // Inject the spy directly via the exported test seam instead of
-      // vi.doMock. A dynamic import() inside a fake-timer setTimeout
-      // callback cannot be awaited predictably under vi.useFakeTimers()
-      // because Vitest's fake timer system does not control the module
-      // loader's internal Promise chain.
-      const { __setReloaderForTest } = await import("../hmr-listener");
-      __setReloaderForTest(reloadSpy);
-      delete (
-        globalThis as { __nextly_hmrDebounce?: ReturnType<typeof setTimeout> }
-      ).__nextly_hmrDebounce;
-    });
-    afterEach(async () => {
-      vi.useRealTimers();
-      const { __setReloaderForTest } = await import("../hmr-listener");
-      __setReloaderForTest(null);
-    });
+  it("reloads when a file the config imports is saved", async () => {
+    watchLoadedConfig(loaded("collections/posts.ts"), cwd, DEV);
+    await watching();
 
-    it("collapses three serverComponentChanges events within the debounce window into one reload", async () => {
-      process.env.NODE_ENV = "development";
-      const { handleHmrMessageForTest } = await import("../hmr-listener");
-      const evt = JSON.stringify({ action: "serverComponentChanges" });
-      handleHmrMessageForTest(evt);
-      vi.advanceTimersByTime(100);
-      handleHmrMessageForTest(evt);
-      vi.advanceTimersByTime(100);
-      handleHmrMessageForTest(evt);
-      // Still within debounce window — should not have fired yet.
-      expect(reloadSpy).not.toHaveBeenCalled();
-      // Advance past the trailing debounce edge.
-      vi.advanceTimersByTime(500);
-      // Allow microtasks queued by the timer callback to run.
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
-      expect(reloadSpy).toHaveBeenCalledTimes(1);
-    });
+    writeFileSync(posts, "export const posts = { slug: 'posts' };\n");
 
-    it("fires a separate reload for events that arrive after the previous reload settles", async () => {
-      process.env.NODE_ENV = "development";
-      const { handleHmrMessageForTest } = await import("../hmr-listener");
-      const evt = JSON.stringify({ action: "serverComponentChanges" });
+    await eventually(() => reload.mock.calls.length === 1);
+  });
 
-      handleHmrMessageForTest(evt);
-      vi.advanceTimersByTime(500);
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
-      expect(reloadSpy).toHaveBeenCalledTimes(1);
+  it("reloads after a save that writes a new file and renames it over the old one", async () => {
+    watchLoadedConfig(loaded("collections/posts.ts"), cwd, DEV);
+    await watching();
 
-      // Let the in-flight Promise marker settle, then fire another event.
-      // The `markHmrReloadInFlight(promise).finally(...)` runs when the
-      // promise resolves; advance time and flush microtasks.
-      // Two microtask flushes are sufficient because reloadSpy is `async () => {}`,
-      // which resolves on the first microtask tick; the `markHmrReloadInFlight`
-      // `.finally(() => { g.__nextly_hmrReload = false })` runs on the second.
-      // If the spy were to do real async work, more flushes would be needed.
-      vi.advanceTimersByTime(0);
-      await Promise.resolve();
-      await Promise.resolve();
-      handleHmrMessageForTest(evt);
-      vi.advanceTimersByTime(500);
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
-      expect(reloadSpy).toHaveBeenCalledTimes(2);
-    });
+    const temporary = join(cwd, "collections", ".posts.ts.tmp");
+    writeFileSync(temporary, "export const posts = { renamed: true };\n");
+    renameSync(temporary, posts);
+    await eventually(() => reload.mock.calls.length === 1);
+
+    // The save after it still reloads. A watcher on the file itself follows
+    // the inode the rename replaced, on Linux, and would never fire again.
+    writeFileSync(posts, "export const posts = { after: true };\n");
+    await eventually(() => reload.mock.calls.length === 2);
+  });
+
+  it("ignores a file the config does not import, beside one it does", async () => {
+    watchLoadedConfig(loaded("collections/posts.ts"), cwd, DEV);
+    await watching();
+
+    writeFileSync(join(cwd, "collections", "unrelated.ts"), "export {};\n");
+    await settle();
+    expect(reload).not.toHaveBeenCalled();
+
+    // The same directory is watched: a save of the imported file does reload.
+    writeFileSync(posts, "export const posts = { edited: true };\n");
+    await eventually(() => reload.mock.calls.length === 1);
+  });
+
+  it("collapses a burst of saves into one reload", async () => {
+    watchLoadedConfig(loaded("collections/posts.ts"), cwd, DEV);
+    await watching();
+
+    for (let i = 0; i < 3; i++) {
+      writeFileSync(config, `export default { n: ${i} };\n`);
+      await new Promise(r => setTimeout(r, 50));
+    }
+    await settle();
+
+    expect(reload).toHaveBeenCalledTimes(1);
+  });
+
+  it("replaces the watched files rather than adding to them", async () => {
+    const pages = join(cwd, "collections", "pages.ts");
+    writeFileSync(pages, "export const pages = {};\n");
+    watchLoadedConfig(loaded("collections/posts.ts"), cwd, DEV);
+    await watching();
+
+    // The config stopped importing posts and started importing pages.
+    watchLoadedConfig(loaded("collections/pages.ts"), cwd, DEV);
+    await watching();
+
+    expect(watchedConfigFiles().sort()).toEqual([pages, config].sort());
+    // A watcher left over from the first set would still reload on this.
+    writeFileSync(posts, "export const posts = { dropped: true };\n");
+    await settle();
+    expect(reload).not.toHaveBeenCalled();
+
+    writeFileSync(pages, "export const pages = { edited: true };\n");
+    await eventually(() => reload.mock.calls.length === 1);
+  });
+
+  it("does not keep the process alive by watching", () => {
+    // A script that booted Nextly in development must still exit when it is
+    // done; the dev server keeps itself alive without the watcher's help.
+    const handles = () =>
+      process.getActiveResourcesInfo().filter(name => name === "FSEventWrap")
+        .length;
+    const before = handles();
+
+    watchLoadedConfig(loaded("collections/posts.ts"), cwd, DEV);
+
+    expect(watchedConfigFiles()).toContain(posts);
+    expect(handles()).toBe(before);
+  });
+
+  it("does not watch packages under node_modules", () => {
+    watchLoadedConfig(
+      loaded("collections/posts.ts", "node_modules/some-plugin/index.js"),
+      cwd,
+      DEV
+    );
+
+    expect(watchedConfigFiles().sort()).toEqual([config, posts].sort());
+  });
+
+  it("watches nothing outside next dev", () => {
+    watchLoadedConfig(loaded("collections/posts.ts"), cwd, {
+      NODE_ENV: "production",
+    } as NodeJS.ProcessEnv);
+
+    expect(watchedConfigFiles()).toEqual([]);
+  });
+
+  it("starts by watching the project's config file", async () => {
+    ensureHmrListener({ cwd, env: DEV });
+
+    await eventually(() => watchedConfigFiles().includes(config));
+    await watching();
+    writeFileSync(config, "export default { started: true };\n");
+    await eventually(() => reload.mock.calls.length === 1);
+  });
+
+  it("resolves the imports against the config's own folder, not the project's", async () => {
+    // A config under src/: the loader bundles from src/, so it reports the
+    // collection as "collections/posts.ts", relative to src/.
+    mkdirSync(join(cwd, "src", "collections"), { recursive: true });
+    const srcConfig = join(cwd, "src", "nextly.config.ts");
+    const srcPosts = join(cwd, "src", "collections", "posts.ts");
+    writeFileSync(srcConfig, "export default {};\n");
+    writeFileSync(srcPosts, "export const posts = {};\n");
+
+    watchLoadedConfig(
+      {
+        configPath: srcConfig,
+        dependencies: ["nextly.config.ts", "collections/posts.ts"],
+      },
+      cwd,
+      DEV
+    );
+
+    expect(watchedConfigFiles().sort()).toEqual([srcConfig, srcPosts].sort());
+    await watching();
+    writeFileSync(srcPosts, "export const posts = { edited: true };\n");
+    await eventually(() => reload.mock.calls.length === 1);
+  });
+
+  it("starts by watching the files the config imports, before any reload has read it", async () => {
+    // What a boot with the boot apply turned off looks like: no load has
+    // reported the imports, and the first edit is to a collection file.
+    writeFileSync(
+      config,
+      'import { posts } from "./collections/posts";\n' +
+        "export default { collections: [posts] };\n"
+    );
+    ensureHmrListener({ cwd, env: DEV });
+
+    await eventually(() => watchedConfigFiles().includes(posts));
+    await watching();
+    writeFileSync(posts, "export const posts = { slug: 'posts' };\n");
+    await eventually(() => reload.mock.calls.length === 1);
+  });
+
+  it("after a load fails, also watches the imported file that broke it", async () => {
+    // The last good load imported nothing. The edit that failed added an
+    // import of a collection file with an error in it, and the fix will be
+    // saved to that file.
+    watchLoadedConfig(loaded(), cwd, DEV);
+    writeFileSync(posts, "export const posts = { slug: 'posts' ;\n");
+    writeFileSync(
+      config,
+      'import { posts } from "./collections/posts";\n' +
+        "export default { collections: [posts] };\n"
+    );
+
+    await watchScannedConfig({ cwd, env: DEV });
+
+    expect(watchedConfigFiles().sort()).toEqual([config, posts].sort());
+    await watching();
+    writeFileSync(posts, "export const posts = { slug: 'posts' };\n");
+    await eventually(() => reload.mock.calls.length === 1);
+  });
+
+  it("after a load fails on an import that does not exist yet, reloads once it is created", async () => {
+    // esbuild reports the missing import at the importing line, so the file to
+    // be created has to be read from the error itself.
+    watchLoadedConfig(loaded(), cwd, DEV);
+    const created = join(cwd, "collections", "new.ts");
+    writeFileSync(
+      config,
+      'import { added } from "./collections/new";\n' +
+        "export default { collections: [added] };\n"
+    );
+
+    await watchScannedConfig({ cwd, env: DEV });
+
+    expect(watchedConfigFiles()).toContain(created);
+    await watching();
+    writeFileSync(created, "export const added = { slug: 'added' };\n");
+    await eventually(() => reload.mock.calls.length === 1);
+  });
+
+  it("keeps watching where the config was after a load finds none", async () => {
+    watchLoadedConfig(loaded("collections/posts.ts"), cwd, DEV);
+    rmSync(config);
+    // What a load returns while the file is gone, for example mid branch
+    // switch.
+    watchLoadedConfig({ configPath: undefined, dependencies: [] }, cwd, DEV);
+    await watching();
+
+    writeFileSync(config, "export default { restored: true };\n");
+    await eventually(() => reload.mock.calls.length === 1);
+  });
+
+  it("with no config yet, reloads once one is created", async () => {
+    rmSync(config);
+    ensureHmrListener({ cwd, env: DEV });
+
+    await eventually(() => watchedConfigFiles().includes(config));
+    await watching();
+    writeFileSync(config, "export default { created: true };\n");
+    await eventually(() => reload.mock.calls.length === 1);
+  });
+
+  it("reloads again for a save made while a reload is running", async () => {
+    let finishFirst!: () => void;
+    reload.mockImplementationOnce(
+      () => new Promise<void>(resolve => (finishFirst = resolve))
+    );
+    watchLoadedConfig(loaded("collections/posts.ts"), cwd, DEV);
+    await watching();
+
+    writeFileSync(config, "export default { first: true };\n");
+    await eventually(() => reload.mock.calls.length === 1);
+    // Saved while the first reload is still running: the first may have read
+    // the file before this edit, so it must not be dropped.
+    writeFileSync(config, "export default { second: true };\n");
+    await eventually(() => reload.mock.calls.length === 2);
+    finishFirst();
+  });
+});
+
+describe("a reload another process refused", () => {
+  let reload: ReturnType<typeof vi.fn<() => Promise<unknown>>>;
+  let warn: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    __setRefusedRetryDelaysForTest([50, 50]);
+    reload = vi.fn(() => Promise.resolve<unknown>("refused"));
+    __setReloaderForTest(reload);
+    warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    __setRefusedRetryDelaysForTest(null);
+    __setReloaderForTest(null);
+    warn.mockRestore();
+  });
+
+  it("is tried again until it runs", async () => {
+    reload.mockResolvedValueOnce("refused").mockResolvedValueOnce("finished");
+
+    scheduleReloadForTest();
+
+    await eventually(() => reload.mock.calls.length === 2);
+    await settle();
+    expect(reload).toHaveBeenCalledTimes(2);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it("stops after the last retry and says the save was not applied", async () => {
+    scheduleReloadForTest();
+
+    // The save's own run and one per retry delay.
+    await eventually(() => reload.mock.calls.length === 3);
+    await eventually(() => warn.mock.calls.length === 1);
+    await settle();
+    expect(reload).toHaveBeenCalledTimes(3);
+    expect(String(warn.mock.calls[0][0])).toMatch(
+      /not applied.*refused 3 times/
+    );
+  });
+
+  it("is not retried when it ran, even if it failed", async () => {
+    reload.mockResolvedValue("finished");
+
+    scheduleReloadForTest();
+
+    await eventually(() => reload.mock.calls.length === 1);
+    await settle();
+    expect(reload).toHaveBeenCalledTimes(1);
   });
 });

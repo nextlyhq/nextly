@@ -63,11 +63,35 @@ const opaqueImport = new Function("path", "return import(path)") as (
   path: string
 ) => Promise<unknown>;
 
+// Mirrors bundle-require's externalPlugin with externalNodeModules=true:
+// mark every non-relative, non-absolute import as external so esbuild
+// never tries to crawl workspace or node_modules dependency trees.
+// Without this, `nextly/config` triggers esbuild to bundle
+// the entire nextly tree, which transitively pulls in jsdom → undici
+// subpath exports that esbuild cannot resolve. Exported so the dev watcher's
+// scan of a config's imports follows exactly the files a load compiles.
+export const nodeModulesExternalPlugin: Plugin = {
+  name: "external-node-modules",
+  setup(b) {
+    b.onResolve({ filter: /.*/ }, args => {
+      if (
+        args.kind === "entry-point" ||
+        args.path.startsWith(".") ||
+        args.path.startsWith("/")
+      ) {
+        return undefined;
+      }
+      return { path: args.path, external: true };
+    });
+  },
+};
+
 export interface BundleConfigResult {
   // The default-or-namespace export of the compiled config module.
   mod: { default?: unknown } & Record<string, unknown>;
-  // Absolute paths of every file esbuild followed during the bundle.
-  // Used by the file watcher in dev mode.
+  // Every file esbuild followed during the bundle, relative to `cwd`: the
+  // config's own folder unless the caller passes another. Used by the file
+  // watcher in dev mode, which resolves them against that folder.
   dependencies: string[];
 }
 
@@ -112,28 +136,6 @@ export async function bundleAndRequire(
   // Per-call UUID keeps concurrent / repeat loads (HMR cycles) from
   // colliding on the same outFile.
   const outFile = join(cacheRoot, `${baseNoExt}.${randomUUID()}.mjs`);
-
-  // Mirrors bundle-require's externalPlugin with externalNodeModules=true:
-  // mark every non-relative, non-absolute import as external so esbuild
-  // never tries to crawl workspace or node_modules dependency trees.
-  // Without this, `nextly/config` triggers esbuild to bundle
-  // the entire nextly tree, which transitively pulls in jsdom → undici
-  // subpath exports that esbuild cannot resolve.
-  const nodeModulesExternalPlugin: Plugin = {
-    name: "external-node-modules",
-    setup(b) {
-      b.onResolve({ filter: /.*/ }, args => {
-        if (
-          args.kind === "entry-point" ||
-          args.path.startsWith(".") ||
-          args.path.startsWith("/")
-        ) {
-          return undefined;
-        }
-        return { path: args.path, external: true };
-      });
-    },
-  };
 
   try {
     // Loaded per call rather than held at module scope: this is the optional
