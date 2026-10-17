@@ -249,13 +249,15 @@ describe("writeAgentSkills", () => {
 // The command is printed by this CLI and written in two places people read;
 // all three must be the one the CLI prints, or an edit to it reaches only one.
 describe("the update command, wherever it is written", () => {
+  // The guide's version is the scaffold's release, filled in at copy time; the
+  // docs page leaves it for the reader to fill.
   it.each([
-    "templates/base/AGENTS.md.template",
-    "docs/guides/coding-agents.mdx",
-  ])("%s gives the command the CLI prints", async file => {
+    ["templates/base/AGENTS.md.template", "{{skillsTag}}"],
+    ["docs/guides/coding-agents.mdx", "<version>"],
+  ])("%s gives the command the CLI prints", async (file, version) => {
     const text = await readFile(path.join(repository, file), "utf8");
 
-    expect(text).toContain(updateSkillsCommand("<version>"));
+    expect(text).toContain(updateSkillsCommand(version));
   });
 });
 
