@@ -1434,7 +1434,7 @@ async function handleServiceRequest(
     if (params[0] === "me") {
       const authResult = await requireAuthentication(req);
       if (isErrorResponse(authResult)) {
-        return createJsonErrorResponse(authResult);
+        return refuseRequest(method, authResult);
       }
       // Add user ID to route params for /api/me endpoints
       if (routeParams) {
@@ -1446,7 +1446,7 @@ async function handleServiceRequest(
     else if (requiresAuthOnly(service, method)) {
       const authResult = await requireAuthentication(req);
       if (isErrorResponse(authResult)) {
-        return createJsonErrorResponse(authResult);
+        return refuseRequest(method, authResult);
       }
       authorizedUser = authResult;
     }
@@ -1461,7 +1461,7 @@ async function handleServiceRequest(
         httpMethod
       );
       if (isErrorResponse(authResult)) {
-        return createJsonErrorResponse(authResult);
+        return refuseRequest(method, authResult);
       }
       authorizedUser = authResult;
     }
@@ -1963,6 +1963,21 @@ function respondAdminMeta(payload: Record<string, unknown>): Response {
   // Configuration, not content: see `SKIP_DATE_FORMATTING_HEADER`.
   response.headers.set(SKIP_DATE_FORMATTING_HEADER, "1");
   return response;
+}
+
+/**
+ * A refusal at the route gate, before dispatch. For a method whose answers
+ * belong to one caller, the refusal does too: a shared cache replaying one
+ * person's 401 or 403 to another hides from them what they may read.
+ */
+function refuseRequest(
+  method: string,
+  refusal: Parameters<typeof createJsonErrorResponse>[0]
+): Response {
+  const response = createJsonErrorResponse(refusal);
+  return SESSION_PRIVATE_METHODS.has(method)
+    ? withSessionCacheHeaders(response)
+    : response;
 }
 
 /**
