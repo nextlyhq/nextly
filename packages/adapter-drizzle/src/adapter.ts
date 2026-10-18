@@ -443,6 +443,9 @@ export abstract class DrizzleAdapter {
    */
   private readonly flowTransactions = new AsyncLocalStorage<FlowTransaction>();
 
+  /** Each pool's reporting views, by method list (`observedPool`). Gone with the pool. */
+  private readonly observedPools = new WeakMap<object, Map<string, object>>();
+
   /**
    * Whether the calling async flow is inside a transaction on this adapter
    * that has not finished: its own, or one it was started from inside.
@@ -551,6 +554,10 @@ export abstract class DrizzleAdapter {
    * handing to code that queries the pool directly, such as Drizzle's handle.
    * Everything else, `instanceof` included, reaches the pool unchanged.
    *
+   * One view per pool and method list, made once: every Drizzle handle on the pool is given the
+   * same one, so `getDrizzle()` and `getDrizzle(relations)` share a `$client`, as they did when
+   * each was handed the pool itself.
+   *
    * @param pool - The driver's pool
    * @param methods - The pool methods that take a connection
    * @returns A view of `pool` that reports those calls
@@ -559,7 +566,12 @@ export abstract class DrizzleAdapter {
     pool: P,
     methods: readonly string[]
   ): P {
-    return new Proxy(pool, {
+    const key = methods.join(",");
+    const views = this.observedPools.get(pool) ?? new Map<string, object>();
+    this.observedPools.set(pool, views);
+    const cached = views.get(key);
+    if (cached) return cached as P;
+    const view = new Proxy(pool, {
       get: (target, property, receiver) => {
         const value: unknown = Reflect.get(target, property, receiver);
         if (
@@ -575,6 +587,8 @@ export abstract class DrizzleAdapter {
         };
       },
     });
+    views.set(key, view);
+    return view;
   }
 
   /**
