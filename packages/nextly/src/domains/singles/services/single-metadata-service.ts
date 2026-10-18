@@ -55,9 +55,13 @@ import type {
 } from "../../../schemas/dynamic-singles/types";
 import { assertGlobalResourceSlugAvailable } from "../../../services/lib/resource-slug-guard";
 import type { Logger } from "../../../shared/types";
+import type { DynamicCollectionSchemaService } from "../../dynamic-collections/services/dynamic-collection-schema-service";
 import { fieldGroupSlugList } from "../../field-groups/storage/field-group-field-type";
 import { archiveFieldsLeavingTranslation } from "../../i18n/migration/archive-preflight";
-import { applyMigrationStatements } from "../../schema/services/apply-migration-statements";
+import {
+  applyMigrationStatements,
+  applyMigrationWhole,
+} from "../../schema/services/apply-migration-statements";
 import { withSchemaChangeExcluded } from "../../schema/services/schema-change-exclusion";
 
 import { singleTableFamiliesCollide } from "./resolve-single-table-name";
@@ -889,6 +893,14 @@ export class SingleMetadataService {
       alterInput.oldFields
     );
 
+    await this.refuseWhatTheValueCannotTake(
+      input.slug,
+      tableName,
+      alterInput,
+      liveFacts.liveColumnTypes,
+      schemaService
+    );
+
     // Detected from the FULL field lists: a renamed LOCALIZED field-group
     // field sits in neither side of alterInput (the localized filter removes
     // both spellings), and its association migration must not be excluded
@@ -921,6 +933,54 @@ export class SingleMetadataService {
       describesWholeTable: false,
       ownsMigrationStatus: true,
     };
+  }
+
+  /**
+   * Refuses the save, before any statement runs, when the value the Single holds cannot take the
+   * change: a field made unique over a repeated value, or a text field narrowed below the value it
+   * holds. A Single's table is built by the collection's generator, so the collection save's rule
+   * (`refusalsForCollectionSave`) is the one asked. Asked here rather than left to the database,
+   * because MySQL would have committed every statement before the refused one, and PostgreSQL's
+   * cast would cut a longer value to fit rather than refuse it.
+   *
+   * @throws NextlyError `VALIDATION_ERROR` naming each field, with the stored value kept out of
+   *   the message and the log
+   */
+  private async refuseWhatTheValueCannotTake(
+    slug: string,
+    tableName: string,
+    diff: { oldFields: FieldDefinition[]; newFields: FieldDefinition[] },
+    liveColumnTypes: ReadonlyMap<string, string>,
+    schemaService: Pick<
+      DynamicCollectionSchemaService,
+      "detectFieldRename" | "addedColumnBackfill"
+    >
+  ): Promise<void> {
+    const adapter = this.adapter;
+    if (!adapter) return;
+    const { refusalsForCollectionSave } = await import(
+      "../../dynamic-collections/services/save-preconditions"
+    );
+    const refusals = await refusalsForCollectionSave({
+      adapter,
+      dialect: adapter.getCapabilities().dialect,
+      tableName,
+      oldFields: diff.oldFields,
+      newFields: diff.newFields,
+      rename: schemaService.detectFieldRename(diff.oldFields, diff.newFields),
+      addedColumnBackfill: field => schemaService.addedColumnBackfill(field),
+      presentColumns: new Set(liveColumnTypes.keys()),
+    });
+    if (refusals.length === 0) return;
+    throw NextlyError.validation({
+      errors: refusals.map(r => r.error),
+      logContext: {
+        single: slug,
+        fields: refusals.map(r => r.error.path),
+        // What is in the way, for the log only, and never the value itself.
+        details: refusals.flatMap(r => (r.logContext ? [r.logContext] : [])),
+      },
+    });
   }
 
   /**
@@ -1118,10 +1178,15 @@ export class SingleMetadataService {
    * asked nothing of the main table's schema, so overwriting the previous verdict with one about a
    * migration that was never requested would be a claim this apply cannot make.
    *
-   * 🔴 Never throws once it has begun. The PHASE decides that, not the error type: from here on a
-   * statement may already have run, and raising would skip the row write and leave the registry
-   * describing storage that no longer matches it. Refusals are the plan's job, which is where
-   * raising is free because nothing has been touched yet.
+   * The main table's migration runs whole or not at all (`applyMigrationWhole`), and a refusal
+   * there is thrown, so the save fails with the database's reason and the registry keeps the fields
+   * it had: on PostgreSQL and SQLite nothing changed, and on MySQL the refusal says how far it got,
+   * the next save passing over what already ran to finish it.
+   *
+   * 🔴 Past the main migration it never throws. The PHASE decides that, not the error type: the
+   * main table is in its new shape by then, and raising would skip the row write and leave the
+   * registry describing storage that no longer matches it. A companion that fails to follow is
+   * reported as a failed migration instead.
    */
   private async applyUpdateDdl(
     input: UpdateSingleSchemaInput,
@@ -1137,13 +1202,21 @@ export class SingleMetadataService {
       return plan.ownsMigrationStatus ? "pending" : undefined;
     }
 
-    try {
-      if (plan.migrationSQL) {
-        // The shared runner, not a private copy: it owns both the splitting rule and the tolerance
-        // that makes re-running over half-applied schema the repair case rather than a dead end.
-        await applyMigrationStatements(adapter, plan.migrationSQL);
-      }
+    if (plan.migrationSQL) {
+      // Before the try below, which records what it catches: a refusal here has changed nothing
+      // the registry should describe, so it fails the save. The collection save's runner, so the
+      // two apply a migration the same way; MySQL passes over what an earlier refused save already
+      // applied, since this plan is drawn from the registry rather than the live table.
+      await applyMigrationWhole({
+        db: adapter.getDrizzle(),
+        dialect: adapter.getCapabilities().dialect,
+        migrationSQL: plan.migrationSQL,
+        entity: "single",
+        tolerateApplied: true,
+      });
+    }
 
+    try {
       // Observed, not assumed, and it covers the rebuild case as well as the alter: a plan that
       // created the table has to find it afterwards for "applied" to mean anything.
       if (!(await adapter.tableExists(tableName))) {
