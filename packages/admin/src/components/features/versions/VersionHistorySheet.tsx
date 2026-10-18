@@ -41,6 +41,7 @@ import type { VersionScope } from "@admin/services/versionApi";
 
 import { useDocumentHistory } from "./document-history-context";
 import { RestoreConfirmDialog } from "./RestoreConfirmDialog";
+import { useMarkVersionSeen } from "./useMarkVersionSeen";
 import { predecessorOf } from "./version-pairing";
 import { versionsHref } from "./VersionComparePage";
 import { VersionLabelDialog } from "./VersionLabelDialog";
@@ -238,6 +239,20 @@ export function VersionHistorySheet({
     viewedError,
     setViewing,
   ]);
+
+  // Shown once it has arrived and is on screen: chosen and still loading, or
+  // failed, is not a version the person has seen.
+  useMarkVersionSeen(
+    scope,
+    scopeId,
+    open &&
+      selected !== null &&
+      viewedSnapshot !== undefined &&
+      !viewedLoading &&
+      viewedError === null
+      ? selected
+      : null
+  );
 
   // Returning to the live document from the banner clears the selection here
   // too, so the list stops showing a row as active for a version that is no

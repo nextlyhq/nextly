@@ -17,6 +17,7 @@ const {
   setLabelMock,
   mutateMock,
   toastErrorMock,
+  markSeenMock,
 } = vi.hoisted(() => ({
   useVersionsMock: vi.fn(),
   useVersionMock: vi.fn(),
@@ -24,7 +25,23 @@ const {
   setLabelMock: vi.fn(),
   mutateMock: vi.fn(),
   toastErrorMock: vi.fn(),
+  // Resolves like the route; `clearAllMocks` keeps this between tests.
+  markSeenMock: vi.fn(() =>
+    Promise.resolve({ message: "Marked as seen.", item: {} })
+  ),
 }));
+
+// The mark a shown version sends. Only this call is replaced; everything else
+// the panel reads stays real.
+vi.mock("@admin/services/versionApi", async () => {
+  const actual = await vi.importActual<
+    typeof import("@admin/services/versionApi")
+  >("@admin/services/versionApi");
+  return {
+    ...actual,
+    versionApi: { ...actual.versionApi, markSeen: markSeenMock },
+  };
+});
 
 vi.mock("@admin/components/ui", async () => {
   const actual = await vi.importActual<typeof import("@admin/components/ui")>(
@@ -293,6 +310,49 @@ describe("VersionHistorySheet", () => {
     ).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: /Try again/ }));
     expect(refetch).toHaveBeenCalled();
+  });
+
+  it("marks a version seen once when it is shown, and the list marks nothing", async () => {
+    useVersionsMock.mockReturnValue(
+      listState({
+        data: {
+          pages: [
+            { items: [version(3), version(2)], meta: { hasNext: false } },
+          ],
+        },
+      })
+    );
+    useVersionMock.mockReturnValue(detailState({ data: { snapshot: {} } }));
+
+    const { rerender } = renderSheet();
+    // The list names versions without showing any of them.
+    expect(markSeenMock).not.toHaveBeenCalled();
+
+    await userEvent.click(screen.getByRole("button", { name: /Version 2/ }));
+    await waitFor(() => expect(markSeenMock).toHaveBeenCalledTimes(1));
+    expect(markSeenMock).toHaveBeenCalledWith(scope, 2);
+
+    // Staying on the same version is the same showing.
+    rerender(<VersionHistorySheet open onOpenChange={vi.fn()} scope={scope} />);
+    expect(markSeenMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("marks nothing while the chosen version has not arrived", async () => {
+    useVersionsMock.mockReturnValue(
+      listState({
+        data: {
+          pages: [
+            { items: [version(3), version(2)], meta: { hasNext: false } },
+          ],
+        },
+      })
+    );
+    useVersionMock.mockReturnValue(detailState({ isLoading: true }));
+
+    renderSheet();
+    await userEvent.click(screen.getByRole("button", { name: /Version 2/ }));
+
+    expect(markSeenMock).not.toHaveBeenCalled();
   });
 
   it("offers no compare dialog: a comparison is read on its own page", async () => {
