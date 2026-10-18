@@ -159,6 +159,16 @@ describe("namesScript", () => {
     ).toBe(false);
   });
 
+  it("accepts a sharded leg's one shard argument, and only that", () => {
+    // A shard runs a part of the same suite; the leg's jobs run every part.
+    for (const call of ["pnpm lane:test -- --shard=${{ matrix.shard }}/${{ strategy.job-total }}", "pnpm lane:test -- --shard=1/2"]) {
+      expect(namesScript(`        run: ${call}\n`, "lane:test"), call).toBe(true);
+    }
+    for (const call of ["pnpm lane:test -- --shard=1/2 --dry=json", "pnpm lane:test -- --dry=json", "pnpm lane:test --shard=1/2", "pnpm lane:test -- --shard=all"]) {
+      expect(namesScript(`        run: ${call}\n`, "lane:test"), call).toBe(false);
+    }
+  });
+
   it("is false when nothing calls it", () => {
     expect(namesScript("        run: echo skipped\n", "lane:test")).toBe(false);
   });

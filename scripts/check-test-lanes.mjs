@@ -246,9 +246,14 @@ export function namesScript(source, script) {
   // 🔴 And anchored at the END of the COMMAND, not just the name. `pnpm
   // lane:test --dry=json` would otherwise satisfy this while the step only
   // printed a plan — the check would measure the manifest's script and the job
-  // would run something else. Nothing may follow the name but whitespace.
+  // would run something else. Nothing may follow the name but whitespace,
+  // with one exception: a sharded leg passes `-- --shard=<n>/<total>` (each
+  // a number or a `${{ }}` expression), which runs the same suite split into
+  // parts across the leg's jobs, so every part of it still runs somewhere.
   const escaped = script.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(`pnpm ${escaped}[ \\t]*(?=\\r?\\n|$)`).test(source);
+  const part = "(?:\\d+|\\$\\{\\{[^}\\n]+\\}\\})";
+  const shard = `(?:[ \\t]+--[ \\t]+--shard=${part}/${part})?`;
+  return new RegExp(`pnpm ${escaped}${shard}[ \\t]*(?=\\r?\\n|$)`).test(source);
 }
 
 export function isSingleCommand(script) {
