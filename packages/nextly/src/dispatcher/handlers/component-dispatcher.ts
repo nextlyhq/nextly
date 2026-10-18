@@ -32,6 +32,7 @@ import {
 import { resolveFieldGroupRegistryName } from "../../domains/field-groups/storage/resolve-storage-names";
 import { assertLocalizationConfigured } from "../../domains/i18n/config/require-app-config";
 import { archiveFieldsLeavingTranslation } from "../../domains/i18n/migration/archive-preflight";
+import { companionRenameFromResolutions } from "../../domains/i18n/migration/companion-rename";
 import { columnsMovingToCompanion } from "../../domains/i18n/migration/field-joins-translation";
 import { moveValuesOfFieldsJoiningTranslation } from "../../domains/i18n/runtime/move-joining-values";
 import { RealClassifier } from "../../domains/schema/pipeline/classifier/classifier";
@@ -645,6 +646,14 @@ export const COMPONENTS_METHODS: Record<
               adapter,
               // Added to the companion, with their values, before the push.
               joinedBefore,
+              // A translated field the admin renamed: the dialog's answer naming the companion.
+              renamed: companionRenameFromResolutions(renameResolutions, {
+                tableName,
+                oldFields: component.fields as unknown as FieldDefinition[],
+                newFields: fields as unknown as FieldDefinition[],
+                dialect: adapter.dialect,
+                builtBy: "fieldGroup",
+              }),
             });
           } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);

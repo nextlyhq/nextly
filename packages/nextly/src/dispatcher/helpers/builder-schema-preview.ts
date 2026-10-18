@@ -9,10 +9,12 @@
  */
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
+import { companionRenameCandidate } from "../../domains/i18n/migration/companion-rename";
 import { columnsMovingToCompanion } from "../../domains/i18n/migration/field-joins-translation";
 import { previewBodyWithLeavingTranslation } from "../../domains/i18n/migration/preview-leaving-translation";
 import { translatePipelinePreviewToLegacy } from "../../domains/schema/legacy-preview/translate";
 import { previewDesiredSchema } from "../../domains/schema/pipeline/preview";
+import type { RenameCandidate } from "../../domains/schema/pipeline/pushschema-pipeline-interfaces";
 import { toRenameCandidateWire } from "../../domains/schema/pipeline/rename-candidate-wire";
 import type { DesiredSchema } from "../../domains/schema/pipeline/types";
 import type { ColumnOrigin } from "../../domains/schema/services/field-column-descriptor";
@@ -76,9 +78,39 @@ export async function builderSchemaPreviewBody(args: {
       requestedLocalized: args.requestedLocalized,
     },
     {
-      // Detected by the same pipeline run, so they describe the same diff.
-      renamed: pipelinePreview.candidates.map(toRenameCandidateWire),
+      // Detected by the same pipeline run, so they describe the same diff; a translated field's
+      // rename, which the pipeline cannot see on the main table, is offered on its companion.
+      renamed: [
+        ...pipelinePreview.candidates,
+        ...(await translatedFieldRename(args, wasLocalized)),
+      ].map(toRenameCandidateWire),
       schemaVersion: args.schemaVersion,
     }
   );
+}
+
+/**
+ * The rename of a translated field, which lives on the companion and so is not among the
+ * pipeline's candidates: the one the main table's rule (`detectFieldRename`) finds, offered on the
+ * companion when the field is translated before and after (`companionRenameCandidate`).
+ */
+async function translatedFieldRename(
+  args: Parameters<typeof builderSchemaPreviewBody>[0],
+  wasLocalized: boolean
+): Promise<RenameCandidate[]> {
+  const { DynamicCollectionSchemaService } = await import(
+    "../../domains/dynamic-collections/services/dynamic-collection-schema-service"
+  );
+  const candidate = companionRenameCandidate({
+    tableName: args.tableName,
+    detected: new DynamicCollectionSchemaService(
+      undefined,
+      args.dialect
+    ).detectFieldRename(args.currentFields, args.newFields),
+    wasLocalized,
+    isLocalized: args.requestedLocalized ?? wasLocalized,
+    dialect: args.dialect,
+    builtBy: args.builtBy,
+  });
+  return candidate ? [candidate] : [];
 }

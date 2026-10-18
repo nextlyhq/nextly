@@ -31,6 +31,7 @@ import {
 import { buildCompanionCreateOnlySql } from "../../i18n/migration/generate-up";
 import {
   buildCompanionTransitionPlans,
+  type FieldRename,
   fieldsLeavingTranslation,
 } from "../../i18n/migration/reconcile-companion";
 import {
@@ -1036,6 +1037,8 @@ export class DynamicCollectionService extends BaseService {
     status: boolean;
     /** Whether the entity HAD Draft/Published before this save — see `wasStatus` on the args. */
     wasStatus: boolean;
+    /** A field this save renames, by field name, as the main table's rename is decided. */
+    renamed?: FieldRename;
   }): Promise<{
     sql: string;
     localSql?: string;
@@ -1114,6 +1117,7 @@ export class DynamicCollectionService extends BaseService {
       // writes come back separately to go ahead of it.
       archiveBeforeMain: true,
       joinedBefore: joining.fields,
+      renamed: args.renamed,
     };
 
     // Which translatable columns the main table still carries. A disable must not re-add one that
@@ -1580,6 +1584,13 @@ export class DynamicCollectionService extends BaseService {
             isLocalized: collectionIsLocalized,
             status: hasStatus,
             wasStatus,
+            // One rename rule for every column: the main table's decides a translated field's too.
+            renamed: fieldRenameOf(
+              this.schemaService.detectFieldRename(
+                oldUserFields,
+                userDefinedFields
+              )
+            ),
           }
         );
         migrationSQL = localizedMigration.sql;
@@ -1791,4 +1802,11 @@ export class DynamicCollectionService extends BaseService {
   getRegistryService(): DynamicCollectionRegistryService {
     return this.registryService;
   }
+}
+
+/** A detected rename as the companion reconcile takes it: the field's name before and after. */
+function fieldRenameOf(
+  rename: { from: FieldDefinition; to: FieldDefinition } | null
+): FieldRename | undefined {
+  return rename ? { from: rename.from.name, to: rename.to.name } : undefined;
 }

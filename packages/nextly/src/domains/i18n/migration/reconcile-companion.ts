@@ -8,6 +8,7 @@ import { isFieldLocalized } from "../classify-fields";
 
 import { ddlType, lit, q } from "./ddl-types";
 import { deriveCompanionSpec } from "./derive-companion-spec";
+import { storageDiffers } from "./field-leaves-translation-rules";
 import { fieldToLocalizedColumnSpec } from "./field-to-column-spec";
 import {
   archiveOwnerOf,
@@ -22,6 +23,12 @@ import {
   companionUpdatedAtDdl,
 } from "./generate-up";
 import type { I18nTransitionKind } from "./transition-state";
+
+/** One field renamed in a change: its name before and after. */
+export interface FieldRename {
+  from: string;
+  to: string;
+}
 
 /** Minimal field shape the companion reconciler needs. Structurally compatible with FieldDefinition. */
 export interface CompanionFieldLike {
@@ -563,6 +570,13 @@ export interface CompanionTransitionArgs {
    * (`buildFieldsJoiningTranslationStatements`). Their ADD is not repeated here.
    */
   joinedBefore?: readonly string[];
+  /**
+   * A field renamed in this change, by field name. When it was translated before, its companion
+   * column is renamed first, and the rest of the transition sees the old field under its new name:
+   * still translated, every language moves with the column; made shared, it leaves translation as
+   * a field that kept its name does, the other languages archived under the new name.
+   */
+  renamed?: FieldRename;
 }
 
 /** The plan produced by {@link buildCompanionTransitionStatements}. */
@@ -760,50 +774,97 @@ export function buildCompanionTransitionStatements(
   // FIELD CHANGE while staying localized — ADD/DROP the changed localized columns + reconcile
   // `_status`.
   if (wasLocalized && isLocalized) {
-    const oldLocalized = oldFields.filter(f => isFieldLocalized(f, true));
+    // A translated field renamed in this change keeps its column, renamed first; from there the
+    // old field is seen under its new name, so the rest of the change is decided as for a field
+    // that kept it.
+    const rename = companionColumnRename(args);
+    const before = rename?.oldFields ?? oldFields;
+    const oldLocalized = before.filter(f => isFieldLocalized(f, true));
     const newLocalized = newFields.filter(f => isFieldLocalized(f, true));
-    const sharedAfter = fieldsLeavingTranslation(oldFields, newFields);
+    const sharedAfter = fieldsLeavingTranslation(before, newFields);
     const archiveFirst = args.archiveBeforeMain === true;
+    // The rename runs before whatever reads the column under its new name: the archive writes,
+    // when they go before the main table, else the companion's own statements.
+    const renaming = rename?.statements ?? [];
     const beforeMain = archiveFirst
-      ? buildLeavingFieldsArchiveStatements({
-          slug,
-          kind,
-          tableName,
-          dialect,
-          builtBy,
-          defaultLocale,
-          oldFields,
-          newFields,
-        })
+      ? [
+          ...renaming,
+          ...buildLeavingFieldsArchiveStatements({
+            slug,
+            kind,
+            tableName,
+            dialect,
+            builtBy,
+            defaultLocale,
+            oldFields: before,
+            newFields,
+          }),
+        ]
       : [];
     return {
       beforeMain,
-      statements: buildCompanionReconcileStatements({
-        slug,
-        kind,
-        tableName,
-        builtBy,
-        oldLocalized,
-        newLocalized,
-        dialect,
-        status,
-        companionExists,
-        companionHasStatus: args.companionHasStatus,
-        // Carry the default locale so a newly-added `_status` back-fills the
-        // default-locale companion row from the main row's status, and a field leaving
-        // translation keeps its default language's value.
-        defaultLocale,
-        sharedAfter,
-        sharedAfterArchived: archiveFirst,
-        joinedBefore: args.joinedBefore,
-        presentOnCompanion: args.presentOnCompanion,
-      }),
+      statements: [
+        ...(archiveFirst ? [] : renaming),
+        ...buildCompanionReconcileStatements({
+          slug,
+          kind,
+          tableName,
+          builtBy,
+          oldLocalized,
+          newLocalized,
+          dialect,
+          status,
+          companionExists,
+          companionHasStatus: args.companionHasStatus,
+          // Carry the default locale so a newly-added `_status` back-fills the
+          // default-locale companion row from the main row's status, and a field leaving
+          // translation keeps its default language's value.
+          defaultLocale,
+          sharedAfter,
+          sharedAfterArchived: archiveFirst,
+          joinedBefore: args.joinedBefore,
+          presentOnCompanion: args.presentOnCompanion,
+        }),
+      ],
       needsArchive: sharedAfter.length > 0,
       companionDropped: false,
     };
   }
 
   return none;
+}
+
+/**
+ * The rename of a field translated before the change (`args.renamed`): its companion column's
+ * RENAME (none when the column keeps its name), and the old fields with it under its new name. Undefined when there is no such rename,
+ * or when the field's storage changes too, which a rename cannot carry since it keeps the type.
+ */
+function companionColumnRename(
+  args: CompanionTransitionArgs
+): { statements: string[]; oldFields: CompanionFieldLike[] } | undefined {
+  const { renamed, dialect, builtBy } = args;
+  if (!renamed) return undefined;
+  const from = args.oldFields.find(f => f.name === renamed.from);
+  const to = args.newFields.find(f => f.name === renamed.to);
+  if (!from || !to || !isFieldLocalized(from, true)) return undefined;
+  const fromColumn = fieldToLocalizedColumnSpec(from, dialect, builtBy);
+  const toColumn = fieldToLocalizedColumnSpec(to, dialect, builtBy);
+  if (!fromColumn || !toColumn || storageDiffers(fromColumn, toColumn)) {
+    return undefined;
+  }
+  const companionTable = `${args.tableName}_locales`;
+  return {
+    // A rename that keeps the column's name moves nothing on the companion.
+    statements:
+      fromColumn.name === toColumn.name
+        ? []
+        : [
+            `ALTER TABLE ${q(companionTable, dialect)} RENAME COLUMN ${q(fromColumn.name, dialect)} TO ${q(toColumn.name, dialect)}`,
+          ],
+    oldFields: args.oldFields.map(f =>
+      f === from ? { ...f, name: to.name } : f
+    ),
+  };
 }
 
 /**

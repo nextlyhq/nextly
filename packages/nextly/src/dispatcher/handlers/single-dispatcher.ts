@@ -38,6 +38,7 @@ import type { FieldConfig } from "../../collections/fields/types";
 import { container } from "../../di/container";
 import { assertLocalizationConfigured } from "../../domains/i18n/config/require-app-config";
 import { archiveFieldsLeavingTranslation } from "../../domains/i18n/migration/archive-preflight";
+import { companionRenameFromResolutions } from "../../domains/i18n/migration/companion-rename";
 import { columnsMovingToCompanion } from "../../domains/i18n/migration/field-joins-translation";
 import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion-registration";
 import { moveValuesOfFieldsJoiningTranslation } from "../../domains/i18n/runtime/move-joining-values";
@@ -1337,6 +1338,15 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
           adapter,
           // Added to the companion, with their values, before the push.
           joinedBefore,
+          // A translated field the admin renamed: the dialog's answer naming the companion.
+          renamed: companionRenameFromResolutions(renameResolutions, {
+            tableName,
+            oldFields: single.fields as unknown as FieldDefinition[],
+            newFields: fields as unknown as FieldDefinition[],
+            dialect: adapter.dialect,
+            // A Single's table is built by the collection's generator.
+            builtBy: "collection",
+          }),
         });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);

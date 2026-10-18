@@ -33,6 +33,7 @@ import {
 } from "../../api/response-shapes";
 import { assertLocalizationConfigured } from "../../domains/i18n/config/require-app-config";
 import { archiveFieldsLeavingTranslation } from "../../domains/i18n/migration/archive-preflight";
+import { companionRenameFromResolutions } from "../../domains/i18n/migration/companion-rename";
 import { ensureI18nArchive } from "../../domains/i18n/migration/ensure-archive";
 import { columnsMovingToCompanion } from "../../domains/i18n/migration/field-joins-translation";
 import { buildCompanionTransitionStatements } from "../../domains/i18n/migration/reconcile-companion";
@@ -958,6 +959,14 @@ const COLLECTIONS_METHODS: Record<
             ).then(cols => cols.map(c => c.name)),
             // Added to the companion, with their values, before the push.
             joinedBefore,
+            // A translated field the admin renamed: the dialog's answer naming the companion.
+            renamed: companionRenameFromResolutions(renameResolutions, {
+              tableName,
+              oldFields,
+              newFields,
+              dialect,
+              builtBy: "collection",
+            }),
           });
           // A disable archives non-default translations, so ensure the archive
           // table exists first. Run each statement individually (executeQuery is

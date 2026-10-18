@@ -25,7 +25,10 @@ import {
 } from "../../../dispatcher/helpers/di";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import { ensureI18nArchive } from "../../i18n/migration/ensure-archive";
-import { buildCompanionTransitionStatements } from "../../i18n/migration/reconcile-companion";
+import {
+  buildCompanionTransitionStatements,
+  type FieldRename,
+} from "../../i18n/migration/reconcile-companion";
 import {
   companionHasStatusColumn,
   localizedColumnsOnMain,
@@ -57,6 +60,8 @@ export interface ReconcileSingleCompanionArgs {
    * table changed (`moveValuesOfFieldsJoiningTranslation`). Their ADD is not repeated.
    */
   joinedBefore?: readonly string[];
+  /** A translated field this change renames, by field name; its companion column is renamed. */
+  renamed?: FieldRename;
 }
 
 export async function reconcileSingleCompanion(
@@ -107,6 +112,7 @@ export async function reconcileSingleCompanion(
     companionHasStatus,
     wasStatus,
     joinedBefore: args.joinedBefore,
+    renamed: args.renamed,
     // Which translatable columns the main table still carries. A disable must not re-add one that
     // is already there, and must still restore it: presence says the column exists, never that its
     // value is current, because every localized write went to the companion alone.

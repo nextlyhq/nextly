@@ -1139,6 +1139,21 @@ export class SingleMetadataService {
     });
   }
 
+  /** The field this save renames, by field name, decided as the main table's rename is. */
+  private async detectedFieldRename(
+    previousFields: FieldDefinition[],
+    fields: FieldDefinition[]
+  ): Promise<{ from: string; to: string } | undefined> {
+    const { DynamicCollectionSchemaService } = await import(
+      "../../dynamic-collections/services/dynamic-collection-schema-service"
+    );
+    const rename = new DynamicCollectionSchemaService(
+      undefined,
+      this.dialect
+    ).detectFieldRename(previousFields, fields);
+    return rename ? { from: rename.from.name, to: rename.to.name } : undefined;
+  }
+
   /**
    * Run the plan, reporting how far it got.
    *
@@ -1212,6 +1227,11 @@ export class SingleMetadataService {
           wasStatus: input.wasStatus,
           adapter,
           joinedBefore,
+          // One rename rule for every column: the main table's decides a translated field's too.
+          renamed: await this.detectedFieldRename(
+            plan.previousFields,
+            plan.fields
+          ),
         });
       } catch (companionError) {
         // 🔴 The shape is RETRACTED here, never rebound, because nothing at this level knows what
