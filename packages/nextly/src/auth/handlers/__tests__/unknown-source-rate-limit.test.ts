@@ -406,6 +406,144 @@ describe("reading the body", () => {
   });
 });
 
+describe("bodies held open", () => {
+  /** How a held body's read can end. */
+  type Ending = "completes" | "aborts" | "overruns the byte limit";
+
+  interface Held {
+    /** Settles once the limiter has started reading this body. */
+    reading: Promise<void>;
+    response: Promise<Response | null>;
+    end(how: Ending): void;
+  }
+
+  /** Every held body a test opened, ended after it so none outlives it. */
+  let open: Held[] = [];
+
+  afterEach(async () => {
+    for (const held of open) held.end("completes");
+    await Promise.all(open.map(held => held.response));
+    open = [];
+  });
+
+  /**
+   * A login whose body arrives only when `end` is called. Its queue is zero,
+   * so it is pulled only once something reads it, and nothing reads a login's
+   * body before the limiter does: `reading` is the limiter's read starting.
+   */
+  function heldLogin(h: Harness, email: string): Held {
+    let started!: () => void;
+    const reading = new Promise<void>(resolve => {
+      started = resolve;
+    });
+    let finish!: (how: Ending) => void;
+    const ended = new Promise<Ending>(resolve => {
+      finish = resolve;
+    });
+    let done = false;
+    const body = new ReadableStream<Uint8Array>(
+      {
+        async pull(controller) {
+          started();
+          const how = await ended;
+          if (how === "aborts") {
+            controller.error(new Error("client went away"));
+            return;
+          }
+          const text =
+            how === "completes"
+              ? JSON.stringify({ email, password: "pw" })
+              : "x".repeat(40 * 1024);
+          controller.enqueue(new TextEncoder().encode(text));
+          controller.close();
+        },
+      },
+      { highWaterMark: 0 }
+    );
+    const request = new Request("http://localhost:3000/admin/api/auth/login", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Origin: "http://localhost:3000",
+      },
+      body,
+      duplex: "half",
+    } as RequestInit);
+    const held: Held = {
+      reading,
+      response: routeAuthRequest(request, "login", h.deps),
+      end(how) {
+        if (done) return;
+        done = true;
+        finish(how);
+      },
+    };
+    open.push(held);
+    return held;
+  }
+
+  /**
+   * Open `count` held logins, all for one address so that their arrivals
+   * spend one ceiling place between them, and wait until the limiter reads
+   * each.
+   */
+  async function holdOpen(h: Harness, count: number): Promise<Held[]> {
+    const held = Array.from({ length: count }, () =>
+      heldLogin(h, "held@example.com")
+    );
+    await Promise.all(held.map(each => each.reading));
+    return held;
+  }
+
+  /**
+   * Whether the limiter starts reading `held`'s body. It is refused without a
+   * read, or its read starts, before a timer turn passes.
+   */
+  async function readStarts(held: Held): Promise<boolean> {
+    return Promise.race([
+      held.reading.then(() => true),
+      held.response.then(() => false),
+    ]);
+  }
+
+  it("reads no more bodies at once than the ceiling admits, and refusing the rest spends nothing", async () => {
+    const h = harness({ budget: 1 }); // ceiling 100
+    await holdOpen(h, 100);
+
+    const extra = heldLogin(h, "extra@example.com");
+    const refused = await extra.response;
+    expect(refused?.status).toBe(429);
+    expect(Number(refused?.headers.get("retry-after"))).toBeGreaterThan(0);
+    // Refused before its body was read.
+    expect(await readStarts(extra)).toBe(false);
+
+    // The refusal spent nothing: once the held bodies arrive (one admitted,
+    // the rest refused by their shared address's budget), the refused
+    // address still has its whole budget and the ceiling has room for it.
+    for (const held of open) held.end("completes");
+    await Promise.all(open.map(held => held.response));
+    expect(await admitted(login(h, "extra@example.com"))).toBe(true);
+  });
+
+  it.each<Ending>(["completes", "aborts", "overruns the byte limit"])(
+    "gives a body's reading place back once, when its read %s",
+    async how => {
+      const h = harness({ budget: 1 }); // ceiling 100
+      const [first] = await holdOpen(h, 100);
+
+      first!.end(how);
+      await first!.response;
+
+      // One place came back: one more body is read, and the next is refused.
+      const next = heldLogin(h, "next@example.com");
+      expect(await readStarts(next)).toBe(true);
+      const after = heldLogin(h, "after@example.com");
+      expect(await readStarts(after)).toBe(false);
+      expect((await after.response)?.status).toBe(429);
+    }
+  );
+});
+
 describe("the account-less budget", () => {
   it("bounds bodies that name nothing together, apart from keyed sign-ins", async () => {
     const h = harness({ budget: 2 });
