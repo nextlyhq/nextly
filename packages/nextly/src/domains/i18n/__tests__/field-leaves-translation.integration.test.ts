@@ -670,9 +670,10 @@ describeEachDialect("a field that stops being translated", dialect => {
     });
     const id = String(created.item.id);
     for (const statement of getI18nArchiveDdl(dialect)) await query(statement);
+    // As the archive writers record it: with the kind of entity that archived the row.
     await query(
-      `INSERT INTO ${quote(dialect, "nextly_i18n_archive")} (${["collection", "entry_id", "locale", "field", "value"].map(c => quote(dialect, c)).join(", ")}) ` +
-        `VALUES ('articles', '${id}', 'es', 'sub_title', '${VALUES.es}')`
+      `INSERT INTO ${quote(dialect, "nextly_i18n_archive")} (${["collection", "entity_kind", "entry_id", "locale", "field", "value"].map(c => quote(dialect, c)).join(", ")}) ` +
+        `VALUES ('articles', 'collection', '${id}', 'es', 'sub_title', '${VALUES.es}')`
     );
 
     const result = await restoreI18nArchive({
@@ -698,7 +699,15 @@ describeEachDialect("a field that stops being translated", dialect => {
     const id = await seedCollection();
     for (const statement of getI18nArchiveDdl(dialect)) await query(statement);
     const archive = quote(dialect, "nextly_i18n_archive");
-    const columns = ["id", "collection", "entry_id", "locale", "field", "value"]
+    const columns = [
+      "id",
+      "collection",
+      "entity_kind",
+      "entry_id",
+      "locale",
+      "field",
+      "value",
+    ]
       .map(c => quote(dialect, c))
       .join(", ");
     // The newer row (the higher id) is written first, so a read that follows storage order rather
@@ -708,7 +717,7 @@ describeEachDialect("a field that stops being translated", dialect => {
       [9001, "Older"],
     ] as const) {
       await query(
-        `INSERT INTO ${archive} (${columns}) VALUES (${rowId}, 'posts', '${id}', 'es', 'heading', '${value}')`
+        `INSERT INTO ${archive} (${columns}) VALUES (${rowId}, 'posts', 'collection', '${id}', 'es', 'heading', '${value}')`
       );
     }
 
