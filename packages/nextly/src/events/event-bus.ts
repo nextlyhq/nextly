@@ -161,9 +161,11 @@ export class EventBus {
   }
 
   /**
-   * Await all in-flight async handlers. **Testing aid** — production emit is
-   * fire-and-forget. Drains repeatedly so handler chains that emit again settle
-   * too.
+   * Await all in-flight async handlers. Emitting stays fire-and-forget; this
+   * is for a caller about to tear the runtime down under them, which the
+   * plugin lifecycle command does after a plugin's `onInstall` or
+   * `onUninstall`, and for tests. Drains repeatedly so handler chains that
+   * emit again settle too.
    */
   async settle(): Promise<void> {
     while (this.inFlight.size > 0) {

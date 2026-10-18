@@ -551,6 +551,7 @@ async function connect(options: RunnerOptions, context: CommandContext) {
     );
     const { getImageProcessor } = await import("../../storage/image-processor");
     const { getHookRegistry } = await import("../../hooks/hook-registry");
+    const { getEventBus } = await import("../../events/event-bus");
 
     // A registration this command did not make is not this command's to tear
     // down. `registerServices` refuses when one exists, and the cleanup below
@@ -634,6 +635,14 @@ async function connect(options: RunnerOptions, context: CommandContext) {
       // destroys only the plugins that registration recorded (none, if it
       // failed before initializing them), and `clearServices` resets whatever
       // was registered, however much that was.
+      //
+      // First, the handlers of every event the hook emitted are let finish.
+      // Emitting is fire-and-forget, so another plugin's handler (removing
+      // what it kept about each account an uninstall reports deleted, say)
+      // is still running when the hook returns; torn down under it, that
+      // work would stop part way, and an uninstall's DOWNs then drop the
+      // rows it was reading.
+      await getEventBus().settle();
       await destroyRegisteredPlugins();
       clearServices();
     }
