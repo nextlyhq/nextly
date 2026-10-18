@@ -57,6 +57,17 @@ export interface TransactionScope {
    */
   track: <R>(work: PromiseLike<R>) => Promise<R>;
   /**
+   * How many statements `track` has recorded so far, so work that must not
+   * overlap another statement can tell whether one started while it ran.
+   */
+  started: () => number;
+  /**
+   * Records a failure the transaction must roll back for, though nobody
+   * awaiting a statement saw it: `run` then rejects with it once the work and
+   * its statements have settled. The first one recorded is the one reported.
+   */
+  fail: (error: unknown) => void;
+  /**
    * Runs the transaction's work and decides what the transaction resolves
    * to: the work's own result, or the error that must roll it back.
    */
@@ -107,6 +118,10 @@ export interface TransactionScope {
  * what the author's own code saw — and the drain still finishes first, so
  * nothing the work started is left running when the rollback begins.
  *
+ * A failure recorded through `fail` decides the outcome after those: core
+ * code that ran inside the transaction records one when it could not keep
+ * the transaction whole, and nothing the author awaited would show it.
+ *
  * Shared by every transaction a plugin holds — `ctx.db.transaction`,
  * `ctx.db.raw.transaction` and `ctx.services.collections.withTransaction` —
  * so the handle each passes its work ends by one rule, and refuses with the
@@ -117,6 +132,8 @@ export function transactionScope(
 ): TransactionScope {
   let open = true;
   const inFlight = new Set<Promise<unknown>>();
+  let startedCount = 0;
+  const recorded: unknown[] = [];
 
   /**
    * Waits for every statement still in flight, and returns the failures
@@ -145,6 +162,7 @@ export function transactionScope(
       // await, so the one handed back is a settled-once native promise:
       // awaited after the transaction it cannot run a second time outside it.
       const running = Promise.resolve(work);
+      startedCount += 1;
       inFlight.add(running);
       const forget = (): void => {
         inFlight.delete(running);
@@ -155,6 +173,10 @@ export function transactionScope(
       // handler (the one above), and Node would never report a failure the
       // caller left unhandled.
       return running.then(value => value);
+    },
+    started: () => startedCount,
+    fail(error: unknown) {
+      recorded.push(error);
     },
     async run<R>(work: () => Promise<R>): Promise<R> {
       let outcome: { ok: true; value: R } | { ok: false; error: unknown };
@@ -167,6 +189,7 @@ export function transactionScope(
       open = false;
       if (!outcome.ok) throw outcome.error;
       if (drained.length > 0) throw drained[0];
+      if (recorded.length > 0) throw recorded[0];
       return outcome.value;
     },
   };

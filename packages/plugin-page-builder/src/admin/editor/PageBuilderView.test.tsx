@@ -340,6 +340,34 @@ describe("the field the view edits", () => {
   });
 });
 
+describe("moving to another field's address", () => {
+  it("keeps each field's page to itself", () => {
+    // The admin keeps the view mounted when `?field=` changes, and the editor
+    // reads its document once, when it mounts. One that stayed would go on
+    // showing the first field's page while writing into the second: an edit
+    // made after the move would then save content's page into body.
+    const view = render(<Host />);
+    act(() => edit?.(EDITED));
+
+    view.rerender(
+      <Host field={declaration({ name: "body", type: "blocks" })} />
+    );
+
+    // The editor for body starts from body's own page...
+    expect(seeded).toEqual([pageSaying(CONTENT_TEXT), pageSaying(BODY_TEXT)]);
+    // ...and the work done on content went to content as its editor left.
+    expect(values?.content).toEqual(EDITED);
+    expect(values?.body).toEqual(pageSaying(BODY_TEXT));
+
+    // An edit after the move lands in body and leaves content as it was.
+    const AFTER = pageSaying("Written after the move");
+    act(() => edit?.(AFTER));
+    fireEvent.click(screen.getByRole("button", { name: "Leave editor" }));
+    expect(values?.body).toEqual(AFTER);
+    expect(values?.content).toEqual(EDITED);
+  });
+});
+
 describe("a document that may not be edited", () => {
   it("draws the editor when the document may be edited", () => {
     // The control for the case below: the chrome it asserts absent is drawn
