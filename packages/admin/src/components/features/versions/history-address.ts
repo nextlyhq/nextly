@@ -7,13 +7,14 @@
  * the panel rather than leaving the document.
  *
  * Opening adds a history entry, so back closes it. Choosing a version replaces
- * the current entry rather than adding one per row looked at. Closing clears
- * both keys in one step.
+ * the current entry rather than adding one per row looked at. Closing steps
+ * back off the entry opening added, so back never reopens the panel; a panel
+ * opened by a link is closed in place.
  *
  * @module components/features/versions/history-address
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { useSearchParams } from "@admin/hooks/useSearchParams";
 import { setSearchParams } from "@admin/lib/navigation";
@@ -48,14 +49,16 @@ export interface HistoryAddress {
 }
 
 /**
- * The panel's state as the address holds it.
+ * The panel's state as the address holds it, or closed wherever history is
+ * not `available`: a link naming history on a document without it opens
+ * nothing.
  *
  * Held in local state as well, set the moment this writes and re-read
  * whenever the address changes (back and forward included): the address is
  * the source, and the screen answers a click without waiting for the router
  * to announce the move.
  */
-export function useHistoryAddress(): HistoryAddress {
+export function useHistoryAddress(available = true): HistoryAddress {
   const params = useSearchParams();
   const addressOpen = params[HISTORY_PARAM] === "1";
   const addressVersion = addressOpen
@@ -64,17 +67,32 @@ export function useHistoryAddress(): HistoryAddress {
 
   const [open, setOpenState] = useState(addressOpen);
   const [version, setVersionState] = useState(addressVersion);
-  useEffect(() => setOpenState(addressOpen), [addressOpen]);
+  // Whether the open entry is one this hook added, and so one closing can
+  // step back off. Forgotten once the address is closed by any means.
+  const addedOpenEntry = useRef(false);
+  useEffect(() => {
+    setOpenState(addressOpen);
+    if (!addressOpen) addedOpenEntry.current = false;
+  }, [addressOpen]);
   useEffect(() => setVersionState(addressVersion), [addressVersion]);
 
   const setOpen = useCallback((next: boolean) => {
     setOpenState(next);
     if (next) {
+      addedOpenEntry.current = true;
       setSearchParams({ [HISTORY_PARAM]: "1" });
       return;
     }
     setVersionState(null);
-    setSearchParams({ [HISTORY_PARAM]: null, [VERSION_PARAM]: null });
+    if (addedOpenEntry.current) {
+      addedOpenEntry.current = false;
+      window.history.back();
+      return;
+    }
+    setSearchParams(
+      { [HISTORY_PARAM]: null, [VERSION_PARAM]: null },
+      { replace: true }
+    );
   }, []);
 
   const setVersion = useCallback((next: number | null) => {
@@ -85,5 +103,10 @@ export function useHistoryAddress(): HistoryAddress {
     );
   }, []);
 
-  return { open, version, setOpen, setVersion };
+  return {
+    open: available && open,
+    version: available ? version : null,
+    setOpen,
+    setVersion,
+  };
 }

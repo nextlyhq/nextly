@@ -683,7 +683,7 @@ export function SingleForm({
   // Out of the way when the author collapsed it (shared with the collection
   // editor), and while history is open, which takes its place.
   const { collapsed: railCollapsed, toggle: toggleRail } =
-    useDocumentPanelCollapsed();
+    useDocumentPanelCollapsed(historyEnabledFrom(schema) !== false);
 
   // i18n: per-locale writing direction (RTL) + the app default locale, for the content-locale
   // context passed to field components and the language pills. Inert for non-localized singles.

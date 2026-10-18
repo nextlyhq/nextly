@@ -33,6 +33,27 @@ async function savedPost(page: Page): Promise<void> {
   });
 }
 
+/**
+ * How far the editor is scrolled. The admin scrolls a container of its own,
+ * not the window, so this reads the field's nearest scrolling ancestor, and
+ * `to` moves it.
+ */
+const editorScroll = (page: Page, to?: number) =>
+  excerpt(page).evaluate((field, y) => {
+    for (let node = field.parentElement; node; node = node.parentElement) {
+      const overflow = getComputedStyle(node).overflowY;
+      if (
+        (overflow === "auto" || overflow === "scroll") &&
+        node.scrollHeight > node.clientHeight
+      ) {
+        if (y !== undefined) node.scrollTop = y;
+        return node.scrollTop;
+      }
+    }
+    if (y !== undefined) window.scrollTo(0, y);
+    return window.scrollY;
+  }, to);
+
 /** The history panel, by its heading. */
 const panel = (page: Page) =>
   page.getByRole("dialog").filter({
@@ -78,8 +99,11 @@ test.describe("history beside the document", () => {
     await page.setViewportSize({ width: 390, height: 844 });
     await savedPost(page);
     await excerpt(page).fill("phone words not saved");
-    await excerpt(page).scrollIntoViewIfNeeded();
-    const before = await page.evaluate(() => window.scrollY);
+    // A known place down the editor, so a panel that reset the scroll to the
+    // top could not pass for one that kept it.
+    await editorScroll(page, 400);
+    await expect.poll(() => editorScroll(page)).toBeGreaterThan(0);
+    const before = await editorScroll(page);
 
     await page.getByRole("button", { name: "More actions" }).click();
     await page.getByRole("menuitem", { name: "History", exact: true }).click();
@@ -92,9 +116,9 @@ test.describe("history beside the document", () => {
     await page.getByRole("button", { name: "Close history" }).click();
     await expect(panel(page)).toBeHidden();
     await expect(excerpt(page)).toHaveValue("phone words not saved");
-    expect(
-      Math.abs((await page.evaluate(() => window.scrollY)) - before)
-    ).toBeLessThanOrEqual(4);
+    expect(Math.abs((await editorScroll(page)) - before)).toBeLessThanOrEqual(
+      4
+    );
   });
 
   test("on a phone, reads a version with the page stepped aside, and comes back to the list", async ({

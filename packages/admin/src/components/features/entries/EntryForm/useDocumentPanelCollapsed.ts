@@ -13,12 +13,12 @@ import { useHistoryAddress } from "@admin/components/features/versions/history-a
 
 import { useRailCollapsed } from "./useRailCollapsed";
 
-export function useDocumentPanelCollapsed(): {
+export function useDocumentPanelCollapsed(historyAvailable = true): {
   collapsed: boolean;
   /** Changes the author's choice, which applies once history is closed. */
   toggle: () => void;
 } {
   const { collapsed, toggle } = useRailCollapsed();
-  const { open: historyOpen } = useHistoryAddress();
+  const { open: historyOpen } = useHistoryAddress(historyAvailable);
   return { collapsed: collapsed || historyOpen, toggle };
 }

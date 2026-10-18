@@ -5,7 +5,7 @@
  * properties are about which address a move leaves behind, and how many steps
  * back it takes to undo, which a stubbed history would only restate.
  */
-import { act, renderHook } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { useHistoryAddress } from "../history-address";
@@ -39,7 +39,7 @@ describe("useHistoryAddress", () => {
     });
   });
 
-  it("adds a step back for opening, none for choosing a version, and closes both keys in one", () => {
+  it("adds a step back for opening, none for choosing a version, and closes by stepping back off it", async () => {
     at("/admin/collections/posts/e1?locale=es");
     const start = window.history.length;
     const { result } = renderHook(() => useHistoryAddress());
@@ -56,10 +56,30 @@ describe("useHistoryAddress", () => {
     expect(result.current).toMatchObject({ open: true, version: 2 });
 
     act(() => result.current.setOpen(false));
-    expect(search().get("history")).toBeNull();
+    expect(result.current).toMatchObject({ open: false, version: null });
+    // Back to the entry before opening, so Back cannot reopen the panel: no
+    // new entry for closing.
+    await waitFor(() => expect(search().get("history")).toBeNull());
+    expect(window.history.length).toBe(start + 1);
     expect(search().get("version")).toBeNull();
     // Other keys are the page's own and stay.
     expect(search().get("locale")).toBe("es");
+  });
+
+  it("closes a panel a link opened in place, adding no entry", () => {
+    at("/admin/collections/posts/e1?history=1&version=2");
+    const start = window.history.length;
+    const { result } = renderHook(() => useHistoryAddress());
+
+    act(() => result.current.setOpen(false));
+    expect(search().get("history")).toBeNull();
+    expect(search().get("version")).toBeNull();
+    expect(window.history.length).toBe(start);
+  });
+
+  it("reads history as closed where it is not available, whatever the address says", () => {
+    at("/admin/collections/posts/e1?history=1&version=4");
+    const { result } = renderHook(() => useHistoryAddress(false));
     expect(result.current).toMatchObject({ open: false, version: null });
   });
 

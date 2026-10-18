@@ -458,7 +458,7 @@ export function EntryForm({
   // Out of the way when the author collapsed it, and while history is open,
   // which takes its place.
   const { collapsed: railCollapsed, toggle: toggleRail } =
-    useDocumentPanelCollapsed();
+    useDocumentPanelCollapsed(historyEnabledFrom(collection) !== false);
   // Which past version the document area is showing, the context value that
   // publishes it to the panel, and the version's own body layout — held by the
   // shared host so the Single editor answers the panel identically.

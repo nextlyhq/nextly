@@ -345,7 +345,6 @@ export function EntrySystemHeader({
   const [discardDraftOpen, setDiscardDraftOpen] = useState(false);
   // Whether history is open lives in the address, so a reload or a shared link
   // opens it again and the back button closes it.
-  const { open: historyOpen, setOpen: setHistoryOpen } = useHistoryAddress();
   // True while the document area is showing a past version rather than the
   // live document.
   const { viewing: viewingVersion } = useDocumentHistory();
@@ -374,6 +373,18 @@ export function EntrySystemHeader({
     }
   }, [mode]);
 
+  // A document only has history once it has been saved, and rendering a
+  // snapshot needs the schema, so both are required to offer it. Read before
+  // anything returns early, and the address opens history only then, so a
+  // link naming it on a document without it opens nothing.
+  const historyOffered =
+    mode === "edit" &&
+    Boolean(entry?.id) &&
+    historyFields !== undefined &&
+    historyEnabled !== false;
+  const { open: historyOpen, setOpen: setHistoryOpen } =
+    useHistoryAddress(historyOffered);
+
   if (!form) {
     return null;
   }
@@ -399,8 +410,6 @@ export function EntrySystemHeader({
       },
       entryLocale.collectionLocalized
     );
-
-  const showEditMenuItems = mode === "edit" && entry?.id;
 
   // - hasStatus + create or hasStatus+edit+draft → Save Draft + Publish
   //   (the user is working on something not yet live).
@@ -601,12 +610,7 @@ export function EntrySystemHeader({
     isReadingHistory ? [] : contributedActions
   );
 
-  // A document only has history once it has been saved, and rendering a
-  // snapshot needs the schema, so both are required to offer it.
-  const showHistory =
-    showEditMenuItems &&
-    historyFields !== undefined &&
-    historyEnabled !== false;
+  const showHistory = historyOffered;
 
   // What the preview control is given, once: the control draws from it on a
   // wide screen, and the menu lists the same choices on a narrow one.
