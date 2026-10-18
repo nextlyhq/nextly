@@ -230,6 +230,23 @@ describe("nextly media orphans, as the CLI runs it", () => {
     expect(seen.loadedIn).toEqual([dir]);
   });
 
+  // A relative --cwd names a folder from where the command was run, once.
+  it("resolves a relative --cwd once, from where the command was run", async () => {
+    process.chdir(path.dirname(dir));
+
+    await createProgram().parseAsync([
+      "node",
+      "nextly",
+      "--cwd",
+      path.basename(dir),
+      "media",
+      "orphans",
+    ]);
+
+    expect(seen.loadedIn).toEqual([dir]);
+    expect(seen.loadConfig).toEqual([{ configPath: undefined, cwd: dir }]);
+  });
+
   it("registers the tables before it reads media, and finds the project from --cwd", async () => {
     await createProgram().parseAsync([
       "node",

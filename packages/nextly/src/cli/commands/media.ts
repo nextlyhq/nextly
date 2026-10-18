@@ -229,12 +229,15 @@ export function createMediaCommand(): Command {
         // From inside the project: a storage factory in the config, such as
         // a local-disk plugin given a relative path, resolves that path when
         // the config loads, against the process's directory.
-        process.chdir(context.cwd);
+        // Resolved once, from where the command was run: a relative --cwd
+        // read again after the change would name a folder inside itself.
+        const cwd = path.resolve(context.cwd);
+        process.chdir(cwd);
         // The loader discovers the config from the project; a path is
         // passed only when one was given.
         const { config } = await loadConfig({
           configPath: context.configPath,
-          cwd: context.cwd,
+          cwd,
         });
         const db = validateDatabaseEnv();
         adapter = await createCliAdapter({
@@ -248,7 +251,7 @@ export function createMediaCommand(): Command {
         // project, resolved from --cwd rather than from where this runs.
         const mediaStorage = initializeMediaStorage({
           plugins: config.storage,
-          local: { uploadDir: path.resolve(context.cwd, "public/uploads") },
+          local: { uploadDir: path.resolve(cwd, "public/uploads") },
         });
         const storage = mediaStorage.getAdapterForCollection("media");
         const prefix = mediaStorage.getCollectionConfig("media")?.prefix;

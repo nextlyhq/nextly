@@ -40,12 +40,18 @@ import { and, eq, isNull } from "drizzle-orm";
 
 import { getMediaStorage } from "@nextly/storage";
 
-import { removeStoredFiles } from "../domains/media/remove-stored-files";
+import {
+  removeStoredFiles,
+  warnUnlocated,
+} from "../domains/media/remove-stored-files";
 import {
   revalidateMedia,
   withMediaRevalidationBatch,
 } from "../domains/media/revalidate-media";
-import type { MediaFilesRecord } from "../domains/media/stored-files";
+import {
+  storedFilesOf,
+  type MediaFilesRecord,
+} from "../domains/media/stored-files";
 import type { ServiceErrorCode } from "../errors/error-codes";
 
 import { BaseService } from "./base-service";
@@ -136,6 +142,51 @@ const removeEveryStoredFile: RemoveStoredFiles = async records => {
     records.map(record => removeStoredFiles(storage, record, record.id))
   );
 };
+
+/**
+ * Storage a caller hands a cascading folder delete, as the cleanup argument
+ * has taken it before: given every stored file of the items removed.
+ */
+interface FolderStorageCleanup {
+  bulkDelete(
+    filePaths: string[],
+    collection?: string
+  ): Promise<{
+    successful: string[];
+    failed: Array<{ filePath: string; error: string }>;
+  }>;
+}
+
+/** The removal a cascading folder delete runs, from what its caller gave. */
+function removalFrom(
+  cleanup: RemoveStoredFiles | FolderStorageCleanup | undefined
+): RemoveStoredFiles {
+  if (cleanup === undefined) return removeEveryStoredFile;
+  if (typeof cleanup === "function") return cleanup;
+  return async records => {
+    const filePaths: string[] = [];
+    for (const record of records) {
+      const { paths, unlocated } = storedFilesOf(record);
+      filePaths.push(...paths);
+      for (const url of unlocated) warnUnlocated(url, record.id);
+    }
+    if (filePaths.length === 0) return;
+    // The rows are already gone: a storage failure is named, never thrown.
+    try {
+      const { failed } = await cleanup.bulkDelete(filePaths, "media");
+      for (const { filePath, error } of failed) {
+        console.warn(
+          `[MediaFolderService] Could not remove ${filePath}: ${error}`
+        );
+      }
+    } catch (error) {
+      console.warn(
+        "[MediaFolderService] Could not remove the files of the deleted items:",
+        error instanceof Error ? error.message : error
+      );
+    }
+  };
+}
 
 export class MediaFolderService extends BaseService {
   constructor(adapter: DrizzleAdapter, logger: Logger) {
@@ -630,8 +681,14 @@ export class MediaFolderService extends BaseService {
   async deleteFolder(
     folderId: string,
     deleteContents: boolean = false,
-    removeFiles: RemoveStoredFiles = removeEveryStoredFile
+    /**
+     * How the deleted items' stored files are removed: every one of them
+     * through the media storage by default. Storage with `bulkDelete` is
+     * given their paths.
+     */
+    cleanup?: RemoveStoredFiles | FolderStorageCleanup
   ): Promise<DeleteFolderOutcome> {
+    const removeFiles = removalFrom(cleanup);
     try {
       const { mediaFolders } = this.tables;
 

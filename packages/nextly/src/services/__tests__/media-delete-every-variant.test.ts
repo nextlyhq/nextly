@@ -697,6 +697,28 @@ describe("deleting a folder with its contents", () => {
     expect(await onDisk()).toEqual([]);
   });
 
+  // A caller may still hand over storage with `bulkDelete`, as the cleanup
+  // argument took before.
+  it("hands a given storage every file of each item, once its rows are gone", async () => {
+    onLocalDisk();
+    const folder = await newFolder();
+    const id = await uploadPhoto(folder);
+    const files = await referencedNow(id);
+    const given: string[][] = [];
+    const storage = {
+      bulkDelete: async (filePaths: string[]) => {
+        given.push(filePaths);
+        expect(await referencedNow(id)).toEqual([]);
+        return { successful: filePaths, failed: [] };
+      },
+    };
+
+    const result = await folders().deleteFolder(folder, true, storage);
+
+    expect(result.success).toBe(true);
+    expect(given.flat().sort()).toEqual(files);
+  });
+
   it("leaves every file stored when an enclosing transaction rolls back", async () => {
     onLocalDisk();
     const folder = await newFolder();
