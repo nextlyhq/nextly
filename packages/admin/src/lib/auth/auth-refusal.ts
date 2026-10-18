@@ -23,42 +23,42 @@ export type AuthRefusal =
    * same page at the app's own address.
    */
   | { kind: "origin"; pageOrigin: string; appOrigin: string; href: string }
+  /**
+   * The server reads its own address as a loopback one while the page is on a
+   * real host: a server behind a proxy that has not been told its public
+   * address. Sending the person to the loopback address would not help, so
+   * this names the setting instead, and offers no link.
+   */
+  | { kind: "unlisted"; pageOrigin: string; appOrigin: string }
   /** Refused for a reason the form has nothing more to say about. */
   | { kind: "refused"; message: string };
 
 /**
  * The refusal a caught submission error stands for, or null when it was not a
- * refusal (403) at all, so the form's own handling applies.
+ * refusal (403) at all, or is one of the codes the form `explains` itself (the
+ * sign-in form's unverified email, which it answers with a resend action), so
+ * the form's own handling applies.
  */
 export function authRefusalOf(
   error: unknown,
-  page: PagePlace
+  page: PagePlace,
+  explains: readonly string[] = []
 ): AuthRefusal | null {
   if (!isApiError(error) || error.status !== 403) return null;
+  if (error.code !== undefined && explains.includes(error.code)) return null;
 
-  if (error.code === "CSRF_FAILED") {
-    if (error.data?.reason === "origin") {
-      const appOrigin = webOrigin(error.data.appOrigin);
-      // Only an address that differs from where the page is helps: the same
-      // one would send the person back to the page that was just refused.
-      if (appOrigin !== undefined && appOrigin !== page.origin) {
-        return {
-          kind: "origin",
-          pageOrigin: page.origin,
-          appOrigin,
-          href: `${appOrigin}${page.pathname}${page.search}`,
-        };
-      }
-    }
-    if (error.data?.reason === "token") {
-      return {
-        kind: "refused",
-        message:
-          "This form could not be verified, usually because the page has been open a long time. Reload the page and try again.",
-      };
-    }
+  const reason = error.code === "CSRF_FAILED" ? error.data?.reason : undefined;
+  if (reason === "origin") {
+    const refusal = originRefusal(error.data?.appOrigin, page);
+    if (refusal) return refusal;
   }
-
+  if (reason === "token") {
+    return {
+      kind: "refused",
+      message:
+        "This form could not be verified, usually because the page has been open a long time. Reload the page and try again.",
+    };
+  }
   return {
     kind: "refused",
     message:
@@ -66,6 +66,39 @@ export function authRefusalOf(
         ? error.message
         : "The server refused this request.",
   };
+}
+
+/**
+ * What a refused origin tells the person, or null when the server named no
+ * usable address of its own. Only an address that differs from where the page
+ * is helps: the same one would send the person back to the refused page.
+ */
+function originRefusal(reported: unknown, page: PagePlace): AuthRefusal | null {
+  const appOrigin = webOrigin(reported);
+  if (appOrigin === undefined || appOrigin === page.origin) return null;
+  if (isLoopback(appOrigin) && !isLoopback(page.origin)) {
+    return { kind: "unlisted", pageOrigin: page.origin, appOrigin };
+  }
+  return {
+    kind: "origin",
+    pageOrigin: page.origin,
+    appOrigin,
+    // The path only. The query can hold a secret (a password-reset or
+    // invitation token), and it is not sent anywhere but where the person
+    // already is.
+    href: `${appOrigin}${page.pathname}`,
+  };
+}
+
+/** Whether an origin names this machine: `localhost`, a `*.localhost`, or a loopback IP. */
+function isLoopback(origin: string): boolean {
+  const host = new URL(origin).hostname;
+  return (
+    host === "localhost" ||
+    host.endsWith(".localhost") ||
+    host === "[::1]" ||
+    /^127(?:\.\d{1,3}){3}$/.test(host)
+  );
 }
 
 /**

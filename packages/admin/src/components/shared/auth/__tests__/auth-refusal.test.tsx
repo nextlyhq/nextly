@@ -93,6 +93,49 @@ describe("reading a refusal", () => {
     }
   });
 
+  it("never carries the page's query to the other address", () => {
+    // A reset or invitation page holds its token in the query.
+    const refusal = authRefusalOf(originRefusal(), {
+      origin: "http://127.0.0.1:3000",
+      pathname: "/admin/reset-password",
+      search: "?token=secret-reset-token",
+    });
+    expect(refusal).toMatchObject({
+      kind: "origin",
+      href: "http://localhost:3000/admin/reset-password",
+    });
+  });
+
+  it("offers no link when the server only knows itself by a loopback address", () => {
+    // A server behind a proxy that hasn't been told its public address: the
+    // loopback address it reports is no place to send the person.
+    expect(
+      authRefusalOf(originRefusal(), {
+        origin: "https://app.example.com",
+        pathname: "/admin/reset-password",
+        search: "?token=secret-reset-token",
+      })
+    ).toEqual({
+      kind: "unlisted",
+      pageOrigin: "https://app.example.com",
+      appOrigin: "http://localhost:3000",
+    });
+  });
+
+  it("leaves a code the form explains to the form", () => {
+    const unverified = parseApiError(
+      {
+        error: {
+          code: "EMAIL_NOT_VERIFIED",
+          message: "Please verify your email.",
+        },
+      },
+      403
+    );
+    expect(authRefusalOf(unverified, PAGE, ["EMAIL_NOT_VERIFIED"])).toBeNull();
+    expect(authRefusalOf(unverified, PAGE)?.kind).toBe("refused");
+  });
+
   it("does not send the person back to the address that was refused", () => {
     expect(
       authRefusalOf(originRefusal(), {
@@ -212,6 +255,40 @@ describe("the forms show it", () => {
 
     await screen.findByRole("alert");
     expectOriginNotice("/admin/login");
+  });
+
+  it("sign-in still offers to resend the verification email", async () => {
+    // The server answers an unverified account with a 403 too, and sign-in
+    // meets it with a resend action, not a refusal.
+    openAt("/admin/login");
+    post.mockRejectedValue(
+      parseApiError(
+        {
+          error: {
+            code: "EMAIL_NOT_VERIFIED",
+            message: "Please verify your email.",
+          },
+        },
+        403
+      )
+    );
+    const user = userEvent.setup();
+
+    render(<Login />);
+    await user.type(
+      await screen.findByPlaceholderText(/email address/i),
+      "ada@example.com"
+    );
+    await user.type(
+      screen.getByPlaceholderText(/enter your password/i),
+      "right-password"
+    );
+    await user.click(screen.getByRole("button", { name: /sign in/i }));
+
+    expect(
+      await screen.findByRole("button", { name: /resend verification email/i })
+    ).toBeVisible();
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 
   it("setup shows an unexplained refusal in the form too", async () => {

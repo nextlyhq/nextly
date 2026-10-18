@@ -43,6 +43,26 @@ export function AuthRefusalNotice({ refusal }: AuthRefusalNoticeProps) {
     );
   }
 
+  if (refusal.kind === "unlisted") {
+    return (
+      <Alert variant="destructive" role="alert" className="mb-6">
+        <AlertTitle>This app doesn&apos;t recognise its own address</AlertTitle>
+        <AlertDescription>
+          <p>
+            The server sees itself at{" "}
+            <code className="font-mono">{refusal.appOrigin}</code>, so it
+            refuses requests from{" "}
+            <code className="font-mono">{refusal.pageOrigin}</code>. If{" "}
+            <code className="font-mono">{refusal.pageOrigin}</code> is this
+            app&apos;s address, add it to{" "}
+            <code className="font-mono">NEXTLY_ALLOWED_ORIGINS</code> on the
+            server.
+          </p>
+        </AlertDescription>
+      </Alert>
+    );
+  }
+
   return (
     <Alert variant="destructive" role="alert" className="mb-6">
       <AlertDescription>{refusal.message}</AlertDescription>

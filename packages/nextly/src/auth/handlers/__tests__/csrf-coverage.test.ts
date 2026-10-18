@@ -127,6 +127,23 @@ const CSRF_PROTECTED_ROUTES: Array<{
     path: "verify-email/resend",
     body: { email: "a@b.c" },
   },
+  // These three refuse through the shared `csrfRefusal` helper, where every
+  // row above builds its refusal itself, so both paths are held here.
+  {
+    method: "POST",
+    path: "accept-invite",
+    body: { token: "t", password: "pw" },
+  },
+  {
+    method: "POST",
+    path: "set-initial-password",
+    body: { pendingToken: "t", newPassword: "pw" },
+  },
+  {
+    method: "POST",
+    path: "challenge/resolve",
+    body: { pendingToken: "t", response: {} },
+  },
 ];
 
 describe("CSRF coverage", () => {

@@ -167,7 +167,9 @@ export function Login() {
       // which remounts PublicRoute, creating an infinite loop.
       window.location.href = ROUTES.DASHBOARD;
     } catch (error: unknown) {
-      if (authRefusal.take(error)) {
+      // Its own answers first: an unverified email is a 403 too, and this form
+      // meets it with a resend action rather than a refusal.
+      if (authRefusal.take(error, ["EMAIL_NOT_VERIFIED", "ACCOUNT_LOCKED"])) {
         setEmailNotVerified(false);
         return;
       }

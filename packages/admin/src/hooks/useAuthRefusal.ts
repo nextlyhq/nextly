@@ -11,9 +11,10 @@ export interface UseAuthRefusalReturn {
   clear: () => void;
   /**
    * Keep a caught error if it is a refusal, and answer whether it was, so the
-   * form's own message (a toast) is shown only for everything else.
+   * form's own message (a toast) is shown only for everything else. Codes in
+   * `explains` are the form's own to answer, and are never kept.
    */
-  take: (error: unknown) => boolean;
+  take: (error: unknown, explains?: readonly string[]) => boolean;
 }
 
 /**
@@ -25,8 +26,8 @@ export function useAuthRefusal(): UseAuthRefusalReturn {
 
   const clear = useCallback(() => setRefusal(null), []);
 
-  const take = useCallback((error: unknown) => {
-    const found = authRefusalOf(error, window.location);
+  const take = useCallback((error: unknown, explains?: readonly string[]) => {
+    const found = authRefusalOf(error, window.location, explains);
     setRefusal(found);
     return found !== null;
   }, []);
