@@ -13,6 +13,7 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Command } from "commander";
 
+import { claimFirstSetup } from "../../auth/setup-token/setup-gate";
 import {
   SETUP_TOKEN_ENV,
   generateSetupToken,
@@ -58,15 +59,33 @@ export async function setupTokenCommand(input: {
       logContext: { reason: "setup-token-command-without-store" },
     });
   }
-  if (await input.hasAdministrator()) {
+  // Under the claim a setup holds from judging its token to spending it, so a
+  // replacement never lands between the two: a leaked token a setup already
+  // accepted cannot complete it after being replaced, nor delete its
+  // replacement when it is spent.
+  const claim = await claimFirstSetup(input.meta);
+  if (!claim) {
     return {
       ok: false,
       lines: [
-        "This install already has an administrator: setup is complete, and no token is needed.",
+        "A setup is in progress on this install, so the token was not replaced. Run this again in a moment.",
       ],
     };
   }
-  const outcome = await replaceSetupToken({ meta: input.meta, env: input.env });
+  let outcome: Awaited<ReturnType<typeof replaceSetupToken>>;
+  try {
+    if (await input.hasAdministrator()) {
+      return {
+        ok: false,
+        lines: [
+          "This install already has an administrator: setup is complete, and no token is needed.",
+        ],
+      };
+    }
+    outcome = await replaceSetupToken({ meta: input.meta, env: input.env });
+  } finally {
+    await claim.release();
+  }
   if (outcome.kind === "operator-token") {
     return {
       ok: false,

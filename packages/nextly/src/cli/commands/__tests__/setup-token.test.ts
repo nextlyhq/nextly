@@ -13,6 +13,7 @@ import {
   verifySetupToken,
   type SetupTokenMeta,
 } from "../../../auth/setup-token/setup-token";
+import { claimFirstSetup } from "../../../auth/setup-token/setup-gate";
 import { setupTokenCommand } from "../setup-token";
 
 function memoryMeta(): SetupTokenMeta & { rows: Map<string, string> } {
@@ -86,6 +87,30 @@ describe("nextly setup-token", () => {
     expect(result.lines[0]).toMatch(/Change the variable where it is set/);
     expect(meta.rows.has(SETUP_TOKEN_META_KEY)).toBe(false);
     expect(await accepts(meta, env[SETUP_TOKEN_ENV], env)).toBe("valid");
+  });
+
+  it("refuses, changing nothing, while a setup holds the claim", async () => {
+    const meta = memoryMeta();
+    const first = await setupTokenCommand({
+      generate: false,
+      meta,
+      hasAdministrator: async () => false,
+      env: {},
+    });
+    const held = await claimFirstSetup(meta);
+    expect(held).not.toBeNull();
+
+    const during = await setupTokenCommand({
+      generate: false,
+      meta,
+      hasAdministrator: async () => false,
+      env: {},
+    });
+    expect(during.ok).toBe(false);
+    expect(during.lines[0]).toMatch(/setup is in progress/);
+    // The token the setup is using still opens setup.
+    expect(await accepts(meta, token(first.lines[0]))).toBe("valid");
+    await held?.release();
   });
 
   it("refuses once the install has an administrator", async () => {
