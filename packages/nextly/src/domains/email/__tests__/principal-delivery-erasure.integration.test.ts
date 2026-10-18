@@ -59,12 +59,16 @@ interface DeliveryRow {
 let current: TestNextly | undefined;
 let ctx: PluginContext | undefined;
 const sent: string[] = [];
+// Run by the capturing mailer as it accepts a message, so a test can change
+// the database between the provider being resolved and the record written.
+let duringSend: (() => Promise<void>) | undefined;
 
 afterEach(async () => {
   await current?.destroy();
   current = undefined;
   ctx = undefined;
   sent.length = 0;
+  duringSend = undefined;
 });
 
 const accounts = definePlugin({
@@ -111,6 +115,7 @@ const accounts = definePlugin({
         createAdapter: () => ({
           send: async (opts: { to: string }) => {
             sent.push(opts.to);
+            await duringSend?.();
             return { success: true, messageId: `captured-${sent.length}` };
           },
         }),
@@ -338,6 +343,65 @@ describe.each(getConfiguredTestDialects())(
       expect(written).toHaveLength(1);
       expect(written[0].recipientHash).toBe(ERASED_RECIPIENT_HASH);
       expect(written[0].principalId).toMatch(/^[0-9a-f]{64}$/);
+    }, 120_000);
+
+    it("keeps the deletion when the deletion email's record fails in the reporting transaction", async () => {
+      // The provider is removed after the send resolved it and before its
+      // record is written, so the first insert breaks the provider reference
+      // inside the plugin's transaction and the recorder retries without it.
+      // On PostgreSQL a failed statement aborts the whole transaction: had the
+      // recorder's failure been left in it, the commit would roll back the
+      // report, and the deletion along with it, while the plugin was told it
+      // had committed.
+      const t = await boot(dialect);
+      const gone = await person("acc_record_fails");
+      const [provider] = await t.adapter.select<{ id: string }>(
+        "email_providers"
+      );
+      duringSend = async () => {
+        duringSend = undefined;
+        await t.adapter.delete("email_providers", {
+          and: [{ column: "id", op: "=", value: provider.id }],
+        });
+      };
+
+      const written = await added(t, () =>
+        plugin().db.transaction(async tx => {
+          await plugin().principals!.reportDeleted(gone, { tx });
+          await plugin().services.email.sendWithTemplate(
+            "accounts-deleted",
+            SHARED,
+            {},
+            { person: gone }
+          );
+        })
+      );
+
+      // The retried record, written erased: the transaction committed, with
+      // the report it holds.
+      expect(written).toHaveLength(1);
+      expect(written[0].recipientHash).toBe(ERASED_RECIPIENT_HASH);
+      // And the report outlived it: a later record for the person is erased
+      // as it is written, which only a committed report decides.
+      await t.nextly.emailProviders.create({
+        data: {
+          name: "Capturing again",
+          type: "capturing-mailer",
+          fromEmail: "from@example.com",
+          configuration: { apiKey: "throwaway-test-key" },
+          isDefault: true,
+        },
+      });
+      const later = await added(t, () =>
+        plugin().services.email.sendWithTemplate(
+          "accounts-deleted",
+          SHARED,
+          {},
+          { person: gone }
+        )
+      );
+      expect(later).toHaveLength(1);
+      expect(later[0].recipientHash).toBe(ERASED_RECIPIENT_HASH);
     }, 120_000);
 
     it("writes a record erased long after the report, the delivery log pruned in between", async () => {

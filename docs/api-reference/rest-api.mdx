@@ -24,7 +24,7 @@ The health endpoint and media-streaming endpoint can be exported at their own ro
 export { GET, HEAD } from "nextly/api/health";
 ```
 
-Every endpoint below is served under `/admin/api/`, except the health route at `/api/health`. Keep the handler at `/admin/api`: the admin panel calls it there, and the session cookies are scoped to `/admin`, so a browser session never reaches a handler mounted anywhere else. An API key works on any mount, but the paths on this page assume the scaffold's. The global [`rateLimit`](/docs/configuration/nextly-config#ratelimit) skips requests under `/admin/api/` by default, so it applies to none of them until you change its `skip`.
+Every endpoint below is served under `/admin/api/`, except the health route at `/api/health`. Keep the handler at `/admin/api`: the admin panel calls it there, and the session cookies are scoped to `/admin`, so a browser session never reaches a handler mounted anywhere else. An API key works on any mount, but the paths on this page assume the scaffold's. The global [`rateLimit`](/docs/configuration/nextly-config#ratelimit) applies to every one of them, counting each by who is asking: a signed-in session, an API key, or the client's address.
 
 ## Authentication
 
