@@ -140,6 +140,56 @@ describe("useDocumentAutosave", () => {
    * addresses a document that exists. Recording must be off rather than
    * addressed at an invented id.
    */
+  it("records nothing once a save has made the edit the stored document", async () => {
+    // 🔴 The leftover recording. An edit schedules one; the author saves
+    // inside the debounce, and the save leaves the form clean (it resets to
+    // what was stored). The timer then fired anyway and wrote the saved
+    // values as a recovery point: a needless write after every quick save,
+    // and one that reads as the editor writing while it should only read.
+    const { result } = renderHook(() => useHarness());
+
+    act(() => {
+      result.current.form.setValue("title", "hello", { shouldDirty: true });
+    });
+    act(() => {
+      vi.advanceTimersByTime(DEBOUNCE / 2);
+    });
+    // What a save does to the form once the server has the values.
+    act(() => {
+      result.current.form.reset({ title: "hello" });
+    });
+    act(() => {
+      vi.advanceTimersByTime(DEBOUNCE * 2);
+    });
+
+    await Promise.resolve();
+    expect(saveSpy).not.toHaveBeenCalled();
+  });
+
+  it("still records edits typed while the save was in flight", async () => {
+    // The control for the case above. A save that lands resets the form to
+    // what was stored and then re-applies what the author typed meanwhile, in
+    // one tick: clean, then dirty again. Dropping the pending recording on the
+    // clean must not drop these.
+    const { result } = renderHook(() => useHarness());
+
+    act(() => {
+      result.current.form.setValue("title", "hello", { shouldDirty: true });
+    });
+    act(() => {
+      result.current.form.reset({ title: "hello" });
+      result.current.form.setValue("title", "hello again", {
+        shouldDirty: true,
+      });
+    });
+    act(() => {
+      vi.advanceTimersByTime(DEBOUNCE);
+    });
+
+    await waitFor(() => expect(saveSpy).toHaveBeenCalledTimes(1));
+    expect(saveSpy).toHaveBeenCalledWith(SCOPE, { title: "hello again" }, null);
+  });
+
   it("records nothing while the document has no address", async () => {
     const { result } = renderHook(() => useHarness(null));
 

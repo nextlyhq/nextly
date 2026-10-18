@@ -172,6 +172,60 @@ describe("what switches recording off", () => {
   });
 });
 
+describe("a pending recording the caller no longer wants", () => {
+  it("is dropped by cancel(), so the timer records nothing", async () => {
+    const save = vi.fn(() => saved());
+    const { result } = renderHook(() =>
+      useSnapshotAutosave({ identity: "doc-1", save, debounceMs: DEBOUNCE })
+    );
+
+    act(() => result.current.schedule());
+    act(() => result.current.cancel());
+    act(() => void vi.advanceTimersByTime(DEBOUNCE * 2));
+
+    await Promise.resolve();
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it("records nothing when shouldRecord answers no at flush", async () => {
+    // 🔴 Asked at FLUSH, not when scheduled: the work was worth recording when
+    // the timer started, and a save since has made it the stored document.
+    const save = vi.fn(() => saved());
+    let worthRecording = true;
+    const { result } = renderHook(() =>
+      useSnapshotAutosave({
+        identity: "doc-1",
+        save,
+        debounceMs: DEBOUNCE,
+        shouldRecord: () => worthRecording,
+      })
+    );
+
+    act(() => result.current.schedule());
+    worthRecording = false;
+    act(() => void vi.advanceTimersByTime(DEBOUNCE));
+
+    await Promise.resolve();
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it("still records when shouldRecord answers yes, which is the control", async () => {
+    const save = vi.fn(() => saved());
+    const { result } = renderHook(() =>
+      useSnapshotAutosave({
+        identity: "doc-1",
+        save,
+        debounceMs: DEBOUNCE,
+        shouldRecord: () => true,
+      })
+    );
+
+    act(() => result.current.schedule());
+    act(() => void vi.advanceTimersByTime(DEBOUNCE));
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+  });
+});
+
 describe("the identity is opaque, and it bounds a pending recording", () => {
   it("drops a pending recording when the identity changes", async () => {
     /*

@@ -110,8 +110,28 @@ function recordingBlocked(state: {
   identity: string | null;
   enabled: boolean;
   refused: boolean;
+  shouldRecord: (() => boolean) | undefined;
 }): boolean {
-  return state.identity === null || !state.enabled || state.refused;
+  return (
+    state.identity === null ||
+    !state.enabled ||
+    state.refused ||
+    state.shouldRecord?.() === false
+  );
+}
+
+/**
+ * Stop a pending debounce, if there is one, and forget it.
+ *
+ * One home for it because three places stop the timer (a restart, a cancel and
+ * a change of identity) and each must also clear the ref, or a later check
+ * would read a timer that will never fire as one still pending.
+ */
+function clearTimer(timerRef: {
+  current: ReturnType<typeof setTimeout> | null;
+}): void {
+  if (timerRef.current) clearTimeout(timerRef.current);
+  timerRef.current = null;
 }
 
 /**
@@ -161,6 +181,14 @@ export interface UseSnapshotAutosaveOptions {
    * recovery point written now would describe a state that never existed.
    */
   enabled?: boolean;
+
+  /**
+   * Whether there is still something worth recording, asked at FLUSH. A
+   * timer started while there was work can outlive the work: a save makes it
+   * the stored document, and recording it then writes the saved values as a
+   * recovery point. Absent, every flush may record, as before.
+   */
+  shouldRecord?: () => boolean;
 }
 
 export interface UseSnapshotAutosaveResult {
@@ -173,6 +201,11 @@ export interface UseSnapshotAutosaveResult {
    * records once at the end of it.
    */
   schedule: () => void;
+  /**
+   * Drop a pending recording: the timer, and a re-flush queued behind one in
+   * flight. For when the work it was for is gone (saved, or discarded).
+   */
+  cancel: () => void;
 }
 
 /**
@@ -184,6 +217,7 @@ export function useSnapshotAutosave({
   save,
   debounceMs = DEFAULT_AUTOSAVE_DEBOUNCE_MS,
   enabled = true,
+  shouldRecord,
 }: UseSnapshotAutosaveOptions): UseSnapshotAutosaveResult {
   const [status, setStatus] = useState<AutosaveStatus>("idle");
   const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null);
@@ -206,16 +240,14 @@ export function useSnapshotAutosave({
   const refusedRef = useRef(false);
 
   /*
-   * Read through refs inside the debounced callback rather than captured as
+   * Read through a ref inside the debounced callback rather than captured as
    * dependencies. The callback is created once per subscription, and closing
-   * over these would pin the values they held when it was set up.
+   * over these would pin the values they held when it was set up. One ref for
+   * all four, since flush reads them together and each render replaces them
+   * together.
    */
-  const identityRef = useRef(identity);
-  const enabledRef = useRef(enabled);
-  const saveRef = useRef(save);
-  identityRef.current = identity;
-  enabledRef.current = enabled;
-  saveRef.current = save;
+  const latestRef = useRef({ identity, enabled, shouldRecord, save });
+  latestRef.current = { identity, enabled, shouldRecord, save };
 
   useEffect(() => {
     mountedRef.current = true;
@@ -225,11 +257,13 @@ export function useSnapshotAutosave({
   }, []);
 
   const flush = useCallback(async () => {
+    const latest = latestRef.current;
     if (
       recordingBlocked({
-        identity: identityRef.current,
-        enabled: enabledRef.current,
+        identity: latest.identity,
+        enabled: latest.enabled,
         refused: refusedRef.current,
+        shouldRecord: latest.shouldRecord,
       })
     )
       return;
@@ -243,7 +277,7 @@ export function useSnapshotAutosave({
     if (mountedRef.current) setStatus("saving");
 
     try {
-      const result = await saveRef.current();
+      const result = await latest.save();
       if (mountedRef.current) {
         setLastSavedAt(new Date(result.updatedAt));
         setStatus("saved");
@@ -283,11 +317,16 @@ export function useSnapshotAutosave({
    * then declines costs a cleared timeout.
    */
   const schedule = useCallback(() => {
-    if (timerRef.current) clearTimeout(timerRef.current);
+    clearTimer(timerRef);
     timerRef.current = setTimeout(() => {
       void flush();
     }, debounceMs);
   }, [flush, debounceMs]);
+
+  const cancel = useCallback(() => {
+    clearTimer(timerRef);
+    pendingRef.current = false;
+  }, []);
 
   // A pending recording belongs to the identity that scheduled it. Left
   // running across a change it would write one document's snapshot against
@@ -298,13 +337,8 @@ export function useSnapshotAutosave({
     // another entity with its own setting and its own access, so the answer is
     // asked again rather than inherited.
     refusedRef.current = false;
-    return () => {
-      if (timerRef.current) {
-        clearTimeout(timerRef.current);
-        timerRef.current = null;
-      }
-    };
+    return () => clearTimer(timerRef);
   }, [identity]);
 
-  return { status, lastSavedAt, schedule };
+  return { status, lastSavedAt, schedule, cancel };
 }

@@ -17,7 +17,7 @@
  * @module hooks/useDocumentAutosave
  */
 
-import { useCallback, useEffect } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import type { UseFormReturn } from "react-hook-form";
 
 import {
@@ -142,11 +142,22 @@ export function useDocumentAutosave({
     ? `${scope.kind}:${scope.slug}:${"entryId" in scope ? scope.entryId : scope.documentId}:${locale ?? ""}`
     : null;
 
-  const { status, lastSavedAt, schedule } = useSnapshotAutosave({
+  /*
+   * Whether the editor still holds uncommitted work, as the subscription below
+   * last heard it. Kept here rather than read from `form.formState.isDirty`,
+   * which react-hook-form keeps current only while a render reads it.
+   */
+  const dirtyRef = useRef(false);
+
+  const { status, lastSavedAt, schedule, cancel } = useSnapshotAutosave({
     identity,
     save,
     debounceMs,
     enabled,
+    // A recording that became pointless while its timer ran (a save made the
+    // work the stored document) is not made; see the subscription below for
+    // the first line of this.
+    shouldRecord: () => dirtyRef.current,
   });
 
   useEffect(() => {
@@ -171,7 +182,16 @@ export function useDocumentAutosave({
          * nothing. And it is the same condition the unsaved-changes guard uses,
          * so the two cannot disagree about whether there is work at risk.
          */
-        if (!isDirty) return;
+        dirtyRef.current = isDirty === true;
+        // Clean again: a save stored the work, or it was discarded. A
+        // recording still pending for it would write the saved values as a
+        // recovery point, so it is dropped here, at once, not on a debounce:
+        // edits typed while a save was in flight dirty the form again in the
+        // same tick, and those must schedule their own recording.
+        if (!isDirty) {
+          cancel();
+          return;
+        }
         schedule();
       },
     });
@@ -180,6 +200,6 @@ export function useDocumentAutosave({
     // `scope` participates through its identity fields: a different document
     // needs a different subscription, and comparing the object itself would
     // resubscribe on every render.
-  }, [form, schedule, enabled, scope?.kind, scope?.slug, scope]);
+  }, [form, schedule, cancel, enabled, scope?.kind, scope?.slug, scope]);
   return { status, lastSavedAt };
 }
