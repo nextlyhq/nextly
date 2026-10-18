@@ -123,7 +123,7 @@ function isConditionallyVisible(
   }
   /*
    * A HIDDEN child counts for nothing, the same way a hidden field does at the
-   * top level. `FieldWrapper` returns null for one, so it draws nothing — and a
+   * top level. The form's renderer returns null for one, so it draws nothing — and a
    * group's commonest shape is exactly the trap: a hidden controller field
    * beside the controls whose conditions read it. Counting the controller kept
    * such a group alive with every visible control conditioned away, which is

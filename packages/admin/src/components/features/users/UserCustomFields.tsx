@@ -32,6 +32,7 @@ import type {
 import { useMemo } from "react";
 import type { Control, FieldErrors, FieldValues } from "react-hook-form";
 
+import { fieldAdminGates } from "@admin/components/features/entries/fields/field-admin-gates";
 import { FieldWrapper } from "@admin/components/features/entries/fields/FieldWrapper";
 import { NumberInput } from "@admin/components/features/entries/fields/number/NumberInput";
 import { CheckboxInput } from "@admin/components/features/entries/fields/selection/CheckboxInput";
@@ -269,6 +270,12 @@ function UserFieldInput({
 }: UserFieldInputProps) {
   const pluginFieldType = usePluginFieldType(fieldConfig.type);
   const isCheckbox = fieldConfig.type === "checkbox";
+
+  // A field declared hidden is not drawn. Asked here because this form draws
+  // the wrapper itself rather than through the entry form's renderer, which
+  // is where every other field meets this gate. User fields carry no
+  // condition that this form evaluates, so hidden is the gate that applies.
+  if (fieldAdminGates(fieldConfig).hidden) return null;
 
   return (
     <FieldWrapper
