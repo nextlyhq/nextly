@@ -272,7 +272,7 @@ jobs:
   # The required check `Integration (postgres)`, read by the ruleset and by
   # scripts/verify-merge.mjs: it passes only when every shard above passed.
   #
-  # It runs on the same condition as the shards, so a run that skips them
+  # It runs on the same conditions as the shards, so a run that skips them
   # skips this too and reports `skipped` under this literal name, as the
   # unsharded leg did. When they did run, `needs.<id>.result` is `success`
   # only if every shard succeeded; anything else fails it, including a shard
@@ -280,7 +280,12 @@ jobs:
   integration-postgres:
     name: Integration (postgres)
     needs: [changes, integration-postgres-shards]
-    if: ${{ !cancelled() && needs.changes.outputs.superseded != 'true' && needs.changes.outputs.inert != 'true' && needs.changes.outputs.requested != 'false' }}
+    # `always()`, not `!cancelled()`: a shard stopped by its own backstop is
+    # cancelled, and this check, skipped then, would read to the merge gate as
+    # a pass. It runs on the shards' conditions otherwise, and fails unless
+    # every shard succeeded; a run cancelled on purpose reads as failed here
+    # rather than cancelled, on a head nothing merges.
+    if: ${{ always() && needs.changes.outputs.superseded != 'true' && needs.changes.outputs.inert != 'true' && needs.changes.outputs.requested != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -387,7 +392,7 @@ jobs:
   # The required check `Integration (mysql)`, read by the ruleset and by
   # scripts/verify-merge.mjs: it passes only when every shard above passed.
   #
-  # It runs on the same condition as the shards, so a run that skips them
+  # It runs on the same conditions as the shards, so a run that skips them
   # skips this too and reports `skipped` under this literal name, as the
   # unsharded leg did. When they did run, `needs.<id>.result` is `success`
   # only if every shard succeeded; anything else fails it, including a shard
@@ -395,7 +400,12 @@ jobs:
   integration-mysql:
     name: Integration (mysql)
     needs: [changes, integration-mysql-shards]
-    if: ${{ !cancelled() && needs.changes.outputs.superseded != 'true' && needs.changes.outputs.inert != 'true' && needs.changes.outputs.requested != 'false' }}
+    # `always()`, not `!cancelled()`: a shard stopped by its own backstop is
+    # cancelled, and this check, skipped then, would read to the merge gate as
+    # a pass. It runs on the shards' conditions otherwise, and fails unless
+    # every shard succeeded; a run cancelled on purpose reads as failed here
+    # rather than cancelled, on a head nothing merges.
+    if: ${{ always() && needs.changes.outputs.superseded != 'true' && needs.changes.outputs.inert != 'true' && needs.changes.outputs.requested != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

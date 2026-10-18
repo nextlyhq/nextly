@@ -282,6 +282,29 @@ describe("a sharded leg", () => {
   });
 });
 
+describe("a sharded leg's required check", () => {
+  /*
+   * The required check reads the shards' result and fails unless every shard
+   * passed. It must run whatever happened to them: a shard stopped by its own
+   * backstop is cancelled, and a verdict guarded by `!cancelled()` could then
+   * be skipped, which the merge gate reads as a pass. So it runs under
+   * `always()`, with the same conditions as the shards otherwise.
+   */
+  it("runs whatever happened to the shards, on the shards' own conditions", () => {
+    const workflow = read(".github/workflows/integration.yml");
+    const verdicts = Object.entries(workflow.jobs).filter(([, job]) =>
+      (job.needs ?? []).some?.(need => String(need).endsWith("-shards"))
+    );
+    expect(verdicts.map(([id]) => id).sort()).toEqual(["integration-mysql", "integration-postgres"]);
+    for (const [id, job] of verdicts) {
+      const shards = workflow.jobs[`${id}-shards`];
+      expect(String(job.if), id).toMatch(/^\$\{\{\s*always\(\)/);
+      expect(String(job.if), id).not.toMatch(/cancelled\(\)/);
+      expect(String(job.if).replace(/always\(\)/, ""), id).toBe(String(shards.if).replace(/!cancelled\(\)/, ""));
+    }
+  });
+});
+
 describe("the MySQL leg's database", () => {
   /*
    * The core suite commits many small transactions, and MySQL's default
