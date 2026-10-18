@@ -688,10 +688,11 @@ function oneDocumentRule(
 
 /**
  * How many more documents a release holding `held` may take: none once it
- * holds the limit, or more than the limit (a release made before it). Not an
- * atomic invariant: two adds racing past the count can both land, which the
- * limit tolerates because what it prevents is unbounded growth, not the
- * one-over row. The add refusal and `capabilities` both ask this.
+ * holds the limit, or more than the limit (a release made before it). The
+ * write asks this under the release-row lock, in the insert's transaction, so
+ * adds racing for the last place are judged one after another and the limit
+ * holds however many arrive at once. The add refusal and `capabilities` both
+ * ask this.
  */
 function roomFor(held: number): number {
   return Math.max(0, RELEASE_MEMBER_LIMIT - held);
@@ -989,7 +990,7 @@ export class ReleasesService {
 
     const mayPublish = await this.holds(actor, "publish");
     const mayCreate = await this.holds(actor, "create");
-    const held = await this.heldBy(releases);
+    const held = await this.heldBy(releases, mayCreate, mayPublish);
 
     return new Map(
       releases.map(release => {
@@ -1029,19 +1030,27 @@ export class ReleasesService {
   /**
    * How many documents each release among these holds, keyed by release id,
    * for the ones whose controls depend on it: a single-document release, and
-   * any release that can still take a document, which the limit may have
-   * filled. One query for all of them, and none when there are none: a
-   * release that ran is final and takes nothing whatever it holds.
+   * any release this caller could still add a document to, which the limit
+   * may have filled. One query for all of them, and none when there are none:
+   * a release that ran is final and takes nothing whatever it holds.
    */
   private async heldBy(
-    releases: readonly ReleaseRow[]
+    releases: readonly ReleaseRow[],
+    mayCreate: boolean,
+    mayPublish: boolean
   ): Promise<Map<string, number>> {
+    // Only where the count can change an answer: a single release's run and
+    // add controls, and an ordinary release this caller could add to. A
+    // caller who may not add learns `addMember: false` without reading what
+    // any release holds.
     const counted = releases
       .filter(
         release =>
           release.kind === "single" ||
-          RELEASE_ASSEMBLABLE_FROM.includes(release.state) ||
-          RELEASE_ASSEMBLABLE_WITH_PUBLISH_FROM.includes(release.state)
+          (mayCreate &&
+            membershipFence(release.kind, "add", mayPublish).includes(
+              release.state
+            ))
       )
       .map(release => release.id);
     return this.deps.repository.memberCountsOf(counted);
