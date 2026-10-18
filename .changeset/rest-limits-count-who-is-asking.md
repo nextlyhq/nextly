@@ -41,3 +41,11 @@ which never refuses a session, a key or a sign-in. Invalid API keys and
 unresolvable plugin people are bounded before the next lookup. An app that
 relied on the old exemption can pass the deprecated `defaultSkipAdminApi` as
 `rateLimit.skip`; a later release removes it.
+
+The limit's defaults now have one source, 100 reads and 30 writes a minute
+per address, which is what every app configured through `defineConfig` already
+ran on. A limiter built with no values used a second copy of 600 and 120; it
+now uses the same 100 and 30. That narrows only code that reaches the limiter
+without a sanitized config: `createRateLimiter()` called without `readLimit`
+or `writeLimit`, and `createDynamicHandlers()` created without a config. Pass
+the limits explicitly to keep the old numbers.

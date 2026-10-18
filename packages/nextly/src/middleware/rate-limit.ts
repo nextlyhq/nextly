@@ -401,7 +401,11 @@ export class InMemoryRateLimitStore implements RateLimitStore {
 // ============================================================================
 
 /**
- * Default configuration values.
+ * Default configuration values: the one source of them. The sanitized config
+ * (`DEFAULT_RATE_LIMIT_CONFIG`) is this object, so an app configured through
+ * `defineConfig` and a limiter built without values count the same budgets.
+ * A signed-in session spends a budget of its own, a multiple of these, so the
+ * admin's parallel page loads are not sized against them.
  *
  * Exported because the plugin-route limiter answers to the same defaults:
  * a general-limited plugin route with no configured limits is limited by
@@ -410,8 +414,8 @@ export class InMemoryRateLimitStore implements RateLimitStore {
  * different allowance than the REST surface beside them.
  */
 export const RATE_LIMIT_DEFAULTS = {
-  readLimit: 600, // 10 req/s burst — admin UI makes many parallel GETs on load
-  writeLimit: 120,
+  readLimit: 100,
+  writeLimit: 30,
   windowMs: 60000, // 1 minute
 } as const;
 

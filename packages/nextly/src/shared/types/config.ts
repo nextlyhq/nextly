@@ -43,7 +43,10 @@ import type {
 import { NextlyError } from "../../errors/nextly-error";
 import type { FieldGroupConfig } from "../../field-groups/config/types";
 import type { CorsConfig } from "../../middleware/cors";
-import type { RateLimitStore } from "../../middleware/rate-limit";
+import {
+  RATE_LIMIT_DEFAULTS,
+  type RateLimitStore,
+} from "../../middleware/rate-limit";
 import type { SecurityHeadersConfig } from "../../middleware/security-headers";
 import type { AdminPlacement } from "../../plugins/admin-placement";
 import type { PluginPermission } from "../../plugins/contributions";
@@ -1048,12 +1051,12 @@ export const DEFAULT_DB_CONFIG: Required<DatabaseConfig> = {
 /**
  * Default rate limiting configuration values.
  * Only applied when rate limiting is enabled.
+ *
+ * The limiter's own defaults, not a copy of them: two copies once said 100
+ * and 600 reads, and an app got one while a limiter built without values got
+ * the other.
  */
-export const DEFAULT_RATE_LIMIT_CONFIG = {
-  readLimit: 100,
-  writeLimit: 30,
-  windowMs: 60000,
-} as const;
+export const DEFAULT_RATE_LIMIT_CONFIG = RATE_LIMIT_DEFAULTS;
 
 /**
  * Default API key rate limiting values.

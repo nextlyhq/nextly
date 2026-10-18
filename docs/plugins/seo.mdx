@@ -182,7 +182,7 @@ set that cannot reach the cap: if it produces fewer than 50,000 URLs and stays u
 that is.
 
 Nextly's REST rate limit bounds how often one client can ask: each anonymous request
-spends its address's read budget (600 a minute by default), or, with no resolvable
+spends its address's read budget (100 a minute by default), or, with no resolvable
 address, a ceiling shared by all such requests. It bounds the repeats, not what each one
 costs. With no `baseUrl` set the response is `no-store`, so nothing in front absorbs the
 repeats either.
