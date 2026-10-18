@@ -174,6 +174,40 @@ describe("captureInTx", () => {
       expect(capture).toHaveBeenCalledOnce();
     });
 
+    it("records a save of a language other than the newest version's", async () => {
+      // The document's newest version is in no language; an older Spanish one
+      // could match this save yet predate a change to the shared fields.
+      await captureInTx(unchanged, service(), {
+        ref,
+        parts,
+        onlyIfChanged: true,
+        locale: "es",
+      });
+      expect(capture).toHaveBeenCalledOnce();
+    });
+
+    it("records nothing for a language whose version is the newest and holds this save", async () => {
+      const spanish = {
+        select: () =>
+          Promise.resolve([
+            {
+              versionNo: 3,
+              status: "published",
+              locale: "es",
+              snapshot: { id: "e1", title: "Hi" },
+            },
+          ]),
+      } as unknown as Parameters<typeof captureInTx>[0];
+      const result = await captureInTx(spanish, service(), {
+        ref,
+        parts,
+        onlyIfChanged: true,
+        locale: "es",
+      });
+      expect(result).toEqual({ versionNo: null });
+      expect(capture).not.toHaveBeenCalled();
+    });
+
     it("records a create whatever an earlier document under its id left", async () => {
       // No `onlyIfChanged`: a create says the document began.
       await captureInTx(unchanged, service(), { ref, parts });

@@ -38,9 +38,13 @@ import { lazy, Suspense, useState, useEffect } from "react";
 import { useFormContext, useWatch } from "react-hook-form";
 
 import { PluginSlot } from "@admin/components/shared/plugin-slot";
-import { evaluateCondition } from "@admin/lib/builder/condition-evaluator";
 import { usePluginFieldType } from "@admin/lib/plugins/plugin-field-type";
 
+import {
+  conditionSourcePath,
+  effectiveFieldGate,
+  fieldAdminGates,
+} from "./field-admin-gates";
 import { FieldWrapper } from "./FieldWrapper";
 import { UploadInput } from "./media/UploadInput";
 import { NumberInput } from "./number/NumberInput";
@@ -264,29 +268,15 @@ export function FieldRenderer({
    */
   const pluginFieldType = usePluginFieldType(field.type);
 
-  // Determine if field should be read-only or disabled
-  // Cast to any to handle fields that don't have readOnly/disabled in their admin options
-  const adminOptions = field.admin as
-    | {
-        readOnly?: boolean;
-        disabled?: boolean;
-        condition?: { field: string; equals: string };
-        /** D24 — plugin-supplied field-editor component path (overrides the type dispatch). */
-        component?: string;
-      }
-    | undefined;
-  const isReadOnly = readOnly || adminOptions?.readOnly;
-  const isDisabled = disabled || adminOptions?.disabled;
+  // A plugin-supplied editor for this one field (D24 — a component path),
+  // which replaces the type dispatch below.
+  const adminOptions = field.admin;
 
-  // Get condition configuration
-  const condition = adminOptions?.condition;
-
-  // Compute the full path of the condition field (relative to current basePath)
-  const conditionFieldPath = condition?.field
-    ? basePath
-      ? `${basePath}.${condition.field}`
-      : condition.field
-    : undefined;
+  // The condition's source, relative to the current base path.
+  const conditionFieldPath = conditionSourcePath(
+    fieldAdminGates(field).condition,
+    basePath
+  );
 
   // Watch the condition field value to enable reactive conditional rendering
   const conditionFieldValue = useWatch({
@@ -295,14 +285,18 @@ export function FieldRenderer({
     disabled: !conditionFieldPath,
   });
 
-  // PR E2: delegate to the shared evaluator. Supports the full operator
-  // surface (equals / contains / between / before-after / isTrue / etc.)
-  // AND backwards-compat with the legacy { field, equals } shape.
-  if (condition && conditionFieldPath) {
-    if (!evaluateCondition(condition, conditionFieldValue)) {
-      return null;
-    }
-  }
+  // The form's one decision about this field — drawn at all, read-only,
+  // disabled — from what the parent passes down, the field's own gates and
+  // the value its condition reads. A document view folds the same function
+  // over a field's groups, so the two cannot disagree.
+  const gate = effectiveFieldGate(
+    field,
+    { shown: true, readOnly: Boolean(readOnly), disabled: Boolean(disabled) },
+    conditionFieldValue
+  );
+  if (!gate.shown) return null;
+  const isReadOnly = gate.readOnly;
+  const isDisabled = gate.disabled;
 
   // =========================================
   // Data Fields (With FieldWrapper)

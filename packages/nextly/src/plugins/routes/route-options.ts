@@ -279,6 +279,20 @@ function principalOptionProblem(route: PluginRoute): string | null {
 }
 
 /** Why a route's declared options are invalid, or null when they are fine. */
+/**
+ * Why a route's `limitKey` cannot be used, or null when it can.
+ *
+ * The type binds only TypeScript: a JavaScript plugin's non-function value
+ * passed boot, was named at startup as though absent, and then threw on every
+ * request whose client address could not be read, before the handler or its
+ * error boundary. Refused here instead, where it is a configuration error.
+ */
+function limitKeyOptionProblem(route: PluginRoute): string | null {
+  const { limitKey } = route as { limitKey?: unknown };
+  if (limitKey === undefined || typeof limitKey === "function") return null;
+  return `limitKey must be a function, not ${typeof limitKey}`;
+}
+
 export function validateRouteOptions(route: PluginRoute): string | null {
   // As with `rateLimit` below, the union binds only TypeScript: a JavaScript
   // plugin's `"post"` would be registered under that literal, and requests,
@@ -302,6 +316,8 @@ export function validateRouteOptions(route: PluginRoute): string | null {
   }
   const principalProblem = principalOptionProblem(route);
   if (principalProblem !== null) return principalProblem;
+  const limitKeyProblem = limitKeyOptionProblem(route);
+  if (limitKeyProblem !== null) return limitKeyProblem;
   // The union is a TYPESCRIPT guarantee, and an unchecked JavaScript plugin
   // has none: a typo like "authn" parsed happily, made `rateLimitKey` answer
   // null, and the route then ran with no limiter at all — silently losing the
@@ -325,10 +341,12 @@ export function validateRouteOptions(route: PluginRoute): string | null {
  * its proxy, or null when there is nothing to say.
  *
  * Without `security.trustProxy` no client address is read at all, so every
- * caller counts as the same client and a route's per-client limit is one
- * bucket for the whole site: one client can spend it for everyone. Core's own `/auth/*` routes accept that trade-off
- * deliberately; a plugin route inherits it, so the operator is told which
- * routes do.
+ * caller counts as the same client and a `"general"` or `{ max, windowMs }`
+ * route's per-client limit is one bucket for the whole site: one client can
+ * spend it for everyone. The operator is told which routes do. An `"auth"`
+ * route is left out: it is counted per identity under a ceiling instead, as
+ * core's sign-in is, and {@link unkeyedAuthRouteWarnings} names the ones that
+ * cannot say which identity a request names.
  */
 export function rateLimitProxyWarning(
   routes: ReadonlyArray<{ fullPath: string; route: PluginRoute }>,
@@ -336,7 +354,10 @@ export function rateLimitProxyWarning(
 ): string | null {
   if (trustProxy) return null;
   const limited = routes
-    .filter(entry => entry.route.rateLimit !== undefined)
+    .filter(
+      entry =>
+        entry.route.rateLimit !== undefined && entry.route.rateLimit !== "auth"
+    )
     .map(entry => `${entry.route.method} ${entry.fullPath}`);
   if (limited.length === 0) return null;
   return (
@@ -345,4 +366,39 @@ export function rateLimitProxyWarning(
     `client shares one limit: ${limited.join(", ")}. Turn on ` +
     "security.trustProxy when the app runs behind a proxy you control."
   );
+}
+
+/**
+ * One boot warning for each `rateLimit: "auth"` plugin route without a
+ * `limitKey`, or none while the auth limiter is off.
+ *
+ * Such a route's requests from clients whose address cannot be read are
+ * bounded only by the plugin's ceiling, a hundred times the auth budget,
+ * since nothing names the identity to count them by; nothing about a working
+ * route shows that, so each is named where an operator reads.
+ */
+export function unkeyedAuthRouteWarnings(
+  routes: ReadonlyArray<{
+    pluginName: string;
+    fullPath: string;
+    route: PluginRoute;
+  }>,
+  authLimitOn: boolean
+): string[] {
+  if (!authLimitOn) return [];
+  return routes
+    .filter(
+      entry =>
+        entry.route.rateLimit === "auth" &&
+        typeof entry.route.limitKey !== "function"
+    )
+    .map(
+      entry =>
+        `[nextly] Plugin "${entry.pluginName}" route ${entry.route.method} ` +
+        `${entry.fullPath} is rate limited as auth but names no limitKey, so ` +
+        "requests from clients whose address cannot be read are limited only " +
+        "by a ceiling shared by the plugin's auth routes, not per identity. " +
+        "Give the route a limitKey, or set security.trustProxy behind a proxy " +
+        "that reports the client to limit them per client."
+    );
 }

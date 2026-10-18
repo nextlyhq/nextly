@@ -253,29 +253,32 @@ export function Login() {
           onCredentialRejected={challengeFlow.abandonPasswordChange}
         />
       ) : challengeFlow.challenge && authUi.loaded ? (
-        <AuthChallenge
-          authUi={authUi}
-          challengeType={challengeFlow.challenge.challengeType}
-          pendingToken={challengeFlow.challenge.pendingToken}
-          // Answered and still no session — the account must replace its
-          // admin-set password first — is raised by the hook itself, so this
-          // passes the resolver straight through.
-          resolve={challengeFlow.resolve}
-          onResolved={next => {
-            // A challenge view calls this when it reads the answer as "done".
-            // A forced password change is accepted and NOT done: the host is
-            // already rendering that step, and navigating would land on a page
-            // with no session that bounces straight back to login. Checked
-            // here rather than trusted to the view, which may predate the
-            // `continues` field entirely.
-            if (challengeFlow.isContinuing()) return;
-            // The host has already sent the browser to the server's `next`;
-            // the view's own value cannot be that, and navigating on it
-            // replaced the destination with the dashboard.
-            if (challengeFlow.hasNavigated()) return;
-            window.location.href = next ?? ROUTES.DASHBOARD;
-          }}
-        />
+        <>
+          <AuthRefusalNotice refusal={challengeFlow.refusal} />
+          <AuthChallenge
+            authUi={authUi}
+            challengeType={challengeFlow.challenge.challengeType}
+            pendingToken={challengeFlow.challenge.pendingToken}
+            // Answered and still no session — the account must replace its
+            // admin-set password first — is raised by the hook itself, so this
+            // passes the resolver straight through.
+            resolve={challengeFlow.resolve}
+            onResolved={next => {
+              // A challenge view calls this when it reads the answer as "done".
+              // A forced password change is accepted and NOT done: the host is
+              // already rendering that step, and navigating would land on a page
+              // with no session that bounces straight back to login. Checked
+              // here rather than trusted to the view, which may predate the
+              // `continues` field entirely.
+              if (challengeFlow.isContinuing()) return;
+              // The host has already sent the browser to the server's `next`;
+              // the view's own value cannot be that, and navigating on it
+              // replaced the destination with the dashboard.
+              if (challengeFlow.hasNavigated()) return;
+              window.location.href = next ?? ROUTES.DASHBOARD;
+            }}
+          />
+        </>
       ) : challengeFlow.resuming || challengeFlow.challenge ? (
         // The outstanding step is still being looked up. Showing the password
         // form meanwhile swapped it out from under the person a moment later,

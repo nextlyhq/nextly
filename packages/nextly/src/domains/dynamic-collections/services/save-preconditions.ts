@@ -41,6 +41,20 @@ function quote(dialect: SupportedDialect, name: string): string {
   return dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
 }
 
+/**
+ * Where the entries' values are before this save: the column the field had. A renamed field's
+ * migration renames the column first and only then makes it unique or narrows it, so its values
+ * are checked under the old name. Undefined for a field the save adds.
+ */
+function heldColumn(
+  previous: FieldDefinition | undefined,
+  dialect: SupportedDialect
+): string | undefined {
+  return previous === undefined
+    ? undefined
+    : getColumnDescriptor(previous, dialect, "collection")?.name;
+}
+
 function refused(error: Refusal, logContext?: Record<string, unknown>) {
   return { error, ...(logContext ? { logContext } : {}) };
 }
@@ -96,24 +110,40 @@ export async function refusalsForCollectionSave(args: {
     const column = getColumnDescriptor(field, dialect, "collection");
     if (!column) continue;
     const previous = previousOf(field);
-    // The entries' values are where the field kept them before this save: a renamed field's
-    // migration renames the column first and only then makes it unique or narrows it, so its
-    // values are checked under the old name.
-    const held =
-      previous !== undefined
-        ? (getColumnDescriptor(previous, dialect, "collection")?.name ??
-          column.name)
-        : column.name;
+    const held = heldColumn(previous, dialect) ?? column.name;
     // A column still to be deployed holds no entries, so nothing can be in the way yet.
     if (previous !== undefined && !args.presentColumns.has(held)) continue;
-    const col = quote(dialect, held);
-    const refusal =
-      field.unique === true && previous?.unique !== true
-        ? await uniqueRefusal({ field, previous, col })
-        : await lengthRefusal({ field, previous, col, length: column.length });
-    if (refusal) refusals.push(refusal);
+    refusals.push(
+      ...(await fieldRefusals(field, previous, quote(dialect, held), column))
+    );
   }
   return refusals;
+
+  /**
+   * Both checks, not one or the other: a field made unique and shorter in one save can pass the
+   * uniqueness check with values the shorter column would cut, and PostgreSQL's cast truncates
+   * them rather than refusing.
+   */
+  async function fieldRefusals(
+    field: FieldDefinition,
+    previous: FieldDefinition | undefined,
+    col: string,
+    column: { length?: number }
+  ): Promise<SaveRefusal[]> {
+    const unique =
+      field.unique === true && previous?.unique !== true
+        ? await uniqueRefusal({ field, previous, col })
+        : undefined;
+    const length = await lengthRefusal({
+      field,
+      previous,
+      col,
+      length: column.length,
+    });
+    return [unique, length].filter(
+      (refusal): refusal is SaveRefusal => refusal !== undefined
+    );
+  }
 
   async function uniqueRefusal(at: {
     field: FieldDefinition;
