@@ -1078,10 +1078,12 @@ export type { BreachedPasswordsConfig } from "./shared/types/config";
 // MIDDLEWARE
 // ============================================================
 
-// Rate limiting middleware
+// Rate limiting middleware. `defaultSkipAdminApi` is deprecated: kept for an
+// app that passes it as `rateLimit.skip`, and no longer the default.
 export {
   createRateLimiter,
   createRateLimitHeaders,
+  defaultSkipAdminApi,
   InMemoryRateLimitStore,
   resolveRateLimitStore,
   type RateLimitConfig,

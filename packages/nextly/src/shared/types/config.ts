@@ -284,9 +284,29 @@ export interface RateLimitingConfig {
 
   /**
    * Function to skip rate limiting for certain requests.
-   * Returns true to skip rate limiting.
+   * Returns true to skip rate limiting. No request is skipped by default, the
+   * admin API included.
    */
   skip?: (request: Request) => boolean | Promise<boolean>;
+
+  /**
+   * The budget a signed-in session spends per window, counted per user
+   * whatever address it comes from. A plugin's signed-in people each spend a
+   * budget of this size too.
+   *
+   * @default five times `readLimit` and `writeLimit`
+   */
+  sessions?: { readLimit?: number; writeLimit?: number };
+
+  /**
+   * The ceiling shared, per window, by requests that carry no session or API
+   * key and come from no address the server can resolve (see
+   * `security.trustProxy`). It never refuses a session, a key, or a request to
+   * an auth route.
+   *
+   * @default ten times `readLimit` and `writeLimit`
+   */
+  unresolvedCeiling?: { readLimit?: number; writeLimit?: number };
 
   /**
    * Per-collection rate limit overrides.
@@ -341,6 +361,10 @@ export interface SanitizedRateLimitingConfig {
   skip?: (request: Request) => boolean | Promise<boolean>;
   /** Per-collection rate limit overrides (optional) */
   collections?: Record<string, { readLimit?: number; writeLimit?: number }>;
+  /** A session's own budget (optional); five times the per-address budgets when absent. */
+  sessions?: { readLimit?: number; writeLimit?: number };
+  /** The unresolved sources' ceiling (optional); ten times the per-address budgets when absent. */
+  unresolvedCeiling?: { readLimit?: number; writeLimit?: number };
 }
 
 // ============================================================
@@ -1135,6 +1159,8 @@ export function sanitizeConfig(config: NextlyConfig): SanitizedNextlyConfig {
     keyGenerator: config.rateLimit?.keyGenerator,
     skip: config.rateLimit?.skip,
     collections: config.rateLimit?.collections,
+    sessions: config.rateLimit?.sessions,
+    unresolvedCeiling: config.rateLimit?.unresolvedCeiling,
   };
 
   // Build apiKeys config only if the block is provided; omitting it entirely
