@@ -121,6 +121,30 @@ describe("LinkedTransaction.runContained", () => {
     expect(outcome).toBe("committed");
   });
 
+  it("keeps the transaction when the plugin's statement starts once the rollback is sent", async () => {
+    // A statement started after the rollback to the savepoint was sent is
+    // queued behind it on the connection, so the rollback cannot undo it, and
+    // failing the transaction would discard the plugin's write for nothing.
+    const log: string[] = [];
+    const tx = recordingTx(log);
+    const { scope, link } = linked(tx);
+    const rollback = tx.rollbackToSavepoint!;
+    tx.rollbackToSavepoint = async (name: string) => {
+      const sent = rollback(name);
+      void scope.track(Promise.resolve("plugin row"));
+      await sent;
+    };
+
+    const outcome = await scope.run(async () => {
+      await link
+        .runContained(() => failingLater(new Error("insert failed")))
+        .catch(() => undefined);
+      return "committed";
+    });
+
+    expect(outcome).toBe("committed");
+  });
+
   it("runs contained writes one at a time, so one never rolls back another's", async () => {
     const log: string[] = [];
     const { scope, link } = linked(recordingTx(log));

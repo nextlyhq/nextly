@@ -122,6 +122,9 @@ async function runUnderSavepoint<R>(
   try {
     result = await work(tx);
   } catch (error) {
+    // Counted before the rollback is sent: a statement started after that is
+    // queued behind it on the connection, so the rollback does not undo it.
+    const undone = others() !== before;
     try {
       await tx.rollbackToSavepoint(name);
       await tx.releaseSavepoint(name);
@@ -130,7 +133,7 @@ async function runUnderSavepoint<R>(
       scope.fail(rollbackError);
       throw error;
     }
-    if (others() !== before) scope.fail(undoneStatementError());
+    if (undone) scope.fail(undoneStatementError());
     throw error;
   }
   await tx.releaseSavepoint(name);

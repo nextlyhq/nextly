@@ -35,8 +35,10 @@ rolls the transaction back and answers with the ROLLBACK command tag, raising
 no error. So a callback that caught a failed statement and returned saw
 `transaction()` resolve while none of its writes were kept.
 
-**`transaction()` on PostgreSQL now rejects in that case**, with a
-`DatabaseError` (`code` `25P02`): an error now replaces a silent rollback. Code
+**The PostgreSQL adapter's `transaction()`, and so `ctx.db.transaction`, now
+rejects in that case**, with a `DatabaseError` (`code` `25P02`): an error now
+replaces a silent rollback. `ctx.db.raw.transaction` is Drizzle's own
+transaction and is unchanged. Code
 that catches a failed statement inside a PostgreSQL transaction and carries on
 will see the transaction fail where it used to appear to succeed. Nothing it
 wrote was ever kept, so no data changes; only the report does. A bulk create

@@ -397,8 +397,10 @@ settled runs outside the transaction.
 On PostgreSQL a statement that fails inside a transaction aborts it: every
 later statement is refused, and the transaction can only roll back. So a
 statement whose failure your callback catches still takes the transaction down
-with it, and the transaction rejects with a `DatabaseError` (`code` `25P02`)
-rather than resolving with nothing kept. MySQL and SQLite undo only the failed
+with it. `ctx.db.transaction` then rejects with a `DatabaseError` (`code`
+`25P02`) rather than resolving with nothing kept. `ctx.db.raw.transaction` is
+Drizzle's own transaction and does not: it resolves although nothing was kept,
+so in it, let a failed statement reject the callback rather than catching it. MySQL and SQLite undo only the failed
 statement and let the transaction go on, except that MySQL undoes the whole
 transaction on a deadlock. A statement that may fail, and that
 the rest of the work should not depend on, belongs outside the transaction.
