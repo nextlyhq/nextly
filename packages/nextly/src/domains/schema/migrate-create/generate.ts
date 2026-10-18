@@ -73,6 +73,7 @@ import type { RenameCandidate } from "../pipeline/pushschema-pipeline-interfaces
 import { conversionForRename } from "../pipeline/rename-conversion";
 import { RegexRenameDetector } from "../pipeline/rename-detector";
 import { generateStatements } from "../pipeline/sql-templates/index";
+import { sqliteTableRebuildStatements } from "../pipeline/sql-templates/sqlite-rebuild";
 
 import {
   appStreamSnapshots,
@@ -380,7 +381,10 @@ export async function generateMigration(
   // reverse rename rather than a data-losing drop+add. Object-removing ops
   // recover their original spec from previousSnapshot.
   const inverseOps = withCyclicForeignKeysSplit(
-    buildInverseOperations(operations, previousSnapshot),
+    restoredNullable(
+      buildInverseOperations(operations, previousSnapshot),
+      fieldJoinsPlans
+    ),
     args.dialect,
     desiredSnapshot.tables
   );
@@ -899,10 +903,91 @@ function planFieldsJoiningTranslation(
           builtBy: "codeFirst",
           oldFields,
           newFields: c.fields,
+          // A translated entity whose fields were all shared has no companion yet.
+          companionExists: (prevMain?.localizedColumns?.length ?? 0) > 0,
+          restoreRequired: requiredAgain(
+            c.tableName,
+            joining,
+            prevMain,
+            dialect,
+            previousSnapshot
+          ),
         }),
       },
     ];
   });
+}
+
+/**
+ * The statements that make a joining field's main column required again on the way DOWN, as the
+ * previous snapshot had it, rendered as the main migration renders a column change: a table
+ * rebuild on SQLite, `SET NOT NULL` on PostgreSQL, and on MySQL, which has no statement for
+ * nullability alone, the column restated with its type.
+ */
+function requiredAgain(
+  tableName: string,
+  joining: readonly LeavingField[],
+  prevMain: TableSpec | undefined,
+  dialect: SupportedDialect,
+  previousSnapshot: NextlySchemaSnapshot
+): string[] {
+  const ops: Operation[] = joining.flatMap(({ column }) => {
+    const before = prevMain?.columns.find(c => c.name === column.name);
+    if (!before || before.nullable) return [];
+    return [
+      dialect === "mysql"
+        ? {
+            type: "change_column_type" as const,
+            tableName,
+            columnName: before.name,
+            fromType: before.type,
+            toType: before.type,
+            nullable: false,
+            ...(before.default !== undefined
+              ? { columnDefault: before.default }
+              : {}),
+            fromNullable: true,
+          }
+        : {
+            type: "change_column_nullable" as const,
+            tableName,
+            columnName: before.name,
+            fromNullable: true,
+            toNullable: false,
+          },
+    ];
+  });
+  if (ops.length === 0) return [];
+  // SQLite has no statement for nullability: the table is rebuilt to its definition as the
+  // previous snapshot has it, its rows copied across, and a row with no value refuses the copy.
+  if (dialect === "sqlite" && prevMain) {
+    return sqliteTableRebuildStatements(prevMain, ops);
+  }
+  return generateStatements(ops, dialect, previousSnapshot.tables);
+}
+
+/**
+ * The main migration's DOWN with each joining field's column re-added nullable: on the way down
+ * it runs before the `joins` file's DOWN copies the default language's values back, so a
+ * required column added there would refuse every existing row. The `joins` DOWN makes it
+ * required again once the values are in (`requiredAgain`).
+ */
+function restoredNullable(
+  inverse: Operation[],
+  joins: readonly FieldJoinsEntry[]
+): Operation[] {
+  const joining = new Set(
+    joins.flatMap(({ plan }) =>
+      plan.spec.columns.map(c => `${plan.spec.mainTable}::${c.name}`)
+    )
+  );
+  return inverse.map(op =>
+    op.type === "add_column" &&
+    joining.has(`${op.tableName}::${op.column.name}`) &&
+    !op.column.nullable
+      ? { ...op, column: { ...op.column, nullable: true } }
+      : op
+  );
 }
 
 /**

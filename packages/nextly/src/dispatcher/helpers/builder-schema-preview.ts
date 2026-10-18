@@ -10,7 +10,6 @@
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { companionRenameCandidate } from "../../domains/i18n/migration/companion-rename";
-import { columnsMovingToCompanion } from "../../domains/i18n/migration/field-joins-translation";
 import { previewBodyWithLeavingTranslation } from "../../domains/i18n/migration/preview-leaving-translation";
 import { translatePipelinePreviewToLegacy } from "../../domains/schema/legacy-preview/translate";
 import { previewDesiredSchema } from "../../domains/schema/pipeline/preview";
@@ -40,21 +39,12 @@ export async function builderSchemaPreviewBody(args: {
 }): Promise<Record<string, unknown>> {
   const { db, dialect, tableName, currentFields, newFields } = args;
   // A field becoming translated takes its value to the companion before main drops its column,
-  // so the preview judges that drop as the apply will.
-  const wasLocalized = args.entity.localized === true;
+  // so the preview judges that drop as the apply will: with the same default language.
   const pipelinePreview = await previewDesiredSchema({
     desired: args.desired,
     db,
     dialect,
-    columnsMovedToCompanion: columnsMovingToCompanion({
-      tableName,
-      dialect,
-      builtBy: args.builtBy,
-      oldFields: currentFields,
-      newFields,
-      wasLocalized,
-      isLocalized: args.requestedLocalized ?? wasLocalized,
-    }),
+    defaultLocale: getConfigFromDI()?.localization?.defaultLocale ?? "en",
   });
   const legacyShape = await translatePipelinePreviewToLegacy(pipelinePreview, {
     tableName,
@@ -82,7 +72,7 @@ export async function builderSchemaPreviewBody(args: {
       // rename, which the pipeline cannot see on the main table, is offered on its companion.
       renamed: [
         ...pipelinePreview.candidates,
-        ...(await translatedFieldRename(args, wasLocalized)),
+        ...(await translatedFieldRename(args, args.entity.localized === true)),
       ].map(toRenameCandidateWire),
       schemaVersion: args.schemaVersion,
     }

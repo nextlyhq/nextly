@@ -49,35 +49,6 @@ export function fieldsJoiningTranslation(
     .map(f => f.name);
 }
 
-/**
- * The main-table columns a change moves to the companion: each joining field's column, which the
- * companion names as the main table does. The push still drops them from main, and is told they
- * moved so it neither offers them as renames nor asks to confirm their loss. Nothing unless the
- * entity is translated before and after the change.
- */
-export function columnsMovingToCompanion(args: {
-  tableName: string;
-  dialect: SupportedDialect;
-  builtBy: ColumnOrigin;
-  oldFields: readonly CompanionFieldLike[];
-  newFields: readonly CompanionFieldLike[];
-  wasLocalized: boolean;
-  isLocalized: boolean;
-}): ColumnMovedToCompanion[] {
-  if (!args.wasLocalized || !args.isLocalized) return [];
-  const joining = new Set(
-    fieldsJoiningTranslation(args.oldFields, args.newFields)
-  );
-  return args.oldFields
-    .filter(f => joining.has(f.name))
-    .flatMap(f => {
-      const column = fieldToLocalizedColumnSpec(f, args.dialect, args.builtBy);
-      return column
-        ? [{ tableName: args.tableName, columnName: column.name }]
-        : [];
-    });
-}
-
 /** What moving the joining fields' values takes, and which fields they are. */
 export interface FieldsJoiningTranslationPlan {
   /**
@@ -239,6 +210,17 @@ export function planFieldJoinsTranslationMigration(args: {
   builtBy: ColumnOrigin;
   oldFields: readonly CompanionFieldLike[];
   newFields: readonly CompanionFieldLike[];
+  /**
+   * Whether the companion exists before this file runs, as the migrations up to it left it: a
+   * translated entity whose every field was shared has none, and the file then creates it.
+   */
+  companionExists: boolean;
+  /**
+   * Statements that make the restored main columns required again, run last on the way DOWN,
+   * once the default language's values are back in them. The main migration's DOWN re-adds them
+   * nullable, since rows hold no value at that point.
+   */
+  restoreRequired?: readonly string[];
 }): FieldLeavesFile {
   const { spec } = args;
   const up = buildFieldsJoiningTranslationStatements({
@@ -250,13 +232,158 @@ export function planFieldJoinsTranslationMigration(args: {
     oldFields: args.oldFields,
     newFields: args.newFields,
     status: spec.status === true,
-    // The entity was translated before, so a database built from its migrations has the companion.
-    companionExists: true,
+    companionExists: args.companionExists,
   });
   const leaving = planFieldLeavesTranslationMigration(spec);
+  const down = [
+    leaving.archive.upSql,
+    leaving.shared.upSql,
+    // A companion this file created goes with it, leaving the database as the file found it.
+    ...(up.createsCompanion
+      ? [`DROP TABLE IF EXISTS ${q(spec.companionTable, spec.dialect)};`]
+      : []),
+    // Last, with every value back: a column made required while one is missing fails loudly here,
+    // nullable and holding what came back, rather than dropping anything.
+    ...(args.restoreRequired ?? []).map(s =>
+      s.trim().endsWith(";") ? s : `${s};`
+    ),
+  ];
   return {
     upSql: up.statements.map(s => `${s};`).join("\n\n"),
-    downSql: `${leaving.archive.upSql}\n\n${leaving.shared.upSql}`,
+    downSql: down.filter(part => part.trim().length > 0).join("\n\n"),
     spec,
   };
+}
+
+/** What one schema apply moves to the companions, and the statements that move it. */
+export interface JoiningMovesForApply {
+  /** The main-table columns whose values move; their drops are neither renames nor losses. */
+  moved: (ColumnMovedToCompanion & { fieldName: string })[];
+  /** The moves, to run before any drop, and after every refusal. */
+  statements: string[];
+}
+
+/** An entity a schema apply describes, as the moves need it. */
+interface ApplyEntity {
+  slug: string;
+  tableName: string;
+  fields: readonly CompanionFieldLike[];
+  localized?: boolean;
+  status?: boolean;
+  builderOwned?: boolean;
+}
+
+/**
+ * The fields a schema apply makes translated, and how their values move, read from the apply
+ * itself: a translated field of a translated entity whose main column the diff drops still holds
+ * the field's value, which is moved to the default language's companion row before the drop.
+ *
+ * One answer for every caller of the apply (the Schema Builder's dialogs, and code-first sync at
+ * `next dev`, on reload and in `db:sync`), drawn from the live tables: a column the diff does not
+ * drop has nothing left to move, so an apply repeated after one that already moved and dropped it
+ * plans nothing. A field that no statement here moves is not reported as moved, so its drop stays
+ * one the apply asks about.
+ */
+export async function planJoiningMovesForApply(args: {
+  desired: {
+    collections: Record<string, ApplyEntity>;
+    singles: Record<string, ApplyEntity>;
+    components: Record<string, ApplyEntity>;
+  };
+  /** The diff's operations; the moved columns are among its drops. */
+  operations: readonly {
+    type: string;
+    tableName?: string;
+    columnName?: string;
+  }[];
+  db: unknown;
+  dialect: SupportedDialect;
+  defaultLocale: string;
+}): Promise<JoiningMovesForApply> {
+  const { builtByFor } = await import(
+    "../../schema/pipeline/registered-collections"
+  );
+  const dropped = new Set(
+    args.operations
+      .filter(op => op.type === "drop_column")
+      .map(op => `${op.tableName}::${op.columnName}`)
+  );
+  const entities = [
+    ...Object.values(args.desired.collections).map(e => ({
+      e,
+      builtBy: builtByFor("collection", e.builderOwned),
+    })),
+    ...Object.values(args.desired.singles).map(e => ({
+      e,
+      builtBy: builtByFor("single", e.builderOwned),
+    })),
+    ...Object.values(args.desired.components).map(e => ({
+      e,
+      builtBy: builtByFor("fieldGroup", e.builderOwned),
+    })),
+  ];
+  const result: JoiningMovesForApply = { moved: [], statements: [] };
+  for (const { e, builtBy } of entities) {
+    if (e.localized !== true) continue;
+    const joining = e.fields.flatMap(f => {
+      if (!isFieldLocalized(f, true)) return [];
+      const column = fieldToLocalizedColumnSpec(f, args.dialect, builtBy);
+      return column && dropped.has(`${e.tableName}::${column.name}`)
+        ? [{ field: f.name, column: column.name }]
+        : [];
+    });
+    if (joining.length === 0) continue;
+    const plan = await planEntityMove(e, builtBy, joining, args);
+    if (plan.statements.length === 0) continue;
+    result.statements.push(...plan.statements);
+    result.moved.push(
+      ...joining
+        .filter(j => plan.fields.includes(j.field))
+        .map(j => ({
+          tableName: e.tableName,
+          columnName: j.column,
+          fieldName: j.field,
+        }))
+    );
+  }
+  return result;
+}
+
+/** One entity's move, planned against its companion as it is now. */
+async function planEntityMove(
+  e: ApplyEntity,
+  builtBy: ColumnOrigin,
+  joining: readonly { field: string; column: string }[],
+  args: { db: unknown; dialect: SupportedDialect; defaultLocale: string }
+): Promise<FieldsJoiningTranslationPlan> {
+  const { introspectLiveSnapshot } = await import(
+    "../../schema/pipeline/diff/introspect-live"
+  );
+  const companionTable = `${e.tableName}_locales`;
+  const snapshot = await introspectLiveSnapshot(args.db, args.dialect, [
+    e.tableName,
+    companionTable,
+  ]);
+  const columnsOf = (table: string) =>
+    snapshot.tables.find(t => t.name === table)?.columns.map(c => c.name);
+  const onMain = new Set(columnsOf(e.tableName) ?? []);
+  const companionColumns = columnsOf(companionTable);
+  const onCompanion = new Set(companionColumns ?? []);
+  const names = new Set(joining.map(j => j.field));
+  return buildFieldsJoiningTranslationStatements({
+    slug: e.slug,
+    tableName: e.tableName,
+    dialect: args.dialect,
+    builtBy,
+    defaultLocale: args.defaultLocale,
+    // The fields as they are on the live main table: the joining ones still shared there.
+    oldFields: e.fields.map(f =>
+      names.has(f.name) ? { ...f, localized: false } : f
+    ),
+    newFields: e.fields,
+    status: onMain.has("status") && onCompanion.has("_status"),
+    companionStatus: e.status === true,
+    companionExists: companionColumns !== undefined,
+    companionColumns: onCompanion,
+  });
 }

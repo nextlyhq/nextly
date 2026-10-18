@@ -2437,6 +2437,8 @@ async function applyReloadHolding(
         source: sourceArg,
         promptChannel: channelArg,
         databaseName,
+        // A field the config makes translated keeps its value as this language's.
+        defaultLocale: newConfig?.localization?.defaultLocale ?? "en",
       });
     },
     // Unused for source='code' — HMR skips the version check.

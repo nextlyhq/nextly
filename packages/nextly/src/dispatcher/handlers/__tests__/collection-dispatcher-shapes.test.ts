@@ -43,7 +43,11 @@ vi.mock("../../helpers/di", () => ({
   getConfigFromDI: vi.fn(),
 }));
 
-vi.mock("../../../domains/schema/pipeline/apply", () => ({
+// The apply is doubled; `movedOnto`, which only reads the apply's result, is kept as it is.
+vi.mock("../../../domains/schema/pipeline/apply", async importOriginal => ({
+  ...(await importOriginal<
+    typeof import("../../../domains/schema/pipeline/apply")
+  >()),
   createApplyDesiredSchema: vi.fn(),
 }));
 

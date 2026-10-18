@@ -33,8 +33,7 @@ import { resolveFieldGroupRegistryName } from "../../domains/field-groups/storag
 import { assertLocalizationConfigured } from "../../domains/i18n/config/require-app-config";
 import { archiveFieldsLeavingTranslation } from "../../domains/i18n/migration/archive-preflight";
 import { companionRenameFromResolutions } from "../../domains/i18n/migration/companion-rename";
-import { columnsMovingToCompanion } from "../../domains/i18n/migration/field-joins-translation";
-import { moveValuesOfFieldsJoiningTranslation } from "../../domains/i18n/runtime/move-joining-values";
+import { movedOnto } from "../../domains/schema/pipeline/apply";
 import { RealClassifier } from "../../domains/schema/pipeline/classifier/classifier";
 import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/database-url";
 import { RealPreCleanupExecutor } from "../../domains/schema/pipeline/pre-cleanup/executor";
@@ -583,29 +582,6 @@ export const COMPONENTS_METHODS: Record<
             notifier: getProductionNotifier(),
           });
 
-          // A field becoming translated keeps its value as the default language's: it moves to
-          // the companion now, before the push drops its main column.
-          const joining = {
-            tableName,
-            builtBy: "fieldGroup" as const,
-            oldFields: (component.fields ?? []) as unknown as FieldDefinition[],
-            newFields: fields as unknown as FieldDefinition[],
-            wasLocalized,
-            isLocalized,
-          };
-          const joinedBefore = await moveValuesOfFieldsJoiningTranslation(
-            adapter,
-            {
-              ...joining,
-              slug,
-              defaultLocale:
-                getConfigFromDI()?.localization?.defaultLocale ?? "en",
-              // Field groups have no Draft/Published.
-              wasStatus: false,
-              status: false,
-            }
-          );
-
           const result = await pipeline.apply({
             desired,
             db,
@@ -617,10 +593,10 @@ export const COMPONENTS_METHODS: Record<
             // Named, not defaulted: the scope defaults to a collection, and a field group recorded under
             // that kind is invisible to every history query filtered by its own.
             uiTargetKind: "component" as const,
-            columnsMovedToCompanion: columnsMovingToCompanion({
-              ...joining,
-              dialect,
-            }),
+            // A field becoming translated keeps its value as this language's; the apply moves it
+            // after its prompts and refusals, before it drops the main column.
+            defaultLocale:
+              getConfigFromDI()?.localization?.defaultLocale ?? "en",
           });
 
           if (!result.success) {
@@ -644,8 +620,8 @@ export const COMPONENTS_METHODS: Record<
               wasLocalized:
                 (component as { localized?: boolean }).localized === true,
               adapter,
-              // Added to the companion, with their values, before the push.
-              joinedBefore,
+              // Added to the companion, with their values, by the apply before its drop.
+              joinedBefore: movedOnto(result, tableName),
               // A translated field the admin renamed: the dialog's answer naming the companion.
               renamed: companionRenameFromResolutions(renameResolutions, {
                 tableName,

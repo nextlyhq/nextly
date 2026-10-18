@@ -10,7 +10,10 @@
  *
  * @module domains/schema/pipeline/moved-to-companion
  */
+import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
+
 import type { Operation } from "./diff/types";
+import type { DesiredSchema } from "./types";
 
 export interface ColumnMovedToCompanion {
   tableName: string;
@@ -32,4 +35,57 @@ export function operationsToJudge(
       op.type !== "drop_column" ||
       !keys.has(`${op.tableName}::${op.columnName}`)
   );
+}
+
+/**
+ * The values this apply moves to companions (`planJoiningMovesForApply`), or none without a default
+ * language to move them into. Loaded on use, as the localization layer is only needed when an
+ * entity is translated.
+ */
+export async function planCompanionMoves(
+  desired: DesiredSchema,
+  operations: readonly Operation[],
+  db: unknown,
+  dialect: SupportedDialect,
+  defaultLocale: string | undefined
+): Promise<{
+  moved: (ColumnMovedToCompanion & { fieldName: string })[];
+  statements: string[];
+}> {
+  if (defaultLocale === undefined) return { moved: [], statements: [] };
+  const { planJoiningMovesForApply } = await import(
+    "../../i18n/migration/field-joins-translation"
+  );
+  // Only fields that store a value under a name can join translation; layout fields have neither.
+  const named = <
+    E extends { fields: readonly { name?: unknown; type: string }[] },
+  >(
+    entities: Record<string, E>
+  ) =>
+    Object.fromEntries(
+      Object.entries(entities).map(([key, e]) => [
+        key,
+        {
+          ...e,
+          fields: e.fields.filter(
+            (f): f is typeof f & { name: string } => typeof f.name === "string"
+          ),
+        },
+      ])
+    );
+  return planJoiningMovesForApply({
+    desired: {
+      collections: named(desired.collections),
+      singles: named(desired.singles),
+      components: named(desired.components),
+    },
+    operations: operations.map(op => ({
+      type: op.type,
+      tableName: "tableName" in op ? op.tableName : undefined,
+      columnName: "columnName" in op ? op.columnName : undefined,
+    })),
+    db,
+    dialect,
+    defaultLocale,
+  });
 }

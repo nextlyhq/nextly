@@ -19,7 +19,10 @@ import {
   buildCompanionTransitionStatements,
   type FieldRename,
 } from "../../i18n/migration/reconcile-companion";
-import { localizedColumnsOnMain } from "../../i18n/runtime/companion-io";
+import {
+  localizedColumnsOnMain,
+  translatedColumnsOnCompanion,
+} from "../../i18n/runtime/companion-io";
 import { buildCompanionRuntimeTable } from "../../i18n/runtime/companion-registration";
 
 /**
@@ -170,6 +173,7 @@ export async function reconcileComponentCompanion(args: {
   const dialect = adapter.dialect;
   const defaultLocale = getConfigFromDI()?.localization?.defaultLocale ?? "en";
 
+  const companionExists = await adapter.tableExists(`${tableName}_locales`);
   const plan = buildCompanionTransitionStatements({
     // The companion mirrors the main table, and a field group's builder reads a width from a different key.
     builtBy: "fieldGroup" as const,
@@ -186,7 +190,7 @@ export async function reconcileComponentCompanion(args: {
     isLocalized: localized,
     oldFields,
     newFields,
-    companionExists: await adapter.tableExists(`${tableName}_locales`),
+    companionExists,
     // Which translatable columns the main table still carries. A disable must not re-add one that
     // is already there, and must still restore it: presence says the column exists, never that its
     // value is current, because every localized write went to the companion alone.
@@ -197,6 +201,15 @@ export async function reconcileComponentCompanion(args: {
     ).then(cols => cols.map(c => c.name)),
     joinedBefore: args.joinedBefore,
     renamed: args.renamed,
+    // Taken as they are: an earlier apply that moved a value and stopped before the registry
+    // recorded it left its companion column in place.
+    presentOnCompanion: companionExists
+      ? await translatedColumnsOnCompanion(adapter, {
+          tableName,
+          fields: newFields,
+          builtBy: "fieldGroup",
+        })
+      : undefined,
   });
 
   // A disable archives non-default translations, so ensure `nextly_i18n_archive` exists first

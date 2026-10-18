@@ -32,6 +32,7 @@ import {
 import {
   companionHasStatusColumn,
   localizedColumnsOnMain,
+  translatedColumnsOnCompanion,
 } from "../../i18n/runtime/companion-io";
 import { buildCompanionRuntimeTable } from "../../i18n/runtime/companion-registration";
 
@@ -113,6 +114,15 @@ export async function reconcileSingleCompanion(
     wasStatus,
     joinedBefore: args.joinedBefore,
     renamed: args.renamed,
+    // Taken as they are: an earlier apply that moved a value and stopped before the registry
+    // recorded it left its companion column in place.
+    presentOnCompanion: companionExists
+      ? await translatedColumnsOnCompanion(adapter, {
+          tableName,
+          fields: newFields,
+          builtBy: "collection",
+        })
+      : undefined,
     // Which translatable columns the main table still carries. A disable must not re-add one that
     // is already there, and must still restore it: presence says the column exists, never that its
     // value is current, because every localized write went to the companion alone.
