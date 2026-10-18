@@ -264,6 +264,7 @@ describe("nextly media orphans", () => {
       expect(said).not.toMatch(/^Removed /m);
       expect(said).toContain(layout.orphan);
       expect(said).toMatch(/by hand/);
+      expect(said).toMatch(/Set a `prefix` for media/);
     }
   );
 
@@ -371,6 +372,10 @@ describe("mediaPlaceIsExclusive", () => {
     ["media", ["media"], false],
     ["media/", ["media"], false],
     ["media", ["media/"], false],
+    // A prefix inside media's, or around it, shares its place too.
+    ["uploads", ["uploads/private"], false],
+    ["uploads/media", ["uploads"], false],
+    ["media", ["media-archive"], true],
   ] as const)(
     "prefix %j beside %j is exclusive: %s",
     (prefix, others, expected) => {

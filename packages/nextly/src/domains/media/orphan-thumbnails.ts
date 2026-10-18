@@ -41,10 +41,11 @@ function folderOf(prefix = ""): string {
 
 /**
  * Whether the media collection's place in its storage is its own: it has a
- * prefix, and no other collection on the same storage has that prefix. Only
- * then does a file's place show it is media's. Without one, media shares the
- * storage's root with every other upload to it, any of which can store a
- * file of the same form, named as a person named it.
+ * prefix, and no other collection on the same storage shares it, with the
+ * same prefix, one inside it or one around it. Only then does a file's place
+ * show it is media's. Without one, media shares the storage's root with every
+ * other upload to it, any of which can store a file of the same form, named
+ * as a person named it.
  */
 export function mediaPlaceIsExclusive(
   prefix: string | undefined,
@@ -52,8 +53,14 @@ export function mediaPlaceIsExclusive(
 ): boolean {
   const folder = folderOf(prefix);
   return (
-    folder !== "" && otherPrefixes.every(other => folderOf(other) !== folder)
+    folder !== "" &&
+    otherPrefixes.every(other => !overlaps(folder, folderOf(other)))
   );
+}
+
+/** Whether two folders are one, or one holds the other. */
+function overlaps(a: string, b: string): boolean {
+  return a === b || a.startsWith(`${b}/`) || b.startsWith(`${a}/`);
 }
 
 /**
