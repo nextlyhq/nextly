@@ -276,7 +276,7 @@ export class DynamicCollectionService extends BaseService {
     tableHasRows: boolean;
     foreignKeysByColumn: ReadonlyMap<string, readonly string[]>;
     indexNames: ReadonlySet<string>;
-    uniqueColumns: ReadonlySet<string>;
+    uniqueColumns: ReadonlyMap<string, string | null>;
     columnsContainingNull: ReadonlySet<string>;
     columnsAbsentFromTable: ReadonlySet<string>;
     liveColumnTypes: ReadonlyMap<string, string>;
@@ -870,7 +870,7 @@ export class DynamicCollectionService extends BaseService {
     newFields: readonly FieldDefinition[],
     facts: {
       liveColumnTypes: ReadonlyMap<string, string>;
-      uniqueColumns: ReadonlySet<string>;
+      uniqueColumns: ReadonlyMap<string, string | null>;
     }
   ): FieldDefinition[] {
     const columnOf = (f: FieldDefinition) =>
@@ -942,7 +942,7 @@ export class DynamicCollectionService extends BaseService {
       DynamicCollectionSchemaService["generateAlterTableMigration"]
     >[3] & {
       liveColumnTypes: ReadonlyMap<string, string>;
-      uniqueColumns: ReadonlySet<string>;
+      uniqueColumns: ReadonlyMap<string, string | null>;
     },
     artefact: string
   ): string | undefined {
@@ -1590,15 +1590,25 @@ export class DynamicCollectionService extends BaseService {
       const existingUserFields = (collection.fields || []).filter(
         (f: FieldDefinition) => !reservedFieldNames.includes(f.name)
       );
+      const statusOptions = {
+        wasStatus: wasStatusForUpdate,
+        hasStatus: updates.status === true,
+      };
       migrationSQL = this.schemaService.generateAlterTableMigration(
         collection.tableName,
         existingUserFields,
         existingUserFields,
-        {
-          wasStatus: wasStatusForUpdate,
-          hasStatus: updates.status === true,
-        }
+        statusOptions
       );
+      // A save MySQL stopped part-way can have added or dropped the lifecycle column already.
+      localMigrationSQL =
+        this.localAlterSQL(
+          collection.tableName,
+          existingUserFields,
+          existingUserFields,
+          { ...statusOptions, ...(await liveTable()) },
+          migrationSQL
+        ) ?? null;
       migrationFileName = `${Date.now()}_status_${collectionName}.sql`;
     }
 

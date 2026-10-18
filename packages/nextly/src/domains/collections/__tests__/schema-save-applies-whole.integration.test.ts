@@ -11,7 +11,10 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 import { describeEachDialect } from "../../../plugins/__tests__/helpers/dialect-matrix";
 import { DynamicCollectionService } from "../../dynamic-collections/services/dynamic-collection-service";
-import { uniqueIndexNameForColumn } from "../../schema/services/index-name";
+import {
+  indexNameForColumn,
+  uniqueIndexNameForColumn,
+} from "../../schema/services/index-name";
 import {
   createTestNextly,
   type TestDialect,
@@ -443,6 +446,113 @@ describeEachDialect("a schema save whose migration fails", dialect => {
 
     // Refused rather than recorded: the index under that name enforces nothing about headings.
     expect(saved.success, JSON.stringify(saved)).toBe(false);
+    expect((await createPost({ heading: "One" })).success).toBe(true);
+  });
+
+  /** The Builder's collection service, for a test that reads a save's statements. */
+  function collectionService(): DynamicCollectionService {
+    return new DynamicCollectionService(
+      current.adapter as unknown as ConstructorParameters<
+        typeof DynamicCollectionService
+      >[0],
+      current.getService("logger") as ConstructorParameters<
+        typeof DynamicCollectionService
+      >[1]
+    );
+  }
+
+  const shortHeading = {
+    name: "heading",
+    type: "text",
+    options: { variant: "short" },
+  };
+
+  it("checks a renamed field's values when the same save makes it unique", async () => {
+    await postsWith(
+      [shortHeading],
+      [{ heading: "Same" }, { heading: "Same" }, { heading: "Other" }]
+    );
+
+    const saved = await handler().updateCollection(
+      { collectionName: "posts" },
+      { fields: [{ ...shortHeading, name: "headline", unique: true }] }
+    );
+
+    // Refused before the rename runs, from the values under the old name.
+    expect(saved.success, JSON.stringify(saved)).toBe(false);
+    expect(refusalOf(saved)).toMatch(
+      /^2 entries share a value for headline, which must be unique\./
+    );
+    expect(await registeredFields("posts")).toEqual(["heading"]);
+  });
+
+  it("keeps the lifecycle column in the file of a save whose table already has it", async () => {
+    await postsWith([shortHeading], [{ heading: "One" }]);
+    await query(
+      `ALTER TABLE ${q("dc_posts")} ADD COLUMN ${q("status")} VARCHAR(20) DEFAULT 'draft'`
+    );
+
+    const update = await collectionService().generateCollectionUpdate("posts", {
+      fields: [shortHeading],
+      status: true,
+    } as Parameters<DynamicCollectionService["generateCollectionUpdate"]>[1]);
+
+    // The file is replayed on databases without the column; only this database skips it.
+    expect(update.migrationSQL).toMatch(/ADD COLUMN .status./);
+    expect(update.localMigrationSQL ?? "").not.toMatch(/ADD COLUMN .status./);
+  });
+
+  it("turns Draft/Published off when the status column is already gone", async () => {
+    const created = await handler().createCollection({
+      name: "posts",
+      label: "Post",
+      status: true,
+      fields: [shortHeading],
+    });
+    expect(created.success, JSON.stringify(created)).toBe(true);
+    await query(`ALTER TABLE ${q("dc_posts")} DROP COLUMN ${q("status")}`);
+
+    const saved = await handler().updateCollection(
+      { collectionName: "posts" },
+      { fields: [shortHeading], status: false }
+    );
+
+    expect(saved.success, JSON.stringify(saved)).toBe(true);
+  });
+
+  it("indexes a field whose index a refused save already created", async () => {
+    await postsWith([shortHeading], [{ heading: "One" }]);
+    await query(
+      `CREATE INDEX ${q(indexNameForColumn("dc_posts", "heading"))} ON ${q("dc_posts")} (${q("heading")})`
+    );
+
+    const saved = await handler().updateCollection(
+      { collectionName: "posts" },
+      { fields: [{ ...shortHeading, index: true }] }
+    );
+
+    expect(saved.success, JSON.stringify(saved)).toBe(true);
+  });
+
+  it("drops the unique index Unique adopted when Unique is turned off", async () => {
+    // A unique index under a name the generator never uses, as an older table may carry.
+    await postsWith([shortHeading], [{ heading: "One" }]);
+    await query(
+      `CREATE UNIQUE INDEX ${q("legacy_heading_unique")} ON ${q("dc_posts")} (${q("heading")})`
+    );
+    const on = await handler().updateCollection(
+      { collectionName: "posts" },
+      { fields: [{ ...shortHeading, unique: true }] }
+    );
+    expect(on.success, JSON.stringify(on)).toBe(true);
+
+    const off = await handler().updateCollection(
+      { collectionName: "posts" },
+      { fields: [shortHeading] }
+    );
+
+    expect(off.success, JSON.stringify(off)).toBe(true);
+    // Recorded not unique, and not enforced either.
     expect((await createPost({ heading: "One" })).success).toBe(true);
   });
 

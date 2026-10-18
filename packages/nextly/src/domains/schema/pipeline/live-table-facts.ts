@@ -317,45 +317,63 @@ export async function readIndexNames(
  * has to know whether a column's values are already held unique, after one MySQL refused part-way
  * say, asks the catalog what each index covers rather than which names it holds. Single-column
  * indexes only, because a unique field is enforced by one; the primary key counts.
+ *
+ * Each column comes with the name of the index that covers it, so turning Unique off drops the
+ * index that is there rather than one of the names the generator would have used. The name is
+ * null where no statement can drop it by name: the primary key, and SQLite's index for an inline
+ * `UNIQUE`, which only a table rebuild removes.
  */
 export async function readUniqueColumns(
   db: unknown,
   dialect: SupportedDialect,
   tableName: string
-): Promise<Set<string>> {
-  const columns = new Set<string>();
+): Promise<Map<string, string | null>> {
+  const columns = new Map<string, string | null>();
 
   if (dialect === "postgresql") {
     const result = (await (db as PgMysqlExecute).execute(
-      sql`SELECT a.attname AS column_name
+      sql`SELECT a.attname AS column_name, c.relname AS index_name, i.indisprimary AS is_primary
           FROM pg_index i
           JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = i.indkey[0]
+          JOIN pg_class c ON c.oid = i.indexrelid
           WHERE i.indrelid = to_regclass(${tableName}) AND i.indisunique AND i.indnatts = 1`
-    )) as { rows: { column_name: string }[] };
-    for (const row of result.rows) columns.add(row.column_name);
+    )) as {
+      rows: { column_name: string; index_name: string; is_primary: boolean }[];
+    };
+    for (const row of result.rows) {
+      columns.set(row.column_name, row.is_primary ? null : row.index_name);
+    }
     return columns;
   }
 
   if (dialect === "mysql") {
-    const rows = mysqlRows<{ COLUMN_NAME: string }>(
+    const rows = mysqlRows<{ COLUMN_NAME: string; INDEX_NAME: string }>(
       await (db as PgMysqlExecute).execute(
-        sql`SELECT MIN(COLUMN_NAME) AS COLUMN_NAME FROM information_schema.STATISTICS
+        sql`SELECT MIN(COLUMN_NAME) AS COLUMN_NAME, INDEX_NAME FROM information_schema.STATISTICS
             WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ${tableName} AND NON_UNIQUE = 0
             GROUP BY INDEX_NAME HAVING COUNT(*) = 1`
       )
     );
-    for (const row of rows) columns.add(row.COLUMN_NAME);
+    for (const row of rows) {
+      columns.set(
+        row.COLUMN_NAME,
+        row.INDEX_NAME === "PRIMARY" ? null : row.INDEX_NAME
+      );
+    }
     return columns;
   }
 
   const indexes = (await (db as SqliteAll).all(
     sql`PRAGMA index_list(${sql.identifier(tableName)})`
-  )) as { name: string; unique: number }[];
+  )) as { name: string; unique: number; origin?: string }[];
   for (const index of indexes.filter(i => Number(i.unique) === 1)) {
     const covered = (await (db as SqliteAll).all(
       sql`PRAGMA index_info(${sql.identifier(index.name)})`
     )) as { name: string }[];
-    if (covered.length === 1 && covered[0]) columns.add(covered[0].name);
+    if (covered.length === 1 && covered[0]) {
+      // `c` is an index made by CREATE INDEX; the others come with the table's own definition.
+      columns.set(covered[0].name, index.origin === "c" ? index.name : null);
+    }
   }
   return columns;
 }

@@ -545,7 +545,7 @@ export class DynamicCollectionSchemaService {
     options:
       | {
           planFor?: "artefact" | "database";
-          uniqueColumns?: ReadonlySet<string>;
+          uniqueColumns?: ReadonlyMap<string, string | null>;
           indexNames?: ReadonlySet<string>;
         }
       | undefined
@@ -567,9 +567,14 @@ export class DynamicCollectionSchemaService {
         );
         continue;
       }
-      const live = this.uniqueIndexNameCandidates(tableName, column).find(
-        name => options?.indexNames?.has(name) === true
-      );
+      // The index the table has: under one of the names the generator uses, or the one that
+      // covers the column whatever it is called, which is what turning Unique on adopted.
+      const live =
+        this.uniqueIndexNameCandidates(tableName, column).find(
+          name => options?.indexNames?.has(name) === true
+        ) ??
+        options?.uniqueColumns?.get(column) ??
+        undefined;
       if (forDatabase && live === undefined) continue;
       // A field this dialect could never key (and `slug`, whose index every table keeps) had no
       // index of its own to drop.
@@ -831,6 +836,27 @@ export class DynamicCollectionSchemaService {
         `uq_${tableName}_${column}`,
       ]),
     ];
+  }
+
+  /**
+   * Whether this database's own run already has a column's plain index: a save that MySQL, which
+   * commits each schema statement, refused part-way can have created it while the registry still
+   * records the index off. The migration file keeps the create, since it is replayed on
+   * databases that never ran that save.
+   */
+  private indexAlreadyRun(
+    tableName: string,
+    column: string,
+    options:
+      | { planFor?: "artefact" | "database"; indexNames?: ReadonlySet<string> }
+      | undefined
+  ): boolean {
+    return (
+      options?.planFor === "database" &&
+      this.indexNameCandidates(tableName, column).some(
+        name => options.indexNames?.has(name) === true
+      )
+    );
   }
 
   private indexNameCandidates(tableName: string, column: string): string[] {
@@ -1354,7 +1380,7 @@ ${allColumnDefs.join(",\n")}
        * already enforces it (left by a save MySQL refused part-way) is not created twice, and an
        * index that merely holds the expected name on another column is not taken for it.
        */
-      uniqueColumns?: ReadonlySet<string>;
+      uniqueColumns?: ReadonlyMap<string, string | null>;
       /**
        * Physical table name per referenced field-group slug, resolved from the
        * REGISTRY by the caller. A field group's data table is whatever the
@@ -1429,10 +1455,12 @@ ${allColumnDefs.join(",\n")}
       );
 
       for (const column of lifecycleColumns) {
-        // A column this table already has is not added again: a save that MySQL, which commits
-        // each schema statement, refused part-way can have added it while the registry still
-        // records the lifecycle as off, and adding a column twice fails on every dialect.
-        if (hasStatus && options?.liveColumnTypes?.has(column.name)) continue;
+        // This database's own run skips a lifecycle column change the table already shows: a
+        // save that MySQL, which commits each schema statement, refused part-way can have added
+        // or dropped it while the registry still records the lifecycle as before. The migration
+        // file keeps both, since it is replayed on databases that never ran that save.
+        const present = options?.liveColumnTypes?.has(column.name) === true;
+        if (options?.planFor === "database" && present === hasStatus) continue;
         statements.push(
           hasStatus
             ? `ALTER TABLE ${this.quoteIdentifier(tableName)} ADD COLUMN ${renderSystemColumnSql(column, name => this.quoteIdentifier(name))};`
@@ -1683,7 +1711,12 @@ ${allColumnDefs.join(",\n")}
                 field
               )
           );
-          if (toggleIndexSql) statements.push(toggleIndexSql);
+          if (
+            toggleIndexSql &&
+            !this.indexAlreadyRun(tableName, idxCol, options)
+          ) {
+            statements.push(toggleIndexSql);
+          }
         } else {
           // Same guard as the removal path: turning an index off that the table never carried
           // aborts on MySQL, which cannot express `DROP INDEX IF EXISTS`.
@@ -2569,12 +2602,16 @@ ${allColumnDefs.join(",\n")}
     fields: FieldDefinition[]
   ): {
     indexNames: Set<string>;
-    uniqueColumns: Set<string>;
+    uniqueColumns: Map<string, string | null>;
     foreignKeysByColumn: Map<string, string[]>;
   } {
     const indexNames = new Set<string>();
-    // The key and the system slug index are unique on every generated table.
-    const uniqueColumns = new Set<string>(["id", "slug"]);
+    // The key and the system slug index are unique on every generated table, and no field's
+    // Unique toggle drops either.
+    const uniqueColumns = new Map<string, string | null>([
+      ["id", null],
+      ["slug", null],
+    ]);
     const foreignKeysByColumn = new Map<string, string[]>();
     // The system indexes every generated table carries, named as `generateMigrationSQL` names
     // them, so a system column removed by an edit is not treated as unindexed.
@@ -2600,7 +2637,7 @@ ${allColumnDefs.join(",\n")}
       const uniqueName = this.plannedUniqueIndexName(tableName, field);
       if (uniqueName !== null) {
         indexNames.add(uniqueName);
-        uniqueColumns.add(column);
+        uniqueColumns.set(column, uniqueName);
       }
       if (field.type === "relationship" && field.options?.target) {
         foreignKeysByColumn.set(column, [
