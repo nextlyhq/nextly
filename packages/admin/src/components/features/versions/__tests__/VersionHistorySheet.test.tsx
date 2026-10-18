@@ -17,7 +17,6 @@ const {
   setLabelMock,
   mutateMock,
   toastErrorMock,
-  compareDialogMock,
 } = vi.hoisted(() => ({
   useVersionsMock: vi.fn(),
   useVersionMock: vi.fn(),
@@ -25,17 +24,6 @@ const {
   setLabelMock: vi.fn(),
   mutateMock: vi.fn(),
   toastErrorMock: vi.fn(),
-  compareDialogMock: vi.fn(),
-}));
-
-// Stubbed so these tests stay about the panel. The real dialog fetches a diff
-// of its own, which the panel neither requests nor knows about; its own suite
-// covers what it renders.
-vi.mock("../VersionCompareDialog", () => ({
-  VersionCompareDialog: (props: Record<string, unknown>) => {
-    compareDialogMock(props);
-    return <div data-testid="compare-dialog" />;
-  },
 }));
 
 vi.mock("@admin/components/ui", async () => {
@@ -115,7 +103,7 @@ function renderSheet(props: Record<string, unknown> = {}) {
  */
 function titleRow(): HTMLElement {
   const title = screen.getByRole("heading", {
-    name: /^(Version history|Version \d+)$/,
+    name: /^(History|Version \d+)$/,
   });
   const row = title.closest("div");
   if (!row) throw new Error("panel title row not found");
@@ -280,8 +268,8 @@ describe("VersionHistorySheet", () => {
   });
 
   it("keeps a retry reachable from a preview when the head refresh fails", async () => {
-    // In preview the freshness gate hides "Compare with current"; the retry has
-    // to remain reachable or the comparison cannot recover without a reopen.
+    // In preview the freshness gate withholds the comparison; the retry has to
+    // remain reachable or the comparison cannot recover without a reopen.
     const refetch = vi.fn();
     useVersionsMock.mockReturnValue(
       listState({
@@ -301,43 +289,13 @@ describe("VersionHistorySheet", () => {
     await userEvent.click(screen.getByRole("button", { name: /Version 2/ }));
 
     expect(
-      screen.queryByRole("button", { name: /Compare with current/ })
+      screen.queryByRole("button", { name: /Open full comparison/ })
     ).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: /Try again/ }));
     expect(refetch).toHaveBeenCalled();
   });
 
-  it("opens the compare dialog with the pair, without replacing the panel", async () => {
-    useVersionsMock.mockReturnValue(
-      listState({
-        data: {
-          pages: [
-            { items: [version(3), version(2)], meta: { hasNext: false } },
-          ],
-        },
-      })
-    );
-    useVersionMock.mockReturnValue(detailState({ data: { snapshot: {} } }));
-
-    renderSheet();
-    await userEvent.click(screen.getByRole("button", { name: /Version 2/ }));
-    await userEvent.click(
-      screen.getByRole("button", { name: /Compare with current/ })
-    );
-
-    // Older on the left: "compare with current" reads version 2 against the
-    // head, so the chosen version is `from` and the head is `to`.
-    expect(compareDialogMock).toHaveBeenCalledWith(
-      expect.objectContaining({ open: true, from: 2, to: 3 })
-    );
-    // The preview stays underneath rather than being swapped out, which is what
-    // makes dismissing the dialog a return rather than a navigation.
-    expect(
-      screen.getByRole("button", { name: /Back to history/ })
-    ).toBeInTheDocument();
-  });
-
-  it("compares against the next older version of the same locale", async () => {
+  it("offers no compare dialog: a comparison is read on its own page", async () => {
     useVersionsMock.mockReturnValue(
       listState({
         data: {
@@ -351,13 +309,15 @@ describe("VersionHistorySheet", () => {
 
     renderSheet();
     await userEvent.click(screen.getByRole("button", { name: /Version 3/ }));
-    await userEvent.click(
-      screen.getByRole("button", { name: /Compare with previous/ })
-    );
 
-    expect(compareDialogMock).toHaveBeenCalledWith(
-      expect.objectContaining({ from: 2, to: 3 })
-    );
+    // The version is chosen, so this is where the dialog was offered from.
+    expect(
+      screen.getByRole("button", { name: /Open full comparison/ })
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /Compare with/ })
+    ).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: /Compar/ })).toBeNull();
   });
 
   it("offers the full comparison only once the pair it would open is known", async () => {
@@ -436,21 +396,6 @@ describe("VersionHistorySheet", () => {
     // being present is not enough — it has to still be reachable.
     expect(screen.getByText("Version 1")).toBeInTheDocument();
     expect(reachable(screen.getByLabelText("Title"))).toBe(true);
-  });
-
-  it("mounts no compare dialog until one is asked for", () => {
-    useVersionsMock.mockReturnValue(
-      listState({
-        data: { pages: [{ items: [version(1)], meta: { hasNext: false } }] },
-      })
-    );
-
-    renderSheet();
-
-    // The assertion above is only meaningful if the stub is absent by default;
-    // a dialog mounted from the start would satisfy it without any click.
-    expect(screen.queryByTestId("compare-dialog")).toBeNull();
-    expect(compareDialogMock).not.toHaveBeenCalled();
   });
 
   it("offers more only when another page exists", () => {

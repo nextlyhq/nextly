@@ -5,11 +5,8 @@
  * looking at one thing — this document's history — and nesting dialogs would
  * trap focus twice for what is conceptually a step, not a new context.
  *
- * Comparing is the exception, and for a reason about geometry rather than about
- * navigation. A comparison is two columns of field values; this panel is 480px
- * wide, which cannot hold two, so hosting it here forced the diff to stack.
- * `VersionCompareDialog` gives it a surface sized for the job, mounted from
- * here on the same terms as the restore and rename dialogs.
+ * A comparison is not shown here: it is read on its own page, whose address
+ * names the pair, opened from the version being previewed.
  *
  * @module components/features/versions/VersionHistorySheet
  */
@@ -44,8 +41,7 @@ import type { VersionScope } from "@admin/services/versionApi";
 
 import { useDocumentHistory } from "./document-history-context";
 import { RestoreConfirmDialog } from "./RestoreConfirmDialog";
-import { predecessorOf, sameLocaleVersions } from "./version-pairing";
-import { VersionCompareDialog } from "./VersionCompareDialog";
+import { predecessorOf } from "./version-pairing";
 import { versionsHref } from "./VersionComparePage";
 import { VersionLabelDialog } from "./VersionLabelDialog";
 import { VersionLocaleFilter } from "./VersionLocaleFilter";
@@ -144,14 +140,6 @@ export function VersionHistorySheet({
   restoreRefused = false,
 }: VersionHistorySheetProps) {
   const [selected, setSelected] = useState<number | null>(null);
-  // The version pair being compared (older -> newer), or null when not
-  // comparing. Comparing opens a dialog over this panel rather than replacing
-  // its body, so the panel stays in whichever of its two states it was in and
-  // is there again on dismiss.
-  const [comparing, setComparing] = useState<{
-    from: number;
-    to: number;
-  } | null>(null);
   const [confirmingRestore, setConfirmingRestore] = useState(false);
   // The version being renamed, which is not necessarily the one being previewed
   // — an editor can name a row without opening it.
@@ -167,7 +155,6 @@ export function VersionHistorySheet({
   useEffect(() => {
     if (!open) {
       setSelected(null);
-      setComparing(null);
       setConfirmingRestore(false);
       // The rename dialog is mounted outside the panel, so closing the panel
       // does not close it. Left set, it would stay on screen over a dismissed
@@ -197,7 +184,6 @@ export function VersionHistorySheet({
   if (renderedScopeId !== scopeId) {
     setRenderedScopeId(scopeId);
     setSelected(null);
-    setComparing(null);
     setConfirmingRestore(false);
     setRenaming(null);
     // A different document may not have the previously filtered locale at all,
@@ -319,14 +305,9 @@ export function VersionHistorySheet({
     entityLocalized ??
     (localeFilter !== undefined || versions.some(v => v.locale !== null));
 
-  // Compare targets for the version being previewed. A comparison must stay
-  // within one locale (the server rejects a cross-locale pair), so both the
-  // "current" and "previous" targets are drawn only from versions sharing the
-  // selected row's locale. "Previous" is the next-older row in that set, not
+  // The comparison target for the version being previewed: the next-older
+  // version in the same language (the server rejects a cross-locale pair), not
   // `selected - 1`, since retention can leave gaps in the numbering.
-  const localeVersions =
-    selected === null ? [] : sameLocaleVersions(versions, selected);
-  const latestVersionNo = localeVersions[0]?.versionNo ?? null;
   // The comparison page's rail asks this same question, so it is answered in
   // one place. Passing `false` for "more pages exist" is deliberate here: this
   // panel pages forward on its own below until the previous target resolves or
@@ -342,19 +323,10 @@ export function VersionHistorySheet({
   // whose `from` 404s.
   const selectedPresent =
     selected !== null && versions.some(v => v.versionNo === selected);
-  // "Current" is only offered once the list has revalidated: reopening after a
-  // save serves the cached head while `staleTime: 0` refetches, and comparing
-  // against that stale head would mislabel an outdated version as current. A
-  // failed revalidation clears `isRefetching` but leaves the head stale, so
-  // `isRefetchError` keeps the action disabled until a fetch succeeds.
-  const canCompareCurrent =
-    selectedPresent &&
-    latestVersionNo !== null &&
-    selected !== latestVersionNo &&
-    !isRefetching &&
-    !isRefetchError;
-  // Same freshness gate as "current": a stale or failed revalidation could point
-  // "previous" at a version retention has already pruned, 404-ing the diff.
+  // Only offered once the list has revalidated: a stale or failed revalidation
+  // could point "previous" at a version retention has already pruned, 404-ing
+  // the comparison. A failed revalidation clears `isRefetching` but leaves the
+  // list stale, so `isRefetchError` keeps it withheld until a fetch succeeds.
   const canComparePrevious =
     selectedPresent &&
     previousVersionNo !== null &&
@@ -385,8 +357,8 @@ export function VersionHistorySheet({
     // Do not page while a head revalidation is running OR has failed. Firing
     // `fetchNextPage` mid-revalidation would cancel it (default `cancelRefetch`),
     // and firing it after a failed one would clear `isRefetchError` without
-    // refreshing the stale head, both re-enabling "Compare with current" against
-    // a stale head. Paging resumes once a revalidation succeeds.
+    // refreshing the stale head, both re-enabling the comparison against a
+    // stale head. Paging resumes once a revalidation succeeds.
     if (isRefetching || isRefetchError) return;
     const search = previousSearchRef.current;
     // Keyed by document too: version numbers repeat across documents, so a spent
@@ -495,7 +467,7 @@ export function VersionHistorySheet({
         <SheetHeader className="p-4 border-b border-border">
           <div className="flex items-center justify-between gap-2">
             <SheetTitle>
-              {selected === null ? "Version history" : `Version ${selected}`}
+              {selected === null ? "History" : `Version ${selected}`}
             </SheetTitle>
             {/* Locale filter, only while browsing the list (a chosen version is
                 already locale-fixed) and only for a document whose own history
@@ -506,11 +478,10 @@ export function VersionHistorySheet({
                 <VersionLocaleFilter
                   value={localeFilter}
                   onChange={locale => {
-                    // Changing the visible locale set can drop the previewed or
-                    // compared version out of view, so clear both modes.
+                    // Changing the visible locale set can drop the previewed
+                    // version out of view, so return to the list.
                     setLocaleFilter(locale);
                     setSelected(null);
-                    setComparing(null);
                   }}
                 />
               )}
@@ -665,12 +636,9 @@ export function VersionHistorySheet({
             >
               Back to history
             </Button>
-            {/* Compare is offered from the preview, where a version is already
-                  chosen: against the one before it, and against the current. */}
-            {/* The full comparison, on a page of its own. The dialog below
-                stays for a quick look without leaving the document; this is
-                for reading a change properly, and its address names the pair
-                so it can be shared. */}
+            {/* The full comparison, on a page of its own, from the version
+                already chosen against the one before it: its address names
+                the pair so it can be shared. */}
             {/* Only offered once the pair it would open is known. Omitting the
                 pair does not open "this version with nothing"; the destination
                 reads an absent pair as the two NEWEST versions, so the control
@@ -695,28 +663,6 @@ export function VersionHistorySheet({
                 }
               >
                 Open full comparison
-              </Button>
-            ) : null}
-            {canComparePrevious && previousVersionNo !== null ? (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() =>
-                  setComparing({ from: previousVersionNo, to: selected })
-                }
-              >
-                Compare with previous
-              </Button>
-            ) : null}
-            {canCompareCurrent && latestVersionNo !== null ? (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() =>
-                  setComparing({ from: selected, to: latestVersionNo })
-                }
-              >
-                Compare with current
               </Button>
             ) : null}
             {/* Restoring is offered in the BANNER over the version being
@@ -747,23 +693,6 @@ export function VersionHistorySheet({
           onConfirm={() => {
             if (canRestore && !restoreRefused) restore.mutate(selected);
           }}
-        />
-      ) : null}
-
-      {/* Mounted on the same terms as the restore dialog. Its own body is far
-          wider than this panel, which is the whole reason a comparison is not a
-          mode of the panel. */}
-      {comparing !== null ? (
-        <VersionCompareDialog
-          open
-          onOpenChange={open => {
-            // Dismissing returns to the version that was on screen, not the
-            // list: the panel behind was never navigated away from.
-            if (!open) setComparing(null);
-          }}
-          scope={scope}
-          from={comparing.from}
-          to={comparing.to}
         />
       ) : null}
 

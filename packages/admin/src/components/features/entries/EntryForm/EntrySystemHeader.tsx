@@ -626,7 +626,7 @@ export function EntrySystemHeader({
       ? [
           {
             id: "history",
-            label: "Version history",
+            label: "History",
             onSelect: () => setHistoryOpen(true),
           },
         ]
@@ -693,14 +693,16 @@ export function EntrySystemHeader({
             {showHistory ? (
               <Button
                 type="button"
-                variant="outline"
+                variant={historyOpen ? "secondary" : "outline"}
                 size="sm"
-                className={cn("px-2", WIDE_ONLY)}
-                aria-label="Version history"
-                title="Version history"
+                className={cn("gap-1.5", WIDE_ONLY)}
+                // Pressed while history is open, so the control says which
+                // state the document is in as well as offering to change it.
+                aria-pressed={historyOpen}
                 onClick={() => setHistoryOpen(true)}
               >
                 <History className="h-4 w-4" aria-hidden="true" />
+                History
               </Button>
             ) : null}
             {toolbarSlot}
