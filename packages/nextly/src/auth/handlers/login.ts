@@ -19,10 +19,11 @@ import { runStrategyChain } from "../pipeline/strategy-chain";
 import type { AuthStrategy } from "../pipeline/types";
 
 import {
+  csrfFailure,
   jsonResponse,
-  stallResponse,
   loginFailureResponse,
   recordLoginFailure,
+  stallResponse,
 } from "./handler-utils";
 import {
   issueSession,
@@ -233,7 +234,7 @@ export async function handleLogin(
       return jsonResponse(
         403,
         {
-          error: { code: "CSRF_FAILED", message: csrfResult.error },
+          error: csrfFailure(request, csrfResult),
         },
         { "x-request-id": requestId }
       );
