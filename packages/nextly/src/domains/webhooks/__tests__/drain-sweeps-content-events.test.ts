@@ -25,8 +25,8 @@ function idleDb(): never {
 }
 
 /**
- * An adapter whose record holds one subject deleted long ago: its two events,
- * the deletion last, until they are removed.
+ * An adapter whose record holds one subject deleted long ago: an event its
+ * deletion stamped, and the deletion, until they are removed.
  */
 function oneDeletedSubject() {
   let left = true;
@@ -36,17 +36,9 @@ function oneDeletedSubject() {
     adapter: {
       select: async (table: string, query?: { limit?: number }) => {
         if (table !== "nextly_content_events" || !left) return [];
-        // The oldest deletion asks for one row; its life's batch for more.
-        return query?.limit === 1
-          ? [
-              {
-                id: "e2",
-                subjectKind: "collection",
-                subjectSlug: "posts",
-                subjectId: "d1",
-              },
-            ]
-          : [{ id: "e1" }, { id: "e2" }];
+        // The oldest deletion asks for one row; its life's batch, for the
+        // events the deletion stamped other than itself.
+        return query?.limit === 1 ? [{ id: "e2" }] : [{ id: "e1" }];
       },
       delete: async (table: string) => {
         deleted.push(table);
