@@ -13,10 +13,12 @@
 process.env.NEXTLY_SECRET = "test-secret-must-be-at-least-32-characters-long!!";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+import { and, eq } from "drizzle-orm";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { buildAuthRouterDeps } from "../../../auth/handlers/deps-bridge";
 import { handleLogin } from "../../../auth/handlers/login";
+import { handleSetup } from "../../../auth/handlers/setup";
 import { getDialectTables } from "../../../database/index";
 import { generateSqliteCoreTableStatements } from "../../../database/sqlite-core-tables";
 import { superAdminRoleHeld } from "../../../domains/users/services/last-super-admin";
@@ -44,6 +46,18 @@ interface UsersDb {
   };
   insert(table: unknown): {
     values(row: Record<string, unknown>): Promise<unknown>;
+  };
+}
+
+/** The narrow view the administrator count is read through. */
+interface HoldersDb {
+  select(projection: Record<string, unknown>): {
+    from(table: unknown): {
+      innerJoin(
+        table: unknown,
+        on: unknown
+      ): { where(condition: unknown): Promise<Array<{ userId: unknown }>> };
+    };
   };
 }
 
@@ -152,6 +166,58 @@ describe.each(getConfiguredTestDialects())(
         "visitor@example.com",
       ]);
       expect(await signIn(t, "ada@example.com")).toBe(200);
+    });
+
+    /** How many accounts hold the administrator role. */
+    async function administrators(t: TestNextly): Promise<number> {
+      const { roles, userRoles } = getDialectTables();
+      const rows = await (t.adapter.getDrizzle() as unknown as HoldersDb)
+        .select({ userId: userRoles.userId })
+        .from(userRoles)
+        .innerJoin(roles, eq(roles.id, userRoles.roleId))
+        .where(and(eq(roles.slug, "super-admin")));
+      return rows.length;
+    }
+
+    /** A web setup request, as the setup form sends it. */
+    function webSetup(t: TestNextly, email: string): Promise<Response> {
+      const deps = buildAuthRouterDeps(
+        t.getService as unknown as (name: string) => unknown
+      );
+      return handleSetup(
+        new Request(`${ORIGIN}/admin/api/auth/setup`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Origin: ORIGIN,
+            cookie: "nextly_csrf=tok",
+          },
+          body: JSON.stringify({
+            csrfToken: "tok",
+            email,
+            name: "Web",
+            password: PASSWORD,
+          }),
+        }),
+        deps
+      );
+    }
+
+    it("leaves exactly one administrator when the command and web setup race", async () => {
+      const t = await emptyInstall();
+      const [outcome, response] = await Promise.all([
+        createFirstAdministrator(setupOf(t), {
+          email: "cli@example.com",
+          name: "Cli",
+          password: PASSWORD,
+        }),
+        webSetup(t, "web@example.com"),
+      ]);
+      expect(await administrators(t)).toBe(1);
+      // Exactly one of them succeeded.
+      expect([outcome === "created", response.ok].filter(Boolean)).toHaveLength(
+        1
+      );
     });
   }
 );
