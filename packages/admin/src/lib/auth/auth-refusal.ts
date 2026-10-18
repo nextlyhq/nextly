@@ -22,12 +22,22 @@ export type AuthRefusal =
    * The origin check refused the address the page is open at. `href` is the
    * same page at the app's own address.
    */
-  | { kind: "origin"; pageOrigin: string; appOrigin: string; href: string }
+  | {
+      kind: "origin";
+      pageOrigin: string;
+      appOrigin: string;
+      /**
+       * Absent on a page whose address carries a query, such as a reset or
+       * invitation token: the query is not sent elsewhere, and the page is
+       * unusable without it, so the person reopens the link they were sent.
+       */
+      href?: string;
+    }
   /**
-   * The server reads its own address as a loopback one while the page is on a
-   * real host: a server behind a proxy that has not been told its public
-   * address. Sending the person to the loopback address would not help, so
-   * this names the setting instead, and offers no link.
+   * The two addresses are not two names for this machine: a server behind a
+   * proxy or in a container reports the address it listens on, which the
+   * person's browser may not reach at all. So this names the setting instead,
+   * and offers no link.
    */
   | { kind: "unlisted"; pageOrigin: string; appOrigin: string }
   /** Refused for a reason the form has nothing more to say about. */
@@ -76,18 +86,22 @@ export function authRefusalOf(
 function originRefusal(reported: unknown, page: PagePlace): AuthRefusal | null {
   const appOrigin = webOrigin(reported);
   if (appOrigin === undefined || appOrigin === page.origin) return null;
-  if (isLoopback(appOrigin) && !isLoopback(page.origin)) {
+  // A link is offered only between two names for this machine, the one case
+  // where the other address is known to reach the same server.
+  if (!isLoopback(appOrigin) || !isLoopback(page.origin)) {
     return { kind: "unlisted", pageOrigin: page.origin, appOrigin };
   }
-  return {
-    kind: "origin",
-    pageOrigin: page.origin,
-    appOrigin,
-    // The path only. The query can hold a secret (a password-reset or
-    // invitation token), and it is not sent anywhere but where the person
-    // already is.
-    href: `${appOrigin}${page.pathname}`,
-  };
+  // The query can hold a secret (a password-reset or invitation token), and
+  // it is never sent to another address; without it such a page cannot work,
+  // so no link is offered for it.
+  return page.search === ""
+    ? {
+        kind: "origin",
+        pageOrigin: page.origin,
+        appOrigin,
+        href: `${appOrigin}${page.pathname}`,
+      }
+    : { kind: "origin", pageOrigin: page.origin, appOrigin };
 }
 
 /** Whether an origin names this machine: `localhost`, a `*.localhost`, or a loopback IP. */

@@ -32,12 +32,19 @@ export function AuthRefusalNotice({ refusal }: AuthRefusalNoticeProps) {
             app only accepts it at{" "}
             <code className="font-mono">{refusal.appOrigin}</code>.
           </p>
-          <a
-            href={refusal.href}
-            className="mt-2 inline-block font-medium underline underline-offset-2"
-          >
-            Open this page at {refusal.appOrigin}
-          </a>
+          {refusal.href ? (
+            <a
+              href={refusal.href}
+              className="mt-2 inline-block font-medium underline underline-offset-2"
+            >
+              Open this page at {refusal.appOrigin}
+            </a>
+          ) : (
+            <p className="mt-2">
+              Open the link you were sent again, at{" "}
+              <code className="font-mono">{refusal.appOrigin}</code>.
+            </p>
+          )}
         </AlertDescription>
       </Alert>
     );

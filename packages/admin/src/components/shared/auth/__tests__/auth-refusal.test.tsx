@@ -93,16 +93,45 @@ describe("reading a refusal", () => {
     }
   });
 
-  it("never carries the page's query to the other address", () => {
-    // A reset or invitation page holds its token in the query.
+  it("offers no link for a page whose address carries a query", () => {
+    // A reset or invitation page holds its token in the query. The token is
+    // never sent to another address, and the page can't work without it, so
+    // the person is told to reopen the link they were sent.
     const refusal = authRefusalOf(originRefusal(), {
       origin: "http://127.0.0.1:3000",
       pathname: "/admin/reset-password",
       search: "?token=secret-reset-token",
     });
-    expect(refusal).toMatchObject({
+    expect(refusal).toEqual({
       kind: "origin",
-      href: "http://localhost:3000/admin/reset-password",
+      pageOrigin: "http://127.0.0.1:3000",
+      appOrigin: "http://localhost:3000",
+    });
+  });
+
+  it("offers no link to an address that is not this machine's", () => {
+    // A server in a container reports the name it listens on, which the
+    // browser may not reach.
+    const container = parseApiError(
+      {
+        error: {
+          code: "CSRF_FAILED",
+          message: "Invalid request origin",
+          data: { reason: "origin", appOrigin: "http://nextly:3000" },
+        },
+      },
+      403
+    );
+    expect(
+      authRefusalOf(container, {
+        origin: "https://example.com",
+        pathname: "/admin/login",
+        search: "",
+      })
+    ).toEqual({
+      kind: "unlisted",
+      pageOrigin: "https://example.com",
+      appOrigin: "http://nextly:3000",
     });
   });
 
