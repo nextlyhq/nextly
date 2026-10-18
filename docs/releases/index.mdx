@@ -12,11 +12,11 @@ can put new pages live and retire old ones in the same moment.
 
 ## Availability
 
-|            |                                                                                                                                |
-| ---------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| Built in   | No plugin required                                                                                                             |
-| Admin      | A **Releases** section with a calendar view, and an "Add to release" action on documents                                       |
-| Permission | Scheduling requires publish access. A key scoped only to publishing releases can schedule without holding a general read grant |
+|            |                                                                                                                                                                                           |
+| ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Built in   | No plugin required                                                                                                                                                                        |
+| Admin      | A **Releases** section with a calendar view, and an "Add to release" action on documents                                                                                                  |
+| Permission | Scheduling requires publish access. A key scoped only to publishing releases can schedule without holding a general read grant. Renaming and deleting each have a permission of their own |
 
 ## What it is not
 
@@ -36,6 +36,8 @@ can put new pages live and retire old ones in the same moment.
 | Apply       | On a background-jobs pass after that time, every member's action is applied |
 | Publish now | A draft or scheduled release is run at once instead of waiting for its time |
 | Cancel      | An unapplied release can be cancelled                                       |
+| Rename      | The title and description can be changed in any state                       |
+| Delete      | A draft or cancelled release can be deleted, with its documents             |
 
 A document is checked when it is added, the same way over REST and from the Direct API. It
 must exist, and the person adding it must be allowed to read it. Its collection or Single
@@ -97,10 +99,55 @@ a release that was already overdue goes out with it.
 
 A **published** release is the record of what went live, and a **cancelled** one the record
 of a launch called off. Neither changes again: no documents are added or removed, it is not
-scheduled again, and Publish now refuses it. To try again, create a new release.
+scheduled again, and Publish now refuses it. To try again, create a new release. Either can
+still be renamed, and a cancelled one can be deleted. A published one is never deleted.
 
 A **stopped** release has not run. Remove or fix the documents that stopped it, then schedule
 it again. Publish now refuses it until then, so the fix is checked before anything goes out.
+
+## Renaming and deleting a release
+
+<Callout type="info">
+  Renaming and deleting are **experimental**: their names and answers may change
+  before releases are finished.
+</Callout>
+
+A release's title and description can be changed in any state, by anyone holding
+`update-content-releases`. A draft or cancelled release can be deleted, documents and all, by
+anyone holding `delete-content-releases`.
+
+|            | Rename                                                        | Delete                           |
+| ---------- | ------------------------------------------------------------- | -------------------------------- |
+| REST       | `PATCH /api/releases/:id` with `title`, `description` or both | `DELETE /api/releases/:id`       |
+| Direct API | `nextly.releases.update({ id, title, description })`          | `nextly.releases.delete({ id })` |
+| Permission | `update-content-releases`                                     | `delete-content-releases`        |
+
+A rename answers with the release as it now reads. The title follows the rules creating a
+release uses: it can't be empty, and it can be at most 255 characters. A `description` of `null`
+clears it. A body that names any other field is refused, since a state is changed by its own
+route. A rename that changes nothing writes nothing.
+
+Only a draft or a cancelled release can be deleted. A scheduled or stopped one is refused with
+`409 Conflict`: cancel it first. A published release is refused too, and always will be: it is
+the record of what went live. Deleting a release that does not exist answers `404`.
+
+Both are recorded in the activity log, under `content-releases`, with who made the change.
+A change made through an API key is not recorded there yet.
+
+### Who holds the two permissions after an upgrade
+
+The two permissions are created the first time an existing site boots on a version that has
+them. Each is granted then to the roles that already held the power it splits off, so nobody
+gains or loses anything:
+
+- super-admins hold both;
+- every role holding `create-content-releases` gains `update-content-releases`, since renaming
+  was part of assembling a release;
+- every role holding `publish-content-releases` gains `delete-content-releases`, since a
+  release nobody wanted was abandoned by cancelling it.
+
+This happens once, when the permissions are created. If you take one away from a role later, a
+restart doesn't give it back.
 
 ## Listing releases
 
