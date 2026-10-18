@@ -31,19 +31,10 @@ export async function seedSuperAdmin(
     name?: string;
     silent?: boolean;
     /**
-     * Whether an account already holding `email` is made the super admin.
-     * True by default, for a seed re-run against its own account. False for a
-     * caller that must create the account itself, such as setup: an existing
-     * account there may be a stranger's sign-up, whose own password would then
-     * sign in as the administrator, so it is refused instead.
-     */
-    reuseExistingAccount?: boolean;
-    /**
      * Whether the seeder gives the account the Super Admin role itself. True
-     * by default. False for setup: the account then becomes the administrator
-     * only through the first-administrator grant its creation makes under the
-     * role row's lock, which exactly one of any accounts created together
-     * wins, so a setup that lost a race is not made a second administrator.
+     * by default. False for setup, whose account already holds it through the
+     * first-administrator grant its creation made, and which only needs the
+     * role's permissions ensured here.
      */
     assignRole?: boolean;
   }
@@ -58,7 +49,6 @@ export async function seedSuperAdmin(
     password,
     name = "Super Admin",
     silent = false,
-    reuseExistingAccount = true,
     assignRole = true,
   } = options || {};
 
@@ -90,14 +80,6 @@ export async function seedSuperAdmin(
 
   const container = new ServiceContainer(adapter as DrizzleAdapter);
 
-  // Refused before anything is written, with the generic duplicate answer.
-  // The create below is the backstop: with reuse off it never adopts an
-  // account, so one registered in between fails on the unique email instead.
-  if (!reuseExistingAccount && (await container.users.findByEmail(email))) {
-    throw NextlyError.duplicate({
-      logContext: { reason: "super-admin-email-has-an-account" },
-    });
-  }
   const roleService = container.roles;
   const permissionService = container.permissions;
   const rolePermissionService = container.rolePermissions;
@@ -112,9 +94,7 @@ export async function seedSuperAdmin(
   try {
     // Step 1: Check if super admin user already exists
     log(" Checking for existing super admin user...");
-    const existingUser = reuseExistingAccount
-      ? await userService.findByEmail(email)
-      : null;
+    const existingUser = await userService.findByEmail(email);
 
     let userId: string;
 
