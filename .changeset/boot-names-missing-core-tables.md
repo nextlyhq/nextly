@@ -35,7 +35,6 @@ release can add core tables, and an existing database gets them only through
 start in silence, and the first write that needed a missing table failed far
 from the cause (deleting a document, for one, rolls back). It now logs one
 warning naming every missing core table and the command that creates them,
-beside the existing warning for missing columns, and keeps booting. A boot
-that reconciles the core schema itself (the development apply, or
-production's opt-in `db.runMigrationsOnBoot`) gives neither warning, since
-what is missing is about to be created.
+beside the existing warning for missing columns, and keeps booting. A
+production boot that runs its own migrations (`db.runMigrationsOnBoot`)
+gives neither warning, since what is missing is about to be created.

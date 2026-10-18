@@ -863,9 +863,11 @@ async function registerServicesOnce(
   const schemaRegistry = await initializeSchemaRegistry(
     adapter,
     bootExtensionSchema,
-    // Whether this boot reconciles the core schema itself later on, so the
-    // check that runs first does not tell the operator to do it.
-    bootApplyEnabled() || bootMigratesCore(config.db)
+    // Whether this boot migrates the core schema itself later on, so the
+    // check that runs first does not tell the operator to do it. Production's
+    // opt-in only: the development apply skips the core run in a project with
+    // no migrations, where the warning is the only sign of what is missing.
+    bootMigratesCore(config.db)
   );
 
   // Publish the webhook recording policy from the config INDEPENDENTLY of the
