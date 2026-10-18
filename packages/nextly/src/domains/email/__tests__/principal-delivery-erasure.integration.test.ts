@@ -345,6 +345,66 @@ describe.each(getConfiguredTestDialects())(
       expect(written[0].principalId).toMatch(/^[0-9a-f]{64}$/);
     }, 120_000);
 
+    it("keeps a deletion report still running when the deletion email's record fails beside it", async () => {
+      // The report and the email start together on the plugin's transaction,
+      // so the report is still making its statements when the email's record
+      // fails on the removed provider and is rolled back to its savepoint. A
+      // rollback reaching into the report would undo its later writes while
+      // the transaction still committed; failing the transaction instead
+      // would lose the deletion loudly. Neither may happen: the record waits
+      // for the report, and both commit.
+      const t = await boot(dialect);
+      const gone = await person("acc_report_in_flight");
+      const [provider] = await t.adapter.select<{ id: string }>(
+        "email_providers"
+      );
+      duringSend = async () => {
+        duringSend = undefined;
+        await t.adapter.delete("email_providers", {
+          and: [{ column: "id", op: "=", value: provider.id }],
+        });
+      };
+
+      const written = await added(t, () =>
+        plugin().db.transaction(async tx => {
+          await Promise.all([
+            plugin().principals!.reportDeleted(gone, { tx }),
+            plugin().services.email.sendWithTemplate(
+              "accounts-deleted",
+              SHARED,
+              {},
+              { person: gone }
+            ),
+          ]);
+        })
+      );
+
+      // The record, retried and written erased: the transaction committed.
+      expect(written).toHaveLength(1);
+      expect(written[0].recipientHash).toBe(ERASED_RECIPIENT_HASH);
+      // And the report committed whole: a later record for the person is
+      // erased as it is written, which only a committed report decides.
+      await t.nextly.emailProviders.create({
+        data: {
+          name: "Capturing again",
+          type: "capturing-mailer",
+          fromEmail: "from@example.com",
+          configuration: { apiKey: "throwaway-test-key" },
+          isDefault: true,
+        },
+      });
+      const later = await added(t, () =>
+        plugin().services.email.sendWithTemplate(
+          "accounts-deleted",
+          SHARED,
+          {},
+          { person: gone }
+        )
+      );
+      expect(later).toHaveLength(1);
+      expect(later[0].recipientHash).toBe(ERASED_RECIPIENT_HASH);
+    }, 120_000);
+
     it("keeps the deletion when the deletion email's record fails in the reporting transaction", async () => {
       // The provider is removed after the send resolved it and before its
       // record is written, so the first insert breaks the provider reference
