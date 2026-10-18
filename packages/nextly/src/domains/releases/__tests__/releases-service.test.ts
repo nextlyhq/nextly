@@ -1437,7 +1437,12 @@ describe("ReleasesService.delete deletes only a release that never ran", () => {
       repo.findReleases.mockResolvedValue([
         { id: "r1", state, title: "Launch", revision: 1 },
       ]);
-      await svc.delete("r1", ADMIN);
+      // Answered as it was, for the mutation envelope.
+      expect(await svc.delete("r1", ADMIN)).toMatchObject({
+        id: "r1",
+        title: "Launch",
+        state,
+      });
       expect(repo.deleteRelease).toHaveBeenCalledWith("r1");
       expect(deps.recordActivity).toHaveBeenCalledWith({
         action: "delete",

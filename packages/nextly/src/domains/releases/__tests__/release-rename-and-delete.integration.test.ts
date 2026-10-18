@@ -552,6 +552,10 @@ describe.each(getConfiguredTestDialects())(
 
       const allowed = await rest(await keyHolding(t, [DELETE]), "DELETE", id);
       expect(allowed.status).toBe(200);
+      expect(await allowed.json()).toMatchObject({
+        message: "Release deleted.",
+        item: { id, title: "A draft release", state: "draft" },
+      });
       expect(await t.nextly.releases.findByID({ id })).toBeNull();
 
       // A stopped release is refused over REST as it is on the Direct API.

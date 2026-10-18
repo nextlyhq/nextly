@@ -841,8 +841,12 @@ const RELEASE_OPERATIONS: Record<
   },
 
   deleteRelease: async ({ caller, releases, releaseId }) => {
-    await releases.delete({ ...caller, id: releaseId });
-    return respondAction("Release deleted.", { releaseId });
+    // The mutation envelope with the release as it was, as a deleted entry is
+    // answered: the client can name what it just removed.
+    return respondMutation(
+      "Release deleted.",
+      await releases.delete({ ...caller, id: releaseId })
+    );
   },
 
   publishRelease: async ({ caller, releases, releaseId }) => {

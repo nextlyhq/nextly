@@ -122,7 +122,8 @@ anyone holding `delete-content-releases`.
 | Direct API | `nextly.releases.update({ id, title, description })`          | `nextly.releases.delete({ id })` |
 | Permission | `update-content-releases`                                     | `delete-content-releases`        |
 
-A rename answers with the release as it now reads. The title follows the rules creating a
+A rename answers with the release as it now reads, and a delete with the release as it was,
+each in the usual `{ message, item }` envelope. The title follows the rules creating a
 release uses: it can't be empty, and it can be at most 255 characters. A `description` of `null`
 clears it. A body that names any other field is refused, since a state is changed by its own
 route. A rename that changes nothing writes nothing.

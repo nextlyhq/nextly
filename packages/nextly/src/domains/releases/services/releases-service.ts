@@ -2159,10 +2159,11 @@ export class ReleasesService {
    * committed to a launch and is cancelled first; a published one is the
    * record of what went live and is never deleted. Each refusal is a CONFLICT
    * naming what to do instead, and a release that is not there is NOT_FOUND.
+   * Answers the release as it was before the delete.
    *
    * @experimental
    */
-  async delete(id: string, actor: ReleaseActor): Promise<void> {
+  async delete(id: string, actor: ReleaseActor): Promise<ReleaseRow> {
     await this.authorize(actor, "delete");
     const current = await this.requireRelease(id);
     if (!RELEASE_DELETABLE_FROM.includes(current.state)) {
@@ -2177,6 +2178,7 @@ export class ReleasesService {
       });
     }
     await this.recordActivity({ action: "delete", release: current }, actor);
+    return current;
   }
 
   /**

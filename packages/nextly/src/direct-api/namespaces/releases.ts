@@ -226,11 +226,12 @@ export interface ReleasesNamespace {
    * `delete-content-releases` on a checked call. A scheduled or stopped
    * release is refused with CONFLICT (cancel it first), and so is a
    * published one, which stays as the record of what went live; a release
-   * that is not there is NOT_FOUND.
+   * that is not there is NOT_FOUND. Answers the release as it was before
+   * the delete.
    *
    * @experimental
    */
-  delete(args: { id: string } & ReleaseCallerArgs): Promise<void>;
+  delete(args: { id: string } & ReleaseCallerArgs): Promise<ReleaseRow>;
 }
 
 /**

@@ -150,7 +150,12 @@ function namespace() {
         title: "Renamed",
         state: "draft",
       })),
-      delete: vi.fn(async (_args: Record<string, unknown>) => undefined),
+      // Answers the release as it was before the delete, as the service does.
+      delete: vi.fn(async (_args: Record<string, unknown>) => ({
+        id: "r1",
+        title: "Old launch",
+        state: "draft",
+      })),
       // Answers the release as it stands after the run, so a case can say
       // which way it went.
       publishNow: vi.fn(
@@ -1056,9 +1061,15 @@ describe("renaming and deleting a release", () => {
     expect(api.releases.update).not.toHaveBeenCalled();
   });
 
-  it("deletes the release in the path, with its checks turned on", async () => {
+  it("deletes the release in the path, with its checks turned on, and answers the mutation envelope", async () => {
     const res = await send("deleteRelease", "DELETE");
     expect(res.status).toBe(200);
+    // `{ message, item }`, as every other delete in this API answers, with the
+    // release as it was.
+    expect(await res.json()).toEqual({
+      message: "Release deleted.",
+      item: { id: "r1", title: "Old launch", state: "draft" },
+    });
     expect(api.releases.delete).toHaveBeenCalledWith(
       expect.objectContaining({
         id: "r1",
