@@ -348,7 +348,9 @@ describe("a file the delete cannot remove", () => {
 
   // Nothing is guessed: a thumbnail whose location the record does not show
   // is left, and named by the one identifier there is, its URL.
-  it("is named by its URL when its location cannot be worked out", async () => {
+  // Named without what can carry a secret: a signed URL's query, its
+  // fragment, and any credentials before its host.
+  it("is named by its URL when its location cannot be worked out, without its secrets", async () => {
     const bucket = new Bucket("s3");
     initializeMediaStorage({
       plugins: [
@@ -360,7 +362,10 @@ describe("a file the delete cannot remove", () => {
         },
       ],
     });
-    const thumbnailUrl = "https://elsewhere.example/2026/10/b2-thumb_x.png";
+    const located = "https://elsewhere.example/2026/10/b2-thumb_x.png";
+    const thumbnailUrl =
+      located.replace("https://", "https://key-id:key-secret@") +
+      "?X-Amz-Signature=signed-secret#frag-secret";
     await db.db.insert(db.schema.media).values({
       id: "media-1",
       filename: "2026/10/a1-x.png",
@@ -389,8 +394,9 @@ describe("a file the delete cannot remove", () => {
     const said = warn.mock.calls
       .map(args => args.map(String).join(" "))
       .join("\n");
-    expect(said).toContain(thumbnailUrl);
+    expect(said).toContain(located);
     expect(said).toContain("media-1");
+    expect(said).not.toMatch(/secret/);
   });
 });
 

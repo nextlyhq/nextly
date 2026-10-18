@@ -12,6 +12,23 @@ export interface StoredFileRemover {
   delete(filePath: string, collection?: string): Promise<void>;
 }
 
+/**
+ * A stored path or URL as a log may show it: without the credentials before
+ * a host, the query and the fragment, any of which a signed or tokenized URL
+ * can carry. What is left still finds the file.
+ */
+export function storedPathForLog(pathOrUrl: string): string {
+  const withoutQuery = pathOrUrl.replace(/[?#].*$/, "");
+  // A stored path keeps its spelling; only a URL has credentials to drop.
+  if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(withoutQuery)) return withoutQuery;
+  try {
+    const url = new URL(withoutQuery);
+    return `${url.origin}${url.pathname}`;
+  } catch {
+    return withoutQuery.replace(/\/\/[^/]*@/, "//");
+  }
+}
+
 /** A stored file that could not be removed, by its path, so it can be found. */
 export function warnNotRemoved(
   filePath: string,
@@ -19,7 +36,7 @@ export function warnNotRemoved(
   error: unknown
 ): void {
   console.warn(
-    `[MediaService] Could not remove ${filePath} of media ${mediaId}:`,
+    `[MediaService] Could not remove ${storedPathForLog(filePath)} of media ${mediaId}:`,
     error instanceof Error ? error.message : error
   );
 }
@@ -30,7 +47,7 @@ export function warnNotRemoved(
  */
 export function warnUnlocated(url: string, mediaId: string): void {
   console.warn(
-    `[MediaService] Left the thumbnail of media ${mediaId} at ${url}: its stored location could not be worked out from the record.`
+    `[MediaService] Left the thumbnail of media ${mediaId} at ${storedPathForLog(url)}: its stored location could not be worked out from the record.`
   );
 }
 
@@ -57,7 +74,7 @@ export async function removeStoredFiles(
           shouldRetry: isTransientError,
           onRetry: (err, attempt) => {
             console.warn(
-              `[MediaService] Delete retry ${attempt} for ${filePath}:`,
+              `[MediaService] Delete retry ${attempt} for ${storedPathForLog(filePath)}:`,
               err instanceof Error ? err.message : err
             );
           },

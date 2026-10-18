@@ -42,6 +42,7 @@ import { getMediaStorage } from "@nextly/storage";
 
 import {
   removeStoredFiles,
+  storedPathForLog,
   warnUnlocated,
 } from "../domains/media/remove-stored-files";
 import {
@@ -194,7 +195,7 @@ function removalFrom(
       const { failed } = await cleanup.bulkDelete(filePaths, "media");
       for (const { filePath, error } of failed) {
         console.warn(
-          `[MediaFolderService] Could not remove ${filePath}: ${error}`
+          `[MediaFolderService] Could not remove ${storedPathForLog(filePath)}: ${error}`
         );
       }
     } catch (error) {
