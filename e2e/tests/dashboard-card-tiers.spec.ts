@@ -79,16 +79,19 @@ async function sizeDashboard(page: Page, target: number): Promise<void> {
   throw new Error(`the dashboard did not reach ${target}px`);
 }
 
-async function tierAt(page: Page, dashboardWidth: number) {
+/**
+ * Size the dashboard and wait for the card to reach `tier`. Waited for rather than read: the card
+ * already has its previous tier when the resize lands, and its observer may not have fired yet.
+ */
+async function expectTierAt(page: Page, dashboardWidth: number, tier: string) {
   await sizeDashboard(page, dashboardWidth);
   const card = recentPostsCell(page).locator("[data-tier]").first();
-  await expect(card).toHaveAttribute("data-tier", /small|medium|large/);
+  await expect(card).toHaveAttribute("data-tier", tier);
   // Nothing in the card is wider than the card: it wraps rather than overflowing its cell.
   const overflow = await card.evaluate(
     element => element.scrollWidth - element.clientWidth
   );
   expect(overflow).toBeLessThanOrEqual(1);
-  return card.getAttribute("data-tier");
 }
 
 test.afterEach(async ({ page }) => {
@@ -123,7 +126,7 @@ for (const [dashboardWidth, width, tier] of CASES) {
     await gotoAdmin(page, "/");
     await placeRecentPosts(page, width);
     await page.reload();
-    expect(await tierAt(page, dashboardWidth)).toBe(tier);
+    await expectTierAt(page, dashboardWidth, tier);
   });
 }
 
@@ -143,11 +146,11 @@ test("crosses from small to medium where the bands put the edge", async ({
   await gotoAdmin(page, "/");
   await placeRecentPosts(page, "half");
   await page.reload();
-  expect(await tierAt(page, 680)).toBe("small");
-  expect(await tierAt(page, 720)).toBe("medium");
+  await expectTierAt(page, 680, "small");
+  await expectTierAt(page, 720, "medium");
 
   await placeRecentPosts(page, "full");
   await page.reload();
-  expect(await tierAt(page, 330)).toBe("small");
-  expect(await tierAt(page, 350)).toBe("medium");
+  await expectTierAt(page, 330, "small");
+  await expectTierAt(page, 350, "medium");
 });

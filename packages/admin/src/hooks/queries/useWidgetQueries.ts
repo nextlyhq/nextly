@@ -33,7 +33,7 @@ import {
   WIDGET_SOURCE_FIELD_TYPES,
   type WidgetQuery,
 } from "nextly/config";
-import { useCallback, useMemo, useRef } from "react";
+import { useMemo } from "react";
 
 import { protectedApi } from "@admin/lib/api/protectedApi";
 import type {
@@ -679,9 +679,6 @@ export function useWidgetQueries(
   queries: WidgetQueryRequest[]
 ): UseWidgetQueriesResult {
   const partitions = useMemo(() => partitionRequests(queries), [queries]);
-  // The tier each placement's answer was fetched at, written by the fetch itself, which is the
-  // only place that knows what was sent; see `fetchedTierFor`.
-  const fetchedTiers = useRef(new Map<string, SizeTier>());
 
   const results = useQueries({
     queries: partitions.map(partition => ({
@@ -697,11 +694,7 @@ export function useWidgetQueries(
         const body = await protectedApi.post<unknown>("/dashboard/query", {
           queries: partition.map(entry => entry.sized?.query ?? entry.query),
         });
-        for (const entry of partition) {
-          if (entry.sized)
-            fetchedTiers.current.set(entry.placementId, entry.sized.tier);
-        }
-        return readResults(body);
+        return { slots: readResults(body), tiers: tiersSent(partition) };
       },
       staleTime: 0,
       gcTime: 5 * 60 * 1000,
@@ -717,6 +710,10 @@ export function useWidgetQueries(
   // Both dictionaries are keyed by caller-supplied ids; see `emptyRecord`.
   const slots: Record<string, WidgetSlot> = emptyRecord();
   const cellSlots: CellSlots = emptyRecord();
+  // The tier each placement's answer was fetched at, read from the cached answer itself: the
+  // request that wrote it may belong to a render that has since left, and the answer a returning
+  // card receives is that request's, at that request's tier.
+  const fetchedTiers: Record<string, SizeTier> = emptyRecord();
   partitions.forEach((partition, index) => {
     const answer = results[index];
     if (!answer) return;
@@ -728,8 +725,14 @@ export function useWidgetQueries(
         // disagreeing about the shape. Saying so per widget is what stops the
         // trailing cards spinning silently forever -- and what keeps one bad
         // entry from throwing out of the renderer and taking the page with it.
-        fileAnswer(slots, cellSlots, entry, asSlot(answer.data[position]));
+        fileAnswer(
+          slots,
+          cellSlots,
+          entry,
+          asSlot(answer.data.slots[position])
+        );
       });
+      Object.assign(fetchedTiers, answer.data.tiers);
       return;
     }
 
@@ -768,10 +771,13 @@ export function useWidgetQueries(
 
   const settledAt = results.map(answer => answer.dataUpdatedAt);
 
-  const fetchedTierFor = useCallback(
-    (placementId: string) => fetchedTiers.current.get(placementId),
-    []
-  );
+  // Stable while the tiers are, so a caller keyed on it does not run again on every render.
+  const tiersKey = JSON.stringify(fetchedTiers);
+  const fetchedTierFor = useMemo(() => {
+    const tiers = JSON.parse(tiersKey) as Record<string, SizeTier>;
+    return (placementId: string): SizeTier | undefined =>
+      Object.hasOwn(tiers, placementId) ? tiers[placementId] : undefined;
+  }, [tiersKey]);
 
   return {
     slots,
@@ -807,6 +813,20 @@ export function useWidgetQueries(
         : null,
     fetchedTierFor,
   };
+}
+
+/**
+ * The tier each sized request in `partition` was sent at, by placement: cached with the answer,
+ * so whoever reads the answer reads the tier it was asked for.
+ */
+function tiersSent(
+  partition: readonly WidgetQueryRequest[]
+): Record<string, SizeTier> {
+  const tiers: Record<string, SizeTier> = emptyRecord();
+  for (const entry of partition) {
+    if (entry.sized) tiers[entry.placementId] = entry.sized.tier;
+  }
+  return tiers;
 }
 
 /**
