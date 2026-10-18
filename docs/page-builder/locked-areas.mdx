@@ -1,0 +1,107 @@
+---
+title: Locked areas
+description: Lock a block's slot so authors keep its structure, and choose what they may still change.
+---
+
+A block can lock one of its slots. A locked slot holds the blocks it starts with, the
+ones its `defaultBlock` creates when the block is placed, so a designed section keeps
+its shape however an author edits the page. The locks use WordPress's `templateLock`
+names and meanings, so authors who know one know the other.
+
+## The four locks
+
+```ts
+import { defineBlock } from "@nextlyhq/plugin-sdk/blocks";
+
+export const hero = defineBlock({
+  name: "acme/hero",
+  version: 1,
+  description: "A headline and a call to action, in that order.",
+  example: { props: {} },
+  slots: {
+    content: {
+      defaultBlock: [{ type: "acme/headline" }, { type: "acme/button" }],
+      lock: "all",
+    },
+  },
+  render: ({ renderSlot }) => renderSlot("content"),
+});
+```
+
+| `lock`          | Blocks can be added or removed | Blocks can be moved | What can change                |
+| --------------- | ------------------------------ | ------------------- | ------------------------------ |
+| `"insert"`      | no                             | yes                 | content and design             |
+| `"all"`         | no                             | no                  | content and design             |
+| `"contentOnly"` | no                             | no                  | content only                   |
+| `false`         | yes                            | yes                 | anything (the slot is unlocked) |
+
+A slot that declares no lock takes the lock of the slot its block sits in, so a locked
+section stays locked all the way down. `false` stops that, except beneath
+`"contentOnly"`, which nothing inside it can loosen.
+
+## Declare what is content
+
+Inside a `"contentOnly"` slot, only the props a block declares as content can change:
+its text, its media, its links. Mark them with `role: "content"`, as a WordPress block
+attribute is marked.
+
+```ts
+import { defineBlock } from "@nextlyhq/plugin-sdk/blocks";
+
+export const headline = defineBlock({
+  name: "acme/headline",
+  version: 1,
+  description: "A heading.",
+  example: { props: { text: "Title", align: "left" } },
+  props: {
+    text: { type: "text", role: "content" },
+    align: { type: "select" },
+  },
+  defaultProps: { text: "Title", align: "left" },
+  render: ({ props }) => props.text,
+});
+```
+
+The core blocks already declare theirs: a heading's text and link, an image's media,
+alt text and caption, a button's label and link, and so on.
+
+Everything else stays as the block started: its other props, its styles, classes, its
+root element's id and attributes, visibility, custom CSS and its own lock. So does whether
+it renders: a block marked as failing its migration, or at a version ahead of its
+definition's, is drawn as a placeholder, and neither can change there. A block that
+declares no content props has nothing an author can change inside a `"contentOnly"` slot.
+Its layer name stays editable, since the page never draws it.
+
+## Who is held to a lock
+
+Every save, whoever sends it: the editor, the API, an import or an agent. A save that
+breaks a lock is refused with an error naming the slot and the rule, for example:
+
+> The "content" slot of a "acme/hero" is locked "all", so it holds "acme/headline",
+> "acme/button", in that order. It holds "acme/headline".
+
+A lock is measured against the blocks the slot starts with, so changing a locked slot's
+`defaultBlock` changes what every stored page must hold. Bump the block's `version` and
+migrate the pages already stored.
+
+Changing a block's `defaultProps` doesn't lock existing pages out. Inside a
+`"contentOnly"` slot, a save may keep any value the page already stores in the same
+place, or put it back as the block now starts. Only a third value is refused. A page
+saved for the first time, a single, and a localized blocks field are measured against
+the starting blocks alone.
+A page placing a component keeps what the component itself holds.
+
+## Components and locks
+
+A lock inside a component holds on every page that places it. A placement cannot use an
+exposed field or an exposed slot to change what the lock holds, and such a page is
+refused, naming the placement.
+
+A component cannot add an exposed field that drives something a `"contentOnly"` lock
+holds, since no placement could change it. Expose a content field instead, remove the
+exposure, or loosen the lock on that slot. An exposure a component already stores is
+kept, and reported in the server log, so an unrelated edit still saves.
+
+Registration refuses a lock value other than the four, and a `role` other than
+`"content"`, naming the block. `nextly generate` refuses them too, so a block manifest
+is never written for blocks the app would refuse at boot.

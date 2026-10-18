@@ -22,7 +22,8 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import fsExtra from "fs-extra";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { DatabaseConfig } from "../types";
 import { readEnvKeys } from "../utils/env-file";
@@ -143,5 +144,43 @@ describe("a template project's .env.example", () => {
     expect(await readFile(join(target, ".env.example"), "utf-8")).toBe(
       "MY_KEY=documented {{databaseUrl}}\n"
     );
+  });
+
+  // Only "absent" means absent. A file that could not be looked at may well
+  // be there, and the copy would replace it.
+  it("stops, and leaves the example file as it is, when it cannot look at it", async () => {
+    const target = join(workspace, "app");
+    await mkdir(target);
+    const example = join(target, ".env.example");
+    await writeFile(example, "MINE=kept\n");
+    const realLstat = fsExtra.lstat.bind(fsExtra);
+    const spy = vi.spyOn(fsExtra, "lstat").mockImplementation((async (
+      p: string
+    ) => {
+      if (String(p) === example) {
+        throw Object.assign(new Error("EIO"), { code: "EIO" });
+      }
+      return realLstat(p);
+    }) as typeof fsExtra.lstat);
+    try {
+      await expect(
+        copyTemplate({
+          projectName: "app",
+          projectType: "blank",
+          targetDir: target,
+          database: postgres,
+          packageManager: "npm",
+          allowExistingTarget: true,
+          templateSource: {
+            basePath: join(templates, "base"),
+            templatePath: join(templates, "blank"),
+          },
+        })
+      ).rejects.toMatchObject({ code: "EIO" });
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(await readFile(example, "utf-8")).toBe("MINE=kept\n");
   });
 });

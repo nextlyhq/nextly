@@ -873,8 +873,12 @@ export async function nextConfigFileToChange(cwd: string): Promise<string> {
   return (await findConfigFile(cwd)) ?? "next.config.mjs";
 }
 
-/** The app's Next config file, by the name Next.js would read first. */
-async function findConfigFile(cwd: string): Promise<string | null> {
+/**
+ * The app's Next config file, by the name Next.js would read first. Every
+ * step that reads the app's config finds it here, so none reads a file that
+ * another step would pass over and replace.
+ */
+export async function findConfigFile(cwd: string): Promise<string | null> {
   for (const name of CONFIG_FILES) {
     if (await fs.pathExists(path.join(cwd, name))) return name;
   }

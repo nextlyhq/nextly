@@ -304,11 +304,36 @@ describe("generateInstrumentation", () => {
     expect(offered.toAdd).toMatch(/^Make register\(\) async/);
   });
 
+  it("adds Nextly to the hook Next.js loads, not to a default-named one beside it", async () => {
+    const cwd = await app();
+    await writeFile(
+      path.join(cwd, "next.config.mjs"),
+      'export default { pageExtensions: ["page.tsx"] };\n'
+    );
+    await mkdir(path.join(cwd, "src"), { recursive: true });
+    // With pageExtensions set, Next.js loads only `instrumentation.page.tsx`.
+    await writeFile(
+      path.join(cwd, "src/instrumentation.ts"),
+      "export function register() {}\n"
+    );
+    await writeFile(
+      path.join(cwd, "src/instrumentation.page.tsx"),
+      "export function register() {}\n"
+    );
+
+    const [offered] = (await generateInstrumentation(cwd, { srcDir: true }))
+      .skipped;
+
+    expect(offered.path).toBe("src/instrumentation.page.tsx");
+    expect(offered.toAdd).toMatch(/^Make register\(\) async/);
+  });
+
   it.each([
     [["mdx", "page.js"], "src/instrumentation.page.js"],
-    [["mdx", "md"], "src/instrumentation.<one of your pageExtensions>"],
+    // The hook is an ES module, which a `.cjs` file cannot hold.
+    [["cjs", "mjs"], "src/instrumentation.mjs"],
   ])(
-    "never names a hook after a content extension (%j)",
+    "never names a hook after an extension it cannot be written in (%j)",
     async (extensions, expected) => {
       const cwd = await app();
       await writeFile(
@@ -320,6 +345,31 @@ describe("generateInstrumentation", () => {
         .skipped;
 
       expect(offered.path).toBe(expected);
+    }
+  );
+
+  it.each([[["mdx", "md"]], [["cjs"]]])(
+    "says to add an extension the hook can be written in when the list has none (%j)",
+    async extensions => {
+      const cwd = await app();
+      await writeFile(
+        path.join(cwd, "next.config.mjs"),
+        `export default { pageExtensions: ${JSON.stringify(extensions)} };\n`
+      );
+
+      const [offered] = (await generateInstrumentation(cwd, { srcDir: true }))
+        .skipped;
+
+      // No configured name can load the hook, so none is offered as one.
+      expect(offered.path).toBe(
+        "src/instrumentation.<a JavaScript or TypeScript extension added to pageExtensions>"
+      );
+      expect(offered.why).toContain(
+        `none of them (${extensions.join(", ")}) can hold the hook`
+      );
+      expect(offered.why).toContain(
+        "add a JavaScript or TypeScript extension to pageExtensions"
+      );
     }
   );
 

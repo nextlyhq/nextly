@@ -7,8 +7,8 @@
  * the baseline is resolved here, from the document's own history, rather than
  * by each client working it out from a list it may only have one page of.
  *
- * Baselines are registered. Core registers `previous`, `published` and
- * `draft`; another core feature adds its own (Workflows: "since submitted",
+ * Baselines are registered. Core registers `previous`, `published`, `draft`
+ * and `last-viewed`; another core feature adds its own (Workflows: "since submitted",
  * "since approved") without the history code changing. An explicit pair of
  * version numbers stays available beside them.
  *
@@ -20,9 +20,11 @@
  * @experimental
  */
 
+import { getService } from "../../di";
 import { NextlyError } from "../../errors";
 import type { VersionStatus } from "../../schemas/versions/types";
 
+import { readLastLookedAt } from "./version-views";
 import type { VersionRef } from "./versions-repository";
 
 /** One durable version, as a baseline sees it. */
@@ -52,6 +54,30 @@ export interface BaselineContext {
 }
 
 /**
+ * A baseline that stands in for the version it named, which is gone: the
+ * comparison uses `versionNo`, and says that `replaces` was removed.
+ */
+export interface BaselineSubstitute {
+  versionNo: number;
+  /** The version the baseline named, which retention removed. */
+  replaces: number;
+}
+
+/**
+ * A baseline that has nothing to compare with, and says why from what it
+ * read: the reason travels with the decision rather than being read again.
+ */
+export interface BaselineRefusal {
+  unavailable: string;
+}
+
+/** What a baseline resolved to: a version, and the one it stands in for. */
+export interface BaselineChoice {
+  versionNo: number;
+  replaces?: number;
+}
+
+/**
  * A registered baseline.
  *
  * @experimental
@@ -65,8 +91,27 @@ export interface ComparisonBaseline {
    * The version to compare the target with, or null when there is none (the
    * part's first version has no previous one). May read through the context
    * only; a baseline that needs more (Workflows' pins) reads its own records.
+   * A baseline whose version is gone may name a substitute, which the
+   * comparison then reports.
    */
-  resolve(context: BaselineContext): number | null | Promise<number | null>;
+  resolve(
+    context: BaselineContext
+  ):
+    | number
+    | BaselineSubstitute
+    | BaselineRefusal
+    | null
+    | Promise<number | BaselineSubstitute | BaselineRefusal | null>;
+  /**
+   * Why there is nothing to compare with, in the reader's terms, when the
+   * baseline resolves to nothing or to the target itself (`found`, with the
+   * version it stood in for when it substituted one). Without one, the reader
+   * is told the version has no such baseline.
+   */
+  unavailable?(
+    context: BaselineContext,
+    found: BaselineChoice | null
+  ): string | Promise<string>;
 }
 
 const BASELINE_NAME = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
@@ -105,8 +150,7 @@ export function comparisonBaselineNames(): string[] {
 
 /**
  * The version a named baseline compares the target with, or null when it has
- * none. The context's versions are narrowed to its part first, so no baseline
- * can reach into another language.
+ * none.
  *
  * Throws a validation error naming the known baselines for an unknown name.
  */
@@ -114,6 +158,33 @@ export async function resolveComparisonBaseline(
   name: string,
   context: BaselineContext
 ): Promise<number | null> {
+  const choice = await chooseComparisonBaseline(name, context);
+  return choice !== null && "versionNo" in choice ? choice.versionNo : null;
+}
+
+/**
+ * What a named baseline resolves to, with the version it stands in for when it
+ * substituted one. The context's versions are narrowed to its part first, so
+ * no baseline can reach into another language.
+ */
+async function chooseComparisonBaseline(
+  name: string,
+  context: BaselineContext
+): Promise<BaselineChoice | BaselineRefusal | null> {
+  const baseline = requireBaseline(name);
+  const resolved = await baseline.resolve(narrowToPart(context));
+  if (resolved === null) return null;
+  return typeof resolved === "number" ? { versionNo: resolved } : resolved;
+}
+
+function narrowToPart(context: BaselineContext): BaselineContext {
+  return {
+    ...context,
+    versions: context.versions.filter(v => v.locale === context.part),
+  };
+}
+
+function requireBaseline(name: string): ComparisonBaseline {
   const baseline = registry.get(name);
   if (!baseline) {
     throw NextlyError.validation({
@@ -126,10 +197,7 @@ export async function resolveComparisonBaseline(
       ],
     });
   }
-  return baseline.resolve({
-    ...context,
-    versions: context.versions.filter(v => v.locale === context.part),
-  });
+  return baseline;
 }
 
 /**
@@ -168,12 +236,57 @@ registerComparisonBaseline({
   // Nothing is currently published in a part that has been withdrawn.
   resolve: ({ versions, live }) =>
     live ? (latestPublished(versions)?.versionNo ?? null) : null,
+  unavailable: ({ live, target }) =>
+    live
+      ? `Version ${target} has no "published" version to compare with.`
+      : "Nothing is published in this language now, so there is no published version to compare with.",
 });
 
 registerComparisonBaseline({
   name: "draft",
   label: "Current draft",
   resolve: ({ versions }) => currentDraft(versions)?.versionNo ?? null,
+});
+
+registerComparisonBaseline({
+  name: "last-viewed",
+  label: "Last looked at",
+  // The furthest version of the reader's previous visit to this part (see
+  // `version-views`). When retention has removed it, the nearest older version
+  // still kept stands in, and the comparison names the one removed.
+  resolve: async ({ ref, part, userId, versions }) => {
+    if (userId === null) {
+      return {
+        unavailable:
+          "Only a signed-in person has a version they last looked at.",
+      };
+    }
+    const looked = await readLastLookedAt(getService("adapter"), {
+      userId,
+      ref,
+      part,
+    });
+    if (looked === null) {
+      return {
+        unavailable:
+          "You have not looked at this part of the document on an earlier visit, so there is no version you last looked at.",
+      };
+    }
+    if (versions.some(v => v.versionNo === looked)) return looked;
+    const kept = versions.find(v => v.versionNo < looked);
+    return kept
+      ? { versionNo: kept.versionNo, replaces: looked }
+      : {
+          unavailable:
+            "The version you last looked at was removed, and no older version is kept.",
+        };
+  },
+  // Only reached with a version in hand that is the target itself; every
+  // other refusal came from `resolve`, with the reason it read.
+  unavailable: (_context, found) =>
+    found?.replaces !== undefined
+      ? "The version you last looked at was removed, and the nearest older version kept is this one."
+      : "This is the version you last looked at, so nothing has changed since.",
 });
 
 /** What a comparison request names, before its pair is resolved. */
@@ -203,7 +316,11 @@ export interface ComparisonRequest {
 export interface ResolvedComparison {
   from: number;
   to: number;
-  baseline: { name: string; versionNo: number };
+  /**
+   * The baseline that chose `from`. `replaces` names the version it named
+   * instead, when retention had removed that one.
+   */
+  baseline: { name: string; versionNo: number; replaces?: number };
 }
 
 /**
@@ -227,23 +344,7 @@ export async function resolveComparisonPair(
   const part = partOf(request, versions);
   const inPart = versions.filter(v => v.locale === part);
   const draft = currentDraft(inPart);
-  const asksForDraft = request.to === undefined || request.baseline === "draft";
-  if (
-    asksForDraft &&
-    draft === undefined &&
-    (request.workingDraftParts ?? []).includes(part)
-  ) {
-    throw NextlyError.validation({
-      errors: [
-        {
-          path: "baseline",
-          code: "NO_BASELINE",
-          message:
-            "This draft was saved before every save was kept as a version, so it has no version to compare. Save it once and compare again.",
-        },
-      ],
-    });
-  }
+  assertDraftHasVersion(request, part, draft);
   const target = request.to ?? draft?.versionNo ?? inPart[0]?.versionNo;
   if (target === undefined) {
     throw NextlyError.notFound({
@@ -251,35 +352,89 @@ export async function resolveComparisonPair(
     });
   }
   const live = await request.partIsLive(part);
-  const name =
-    request.baseline ??
-    (target === draft?.versionNo && live && latestPublished(inPart)
-      ? "published"
-      : "previous");
+  const name = request.baseline ?? defaultBaseline(target, draft, live, inPart);
 
-  const from = await resolveComparisonBaseline(name, {
+  const context: BaselineContext = {
     ref: request.ref,
     part,
     target,
     userId: request.userId,
     versions,
     live,
-  });
-  if (from === null || from === target) {
-    throw NextlyError.validation({
-      errors: [
-        {
-          path: "baseline",
-          code: "NO_BASELINE",
-          message:
-            name === "published" && !live
-              ? "Nothing is published in this language now, so there is no published version to compare with."
-              : `Version ${target} has no "${name}" version to compare with.`,
-        },
-      ],
-    });
+  };
+  const choice = await chooseComparisonBaseline(name, context);
+  if (choice !== null && "unavailable" in choice) {
+    throw noBaseline(choice.unavailable);
   }
-  return { from, to: target, baseline: { name, versionNo: from } };
+  if (choice === null || choice.versionNo === target) {
+    throw noBaseline(await unavailableMessage(name, context, choice));
+  }
+  return {
+    from: choice.versionNo,
+    to: target,
+    baseline: {
+      name,
+      versionNo: choice.versionNo,
+      ...(choice.replaces !== undefined ? { replaces: choice.replaces } : {}),
+    },
+  };
+}
+
+/** A comparison refused because one side has nothing to compare with. */
+function noBaseline(message: string): NextlyError {
+  return NextlyError.validation({
+    errors: [{ path: "baseline", code: "NO_BASELINE", message }],
+  });
+}
+
+/**
+ * Refuse a request for the current draft when the part's working draft was
+ * saved before every save was kept as a version: there is no version holding
+ * it, and older versions must not be passed off as the draft.
+ */
+function assertDraftHasVersion(
+  request: ComparisonRequest,
+  part: string | null,
+  draft: PartVersion | undefined
+): void {
+  const asksForDraft = request.to === undefined || request.baseline === "draft";
+  if (
+    asksForDraft &&
+    draft === undefined &&
+    (request.workingDraftParts ?? []).includes(part)
+  ) {
+    throw noBaseline(
+      "This draft was saved before every save was kept as a version, so it has no version to compare. Save it once and compare again."
+    );
+  }
+}
+
+/**
+ * The baseline a request that names none compares with: what is live, for a
+ * live part's current draft that has a published version; otherwise the
+ * version before the target.
+ */
+function defaultBaseline(
+  target: number,
+  draft: PartVersion | undefined,
+  live: boolean,
+  inPart: readonly PartVersion[]
+): string {
+  return target === draft?.versionNo && live && latestPublished(inPart)
+    ? "published"
+    : "previous";
+}
+
+/** Why a baseline has nothing to compare with, in its own words if it has them. */
+async function unavailableMessage(
+  name: string,
+  context: BaselineContext,
+  found: BaselineChoice | null
+): Promise<string> {
+  const baseline = requireBaseline(name);
+  return baseline.unavailable
+    ? baseline.unavailable(narrowToPart(context), found)
+    : `Version ${context.target} has no "${name}" version to compare with.`;
 }
 
 /** The part a request compares: its target's own, or the one it names. */

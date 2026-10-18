@@ -288,6 +288,18 @@ jobs:
       - name: Setup
         uses: ./.github/actions/integration-setup
 
+      # MySQL 8.4 writes every commit's redo log and binary log to disk before
+      # it returns, and its redo log is 100 MB. The core suite commits many
+      # small transactions, so the leg spent its time waiting on those writes
+      # ("Consider increasing innodb_redo_log_capacity") and overran its
+      # budget with every test green. A throwaway test database needs neither
+      # guarantee, so this relaxes both and enlarges the redo log; all three
+      # settings change at runtime, so the service image stays as it is.
+      - name: Give the test database room to write
+        run: |
+          mysql -h 127.0.0.1 -uroot -pnextly -e "SET GLOBAL innodb_redo_log_capacity = 1073741824; SET GLOBAL innodb_flush_log_at_trx_commit = 2; SET GLOBAL sync_binlog = 0;"
+          mysql -h 127.0.0.1 -uroot -pnextly -N -e "SELECT @@innodb_redo_log_capacity, @@innodb_flush_log_at_trx_commit, @@sync_binlog;"
+
       # See the postgres leg for why every adapter is built on every leg.
       - name: Run integration tests (mysql)
         run: |
