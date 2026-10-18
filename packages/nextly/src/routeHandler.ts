@@ -109,6 +109,7 @@ import {
   COLLECTION_DEFINITION_RESOURCE,
 } from "./auth/collection-definition-policy";
 import { readAccessTokenCookie } from "./auth/cookies/access-token-cookie";
+import { hasAuthRateLimit } from "./auth/handlers/router";
 import type { SanitizedNextlyConfig } from "./collections/config/define-config";
 import { container } from "./di/container";
 import { readServiceConfig } from "./dispatcher/dispatcher";
@@ -152,7 +153,10 @@ import {
 } from "./plugins/routes/dispatch";
 import { getPluginRouteRegistry } from "./plugins/routes/route-registry";
 import type { PluginRouteMount } from "./plugins/routes/route-types";
-import { pluginRouteBootDecision } from "./plugins/routes/should-register";
+import {
+  declaredPluginRoute,
+  pluginRouteBootDecision,
+} from "./plugins/routes/should-register";
 import { settingsWritePermission } from "./plugins/settings-permission";
 import { assertAdminWidgets } from "./plugins/validate-admin-widgets";
 import { assertClientConfigs } from "./plugins/validate-client-config";
@@ -1185,10 +1189,40 @@ async function reachPluginRoute(
     );
     return refused ?? pluginRouteAuthRequired(req, decision.route);
   }
-  if (decision.kind === "boot") await ensureServicesInitialized();
+  if (decision.kind === "boot") {
+    const refused = await limitBeforeBoot(httpMethod, requestPath, mount);
+    if (refused) return refused;
+    await ensureServicesInitialized();
+  }
 
   const match = getPluginRouteRegistry().match(httpMethod, requestPath, mount);
   return match === null ? null : runPluginRoute(req, match);
+}
+
+/**
+ * The REST limit for a request about to boot the app for a plugin route,
+ * judged from the route's declaration so an over-budget request costs no
+ * boot. A route asking for a person is only checked against its plugin's
+ * spent failed-resolution bound here; its limit is settled around the
+ * person's resolution, which needs the booted app. A route only boot can
+ * name, behind a `setup` transformer, is judged once it is booted.
+ */
+async function limitBeforeBoot(
+  method: string,
+  path: string,
+  mount: PluginRouteMount
+): Promise<Response | null> {
+  const gate = currentRestLimitGate();
+  if (!gate) return null;
+  const declared = declaredPluginRoute(
+    getHandlerConfig()?.plugins,
+    { method, path },
+    mount
+  );
+  if (declared === null) return null;
+  return declared.route.principal === undefined
+    ? gate.settle(restLimitTargetOf(declared.route))
+    : gate.personBoundRefusal(declared.pluginName);
 }
 
 /**
@@ -2384,7 +2418,13 @@ export function createDynamicHandlers(options?: {
     method: string,
     authRouted: boolean
   ): RestLimitTarget | null {
-    if (authRouted && isAuthRoute(params)) return "auth";
+    // Only the auth paths the auth limit judges are left to it; every other
+    // `/auth/*` request is held to the REST limit like any request.
+    if (authRouted && isAuthRoute(params)) {
+      return hasAuthRateLimit(method, params.slice(1).join("/"))
+        ? "auth"
+        : "core";
+    }
     return mayReachPluginRoute(method, params) ? null : "core";
   }
 

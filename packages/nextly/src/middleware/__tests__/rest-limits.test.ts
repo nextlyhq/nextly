@@ -348,3 +348,60 @@ describe("createRateLimiter", () => {
     expect(second?.status).toBe(429);
   });
 });
+
+describe("REST limit: a burst under a bound", () => {
+  /** A lookup held open until `finish`, as a slow database would hold it. */
+  function heldOpen<T>(answer: T) {
+    let finish: () => void = () => {};
+    const open = new Promise<void>(resolve => {
+      finish = resolve;
+    });
+    const started = vi.fn(async () => {
+      await open;
+      return answer;
+    });
+    return { started, finish };
+  }
+
+  it("starts no more key lookups than the bound has room for, however many arrive together", async () => {
+    const lookup = heldOpen(null);
+    const readers = { ...testReaders(), lookupKey: lookup.started };
+    const check = limiter({}, readers);
+    const burst = Array.from({ length: 8 }, () =>
+      check({ key: "bogus", address: "203.0.113.7" })
+    );
+    // Every request has had its turn to peek before any lookup answers.
+    await vi.waitFor(() => expect(lookup.started).toHaveBeenCalledTimes(2));
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(lookup.started).toHaveBeenCalledTimes(2);
+    lookup.finish();
+    const answers = await Promise.all(burst);
+    expect(answers.filter(answer => answer === null)).toHaveLength(2);
+  });
+
+  it("starts no more person resolutions than the plugin's bound has room for", async () => {
+    const limits = createRestLimits(
+      {
+        enabled: true,
+        readLimit: 2,
+        writeLimit: 1,
+        trustProxy: true,
+        store: new InMemoryRateLimitStore(),
+      },
+      testReaders()
+    );
+    const resolution = heldOpen(null);
+    const burst = Array.from({ length: 8 }, () =>
+      limits.admitPerson(request({ address: "203.0.113.7" }), "accounts", {
+        resolve: resolution.started,
+        personOf: () => null,
+      })
+    );
+    await vi.waitFor(() => expect(resolution.started).toHaveBeenCalledTimes(2));
+    await new Promise(resolve => setTimeout(resolve, 20));
+    expect(resolution.started).toHaveBeenCalledTimes(2);
+    resolution.finish();
+    const answers = await Promise.all(burst);
+    expect(answers.filter(answer => "refused" in answer)).toHaveLength(6);
+  });
+});

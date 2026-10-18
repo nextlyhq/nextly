@@ -8,8 +8,10 @@
  * 150 writes. The playground configures no limits, so it runs on these.
  * Each page here must spend no more than a tenth of that on a load, so a
  * person working quickly across pages never meets the limit. A page that
- * spends more means the default is wrong, and it is changed through the spec
- * that set it, not here.
+ * spends more means the session budget's default is too small, and that
+ * default changes, not this bar. Every measured request must also have been
+ * admitted: a limit that refused the page's data would load fewer requests and
+ * pass the count while the page broke.
  *
  * Each load's counts are printed and attached to the report, so the measured
  * numbers can be recorded.
@@ -44,14 +46,20 @@ const READ_METHODS = new Set(["GET", "HEAD", "OPTIONS"]);
 async function measureLoad(
   page: Page,
   path: string
-): Promise<{ reads: number; writes: number }> {
-  const counts = { reads: 0, writes: 0 };
+): Promise<{ reads: number; writes: number; refused: string[] }> {
+  const counts = { reads: 0, writes: 0, refused: [] as string[] };
   let last = Date.now();
   page.on("request", request => {
     if (!new URL(request.url()).pathname.startsWith("/admin/api/")) return;
     if (READ_METHODS.has(request.method())) counts.reads++;
     else counts.writes++;
     last = Date.now();
+  });
+  page.on("response", response => {
+    const { pathname } = new URL(response.url());
+    if (pathname.startsWith("/admin/api/") && response.status() === 429) {
+      counts.refused.push(`${response.request().method()} ${pathname}`);
+    }
   });
 
   const started = Date.now();
@@ -76,6 +84,7 @@ for (const screen of PAGES) {
       description: line,
     });
 
+    expect(counts.refused, "admin API requests the limit refused").toEqual([]);
     expect(counts.reads, "admin API reads on one load").toBeLessThanOrEqual(
       PAGE_BUDGET.reads
     );

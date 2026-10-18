@@ -18,9 +18,12 @@ vi.mock("../auth/session/session-standing", async importOriginal => ({
   sessionTokenIsCurrent: async () => true,
 }));
 
+/** The service boot, stood in for and watched: a refused request must not cause one. */
+const boot = vi.hoisted(() => vi.fn(async () => undefined));
+
 vi.mock("../route-handler", async importOriginal => ({
   ...(await importOriginal<typeof import("../route-handler")>()),
-  ensureServicesInitialized: async () => undefined,
+  ensureServicesInitialized: boot,
   getDispatcher: async () => ({
     dispatch: async () => ({ success: true, status: 200, data: {} }),
   }),
@@ -73,6 +76,12 @@ const routes: PluginRoute[] = [
     path: "/sign-in",
     public: true,
     rateLimit: "auth",
+    handler: () => Response.json({ ok: true }),
+  },
+  {
+    method: "GET",
+    path: "/open",
+    public: true,
     handler: () => Response.json({ ok: true }),
   },
 ];
@@ -242,5 +251,49 @@ describe("the REST entry point's limit", () => {
     );
     expect(await refusedByRestLimit(pluginSignIn)).toBe(false);
     expect(pluginSignIn.status).toBe(200);
+  });
+});
+
+describe("the REST entry point's limit, before work", () => {
+  /** Spend the unresolved sources' read ceiling, whatever earlier cases left of it. */
+  async function spendReadCeiling(): Promise<void> {
+    await refusals(READS * 10, () => send("GET", ["collections"]));
+    expect(await refusedByRestLimit(await send("GET", ["collections"]))).toBe(
+      true
+    );
+  }
+
+  it("holds an auth path the auth limit does not judge to the ceiling", async () => {
+    await spendReadCeiling();
+    expect(
+      await refusedByRestLimit(await send("GET", ["auth", "session"]))
+    ).toBe(true);
+  });
+
+  it("refuses an over-budget request to a public plugin route without booting for it", async () => {
+    await spendReadCeiling();
+    boot.mockClear();
+    const refused = await send("GET", ["plugins", "acme", "open"]);
+    expect(await refusedByRestLimit(refused)).toBe(true);
+    expect(boot).not.toHaveBeenCalled();
+    // The control: the same route from a resolved address boots and answers.
+    const served = await send("GET", ["plugins", "acme", "open"], {
+      "x-forwarded-for": freshAddress(),
+    });
+    expect(served.status).toBe(200);
+    expect(boot).toHaveBeenCalled();
+  });
+
+  it("refuses a person under a spent failed-resolution bound without booting for it", async () => {
+    // Unresolvable people from unresolved sources, up to the plugin's bound.
+    await refusals(READS * 10, () => send("GET", ["plugins", "acme", "me"]));
+    boot.mockClear();
+    resolve.mockClear();
+    const refused = await send("GET", ["plugins", "acme", "me"], {
+      cookie: "acme_member=m9",
+    });
+    expect(await refusedByRestLimit(refused)).toBe(true);
+    expect(boot).not.toHaveBeenCalled();
+    expect(resolve).not.toHaveBeenCalled();
   });
 });

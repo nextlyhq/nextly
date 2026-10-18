@@ -52,6 +52,15 @@ export interface RestLimitDecider {
     plugin: string,
     person: PersonResolution<T>
   ): Promise<{ refused: Response } | { resolved: T }>;
+  /**
+   * The refusal a plugin person's request would meet because its plugin's
+   * failed-resolution bound is already spent, recording nothing: asked before
+   * work that only a person who might resolve would pay for, such as a boot.
+   */
+  personBoundRefusal(
+    request: Request,
+    plugin: string
+  ): Promise<Response | null>;
 }
 
 /** Where a gate keeps the keys it has looked up. */
@@ -92,6 +101,15 @@ export class RestLimitGate implements ApiKeyMemory {
     if (this.settled) return { resolved: await person.resolve() };
     this.settled = true;
     return this.decider.admitPerson(this.request, plugin, person);
+  }
+
+  /**
+   * Whether a person's request would already be refused by its plugin's
+   * spent bound. Decides nothing, so the route still settles the limit.
+   */
+  personBoundRefusal(plugin: string): Promise<Response | null> {
+    if (this.settled) return Promise.resolve(null);
+    return this.decider.personBoundRefusal(this.request, plugin);
   }
 
   remember(rawKey: string, known: KnownApiKey): void {

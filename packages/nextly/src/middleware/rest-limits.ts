@@ -147,11 +147,25 @@ function isSystemEndpoint(request: Request): boolean {
   );
 }
 
-/** A bound's state before the work it bounds. */
-type BoundState = { refused: RateLimitResult } | { recorded: boolean };
+/**
+ * A bound's state before the work it bounds: refused, or admitted with
+ * whether arrival already recorded the attempt and whether it holds one of
+ * the bound's places in flight.
+ */
+type BoundState =
+  | { refused: RateLimitResult }
+  | { recorded: boolean; reserved: boolean };
 
 /** The limit itself. Holds no per-request state; the store holds the counts. */
 class RestLimits implements RestLimitDecider {
+  /**
+   * The lookups and resolutions a bound is guarding in this process right
+   * now, by the bound's key. The store records an attempt only once it has
+   * failed, so without these a burst would see one count and start as many
+   * lookups as arrived together.
+   */
+  private readonly inFlight = new Map<string, number>();
+
   constructor(
     private readonly settings: RestLimitSettings,
     private readonly store: RateLimitStore,
@@ -203,15 +217,38 @@ class RestLimits implements RestLimitDecider {
     if ("refused" in before) {
       return { refused: this.refusal(request, before.refused) };
     }
-    const resolved = await person.resolve();
-    const who = person.personOf(resolved);
-    const refused = who
-      ? await this.count(request, {
-          key: `ratelimit:person:${plugin}:${who.kind}:${who.id}:${operation}`,
-          limit: this.settings.sessions[operation],
-        })
-      : await this.spendBound(request, bound, before);
-    return refused ? { refused } : { resolved };
+    try {
+      const resolved = await person.resolve();
+      const who = person.personOf(resolved);
+      const refused = who
+        ? await this.count(request, {
+            key: `ratelimit:person:${plugin}:${who.kind}:${who.id}:${operation}`,
+            limit: this.settings.sessions[operation],
+          })
+        : await this.spendBound(request, bound, before);
+      return refused ? { refused } : { resolved };
+    } finally {
+      this.release(bound, before);
+    }
+  }
+
+  async personBoundRefusal(
+    request: Request,
+    plugin: string
+  ): Promise<Response | null> {
+    // A store that cannot be asked without recording answers nothing here;
+    // the person's request is then judged in full when its route settles.
+    if (!this.store.consume || (await this.exempt(request))) return null;
+    const bound = this.failedPersonBucket(
+      request,
+      plugin,
+      operationOf(request.method)
+    );
+    const held = await this.store.consume(bound.key, 0, this.settings.windowMs);
+    const pending = this.inFlight.get(bound.key) ?? 0;
+    return held.count + pending >= bound.limit
+      ? this.refusal(request, refusedBy(bound, held.resetTime))
+      : null;
   }
 
   /** A request this limit never counts: a system endpoint, or a configured skip. */
@@ -270,21 +307,32 @@ class RestLimits implements RestLimitDecider {
   ): Promise<Response | null> {
     const before = await this.boundBefore(bound);
     if ("refused" in before) return this.refusal(request, before.refused);
-    const resolved = await this.readers.lookupKey(rawKey);
-    if (resolved) {
-      keys.remember(rawKey, { resolved, debited: true });
-      return this.readers.debitKey(resolved.id);
+    try {
+      const resolved = await this.readers.lookupKey(rawKey);
+      if (resolved) {
+        keys.remember(rawKey, { resolved, debited: true });
+        return await this.readers.debitKey(resolved.id);
+      }
+      // A key that does not resolve is answered without a second lookup; one
+      // nothing could ask about is left for authentication to ask again.
+      if (resolved === null) {
+        keys.remember(rawKey, { resolved, debited: false });
+      }
+      return await this.spendBound(request, bound, before);
+    } finally {
+      this.release(bound, before);
     }
-    // A key that does not resolve is answered without a second lookup; one
-    // nothing could ask about is left for authentication to ask again.
-    if (resolved === null) keys.remember(rawKey, { resolved, debited: false });
-    return this.spendBound(request, bound, before);
   }
 
   /**
    * Whether a bound is already spent, asked before the work it bounds.
    *
-   * Asked with a zero-limit `consume`, which records nothing. A store without
+   * Asked with a zero-limit `consume`, which records nothing, and counted
+   * with the work under the bound already in flight here, which then takes a
+   * place: the check and the reservation follow the store's answer with no
+   * await between them, so in one process a burst starts no more work than
+   * the bound has room for. Each further process can start at most the
+   * bound's room again before the store holds its failures. A store without
    * `consume` cannot be asked without recording, so there the attempt is
    * recorded on arrival: stricter, since work that succeeds then spends the
    * bound too, and never looser.
@@ -296,9 +344,12 @@ class RestLimits implements RestLimitDecider {
         0,
         this.settings.windowMs
       );
-      return held.count >= bound.limit
-        ? { refused: refusedBy(bound, held.resetTime) }
-        : { recorded: false };
+      const pending = this.inFlight.get(bound.key) ?? 0;
+      if (held.count + pending >= bound.limit) {
+        return { refused: refusedBy(bound, held.resetTime) };
+      }
+      this.inFlight.set(bound.key, pending + 1);
+      return { recorded: false, reserved: true };
     }
     const record = await this.store.increment(
       bound.key,
@@ -306,7 +357,18 @@ class RestLimits implements RestLimitDecider {
     );
     return record.count > bound.limit
       ? { refused: refusedBy(bound, record.resetTime) }
-      : { recorded: true };
+      : { recorded: true, reserved: false };
+  }
+
+  /**
+   * Give back the place a request held in flight, once its failure, if any,
+   * is recorded, so no request starts in the gap between the two.
+   */
+  private release(bound: Bucket, before: { reserved: boolean }): void {
+    if (!before.reserved) return;
+    const left = (this.inFlight.get(bound.key) ?? 1) - 1;
+    if (left > 0) this.inFlight.set(bound.key, left);
+    else this.inFlight.delete(bound.key);
   }
 
   /** Spend a bound for work that failed, unless arrival already spent it. */
@@ -375,6 +437,7 @@ const UNLIMITED: RestLimitDecider = {
   async admitPerson(_request, _plugin, person) {
     return { resolved: await person.resolve() };
   },
+  personBoundRefusal: () => Promise.resolve(null),
 };
 
 /**
