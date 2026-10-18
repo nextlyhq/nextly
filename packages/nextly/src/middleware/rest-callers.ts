@@ -72,8 +72,8 @@ function registeredApiKeyService(): ApiKeyService | undefined {
  * The readers the REST entry point uses.
  *
  * @param ready - Starts the services a key lookup needs, where something can.
- *   Called only for a request presenting a key, which the route would start
- *   them for next anyway.
+ *   Called only for a request presenting a key while no key service is
+ *   registered, which the route would start them for next anyway.
  */
 export function defaultRestCallerReaders(
   ready?: () => Promise<void>
@@ -82,8 +82,15 @@ export function defaultRestCallerReaders(
     sessionUser: verifiedSessionUser,
     async lookupKey(rawKey) {
       try {
-        await ready?.();
-        const service = registeredApiKeyService();
+        // Started only when nothing is registered yet. A running process
+        // answers with the services it has, as authentication does: asking a
+        // boot of a process already up can re-register its services in
+        // development, under the key being looked up.
+        let service = registeredApiKeyService();
+        if (!service && ready) {
+          await ready();
+          service = registeredApiKeyService();
+        }
         return service ? await service.authenticateApiKey(rawKey) : undefined;
       } catch {
         // Not a verdict on the key: authentication asks again and answers.
