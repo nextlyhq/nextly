@@ -234,8 +234,9 @@ export function releaseTabQuery(
           // `updatedAt` is the instant a release finished: the move to
           // `published` sets it to the publish instant and the move to
           // `cancelled` to the cancel instant, and a finished release takes no
-          // other write. Anything that later writes to a finished release must
-          // keep that true or move this order to a column of its own.
+          // other write that moves it: a rename leaves `updatedAt` alone.
+          // Anything that later writes to a finished release must keep that
+          // true or move this order to a column of its own.
           //
           // Not served by an index: the release indexes cover `(state,
           // scheduledAt)`, so a Done page sorts the finished releases it

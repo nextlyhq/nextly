@@ -943,6 +943,8 @@ export const nextly = {
     schedule: args => requireNextly().releases.schedule(args),
     cancel: args => requireNextly().releases.cancel(args),
     publishNow: args => requireNextly().releases.publishNow(args),
+    update: args => requireNextly().releases.update(args),
+    delete: args => requireNextly().releases.delete(args),
   } satisfies ReleasesNamespace,
 
   users: {

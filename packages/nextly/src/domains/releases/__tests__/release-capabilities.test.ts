@@ -106,8 +106,8 @@ describe("capabilities, for a caller holding everything", () => {
   });
 
   it("allows cancelling a DRAFT, because that is how one is abandoned", async () => {
-    // There is no delete route, so a draft that could not be cancelled would
-    // stay in the list forever.
+    // Deleting needs a permission of its own, so a publisher without it
+    // still needs a way to call a draft off.
     const { svc } = service(ALL);
     const can = await svc.capabilities([release("draft")], ACTOR);
     expect(can.get("r1")?.cancel).toBe(true);
@@ -177,8 +177,9 @@ describe("capabilities, as an instrument", () => {
     const { svc, canManageReleases } = service(ALL);
     const rows = RELEASE_STATES.map((state, n) => release(state, `r${n}`));
     await svc.capabilities([...rows, ...rows, ...rows], ACTOR);
-    // `read` for the authorize, then `publish` and `create` once each.
-    expect(canManageReleases.mock.calls.length).toBeLessThanOrEqual(3);
+    // `read` for the authorize, then `publish`, `create`, `update` and
+    // `delete` once each.
+    expect(canManageReleases.mock.calls.length).toBeLessThanOrEqual(5);
   });
 
   it("asks nothing at all for an empty page", async () => {
@@ -378,5 +379,73 @@ describe("capabilities, for a single-document release", () => {
     expect(can.get("over")?.removeMember).toBe(true);
     // The control: one short of the limit still takes a document.
     expect(can.get("room")?.addMember).toBe(true);
+  });
+});
+
+describe("capabilities to rename and to delete", () => {
+  // Each case is decided by one authority and, for delete, the state; the
+  // control in each is the same rows with the other authorities held instead,
+  // so a verdict read from the wrong grant fails it.
+
+  it("offers renaming in every state to a holder of update, and to nobody else", async () => {
+    const rows = RELEASE_STATES.map(state => release(state, state));
+    const withUpdate = await service(["read", "update"]).svc.capabilities(
+      rows,
+      ACTOR
+    );
+    const withoutUpdate = await service([
+      "read",
+      "create",
+      "publish",
+      "delete",
+    ]).svc.capabilities(rows, ACTOR);
+    for (const state of RELEASE_STATES) {
+      expect(withUpdate.get(state)?.update).toBe(true);
+      expect(withoutUpdate.get(state)?.update).toBe(false);
+    }
+  });
+
+  it("offers deleting a draft or a cancelled release only, and only to a holder of delete", async () => {
+    const rows = RELEASE_STATES.map(state => release(state, state));
+    const withDelete = await service(["read", "delete"]).svc.capabilities(
+      rows,
+      ACTOR
+    );
+    const withoutDelete = await service([
+      "read",
+      "create",
+      "publish",
+      "update",
+    ]).svc.capabilities(rows, ACTOR);
+    expect(
+      Object.fromEntries(
+        RELEASE_STATES.map(state => [state, withDelete.get(state)?.delete])
+      )
+    ).toEqual({
+      draft: true,
+      scheduled: false,
+      published: false,
+      cancelled: true,
+      blocked: false,
+    });
+    for (const state of RELEASE_STATES) {
+      expect(withoutDelete.get(state)?.delete).toBe(false);
+    }
+  });
+
+  it("does not offer deleting a cancelled release that was ever scheduled", async () => {
+    const { svc } = service(["read", "delete"]);
+    const can = await svc.capabilities(
+      [
+        {
+          ...release("cancelled", "was"),
+          scheduledAt: new Date("2026-09-01T09:00:00Z"),
+        },
+        { ...release("cancelled", "never"), scheduledAt: null },
+      ],
+      ACTOR
+    );
+    expect(can.get("was")?.delete).toBe(false);
+    expect(can.get("never")?.delete).toBe(true);
   });
 });
