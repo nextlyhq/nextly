@@ -28,9 +28,9 @@ import { dynamicCollectionsMysql } from "../../../schemas/dynamic-collections/my
 import { dynamicCollectionsPg } from "../../../schemas/dynamic-collections/postgres";
 import { dynamicCollectionsSqlite } from "../../../schemas/dynamic-collections/sqlite";
 import {
-  dynamicFieldGroupsMysql,
-  dynamicFieldGroupsPg,
-  dynamicFieldGroupsSqlite,
+  buildDynamicFieldGroupsMysql,
+  buildDynamicFieldGroupsPg,
+  buildDynamicFieldGroupsSqlite,
 } from "../../../schemas/dynamic-field-groups";
 import { dynamicSinglesMysql } from "../../../schemas/dynamic-singles/mysql";
 import { dynamicSinglesPg } from "../../../schemas/dynamic-singles/postgres";
@@ -40,6 +40,7 @@ import {
   UNKNOWN_ARCHIVE_KIND,
   UNRESOLVED_ARCHIVE_KIND,
 } from "../../../schemas/nextly-i18n-archive";
+import { resolveFieldGroupRegistryName } from "../../field-groups/storage/resolve-storage-names";
 
 import type { I18nTransitionKind } from "./transition-state";
 
@@ -65,6 +66,8 @@ interface LabelDb {
 export interface LabelArchiveAdapter {
   dialect: SupportedDialect;
   tableExists(tableName: string): Promise<boolean>;
+  /** Which tables exist, for finding which name the field-group registry has on this database. */
+  listTables(): Promise<string[]>;
   getDrizzle<T = unknown>(): T;
 }
 
@@ -75,28 +78,38 @@ type RegistryTable =
   | typeof dynamicSinglesPg
   | typeof dynamicSinglesMysql
   | typeof dynamicSinglesSqlite
-  | typeof dynamicFieldGroupsPg
-  | typeof dynamicFieldGroupsMysql
-  | typeof dynamicFieldGroupsSqlite;
+  | ReturnType<typeof buildDynamicFieldGroupsPg>
+  | ReturnType<typeof buildDynamicFieldGroupsMysql>
+  | ReturnType<typeof buildDynamicFieldGroupsSqlite>;
 
-/** Each registry, with the kind the archive records for its entities, on this dialect. */
-function registries(
-  dialect: SupportedDialect
-): { kind: I18nTransitionKind; table: RegistryTable }[] {
+/**
+ * Each registry, with the kind the archive records for its entities, on this database. The
+ * field-group registry is found by name, since its storage migration renames it: reading only the
+ * old name would miss every field group on a migrated database, and make a collection sharing a
+ * slug look like its rows' only owner.
+ */
+async function registries(
+  adapter: LabelArchiveAdapter
+): Promise<{ kind: I18nTransitionKind; table: RegistryTable }[]> {
+  const fieldGroupRegistry = await resolveFieldGroupRegistryName(adapter);
   const byDialect = {
-    postgresql: [dynamicCollectionsPg, dynamicSinglesPg, dynamicFieldGroupsPg],
-    mysql: [
+    postgresql: () => [
+      dynamicCollectionsPg,
+      dynamicSinglesPg,
+      buildDynamicFieldGroupsPg(fieldGroupRegistry),
+    ],
+    mysql: () => [
       dynamicCollectionsMysql,
       dynamicSinglesMysql,
-      dynamicFieldGroupsMysql,
+      buildDynamicFieldGroupsMysql(fieldGroupRegistry),
     ],
-    sqlite: [
+    sqlite: () => [
       dynamicCollectionsSqlite,
       dynamicSinglesSqlite,
-      dynamicFieldGroupsSqlite,
+      buildDynamicFieldGroupsSqlite(fieldGroupRegistry),
     ],
   } as const;
-  const [collections, singles, fieldGroups] = byDialect[dialect];
+  const [collections, singles, fieldGroups] = byDialect[adapter.dialect]();
   return [
     { kind: "collection", table: collections },
     { kind: "single", table: singles },
@@ -117,7 +130,7 @@ async function holdersOf(
     string,
     { kind: I18nTransitionKind; createdAt: Date }[]
   >();
-  for (const { kind, table } of registries(adapter.dialect)) {
+  for (const { kind, table } of await registries(adapter)) {
     // A database that never registered an entity of this kind has no table for it, and so no
     // holder of any slug.
     if (!(await adapter.tableExists(getTableName(table)))) continue;

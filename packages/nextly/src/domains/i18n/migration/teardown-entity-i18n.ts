@@ -53,6 +53,8 @@ export interface TeardownI18nAdapter {
   dialect: SupportedDialect;
   executeQuery<T = unknown>(sql: string, params?: unknown[]): Promise<T[]>;
   tableExists(tableName: string): Promise<boolean>;
+  /** Which tables exist, for finding the field-group registry's name when labelling older rows. */
+  listTables(): Promise<string[]>;
   getDrizzle<T = unknown>(): T;
 }
 

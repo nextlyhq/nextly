@@ -20,6 +20,7 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import { forgetFieldGroupStorageNames } from "../../field-groups/storage/resolve-storage-names";
 import { reconcileCore } from "../../schema/migrate/core-reconcile";
 import { restoreI18nArchive } from "../migration/restore-archive";
 import { teardownEntityI18n } from "../migration/teardown-entity-i18n";
@@ -469,6 +470,61 @@ describeEachDialect("the archive's entity kind", dialect => {
     expect(await archived()).toEqual([
       { kind: "unresolved", entry: collectionId, value: "Antiguo" },
     ]);
+  });
+
+  /** `BETWEEN` plus `hours`, in the archive's encoding of `archived_at`. */
+  const hoursAfterBetween = (hours: number) =>
+    dialect === "sqlite"
+      ? String(978307200 + hours * 3600)
+      : `'2001-01-01 ${String(hours).padStart(2, "0")}:00:00'`;
+
+  it("counts a row as the entity's only when archived well after its creation", async () => {
+    // The creation time can read back off by any zone offset, so a row archived within hours of it
+    // may predate it; one archived a day later cannot.
+    const collectionId = await seedCollection();
+    await createdLongAgo("dynamic_collections", "hero", BETWEEN);
+    await archiveWithoutTheKind();
+    await legacyRow("hero", collectionId, "Pronto", hoursAfterBetween(1));
+    await legacyRow("hero", collectionId, "Tarde", hoursAfterBetween(20));
+    await migrateCore();
+
+    await restoreHero();
+
+    // SQLite keeps both times as epoch seconds, with no zone to doubt, so an hour is enough there.
+    expect(await archivedBySlug()).toEqual([
+      {
+        slug: "hero",
+        kind: dialect === "sqlite" ? "collection" : "unresolved",
+        value: "Pronto",
+      },
+      { slug: "hero", kind: "collection", value: "Tarde" },
+    ]);
+  });
+
+  it("finds the field group under its migrated registry name", async () => {
+    // The field-group storage migration renames its registry. A slug a collection shares with a
+    // field group is still two holders there, not the collection's alone.
+    const collectionId = await seedCollection();
+    await seedFieldGroup();
+    await createdLongAgo("dynamic_collections", "hero");
+    await createdLongAgo("dynamic_components", "hero");
+    await archiveWithoutTheKind();
+    await legacyRow("hero", collectionId, "Antes");
+    await legacyRow("hero", "hero-1", "Grupo");
+    await migrateCore();
+    // What the storage migration leaves: the registry under its new name, and no old one.
+    await query(
+      dialect === "mysql"
+        ? "RENAME TABLE `dynamic_components` TO `dynamic_field_groups`"
+        : `ALTER TABLE "dynamic_components" RENAME TO "dynamic_field_groups"`
+    );
+    forgetFieldGroupStorageNames();
+    expect(await current.adapter.tableExists("dynamic_components")).toBe(false);
+
+    const restored = await restoreHero();
+
+    expect(restored.rowsRead).toBe(0);
+    expect(restored.rowsUnattributed).toBe(2);
   });
 
   it("keeps the rows of a slug two entities shared unresolved after one of them is deleted", async () => {
