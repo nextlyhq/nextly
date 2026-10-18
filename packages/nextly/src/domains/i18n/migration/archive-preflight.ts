@@ -26,8 +26,10 @@ import {
   refusalsForFieldsLeavingTranslation,
   refusalsForTranslatedFieldRenamedAndReshaped,
   storageDiffers,
+  withoutLeavingConstraints,
 } from "./field-leaves-translation-rules";
 import { fieldToLocalizedColumnSpec } from "./field-to-column-spec";
+import { refusalsForConstrainedFieldsLeaving } from "./leaving-constraint-preconditions";
 import {
   buildLeavingFieldsArchiveStatements,
   fieldsLeavingTranslation,
@@ -126,7 +128,7 @@ export async function archiveFieldsLeavingTranslation(args: {
   }
 
   const dialect = args.adapter.getCapabilities().dialect;
-  const refusals = [
+  const shapeRefusals = [
     ...refusalsForFieldsLeavingTranslation({
       leaving,
       newFields: args.newFields,
@@ -144,6 +146,26 @@ export async function archiveFieldsLeavingTranslation(args: {
         ? await renamedAndReshaped(args, dialect)
         : undefined,
     }),
+  ];
+  // A Required or Unique field leaving translation takes its setting on once the default
+  // language's values are shared, so those values are asked whether they can take it. A field
+  // refused above for its storage is not asked as well.
+  const refusedPaths = new Set(shapeRefusals.map(r => r.path));
+  const refusals = [
+    ...shapeRefusals,
+    ...(await refusalsForConstrainedFieldsLeaving({
+      adapter: args.adapter,
+      dialect,
+      tableName: args.tableName,
+      builtBy: args.builtBy,
+      defaultLocale: args.defaultLocale,
+      leaving: new Set(
+        [...leaving].filter(name => !refusedPaths.has(`fields.${name}`))
+      ),
+      oldFields: args.oldFields,
+      newFields: args.newFields,
+      surface: "builder",
+    })),
   ];
   if (refusals.length > 0) {
     throw NextlyError.validation({
@@ -170,6 +192,31 @@ export async function archiveFieldsLeavingTranslation(args: {
       newFields: args.newFields,
     })
   );
+}
+
+/**
+ * The fields a schema dialog's apply pushes first when a Required or Unique field stops being
+ * translated: those fields without their settings. Created with them, the shared column would hold
+ * NULL or one placeholder in every entry before the companion transition copies the default
+ * language's values in, so the apply pushes this list, runs the transition, and then pushes the
+ * real fields to apply the settings. Undefined when no field needs it.
+ */
+export function fieldsWithLeavingSettingsDeferred<
+  F extends LeavingFieldLike,
+>(args: {
+  oldFields: readonly LeavingFieldLike[];
+  newFields: readonly F[];
+  wasLocalized: boolean;
+  isLocalized: boolean;
+}): F[] | undefined {
+  if (!args.wasLocalized || !args.isLocalized) return undefined;
+  const deferred = withoutLeavingConstraints(
+    args.newFields,
+    new Set(fieldsLeavingTranslation(args.oldFields, args.newFields))
+  );
+  return deferred.some((f, i) => f !== args.newFields[i])
+    ? deferred
+    : undefined;
 }
 
 /**

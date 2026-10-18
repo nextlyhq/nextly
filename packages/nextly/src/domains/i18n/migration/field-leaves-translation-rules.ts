@@ -31,6 +31,8 @@ export interface LeavingTranslationRefusal {
   code:
     | "RESHAPED_FIELD_LEAVES_TRANSLATION"
     | "CONSTRAINED_FIELD_LEAVES_TRANSLATION"
+    | "REQUIRED_FIELD_LEAVES_WITHOUT_VALUES"
+    | "UNIQUE_FIELD_LEAVES_OVER_DUPLICATES"
     | "RESHAPED_FIELD_JOINS_TRANSLATION"
     | "RESHAPED_TRANSLATED_FIELD_RENAMED";
   /** Why the field cannot leave or join translation in this change, as one sentence. */
@@ -45,7 +47,7 @@ export interface LeavingTranslationRefusal {
  * A refusal whose message is derived from its reason and steps, so a surface that lists the
  * steps and one that prints the message cannot say different things.
  */
-function refusal(
+export function refusal(
   path: string,
   code: LeavingTranslationRefusal["code"],
   reason: string,
@@ -54,7 +56,9 @@ function refusal(
   return { path, code, reason, steps, message: [reason, ...steps].join(" ") };
 }
 
-type Surface = "builder" | "code";
+/** Whose steps a refusal names: the Schema Builder's settings, or the config and its CLI. */
+export type TranslationSurface = "builder" | "code";
+type Surface = TranslationSurface;
 type Constraint = "required" | "unique";
 
 /**
@@ -74,10 +78,10 @@ export function storageDiffers(
 }
 
 /**
- * The settings a field cannot carry while it stops being translated: its own flags, and
- * `unique` when a unique index covers it without the flag.
+ * The settings a field leaving translation has to take on after its values are shared: its own
+ * flags, and `unique` when a unique index covers it without the flag.
  */
-function constraintsOf(
+export function leavingFieldConstraints(
   field: LeavingFieldLike,
   uniqueIndexed: ReadonlySet<string> | undefined
 ): Constraint[] {
@@ -175,12 +179,31 @@ export function refusalsForFieldsLeavingTranslation(args: {
       refusals.push(reshapedRefusal(field.name, args.surface));
       continue;
     }
-    const constraints = constraintsOf(field, args.uniqueIndexed);
-    if (constraints.length > 0) {
+    // The Builder's paths create the shared column without these settings, copy the values in, and
+    // only then apply them (`withoutLeavingConstraints`), asking first whether the values can take
+    // them (`refusalsForConstrainedFieldsLeaving`).
+    const constraints = leavingFieldConstraints(field, args.uniqueIndexed);
+    if (constraints.length > 0 && args.surface === "code") {
       refusals.push(constrainedRefusal(field.name, constraints, args.surface));
     }
   }
   return refusals;
+}
+
+/**
+ * `fields` with each field in `leaving` that carries a leaving field's settings made optional and
+ * not unique: the shape its shared column is created in, before the default language's values are
+ * copied into it. Every other field is returned as it is.
+ */
+export function withoutLeavingConstraints<F extends LeavingFieldLike>(
+  fields: readonly F[],
+  leaving: ReadonlySet<string>
+): F[] {
+  return fields.map(f =>
+    leaving.has(f.name) && leavingFieldConstraints(f, undefined).length > 0
+      ? { ...f, required: false, unique: false }
+      : f
+  );
 }
 
 function builderConstraintSteps(constraints: readonly Constraint[]): string[] {

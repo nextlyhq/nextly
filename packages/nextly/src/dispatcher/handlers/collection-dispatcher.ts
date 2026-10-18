@@ -32,7 +32,10 @@ import {
   respondMutation,
 } from "../../api/response-shapes";
 import { assertLocalizationConfigured } from "../../domains/i18n/config/require-app-config";
-import { archiveFieldsLeavingTranslation } from "../../domains/i18n/migration/archive-preflight";
+import {
+  archiveFieldsLeavingTranslation,
+  fieldsWithLeavingSettingsDeferred,
+} from "../../domains/i18n/migration/archive-preflight";
 import { companionRenameFromResolutions } from "../../domains/i18n/migration/companion-rename";
 import { ensureI18nArchive } from "../../domains/i18n/migration/ensure-archive";
 import { buildCompanionTransitionStatements } from "../../domains/i18n/migration/reconcile-companion";
@@ -754,12 +757,21 @@ const COLLECTIONS_METHODS: Record<
       // candidates for the new collection being saved.
       const desired = await buildFullDesiredSchema();
 
+      // A Required or Unique field leaving translation is pushed without its setting first, and
+      // the setting is pushed once the companion transition has copied its values in.
+      const settingsDeferred = fieldsWithLeavingSettingsDeferred({
+        oldFields: (collection.fields ?? []) as unknown as FieldDefinition[],
+        newFields: fields as unknown as FieldDefinition[],
+        wasLocalized,
+        isLocalized,
+      });
+
       // Splice in the user's changes for THIS collection (overwrites
       // any registry entry for the same slug).
       desired.collections[p.collectionName] = {
         slug: p.collectionName,
         tableName,
-        fields: fields as DesiredCollection["fields"],
+        fields: (settingsDeferred ?? fields) as DesiredCollection["fields"],
         // Mirror previewSchemaChanges so apply diffs against the same
         // desired schema preview classified.
         status: collection.status === true,
@@ -1008,6 +1020,17 @@ const COLLECTIONS_METHODS: Record<
             },
           });
         }
+      }
+
+      // The settings the first push left off, now that the shared columns hold the default
+      // language's values. Whether those values can take them was asked before anything ran.
+      if (settingsDeferred) {
+        desired.collections[p.collectionName] = {
+          ...desired.collections[p.collectionName],
+          fields: fields as DesiredCollection["fields"],
+        };
+        const settled = await apply(desired, "ui", { promptChannel: "auto" });
+        if (!settled.success) throw new Error(settled.error.message);
       }
 
       // pipeline.apply mutates the live DB (renamed/added/dropped
