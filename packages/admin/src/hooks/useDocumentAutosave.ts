@@ -200,5 +200,16 @@ export function useDocumentAutosave({
     // needs a different subscription, and comparing the object itself would
     // resubscribe on every render.
   }, [form, schedule, cancel, scope?.kind, scope?.slug, scope]);
+
+  /*
+   * Recording back on with work still unsaved asks for a recording again. A
+   * save slower than the debounce lets the edit's timer fire while recording
+   * is off, where flush refuses it; without this, the work would have no
+   * recovery point until the next keystroke. A save that stored the work left
+   * the form clean, so nothing is asked for then.
+   */
+  useEffect(() => {
+    if (enabled && dirtyRef.current) schedule();
+  }, [enabled, schedule]);
   return { status, lastSavedAt };
 }

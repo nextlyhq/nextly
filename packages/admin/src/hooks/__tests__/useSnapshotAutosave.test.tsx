@@ -73,6 +73,57 @@ describe("useSnapshotAutosave", () => {
     await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
   });
 
+  /**
+   * Holds the first recording open, so a second one asked for meanwhile is
+   * queued behind it rather than started. Returns how to let the first finish.
+   */
+  function withRecordingInFlight() {
+    let finish: () => void = () => undefined;
+    const save = vi
+      .fn<() => Promise<{ updatedAt: string }>>()
+      .mockImplementationOnce(
+        () =>
+          new Promise(resolve => {
+            finish = () => resolve({ updatedAt: STORED_AT });
+          })
+      )
+      .mockImplementation(() => saved());
+    const hook = renderHook(() =>
+      useSnapshotAutosave({ identity: "doc-1", save, debounceMs: DEBOUNCE })
+    );
+    act(() => hook.result.current.schedule());
+    act(() => void vi.advanceTimersByTime(DEBOUNCE));
+    // A second edit's timer fires while the first recording is still open.
+    act(() => hook.result.current.schedule());
+    act(() => void vi.advanceTimersByTime(DEBOUNCE));
+    return { save, hook, finish: () => finish() };
+  }
+
+  it("also drops the recording queued behind one still in flight", async () => {
+    // The other half of cancel(): the timer has already fired, so what is
+    // pending is the re-flush queued behind the open recording, and it would
+    // run as soon as that recording finished.
+    const { save, hook, finish } = withRecordingInFlight();
+    expect(save).toHaveBeenCalledTimes(1);
+
+    act(() => hook.result.current.cancel());
+    await act(async () => finish());
+    act(() => void vi.advanceTimersByTime(DEBOUNCE * 2));
+
+    await Promise.resolve();
+    expect(save).toHaveBeenCalledTimes(1);
+  });
+
+  it("runs the queued recording when nothing cancels it, which is the control", async () => {
+    // Without this, the case above passes on a core that never re-flushes.
+    const { save, finish } = withRecordingInFlight();
+    expect(save).toHaveBeenCalledTimes(1);
+
+    await act(async () => finish());
+
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(2));
+  });
+
   it("waits for the debounce before recording anything", async () => {
     const save = vi.fn(() => saved());
     const { result } = renderHook(() =>

@@ -111,6 +111,87 @@ describe("useDocumentAutosave", () => {
     expect(saveSpy).not.toHaveBeenCalled();
   });
 
+  it("still records edits typed while the save was in flight", async () => {
+    // The control for the two cases above. A save that lands resets the form
+    // to what was stored and then re-applies what the author typed meanwhile,
+    // in one tick: clean, then dirty again. Dropping the pending recording on
+    // the clean must not drop these.
+    const { result } = renderHook(() => useHarness());
+
+    act(() => {
+      result.current.form.setValue("title", "hello", { shouldDirty: true });
+    });
+    act(() => {
+      result.current.form.reset({ title: "hello" });
+      result.current.form.setValue("title", "hello again", {
+        shouldDirty: true,
+      });
+    });
+    act(() => {
+      vi.advanceTimersByTime(DEBOUNCE);
+    });
+
+    await waitFor(() => expect(saveSpy).toHaveBeenCalledTimes(1));
+    expect(saveSpy).toHaveBeenCalledWith(SCOPE, { title: "hello again" }, null);
+  });
+
+  it("records edits typed while recording was off, once it is back on", async () => {
+    // The same with recording off around the save, as both editors do it:
+    // hearing the form while recording is off must not lose what the author
+    // types during the save. Cancelling on disable instead would.
+    const { result, rerender } = renderHook(
+      ({ enabled }) => useHarness(SCOPE, enabled),
+      { initialProps: { enabled: true } }
+    );
+
+    act(() => {
+      result.current.form.setValue("title", "hello", { shouldDirty: true });
+    });
+    rerender({ enabled: false });
+    act(() => {
+      result.current.form.reset({ title: "hello" });
+      result.current.form.setValue("title", "hello again", {
+        shouldDirty: true,
+      });
+    });
+    rerender({ enabled: true });
+    act(() => {
+      vi.advanceTimersByTime(DEBOUNCE);
+    });
+
+    await waitFor(() => expect(saveSpy).toHaveBeenCalledTimes(1));
+    expect(saveSpy).toHaveBeenCalledWith(SCOPE, { title: "hello again" }, null);
+  });
+
+  it("records unsaved work once recording is back on after a slow save", async () => {
+    // A save that keeps recording off for longer than the debounce: the
+    // edit's timer fires while recording is off and is refused. If the work is
+    // still unsaved when recording comes back on (the save failed, or edits
+    // landed during it), it is asked for again rather than left with no
+    // recovery point until the next keystroke.
+    const { result, rerender } = renderHook(
+      ({ enabled }) => useHarness(SCOPE, enabled),
+      { initialProps: { enabled: true } }
+    );
+
+    act(() => {
+      result.current.form.setValue("title", "hello", { shouldDirty: true });
+    });
+    rerender({ enabled: false });
+    act(() => {
+      vi.advanceTimersByTime(DEBOUNCE * 2);
+    });
+    expect(saveSpy).not.toHaveBeenCalled();
+
+    rerender({ enabled: true });
+    act(() => {
+      vi.advanceTimersByTime(DEBOUNCE);
+    });
+
+    await waitFor(() => expect(saveSpy).toHaveBeenCalledTimes(1));
+    expect(saveSpy).toHaveBeenCalledWith(SCOPE, { title: "hello" }, null);
+  });
+
   it("records the values in the editor after the debounce", async () => {
     const { result } = renderHook(() => useHarness());
 
