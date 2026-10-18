@@ -775,6 +775,7 @@ describe("register handler: respondAction shape", () => {
   it("silent-success path returns generic message (no email echo, no user)", async () => {
     const deps = {
       allowedOrigins: ALLOWED_ORIGINS,
+      allowRegistration: true,
       revealRegistrationConflict: false,
       loginStallTimeMs: 0,
       registerUser: vi.fn().mockResolvedValue({
@@ -801,6 +802,7 @@ describe("register handler: respondAction shape", () => {
   it("reveal-on success path returns 201 with user", async () => {
     const deps = {
       allowedOrigins: ALLOWED_ORIGINS,
+      allowRegistration: true,
       revealRegistrationConflict: true,
       loginStallTimeMs: 0,
       registerUser: vi.fn().mockResolvedValue({

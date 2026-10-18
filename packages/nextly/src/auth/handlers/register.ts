@@ -53,6 +53,11 @@ const RegisterPayloadSchema = z.object({
 export interface RegisterHandlerDeps {
   allowedOrigins: string[];
   /**
+   * Whether strangers may register (`auth.allowRegistration`). While false,
+   * every registration is refused before anything is created or sent.
+   */
+  allowRegistration: boolean;
+  /**
    * Whether to surface email conflicts as 409 DUPLICATE (true) or swallow
    * them and return generic silent-success (false, the spec default).
    */
@@ -138,6 +143,17 @@ export async function handleRegister(
 
     // beforeRegister hook (D71) — let a plugin normalize/augment the payload
     // before validation. No-op when no hooks are registered.
+    // Off unless the app turns it on: refused before any hook, account or
+    // email. Not a silent success, so the person learns the app does not take
+    // sign-ups rather than waiting for an email that never comes.
+    if (!deps.allowRegistration) {
+      throw new NextlyError({
+        code: "FORBIDDEN",
+        publicMessage: "Registration is not open.",
+        logContext: { reason: "registration-disabled" },
+      });
+    }
+
     let regBody = body as Record<string, unknown>;
     if (deps.authHooks && deps.pluginCtx) {
       regBody = await deps.authHooks.runBeforeRegister(regBody, deps.pluginCtx);

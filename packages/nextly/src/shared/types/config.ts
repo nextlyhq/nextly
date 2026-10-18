@@ -711,6 +711,17 @@ export interface AuthConfig {
   revealRegistrationConflict?: boolean;
 
   /**
+   * Whether strangers may create an account through the registration route.
+   *
+   * Default: `false`. While it is off, a registration is refused before any
+   * account is created or any email sent. An account still awaiting
+   * verification from before can still complete it by its link. Turn it on
+   * only for an app whose users sign themselves up; an account registered this
+   * way gets no role, and never becomes the install's first administrator.
+   */
+  allowRegistration?: boolean;
+
+  /**
    * @experimental Opt-in auth strategies (D71). A plugin may *provide* a
    * strategy, but it only authenticates anyone once listed here. Strategies run
    * in order; the built-in `password` strategy always runs last.
@@ -724,6 +735,8 @@ export interface AuthConfig {
 export interface SanitizedAuthConfig {
   /** Whether to reveal duplicate-email registrations on the wire. Defaults to false. */
   revealRegistrationConflict: boolean;
+  /** Whether strangers may register. Defaults to false. */
+  allowRegistration: boolean;
   /** @experimental Opt-in auth strategies (D71); built-in password runs last. */
   strategies?: AuthStrategy[];
 }
@@ -733,6 +746,7 @@ export interface SanitizedAuthConfig {
  */
 export const DEFAULT_AUTH_CONFIG: SanitizedAuthConfig = {
   revealRegistrationConflict: false,
+  allowRegistration: false,
 };
 
 // ============================================================
@@ -1202,6 +1216,10 @@ export function sanitizeConfig(config: NextlyConfig): SanitizedNextlyConfig {
       revealRegistrationConflict:
         config.auth?.revealRegistrationConflict ??
         DEFAULT_AUTH_CONFIG.revealRegistrationConflict,
+      // Only `true` opens registration; anything else leaves it closed.
+      allowRegistration:
+        config.auth?.allowRegistration === true ||
+        DEFAULT_AUTH_CONFIG.allowRegistration,
       // Pass opt-in auth strategies through unchanged (D71).
       strategies: config.auth?.strategies,
     },

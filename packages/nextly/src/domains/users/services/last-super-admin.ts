@@ -17,6 +17,8 @@
  *
  * @module domains/users/services/last-super-admin
  */
+import { randomUUID } from "node:crypto";
+
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { and, eq, ne, type Column, type SQL } from "drizzle-orm";
 
@@ -113,47 +115,25 @@ export async function refuseRemovingLastSuperAdmin(
   userId: string | number,
   removal: SuperAdminRemoval
 ): Promise<void> {
-  const { roles, users, userRoles } = tables;
+  const { userRoles } = tables;
   const target = String(userId);
 
-  const roleRow = tx
-    .select({ id: roles.id })
-    .from(roles)
-    .where(eq(roles.slug, SUPER_ADMIN_ROLE_SLUG))
-    .limit(1);
-  const [superAdmin] =
-    dialect === "sqlite"
-      ? await roleRow
-      : await roleRow.for(
-          dialect === "postgresql" ? "no key update" : "update"
-        );
+  const superAdminRoleId = await lockSuperAdminRole(tx, tables, dialect);
   // No role, no super-admin to protect.
-  if (!superAdmin) return;
-  const superAdminRoleId = String(superAdmin.id);
+  if (superAdminRoleId === undefined) return;
 
   // The active accounts holding, in force, the `super-admin` role itself.
-  const now = new Date();
   const holders = (who: SQL) =>
-    tx
-      .select({ userId: userRoles.userId, roleId: userRoles.roleId })
-      .from(userRoles)
-      .innerJoin(users, eq(users.id, userRoles.userId))
-      .where(
-        and(
-          who,
-          eq(userRoles.roleId, superAdminRoleId),
-          roleAssignmentInForce(userRoles, now),
-          eq(users.isActive, true)
-        )
-      );
-  const latest = (read: LockableRead): PromiseLike<Rows> =>
-    dialect === "sqlite" ? read : read.for("share");
+    superAdminHolders(tx, tables, superAdminRoleId, who, { activeOnly: true });
 
-  const held = await latest(holders(eq(userRoles.userId, target)));
+  const held = await latestRows(holders(eq(userRoles.userId, target)), dialect);
   if (held.length === 0) return;
   if (keepsTheRole(removal, superAdminRoleId)) return;
 
-  const others = await latest(holders(ne(userRoles.userId, target)).limit(1));
+  const others = await latestRows(
+    holders(ne(userRoles.userId, target)).limit(1),
+    dialect
+  );
   if (others.length > 0) return;
 
   throw NextlyError.conflict({
@@ -165,6 +145,145 @@ export async function refuseRemovingLastSuperAdmin(
       userId: target,
     },
   });
+}
+
+/**
+ * Lock the `super-admin` role's row inside `tx`'s transaction, and return its
+ * id, or `undefined` when the role does not exist. Exported for the
+ * first-administrator grant, which takes it before its transaction writes
+ * anything (grantFirstAdministratorInTx).
+ *
+ * Every write that adds or removes the install's administrator takes this lock
+ * first, so they take it in one order and run one at a time: on PostgreSQL
+ * `FOR NO KEY UPDATE`, which leaves a concurrent grant's foreign-key check free
+ * to proceed; on MySQL `FOR UPDATE`; on SQLite none, since its write
+ * transactions open with `BEGIN IMMEDIATE` and so run one at a time already.
+ */
+export async function lockSuperAdminRole(
+  tx: LastSuperAdminTx,
+  tables: LastSuperAdminTables,
+  dialect: SupportedDialect
+): Promise<string | undefined> {
+  const { roles } = tables;
+  const roleRow = tx
+    .select({ id: roles.id })
+    .from(roles)
+    .where(eq(roles.slug, SUPER_ADMIN_ROLE_SLUG))
+    .limit(1);
+  const [superAdmin] =
+    dialect === "sqlite"
+      ? await roleRow
+      : await roleRow.for(
+          dialect === "postgresql" ? "no key update" : "update"
+        );
+  return superAdmin ? String(superAdmin.id) : undefined;
+}
+
+/**
+ * The accounts holding the `super-admin` role itself, in force, narrowed by
+ * `who`, and to active accounts when `activeOnly` is set.
+ */
+function superAdminHolders(
+  tx: LastSuperAdminTx,
+  tables: LastSuperAdminTables,
+  superAdminRoleId: string,
+  who: SQL | undefined,
+  { activeOnly }: { activeOnly: boolean }
+): FilteredRead {
+  const { users, userRoles } = tables;
+  return tx
+    .select({ userId: userRoles.userId, roleId: userRoles.roleId })
+    .from(userRoles)
+    .innerJoin(users, eq(users.id, userRoles.userId))
+    .where(
+      and(
+        who,
+        eq(userRoles.roleId, superAdminRoleId),
+        roleAssignmentInForce(userRoles, new Date()),
+        activeOnly ? eq(users.isActive, true) : undefined
+      )
+    );
+}
+
+/**
+ * A read of the latest committed rows. Locking on PostgreSQL and MySQL, where
+ * a plain read under MySQL's repeatable read could answer from a snapshot that
+ * predates a racing write's commit; plain on SQLite, whose write transactions
+ * already run one at a time.
+ */
+function latestRows(
+  read: LockableRead,
+  dialect: SupportedDialect
+): PromiseLike<Rows> {
+  return dialect === "sqlite" ? read : read.for("share");
+}
+
+/**
+ * Whether anyone holds the `super-admin` role in force, read without a lock.
+ *
+ * A cheap answer for skipping the first-administrator grant on an install that
+ * already has one. It decides nothing that matters: the grant itself checks
+ * again under the role row's lock (grantFirstAdministratorInTx).
+ */
+export async function superAdminRoleHeld(
+  db: LastSuperAdminTx,
+  tables: LastSuperAdminTables
+): Promise<boolean> {
+  const { roles } = tables;
+  const [role] = await db
+    .select({ id: roles.id })
+    .from(roles)
+    .where(eq(roles.slug, SUPER_ADMIN_ROLE_SLUG))
+    .limit(1);
+  if (!role) return false;
+  const held = await superAdminHolders(db, tables, String(role.id), undefined, {
+    activeOnly: false,
+  }).limit(1);
+  return held.length > 0;
+}
+
+/** The slice of a Drizzle transaction the first-administrator grant writes through. */
+export interface FirstAdministratorTx extends LastSuperAdminTx {
+  insert(table: unknown): { values(row: unknown): PromiseLike<unknown> };
+}
+
+/**
+ * Make `userId` the install's first administrator, inside `tx`'s transaction,
+ * when nobody holds the `super-admin` role yet. Returns whether it did.
+ *
+ * For an account the app itself provisions on an install with no
+ * administrator: how a fresh install gets one. The caller takes the role row's
+ * lock with lockSuperAdminRole before its transaction writes anything, the
+ * order every removal takes it in, and passes the role id here once the
+ * account is inserted. Of two accounts provisioned at once on an empty install
+ * exactly one is then granted; a check made before the insert, and a grant
+ * made after its commit, let both through. Taking the lock after the insert
+ * instead deadlocks on MySQL, where the holders read below can wait on the
+ * other transaction's uncommitted account while it waits on the lock. Any
+ * in-force holder counts, active or not, so a racing grant to an account that
+ * is not yet active still counts as the one.
+ */
+export async function grantFirstAdministratorInTx(
+  tx: FirstAdministratorTx,
+  tables: LastSuperAdminTables,
+  dialect: SupportedDialect,
+  superAdminRoleId: string,
+  userId: string | number
+): Promise<boolean> {
+  const held = await latestRows(
+    superAdminHolders(tx, tables, superAdminRoleId, undefined, {
+      activeOnly: false,
+    }).limit(1),
+    dialect
+  );
+  if (held.length > 0) return false;
+  await tx.insert(tables.userRoles).values({
+    id: randomUUID(),
+    userId: String(userId),
+    roleId: superAdminRoleId,
+    expiresAt: null,
+  });
+  return true;
 }
 
 /**

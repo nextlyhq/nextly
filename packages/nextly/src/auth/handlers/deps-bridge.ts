@@ -100,7 +100,12 @@ export function buildAuthRouterDeps(
     // from the registered NextlyConfig. Defaults to false (silent-success on
     // email conflict) when config is not yet initialised or the flag is
     // unset. The schema is already populated by sanitizeConfig.
-    revealRegistrationConflict: readRevealRegistrationConflict(getService),
+    revealRegistrationConflict: readAuthFlag(
+      getService,
+      "revealRegistrationConflict"
+    ),
+    // Off unless the app turns it on (staff-only by default).
+    allowRegistration: readAuthFlag(getService, "allowRegistration"),
     devAutoLogin: readDevAutoLogin(getService),
     allowedOrigins: env.NEXTLY_ALLOWED_ORIGINS_PARSED || [],
     ...readProxyTrustSettings(() => getService("config")),
@@ -753,26 +758,20 @@ function readServiceConfig(
 }
 
 /**
- * Read `auth.revealRegistrationConflict` from the NextlyConfig registered in
- * the DI container. Returns the spec default (false) when the container is
- * not yet initialised or the flag is unset.
+ * Read a boolean `auth.<name>` flag from the NextlyConfig registered in the DI
+ * container. Only `true` turns a flag on; an unset or non-boolean value, or a
+ * container not yet initialised, answers `false`, each flag's safe default.
  */
-function readRevealRegistrationConflict(
-  getService: (name: string) => unknown
+function readAuthFlag(
+  getService: (name: string) => unknown,
+  name: "revealRegistrationConflict" | "allowRegistration"
 ): boolean {
   try {
     const config = getService("config");
     if (config && typeof config === "object" && "auth" in config) {
       const auth = (config as { auth?: unknown }).auth;
-      if (
-        auth &&
-        typeof auth === "object" &&
-        "revealRegistrationConflict" in auth
-      ) {
-        return (
-          (auth as { revealRegistrationConflict?: unknown })
-            .revealRegistrationConflict === true
-        );
+      if (auth && typeof auth === "object" && name in auth) {
+        return (auth as Record<string, unknown>)[name] === true;
       }
     }
     return false;
