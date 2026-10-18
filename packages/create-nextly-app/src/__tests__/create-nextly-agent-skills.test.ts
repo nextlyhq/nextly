@@ -96,6 +96,7 @@ vi.mock("../generators/agent-skills", async importOriginal => {
 });
 
 import { createNextly } from "../create-nextly";
+import { packageVersion } from "../lib/package-version";
 
 /** The release the test's bundle declares, apart from this CLI's own on purpose. */
 const SKILLS_VERSION = "9.9.9-skills";
@@ -240,6 +241,17 @@ describe("createNextly and the skills for coding agents", () => {
       ".agents/skills/nextly-install": SKILL_TEXT,
       ".claude/skills/nextly-install": "edited by the developer",
     });
+    // The update command names this CLI's release tag, which publishes this
+    // bundle, not the release the skills were checked against, whose tag
+    // may carry no user skills at all.
+    const kept = prompts.warn.mock.calls
+      .map(([message]) => String(message))
+      .find(message => message.includes(".claude/skills/nextly-install"));
+    expect(kept).toContain(`nextlyhq/nextly#v${packageVersion()}'`);
+    expect(kept).not.toContain(`#v${SKILLS_VERSION}`);
+    // During a release the package can be installable before its tag is
+    // pushed, so the message also names where to look then.
+    expect(kept).toContain("nextlyhq.com/docs/guides/coding-agents");
   });
 
   it("stops before anything is scaffolded when the bundle is broken", async () => {

@@ -24,6 +24,9 @@ vi.mock("../../../api/versions-access", () => ({
   // mutates the snapshot in place, so a mock that RETURNED one would describe a
   // contract the module does not have.
   hydrateVersionSnapshot: () => Promise.resolve(),
+  // The page as read: these cases judge paging and the gate, not the
+  // "last looked at" marking, which has its own tests.
+  withLastViewedMarks: (rows: unknown) => Promise.resolve(rows),
 }));
 
 const getAutosaveSpy = vi.fn();
@@ -53,10 +56,43 @@ import {
   getAutosaveForDocument,
   getVersionForDocument,
   listVersionsForDocument,
+  respondVersionPage,
   userFromParams,
 } from "../versions-methods";
 
 const user = { id: "user-1" };
+
+describe("respondVersionPage", () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it("rebuilds the caller and paging from the params, and answers privately", async () => {
+    listSpy.mockResolvedValue([]);
+
+    const response = await respondVersionPage(
+      { scopeKind: "collection", slug: "posts", entryId: "e1" },
+      {
+        limit: "10",
+        _authenticatedUserId: "user-1",
+        _authenticatedUserRoles: JSON.stringify(["editor"]),
+      }
+    );
+
+    expect(assertReadableSpy).toHaveBeenCalledWith(
+      "collection",
+      "posts",
+      "e1",
+      expect.objectContaining({ id: "user-1", roles: ["editor"] }),
+      undefined
+    );
+    expect(listSpy).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ limit: 11 })
+    );
+    // The page marks where this person last looked, so no shared cache may
+    // keep it.
+    expect(response.headers.get("cache-control")).toMatch(/private/);
+  });
+});
 
 describe("listVersionsForDocument", () => {
   beforeEach(() => vi.clearAllMocks());

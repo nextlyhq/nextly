@@ -3,7 +3,7 @@ title: Authentication
 description: Custom email + password authentication with JWT sessions, API keys, RBAC, and the super-admin bootstrap flow.
 ---
 
-> **Parts of this page need the release after 0.0.2-alpha.66:** the access token's account check every five seconds (on 0.0.2-alpha.66 the token is trusted until it expires), the refresh cookie's scope, the last-super-admin rule, the rate limit on the email-verification routes, and `/auth/pending`.
+> **Parts of this page need the release after 0.0.2-alpha.66:** the access token's account check every five seconds (on 0.0.2-alpha.66 the token is trusted until it expires), the refresh cookie's scope, the last-super-admin rule, the rate limit on the email-verification routes, `/auth/pending`, and the auth rate limit's per-account counting when no client address can be read, with its two warnings.
 
 Nextly ships a complete custom authentication system. It is **not** built on NextAuth, Auth.js, or any OAuth library. The runtime owns:
 
@@ -310,9 +310,41 @@ Failed logins are tracked per-user. After 5 consecutive failures, the account is
 
 Every login response is held for at least 500ms regardless of whether the account exists. This prevents email enumeration via response timing.
 
-### Per-IP auth-rate-limit
+### Auth rate limit
 
-A separate per-IP envelope rate-limits `/auth/login`, `/auth/register`, `/auth/forgot-password`, `/auth/verify-email/resend`, `/auth/verify-email`, `/auth/reset-password`, `/auth/accept-invite`, `/auth/challenge/resolve` and `/auth/set-initial-password`, sharing one budget per IP (default: 30 requests/hour, configurable via `security.authRateLimit`). This stops credential-stuffing attacks from a single source even before per-user lockout kicks in.
+A separate rate limit guards `/auth/login`, `/auth/register`, `/auth/forgot-password`, `/auth/verify-email/resend`, `/auth/verify-email`, `/auth/reset-password`, `/auth/accept-invite`, `/auth/challenge/resolve` and `/auth/set-initial-password`. It stops credential stuffing before per-user lockout kicks in. The budget is 30 requests an hour by default, set with `security.authRateLimit`; `requestsPerHour: 0` turns it off. What it counts against depends on whether Nextly can read the client's address.
+
+**When the client address can be read**, every request from that address counts against one budget, across all of these routes. An address can be read only when `security.trustProxy` is `true` and the request came through a proxy that reports the client (see [Deployment](/docs/guides/deployment#client-addresses-and-the-auth-rate-limit)).
+
+**When it cannot**, which is every request while `security.trustProxy` is unset (the default), each request counts against the account it names instead:
+
+| Request | Counts against |
+|---|---|
+| Sign-in, registration, password-reset request, verification resend | The email address in the body, compared the way sign-in compares it (case and surrounding spaces ignored), whether or not an account has it. |
+| Password reset, email verification, invite acceptance, second-factor answer, initial-password set | The account the request's token belongs to. |
+| A body that names no address, or a token that belongs to no account | One shared account-less budget. |
+
+Sign-in is keyed on the `email` its body carries, which is what the built-in password strategy reads. A [custom strategy](/docs/plugins/auth) that signs people in from something else, such as a username or an OAuth code, is not yet keyed on what it reads. From an unreadable address, a sign-in to it that carries no `email` counts against the account-less budget below, which every such sign-in shares (30 an hour by default). One that carries an `email` counts against that address's budget, whatever the strategy reads. Per-identity limits for these strategies need the strategy to name its account to the limiter, which a later release adds; until then, `security.trustProxy` behind a proxy is what keeps their sign-in per client.
+
+Each account, and the account-less budget, gets the configured budget (30 an hour by default). All of these requests together are also held to a ceiling of 100 times that budget (3,000 an hour by default), so inventing addresses buys no extra attempts. A request whose address can be read never counts against the ceiling.
+
+These counts are kept per server process unless the app gives `rateLimit.store` a store object of its own that every instance shares, such as one backed by Redis ([`rateLimit`](/docs/configuration/nextly-config#ratelimit)). The built-in `"database"` [limit store](/docs/configuration/limit-store) does not count sign-in limits yet. On Vercel, or any deployment with more than one instance, each instance otherwise counts on its own, so every budget and the ceiling are multiplied by the number of instances. Configure a shared store object wherever the limits must hold as written.
+
+What happens when each is spent. Each refused request is answered with `429` and a `Retry-After` header saying when to try again. With Nextly's own counts, that is when the oldest counted request leaves the window (an hour by default). A store object of your own keeps its own window and reports when it resets. One without `consume` also counts the requests it refuses, so, depending on how it keeps its window, a client that keeps retrying can keep its budget spent.
+
+- **An account's budget:** requests naming that account are refused. Other accounts are unaffected until the ceiling is met.
+- **The account-less budget:** requests that name no account, or carry a token that matches none, are refused. Requests that name an account are unaffected.
+- **The ceiling:** every request whose address cannot be read is refused, whatever it names. Requests whose address can be read are unaffected.
+
+A request its own budget refuses can still count toward the ceiling, so the ceiling can be met by requests that are themselves refused:
+
+- On the token routes (password reset, email verification, invite acceptance, second-factor answer, initial-password set), a request that carries a token spends a ceiling place before the token is looked up, because that lookup is the work the ceiling bounds. It has spent it whether the token turns out to belong to an account or to none.
+- With a shared store object, two requests for the same account that arrive together can both pass the check for its last place, and the one then refused has spent a ceiling place.
+- With a store object that has no `consume`, every refused request counts toward the ceiling.
+
+Two limits remain while addresses cannot be read. Someone who knows an address can spend that one account's budget and hold its sign-in shut for the window. Someone sending requests at the ceiling's rate can hold every unreadable-address sign-in shut for as long as they keep it up. Making client addresses readable removes both.
+
+Nextly says when it is counting this way. Starting on Vercel with `security.trustProxy` unset logs a warning naming the setting. The first auth request that arrives with proxy headers (`x-forwarded-for`, `cf-connecting-ip` or `x-real-ip`) but still yields no address logs one warning per process, naming `security.trustProxy` and `TRUSTED_PROXY_IPS`.
 
 ### CSRF protection
 

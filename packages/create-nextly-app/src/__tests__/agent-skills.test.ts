@@ -4,11 +4,13 @@
  * never over a skill folder the project already has.
  */
 import {
+  chmod,
   mkdir,
   mkdtemp,
   readFile,
   readdir,
   rm,
+  stat,
   symlink,
   writeFile,
 } from "node:fs/promises";
@@ -21,6 +23,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   AGENT_SKILL_HOMES,
   type BundledSkill,
+  bundledSkillsVersionOrNull,
   projectNextlyVersion,
   readBundledSkills,
   skillsVersionMismatch,
@@ -45,7 +48,7 @@ afterEach(async () => {
 const skill = (name: string, text = `---\nname: ${name}\n---\n# ${name}\n`) =>
   ({
     name,
-    files: [{ path: "SKILL.md", content: Buffer.from(text) }],
+    files: [{ path: "SKILL.md", content: Buffer.from(text), mode: 0o644 }],
   }) satisfies BundledSkill;
 
 /** Writes a bundle folder: each skill name mapped to its files. */
@@ -57,6 +60,29 @@ async function bundle(files: Record<string, string>): Promise<string> {
   }
   return root;
 }
+
+describe("bundledSkillsVersionOrNull", () => {
+  const declaring = (version: string): string =>
+    `---\nname: x\nmetadata:\n  nextly-version: ${version}\n---\n`;
+
+  it("is the one release every bundled skill declares", async () => {
+    const root = await bundle({
+      "a-skill/SKILL.md": declaring("0.0.2-alpha.70"),
+      "b-skill/SKILL.md": declaring("0.0.2-alpha.70"),
+    });
+    expect(bundledSkillsVersionOrNull(root)).toBe("0.0.2-alpha.70");
+  });
+
+  // The guide then offers no restore, rather than one tied to a guess.
+  it("is null for skills that disagree, and for a missing bundle", async () => {
+    const root = await bundle({
+      "a-skill/SKILL.md": declaring("0.0.2-alpha.70"),
+      "b-skill/SKILL.md": declaring("0.0.2-alpha.71"),
+    });
+    expect(bundledSkillsVersionOrNull(root)).toBeNull();
+    expect(bundledSkillsVersionOrNull(path.join(dir, "absent"))).toBeNull();
+  });
+});
 
 describe("readBundledSkills", () => {
   it("reads every skill folder with all its files, nested ones too", async () => {
@@ -84,6 +110,62 @@ describe("readBundledSkills", () => {
       { name: "b-skill", files: [["SKILL.md", "b"]] },
     ]);
   });
+
+  // A skill may ship a helper script its instructions run directly, so the
+  // executable bit travels with the bytes.
+  // Windows has no Unix permission bits to keep: it reports 0o666 whatever
+  // was set, so these two run only where the bits exist.
+  it.skipIf(process.platform === "win32")(
+    "keeps each file's mode, an executable script's included",
+    async () => {
+      const root = await bundle({
+        "a-skill/SKILL.md": "a",
+        "a-skill/scripts/run.sh": "#!/bin/sh\n",
+      });
+      await chmod(path.join(root, "a-skill/scripts/run.sh"), 0o755);
+      const project = path.join(dir, "app");
+      await mkdir(project);
+
+      await writeAgentSkills(project, await readBundledSkills(root), "1.2.3");
+
+      for (const home of AGENT_SKILL_HOMES) {
+        const mode = (
+          await stat(path.join(project, home, "a-skill/scripts/run.sh"))
+        ).mode;
+        expect(mode & 0o777).toBe(0o755);
+      }
+    }
+  );
+
+  // A restrictive umask filters the mode a file is created with, so the
+  // bits are applied again after the write.
+  it.skipIf(process.platform === "win32")(
+    "keeps an executable script executable under a umask that strips it",
+    async () => {
+      const root = await bundle({
+        "a-skill/SKILL.md": "a",
+        "a-skill/scripts/run.sh": "#!/bin/sh\n",
+      });
+      await chmod(path.join(root, "a-skill/scripts/run.sh"), 0o755);
+      const skills = await readBundledSkills(root);
+      const project = path.join(dir, "app");
+      await mkdir(project);
+
+      // Strips group and other execute; owner execute stays, so folders
+      // remain usable, as any working umask leaves them.
+      const before = process.umask(0o011);
+      try {
+        await writeAgentSkills(project, skills, "1.2.3");
+      } finally {
+        process.umask(before);
+      }
+
+      const mode = (
+        await stat(path.join(project, ".agents/skills/a-skill/scripts/run.sh"))
+      ).mode;
+      expect(mode & 0o777).toBe(0o755);
+    }
+  );
 
   it("refuses a folder without a SKILL.md, naming it", async () => {
     const root = await bundle({
@@ -120,8 +202,12 @@ describe("writeAgentSkills", () => {
       {
         name: "nextly-deploy",
         files: [
-          { path: "SKILL.md", content: Buffer.from("deploy") },
-          { path: "references/vercel.md", content: Buffer.from("vercel") },
+          { path: "SKILL.md", content: Buffer.from("deploy"), mode: 0o644 },
+          {
+            path: "references/vercel.md",
+            content: Buffer.from("vercel"),
+            mode: 0o644,
+          },
         ],
       },
     ];
@@ -226,13 +312,15 @@ describe("writeAgentSkills", () => {
 // The command is printed by this CLI and written in two places people read;
 // all three must be the one the CLI prints, or an edit to it reaches only one.
 describe("the update command, wherever it is written", () => {
+  // The guide's version is the scaffold's release, filled in at copy time; the
+  // docs page leaves it for the reader to fill.
   it.each([
-    "templates/base/AGENTS.md.template",
-    "docs/guides/coding-agents.mdx",
-  ])("%s gives the command the CLI prints", async file => {
+    ["templates/base/AGENTS.md.template", "{{skillsTag}}"],
+    ["docs/guides/coding-agents.mdx", "<version>"],
+  ])("%s gives the command the CLI prints", async (file, version) => {
     const text = await readFile(path.join(repository, file), "utf8");
 
-    expect(text).toContain(updateSkillsCommand("<version>"));
+    expect(text).toContain(updateSkillsCommand(version));
   });
 });
 
@@ -296,9 +384,9 @@ describe("a skill that cannot be written whole", () => {
     const broken = {
       name: "nextly-install",
       files: [
-        { path: "SKILL.md", content: Buffer.from("install") },
-        { path: "notes", content: Buffer.from("a file") },
-        { path: "notes/more.md", content: Buffer.from("more") },
+        { path: "SKILL.md", content: Buffer.from("install"), mode: 0o644 },
+        { path: "notes", content: Buffer.from("a file"), mode: 0o644 },
+        { path: "notes/more.md", content: Buffer.from("more"), mode: 0o644 },
       ],
     };
 

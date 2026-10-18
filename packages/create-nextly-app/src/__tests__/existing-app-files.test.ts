@@ -24,15 +24,18 @@ import fsExtra from "fs-extra";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { generateIntoExistingApp } from "../generators/existing-app";
+import { readMediaRouteTemplates } from "../generators/media-routes";
 import type { DatabaseConfig, ProjectInfo } from "../types";
 
-const templates = join(
-  dirname(fileURLToPath(import.meta.url)),
-  "..",
-  "..",
-  "..",
-  "..",
-  "templates"
+const templates = await readMediaRouteTemplates(
+  join(
+    dirname(fileURLToPath(import.meta.url)),
+    "..",
+    "..",
+    "..",
+    "..",
+    "templates"
+  )
 );
 
 const projectInfo: ProjectInfo = {
@@ -215,6 +218,31 @@ describe("adding Nextly to an existing app", () => {
     expect(
       existsSync(join(dir, "app/admin/api/media/[[...path]]/route.ts"))
     ).toBe(false);
+  });
+
+  // A project reached through a symbolic link is the app's own choice: every
+  // file is judged below the root alike, so the config is written with the
+  // routes that import it, not skipped while they are written.
+  it("writes every file into a project reached through a symbolic link", async () => {
+    const elsewhere = await mkdtemp(join(tmpdir(), "nextly-via-"));
+    try {
+      const linked = join(elsewhere, "app-link");
+      await symlink(dir, linked);
+
+      await generateIntoExistingApp(
+        linked,
+        "blank",
+        projectInfo,
+        sqlite,
+        templates
+      );
+
+      for (const file of NEXTLY_FILES) {
+        expect(existsSync(join(dir, file)), file).toBe(true);
+      }
+    } finally {
+      await rm(elsewhere, { recursive: true, force: true });
+    }
   });
 
   it("reports what it wrote and what it extended", async () => {

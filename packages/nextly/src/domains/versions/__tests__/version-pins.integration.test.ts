@@ -18,6 +18,7 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import { untilSomeoneWaitsOnALock } from "./helpers/lock-wait";
 import {
   pinnedVersionNos,
   registerVersionPinHolder,
@@ -244,9 +245,11 @@ describe.each(getConfiguredTestDialects())(
             order.push("pinned");
           });
 
-        // Long enough for a pin that does not wait to finish.
-        await new Promise(resolve => setTimeout(resolve, 500));
-        release();
+        try {
+          await untilSomeoneWaitsOnALock(current!.adapter, dialect);
+        } finally {
+          release();
+        }
         await Promise.all([save, pin]);
 
         expect(order).toEqual(["save finished", "pinned"]);
@@ -294,8 +297,11 @@ describe.each(getConfiguredTestDialects())(
             order.push("released");
           });
 
-        await new Promise(resolve => setTimeout(resolve, 500));
-        finish();
+        try {
+          await untilSomeoneWaitsOnALock(current!.adapter, dialect);
+        } finally {
+          finish();
+        }
         await Promise.all([pinning, releasing]);
 
         expect(order).toEqual(["pin finished", "released"]);
@@ -341,8 +347,11 @@ describe.each(getConfiguredTestDialects())(
             (error: unknown) => error
           );
 
-        await new Promise(resolve => setTimeout(resolve, 500));
-        finish();
+        try {
+          await untilSomeoneWaitsOnALock(current!.adapter, dialect);
+        } finally {
+          finish();
+        }
         await deleting;
         const refused = await pinning;
 
@@ -390,8 +399,11 @@ describe.each(getConfiguredTestDialects())(
             (error: unknown) => error
           );
 
-        await new Promise(resolve => setTimeout(resolve, 500));
-        finish();
+        try {
+          await untilSomeoneWaitsOnALock(current!.adapter, dialect);
+        } finally {
+          finish();
+        }
         await deleting;
         const refused = await pinning;
 
@@ -427,6 +439,70 @@ describe.each(getConfiguredTestDialects())(
       ).toBeFalsy();
       expect(await versionPins.list(current!.adapter, doc.ref)).toEqual([]);
     });
+
+    /**
+     * A pin that holds the collection's registry row (the lock `pin` takes
+     * first) while the registry's delete runs, then pins and commits. The
+     * delete must still leave no pin, and must not deadlock with the pin.
+     */
+    async function pinWhileDeleting(
+      doc: Awaited<ReturnType<typeof cappedDocument>>,
+      versionNo: number
+    ) {
+      let finish!: () => void;
+      const held = new Promise<void>(resolve => {
+        finish = resolve;
+      });
+      let locked!: () => void;
+      const lockTaken = new Promise<void>(resolve => {
+        locked = resolve;
+      });
+      const pinning = doc.inTx(async tx => {
+        await tx.selectOne("dynamic_collections", {
+          where: { and: [{ column: "slug", op: "=", value: "notes" }] },
+          forUpdate: true,
+        });
+        locked();
+        await held;
+        await workflows.pin(tx, { ref: doc.ref, slot: "approved", versionNo });
+      });
+      await lockTaken;
+      const deleting = current!
+        .getService("collectionRegistryService")
+        .deleteCollection("notes", { force: true });
+      try {
+        await untilSomeoneWaitsOnALock(current!.adapter, dialect);
+      } finally {
+        finish();
+      }
+      return Promise.allSettled([pinning, deleting]);
+    }
+
+    it.skipIf(dialect === "sqlite")(
+      "leaves no pin when a pin holds the registry row as its entity is deleted",
+      async () => {
+        const doc = await cappedDocument(dialect);
+        const [pinned, deleted] = await pinWhileDeleting(doc, 1);
+        expect(pinned.status).toBe("fulfilled");
+        expect(deleted.status).toBe("fulfilled");
+        expect(await versionPins.list(current!.adapter, doc.ref)).toEqual([]);
+      }
+    );
+
+    it.skipIf(dialect === "sqlite")(
+      "does not deadlock when a pin moves its slot as its entity is deleted",
+      async () => {
+        const doc = await cappedDocument(dialect);
+        await doc.save(1); // version 2
+        await doc.inTx(tx =>
+          workflows.pin(tx, { ref: doc.ref, slot: "approved", versionNo: 1 })
+        );
+        const [pinned, deleted] = await pinWhileDeleting(doc, 2);
+        expect(pinned.status).toBe("fulfilled");
+        expect(deleted.status).toBe("fulfilled");
+        expect(await versionPins.list(current!.adapter, doc.ref)).toEqual([]);
+      }
+    );
 
     it("removes a collection's pins when the collection is deleted", async () => {
       const doc = await cappedDocument(dialect);

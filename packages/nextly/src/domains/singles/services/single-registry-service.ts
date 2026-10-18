@@ -52,7 +52,7 @@ import {
   calculateSchemaHash,
   schemaHashesMatch,
 } from "../../schema/services/schema-hash";
-import { sweepDeletedEntityVersions } from "../../versions/entity-teardown";
+import { deleteEntityRegistryRow } from "../../versions/entity-teardown";
 import {
   clearWebhookRecording,
   setWebhookRecording,
@@ -680,10 +680,9 @@ export class SingleRegistryService extends BaseRegistryService<
       // the schema route's DELETE as well as the metadata service.
       //
       // What is swept, and what is deliberately kept, is for
-      // `sweepDeletedEntityVersions` to say.
+      // `deleteEntityRegistryRow` to say.
       const count = await this.adapter.transaction(async tx => {
-        await sweepDeletedEntityVersions(tx, "single", slug);
-        return tx.delete(this.registryTableName, this.whereEq("slug", slug));
+        return deleteEntityRegistryRow(tx, "single", slug);
       });
 
       if (count === 0) {

@@ -758,6 +758,29 @@ export class VersionsRepository {
     return typeof top === "number" ? top : 0;
   }
 
+  /**
+   * The part (language, or null for none) of one durable version, or
+   * undefined when the document has no such version. Reads that one row's
+   * language only.
+   */
+  async findPartOfVersion(
+    ref: VersionRef,
+    versionNo: number
+  ): Promise<string | null | undefined> {
+    const rows = await this.db.select<{ locale: string | null }>(TABLE, {
+      columns: ["locale"],
+      where: {
+        and: [
+          ...this.docWhere(ref),
+          { column: "isAutosave", op: "=", value: false },
+          { column: "versionNo", op: "=", value: versionNo },
+        ],
+      },
+      limit: 1,
+    });
+    return rows.length === 0 ? undefined : (rows[0]?.locale ?? null);
+  }
+
   /** Fetch one durable version by its number, snapshot included. */
   async findByVersionNo(
     ref: VersionRef,

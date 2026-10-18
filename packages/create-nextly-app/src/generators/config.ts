@@ -13,12 +13,26 @@ import { nothingYet, writeNew } from "./write-new";
  * Content templates (blog, etc.) use file-based configs from templates/configs/ instead.
  * Storage is not included - local disk is the default (zero config needed).
  */
+/**
+ * Each template's config in parts: the imports, any definitions that go
+ * above the export (none for the blank template), and the `collections` and
+ * `singles` lines, each with the comment that goes directly above it inside
+ * the exported object. Named parts, so nothing has to be guessed out of the
+ * text: splitting it apart once took the comments for definitions and moved
+ * them above `export default`.
+ */
 const BASE_TEMPLATES: Record<
   string,
-  { imports: string; collections: string; singles: string }
+  {
+    imports: string;
+    definitions: string;
+    collections: string;
+    singles: string;
+  }
 > = {
   blank: {
     imports: `import { defineConfig } from "nextly/config";`,
+    definitions: "",
     collections: `  // Add your collections here
   collections: [],`,
     singles: `  // Add your singles (globals) here
@@ -38,29 +52,15 @@ function buildConfigTemplate(
   typesFile: string
 ): string {
   const base = BASE_TEMPLATES[projectType] || BASE_TEMPLATES["blank"];
-
-  // Extract collection definitions (everything before "collections: [")
-  const collectionsMatch = base.collections.match(
-    /^([\s\S]*?)(\s*collections: \[[\s\S]*?\],?)$/
-  );
-  const collectionDefs = collectionsMatch ? collectionsMatch[1] : "";
-  const collectionsLine = collectionsMatch
-    ? collectionsMatch[2]
-    : base.collections;
-
-  // Extract singles definitions (everything before "singles: [")
-  const singlesMatch = base.singles.match(
-    /^([\s\S]*?)(\s*singles: \[[\s\S]*?\],?)$/
-  );
-  const singleDefs = singlesMatch ? singlesMatch[1] : "";
-  const singlesLine = singlesMatch ? singlesMatch[2] : base.singles;
+  const definitions = base.definitions ? `\n${base.definitions}\n` : "";
 
   // Build the template
   const template = `${base.imports}
-${collectionDefs}${singleDefs}
+${definitions}
 export default defineConfig({
-${collectionsLine}
-${singlesLine}
+${base.collections}
+
+${base.singles}
 
   // TypeScript type generation
   typescript: {

@@ -1,6 +1,11 @@
 import type { ProjectInfo } from "../types";
 
 import type { GeneratedFiles } from "./generated-files";
+import {
+  MODULE_FILE,
+  appPageExtensions,
+  pageExtensionsSkip,
+} from "./page-extensions";
 import { nothingYet, writeNew } from "./write-new";
 
 const API_ROUTE_TEMPLATE = `// Imported from \`nextly/runtime\` (not the package root) so the
@@ -33,17 +38,27 @@ export async function generateRoutes(
   projectInfo: ProjectInfo
 ): Promise<GeneratedFiles> {
   const files = nothingYet();
+  const base = `${projectInfo.appDir}/${ADMIN_API_FOLDER.join("/")}/route`;
+  // Where the app sets pageExtensions, Next.js would never serve route.ts:
+  // the route is reported under the name it would serve, and not written.
+  const pages = await appPageExtensions(cwd);
+  if (pages.extensions !== "absent") {
+    const { configName, extensions } = pages;
+    files.skipped.push(
+      pageExtensionsSkip(
+        base,
+        API_ROUTE_TEMPLATE,
+        { configName, extensions },
+        MODULE_FILE
+      )
+    );
+    return files;
+  }
   // A route the app already has there is kept; the admin needs Nextly's, so
   // its content is given to add by hand.
-  await writeNew(
-    cwd,
-    `${projectInfo.appDir}/${ADMIN_API_FOLDER.join("/")}/route.ts`,
-    API_ROUTE_TEMPLATE,
-    files,
-    {
-      why: "the app already has a route there; the admin's API needs Nextly's, which is",
-      toAdd: API_ROUTE_TEMPLATE,
-    }
-  );
+  await writeNew(cwd, `${base}.ts`, API_ROUTE_TEMPLATE, files, {
+    why: "the app already has a route there; the admin's API needs Nextly's, which is",
+    toAdd: API_ROUTE_TEMPLATE,
+  });
   return files;
 }
