@@ -490,7 +490,7 @@ describeEachDialect("the archive's entity kind", dialect => {
     // Past PostgreSQL's margin, inside MySQL's, which allows for a session zone that changed.
     await legacyRow("hero", collectionId, "Medio", hoursAfterBetween(20));
     // Past MySQL's margin too.
-    await legacyRow("hero", collectionId, "Tarde", hoursAfterBetween(30));
+    await legacyRow("hero", collectionId, "Tarde", hoursAfterBetween(50));
     await migrateCore();
 
     await restoreHero();

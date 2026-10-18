@@ -647,52 +647,73 @@ describeEachDialect("a field that stops being translated", dialect => {
       { locale: "es", heading: VALUES.es },
     ]);
   });
-  it("restores a field by the name its author knows, not only by its column", async () => {
-    // A field defined in code keeps the name its author gave it, so `subTitle` is stored as
-    // `sub_title` and archived under that column; the Schema Builder lower-cases names, so only a
-    // code-defined field shows the difference.
-    await current.destroy();
-    current = await createTestNextly({
-      dialect,
-      collections: [
-        defineCollection({
-          slug: "articles",
-          localized: true,
-          fields: [text({ name: "subTitle" })],
-        }),
-      ],
-      localization: { locales: LOCALES, defaultLocale: "en" },
-    });
-    const created = await current.nextly.create({
-      collection: "articles",
-      data: { subTitle: VALUES.en },
-      overrideAccess: true,
-    });
-    const id = String(created.item.id);
-    for (const statement of getI18nArchiveDdl(dialect)) await query(statement);
-    // As the archive writers record it: with the kind of entity that archived the row.
-    await query(
-      `INSERT INTO ${quote(dialect, "nextly_i18n_archive")} (${["collection", "entity_kind", "entry_id", "locale", "field", "value"].map(c => quote(dialect, c)).join(", ")}) ` +
-        `VALUES ('articles', 'collection', '${id}', 'es', 'sub_title', '${VALUES.es}')`
-    );
+  it.each([
+    { archived: "as the archive writers record it, with its kind", kind: true },
+    // What an upgraded install holds: a row from before the archive recorded kinds, of an entity
+    // created long before it, so the restore can give it its owner's kind by itself.
+    {
+      archived: "by an install from before the archive recorded kinds",
+      kind: false,
+    },
+  ])(
+    "restores a field by the name its author knows, archived $archived",
+    async ({ kind }) => {
+      // A field defined in code keeps the name its author gave it, so `subTitle` is stored as
+      // `sub_title` and archived under that column; the Schema Builder lower-cases names, so only a
+      // code-defined field shows the difference.
+      await current.destroy();
+      current = await createTestNextly({
+        dialect,
+        collections: [
+          defineCollection({
+            slug: "articles",
+            localized: true,
+            fields: [text({ name: "subTitle" })],
+          }),
+        ],
+        localization: { locales: LOCALES, defaultLocale: "en" },
+      });
+      const created = await current.nextly.create({
+        collection: "articles",
+        data: { subTitle: VALUES.en },
+        overrideAccess: true,
+      });
+      const id = String(created.item.id);
+      for (const statement of getI18nArchiveDdl(dialect))
+        await query(statement);
+      const columns = [
+        "collection",
+        ...(kind ? ["entity_kind"] : []),
+        "entry_id",
+      ];
+      await query(
+        `INSERT INTO ${quote(dialect, "nextly_i18n_archive")} (${[...columns, "locale", "field", "value"].map(c => quote(dialect, c)).join(", ")}) ` +
+          `VALUES ('articles', ${kind ? "'collection', " : ""}'${id}', 'es', 'sub_title', '${VALUES.es}')`
+      );
+      if (!kind) {
+        await query(
+          `UPDATE ${quote(dialect, "dynamic_collections")} SET ${quote(dialect, "created_at")} = ${dialect === "sqlite" ? "915148800" : "'1999-01-01 00:00:00'"} WHERE ${quote(dialect, "slug")} = 'articles'`
+        );
+      }
 
-    const result = await restoreI18nArchive({
-      adapter: current.adapter as unknown as Parameters<
-        typeof restoreI18nArchive
-      >[0]["adapter"],
-      collection: "articles",
-      kind: "collection",
-      companionTableName: "dc_articles_locales",
-      field: "subTitle",
-    });
+      const result = await restoreI18nArchive({
+        adapter: current.adapter as unknown as Parameters<
+          typeof restoreI18nArchive
+        >[0]["adapter"],
+        collection: "articles",
+        kind: "collection",
+        companionTableName: "dc_articles_locales",
+        field: "subTitle",
+      });
 
-    expect(result.rowsRestored).toBe(1);
-    const [back] = await query<{ value: string | null }>(
-      `SELECT ${quote(dialect, "sub_title")} AS value FROM ${quote(dialect, "dc_articles_locales")} ` +
-        `WHERE ${quote(dialect, "_parent")} = '${id}' AND ${quote(dialect, "_locale")} = 'es'`
-    );
-    expect(back?.value).toBe(VALUES.es);
-  });
+      expect(result.rowsRestored).toBe(1);
+      const [back] = await query<{ value: string | null }>(
+        `SELECT ${quote(dialect, "sub_title")} AS value FROM ${quote(dialect, "dc_articles_locales")} ` +
+          `WHERE ${quote(dialect, "_parent")} = '${id}' AND ${quote(dialect, "_locale")} = 'es'`
+      );
+      expect(back?.value).toBe(VALUES.es);
+    }
+  );
   it("restores the newest value when a field was archived more than once", async () => {
     // A field made shared, translated again, edited, and made shared again leaves two archive
     // rows for the same entry, language and field; the second is the one to bring back.

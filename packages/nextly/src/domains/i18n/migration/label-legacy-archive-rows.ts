@@ -183,15 +183,16 @@ function archivedEpoch(dialect: SupportedDialect, column: AnyColumn): SQL {
  * more than one zone (the application's clock, or the database's `now()` in the session's zone),
  * so read back it can be off by any UTC offset. On PostgreSQL `archived_at` is an instant, so the
  * widest offset there is, fourteen hours, keeps a row archived before the entity existed from
- * ever passing. On MySQL `archived_at` has no zone either, and its epoch is taken in the session's
- * zone, which can have changed since the row was written, so both sides can be off: twenty-eight
- * hours covers two offsets at opposite extremes. A row archived within the window of its entity's
+ * ever passing. On MySQL every one of the three is zone-less and session-local: the registry's
+ * `created_at` (often the database's `NOW(3)`), `archived_at` (`CURRENT_TIMESTAMP(3)`), and the
+ * epoch `UNIX_TIMESTAMP` takes of it now, and the session's zone can differ each time. Forty-two
+ * hours covers three offsets at their extremes. A row archived within the window of its entity's
  * creation stays unresolved, and is still restored by naming its kind. SQLite stores both as
  * epoch seconds, so only its rounding needs room.
  */
 function creationMargin(dialect: SupportedDialect): number {
   const hour = 60 * 60;
-  if (dialect === "mysql") return 28 * hour;
+  if (dialect === "mysql") return 42 * hour;
   if (dialect === "postgresql") return 14 * hour;
   return 1;
 }
