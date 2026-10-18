@@ -41,11 +41,6 @@ function quote(dialect: SupportedDialect, name: string): string {
   return dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
 }
 
-/** A value as the refusal shows it: quoted text, so an empty one is visible. */
-function shown(value: unknown): string {
-  return `'${String(value)}'`;
-}
-
 function refused(error: Refusal, logContext?: Record<string, unknown>) {
   return { error, ...(logContext ? { logContext } : {}) };
 }
@@ -143,13 +138,14 @@ export async function refusalsForCollectionSave(args: {
         : undefined;
     }
     const [repeat] = await adapter.executeQuery<{
-      value: unknown;
       n: number | string;
     }>(
-      `SELECT ${at.col} AS value, COUNT(*) AS n FROM ${table} WHERE ${at.col} IS NOT NULL ` +
+      // Only how many share the commonest repeated value: the value itself is never read.
+      `SELECT COUNT(*) AS n FROM ${table} WHERE ${at.col} IS NOT NULL ` +
         `GROUP BY ${at.col} HAVING COUNT(*) > 1 ORDER BY COUNT(*) DESC LIMIT 1`
     );
-    // The repeated value is stored content, so it is logged and left out of the message.
+    // The repeated value is stored content, which someone who may edit the schema need not be
+    // allowed to read, so neither the message nor the log carries it.
     return repeat
       ? refused(
           {
@@ -159,7 +155,9 @@ export async function refusalsForCollectionSave(args: {
               `${entries(Number(repeat.n))} share a value for ${at.field.name}, which must be unique. ` +
               `Give them their own values first, then turn Unique on.`,
           },
-          { field: at.field.name, repeatedValue: shown(repeat.value) }
+          // The field and how many entries share a value, never the value: logs are kept and
+          // read more widely than the table, and the value may be a secret.
+          { field: at.field.name, entriesSharingAValue: Number(repeat.n) }
         )
       : undefined;
   }

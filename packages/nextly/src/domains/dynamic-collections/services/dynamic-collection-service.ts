@@ -38,6 +38,7 @@ import { queryLiveColumnTypes } from "../../schema/pipeline/live-column-types";
 import {
   readColumnNullState,
   readForeignKeyColumns,
+  readIndexColumns,
   readIndexNames,
   readUniqueColumns,
   tableHasRows,
@@ -276,6 +277,7 @@ export class DynamicCollectionService extends BaseService {
     tableHasRows: boolean;
     foreignKeysByColumn: ReadonlyMap<string, readonly string[]>;
     indexNames: ReadonlySet<string>;
+    indexColumns: ReadonlyMap<string, readonly string[]>;
     uniqueColumns: ReadonlyMap<string, string | null>;
     columnsContainingNull: ReadonlySet<string>;
     columnsAbsentFromTable: ReadonlySet<string>;
@@ -315,25 +317,29 @@ export class DynamicCollectionService extends BaseService {
     // anyway. Which of them a save then TIGHTENS is the generator's question;
     // it holds both field lists and this reader holds only the live table.
     const nullableColumns = columnsThatMayHoldNull(pendingFields);
-    const [hasRows, foreignKeys, indexes, unique, holdingNull, liveTypes] =
-      await Promise.all([
-        tableHasRows(db, this.adapter.dialect, tableName),
-        readForeignKeyColumns(db, this.adapter.dialect, tableName),
-        readIndexNames(db, this.adapter.dialect, tableName),
-        // What each unique index covers, which its name does not say.
-        readUniqueColumns(db, this.adapter.dialect, tableName),
-        readColumnNullState(
-          db,
-          this.adapter.dialect,
-          tableName,
-          nullableColumns
-        ),
-        // What each column IS, for the one statement that has to restate a column it is not
-        // otherwise changing: MySQL's `MODIFY`. Rendering that type instead of reading it asks
-        // which renderer built the column, which has no static answer once the create path moved
-        // to the descriptor.
-        queryLiveColumnTypes(db, this.adapter.dialect, [tableName]),
-      ]);
+    const [
+      hasRows,
+      foreignKeys,
+      indexes,
+      indexColumns,
+      unique,
+      holdingNull,
+      liveTypes,
+    ] = await Promise.all([
+      tableHasRows(db, this.adapter.dialect, tableName),
+      readForeignKeyColumns(db, this.adapter.dialect, tableName),
+      readIndexNames(db, this.adapter.dialect, tableName),
+      // What each index covers, which its name does not say.
+      readIndexColumns(db, this.adapter.dialect, tableName),
+      // What each unique index covers, which its name does not say.
+      readUniqueColumns(db, this.adapter.dialect, tableName),
+      readColumnNullState(db, this.adapter.dialect, tableName, nullableColumns),
+      // What each column IS, for the one statement that has to restate a column it is not
+      // otherwise changing: MySQL's `MODIFY`. Rendering that type instead of reading it asks
+      // which renderer built the column, which has no static answer once the create path moved
+      // to the descriptor.
+      queryLiveColumnTypes(db, this.adapter.dialect, [tableName]),
+    ]);
 
     // What the table carries, and only that.
     //
@@ -352,6 +358,7 @@ export class DynamicCollectionService extends BaseService {
       tableHasRows: hasRows,
       foreignKeysByColumn: foreignKeys,
       indexNames: indexes,
+      indexColumns,
       uniqueColumns: unique,
       columnsContainingNull: holdingNull.holdingNull,
       columnsAbsentFromTable: holdingNull.absent,

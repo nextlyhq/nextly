@@ -534,6 +534,79 @@ describeEachDialect("a schema save whose migration fails", dialect => {
     expect(saved.success, JSON.stringify(saved)).toBe(true);
   });
 
+  // MySQL has no partial indexes.
+  it.skipIf(dialect === "mysql")(
+    "does not take a partial unique index for the field's own when Unique is turned on",
+    async () => {
+      await postsWith([shortHeading], [{ heading: "One" }]);
+      await query(
+        `CREATE UNIQUE INDEX ${q("partial_heading")} ON ${q("dc_posts")} (${q("heading")}) WHERE ${q("heading")} <> 'Free'`
+      );
+
+      const saved = await handler().updateCollection(
+        { collectionName: "posts" },
+        { fields: [{ ...shortHeading, unique: true }] }
+      );
+
+      expect(saved.success, JSON.stringify(saved)).toBe(true);
+      // Unique for every row, including the ones the partial index left out.
+      expect((await createPost({ heading: "Free" })).success).toBe(true);
+      expect((await createPost({ heading: "Free" })).success).toBe(false);
+    }
+  );
+
+  // The plain index's create says `IF NOT EXISTS` on PostgreSQL and SQLite, which a name taken by
+  // another index slips past whatever this database's plan decides; on MySQL it is refused.
+  it.skipIf(dialect !== "mysql")(
+    "refuses an index whose name another column's index already holds",
+    async () => {
+      await postsWith([shortHeading], [{ heading: "One" }]);
+      await query(
+        `CREATE INDEX ${q(indexNameForColumn("dc_posts", "heading"))} ON ${q("dc_posts")} (${q("id")})`
+      );
+
+      const saved = await handler().updateCollection(
+        { collectionName: "posts" },
+        { fields: [{ ...shortHeading, index: true }] }
+      );
+
+      // Refused rather than recorded: that index serves nothing about headings.
+      expect(saved.success, JSON.stringify(saved)).toBe(false);
+    }
+  );
+
+  it("drops a renamed field's unique index when the same save turns Unique off", async () => {
+    await postsWith([{ ...shortHeading, unique: true }], [{ heading: "One" }]);
+
+    const saved = await handler().updateCollection(
+      { collectionName: "posts" },
+      { fields: [{ ...shortHeading, name: "headline" }] }
+    );
+
+    expect(saved.success, JSON.stringify(saved)).toBe(true);
+    // Not unique any more, under its new name.
+    expect((await createPost({ headline: "One" })).success).toBe(true);
+  });
+
+  it("keeps a repeated value out of the refusal's log context", async () => {
+    await postsWith(
+      [shortHeading],
+      [{ heading: "Secret" }, { heading: "Secret" }]
+    );
+
+    const refusal = await collectionService()
+      .generateCollectionUpdate("posts", {
+        fields: [{ ...shortHeading, unique: true }],
+      } as Parameters<DynamicCollectionService["generateCollectionUpdate"]>[1])
+      .then(
+        () => undefined,
+        (error: unknown) => error as { logContext?: unknown }
+      );
+
+    expect(refusal?.logContext).toBeDefined();
+    expect(JSON.stringify(refusal?.logContext)).not.toContain("Secret");
+  });
+
   it("drops the unique index Unique adopted when Unique is turned off", async () => {
     // A unique index under a name the generator never uses, as an older table may carry.
     await postsWith([shortHeading], [{ heading: "One" }]);

@@ -316,7 +316,8 @@ export async function readIndexNames(
  * stand on another column, and a unique index under another name can cover this one. A save that
  * has to know whether a column's values are already held unique, after one MySQL refused part-way
  * say, asks the catalog what each index covers rather than which names it holds. Single-column
- * indexes only, because a unique field is enforced by one; the primary key counts.
+ * indexes only, because a unique field is enforced by one; the primary key counts. A partial
+ * unique index, or one on an expression or a prefix, does not: it leaves repeats free outside it.
  *
  * Each column comes with the name of the index that covers it, so turning Unique off drops the
  * index that is there rather than one of the names the generator would have used. The name is
@@ -328,68 +329,156 @@ export async function readUniqueColumns(
   dialect: SupportedDialect,
   tableName: string
 ): Promise<Map<string, string | null>> {
-  if (dialect === "postgresql") return readPgUniqueColumns(db, tableName);
-  if (dialect === "mysql") return readMysqlUniqueColumns(db, tableName);
-  return readSqliteUniqueColumns(db, tableName);
-}
-
-async function readPgUniqueColumns(
-  db: unknown,
-  tableName: string
-): Promise<Map<string, string | null>> {
-  const result = (await (db as PgMysqlExecute).execute(
-    sql`SELECT a.attname AS column_name, c.relname AS index_name, i.indisprimary AS is_primary
-        FROM pg_index i
-        JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = i.indkey[0]
-        JOIN pg_class c ON c.oid = i.indexrelid
-        WHERE i.indrelid = to_regclass(${tableName}) AND i.indisunique AND i.indnatts = 1`
-  )) as {
-    rows: { column_name: string; index_name: string; is_primary: boolean }[];
-  };
+  const unique = (await readIndexes(db, dialect, tableName)).filter(
+    index => index.unique && index.wholeColumns && index.columns.length === 1
+  );
   return new Map(
-    result.rows.map(row => [
-      row.column_name,
-      row.is_primary ? null : row.index_name,
+    unique.map(index => [
+      index.columns[0],
+      index.droppableByName ? index.name : null,
     ])
   );
 }
 
-async function readMysqlUniqueColumns(
+/**
+ * Each index that stands on whole columns, with the columns it covers, by name. A save that has
+ * to know whether a column's index already exists, after one MySQL refused part-way say, asks
+ * what an index covers: an index under the expected name can stand on another column.
+ */
+export async function readIndexColumns(
+  db: unknown,
+  dialect: SupportedDialect,
+  tableName: string
+): Promise<Map<string, string[]>> {
+  return new Map(
+    (await readIndexes(db, dialect, tableName))
+      .filter(index => index.wholeColumns)
+      .map(index => [index.name, index.columns])
+  );
+}
+
+/** One index of a live table, as the catalog describes it. */
+interface LiveIndex {
+  name: string;
+  columns: string[];
+  unique: boolean;
+  /**
+   * Whether it stands on its columns' whole values for every row: not partial (`WHERE`), not on
+   * an expression, not a MySQL prefix, and valid. Only such an index enforces or serves the field
+   * as a whole; a unique index over part of the rows leaves the rest free to repeat.
+   */
+  wholeColumns: boolean;
+  /** False for the primary key, and SQLite's index for an inline `UNIQUE`, which only a rebuild removes. */
+  droppableByName: boolean;
+}
+
+/** Every index on `tableName`, read once from the catalog of the dialect. */
+async function readIndexes(
+  db: unknown,
+  dialect: SupportedDialect,
+  tableName: string
+): Promise<LiveIndex[]> {
+  if (dialect === "postgresql") return readPgIndexes(db, tableName);
+  if (dialect === "mysql") return readMysqlIndexes(db, tableName);
+  return readSqliteIndexes(db, tableName);
+}
+
+async function readPgIndexes(
   db: unknown,
   tableName: string
-): Promise<Map<string, string | null>> {
-  const rows = mysqlRows<{ COLUMN_NAME: string; INDEX_NAME: string }>(
+): Promise<LiveIndex[]> {
+  const result = (await (db as PgMysqlExecute).execute(
+    sql`SELECT c.relname AS index_name, a.attname AS column_name, i.indisunique AS is_unique,
+          i.indisprimary AS is_primary,
+          (i.indpred IS NULL AND i.indexprs IS NULL AND i.indisvalid) AS whole
+        FROM pg_index i
+        JOIN pg_class c ON c.oid = i.indexrelid
+        LEFT JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
+        WHERE i.indrelid = to_regclass(${tableName})`
+  )) as {
+    rows: {
+      index_name: string;
+      column_name: string | null;
+      is_unique: boolean;
+      is_primary: boolean;
+      whole: boolean;
+    }[];
+  };
+  const byName = new Map<string, LiveIndex>();
+  for (const row of result.rows) {
+    const index = byName.get(row.index_name) ?? {
+      name: row.index_name,
+      columns: [],
+      unique: row.is_unique,
+      wholeColumns: row.whole,
+      droppableByName: !row.is_primary,
+    };
+    if (row.column_name !== null) index.columns.push(row.column_name);
+    byName.set(row.index_name, index);
+  }
+  return [...byName.values()];
+}
+
+async function readMysqlIndexes(
+  db: unknown,
+  tableName: string
+): Promise<LiveIndex[]> {
+  const rows = mysqlRows<{
+    INDEX_NAME: string;
+    COLUMN_NAME: string | null;
+    NON_UNIQUE: number | string;
+    SUB_PART: number | string | null;
+  }>(
     await (db as PgMysqlExecute).execute(
-      sql`SELECT MIN(COLUMN_NAME) AS COLUMN_NAME, INDEX_NAME FROM information_schema.STATISTICS
-          WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ${tableName} AND NON_UNIQUE = 0
-          GROUP BY INDEX_NAME HAVING COUNT(*) = 1`
+      sql`SELECT INDEX_NAME, COLUMN_NAME, NON_UNIQUE, SUB_PART FROM information_schema.STATISTICS
+          WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ${tableName}
+          ORDER BY INDEX_NAME, SEQ_IN_INDEX`
     )
   );
-  return new Map(
-    rows.map(row => [
-      row.COLUMN_NAME,
-      row.INDEX_NAME === "PRIMARY" ? null : row.INDEX_NAME,
-    ])
-  );
+  const byName = new Map<string, LiveIndex>();
+  for (const row of rows) {
+    const index = byName.get(row.INDEX_NAME) ?? {
+      name: row.INDEX_NAME,
+      columns: [],
+      unique: Number(row.NON_UNIQUE) === 0,
+      wholeColumns: true,
+      droppableByName: row.INDEX_NAME !== "PRIMARY",
+    };
+    // An expression has no column name, and a prefix keys only part of each value.
+    if (row.COLUMN_NAME === null || row.SUB_PART !== null) {
+      index.wholeColumns = false;
+    } else {
+      index.columns.push(row.COLUMN_NAME);
+    }
+    byName.set(row.INDEX_NAME, index);
+  }
+  return [...byName.values()];
 }
 
-async function readSqliteUniqueColumns(
+async function readSqliteIndexes(
   db: unknown,
   tableName: string
-): Promise<Map<string, string | null>> {
-  const columns = new Map<string, string | null>();
-  const indexes = (await (db as SqliteAll).all(
+): Promise<LiveIndex[]> {
+  const listed = (await (db as SqliteAll).all(
     sql`PRAGMA index_list(${sql.identifier(tableName)})`
-  )) as { name: string; unique: number; origin?: string }[];
-  for (const index of indexes.filter(i => Number(i.unique) === 1)) {
+  )) as { name: string; unique: number; origin?: string; partial?: number }[];
+  const indexes: LiveIndex[] = [];
+  for (const index of listed) {
     const covered = (await (db as SqliteAll).all(
       sql`PRAGMA index_info(${sql.identifier(index.name)})`
-    )) as { name: string }[];
-    if (covered.length !== 1 || !covered[0]) continue;
-    // `c` is an index made by CREATE INDEX; the others come with the table's own definition.
-    columns.set(covered[0].name, index.origin === "c" ? index.name : null);
+    )) as { name: string | null }[];
+    indexes.push({
+      name: index.name,
+      columns: covered.flatMap(c => (c.name === null ? [] : [c.name])),
+      unique: Number(index.unique) === 1,
+      // An expression has no column name.
+      wholeColumns:
+        Number(index.partial ?? 0) === 0 && covered.every(c => c.name !== null),
+      // `c` is an index made by CREATE INDEX; the others come with the table's own definition.
+      droppableByName: index.origin === "c",
+    });
   }
-  return columns;
+  return indexes;
 }
 
 /**

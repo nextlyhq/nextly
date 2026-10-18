@@ -568,12 +568,15 @@ export class DynamicCollectionSchemaService {
         continue;
       }
       // The index the table has: under one of the names the generator uses, or the one that
-      // covers the column whatever it is called, which is what turning Unique on adopted.
+      // covers the column whatever it is called, which is what turning Unique on adopted. Both are
+      // asked of the column the field had before this save: a field renamed in the same save
+      // keeps its index under the old name, which a rename does not change.
+      const before = toSnakeCase(previous.name);
       const live =
-        this.uniqueIndexNameCandidates(tableName, column).find(
+        this.uniqueIndexNameCandidates(tableName, before).find(
           name => options?.indexNames?.has(name) === true
         ) ??
-        options?.uniqueColumns?.get(column) ??
+        options?.uniqueColumns?.get(before) ??
         undefined;
       if (forDatabase && live === undefined) continue;
       // A field this dialect could never key (and `slug`, whose index every table keeps) had no
@@ -583,7 +586,7 @@ export class DynamicCollectionSchemaService {
         this.plannedUniqueIndexName(tableName, previous) === null
       )
         continue;
-      const present = live ?? uniqueIndexNameForColumn(tableName, column);
+      const present = live ?? uniqueIndexNameForColumn(tableName, before);
       if (this.dialect === "postgresql") {
         statements.push(
           `ALTER TABLE ${this.quoteIdentifier(tableName)} DROP CONSTRAINT IF EXISTS ${this.quoteIdentifier(present)};`
@@ -848,14 +851,19 @@ export class DynamicCollectionSchemaService {
     tableName: string,
     column: string,
     options:
-      | { planFor?: "artefact" | "database"; indexNames?: ReadonlySet<string> }
+      | {
+          planFor?: "artefact" | "database";
+          indexColumns?: ReadonlyMap<string, readonly string[]>;
+        }
       | undefined
   ): boolean {
+    // The index of the expected name, and on exactly this column: another index can hold the name.
     return (
       options?.planFor === "database" &&
-      this.indexNameCandidates(tableName, column).some(
-        name => options.indexNames?.has(name) === true
-      )
+      this.indexNameCandidates(tableName, column).some(name => {
+        const covered = options.indexColumns?.get(name);
+        return covered?.length === 1 && covered[0] === column;
+      })
     );
   }
 
@@ -1381,6 +1389,12 @@ ${allColumnDefs.join(",\n")}
        * index that merely holds the expected name on another column is not taken for it.
        */
       uniqueColumns?: ReadonlyMap<string, string | null>;
+      /**
+       * The columns each whole-column index covers, by name, read by `readIndexColumns`. A plain
+       * index this database already has is skipped in its own run only when the index of the
+       * expected name really stands on that column.
+       */
+      indexColumns?: ReadonlyMap<string, readonly string[]>;
       /**
        * Physical table name per referenced field-group slug, resolved from the
        * REGISTRY by the caller. A field group's data table is whatever the
@@ -2602,10 +2616,13 @@ ${allColumnDefs.join(",\n")}
     fields: FieldDefinition[]
   ): {
     indexNames: Set<string>;
+    indexColumns: Map<string, string[]>;
     uniqueColumns: Map<string, string | null>;
     foreignKeysByColumn: Map<string, string[]>;
   } {
     const indexNames = new Set<string>();
+    // Each predicted index on the one column it is named for, as the create emits it.
+    const indexColumns = new Map<string, string[]>();
     // The key and the system slug index are unique on every generated table, and no field's
     // Unique toggle drops either.
     const uniqueColumns = new Map<string, string | null>([
@@ -2617,6 +2634,7 @@ ${allColumnDefs.join(",\n")}
     // them, so a system column removed by an edit is not treated as unindexed.
     for (const column of ["slug", "created_at", "created_by"]) {
       indexNames.add(indexNameForColumn(tableName, column));
+      indexColumns.set(indexNameForColumn(tableName, column), [column]);
     }
     for (const field of fields) {
       if (!fieldProducesColumn(field)) continue;
@@ -2631,12 +2649,14 @@ ${allColumnDefs.join(",\n")}
           null
       ) {
         indexNames.add(indexNameForColumn(tableName, column));
+        indexColumns.set(indexNameForColumn(tableName, column), [column]);
       }
       // The UNIQUE index is a separate object from the plain one and is emitted under its own
       // rule, so it has to be predicted through that rule rather than inferred from this one.
       const uniqueName = this.plannedUniqueIndexName(tableName, field);
       if (uniqueName !== null) {
         indexNames.add(uniqueName);
+        indexColumns.set(uniqueName, [column]);
         uniqueColumns.set(column, uniqueName);
       }
       if (field.type === "relationship" && field.options?.target) {
@@ -2645,7 +2665,7 @@ ${allColumnDefs.join(",\n")}
         ]);
       }
     }
-    return { indexNames, uniqueColumns, foreignKeysByColumn };
+    return { indexNames, indexColumns, uniqueColumns, foreignKeysByColumn };
   }
 
   /**
