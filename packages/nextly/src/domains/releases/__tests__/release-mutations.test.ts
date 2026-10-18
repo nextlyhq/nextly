@@ -7,6 +7,11 @@
  * put live. Leaving that write out would mark the release published with the
  * edit never shown.
  *
+ * A document-wide action moves every language, so it is settled only while
+ * every stored translation already has the status the action leaves: the
+ * default language's alone says nothing about a German translation still in
+ * draft.
+ *
  * @module domains/releases/__tests__/release-mutations.test
  */
 import { describe, expect, it, vi } from "vitest";
@@ -24,19 +29,26 @@ const POST: DocumentRef = {
   locale: null,
 };
 
-function mutations(status: string, heldDrafts: (string | null)[]) {
+type Languages = ReadonlyMap<string, string | null> | null;
+
+function mutations(
+  status: string,
+  heldDrafts: (string | null)[],
+  languages: Languages = new Map()
+) {
   const listWorkingDraftLocales = vi.fn(async () => heldDrafts);
   const contentApi = {
     findByID: async () => ({ id: "e1", status }),
     findSingle: async () => ({ id: "s1", status }),
   } as unknown as JobContentSource;
-  return {
-    m: createReleaseMutations({
-      contentApi,
-      drafts: { listWorkingDraftLocales },
-    }),
-    listWorkingDraftLocales,
-  };
+  const m = createReleaseMutations({
+    contentApi,
+    drafts: { listWorkingDraftLocales },
+    languages: async () => languages,
+  });
+  const settled = m.settled;
+  if (settled === undefined) throw new Error("settled not offered");
+  return { m: { settled }, listWorkingDraftLocales };
 }
 
 describe("a release action that would change nothing", () => {
@@ -74,5 +86,64 @@ describe("a release action that would change nothing", () => {
       scopeSlug: "posts",
       entryId: "e1",
     });
+  });
+
+  it("is NOT settled while another language is still where it was", async () => {
+    // The default language is published and reads as the document's status;
+    // German is still a draft, and the publish is what moves it.
+    const { m } = mutations(
+      "published",
+      [],
+      new Map([
+        ["en", "published"],
+        ["de", "draft"],
+      ])
+    );
+    expect(await m.settled({ ref: POST, effect: "publish", user: USER })).toBe(
+      false
+    );
+  });
+
+  it("is NOT settled while a takedown would still pull a translation", async () => {
+    const { m } = mutations(
+      "draft",
+      [],
+      new Map([
+        ["en", "draft"],
+        ["de", "published"],
+      ])
+    );
+    expect(
+      await m.settled({ ref: POST, effect: "unpublish", user: USER })
+    ).toBe(false);
+  });
+
+  it("is settled when every stored language is already where the action leaves it", async () => {
+    const { m } = mutations(
+      "published",
+      [],
+      new Map([
+        ["en", "published"],
+        ["de", "published"],
+      ])
+    );
+    expect(await m.settled({ ref: POST, effect: "publish", user: USER })).toBe(
+      true
+    );
+  });
+
+  it("is NOT settled when the languages cannot be read", async () => {
+    const { m } = mutations("published", [], null);
+    expect(await m.settled({ ref: POST, effect: "publish", user: USER })).toBe(
+      false
+    );
+  });
+
+  it("offers no settlement without a way to read the languages", () => {
+    const m = createReleaseMutations({
+      contentApi: {} as JobContentSource,
+      drafts: { listWorkingDraftLocales: async () => [] },
+    });
+    expect(m.settled).toBeUndefined();
   });
 });

@@ -5929,6 +5929,38 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
+   * Each stored translation's own status for one entry, keyed by locale, read
+   * now from the pool: the languages a release's document-wide write moves
+   * besides the main row. Empty for a collection that keeps no translations;
+   * `null` where it keeps them but they cannot be read here (the translation
+   * table is not there yet, or has no per-language status), so that is never
+   * taken for "none to move".
+   *
+   * @experimental
+   */
+  async releaseLanguageStatuses(params: {
+    collectionName: string;
+    entryId: string;
+  }): Promise<Map<string, string | null> | null> {
+    const companion = await this.fileManager.loadCompanionSchema(
+      params.collectionName
+    );
+    if (!companion) return new Map();
+    if (
+      !companion.hasStatus ||
+      !(await isCompanionReady(this.adapter, companion.companionTableName))
+    ) {
+      return null;
+    }
+    return readCompanionLocaleStatusAll(
+      this.db as Parameters<typeof readCompanionLocaleStatusAll>[0],
+      companion.table,
+      params.entryId,
+      "ready"
+    );
+  }
+
+  /**
    * Whether this user may update the entry, decided without writing anything.
    *
    * The same load-then-check `updateEntry` performs. For callers that write

@@ -333,6 +333,19 @@ export class CollectionsHandler {
   }
 
   /**
+   * Each stored translation's own status for one entry, keyed by locale. See
+   * the mutation service.
+   *
+   * @experimental
+   */
+  async releaseLanguageStatuses(params: {
+    collectionName: string;
+    entryId: string;
+  }): Promise<Map<string, string | null> | null> {
+    return this.entryService.releaseLanguageStatuses(params);
+  }
+
+  /**
    * The languages whose unreleased work a release's document-wide write of
    * these entries would be refused over.
    *

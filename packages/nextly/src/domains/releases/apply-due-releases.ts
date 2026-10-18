@@ -104,8 +104,11 @@ export interface ReleaseMutations {
    * Asked before a write, which `applied` is not fit for: a document already
    * published that holds a pending draft is not a no-op for a publish, because
    * putting that draft live is what the release is for.
+   *
+   * Optional: mutations that cannot answer it leave it out, and every action
+   * handed to them is then written.
    */
-  settled(input: {
+  settled?(input: {
     ref: DocumentRef;
     effect: "publish" | "unpublish";
     user: UserContext;
@@ -610,14 +613,16 @@ async function writeAndConfirm(
 /**
  * Whether the action would change nothing, so the write can be left out.
  *
- * A read that cannot be answered says `false`: the write then runs as it
- * always has, which may repeat work but never loses an action.
+ * Mutations without `settled`, and a read that cannot be answered, say
+ * `false`: the write then runs as it always has, which may repeat work but
+ * never loses an action.
  */
 async function alreadySettled(
   deps: ApplyDueReleasesDeps,
   action: MaterialisationAction,
   user: UserContext
 ): Promise<boolean> {
+  if (deps.mutations.settled === undefined) return false;
   try {
     return await deps.mutations.settled({
       ref: action.ref,

@@ -22,6 +22,7 @@ import { CollectionAccessService } from "../../domains/collections/services/coll
 import { collectionTableName } from "../../domains/collections/services/collection-utils";
 import { databaseRunAs } from "../../domains/jobs/jobs-runner";
 import type { ReleaseCheckScope } from "../../domains/releases/readiness/check-sources";
+import type { ReleaseLanguageStatuses } from "../../domains/releases/release-mutations";
 import {
   documentRefKey,
   type DocumentRef,
@@ -98,6 +99,27 @@ export function releaseDocumentChecks(
       }),
   };
 }
+
+/**
+ * Each stored translation's own status for a release member's document, read
+ * by the release's run to tell whether its document-wide write would still
+ * move a language. A Single answers only for the row the member names: any
+ * other is a document that is gone, which nothing here vouches for.
+ */
+export const releaseLanguageStatuses: ReleaseLanguageStatuses = async ref => {
+  if (ref.scopeKind !== "single") {
+    return collections().releaseLanguageStatuses({
+      collectionName: ref.scopeSlug,
+      entryId: ref.entryId,
+    });
+  }
+  const single = await singleEntries().releaseLanguageStatuses({
+    slug: ref.scopeSlug,
+  });
+  return single !== null && single.entryId === ref.entryId
+    ? single.statuses
+    : null;
+};
 
 /**
  * A Single's answer, keyed by the members' entry ids: only a member naming the

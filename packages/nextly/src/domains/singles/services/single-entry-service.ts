@@ -213,6 +213,18 @@ export class SingleEntryService extends BaseService {
   }
 
   /**
+   * Each stored translation's own status for this Single, keyed by locale.
+   * See the mutation service.
+   *
+   * @experimental
+   */
+  async releaseLanguageStatuses(
+    params: Parameters<SingleMutationService["releaseLanguageStatuses"]>[0]
+  ): ReturnType<SingleMutationService["releaseLanguageStatuses"]> {
+    return this.mutationService.releaseLanguageStatuses(params);
+  }
+
+  /**
    * The languages whose unreleased work a release's document-wide write of
    * this Single would be refused over. See the mutation service.
    *

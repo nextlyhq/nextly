@@ -105,6 +105,7 @@ import {
 import {
   cachedCompanionReadiness,
   companionNotReadyMessage,
+  isCompanionReady,
   resolveCompanionReadiness,
 } from "../../i18n/runtime/companion-readiness";
 import { languageIsLive } from "../../i18n/runtime/language-lifecycle";
@@ -360,18 +361,9 @@ export class SingleMutationService extends BaseService {
   async releaseHeldDraftLocales(params: {
     slug: string;
   }): Promise<{ entryId: string; locales: string[] } | null> {
-    const singleMeta = await resolveSingleForRequest(
-      this.adapter,
-      this.singleRegistryService,
-      params.slug,
-      this.logger
-    );
-    if (!singleMeta) return null;
-    const row = await this.adapter.selectOne<SingleDocument>(
-      singleMeta.tableName,
-      {}
-    );
-    if (!row) return null;
+    const stored = await this.releaseSingleRow(params.slug);
+    if (stored === null) return null;
+    const { singleMeta, row } = stored;
     return {
       entryId: row.id,
       locales: await this.languagesHoldingDrafts(
@@ -379,6 +371,78 @@ export class SingleMutationService extends BaseService {
         singleMeta,
         params.slug,
         row.id
+      ),
+    };
+  }
+
+  /**
+   * The Single a release member names and its stored row, read from the pool;
+   * `null` for a Single not registered or holding no document.
+   */
+  private async releaseSingleRow(
+    slug: string
+  ): Promise<{ singleMeta: DynamicSingleRecord; row: SingleDocument } | null> {
+    const singleMeta = await resolveSingleForRequest(
+      this.adapter,
+      this.singleRegistryService,
+      slug,
+      this.logger
+    );
+    if (!singleMeta) return null;
+    const row = await this.adapter.selectOne<SingleDocument>(
+      singleMeta.tableName,
+      {}
+    );
+    return row ? { singleMeta, row } : null;
+  }
+
+  /**
+   * Each stored translation's own status for this Single, keyed by locale,
+   * read now from the pool: the languages a release's document-wide write
+   * moves besides the main row. Answered with the id of the row it was asked
+   * of, so a caller can tell the Single's document from one it held before;
+   * `null` for a Single with no stored document. The statuses are empty for a
+   * Single that keeps no translations, and `null` where it keeps them but they
+   * cannot be read here (the translation table is not there yet, or has no
+   * per-language status), so that is never taken for "none to move".
+   *
+   * @experimental
+   */
+  async releaseLanguageStatuses(params: { slug: string }): Promise<{
+    entryId: string;
+    statuses: Map<string, string | null> | null;
+  } | null> {
+    const stored = await this.releaseSingleRow(params.slug);
+    if (stored === null) return null;
+    const { singleMeta, row } = stored;
+    // Built as the write builds it, so the languages read are the ones the
+    // write moves.
+    const companion =
+      this.localization && singleMeta.localized === true
+        ? buildCompanionSchema({
+            slug: params.slug,
+            tableName: singleMeta.tableName,
+            fields: singleMeta.fields as { name: string; type: string }[],
+            dialect: this.adapter.dialect,
+            status: (singleMeta as { status?: boolean }).status === true,
+          })
+        : null;
+    if (!companion) return { entryId: row.id, statuses: new Map() };
+    if (
+      !companion.hasStatus ||
+      !(await isCompanionReady(this.adapter, companion.companionTableName))
+    ) {
+      return { entryId: row.id, statuses: null };
+    }
+    return {
+      entryId: row.id,
+      statuses: await readCompanionLocaleStatusAll(
+        this.adapter.getDrizzle<
+          Parameters<typeof readCompanionLocaleStatusAll>[0]
+        >(),
+        companion.table,
+        row.id,
+        "ready"
       ),
     };
   }

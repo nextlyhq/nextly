@@ -11,7 +11,10 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { applyDueReleases, settleableComponents } from "../apply-due-releases";
-import type { ApplyDueReleasesDeps } from "../apply-due-releases";
+import type {
+  ApplyDueReleasesDeps,
+  ReleaseMutations,
+} from "../apply-due-releases";
 import type { ReleaseMemberRow, ReleaseRow } from "../releases-repository";
 
 const NOW = new Date("2026-06-01T00:00:00.000Z");
@@ -627,6 +630,30 @@ describe("applyDueReleases", () => {
     });
     const result = await applyDueReleases(d);
     expect(publish).toHaveBeenCalledTimes(1);
+    expect(result.failed).toBe(0);
+  });
+
+  it("WRITES every action for mutations that say nothing about settlement", async () => {
+    // Mutations written before `settled` existed still satisfy the port, and
+    // every action they are handed is written, as it was before. Typed as the
+    // port itself, so the suite stops compiling if `settled` becomes required.
+    const publish = vi.fn(async () => {});
+    const mutations: ReleaseMutations = {
+      publish,
+      unpublish: async () => {},
+      applied: async () => true,
+    };
+    const result = await applyDueReleases({
+      ...deps({
+        releases: [release({ id: "r1" })],
+        members: [
+          member({ releaseId: "r1", entryId: "e1" }),
+          member({ releaseId: "r1", entryId: "e2" }),
+        ],
+      }),
+      mutations,
+    });
+    expect(publish).toHaveBeenCalledTimes(2);
     expect(result.failed).toBe(0);
   });
 

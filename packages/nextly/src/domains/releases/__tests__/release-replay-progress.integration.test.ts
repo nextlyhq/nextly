@@ -7,11 +7,20 @@
  * events do not run twice and the pass reaches the documents still to go. One
  * already published but holding a working draft is still written, because
  * putting that draft live is what the release is for.
+ *
+ * A localized document is passed over only when EVERY language is already
+ * where the action leaves it. The document read reports the default language,
+ * so a page published in English with its German translation still a draft
+ * reads as published, and passing it over would mark the release published
+ * with German never put live. Its assertions read the translation rows
+ * directly, because a localized read falls back to the default language.
  */
 import { afterEach, describe, expect, it } from "vitest";
 
 import { defineCollection } from "../../../collections/config/define-collection";
 import { text } from "../../../collections/fields";
+import { defineSingle } from "../../../config";
+import { releaseLanguageStatuses } from "../../../di/registrations/release-document-checks";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -19,6 +28,7 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import type { CollectionsHandler } from "../../../services/collections-handler";
+import type { SingleEntryService } from "../../singles/services/single-entry-service";
 import { VersionsRepository } from "../../versions/versions-repository";
 import { applyDueReleases } from "../apply-due-releases";
 import { createReleaseMutations } from "../release-mutations";
@@ -89,7 +99,11 @@ async function entry(
 
 async function dueReleaseOf(
   t: TestNextly,
-  entryIds: readonly string[]
+  entryIds: readonly string[],
+  scope: { scopeKind: "collection" | "single"; scopeSlug: string } = {
+    scopeKind: "collection",
+    scopeSlug: SLUG,
+  }
 ): Promise<string> {
   const repo = new ReleasesRepository(t.adapter);
   const release = await repo.createRelease({ title: "Go live" });
@@ -97,8 +111,7 @@ async function dueReleaseOf(
     await repo.addMember(
       {
         releaseId: release.id,
-        scopeKind: "collection",
-        scopeSlug: SLUG,
+        ...scope,
         entryId,
         locale: null,
         action: "publish",
@@ -118,6 +131,7 @@ function materialise(t: TestNextly) {
     mutations: createReleaseMutations({
       contentApi: t.nextly,
       drafts: new VersionsRepository(t.adapter),
+      languages: releaseLanguageStatuses,
     }),
     runAs: {
       findUser: async id => ({ id, isActive: true }),
@@ -183,6 +197,174 @@ describe.each(getConfiguredTestDialects())(
           entryId: id,
         })
       ).toEqual([]);
+    });
+  }
+);
+
+const PAGES = "pages";
+const PREFERENCES = "preferences";
+
+async function bootLocalized(dialect: TestDialect): Promise<TestNextly> {
+  changes = 0;
+  const open = {
+    read: () => true,
+    update: () => true,
+    publish: () => true,
+    unpublish: () => true,
+  };
+  current = await createTestNextly({
+    dialect,
+    collections: [
+      defineCollection({
+        slug: PAGES,
+        localized: true,
+        status: true,
+        access: open,
+        hooks: {
+          afterChange: [
+            () => {
+              changes += 1;
+            },
+          ],
+        },
+        fields: [text({ name: "title", localized: true })],
+      }),
+    ],
+    singles: [
+      defineSingle({
+        slug: PREFERENCES,
+        localized: true,
+        status: true,
+        access: open,
+        fields: [text({ name: "siteName", localized: true })],
+      }),
+    ],
+    localization: { locales: ["en", "de"], defaultLocale: "en" },
+  });
+  return current;
+}
+
+/** Every stored translation's own status, keyed by locale, read raw. */
+async function languageStatuses(
+  t: TestNextly,
+  companionTable: string
+): Promise<Record<string, string>> {
+  const rows = await t.adapter.select<{ _locale?: unknown; _status?: unknown }>(
+    companionTable,
+    {}
+  );
+  const out: Record<string, string> = {};
+  for (const r of rows) out[String(r._locale)] = String(r._status);
+  return out;
+}
+
+/** A page published in English, its German translation as `de`. */
+async function page(t: TestNextly, de: "draft" | "published"): Promise<string> {
+  const created = await handlerOf(t).createEntry(
+    { collectionName: PAGES, overrideAccess: true },
+    { title: "Page EN", status: "published" }
+  );
+  const id = (created.data as { id?: string } | undefined)?.id;
+  if (typeof id !== "string") throw new Error("no id from create");
+  await handlerOf(t).updateEntry(
+    { collectionName: PAGES, entryId: id, overrideAccess: true, locale: "de" },
+    { title: "Seite DE", status: de }
+  );
+  return id;
+}
+
+describe.each(getConfiguredTestDialects())(
+  "a release pass judges a localized document by every language (%s)",
+  dialect => {
+    it("WRITES a page published in English while German is still a draft", async () => {
+      const t = await bootLocalized(dialect);
+      const id = await page(t, "draft");
+      // The state the default-language read misjudges: it reports the page
+      // published, while German has not gone live.
+      expect(await languageStatuses(t, `dc_${PAGES}_locales`)).toEqual({
+        en: "published",
+        de: "draft",
+      });
+      expect(
+        (
+          (await t.nextly.findByID({
+            collection: PAGES,
+            id,
+            overrideAccess: true,
+            status: "all",
+          } as never)) as { status?: string } | null
+        )?.status
+      ).toBe("published");
+      await dueReleaseOf(t, [id], {
+        scopeKind: "collection",
+        scopeSlug: PAGES,
+      });
+
+      const result = await materialise(t);
+
+      expect(result.failed).toBe(0);
+      expect(await languageStatuses(t, `dc_${PAGES}_locales`)).toEqual({
+        en: "published",
+        de: "published",
+      });
+    });
+
+    it("WRITES a Single published in English while German is still a draft", async () => {
+      const t = await bootLocalized(dialect);
+      const singles: SingleEntryService = t.getService("singleEntryService");
+      await singles.update(
+        PREFERENCES,
+        { siteName: "Prefs EN", status: "published" },
+        { locale: "en", overrideAccess: true }
+      );
+      await singles.update(
+        PREFERENCES,
+        { siteName: "Prefs DE", status: "draft" },
+        { locale: "de", overrideAccess: true }
+      );
+      const table = `single_${PREFERENCES}_locales`;
+      expect(await languageStatuses(t, table)).toEqual({
+        en: "published",
+        de: "draft",
+      });
+      const rows = await t.adapter.select<{ id: string }>(
+        `single_${PREFERENCES}`,
+        {}
+      );
+      const singleId = rows[0]?.id;
+      if (typeof singleId !== "string") throw new Error("no single row");
+      await dueReleaseOf(t, [singleId], {
+        scopeKind: "single",
+        scopeSlug: PREFERENCES,
+      });
+
+      const result = await materialise(t);
+
+      expect(result.failed).toBe(0);
+      expect(await languageStatuses(t, table)).toEqual({
+        en: "published",
+        de: "published",
+      });
+    });
+
+    it("passes over a page already published in every language", async () => {
+      // The control: the languages are read, not merely distrusted. A reader
+      // that could not tell would write this page too.
+      const t = await bootLocalized(dialect);
+      const id = await page(t, "published");
+      const releaseId = await dueReleaseOf(t, [id], {
+        scopeKind: "collection",
+        scopeSlug: PAGES,
+      });
+      changes = 0;
+
+      const result = await materialise(t);
+
+      expect(changes).toBe(0);
+      expect(result.failed).toBe(0);
+      expect((await t.nextly.releases.findByID({ id: releaseId }))?.state).toBe(
+        "published"
+      );
     });
   }
 );

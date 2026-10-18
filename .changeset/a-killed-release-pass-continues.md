@@ -31,8 +31,15 @@
 
 A release pass that the host ends part-way, at a serverless function's time limit for
 example, now makes progress on the next pass. A document already where its release action
-leaves it, holding no working draft, counts as applied without being written again, so its
-hooks and outbox events no longer run twice and the next pass reaches the documents still to
-go. Before, the next pass rewrote everything it had already written, and a pass ended at the
-same point every time never finished. A document holding a working draft is still written,
-because that draft is what the release puts live.
+leaves it in every language, holding no working draft, counts as applied without being
+written again, so its hooks and outbox events no longer run twice and the next pass reaches
+the documents still to go. Before, the next pass rewrote everything it had already written,
+and a pass ended at the same point every time never finished. A document holding a working
+draft is still written, because that draft is what the release puts live, and so is one with
+a translation not yet where the action leaves it.
+
+`createReleasesDrainJob` takes an optional `languages` reader for each document's
+per-language statuses, which the built-in registration supplies. A drain job created without
+it writes every action, as before. For the same reason the `settled` check on the mutations
+`applyDueReleases` is given is optional: mutations without it are written as they always
+were.

@@ -65,11 +65,27 @@ import type { DocumentRef } from "./releases-repository";
  */
 const WITHDRAWN_STATUS = "draft";
 
+/**
+ * Each stored translation's own status for a document, keyed by locale:
+ * empty where the document keeps no translations, and `null` where it keeps
+ * them but they cannot be read.
+ */
+export type ReleaseLanguageStatuses = (
+  ref: DocumentRef
+) => Promise<ReadonlyMap<string, string | null> | null>;
+
 export function createReleaseMutations(deps: {
   /** The Direct API. Injected for the reason the applier's own deps are. */
   contentApi: JobContentSource;
   /** Where a document's pending working drafts are read. */
   drafts: Pick<VersionsRepository, "listWorkingDraftLocales">;
+  /**
+   * Each stored translation's own status, keyed by locale: empty for a
+   * document that keeps none, `null` where they cannot be read. Without it
+   * nothing is reported settled, since a document-wide action moves every
+   * language and the document read reports only the default one.
+   */
+  languages?: ReleaseLanguageStatuses;
 }): ReleaseMutations {
   const write = async (
     ref: DocumentRef,
@@ -148,13 +164,27 @@ export function createReleaseMutations(deps: {
   ): boolean =>
     effect === "publish" ? status === "published" : status === WITHDRAWN_STATUS;
 
-  return {
+  const mutations: ReleaseMutations = {
     publish: ({ ref, user }) => write(ref, user, "published"),
     unpublish: ({ ref, user }) => write(ref, user, WITHDRAWN_STATUS),
     applied: async ({ ref, effect }) =>
       reached(await currentStatus(ref), effect),
+  };
+  const languages = deps.languages;
+  if (languages === undefined) return mutations;
+
+  return {
+    ...mutations,
     settled: async ({ ref, effect }) => {
       if (!reached(await currentStatus(ref), effect)) return false;
+      // The document read reports the default language alone, and the write
+      // moves every one: a translation still elsewhere is what the write is
+      // for. Unreadable languages are never taken for settled ones.
+      const stored = await languages(ref);
+      if (stored === null) return false;
+      for (const status of stored.values()) {
+        if (!reached(status ?? undefined, effect)) return false;
+      }
       // A held working draft, in any language, is content the write would
       // still promote, so the action is not a no-op while one exists. Every
       // language, because a member names the whole document.
