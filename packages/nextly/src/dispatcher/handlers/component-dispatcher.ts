@@ -34,11 +34,9 @@ import { assertLocalizationConfigured } from "../../domains/i18n/config/require-
 import { archiveFieldsLeavingTranslation } from "../../domains/i18n/migration/archive-preflight";
 import { columnsMovingToCompanion } from "../../domains/i18n/migration/field-joins-translation";
 import { moveValuesOfFieldsJoiningTranslation } from "../../domains/i18n/runtime/move-joining-values";
-import { translatePipelinePreviewToLegacy } from "../../domains/schema/legacy-preview/translate";
 import { RealClassifier } from "../../domains/schema/pipeline/classifier/classifier";
 import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/database-url";
 import { RealPreCleanupExecutor } from "../../domains/schema/pipeline/pre-cleanup/executor";
-import { previewDesiredSchema } from "../../domains/schema/pipeline/preview";
 import {
   BrowserPromptDispatcher,
   type BrowserRenameResolution,
@@ -48,7 +46,6 @@ import {
   noopMigrationJournal,
   noopPreRenameExecutor,
 } from "../../domains/schema/pipeline/pushschema-pipeline-stubs";
-import { toRenameCandidateWire } from "../../domains/schema/pipeline/rename-candidate-wire";
 import { RegexRenameDetector } from "../../domains/schema/pipeline/rename-detector";
 import type { Resolution } from "../../domains/schema/pipeline/resolution/types";
 import type { DesiredFieldGroup } from "../../domains/schema/pipeline/types";
@@ -66,6 +63,7 @@ import {
 } from "../../schemas/dynamic-field-groups";
 import type { FieldGroupRegistryService } from "../../services/field-groups/field-group-registry-service";
 import type { Logger } from "../../shared/types";
+import { builderSchemaPreviewBody } from "../helpers/builder-schema-preview";
 import { buildFullDesiredSchema } from "../helpers/desired-schema";
 import {
   getAdapterFromDI,
@@ -379,49 +377,30 @@ export const COMPONENTS_METHODS: Record<
         // i18n: carry the localized flag so the push diff omits translatable columns
         // from the component's main table (they live in comp_<slug>_locales, reconciled
         // out-of-band below) — mirrors the collection/single apply path.
-        localized: (component as { localized?: boolean }).localized === true,
+        // The request's flag wins when the Builder sent one, as in the collection and Single
+        // previews, so a change that also turns translation on or off is diffed as it will apply.
+        localized:
+          readRequestLocalized(body) ??
+          (component as { localized?: boolean }).localized === true,
         // Authored in the Schema Builder: this is the Builder's own save path.
         builderOwned: true,
       };
 
-      // A field becoming translated takes its value to the companion before main drops its
-      // column, so the preview judges that drop as the apply will.
-      const previewWasLocalized =
-        (component as { localized?: boolean }).localized === true;
-      const pipelinePreview = await previewDesiredSchema({
-        desired,
-        db,
-        dialect,
-        columnsMovedToCompanion: columnsMovingToCompanion({
-          tableName,
-          dialect,
-          builtBy: "fieldGroup",
-          oldFields: currentFields,
-          newFields: fields as FieldDefinition[],
-          wasLocalized: previewWasLocalized,
-          isLocalized: readRequestLocalized(body) ?? previewWasLocalized,
-        }),
-      });
-
-      const legacyShape = await translatePipelinePreviewToLegacy(
-        pipelinePreview,
-        {
-          tableName,
-          currentFields,
-          newFields: fields as FieldDefinition[],
+      return respondData(
+        await builderSchemaPreviewBody({
+          desired,
           db,
           dialect,
-        }
+          slug: slug,
+          tableName,
+          builtBy: "fieldGroup",
+          entity: component,
+          currentFields,
+          newFields: fields as FieldDefinition[],
+          requestedLocalized: readRequestLocalized(body),
+          schemaVersion: component.schemaVersion,
+        })
       );
-
-      const renamed = pipelinePreview.candidates.map(toRenameCandidateWire);
-
-      const legacyAsRecord = legacyShape as unknown as Record<string, unknown>;
-      return respondData({
-        ...legacyAsRecord,
-        renamed,
-        schemaVersion: component.schemaVersion,
-      });
     },
   },
 
@@ -547,6 +526,7 @@ export const COMPONENTS_METHODS: Record<
               getConfigFromDI()?.localization?.defaultLocale ?? "en",
             adapter,
             entity: slug,
+            kind: "fieldGroup",
             oldFields: (component.fields ?? []) as unknown as FieldDefinition[],
             newFields: fields as unknown as FieldDefinition[],
             wasLocalized,

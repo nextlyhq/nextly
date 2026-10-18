@@ -31,7 +31,10 @@ import {
   type UnknownSourceLimits,
   type UnknownSourceVerdict,
 } from "../middleware/unknown-source-counter";
+import { namesAccountKey } from "../pipeline/password-strategy";
 import { verifyPendingToken } from "../pipeline/pending-token";
+import { limitKeyFor } from "../pipeline/strategy-chain";
+import type { AuthStrategy } from "../pipeline/types";
 
 import type { AuthRouterDeps } from "./router";
 
@@ -79,6 +82,60 @@ function accountKey(email: string | null, secret: string): string {
   const key = Buffer.from(hkdfSync("sha256", secret, "", ACCOUNT_KEY_INFO, 32));
   const digest = createHmac("sha256", key).update(normalized).digest("hex");
   return `auth-unknown:account:${digest}`;
+}
+
+/** What the strategy-key use of the install's secret is called. */
+const STRATEGY_KEY_INFO = "nextly auth limit strategy keys";
+
+/**
+ * The key a strategy's budget for `key` is counted under, as `accountKey` is
+ * for an email: an HMAC under a key derived for this use alone, so a stored
+ * key names no credential. The strategy's name is part of what is hashed, so
+ * two strategies naming the same string share nothing, and every key is one
+ * size however long the credential a strategy names.
+ */
+function strategyKey(name: string, key: string | null, secret: string): string {
+  if (key === null || key === "") return ACCOUNTLESS_KEY;
+  const derived = Buffer.from(
+    hkdfSync("sha256", secret, "", STRATEGY_KEY_INFO, 32)
+  );
+  const digest = createHmac("sha256", derived)
+    .update(`${name}\0${key}`)
+    .digest("hex");
+  return `auth-unknown:strategy:${digest}`;
+}
+
+/**
+ * Whether a sign-in's key is the strategies' to name: the app has a strategy
+ * of its own, and the first in the chain can answer the question. With no
+ * strategy of its own, the password strategy's email keying applies exactly
+ * as for every other route; with a first strategy that cannot answer, the
+ * chain cannot be asked at all.
+ */
+function strategiesNameTheKey(strategies: readonly AuthStrategy[]): boolean {
+  const [first] = strategies;
+  return (
+    first?.limitKey !== undefined &&
+    strategies.some(strategy => !namesAccountKey(strategy))
+  );
+}
+
+/** The key a sign-in is counted under, from what its strategies answered. */
+function signInKey(
+  named: Awaited<ReturnType<typeof limitKeyFor>>,
+  body: Record<string, unknown>,
+  secret: string
+): string {
+  if (named === "unanswerable") {
+    // A strategy that cannot answer may claim the request, so the chain is
+    // keyed as a sign-in with no strategies of its own is.
+    const email = stringField(body, "email");
+    return accountKey(email === "" ? null : email, secret);
+  }
+  if (named.strategy === null) return ACCOUNTLESS_KEY;
+  return namesAccountKey(named.strategy)
+    ? accountKey(named.key, secret)
+    : strategyKey(named.strategy.name, named.key, secret);
 }
 
 /**
@@ -199,6 +256,20 @@ export async function admitUnknownSource(
   const met = await counter.ceilingMet(limits);
   if (met) return met;
   const body = await readBody(request);
+
+  const strategies = deps.authStrategies ?? [];
+  if (authPath === "login" && strategiesNameTheKey(strategies)) {
+    // Asking the strategies is the work the ceiling bounds, so the ceiling is
+    // spent first, as a token route spends it before its lookup.
+    const arrival = await counter.arrive(limits);
+    if (!arrival.allowed) return arrival;
+    const named = await limitKeyFor(strategies, { request, body });
+    return counter.admitArrived(
+      signInKey(named, body, deps.secret),
+      limits,
+      arrival.at
+    );
+  }
 
   const tokenKind = TOKEN_ROUTES[authPath];
   if (tokenKind === undefined) {

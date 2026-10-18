@@ -24,11 +24,8 @@ import {
 } from "../../../plugins/test-nextly";
 import type { CollectionsHandler } from "../../../services/collections-handler";
 import { ReleasesRepository } from "../releases-repository";
-import { seedLiveAuthor } from "./helpers/live-author";
-import {
-  ANY_EDITABLE_STATE,
-  scheduleAsItStands,
-} from "./helpers/release-writes";
+import { seedPlainAuthor } from "./helpers/live-author";
+import { scheduleAsItStands } from "./helpers/release-writes";
 
 let current: TestNextly | undefined;
 
@@ -48,7 +45,14 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
       defineCollection({
         slug: SLUG,
         status: true,
-        access: { read: () => true, update: () => true },
+        // Its authors may put a post live and take one down, so a member is
+        // one the release's run can perform.
+        access: {
+          read: () => true,
+          update: () => true,
+          publish: () => true,
+          unpublish: () => true,
+        },
         fields: [text({ name: "title" })],
       }),
     ],
@@ -69,26 +73,42 @@ async function draftInRelease(
   const id = (created.data as { id?: string } | undefined)?.id;
   if (typeof id !== "string") throw new Error("no id from create");
 
-  const repo = new ReleasesRepository(t.adapter);
-  const release = await repo.createRelease({ title: "Go live" });
-  await repo.addMember(
-    {
-      releaseId: release.id,
-      scopeKind: "collection",
-      scopeSlug: SLUG,
-      entryId: id,
-      locale: null,
-      action: "publish",
-      // A live author: the read path projects a due member only when its author
-      // still exists and is active, matching the write path that runs AS them.
-      createdBy: await seedLiveAuthor(t),
-    },
-    ANY_EDITABLE_STATE
-  );
+  await releaseHolding(t, id, "publish", scheduledAt);
+  return id;
+}
+
+/**
+ * A release holding this post, added the way the product adds one, and
+ * scheduled when an instant is given. Asserted ready, so what a case reads is
+ * the effect of a release that would actually run.
+ */
+async function releaseHolding(
+  t: TestNextly,
+  entryId: string,
+  action: "publish" | "unpublish",
+  scheduledAt: Date | null
+): Promise<void> {
+  const release = await t.nextly.releases.create({ title: "Go live" });
+  await t.nextly.releases.addMember({
+    releaseId: release.id,
+    scopeKind: "collection",
+    scopeSlug: SLUG,
+    entryId,
+    locale: null,
+    action,
+    // A live author: the read path projects a due member only when its author
+    // still exists and is active, matching the write path that runs AS them.
+    // Not the super admin, so the author's own access is what is judged.
+    userId: await seedPlainAuthor(t),
+  });
+  expect(
+    (await t.nextly.releases.readiness({ releaseId: release.id })).hard
+  ).toEqual([]);
   if (scheduledAt !== null) {
+    // Through the repository, so an instant already past can be set.
+    const repo = new ReleasesRepository(t.adapter);
     await scheduleAsItStands(repo, release.id, scheduledAt, "UTC");
   }
-  return id;
 }
 
 /** A PUBLISHED entry, and the release that will withdraw it. */
@@ -97,10 +117,8 @@ async function publishedInTakedown(
   scheduledAt: Date | null
 ): Promise<string> {
   const handler = t.getService("collectionsHandler") as CollectionsHandler;
-  // Trusted for the SETUP only. This collection declares no `publish` rule, and
-  // publish/unpublish are granted only by an explicit one — so an untrusted
-  // create of a published row is refused. What has to be untrusted is the READ
-  // the assertion makes, which is where the release decision applies.
+  // Trusted for the SETUP only: what has to be untrusted is the READ the
+  // assertion makes, which is where the release decision applies.
   const created = await handler.createEntry(
     { collectionName: SLUG, overrideAccess: true },
     { title: "live", status: "published" }
@@ -108,23 +126,7 @@ async function publishedInTakedown(
   const id = (created.data as { id?: string } | undefined)?.id;
   if (typeof id !== "string") throw new Error("no id from create");
 
-  const repo = new ReleasesRepository(t.adapter);
-  const release = await repo.createRelease({ title: "Take it down" });
-  await repo.addMember(
-    {
-      releaseId: release.id,
-      scopeKind: "collection",
-      scopeSlug: SLUG,
-      entryId: id,
-      locale: null,
-      action: "unpublish",
-      createdBy: await seedLiveAuthor(t),
-    },
-    ANY_EDITABLE_STATE
-  );
-  if (scheduledAt !== null) {
-    await scheduleAsItStands(repo, release.id, scheduledAt, "UTC");
-  }
+  await releaseHolding(t, id, "unpublish", scheduledAt);
   return id;
 }
 

@@ -925,28 +925,27 @@ export const nextly = {
       requireNextly().notices.markRead(args),
   },
 
+  // Checked against the namespace's own type, so a method added there and
+  // not delegated here is a compile error rather than a gap a caller finds.
   releases: {
-    create: (args: Parameters<ReleasesNamespace["create"]>[0]) =>
-      requireNextly().releases.create(args),
-    find: (args?: Parameters<ReleasesNamespace["find"]>[0]) =>
-      requireNextly().releases.find(args),
-    count: (args?: Parameters<ReleasesNamespace["count"]>[0]) =>
-      requireNextly().releases.count(args),
-    findByID: (args: Parameters<ReleasesNamespace["findByID"]>[0]) =>
-      requireNextly().releases.findByID(args),
-    addMember: (args: Parameters<ReleasesNamespace["addMember"]>[0]) =>
-      requireNextly().releases.addMember(args),
-    removeMember: (args: Parameters<ReleasesNamespace["removeMember"]>[0]) =>
-      requireNextly().releases.removeMember(args),
-    listMembers: (args: Parameters<ReleasesNamespace["listMembers"]>[0]) =>
-      requireNextly().releases.listMembers(args),
-    schedule: (args: Parameters<ReleasesNamespace["schedule"]>[0]) =>
-      requireNextly().releases.schedule(args),
-    cancel: (args: Parameters<ReleasesNamespace["cancel"]>[0]) =>
-      requireNextly().releases.cancel(args),
-    publishNow: (args: Parameters<ReleasesNamespace["publishNow"]>[0]) =>
-      requireNextly().releases.publishNow(args),
-  },
+    create: args => requireNextly().releases.create(args),
+    find: args => requireNextly().releases.find(args),
+    count: args => requireNextly().releases.count(args),
+    findByID: args => requireNextly().releases.findByID(args),
+    capabilities: args => requireNextly().releases.capabilities(args),
+    blockingReasons: args => requireNextly().releases.blockingReasons(args),
+    readiness: args => requireNextly().releases.readiness(args),
+    addMember: args => requireNextly().releases.addMember(args),
+    removeMember: args => requireNextly().releases.removeMember(args),
+    changeMemberAction: args =>
+      requireNextly().releases.changeMemberAction(args),
+    listMembers: args => requireNextly().releases.listMembers(args),
+    schedule: args => requireNextly().releases.schedule(args),
+    cancel: args => requireNextly().releases.cancel(args),
+    publishNow: args => requireNextly().releases.publishNow(args),
+    update: args => requireNextly().releases.update(args),
+    delete: args => requireNextly().releases.delete(args),
+  } satisfies ReleasesNamespace,
 
   users: {
     find: (args?: FindUsersArgs) => requireNextly().users.find(args),

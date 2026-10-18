@@ -41,11 +41,9 @@ import { archiveFieldsLeavingTranslation } from "../../domains/i18n/migration/ar
 import { columnsMovingToCompanion } from "../../domains/i18n/migration/field-joins-translation";
 import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion-registration";
 import { moveValuesOfFieldsJoiningTranslation } from "../../domains/i18n/runtime/move-joining-values";
-import { translatePipelinePreviewToLegacy } from "../../domains/schema/legacy-preview/translate";
 import { RealClassifier } from "../../domains/schema/pipeline/classifier/classifier";
 import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/database-url";
 import { RealPreCleanupExecutor } from "../../domains/schema/pipeline/pre-cleanup/executor";
-import { previewDesiredSchema } from "../../domains/schema/pipeline/preview";
 import {
   BrowserPromptDispatcher,
   type BrowserRenameResolution,
@@ -55,7 +53,6 @@ import {
   noopMigrationJournal,
   noopPreRenameExecutor,
 } from "../../domains/schema/pipeline/pushschema-pipeline-stubs";
-import { toRenameCandidateWire } from "../../domains/schema/pipeline/rename-candidate-wire";
 import { RegexRenameDetector } from "../../domains/schema/pipeline/rename-detector";
 import type { Resolution } from "../../domains/schema/pipeline/resolution/types";
 import type { DesiredSingle } from "../../domains/schema/pipeline/types";
@@ -93,6 +90,7 @@ import {
 } from "../helpers/authenticated-actor";
 import { readAuthenticatedRoles } from "../helpers/authenticated-roles";
 import { readAuthenticatedUser } from "../helpers/authenticated-user";
+import { builderSchemaPreviewBody } from "../helpers/builder-schema-preview";
 import { buildFullDesiredSchema } from "../helpers/desired-schema";
 import {
   getAdapterFromDI,
@@ -1135,44 +1133,24 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         builderOwned: true,
       };
 
-      // A field becoming translated takes its value to the companion before main drops its
-      // column, so the preview judges that drop as the apply will.
-      const previewWasLocalized =
-        (single as { localized?: boolean }).localized === true;
-      const pipelinePreview = await previewDesiredSchema({
-        desired,
-        db,
-        dialect,
-        columnsMovedToCompanion: columnsMovingToCompanion({
-          tableName,
-          dialect,
-          builtBy: "collection",
-          oldFields: currentFields,
-          newFields: fields as FieldDefinition[],
-          wasLocalized: previewWasLocalized,
-          isLocalized: readRequestLocalized(body) ?? previewWasLocalized,
-        }),
-      });
-
-      const legacyShape = await translatePipelinePreviewToLegacy(
-        pipelinePreview,
-        {
-          tableName,
-          currentFields,
-          newFields: fields as FieldDefinition[],
+      return respondData(
+        await builderSchemaPreviewBody({
+          desired,
           db,
           dialect,
-        }
+          slug: slug,
+          tableName,
+          builtBy: "collection",
+          entity: single,
+          currentFields,
+          newFields: fields as FieldDefinition[],
+          requestedLocalized: readRequestLocalized(body),
+          // Legacy rows (schema_version NULL) read as 1, so the editor always has a concrete
+          // version to echo back on Apply; JSON omits an undefined one and the guard would reject
+          // the first save as version-less.
+          schemaVersion: single.schemaVersion ?? 1,
+        })
       );
-
-      const renamed = pipelinePreview.candidates.map(toRenameCandidateWire);
-
-      const legacyAsRecord = legacyShape as unknown as Record<string, unknown>;
-      return respondData({
-        ...legacyAsRecord,
-        renamed,
-        schemaVersion: single.schemaVersion ?? 1,
-      });
     },
   },
 
@@ -1250,6 +1228,7 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         defaultLocale: getConfigFromDI()?.localization?.defaultLocale ?? "en",
         adapter,
         entity: slug,
+        kind: "single",
         oldFields: single.fields as unknown as FieldDefinition[],
         newFields: fields as unknown as FieldDefinition[],
         wasLocalized,

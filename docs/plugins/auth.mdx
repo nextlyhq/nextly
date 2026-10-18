@@ -3,8 +3,6 @@ title: Auth extensibility
 description: Extend authentication from a plugin — custom strategies, external sign-in (OAuth), auth-flow hooks, and first-class multi-step challenges (2FA) — without forking core.
 ---
 
-> **Parts of this page need the release after 0.0.2-alpha.66:** `ctx.auth.completeLogin` and `capabilities.auth.login`, the resume cookie, `ChallengeViewProps` and the view's resolve result, and the limits on what `afterAuthenticate` and `customizeClaims` may change.
-
 > **Alpha (`0.x`) — `@experimental`.** The auth-extensibility surface (D71/D57) is
 > new and ships `@experimental`: it works and is integration-tested, but stays
 > experimental until a first-party plugin exercises it in production (D55). Pin
@@ -45,9 +43,40 @@ export default defineConfig({
 Hooks, challenges, and UI follow normal contribution rules (active as soon as the
 plugin is installed). Strategies don't — that's deliberate (secure-by-default).
 
-## Worked example: signing in with an external provider
+## Naming the account to the sign-in rate limit
 
-> **Needs the release after 0.0.2-alpha.66.**
+When Nextly cannot read a client's address, which is every request while `security.trustProxy` is unset, the [auth rate limit](/docs/guides/authentication#auth-rate-limit) counts a request against the account it names. For a sign-in that is the `email` its body carries, which is what the built-in `password` strategy reads. A strategy that signs people in from something else should tell the limiter what it reads, with `limitKey` (`@experimental`):
+
+```ts
+import type { AuthStrategy } from "@nextlyhq/plugin-sdk";
+
+export const usernameStrategy: AuthStrategy = {
+  name: "username",
+  async authenticate({ body }) {
+    if (typeof body.username !== "string") return { type: "pass" };
+    // Look the account up by its trimmed, lowercased username and check the
+    // password here.
+    return { type: "fail" };
+  },
+  // Named the way the lookup above names it, so spellings it treats as one
+  // share one budget.
+  limitKey: ({ body }) =>
+    typeof body.username === "string"
+      ? { handles: true, key: body.username.trim().toLowerCase() }
+      : { handles: false },
+};
+```
+
+- Return `{ handles: false }` for a request your strategy does not handle; the next strategy is asked. The first that handles a request decides its budget, whatever later strategies would say.
+- Take the key from the request alone: never look the account up. An unknown and a known name are then limited alike, so the limiter's answer never tells a caller which names exist.
+- For a credential that names nobody until it is looked up, such as an OAuth code, return the credential itself as the key.
+- A key of `null` counts the request against the budget shared by requests that name no account. So does an answer that throws or rejects; it never lets the request past the limiter.
+- Each strategy's keys are its own: a `username` key of `ann` and an email of `ann` are separate budgets. Keys are stored as a fixed-size HMAC under the install's secret, so a shared store never holds the credential.
+- A request a strategy handles spends a place of the ceiling before its key is known, as a password-reset request does.
+
+A strategy without `limitKey` could claim any request, so once the limiter reaches one in `auth.strategies`, the request is limited by the `email` it carries, as before. The server names each such strategy at startup while the limit is on.
+
+## Worked example: signing in with an external provider
 
 A provider whose sign-in starts with a redirect does not fit the strategy chain,
 which runs against a request that already carries a credential. Such a plugin
@@ -262,8 +291,6 @@ export const twoFactor = definePlugin({
    flow and the page says so.
 
 ### Single use and the attempt budget
-
-> **Needs the release after 0.0.2-alpha.66.**
 
 A challenge is answered once, on every instance. The first correct answer marks
 its sign-in answered in the database, in a write only one caller can win,

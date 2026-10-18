@@ -50,6 +50,7 @@ import type {
   CacheRevalidator,
   RevalidationIntent,
 } from "../../revalidation/types";
+import type { ValidationIssue } from "../../shared/lib/entry-validation";
 import type { PaginatedResponse } from "../../types/pagination";
 import { BaseService } from "../base-service";
 import type { CollectionFileManager } from "../collection-file-manager";
@@ -598,6 +599,46 @@ export class CollectionEntryService extends BaseService {
     authenticatedScope?: AuthenticatedScope;
   }): Promise<boolean> {
     return this.mutationService.canUpdateEntry(params);
+  }
+
+  /**
+   * What a release's publish of this entry would be refused with by
+   * validation, judged without writing. See the mutation service.
+   *
+   * @experimental
+   */
+  async releasePublishIssues(params: {
+    collectionName: string;
+    entryIds: readonly string[];
+    user: UserContext;
+  }): Promise<Map<string, ValidationIssue[]>> {
+    return this.mutationService.releasePublishIssues(params);
+  }
+
+  /**
+   * Whether a release's document-wide write of this collection would meet a
+   * translation table without its per-language status. See the mutation
+   * service.
+   *
+   * @experimental
+   */
+  async releaseCompanionLacksStatus(params: {
+    collectionName: string;
+  }): Promise<boolean> {
+    return this.mutationService.releaseCompanionLacksStatus(params);
+  }
+
+  /**
+   * The languages whose unreleased work a release's document-wide write of
+   * these entries would be refused over.
+   *
+   * @experimental
+   */
+  async releaseHeldDraftLocales(params: {
+    collectionName: string;
+    entryIds: readonly string[];
+  }): Promise<Map<string, string[]>> {
+    return this.mutationService.releaseHeldDraftLocales(params);
   }
 
   async updateEntry(

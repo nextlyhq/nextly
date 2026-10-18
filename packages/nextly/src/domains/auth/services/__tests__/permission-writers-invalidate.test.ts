@@ -244,6 +244,7 @@ const writes = FILES.flatMap(writesIn);
  * writes more than once.
  */
 const WRITES = [
+  "domains/auth/services/permission-seed-service.ts:ensureWithCreationGrants",
   "domains/auth/services/permission-seed-service.ts:markOrphanedPermissionsRows",
   "domains/auth/services/permission-seed-service.ts:normalizeReversedSlugs",
   "domains/auth/services/permission-seed-service.ts:retirePermissionRow",

@@ -27,9 +27,10 @@ import { validateCsrf } from "../csrf/validate";
 import type { AuthHookRegistry } from "../pipeline/hooks";
 
 import {
+  buildAuthErrorResponse,
+  csrfFailure,
   jsonResponse,
   stallResponse,
-  buildAuthErrorResponse,
 } from "./handler-utils";
 
 /**
@@ -131,7 +132,7 @@ export async function handleRegister(
       // not an account-state leak. Keep the existing wire shape.
       return jsonResponse(
         403,
-        { error: { code: "CSRF_FAILED", message: csrfResult.error } },
+        { error: csrfFailure(request, csrfResult) },
         { "x-request-id": requestId }
       );
     }

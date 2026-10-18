@@ -16,9 +16,10 @@ import { readCsrfCookie, readCsrfFromRequest } from "../csrf/csrf-cookie";
 import { validateCsrf } from "../csrf/validate";
 
 import {
+  buildAuthErrorResponse,
+  csrfFailure,
   jsonResponse,
   stallResponse,
-  buildAuthErrorResponse,
 } from "./handler-utils";
 
 export interface ForgotPasswordHandlerDeps {
@@ -142,7 +143,7 @@ export async function handleForgotPassword(
       await stallResponse(startTime, deps.loginStallTimeMs);
       return jsonResponse(
         403,
-        { error: { code: "CSRF_FAILED", message: csrfResult.error } },
+        { error: csrfFailure(request, csrfResult) },
         { "x-request-id": requestId }
       );
     }

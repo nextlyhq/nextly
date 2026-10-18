@@ -33,6 +33,7 @@ import {
 } from "../../api/response-shapes";
 import { assertLocalizationConfigured } from "../../domains/i18n/config/require-app-config";
 import { archiveFieldsLeavingTranslation } from "../../domains/i18n/migration/archive-preflight";
+import { ensureI18nArchive } from "../../domains/i18n/migration/ensure-archive";
 import { columnsMovingToCompanion } from "../../domains/i18n/migration/field-joins-translation";
 import { buildCompanionTransitionStatements } from "../../domains/i18n/migration/reconcile-companion";
 import {
@@ -41,12 +42,10 @@ import {
 } from "../../domains/i18n/runtime/companion-io";
 import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion-registration";
 import { moveValuesOfFieldsJoiningTranslation } from "../../domains/i18n/runtime/move-joining-values";
-import { translatePipelinePreviewToLegacy } from "../../domains/schema/legacy-preview/translate";
 import { createApplyDesiredSchema } from "../../domains/schema/pipeline/apply";
 import { RealClassifier } from "../../domains/schema/pipeline/classifier/classifier";
 import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/database-url";
 import { RealPreCleanupExecutor } from "../../domains/schema/pipeline/pre-cleanup/executor";
-import { previewDesiredSchema } from "../../domains/schema/pipeline/preview";
 import {
   BrowserPromptDispatcher,
   type BrowserRenameResolution,
@@ -56,10 +55,8 @@ import {
   noopMigrationJournal,
   noopPreRenameExecutor,
 } from "../../domains/schema/pipeline/pushschema-pipeline-stubs";
-import { toRenameCandidateWire } from "../../domains/schema/pipeline/rename-candidate-wire";
 import { RegexRenameDetector } from "../../domains/schema/pipeline/rename-detector";
 import type { Resolution } from "../../domains/schema/pipeline/resolution/types";
-import { isIdempotencyError } from "../../domains/schema/pipeline/sql-statement-utils";
 import type { DesiredCollection } from "../../domains/schema/pipeline/types";
 import { DrizzleStatementExecutor } from "../../domains/schema/services/drizzle-statement-executor";
 import { generateRuntimeSchema } from "../../domains/schema/services/runtime-schema-generator";
@@ -73,10 +70,6 @@ import { getHandlerConfig } from "../../route-handler/auth-handler";
 import { withSessionCacheHeaders } from "../../routeHandler";
 import { getProductionNotifier } from "../../runtime/notifications/index";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
-import {
-  getI18nArchiveDdl,
-  getI18nArchiveIndexRepairDdl,
-} from "../../schemas/nextly-i18n-archive";
 import type { ServiceContainer } from "../../services";
 import type { CollectionsHandler } from "../../services/collections-handler";
 import { readableSlugAllowlist } from "../../services/lib/readable-slug-allowlist";
@@ -87,6 +80,7 @@ import {
 } from "../helpers/authenticated-actor";
 import { readAuthenticatedRoles } from "../helpers/authenticated-roles";
 import { readAuthenticatedUser } from "../helpers/authenticated-user";
+import { builderSchemaPreviewBody } from "../helpers/builder-schema-preview";
 import { buildFullDesiredSchema } from "../helpers/desired-schema";
 import {
   getAdapterFromDI,
@@ -610,57 +604,24 @@ const COLLECTIONS_METHODS: Record<
         builderOwned: true,
       };
 
-      // A field becoming translated takes its value to the companion before main drops its
-      // column, so the preview judges that drop as the apply will.
-      const previewWasLocalized =
-        (collection as { localized?: boolean }).localized === true;
-      const pipelinePreview = await previewDesiredSchema({
-        desired,
-        db,
-        dialect,
-        columnsMovedToCompanion: columnsMovingToCompanion({
-          tableName,
-          dialect,
-          builtBy: "collection",
-          oldFields: currentFields,
-          newFields: fields as FieldDefinition[],
-          wasLocalized: previewWasLocalized,
-          isLocalized: previewLocalized ?? previewWasLocalized,
-        }),
-      });
-
-      const legacyShape = await translatePipelinePreviewToLegacy(
-        pipelinePreview,
-        {
-          tableName,
-          currentFields,
-          newFields: fields as FieldDefinition[],
+      return respondData(
+        await builderSchemaPreviewBody({
+          desired,
           db,
           dialect,
-        }
+          slug: p.collectionName,
+          tableName,
+          builtBy: "collection",
+          entity: collection,
+          currentFields,
+          newFields: fields as FieldDefinition[],
+          requestedLocalized: previewLocalized,
+          // Legacy rows (schema_version NULL) read as 1, so the editor always has a concrete
+          // version to echo back on Apply; JSON omits an undefined one and the guard would reject
+          // the first save as version-less.
+          schemaVersion: collection.schemaVersion ?? 1,
+        })
       );
-
-      // Forward rename candidates from the same pipeline preview run
-      // (the pipeline already detected them).
-      const renamed = pipelinePreview.candidates.map(toRenameCandidateWire);
-
-      // previewSchemaChanges returns a custom preview payload
-      // (legacyShape plus renamed plus schemaVersion) with no CRUD
-      // analog. We spread legacyShape into a new object so the resulting
-      // body has at least the renamed/schemaVersion fields, never empty.
-      // Cast through `unknown` because SchemaPreviewResult is a sealed
-      // shape with no string index signature; respondData's generic
-      // requires a Record<string, unknown> for spread compatibility.
-      const legacyAsRecord = legacyShape as unknown as Record<string, unknown>;
-      return respondData({
-        ...legacyAsRecord,
-        renamed,
-        // Normalize legacy rows (schema_version NULL) to 1 so the editor always
-        // receives a concrete version to echo back on apply; otherwise JSON
-        // omits an undefined value and the guard rejects the first save as
-        // version-less. Mirrors the single-dispatcher preview.
-        schemaVersion: collection.schemaVersion ?? 1,
-      });
     },
   },
   // Apply confirmed schema changes via the in-process schema service.
@@ -911,6 +872,7 @@ const COLLECTIONS_METHODS: Record<
         defaultLocale: getConfigFromDI()?.localization?.defaultLocale ?? "en",
         adapter,
         entity: String(p.collectionName),
+        kind: "collection",
         oldFields: (collection.fields ?? []) as unknown as FieldDefinition[],
         newFields: fields as unknown as FieldDefinition[],
         wasLocalized,
@@ -969,6 +931,7 @@ const COLLECTIONS_METHODS: Record<
             // The companion mirrors the main table, and a collection's table comes from the Schema Builder's collection creator.
             builtBy: "collection" as const,
             slug: p.collectionName,
+            kind: "collection",
             tableName,
             dialect,
             defaultLocale,
@@ -1000,22 +963,7 @@ const COLLECTIONS_METHODS: Record<
           // table exists first. Run each statement individually (executeQuery is
           // single-statement on some drivers, e.g. sqlite).
           if (plan.needsArchive) {
-            for (const stmt of getI18nArchiveDdl(dialect)) {
-              await adapter.executeQuery(stmt);
-            }
-            // MySQL's table DDL cannot restore an index the table is missing, and
-            // index-only drift produces no reconcile operations, so the repair runs
-            // here. Tolerated rather than checked first: attempting it and accepting
-            // "duplicate key name" is one round trip instead of two, and the same
-            // tolerance the schema executor already applies.
-            const indexRepair = getI18nArchiveIndexRepairDdl(dialect);
-            if (indexRepair) {
-              try {
-                await adapter.executeQuery(indexRepair);
-              } catch (err) {
-                if (!isIdempotencyError(err)) throw err;
-              }
-            }
+            await ensureI18nArchive(adapter, dialect);
           }
           // 🔴 STRICT on purpose, matching the other two companion paths: tolerating a re-run
           // would make a half-finished localization ENABLE look like success, because the planner

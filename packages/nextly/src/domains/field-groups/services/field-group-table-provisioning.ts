@@ -13,15 +13,11 @@ import {
   getSchemaRegistryFromDI,
 } from "../../../dispatcher/helpers/di";
 import type { FieldDefinition } from "../../../schemas/dynamic-collections";
-import {
-  getI18nArchiveDdl,
-  getI18nArchiveIndexRepairDdl,
-} from "../../../schemas/nextly-i18n-archive";
 import { FieldGroupSchemaService } from "../../../services/field-groups/field-group-schema-service";
+import { ensureI18nArchive } from "../../i18n/migration/ensure-archive";
 import { buildCompanionTransitionStatements } from "../../i18n/migration/reconcile-companion";
 import { localizedColumnsOnMain } from "../../i18n/runtime/companion-io";
 import { buildCompanionRuntimeTable } from "../../i18n/runtime/companion-registration";
-import { isIdempotencyError } from "../../schema/pipeline/sql-statement-utils";
 
 /**
  * Whether the in-memory schema was actually refreshed, and why not when it was not.
@@ -173,6 +169,7 @@ export async function reconcileComponentCompanion(args: {
     // The companion mirrors the main table, and a field group's builder reads a width from a different key.
     builtBy: "fieldGroup" as const,
     slug,
+    kind: "fieldGroup",
     tableName,
     dialect,
     defaultLocale,
@@ -199,22 +196,7 @@ export async function reconcileComponentCompanion(args: {
   // A disable archives non-default translations, so ensure `nextly_i18n_archive` exists first
   // (Builder entities have no `nextly migrate` step to provision it). Idempotent.
   if (plan.needsArchive) {
-    for (const stmt of getI18nArchiveDdl(dialect)) {
-      await adapter.executeQuery(stmt);
-    }
-    // MySQL's table DDL cannot restore an index the table is missing, and
-    // index-only drift produces no reconcile operations, so the repair runs
-    // here. Tolerated rather than checked first: attempting it and accepting
-    // "duplicate key name" is one round trip instead of two, and the same
-    // tolerance the schema executor already applies.
-    const indexRepair = getI18nArchiveIndexRepairDdl(dialect);
-    if (indexRepair) {
-      try {
-        await adapter.executeQuery(indexRepair);
-      } catch (err) {
-        if (!isIdempotencyError(err)) throw err;
-      }
-    }
+    await ensureI18nArchive(adapter, dialect);
   }
   // 🔴 STRICT on purpose: the companion does NOT tolerate a re-run.
   //

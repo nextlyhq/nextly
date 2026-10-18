@@ -2042,6 +2042,25 @@ const RELEASE_ROUTES: ReleaseRoute[] = [
     operation: "single",
     method: "getRelease",
   },
+  // A release's own title and description, and the release itself. `PATCH`
+  // changes only those two fields: a state is moved by the routes below,
+  // never by a body.
+  {
+    id: true,
+    subresource: null,
+    subId: false,
+    verb: "PATCH",
+    operation: "update",
+    method: "updateRelease",
+  },
+  {
+    id: true,
+    subresource: null,
+    subId: false,
+    verb: "DELETE",
+    operation: "delete",
+    method: "deleteRelease",
+  },
   {
     id: true,
     subresource: "members",
@@ -2065,6 +2084,16 @@ const RELEASE_ROUTES: ReleaseRoute[] = [
     verb: "DELETE",
     operation: "delete",
     method: "removeReleaseMember",
+  },
+  // Switching a document between going live and coming down: a change to the
+  // member, so the member's own path, with the new action in the body.
+  {
+    id: true,
+    subresource: "members",
+    subId: true,
+    verb: "PATCH",
+    operation: "update",
+    method: "changeReleaseMemberAction",
   },
   // Scheduling and cancelling are separate routes rather than one `PATCH` with a
   // state in the body: they are the two directions of the authority the seed
@@ -2110,6 +2139,16 @@ const RELEASE_ROUTES: ReleaseRoute[] = [
     verb: "GET",
     operation: "list",
     method: "listReleaseBlockers",
+  },
+  // Every problem the release's documents have, hard and soft. Its own route
+  // for the reason `blockers` is: answering it checks every document.
+  {
+    id: true,
+    subresource: "readiness",
+    subId: false,
+    verb: "GET",
+    operation: "single",
+    method: "getReleaseReadiness",
   },
 ];
 
