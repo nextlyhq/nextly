@@ -135,11 +135,6 @@ describe("useDocumentAutosave", () => {
     expect(saveSpy).not.toHaveBeenCalled();
   });
 
-  /**
-   * A new entry has no id until it has been created once, and the endpoint
-   * addresses a document that exists. Recording must be off rather than
-   * addressed at an invented id.
-   */
   it("records nothing once a save has made the edit the stored document", async () => {
     // 🔴 The leftover recording. An edit schedules one; the author saves
     // inside the debounce, and the save leaves the form clean (it resets to
@@ -190,6 +185,66 @@ describe("useDocumentAutosave", () => {
     expect(saveSpy).toHaveBeenCalledWith(SCOPE, { title: "hello again" }, null);
   });
 
+  it("records nothing after a save that ran with recording turned off", async () => {
+    // 🔴 What both editors do: they turn recording off while a real save is
+    // in flight, and the save resets the form clean during that window. The
+    // clean has to be heard then too, or the recording scheduled by the edit
+    // survives it and fires once recording is back on, inside its debounce.
+    const { result, rerender } = renderHook(
+      ({ enabled }) => useHarness(SCOPE, enabled),
+      { initialProps: { enabled: true } }
+    );
+
+    act(() => {
+      result.current.form.setValue("title", "hello", { shouldDirty: true });
+    });
+    rerender({ enabled: false });
+    act(() => {
+      result.current.form.reset({ title: "hello" });
+    });
+    rerender({ enabled: true });
+    act(() => {
+      vi.advanceTimersByTime(DEBOUNCE * 2);
+    });
+
+    await Promise.resolve();
+    expect(saveSpy).not.toHaveBeenCalled();
+  });
+
+  it("records edits typed while recording was off, once it is back on", async () => {
+    // The control for the case above: hearing the form while recording is
+    // off must not lose what the author types during the save. The save
+    // resets clean and re-applies those edits; once recording is back on,
+    // they are recorded.
+    const { result, rerender } = renderHook(
+      ({ enabled }) => useHarness(SCOPE, enabled),
+      { initialProps: { enabled: true } }
+    );
+
+    act(() => {
+      result.current.form.setValue("title", "hello", { shouldDirty: true });
+    });
+    rerender({ enabled: false });
+    act(() => {
+      result.current.form.reset({ title: "hello" });
+      result.current.form.setValue("title", "hello again", {
+        shouldDirty: true,
+      });
+    });
+    rerender({ enabled: true });
+    act(() => {
+      vi.advanceTimersByTime(DEBOUNCE);
+    });
+
+    await waitFor(() => expect(saveSpy).toHaveBeenCalledTimes(1));
+    expect(saveSpy).toHaveBeenCalledWith(SCOPE, { title: "hello again" }, null);
+  });
+
+  /**
+   * A new entry has no id until it has been created once, and the endpoint
+   * addresses a document that exists. Recording must be off rather than
+   * addressed at an invented id.
+   */
   it("records nothing while the document has no address", async () => {
     const { result } = renderHook(() => useHarness(null));
 

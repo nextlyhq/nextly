@@ -160,8 +160,15 @@ export function useDocumentAutosave({
     shouldRecord: () => dirtyRef.current,
   });
 
+  /*
+   * Subscribed whether or not recording is enabled. Both editors turn it off
+   * while a real save is in flight, and that save is what leaves the form
+   * clean: unsubscribed then, the clean goes unheard and the recording the
+   * edit scheduled survives it. Recording itself stays off while disabled,
+   * because flush refuses then; scheduling here only starts the wait.
+   */
   useEffect(() => {
-    if (!enabled || !scope) return;
+    if (!scope) return;
 
     const subscription = form.subscribe({
       formState: { values: true, isDirty: true },
@@ -200,6 +207,6 @@ export function useDocumentAutosave({
     // `scope` participates through its identity fields: a different document
     // needs a different subscription, and comparing the object itself would
     // resubscribe on every render.
-  }, [form, schedule, cancel, enabled, scope?.kind, scope?.slug, scope]);
+  }, [form, schedule, cancel, scope?.kind, scope?.slug, scope]);
   return { status, lastSavedAt };
 }
