@@ -931,6 +931,7 @@ export const nextly = {
     create: args => requireNextly().releases.create(args),
     find: args => requireNextly().releases.find(args),
     count: args => requireNextly().releases.count(args),
+    calendar: args => requireNextly().releases.calendar(args),
     findByID: args => requireNextly().releases.findByID(args),
     capabilities: args => requireNextly().releases.capabilities(args),
     blockingReasons: args => requireNextly().releases.blockingReasons(args),
