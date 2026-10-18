@@ -17,7 +17,7 @@ process.env.NEXTLY_SECRET =
   process.env.NEXTLY_SECRET ??
   "test-secret-must-be-at-least-32-characters-long!!";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { defineCollection, defineSingle, text } from "../../../config";
 import {
@@ -28,6 +28,7 @@ import {
 } from "../../../plugins/test-nextly";
 import { createDynamicHandlers } from "../../../routeHandler";
 import { ServiceContainer } from "../../../services/index";
+import { registerFieldFunctions } from "../../../shared/lib/field-level-registry";
 import type { CollectionsHandler } from "../../../services/collections-handler";
 
 import { ReleasesRepository } from "../releases-repository";
@@ -41,6 +42,17 @@ afterEach(async () => {
   await current?.destroy();
   current = undefined;
 });
+
+/** The collections these cases put documents in. */
+type CollectionSlug =
+  | "articles"
+  | "notices"
+  | "memos"
+  | "scratch"
+  | "seasonal"
+  | "dossiers"
+  | "briefs"
+  | "bulletins";
 
 const LATER = new Date("2099-01-01T09:00:00Z");
 
@@ -91,6 +103,40 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
             },
           }),
         ],
+      }),
+      // A second drafts collection with the same guarded field, so a batch
+      // spans two scopes.
+      defineCollection({
+        slug: "briefs",
+        status: true,
+        versions: { drafts: true },
+        access: {
+          read: () => true,
+          update: () => true,
+          publish: () => true,
+          unpublish: () => true,
+        },
+        fields: [
+          text({ name: "title" }),
+          text({
+            name: "guarded",
+            access: {
+              update: ({ req }) => req.user?.email === "chief@example.com",
+            },
+          }),
+        ],
+      }),
+      // Given a field rule on its status in a case: see `guardStatus`.
+      defineCollection({
+        slug: "bulletins",
+        status: true,
+        access: {
+          read: () => true,
+          update: () => true,
+          publish: () => true,
+          unpublish: () => true,
+        },
+        fields: [text({ name: "title" })],
       }),
       // Its draft/published lifecycle is turned off part-way through a case.
       defineCollection({
@@ -165,13 +211,7 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
 /** A document, stored through the ordinary write. */
 async function entry(
   t: TestNextly,
-  collection:
-    | "articles"
-    | "notices"
-    | "memos"
-    | "scratch"
-    | "seasonal"
-    | "dossiers",
+  collection: CollectionSlug,
   status: "draft" | "published" = "draft"
 ): Promise<string> {
   const handler = t.getService("collectionsHandler") as CollectionsHandler;
@@ -182,6 +222,27 @@ async function entry(
   const id = (created.data as { id?: string } | undefined)?.id;
   if (typeof id !== "string") throw new Error("no id from create");
   return id;
+}
+
+/**
+ * Let only the editor-in-chief set a bulletin's status, by a field rule.
+ *
+ * Registered as a plugin's raw field contribution reaches the rules: the
+ * code-first config refuses a field named `status` while the lifecycle is on,
+ * and a contributed field is checked for its type and not its name.
+ */
+function guardStatus(): void {
+  registerFieldFunctions("collection", "bulletins", [
+    { name: "title", type: "text" },
+    {
+      name: "status",
+      type: "text",
+      access: {
+        update: ({ req }: { req: { user?: { email?: string } } }) =>
+          req.user?.email === "chief@example.com",
+      },
+    },
+  ]);
 }
 
 /** Empty an article's required title on its stored row. */
@@ -205,13 +266,7 @@ async function releaseOf(
   t: TestNextly,
   author: string,
   documents: Array<{
-    collection:
-      | "articles"
-      | "notices"
-      | "memos"
-      | "scratch"
-      | "seasonal"
-      | "dossiers";
+    collection: CollectionSlug;
     id: string;
     action?: "publish" | "unpublish";
   }>
@@ -443,6 +498,142 @@ describe.each(getConfiguredTestDialects())(
           })
         )
       ).toEqual([{ memberId: memberIds[0], code: "FIELD_NOT_PERMITTED" }]);
+    });
+
+    it("reports a status the author may not set, with no pending change, as the write refuses it", async () => {
+      const t = await boot(dialect);
+      guardStatus();
+      const author = await seedPlainAuthor(t);
+      const going = await entry(t, "bulletins");
+      const coming = await entry(t, "bulletins", "published");
+      const { releaseId, memberIds } = await releaseOf(t, author, [
+        { collection: "bulletins", id: going },
+        { collection: "bulletins", id: coming, action: "unpublish" },
+      ]);
+
+      // The release's own write, as the author, refuses both.
+      const authorUser = (await t.nextly.users.findByID({
+        id: author,
+      })) as unknown as { email: string };
+      for (const [id, status] of [
+        [going, "published"],
+        [coming, "draft"],
+      ] as const) {
+        await expect(
+          t.nextly.update({
+            collection: "bulletins" as never,
+            id,
+            data: { status } as never,
+            locale: "*",
+            overrideAccess: false,
+            user: { id: author, email: authorUser.email, roles: [] },
+          } as never)
+        ).rejects.toMatchObject({ code: "CONFLICT" });
+      }
+
+      expect((await t.nextly.releases.readiness({ releaseId })).hard).toEqual(
+        memberIds.map(memberId =>
+          expect.objectContaining({
+            memberId,
+            code: "FIELD_NOT_PERMITTED",
+            detail: { fields: ["status"] },
+          })
+        )
+      );
+      expect(
+        await problemsOf(
+          t.nextly.releases.schedule({
+            id: releaseId,
+            at: LATER,
+            timezone: "UTC",
+          })
+        )
+      ).toEqual(
+        memberIds.map(memberId => ({ memberId, code: "FIELD_NOT_PERMITTED" }))
+      );
+    });
+
+    it("reports a pending change an unpublish would fold in, to a field the author may not write", async () => {
+      const t = await boot(dialect);
+      const author = await seedPlainAuthor(t);
+      const id = await entry(t, "dossiers", "published");
+      // A trusted edit holds a change to the guarded field as pending work.
+      await t.nextly.update({
+        collection: "dossiers" as never,
+        id,
+        data: { guarded: "secret" } as never,
+      });
+      const { releaseId, memberIds } = await releaseOf(t, author, [
+        { collection: "dossiers", id, action: "unpublish" },
+      ]);
+
+      // The takedown itself, as the author, folds the pending change in and
+      // refuses the guarded field.
+      const authorUser = (await t.nextly.users.findByID({
+        id: author,
+      })) as unknown as { email: string };
+      await expect(
+        t.nextly.update({
+          collection: "dossiers" as never,
+          id,
+          data: { status: "draft" } as never,
+          locale: "*",
+          overrideAccess: false,
+          user: { id: author, email: authorUser.email, roles: [] },
+        } as never)
+      ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+
+      expect((await t.nextly.releases.readiness({ releaseId })).hard).toEqual([
+        expect.objectContaining({
+          memberId: memberIds[0],
+          code: "FIELD_NOT_PERMITTED",
+          detail: { fields: ["guarded"] },
+        }),
+      ]);
+      expect(
+        await problemsOf(
+          t.nextly.releases.schedule({
+            id: releaseId,
+            at: LATER,
+            timezone: "UTC",
+          })
+        )
+      ).toEqual([{ memberId: memberIds[0], code: "FIELD_NOT_PERMITTED" }]);
+    });
+
+    it("judges many collection documents' pending changes from batched reads, without a read per document", async () => {
+      const t = await boot(dialect);
+      const author = await seedPlainAuthor(t);
+      const documents: Array<{
+        collection: "dossiers" | "briefs";
+        id: string;
+      }> = [];
+      for (const collection of ["dossiers", "briefs"] as const) {
+        for (let i = 0; i < 4; i += 1) {
+          const id = await entry(t, collection, "published");
+          // A trusted edit holds a change to the guarded field.
+          await t.nextly.update({
+            collection: collection as never,
+            id,
+            data: { guarded: `secret-${i}` } as never,
+          });
+          documents.push({ collection, id });
+        }
+      }
+      const { releaseId, memberIds } = await releaseOf(t, author, documents);
+
+      const transaction = vi.spyOn(t.adapter, "transaction");
+      const found = await t.nextly.releases.readiness({ releaseId });
+      const opened = transaction.mock.calls.length;
+      transaction.mockRestore();
+
+      // Every document is judged: the population control for the count below.
+      expect(found.hard.map(f => [f.memberId, f.code])).toEqual(
+        memberIds.map(id => [id, "FIELD_NOT_PERMITTED"])
+      );
+      // The stored documents the rules compare against are read for each
+      // scope's batch at once, not in a transaction per document.
+      expect(opened).toBe(0);
     });
 
     it("reports a pending change to a field the author may not write, and refuses to schedule", async () => {

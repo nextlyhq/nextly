@@ -79,9 +79,17 @@ function accountKey(email: string | null, secret: string): string {
   if (email === null) return ACCOUNTLESS_KEY;
   const normalized = normalizeAccountEmail(email);
   if (normalized === "") return ACCOUNTLESS_KEY;
-  const key = Buffer.from(hkdfSync("sha256", secret, "", ACCOUNT_KEY_INFO, 32));
-  const digest = createHmac("sha256", key).update(normalized).digest("hex");
-  return `auth-unknown:account:${digest}`;
+  return `auth-unknown:account:${keyedDigest(ACCOUNT_KEY_INFO, normalized, secret)}`;
+}
+
+/**
+ * The HMAC every limiter key is made of: under a key derived from the
+ * install's secret for the use `info` names alone, so no two uses share a
+ * key, and a stored key names nothing without the secret.
+ */
+function keyedDigest(info: string, input: string, secret: string): string {
+  const derived = Buffer.from(hkdfSync("sha256", secret, "", info, 32));
+  return createHmac("sha256", derived).update(input).digest("hex");
 }
 
 /** What the strategy-key use of the install's secret is called. */
@@ -96,13 +104,25 @@ const STRATEGY_KEY_INFO = "nextly auth limit strategy keys";
  */
 function strategyKey(name: string, key: string | null, secret: string): string {
   if (key === null || key === "") return ACCOUNTLESS_KEY;
-  const derived = Buffer.from(
-    hkdfSync("sha256", secret, "", STRATEGY_KEY_INFO, 32)
-  );
-  const digest = createHmac("sha256", derived)
-    .update(`${name}\0${key}`)
-    .digest("hex");
-  return `auth-unknown:strategy:${digest}`;
+  return `auth-unknown:strategy:${keyedDigest(STRATEGY_KEY_INFO, `${name}\0${key}`, secret)}`;
+}
+
+/** What the plugin-route use of the install's secret is called. */
+const PLUGIN_ROUTE_KEY_INFO = "nextly plugin auth route limit keys";
+
+/**
+ * The key a plugin auth route's budget for the identity `key` is counted
+ * under, as `strategyKey` is for a strategy: an HMAC under a key derived for
+ * this use alone. The plugin's name is part of what is hashed, so two plugins
+ * naming the same identity share no budget. `null` when the route named none.
+ */
+export function pluginRouteLimitKey(
+  pluginName: string,
+  key: string | null,
+  secret: string
+): string | null {
+  if (key === null || key === "") return null;
+  return `plugin-auth-unknown:identity:${keyedDigest(PLUGIN_ROUTE_KEY_INFO, `${pluginName}\0${key}`, secret)}`;
 }
 
 /**
@@ -186,7 +206,9 @@ async function boundedBody(
  * The JSON object a request carries, or an empty one when it carries none or
  * one too large to be worth reading.
  */
-async function readBody(request: Request): Promise<Record<string, unknown>> {
+export async function readLimiterBody(
+  request: Request
+): Promise<Record<string, unknown>> {
   try {
     const bytes = await boundedBody(request, LIMITER_BODY_BYTES);
     if (bytes === null) return {};
@@ -255,7 +277,7 @@ export async function admitUnknownSource(
   // body is read: past the ceiling, a request costs no reading and no parse.
   const met = await counter.ceilingMet(limits);
   if (met) return met;
-  const body = await readBody(request);
+  const body = await readLimiterBody(request);
 
   const strategies = deps.authStrategies ?? [];
   if (authPath === "login" && strategiesNameTheKey(strategies)) {
