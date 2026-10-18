@@ -74,7 +74,7 @@
   "src/schemas/rbac/index.ts": 1,
   "src/schemas/schema-events/index.ts": 1,
   "src/schemas/users/index.ts": 1,
-  "src/services/collection-file-manager.ts": 3,
+  "src/services/collection-file-manager.ts": 1,
   "src/services/general-settings/general-settings-service.ts": 1,
   "src/services/image-size.ts": 3,
   "src/services/index.ts": 1,

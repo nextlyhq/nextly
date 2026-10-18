@@ -516,6 +516,84 @@ describe("applyDueReleases", () => {
     expect(result.deferred).toBe(0);
   });
 
+  it("FINISHES an overlapping component whose budget was spent before it began", async () => {
+    // Two releases sharing a document are one piece the pass cannot divide.
+    // The first piece of a pass is exempt from the deadline, so a component
+    // larger than the budget overruns it in this pass rather than stalling:
+    // every write lands and both releases are settled together.
+    const marked: string[] = [];
+    const publish = vi.fn(async () => {});
+    let tick = 0;
+    const d = deps({
+      releases: [release({ id: "r1" }), release({ id: "r2" })],
+      members: [
+        member({ releaseId: "r1", entryId: "e1" }),
+        member({ releaseId: "r1", entryId: "e2" }),
+        member({ releaseId: "r1", entryId: "e3" }),
+        member({ releaseId: "r2", entryId: "e3" }),
+        member({ releaseId: "r2", entryId: "e4" }),
+      ],
+      mutations: { publish },
+      marked,
+    });
+    const result = await applyDueReleases({
+      ...d,
+      now: () => new Date(NOW.getTime() + tick++ * 1000),
+      deadline: new Date(NOW.getTime() - 60_000),
+    });
+
+    expect(publish).toHaveBeenCalledTimes(4);
+    expect(result.deferred).toBe(0);
+    expect(marked.sort()).toEqual(["r1", "r2"]);
+  });
+
+  it("REPLAYS an overlapping component from its start when a pass is killed inside it", async () => {
+    // A host that ends the process part-way (a serverless time limit) leaves
+    // the writes that committed and settles no release, so the next pass
+    // plans the whole component again, in the same order, and rewrites the
+    // documents already published before it reaches the rest. Killed at the
+    // same point every time, the tail is never written and neither release is
+    // settled.
+    const members = [
+      member({ releaseId: "r1", entryId: "e1" }),
+      member({ releaseId: "r1", entryId: "e2" }),
+      member({ releaseId: "r1", entryId: "e3" }),
+      member({ releaseId: "r2", entryId: "e3" }),
+      member({ releaseId: "r2", entryId: "e4" }),
+    ];
+    const killedAfter = async (writes: number) => {
+      const written: string[] = [];
+      const marked: string[] = [];
+      const d = deps({
+        releases: [release({ id: "r1" }), release({ id: "r2" })],
+        members,
+        marked,
+        mutations: {
+          // The process ends here: the write never returns.
+          publish: ({ ref }) => {
+            if (written.length >= writes) return new Promise(() => {});
+            written.push(ref.entryId);
+            return Promise.resolve();
+          },
+        },
+      });
+      void applyDueReleases({ ...d, deadline: new Date(NOW.getTime() + 1) });
+      for (let n = 0; n < 50; n++) await new Promise(r => setImmediate(r));
+      return { written, marked };
+    };
+
+    const first = await killedAfter(2);
+    const second = await killedAfter(2);
+    expect(first.written).toEqual(["e1", "e2"]);
+    expect(second.written).toEqual(["e1", "e2"]);
+    expect([...first.marked, ...second.marked]).toEqual([]);
+
+    // The control: a pass the host lets finish settles the component.
+    const whole = await killedAfter(Number.POSITIVE_INFINITY);
+    expect(whole.written).toEqual(["e1", "e2", "e3", "e4"]);
+    expect(whole.marked.sort()).toEqual(["r1", "r2"]);
+  });
+
   it("does NOT discharge a release whose actions it never started", async () => {
     // The trap a naive cap walks into. An unattempted action leaves NO outcome,
     // and the discharge test reads outcomes — so without holding it open, the

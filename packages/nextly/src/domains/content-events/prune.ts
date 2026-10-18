@@ -12,6 +12,8 @@
  * @module domains/content-events/prune
  */
 
+import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+
 import {
   CONTENT_EVENTS_TABLE,
   CONTENT_EVENT_PARTS_TABLE,
@@ -25,10 +27,13 @@ const CONTENT_EVENT_PRUNE_BATCH = 500;
 
 /**
  * What the prune needs of the database: a plain read and a delete, in the
- * shape every activity-window pruner takes, so the write paths' adapter and
- * the scheduled drain's both satisfy it.
+ * shape every activity-window pruner takes, and a transaction to delete each
+ * batch in, so the write paths' adapter and the scheduled drain's both
+ * satisfy it.
  */
-export type ContentEventsPruneDb = NoticesPruneDb;
+export interface ContentEventsPruneDb
+  extends NoticesPruneDb,
+    Pick<DrizzleAdapter, "transaction"> {}
 
 interface EndedSubject {
   /** The deletion event: it names itself as the end of its life. */
@@ -54,17 +59,23 @@ async function oldestEndedSubject(
   return ended;
 }
 
-/** Remove these events and their parts, the parts first. */
+/**
+ * Remove these events and their parts, the parts first, in one transaction:
+ * a batch that fails part-way leaves every event with the parts it had,
+ * never an event read back as involving none.
+ */
 async function deleteEvents(
   db: ContentEventsPruneDb,
   ids: string[]
 ): Promise<void> {
-  // Parts first, so no part row is left naming an event that is gone.
-  await db.delete(CONTENT_EVENT_PARTS_TABLE, {
-    and: [{ column: "eventId", op: "IN", value: ids }],
-  });
-  await db.delete(CONTENT_EVENTS_TABLE, {
-    and: [{ column: "id", op: "IN", value: ids }],
+  await db.transaction(async tx => {
+    // Parts first, so no part row is left naming an event that is gone.
+    await tx.delete(CONTENT_EVENT_PARTS_TABLE, {
+      and: [{ column: "eventId", op: "IN", value: ids }],
+    });
+    await tx.delete(CONTENT_EVENTS_TABLE, {
+      and: [{ column: "id", op: "IN", value: ids }],
+    });
   });
 }
 
