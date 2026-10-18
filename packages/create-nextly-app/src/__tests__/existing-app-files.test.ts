@@ -24,15 +24,18 @@ import fsExtra from "fs-extra";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { generateIntoExistingApp } from "../generators/existing-app";
+import { readMediaRouteTemplates } from "../generators/media-routes";
 import type { DatabaseConfig, ProjectInfo } from "../types";
 
-const templates = join(
-  dirname(fileURLToPath(import.meta.url)),
-  "..",
-  "..",
-  "..",
-  "..",
-  "templates"
+const templates = await readMediaRouteTemplates(
+  join(
+    dirname(fileURLToPath(import.meta.url)),
+    "..",
+    "..",
+    "..",
+    "..",
+    "templates"
+  )
 );
 
 const projectInfo: ProjectInfo = {

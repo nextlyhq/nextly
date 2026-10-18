@@ -413,6 +413,44 @@ const CASES: { label: string; definition: Record<string, unknown> }[] = [
     label: "defaultProps that are a primitive",
     definition: valid({ defaultProps: "none" }),
   },
+  // A slot's lock and a prop's role are the engine's vocabulary, read on every
+  // save as structure: a value it does not recognise is refused at boot.
+  ...(["all", "insert", "contentOnly", false] as const).map(lock => ({
+    label: `a slot locked ${JSON.stringify(lock)}`,
+    definition: valid({ slots: { body: { lock } } }),
+  })),
+  {
+    label: "a slot locked with an unknown value",
+    definition: valid({ slots: { body: { lock: "readonly" } } }),
+  },
+  {
+    label: "a slot locked true",
+    definition: valid({ slots: { body: { lock: true } } }),
+  },
+  {
+    label: "a slot lock in the wrong case",
+    definition: valid({ slots: { body: { lock: "contentonly" } } }),
+  },
+  {
+    label: "a prop whose role is content",
+    definition: valid({ props: { text: { type: "text", role: "content" } } }),
+  },
+  {
+    label: "a prop with no role",
+    definition: valid({ props: { text: { type: "text" } } }),
+  },
+  {
+    label: "a prop whose role is misspelled",
+    definition: valid({ props: { text: { type: "text", role: "Content" } } }),
+  },
+  {
+    label: "a prop whose role is not a string",
+    definition: valid({ props: { text: { type: "text", role: true } } }),
+  },
+  {
+    label: "a prop schema that is not an object",
+    definition: valid({ props: { text: "text" } }),
+  },
 ];
 
 /**

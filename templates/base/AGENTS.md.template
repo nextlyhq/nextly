@@ -194,10 +194,11 @@ one that matches a task before starting it. They were written for the Nextly
 release this project was created with.
 
 Each skill names the Nextly release it was checked against in its
-frontmatter, as `metadata.nextly-version`. Restore them as they were released
-only when `.agents/skills/nextly-install/SKILL.md` exists and its
-`metadata.nextly-version` is exactly what `{{execCommand}} nextly --version`
-prints:
+frontmatter, as `metadata.nextly-version`. The command below installs skills
+written for `{{skillsVersion}}`. Restore them as they were released only when
+`.agents/skills/nextly-install/SKILL.md` exists, its `metadata.nextly-version`
+is exactly `{{skillsVersion}}`, and `{{execCommand}} nextly --version` prints
+exactly `{{skillsVersion}}`:
 
 ```bash
 npx skills add 'nextlyhq/nextly#v{{skillsTag}}' --skill '*' --agent claude-code codex cursor --copy -y

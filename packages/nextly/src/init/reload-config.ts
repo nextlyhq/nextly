@@ -1277,14 +1277,23 @@ async function ensureLocalizedCompanionsForReload(
  * all want the state after the last of them.
  */
 const globalForReload = globalThis as unknown as {
-  __nextly_reloadInFlight?: Promise<void>;
-  __nextly_reloadQueued?: Promise<void>;
+  __nextly_reloadInFlight?: Promise<ReloadOutcome>;
+  __nextly_reloadQueued?: Promise<ReloadOutcome>;
 };
+
+/**
+ * How a reload ended. `"refused"`: another process held the schema lock, or a
+ * storage migration was in flight, so nothing was read or applied and trying
+ * again later can succeed. `"finished"`: everything else, including a reload
+ * that failed and logged why; another try reads the same files and fails the
+ * same way.
+ */
+export type ReloadOutcome = "refused" | "finished";
 
 export function reloadNextlyConfig(opts?: {
   resolver?: ServiceResolver;
   dispatcher?: PromptDispatcher;
-}): Promise<void> {
+}): Promise<ReloadOutcome> {
   // Checked before the running one: the queued run is cleared inside its own
   // continuation, which is a microtask later than the running one's cleanup.
   // A caller landing in between would otherwise start a second concurrent run
@@ -1311,7 +1320,7 @@ export function reloadNextlyConfig(opts?: {
 function startReload(opts?: {
   resolver?: ServiceResolver;
   dispatcher?: PromptDispatcher;
-}): Promise<void> {
+}): Promise<ReloadOutcome> {
   const started = runReload(opts).finally(() => {
     delete globalForReload.__nextly_reloadInFlight;
   });
@@ -1342,7 +1351,7 @@ function startReload(opts?: {
 async function runReload(opts?: {
   resolver?: ServiceResolver;
   dispatcher?: PromptDispatcher;
-}): Promise<void> {
+}): Promise<ReloadOutcome> {
   const resolveService = (name: string): unknown =>
     opts?.resolver ? opts.resolver(name) : defaultResolver(name);
 
@@ -1355,7 +1364,10 @@ async function runReload(opts?: {
     // DI is not up yet. `applyReload` resolves again and abandons on its own,
     // so there is nothing to exclude against and nothing to report here.
   }
-  if (!adapter) return applyReload(opts);
+  if (!adapter) {
+    await applyReload(opts);
+    return "finished";
+  }
 
   // Tells a refused exclusion apart from a failure inside the reload itself,
   // which must propagate exactly as it did before this wrapper existed.
@@ -1385,6 +1397,7 @@ async function runReload(opts?: {
         return applyReload(opts);
       }
     );
+    return "finished";
   } catch (error) {
     if (reloadStarted) throw error;
     // Logged apart on purpose: a refusal is routine and expected, while a check
@@ -1394,11 +1407,12 @@ async function runReload(opts?: {
       logger?.warn(
         `[Nextly HMR] schema reload skipped: ${describeError(error)}`
       );
-    } else {
-      logger?.error(
-        `[Nextly HMR] could not establish migration state, skipping schema reload: ${describeError(error)}`
-      );
+      return "refused";
     }
+    logger?.error(
+      `[Nextly HMR] could not establish migration state, skipping schema reload: ${describeError(error)}`
+    );
+    return "finished";
   }
 }
 
@@ -1527,6 +1541,11 @@ async function applyReloadHolding(
     });
     clearConfigCache();
     const result = await loadConfig();
+    // Watch exactly what this read: the config and every file it imported. Set
+    // before the checks below, which may still refuse the edit; the fix for a
+    // refusal is another save of one of these same files.
+    const { watchLoadedConfig } = await import("../runtime/hmr-listener");
+    watchLoadedConfig(result);
     newConfig = (
       result as {
         config?: {
@@ -1597,33 +1616,17 @@ async function applyReloadHolding(
     // working set back so the retained config keeps the behavior it was
     // validated with.
     undoOptimisticReloadWork();
-    // NextlyError wraps the underlying loader/bundler error in
-    // `cause` (and surfaces a generic public message like "Failed to
-    // load Nextly configuration."). Surface BOTH the public message
-    // and the cause so an operator can actually diagnose the
-    // problem instead of seeing the bare wrapper text.
-    const msg = err instanceof Error ? err.message : String(err);
-    const cause =
-      err instanceof Error && err.cause instanceof Error
-        ? err.cause.message
-        : err instanceof Error && typeof err.cause === "string"
-          ? err.cause
-          : undefined;
-    const logContext =
-      err && typeof err === "object" && "logContext" in err
-        ? JSON.stringify(err.logContext)
-        : undefined;
-    const detail = cause
-      ? `${msg} (cause: ${cause})`
-      : logContext
-        ? `${msg} (context: ${logContext})`
-        : msg;
-
-    console.warn(
-      `[Nextly HMR] Could not reload nextly.config.ts: ${detail}. ` +
-        `Keeping the previously-loaded config. Fix the syntax error and ` +
-        `save again to retry.`
+    // Says what failed and what to do about it, by the failure's own kind: a
+    // syntax error, an import that cannot be found, or esbuild missing.
+    const { describeConfigReloadFailure } = await import(
+      "./config-reload-failure"
     );
+    console.warn(describeConfigReloadFailure(err));
+    // The fix may be saved to a file the last good load never imported, such
+    // as a collection file this edit added with an error in it. Watch the files
+    // the broken config reaches as well, found without running it.
+    const { watchScannedConfig } = await import("../runtime/hmr-listener");
+    await watchScannedConfig();
     return;
   }
   // The loader returned without a config: the swap already happened inside it,
