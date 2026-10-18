@@ -69,23 +69,6 @@ export async function applyMigrationStatements(
   }
 }
 
-/**
- * A migration's statements: split on Drizzle's `--> statement-breakpoint` separator, with comment
- * lines dropped so a chunk holding only a comment is not sent.
- */
-function migrationStatements(migrationSQL: string): string[] {
-  return migrationSQL
-    .split("--> statement-breakpoint")
-    .map(statement =>
-      statement
-        .split("\n")
-        .filter(line => !line.trim().startsWith("--"))
-        .join("\n")
-        .trim()
-    )
-    .filter(statement => statement.length > 0);
-}
-
 /** The error a refused migration is reported with: whether anything ran, and where it stopped. */
 function migrationRefused(
   error: unknown,
@@ -130,7 +113,9 @@ export async function applyMigrationWhole(args: {
   entity: string;
   tolerateApplied?: boolean;
 }): Promise<void> {
-  const statements = migrationStatements(args.migrationSQL);
+  // The one splitting rule: a separator is a line of its own, so its text inside a quoted value
+  // stays part of the statement.
+  const statements = splitStatements([args.migrationSQL]);
   if (statements.length === 0) return;
   const progress = { ran: 0 };
   try {

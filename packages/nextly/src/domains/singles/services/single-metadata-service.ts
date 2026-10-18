@@ -865,8 +865,17 @@ export class SingleMetadataService {
       };
     }
 
-    const alterInput = await this.normalizeFieldsForAlter(
+    // MySQL commits each schema statement, so a save refused part-way can have renamed a column
+    // while the registry still has the old name: the plan starts from the table as it is, or the
+    // rename runs again on a column that is gone.
+    const startingFields = await this.withRenameAlreadyMade(
+      tableName,
       previousFields,
+      fields,
+      schemaService
+    );
+    const alterInput = await this.normalizeFieldsForAlter(
+      startingFields,
       fields,
       isLocalized || wasLocalized
     );
@@ -896,7 +905,12 @@ export class SingleMetadataService {
     await this.refuseWhatTheValueCannotTake(
       input.slug,
       tableName,
-      alterInput,
+      {
+        previousFields: startingFields,
+        fields,
+        wasLocalized,
+        isLocalized,
+      },
       liveFacts.liveColumnTypes,
       schemaService
     );
@@ -949,7 +963,12 @@ export class SingleMetadataService {
   private async refuseWhatTheValueCannotTake(
     slug: string,
     tableName: string,
-    diff: { oldFields: FieldDefinition[]; newFields: FieldDefinition[] },
+    change: {
+      previousFields: FieldDefinition[];
+      fields: FieldDefinition[];
+      wasLocalized: boolean;
+      isLocalized: boolean;
+    },
     liveColumnTypes: ReadonlyMap<string, string>,
     schemaService: Pick<
       DynamicCollectionSchemaService,
@@ -961,16 +980,40 @@ export class SingleMetadataService {
     const { refusalsForCollectionSave } = await import(
       "../../dynamic-collections/services/save-preconditions"
     );
-    const refusals = await refusalsForCollectionSave({
+    const dialect = adapter.getCapabilities().dialect;
+    const where = await this.whereTheValuesAre(change);
+    const onMain = await refusalsForCollectionSave({
       adapter,
-      dialect: adapter.getCapabilities().dialect,
+      dialect,
       tableName,
-      oldFields: diff.oldFields,
-      newFields: diff.newFields,
-      rename: schemaService.detectFieldRename(diff.oldFields, diff.newFields),
+      oldFields: where.main.oldFields,
+      newFields: where.main.newFields,
+      rename: schemaService.detectFieldRename(
+        where.main.oldFields,
+        where.main.newFields
+      ),
       addedColumnBackfill: field => schemaService.addedColumnBackfill(field),
       presentColumns: new Set(liveColumnTypes.keys()),
     });
+    const companionTable = `${tableName}_locales`;
+    const companionColumns =
+      where.companion.oldFields.length > 0
+        ? await this.liveColumnsOf(companionTable)
+        : undefined;
+    const onCompanion = companionColumns
+      ? await refusalsForCollectionSave({
+          adapter,
+          dialect,
+          tableName: companionTable,
+          oldFields: where.companion.oldFields,
+          newFields: where.companion.newFields,
+          rename: null,
+          // A translated field gains no column here: its language rows are the companion's.
+          addedColumnBackfill: () => null,
+          presentColumns: companionColumns,
+        })
+      : [];
+    const refusals = [...onMain, ...onCompanion];
     if (refusals.length === 0) return;
     throw NextlyError.validation({
       errors: refusals.map(r => r.error),
@@ -981,6 +1024,105 @@ export class SingleMetadataService {
         details: refusals.flatMap(r => (r.logContext ? [r.logContext] : [])),
       },
     });
+  }
+
+  /**
+   * Where each field's values are before this save, which is where a precondition reads them: on
+   * the companion for a field translated before it, on the main table otherwise. A field
+   * translated after the save is judged on its length alone, since being unique is a question
+   * about the main table's rows.
+   */
+  private async whereTheValuesAre(change: {
+    previousFields: FieldDefinition[];
+    fields: FieldDefinition[];
+    wasLocalized: boolean;
+    isLocalized: boolean;
+  }): Promise<{
+    main: { oldFields: FieldDefinition[]; newFields: FieldDefinition[] };
+    companion: { oldFields: FieldDefinition[]; newFields: FieldDefinition[] };
+  }> {
+    const { isFieldLocalized } = await import("../../i18n/classify-fields");
+    const translatedBefore = new Set(
+      change.previousFields
+        .filter(f => isFieldLocalized(f, change.wasLocalized))
+        .map(f => f.name)
+    );
+    const lengthOnly = (f: FieldDefinition): FieldDefinition =>
+      isFieldLocalized(f, change.isLocalized) ? { ...f, unique: false } : f;
+    return {
+      main: {
+        oldFields: change.previousFields.filter(
+          f => !translatedBefore.has(f.name)
+        ),
+        newFields: change.fields
+          .filter(f => !translatedBefore.has(f.name))
+          .map(lengthOnly),
+      },
+      companion: {
+        oldFields: change.previousFields.filter(f =>
+          translatedBefore.has(f.name)
+        ),
+        newFields: change.fields
+          .filter(f => translatedBefore.has(f.name))
+          .map(f => ({ ...f, unique: false })),
+      },
+    };
+  }
+
+  /** The columns `table` has now, or undefined when it does not exist. */
+  private async liveColumnsOf(
+    table: string
+  ): Promise<ReadonlySet<string> | undefined> {
+    const adapter = this.adapter;
+    if (!adapter) return undefined;
+    const { queryLiveColumnTypes } = await import(
+      "../../schema/pipeline/live-column-types"
+    );
+    const live = await queryLiveColumnTypes(
+      adapter.getDrizzle(),
+      adapter.getCapabilities().dialect,
+      [table]
+    );
+    const columns = live.get(table);
+    return columns && columns.size > 0 ? new Set(columns.keys()) : undefined;
+  }
+
+  /**
+   * The previous fields with a rename this database already made applied to them: the field the
+   * main table's rule (`detectFieldRename`) finds renamed, when the live table has its new column
+   * and not its old one. Otherwise the previous fields as they are.
+   */
+  private async withRenameAlreadyMade(
+    tableName: string,
+    previousFields: FieldDefinition[],
+    fields: FieldDefinition[],
+    schemaService: Pick<DynamicCollectionSchemaService, "detectFieldRename">
+  ): Promise<FieldDefinition[]> {
+    const rename = schemaService.detectFieldRename(previousFields, fields);
+    const columns = rename ? await this.renamedColumns(rename) : undefined;
+    if (!rename || !columns) return previousFields;
+    const live = await this.liveColumnsOf(tableName);
+    const made = live?.has(columns.to) === true && !live.has(columns.from);
+    if (!made) return previousFields;
+    return previousFields.map(f =>
+      f === rename.from ? { ...rename.from, name: rename.to.name } : f
+    );
+  }
+
+  /** The columns a rename moves between, or undefined when it renames no column. */
+  private async renamedColumns(rename: {
+    from: FieldDefinition;
+    to: FieldDefinition;
+  }): Promise<{ from: string; to: string } | undefined> {
+    const adapter = this.adapter;
+    if (!adapter) return undefined;
+    const { getColumnDescriptor } = await import(
+      "../../schema/services/field-column-descriptor"
+    );
+    const dialect = adapter.getCapabilities().dialect;
+    const from = getColumnDescriptor(rename.from, dialect, "collection")?.name;
+    const to = getColumnDescriptor(rename.to, dialect, "collection")?.name;
+    return from && to && from !== to ? { from, to } : undefined;
   }
 
   /**

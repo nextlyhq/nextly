@@ -240,4 +240,148 @@ describeEachDialect("a Single's schema save that cannot apply", dialect => {
       ]);
     }
   );
+  // MySQL only: it commits each schema statement, so a rename can land before a later statement
+  // of the same save is refused. PostgreSQL rolls the whole save back, and SQLite skips the name.
+  it.skipIf(dialect !== "mysql")(
+    "finishes a save whose rename landed before a later statement was refused",
+    async () => {
+      await heroWith(
+        [
+          { name: "heading", type: "text" },
+          { name: "views", type: "number" },
+        ],
+        { heading: "Hello", views: 7 }
+      );
+      const blocking = uniqueIndexNameForColumn("single_hero", "views");
+      await query(
+        `CREATE INDEX ${q(blocking)} ON ${q("single_hero")} (${q("id")})`
+      );
+      // `heading` renamed to `headline`, and `views` made unique: the rename runs first, and the
+      // unique index is refused on the name another index holds.
+      const fields = [
+        { name: "headline", type: "text" },
+        { name: "views", type: "number", unique: true },
+      ];
+
+      const refused = await refusal(save(fields));
+      expect(refused).toMatchObject({ code: "NEXTLY_MIGRATION_APPLY_FAILED" });
+      expect(await columnsOf("single_hero")).toContain("headline");
+
+      await query(`DROP INDEX ${q(blocking)} ON ${q("single_hero")}`);
+      await save(fields);
+
+      expect((await registeredFields()).map(f => f.name)).toEqual([
+        "headline",
+        "views",
+      ]);
+      const [row] = await query<{ headline: string }>(
+        `SELECT ${q("headline")} AS headline FROM ${q("single_hero")}`
+      );
+      expect(row?.headline).toBe("Hello");
+    }
+  );
+
+  it("saves a field whose default holds the statement separator's text", async () => {
+    // The separator is a line of its own between statements; the same text inside a quoted default
+    // is part of the value, and a statement cut there is no longer valid SQL.
+    await heroWith([{ name: "heading", type: "text" }], { heading: "Hello" });
+
+    await saveThroughService([
+      { name: "heading", type: "text" },
+      // Short, so the column is a varchar: MySQL takes no default on a text column.
+      { ...shortText("note", 64), default: "a --> statement-breakpoint b" },
+    ]);
+
+    expect(await columnsOf("single_hero")).toContain("note");
+  });
 });
+
+describeEachDialect(
+  "a translated Single's schema save that cannot apply",
+  dialect => {
+    let current: TestNextly;
+
+    beforeEach(async () => {
+      vi.stubEnv("NODE_ENV", "development");
+      current = await createTestNextly({
+        dialect,
+        collections: [],
+        localization: { locales: ["en", "es"], defaultLocale: "en" },
+      });
+    });
+
+    afterEach(async () => {
+      await current.destroy();
+      vi.unstubAllEnvs();
+    });
+
+    it("refuses a length shorter than a translation the Single holds, naming the field", async () => {
+      // A translated field's values are on the companion, one row per language: the narrower
+      // length is checked against those, not only against what the main table holds.
+      await dispatchSingles(
+        "createSingle",
+        {},
+        {
+          slug: "hero",
+          label: "Hero",
+          localized: true,
+          fields: [{ name: "heading", type: "text" }],
+        }
+      );
+      const registry: SingleRegistryService = current.getService(
+        "singleRegistryService"
+      );
+      const metadata: SingleMetadataService = current.getService(
+        "singleMetadataService"
+      );
+      const saveThroughService = async (fields: Record<string, unknown>[]) => {
+        const existing = await registry.getSingleBySlug("hero");
+        if (!existing) throw new Error("the Single hero is missing");
+        return metadata.updateSingleSchema({
+          slug: "hero",
+          existing,
+          updateData: { fields },
+          fields: fields as unknown as FieldDefinition[],
+          isLocalized: true,
+          wasLocalized: true,
+          localizedRequested: false,
+          hasStatus: false,
+          wasStatus: false,
+          statusRequested: false,
+        });
+      };
+      await saveThroughService([shortText("heading", 40)]);
+      const singles: SingleEntryService =
+        current.getService("singleEntryService");
+      for (const [locale, heading] of [
+        ["en", "Hi"],
+        ["es", "Una frase bastante larga"],
+      ]) {
+        const written = await singles.update(
+          "hero",
+          { heading },
+          { locale, overrideAccess: true }
+        );
+        expect(written.success, JSON.stringify(written)).toBe(true);
+      }
+
+      const refused = await saveThroughService([shortText("heading", 5)]).then(
+        () => undefined,
+        (error: unknown) => error
+      );
+
+      expect(refused).toMatchObject({
+        publicData: {
+          errors: [
+            expect.objectContaining({
+              path: "fields.heading",
+              message: expect.stringMatching(
+                /^1 entry holds a heading longer than 5 characters, the new length\./
+              ),
+            }),
+          ],
+        },
+      });
+    });
+  }
+);
