@@ -152,7 +152,11 @@ async function onDisk(): Promise<string[]> {
   return entries
     .filter(entry => entry.isFile() && entry.name !== ".gitignore")
     .map(entry =>
-      path.relative(uploads, path.join(entry.parentPath, entry.name))
+      // As a stored path is written, with `/` on every platform.
+      path
+        .relative(uploads, path.join(entry.parentPath, entry.name))
+        .split(path.sep)
+        .join("/")
     );
 }
 

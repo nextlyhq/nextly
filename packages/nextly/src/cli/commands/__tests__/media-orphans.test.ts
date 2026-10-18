@@ -110,7 +110,13 @@ async function onLocalDisk(): Promise<Layout> {
   const stored = async () =>
     (await readdir(dir, { recursive: true, withFileTypes: true }))
       .filter(entry => entry.isFile())
-      .map(entry => path.relative(dir, path.join(entry.parentPath, entry.name)))
+      // As a stored path is written, with `/` on every platform.
+      .map(entry =>
+        path
+          .relative(dir, path.join(entry.parentPath, entry.name))
+          .split(path.sep)
+          .join("/")
+      )
       .sort();
   return { storage, stored, ...files };
 }
