@@ -1318,6 +1318,8 @@ export {
 export {
   getMediaVariant,
   getSmallestMediaVariant,
+  // @experimental: an absolute media URL for a consumer outside the app.
+  toPublicMediaUrl,
   type MediaLike,
   type GetMediaVariantOptions,
 } from "./lib/media-variant";

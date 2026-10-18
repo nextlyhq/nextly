@@ -365,7 +365,7 @@ or a single, fetched on its own with `media.findByID()`, or returned by
 ```json
 {
   "id": "abc-123",
-  "url": "https://example.com/uploads/2026/04/photo.jpg",
+  "url": "/uploads/2026/04/photo.jpg",
   "width": 3000,
   "height": 2000,
   "focalX": 50,
@@ -378,10 +378,12 @@ or a single, fetched on its own with `media.findByID()`, or returned by
 }
 ```
 
-Every URL in that response is absolute, the variants included, so a mobile client
-or an edge worker can resolve one without knowing where your storage adapter puts
-things. `sizes` is `null` for a file with no variants: a non-image, or an image
-uploaded before you configured any size.
+Every URL in that response, the variants included, is as your storage adapter
+wrote it: on local disk a path on the adapter's own base (`/uploads/...` by
+default), and on S3, Vercel Blob or UploadThing an absolute URL. See
+[Media URLs](#media-urls) for how they are formed, and how to get an absolute one.
+`sizes` is `null` for a file with no variants: a non-image, or an image uploaded
+before you configured any size.
 
 Select one with `getMediaVariant`, which asks for a name, tries your fallback name
 next, then `thumbnailUrl`, then the original:
@@ -475,6 +477,63 @@ export function Cover({
 The component takes the two values rather than a whole media record, because
 `media.findByID()` does not return them today: `MediaFile` has no `focalX` or `focalY`,
 so read the crop point from the media row until it does.
+
+## Media URLs
+
+A media URL is where the storage adapter that holds the file serves it.
+
+- **Local disk** builds it from its `baseUrl` and the file's path. The default
+  `baseUrl` is `/uploads`, so the URL is a path, `/uploads/2026/04/photo.jpg`.
+  Your app's pages resolve it on whatever host and port serve them: `next dev` on
+  any port, a LAN address, a tunnel or a preview deployment, with nothing to
+  configure. To serve uploads from another origin, give the adapter an absolute
+  `baseUrl`, and every URL is on it:
+
+  ```ts
+  // nextly.config.ts
+  import { defineConfig } from "nextly/config";
+  import { localStorage } from "nextly/storage";
+
+  export default defineConfig({
+    storage: [
+      localStorage({
+        basePath: "./public/uploads",
+        baseUrl: process.env.MEDIA_BASE_URL ?? "/uploads",
+        collections: { media: true },
+      }),
+    ],
+  });
+  ```
+
+- **S3, Vercel Blob and UploadThing** return absolute URLs on their own hosts,
+  unchanged.
+
+A URL is never rewritten onto `NEXT_PUBLIC_APP_URL` when it is read, so a project
+whose `.env` still says `http://localhost:3000` shows its images on any other port.
+
+### An absolute URL, for somewhere outside your app
+
+An email, a feed or JSON-LD is read somewhere a path cannot resolve. Make the URL
+absolute with `toPublicMediaUrl`:
+
+```ts
+import { toPublicMediaUrl } from "nextly";
+
+declare const media: { url: string };
+const imageUrl = toPublicMediaUrl(media.url, { baseUrl: "https://example.com" });
+```
+
+It leaves an absolute URL as it is. A relative one is resolved against the
+`baseUrl` you pass (an email's settings, or your site's own origin), else
+`NEXT_PUBLIC_APP_URL`. It never guesses a host: with neither set, in development
+it returns the path and logs a warning naming both, and in production it logs an
+error and returns `null`, so leave that image out rather than send a path that
+cannot resolve. `toPublicMediaUrl` is experimental: its shape may still change
+before Nextly's first stable release.
+
+Open Graph and Twitter images from `buildMetadata` (`nextly/runtime`) stay
+relative, as its canonical links do: Next.js resolves them against your root
+layout's `metadataBase`, which the starter templates set from your site's URL.
 
 ## Environment variables
 

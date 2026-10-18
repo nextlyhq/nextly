@@ -42,7 +42,7 @@ import {
 } from "../../../hooks/request-facts";
 import type { HookContext } from "../../../hooks/types";
 import { keysToCamelCase, keysToSnakeCase } from "../../../lib/case-conversion";
-import { absolutizeMediaUrls } from "../../../lib/media-variant";
+import { normalizeMediaUrls } from "../../../lib/media-variant";
 import {
   expansionStatusScope,
   resolveStatusFilter,
@@ -2209,10 +2209,9 @@ export class SingleQueryService extends BaseService {
 
       return rows.map(row => {
         const camel = keysToCamelCase(row) as Record<string, unknown>;
-        // Local storage stores relative URLs (`/uploads/...`); cloud adapters
-        // store absolute ones. Prefix the relative form so expanded media in
-        // API responses is reachable by external clients.
-        return absolutizeMediaUrls(camel);
+        // URLs as the storage wrote them, as the relationship path returns
+        // them (normalizeMediaUrls).
+        return normalizeMediaUrls(camel);
       });
     } catch (error) {
       // Raised, not swallowed. Returning [] here degrades a failed fetch into

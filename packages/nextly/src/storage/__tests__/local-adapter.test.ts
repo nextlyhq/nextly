@@ -154,6 +154,34 @@ describe("LocalStorageAdapter", () => {
       expect(url).toBe("/uploads/2026/04/uuid-photo.jpg");
     });
 
+    // A project that serves uploads from another origin sets the base to an
+    // absolute URL, and the media URLs are on it.
+    it.each([
+      [
+        "https://media.example.com",
+        "https://media.example.com/2026/04/uuid-photo.jpg",
+      ],
+      [
+        "https://media.example.com/",
+        "https://media.example.com/2026/04/uuid-photo.jpg",
+      ],
+      [
+        "https://cdn.example.com/site/uploads",
+        "https://cdn.example.com/site/uploads/2026/04/uuid-photo.jpg",
+      ],
+    ])("puts the file on an absolute baseUrl %s", async (baseUrl, expected) => {
+      const onAbsolute = new LocalStorageAdapter({
+        basePath: testDir,
+        baseUrl,
+      });
+      expect(onAbsolute.getPublicUrl("2026/04/uuid-photo.jpg")).toBe(expected);
+      const stored = await onAbsolute.upload(Buffer.from("x"), {
+        filename: "photo.jpg",
+        mimeType: "image/jpeg",
+      });
+      expect(stored.url).toBe(`${baseUrl.replace(/\/$/, "")}/${stored.path}`);
+    });
+
     it("should round-trip: upload URL points to file on disk", async () => {
       const buffer = Buffer.from("test content");
       const result = await adapter.upload(buffer, {
