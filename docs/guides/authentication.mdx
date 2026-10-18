@@ -405,7 +405,7 @@ Raw tokens are returned to the user once (in the email link); only the hashes ar
 
 ## Auth configuration
 
-The `auth` block in `defineConfig()` exposes two opt-in flags. The TTLs and brute-force settings listed below as defaults are wired in the runtime today; they are not yet exposed as user-tunable config keys.
+The `auth` block in `defineConfig()` exposes opt-in flags. The TTLs and brute-force settings listed below as defaults are wired in the runtime today; they are not yet exposed as user-tunable config keys.
 
 ```typescript
 // nextly.config.ts
@@ -413,8 +413,6 @@ import { defineConfig } from "nextly/config";
 
 export default defineConfig({
   auth: {
-    // Open self-registration at /auth/register. Off by default.
-    allowRegistration: false,
     // When false (default), /auth/register returns the same "we've sent a
     // confirmation link" response whether or not the email exists. Set to
     // true only if you don't care about email enumeration (e.g. closed
@@ -428,7 +426,7 @@ export default defineConfig({
 
 > **Needs the release after 0.0.2-alpha.68.**
 
-Self-registration is off unless `auth.allowRegistration` is `true`. While it's off, `POST /admin/api/auth/register` answers `403` "Registration is not open.", creating no account and sending no email; an account already awaiting verification can still verify. With it on, a registered account gets no role, and never becomes the [first administrator](#the-first-administrator).
+Self-registration is off unless the `auth` block sets `allowRegistration: true`. While it's off, `POST /admin/api/auth/register` answers `403` "Registration is not open.", creating no account and sending no email; an account already awaiting verification can still verify. With it on, a registered account gets no role, and never becomes the [first administrator](#the-first-administrator).
 
 Built-in defaults you can rely on (not configurable yet):
 
