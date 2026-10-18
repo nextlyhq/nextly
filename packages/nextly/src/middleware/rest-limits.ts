@@ -462,9 +462,7 @@ export function createRestLimits(
     settings,
     // Let through while the store is away: the general API limit refusing
     // would take the site down with its store (see `core-limit-outage`).
-    openWhileStoreIsDown(
-      coreCountsOr(config.store ?? new InMemoryRateLimitStore())
-    ),
+    openWhileStoreIsDown(config.store ?? new InMemoryRateLimitStore()),
     readers
   );
 }
@@ -478,7 +476,7 @@ export function createRestLimits(
  * process's memory for good, and on the database store each instance would
  * count a budget of its own.
  */
-function coreCountsOr(fallback: RateLimitStore): RateLimitStore {
+export function coreCountsOr(fallback: RateLimitStore): RateLimitStore {
   const current = (): RateLimitStore => {
     try {
       if (container.has("coreRateLimitStore")) {
