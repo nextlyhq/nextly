@@ -1,6 +1,6 @@
 {
   "name": "@nextlyhq/plugin-commerce",
-  "version": "0.0.2-alpha.66",
+  "version": "0.0.2-alpha.67",
   "private": true,
   "description": "Commerce for Nextly: exact money, and the catalogue and payment contracts every provider plugin implements",
   "license": "MIT",
@@ -39,7 +39,7 @@
   },
   "peerDependencies": {
     "@nextlyhq/plugin-sdk": "workspace:*",
-    "nextly": "0.0.2-alpha.66"
+    "nextly": "0.0.2-alpha.67"
   },
   "devDependencies": {
     "@nextlyhq/eslint-config": "workspace:*",
