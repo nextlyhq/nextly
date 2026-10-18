@@ -67,6 +67,39 @@ describe("sameContent", () => {
     ).toBe(false);
   });
 
+  it("ignores a component row's own timestamps, and nothing else in it", () => {
+    // A save rewrites a component's row, moving its timestamps; at second
+    // precision two saves may or may not share them, so they cannot decide.
+    const row = (updatedAt: string, label: string) => ({
+      account: {
+        _componentType: "account",
+        id: "c1",
+        created_at: updatedAt,
+        updated_at: updatedAt,
+        label,
+      },
+    });
+    expect(
+      sameContent(
+        row("2026-10-17T12:14:48.000Z", "L"),
+        row("2026-10-17T12:14:49.000Z", "L")
+      )
+    ).toBe(true);
+    expect(
+      sameContent(
+        row("2026-10-17T12:14:48.000Z", "L"),
+        row("2026-10-17T12:14:48.000Z", "M")
+      )
+    ).toBe(false);
+    // A group that is not a component has no framework columns.
+    expect(
+      sameContent(
+        { meta: { updated_at: "2026-10-17" } },
+        { meta: { updated_at: "2026-10-18" } }
+      )
+    ).toBe(false);
+  });
+
   it("counts a Single's createdBy as content, and a collection's as its owner column", () => {
     // A Single has no owner column, so a field it declares as createdBy is
     // something an editor wrote.

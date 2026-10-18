@@ -2042,6 +2042,25 @@ const RELEASE_ROUTES: ReleaseRoute[] = [
     operation: "single",
     method: "getRelease",
   },
+  // A release's own title and description, and the release itself. `PATCH`
+  // changes only those two fields: a state is moved by the routes below,
+  // never by a body.
+  {
+    id: true,
+    subresource: null,
+    subId: false,
+    verb: "PATCH",
+    operation: "update",
+    method: "updateRelease",
+  },
+  {
+    id: true,
+    subresource: null,
+    subId: false,
+    verb: "DELETE",
+    operation: "delete",
+    method: "deleteRelease",
+  },
   {
     id: true,
     subresource: "members",

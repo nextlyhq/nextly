@@ -3,6 +3,7 @@ import { isDbError, type DbErrorKind } from "../database/errors";
 import { NEXTLY_ERROR_STATUS, type NextlyErrorCode } from "./error-codes";
 import type {
   PublicData,
+  ReleaseNotDeletablePublicData,
   ReleaseProblemsPublicData,
   ValidationPublicData,
 } from "./public-data";
@@ -367,9 +368,10 @@ export class NextlyError extends Error {
     message?: string;
     /**
      * What a caller needs to act on the conflict: for a release refused over
-     * its documents, the problems by code and member.
+     * its documents, the problems by code and member; for a release that
+     * cannot be deleted, the reason.
      */
-    data?: ReleaseProblemsPublicData;
+    data?: ReleaseProblemsPublicData | ReleaseNotDeletablePublicData;
     cause?: Error;
     logContext?: Record<string, unknown>;
   }): NextlyError {
