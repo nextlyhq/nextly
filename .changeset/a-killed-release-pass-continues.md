@@ -36,10 +36,14 @@ written again, so its hooks and outbox events no longer run twice and the next p
 the documents still to go. Before, the next pass rewrote everything it had already written,
 and a pass ended at the same point every time never finished. A document holding a working
 draft is still written, because that draft is what the release puts live, and so is one with
-a translation not yet where the action leaves it.
+a translation not yet where the action leaves it. The status is read from storage, not through
+read hooks, and a document counts only for an author the write would still let act. A write
+refused to an author who lost the permission no longer counts as applied just because the
+document was already where the action leaves it, so that release is no longer marked
+published.
 
-`createReleasesDrainJob` takes an optional `languages` reader for each document's
-per-language statuses, which the built-in registration supplies. A drain job created without
+`createReleasesDrainJob` takes an optional `settlement` (the stored lifecycle and the
+author's access gate), which the built-in registration supplies. A drain job created without
 it writes every action, as before. For the same reason the `settled` check on the mutations
 `applyDueReleases` is given is optional: mutations without it are written as they always
 were.

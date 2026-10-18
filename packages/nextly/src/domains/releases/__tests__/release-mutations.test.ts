@@ -31,24 +31,40 @@ const POST: DocumentRef = {
 
 type Languages = ReadonlyMap<string, string | null> | null;
 
+/**
+ * Mutations over a document stored with `status` and `languages`, whose
+ * document read reports `readStatus` (a read hook may say otherwise than the
+ * row), for an author the write's gate does or does not let act.
+ */
 function mutations(
   status: string,
   heldDrafts: (string | null)[],
-  languages: Languages = new Map()
+  languages: Languages = new Map(),
+  over: { readStatus?: string; mayPerform?: boolean } = {}
 ) {
   const listWorkingDraftLocales = vi.fn(async () => heldDrafts);
+  const readStatus = over.readStatus ?? status;
   const contentApi = {
-    findByID: async () => ({ id: "e1", status }),
-    findSingle: async () => ({ id: "s1", status }),
+    findByID: async () => ({ id: "e1", status: readStatus }),
+    findSingle: async () => ({ id: "s1", status: readStatus }),
   } as unknown as JobContentSource;
+  const mayPerform = vi.fn(async () => over.mayPerform ?? true);
   const m = createReleaseMutations({
     contentApi,
     drafts: { listWorkingDraftLocales },
-    languages: async () => languages,
+    settlement: {
+      storedLifecycle: async () =>
+        languages === null ? null : { status, languages },
+      mayPerform,
+    },
   });
   const settled = m.settled;
   if (settled === undefined) throw new Error("settled not offered");
-  return { m: { settled }, listWorkingDraftLocales };
+  return {
+    m: { settled, applied: m.applied },
+    listWorkingDraftLocales,
+    mayPerform,
+  };
 }
 
 describe("a release action that would change nothing", () => {
@@ -137,6 +153,31 @@ describe("a release action that would change nothing", () => {
     expect(await m.settled({ ref: POST, effect: "publish", user: USER })).toBe(
       false
     );
+  });
+
+  it("is NOT settled for a stored draft that the document read reports as published", async () => {
+    // A read hook can rewrite what a read returns; the stored row cannot lie.
+    const { m } = mutations("draft", [], new Map(), {
+      readStatus: "published",
+    });
+    expect(await m.settled({ ref: POST, effect: "publish", user: USER })).toBe(
+      false
+    );
+  });
+
+  it("is NOT settled, nor applied, for an author the write's gate refuses", async () => {
+    // The document already stands, but the write would refuse this author, so
+    // neither the skip nor a refused write may count the action as done.
+    const { m, mayPerform } = mutations("published", [], new Map(), {
+      mayPerform: false,
+    });
+    expect(await m.settled({ ref: POST, effect: "publish", user: USER })).toBe(
+      false
+    );
+    expect(await m.applied({ ref: POST, effect: "publish", user: USER })).toBe(
+      false
+    );
+    expect(mayPerform).toHaveBeenCalledWith(USER, POST, "publish");
   });
 
   it("offers no settlement without a way to read the languages", () => {

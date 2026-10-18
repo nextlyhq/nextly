@@ -6046,35 +6046,45 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
-   * Each stored translation's own status for one entry, keyed by locale, read
-   * now from the pool: the languages a release's document-wide write moves
-   * besides the main row. Empty for a collection that keeps no translations;
-   * `null` where it keeps them but they cannot be read here (the translation
-   * table is not there yet, or has no per-language status), so that is never
-   * taken for "none to move".
+   * One entry's lifecycle as stored, read now from the pool and past every
+   * read hook: the main row's own status, and each stored translation's own,
+   * keyed by locale, which a release's document-wide write moves besides the
+   * main row. The translations are empty for a collection that keeps none.
+   * `null` for an entry that is not there, or whose translations it keeps but
+   * cannot be read here (the translation table is not there yet, or has no
+   * per-language status), so that is never taken for "none to move".
    *
    * @experimental
    */
-  async releaseLanguageStatuses(params: {
+  async releaseStoredLifecycle(params: {
     collectionName: string;
     entryId: string;
-  }): Promise<Map<string, string | null> | null> {
+  }): Promise<{
+    status: string | null;
+    languages: Map<string, string | null>;
+  } | null> {
+    const row = await this.storedEntry(params.collectionName, params.entryId);
+    if (!row) return null;
+    const status = typeof row.status === "string" ? row.status : null;
     const companion = await this.fileManager.loadCompanionSchema(
       params.collectionName
     );
-    if (!companion) return new Map();
+    if (!companion) return { status, languages: new Map() };
     if (
       !companion.hasStatus ||
       !(await isCompanionReady(this.adapter, companion.companionTableName))
     ) {
       return null;
     }
-    return readCompanionLocaleStatusAll(
-      this.db as Parameters<typeof readCompanionLocaleStatusAll>[0],
-      companion.table,
-      params.entryId,
-      "ready"
-    );
+    return {
+      status,
+      languages: await readCompanionLocaleStatusAll(
+        this.db as Parameters<typeof readCompanionLocaleStatusAll>[0],
+        companion.table,
+        params.entryId,
+        "ready"
+      ),
+    };
   }
 
   /**

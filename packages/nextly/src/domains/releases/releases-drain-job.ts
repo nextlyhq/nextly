@@ -35,7 +35,7 @@ import { VersionsRepository } from "../versions/versions-repository";
 import { applyDueReleases } from "./apply-due-releases";
 import type { ApplyDueReleasesResult } from "./apply-due-releases";
 import { createReleaseMutations } from "./release-mutations";
-import type { ReleaseLanguageStatuses } from "./release-mutations";
+import type { ReleaseSettlementReads } from "./release-mutations";
 import { ReleasesRepository } from "./releases-repository";
 import type { ReleasesDbApi } from "./releases-repository";
 
@@ -49,11 +49,12 @@ export function createReleasesDrainJob(deps: {
   /** The identity reads, so a member's author can be resolved. */
   runAs: RunAsDeps;
   /**
-   * Each stored translation's own status for a member's document. With it, a
-   * document already where its action leaves it, in every language, is passed
-   * over rather than written again; without it every action is written.
+   * The stored lifecycle and the write's access gate. With them, a document
+   * already where its action leaves it, in every language, for an author the
+   * write would let act, is passed over rather than written again; without
+   * them every action is written.
    */
-  languages?: ReleaseLanguageStatuses;
+  settlement?: ReleaseSettlementReads;
   /**
    * What to do with the outcome of each pass. REQUIRED.
    *
@@ -103,7 +104,7 @@ export function createReleasesDrainJob(deps: {
         mutations: createReleaseMutations({
           contentApi: deps.contentApi,
           drafts: new VersionsRepository(deps.db),
-          languages: deps.languages,
+          settlement: deps.settlement,
         }),
         runAs: deps.runAs,
       });

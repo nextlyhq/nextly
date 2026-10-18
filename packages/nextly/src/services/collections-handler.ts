@@ -335,16 +335,19 @@ export class CollectionsHandler {
   }
 
   /**
-   * Each stored translation's own status for one entry, keyed by locale. See
-   * the mutation service.
+   * One entry's lifecycle as stored, past every read hook: the main row's
+   * status and each translation's. See the mutation service.
    *
    * @experimental
    */
-  async releaseLanguageStatuses(params: {
+  async releaseStoredLifecycle(params: {
     collectionName: string;
     entryId: string;
-  }): Promise<Map<string, string | null> | null> {
-    return this.entryService.releaseLanguageStatuses(params);
+  }): Promise<{
+    status: string | null;
+    languages: Map<string, string | null>;
+  } | null> {
+    return this.entryService.releaseStoredLifecycle(params);
   }
 
   /**

@@ -356,7 +356,10 @@ them again. A document that is already where the release leaves it in every lang
 holds no working draft, is not written a second time: its hooks and outbox events do not run
 again, and the pass goes on to the documents still to go. A document that holds a working
 draft is still written, since putting that draft live is what the release is for, and so is
-one with a translation not yet where the release leaves it.
+one with a translation not yet where the release leaves it. The check reads the stored status,
+not what a read hook reports, and counts a document only for an author still allowed to
+publish (or take down) it: a release whose author has lost that permission fails that
+document and is not marked published, even when the document is already live.
 
 ## Checks before the moment
 

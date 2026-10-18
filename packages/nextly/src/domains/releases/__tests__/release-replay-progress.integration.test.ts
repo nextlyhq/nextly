@@ -14,13 +14,18 @@
  * reads as published, and passing it over would mark the release published
  * with German never put live. Its assertions read the translation rows
  * directly, because a localized read falls back to the default language.
+ *
+ * A document is accepted as settled only as the write would accept it: from
+ * its stored status, which a read hook cannot rewrite, and only for an author
+ * the write's own access gate would let perform the action.
  */
 import { afterEach, describe, expect, it } from "vitest";
 
 import { defineCollection } from "../../../collections/config/define-collection";
 import { text } from "../../../collections/fields";
 import { defineSingle } from "../../../config";
-import { releaseLanguageStatuses } from "../../../di/registrations/release-document-checks";
+import { resetHookRegistry } from "../../../hooks/hook-registry";
+import { releaseSettlementReads } from "../../../di/registrations/release-document-checks";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -44,6 +49,8 @@ let current: TestNextly | undefined;
 afterEach(async () => {
   await current?.destroy();
   current = undefined;
+  // Collection hooks register into the global registry.
+  resetHookRegistry();
 });
 
 const SLUG = "posts";
@@ -131,7 +138,7 @@ function materialise(t: TestNextly) {
     mutations: createReleaseMutations({
       contentApi: t.nextly,
       drafts: new VersionsRepository(t.adapter),
-      languages: releaseLanguageStatuses,
+      settlement: releaseSettlementReads(t.adapter, t.getService("logger")),
     }),
     runAs: {
       findUser: async id => ({ id, isActive: true }),
@@ -364,6 +371,124 @@ describe.each(getConfiguredTestDialects())(
       expect(result.failed).toBe(0);
       expect((await t.nextly.releases.findByID({ id: releaseId }))?.state).toBe(
         "published"
+      );
+    });
+  }
+);
+
+const HOOKED = "hooked";
+const LOCKED = "locked";
+
+async function bootGuarded(dialect: TestDialect): Promise<TestNextly> {
+  current = await createTestNextly({
+    dialect,
+    collections: [
+      defineCollection({
+        slug: HOOKED,
+        status: true,
+        access: {
+          read: () => true,
+          update: () => true,
+          publish: () => true,
+          unpublish: () => true,
+        },
+        hooks: {
+          // Reports every document as live, whatever is stored.
+          afterRead: [
+            ({ data }: { data?: unknown }) => ({
+              ...(data as Record<string, unknown>),
+              status: "published",
+            }),
+          ],
+        },
+        fields: [text({ name: "title" })],
+      }),
+      defineCollection({
+        slug: LOCKED,
+        status: true,
+        // Editable, but nobody may publish or take down.
+        access: {
+          read: () => true,
+          update: () => true,
+          publish: () => false,
+          unpublish: () => false,
+        },
+        fields: [text({ name: "title" })],
+      }),
+    ],
+  });
+  return current;
+}
+
+async function entryIn(
+  t: TestNextly,
+  collectionName: string,
+  status: "draft" | "published"
+): Promise<string> {
+  const created = await handlerOf(t).createEntry(
+    { collectionName, overrideAccess: true },
+    { title: "one", status }
+  );
+  const id = (created.data as { id?: string } | undefined)?.id;
+  if (typeof id !== "string") throw new Error("no id from create");
+  return id;
+}
+
+async function storedStatus(
+  t: TestNextly,
+  collectionName: string,
+  id: string
+): Promise<string | undefined> {
+  const row = await t.adapter.selectOne<{ status?: string }>(
+    `dc_${collectionName}`,
+    { where: { and: [{ column: "id", op: "=", value: id }] } }
+  );
+  return row?.status;
+}
+
+describe.each(getConfiguredTestDialects())(
+  "a release pass accepts a settled document only as the write would (%s)",
+  dialect => {
+    it("WRITES a stored draft that a read hook reports as published", async () => {
+      const t = await bootGuarded(dialect);
+      const id = await entryIn(t, HOOKED, "draft");
+      // The hook is in force: a read says live while the row says draft.
+      expect(
+        (
+          (await t.nextly.findByID({
+            collection: HOOKED,
+            id,
+            overrideAccess: true,
+            status: "all",
+          } as never)) as { status?: string } | null
+        )?.status
+      ).toBe("published");
+      expect(await storedStatus(t, HOOKED, id)).toBe("draft");
+      await dueReleaseOf(t, [id], {
+        scopeKind: "collection",
+        scopeSlug: HOOKED,
+      });
+
+      const result = await materialise(t);
+
+      expect(result.failed).toBe(0);
+      expect(await storedStatus(t, HOOKED, id)).toBe("published");
+    });
+
+    it("does NOT discharge a release whose author may not publish, though the document is live", async () => {
+      const t = await bootGuarded(dialect);
+      const id = await entryIn(t, LOCKED, "published");
+      const releaseId = await dueReleaseOf(t, [id], {
+        scopeKind: "collection",
+        scopeSlug: LOCKED,
+      });
+
+      const result = await materialise(t);
+
+      expect(result.failed).toBe(1);
+      expect(result.outcomes[0]?.failure).toBe("WRITE_FAILED");
+      expect((await t.nextly.releases.findByID({ id: releaseId }))?.state).toBe(
+        "scheduled"
       );
     });
   }

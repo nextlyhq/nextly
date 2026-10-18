@@ -397,24 +397,29 @@ export class SingleMutationService extends BaseService {
   }
 
   /**
-   * Each stored translation's own status for this Single, keyed by locale,
-   * read now from the pool: the languages a release's document-wide write
-   * moves besides the main row. Answered with the id of the row it was asked
-   * of, so a caller can tell the Single's document from one it held before;
-   * `null` for a Single with no stored document. The statuses are empty for a
-   * Single that keeps no translations, and `null` where it keeps them but they
-   * cannot be read here (the translation table is not there yet, or has no
-   * per-language status), so that is never taken for "none to move".
+   * This Single's lifecycle as stored, read now from the pool and past every
+   * read hook: the main row's own status, and each stored translation's own,
+   * keyed by locale, which a release's document-wide write moves besides the
+   * main row. Answered with the id of the row it was asked of, so a caller can
+   * tell the Single's document from one it held before; `null` for a Single
+   * with no stored document. The translations are empty for a Single that
+   * keeps none; the lifecycle is `null` where it keeps them but they cannot be
+   * read here (the translation table is not there yet, or has no per-language
+   * status), so that is never taken for "none to move".
    *
    * @experimental
    */
-  async releaseLanguageStatuses(params: { slug: string }): Promise<{
+  async releaseStoredLifecycle(params: { slug: string }): Promise<{
     entryId: string;
-    statuses: Map<string, string | null> | null;
+    lifecycle: {
+      status: string | null;
+      languages: Map<string, string | null>;
+    } | null;
   } | null> {
     const stored = await this.releaseSingleRow(params.slug);
     if (stored === null) return null;
     const { singleMeta, row } = stored;
+    const status = typeof row.status === "string" ? row.status : null;
     // Built as the write builds it, so the languages read are the ones the
     // write moves.
     const companion =
@@ -427,23 +432,28 @@ export class SingleMutationService extends BaseService {
             status: (singleMeta as { status?: boolean }).status === true,
           })
         : null;
-    if (!companion) return { entryId: row.id, statuses: new Map() };
+    if (!companion) {
+      return { entryId: row.id, lifecycle: { status, languages: new Map() } };
+    }
     if (
       !companion.hasStatus ||
       !(await isCompanionReady(this.adapter, companion.companionTableName))
     ) {
-      return { entryId: row.id, statuses: null };
+      return { entryId: row.id, lifecycle: null };
     }
     return {
       entryId: row.id,
-      statuses: await readCompanionLocaleStatusAll(
-        this.adapter.getDrizzle<
-          Parameters<typeof readCompanionLocaleStatusAll>[0]
-        >(),
-        companion.table,
-        row.id,
-        "ready"
-      ),
+      lifecycle: {
+        status,
+        languages: await readCompanionLocaleStatusAll(
+          this.adapter.getDrizzle<
+            Parameters<typeof readCompanionLocaleStatusAll>[0]
+          >(),
+          companion.table,
+          row.id,
+          "ready"
+        ),
+      },
     };
   }
 

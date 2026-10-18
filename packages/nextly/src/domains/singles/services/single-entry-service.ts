@@ -213,15 +213,15 @@ export class SingleEntryService extends BaseService {
   }
 
   /**
-   * Each stored translation's own status for this Single, keyed by locale.
-   * See the mutation service.
+   * This Single's lifecycle as stored, past every read hook: the main row's
+   * status and each translation's. See the mutation service.
    *
    * @experimental
    */
-  async releaseLanguageStatuses(
-    params: Parameters<SingleMutationService["releaseLanguageStatuses"]>[0]
-  ): ReturnType<SingleMutationService["releaseLanguageStatuses"]> {
-    return this.mutationService.releaseLanguageStatuses(params);
+  async releaseStoredLifecycle(
+    params: Parameters<SingleMutationService["releaseStoredLifecycle"]>[0]
+  ): ReturnType<SingleMutationService["releaseStoredLifecycle"]> {
+    return this.mutationService.releaseStoredLifecycle(params);
   }
 
   /**
