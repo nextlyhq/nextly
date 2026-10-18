@@ -686,13 +686,11 @@ export function EntrySystemHeader({
 
             On a narrow screen History and the preview fold into the document's
             menu and the panel toggle goes (the panel is a page there), so the
-            actions stay one row. The cluster never wraps inside itself: if it
-            cannot sit beside the way back, the row wraps and it takes a line of
-            its own, so the header is at most two rows above the title. */}
-          {/* Wraps within the row's width rather than past it: the header's
-            own controls fit one row on a phone, and a feature's contributed
-            controls, which this cannot size, must never push them off the
-            screen. */}
+            actions stay one row. If the cluster cannot sit beside the way back,
+            the row wraps and it takes a line of its own. It also wraps inside
+            itself, never past the editor's edge: a preview pane can narrow the
+            editor on a wide screen, and a feature's contributed controls, which
+            this cannot size, must never push the header's own off it. */}
           <div className="ml-auto flex min-w-0 max-w-full flex-wrap items-center justify-end gap-1.5">
             {showHistory ? (
               <Button

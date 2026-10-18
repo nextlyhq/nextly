@@ -37,5 +37,9 @@ state moves to a status line under it. Save draft, Unpublish and the other
 secondary document verbs keep their words at every width: they draw no icon,
 so at narrow widths they used to leave an empty bordered button. On a
 phone, History and the preview move into the document's menu and the panel
-toggle goes, so the actions keep to one row. What each control does is
-unchanged.
+toggle goes, so the actions keep to one row. The folded menu names each
+preview action by what it does, and its trigger shows a shareable link still
+being made. The document's status shows wherever the document panel is not
+on screen, a phone included. The actions wrap within the editor's width, so
+a preview pane or a feature's contributed controls never push them past its
+edge. What each control does is unchanged.
