@@ -14,6 +14,8 @@
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 import { sql } from "drizzle-orm";
 
+import { NextlyError } from "../../../../errors";
+
 const SAFE_IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 function quoteIdent(name: string, dialect: SupportedDialect): string {
@@ -130,7 +132,9 @@ function extractRows<T>(raw: unknown, dialect: SupportedDialect): T[] {
   if (dialect === "postgresql") {
     const rows = (raw as { rows?: T[] }).rows;
     if (!Array.isArray(rows)) {
-      throw new Error("PG query returned no rows array");
+      throw NextlyError.internal({
+        logContext: { reason: "query returned no rows array", dialect },
+      });
     }
     return rows;
   }
@@ -139,9 +143,14 @@ function extractRows<T>(raw: unknown, dialect: SupportedDialect): T[] {
       return (raw as [T[], unknown])[0];
     }
     if (Array.isArray(raw)) return raw as T[];
-    throw new Error("MySQL query returned unrecognized shape");
+    throw NextlyError.internal({
+      logContext: { reason: "query returned an unrecognized shape", dialect },
+    });
   }
-  throw new Error(`unrecognized dialect for extractRows: ${dialect}`);
+  // SQLite reads its rows through `all`, so it never reaches here.
+  throw NextlyError.internal({
+    logContext: { reason: "no row reader for this dialect", dialect },
+  });
 }
 
 /**
