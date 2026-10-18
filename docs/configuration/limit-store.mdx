@@ -5,7 +5,7 @@ description: Where limits keep their counts, how to share them between instances
 
 Limits count attempts: sign-ins, password resets, codes sent. The **limit store** is where those counts are kept. `rateLimit.store` selects it, and every limit built on the limit store contract counts there.
 
-Core's own sign-in and API limits do not count in it yet. They keep counting as before: in each process, or in an app's store of the earlier `RateLimitStore` contract.
+Core's own limits count there too: the sign-in limit, the limits plugin routes ask for, the REST API limit and each API key's limit. See [Core's own limits](#cores-own-limits).
 
 > **Experimental.** The setting's two shipped choices, `"memory"` and `"database"`, and `singleInstance` are stable. The contract for an app's own store, and `maxEntries`, may still change.
 
@@ -37,6 +37,26 @@ rateLimit: {
 
 An app that already passes a store of the earlier `RateLimitStore` contract (`increment`, `reset`) keeps it serving core's own sign-in and API limits, as before. Limits built on the newer contract then count in memory.
 
+## Core's own limits
+
+| Limit | Counts in | While the store is away |
+|---|---|---|
+| Sign-in (core's `/auth/*` endpoints, and plugin routes with `rateLimit: "auth"`) | The selected store | Refused with `503` and "Please try again shortly." |
+| The REST API, per address, session, API key or person | The selected store | Let through, uncounted |
+| Plugin routes with `rateLimit: "general"` or their own `{ max, windowMs }` | The selected store | Let through, uncounted |
+| Each API key's own limit (`apiKeys.rateLimit`) | The selected store | Let through, uncounted |
+
+An app's store of the earlier `RateLimitStore` contract, when configured, serves all of these instead.
+
+- **Keys are keyed hashes.** Core's keys hold client addresses, account ids and API key ids. None of them reaches any store as given, the memory store and an app's own store included.
+- **Counts roll.** An attempt counts for one window from when it was made, kept in up to 32 buckets per key, so an entry stays small however many attempts it holds. An attempt can be forgotten up to 1/32 of the window early. An entry expires by the end of its newest attempt's window.
+- **An outage refuses sign-in and opens the API.** Admitting sign-ins while their store is away would let password guessing run uncounted. Refusing API requests would take the whole site down with its store. The outage is logged once when it begins (`kind: "core-limit-store-unavailable"`) and once when the store answers again (`kind: "core-limit-store-recovered"`).
+- **With an app's own store, an outage stops staff sign-in until the store answers.** Monitor that store as you monitor the database.
+
+### The production warning
+
+A production start whose limits count in one process's memory logs a warning, because each instance would count a budget of its own. The warning names `rateLimit.store: "database"`, which shares the counts, and `rateLimit.singleInstance: true`, which says the site runs one instance and silences it. With only a store of the earlier contract configured, it says that plugin limits count in memory.
+
 ## The bound
 
 Each store holds a limited number of live entries: 100,000 for memory and 1,000,000 for the database by default. `rateLimit.maxEntries` changes that:
@@ -53,7 +73,7 @@ A store never removes a live count to make room. Removing one would let anyone a
 - At 80% of the bound, the store logs a warning (`kind: "limit-store-filling"`).
 - When full, it first removes expired entries. If there is still no room, it answers the new key as **unavailable** and logs an error (`kind: "limit-store-full"`), at most once a minute. Keys it already holds keep counting.
 
-Each limit decides what "unavailable" means for its own request. Watch for both log lines.
+Each limit decides what "unavailable" means for its own request (core's own: [above](#cores-own-limits)). Watch for both log lines.
 
 ## The database store
 
@@ -67,7 +87,7 @@ Each limit decides what "unavailable" means for its own request. Watch for both 
 
 ## When a store does not answer
 
-Every store call, to any store, is answered within **2 seconds**. A call that takes longer, or a store that fails, is answered as unavailable, as when the store cannot be reached. A call past its deadline may still be running in the store, so at most 64 calls run at once: past that, a call is answered as unavailable at once, until the store catches up. With a store of your own, monitor it: while it is down, the limits built on it cannot count.
+Every store call, to any store, is answered within **2 seconds**. A call that takes longer, or a store that fails, is answered as unavailable, as when the store cannot be reached. A call past its deadline may still be running in the store, so at most 64 calls run at once: past that, a call is answered as unavailable at once, until the store catches up. With a store of your own, monitor it: while it is down, the limits built on it cannot count, and core's sign-in is refused.
 
 ## Your own store
 

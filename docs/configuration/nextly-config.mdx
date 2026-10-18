@@ -272,7 +272,8 @@ Global API rate limiting. **Enabled by default** with 100 read / 30 write reques
 | `readLimit` | `number` | `100` | Max GET requests per window. |
 | `writeLimit` | `number` | `30` | Max POST/PATCH/PUT/DELETE per window. |
 | `windowMs` | `number` | `60_000` | Window in milliseconds. |
-| `store` | `RateLimitStore` | In-memory | Pluggable store; use a Redis store across multi-instance deployments. |
+| `store` | `"memory" \| "database" \| LimitStore \| RateLimitStore` | `"memory"` | Where every limit counts, core's own included. `"database"` shares the counts between instances. See [Limit store](/docs/configuration/limit-store). |
+| `singleInstance` | `boolean` | `false` | Says the site runs one instance, which silences the production warning about limits counted in memory. |
 | `keyGenerator` | `(request: Request) => string` | Client IP | Custom rate-limit key. |
 | `skip` | `(request: Request) => boolean \| Promise<boolean>` | None | Skip rate limiting for matching requests. |
 | `sessions` | `{ readLimit?: number; writeLimit?: number }` | 5 × `readLimit` / `writeLimit` | A signed-in session's own budget, per user. |
