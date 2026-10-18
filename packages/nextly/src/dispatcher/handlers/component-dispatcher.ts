@@ -32,6 +32,8 @@ import {
 import { resolveFieldGroupRegistryName } from "../../domains/field-groups/storage/resolve-storage-names";
 import { assertLocalizationConfigured } from "../../domains/i18n/config/require-app-config";
 import { archiveFieldsLeavingTranslation } from "../../domains/i18n/migration/archive-preflight";
+import { columnsMovingToCompanion } from "../../domains/i18n/migration/field-joins-translation";
+import { moveValuesOfFieldsJoiningTranslation } from "../../domains/i18n/runtime/move-joining-values";
 import { translatePipelinePreviewToLegacy } from "../../domains/schema/legacy-preview/translate";
 import { RealClassifier } from "../../domains/schema/pipeline/classifier/classifier";
 import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/database-url";
@@ -382,10 +384,23 @@ export const COMPONENTS_METHODS: Record<
         builderOwned: true,
       };
 
+      // A field becoming translated takes its value to the companion before main drops its
+      // column, so the preview judges that drop as the apply will.
+      const previewWasLocalized =
+        (component as { localized?: boolean }).localized === true;
       const pipelinePreview = await previewDesiredSchema({
         desired,
         db,
         dialect,
+        columnsMovedToCompanion: columnsMovingToCompanion({
+          tableName,
+          dialect,
+          builtBy: "fieldGroup",
+          oldFields: currentFields,
+          newFields: fields as FieldDefinition[],
+          wasLocalized: previewWasLocalized,
+          isLocalized: readRequestLocalized(body) ?? previewWasLocalized,
+        }),
       });
 
       const legacyShape = await translatePipelinePreviewToLegacy(
@@ -587,6 +602,29 @@ export const COMPONENTS_METHODS: Record<
             notifier: getProductionNotifier(),
           });
 
+          // A field becoming translated keeps its value as the default language's: it moves to
+          // the companion now, before the push drops its main column.
+          const joining = {
+            tableName,
+            builtBy: "fieldGroup" as const,
+            oldFields: (component.fields ?? []) as unknown as FieldDefinition[],
+            newFields: fields as unknown as FieldDefinition[],
+            wasLocalized,
+            isLocalized,
+          };
+          const joinedBefore = await moveValuesOfFieldsJoiningTranslation(
+            adapter,
+            {
+              ...joining,
+              slug,
+              defaultLocale:
+                getConfigFromDI()?.localization?.defaultLocale ?? "en",
+              // Field groups have no Draft/Published.
+              wasStatus: false,
+              status: false,
+            }
+          );
+
           const result = await pipeline.apply({
             desired,
             db,
@@ -598,6 +636,10 @@ export const COMPONENTS_METHODS: Record<
             // Named, not defaulted: the scope defaults to a collection, and a field group recorded under
             // that kind is invisible to every history query filtered by its own.
             uiTargetKind: "component" as const,
+            columnsMovedToCompanion: columnsMovingToCompanion({
+              ...joining,
+              dialect,
+            }),
           });
 
           if (!result.success) {
@@ -621,6 +663,8 @@ export const COMPONENTS_METHODS: Record<
               wasLocalized:
                 (component as { localized?: boolean }).localized === true,
               adapter,
+              // Added to the companion, with their values, before the push.
+              joinedBefore,
             });
           } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);

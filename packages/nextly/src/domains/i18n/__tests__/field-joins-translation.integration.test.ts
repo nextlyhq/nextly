@@ -11,6 +11,7 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 import { dispatchCollections } from "../../../dispatcher/handlers/collection-dispatcher";
+import { dispatchComponents } from "../../../dispatcher/handlers/component-dispatcher";
 import { dispatchSingles } from "../../../dispatcher/handlers/single-dispatcher";
 import { describeEachDialect } from "../../../plugins/__tests__/helpers/dialect-matrix";
 import {
@@ -182,6 +183,24 @@ describeEachDialect("a shared field that becomes translated", dialect => {
     return (read.data as { heading?: unknown }).heading;
   }
 
+  /**
+   * A translated field group whose `heading` is shared, with one row holding a value. Its rows
+   * belong to the entries that embed it, so the row is written as an embedding entry would write it.
+   */
+  async function seedFieldGroup(): Promise<string> {
+    await dispatchComponents(
+      "createComponent",
+      {},
+      { slug: "banner", label: "Banner", localized: true, fields: SHARED }
+    );
+    const id = "banner-1";
+    await query(
+      `INSERT INTO ${quote(dialect, "comp_banner")} (${["id", "_parent_id", "_parent_table", "_parent_field", "heading", "views"].map(c => quote(dialect, c)).join(", ")}) ` +
+        `VALUES ('${id}', 'entry-1', 'dc_pages', 'banner', 'Hello', 7)`
+    );
+    return id;
+  }
+
   /** Every path that can make a shared field translated. */
   const PATHS = [
     {
@@ -251,6 +270,30 @@ describeEachDialect("a shared field that becomes translated", dialect => {
             confirmed: true,
             localized: true,
             schemaVersion: await schemaVersionOf("dynamic_singles", "hero"),
+          }
+        );
+      },
+    },
+    {
+      path: "a field group's schema is applied with the schema dialog",
+      table: "comp_banner",
+      seed: seedFieldGroup,
+      // A field group has no reader of its own: its rows are read through the entries embedding
+      // them, from the default language's companion row.
+      read: async (id: string) =>
+        (await companionHeadings("comp_banner", id)).en,
+      change: async () => {
+        await dispatchComponents(
+          "applyComponentSchemaChanges",
+          { slug: "banner" },
+          {
+            fields: TRANSLATED,
+            confirmed: true,
+            localized: true,
+            schemaVersion: await schemaVersionOf(
+              "dynamic_components",
+              "banner"
+            ),
           }
         );
       },

@@ -151,6 +151,11 @@ export async function reconcileComponentCompanion(args: {
   /** Localization state BEFORE this save (persisted). Drives enable/disable detection. */
   wasLocalized: boolean;
   adapter: DrizzleAdapter;
+  /**
+   * Fields becoming translated whose companion columns the caller already added, with their
+   * values, before the main table changed (`moveValuesOfFieldsJoiningTranslation`).
+   */
+  joinedBefore?: readonly string[];
   // Whether any DDL actually ran. The caller cannot derive this from the request: a field-set
   // change on a group that was and remains non-localized reaches here and moves nothing, and a
   // caller that inferred "the tables changed" from the request shape would report a physical
@@ -188,6 +193,7 @@ export async function reconcileComponentCompanion(args: {
       tableName,
       oldFields
     ).then(cols => cols.map(c => c.name)),
+    joinedBefore: args.joinedBefore,
   });
 
   // A disable archives non-default translations, so ensure `nextly_i18n_archive` exists first
