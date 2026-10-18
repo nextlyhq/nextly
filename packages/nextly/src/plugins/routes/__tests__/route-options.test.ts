@@ -328,6 +328,26 @@ describe("validateRouteOptions", () => {
     }
   });
 
+  it("refuses a limitKey that is not a function, as a JavaScript plugin can give", () => {
+    for (const limitKey of ["email", { handles: true }, null]) {
+      expect(
+        validateRouteOptions(
+          route({ rateLimit: "auth", limitKey: limitKey as never })
+        )
+      ).toMatch(/limitKey must be a function/);
+    }
+  });
+
+  it("accepts a function limitKey, and none at all", () => {
+    // The control: a check refusing every limitKey would pass the case above.
+    expect(
+      validateRouteOptions(
+        route({ rateLimit: "auth", limitKey: () => ({ handles: false }) })
+      )
+    ).toBeNull();
+    expect(validateRouteOptions(route({ rateLimit: "auth" }))).toBeNull();
+  });
+
   it("refuses rawBody on a method with no body", () => {
     expect(
       validateRouteOptions(route({ rawBody: true, method: "GET" }))

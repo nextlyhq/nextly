@@ -279,6 +279,20 @@ function principalOptionProblem(route: PluginRoute): string | null {
 }
 
 /** Why a route's declared options are invalid, or null when they are fine. */
+/**
+ * Why a route's `limitKey` cannot be used, or null when it can.
+ *
+ * The type binds only TypeScript: a JavaScript plugin's non-function value
+ * passed boot, was named at startup as though absent, and then threw on every
+ * request whose client address could not be read, before the handler or its
+ * error boundary. Refused here instead, where it is a configuration error.
+ */
+function limitKeyOptionProblem(route: PluginRoute): string | null {
+  const { limitKey } = route as { limitKey?: unknown };
+  if (limitKey === undefined || typeof limitKey === "function") return null;
+  return `limitKey must be a function, not ${typeof limitKey}`;
+}
+
 export function validateRouteOptions(route: PluginRoute): string | null {
   // As with `rateLimit` below, the union binds only TypeScript: a JavaScript
   // plugin's `"post"` would be registered under that literal, and requests,
@@ -302,6 +316,8 @@ export function validateRouteOptions(route: PluginRoute): string | null {
   }
   const principalProblem = principalOptionProblem(route);
   if (principalProblem !== null) return principalProblem;
+  const limitKeyProblem = limitKeyOptionProblem(route);
+  if (limitKeyProblem !== null) return limitKeyProblem;
   // The union is a TYPESCRIPT guarantee, and an unchecked JavaScript plugin
   // has none: a typo like "authn" parsed happily, made `rateLimitKey` answer
   // null, and the route then ran with no limiter at all — silently losing the
