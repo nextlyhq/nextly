@@ -19,6 +19,10 @@ const posix = (p: unknown) => String(p).replaceAll("\\", "/");
 vi.mock("fs-extra", () => ({
   default: {
     pathExists: vi.fn(),
+    // Nothing on any path is a link: these cases scaffold into plain folders.
+    lstat: vi.fn(async () => {
+      throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+    }),
     readJson: vi.fn(),
     writeFile: vi.fn(),
     appendFile: vi.fn(),
@@ -79,13 +83,8 @@ describe("generateConfig", () => {
     expect(content).not.toContain("s3Storage");
   });
 
-  it("should throw error if config already exists", async () => {
-    mockPathExists.mockResolvedValue(true as never);
-
-    await expect(
-      generateConfig("/test/project", "blank", rootLayout)
-    ).rejects.toThrow("nextly.config.ts already exists");
-  });
+  // A file the app already has is kept and reported, not refused: that is
+  // tested against real directories in existing-app-files.test.ts.
 
   // The types file goes where the app keeps its code. A `./src/...` path written
   // into an app with no src/ makes the first `generate:types` create a src/
@@ -228,23 +227,8 @@ describe("generateRoutes", () => {
     expect(posix(path)).not.toContain("src/app");
   });
 
-  it("should throw error if route already exists", async () => {
-    mockPathExists.mockResolvedValue(true as never);
-
-    const projectInfo: ProjectInfo = {
-      isNextJs: true,
-      isAppRouter: true,
-      hasTypescript: true,
-      packageManager: "pnpm",
-      nextVersion: "14.0.0",
-      srcDir: true,
-      appDir: "src/app",
-    };
-
-    await expect(generateRoutes("/test/project", projectInfo)).rejects.toThrow(
-      "API route already exists"
-    );
-  });
+  // A file the app already has is kept and reported, not refused: that is
+  // tested against real directories in existing-app-files.test.ts.
 });
 
 describe("generateAdminPage", () => {
@@ -319,23 +303,8 @@ describe("generateAdminPage", () => {
     );
   });
 
-  it("should throw error if admin page already exists", async () => {
-    mockPathExists.mockResolvedValue(true as never);
-
-    const projectInfo: ProjectInfo = {
-      isNextJs: true,
-      isAppRouter: true,
-      hasTypescript: true,
-      packageManager: "pnpm",
-      nextVersion: "14.0.0",
-      srcDir: true,
-      appDir: "src/app",
-    };
-
-    await expect(
-      generateAdminPage("/test/project", projectInfo)
-    ).rejects.toThrow("Admin page already exists");
-  });
+  // A file the app already has is kept and reported, not refused: that is
+  // tested against real directories in existing-app-files.test.ts.
 });
 
 // generateEnv is tested in env-files.test.ts, against real files: what it
@@ -398,24 +367,6 @@ describe("generateTypesDirectory", () => {
     expect(posix(ensureDirPath)).not.toContain("src/types");
   });
 
-  it("should not overwrite existing files", async () => {
-    mockPathExists.mockResolvedValue(true as never);
-
-    const projectInfo: ProjectInfo = {
-      isNextJs: true,
-      isAppRouter: true,
-      hasTypescript: true,
-      packageManager: "pnpm",
-      nextVersion: "14.0.0",
-      srcDir: true,
-      appDir: "src/app",
-    };
-
-    await generateTypesDirectory("/test/project", projectInfo);
-
-    // Should still ensure directory exists
-    expect(mockEnsureDir).toHaveBeenCalled();
-    // But should not write files if they exist
-    expect(mockWriteFile).not.toHaveBeenCalled();
-  });
+  // Existing types files are kept byte for byte: existing-app-files.test.ts,
+  // against real directories, since the write itself (wx) is what keeps them.
 });

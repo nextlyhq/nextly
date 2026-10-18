@@ -25,6 +25,7 @@ import {
   type I18nTransitionKind,
 } from "../../domains/i18n/migration/transition-state";
 import { withSchemaChangeExcluded } from "../../domains/schema/services/schema-change-exclusion";
+import { deleteEntityRegistryRow } from "../../domains/versions/entity-teardown";
 // Resolve the versioning config so `db:sync` persists it (parity with boot/HMR).
 import { resolveVersionsConfig } from "../../domains/versions/resolve-config";
 import {
@@ -738,10 +739,12 @@ async function handleRemovedSingles(
       await teardownEntityComponentData({ adapter, parentTable: tableName });
       await teardownEntityI18n({ adapter, slug, tableName, kind: "single" });
 
-      // Delete registry entry directly
-      await adapter.delete("dynamic_singles", {
-        and: [{ column: "slug", op: "=", value: slug }],
-      });
+      // Delete the registry entry directly, then the Single's autosaves and
+      // version pins, in one transaction and in that order, as the
+      // registry's own delete does: see `deleteEntityRegistryRow`.
+      await adapter.transaction(tx =>
+        deleteEntityRegistryRow(tx, "single", slug)
+      );
 
       // Drop the data table
       const sql =

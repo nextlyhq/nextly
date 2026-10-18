@@ -1032,6 +1032,17 @@ function topLevelNames(fields: FieldConfig[]): Set<string> {
   return names;
 }
 
+/** Whether any node, at any depth, is a field redaction withheld. */
+function containsHidden(nodes: readonly FieldDiff[]): boolean {
+  return nodes.some(
+    node =>
+      node.kind === "hidden" ||
+      (node.kind === "group" && containsHidden(node.fields)) ||
+      (node.kind === "list" &&
+        node.items.some(item => containsHidden(item.fields)))
+  );
+}
+
 // ---- pruning for modifiedOnly ----------------------------------------------
 
 function pruneNode(node: FieldDiff): FieldDiff {
@@ -1076,8 +1087,10 @@ export function computeVersionDiff(
     componentRulesApplied: opts.componentRulesApplied === true,
   });
   const hasChanges = nodes.some(n => n.status !== "unchanged");
-  // Hidden fields can only be at the top, where redaction runs.
-  const incomplete = nodes.some(n => n.kind === "hidden");
+  // Read before pruning: a field withheld inside a group, a repeater row or a
+  // component is a hidden node at that depth, and `modifiedOnly` drops it with
+  // the other unchanged nodes, so the flag is what still tells the reader.
+  const incomplete = containsHidden(nodes);
   if (!opts.modifiedOnly) return { hasChanges, incomplete, fields: nodes };
 
   // Changed nodes only. A hidden field's change cannot be known, so it is not

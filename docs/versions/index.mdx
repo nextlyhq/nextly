@@ -74,7 +74,8 @@ change.
 A comparison can name two versions (`?from=4&to=6`), or a version and a **baseline** the
 server works out (`?to=6&baseline=previous`). The baselines are `previous` (the version
 before it in the same language), `published` (what that language serves now: its latest
-published version, while it is published) and `draft` (that language's current draft).
+published version, while it is published), `draft` (that language's current draft) and
+`last-viewed` (the version you last looked at in that language; see below).
 With no `from` and no `baseline`, the comparison opens on the current draft against what is
 published when the language is published and has a draft, and otherwise on a version
 against the one before it (`?locale=` picks the language when no version is named).
@@ -86,6 +87,32 @@ Some comparisons have nothing to start from, and are refused with `NO_BASELINE`:
   published to compare with, even though its history records an earlier publish.
 
 The response says which baseline it used. Baselines are experimental.
+
+### The version you last looked at
+
+Nextly remembers, per person, document and language, the version each person last looked
+at, so a comparison can show what changed since then (`?to=9&baseline=last-viewed`).
+
+- **Only an explicit mark records it.** A client that shows a version or a comparison to a
+  signed-in person sends `PUT …/versions/{n}/seen` (on a collection entry,
+  `/collections/{slug}/entries/{id}/versions/{n}/seen`; on a Single,
+  `/singles/{slug}/versions/{n}/seen`). Reading a version, a comparison or the history
+  records nothing, so a prefetch or a second tab never moves it. The mark needs read access
+  to the document, and an API key or the system is refused: only a person's own screen
+  says what they saw. The admin's history screens do not send it yet, so until they do,
+  `last-viewed` answers only for a client that marks what it shows.
+- **It counts by visit.** A mark more than 30 minutes after that marker's last one starts a
+  new visit. "Last looked at" is the furthest version of the previous visit, and within a
+  visit the marker only moves forward. Each language, and each document, keeps its own
+  visit.
+- **It survives retention.** When the version you looked at was removed, the comparison
+  starts from the nearest older version still kept, and the response's `baseline` names the
+  removed one as `replaces`.
+- **The history list shows it.** The row where you last looked carries `lastViewed: true`.
+
+A person who has not looked before, or a key, has no version they last looked at, and the
+comparison is refused with `NO_BASELINE` and a message saying why. These responses depend on
+who asks, so they are marked private to the session.
 
 Secret fields are masked in diffs. A password field's history never shows its values.
 
@@ -149,7 +176,7 @@ keeps:
 - the latest published version of each language, and the latest published version with no
   language (a document without languages, or a publish of every language at once);
 - every named version, including the "Before restore" version a restore records;
-- every version that records a restore, and the version it was restored from.
+- every version that records a restore, and the version it was restored from;
 - every version a feature has pinned (see [Pinning a version](#pinning-a-version)).
 
 So a run of saves in one language never removes another language's published version, and
@@ -163,7 +190,9 @@ A feature that refers to a version, such as the version an approval names, pins 
 retention keeps it for as long as the feature needs it, whatever the limit.
 
 A feature registers itself once, as it loads, under a kebab-case name and a label a reader
-would recognise. It then points named slots at a document's versions. A slot holds one
+would recognise, and keeps the handle registration returns: it is the only way to pin under
+that name, so no other code can move or release the slots the feature relies on. It then
+points named slots at a document's versions. A slot holds one
 version: pointing it at another frees the one it left, so a feature never has to remember
 to release the old one. A version stays while any slot of any feature points at it, so one
 feature releasing never frees what another still holds.
@@ -171,14 +200,14 @@ feature releasing never frees what another still holds.
 ```ts
 import {
   registerVersionPinHolder,
-  versionPins,
   type TransactionContext,
   type VersionRef,
 } from "nextly";
 
-registerVersionPinHolder({ name: "legal-review", label: "Legal review" });
-
-const legal = versionPins.holder("legal-review");
+const legal = registerVersionPinHolder({
+  name: "legal-review",
+  label: "Legal review",
+});
 
 // Record the approval and pin the version it names in one transaction.
 export async function approve(
@@ -198,11 +227,12 @@ export async function clearReview(tx: TransactionContext, ref: VersionRef) {
 - `pin`, `release` and `releaseAll` run on the transaction you pass, so a pin commits or
   rolls back with the change it records. `pin` refuses a version the document does not have,
   and waits for a save of the same document already under way.
-- `versionPins.holder` refuses a name nothing registered, and `registerVersionPinHolder`
-  refuses a name another feature registered. Registering the same name and label again
-  changes nothing.
+- `registerVersionPinHolder` refuses a name another feature registered. Registering the
+  same name and label again, as a module reloaded in development does, returns the same
+  handle.
 - `versionPins.list(db, ref)` reads every slot on a document, of every feature.
-- Deleting a document, or a Single, removes its pins.
+- Deleting a document, a collection or a Single removes its pins, and a pin waiting on one
+  being deleted is refused.
 
 A plugin's `ctx.db.transaction` hands it a handle to its own tables, not the
 `TransactionContext` above, so a plugin cannot pin through it.

@@ -65,6 +65,10 @@ import {
 import { NOTICES_TABLE, noticesTables } from "../../../schemas/notices";
 import { PLUGIN_SETTINGS_TABLE } from "../../../schemas/plugin-settings/table-name";
 import {
+  VERSION_VIEWS_TABLE,
+  versionViewsTables,
+} from "../../../schemas/version-views";
+import {
   layoutRowId,
   widgetLayoutTables,
   WIDGET_LAYOUT_TABLE,
@@ -2097,6 +2101,24 @@ export class UserMutationService extends BaseService {
   }
 
   /**
+   * Delete the rows a person owns in a table keyed by their id (their notices,
+   * their "last looked at" markers), inside the deletion's transaction so the
+   * two stand or fall together. `tableExists` is probed before the
+   * transaction.
+   */
+  private async eraseOwnedRows(
+    txDb: DrizzleTransactionLike,
+    table: { userId: Column },
+    userId: string,
+    tableExists: boolean
+  ): Promise<void> {
+    // An installation that has not run `nextly migrate` has no table, and a
+    // delete against it would abort the transaction and the deletion with it.
+    if (!tableExists) return;
+    await txDb.delete(table).where(eq(table.userId, userId));
+  }
+
+  /**
    * Whether a table is present, for a probe taken BEFORE the delete
    * transaction opens.
    *
@@ -2119,24 +2141,6 @@ export class UserMutationService extends BaseService {
    * ever differed by the name, and each copy was another branch in a method
    * already over its complexity budget.
    */
-  /**
-   * Delete a person's notices, inside the deletion's transaction so the two
-   * stand or fall together. `tableExists` is probed before the transaction.
-   */
-  private async eraseNotices(
-    txDb: DrizzleTransactionLike,
-    userId: string,
-    tableExists: boolean
-  ): Promise<void> {
-    // An installation that has not run `nextly migrate` has no table, and a
-    // delete against it would abort the transaction and the deletion with it.
-    if (!tableExists) return;
-    const notices = noticesTables(this.dialect).nextlyNotices as unknown as {
-      userId: Column;
-    };
-    await txDb.delete(notices).where(eq(notices.userId, userId));
-  }
-
   private async tablePresent(table: string): Promise<boolean> {
     try {
       return await this.adapter.tableExists(table);
@@ -2567,6 +2571,11 @@ export class UserMutationService extends BaseService {
     // would abort the transaction and the deletion with it.
     const noticesExist = await this.tablePresent(NOTICES_TABLE);
 
+    // Which version of each document the person last looked at: theirs alone,
+    // keyed by their id, so it goes with the account. Probed out here for the
+    // reason notices are.
+    const versionViewsExist = await this.tablePresent(VERSION_VIEWS_TABLE);
+
     // Who last edited a plugin's settings, probed out here for the reason the
     // three above are: a failed statement aborts an open Postgres transaction
     // and there would be no way back.
@@ -2691,7 +2700,18 @@ export class UserMutationService extends BaseService {
         // key — two derivations of one identifier agree until one is edited,
         // and the failure here is silent: the delete matches no row, the
         // account goes, and the layout stays.
-        await this.eraseNotices(txDb, String(userId), noticesExist);
+        await this.eraseOwnedRows(
+          txDb,
+          noticesTables(this.dialect).nextlyNotices,
+          String(userId),
+          noticesExist
+        );
+        await this.eraseOwnedRows(
+          txDb,
+          versionViewsTables(this.dialect).nextlyVersionViews,
+          String(userId),
+          versionViewsExist
+        );
 
         if (widgetLayoutExists) {
           const layoutTable = widgetLayoutTables(this.dialect)

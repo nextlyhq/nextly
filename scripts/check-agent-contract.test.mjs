@@ -27,6 +27,7 @@ import {
   claimsFilePath,
   instructionCopyFindings,
   guidanceReferences,
+  guidanceTarget,
   ruleFindings,
   instructionFiles,
   unresolvedIn,
@@ -355,6 +356,32 @@ describe("the command, run against another checkout", () => {
     execFileSync("git", ["init", "-q"], { cwd: base });
     return { base, put, copy, check, rules };
   }
+
+  /*
+   * A project template is guidance for the project scaffolded from it, whose
+   * skills folders hold the bundled user skills and nothing else. So a
+   * template citing a bundled skill passes, while the same citation in a file
+   * of this repository, or a template citing a contributor skill this
+   * repository has but no scaffold writes, is reported.
+   */
+  it("reads a template's skill citation against the skills a scaffold writes", () => {
+    const { base, put, check } = overrideCheckout();
+    try {
+      put("templates/base/AGENTS.md.template", "Read `.agents/skills/nextly-install/SKILL.md` and `.claude/skills/`.\n");
+      const bundled = check();
+      expect(bundled.stderr).toBe("");
+      expect(bundled.status).toBe(0);
+
+      put("templates/base/AGENTS.md.template", "Read `.agents/skills/a/SKILL.md`.\n");
+      put("docs/agents.md", "Read `.agents/skills/nextly-install/SKILL.md`.\n");
+      const unbundled = check();
+      expect(unbundled.status).toBe(1);
+      expect(unbundled.stderr).toContain("templates/base/AGENTS.md.template: guidance '.agents/skills/a/SKILL.md' does not resolve");
+      expect(unbundled.stderr).toContain("docs/agents.md: guidance '.agents/skills/nextly-install/SKILL.md' does not resolve");
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
 
   /*
    * With a root override, the AGENTS.md harness reads it and never the
@@ -796,6 +823,30 @@ describe("finding citations of agent guidance anywhere in the repository", () =>
 
   it("drops trailing punctuation that belongs to the sentence", () => {
     expect([...guidanceReferences("see `.claude/rules/a.md`.")]).toEqual([".claude/rules/a.md"]);
+  });
+});
+
+describe("resolving a template's guidance in the project it scaffolds", () => {
+  const bundled = ["nextly-install", "nextly-build"];
+
+  it("maps a bundled skill under either skills folder to the user skill it is copied from", () => {
+    expect(guidanceTarget("templates/base/AGENTS.md.template", ".agents/skills/nextly-install/SKILL.md", bundled)).toBe("skills/nextly-install/SKILL.md");
+    expect(guidanceTarget("templates/base/AGENTS.md.template", ".claude/skills/nextly-build/", bundled)).toBe("skills/nextly-build/");
+  });
+
+  it("maps either skills folder itself to the user skills folder", () => {
+    expect(guidanceTarget("templates/base/AGENTS.md.template", ".agents/skills/", bundled)).toBe("skills/");
+    expect(guidanceTarget("templates/blog/AGENTS.md.template", ".claude/skills", bundled)).toBe("skills");
+  });
+
+  it("resolves nothing a scaffold does not write", () => {
+    expect(guidanceTarget("templates/base/AGENTS.md.template", ".agents/skills/derived-checks/SKILL.md", bundled)).toBeNull();
+    expect(guidanceTarget("templates/base/AGENTS.md.template", ".claude/rules/integration-tests.md", bundled)).toBeNull();
+  });
+
+  it("leaves a citation outside the templates to this repository", () => {
+    expect(guidanceTarget("docs/guides/coding-agents.mdx", ".agents/skills/nextly-install/SKILL.md", bundled)).toBe(".agents/skills/nextly-install/SKILL.md");
+    expect(guidanceTarget("templatesque/AGENTS.md", ".agents/skills/a/", bundled)).toBe(".agents/skills/a/");
   });
 });
 

@@ -12,6 +12,7 @@ import {
 import {
   applyComponentReadAccess,
   fieldsCarryingReadRules,
+  nestedWithheldPaths,
 } from "../component-read-access";
 
 afterEach(() => clearFieldFunctions());
@@ -106,5 +107,43 @@ describe("fieldsCarryingReadRules", () => {
         "posts"
       )
     ).toEqual(["meta"]);
+  });
+});
+
+describe("a container that reaches itself", () => {
+  // Raw config a plugin contributes is checked for field types only, so an
+  // unnamed container whose fields include itself reaches the history walks.
+  function cyclic(): FieldConfig[] {
+    const layout: Record<string, unknown> = { type: "row", fields: [] };
+    const banner: Record<string, unknown> = {
+      name: "banner",
+      type: "component",
+      component: "card",
+    };
+    layout.fields = [banner, layout];
+    const group: Record<string, unknown> = { name: "meta", type: "group" };
+    group.fields = [group];
+    return fields(layout, group);
+  }
+
+  it("is walked once per path, by every history walk", async () => {
+    registerFieldFunctions("fieldGroup", "card", [
+      { name: "secret", type: "text", access: denied },
+    ]);
+    const shape = cyclic();
+    const components = new Map([
+      ["card", fields({ name: "secret", type: "text" })],
+    ]);
+    const entry = { banner: { secret: "S" }, meta: {} };
+    const before = structuredClone(entry);
+
+    await applyComponentReadAccess(entry, shape, components, caller);
+    expect(entry.banner).toEqual({});
+    expect([...nestedWithheldPaths(before, entry, shape, components)]).toEqual([
+      "banner.secret",
+    ]);
+    expect(
+      fieldsCarryingReadRules("collection", shape, components, "posts")
+    ).toEqual(["banner"]);
   });
 });

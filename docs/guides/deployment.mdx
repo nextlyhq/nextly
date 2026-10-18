@@ -111,6 +111,10 @@ Use a managed PostgreSQL service that's reachable from Vercel's IP ranges:
 
 SQLite is **not** suitable for Vercel deployments -- the file would be wiped on every cold start. See [Database](/docs/database) for adapter-specific guidance.
 
+### 6. Client addresses
+
+Set `security.trustProxy: true` in `nextly.config.ts`, so sign-in is rate limited per client and audit records carry real addresses. Vercel's edge makes this safe: see [On Vercel](#on-vercel).
+
 ## Self-host with Node.js
 
 Run Nextly on any host that supports Node.js 20.19+, 22.12+ or 24+. The deployment shape is intentionally boring: build the app, run it under a process manager, put a reverse proxy in front for SSL.
@@ -139,11 +143,71 @@ Configure the same variables listed in the production checklist above. On most h
 
 Use a process manager (pm2, systemd, Docker, etc.) and a reverse proxy (nginx, Caddy, etc.) -- consult their documentation for setup specific to your distribution. The Nextly process is a plain Next.js server; nothing about it requires special configuration beyond ensuring the proxy forwards `Host` and `X-Forwarded-Proto` so callbacks resolve correctly.
 
-If your reverse proxy is on a separate IP and you rely on rate-limiting / refresh-token IP binding, set `security.trustProxy: true` in `nextly.config.ts` and populate the `TRUSTED_PROXY_IPS` env var with the proxy's CIDR ranges. Otherwise Nextly ignores `X-Forwarded-For` and treats every request as coming from a single bucket, which is the safe default for direct-internet deployments.
+To rate-limit sign-in per client and record real client addresses, let Nextly read the address your proxy reports: see [Client addresses and the auth rate limit](#client-addresses-and-the-auth-rate-limit).
 
 ### Migrations on deploy
 
 For self-hosted deploys, the same forward-only model applies. Run `nextly migrate` against the production database **before** the new app binary takes traffic. See [Production migrations](/docs/guides/production-migrations) for GitHub Actions, Railway, Render, Fly.io, and AWS examples.
+
+## Client addresses and the auth rate limit
+
+A Next.js request carries no peer address, so Nextly learns the client's address only from a header a proxy sets, and it reads that header only when `security.trustProxy` is `true`. That is off by default, because a header a client can set itself would let anyone pick their own address.
+
+While it is off, the [auth rate limit](/docs/guides/authentication#auth-rate-limit) counts each sign-in request against the account it names, under a shared ceiling, rather than per client. That keeps credential stuffing bounded, but someone who knows an address can spend that account's budget. Turn it on wherever a proxy you control always sets the header. *The per-account counting and the warnings below need the release after 0.0.2-alpha.66; before it, every request whose address cannot be read shares one budget.*
+
+### On Vercel
+
+Vercel's edge overwrites `x-forwarded-for` with the client's own address and does not pass on one a caller sent, so trusting it there is safe:
+
+```ts title="nextly.config.ts"
+export default defineConfig({
+  security: {
+    trustProxy: true,
+  },
+});
+```
+
+No `TRUSTED_PROXY_IPS` is needed. Until this is set, Nextly logs a warning at startup on Vercel naming the setting.
+
+This holds when requests reach Vercel directly. If another proxy or CDN sits in front of Vercel, Vercel's edge overwrites `x-forwarded-for` with that proxy's address rather than the client's ([Vercel's request headers](https://vercel.com/docs/headers/request-headers#x-forwarded-for)). Every client then reads as the proxy, and shares one budget. In that setup, configure Vercel's Trusted Proxy support so the client's address is passed through, or leave `security.trustProxy` off.
+
+### Behind your own reverse proxy
+
+Have the proxy append the address it received the request from to `X-Forwarded-For`, and set `security.trustProxy: true` as above. In nginx:
+
+```nginx
+location / {
+  proxy_pass http://127.0.0.1:3000;
+  proxy_set_header Host $host;
+  proxy_set_header X-Forwarded-Proto $scheme;
+  proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+}
+```
+
+Caddy's `reverse_proxy` sets `X-Forwarded-For` to the address it received the request from, with no extra configuration, when requests reach Caddy directly.
+
+Nextly reads `X-Forwarded-For` from the right, so with one proxy the last address is the client's. When something else sits in front of that proxy, such as a load balancer or CDN, its addresses appear in the header too. List them in `TRUSTED_PROXY_IPS` (comma-separated IPv4 CIDR ranges or addresses, and exact IPv6 addresses; an IPv6 range such as `2001:db8::/32` is not supported and is ignored) so Nextly skips them and reaches the client:
+
+```bash
+TRUSTED_PROXY_IPS=10.0.0.0/8,192.168.1.10
+```
+
+Caddy behind such a hop also needs to be told to trust it. By default Caddy ignores an incoming `X-Forwarded-For` and passes on only the address of the hop in front of it, so Nextly would count every client as that hop. Name the hops in Caddy's global options, and have Caddy read the header from the right as Nextly does:
+
+```caddyfile
+{
+  servers {
+    trusted_proxies static 10.0.0.0/8 192.168.1.10
+    trusted_proxies_strict
+  }
+}
+```
+
+See Caddy's [`reverse_proxy` defaults](https://caddyserver.com/docs/caddyfile/directives/reverse_proxy#defaults).
+
+Only turn `security.trustProxy` on when every request reaches Nextly through the proxy. If the app's own port is reachable directly, a caller can send any `X-Forwarded-For` they like and choose the address they are counted under.
+
+If requests arrive with proxy headers that Nextly still cannot use, because `security.trustProxy` is unset or every address in the header is listed as a trusted proxy, Nextly logs one warning per process naming both settings.
 
 ## Final checklist
 
@@ -158,6 +222,7 @@ Before going live, verify:
 - [ ] An email provider is configured (Resend, SMTP, or SendLayer) -- without one, password-reset and verification tokens are returned in the API response as a development fallback.
 - [ ] All pending migrations have been applied (`nextly migrate:status` reports zero pending and zero unfinished).
 - [ ] The reverse proxy / load balancer terminates TLS and forwards real client headers.
+- [ ] `security.trustProxy` is `true` on Vercel or behind a proxy every request passes through, with `TRUSTED_PROXY_IPS` listing any hops in front of it (see [Client addresses and the auth rate limit](#client-addresses-and-the-auth-rate-limit)). *Needs the release after 0.0.2-alpha.66* for the per-account counting and warnings it describes.
 - [ ] Database backups are configured (your hosting provider's snapshots, point-in-time recovery, etc.).
 - [ ] Monitoring / error reporting is wired up (Sentry, Datadog, etc.).
 - [ ] `.env*` files are not committed to version control.

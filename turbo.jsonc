@@ -96,6 +96,12 @@
     "RESEND_USER_AGENT", // Resend email provider: User-Agent some proxies filter on
     "DATABASE_URL",
     "DB_DIALECT",
+    // The machine's worker limit, set by scripts/bounded.mjs for a local run
+    // and read by the playground's Next.js build for its page-data workers.
+    // A memory bound has to reach the task to bound it; strict env mode drops
+    // anything not listed. Passed through, not hashed: it changes how many
+    // workers build the output, never the output.
+    "NEXTLY_LOCAL_MAX_WORKERS",
     "NEXT_PHASE", // nextly boot: a production build seeds no permissions or roles
     "GITHUB_ACTOR", // nextly migrate: appliedBy actor in CI
     "USER", // nextly migrate: appliedBy actor on dev laptops
@@ -177,6 +183,34 @@
       "dependsOn": ["^build"], // Build dependencies first (critical for npm packages)
       "inputs": ["$TURBO_DEFAULT$", ".env*"], // Source files + env files
       "outputs": ["dist/**", ".next/**", "!.next/cache/**", "**/*.tsbuildinfo"],
+      "env": ["NODE_ENV", "NEXTLY_DEV_DIAGNOSTICS"]
+    },
+
+    // create-nextly-app#build - the one build that copies files from OUTSIDE
+    // its package into it.
+    //
+    // 🔴 Its build copies the repo-root `templates/` and the user skills in
+    // `skills/` into `packages/create-nextly-app/{templates,skills}/`, which
+    // the package publishes. Both copies are gitignored, so `$TURBO_DEFAULT$`
+    // sees neither, and the shared definition declares only `dist/**` as
+    // output. A build replayed from cache on a clean worker then restored no
+    // bundle, and the package packed without the files every scaffold needs;
+    // an edit to `skills/` or `templates/` alone left the hash unchanged and
+    // reused a stale bundle. Their sources are inputs here and the copies
+    // outputs. The skill check the build asks, `scripts/agent-skills.mjs`, is
+    // already covered by `globalDependencies`.
+    //
+    // A package task REPLACES the shared definition, so every field of it is
+    // restated, as `create-nextly-app#test` below does.
+    "create-nextly-app#build": {
+      "dependsOn": ["^build"],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        ".env*",
+        "$TURBO_ROOT$/templates/**",
+        "$TURBO_ROOT$/skills/**"
+      ],
+      "outputs": ["dist/**", "templates/**", "skills/**", "**/*.tsbuildinfo"],
       "env": ["NODE_ENV", "NEXTLY_DEV_DIAGNOSTICS"]
     },
 
@@ -524,7 +558,15 @@
     // with it. `dependsOn` is restated because replacement drops that too.
     "create-nextly-app#test": {
       "dependsOn": ["^build", "build:surface-declarations"],
-      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/templates/**"],
+      // The repo-root `skills/` is read by the bundle test, and the coding-agents
+      // docs page by the test that holds it to the update command the CLI
+      // prints, so each is hashed with the templates for the same reason.
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/templates/**",
+        "$TURBO_ROOT$/skills/**",
+        "$TURBO_ROOT$/docs/guides/coding-agents.mdx"
+      ],
       "outputs": ["coverage/**"],
       "cache": true
     },

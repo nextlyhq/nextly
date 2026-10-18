@@ -8,6 +8,8 @@ description: >-
   Server Component with getNextly and find. Also use when a collection does
   not appear in the admin, a field change does not reach the database, or a
   page reading content fails to build.
+metadata:
+  nextly-version: 0.0.2-alpha.67
 ---
 
 # Define a collection in Nextly
@@ -17,7 +19,7 @@ Each one becomes a database table, an admin list and edit screen, and a type
 you can query. Collections can also be made in the admin's visual Schema
 Builder; this skill covers the code-first way.
 
-Checked against `nextly` 0.0.2-alpha.66 with Next.js 16.4. Run
+Checked against `nextly` 0.0.2-alpha.67 with Next.js 16.4. Run
 `npx nextly --version`; if it prints a newer version, prefer
 <https://nextlyhq.com/docs> where it disagrees with this skill. Nextly must
 already be installed (the `nextly-install` skill), with `esbuild` among the
@@ -120,19 +122,14 @@ npx nextly generate:types
 ```
 
 This writes the file named in `typescript.outputFile`, and Zod schemas under
-`src/db/schemas/collections/zod/`. With them, `find({ collection: "posts" })`
-is typed; without them, entries are loosely typed and fields read as
-`unknown`. Regenerate in the same change as every schema edit.
+`src/db/schemas/collections/zod/` (`db/schemas/collections/zod/` without a
+`src/` folder). With them, `find({ collection: "posts" })` is typed; without
+them, entries are loosely typed and fields read as `unknown`. Regenerate in
+the same change as every schema edit.
 
-The Zod schemas import `zod`, which the project must depend on itself. Add it
-once, at the major version Nextly uses:
-
-```bash
-npm install zod@^4.6.2      # or: pnpm add zod@^4.6.2
-```
-
-Without it, pnpm projects fail `tsc` and `next build` with `Cannot find module
-'zod'`; npm projects only work by accident of hoisting.
+The Zod schemas import `z` from `nextly/zod`, so the project needs no `zod`
+dependency of its own. To combine them with your own Zod code, import `z`
+from `nextly/zod` there too.
 
 ## 5. Read entries in a page
 

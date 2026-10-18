@@ -898,6 +898,24 @@ export const pageBuilder = (opts: PageBuilderOptions = {}) => {
             `[page-builder] a component save was refused because it would break ${String(broken.hosts.length)} of the documents that place it`,
             { componentId: broken.componentId, hosts: broken.hosts }
           ),
+        onHostsStillBroken: found =>
+          ctx.logger.warn(
+            `[page-builder] a component save left ${String(found.hosts.length)} document(s) that already break a lock inside it no worse; they need repairing where they are stored`,
+            { componentId: found.componentId, hosts: found.hosts }
+          ),
+        onLockedExposures: found =>
+          ctx.logger.warn(
+            `[page-builder] a component exposes ${String(found.exposures.length)} field(s) a contentOnly lock holds; placements cannot change them. Remove each exposure, or loosen the lock on its slot.`,
+            {
+              componentId: found.componentId,
+              exposures: found.exposures.map(entry => ({
+                id: entry.exposureId,
+                label: entry.label,
+                slot: entry.slot,
+                holder: entry.holderType,
+              })),
+            }
+          ),
       };
 
       registerClassUsageMaintenance({

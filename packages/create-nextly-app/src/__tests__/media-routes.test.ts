@@ -19,13 +19,18 @@ import { fileURLToPath } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { generateMediaRoutes } from "../generators/media-routes";
+import {
+  generateMediaRoutes,
+  readMediaRouteTemplates,
+} from "../generators/media-routes";
+import { generateRoutes } from "../generators/routes";
 import type { ProjectInfo } from "../types";
 
-const TEMPLATES = resolve(
+const TEMPLATES_DIR = resolve(
   dirname(fileURLToPath(import.meta.url)),
   "../../../../templates"
 );
+const TEMPLATES = await readMediaRouteTemplates(TEMPLATES_DIR);
 
 const ADMIN_MEDIA = "admin/api/media/[[...path]]/route.ts";
 const PUBLIC_MEDIA = "api/media/[[...path]]/route.ts";
@@ -69,7 +74,7 @@ function withoutConfigSpecifier(text: string): string {
 }
 
 const template = (path: string) =>
-  readFileSync(join(TEMPLATES, "base/src/app", path), "utf8");
+  readFileSync(join(TEMPLATES_DIR, "base/src/app", path), "utf8");
 const written = (appDir: string, path: string) =>
   readFileSync(join(cwd, appDir, path), "utf8");
 
@@ -309,6 +314,105 @@ describe("where Next.js sees the same URL", () => {
   });
 });
 
+describe("a route handler that already answers the URL through a dynamic segment", () => {
+  // A catch-all route handler takes every URL below it, and a dynamic one the
+  // URL at its depth. A route written beside either would take those requests
+  // from the handler the app already has, so it is left out and reported.
+  it("writes nothing under a catch-all route handler that takes the URL", async () => {
+    mkdirSync(join(cwd, "src/app/api/[...rest]"), { recursive: true });
+    writeFileSync(
+      join(cwd, "src/app/api/[...rest]/route.ts"),
+      "export const GET = () => new Response();\n"
+    );
+
+    const result = await generateMediaRoutes(cwd, project(true), TEMPLATES);
+
+    expect(result.written).toEqual([`src/app/${ADMIN_MEDIA}`]);
+    expect(result.skipped.map(entry => entry.path)).toEqual([
+      "src/app/api/[...rest]",
+      "src/app/api/[...rest]",
+    ]);
+    for (const entry of result.skipped) {
+      expect(entry.why).toMatch(/dynamic segment/);
+    }
+  });
+
+  // The install writes Nextly's own admin API catch-all just before these
+  // routes, as a new project has it, and the admin media route is meant to
+  // sit beside it, taking /admin/api/media as the template's does.
+  it("writes the admin media route beside the admin API route the install just wrote", async () => {
+    await generateRoutes(cwd, project(true));
+
+    const result = await generateMediaRoutes(cwd, project(true), TEMPLATES);
+
+    expect(result.written).toEqual([
+      `src/app/${ADMIN_MEDIA}`,
+      `src/app/${PUBLIC_MEDIA}`,
+      `src/app/${HEALTH}`,
+    ]);
+    expect(result.skipped).toEqual([]);
+  });
+
+  // Higher up, a catch-all takes several parts at once, which a single
+  // dynamic segment cannot: only the catch-all reading reaches these URLs.
+  it("writes nothing under a catch-all route handler at the app's root", async () => {
+    mkdirSync(join(cwd, "app/[...rest]"), { recursive: true });
+    writeFileSync(
+      join(cwd, "app/[...rest]/route.ts"),
+      "export const GET = () => new Response();\n"
+    );
+
+    const result = await generateMediaRoutes(cwd, project(false), TEMPLATES);
+
+    expect(result.written).toEqual([]);
+    expect(result.skipped.map(entry => entry.path)).toEqual([
+      "app/[...rest]",
+      "app/[...rest]",
+      "app/[...rest]",
+    ]);
+  });
+
+  it("writes nothing beside a dynamic route handler at the URL's last segment", async () => {
+    mkdirSync(join(cwd, "app/api/[name]"), { recursive: true });
+    writeFileSync(
+      join(cwd, "app/api/[name]/route.ts"),
+      "export const GET = () => new Response();\n"
+    );
+
+    const result = await generateMediaRoutes(cwd, project(false), TEMPLATES);
+
+    expect(result.written).toEqual([`app/${ADMIN_MEDIA}`]);
+    expect(result.skipped.map(entry => entry.path)).toEqual([
+      "app/api/[name]",
+      "app/api/[name]",
+    ]);
+  });
+
+  // The controls: pages through dynamic segments are the usual shape of a
+  // site, and static API routes beside them are how Next.js apps are built.
+  it("still writes every route beside a catch-all page and a localised page tree", async () => {
+    mkdirSync(join(cwd, "app/(frontend)/[...slug]"), { recursive: true });
+    writeFileSync(
+      join(cwd, "app/(frontend)/[...slug]/page.tsx"),
+      "export default () => null;\n"
+    );
+    mkdirSync(join(cwd, "app/[locale]/about"), { recursive: true });
+    writeFileSync(
+      join(cwd, "app/[locale]/about/page.tsx"),
+      "export default () => null;\n"
+    );
+
+    const result = await generateMediaRoutes(cwd, project(false), TEMPLATES);
+
+    expect(result.skipped).toEqual([]);
+    expect(result.written).toEqual([
+      `app/${ADMIN_MEDIA}`,
+      `app/${PUBLIC_MEDIA}`,
+      `app/${HEALTH}`,
+    ]);
+  });
+});
+
 describe("a project that also uses the Pages Router", () => {
   // Next.js serves both routers in one app, but refuses to build when a page
   // and an app route answer the same URL. So a Pages Router endpoint at a
@@ -527,32 +631,32 @@ describe("what Next.js does and does not route", () => {
     }
   );
 
-  // A concrete child URL sorts ahead of an optional catch-all, so the two
-  // coexist; a dynamic child at the same level does not.
-  it("writes a catch-all beside a concrete child route, and not beside a dynamic one", async () => {
+  // A concrete child Next.js matches ahead of the catch-all, so it may take
+  // requests Nextly's route serves; a child holding no route takes nothing.
+  it("leaves a catch-all beside a concrete child route, and writes it beside a folder with none", async () => {
     mkdirSync(join(cwd, "src/app/api/media/sign"), { recursive: true });
     writeFileSync(
       join(cwd, "src/app/api/media/sign/route.ts"),
       "export const POST = () => new Response();\n"
     );
-    mkdirSync(join(cwd, "src/app/admin/api/media/(files)/[id]/thumb"), {
-      recursive: true,
-    });
+    mkdirSync(join(cwd, "src/app/admin/api/media/assets"), { recursive: true });
     writeFileSync(
-      join(cwd, "src/app/admin/api/media/(files)/[id]/thumb/route.ts"),
-      "export const GET = () => new Response();\n"
+      join(cwd, "src/app/admin/api/media/assets/logo.svg"),
+      "<svg/>"
     );
 
     const result = await generateMediaRoutes(cwd, project(true), TEMPLATES);
 
     expect(result.written).toEqual([
-      `src/app/${PUBLIC_MEDIA}`,
+      `src/app/${ADMIN_MEDIA}`,
       `src/app/${HEALTH}`,
     ]);
-    // The folder named is the one holding the dynamic child: the route group.
     expect(result.skipped.map(entry => entry.path)).toEqual([
-      "src/app/admin/api/media/(files)",
+      "src/app/api/media",
     ]);
+    expect(result.skipped[0]?.why).toMatch(
+      /^holds a route at sign\/, which Next\.js matches ahead of Nextly's catch-all/
+    );
     expect(
       readFileSync(join(cwd, "src/app/api/media/sign/route.ts"), "utf8")
     ).toContain("POST");
@@ -576,9 +680,9 @@ describe("a template that no longer imports the config", () => {
         );
       }
 
-      await expect(
-        generateMediaRoutes(cwd, project(true), templates)
-      ).rejects.toThrow(/does not import the Nextly config/);
+      await expect(readMediaRouteTemplates(templates)).rejects.toThrow(
+        /does not import the Nextly config/
+      );
       // The broken route is the second; the first, which is fine, must not
       // have been written ahead of the refusal either.
       expect(() => readFileSync(join(cwd, "src/app", ADMIN_MEDIA))).toThrow();
@@ -586,5 +690,206 @@ describe("a template that no longer imports the config", () => {
     } finally {
       rmSync(templates, { recursive: true, force: true });
     }
+  });
+});
+
+describe("a child folder at a media route's URL", () => {
+  const child = (name: string) => {
+    const file = join(cwd, "src/app/api/media", name, "route.ts");
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, "export const GET = () => new Response();\n");
+  };
+  const publicSkip = async () => {
+    const result = await generateMediaRoutes(cwd, project(true), TEMPLATES);
+    expect(result.written).toEqual([
+      `src/app/${ADMIN_MEDIA}`,
+      `src/app/${HEALTH}`,
+    ]);
+    expect(result.skipped.map(entry => entry.path)).toEqual([
+      "src/app/api/media",
+    ]);
+    return result.skipped[0]?.why ?? "";
+  };
+
+  /*
+   * Next.js builds `[id]` beside `[[...path]]`, but matches the more specific
+   * `[id]` first, so it would take every `/api/media/<id>` request, which
+   * Nextly's route serves (an item by its id): the route is reported, not
+   * written into a media library that would half work.
+   */
+  it("leaves the catch-all beside a single dynamic child, saying it would take the item requests", async () => {
+    child("[id]");
+    expect(await publicSkip()).toMatch(
+      /^holds a dynamic route one part below this URL, which Next\.js matches first, so it would take the requests for a media item by its id/
+    );
+  });
+
+  /*
+   * Measured on Next.js 16: a second optional catch-all fails the build as an
+   * ambiguous route, and a required one builds but fails every request at
+   * this URL ("You cannot use both an required and optional catch-all route
+   * at the same level").
+   */
+  it.each([
+    [
+      "[[...rest]]",
+      /^holds another optional catch-all route, which Next\.js refuses to build beside Nextly's/,
+    ],
+    [
+      "[...rest]",
+      /^holds a required catch-all route, which Next\.js builds beside Nextly's optional catch-all and then fails every request/,
+    ],
+  ])(
+    "leaves the catch-all beside a %s child, saying why",
+    async (name, reason) => {
+      child(name);
+      expect(await publicSkip()).toMatch(reason);
+    }
+  );
+
+  // Nextly's own fixed paths are among them, and need no list kept here.
+  it.each(["folders", "bulk"])(
+    "leaves the catch-all beside a %s/ child, which would take requests Nextly's route serves",
+    async name => {
+      child(name);
+      expect(await publicSkip()).toMatch(
+        new RegExp(`^holds a route at ${name}/, which Next\\.js matches ahead`)
+      );
+    }
+  );
+});
+
+describe("an app that sets pageExtensions", () => {
+  const config = (text: string) =>
+    writeFileSync(join(cwd, "next.config.ts"), text);
+  const nothingWritten = () => {
+    for (const route of [ADMIN_MEDIA, PUBLIC_MEDIA, HEALTH]) {
+      const folder = dirname(join(cwd, "src/app", route));
+      expect(() => readdirSync(folder)).toThrow();
+    }
+  };
+
+  /*
+   * Next.js routes `route.page.tsx` there and never `route.ts`, and the app
+   * may already have routes under such names, so each route is reported with
+   * the name to create and its content, and none is written.
+   */
+  it("writes no route, and names each under the extension the app routes", async () => {
+    config(
+      'const config = { pageExtensions: ["page.tsx", "page.ts"] };\nexport default config;\n'
+    );
+
+    const result = await generateMediaRoutes(cwd, project(true), TEMPLATES);
+
+    expect(result.written).toEqual([]);
+    expect(result.skipped.map(entry => entry.path)).toEqual([
+      "src/app/admin/api/media/[[...path]]/route.page.tsx",
+      "src/app/api/media/[[...path]]/route.page.tsx",
+      "src/app/api/health/route.page.tsx",
+    ]);
+    expect(result.skipped[0]?.why).toMatch(
+      /^next\.config\.ts sets pageExtensions, and Next\.js routes a file there only under a name with one of them/
+    );
+    expect(result.skipped[2]?.toAdd).toBe(template(HEALTH));
+    nothingWritten();
+  });
+
+  it("gives a placeholder name for a list it cannot read", async () => {
+    config(
+      'const extensions = ["page.tsx"];\nexport default { pageExtensions: extensions };\n'
+    );
+
+    const result = await generateMediaRoutes(cwd, project(true), TEMPLATES);
+
+    expect(result.written).toEqual([]);
+    expect(result.skipped[2]?.path).toBe(
+      "src/app/api/health/route.<one of your pageExtensions>"
+    );
+    nothingWritten();
+  });
+
+  it("says to add a module extension when the list holds none", async () => {
+    config('export default { pageExtensions: ["md", "mdx"] };\n');
+
+    const result = await generateMediaRoutes(cwd, project(true), TEMPLATES);
+
+    expect(result.written).toEqual([]);
+    expect(result.skipped[2]?.why).toContain(
+      "none of them (md, mdx) is a JavaScript or TypeScript extension"
+    );
+    nothingWritten();
+  });
+});
+
+describe("which Pages Router pages answer a route's URL", () => {
+  const page = (file: string) => {
+    mkdirSync(dirname(join(cwd, file)), { recursive: true });
+    writeFileSync(join(cwd, file), "export default function handler() {}\n");
+  };
+  const run = () => generateMediaRoutes(cwd, project(false), TEMPLATES);
+  const all = [`app/${ADMIN_MEDIA}`, `app/${PUBLIC_MEDIA}`, `app/${HEALTH}`];
+
+  // `[slug].tsx` takes exactly one part, so it answers `/about` and never a
+  // URL of two parts or more such as `/api/health`.
+  it("writes every route beside a single dynamic page at the top", async () => {
+    page("pages/[slug].tsx");
+
+    const result = await run();
+
+    expect(result.skipped).toEqual([]);
+    expect(result.written).toEqual(all);
+  });
+
+  // A dynamic folder takes one part and is walked with the rest of the URL.
+  it("follows a dynamic folder with the rest of the URL", async () => {
+    page("pages/[section]/media.ts");
+
+    const result = await run();
+
+    expect(result.written).toEqual([`app/${ADMIN_MEDIA}`, `app/${HEALTH}`]);
+    expect(result.skipped.map(entry => entry.path)).toEqual([
+      "pages/[section]/media.ts",
+    ]);
+    expect(result.skipped[0]?.why).toMatch(/^is a dynamic Pages Router route/);
+  });
+
+  // `health/details.ts` is `/api/health/details`; only the folder's `index`
+  // page, in any extension, or an optional catch-all in it is `/api/health`.
+  it("writes the health route beside a page below its URL", async () => {
+    page("pages/api/health/details.ts");
+
+    const result = await run();
+
+    expect(result.skipped).toEqual([]);
+    expect(result.written).toEqual(all);
+  });
+
+  it.each([
+    ["pages/api/health/index.ts", /^is a Pages Router route at the same URL/],
+    ["pages/api/health/index.mdx", /^is a Pages Router route at the same URL/],
+    ["pages/api/health/[[...rest]].ts", /^is a dynamic Pages Router route/],
+  ])("leaves the health route where %s answers its URL", async (file, why) => {
+    page(file);
+
+    const result = await run();
+
+    expect(result.written).toEqual([
+      `app/${ADMIN_MEDIA}`,
+      `app/${PUBLIC_MEDIA}`,
+    ]);
+    expect(result.skipped.map(entry => entry.path)).toEqual([file]);
+    expect(result.skipped[0]?.why).toMatch(why);
+  });
+
+  // The media routes serve every URL below theirs, so any page there competes.
+  it("leaves a media route beside any page below its URL", async () => {
+    page("pages/api/media/details.ts");
+
+    const result = await run();
+
+    expect(result.written).toEqual([`app/${ADMIN_MEDIA}`, `app/${HEALTH}`]);
+    expect(result.skipped.map(entry => entry.path)).toEqual([
+      "pages/api/media",
+    ]);
   });
 });

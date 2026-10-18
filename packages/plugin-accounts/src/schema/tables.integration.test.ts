@@ -1,6 +1,7 @@
 /**
  * The accounts plugin's tables on each dialect: the rules the database itself
- * keeps, so no race between two requests can break them.
+ * keeps, so no race between two requests can break them. And a production boot
+ * over a database the plugin was never installed on, which core refuses.
  *
  * @module schema/tables.integration.test
  */
@@ -145,8 +146,14 @@ describe.each(getConfiguredTestDialects())(
 describe.each(getConfiguredTestDialects())(
   "the accounts plugin at a production boot (%s)",
   (dialect: TestDialect) => {
-    it("refuses a database whose accounts schema is behind the plugin's", async () => {
-      // What a production boot requires before it reaches the schema gate. A
+    // A production install gets the plugin's tables only from `nextly plugins
+    // install`, which applies its migration modules and records the install.
+    // Core refuses a configured plugin with no install record first, before the
+    // schema-version gate, on every dialect. The schema-version gate itself is
+    // reached only past this one, so `install.integration.test.ts` pins it with a
+    // database the real commands make.
+    it("refuses a database the accounts plugin was never installed on", async () => {
+      // What a production boot requires before it reaches the plugin gates. A
       // throwaway secret for this boot alone, never a real one.
       const production: Record<string, string> = {
         NODE_ENV: "production",
@@ -173,7 +180,7 @@ describe.each(getConfiguredTestDialects())(
         }
       }
       expect(NextlyError.is(failure) ? failure.code : String(failure)).toBe(
-        "PLUGIN_SCHEMA_BEHIND"
+        "PLUGIN_NOT_INSTALLED"
       );
     });
   }

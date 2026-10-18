@@ -282,7 +282,7 @@ These env vars are read by middleware and security helpers. None are part of the
 
 | Variable | Required | Default | Description | Read by |
 |---|---|---|---|---|
-| `TRUSTED_PROXY_IPS` | No | empty | Comma-separated CIDR list of trusted reverse-proxy IPs. Combined with `security.trustProxy: true`, controls which `X-Forwarded-For` values are honoured for client-IP resolution (rate limiting, refresh-token binding, audit logging). | `packages/nextly/src/utils/get-trusted-client-ip.ts` |
+| `TRUSTED_PROXY_IPS` | No | empty | Comma-separated list of trusted reverse-proxy IPs: IPv4 CIDR ranges or addresses, and exact IPv6 addresses (IPv6 ranges are not supported and are ignored). Combined with `security.trustProxy: true`, controls which `X-Forwarded-For` values are honoured for client-IP resolution (rate limiting, refresh-token binding, audit logging): the listed hops are skipped, reading from the right, to reach the client. Needed only for hops in front of your own proxy, such as a load balancer; see [Client addresses and the auth rate limit](/docs/guides/deployment#client-addresses-and-the-auth-rate-limit). | `packages/nextly/src/utils/get-trusted-client-ip.ts` |
 
 ---
 

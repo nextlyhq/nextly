@@ -24,6 +24,7 @@ import type { Logger } from "../../../services/shared";
 import { ReleasesRepository } from "../releases-repository";
 
 import { seedLiveAuthor } from "./helpers/live-author";
+import { scheduleAsItStands } from "./helpers/release-writes";
 
 let current: TestNextly | undefined;
 
@@ -344,9 +345,10 @@ describe.each(getConfiguredTestDialects())(
       const repo = new ReleasesRepository(t.adapter);
       const now = new Date(Math.floor(Date.now() / 1000) * 1000);
       const atNow = await repo.createRelease({ title: "At now" });
-      await repo.scheduleRelease(atNow.id, now, "UTC");
+      await scheduleAsItStands(repo, atNow.id, now, "UTC");
       const later = await repo.createRelease({ title: "A second later" });
-      await repo.scheduleRelease(
+      await scheduleAsItStands(
+        repo,
         later.id,
         new Date(now.getTime() + 1000),
         "UTC"
@@ -363,14 +365,20 @@ describe.each(getConfiguredTestDialects())(
       const day = 24 * 60 * 60 * 1000;
       for (let i = 0; i < 40; i += 1) {
         const future = await repo.createRelease({ title: `Future ${i}` });
-        await repo.scheduleRelease(
+        await scheduleAsItStands(
+          repo,
           future.id,
           new Date(now.getTime() + (i + 1) * day),
           "UTC"
         );
       }
       const due = await repo.createRelease({ title: "Due" });
-      await repo.scheduleRelease(due.id, new Date(now.getTime() - day), "UTC");
+      await scheduleAsItStands(
+        repo,
+        due.id,
+        new Date(now.getTime() - day),
+        "UTC"
+      );
 
       // Count the rows the database hands back for the read, through a
       // wrapper on the adapter the repository reads with.

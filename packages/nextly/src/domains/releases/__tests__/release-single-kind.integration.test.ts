@@ -21,6 +21,7 @@ import {
 import { ReleasesRepository } from "../releases-repository";
 
 import { seedLiveAuthor } from "./helpers/live-author";
+import { ANY_EDITABLE_STATE } from "./helpers/release-writes";
 
 let current: TestNextly | undefined;
 
@@ -166,9 +167,9 @@ describe.each(getConfiguredTestDialects())(
         locale: null,
         action: "publish" as const,
       });
-      await repo.addMember(member(await post(t, "first")));
+      await repo.addMember(member(await post(t, "first")), ANY_EDITABLE_STATE);
       await expect(
-        repo.addMember(member(await post(t, "second")))
+        repo.addMember(member(await post(t, "second")), ANY_EDITABLE_STATE)
       ).rejects.toThrow();
       expect(await repo.listMembers(release.id)).toHaveLength(1);
     });

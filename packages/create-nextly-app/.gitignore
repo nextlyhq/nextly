@@ -1,0 +1,3 @@
+# The skills the build copies in from the repository's skills/ folder;
+# their one home is that folder, and this copy is published, never committed.
+/skills/

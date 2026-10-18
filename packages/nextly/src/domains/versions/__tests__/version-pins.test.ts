@@ -2,7 +2,8 @@
  * Version pin holders are registered, and a pin's slot is keyed by document,
  * holder and slot.
  */
-import { afterEach, describe, expect, it } from "vitest";
+import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
+import { beforeEach, describe, expect, it } from "vitest";
 
 import {
   registerVersionPinHolder,
@@ -12,7 +13,7 @@ import {
   versionPins,
 } from "../version-pins";
 
-afterEach(() => {
+beforeEach(() => {
   resetVersionPinHolders();
   registerVersionPinHolder({ name: "workflows", label: "Workflows" });
 });
@@ -24,14 +25,19 @@ const ref = {
 };
 
 describe("version pin holders", () => {
-  it("registers Workflows as the first holder", () => {
-    expect(versionPinHolderNames()).toContain("workflows");
+  it("hands a feature the handle it pins through when it registers", () => {
+    const handle = registerVersionPinHolder({
+      name: "release-review",
+      label: "Releases",
+    });
+    expect(versionPinHolderNames()).toContain("release-review");
+    expect(typeof handle.pin).toBe("function");
+    expect(typeof handle.release).toBe("function");
+    expect(typeof handle.releaseAll).toBe("function");
   });
 
-  it("lets a feature register a holder and pin through it", () => {
-    registerVersionPinHolder({ name: "release-review", label: "Releases" });
-    expect(versionPinHolderNames()).toContain("release-review");
-    expect(() => versionPins.holder("release-review")).not.toThrow();
+  it("offers no way to reach a holder's handle by its name", () => {
+    expect(Object.keys(versionPins)).toEqual(["list"]);
   });
 
   it("refuses a name taken already, naming the feature that holds it", () => {
@@ -40,11 +46,14 @@ describe("version pin holders", () => {
     ).toThrow(/Workflows/);
   });
 
-  it("accepts the same registration again, as a reloaded module makes it", () => {
-    registerVersionPinHolder({ name: "release-review", label: "Releases" });
-    expect(() =>
+  it("returns the same handle for the same registration, as a reloaded module makes it", () => {
+    const first = registerVersionPinHolder({
+      name: "release-review",
+      label: "Releases",
+    });
+    expect(
       registerVersionPinHolder({ name: "release-review", label: "Releases" })
-    ).not.toThrow();
+    ).toBe(first);
     expect(
       versionPinHolderNames().filter(name => name === "release-review")
     ).toHaveLength(1);
@@ -56,10 +65,39 @@ describe("version pin holders", () => {
     }
   });
 
-  it("refuses an unregistered holder, naming the registration call", () => {
-    expect(() => versionPins.holder("nobody")).toThrow(
-      /registerVersionPinHolder/
-    );
+  // Refused before any database work: the stub transaction throws on any use,
+  // so a refusal that reached the database would fail with its message.
+  const noDatabase = new Proxy(
+    {},
+    {
+      get() {
+        throw new Error("no database work expected");
+      },
+    }
+  ) as TransactionContext;
+
+  it("refuses a slot that is empty or too long for its column", async () => {
+    const handle = registerVersionPinHolder({ name: "slots", label: "Slots" });
+    for (const slot of ["", "x".repeat(192)]) {
+      await expect(
+        handle.pin(noDatabase, { ref, slot, versionNo: 1 })
+      ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+      await expect(
+        handle.release(noDatabase, { ref, slot })
+      ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+    }
+  });
+
+  it("refuses a version number that is not a positive integer", async () => {
+    const handle = registerVersionPinHolder({
+      name: "numbers",
+      label: "Numbers",
+    });
+    for (const versionNo of [0, -1, 1.5, Number.NaN]) {
+      await expect(
+        handle.pin(noDatabase, { ref, slot: "approved", versionNo })
+      ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+    }
   });
 });
 

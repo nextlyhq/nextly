@@ -96,7 +96,10 @@ describe.each(availableDialects())(
         await migrateFresh(fresh, NO_MIGRATIONS);
 
         for (const { table, index } of INDEXES) {
-          expect(await fresh.indexesOf(table)).toContain(index);
+          // The name alone would pass for an index over the wrong column.
+          expect(await fresh.indexColumnsOf(table, index)).toEqual([
+            "token_hash",
+          ]);
         }
       });
     }, 180_000);
@@ -119,7 +122,9 @@ describe.each(availableDialects())(
         expect(await migrateFresh(fresh, NO_MIGRATIONS)).toBe(true);
 
         for (const { table, index } of INDEXES) {
-          expect(await fresh.indexesOf(table)).toContain(index);
+          expect(await fresh.indexColumnsOf(table, index)).toEqual([
+            "token_hash",
+          ]);
         }
         // An index adds nothing to a row: both tokens issued before read back
         // exactly as they were, in every column.

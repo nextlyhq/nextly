@@ -25,6 +25,10 @@ import {
 import { RELEASE_TABS, releaseTabOf, type ReleaseTab } from "../release-tabs";
 import { releaseMemberKey } from "../release-member-key";
 import { ReleasesRepository, type ReleaseRow } from "../releases-repository";
+import {
+  ANY_EDITABLE_STATE,
+  scheduleAsItStands,
+} from "./helpers/release-writes";
 
 let current: TestNextly | undefined;
 
@@ -157,12 +161,18 @@ async function seedOneOfEach(repo: ReleasesRepository, now: Date) {
   const draft = await repo.createRelease({ title: "Draft" });
 
   const future = await repo.createRelease({ title: "Future" });
-  await repo.scheduleRelease(future.id, new Date(now.getTime() + DAY), "UTC");
+  await scheduleAsItStands(
+    repo,
+    future.id,
+    new Date(now.getTime() + DAY),
+    "UTC"
+  );
 
   // Past its instant but inside the grace period: the runner simply has not
   // reached it yet, so it is still Upcoming.
   const justDue = await repo.createRelease({ title: "Just due" });
-  await repo.scheduleRelease(
+  await scheduleAsItStands(
+    repo,
     justDue.id,
     new Date(now.getTime() - 3 * MINUTE),
     "UTC"
@@ -170,18 +180,18 @@ async function seedOneOfEach(repo: ReleasesRepository, now: Date) {
 
   const overdue = await repo.createRelease({ title: "Overdue" });
   const overdueAt = new Date(now.getTime() - 60 * MINUTE);
-  await repo.scheduleRelease(overdue.id, overdueAt, "UTC");
+  await scheduleAsItStands(repo, overdue.id, overdueAt, "UTC");
 
   const stopped = await repo.createRelease({ title: "Stopped" });
   const stoppedAt = new Date(now.getTime() - 30 * MINUTE);
-  await repo.scheduleRelease(stopped.id, stoppedAt, "UTC");
+  await scheduleAsItStands(repo, stopped.id, stoppedAt, "UTC");
   expect(
     await repo.blockReleases([{ id: stopped.id, scheduledAt: stoppedAt }])
   ).toEqual([stopped.id]);
 
   const published = await repo.createRelease({ title: "Published" });
   const publishedAt = new Date(now.getTime() - 2 * DAY);
-  await repo.scheduleRelease(published.id, publishedAt, "UTC");
+  await scheduleAsItStands(repo, published.id, publishedAt, "UTC");
   expect(await repo.markReleasePublished(published.id, publishedAt)).toBe(true);
 
   const cancelled = await repo.createRelease({ title: "Cancelled" });
@@ -247,13 +257,15 @@ describe.each(getConfiguredTestDialects())(
         await insertScheduled(app, id, `Tied ${tiedIds.indexOf(id)}`, shared);
       }
       const sooner = await repo.createRelease({ title: "Sooner" });
-      await repo.scheduleRelease(
+      await scheduleAsItStands(
+        repo,
         sooner.id,
         new Date(now.getTime() + DAY),
         "UTC"
       );
       const later = await repo.createRelease({ title: "Later" });
-      await repo.scheduleRelease(
+      await scheduleAsItStands(
+        repo,
         later.id,
         new Date(now.getTime() + 3 * DAY),
         "UTC"
@@ -285,7 +297,8 @@ describe.each(getConfiguredTestDialects())(
       // reading it — in memory, or in the client — finds nothing on page one.
       for (let i = 0; i < 24; i += 1) {
         const release = await repo.createRelease({ title: `Launch ${i}` });
-        await repo.scheduleRelease(
+        await scheduleAsItStands(
+          repo,
           release.id,
           new Date(now.getTime() + (i + 1) * MINUTE * 60),
           "UTC"
@@ -295,7 +308,8 @@ describe.each(getConfiguredTestDialects())(
         title: "Winter catalogue",
         description: "Every ZEBRA print, at once",
       });
-      await repo.scheduleRelease(
+      await scheduleAsItStands(
+        repo,
         match.id,
         new Date(now.getTime() + 30 * DAY),
         "UTC"
@@ -425,14 +439,17 @@ describe.each(getConfiguredTestDialects())(
       const release = await repo.createRelease({ title: "Ordered" });
       const added: string[] = [];
       for (let i = 0; i < 12; i += 1) {
-        const member = await repo.addMember({
-          releaseId: release.id,
-          scopeKind: "collection",
-          scopeSlug: "posts",
-          entryId: `e${i}`,
-          locale: null,
-          action: "publish",
-        });
+        const member = await repo.addMember(
+          {
+            releaseId: release.id,
+            scopeKind: "collection",
+            scopeSlug: "posts",
+            entryId: `e${i}`,
+            locale: null,
+            action: "publish",
+          },
+          ANY_EDITABLE_STATE
+        );
         added.push(member.id);
       }
 
@@ -473,11 +490,11 @@ describe.each(getConfiguredTestDialects())(
       }
       const older = await repo.createRelease({ title: "Shipped long ago" });
       const olderAt = new Date(now.getTime() - 10 * DAY);
-      await repo.scheduleRelease(older.id, olderAt, "UTC");
+      await scheduleAsItStands(repo, older.id, olderAt, "UTC");
       await repo.markReleasePublished(older.id, olderAt);
       const newer = await repo.createRelease({ title: "Shipped yesterday" });
       const newerAt = new Date(now.getTime() - DAY);
-      await repo.scheduleRelease(newer.id, newerAt, "UTC");
+      await scheduleAsItStands(repo, newer.id, newerAt, "UTC");
       await repo.markReleasePublished(newer.id, newerAt);
 
       const drafts = await repo.findReleasePage({
@@ -510,7 +527,8 @@ describe.each(getConfiguredTestDialects())(
         ["Tomorrow", 1],
       ] as const) {
         const release = await repo.createRelease({ title });
-        await repo.scheduleRelease(
+        await scheduleAsItStands(
+          repo,
           release.id,
           new Date(now.getTime() + days * DAY),
           "UTC"
@@ -545,14 +563,16 @@ describe.each(getConfiguredTestDialects())(
       const now = new Date();
       for (let i = 0; i < 5; i += 1) {
         const release = await repo.createRelease({ title: `Autumn ${i}` });
-        await repo.scheduleRelease(
+        await scheduleAsItStands(
+          repo,
           release.id,
           new Date(now.getTime() + (i + 1) * DAY),
           "UTC"
         );
       }
       const other = await repo.createRelease({ title: "Winter" });
-      await repo.scheduleRelease(
+      await scheduleAsItStands(
+        repo,
         other.id,
         new Date(now.getTime() + DAY),
         "UTC"

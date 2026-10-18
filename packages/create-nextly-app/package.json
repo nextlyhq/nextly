@@ -1,6 +1,6 @@
 {
   "name": "create-nextly-app",
-  "version": "0.0.2-alpha.66",
+  "version": "0.0.2-alpha.67",
   "description": "CLI to scaffold Nextly in your Next.js project",
   "license": "MIT",
   "type": "module",
@@ -20,6 +20,7 @@
   "files": [
     "dist",
     "bin",
+    "skills",
     "templates"
   ],
   "scripts": {
@@ -36,6 +37,7 @@
     "@babel/parser": "^7.29.7",
     "@clack/prompts": "^1.1.0",
     "commander": "^14.0.2",
+    "dotenv-expand": "10.0.0",
     "execa": "^9.6.0",
     "fs-extra": "^11.3.0",
     "picocolors": "^1.1.1",
