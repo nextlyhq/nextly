@@ -33,6 +33,7 @@ import {
   companionHasStatusColumn,
   localizedColumnsOnMain,
 } from "../../i18n/runtime/companion-io";
+import { normalizeType } from "../../schema/pipeline/diff/normalize-type";
 import { queryLiveColumnTypes } from "../../schema/pipeline/live-column-types";
 import {
   readColumnNullState,
@@ -42,8 +43,8 @@ import {
   tableHasRows,
 } from "../../schema/pipeline/live-table-facts";
 import {
-  toSnakeCase,
   columnsThatMayHoldNull,
+  getColumnDescriptor,
 } from "../../schema/services/field-column-descriptor";
 import { calculateSchemaHash } from "../../schema/services/schema-hash";
 import { buildCollectionMetadataUpsert } from "../../schema/ui-schema/metadata-sql";
@@ -849,33 +850,114 @@ export class DynamicCollectionService extends BaseService {
   }
 
   /**
-   * The fields this save adds whose columns this database already has, as the table holds them:
-   * present, and unique only where a unique index already covers the column. What an index
-   * covers is asked of the catalog: one under the expected name can stand on another column. A save that MySQL, which
-   * commits each schema statement, refused part-way leaves such columns while the registry still
-   * lacks the fields, so the next save plans from them rather than adding them again.
+   * The field list this database's own plan starts from: the previous fields as the live table
+   * holds them. MySQL commits each schema statement, so a save it refused part-way can have added
+   * some columns and dropped others while the registry still records the fields before the save.
+   * Planning from the registry would add a column twice or drop one that is gone, and fail again.
+   *
+   * - A field the save removes whose column is already gone is left out, so it is not dropped.
+   * - A field the save adds whose column is already there is taken as present, and as unique only
+   *   where a unique index already covers its column (asked of the catalog, since an index of the
+   *   expected name can stand on another column).
+   * - Such a column is taken only when its type is the one the field would have. A column of the
+   *   same name with another type is not a part-applied save's: removed fields once kept their
+   *   columns on MySQL, with their old values, and adopting one would record the field over a
+   *   column of the wrong type. The save is refused, naming the column.
    */
-  private async addedFieldsAlreadyOnTable(
+  private thisDatabasesStartingFields(
     tableName: string,
     oldFields: readonly FieldDefinition[],
     newFields: readonly FieldDefinition[],
-    uniqueColumns: ReadonlySet<string>
-  ): Promise<FieldDefinition[]> {
+    facts: {
+      liveColumnTypes: ReadonlyMap<string, string>;
+      uniqueColumns: ReadonlySet<string>;
+    }
+  ): FieldDefinition[] {
+    const columnOf = (f: FieldDefinition) =>
+      getColumnDescriptor(f, this.adapter.dialect, "collection")?.name;
+    const kept = new Set(newFields.map(f => f.name));
     const known = new Set(oldFields.map(f => f.name));
-    const added = newFields.filter(f => !known.has(f.name));
-    if (added.length === 0) return [];
-    const present = new Set(
-      (await localizedColumnsOnMain(this.adapter, tableName, added)).map(
-        c => c.name
-      )
+    const stillThere = oldFields.filter(f => {
+      const column = columnOf(f);
+      return (
+        kept.has(f.name) ||
+        column === undefined ||
+        facts.liveColumnTypes.has(column)
+      );
+    });
+    const alreadyAdded = newFields.flatMap(f => {
+      const column = columnOf(f);
+      if (known.has(f.name) || column === undefined) return [];
+      const live = facts.liveColumnTypes.get(column);
+      if (live === undefined) return [];
+      const planned = [
+        ...this.schemaService.plannedColumnTypes([f]).values(),
+      ][0];
+      if (normalizeType(live) !== normalizeType(planned)) {
+        throw this.columnTakenRefusal(tableName, f, column, live, planned);
+      }
+      return [
+        {
+          ...f,
+          required: false,
+          unique: f.unique === true && facts.uniqueColumns.has(column),
+        },
+      ];
+    });
+    return [...stillThere, ...alreadyAdded];
+  }
+
+  /** The refusal for an added field whose column name an unrelated column already holds. */
+  private columnTakenRefusal(
+    tableName: string,
+    field: FieldDefinition,
+    column: string,
+    liveType: string,
+    plannedType: string | undefined
+  ): NextlyError {
+    return NextlyError.validation({
+      errors: [
+        {
+          path: `fields.${field.name}`,
+          code: "COLUMN_ALREADY_EXISTS",
+          message:
+            `The table already has a column "${column}" of another type, left from an earlier ` +
+            `field. Give ${field.name} another name, or remove that column first.`,
+        },
+      ],
+      logContext: { tableName, column, liveType, plannedType },
+    });
+  }
+
+  /**
+   * This database's own statements for an edit, when they differ from the migration file's: the
+   * same diff, planned from the live table (`thisDatabasesStartingFields`) and skipping index
+   * changes it already shows. Undefined when the two agree, so a caller cannot run the wrong one.
+   */
+  private localAlterSQL(
+    tableName: string,
+    oldFields: FieldDefinition[],
+    newFields: FieldDefinition[],
+    options: Parameters<
+      DynamicCollectionSchemaService["generateAlterTableMigration"]
+    >[3] & {
+      liveColumnTypes: ReadonlyMap<string, string>;
+      uniqueColumns: ReadonlySet<string>;
+    },
+    artefact: string
+  ): string | undefined {
+    const local = this.schemaService.generateAlterTableMigration(
+      tableName,
+      this.thisDatabasesStartingFields(
+        tableName,
+        oldFields,
+        newFields,
+        options
+      ),
+      newFields,
+      { ...options, planFor: "database" }
     );
-    return added
-      .filter(f => present.has(toSnakeCase(f.name)))
-      .map(f => ({
-        ...f,
-        required: false,
-        unique: f.unique === true && uniqueColumns.has(toSnakeCase(f.name)),
-      }));
+    return local === artefact ? undefined : local;
   }
 
   /**
@@ -1288,10 +1370,14 @@ export class DynamicCollectionService extends BaseService {
           });
       if (refusals.length > 0) {
         throw NextlyError.validation({
-          errors: refusals,
+          errors: refusals.map(r => r.error),
           logContext: {
             collection: collectionName,
-            fields: refusals.map(r => r.path),
+            fields: refusals.map(r => r.error.path),
+            // What the entries in the way hold, for the log only.
+            details: refusals.flatMap(r =>
+              r.logContext ? [r.logContext] : []
+            ),
           },
         });
       }
@@ -1385,22 +1471,13 @@ export class DynamicCollectionService extends BaseService {
           ...oldShared,
           ...userDefinedFields.filter(f => retainedOnMain.has(f.name)),
         ];
-        // Shared fields this save adds whose columns a save MySQL stopped part-way left here.
-        const alreadyOnTable = await this.addedFieldsAlreadyOnTable(
+        const localMainSQL = this.localAlterSQL(
           collection.tableName,
           localOldShared,
           newShared,
-          mainOptions.uniqueColumns
+          mainOptions,
+          mainSQL
         );
-        const localMainSQL =
-          retainedOnMain.size > 0 || alreadyOnTable.length > 0
-            ? this.schemaService.generateAlterTableMigration(
-                collection.tableName,
-                [...localOldShared, ...alreadyOnTable],
-                newShared,
-                mainOptions
-              )
-            : undefined;
         const localizedMigration = await this.buildLocalizedMigrationSQL(
           { artefact: mainSQL, local: localMainSQL },
           {
@@ -1442,23 +1519,16 @@ export class DynamicCollectionService extends BaseService {
           userDefinedFields,
           alterOptions
         );
-        // The file adds every new field's column; this database may already have some, left by a
-        // save MySQL stopped part-way, and adding a column twice fails. Its own plan starts from
-        // the table as it is.
-        const alreadyOnTable = await this.addedFieldsAlreadyOnTable(
-          collection.tableName,
-          oldUserFields,
-          userDefinedFields,
-          alterOptions.uniqueColumns
-        );
-        if (alreadyOnTable.length > 0) {
-          localMigrationSQL = this.schemaService.generateAlterTableMigration(
+        // The file is planned from the registry; this database, which a save MySQL stopped
+        // part-way can have changed already, plans from the table as it is.
+        localMigrationSQL =
+          this.localAlterSQL(
             collection.tableName,
-            [...oldUserFields, ...alreadyOnTable],
+            oldUserFields,
             userDefinedFields,
-            alterOptions
-          );
-        }
+            alterOptions,
+            migrationSQL
+          ) ?? null;
       }
       migrationFileName = `${Date.now()}_update_${collectionName}.sql`;
 

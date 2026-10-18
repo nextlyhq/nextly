@@ -10,6 +10,7 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 import { describeEachDialect } from "../../../plugins/__tests__/helpers/dialect-matrix";
+import { DynamicCollectionService } from "../../dynamic-collections/services/dynamic-collection-service";
 import { uniqueIndexNameForColumn } from "../../schema/services/index-name";
 import {
   createTestNextly,
@@ -155,7 +156,7 @@ describeEachDialect("a schema save whose migration fails", dialect => {
     }
   }
 
-  it("refuses making a field unique while entries share a value, naming it", async () => {
+  it("refuses making a field unique while entries share a value, naming the field but not the value", async () => {
     await postsWith(
       [{ name: "heading", type: "text" }],
       [{ heading: "Same" }, { heading: "Same" }, { heading: "Other" }]
@@ -168,8 +169,10 @@ describeEachDialect("a schema save whose migration fails", dialect => {
 
     expect(saved.success, JSON.stringify(saved)).toBe(false);
     expect(refusalOf(saved)).toMatch(
-      /^2 entries share the value 'Same' for heading, which must be unique\./
+      /^2 entries share a value for heading, which must be unique\./
     );
+    // Someone who may edit the schema need not be allowed to read the entries.
+    expect(JSON.stringify(saved)).not.toContain("Same");
   });
 
   it("makes a field unique when its entries' values already differ", async () => {
@@ -375,6 +378,107 @@ describeEachDialect("a schema save whose migration fails", dialect => {
     );
 
     expect(unique.success, JSON.stringify(unique)).toBe(true);
+  });
+
+  const q = (name: string) =>
+    dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
+
+  it("removes a field whose column a refused save already dropped", async () => {
+    // As a save MySQL refused part-way leaves it: the column gone, the field still registered.
+    await postsWith(
+      [
+        { name: "heading", type: "text" },
+        { name: "note", type: "text" },
+      ],
+      [{ heading: "One", note: "Kept" }]
+    );
+    await query(`ALTER TABLE ${q("dc_posts")} DROP COLUMN ${q("note")}`);
+
+    const saved = await handler().updateCollection(
+      { collectionName: "posts" },
+      { fields: [{ name: "heading", type: "text" }] }
+    );
+
+    expect(saved.success, JSON.stringify(saved)).toBe(true);
+    expect(await registeredFields("posts")).toEqual(["heading"]);
+  });
+
+  it("refuses a new field whose column name a column of another type already holds", async () => {
+    // A removed field's column, kept with its values, as MySQL once left them.
+    await postsWith([{ name: "heading", type: "text" }], [{ heading: "One" }]);
+    await query(`ALTER TABLE ${q("dc_posts")} ADD COLUMN ${q("code")} INTEGER`);
+
+    const saved = await handler().updateCollection(
+      { collectionName: "posts" },
+      {
+        fields: [
+          { name: "heading", type: "text" },
+          { name: "code", type: "text" },
+        ],
+      }
+    );
+
+    expect(saved.success, JSON.stringify(saved)).toBe(false);
+    expect(refusalOf(saved)).toMatch(
+      /^The table already has a column "code" of another type/
+    );
+    expect(await registeredFields("posts")).toEqual(["heading"]);
+  });
+
+  it("refuses making a field unique while another index holds its index's name", async () => {
+    const heading = {
+      name: "heading",
+      type: "text",
+      options: { variant: "short" },
+    };
+    await postsWith([heading], [{ heading: "One" }, { heading: "Two" }]);
+    await query(
+      `CREATE INDEX ${q(uniqueIndexNameForColumn("dc_posts", "heading"))} ON ${q("dc_posts")} (${q("id")})`
+    );
+
+    const saved = await handler().updateCollection(
+      { collectionName: "posts" },
+      { fields: [{ ...heading, unique: true }] }
+    );
+
+    // Refused rather than recorded: the index under that name enforces nothing about headings.
+    expect(saved.success, JSON.stringify(saved)).toBe(false);
+    expect((await createPost({ heading: "One" })).success).toBe(true);
+  });
+
+  it("writes the unique index again into the file of a save that turns Unique back on", async () => {
+    // Outside development each save only writes its migration. Turning Unique off and then on
+    // again before either is deployed must replay as a drop and then a create, although the
+    // table still shows the index while both wait.
+    const heading = {
+      name: "heading",
+      type: "text",
+      options: { variant: "short" },
+    };
+    await postsWith([{ ...heading, unique: true }], [{ heading: "One" }]);
+    vi.stubEnv("NODE_ENV", "production");
+    const off = await handler().updateCollection(
+      { collectionName: "posts" },
+      { fields: [heading] }
+    );
+    expect(off.success, JSON.stringify(off)).toBe(true);
+
+    const service = new DynamicCollectionService(
+      current.adapter as unknown as ConstructorParameters<
+        typeof DynamicCollectionService
+      >[0],
+      current.getService("logger") as ConstructorParameters<
+        typeof DynamicCollectionService
+      >[1]
+    );
+    const on = await service.generateCollectionUpdate("posts", {
+      fields: [{ ...heading, unique: true }],
+    } as Parameters<DynamicCollectionService["generateCollectionUpdate"]>[1]);
+
+    const index = uniqueIndexNameForColumn("dc_posts", "heading");
+    expect(on.migrationSQL).toContain(`CREATE UNIQUE INDEX ${q(index)}`);
+    // This database still has the index, so its own run creates none.
+    expect(on.localMigrationSQL ?? "").not.toContain("CREATE UNIQUE INDEX");
   });
 });
 

@@ -23,6 +23,16 @@ import {
 
 type Refusal = ValidationPublicData["errors"][number];
 
+/**
+ * One refusal: what the caller is told, and what only the log may hold. A field's stored values
+ * can be hidden from someone who may still edit the collection's schema, so a value read from the
+ * table never reaches the public error.
+ */
+export interface SaveRefusal {
+  error: Refusal;
+  logContext?: Record<string, unknown>;
+}
+
 interface PreconditionAdapter {
   executeQuery<T = unknown>(sql: string): Promise<T[]>;
 }
@@ -34,6 +44,10 @@ function quote(dialect: SupportedDialect, name: string): string {
 /** A value as the refusal shows it: quoted text, so an empty one is visible. */
 function shown(value: unknown): string {
   return `'${String(value)}'`;
+}
+
+function refused(error: Refusal, logContext?: Record<string, unknown>) {
+  return { error, ...(logContext ? { logContext } : {}) };
 }
 
 function entries(count: number): string {
@@ -62,7 +76,7 @@ export async function refusalsForCollectionSave(args: {
    * no entries to check yet, and reading its column would fail.
    */
   presentColumns: ReadonlySet<string>;
-}): Promise<Refusal[]> {
+}): Promise<SaveRefusal[]> {
   const { adapter, dialect } = args;
   const table = quote(dialect, args.tableName);
   const before = new Map(args.oldFields.map(f => [f.name, f]));
@@ -82,7 +96,7 @@ export async function refusalsForCollectionSave(args: {
     return rowCount;
   };
 
-  const refusals: Refusal[] = [];
+  const refusals: SaveRefusal[] = [];
   for (const field of args.newFields) {
     const column = getColumnDescriptor(field, dialect, "collection");
     if (!column) continue;
@@ -103,20 +117,22 @@ export async function refusalsForCollectionSave(args: {
     field: FieldDefinition;
     previous: FieldDefinition | undefined;
     col: string;
-  }): Promise<Refusal | undefined> {
+  }): Promise<SaveRefusal | undefined> {
     const path = `fields.${at.field.name}`;
     if (at.previous === undefined) {
       // A new column gives every existing entry the same value, or NULL, which repeats freely.
       const backfill = args.addedColumnBackfill(at.field);
       const count = backfill === null ? 0 : await rows();
+      // The value an added column gives every entry is the field's own default, not a stored one,
+      // so the message can name it.
       return count > 1
-        ? {
+        ? refused({
             path,
             code: "UNIQUE_OVER_DUPLICATES",
             message:
               `${entries(count)} would share the value ${backfill} for ${at.field.name}, which must be unique. ` +
               `Add the field without Unique, give the existing entries their own values, then turn Unique on.`,
-          }
+          })
         : undefined;
     }
     const [repeat] = await adapter.executeQuery<{
@@ -126,14 +142,18 @@ export async function refusalsForCollectionSave(args: {
       `SELECT ${at.col} AS value, COUNT(*) AS n FROM ${table} WHERE ${at.col} IS NOT NULL ` +
         `GROUP BY ${at.col} HAVING COUNT(*) > 1 ORDER BY COUNT(*) DESC LIMIT 1`
     );
+    // The repeated value is stored content, so it is logged and left out of the message.
     return repeat
-      ? {
-          path,
-          code: "UNIQUE_OVER_DUPLICATES",
-          message:
-            `${entries(Number(repeat.n))} share the value ${shown(repeat.value)} for ${at.field.name}, which must be unique. ` +
-            `Give them their own values first, then turn Unique on.`,
-        }
+      ? refused(
+          {
+            path,
+            code: "UNIQUE_OVER_DUPLICATES",
+            message:
+              `${entries(Number(repeat.n))} share a value for ${at.field.name}, which must be unique. ` +
+              `Give them their own values first, then turn Unique on.`,
+          },
+          { field: at.field.name, repeatedValue: shown(repeat.value) }
+        )
       : undefined;
   }
 
@@ -142,7 +162,7 @@ export async function refusalsForCollectionSave(args: {
     previous: FieldDefinition | undefined;
     col: string;
     length: number | undefined;
-  }): Promise<Refusal | undefined> {
+  }): Promise<SaveRefusal | undefined> {
     if (!narrowsText(at.previous, at.length)) return undefined;
     const chars = dialect === "mysql" ? "CHAR_LENGTH" : "LENGTH";
     const [longer] = await adapter.executeQuery<{ n: number | string }>(
@@ -150,13 +170,13 @@ export async function refusalsForCollectionSave(args: {
     );
     const count = Number(longer?.n ?? 0);
     return count > 0
-      ? {
+      ? refused({
           path: `fields.${at.field.name}`,
           code: "LENGTH_BELOW_VALUES",
           message:
             `${entries(count)} ${count === 1 ? "holds" : "hold"} a ${at.field.name} longer than ${at.length} characters, the new length. ` +
             `Shorten those values first, or keep the longer length.`,
-        }
+        })
       : undefined;
   }
 

@@ -475,13 +475,22 @@ export class DynamicCollectionSchemaService {
    *
    * MySQL is the exception on `IF NOT EXISTS`: it rejects the clause on CREATE INDEX rather than
    * ignoring it.
+   *
+   * `strict` drops the clause everywhere, for a field made unique on a column it already has. There
+   * an index already holding the name is not this one, since the field had no unique index: `IF NOT
+   * EXISTS` would skip the create and the field would be recorded unique without being enforced,
+   * so the database must refuse instead.
    */
-  private uniqueIndexSql(tableName: string, column: string): string {
+  private uniqueIndexSql(
+    tableName: string,
+    column: string,
+    options?: { strict?: boolean }
+  ): string {
     const name = this.quoteIdentifier(
       uniqueIndexNameForColumn(tableName, column)
     );
     const target = `${this.quoteIdentifier(tableName)}(${this.quoteIdentifier(column)})`;
-    return this.dialect === "mysql"
+    return this.dialect === "mysql" || options?.strict === true
       ? `CREATE UNIQUE INDEX ${name} ON ${target};`
       : `CREATE UNIQUE INDEX IF NOT EXISTS ${name} ON ${target};`;
   }
@@ -515,41 +524,61 @@ export class DynamicCollectionSchemaService {
   /**
    * The index statements for kept fields whose `unique` flag changed.
    *
-   * Turning it on creates the field's unique index, unless one already covers the column: a save
-   * that MySQL refused part-way can have created it, and its name alone proves nothing, so what
-   * the live table's unique indexes cover is asked (`uniqueColumns`). Turning it off drops the
-   * field's unique index where the table has one. Recording the flag without either would leave
-   * the registry claiming a uniqueness the table does not enforce, or enforcing one it no longer
-   * claims.
+   * Turning it on creates the field's unique index; turning it off drops it. Recording the flag
+   * without either would leave the registry claiming a uniqueness the table does not enforce, or
+   * enforcing one it no longer claims.
+   *
+   * The migration file follows the field's history: the field had no unique index before it was
+   * made unique, and had one before it was made not unique. Live indexes only choose the spelling
+   * of the one being dropped, since older tables carry another name. That matters outside
+   * development, where saves queue files without running them: a save that turns Unique off and
+   * a later one that turns it back on must replay as a drop and then a create, whatever the table
+   * shows while both are waiting.
+   *
+   * This database's own run (`planFor: "database"`) also skips what the live table already shows,
+   * for a save MySQL stopped part-way: a create where a unique index already covers the column
+   * (asked by what the index covers, since a name proves nothing), and a drop where none is left.
    */
   private uniquenessToggleStatements(
     tableName: string,
     pairs: readonly { previous: FieldDefinition; field: FieldDefinition }[],
     options:
       | {
+          planFor?: "artefact" | "database";
           uniqueColumns?: ReadonlySet<string>;
           indexNames?: ReadonlySet<string>;
         }
       | undefined
   ): string[] {
+    const forDatabase = options?.planFor === "database";
     const statements: string[] = [];
     for (const { previous, field } of pairs) {
       if (previous.unique === field.unique || !fieldProducesColumn(field))
         continue;
       const column = toSnakeCase(field.name);
       if (field.unique === true) {
-        if (options?.uniqueColumns?.has(column)) continue;
+        if (forDatabase && options?.uniqueColumns?.has(column)) continue;
         if (this.plannedUniqueIndexName(tableName, field) === null) {
           if (column === "slug") continue;
           throw this.uniquenessNotEnforceable(tableName, field);
         }
-        statements.push(this.uniqueIndexSql(tableName, column));
+        statements.push(
+          this.uniqueIndexSql(tableName, column, { strict: true })
+        );
         continue;
       }
-      const present = this.uniqueIndexNameCandidates(tableName, column).find(
+      const live = this.uniqueIndexNameCandidates(tableName, column).find(
         name => options?.indexNames?.has(name) === true
       );
-      if (present === undefined) continue;
+      if (forDatabase && live === undefined) continue;
+      // A field this dialect could never key (and `slug`, whose index every table keeps) had no
+      // index of its own to drop.
+      if (
+        live === undefined &&
+        this.plannedUniqueIndexName(tableName, previous) === null
+      )
+        continue;
+      const present = live ?? uniqueIndexNameForColumn(tableName, column);
       if (this.dialect === "postgresql") {
         statements.push(
           `ALTER TABLE ${this.quoteIdentifier(tableName)} DROP CONSTRAINT IF EXISTS ${this.quoteIdentifier(present)};`
@@ -1228,6 +1257,13 @@ ${allColumnDefs.join(",\n")}
     oldFields: FieldDefinition[],
     newFields: FieldDefinition[],
     options?: {
+      /**
+       * Whom the statements are for. The migration file (`"artefact"`, the default) is replayed on
+       * databases that only ever ran migrations, so what it does to an index follows from the
+       * field's history alone. `"database"` is this database's own run, which also skips an index
+       * change the live table already shows: a save MySQL stopped part-way can have made it.
+       */
+      planFor?: "artefact" | "database";
       /**
        * Previous Draft/Published flag — pass `existing.status === true` so
        * the diff knows whether the table currently has a `status` column.
