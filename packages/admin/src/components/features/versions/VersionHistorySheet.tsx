@@ -40,6 +40,7 @@ import { navigateTo } from "@admin/lib/navigation";
 import type { VersionScope } from "@admin/services/versionApi";
 
 import { useDocumentHistory } from "./document-history-context";
+import { useHistoryAddress } from "./history-address";
 import { RestoreConfirmDialog } from "./RestoreConfirmDialog";
 import { useMarkVersionSeen } from "./useMarkVersionSeen";
 import { predecessorOf } from "./version-pairing";
@@ -140,7 +141,9 @@ export function VersionHistorySheet({
   liveDirty = false,
   restoreRefused = false,
 }: VersionHistorySheetProps) {
-  const [selected, setSelected] = useState<number | null>(null);
+  // The version chosen lives in the address beside the panel's own key, so a
+  // link names it; the list shows while none is chosen.
+  const { version: selected, setVersion: setSelected } = useHistoryAddress();
   const [confirmingRestore, setConfirmingRestore] = useState(false);
   // The version being renamed, which is not necessarily the one being previewed
   // — an editor can name a row without opening it.
@@ -184,7 +187,8 @@ export function VersionHistorySheet({
   const [renderedScopeId, setRenderedScopeId] = useState(scopeId);
   if (renderedScopeId !== scopeId) {
     setRenderedScopeId(scopeId);
-    setSelected(null);
+    // The chosen version is not reset here: it lives in the address, which a
+    // render must not write, and another document's address carries none.
     setConfirmingRestore(false);
     setRenaming(null);
     // A different document may not have the previously filtered locale at all,

@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from "react";
 import { useFormContext } from "react-hook-form";
 
 import { useDocumentHistory } from "@admin/components/features/versions/document-history-context";
+import { useHistoryAddress } from "@admin/components/features/versions/history-address";
 import { VersionHistorySheet } from "@admin/components/features/versions/VersionHistorySheet";
 import {
   ChevronLeft,
@@ -342,7 +343,9 @@ export function EntrySystemHeader({
   const inputRef = useRef<HTMLInputElement>(null);
   const [unpublishOpen, setUnpublishOpen] = useState(false);
   const [discardDraftOpen, setDiscardDraftOpen] = useState(false);
-  const [historyOpen, setHistoryOpen] = useState(false);
+  // Whether history is open lives in the address, so a reload or a shared link
+  // opens it again and the back button closes it.
+  const { open: historyOpen, setOpen: setHistoryOpen } = useHistoryAddress();
   // True while the document area is showing a past version rather than the
   // live document.
   const { viewing: viewingVersion } = useDocumentHistory();
