@@ -389,12 +389,18 @@ export function previewChoices({
   const canPane = onTogglePreviewPane !== undefined;
   const canOpen = isPreviewAvailable && onPreview !== undefined;
   const canCopy = isLinkAvailable && onCopyLink !== undefined;
-  const labels = previewLabels(previewLabel, previewPaneOpen, canPane);
   const choices: PreviewChoice[] = [];
+  /*
+   * Named by what each row DOES, not by the preview's own label. Folded into
+   * the document's menu the rows sit side by side, out of the control that
+   * told them apart, and a collection's declared label ("View page") on both
+   * would give two rows one name: one opens the pane beside the editor, the
+   * other a new tab.
+   */
   if (canPane) {
     choices.push({
       id: "pane",
-      label: labels.pane,
+      label: previewPaneOpen ? "Hide preview pane" : "Show preview pane",
       run: () => onTogglePreviewPane?.(),
       disabled,
     });
@@ -402,7 +408,7 @@ export function previewChoices({
   if (canOpen) {
     choices.push({
       id: "open",
-      label: canPane ? labels.menuOpen : labels.solo,
+      label: previewLabel ?? "Open preview in new tab",
       run: () => void onPreview?.(),
       disabled,
     });

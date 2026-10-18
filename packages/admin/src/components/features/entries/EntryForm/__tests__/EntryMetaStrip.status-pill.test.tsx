@@ -1,6 +1,6 @@
 /**
- * The collapsed-rail status pill mirrors the Document panel's lifecycle state
- * when the rail is hidden. It carries Draft / Published and the working-draft
+ * The status pill mirrors the Document panel's lifecycle state wherever that
+ * panel is not on screen: collapsed, or on a window too narrow to draw it. It carries Draft / Published and the working-draft
  * "Changed" state; local-dirty "Modified" stays a Document-panel-only affordance.
  */
 import { describe, it, expect } from "vitest";
@@ -33,7 +33,10 @@ describe("EntryMetaStrip — status pill", () => {
     expect(screen.queryByText("Published")).not.toBeInTheDocument();
   });
 
-  it("hides the pill while the rail is expanded (Document panel owns it)", () => {
+  it("steps aside only where the expanded document panel is on screen", () => {
+    // The panel is drawn from `@4xl/content` up, and below that width it is
+    // not drawn at all, so the pill is how a phone says the status. With the
+    // panel expanded the pill is hidden where the panel shows, never removed.
     render(
       <EntryMetaStrip
         hasStatus
@@ -42,7 +45,15 @@ describe("EntryMetaStrip — status pill", () => {
         hasWorkingDraft
       />
     );
-    expect(screen.queryByText("Changed")).not.toBeInTheDocument();
-    expect(screen.queryByText("Published")).not.toBeInTheDocument();
+    expect(screen.getByText("Changed").className).toContain(
+      "@4xl/content:hidden"
+    );
+  });
+
+  it("shows at every width once the panel is collapsed", () => {
+    render(<EntryMetaStrip hasStatus status="draft" isRailCollapsed />);
+    expect(screen.getByText("Draft").className).not.toContain(
+      "@4xl/content:hidden"
+    );
   });
 });
