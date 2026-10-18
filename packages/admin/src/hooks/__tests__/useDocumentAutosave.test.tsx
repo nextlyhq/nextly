@@ -192,6 +192,36 @@ describe("useDocumentAutosave", () => {
     expect(saveSpy).toHaveBeenCalledWith(SCOPE, { title: "hello" }, null);
   });
 
+  it("does not record again when recording comes back on after one was made", async () => {
+    // Recording is turned off and on again for more than a save: both editors
+    // do it while a past version is on screen. A recovery point already
+    // written for the edit must not be written again on the way back, or a
+    // stale tab overwrites a newer one by merely closing history.
+    const { result, rerender } = renderHook(
+      ({ enabled }) => useHarness(SCOPE, enabled),
+      { initialProps: { enabled: true } }
+    );
+
+    act(() => {
+      result.current.form.setValue("title", "hello", { shouldDirty: true });
+    });
+    act(() => {
+      vi.advanceTimersByTime(DEBOUNCE);
+    });
+    await waitFor(() => expect(saveSpy).toHaveBeenCalledTimes(1));
+
+    rerender({ enabled: false });
+    rerender({ enabled: true });
+    act(() => {
+      vi.advanceTimersByTime(DEBOUNCE * 2);
+    });
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(saveSpy).toHaveBeenCalledTimes(1);
+  });
+
   it("records the values in the editor after the debounce", async () => {
     const { result } = renderHook(() => useHarness());
 
