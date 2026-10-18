@@ -62,8 +62,9 @@ export async function runPostInitTasks(): Promise<void> {
       userExtSchemaService: getService("userExtSchemaService"),
       db: getService("adapter").getDrizzle(),
       // A sync that fails (its table not migrated yet) doesn't stop the table
-      // being made for the fields already recorded.
-      onSyncError: () => {},
+      // being made for the fields already recorded, and nothing here may stop
+      // the app starting.
+      bestEffort: true,
     });
   } catch {
     // Silently skip — the user services may not be registered

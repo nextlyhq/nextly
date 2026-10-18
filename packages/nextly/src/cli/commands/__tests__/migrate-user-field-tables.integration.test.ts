@@ -11,7 +11,12 @@
  *   each field;
  * - with none configured, it creates no table;
  * - on a database whose `user_ext` predates a newly configured field, it adds
- *   that field's column and keeps the existing ones.
+ *   that field's column and keeps the existing ones;
+ * - a unique field gets its unique index;
+ * - a statement that fails for a reason other than "already exists" fails the
+ *   step, rather than letting migrate report storage it never made;
+ * - with no config file loaded, it changes nothing: syncing the defaults'
+ *   empty field list would delete every code-defined field's definition.
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
@@ -42,6 +47,18 @@ describe.each(getConfiguredTestDialects())(
       } catch {
         return false;
       }
+    }
+
+    /** The names of the indexes on `user_ext`, read from the dialect's catalog. */
+    async function indexNames(): Promise<string[]> {
+      const sql =
+        dialect === "postgresql"
+          ? `SELECT indexname AS name FROM pg_indexes WHERE tablename = 'user_ext'`
+          : dialect === "mysql"
+            ? `SELECT INDEX_NAME AS name FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'user_ext'`
+            : `SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'user_ext'`;
+      const rows = await handle.adapter.executeQuery<{ name: unknown }>(sql);
+      return rows.map(r => String(r.name));
     }
 
     beforeEach(async () => {
@@ -94,6 +111,50 @@ describe.each(getConfiguredTestDialects())(
 
       expect(await hasColumn("bio")).toBe(true);
       expect(await hasColumn("company")).toBe(true);
+    });
+
+    it("gives a unique field its unique index", async () => {
+      await provisionUserFieldTables(
+        { fields: [text({ name: "employeeId", unique: true })] },
+        handle.adapter,
+        logger
+      );
+
+      expect(await indexNames()).toContain("uq_user_ext_employee_id");
+    });
+
+    it("fails, rather than reporting storage ready, when a statement fails", async () => {
+      // A user_ext of the wrong shape, with no user_id column: the index on
+      // user_id cannot be made, which is not the "already exists" a re-run
+      // expects.
+      await handle.adapter.executeQuery(
+        `CREATE TABLE ${q}user_ext${q} (${q}id${q} VARCHAR(36) PRIMARY KEY)`
+      );
+
+      await expect(
+        provisionUserFieldTables(
+          { fields: [text({ name: "bio" })] },
+          handle.adapter,
+          logger
+        )
+      ).rejects.toThrow();
+    });
+
+    it("leaves the field definitions alone when no config file was loaded", async () => {
+      await provisionUserFieldTables(
+        { fields: [text({ name: "bio" })] },
+        handle.adapter,
+        logger
+      );
+
+      expect(await provisionUserFieldTables(null, handle.adapter, logger)).toBe(
+        0
+      );
+
+      const rows = await handle.adapter.executeQuery<{ name: unknown }>(
+        `SELECT ${q}name${q} AS name FROM ${q}user_field_definitions${q}`
+      );
+      expect(rows.map(r => String(r.name))).toEqual(["bio"]);
     });
   }
 );

@@ -53,7 +53,7 @@ function errorSays(err: unknown, patterns: RegExp[]): boolean {
  * idempotent reconcile should tolerate. The match is anchored to the
  * documented DDL wordings ONLY — "already exists" (all dialects), SQLite's
  * "duplicate column name", MySQL's "Duplicate key name"/"Duplicate column
- * name", and MySQL's `Can't DROP '<name>'; check that column/key exists`
+ * name"/"Duplicate foreign key constraint name" (error 1826), and MySQL's `Can't DROP '<name>'; check that column/key exists`
  * (error 1091). It must NEVER match MySQL's `Duplicate entry ... for key`
  * (error 1062): that is a runtime DATA error from a rebuild's INSERT..SELECT,
  * and swallowing it would let the subsequent DROP destroy the rows that failed
@@ -77,6 +77,7 @@ export function isIdempotencyError(err: unknown): boolean {
     /already exists/i,
     /duplicate column name/i,
     /duplicate key name/i,
+    /duplicate foreign key constraint name/i,
     /check that column\/key exists/i,
   ]);
 }

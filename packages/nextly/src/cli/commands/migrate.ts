@@ -472,7 +472,7 @@ export async function runMigrate(
         // After the migrations too, and for the same reason: the user fields'
         // table follows the config's final schema.
         const userFields = await provisionUserFieldTables(
-          configResult.config.users,
+          configResult.configPath ? configResult.config.users : null,
           adapter as unknown as DrizzleAdapter,
           logger
         );
@@ -516,12 +516,18 @@ export async function runMigrate(
  * sets up every production database, and a production boot never changes the
  * schema, so this is the step that gives such a database the table its user
  * fields are read from. Returns how many fields it holds columns for.
+ *
+ * `users` is null when no config file was loaded. Nothing is done then: the
+ * defaults declare no fields, and syncing that empty list would delete every
+ * code-defined field's definition, as a migrate run from the wrong folder
+ * would otherwise do.
  */
 export async function provisionUserFieldTables(
-  users: UserConfig | undefined,
+  users: UserConfig | undefined | null,
   adapter: DrizzleAdapter,
   logger: Logger
 ): Promise<number> {
+  if (users === null) return 0;
   const fieldDefService = new UserFieldDefinitionService(adapter, logger);
   return provisionUserFieldStorage({
     codeFields: users?.fields ?? [],

@@ -16,11 +16,13 @@ export interface ProvisionUserFieldStorageDeps {
   /** The Drizzle database the table is created in. */
   db: unknown;
   /**
-   * Called when syncing the code-defined fields fails, instead of failing the
-   * whole step, so the table is still made for the fields already recorded.
-   * Without it, the failure is thrown.
+   * Carry on past failures, as the boot must: a sync that fails still leaves
+   * the table made for the fields already recorded, and a schema statement
+   * that fails is skipped. Without it, as `nextly migrate` runs, any failure
+   * other than an object that already exists is thrown, so a migrate never
+   * reports storage ready that it could not create.
    */
-  onSyncError?: (error: unknown) => void;
+  bestEffort?: boolean;
 }
 
 /**
@@ -45,11 +47,12 @@ export async function provisionUserFieldStorage(
       deps.codeFields as { name: string; [key: string]: unknown }[]
     );
   } catch (error) {
-    if (!deps.onSyncError) throw error;
-    deps.onSyncError(error);
+    if (!deps.bestEffort) throw error;
   }
   await deps.userExtSchemaService.loadMergedFields();
   if (!deps.userExtSchemaService.hasMergedFields()) return 0;
-  await deps.userExtSchemaService.ensureUserExtSchema(deps.db);
+  await deps.userExtSchemaService.ensureUserExtSchema(deps.db, {
+    strict: !deps.bestEffort,
+  });
   return deps.userExtSchemaService.getMergedFieldConfigs().length;
 }

@@ -92,6 +92,7 @@ import {
   isPluginFieldTypeOnSurface,
 } from "../../schema/field-types/field-type-registry";
 import { runRaw } from "../../schema/pipeline/pre-resolution/executor";
+import { isIdempotencyError } from "../../schema/pipeline/sql-statement-utils";
 import { sqliteTimestampColumns } from "../../schema/services/runtime-schema-generator";
 import { calculateSchemaHash } from "../../schema/services/schema-hash";
 
@@ -298,8 +299,16 @@ export class UserExtSchemaService {
    * ADD COLUMN for each field. Safe to call multiple times (idempotent).
    *
    * @param db - Drizzle database instance for executing raw SQL
+   * @param options.strict - Throw a statement's failure unless what it creates
+   *   already exists. The boot leaves it off, since nothing there may stop the
+   *   app starting; `nextly migrate` turns it on, so it never reports storage
+   *   ready that it could not create.
    */
-  async ensureUserExtSchema(db: unknown): Promise<void> {
+  async ensureUserExtSchema(
+    db: unknown,
+    options: { strict?: boolean } = {}
+  ): Promise<void> {
+    const strict = options.strict === true;
     const fields = this.getMergedFieldConfigs();
     if (fields.length === 0) return;
 
@@ -319,13 +328,9 @@ export class UserExtSchemaService {
         .trim();
       if (!executable) continue;
 
-      try {
-        // runRaw picks the dialect's call: SQLite's Drizzle database has no
-        // .execute(), so calling it threw and was taken for "already exists".
-        await runRaw(db, executable, this.dialect);
-      } catch {
-        // Table/index/constraint may already exist — safe to ignore
-      }
+      // runRaw picks the dialect's call: SQLite's Drizzle database has no
+      // .execute(), so calling it threw and was taken for "already exists".
+      await this.runDdl(db, executable, strict);
     }
 
     // 2. ALTER TABLE ADD COLUMN for each field (handles case where
@@ -345,11 +350,24 @@ export class UserExtSchemaService {
         alterSQL = `ALTER TABLE ${this.q}${TABLE_NAME}${this.q} ADD COLUMN ${this.q}${columnName}${this.q} ${columnType}`;
       }
 
-      try {
-        await runRaw(db, alterSQL, this.dialect);
-      } catch {
-        // Column already exists — safe to ignore
-      }
+      await this.runDdl(db, alterSQL, strict);
+    }
+  }
+
+  /**
+   * Run one schema statement. A table, index, constraint or column that
+   * already exists is what a re-run expects, and is ignored. Any other failure
+   * is thrown when `strict`, and ignored otherwise.
+   */
+  private async runDdl(
+    db: unknown,
+    statement: string,
+    strict: boolean
+  ): Promise<void> {
+    try {
+      await runRaw(db, statement, this.dialect);
+    } catch (error) {
+      if (strict && !isIdempotencyError(error)) throw error;
     }
   }
 
@@ -386,6 +404,10 @@ export class UserExtSchemaService {
       label: record.label,
       required: record.required,
     };
+    // `unique` has no column of its own on the row, so the sync stores it
+    // among the field's other options. Read back here, the table gets the
+    // field's unique index rather than an unconstrained column.
+    if (record.pluginOptions?.unique === true) base.unique = true;
 
     // Map admin options (placeholder → admin.placeholder, description → admin.description)
     const adminOpts: Record<string, unknown> = {};
@@ -1069,7 +1091,12 @@ export type NewUserExt = typeof ${TABLE_NAME}.$inferInsert;
         : types.varchar(255);
     }
     if (isTextField(field)) {
-      return field.maxLength ? types.varchar(field.maxLength) : types.text;
+      if (field.maxLength) return types.varchar(field.maxLength);
+      // MySQL cannot index a TEXT column without a key length, so a unique
+      // field's index could never be made. A varchar, as the schema pipeline
+      // gives a MySQL text column, can carry it.
+      if (this.dialect === "mysql" && field.unique) return types.varchar(255);
+      return types.text;
     }
     if (isTextareaField(field)) {
       return types.text;
