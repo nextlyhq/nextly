@@ -55,11 +55,33 @@ export function mediaPlaceIsExclusive(
   prefix: string | undefined,
   otherPrefixes: readonly (string | undefined)[]
 ): boolean {
-  const folder = folderOf(prefix);
   return (
-    folder !== "" &&
-    otherPrefixes.every(other => !overlaps(folder, folderOf(other)))
+    folderOf(prefix) !== "" &&
+    !otherPrefixes.some(other => sharesMediaPlace(prefix, other))
   );
+}
+
+/**
+ * The collections among `others` that share media's place: the ones that
+ * keep media's prefix from being its own, by the same test as
+ * {@link mediaPlaceIsExclusive}. Named to the site, since a prefix for media
+ * cannot help while one of them shares it.
+ */
+export function collectionsSharingMediaPlace(
+  prefix: string | undefined,
+  others: ReadonlyArray<{ slug: string; prefix?: string }>
+): string[] {
+  return others
+    .filter(other => sharesMediaPlace(prefix, other.prefix))
+    .map(other => other.slug);
+}
+
+/** Whether a collection with prefix `other` shares media's place. */
+function sharesMediaPlace(
+  prefix: string | undefined,
+  other: string | undefined
+): boolean {
+  return overlaps(folderOf(prefix), folderOf(other));
 }
 
 /** Whether two folders are one, or one holds the other; the root holds all. */

@@ -268,6 +268,28 @@ describe("nextly media orphans", () => {
     }
   );
 
+  it("names the collections that share media's place, and that each needs a prefix of its own", async () => {
+    const layout = inBucket("s3");
+    const said: string[] = [];
+
+    await mediaOrphans({
+      storage: layout.storage,
+      prefix: "media",
+      exclusive: false,
+      sharedWith: ["docs", "invoices"],
+      referenced: async () => new Set([layout.referenced]),
+      apply: true,
+      say: line => said.push(line),
+      now: NOW,
+    });
+
+    const text = said.join("\n");
+    expect(text).toMatch(/docs/);
+    expect(text).toMatch(/invoices/);
+    expect(text).toMatch(/`prefix` of its own/);
+    expect(text).not.toMatch(/Set a `prefix` for media/);
+  });
+
   // A prefix written with its slash, `media/`, is stored as `media//...`
   // where the storage keeps keys as given (S3), and read back as
   // `media/...` where a filesystem collapses the separator (local disk).

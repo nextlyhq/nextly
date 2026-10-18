@@ -4,6 +4,7 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { Command } from "commander";
 
 import {
+  collectionsSharingMediaPlace,
   findOrphanThumbnails,
   mediaPlaceIsExclusive,
   ORPHAN_MIN_AGE_MS,
@@ -70,6 +71,8 @@ export async function mediaOrphans(options: {
   prefix?: string;
   /** Whether media's place in the storage is its own. */
   exclusive: boolean;
+  /** The collections that keep media's place from being its own. */
+  sharedWith?: readonly string[];
   referenced: () => Promise<ReadonlySet<string>>;
   apply: boolean;
   say: (line: string) => void;
@@ -94,7 +97,7 @@ export async function mediaOrphans(options: {
       `${search.tooRecent} unreferenced thumbnail(s) were stored less than ${hours} hour(s) ago, or at a time the storage does not say, and are left: they may belong to an upload still in progress.`
     );
   }
-  sayUnconfirmed(search.unconfirmed, storage, say);
+  sayUnconfirmed(search.unconfirmed, storage, options.sharedWith ?? [], say);
   if (search.orphans.length === 0) {
     if (search.unconfirmed.length === 0) {
       say("No left-behind thumbnails found.");
@@ -126,12 +129,15 @@ export async function mediaOrphans(options: {
 function sayUnconfirmed(
   unconfirmed: ReadonlyArray<{ path: string; name?: string }>,
   storage: IStorageAdapter,
+  sharedWith: readonly string[],
   say: (line: string) => void
 ): void {
   if (unconfirmed.length === 0) return;
   const why = unconfirmed.some(file => file.name !== undefined)
     ? `The media storage (${storage.getType()}) keeps no folders, so another uploader to it can give a file the same name.`
-    : "The media collection has no storage prefix of its own, so another collection or upload can store a file of the same form in the same place. Set a `prefix` for media in its storage config to have later runs remove them.";
+    : sharedWith.length > 0
+      ? `Media's storage place is not its own: ${sharedWith.join(", ")} also use${sharedWith.length === 1 ? "s" : ""} it, or ha${sharedWith.length === 1 ? "s" : "ve"} no prefix, so a file of the same form there may not be media's. Give each of them a \`prefix\` of its own in the storage config to have later runs remove them.`
+      : "The media collection has no storage prefix of its own, so another collection or upload can store a file of the same form in the same place. Set a `prefix` for media in its storage config to have later runs remove them.";
   say(
     `${unconfirmed.length} unreferenced thumbnail(s) that nothing shows are media's. ${why} They are left as they are, even with --apply; check each and remove the ones that are media's by hand:`
   );
@@ -200,11 +206,18 @@ export function createMediaCommand(): Command {
         const others = mediaStorage
           .getConfiguredCollections()
           .filter(slug => slug !== "media")
-          .map(slug => mediaStorage.getCollectionConfig(slug)?.prefix);
+          .map(slug => ({
+            slug,
+            prefix: mediaStorage.getCollectionConfig(slug)?.prefix,
+          }));
         const code = await mediaOrphans({
           storage,
           prefix,
-          exclusive: mediaPlaceIsExclusive(prefix, others),
+          exclusive: mediaPlaceIsExclusive(
+            prefix,
+            others.map(other => other.prefix)
+          ),
+          sharedWith: collectionsSharingMediaPlace(prefix, others),
           referenced: () => referencedStoredPaths(drizzle),
           apply: cmdOptions.apply === true,
           say: line => console.log(line),

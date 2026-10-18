@@ -134,6 +134,13 @@ describe("nextly media orphans, as the CLI runs it", () => {
 
     expect(exits).toEqual([0]);
     expect(media.deleted).toEqual([]);
+    // A prefix for media cannot help while docs shares it: the output names
+    // the collection that needs one of its own.
+    const said = vi
+      .mocked(console.log)
+      .mock.calls.map(args => String(args[0]))
+      .join("\n");
+    expect(said).toMatch(/docs/);
   });
 
   it("removes a left-behind thumbnail where media's prefix is its own", async () => {
