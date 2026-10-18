@@ -168,7 +168,7 @@ export function VersionHistorySheet({
       // previous document.
       setLocaleFilter(undefined);
     }
-  }, [open]);
+  }, [open, setSelected]);
 
   // Identity of the document this sheet is bound to, as a stable string so a
   // re-created `scope` object with the same target does not read as a change.
@@ -272,7 +272,7 @@ export function VersionHistorySheet({
   const requestRestore = useCallback(() => setConfirmingRestore(true), []);
   // Clears this panel's own selection as well as the shared one, so the list
   // stops marking a row active for a version that is no longer on screen.
-  const returnToCurrent = useCallback(() => setSelected(null), []);
+  const returnToCurrent = useCallback(() => setSelected(null), [setSelected]);
   useEffect(() => {
     if (!open || selected === null) {
       setRestore(null);
