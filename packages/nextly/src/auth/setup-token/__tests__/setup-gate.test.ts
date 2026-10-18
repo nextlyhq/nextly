@@ -65,6 +65,30 @@ describe("the setup claim", () => {
     }
   });
 
+  it("never runs two renewals at once, so a slow one does not end renewal", async () => {
+    vi.useFakeTimers();
+    try {
+      const meta = memoryMeta();
+      const held = await claimFirstSetup(meta);
+      expect(held).not.toBeNull();
+      // The first renewals take longer than the interval between them.
+      const write = meta.compareAndSet.bind(meta);
+      let slow = 2;
+      meta.compareAndSet = async (key, expected, next) => {
+        if (slow > 0) {
+          slow -= 1;
+          await new Promise(resolve => setTimeout(resolve, 45_000));
+        }
+        return write(key, expected, next);
+      };
+      await vi.advanceTimersByTimeAsync(SETUP_CLAIM_STALE_MS * 3);
+      expect(await claimFirstSetup(meta)).toBeNull();
+      await held?.release();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps renewing through a failed renewal, so a passing database error loses nothing", async () => {
     vi.useFakeTimers();
     try {

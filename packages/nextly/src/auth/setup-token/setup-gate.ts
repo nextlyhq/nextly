@@ -101,7 +101,12 @@ export async function claimFirstSetup(
   // Renewed while held, each renewal from the value this holder last wrote,
   // so it stops at once if the claim was ever taken over.
   let current = mine;
+  // One renewal at a time: two started from the same value would race, and
+  // the one that lost would read as a takeover and stop renewal for good.
+  let renewing = false;
   const renew = setInterval(() => {
+    if (renewing) return;
+    renewing = true;
     const next: SetupClaim = { id: mine.id, at: now() };
     void meta
       .compareAndSet(SETUP_CLAIM_META_KEY, current, next)
@@ -112,7 +117,10 @@ export async function claimFirstSetup(
       })
       // A failed write leaves the claim as it was: tried again on the next
       // tick, well before the claim could go stale.
-      .catch(() => undefined);
+      .catch(() => undefined)
+      .finally(() => {
+        renewing = false;
+      });
   }, SETUP_CLAIM_RENEW_MS);
   // Never what keeps a process alive.
   renew.unref?.();

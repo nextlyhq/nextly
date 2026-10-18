@@ -377,6 +377,19 @@ describe("judging a presented token", () => {
     expect(await accepted(meta, `${value}x`, env)).toBe("invalid");
   });
 
+  it("makes one read for a burst of callers arriving while the cache is empty", async () => {
+    const meta = memoryMeta();
+    let reads = 0;
+    const getEntry = meta.getEntry.bind(meta);
+    meta.getEntry = key => {
+      reads += 1;
+      return getEntry(key);
+    };
+    const read = cachedRecordReader(meta, 1000, () => T0);
+    await Promise.all(Array.from({ length: 20 }, () => read()));
+    expect(reads).toBe(1);
+  });
+
   it("sees a replacement within a second through the cached reader", async () => {
     const meta = memoryMeta();
     let clock = T0;

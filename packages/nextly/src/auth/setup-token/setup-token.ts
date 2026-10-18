@@ -368,12 +368,20 @@ export function cachedRecordReader(
   maxAgeMs = 1000,
   now: () => number = Date.now
 ): () => Promise<SetupTokenRecord | null> {
-  let copy: { record: SetupTokenRecord | null; readAt: number } | undefined;
-  return async () => {
+  // The read itself is shared, not only its result: callers arriving while
+  // it is in flight wait for it, so a burst costs one query, not one each.
+  let copy:
+    | { record: Promise<SetupTokenRecord | null>; readAt: number }
+    | undefined;
+  return () => {
     const at = now();
     if (copy && at - copy.readAt < maxAgeMs) return copy.record;
-    const record = await readSetupTokenRecord(meta);
+    const record = readSetupTokenRecord(meta);
     copy = { record, readAt: at };
+    // A failed read is not kept: the next caller reads again.
+    record.catch(() => {
+      if (copy?.record === record) copy = undefined;
+    });
     return record;
   };
 }
