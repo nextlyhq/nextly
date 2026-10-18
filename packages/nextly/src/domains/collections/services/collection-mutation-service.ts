@@ -2171,6 +2171,9 @@ export class CollectionMutationService extends BaseService {
     )
       ? await resolvedCallerGrants(params.user, undefined)
       : null;
+    const reads = await this.goingLiveReadsOf(params.collectionName, [
+      ...rows.keys(),
+    ]);
     // The documents a promotion's rules compare against, read for the whole
     // batch.
     const live =
@@ -2182,10 +2185,9 @@ export class CollectionMutationService extends BaseService {
             tableName: collectionTableName(collection, params.collectionName),
             fields: shared.fields,
             manyToManyFields: shared.manyToManyFields,
+            locale: shared.localizedUpdate?.writeLocale,
+            reads,
           });
-    const reads = await this.goingLiveReadsOf(params.collectionName, [
-      ...rows.keys(),
-    ]);
     for (const [entryId, existingEntry] of rows) {
       // The write refuses here first: a status the rules remove leaves it
       // nothing to move.
@@ -6254,10 +6256,10 @@ export class CollectionMutationService extends BaseService {
   /**
    * Many entries' documents as stored, keyed by id, as
    * {@link storedDocumentOnTx} reads one: their components read for them all
-   * at once by the list read's batched component reader, and their
-   * many-to-many targets by its batched junction read, one query per field.
-   * For a collection that is not localized: there are no translations to read
-   * beside the rows. Read on the pool, writing nothing.
+   * at once by the list read's batched component reader, their many-to-many
+   * ids by the write's junction read, one query per field, and the write
+   * language's translations by the batch's reads, one query for them all.
+   * Read on the pool, writing nothing.
    */
   private async storedDocumentsOf(args: {
     collectionName: string;
@@ -6265,6 +6267,9 @@ export class CollectionMutationService extends BaseService {
     tableName: string;
     fields: FieldDefinition[];
     manyToManyFields: FieldDefinition[];
+    /** The write language, whose translations sit beside each row. */
+    locale: string | undefined;
+    reads: GoingLiveReads;
   }): Promise<Map<string, Record<string, unknown>>> {
     const ids = [...args.rows.keys()];
     const componentFields = args.fields.filter(isFieldGroupField);
@@ -6281,11 +6286,14 @@ export class CollectionMutationService extends BaseService {
     const componentsById = new Map(
       populated.map(entry => [String(entry.id), entry])
     );
-    const targets = new Map<string, Map<string, Record<string, unknown>[]>>();
+    // Every stored id, as the write's own read takes them: a target since
+    // unpublished or removed is still what the junction holds, and a failed
+    // read refuses rather than reading as an empty relationship.
+    const targets = new Map<string, Map<string, string[]>>();
     for (const field of args.manyToManyFields) {
       targets.set(
         field.name,
-        await this.relationshipService.batchFetchManyToManyRelations(
+        await this.relationshipService.fetchManyToManyTargetIdsOf(
           args.collectionName,
           ids,
           field
@@ -6303,9 +6311,7 @@ export class CollectionMutationService extends BaseService {
       }
       const manyToMany: Record<string, string[]> = {};
       for (const field of args.manyToManyFields) {
-        manyToMany[field.name] = (targets.get(field.name)?.get(id) ?? []).map(
-          target => String(target.id)
-        );
+        manyToMany[field.name] = targets.get(field.name)?.get(id) ?? [];
       }
       documents.set(
         id,
@@ -6314,7 +6320,9 @@ export class CollectionMutationService extends BaseService {
             row,
             args.fields,
             args.tableName,
-            {},
+            args.locale === undefined
+              ? {}
+              : await args.reads.translations(id, args.locale),
             null
           ),
           components,
