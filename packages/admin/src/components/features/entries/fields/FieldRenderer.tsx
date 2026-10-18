@@ -41,8 +41,8 @@ import { PluginSlot } from "@admin/components/shared/plugin-slot";
 import { usePluginFieldType } from "@admin/lib/plugins/plugin-field-type";
 
 import {
-  conditionHolds,
   conditionSourcePath,
+  effectiveFieldGate,
   fieldAdminGates,
 } from "./field-admin-gates";
 import { FieldWrapper } from "./FieldWrapper";
@@ -268,17 +268,15 @@ export function FieldRenderer({
    */
   const pluginFieldType = usePluginFieldType(field.type);
 
-  // The declaration's own gates, read the way every editing surface reads
-  // them, so a document view refuses exactly what this form refuses.
-  const gates = fieldAdminGates(field);
-  const isReadOnly = readOnly || gates.readOnly;
-  const isDisabled = disabled || gates.disabled;
   // A plugin-supplied editor for this one field (D24 — a component path),
   // which replaces the type dispatch below.
   const adminOptions = field.admin;
 
   // The condition's source, relative to the current base path.
-  const conditionFieldPath = conditionSourcePath(gates.condition, basePath);
+  const conditionFieldPath = conditionSourcePath(
+    fieldAdminGates(field).condition,
+    basePath
+  );
 
   // Watch the condition field value to enable reactive conditional rendering
   const conditionFieldValue = useWatch({
@@ -287,15 +285,18 @@ export function FieldRenderer({
     disabled: !conditionFieldPath,
   });
 
-  // The shared evaluator supports the full operator surface (equals /
-  // contains / between / before-after / isTrue / etc.) and the legacy
-  // { field, equals } shape.
-  if (
-    conditionFieldPath &&
-    !conditionHolds(gates.condition, conditionFieldValue)
-  ) {
-    return null;
-  }
+  // The form's one decision about this field — drawn at all, read-only,
+  // disabled — from what the parent passes down, the field's own gates and
+  // the value its condition reads. A document view folds the same function
+  // over a field's groups, so the two cannot disagree.
+  const gate = effectiveFieldGate(
+    field,
+    { shown: true, readOnly: Boolean(readOnly), disabled: Boolean(disabled) },
+    conditionFieldValue
+  );
+  if (!gate.shown) return null;
+  const isReadOnly = gate.readOnly;
+  const isDisabled = gate.disabled;
 
   // =========================================
   // Data Fields (With FieldWrapper)

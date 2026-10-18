@@ -213,7 +213,7 @@ export type ViewFieldResolution<F extends object = object> =
   | { kind: "choose"; candidates: ViewFieldCandidate<F>[] };
 
 /** The top-level fields of `fieldType`, by name and label. */
-function candidatesOf<F extends object>(
+export function viewFieldCandidates<F extends object>(
   fieldType: string,
   fields: readonly F[] | undefined
 ): ViewFieldCandidate<F>[] {
@@ -232,23 +232,31 @@ function candidatesOf<F extends object>(
  * Which field a document view edits, given the document's top-level fields and
  * the field the address asks for (`?field=`).
  *
- * A view scoped to a field type edits one field of that type. The only one, if
- * there is one; otherwise the one the address names. An address naming none,
- * or naming something that is not such a field, is asked rather than guessed:
- * opening the wrong one of two looks like the right editor showing the wrong
- * content, which an author cannot tell from a lost page.
+ * A view scoped to a field type edits one field of that type: the one the
+ * address names; otherwise the only one the author may edit. An address naming
+ * none, or naming something that is not such a field, is asked rather than
+ * guessed: opening the wrong one of two looks like the right editor showing the
+ * wrong content, which an author cannot tell from a lost page. The question
+ * offers only the fields the author may edit, as `admits` says.
  */
 export function resolveViewField<F extends object>(
   fieldType: string | undefined,
   fields: readonly F[] | undefined,
-  requested: string | undefined
+  requested: string | undefined,
+  /** Whether the author may edit a field; every field, unless said. */
+  admits: (candidate: ViewFieldCandidate<F>) => boolean = () => true
 ): ViewFieldResolution<F> {
   if (fieldType === undefined) return { kind: "document" };
-  const candidates = candidatesOf(fieldType, fields);
-  const chosen =
-    candidates.length === 1
-      ? candidates[0]
-      : candidates.find(candidate => candidate.name === requested);
+  const candidates = viewFieldCandidates(fieldType, fields);
+  // A field the address names is the one meant, whatever may be done with
+  // it: the author who followed that address learns why it will not open,
+  // rather than meeting another field in its place.
+  const named = candidates.find(candidate => candidate.name === requested);
+  // Otherwise, only the fields the author may edit are offered. Where none
+  // may be, all of them are, so the author still meets the reason.
+  const offered = candidates.filter(admits);
+  const choices = offered.length > 0 ? offered : candidates;
+  const chosen = named ?? (choices.length === 1 ? choices[0] : undefined);
   if (chosen !== undefined) {
     return {
       kind: "field",
@@ -257,5 +265,5 @@ export function resolveViewField<F extends object>(
       within: chosen.within,
     };
   }
-  return { kind: "choose", candidates };
+  return { kind: "choose", candidates: choices };
 }

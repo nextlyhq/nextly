@@ -23,7 +23,6 @@ import { cn } from "@admin/lib/utils";
 import { useEntryLocale } from "../EntryLocaleContext";
 import { UseSourceButton } from "../TranslationMode/UseSourceButton";
 
-import { fieldAdminGates } from "./field-admin-gates";
 import { useFieldElementId } from "./field-id-scope";
 
 // ============================================================
@@ -242,9 +241,6 @@ export function FieldWrapper({
   const isRequired = fieldWithCommonProps.required ?? false;
   const description = fieldWithCommonProps.admin?.description;
   const width = fieldWithCommonProps.admin?.width || "100%";
-  // Read through the shared gates, which a document view also asks, so a
-  // field this form never draws is one no view's address can open either.
-  const isHidden = fieldAdminGates(field).hidden;
   const _fieldType = field.type as string;
 
   // A group is named by `aria-labelledby` on a `role="group"` container rather
@@ -252,7 +248,9 @@ export function FieldWrapper({
   const isGroup = GROUP_FIELD_TYPES.has(_fieldType) || editorIsOpaque;
   // Only the non-group path claims a control carries the id, so only it is
   // checked. A group makes no such claim and cannot fail this way.
-  useFieldLabelLandingCheck(!isGroup && !isHidden, fieldId, label, _fieldType);
+  // A hidden field never reaches the wrapper: the renderer decides whether a
+  // field is drawn at all, through the same gate a document view asks.
+  useFieldLabelLandingCheck(!isGroup, fieldId, label, _fieldType);
   // Announced with the group. The single-control path cannot do this from here:
   // the id lives on an element this component never touches.
   const groupDescribedBy =
@@ -329,11 +327,6 @@ export function FieldWrapper({
     isLocalizedField && fieldName != null ? (
       <UseSourceButton fieldName={fieldName} fieldLabel={label} />
     ) : null;
-
-  // Don't render if hidden
-  if (isHidden) {
-    return null;
-  }
 
   // Get width class
   const widthClass = WIDTH_STYLES[width] || "w-full";

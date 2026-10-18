@@ -228,6 +228,42 @@ describe("which field a field-type view edits", () => {
     ]);
   });
 
+  it("offers only the fields `admits` lets through, and opens the only one", () => {
+    const onlyBody = (candidate: { name: string }) => candidate.name === "body";
+    expect(
+      resolveViewField("blocks", twoFields, undefined, onlyBody)
+    ).toMatchObject({
+      kind: "field",
+      name: "body",
+    });
+    const threeFields = [
+      ...twoFields,
+      { name: "aside", label: "Aside", type: "blocks" },
+    ];
+    const notHero = (candidate: { name: string }) => candidate.name !== "hero";
+    const asked = resolveViewField("blocks", threeFields, undefined, notHero);
+    expect(
+      asked.kind === "choose" ? asked.candidates.map(c => c.name) : asked
+    ).toEqual(["body", "aside"]);
+  });
+
+  it("answers the field the address names even when `admits` refuses it", () => {
+    // The caller says why; opening another field in its place would hide that.
+    const none = () => false;
+    expect(resolveViewField("blocks", twoFields, "hero", none)).toMatchObject({
+      kind: "field",
+      name: "hero",
+    });
+  });
+
+  it("asks among them all when `admits` lets none through", () => {
+    const none = () => false;
+    const asked = resolveViewField("blocks", twoFields, undefined, none);
+    expect(
+      asked.kind === "choose" ? asked.candidates.map(c => c.name) : asked
+    ).toEqual(["hero", "body"]);
+  });
+
   it("asks rather than guesses when the address names a field that is not one", () => {
     // A text field, and a name the document does not have.
     expect(resolveViewField("blocks", twoFields, "title").kind).toBe("choose");

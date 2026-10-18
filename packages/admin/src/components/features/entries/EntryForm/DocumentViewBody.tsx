@@ -36,12 +36,14 @@ import { setSearchParam } from "@admin/lib/navigation";
 import type { DocumentViewProps } from "@admin/lib/plugins/component-registry";
 import {
   resolveViewField,
+  viewFieldCandidates,
   type ViewFieldResolution,
 } from "@admin/lib/plugins/document-view-registry";
 
 import { LiveDocumentRecoveryOffer } from "./AutosaveRecoveryBanner";
 import {
-  useViewFieldRefusal,
+  useConditionValues,
+  viewFieldRefusal,
   type ViewFieldRefusal,
 } from "./document-view-field-gate";
 import { DocumentLockBanner } from "./DocumentLockBanner";
@@ -157,16 +159,21 @@ function useViewField(
   form: UseFormReturn<Record<string, unknown>>
 ) {
   const requested = useSearchParams().field;
+  // Every field the view could edit has its condition watched, not only the
+  // one open: which fields the question offers depends on them all.
+  const valueAt = useConditionValues(
+    fieldType === undefined ? [] : viewFieldCandidates(fieldType, fields),
+    form.control
+  );
   const editing = resolveViewField(
     fieldType,
     fields,
-    typeof requested === "string" ? requested : undefined
+    typeof requested === "string" ? requested : undefined,
+    candidate => viewFieldRefusal(candidate, valueAt) === null
   );
   useFieldInAddress(editing, requested);
-  const refusal = useViewFieldRefusal(
-    editing.kind === "field" ? [...editing.within, editing.declaration] : [],
-    form.control
-  );
+  const refusal =
+    editing.kind === "field" ? viewFieldRefusal(editing, valueAt) : null;
   return { editing, refusal };
 }
 

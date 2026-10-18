@@ -583,22 +583,142 @@ describe("a field the form would not let the author edit", () => {
     refusedSaying(/turned off for editing/);
   });
 
-  it("refuses a field its condition hides, and opens it once the condition holds", () => {
-    const fields = [
-      { name: "title", type: "text" },
-      {
-        name: "layout",
-        type: "blocks",
-        admin: { condition: { field: "title", equals: "Show" } },
-      },
-    ];
-    openWith(fields, "Hello");
-    refusedSaying(/isn't shown for this document/);
-    cleanup();
-
-    // The control: the same declaration, with the condition met, opens.
-    openWith(fields, "Show");
+  it("follows a condition while the view is up, as the form does", () => {
+    // Typed into the mounted document, not set up in two separate mounts: a
+    // gate that read the condition once would pass two mounts and fail here.
+    openWith(
+      [
+        { name: "title", type: "text" },
+        {
+          name: "layout",
+          type: "blocks",
+          admin: { condition: { field: "title", equals: "Show" } },
+        },
+      ],
+      "Show"
+    );
     expect(screen.getByTestId("builder-view")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("Page heading"), {
+      target: { value: "Hide" },
+    });
+
+    refusedSaying(/isn't shown for this document/);
+  });
+
+  it("asks the condition of the field the address names now, not the one it named first", () => {
+    // Two fields hidden by different values. Moving between them keeps the
+    // view's host mounted, so each must be answered from its own condition.
+    window.history.pushState(
+      null,
+      "",
+      "/admin/collections/pages/e1/builder?field=first"
+    );
+    renderView({
+      collection: {
+        name: "pages",
+        fields: [
+          { name: "title", type: "text" },
+          { name: "subtitle", type: "text" },
+          {
+            name: "first",
+            type: "blocks",
+            admin: { condition: { field: "title", equals: "Show" } },
+          },
+          {
+            name: "second",
+            type: "blocks",
+            admin: { condition: { field: "subtitle", equals: "Show" } },
+          },
+        ],
+      } as never,
+      entry: { id: "e1", title: "Show", subtitle: "Hide" } as never,
+      documentView: { component: VIEW, onExit, fieldType: "blocks" },
+    });
+    expect(screen.getByTestId("builder-view")).toBeInTheDocument();
+
+    const moveTo = (name: string) => {
+      window.history.pushState(
+        null,
+        "",
+        `/admin/collections/pages/e1/builder?field=${name}`
+      );
+      act(() => {
+        window.dispatchEvent(new Event("locationchange"));
+      });
+    };
+    moveTo("second");
+    refusedSaying(/isn't shown for this document/);
+
+    moveTo("first");
+    expect(screen.getByTestId("builder-view")).toBeInTheDocument();
+  });
+
+  it("offers only the fields the author may edit, and opens the only one", () => {
+    window.history.pushState(null, "", "/admin/collections/pages/e1/builder");
+    renderView({
+      collection: {
+        name: "pages",
+        fields: [
+          { name: "title", type: "text" },
+          { name: "hero", type: "blocks", admin: { hidden: true } },
+          { name: "body", type: "blocks" },
+        ],
+      } as never,
+      documentView: { component: VIEW, onExit, fieldType: "blocks" },
+    });
+    // One field of two may be edited, so there is nothing to ask.
+    expect(received).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        field: expect.objectContaining({ name: "body" }),
+      })
+    );
+  });
+
+  it("leaves a field the author may not edit out of the question", () => {
+    window.history.pushState(null, "", "/admin/collections/pages/e1/builder");
+    renderView({
+      collection: {
+        name: "pages",
+        fields: [
+          { name: "title", type: "text" },
+          {
+            name: "hero",
+            label: "Hero",
+            type: "blocks",
+            admin: { readOnly: true },
+          },
+          { name: "body", label: "Body", type: "blocks" },
+          { name: "aside", label: "Aside", type: "blocks" },
+        ],
+      } as never,
+      documentView: { component: VIEW, onExit, fieldType: "blocks" },
+    });
+    expect(screen.getByRole("button", { name: "Body" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Aside" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Hero" })).toBeNull();
+  });
+
+  it("refuses a gated field the address names, rather than opening another", () => {
+    // The author followed an address to this field; meeting a different one
+    // in its place would hide why theirs did not open.
+    window.history.pushState(
+      null,
+      "",
+      "/admin/collections/pages/e1/builder?field=hero"
+    );
+    renderView({
+      collection: {
+        name: "pages",
+        fields: [
+          { name: "title", type: "text" },
+          { name: "hero", type: "blocks", admin: { readOnly: true } },
+          { name: "body", type: "blocks" },
+        ],
+      } as never,
+      documentView: { component: VIEW, onExit, fieldType: "blocks" },
+    });
+    refusedSaying(/read-only/);
   });
 
   it("refuses a field the form never draws", () => {

@@ -67,9 +67,51 @@ export function conditionSourcePath(
 }
 
 /** Whether a field with this condition is shown, given its source's value. */
-export function conditionHolds(
+function conditionHolds(
   condition: FieldCondition | undefined,
   sourceValue: unknown
 ): boolean {
   return evaluateCondition(condition, sourceValue);
+}
+
+/**
+ * What the form decides about a field: whether it is drawn at all, and how far
+ * it may be edited. A parent passes its own down — a hidden group draws none
+ * of its fields, and a read-only one makes them all read-only — so a field's
+ * answer starts from what it inherits.
+ */
+export interface FieldGate {
+  shown: boolean;
+  readOnly: boolean;
+  disabled: boolean;
+}
+
+/** What a top-level field inherits: nothing that closes it. */
+export const OPEN_GATE: FieldGate = {
+  shown: true,
+  readOnly: false,
+  disabled: false,
+};
+
+/**
+ * The form's one decision about a field, from what it inherits, its own gates
+ * and the value its condition reads. The form takes it one field at a time as
+ * it draws; a surface editing a field on its own folds it over the unnamed
+ * groups around the field and then the field. Either way it is this function,
+ * so the two cannot disagree about a field.
+ */
+export function effectiveFieldGate(
+  field: object,
+  inherited: FieldGate,
+  conditionValue: unknown
+): FieldGate {
+  const own = fieldAdminGates(field);
+  const conditionMet =
+    own.condition === undefined ||
+    conditionHolds(own.condition, conditionValue);
+  return {
+    shown: inherited.shown && !own.hidden && conditionMet,
+    readOnly: inherited.readOnly || own.readOnly,
+    disabled: inherited.disabled || own.disabled,
+  };
 }
