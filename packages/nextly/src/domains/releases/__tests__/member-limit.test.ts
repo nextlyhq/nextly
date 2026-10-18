@@ -25,9 +25,25 @@ const INPUT = {
   action: "publish" as const,
 };
 
-/** A release already holding `held` documents. */
+/**
+ * A release already holding `held` documents. The repository write applies the
+ * room check it is handed, as the real one does under the release lock, so a
+ * refusal here is the service's rule reaching the write.
+ */
 function service(held: number) {
-  const addMember = vi.fn(async () => ({ id: "m-new" }));
+  const inserted = vi.fn();
+  const addMember = vi.fn(
+    async (
+      _input: unknown,
+      _states: unknown,
+      refuseWhenHolding?: (count: number) => Error | null
+    ) => {
+      const refusal = refuseWhenHolding?.(held) ?? null;
+      if (refusal !== null) throw refusal;
+      inserted();
+      return { id: "m-new" };
+    }
+  );
   const deps = {
     repository: {
       memberCountsOf: vi.fn(
@@ -52,7 +68,7 @@ function service(held: number) {
       declaresLifecycle: async () => true,
     },
   };
-  return { svc: new ReleasesService(deps), addMember };
+  return { svc: new ReleasesService(deps), addMember, inserted };
 }
 
 describe("a release has a size bound", () => {
@@ -63,42 +79,41 @@ describe("a release has a size bound", () => {
   });
 
   it("refuses the document that would exceed it, saying none fit", async () => {
-    const { svc, addMember } = service(RELEASE_MEMBER_LIMIT);
+    const { svc, inserted } = service(RELEASE_MEMBER_LIMIT);
     const refusal = svc.addMember("r1", INPUT, ACTOR);
     await expect(refusal).rejects.toMatchObject({
       code: "CONFLICT",
       publicMessage: expect.stringMatching(/no more fit/),
     });
-    // Refused before the write. The repository's `addMember` is the only
-    // statement that changes anything — the member and the release's revision
-    // bump are one transaction — so not reaching it means nothing changed.
-    expect(addMember).not.toHaveBeenCalled();
+    // Refused under the release lock, before the insert: the member and the
+    // release's revision bump are one transaction, so nothing changed.
+    expect(inserted).not.toHaveBeenCalled();
   });
 
   it("accepts the LAST document that fits", async () => {
     // The boundary in the other direction, which an off-by-one would break
     // while leaving the case above green.
-    const { svc, addMember } = service(RELEASE_MEMBER_LIMIT - 1);
+    const { svc, inserted } = service(RELEASE_MEMBER_LIMIT - 1);
     await expect(svc.addMember("r1", INPUT, ACTOR)).resolves.toBeTruthy();
-    expect(addMember).toHaveBeenCalled();
+    expect(inserted).toHaveBeenCalled();
   });
 
   it("refuses to grow a release made before the limit, and says it can still shrink", async () => {
     // A release over the limit is not an error to repair: it runs as
     // scheduled and documents can leave it. What it cannot do is grow.
-    const { svc, addMember } = service(RELEASE_MEMBER_LIMIT + 50);
+    const { svc, inserted } = service(RELEASE_MEMBER_LIMIT + 50);
     await expect(svc.addMember("r1", INPUT, ACTOR)).rejects.toMatchObject({
       code: "CONFLICT",
       publicMessage: expect.stringMatching(/can still be removed/),
     });
-    expect(addMember).not.toHaveBeenCalled();
+    expect(inserted).not.toHaveBeenCalled();
   });
 
   it("does not stand in the way of an ordinary release", async () => {
     // The control. Without it a cap that refused everything would satisfy the
     // refusals above perfectly.
-    const { svc, addMember } = service(3);
+    const { svc, inserted } = service(3);
     await expect(svc.addMember("r1", INPUT, ACTOR)).resolves.toBeTruthy();
-    expect(addMember).toHaveBeenCalled();
+    expect(inserted).toHaveBeenCalled();
   });
 });

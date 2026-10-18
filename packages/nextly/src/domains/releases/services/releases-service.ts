@@ -1413,7 +1413,6 @@ export class ReleasesService {
     if (await this.singleReleaseHoldsAnother(release, memberKey)) {
       throw singleReleaseHoldsOne(releaseId);
     }
-    await this.assertRoomForOneMore(releaseId);
 
     // The states this add may land on, judged from the read above, and the
     // author checked, before the member is written.
@@ -1443,6 +1442,9 @@ export class ReleasesService {
           createdBy: actor.userId,
         },
         allowedStates,
+        // The member limit, judged under the release lock and after every
+        // other refusal: a final release says it is final, not how much it
+        // holds, and adds racing for the last place are judged one by one.
         held => memberLimitRefusal(releaseId, held)
       );
     } catch (error) {
@@ -1671,18 +1673,6 @@ export class ReleasesService {
         releaseId: release.id,
       },
     });
-  }
-
-  /**
-   * The early answer, before any other work: the guarantee is the same rule
-   * asked again under the release-row lock when the member is written.
-   */
-  private async assertRoomForOneMore(releaseId: string): Promise<void> {
-    const held =
-      (await this.deps.repository.memberCountsOf([releaseId])).get(releaseId) ??
-      0;
-    const refusal = memberLimitRefusal(releaseId, held);
-    if (refusal !== null) throw refusal;
   }
 
   private async requireLiveAuthor(userId: string | null): Promise<void> {

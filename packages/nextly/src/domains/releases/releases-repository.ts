@@ -141,6 +141,25 @@ export interface ReleasesTxApi {
 
 const RELEASES = "nextly_releases";
 const MEMBERS = "nextly_release_members";
+
+/**
+ * The rows a release holds: the one selection every read of membership uses,
+ * so a list, a count and the limit judged under the release lock cannot come
+ * to count different sets.
+ */
+function membersOf(releaseIds: readonly string[]) {
+  // Inferred rather than annotated: it is read both through the port and
+  // inside a transaction, whose where types differ only in name.
+  return {
+    and: [
+      {
+        column: "releaseId",
+        op: "IN" as const,
+        value: [...new Set(releaseIds)],
+      },
+    ],
+  };
+}
 /**
  * Read ONLY to answer whether a member's author may still act. This module owns
  * no user behaviour and writes nothing here; the alternative is resolving an
@@ -1090,11 +1109,7 @@ export class ReleasesRepository {
     if (releaseIds.length === 0) return counts;
     const rows = await this.db.select<{ releaseId: string }>(MEMBERS, {
       columns: ["releaseId"],
-      where: {
-        and: [
-          { column: "releaseId", op: "IN", value: [...new Set(releaseIds)] },
-        ],
-      },
+      where: membersOf(releaseIds),
     });
     for (const row of rows) {
       counts.set(row.releaseId, (counts.get(row.releaseId) ?? 0) + 1);
@@ -1105,11 +1120,7 @@ export class ReleasesRepository {
   async listMembersOf(releaseIds: string[]): Promise<ReleaseMemberRow[]> {
     if (releaseIds.length === 0) return [];
     return this.db.select<ReleaseMemberRow>(MEMBERS, {
-      where: {
-        and: [
-          { column: "releaseId", op: "IN", value: [...new Set(releaseIds)] },
-        ],
-      },
+      where: membersOf(releaseIds),
     });
   }
 
@@ -1161,14 +1172,17 @@ export class ReleasesRepository {
           throw releaseMovedConflict(input.releaseId, "add-member");
         }
         if (refuseWhenHolding !== undefined) {
-          const held = await tx.select<{ id: string }>(MEMBERS, {
-            columns: ["id"],
-            where: {
-              and: [{ column: "releaseId", op: "=", value: input.releaseId }],
-            },
+          const held = await tx.select<{ memberKey: string }>(MEMBERS, {
+            columns: ["memberKey"],
+            where: membersOf([input.releaseId]),
           });
-          limit.refused = refuseWhenHolding(held.length);
-          if (limit.refused !== null) throw limit.refused;
+          // The same document again is the duplicate it is, however full the
+          // release: the unique index refuses it below, as it always has.
+          const key = releaseMemberKey(input.releaseId, input);
+          if (!held.some(member => member.memberKey === key)) {
+            limit.refused = refuseWhenHolding(held.length);
+            if (limit.refused !== null) throw limit.refused;
+          }
         }
         const member: ReleaseMemberRow = {
           // Time-ordered, so members added within one second — one stored

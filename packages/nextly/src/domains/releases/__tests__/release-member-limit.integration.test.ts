@@ -238,6 +238,46 @@ describe.each(getConfiguredTestDialects())(
     );
 
     it(
+      "keeps a document already in a full release a duplicate, not a full release",
+      async () => {
+        const t = await boot(dialect);
+        const author = await seedLiveAuthor(t);
+        const ids = await drafts(t, RELEASE_MEMBER_LIMIT);
+        const id = await releaseHolding(t, author, ids);
+        // The retry of a document the release already holds is answered as
+        // the duplicate it is, however full the release.
+        await expect(add(t, id, ids[0], author)).rejects.toMatchObject({
+          code: "DUPLICATE",
+        });
+      },
+      LONG
+    );
+
+    it(
+      "answers a full release that ran as final, without saying what it holds",
+      async () => {
+        const t = await boot(dialect);
+        const author = await seedLiveAuthor(t);
+        const ids = await drafts(t, RELEASE_MEMBER_LIMIT + 1);
+        const id = await releaseHolding(
+          t,
+          author,
+          ids.slice(0, RELEASE_MEMBER_LIMIT)
+        );
+        await t.nextly.releases.cancel({ id });
+        // The final-state refusal comes first: a caller who may only create
+        // learns the release is cancelled, not how many documents it holds.
+        const refusal = add(t, id, ids[RELEASE_MEMBER_LIMIT], author);
+        await expect(refusal).rejects.toMatchObject({ code: "CONFLICT" });
+        await refusal.catch((error: { publicMessage?: string }) => {
+          expect(error.publicMessage).toMatch(/cancelled/);
+          expect(error.publicMessage).not.toMatch(/holds|200/);
+        });
+      },
+      LONG
+    );
+
+    it(
       "holds the limit when documents are added at once, not only one by one",
       async () => {
         const t = await boot(dialect);
