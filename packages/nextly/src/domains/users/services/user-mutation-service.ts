@@ -99,12 +99,13 @@ import { recordMutationEventInTx } from "../../webhooks/record-mutation-event";
 
 import { emailVerificationColumns } from "./email-verification-write";
 import {
+  firstAdministratorTaken,
+  type FirstAdministratorTx,
   grantFirstAdministratorInTx,
+  type LastSuperAdminTx,
   lockSuperAdminRole,
   refuseRemovingLastSuperAdmin,
   superAdminRoleHeld,
-  type FirstAdministratorTx,
-  type LastSuperAdminTx,
 } from "./last-super-admin";
 import { passwordColumns, updateUserEndingSessions } from "./password-write";
 import { activationChanges } from "./user-activation";
@@ -124,8 +125,11 @@ const SUPER_ADMIN_ROLE_SLUG = "super-admin";
  * and cannot take over or remove an account that already reaches it: no
  * change to its password, email, activation, verification or roles, and no
  * deletion. An address it vouches for is recorded as verified by `"plugin"`.
+ * `"setup"` is the setup route's own provisioning: like `"app"`, except that
+ * the account must become the install's first administrator or is not created
+ * at all (firstAdministratorTaken).
  */
-export type UserWriteCaller = "app" | "plugin" | "self-registration";
+export type UserWriteCaller = "app" | "plugin" | "self-registration" | "setup";
 
 // ============================================================
 // Drizzle Runtime Types
@@ -1425,8 +1429,17 @@ export class UserMutationService extends BaseService {
       // administrator leave exactly one (grantFirstAdministratorInTx). The role
       // is ensured before the transaction opens, and only while no
       // administrator is seen: once one exists, nothing here can grant.
+      const provisionsFirstAdministrator =
+        caller === "app" || caller === "setup";
       const bootstrapRoleReady =
-        caller === "app" && (await this.mayBootstrapFirstAdministrator());
+        provisionsFirstAdministrator &&
+        (await this.mayBootstrapFirstAdministrator());
+      // Setup creates the install's first administrator or nothing: refused
+      // here once one is seen, and inside the insert's transaction when another
+      // wins the grant, so a setup that lost a race publishes no account.
+      if (caller === "setup" && !bootstrapRoleReady) {
+        throw firstAdministratorTaken();
+      }
       let grantedFirstAdministrator = false;
       // First, before the transaction writes anything: the role row's lock.
       const lockForBootstrap = async (
@@ -1462,6 +1475,11 @@ export class UserMutationService extends BaseService {
         await requireExistingAccount(txDb);
         await txDb.insert(users).values(values);
         await bootstrapFirstAdministrator(txDb, superAdminRoleId);
+        // Thrown inside the transaction, so the account and its `user.created`
+        // outbox row roll back and nothing after the commit runs for it.
+        if (caller === "setup" && !grantedFirstAdministrator) {
+          throw firstAdministratorTaken();
+        }
       };
 
       // Wrap user + user_ext + invite inserts in a transaction for atomicity.

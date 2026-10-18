@@ -8,13 +8,14 @@
 
 import { randomUUID } from "node:crypto";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { buildAuthRouterDeps } from "../../../auth/handlers/deps-bridge";
 import { handleSetupStatus } from "../../../auth/handlers/setup";
 import { getDialectTables } from "../../../database/index";
 import { generateSqliteCoreTableStatements } from "../../../database/sqlite-core-tables";
 import { ServiceContainer } from "../../../services/index";
+import { UserMutationService } from "../services/user-mutation-service";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -24,6 +25,7 @@ import {
 
 let current: TestNextly | undefined;
 afterEach(async () => {
+  vi.restoreAllMocks();
   await current?.destroy();
   current = undefined;
 });
@@ -202,6 +204,14 @@ describe.each(getConfiguredTestDialects())(
       const deps = buildAuthRouterDeps(
         t.getService as unknown as (name: string) => unknown
       );
+      // Where a created account is published (its `user.created` delivery and
+      // the hooks after the commit): only the winner may reach it.
+      const published = vi.spyOn(
+        UserMutationService.prototype as unknown as {
+          afterUserCreated: (...args: unknown[]) => Promise<void>;
+        },
+        "afterUserCreated"
+      );
       const emails = ["first@example.com", "second@example.com"];
       const settled = await Promise.allSettled(
         emails.map(email =>
@@ -223,6 +233,9 @@ describe.each(getConfiguredTestDialects())(
         }
       }
       expect(administrators).toHaveLength(1);
+      // The loser was refused inside its own transaction, before any account
+      // of its existed to publish.
+      expect(published).toHaveBeenCalledTimes(1);
       // A setup answered "complete" leaves no account behind.
       for (const [i, r] of settled.entries()) {
         if (r.status === "fulfilled" && r.value === null) {
