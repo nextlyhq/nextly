@@ -238,6 +238,25 @@ describe("Integration on request", () => {
   });
 });
 
+describe("the MySQL leg's database", () => {
+  /*
+   * The core suite commits many small transactions, and MySQL's default
+   * durability made the leg wait on disk writes until it overran its budget
+   * with every test green. The leg relaxes it before the suite runs.
+   */
+  it("enlarges the redo log and stops forcing each commit to disk before the suite starts", () => {
+    const steps = read(".github/workflows/integration.yml").jobs["integration-mysql"].steps.map(step => step.name);
+    const job = read(".github/workflows/integration.yml").jobs["integration-mysql"];
+    const room = job.steps.findIndex(step => step.name === "Give the test database room to write");
+    const suite = job.steps.findIndex(step => step.name === "Run integration tests (mysql)");
+    expect(room, steps.join(", ")).toBeGreaterThanOrEqual(0);
+    expect(room).toBeLessThan(suite);
+    for (const setting of ["innodb_redo_log_capacity = 1073741824", "innodb_flush_log_at_trx_commit = 2", "sync_binlog = 0"]) {
+      expect(job.steps[room].run).toContain(setting);
+    }
+  });
+});
+
 describe("conditions that skip the queue's run", () => {
   /*
    * A step that runs on a pull request's own run but not in the queue is
