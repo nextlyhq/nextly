@@ -355,6 +355,66 @@ function assertUsableSchedule(id: string, at: Date, timezone: string): void {
   }
 }
 
+/** The authorities `capabilities` answers from, each asked once a page. */
+interface HeldAuthorities {
+  mayPublish: boolean;
+  mayCreate: boolean;
+  mayUpdate: boolean;
+  mayDelete: boolean;
+}
+
+/**
+ * Whether the release may be scheduled, cancelled or run now, by the same
+ * fences those writes take. `held` is how many documents it holds.
+ */
+function runCapabilities(
+  release: ReleaseRow,
+  held: number,
+  may: HeldAuthorities
+): Pick<ReleaseCapabilities, "schedule" | "cancel" | "publishNow"> {
+  const { mayRun } = oneDocumentRule(release.kind, held);
+  return {
+    schedule:
+      may.mayPublish &&
+      RELEASE_SCHEDULABLE_FROM.includes(release.state) &&
+      mayRun,
+    cancel: may.mayPublish && RELEASE_CANCELLABLE_FROM.includes(release.state),
+    publishNow:
+      may.mayPublish &&
+      RELEASE_PUBLISHABLE_NOW_FROM.includes(release.state) &&
+      mayRun,
+  };
+}
+
+/**
+ * Whether the release's documents, title or the release itself may be
+ * changed, by the same rules those writes take.
+ */
+function editCapabilities(
+  release: ReleaseRow,
+  held: number,
+  may: HeldAuthorities
+): Pick<
+  ReleaseCapabilities,
+  "addMember" | "removeMember" | "update" | "delete"
+> {
+  // Membership is editable freely in some states and only by a publisher in
+  // others, because the drain reads membership AT the instant — so editing a
+  // scheduled release changes what a publisher committed to.
+  const mayChange = (change: MembershipChange): boolean =>
+    may.mayCreate &&
+    membershipFence(release.kind, change, may.mayPublish).includes(
+      release.state
+    );
+  return {
+    addMember: mayChange("add") && takesAnother(release.kind, held),
+    removeMember: mayChange("remove"),
+    // Any state, as `update` writes it: the title is a label.
+    update: may.mayUpdate,
+    delete: may.mayDelete && whyNotDeletable(release) === null,
+  };
+}
+
 /**
  * Refuse a title the narrowest dialect could not store.
  *
@@ -459,7 +519,7 @@ const NOT_DELETABLE_MESSAGES: Record<
   published:
     "This release has been published. It stays as the record of what went live, and cannot be deleted.",
   committed:
-    "This release is scheduled or stopped. Cancel it first, then delete it.",
+    "This release is scheduled or stopped, so it can't be deleted. Cancelling it calls it off, and it's then kept as a record.",
   "was-scheduled":
     "This release was scheduled, so it's kept as a record. Cancelled releases that were never scheduled can be deleted.",
 };
@@ -1154,38 +1214,15 @@ export class ReleasesService {
     const mayDelete = await this.holds(actor, "delete");
     const held = await this.heldBy(releases);
 
+    const may = { mayPublish, mayCreate, mayUpdate, mayDelete };
     return new Map(
       releases.map(release => {
-        const rule = oneDocumentRule(release.kind, held.get(release.id) ?? 0);
-        // Membership is editable freely in some states and only by a publisher
-        // in others, because the drain reads membership AT the instant — so
-        // editing a scheduled release changes what a publisher committed to.
-        const mayChange = (change: MembershipChange): boolean =>
-          mayCreate &&
-          membershipFence(release.kind, change, mayPublish).includes(
-            release.state
-          );
-
+        const count = held.get(release.id) ?? 0;
         return [
           release.id,
           {
-            schedule:
-              mayPublish &&
-              RELEASE_SCHEDULABLE_FROM.includes(release.state) &&
-              rule.mayRun,
-            cancel:
-              mayPublish && RELEASE_CANCELLABLE_FROM.includes(release.state),
-            addMember:
-              mayChange("add") &&
-              takesAnother(release.kind, held.get(release.id) ?? 0),
-            removeMember: mayChange("remove"),
-            publishNow:
-              mayPublish &&
-              RELEASE_PUBLISHABLE_NOW_FROM.includes(release.state) &&
-              rule.mayRun,
-            // Any state, as `update` writes it: the title is a label.
-            update: mayUpdate,
-            delete: mayDelete && whyNotDeletable(release) === null,
+            ...runCapabilities(release, count, may),
+            ...editCapabilities(release, count, may),
           },
         ];
       })
@@ -2395,14 +2432,16 @@ export class ReleasesService {
   }
 
   /**
-   * Delete a draft or cancelled release, and its documents with it.
+   * Delete a release that never ran, and its documents with it: a draft, or
+   * a release cancelled before it was ever scheduled.
    *
-   * Under `delete-content-releases`. A scheduled or stopped release is
-   * committed to a launch and is cancelled first; a published one is the
-   * record of what went live and is never deleted; and a cancelled one that
-   * was ever scheduled is kept too (`whyNotDeletable`). Each refusal is a CONFLICT
-   * naming what to do instead, and a release that is not there is NOT_FOUND.
-   * Answers the release as it was before the delete.
+   * Under `delete-content-releases`. Every other release is kept, and each
+   * refusal is a CONFLICT whose data names why (`whyNotDeletable`): a
+   * scheduled or stopped one is committed to a launch (cancelling calls it
+   * off and keeps it), a published one is the record of what went live, and
+   * a cancelled one that was ever scheduled may have begun to run. A release
+   * that is not there is NOT_FOUND. Answers the release as the delete found
+   * it under its lock.
    *
    * @experimental
    */
@@ -2414,13 +2453,16 @@ export class ReleasesService {
     // FENCED on the same rule, so a release scheduled since the read above is
     // not deleted, and neither are its documents. A retry judges it as it now
     // is, and is told why.
-    if (!(await this.deps.repository.deleteRelease(id))) {
+    // The row the delete found under its lock, recorded and answered: one
+    // renamed since the read above is the release that was deleted.
+    const deleted = await this.deps.repository.deleteRelease(id);
+    if (deleted === null) {
       throw NextlyError.conflict({
         logContext: { reason: "release-moved-before-delete", releaseId: id },
       });
     }
-    await this.recordActivity({ action: "delete", release: current }, actor);
-    return current;
+    await this.recordActivity({ action: "delete", release: deleted }, actor);
+    return deleted;
   }
 
   /**
