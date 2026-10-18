@@ -1,8 +1,8 @@
 {
   "coverage": {
     "pages": 81,
-    "samples": 459,
-    "compiled": 290
+    "samples": 461,
+    "compiled": 292
   },
   "samplesPerPage": {
     "docs/admin/branding.mdx": {
@@ -122,8 +122,8 @@
       "compiled": 5
     },
     "docs/guides/media-storage.mdx": {
-      "samples": 13,
-      "compiled": 8
+      "samples": 15,
+      "compiled": 10
     },
     "docs/guides/production-migrations.mdx": {
       "samples": 1,
