@@ -94,6 +94,12 @@ In code, set `localized: true` on the field (or remove `localized: false` from a
 
 A field whose type, length or precision changes in the same change is refused, because its value would be copied into a column of the new shape: save the new type with the field still shared, then make it translated.
 
+### When a translated field is renamed
+
+Renaming a translated field in the Schema Builder keeps every language's value under the new name, for a collection, a Single or a field group. The schema dialog lists it as a rename; keep that choice to keep the values. Renamed and made shared in the same change, the field keeps the default language's value as its shared value, and the other languages go to the archive under the new name, so `nextly i18n:restore --field <new name>` brings them back once the field is translated again.
+
+A translated field renamed in code is not yet carried over: the old column keeps every language's value, and the new field starts empty. To rename one in code today, keep the old name until its values are moved.
+
 ## Fallback chains
 
 `fallback: true` means a missing translation falls back rather than rendering empty. A

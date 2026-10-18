@@ -23,6 +23,7 @@ import {
 import type { ServiceContainer } from "../../../services";
 import type { SingleEntryService } from "../../singles/services/single-entry-service";
 import { restoreI18nArchive } from "../migration/restore-archive";
+import { reconcileCompanionColumns } from "../runtime/companion-io";
 
 const LOCALES = ["en", "es"];
 const TRANSLATED = [
@@ -337,6 +338,35 @@ describeEachDialect("a translated field that is renamed", dialect => {
         to: "title2",
       })
     );
+  });
+
+  it("leaves the old column and its values in place when a config rename is reconciled", async () => {
+    // The code-first path does not yet decide renames: `db:sync` reconciles the companion against
+    // the config's field names alone, so the renamed field reads as a new one. Its old column has
+    // to stay, every language's value intact, rather than be dropped as a removed field's.
+    const id = await seedCollection();
+
+    await reconcileCompanionColumns(
+      current.adapter as unknown as Parameters<
+        typeof reconcileCompanionColumns
+      >[0],
+      {
+        builtBy: "collection",
+        slug: "posts",
+        tableName: "dc_posts",
+        fields: RENAMED,
+        dialect,
+      }
+    );
+
+    expect(await companionValues("dc_posts", "heading", id)).toEqual({
+      en: "Hello",
+      es: "Hola",
+    });
+    expect(await companionValues("dc_posts", "title2", id)).toEqual({
+      en: null,
+      es: null,
+    });
   });
 
   it("keeps English's value and archives Spanish when the renamed field is made shared", async () => {
