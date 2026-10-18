@@ -106,7 +106,14 @@ function originRefusal(reported: unknown, page: PagePlace): AuthRefusal | null {
 
 /** Whether an origin names this machine: `localhost`, a `*.localhost`, or a loopback IP. */
 function isLoopback(origin: string): boolean {
-  const host = new URL(origin).hostname;
+  // Read where a refusal is handled, so an origin that will not parse answers
+  // "no" rather than throwing out of that handling.
+  let host: string;
+  try {
+    host = new URL(origin).hostname;
+  } catch {
+    return false;
+  }
   return (
     host === "localhost" ||
     host.endsWith(".localhost") ||

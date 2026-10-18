@@ -145,14 +145,33 @@ export const RELEASE_SCHEDULABLE_FROM: readonly ReleaseState[] = [
 /**
  * Cancelling is also how an unwanted DRAFT is abandoned.
  *
- * There is no delete route, so excluding `draft` here would leave a release
- * created by mistake with no way out of the list.
+ * Kept for `draft` although a draft can now be deleted: deleting needs its own
+ * permission, and a person who may cancel but not delete still needs a way to
+ * call a draft off.
  */
 export const RELEASE_CANCELLABLE_FROM: readonly ReleaseState[] = [
   "draft",
   "scheduled",
   // Abandoning a blocked release is the other way out of it.
   "blocked",
+];
+
+/**
+ * The states a release may be DELETED from: one that never ran, or was called
+ * off before it did. A cancelled release is deletable only if it was never
+ * scheduled (the release service's `whyNotDeletable`): one that was may have
+ * begun to run before it was called off, and nothing stored says otherwise.
+ *
+ * Not `scheduled` or `blocked`, which are committed to a launch and are called
+ * off by cancelling first; and never `published`, which is the record of what
+ * went live and stays. The repository's delete is fenced on this list and the
+ * `delete` capability is read from it, so the control and the write agree.
+ *
+ * @experimental
+ */
+export const RELEASE_DELETABLE_FROM: readonly ReleaseState[] = [
+  "draft",
+  "cancelled",
 ];
 
 /**
@@ -296,6 +315,20 @@ export interface ReleaseCapabilities {
    * @experimental
    */
   publishNow: boolean;
+  /**
+   * Rename it or change its description, in any state: the title is a label,
+   * and a published release keeps its record whatever it is called.
+   *
+   * @experimental
+   */
+  update: boolean;
+  /**
+   * Delete it. True only for a draft, or a cancelled release that was never
+   * scheduled ({@link RELEASE_DELETABLE_FROM}).
+   *
+   * @experimental
+   */
+  delete: boolean;
 }
 
 /**

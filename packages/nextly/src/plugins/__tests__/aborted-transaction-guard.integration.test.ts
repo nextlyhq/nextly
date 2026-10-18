@@ -64,17 +64,20 @@ describe.skipIf(!onPostgres)("aborted-transaction guard (integration)", () => {
   it("records the abort even when the callback swallows it and returns normally", async () => {
     current = await createTestNextly({ dialect: "postgresql" });
 
-    // No rejection to observe from out here: the callback catches its own failure and returns,
-    // so PostgreSQL accepts the COMMIT, downgrades it to a rollback, and `transaction()`
-    // resolves over a transaction that kept nothing. This is the shape the bulk write paths
-    // produce when they record a per-item error and move to the next item.
-    await current.adapter.transaction(async tx => {
-      try {
-        await tx.execute("SELECT 1 FROM a_relation_that_does_not_exist");
-      } catch {
-        // Swallowed on purpose: this is the pattern being guarded against.
-      }
-    });
+    // The callback catches its own failure and returns, so the only report of it is the COMMIT:
+    // PostgreSQL answers it with ROLLBACK, and the adapter rejects with that rather than
+    // resolving over a transaction that kept nothing. This is the shape the bulk write paths
+    // produce when they record a per-item error and move to the next item. The guard still sees
+    // the abort, which names the swallowed statement where the commit's error cannot.
+    await expect(
+      current.adapter.transaction(async tx => {
+        try {
+          await tx.execute("SELECT 1 FROM a_relation_that_does_not_exist");
+        } catch {
+          // Swallowed on purpose: this is the pattern being guarded against.
+        }
+      })
+    ).rejects.toMatchObject({ code: "25P02" });
 
     const sightings = takeAbortedTransactionSightings();
     expect(sightings.length).toBeGreaterThan(0);

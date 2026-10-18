@@ -30,6 +30,8 @@ const service = {
   count: vi.fn(async () => 0),
   create: vi.fn(async () => ({ id: "r1" })),
   addMember: vi.fn(async () => ({ id: "m1" })),
+  update: vi.fn(async () => ({ id: "r1" })),
+  delete: vi.fn(async () => undefined),
 };
 
 vi.mock("../../../di/container", () => ({
@@ -256,6 +258,50 @@ describe("the list's envelope", () => {
     expect(service.count).toHaveBeenCalledWith(
       { tab: "attention" },
       expect.objectContaining({ userId: "u2" })
+    );
+  });
+});
+
+describe("renaming and deleting through the namespace", () => {
+  it("hands the service the two fields of a rename, and the caller only as the actor", async () => {
+    // A spread of the argument bag would hand the service `userId` and the
+    // key scope as part of the change; the change is the two fields alone.
+    const releases = createReleasesNamespace(
+      instance({ overrideAccess: false, user: { id: "u1" } })
+    );
+    await releases.update({
+      id: "r1",
+      title: "Renamed",
+      description: null,
+      userId: "u2",
+    });
+    expect(service.update).toHaveBeenCalledWith(
+      "r1",
+      { title: "Renamed", description: null },
+      expect.objectContaining({ userId: "u2", overrideAccess: false })
+    );
+  });
+
+  it("leaves out a field the call did not name, rather than clearing it", async () => {
+    // `description: undefined` in the change would be a different request
+    // from no description at all; a title-only rename keeps the description.
+    const releases = createReleasesNamespace(instance({}));
+    await releases.update({ id: "r1", title: "Renamed" });
+    expect(service.update).toHaveBeenCalledWith(
+      "r1",
+      { title: "Renamed" },
+      expect.objectContaining({ overrideAccess: true })
+    );
+  });
+
+  it("deletes as the instance's identity when the call names none", async () => {
+    const releases = createReleasesNamespace(
+      instance({ overrideAccess: false, user: { id: "u1" } })
+    );
+    await releases.delete({ id: "r1" });
+    expect(service.delete).toHaveBeenCalledWith(
+      "r1",
+      expect.objectContaining({ userId: "u1", overrideAccess: false })
     );
   });
 });

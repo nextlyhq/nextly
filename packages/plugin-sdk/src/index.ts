@@ -490,6 +490,7 @@ export type {
   PluginRouteHandler,
   PluginRouteMount,
   PluginRouteRateLimit,
+  PluginRouteLimitKey,
   Middleware,
   RouteMethod,
   AuthenticatedScope,

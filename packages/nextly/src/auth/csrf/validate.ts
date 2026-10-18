@@ -64,9 +64,50 @@ export function validateOrigin(
 
   const allAllowed = [selfOrigin, ...allowedOrigins];
 
-  return allAllowed.some(
-    allowed => requestOrigin.toLowerCase() === allowed.toLowerCase()
+  return (
+    allAllowed.some(
+      allowed => requestOrigin.toLowerCase() === allowed.toLowerCase()
+    ) || loopbackPageSubmittingToItself(request, requestOrigin)
   );
+}
+
+/** The three names of this machine a development server is opened at. */
+const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
+
+/**
+ * In development only: whether the request comes from a page on a loopback
+ * address and was sent to exactly that address.
+ *
+ * Under `next dev` the request's own origin, as `request.url` gives it, is the
+ * server's configured host, not the address the browser used, so a page
+ * opened at `127.0.0.1` for an app at `localhost` was refused on its own
+ * server. Accepted here: an `Origin` naming `localhost`, `127.0.0.1` or
+ * `[::1]` that is exactly the scheme and `Host` the request was sent with.
+ * That is the request reaching the listener the page came from.
+ *
+ * What stays refused:
+ * - Another loopback name, even on the same port: two listeners can hold
+ *   `127.0.0.1:3000` and `[::1]:3000`, and be different applications.
+ * - Any other host, `*.localhost` included. A page that rebinds its own
+ *   domain to this machine still sends that domain as its origin.
+ * - Anything outside development: production keeps the exact check.
+ */
+function loopbackPageSubmittingToItself(
+  request: Request,
+  requestOrigin: string
+): boolean {
+  if (process.env.NODE_ENV !== "development") return false;
+  const host = request.headers.get("host");
+  if (!host) return false;
+  let origin: URL;
+  try {
+    origin = new URL(requestOrigin);
+  } catch {
+    return false;
+  }
+  if (!LOOPBACK_HOSTS.has(origin.hostname.toLowerCase())) return false;
+  const sentTo = `${new URL(request.url).protocol}//${host}`;
+  return origin.origin.toLowerCase() === sentTo.toLowerCase();
 }
 
 /**
