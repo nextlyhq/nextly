@@ -198,6 +198,28 @@ describeEachDialect("a schema save whose migration fails", dialect => {
     expect((await createPost({ heading: "Three" })).success).toBe(true);
   });
 
+  it("refuses making a field unique and shorter than a value an entry holds", async () => {
+    const short = (maxLength: number, unique = false) => ({
+      name: "heading",
+      type: "text",
+      unique,
+      options: { variant: "short" },
+      validation: { maxLength },
+    });
+    // Distinct, so the uniqueness check alone would let the save through.
+    await postsWith([short(20)], [{ heading: "abcdef" }, { heading: "Hi" }]);
+
+    const saved = await handler().updateCollection(
+      { collectionName: "posts" },
+      { fields: [short(5, true)] }
+    );
+
+    expect(saved.success, JSON.stringify(saved)).toBe(false);
+    expect(refusalOf(saved)).toMatch(
+      /^1 entry holds a heading longer than 5 characters, the new length\./
+    );
+  });
+
   it("refuses a length shorter than a value an entry holds, naming it", async () => {
     const short = (maxLength: number) => ({
       name: "heading",
