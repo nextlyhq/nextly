@@ -43,7 +43,10 @@ function recordingSetup(
       steps.push("email");
       return false;
     }),
-    createAdministrator: vi.fn(async () => void steps.push("create")),
+    createAdministrator: vi.fn(async () => {
+      steps.push("create");
+      return "created" as const;
+    }),
     spendSetupToken: vi.fn(async () => void steps.push("spend")),
     ...over,
   };
@@ -125,6 +128,20 @@ describe("createFirstAdministrator", () => {
     expect(setup.administratorExists).not.toHaveBeenCalled();
     expect(setup.createAdministrator).not.toHaveBeenCalled();
   });
+
+  it.each(["administrator-exists", "email-in-use"] as const)(
+    "reports creation's own refusal (%s), spending no token",
+    async refusal => {
+      // The checks passed, and creation still refused: an administrator or
+      // an account appeared between them and the insert.
+      const setup = recordingSetup({
+        createAdministrator: vi.fn(async () => refusal),
+      });
+      expect(await createFirstAdministrator(setup, DETAILS)).toBe(refusal);
+      expect(setup.spendSetupToken).not.toHaveBeenCalled();
+      expect(setup.steps.at(-1)).toBe("release");
+    }
+  );
 
   it("releases the claim when creating fails", async () => {
     const setup = recordingSetup({

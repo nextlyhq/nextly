@@ -194,6 +194,26 @@ describe.each(getConfiguredTestDialects())(
       expect(await signIn(t, "ada@example.com")).toBe(200);
     });
 
+    it("creates no account when an administrator appears after the check", async () => {
+      const t = await emptyInstall();
+      await createFirstAdministrator(setupOf(t), {
+        email: "ada@example.com",
+        name: "Ada",
+        password: PASSWORD,
+      });
+      // As if the check ran before the other administrator's grant landed:
+      // creation itself must still refuse, inside its own transaction.
+      const stale = { ...setupOf(t), administratorExists: async () => false };
+      const outcome = await createFirstAdministrator(stale, {
+        email: "late@example.com",
+        name: "Late",
+        password: PASSWORD,
+      });
+      expect(outcome).toBe("administrator-exists");
+      expect(await emails(t)).toEqual(["ada@example.com"]);
+      expect(await administrators(t)).toBe(1);
+    });
+
     /** How many accounts hold the administrator role. */
     async function administrators(t: TestNextly): Promise<number> {
       const { roles, userRoles } = getDialectTables();

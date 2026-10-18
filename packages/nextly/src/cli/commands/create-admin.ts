@@ -52,7 +52,10 @@ import { seedPermissions } from "../../database/seeders/permissions";
 import { seedSuperAdmin } from "../../database/seeders/super-admin";
 import { getFieldGroupRegistryAliases } from "../../domains/field-groups/storage/registry-schemas";
 import { MetaService } from "../../domains/meta/services/meta-service";
-import { superAdminRoleHeld } from "../../domains/users/services/last-super-admin";
+import {
+  isFirstAdministratorTaken,
+  superAdminRoleHeld,
+} from "../../domains/users/services/last-super-admin";
 import { describeError } from "../../errors/index";
 import { NextlyError } from "../../errors/nextly-error";
 // Types only: the program hands this module its context factory, so this
@@ -84,16 +87,23 @@ export interface FirstAdminSetup {
   administratorExists(): Promise<boolean>;
   /** Whether an account already has this email, spelled as sign-in spells it. */
   accountExists(email: string): Promise<boolean>;
-  createAdministrator(details: FirstAdminDetails): Promise<void>;
+  /**
+   * Create the account as the first administrator, or create nothing: the
+   * refusal says whether an administrator came first or the email was taken
+   * meanwhile.
+   */
+  createAdministrator(details: FirstAdminDetails): Promise<CreationOutcome>;
   spendSetupToken(): Promise<void>;
 }
 
-/** How a creation attempt ended. */
-export type FirstAdminOutcome =
+/** How creating the account itself ended. */
+export type CreationOutcome =
   | "created"
   | "administrator-exists"
-  | "email-in-use"
-  | "setup-in-progress";
+  | "email-in-use";
+
+/** How a creation attempt ended. */
+export type FirstAdminOutcome = CreationOutcome | "setup-in-progress";
 
 /**
  * Create the first administrator, under the setup claim, unless one exists.
@@ -110,7 +120,11 @@ export async function createFirstAdministrator(
     // An existing account would be given the role and keep its own password,
     // so the password just typed would be ignored without a word.
     if (await setup.accountExists(details.email)) return "email-in-use";
-    await setup.createAdministrator(details);
+    // The checks above answer the common case without writing; creation
+    // still refuses for itself, since an administrator or an account can
+    // appear between them and the insert.
+    const created = await setup.createAdministrator(details);
+    if (created !== "created") return created;
     await setup.spendSetupToken();
     return "created";
   } finally {
@@ -154,12 +168,40 @@ export function firstAdminSetupFor(
       return rows.length > 0;
     },
     async createAdministrator(details) {
-      // The path web setup creates its administrator through: the permissions
-      // the role is granted, then the account and its role.
+      // The path web setup creates its administrator through. The permission
+      // rows first, which the role's grant needs.
       await seedPermissions(adapter, { silent: true });
+      // Then the account, as setup's: it becomes the first administrator
+      // through the grant made under the role row's lock, inside the insert's
+      // transaction, or is not created at all, so a command that loses to
+      // another setup leaves no account and announces none.
+      // Loaded here, as web setup loads it: the service graph is large, and
+      // every other CLI command would pay for it at start.
+      const { ServiceContainer } = await import("../../services/index");
+      try {
+        await new ServiceContainer(adapter).users.createLocalUser(
+          {
+            email: details.email,
+            name: details.name,
+            password: details.password,
+            isActive: true,
+            emailVerification: "admin-vouched",
+          },
+          undefined,
+          "setup"
+        );
+      } catch (error) {
+        if (isFirstAdministratorTaken(error)) return "administrator-exists";
+        if (NextlyError.is(error) && error.code === "DUPLICATE") {
+          return "email-in-use";
+        }
+        throw error;
+      }
+      // The role's permissions; the account already holds the role.
       const result = await seedSuperAdmin(adapter, {
         ...details,
         silent: true,
+        assignRole: false,
       });
       if (!result.success) {
         throw NextlyError.internal({
@@ -169,6 +211,7 @@ export function firstAdminSetupFor(
           },
         });
       }
+      return "created";
     },
     // Web setup spends the stored token once it has its administrator; so
     // does the command, so no token is left to open setup again.
