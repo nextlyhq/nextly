@@ -32,6 +32,7 @@ import {
   readCompanionColumnHistory,
 } from "../../i18n/migration/companion-history";
 import { deriveCompanionSpec } from "../../i18n/migration/derive-companion-spec";
+import { planFieldJoinsTranslationMigration } from "../../i18n/migration/field-joins-translation";
 import { refusalsForFieldsLeavingTranslation } from "../../i18n/migration/field-leaves-translation-rules";
 import { fieldToLocalizedColumnSpec } from "../../i18n/migration/field-to-column-spec";
 import {
@@ -39,6 +40,7 @@ import {
   type CompanionMigrationPlan,
 } from "../../i18n/migration/plan-companion-migration";
 import {
+  type FieldLeavesFile,
   type FieldLeavesMigrationPlan,
   planFieldLeavesTranslationMigration,
 } from "../../i18n/migration/plan-field-leaves-migration";
@@ -62,6 +64,7 @@ import type {
   TableSpec,
 } from "../pipeline/diff/types";
 import { withForeignKeysLiftedForTypeChanges } from "../pipeline/foreign-key-lift";
+import { operationsToJudge } from "../pipeline/moved-to-companion";
 import type { RenameCandidate } from "../pipeline/pushschema-pipeline-interfaces";
 import { conversionForRename } from "../pipeline/rename-conversion";
 import { RegexRenameDetector } from "../pipeline/rename-detector";
@@ -290,8 +293,23 @@ export async function generateMigration(
     desiredSnapshot
   );
 
+  // 3c. Shared fields that become translated while their entity stays translated. The diff above
+  //     drops their main columns; these files move the values to the companion before it does.
+  const fieldJoinsPlans = planFieldsJoiningTranslation(
+    [
+      ...args.collections.map(e => tagged(e, "collection")),
+      ...args.singles.map(e => tagged(e, "single")),
+      ...args.components.map(e => tagged(e, "fieldGroup")),
+    ],
+    previousSnapshot,
+    args.dialect,
+    args.defaultLocale ?? "en"
+  );
+
   const hasCompanions =
-    companionPlans.length > 0 || fieldLeavesPlans.length > 0;
+    companionPlans.length > 0 ||
+    fieldLeavesPlans.length > 0 ||
+    fieldJoinsPlans.length > 0;
   if (operations.length === 0 && !hasCompanions) {
     return null;
   }
@@ -301,7 +319,20 @@ export async function generateMigration(
   let decisions: RenameDecision[] = [];
   if (operations.length > 0) {
     const detector = new RegexRenameDetector();
-    const candidates = detector.detect(operations, args.dialect);
+    // A joining field's main column goes to the companion, not to another main column, so its
+    // drop is no rename source.
+    const candidates = detector.detect(
+      operationsToJudge(
+        operations,
+        fieldJoinsPlans.flatMap(({ plan }) =>
+          plan.spec.columns.map(column => ({
+            tableName: plan.spec.mainTable,
+            columnName: column.name,
+          }))
+        )
+      ),
+      args.dialect
+    );
     decisions = await promptRenames(candidates, {
       nonInteractive: args.nonInteractive,
       autoAccept: args.autoAcceptRenames,
@@ -462,6 +493,15 @@ export async function generateMigration(
       entity,
       upSql: plan.archive.upSql,
       downSql: plan.archive.downSql,
+    })),
+    //    - A field becoming translated: its JOINS file runs before the main file, which drops the
+    //      field's main column, so the value is on the companion first.
+    ...fieldJoinsPlans.map(({ plan, entity }) => ({
+      spec: plan.spec,
+      kind: "joins" as const,
+      entity,
+      upSql: plan.upSql,
+      downSql: plan.downSql,
     })),
   ];
   beforeMain.forEach(({ spec, ...file }, i) => {
@@ -643,9 +683,16 @@ function planCompanionMigrations(
       ? prevTable.columns.map(col => col.name)
       : [];
     // If the table existed but the localized columns are already gone, a prior
-    // migration created the companion → nothing to do (companionExisted).
-    const hadLocalizedColumns = spec.columns.some(col =>
-      prevMainColumnNames.includes(col.name)
+    // migration created the companion → nothing to do (companionExisted). A field joining
+    // translation still has its main column, but its move is the `joins` file's, so it does not
+    // make this an enable.
+    const joining = new Set(
+      fieldsJoiningTranslationIn(c, previousSnapshot, dialect).map(
+        j => j.column.name
+      )
+    );
+    const hadLocalizedColumns = spec.columns.some(
+      col => prevMainColumnNames.includes(col.name) && !joining.has(col.name)
     );
     const companionExisted = prevTable !== undefined && !hadLocalizedColumns;
 
@@ -756,6 +803,83 @@ function fieldsLeavingTranslationIn(
     if (isFieldLocalized(field, true)) return [];
     const column = fieldToLocalizedColumnSpec(field, dialect, "codeFirst");
     return column && recorded.includes(column.name) ? [{ field, column }] : [];
+  });
+}
+
+/** One entity's fields that become translated, and the file that moves their values. */
+interface FieldJoinsEntry {
+  plan: FieldLeavesFile;
+  entity: I18nTransitionKind;
+}
+
+/**
+ * The fields of a translated entity that the previous snapshot recorded as shared columns of its
+ * main table, translated now. The mirror of `fieldsLeavingTranslationIn`, read from the same
+ * marker, so a snapshot written before the marker existed plans nothing. A field added in this
+ * change has no main column and is not one of them.
+ */
+function fieldsJoiningTranslationIn(
+  c: MinimalConfigEntity,
+  previousSnapshot: NextlySchemaSnapshot,
+  dialect: SupportedDialect
+): LeavingField[] {
+  if (c.localized !== true) return [];
+  const prevMain = previousSnapshot.tables.find(t => t.name === c.tableName);
+  if (prevMain?.localized !== true || !prevMain.localizedColumns) return [];
+  const translated = new Set(prevMain.localizedColumns);
+  const onMain = new Set(prevMain.columns.map(col => col.name));
+  return c.fields.flatMap(field => {
+    if (!isFieldLocalized(field, true)) return [];
+    const column = fieldToLocalizedColumnSpec(field, dialect, "codeFirst");
+    return column && onMain.has(column.name) && !translated.has(column.name)
+      ? [{ field, column }]
+      : [];
+  });
+}
+
+/**
+ * Plan the `joins` file for each translated entity whose shared fields become translated
+ * (`planFieldJoinsTranslationMigration`).
+ */
+function planFieldsJoiningTranslation(
+  entities: TaggedConfigEntity[],
+  previousSnapshot: NextlySchemaSnapshot,
+  dialect: SupportedDialect,
+  defaultLocale: string
+): FieldJoinsEntry[] {
+  return entities.flatMap(({ entity: c, kind }) => {
+    const joining = fieldsJoiningTranslationIn(c, previousSnapshot, dialect);
+    if (joining.length === 0) return [];
+    const names = new Set(joining.map(j => j.field.name));
+    // The fields as they were: the joining ones shared.
+    const oldFields = c.fields.map(f =>
+      names.has(f.name) ? { ...f, localized: false } : f
+    );
+    const prevMain = previousSnapshot.tables.find(t => t.name === c.tableName);
+    return [
+      {
+        entity: kind,
+        plan: planFieldJoinsTranslationMigration({
+          spec: {
+            dialect,
+            collection: c.slug,
+            mainTable: c.tableName,
+            companionTable: `${c.tableName}_locales`,
+            defaultLocale,
+            parentIdType: dialect === "mysql" ? "VARCHAR(36)" : "TEXT",
+            columns: joining.map(j => j.column),
+            // A default-language row created for an entry takes its publishing state, when the
+            // main table and the companion both have one before this change.
+            status:
+              c.status === true &&
+              prevMain?.columns.some(col => col.name === "status") === true,
+          },
+          builtBy: "codeFirst",
+          oldFields,
+          newFields: c.fields,
+        }),
+      },
+    ];
   });
 }
 

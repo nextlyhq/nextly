@@ -58,6 +58,7 @@ export async function readCompanionColumnHistory(
     switch (intent.kind) {
       case "create-only":
       case "enable":
+      case "joins":
         for (const column of intent.spec.columns) {
           columns.set(column.name, column);
         }

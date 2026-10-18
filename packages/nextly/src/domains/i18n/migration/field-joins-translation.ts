@@ -24,7 +24,12 @@ import {
   buildDefaultLocaleRefreshStatements,
   buildMissingDefaultRowsInsert,
 } from "./generate-up";
+import {
+  type FieldLeavesFile,
+  planFieldLeavesTranslationMigration,
+} from "./plan-field-leaves-migration";
 import type { CompanionFieldLike } from "./reconcile-companion";
+import type { CompanionMigrationSpec } from "./types";
 
 /**
  * The fields of a translated entity that become translated in this change, having been shared
@@ -211,5 +216,47 @@ export function buildFieldsJoiningTranslationStatements(args: {
         ),
       ...copy,
     ],
+  };
+}
+
+/**
+ * The `joins` file `nextly migrate:create` writes for shared fields that become translated while
+ * their entity stays translated. It runs before the main migration, which drops the fields' main
+ * columns, and its DOWN runs after the main migration's DOWN has put them back.
+ *
+ * - UP adds each field's companion column and gives every entry's default-language row the main
+ *   table's value (`buildFieldsJoiningTranslationStatements`), creating the row where an entry has
+ *   none. The other languages are given no value they never had.
+ * - DOWN is a field leaving translation, so it is that move's own statements
+ *   (`planFieldLeavesTranslationMigration`): the other languages' values archived, the default
+ *   language's copied back onto the main column, and the companion column dropped.
+ *
+ * `spec.columns` are the joining fields' companion columns; `oldFields` and `newFields` are the
+ * entity's fields before and after, which say which fields join.
+ */
+export function planFieldJoinsTranslationMigration(args: {
+  spec: CompanionMigrationSpec;
+  builtBy: ColumnOrigin;
+  oldFields: readonly CompanionFieldLike[];
+  newFields: readonly CompanionFieldLike[];
+}): FieldLeavesFile {
+  const { spec } = args;
+  const up = buildFieldsJoiningTranslationStatements({
+    slug: spec.collection,
+    tableName: spec.mainTable,
+    dialect: spec.dialect,
+    builtBy: args.builtBy,
+    defaultLocale: spec.defaultLocale,
+    oldFields: args.oldFields,
+    newFields: args.newFields,
+    status: spec.status === true,
+    // The entity was translated before, so a database built from its migrations has the companion.
+    companionExists: true,
+  });
+  const leaving = planFieldLeavesTranslationMigration(spec);
+  return {
+    upSql: up.statements.map(s => `${s};`).join("\n\n"),
+    downSql: `${leaving.archive.upSql}\n\n${leaving.shared.upSql}`,
+    spec,
   };
 }
