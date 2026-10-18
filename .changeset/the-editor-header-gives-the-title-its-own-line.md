@@ -35,5 +35,7 @@ first. The title has a line of its own below at full width, so it is no
 longer cut to a few words wherever the actions take the width, and the save
 state moves to a status line under it. Save draft, Unpublish and the other
 secondary document verbs keep their words at every width: they draw no icon,
-so at narrow widths they used to leave an empty bordered button. What each
-control does is unchanged.
+so at narrow widths they used to leave an empty bordered button. On a
+phone, History and the preview move into the document's menu and the panel
+toggle goes, so the actions keep to one row. What each control does is
+unchanged.
