@@ -32,8 +32,9 @@
 A release's documents are checked before the moment, and a hard problem stops
 scheduling. `GET /api/releases/:id/readiness` and `nextly.releases.readiness()`
 report each document's hard problems (no author, an author who is gone or may
-no longer publish or unpublish it, a document that is gone, unreleased work
-held in another language, a document going live that fails validation or edits
+no longer publish or unpublish it, a document that is gone, a collection or
+Single without a draft/published lifecycle or whose translations lack a
+per-language status, unreleased work held in another language, a document going live that fails validation or edits
 a field its author may no longer write) and soft ones (another scheduled release holds it,
 and which one wins). Every document is checked, however many the release holds.
 Scheduling, Publish now and adding a document to a scheduled release are refused
