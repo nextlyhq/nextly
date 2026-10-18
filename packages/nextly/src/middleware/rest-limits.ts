@@ -22,6 +22,8 @@
  *
  * @module middleware/rest-limits
  */
+import { container } from "../di/container";
+import { NextlyError } from "../errors/nextly-error";
 import { getTrustedClientIp } from "../utils/get-trusted-client-ip";
 
 import {
@@ -457,9 +459,50 @@ export function createRestLimits(
   );
   return new RestLimits(
     settings,
-    config.store ?? new InMemoryRateLimitStore(),
+    config.store ?? coreCountsOr(new InMemoryRateLimitStore()),
     readers
   );
+}
+
+/**
+ * Where core's own limits count, read on every call, or `fallback` while the
+ * services are not registered yet.
+ *
+ * Read per call because the REST limit is built when the route handler is,
+ * which can be before the services are: one store chosen then would be this
+ * process's memory for good, and on the database store each instance would
+ * count a budget of its own.
+ */
+function coreCountsOr(fallback: RateLimitStore): RateLimitStore {
+  const current = (): RateLimitStore => {
+    try {
+      if (container.has("coreRateLimitStore")) {
+        return container.get<RateLimitStore>("coreRateLimitStore");
+      }
+    } catch {
+      // The container is not initialized yet.
+    }
+    return fallback;
+  };
+  return {
+    increment: (key, windowMs) => current().increment(key, windowMs),
+    reset: key => current().reset(key),
+    consume: (key, limit, windowMs) => {
+      const store = current();
+      // Both stores read here have `consume`: the core store when it is not
+      // the app's own (which the REST limit is given directly), and memory.
+      // Refused rather than emulated, since a peek emulated by `increment`
+      // would record the very request it was asked not to.
+      if (!store.consume) {
+        return Promise.reject(
+          NextlyError.internal({
+            logContext: { reason: "rest-limit-store-without-consume" },
+          })
+        );
+      }
+      return store.consume(key, limit, windowMs);
+    },
+  };
 }
 
 /**

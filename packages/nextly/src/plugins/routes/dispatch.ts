@@ -500,7 +500,7 @@ async function admitUnresolvedAuthRoute(
   configured: {
     requestsPerHour: number;
     windowMs: number;
-    store?: RateLimitStore;
+    counts?: RateLimitStore;
   }
 ): Promise<number | null> {
   const { noteUnresolvedAuthRequest } = await import(
@@ -514,7 +514,7 @@ async function admitUnresolvedAuthRoute(
     route: matched.route,
     budget: configured.requestsPerHour,
     windowMs: configured.windowMs,
-    ...(configured.store === undefined ? {} : { store: configured.store }),
+    ...(configured.counts === undefined ? {} : { store: configured.counts }),
     secret: env.NEXTLY_SECRET || "",
   });
   return verdict.allowed ? null : verdict.resetAt;
@@ -584,7 +584,7 @@ async function applyRouteRateLimit(
   const resetAt =
     declared === "auth" && resolved === null
       ? await admitUnresolvedAuthRoute(req, matched, configured)
-      : await admitByAddress(key, budget, configured.store);
+      : await admitByAddress(key, budget, configured.counts);
   if (resetAt === null) return null;
 
   const retryAfter = Math.max(1, Math.ceil((resetAt - Date.now()) / 1000));

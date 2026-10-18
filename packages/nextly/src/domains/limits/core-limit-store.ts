@@ -130,19 +130,25 @@ export function coreLimitStore(
       windowMs: number
     ): Promise<RateLimitRecord & { allowed: boolean }> {
       const stored = storeKey(key);
-      return store.update([stored], (current, now) => {
-        const live = liveBuckets(current.get(stored), now, windowMs);
-        const held = recordOf(live, now, windowMs);
-        // A limit of zero records nothing, so a peek never counts.
-        if (held.count >= limit) {
-          return { write: new Map(), result: { ...held, allowed: false } };
+      return store.update<RateLimitRecord & { allowed: boolean }>(
+        [stored],
+        (current, now) => {
+          const live = liveBuckets(current.get(stored), now, windowMs);
+          const held = recordOf(live, now, windowMs);
+          // A limit of zero records nothing, so a peek never counts.
+          if (held.count >= limit) {
+            return {
+              write: new Map<string, StoredLimit | null>(),
+              result: { ...held, allowed: false },
+            };
+          }
+          const buckets = withAttempt(live, now, windowMs);
+          return {
+            write: new Map([[stored, entryOf(buckets, windowMs)]]),
+            result: { ...recordOf(buckets, now, windowMs), allowed: true },
+          };
         }
-        const buckets = withAttempt(live, now, windowMs);
-        return {
-          write: new Map([[stored, entryOf(buckets, windowMs)]]),
-          result: { ...recordOf(buckets, now, windowMs), allowed: true },
-        };
-      });
+      );
     },
 
     async reset(key: string): Promise<void> {

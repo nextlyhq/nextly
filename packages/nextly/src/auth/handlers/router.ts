@@ -34,7 +34,11 @@ import { handleSession } from "./session";
 import type { WithSessionRowTransaction } from "./session-row";
 import { handleSetInitialPassword } from "./set-initial-password";
 import { handleSetupStatus, handleSetup } from "./setup";
-import { admitUnknownSource, type StoredTokenKind } from "./unknown-source";
+import {
+  admitUnknownSource,
+  countsOf,
+  type StoredTokenKind,
+} from "./unknown-source";
 import { handleVerifyEmail, handleResendVerification } from "./verify-email";
 
 /**
@@ -136,8 +140,14 @@ export interface AuthRouterDeps {
      */
     store?: RateLimitStore;
     /**
-     * Where unknown-source admissions are counted. Absent means `store`
-     * when one is set, else this process's own counter.
+     * Where core's own limits count: `store` when the app configured one,
+     * else the limit store the site selected. Absent means this process's
+     * memory.
+     */
+    counts?: RateLimitStore;
+    /**
+     * Where unknown-source admissions are counted. Absent means `counts`
+     * when it is set, else this process's own counter.
      */
     unknownSourceCounter?: UnknownSourceCounter;
   };
@@ -522,7 +532,7 @@ async function admitAddress(
   ip: string,
   deps: AuthRouterDeps
 ): Promise<UnknownSourceVerdict> {
-  const result = await authRateLimiter(deps.authRateLimit.store).check(
+  const result = await authRateLimiter(countsOf(deps.authRateLimit)).check(
     `auth-ip:${ip}`,
     deps.authRateLimit.requestsPerHour,
     deps.authRateLimit.windowMs

@@ -24,7 +24,10 @@ import type { LimitStore } from "../../domains/limits/limit-store";
 import { NextlyError } from "../../errors";
 import { getHookRegistry } from "../../hooks/hook-registry";
 import { env } from "../../lib/env";
-import type { RateLimitStore } from "../../middleware/rate-limit";
+import {
+  isRateLimitStore,
+  type RateLimitStore,
+} from "../../middleware/rate-limit";
 import {
   NO_PLUGIN_GRANTS,
   type PluginGrants,
@@ -865,6 +868,23 @@ function readLimitStore(
 }
 
 /**
+ * Where core's own limits count, as the container registered it, or the app's
+ * own store of the older contract where the container has none.
+ */
+function countsIn(
+  getService: (name: string) => unknown,
+  configured?: RateLimitStore
+): { counts?: RateLimitStore } {
+  try {
+    const counts = getService("coreRateLimitStore");
+    if (isRateLimitStore(counts)) return { counts };
+  } catch {
+    // A container built without the limit services.
+  }
+  return configured === undefined ? {} : { counts: configured };
+}
+
+/**
  * The configured per-IP auth limit.
  *
  * Exported so a plugin route opting into `rateLimit: "auth"` uses the same
@@ -874,9 +894,19 @@ function readLimitStore(
 export function readAuthRateLimit(getService: (name: string) => unknown): {
   requestsPerHour: number;
   windowMs: number;
+  /** An app's store of the older contract, when it configured one. */
   store?: RateLimitStore;
+  /**
+   * Where core's own limits count: that store, or the selected limit store.
+   * Undefined only where the container has neither registered.
+   */
+  counts?: RateLimitStore;
 } {
-  const fallback = { requestsPerHour: 30, windowMs: 3_600_000 };
+  const fallback = {
+    requestsPerHour: 30,
+    windowMs: 3_600_000,
+    ...countsIn(getService),
+  };
   try {
     const config = getService("config");
 
@@ -900,6 +930,7 @@ export function readAuthRateLimit(getService: (name: string) => unknown): {
       ),
       windowMs: numberOr(limits?.["windowMs"], fallback.windowMs),
       ...(store === undefined ? {} : { store }),
+      ...countsIn(getService, store),
     };
   } catch {
     return fallback;

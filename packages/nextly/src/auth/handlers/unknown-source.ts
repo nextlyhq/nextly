@@ -21,6 +21,7 @@
  */
 import { createHmac, hkdfSync } from "node:crypto";
 
+import type { RateLimitStore } from "../../middleware/rate-limit";
 import { presentedPendingToken } from "../cookies/pending-cookie";
 import { normalizeAccountEmail } from "../credentials/account-email";
 import { authRateLimiter } from "../middleware/rate-limiter";
@@ -248,13 +249,24 @@ async function tokenOwner(
   }
 }
 
+/**
+ * Where core's own limits count for these deps: `counts`, or a store given
+ * directly as `store` where nothing registered `counts`.
+ */
+export function countsOf(
+  limits: Pick<AuthRouterDeps["authRateLimit"], "counts" | "store">
+): RateLimitStore | undefined {
+  return limits.counts ?? limits.store;
+}
+
 /** Where this deployment counts unknown-source admissions. */
 function counterFor(deps: AuthRouterDeps): UnknownSourceCounter {
-  const { unknownSourceCounter, store } = deps.authRateLimit;
+  const { unknownSourceCounter } = deps.authRateLimit;
   if (unknownSourceCounter) return unknownSourceCounter;
-  return store === undefined
+  const counts = countsOf(deps.authRateLimit);
+  return counts === undefined
     ? memoryUnknownSourceCounter
-    : new StoreUnknownSourceCounter(authRateLimiter(store));
+    : new StoreUnknownSourceCounter(authRateLimiter(counts));
 }
 
 /**
