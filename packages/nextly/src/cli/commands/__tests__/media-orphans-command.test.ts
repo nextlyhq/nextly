@@ -110,7 +110,7 @@ describe("nextly media orphans, as the CLI runs it", () => {
   // Two storage plugins on one bucket are two adapter objects; whether they
   // share a place is read from their prefixes, not from which object is
   // which.
-  it("removes nothing where another collection's storage has media's prefix", async () => {
+  it("names the collection whose storage has media's prefix", async () => {
     const media = bucketWithOrphan("media");
     const docs = bucketWithOrphan("media");
     seen.storage = [
@@ -135,7 +135,6 @@ describe("nextly media orphans, as the CLI runs it", () => {
       dir,
       "media",
       "orphans",
-      "--apply",
     ]);
 
     expect(exits).toEqual([0]);
@@ -149,9 +148,8 @@ describe("nextly media orphans, as the CLI runs it", () => {
     expect(said).toMatch(/docs/);
   });
 
-  it("removes a left-behind thumbnail where media's prefix is its own", async () => {
+  it("lists a left-behind thumbnail where media's prefix is its own, and changes nothing", async () => {
     const media = bucketWithOrphan("media");
-    const docs = bucketWithOrphan("docs");
     seen.storage = [
       {
         name: "s3-media",
@@ -159,11 +157,36 @@ describe("nextly media orphans, as the CLI runs it", () => {
         collections: { media: { prefix: "media" } },
         adapter: media.adapter,
       },
+    ];
+
+    await createProgram().parseAsync([
+      "node",
+      "nextly",
+      "--cwd",
+      dir,
+      "media",
+      "orphans",
+    ]);
+
+    expect(exits).toEqual([0]);
+    expect(media.deleted).toEqual([]);
+    const said = vi
+      .mocked(console.log)
+      .mock.calls.map(args => String(args[0]))
+      .join("\n");
+    expect(said).toContain(media.path);
+    expect(said).toMatch(/remove them by hand/);
+  });
+
+  // Removal is not available yet: the command lists, and the site removes.
+  it("refuses --apply before it connects, and changes nothing", async () => {
+    const media = bucketWithOrphan("media");
+    seen.storage = [
       {
-        name: "s3-docs",
+        name: "s3-media",
         type: "s3",
-        collections: { docs: { prefix: "docs" } },
-        adapter: docs.adapter,
+        collections: { media: { prefix: "media" } },
+        adapter: media.adapter,
       },
     ];
 
@@ -177,14 +200,16 @@ describe("nextly media orphans, as the CLI runs it", () => {
       "--apply",
     ]);
 
-    expect(exits).toEqual([0]);
-    expect(media.deleted).toEqual([media.path]);
+    expect(exits).toEqual([1]);
+    expect(media.deleted).toEqual([]);
+    expect(seen.loadConfig).toEqual([]);
+    expect(seen.calls).toEqual([]);
   });
 
   // Collections with no storage plugin upload through the local-disk
   // fallback, into the default uploads folder an explicit local plugin for
   // media may also use, and nothing shows the two are apart.
-  it("removes nothing where media's storage is local disk, which the fallback may share", async () => {
+  it("lists, as not shown to be media's, where media's storage is local disk, which the fallback may share", async () => {
     const media = bucketWithOrphan("media", "local");
     seen.storage = [
       {
@@ -202,7 +227,6 @@ describe("nextly media orphans, as the CLI runs it", () => {
       dir,
       "media",
       "orphans",
-      "--apply",
     ]);
 
     expect(exits).toEqual([0]);
@@ -245,41 +269,6 @@ describe("nextly media orphans, as the CLI runs it", () => {
 
     expect(seen.loadedIn).toEqual([dir]);
     expect(seen.loadConfig).toEqual([{ configPath: undefined, cwd: dir }]);
-  });
-
-  // The CLI reads `.env` from the directory it was run in, before it reads
-  // --cwd, so a database named there may be another project's.
-  it("removes nothing when run from another project with its own .env", async () => {
-    const media = bucketWithOrphan("media");
-    seen.storage = [
-      {
-        name: "s3-media",
-        type: "s3",
-        collections: { media: { prefix: "media" } },
-        adapter: media.adapter,
-      },
-    ];
-    const elsewhere = path.join(dir, "elsewhere");
-    await mkdir(elsewhere);
-    await writeFile(
-      path.join(elsewhere, ".env"),
-      "DATABASE_URL=file:other.db\n"
-    );
-    process.chdir(elsewhere);
-
-    await createProgram().parseAsync([
-      "node",
-      "nextly",
-      "--cwd",
-      dir,
-      "media",
-      "orphans",
-      "--apply",
-    ]);
-
-    expect(exits).toEqual([1]);
-    expect(media.deleted).toEqual([]);
-    expect(seen.calls).not.toContain("select media");
   });
 
   it("reads the project's own .env for what is not already set", async () => {

@@ -130,7 +130,9 @@ export async function mediaOrphans(options: {
       `${search.orphans.length} left-behind thumbnail(s), which no media item refers to:`
     );
     for (const path of search.orphans) say(`  ${path}`);
-    say("Nothing was changed. Run again with --apply to remove them.");
+    say(
+      "Nothing was changed. Check each and remove them by hand: removal by this command follows in a later release."
+    );
     return 0;
   }
   const result = await removeOrphanThumbnails(
@@ -144,7 +146,7 @@ export async function mediaOrphans(options: {
 
 /**
  * The unreferenced thumbnails nothing shows are media's, listed for the site
- * to check and left as they are even with --apply: by key, which tells apart
+ * to check: by key, which tells apart
  * files uploaded under one name, and by that name where there is one.
  */
 function sayUnconfirmed(
@@ -154,7 +156,7 @@ function sayUnconfirmed(
   if (unconfirmed.length === 0) return;
   const named = unconfirmed.some(file => file.name !== undefined);
   context.say(
-    `${unconfirmed.length} unreferenced thumbnail(s) that nothing shows are media's. ${whyUnconfirmed(named, context)} They are left as they are, even with --apply; check each and remove the ones that are media's by hand:`
+    `${unconfirmed.length} unreferenced thumbnail(s) that nothing shows are media's. ${whyUnconfirmed(named, context)} Check each, and remove the ones that are media's by hand:`
   );
   for (const { path, name } of unconfirmed) {
     context.say(
@@ -185,9 +187,9 @@ function whyUnconfirmed(
   }
   if (sharedWith.length > 0) {
     const one = sharedWith.length === 1;
-    return `Media's storage place is not its own: ${sharedWith.join(", ")} also use${one ? "s" : ""} it, or ha${one ? "s" : "ve"} no prefix, so a file of the same form there may not be media's. Give each of them a \`prefix\` of its own in the storage config to have later runs remove them.`;
+    return `Media's storage place is not its own: ${sharedWith.join(", ")} also use${one ? "s" : ""} it, or ha${one ? "s" : "ve"} no prefix, so a file of the same form there may not be media's. Give each of them a \`prefix\` of its own in the storage config, so that media's files can be told apart.`;
   }
-  return "The media collection has no storage prefix of its own, so another collection or upload can store a file of the same form in the same place. Set a `prefix` for media in its storage config to have later runs remove them.";
+  return "The media collection has no storage prefix of its own, so another collection or upload can store a file of the same form in the same place. Set a `prefix` for media in its storage config, so that its files can be told apart.";
 }
 
 /** What --apply did with each listed thumbnail. */
@@ -270,9 +272,10 @@ function otherUploaders(
 }
 
 /**
- * `nextly media orphans [--apply]`: finds, and with --apply removes, the
- * upload-time thumbnails deletes before this release left in the media
- * storage, still publicly served. A dry run by default.
+ * `nextly media orphans`: lists the upload-time thumbnails deletes before
+ * this release left in the media storage, still publicly served, for the
+ * site to remove by hand. Changes nothing; `--apply` is refused until
+ * removal is offered.
  */
 export function createMediaCommand(): Command {
   const media = new Command("media").description(
@@ -280,18 +283,30 @@ export function createMediaCommand(): Command {
   );
   media
     .command("orphans")
-    .description(
-      "List upload-time thumbnails no media item refers to; remove them with --apply"
+    .description("List upload-time thumbnails no media item refers to")
+    .option(
+      "--apply",
+      "Not available yet: removal follows in a later release",
+      false
     )
-    .option("--apply", "Remove the thumbnails listed", false)
     .action(async (cmdOptions: { apply?: boolean }, cmd: Command) => {
       const context = createContext(cmd.optsWithGlobals());
+      // Removal is not offered yet: the command lists, changing nothing,
+      // and the site removes what it lists by hand. Refused before anything
+      // is read or connected.
+      if (cmdOptions.apply === true) {
+        context.logger.error(
+          "Removal is not available yet: run `nextly media orphans` to list the left-behind thumbnails, and remove them by hand."
+        );
+        process.exit(1);
+        return;
+      }
       let adapter: CLIDatabaseAdapter | null = null;
       try {
         // Resolved once, from where the command was run: a relative --cwd
         // read again after the change would name a folder inside itself.
         const cwd = path.resolve(context.cwd);
-        if (!enterProject(cwd, cmdOptions.apply === true, context.logger)) {
+        if (!enterProject(cwd, false, context.logger)) {
           process.exit(1);
           return;
         }
@@ -327,7 +342,7 @@ export function createMediaCommand(): Command {
           ),
           sharedWith: collectionsSharingMediaPlace(prefix, others),
           referenced: () => referencedStoredPaths(drizzle),
-          apply: cmdOptions.apply === true,
+          apply: false,
           say: line => console.log(line),
         });
         await adapter.disconnect();
