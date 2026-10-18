@@ -30,7 +30,10 @@ import { createDynamicHandlers } from "../../../routeHandler";
 import { ServiceContainer } from "../../../services/index";
 import type { CollectionsHandler } from "../../../services/collections-handler";
 
+import { ReleasesRepository } from "../releases-repository";
+
 import { seedLiveAuthor, seedPlainAuthor } from "./helpers/live-author";
+import { ANY_EDITABLE_STATE } from "./helpers/release-writes";
 
 let current: TestNextly | undefined;
 
@@ -624,11 +627,28 @@ describe.each(getConfiguredTestDialects())(
       const ids: string[] = [];
       for (let i = 0; i < 250; i += 1) ids.push(await entry(t, "articles"));
       await breakTitle(t, ids[249]);
-      const { releaseId, memberIds } = await releaseOf(
-        t,
-        author,
-        ids.map(id => ({ collection: "articles" as const, id }))
-      );
+      // Members written through the repository: what is under test is that
+      // readiness checks every batch, not the add path, which each member
+      // would otherwise pay for in full on every dialect.
+      const repo = new ReleasesRepository(t.adapter);
+      const release = await t.nextly.releases.create({ title: "Launch" });
+      const releaseId = release.id;
+      const memberIds: string[] = [];
+      for (const id of ids) {
+        const member = await repo.addMember(
+          {
+            releaseId,
+            scopeKind: "collection",
+            scopeSlug: "articles",
+            entryId: id,
+            locale: null,
+            action: "publish",
+            createdBy: author,
+          },
+          ANY_EDITABLE_STATE
+        );
+        memberIds.push(member.id);
+      }
 
       const found = await t.nextly.releases.readiness({ releaseId });
       expect(found.hard.map(f => [f.memberId, f.code])).toEqual([
