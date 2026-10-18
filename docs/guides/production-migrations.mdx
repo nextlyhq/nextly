@@ -1000,6 +1000,21 @@ database, after `nextly migrate`, before the first production boot that
 includes the plugin. Running it again is safe: it applies what is pending and
 calls `onInstall` again, which is why `onInstall` has to be idempotent.
 
+That makes the build the place to run it, against the database the build
+targets. A project from `create-nextly-app` does so already: its `build`
+script installs each plugin its config registers. Adding a plugin to an
+existing app? Add its install to your build, after `nextly migrate`:
+
+```bash
+nextly migrate && nextly plugins install <name> && next build
+```
+
+Each run of an install records one row in `nextly_schema_events` and changes
+nothing else that is already in place. When you remove a plugin from
+`nextly.config.ts`, remove its `nextly plugins install` from your build
+script, since installing a plugin that is not configured fails the build.
+Install plugins that depend on others after them, as `dependsOn` lists them.
+
 A plugin's install also refuses while a plugin it depends on is not installed
 (`PLUGIN_DEPENDENCY_NOT_INSTALLED`): one never installed, uninstalled, or
 whose uninstall has not finished. That holds for a dependency that owns no

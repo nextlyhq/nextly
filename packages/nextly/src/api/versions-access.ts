@@ -38,6 +38,7 @@ import {
 import { computeVersionDiff } from "../domains/versions/diff";
 import type { VersionDiff } from "../domains/versions/diff";
 import { hydrateDiffReferences } from "../domains/versions/diff-references";
+import { HistoryDividers } from "../domains/versions/history-dividers";
 import { readPartIsLive } from "../domains/versions/part-liveness";
 import { hydrateSnapshotReferences } from "../domains/versions/snapshot-references";
 import {
@@ -48,10 +49,7 @@ import {
   lastLookedAtByPart,
   markLastViewed,
 } from "../domains/versions/version-views";
-import {
-  VersionsRepository,
-  type VersionRef,
-} from "../domains/versions/versions-repository";
+import type { VersionRef } from "../domains/versions/versions-repository";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
 import type {
@@ -782,14 +780,12 @@ export async function withLastViewedMarks<
   if (personId === null) return rows;
   const adapter = getService("adapter");
   const looked = await lastLookedAtByPart(adapter, personId, args.ref);
-  // Each part's divider, found in the database: the version looked at, or the
-  // nearest older one kept, whichever page it falls on.
-  const repo = new VersionsRepository(adapter);
-  const dividers = new Map<string | null, number>();
-  for (const [part, versionNo] of looked) {
-    const divider = await repo.findNearestKeptInPart(args.ref, part, versionNo);
-    if (divider !== undefined) dividers.set(part, divider);
-  }
+  // Each part's divider, found in the database in one read: the version
+  // looked at, or the nearest older one kept, whichever page it falls on.
+  const dividers = await new HistoryDividers(
+    adapter,
+    getService("logger")
+  ).nearestKeptByPart(args.ref, looked);
   return markLastViewed(rows, dividers);
 }
 

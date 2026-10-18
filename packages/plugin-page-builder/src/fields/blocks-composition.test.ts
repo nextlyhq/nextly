@@ -502,6 +502,55 @@ describe("a component save judged against the locks inside its hosts", () => {
     expect(codes(issues)).toEqual(["COMPONENT_HOST_BROKEN"]);
   });
 
+  it("refuses a variant that breaks a second lock reading exactly like the first", async () => {
+    // Two sealed blocks of one type, each with a stored exposure of its
+    // text's tone. The variant already breaks the first; the save has it break
+    // the second too. The two faults name the same block type, slot and
+    // change, so only their number tells them apart.
+    const twoSealed = (overrides: Record<string, string>) =>
+      component(
+        [
+          node("s1", "acme/sealed", { body: [node("t1")] }),
+          node("s2", "acme/sealed", { body: [node("t2")] }),
+        ],
+        {
+          exposed: ["t1", "t2"].map(nodeId => ({
+            id: `tone-${nodeId}`,
+            label: "Tone",
+            nodeId,
+            propPath: "tone",
+            type: "select",
+            options: [{ value: "loud", label: "Loud" }],
+          })),
+          variants: { loud: { label: "Loud", overrides } },
+        }
+      );
+    const { readStored } = storeOf({
+      [COMPONENTS]: {
+        promo: { published: twoSealed({ "tone-t1": "loud" }) },
+      },
+      pages: {
+        home: {
+          published: page([
+            {
+              ...placing("i1", "promo"),
+              props: { componentId: "promo", variant: "loud" },
+            },
+          ]),
+        },
+      },
+    });
+    const { hostsOf } = listing([hostPage]);
+
+    const issues = await judge(
+      twoSealed({ "tone-t1": "loud", "tone-t2": "loud" }),
+      write(readStored, COMPONENTS, "promo"),
+      { hostsOf, status: "published" }
+    );
+
+    expect(codes(issues)).toEqual(["COMPONENT_HOST_BROKEN"]);
+  });
+
   it("warns about a host whose lock was already broken and is made no worse, naming the host and the rule", async () => {
     // The page's stored value for "tone" already changes design inside the
     // sealed slot. The save adds an unrelated exposure, which is reason enough
