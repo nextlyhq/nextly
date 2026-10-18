@@ -5,7 +5,7 @@ import fs from "fs-extra";
 import type { ProjectInfo } from "../types";
 
 import type { GeneratedFiles } from "./generated-files";
-import { configStringList } from "./next-config";
+import { appPageExtensions, moduleExtension } from "./page-extensions";
 import { writeNew } from "./write-new";
 
 /**
@@ -63,21 +63,6 @@ ${startNextly(configImport)}
 }
 
 /**
- * The page extension to name a new hook with: a TypeScript one first, since
- * the hook is TypeScript, then a JavaScript one; never a content extension
- * such as `mdx`, which Next.js would compile as content, and never `cjs`,
- * since the hook is an ES module and a `.cjs` file cannot hold one. Null when
- * the list holds no extension a hook can be written in.
- */
-function hookExtension(extensions: readonly string[]): string | null {
-  return (
-    extensions.find(extension => /(^|\.)tsx?$/.test(extension)) ??
-    extensions.find(extension => /(^|\.)(js|jsx|mjs)$/.test(extension)) ??
-    null
-  );
-}
-
-/**
  * The hook as `instrumentationHook` writes it, with its return type kept only
  * for a hook to be saved under a TypeScript extension. Its one piece of
  * TypeScript is that annotation; without it the hook is valid JavaScript and
@@ -89,28 +74,6 @@ function hookFor(configImport: string, extension: string | null): string {
   return extension !== null && /(^|\.)tsx?$/.test(extension)
     ? hook
     : hook.replace("register(): Promise<void>", "register()");
-}
-
-/** The files Next.js reads its own config from, in the order it looks. */
-const NEXT_CONFIG_NAMES = [
-  "next.config.js",
-  "next.config.mjs",
-  "next.config.ts",
-  "next.config.mts",
-  "next.config.cjs",
-];
-
-/** The text of the app's Next.js config, or null when it has none. */
-async function readNextConfig(
-  cwd: string
-): Promise<{ name: string; text: string } | null> {
-  for (const name of NEXT_CONFIG_NAMES) {
-    const file = path.join(cwd, name);
-    if (await fs.pathExists(file)) {
-      return { name, text: await fs.readFile(file, "utf-8") };
-    }
-  }
-  return null;
 }
 
 /** The first of `names` the app already has beside `app/`, or null. */
@@ -163,7 +126,7 @@ function pageExtensionsAdvice(
   extensions: readonly string[] | null
 ): GeneratedFiles["skipped"][number] {
   const sets = `${configName} sets pageExtensions, and Next.js reads the hook only under a name with one of them, so none was written`;
-  const extension = extensions === null ? null : hookExtension(extensions);
+  const extension = extensions === null ? null : moduleExtension(extensions);
   if (extensions !== null && extension === null) {
     return {
       path: path.posix.join(
@@ -206,12 +169,7 @@ export async function generateInstrumentation(
     ? "../nextly.config"
     : "./nextly.config";
   const result: GeneratedFiles = { written: [], changed: [], skipped: [] };
-  const nextConfig = await readNextConfig(cwd);
-  // Read from the config the app exports, as the Next config step reads it:
-  // a commented-out or nested `pageExtensions` sets nothing.
-  const extensions = nextConfig
-    ? configStringList(nextConfig.text, nextConfig.name, "pageExtensions")
-    : "absent";
+  const { configName, extensions } = await appPageExtensions(cwd);
 
   // With pageExtensions set, Next.js reads the hook only as
   // `instrumentation.<extension>` for one of them, so a default-named file
@@ -236,12 +194,7 @@ export async function generateInstrumentation(
   const relative = path.posix.join(dir, "instrumentation.ts");
   if (extensions !== "absent") {
     result.skipped.push(
-      pageExtensionsAdvice(
-        dir,
-        configImport,
-        nextConfig?.name ?? "The Next.js config",
-        extensions
-      )
+      pageExtensionsAdvice(dir, configImport, configName, extensions)
     );
     return result;
   }

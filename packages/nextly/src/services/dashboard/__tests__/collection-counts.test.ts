@@ -167,6 +167,35 @@ describe("a collection or Single kept off the dashboard is never counted", () =>
   });
 });
 
+describe("the recent-changes figure fails closed", () => {
+  it("counts nothing when the read that names the hidden collections failed", async () => {
+    // The scope may still allow everything, so a count run now would include the activity of
+    // collections kept off the dashboard: the read that names them is what failed.
+    containerGet.mockImplementation((name: string) => {
+      if (name === "collectionRegistryService") {
+        return {
+          getAllCollections: vi
+            .fn()
+            .mockRejectedValue(new Error("registry unreachable")),
+        };
+      }
+      if (name === "singleRegistryService") {
+        return { getAllSingles: vi.fn().mockResolvedValue([]) };
+      }
+      throw new Error(`unexpected container.get("${name}")`);
+    });
+
+    const adapter = makeAdapter();
+    const stats = await new DashboardService(adapter, makeLogger()).getStats({
+      scope: allResources(),
+      caller: CALLER,
+    });
+
+    expect(stats.content.recentChanges24h).toBe(0);
+    expect(activityQuery(adapter)).toBeUndefined();
+  });
+});
+
 /** The recent-changes count's query and its bound values, as the adapter received them. */
 function activityQuery(adapter: ReturnType<typeof makeAdapter>) {
   return vi

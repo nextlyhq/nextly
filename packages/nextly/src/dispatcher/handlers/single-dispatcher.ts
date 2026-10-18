@@ -131,8 +131,9 @@ import {
   getVersionDiffForDocument,
   getVersionForDocument,
   restoreVersionForDocument,
+  markVersionSeenForDocument,
   setVersionLabelForDocument,
-  listVersionsForDocument,
+  respondVersionPage,
   userFromParams,
   readComparisonParams,
 } from "./versions-methods";
@@ -243,17 +244,7 @@ export const SINGLE_VERSION_METHODS: Record<
     execute: async (_svc, p) => {
       const slug = String(p.slug ?? "");
       const entryId = await requireLiveSingleId(slug);
-      const result = await listVersionsForDocument({
-        scopeKind: "single",
-        slug,
-        entryId,
-        user: userFromParams(p),
-        authenticatedScope: readAuthenticatedScope(p),
-        limit: p.limit !== undefined ? Number(p.limit) : undefined,
-        cursor: p.cursor !== undefined ? Number(p.cursor) : undefined,
-        locale: p.locale !== undefined ? String(p.locale) : undefined,
-      });
-      return respondList(result.items, result.meta);
+      return respondVersionPage({ scopeKind: "single", slug, entryId }, p);
     },
   },
   restoreSingleVersion: {
@@ -309,7 +300,26 @@ export const SINGLE_VERSION_METHODS: Record<
         authenticatedScope: readAuthenticatedScope(p),
         ...comparison,
       });
-      return respondDoc(diff);
+      // Private to the caller: a comparison from where this person last
+      // looked differs from one person to the next.
+      return withSessionCacheHeaders(respondDoc(diff));
+    },
+  },
+  markSingleVersionSeen: {
+    execute: async (_svc, p) => {
+      const slug = String(p.slug ?? "");
+      // The live id comes from the server, never the request, as for every
+      // version operation on a Single.
+      const entryId = await requireLiveSingleId(slug);
+      const seen = await markVersionSeenForDocument({
+        scopeKind: "single",
+        slug,
+        entryId,
+        user: userFromParams(p),
+        authenticatedScope: readAuthenticatedScope(p),
+        versionNo: Number(p.versionNo),
+      });
+      return respondMutation("Marked as seen.", seen);
     },
   },
   setSingleVersionLabel: {

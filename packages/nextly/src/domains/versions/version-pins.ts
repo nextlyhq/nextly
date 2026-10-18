@@ -35,6 +35,7 @@ import { NextlyError } from "../../errors";
 import type { VersionScopeKind } from "../../schemas/versions/types";
 
 import type { VersionsDbApi } from "./db-api";
+import { lockDocument } from "./history-locks";
 import type { VersionRef } from "./versions-repository";
 
 const PINS_TABLE = "nextly_version_pins";
@@ -159,67 +160,6 @@ function assertSlot(slot: string): void {
       logContext: { slotLength: slot.length },
     });
   }
-}
-
-/**
- * Where each kind of entity is registered. A page has no registry row to lock
- * here, so its versions cannot be pinned yet: a pin on one is refused as a
- * document that does not exist.
- */
-export const REGISTRY_TABLES: Partial<Record<VersionScopeKind, string>> = {
-  collection: "dynamic_collections",
-  single: "dynamic_singles",
-};
-
-/**
- * The document's table, from a locking read of the entity's registry row on
- * the caller's transaction, so its row can be locked the way a save locks it.
- * Null when the collection or Single itself is gone.
- *
- * Locking the registry row is what orders a pin against the entity's deletion,
- * which sweeps the entity's pins and removes that row in one transaction: a
- * pin either commits before the sweep and is swept, or waits for it and finds
- * the entity gone.
- */
-async function documentTableName(
-  tx: TransactionContext,
-  ref: VersionRef
-): Promise<string | null> {
-  const registry = REGISTRY_TABLES[ref.scopeKind];
-  if (registry === undefined) return null;
-  const entity = await tx.selectOne<{ tableName: string }>(registry, {
-    columns: ["tableName"],
-    where: {
-      and: [{ column: "slug", op: "=" as const, value: ref.scopeSlug }],
-    },
-    forUpdate: true,
-  });
-  return entity ? entity.tableName : null;
-}
-
-/**
- * Take the document's write lock, the lock every save and delete of it
- * holds, and say whether the document still exists.
- *
- * One locking read rather than a lock and then a read: on MySQL a plain read
- * returns the transaction's snapshot, which can still hold a row a delete
- * committed while this waited for the lock; a locking read sees the latest
- * committed row on every dialect.
- */
-async function lockDocument(
-  tx: TransactionContext,
-  ref: VersionRef
-): Promise<boolean> {
-  const tableName = await documentTableName(tx, ref);
-  if (tableName === null) return false;
-  const row = await tx.selectOne<{ id: string }>(tableName, {
-    columns: ["id"],
-    where: {
-      and: [{ column: "id", op: "=" as const, value: ref.entryId }],
-    },
-    forUpdate: true,
-  });
-  return row !== null;
 }
 
 async function assertVersionExists(
