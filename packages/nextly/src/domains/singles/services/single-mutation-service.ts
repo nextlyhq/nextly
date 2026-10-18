@@ -2498,6 +2498,8 @@ export class SingleMutationService extends BaseService {
                   }
                 }
                 await captureInTx(tx, this.versionCapture, {
+                  // An update: a save that changes nothing records nothing.
+                  onlyIfChanged: true,
                   ref: {
                     scopeKind: "single",
                     scopeSlug: slug,
@@ -2559,6 +2561,8 @@ export class SingleMutationService extends BaseService {
               }
 
               await captureInTx(tx, this.versionCapture, {
+                // An update: a save that changes nothing records nothing.
+                onlyIfChanged: true,
                 ref: {
                   scopeKind: "single",
                   scopeSlug: slug,

@@ -978,6 +978,8 @@ export class CollectionMutationService extends BaseService {
        * parent state and the component rule below decides.
        */
       localeTag?: string;
+      /** An update, whose save may change nothing; a create always records. */
+      onlyIfChanged?: boolean;
     }
   ): Promise<void> {
     if (!args.versionsConfig?.enabled) {
@@ -985,6 +987,7 @@ export class CollectionMutationService extends BaseService {
     }
     try {
       await captureInTx(tx, this.versionCapture, {
+        onlyIfChanged: args.onlyIfChanged === true,
         ref: {
           scopeKind: "collection",
           scopeSlug: args.collectionName,
@@ -4876,6 +4879,8 @@ export class CollectionMutationService extends BaseService {
                 manyToManyFields
               );
               await captureInTx(tx, this.versionCapture, {
+                // An update: a save that changes nothing records nothing.
+                onlyIfChanged: true,
                 ref: {
                   scopeKind: "collection",
                   scopeSlug: params.collectionName,
@@ -6990,6 +6995,8 @@ export class CollectionMutationService extends BaseService {
                   ? { ...previousParent, status: "draft" }
                   : previousParent;
                 await captureInTx(tx, this.versionCapture, {
+                  // An update: a save that changes nothing records nothing.
+                  onlyIfChanged: true,
                   ref: {
                     scopeKind: "collection",
                     scopeSlug: params.collectionName,
@@ -7739,6 +7746,8 @@ export class CollectionMutationService extends BaseService {
 
               if (versionsConfig?.enabled && !storeAsWorkingDraft) {
                 await captureInTx(tx, this.versionCapture, {
+                  // An update: a save that changes nothing records nothing.
+                  onlyIfChanged: true,
                   ref: {
                     scopeKind: "collection",
                     scopeSlug: params.collectionName,
@@ -10243,6 +10252,7 @@ export class CollectionMutationService extends BaseService {
       // A held edit records no durable version: nothing was published.
       if (!storeAsWorkingDraft) {
         await this.captureTxVersion(tx, {
+          onlyIfChanged: true,
           collectionName: params.collectionName,
           entryId,
           contentStatus: (updated as { status?: unknown }).status,

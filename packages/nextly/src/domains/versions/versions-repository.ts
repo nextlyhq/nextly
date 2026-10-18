@@ -781,6 +781,10 @@ export class VersionsRepository {
       },
       orderBy: [{ column: "versionNo", direction: "desc" }],
       limit: 1,
+      // A locking read: on MySQL a plain one answers from the snapshot the
+      // transaction's first read took, so a write that waited for this
+      // document's lock would compare with a version older than the newest.
+      forUpdate: true,
     });
     return rows[0];
   }

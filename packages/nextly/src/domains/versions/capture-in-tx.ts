@@ -65,6 +65,13 @@ export interface CaptureInTxArgs {
    * so history reads it as that state rather than an ordinary save.
    */
   label?: string | null;
+  /**
+   * Record nothing when the save leaves this part of the document as its
+   * newest version holds it. For an UPDATE only: a create always records the
+   * version that says the document began, even where an earlier document
+   * under the same id left versions behind.
+   */
+  onlyIfChanged?: boolean;
 }
 
 /**
@@ -84,16 +91,44 @@ async function changesNothing(
   status: string,
   snapshot: Record<string, unknown>
 ): Promise<boolean> {
-  if (typeof args.sourceVersionNo === "number" || args.label) return false;
+  if (alwaysRecords(args)) return false;
   const latest = await new VersionsRepository(tx).findLatestInPart(
     args.ref,
     args.locale ?? null
   );
   if (!latest || latest.status !== status) return false;
-  const previous = latest.snapshot;
-  if (previous === null || typeof previous !== "object") return false;
   const entity = args.ref.scopeKind === "single" ? "single" : "collection";
-  return sameContent(snapshot, previous as Record<string, unknown>, entity);
+  return holdsTheSame(latest.snapshot, snapshot, entity);
+}
+
+/** A save that records whatever it holds: a create, a restore, a named version. */
+function alwaysRecords(args: CaptureInTxArgs): boolean {
+  return (
+    !args.onlyIfChanged ||
+    typeof args.sourceVersionNo === "number" ||
+    Boolean(args.label)
+  );
+}
+
+/** Whether a stored version's snapshot holds what this save would record. */
+function holdsTheSame(
+  previous: unknown,
+  snapshot: Record<string, unknown>,
+  entity: "single" | "collection"
+): boolean {
+  if (previous === null || typeof previous !== "object") return false;
+  const before = previous as Record<string, unknown>;
+  // The stored `status` itself, beside the version status it normalizes to.
+  // Under the draft/published lifecycle the two say the same thing; without
+  // it `status` is an authored field, and two values that both normalize to
+  // "published" are still a change.
+  if (
+    JSON.stringify(snapshot.status ?? null) !==
+    JSON.stringify(before.status ?? null)
+  ) {
+    return false;
+  }
+  return sameContent(snapshot, before, entity);
 }
 
 /**

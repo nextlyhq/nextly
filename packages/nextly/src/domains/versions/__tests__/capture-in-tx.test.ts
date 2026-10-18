@@ -135,7 +135,11 @@ describe("captureInTx", () => {
     const parts = { parentRow: { id: "e1", title: "Hi" } };
 
     it("records no version for an ordinary save", async () => {
-      const result = await captureInTx(unchanged, service(), { ref, parts });
+      const result = await captureInTx(unchanged, service(), {
+        ref,
+        parts,
+        onlyIfChanged: true,
+      });
       expect(result).toEqual({ versionNo: null });
       expect(capture).not.toHaveBeenCalled();
     });
@@ -144,6 +148,7 @@ describe("captureInTx", () => {
       await captureInTx(unchanged, service(), {
         ref,
         parts,
+        onlyIfChanged: true,
         sourceVersionNo: 2,
       });
       expect(capture).toHaveBeenCalledOnce();
@@ -153,6 +158,7 @@ describe("captureInTx", () => {
       await captureInTx(unchanged, service(), {
         ref,
         parts,
+        onlyIfChanged: true,
         label: "Before launch",
       });
       expect(capture).toHaveBeenCalledOnce();
@@ -162,7 +168,36 @@ describe("captureInTx", () => {
       await captureInTx(unchanged, service(), {
         ref,
         parts,
+        onlyIfChanged: true,
         contentStatus: "draft",
+      });
+      expect(capture).toHaveBeenCalledOnce();
+    });
+
+    it("records a create whatever an earlier document under its id left", async () => {
+      // No `onlyIfChanged`: a create says the document began.
+      await captureInTx(unchanged, service(), { ref, parts });
+      expect(capture).toHaveBeenCalledOnce();
+    });
+
+    it("records a change to an authored status that both values normalize past", async () => {
+      // Without the draft/published lifecycle `status` is an ordinary field:
+      // "queued" and "archived" both capture as version status "published".
+      const queued = {
+        select: () =>
+          Promise.resolve([
+            {
+              versionNo: 3,
+              status: "published",
+              snapshot: { id: "e1", title: "Hi", status: "queued" },
+            },
+          ]),
+      } as unknown as Parameters<typeof captureInTx>[0];
+      await captureInTx(queued, service(), {
+        ref,
+        parts: { parentRow: { id: "e1", title: "Hi", status: "archived" } },
+        contentStatus: "archived",
+        onlyIfChanged: true,
       });
       expect(capture).toHaveBeenCalledOnce();
     });
