@@ -104,7 +104,7 @@ function makeAdapter(
           if (raw !== undefined) ran(raw);
           return { rows: [] };
         },
-        transaction: async (run: (tx: typeof db) => Promise<void>) => run(db),
+        transaction: async (run: (tx: unknown) => Promise<void>) => run(db),
       };
       return db;
     }),

@@ -121,7 +121,7 @@ function makeAdapter(options: { mainTableExists?: boolean } = {}) {
           if (/^\s*(CREATE|ALTER|DROP)\b/i.test(text)) ranDdl(text);
           return { rows: [] };
         },
-        transaction: async (run: (tx: typeof db) => Promise<void>) => run(db),
+        transaction: async (run: (tx: unknown) => Promise<void>) => run(db),
         // No archive rows of unknown owner, so a teardown has none to label.
         selectDistinct: () => ({ from: () => ({ where: async () => [] }) }),
         delete: () => ({ where: async () => [] }),
