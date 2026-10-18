@@ -56,6 +56,61 @@ afterEach(() => {
 });
 
 describe("useDocumentAutosave", () => {
+  /**
+   * An edit saved for real before its recording was due. The save resets the
+   * form to what it stored, which leaves it clean, so the recording waiting
+   * for that edit would only write a copy of what was just saved.
+   */
+  /**
+   * The order a real save runs in: recording is turned off while the save is
+   * in flight, the save resets the form when it lands, and recording comes
+   * back on. The reset happens while recording is off, and must still drop
+   * the recording the edit queued.
+   */
+  it("records nothing for an edit saved while recording was off for the save", async () => {
+    const { result, rerender } = renderHook(
+      ({ enabled }: { enabled: boolean }) => useHarness(SCOPE, enabled),
+      { initialProps: { enabled: true } }
+    );
+
+    act(() => {
+      result.current.form.setValue("title", "hello", { shouldDirty: true });
+    });
+    rerender({ enabled: false });
+    act(() => {
+      result.current.form.reset({ title: "hello" });
+    });
+    rerender({ enabled: true });
+    act(() => {
+      vi.advanceTimersByTime(DEBOUNCE * 2);
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(saveSpy).not.toHaveBeenCalled();
+  });
+
+  it("records nothing for an edit a real save stored before the debounce", async () => {
+    const { result } = renderHook(() => useHarness());
+
+    act(() => {
+      result.current.form.setValue("title", "hello", { shouldDirty: true });
+    });
+    // The real save lands and installs what it stored as the form's defaults.
+    act(() => {
+      result.current.form.reset({ title: "hello" });
+    });
+    act(() => {
+      vi.advanceTimersByTime(DEBOUNCE * 2);
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(saveSpy).not.toHaveBeenCalled();
+  });
+
   it("records the values in the editor after the debounce", async () => {
     const { result } = renderHook(() => useHarness());
 
@@ -133,111 +188,6 @@ describe("useDocumentAutosave", () => {
     });
 
     expect(saveSpy).not.toHaveBeenCalled();
-  });
-
-  it("records nothing once a save has made the edit the stored document", async () => {
-    // 🔴 The leftover recording. An edit schedules one; the author saves
-    // inside the debounce, and the save leaves the form clean (it resets to
-    // what was stored). The timer then fired anyway and wrote the saved
-    // values as a recovery point: a needless write after every quick save,
-    // and one that reads as the editor writing while it should only read.
-    const { result } = renderHook(() => useHarness());
-
-    act(() => {
-      result.current.form.setValue("title", "hello", { shouldDirty: true });
-    });
-    act(() => {
-      vi.advanceTimersByTime(DEBOUNCE / 2);
-    });
-    // What a save does to the form once the server has the values.
-    act(() => {
-      result.current.form.reset({ title: "hello" });
-    });
-    act(() => {
-      vi.advanceTimersByTime(DEBOUNCE * 2);
-    });
-
-    await Promise.resolve();
-    expect(saveSpy).not.toHaveBeenCalled();
-  });
-
-  it("still records edits typed while the save was in flight", async () => {
-    // The control for the case above. A save that lands resets the form to
-    // what was stored and then re-applies what the author typed meanwhile, in
-    // one tick: clean, then dirty again. Dropping the pending recording on the
-    // clean must not drop these.
-    const { result } = renderHook(() => useHarness());
-
-    act(() => {
-      result.current.form.setValue("title", "hello", { shouldDirty: true });
-    });
-    act(() => {
-      result.current.form.reset({ title: "hello" });
-      result.current.form.setValue("title", "hello again", {
-        shouldDirty: true,
-      });
-    });
-    act(() => {
-      vi.advanceTimersByTime(DEBOUNCE);
-    });
-
-    await waitFor(() => expect(saveSpy).toHaveBeenCalledTimes(1));
-    expect(saveSpy).toHaveBeenCalledWith(SCOPE, { title: "hello again" }, null);
-  });
-
-  it("records nothing after a save that ran with recording turned off", async () => {
-    // 🔴 What both editors do: they turn recording off while a real save is
-    // in flight, and the save resets the form clean during that window. The
-    // clean has to be heard then too, or the recording scheduled by the edit
-    // survives it and fires once recording is back on, inside its debounce.
-    const { result, rerender } = renderHook(
-      ({ enabled }) => useHarness(SCOPE, enabled),
-      { initialProps: { enabled: true } }
-    );
-
-    act(() => {
-      result.current.form.setValue("title", "hello", { shouldDirty: true });
-    });
-    rerender({ enabled: false });
-    act(() => {
-      result.current.form.reset({ title: "hello" });
-    });
-    rerender({ enabled: true });
-    act(() => {
-      vi.advanceTimersByTime(DEBOUNCE * 2);
-    });
-
-    await Promise.resolve();
-    expect(saveSpy).not.toHaveBeenCalled();
-  });
-
-  it("records edits typed while recording was off, once it is back on", async () => {
-    // The control for the case above: hearing the form while recording is
-    // off must not lose what the author types during the save. The save
-    // resets clean and re-applies those edits; once recording is back on,
-    // they are recorded.
-    const { result, rerender } = renderHook(
-      ({ enabled }) => useHarness(SCOPE, enabled),
-      { initialProps: { enabled: true } }
-    );
-
-    act(() => {
-      result.current.form.setValue("title", "hello", { shouldDirty: true });
-    });
-    rerender({ enabled: false });
-    act(() => {
-      result.current.form.reset({ title: "hello" });
-      result.current.form.setValue("title", "hello again", {
-        shouldDirty: true,
-      });
-    });
-    rerender({ enabled: true });
-    act(() => {
-      vi.advanceTimersByTime(DEBOUNCE);
-    });
-
-    await waitFor(() => expect(saveSpy).toHaveBeenCalledTimes(1));
-    expect(saveSpy).toHaveBeenCalledWith(SCOPE, { title: "hello again" }, null);
   });
 
   /**

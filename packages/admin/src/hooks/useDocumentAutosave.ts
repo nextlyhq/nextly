@@ -143,9 +143,9 @@ export function useDocumentAutosave({
     : null;
 
   /*
-   * Whether the editor still holds uncommitted work, as the subscription below
-   * last heard it. Kept here rather than read from `form.formState.isDirty`,
-   * which react-hook-form keeps current only while a render reads it.
+   * Whether the editor holds uncommitted changes, as the form last reported.
+   * A real save resets the form, which leaves it clean: a recording asked for
+   * before that would write a copy of what the save just stored.
    */
   const dirtyRef = useRef(false);
 
@@ -154,20 +154,15 @@ export function useDocumentAutosave({
     save,
     debounceMs,
     enabled,
-    // A recording that became pointless while its timer ran (a save made the
-    // work the stored document) is not made; see the subscription below for
-    // the first line of this.
-    shouldRecord: () => dirtyRef.current,
+    stillWanted: () => dirtyRef.current,
   });
 
-  /*
-   * Subscribed whether or not recording is enabled. Both editors turn it off
-   * while a real save is in flight, and that save is what leaves the form
-   * clean: unsubscribed then, the clean goes unheard and the recording the
-   * edit scheduled survives it. Recording itself stays off while disabled,
-   * because flush refuses then; scheduling here only starts the wait.
-   */
   useEffect(() => {
+    // Subscribed whether or not recording is enabled. A real save turns
+    // recording off while it runs and resets the form when it lands: the
+    // reset has to be seen to drop the recording queued before the save, and
+    // a subscription that came and went with `enabled` missed exactly that
+    // moment. Whether a recording is made is still decided when it fires.
     if (!scope) return;
 
     const subscription = form.subscribe({
@@ -190,11 +185,8 @@ export function useDocumentAutosave({
          * so the two cannot disagree about whether there is work at risk.
          */
         dirtyRef.current = isDirty === true;
-        // Clean again: a save stored the work, or it was discarded. A
-        // recording still pending for it would write the saved values as a
-        // recovery point, so it is dropped here, at once, not on a debounce:
-        // edits typed while a save was in flight dirty the form again in the
-        // same tick, and those must schedule their own recording.
+        // Clean again, because the work was saved for real or undone: a
+        // recording still waiting for it has nothing left to protect.
         if (!isDirty) {
           cancel();
           return;
