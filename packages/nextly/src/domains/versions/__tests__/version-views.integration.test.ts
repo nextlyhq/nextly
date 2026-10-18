@@ -46,6 +46,35 @@ const KEY: AuthenticatedScope = {
 };
 const SYSTEM: AuthenticatedScope = { actorType: "system", permissions: [] };
 
+/**
+ * A database that reports each query it runs. A Drizzle query runs when it
+ * is awaited or executed, so the builder a call returns is wrapped (and kept
+ * wrapped through the chain, whose methods return the builder itself) and a
+ * run is counted at `then` or `execute`, never at the call that builds it.
+ */
+function countingRuns<T extends object>(target: T, onRun: () => void): T {
+  const wrapped: T = new Proxy(target, {
+    get(inner, key) {
+      const member: unknown = Reflect.get(inner, key, inner);
+      if (typeof member !== "function") return member;
+      if (key === "then" || key === "execute") {
+        return (...args: unknown[]) => {
+          onRun();
+          return member.apply(inner, args);
+        };
+      }
+      return (...args: unknown[]) => {
+        const result: unknown = member.apply(inner, args);
+        if (result === inner) return wrapped;
+        return result !== null && typeof result === "object"
+          ? countingRuns(result, onRun)
+          : result;
+      };
+    },
+  });
+  return wrapped;
+}
+
 const silentLogger = {
   debug: () => undefined,
   info: () => undefined,
@@ -543,8 +572,9 @@ describe.each(getConfiguredTestDialects())(
     it("finds every part's divider in one read, and the history list asks it", async () => {
       // v1 en, v2 es, v3 en, v4 es.
       const doc = await documentWithHistory(dialect, ["en", "es", "en", "es"]);
-      // An adapter whose database counts the reads made through it: a lookup
-      // that asked once per part would make three here, not one.
+      // An adapter whose database counts the queries it RUNS, not the ones it
+      // builds: a lookup that built one query and ran it once per part would
+      // make three round trips here, not one.
       let reads = 0;
       const adapter = current!.adapter;
       const counting = new Proxy(adapter, {
@@ -553,19 +583,10 @@ describe.each(getConfiguredTestDialects())(
           if (prop !== "getDrizzle" || typeof value !== "function") {
             return typeof value === "function" ? value.bind(target) : value;
           }
-          return (...args: unknown[]) => {
-            const db = value.apply(target, args) as object;
-            return new Proxy(db, {
-              get(inner, key) {
-                const member: unknown = Reflect.get(inner, key, inner);
-                if (typeof member !== "function") return member;
-                return (...callArgs: unknown[]) => {
-                  if (key === "select") reads += 1;
-                  return member.apply(inner, callArgs);
-                };
-              },
+          return (...args: unknown[]) =>
+            countingRuns(value.apply(target, args) as object, () => {
+              reads += 1;
             });
-          };
         },
       });
       const dividers = await new HistoryDividers(
@@ -596,10 +617,14 @@ describe.each(getConfiguredTestDialects())(
       try {
         await listVersionsForDocument({ ...doc.at, user: ANA });
         expect(lookup).toHaveBeenCalledTimes(1);
-        expect([...(lookup.mock.calls[0]?.[1]?.keys() ?? [])].sort()).toEqual([
-          "en",
-          "es",
-        ]);
+        // Each part with the version looked at in it, not merely the parts:
+        // the wrong number for a language marks the wrong row.
+        expect(lookup.mock.calls[0]?.[1]).toEqual(
+          new Map<string | null, number>([
+            ["en", 3],
+            ["es", 4],
+          ])
+        );
       } finally {
         lookup.mockRestore();
       }
