@@ -29,4 +29,4 @@
 "@nextlyhq/ui": patch
 ---
 
-The once-per-process warning about proxy client-address headers that could not be used now says how a plugin's `rateLimit: "auth"` route counts such requests: by the identity its `limitKey` names, under that plugin's own ceiling, or by the ceiling alone without one. Before, it described only core's per-account counting, though a plugin auth route can be the first to log it.
+A plugin's `rateLimit: "auth"` route, for a client whose address cannot be read, now charges the identity its `limitKey` names at the time the request's body has arrived. It was charged at the time the request began, so a caller holding several bodies open longer than the window could make each of them count at a time already expired, and spend the identity's budget more than once. The once-per-process warning about proxy client-address headers that could not be used also now says how such a route counts: by the identity its `limitKey` names, under that plugin's own ceiling, or by the ceiling alone without one.

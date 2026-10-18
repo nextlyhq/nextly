@@ -146,6 +146,38 @@ describe.each([
     expect(await status(m, { email: "b@example.com" })).toBe(200);
   });
 
+  it("charges an identity when its body arrives, so a body held past the window cannot spend it twice", async () => {
+    const m = match(pluginName(), { limitKey: byEmail });
+    let release!: () => void;
+    const held = new Promise<void>(resolve => {
+      release = resolve;
+    });
+    const bytes = new TextEncoder().encode(
+      JSON.stringify({ email: "a@example.com" })
+    );
+    const slow = new Request("http://localhost/admin/api/plugins/x/sign-in", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: new ReadableStream<Uint8Array>({
+        async pull(controller) {
+          await held;
+          controller.enqueue(bytes);
+          controller.close();
+        },
+      }),
+      duplex: "half",
+    } as RequestInit);
+
+    const first = runPluginRoute(slow, m);
+    // Let the request reach the body before the clock moves past the window.
+    for (let i = 0; i < 20; i++) await new Promise(r => setImmediate(r));
+    vi.setSystemTime(Date.now() + W + 1);
+    release();
+
+    expect((await first).status).toBe(200);
+    expect(await status(m, { email: "a@example.com" })).toBe(429);
+  });
+
   it("counts an identity across the plugin's auth routes", async () => {
     const plugin = pluginName();
     const start = match(plugin, { limitKey: byEmail }, "/start");
