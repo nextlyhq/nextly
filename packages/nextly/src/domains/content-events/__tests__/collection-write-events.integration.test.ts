@@ -15,7 +15,6 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
-import type { CollectionsHandler } from "../../../services/collections-handler";
 
 let current: TestNextly | undefined;
 
@@ -79,7 +78,7 @@ async function boot(dialect: TestDialect) {
     createdAt: now,
     updatedAt: now,
   });
-  const handler = current.getService<CollectionsHandler>("collectionsHandler");
+  const handler = current.getService("collectionsHandler");
   /** This document's events, oldest first, by their time-ordered ids. */
   const eventsOf = async (id: string) =>
     (await current!.adapter.select<EventRow>("nextly_content_events"))
@@ -231,6 +230,45 @@ describe.each(getConfiguredTestDialects())(
       expect(publishes).toHaveLength(1);
       expect(await t.partsOf(publishes[0]!.id)).toEqual(["en", "es"]);
       expect(publishes[0]).toMatchObject({ toState: "published" });
+    }, 120_000);
+
+    it("refuses a save while the record's table is missing, saving nothing", async () => {
+      const t = await boot(dialect);
+      const as = { overrideAccess: true, user: ANA };
+      const created = await t.handler.createEntry(
+        { collectionName: "posts", ...as },
+        { title: "kept", status: "draft" }
+      );
+      const id = (created.data as { id: string }).id;
+      // An install that has not migrated since the record arrived.
+      await current!.adapter.executeQuery("DROP TABLE nextly_content_events");
+
+      let refusal: unknown;
+      const result = await t.handler
+        .updateEntry(
+          { collectionName: "posts", entryId: id, ...as },
+          { title: "lost" }
+        )
+        .catch(error => {
+          refusal = error;
+          return undefined;
+        });
+
+      // Told what to do, whichever way the service reports a failed write.
+      const said =
+        refusal instanceof Error
+          ? (refusal as { publicMessage?: string }).publicMessage
+          : (result as { message?: string } | undefined)?.message;
+      expect(said).toBe(
+        "The database needs updating before content can be saved. Run `nextly migrate`."
+      );
+      // The change rolled back with its event.
+      const read = await t.handler.getEntry({
+        collectionName: "posts",
+        entryId: id,
+        overrideAccess: true,
+      });
+      expect((read.data as { title?: string }).title).toBe("kept");
     }, 120_000);
   }
 );

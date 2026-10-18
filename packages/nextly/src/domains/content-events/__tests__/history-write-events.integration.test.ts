@@ -14,7 +14,6 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
-import type { CollectionsHandler } from "../../../services/collections-handler";
 
 let current: TestNextly | undefined;
 
@@ -68,7 +67,7 @@ async function boot(dialect: TestDialect) {
     createdAt: now,
     updatedAt: now,
   });
-  const handler = current.getService<CollectionsHandler>("collectionsHandler");
+  const handler = current.getService("collectionsHandler");
   const as = { overrideAccess: true, user: ANA };
   const create = async (
     collectionName: string,

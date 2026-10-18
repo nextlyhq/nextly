@@ -29,6 +29,11 @@
 "@nextlyhq/module-specifiers": patch
 ---
 
+Upgrading requires running `nextly migrate` before content can be saved:
+every save now records its history, and until the record's table exists a
+save is refused with "The database needs updating before content can be
+saved. Run `nextly migrate`." rather than written without its history.
+
 A document's writes now record its history in the record of content events,
 each in the write's own transaction and with who made it, for collections and
 Singles alike: its creation, each save that recorded a version, a restore
