@@ -809,8 +809,8 @@ export class ReleasesRepository {
   }
 
   /**
-   * Delete a release and its members, in one transaction, and say whether it
-   * was deleted.
+   * Delete a release and its members, in one transaction, and answer the
+   * release as this transaction found it under its lock.
    *
    * Fenced on {@link RELEASE_DELETABLE_FROM}, and on the release never having
    * been scheduled, through `advanceRevision`, so the
@@ -825,16 +825,25 @@ export class ReleasesRepository {
    * consulted by a read, so the flush is a precaution for a release that
    * moved between a page's render and this delete, not a change readers see.
    *
-   * `false` when the release is not there or not in a deletable state;
+   * The answer is the row read under the lock, not one the caller read
+   * before: a rename landing between the two would otherwise be recorded
+   * against the deleted release under the title it no longer had.
+   *
+   * `null` when the release is not there or not in a deletable state;
    * nothing is deleted then.
    *
    * @experimental
    */
-  async deleteRelease(id: string): Promise<boolean> {
+  async deleteRelease(id: string): Promise<ReleaseRow | null> {
     const ofThisRelease: VersionsWhere = {
       and: [{ column: "releaseId", op: "=", value: id }],
     };
     const removed = await this.db.transaction(async tx => {
+      await tx.lockRow(RELEASES, id);
+      const [release] = await tx.select<ReleaseRow>(RELEASES, {
+        where: { and: [{ column: "id", op: "=", value: id }] },
+      });
+      if (release === undefined) return null;
       if (
         (await this.advanceRevision(tx, id, RELEASE_DELETABLE_FROM, {
           // Never scheduled: a cancelled release that was is kept, since
@@ -851,12 +860,12 @@ export class ReleasesRepository {
       await tx.delete(RELEASES, {
         and: [{ column: "id", op: "=", value: id }],
       });
-      return members;
+      return { release, members };
     });
-    if (removed === null) return false;
+    if (removed === null) return null;
     // AFTER THE COMMIT, for the reason `blockReleases` gives.
-    await this.flushMembers(removed);
-    return true;
+    await this.flushMembers(removed.members);
+    return removed.release;
   }
 
   /**

@@ -451,6 +451,29 @@ describe.each(getConfiguredTestDialects())(
       expect(await titleOf(t, release.id)).toBe("Someone else's");
     });
 
+    it("answers and records the release as its delete found it under the lock", async () => {
+      const t = await boot(dialect);
+      const release = await t.nextly.releases.create({ title: "Old" });
+      // Another request renames it after this one could have read it, and
+      // before its delete takes the lock: the deleted row carries that title.
+      const { svc, recorded } = interleavedService(t, {
+        before: () => competingWrite(t, release.id, { title: "Renamed" }),
+      });
+
+      const deleted = await svc.delete(release.id, {
+        userId: null,
+        overrideAccess: true,
+      });
+
+      expect(deleted).toMatchObject({ id: release.id, title: "Renamed" });
+      expect(recorded).toHaveLength(1);
+      expect(recorded[0]).toMatchObject({
+        action: "delete",
+        release: { id: release.id, title: "Renamed", state: "draft" },
+      });
+      expect(await t.nextly.releases.findByID({ id: release.id })).toBeNull();
+    });
+
     it("lets a key holding update rename a release over REST, and refuses a key without it", async () => {
       const t = await boot(dialect);
       const release = await t.nextly.releases.create({ title: "Spring" });

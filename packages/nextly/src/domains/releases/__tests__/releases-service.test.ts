@@ -79,7 +79,11 @@ function repository() {
         changed: Array<"title" | "description">;
       } | null> => null
     ),
-    deleteRelease: vi.fn(async (..._args: unknown[]) => true),
+    // Answers the row its delete found under the lock, or null.
+    deleteRelease: vi.fn(
+      async (..._args: unknown[]): Promise<Record<string, unknown> | null> =>
+        null
+    ),
     // The `containing` listing's own read. Present so a test can drive that
     // branch to completion rather than dying on a missing collaborator, which
     // would fail for a reason unrelated to the property under test.
@@ -1460,24 +1464,35 @@ describe("ReleasesService.delete deletes only a release that never ran", () => {
       repo.findReleases.mockResolvedValue([
         { id: "r1", state, title: "Launch", revision: 1 },
       ]);
-      // Answered as it was, for the mutation envelope.
+      // The repository's row is the answer and the record, not the read
+      // before it: here a rename landed in between.
+      repo.deleteRelease.mockResolvedValueOnce({
+        id: "r1",
+        state,
+        title: "Relaunch",
+        revision: 2,
+      });
       expect(await svc.delete("r1", ADMIN)).toMatchObject({
         id: "r1",
-        title: "Launch",
+        title: "Relaunch",
         state,
       });
       expect(repo.deleteRelease).toHaveBeenCalledWith("r1");
       expect(deps.recordActivity).toHaveBeenCalledWith({
         action: "delete",
-        release: expect.objectContaining({ id: "r1", title: "Launch", state }),
+        release: expect.objectContaining({
+          id: "r1",
+          title: "Relaunch",
+          state,
+        }),
         actor: { type: "user", id: "u1" },
       });
     }
   );
 
   it.each([
-    ["scheduled", "Cancel it first"],
-    ["blocked", "Cancel it first"],
+    ["scheduled", "Cancelling it calls it off"],
+    ["blocked", "Cancelling it calls it off"],
     ["published", "record of what went live"],
   ])(
     "refuses a %s release with a CONFLICT saying what to do, and deletes nothing",
@@ -1532,7 +1547,7 @@ describe("ReleasesService.delete deletes only a release that never ran", () => {
     repo.findReleases.mockResolvedValue([
       { id: "r1", state: "draft", title: "Launch", revision: 1 },
     ]);
-    repo.deleteRelease.mockResolvedValueOnce(false);
+    repo.deleteRelease.mockResolvedValueOnce(null);
     await expect(svc.delete("r1", ADMIN)).rejects.toMatchObject({
       code: "CONFLICT",
     });

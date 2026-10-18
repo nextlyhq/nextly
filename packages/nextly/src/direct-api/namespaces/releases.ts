@@ -253,12 +253,13 @@ export interface ReleasesNamespace {
     args: { id: string } & ReleaseDetailsChange & ReleaseCallerArgs
   ): Promise<ReleaseRow>;
   /**
-   * Delete a draft or cancelled release, and its documents with it. Needs
-   * `delete-content-releases` on a checked call. A scheduled or stopped
-   * release is refused with CONFLICT (cancel it first), and so is a
-   * published one, which stays as the record of what went live; a release
-   * that is not there is NOT_FOUND. Answers the release as it was before
-   * the delete.
+   * Delete a release that never ran, with its documents: a draft, or a
+   * release cancelled before it was ever scheduled. Needs
+   * `delete-content-releases` on a checked call. Any other release is
+   * refused with CONFLICT, the reason in the error's data: scheduled or
+   * stopped (`committed`), published (`published`), or cancelled after being
+   * scheduled (`was-scheduled`). A release that is not there is NOT_FOUND.
+   * Answers the release as it was when deleted.
    *
    * @experimental
    */

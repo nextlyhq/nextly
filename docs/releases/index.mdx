@@ -144,11 +144,11 @@ route. A rename that changes nothing writes nothing.
 Only a release that never ran can be deleted: a draft, or one cancelled while it was still a
 draft. Each refusal answers `409 Conflict`, with the reason in the error's `data.reason`:
 
-| `reason`        | The release                         | What to do                      |
-| --------------- | ----------------------------------- | ------------------------------- |
-| `committed`     | Is scheduled or stopped             | Cancel it first                 |
-| `published`     | Has been published                  | Nothing: it is kept for good    |
-| `was-scheduled` | Was cancelled after being scheduled | Nothing: it is kept as a record |
+| `reason`        | The release                         | What to do                           |
+| --------------- | ----------------------------------- | ------------------------------------ |
+| `committed`     | Is scheduled or stopped             | Cancel it to call it off; it is kept |
+| `published`     | Has been published                  | Nothing: it is kept for good         |
+| `was-scheduled` | Was cancelled after being scheduled | Nothing: it is kept as a record      |
 
 A cancelled release that was ever scheduled is kept because nothing stored says whether it began
 to run. One that stopped part-way, after some of its documents went live, and was then cancelled
