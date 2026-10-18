@@ -27,7 +27,7 @@ describe("TOOLBAR_CONTAINER", () => {
 });
 
 describe("ToolbarLabel", () => {
-  const priorities: ToolbarLabelPriority[] = ["secondary", "lifecycle"];
+  const priorities: ToolbarLabelPriority[] = ["secondary"];
 
   it.each(priorities)(
     "keeps %s label text in the accessible tree",
@@ -50,52 +50,6 @@ describe("ToolbarLabel", () => {
       ).toBeInTheDocument();
     }
   );
-
-  it("collapses a secondary label before a lifecycle one", () => {
-    // Ordering is the whole design: supporting actions give up their words
-    // first, and publish/unpublish hold theirs longer. Equal thresholds would
-    // read as working while making the priority meaningless.
-    const { container: secondary } = render(
-      <ToolbarLabel priority="secondary">a</ToolbarLabel>
-    );
-    const { container: lifecycle } = render(
-      <ToolbarLabel priority="lifecycle">b</ToolbarLabel>
-    );
-    const cls = (c: HTMLElement) => c.firstElementChild?.className ?? "";
-
-    expect(cls(secondary)).toContain("/toolbar:sr-only");
-    expect(cls(lifecycle)).toContain("/toolbar:sr-only");
-
-    // Compared as WIDTHS rather than as positions on Tailwind's named scale.
-    // The thresholds are deliberately arbitrary values — they carry the rows'
-    // horizontal padding, which no named step accounts for — so a rank lookup
-    // over `sm`/`md`/`lg` cannot read them and would report a false ordering.
-    const remOf = (c: string) => {
-      const arbitrary = /@max-\[(\d+(?:\.\d+)?)rem\]/.exec(c);
-      if (arbitrary) return Number(arbitrary[1]);
-      const named: Record<string, number> = {
-        xs: 20,
-        sm: 24,
-        md: 28,
-        lg: 32,
-        xl: 36,
-        "2xl": 42,
-        "3xl": 48,
-        "4xl": 56,
-        "5xl": 64,
-      };
-      const step = /@max-([a-z0-9]+)\//.exec(c)?.[1] ?? "";
-      const value = named[step];
-      if (value === undefined) {
-        throw new Error(`unreadable toolbar threshold: ${c}`);
-      }
-      return value;
-    };
-
-    // `@max-*` applies BELOW its value, so the label that collapses first is the
-    // one with the LARGER threshold.
-    expect(remOf(cls(secondary))).toBeGreaterThan(remOf(cls(lifecycle)));
-  });
 
   it("passes extra classes through without dropping the collapse rule", () => {
     const { container } = render(

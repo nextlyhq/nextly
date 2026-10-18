@@ -27,6 +27,7 @@
 import type { AuthenticatedScope } from "../../auth/authenticated-scope";
 import { container } from "../../di/container";
 import { toPaginationMeta } from "../../dispatcher/helpers/service-envelope";
+import type { ReleaseReadiness } from "../../domains/releases/readiness/evaluate-readiness";
 import type { ReleaseCalendar } from "../../domains/releases/release-calendar";
 import type {
   ReleaseMemberRow,
@@ -173,7 +174,18 @@ export interface ReleasesNamespace {
   blockingReasons(
     args: { releaseId: string } & ReleaseCallerArgs
   ): Promise<ReleaseBlocker[]>;
-  /** Put a document into a release under a lifecycle action. */
+  /**
+   * Every problem the release's documents have now: `hard` ones, which stop
+   * it from being scheduled or published now, and `soft` ones, which are
+   * notes. Each is a code and the document it is about, in the order the
+   * documents were added. Every document is checked, however many the release
+   * holds. An unknown release is refused as not found.
+   *
+   * @experimental
+   */
+  readiness(
+    args: { releaseId: string } & ReleaseCallerArgs
+  ): Promise<ReleaseReadiness>;
   /**
    * Put a document into a release under a lifecycle action.
    *
@@ -207,6 +219,25 @@ export interface ReleasesNamespace {
   listMembers(
     args: { releaseId: string } & ReleaseCallerArgs
   ): Promise<ReleaseMemberRow[]>;
+  /**
+   * Switch a document in a release between going live (`publish`) and coming
+   * down (`unpublish`).
+   *
+   * Asks what adding the document under the new action asks, and `publish`
+   * authority on releases for a scheduled one. In a scheduled release the new
+   * action is checked as the document's author, who the release still acts as;
+   * a switch that would leave a hard problem is refused as a `CONFLICT` naming
+   * the problems in `data.problems`, and the release is left as it was.
+   *
+   * @experimental
+   */
+  changeMemberAction(
+    args: {
+      releaseId: string;
+      memberId: string;
+      action: ReleaseMemberAction;
+    } & ReleaseCallerArgs
+  ): Promise<ReleaseMemberRow>;
   /**
    * Commit a release to an instant.
    *
@@ -416,6 +447,16 @@ export function createReleasesNamespace(ctx: NextlyContext): ReleasesNamespace {
 
     listMembers: args =>
       service().listMembers(args.releaseId, actorOf(ctx, args)),
+
+    readiness: args => service().readiness(args.releaseId, actorOf(ctx, args)),
+
+    changeMemberAction: args =>
+      service().changeMemberAction(
+        args.memberId,
+        args.action,
+        actorOf(ctx, args),
+        args.releaseId
+      ),
 
     schedule: args =>
       service().schedule(args.id, args.at, args.timezone, actorOf(ctx, args)),

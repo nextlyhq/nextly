@@ -30,6 +30,49 @@ afterEach(() => {
 });
 
 describe("useSnapshotAutosave", () => {
+  it("makes no recording that was cancelled before it fired", async () => {
+    const save = vi.fn(() => saved());
+    const { result } = renderHook(() =>
+      useSnapshotAutosave({ identity: "doc-1", save, debounceMs: DEBOUNCE })
+    );
+
+    act(() => result.current.schedule());
+    act(() => result.current.cancel());
+    act(() => void vi.advanceTimersByTime(DEBOUNCE * 2));
+    // Given every chance to run, nothing was written.
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it("asks at fire time whether the work is still worth recording", async () => {
+    let wanted = false;
+    const save = vi.fn(() => saved());
+    const { result } = renderHook(() =>
+      useSnapshotAutosave({
+        identity: "doc-1",
+        save,
+        debounceMs: DEBOUNCE,
+        stillWanted: () => wanted,
+      })
+    );
+
+    // Unwanted when the timer fires: nothing is written.
+    act(() => result.current.schedule());
+    act(() => void vi.advanceTimersByTime(DEBOUNCE));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(save).not.toHaveBeenCalled();
+
+    // Wanted again: the same scheduling records.
+    wanted = true;
+    act(() => result.current.schedule());
+    act(() => void vi.advanceTimersByTime(DEBOUNCE));
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+  });
+
   it("waits for the debounce before recording anything", async () => {
     const save = vi.fn(() => saved());
     const { result } = renderHook(() =>

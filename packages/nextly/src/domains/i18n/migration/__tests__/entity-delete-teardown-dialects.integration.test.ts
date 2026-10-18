@@ -153,15 +153,16 @@ for (const entry of DIALECTS) {
     it("teardown drops the companion and purges only this entity's archive rows", async () => {
       await createLocalizedEntity();
       await adapter.executeQuery(
-        `INSERT INTO ${q("nextly_i18n_archive")} (${q("collection")}, ${q("entry_id")}, ${q("locale")}, ${q("field")}, ${q("value")}) VALUES ('${slug}', 'e1', 'fr', 'body', 'Bonjour')`
+        `INSERT INTO ${q("nextly_i18n_archive")} (${q("collection")}, ${q("entity_kind")}, ${q("entry_id")}, ${q("locale")}, ${q("field")}, ${q("value")}) VALUES ('${slug}', 'collection', 'e1', 'fr', 'body', 'Bonjour')`
       );
       await adapter.executeQuery(
-        `INSERT INTO ${q("nextly_i18n_archive")} (${q("collection")}, ${q("entry_id")}, ${q("locale")}, ${q("field")}, ${q("value")}) VALUES ('${slug}_other', 'e1', 'fr', 'body', 'Keep me')`
+        `INSERT INTO ${q("nextly_i18n_archive")} (${q("collection")}, ${q("entity_kind")}, ${q("entry_id")}, ${q("locale")}, ${q("field")}, ${q("value")}) VALUES ('${slug}_other', 'collection', 'e1', 'fr', 'body', 'Keep me')`
       );
 
       const result = await teardownEntityI18n({
         adapter: adapter as never,
         slug,
+        kind: "collection",
         tableName: main,
       });
 
@@ -189,6 +190,7 @@ for (const entry of DIALECTS) {
       await teardownEntityI18n({
         adapter: adapter as never,
         slug,
+        kind: "collection",
         tableName: main,
       });
       await adapter.executeQuery(`DROP TABLE IF EXISTS ${q(main)}`);
@@ -208,6 +210,7 @@ for (const entry of DIALECTS) {
       const result = await teardownEntityI18n({
         adapter: adapter as never,
         slug,
+        kind: "collection",
         tableName: main,
       });
 

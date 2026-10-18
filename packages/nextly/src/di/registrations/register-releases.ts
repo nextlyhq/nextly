@@ -16,10 +16,12 @@
  */
 
 import { apiKeyWriteAllowed } from "../../auth/authenticated-scope";
+import { runDetachedFromRequest } from "../../auth/caller-scope";
 import { nextly } from "../../direct-api/nextly";
 import type { RBACAccessControlService } from "../../domains/auth/services/rbac-access-control-service";
 import type { JobRegistry } from "../../domains/jobs/job-registry";
 import { runSweepNow } from "../../domains/jobs/jobs-runner";
+import { registerCoreReleaseCheckSources } from "../../domains/releases/readiness/core-sources";
 import type { ReleaseTargetCaller } from "../../domains/releases/release-targets";
 import { RELEASES_DRAIN_JOB } from "../../domains/releases/releases-drain-job";
 import { ReleasesRepository } from "../../domains/releases/releases-repository";
@@ -27,19 +29,25 @@ import {
   RELEASES_RESOURCE,
   ReleasesService,
 } from "../../domains/releases/services/releases-service";
-import { resolveSingleForRequest } from "../../domains/singles/services/ensure-runtime-table";
 import { NextlyError } from "../../errors";
 import type { CacheRevalidator } from "../../revalidation/types";
-import type { DynamicSingleRecord } from "../../schemas/dynamic-singles/types";
 import { hasPermission } from "../../services/lib/permissions";
 import { container } from "../container";
 
+import {
+  releaseDocumentChecks,
+  singleRowExists,
+} from "./release-document-checks";
 import type { RegistrationContext } from "./types";
 
 export function registerReleaseServices({
   adapter,
   logger,
 }: RegistrationContext): void {
+  // Core's checks, which every release's readiness, scheduling and Publish now
+  // ask. Registered with the feature, so a boot that has releases has them.
+  registerCoreReleaseCheckSources();
+
   container.registerSingleton<ReleasesService>(
     "releasesService",
     () =>
@@ -149,6 +157,10 @@ export function registerReleaseServices({
         // Publish now answers a drain it could not start with the release as
         // it stands; this is where that failure is reported.
         logger,
+
+        // What the readiness checks ask of a member's document and author,
+        // answered as the release's run would answer it.
+        checks: releaseDocumentChecks(adapter, logger),
 
         // The document's OWN authority, asked with the same operation the
         // ordinary write path uses. Adding a document to a release is a deferred
@@ -263,13 +275,21 @@ export function contentReadAccess(
  * so nothing runs and the release is left scheduled: it is due, and whatever
  * runs this installation's releases sends it out on its next pass.
  */
-function drainNowWith(
+export function drainNowWith(
   adapter: RegistrationContext["adapter"],
   registry: JobRegistry | undefined
 ): (options: { maxDurationMs: number }) => Promise<unknown> {
   return async ({ maxDurationMs }) => {
     if (registry === undefined) return;
-    await runSweepNow(adapter, registry, RELEASES_DRAIN_JOB, { maxDurationMs });
+    // Outside the request's caller scope. The drain writes each document as
+    // the member's author, and the access gate reads a pinned scope when a
+    // write names none: left in place, an API key that asked for Publish now
+    // would be judged in each author's stead, refusing a document its author
+    // may publish or admitting one they may not. A scheduled pass runs on
+    // nobody's request, and Publish now's run must be judged the same way.
+    await runDetachedFromRequest(() =>
+      runSweepNow(adapter, registry, RELEASES_DRAIN_JOB, { maxDurationMs })
+    );
   };
 }
 
@@ -288,37 +308,4 @@ async function nullWhenRefused<T>(
     }
     throw error;
   }
-}
-
-/**
- * Whether a Single has its stored row, asked of its table directly: a read
- * that cannot create the row the way the Single's content read does. `false`
- * for a Single that is not registered or whose table is not there yet.
- */
-async function singleRowExists(
-  adapter: RegistrationContext["adapter"],
-  slug: string,
-  logger: RegistrationContext["logger"]
-): Promise<boolean> {
-  if (!container.has("singleRegistryService")) return false;
-  // Resolved the way every request-scoped Single read opens: the registry row,
-  // and its runtime table registered in THIS process. A worker that booted
-  // before a UI-defined Single existed has the table in the database but not
-  // in its schema registry, and a query there would fail rather than answer.
-  // The logger carries the reason when that registration cannot be made.
-  const single = await resolveSingleForRequest(
-    adapter,
-    container.get<{
-      getSingleBySlug(slug: string): Promise<DynamicSingleRecord | null>;
-    }>("singleRegistryService"),
-    slug,
-    logger
-  );
-  const table = single?.tableName;
-  if (table === undefined || !(await adapter.tableExists(table))) return false;
-  const rows = await adapter.select<{ id: string }>(table, {
-    columns: ["id"],
-    limit: 1,
-  });
-  return rows.length > 0;
 }

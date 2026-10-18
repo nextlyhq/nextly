@@ -34,7 +34,10 @@ import {
   buildAuthRouterDeps,
   challengeBudgetWarning,
 } from "../auth/handlers/deps-bridge";
-import { edgeProxyWarning } from "../auth/handlers/proxy-posture";
+import {
+  edgeProxyWarning,
+  unkeyedStrategyWarnings,
+} from "../auth/handlers/proxy-posture";
 import type { CollectionConfig } from "../collections/config/define-collection";
 import type {
   SanitizedApiKeysConfig,
@@ -821,6 +824,11 @@ async function registerServicesOnce(
   // without client addresses and nothing else would tell its operator.
   const edgeWarning = edgeProxyWarning(transformedConfig);
   if (edgeWarning) resolvedLogger.warn?.(edgeWarning);
+  // Likewise each configured auth strategy the sign-in limiter cannot ask
+  // which account a request names: its sign-ins are limited by email instead.
+  for (const warning of unkeyedStrategyWarnings(transformedConfig)) {
+    resolvedLogger.warn?.(warning);
+  }
 
   // ----------------------------------------
   // Layer 1: Create and Connect Adapter
