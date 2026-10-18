@@ -289,6 +289,27 @@ describeEachDialect("the archive's entity kind", dialect => {
         ? "'2000-01-01 00:00:00'"
         : "'2000-01-01 00:00:00+00'";
 
+  /** Before `LONG_AGO`, in the registries' encoding of `created_at`. */
+  const LONGER_AGO =
+    dialect === "sqlite" ? "915148800" : "'1999-01-01 00:00:00'";
+
+  /**
+   * The entity as created long before its rows were archived. A row counts as an entity's own only
+   * when archived well after its recorded creation, since that time can carry any zone offset.
+   */
+  async function createdLongAgo(
+    registry: string,
+    slug: string,
+    at: string = LONGER_AGO
+  ): Promise<void> {
+    await query(
+      `UPDATE ${q(registry)} SET ${q("created_at")} = ${at} WHERE ${q("slug")} = '${slug}'`
+    );
+  }
+
+  /** After `LONG_AGO` and long before now, in the registries' encoding of `created_at`. */
+  const BETWEEN = dialect === "sqlite" ? "978307200" : "'2001-01-01 00:00:00'";
+
   /** One row as an install from before the kind wrote it, archived now unless `archivedAt` says. */
   async function legacyRow(
     slug: string,
@@ -369,6 +390,9 @@ describeEachDialect("the archive's entity kind", dialect => {
       {},
       { slug: "notice", label: "Notice", localized: true, fields: TRANSLATED }
     );
+    await createdLongAgo("dynamic_collections", "hero");
+    await createdLongAgo("dynamic_components", "banner");
+    await createdLongAgo("dynamic_singles", "notice");
     await archiveWithoutTheKind();
     await legacyRow("hero", collectionId, "Antes");
     await legacyRow("banner", "banner-1", "Bandera");
@@ -386,7 +410,7 @@ describeEachDialect("the archive's entity kind", dialect => {
     ]);
   });
 
-  it("keeps a row archived before its slug's entity existed unknown, and reports it", async () => {
+  it("keeps a row archived before its slug's entity existed unresolved, and reports it", async () => {
     // A slug can be reused: a row archived before today's `hero` was created belongs to whatever
     // held `hero` then, such as a collection since deleted.
     const collectionId = await seedCollection();
@@ -400,7 +424,7 @@ describeEachDialect("the archive's entity kind", dialect => {
     expect(restored.rowsUnattributed).toBe(1);
     expect(await spanishOf("dc_hero", collectionId)).toBe("Colección");
     expect(await archived()).toEqual([
-      { kind: "unknown", entry: collectionId, value: "Antiguo" },
+      { kind: "unresolved", entry: collectionId, value: "Antiguo" },
     ]);
   });
 
@@ -421,8 +445,10 @@ describeEachDialect("the archive's entity kind", dialect => {
     ]);
   });
 
-  it("keeps an unknown row when the entity holding its slug is deleted", async () => {
+  it("keeps an unresolved row when the entity holding its slug is deleted", async () => {
     const collectionId = await seedCollection();
+    // Created after the older row was archived, and long before the newer one.
+    await createdLongAgo("dynamic_collections", "hero", BETWEEN);
     await archiveWithoutTheKind();
     await legacyRow("hero", collectionId, "Antiguo", LONG_AGO);
     await legacyRow("hero", collectionId, "Antes");
@@ -441,7 +467,45 @@ describeEachDialect("the archive's entity kind", dialect => {
     // may be another entity's, so it stays.
     expect(purged.archiveRowsPurged).toBe(1);
     expect(await archived()).toEqual([
-      { kind: "unknown", entry: collectionId, value: "Antiguo" },
+      { kind: "unresolved", entry: collectionId, value: "Antiguo" },
+    ]);
+  });
+
+  it("keeps the rows of a slug two entities shared unresolved after one of them is deleted", async () => {
+    // A collection and a field group both `hero`: their older rows cannot be told apart. Once the
+    // collection is gone the field group looks like their only owner, and still is not.
+    const collectionId = await seedCollection();
+    await seedFieldGroup();
+    await createdLongAgo("dynamic_collections", "hero");
+    await createdLongAgo("dynamic_components", "hero");
+    await archiveWithoutTheKind();
+    await legacyRow("hero", collectionId, "Antes");
+    await legacyRow("hero", "hero-1", "Grupo");
+    await migrateCore();
+
+    await teardownEntityI18n({
+      adapter: current.adapter as unknown as Parameters<
+        typeof teardownEntityI18n
+      >[0]["adapter"],
+      tableName: "dc_hero",
+      slug: "hero",
+      kind: "collection",
+    });
+    await query(
+      `DELETE FROM ${q("dynamic_collections")} WHERE ${q("slug")} = 'hero'`
+    );
+    const restored = await restoreI18nArchive({
+      adapter: restoreAdapter(),
+      collection: "hero",
+      kind: "fieldGroup",
+      companionTableName: "comp_hero_locales",
+    });
+
+    expect(restored.rowsRead).toBe(0);
+    expect(restored.rowsUnattributed).toBe(2);
+    expect((await archived()).map(r => r.kind)).toEqual([
+      "unresolved",
+      "unresolved",
     ]);
   });
 

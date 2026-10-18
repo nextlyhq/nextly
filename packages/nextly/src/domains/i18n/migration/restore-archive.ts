@@ -23,7 +23,7 @@ import { and, asc, count, eq, inArray, lte } from "drizzle-orm";
 import { NextlyError } from "../../../errors/nextly-error";
 import {
   nextlyI18nArchiveTables,
-  UNKNOWN_ARCHIVE_KIND,
+  UNATTRIBUTED_ARCHIVE_KINDS,
 } from "../../../schemas/nextly-i18n-archive";
 import { toSnakeCase } from "../../schema/services/field-column-descriptor";
 import { COMPANION_UPDATED_AT_COLUMN } from "../companion-columns";
@@ -188,7 +188,7 @@ export async function restoreI18nArchive(
       ...(field !== undefined ? [eq(nextlyI18nArchive.field, field)] : [])
     );
   const where = scope(
-    args.claimUnknown ? [kind, UNKNOWN_ARCHIVE_KIND] : [kind]
+    args.claimUnknown ? [kind, ...UNATTRIBUTED_ARCHIVE_KINDS] : [kind]
   );
   const unattributed = async (): Promise<number> => {
     const [row] = (await db
@@ -197,7 +197,7 @@ export async function restoreI18nArchive(
       .where(
         and(
           eq(nextlyI18nArchive.collection, collection),
-          eq(nextlyI18nArchive.entityKind, UNKNOWN_ARCHIVE_KIND)
+          inArray(nextlyI18nArchive.entityKind, [...UNATTRIBUTED_ARCHIVE_KINDS])
         )
       )) as { n: number | string }[];
     return Number(row?.n ?? 0);
@@ -293,8 +293,8 @@ export async function restoreI18nArchive(
 
   // Bounded to the rows read here, for the reason the purge below gives.
   const maxId = rows.reduce((max, r) => (r.id > max ? r.id : max), rows[0].id);
-  const rowsClaimed = rows.filter(
-    r => r.entityKind === UNKNOWN_ARCHIVE_KIND
+  const rowsClaimed = rows.filter(r =>
+    (UNATTRIBUTED_ARCHIVE_KINDS as readonly string[]).includes(r.entityKind)
   ).length;
   if (rowsClaimed > 0) {
     // Recorded only once their values are back, so a restore refused above claims nothing.
@@ -302,7 +302,7 @@ export async function restoreI18nArchive(
       .update(nextlyI18nArchive)
       .set({ entityKind: kind })
       .where(
-        and(scope([UNKNOWN_ARCHIVE_KIND]), lte(nextlyI18nArchive.id, maxId))
+        and(scope(UNATTRIBUTED_ARCHIVE_KINDS), lte(nextlyI18nArchive.id, maxId))
       );
   }
 

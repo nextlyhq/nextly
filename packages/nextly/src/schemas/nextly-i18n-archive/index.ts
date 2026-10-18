@@ -9,7 +9,9 @@ export {
   getI18nArchiveDdl,
   getI18nArchiveIndexRepairDdl,
   getI18nArchiveKindUpgradeDdl,
+  UNATTRIBUTED_ARCHIVE_KINDS,
   UNKNOWN_ARCHIVE_KIND,
+  UNRESOLVED_ARCHIVE_KIND,
 } from "./ddl";
 
 /** Returns the `nextly_i18n_archive` table binding for the given dialect. */

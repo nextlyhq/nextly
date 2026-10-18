@@ -24,6 +24,19 @@ type Dialect = "postgresql" | "mysql" | "sqlite";
  */
 export const UNKNOWN_ARCHIVE_KIND = "unknown";
 
+/**
+ * The `entity_kind` of a row whose owner could not be told when it was examined
+ * (`labelLegacyArchiveRows`). Kept apart from {@link UNKNOWN_ARCHIVE_KIND} so it is never examined
+ * again: the registries it was judged against change, and a later look could name the wrong owner.
+ */
+export const UNRESOLVED_ARCHIVE_KIND = "unresolved";
+
+/** Both kinds of row without an owner: neither is deleted, and either is restored by naming a kind. */
+export const UNATTRIBUTED_ARCHIVE_KINDS = [
+  UNKNOWN_ARCHIVE_KIND,
+  UNRESOLVED_ARCHIVE_KIND,
+] as const;
+
 /** Returns the ordered DDL statements that create the archive table + lookup index. */
 export function getI18nArchiveDdl(dialect: Dialect): string[] {
   switch (dialect) {

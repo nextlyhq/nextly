@@ -5,11 +5,16 @@
  * Such rows carry {@link UNKNOWN_ARCHIVE_KIND}: Singles and field groups archived as well as
  * collections, so no single kind is true of all of them. A slug names at most one collection or
  * Single (the two share one namespace) and at most one field group, so a slug that exactly one
- * registry holds today is that entity's. Its rows are labelled only from the moment that entity
- * was created: a slug can be reused, and a deleted collection's translations archived before a
- * Single took its slug are not the Single's. Those rows, and the rows of a slug two registries
- * hold or none does, stay unknown. Nothing deletes them, and a restore names them with the
- * `--kind` that would claim them.
+ * registry holds is that entity's. Its rows are labelled only from the moment that entity was
+ * created: a slug can be reused, and a deleted collection's translations archived before a Single
+ * took its slug are not the Single's.
+ *
+ * One pass settles every row it finds: a row whose owner is certain gets that owner's kind, and
+ * the rest become {@link UNRESOLVED_ARCHIVE_KIND} for good. Deciding once matters because the
+ * registries change: while a collection and a field group share a slug, their rows are
+ * ambiguous, and after the collection is deleted the field group would look like their only
+ * owner. Nothing deletes an unresolved row, and a restore names it with the `--kind` that would
+ * claim it.
  *
  * Only the new column is written. The archived values themselves are never changed.
  *
@@ -33,6 +38,7 @@ import { dynamicSinglesSqlite } from "../../../schemas/dynamic-singles/sqlite";
 import {
   nextlyI18nArchiveTables,
   UNKNOWN_ARCHIVE_KIND,
+  UNRESOLVED_ARCHIVE_KIND,
 } from "../../../schemas/nextly-i18n-archive";
 
 import type { I18nTransitionKind } from "./transition-state";
@@ -98,6 +104,9 @@ function registries(
   ];
 }
 
+/** How many slugs one registry read names, inside every dialect's bound-parameter limit. */
+const SLUGS_PER_READ = 200;
+
 /** Every entity holding one of `slugs`, with its kind and when it was created. */
 async function holdersOf(
   adapter: LabelArchiveAdapter,
@@ -112,13 +121,18 @@ async function holdersOf(
     // A database that never registered an entity of this kind has no table for it, and so no
     // holder of any slug.
     if (!(await adapter.tableExists(getTableName(table)))) continue;
-    const rows = (await db
-      .select({ slug: table.slug, createdAt: table.createdAt })
-      .from(table)
-      .where(inArray(table.slug, slugs))) as {
-      slug: string;
-      createdAt: Date;
-    }[];
+    const rows: { slug: string; createdAt: Date }[] = [];
+    for (let i = 0; i < slugs.length; i += SLUGS_PER_READ) {
+      rows.push(
+        ...((await db
+          .select({ slug: table.slug, createdAt: table.createdAt })
+          .from(table)
+          .where(inArray(table.slug, slugs.slice(i, i + SLUGS_PER_READ)))) as {
+          slug: string;
+          createdAt: Date;
+        }[])
+      );
+    }
     for (const row of rows) {
       holders.set(row.slug, [
         ...(holders.get(row.slug) ?? []),
@@ -149,8 +163,24 @@ function archivedEpoch(dialect: SupportedDialect, column: AnyColumn): SQL {
 }
 
 /**
- * Labels the unknown rows whose owner the registries identify. Idempotent: it reads and writes
- * only rows still unknown, so it can run before every read that scopes the archive by kind.
+ * How long after an entity's recorded creation a row has to have been archived to be counted as
+ * its own, in seconds.
+ *
+ * PostgreSQL and MySQL keep a registry's creation time without a time zone, and it is written in
+ * more than one zone (the application's clock, or the database's `now()` in the session's zone),
+ * so read back it can be off by any UTC offset. Fourteen hours, the widest offset there is, keeps a
+ * row archived before the entity existed from ever passing; a row archived within that window of
+ * its creation stays unresolved, and is still restored by naming its kind. SQLite stores both as
+ * epoch seconds, so only its rounding needs room.
+ */
+function creationMargin(dialect: SupportedDialect): number {
+  return dialect === "sqlite" ? 1 : 14 * 60 * 60;
+}
+
+/**
+ * Settles the unknown rows: those whose owner the registries identify get its kind, and the rest
+ * become unresolved. Idempotent: it reads and writes only rows still unknown, so it can run before
+ * every read that scopes the archive by kind.
  */
 export async function labelLegacyArchiveRows(
   adapter: LabelArchiveAdapter
@@ -180,11 +210,14 @@ export async function labelLegacyArchiveRows(
         and(
           unknown,
           eq(archive.collection, slug),
-          // Rows archived before the entity existed belong to whatever held the slug then. Whole
-          // seconds with one to spare: MySQL rounds a creation time to the second, which can put
-          // it after a row archived in the same second. A slug is not reused within one.
-          sql`${archivedEpoch(adapter.dialect, archive.archivedAt)} >= ${Math.floor(createdAt.getTime() / 1000) - 1}`
+          // Rows archived before the entity existed belong to whatever held the slug then.
+          sql`${archivedEpoch(adapter.dialect, archive.archivedAt)} >= ${Math.floor(createdAt.getTime() / 1000) + creationMargin(adapter.dialect)}`
         )
       );
   }
+  // Every row this pass did not label stays without an owner, decided now rather than later.
+  await db
+    .update(archive)
+    .set({ entityKind: UNRESOLVED_ARCHIVE_KIND })
+    .where(unknown);
 }
