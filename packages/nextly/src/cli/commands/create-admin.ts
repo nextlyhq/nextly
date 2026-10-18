@@ -353,11 +353,15 @@ async function connectToInstall(logger: CommandContext["logger"]): Promise<{
 }> {
   const database = validateDatabaseEnv();
   if (!database.valid) {
-    // The settings it names are the operator's own, so they are the message.
-    throw new NextlyError({
-      code: "VALIDATION_ERROR",
-      statusCode: 400,
-      publicMessage: database.errors.join("; "),
+    // The settings it names are the operator's own, so each is reported, and
+    // printed with the error's context where the command reports a failure.
+    throw NextlyError.validation({
+      errors: database.errors.map(message => ({
+        path: "env",
+        code: "INVALID_DATABASE_SETTING",
+        message,
+      })),
+      logContext: { problems: database.errors },
     });
   }
   const cli = await createCliAdapter({
