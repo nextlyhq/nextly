@@ -33,6 +33,11 @@ export const HISTORY_ADDRESS_PARAMS: readonly string[] = [
   VERSION_PARAM,
 ];
 
+/** Whether the address names history open right now. */
+function readOpenFromAddress(): boolean {
+  return new URLSearchParams(window.location.search).get(HISTORY_PARAM) === "1";
+}
+
 /** A version number from the address, or null for anything else. */
 function readVersion(raw: string | string[] | undefined): number | null {
   if (typeof raw !== "string") return null;
@@ -79,8 +84,13 @@ export function useHistoryAddress(available = true): HistoryAddress {
   const setOpen = useCallback((next: boolean) => {
     setOpenState(next);
     if (next) {
-      addedOpenEntry.current = true;
-      setSearchParams({ [HISTORY_PARAM]: "1" });
+      // Only an open that adds the entry may later step back off it: one
+      // already open, by a link, adds none, and stepping back would leave the
+      // editor.
+      if (!readOpenFromAddress()) {
+        addedOpenEntry.current = true;
+        setSearchParams({ [HISTORY_PARAM]: "1" });
+      }
       return;
     }
     setVersionState(null);

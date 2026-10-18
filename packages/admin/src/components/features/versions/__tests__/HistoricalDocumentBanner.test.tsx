@@ -71,6 +71,28 @@ describe("HistoricalDocumentBanner", () => {
     expect(onBackToHistory).toHaveBeenCalled();
   });
 
+  it("offers the full comparison only when it is handed one", async () => {
+    const onCompare = vi.fn();
+    const { rerender } = render(
+      <HistoricalDocumentBanner versionNo={7} onReturnToCurrent={vi.fn()} />
+    );
+    expect(
+      screen.queryByRole("button", { name: "Open full comparison" })
+    ).not.toBeInTheDocument();
+
+    rerender(
+      <HistoricalDocumentBanner
+        versionNo={7}
+        onReturnToCurrent={vi.fn()}
+        onCompare={onCompare}
+      />
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: "Open full comparison" })
+    );
+    expect(onCompare).toHaveBeenCalled();
+  });
+
   it("offers restoring only when a handler is supplied", () => {
     const { unmount } = render(
       <HistoricalDocumentBanner versionNo={7} onReturnToCurrent={vi.fn()} />

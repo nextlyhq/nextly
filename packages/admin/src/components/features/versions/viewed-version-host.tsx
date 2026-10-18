@@ -319,6 +319,7 @@ export function ViewedVersionBanner({
       // without a panel.
       onReturnToCurrent={restore?.returnToCurrent ?? (() => setViewing(null))}
       onBackToHistory={restore?.backToHistory}
+      onCompare={restore?.compare}
       // Offered only when the panel says this caller may write.
       onRestore={
         restore?.canRestore && !actionsDisabled ? restore.request : undefined

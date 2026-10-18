@@ -21,6 +21,8 @@ export interface HistoricalDocumentBannerProps {
   onReturnToCurrent: () => void;
   /** Shows the history list again, where it stepped aside for this version. */
   onBackToHistory?: () => void;
+  /** Opens the full comparison, where the history list cannot offer it. */
+  onCompare?: () => void;
   /** Offered only to a caller who may write the document. */
   onRestore?: () => void;
   restoreDisabled?: boolean;
@@ -31,6 +33,7 @@ export function HistoricalDocumentBanner({
   locale = null,
   onReturnToCurrent,
   onBackToHistory,
+  onCompare,
   onRestore,
   restoreDisabled = false,
 }: HistoricalDocumentBannerProps) {
@@ -79,6 +82,11 @@ export function HistoricalDocumentBanner({
             disabled={restoreDisabled}
           >
             Restore this version
+          </Button>
+        ) : null}
+        {onCompare ? (
+          <Button variant="outline" size="sm" type="button" onClick={onCompare}>
+            Open full comparison
           </Button>
         ) : null}
         <Button

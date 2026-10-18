@@ -77,6 +77,19 @@ describe("useHistoryAddress", () => {
     expect(window.history.length).toBe(start);
   });
 
+  it("adds no entry when asked to open what a link already opened, and closes it in place", () => {
+    at("/admin/collections/posts/e1?history=1");
+    const start = window.history.length;
+    const { result } = renderHook(() => useHistoryAddress());
+
+    act(() => result.current.setOpen(true));
+    act(() => result.current.setOpen(false));
+
+    // Closed where it stands: no step back that would leave the editor.
+    expect(search().get("history")).toBeNull();
+    expect(window.history.length).toBe(start);
+  });
+
   it("reads history as closed where it is not available, whatever the address says", () => {
     at("/admin/collections/posts/e1?history=1&version=4");
     const { result } = renderHook(() => useHistoryAddress(false));

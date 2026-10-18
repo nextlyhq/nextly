@@ -5,6 +5,7 @@
  */
 import userEvent from "@testing-library/user-event";
 import type { FieldConfig } from "nextly/config";
+import { useState } from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 import { answerMediaQueries } from "@admin/__tests__/helpers/media-query";
@@ -60,7 +61,10 @@ vi.mock("@admin/hooks/queries/useVersions", () => ({
   useSetVersionLabel: (...a: unknown[]) => setLabelMock(...a),
 }));
 
-import { DocumentHistoryContext } from "../document-history-context";
+import {
+  DocumentHistoryContext,
+  type RestoreAffordance,
+} from "../document-history-context";
 import { VersionHistorySheet } from "../VersionHistorySheet";
 
 const scope = { kind: "collection" as const, slug: "posts", entryId: "e1" };
@@ -845,5 +849,75 @@ describe("VersionHistorySheet — what it publishes to the document", () => {
     // Clearing only the version would bring the page back over the document.
     act(() => published()?.returnToCurrent());
     expect(onOpenChange).toHaveBeenCalledWith(false);
+  });
+});
+
+describe("VersionHistorySheet — the comparison where the page steps aside", () => {
+  beforeEach(() => {
+    restoreMock.mockReturnValue({ mutate: mutateMock, isPending: false });
+    setLabelMock.mockReturnValue({ mutate: vi.fn(), isPending: false });
+    useVersionsMock.mockReturnValue(
+      listState({
+        data: {
+          pages: [
+            { items: [version(3), version(2)], meta: { hasNext: false } },
+          ],
+        },
+      })
+    );
+    useVersionMock.mockReturnValue(
+      detailState({ data: { snapshot: { title: "Old" }, locale: null } })
+    );
+  });
+
+  /**
+   * The editor's own arrangement: the published affordance held in state, and
+   * the panel given a scope object rebuilt on every render, as the header
+   * builds it. A published action that changed each render would loop here.
+   */
+  // Stable, as the editor's own setter is.
+  const keepOpen = () => {};
+  function Editor({
+    onPublished,
+  }: {
+    onPublished: (r: RestoreAffordance | null) => void;
+  }) {
+    const [restore, setRestore] = useState<RestoreAffordance | null>(null);
+    onPublished(restore);
+    return (
+      <DocumentHistoryContext.Provider
+        value={{ viewing: null, setViewing: () => {}, restore, setRestore }}
+      >
+        <VersionHistorySheet
+          open
+          onOpenChange={keepOpen}
+          scope={{ kind: "collection", slug: "posts", entryId: "e1" }}
+        />
+      </DocumentHistoryContext.Provider>
+    );
+  }
+
+  it("hands the banner the comparison on a narrow window, and settles", async () => {
+    answerMediaQueries(false);
+    let published: RestoreAffordance | null = null;
+    render(<Editor onPublished={r => (published = r)} />);
+
+    await userEvent.click(screen.getByRole("button", { name: /Version 3/ }));
+
+    await waitFor(() => expect(published?.compare).toBeTypeOf("function"));
+  });
+
+  it("keeps the comparison in the panel beside the document", async () => {
+    answerMediaQueries(true);
+    let published: RestoreAffordance | null = null;
+    render(<Editor onPublished={r => (published = r)} />);
+
+    await userEvent.click(screen.getByRole("button", { name: /Version 3/ }));
+
+    await waitFor(() => expect(published).not.toBeNull());
+    expect(published?.compare).toBeUndefined();
+    expect(
+      screen.getByRole("button", { name: "Open full comparison" })
+    ).toBeInTheDocument();
   });
 });

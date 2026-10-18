@@ -298,44 +298,6 @@ export function VersionHistorySheet({
   // version is read with that page stepped aside, and the banner leads back.
   const steppedAside = open && !roomBeside && selected !== null;
 
-  // Restoring is offered from the banner in the document, which is where the
-  // reader is looking — but it stays THIS component's mutation, guarded by
-  // this component's confirmation. Only the trigger travels.
-  const requestRestore = useCallback(() => setConfirmingRestore(true), []);
-  // Clears this panel's own selection as well as the shared one, so the list
-  // stops marking a row active for a version that is no longer on screen.
-  // Where the panel is a page, the live document is reached by leaving history
-  // altogether: clearing the version alone would bring the page back over it.
-  const returnToCurrent = useCallback(
-    () => (roomBeside ? setSelected(null) : onOpenChange(false)),
-    [roomBeside, setSelected, onOpenChange]
-  );
-  const backToHistory = useCallback(() => setSelected(null), [setSelected]);
-  useEffect(() => {
-    if (!open || selected === null) {
-      setRestore(null);
-      return;
-    }
-    setRestore({
-      canRestore,
-      request: requestRestore,
-      returnToCurrent,
-      ...(roomBeside ? {} : { backToHistory }),
-    });
-    // Withdrawn on unmount as well as on close: a banner left holding a
-    // trigger into an unmounted panel would open a dialog nothing renders.
-    return () => setRestore(null);
-  }, [
-    open,
-    selected,
-    canRestore,
-    requestRestore,
-    returnToCurrent,
-    backToHistory,
-    roomBeside,
-    setRestore,
-  ]);
-
   const restore = useRestoreVersion({
     scope,
     onSuccess: result => {
@@ -403,6 +365,73 @@ export function VersionHistorySheet({
     previousVersionNo !== null &&
     !isRefetching &&
     !isRefetchError;
+
+  // Restoring is offered from the banner in the document, which is where the
+  // reader is looking — but it stays THIS component's mutation, guarded by
+  // this component's confirmation. Only the trigger travels.
+  const requestRestore = useCallback(() => setConfirmingRestore(true), []);
+  // Clears this panel's own selection as well as the shared one, so the list
+  // stops marking a row active for a version that is no longer on screen.
+  // Where the panel is a page, the live document is reached by leaving history
+  // altogether: clearing the version alone would bring the page back over it.
+  const returnToCurrent = useCallback(
+    () => (roomBeside ? setSelected(null) : onOpenChange(false)),
+    [roomBeside, setSelected, onOpenChange]
+  );
+  const backToHistory = useCallback(() => setSelected(null), [setSelected]);
+  // The full comparison, on a page of its own, from the version chosen
+  // against the one before it in the same language: its address names the
+  // pair so it can be shared. The SELECTED version's language, not the
+  // sheet's filter: the filter says which rows are listed, while this says
+  // which text the pair actually holds, and the destination must name the
+  // document in that.
+  // Built as the address itself, a plain string: the scope object and the
+  // list are rebuilt each render, and an action built from them would
+  // republish the banner's actions, re-rendering the editor, every time.
+  const comparisonHref =
+    selected === null || previousVersionNo === null
+      ? null
+      : versionsHref(
+          scope,
+          { from: previousVersionNo, to: selected },
+          versions.find(v => v.versionNo === selected)?.locale
+        );
+  const openComparison = useCallback(() => {
+    if (comparisonHref !== null) navigateTo(comparisonHref);
+  }, [comparisonHref]);
+  useEffect(() => {
+    if (!open || selected === null) {
+      setRestore(null);
+      return;
+    }
+    setRestore({
+      canRestore,
+      request: requestRestore,
+      returnToCurrent,
+      // Where the page steps aside, the banner is all that is on screen, so
+      // it carries the way back to the list and the comparison too.
+      ...(roomBeside
+        ? {}
+        : {
+            backToHistory,
+            ...(canComparePrevious ? { compare: openComparison } : {}),
+          }),
+    });
+    // Withdrawn on unmount as well as on close: a banner left holding a
+    // trigger into an unmounted panel would open a dialog nothing renders.
+    return () => setRestore(null);
+  }, [
+    open,
+    selected,
+    canRestore,
+    requestRestore,
+    returnToCurrent,
+    backToHistory,
+    canComparePrevious,
+    openComparison,
+    roomBeside,
+    setRestore,
+  ]);
 
   // When previewing a version whose previous same-locale version has not loaded
   // yet, page forward until it resolves or history runs out. Interleaved locales
@@ -710,24 +739,7 @@ export function VersionHistorySheet({
                 pair does not open "this version with nothing"; the destination
                 reads an absent pair as the two NEWEST versions, so the control
                 would silently show a comparison the reader did not ask for. */}
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() =>
-                  navigateTo(
-                    versionsHref(
-                      scope,
-                      { from: previousVersionNo, to: selected },
-                      // The SELECTED version's language, not the sheet's
-                      // filter: the filter says which rows are listed, while
-                      // this says which text the pair being opened actually
-                      // holds — and that is what the destination must name the
-                      // document in.
-                      versions.find(v => v.versionNo === selected)?.locale
-                    )
-                  )
-                }
-              >
+              <Button variant="outline" size="sm" onClick={openComparison}>
                 Open full comparison
               </Button>
               {/* Restoring is offered in the BANNER over the version being

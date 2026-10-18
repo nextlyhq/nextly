@@ -60,6 +60,11 @@ export interface RestoreAffordance {
    * document the list never left the screen.
    */
   backToHistory?: () => void;
+  /**
+   * Opens the full comparison of the version on screen with the one before
+   * it, offered where the panel stepped aside and so cannot offer it itself.
+   */
+  compare?: () => void;
 }
 
 export interface DocumentHistoryValue {
