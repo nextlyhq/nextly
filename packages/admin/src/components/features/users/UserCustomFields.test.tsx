@@ -42,17 +42,11 @@ function record(
   } as UserFieldDefinitionRecord;
 }
 
+/** The project's user fields, as the hook answers for the test in hand. */
+let fields: UserFieldDefinitionRecord[] = [];
+
 vi.mock("@admin/hooks/queries/useUserFields", () => ({
-  useUserFields: () => ({
-    data: {
-      fields: [
-        record("phone", "Phone", null),
-        record("internal", "Internal note", { admin: { hidden: true } }),
-      ],
-    },
-    isLoading: false,
-    isError: false,
-  }),
+  useUserFields: () => ({ data: { fields }, isLoading: false, isError: false }),
 }));
 
 vi.mock("@admin/context/providers/BrandingProvider", () => ({
@@ -71,9 +65,31 @@ function Form() {
 
 describe("UserCustomFields", () => {
   it("does not draw a field declared hidden, and draws the one beside it", () => {
+    fields = [
+      record("phone", "Phone", null),
+      record("internal", "Internal note", { admin: { hidden: true } }),
+    ];
     render(<Form />);
     expect(screen.getByLabelText("Phone")).toBeInTheDocument();
     expect(screen.queryByLabelText("Internal note")).toBeNull();
     expect(screen.queryByText("Internal note")).toBeNull();
+  });
+
+  it("draws no section when every field is hidden", () => {
+    // Not a heading over an empty grid. The visible case above is what this
+    // is measured against: the same form with a field to draw has a heading.
+    fields = [record("internal", "Internal note", { admin: { hidden: true } })];
+    render(<Form />);
+    expect(
+      screen.queryByRole("heading", { name: "Additional Information" })
+    ).toBeNull();
+  });
+
+  it("draws the section heading when a field is shown", () => {
+    fields = [record("phone", "Phone", null)];
+    render(<Form />);
+    expect(
+      screen.getByRole("heading", { name: "Additional Information" })
+    ).toBeInTheDocument();
   });
 });

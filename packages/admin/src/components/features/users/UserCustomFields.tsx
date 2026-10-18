@@ -179,12 +179,20 @@ export function UserCustomFields({
 }: UserCustomFieldsProps) {
   const { data, isLoading, isError } = useUserFields();
 
-  // Filter to active fields and sort by sortOrder
-  const activeFields = useMemo(() => {
+  // The fields this form draws: active, not declared hidden, in sortOrder.
+  // A hidden field is left out here rather than inside its input, so a form
+  // whose every active field is hidden draws no section at all — not a
+  // heading over an empty grid. Asked of the shared gates, because this form
+  // draws each field's wrapper itself rather than through the entry form's
+  // renderer, where every other field meets them. User fields evaluate no
+  // condition on this form, so hidden is the gate that applies.
+  const shownFields = useMemo(() => {
     if (!data?.fields) return [];
     return data.fields
       .filter(f => f.isActive)
-      .sort((a, b) => a.sortOrder - b.sortOrder);
+      .sort((a, b) => a.sortOrder - b.sortOrder)
+      .map(def => ({ def, fieldConfig: toFieldConfig(def) }))
+      .filter(({ fieldConfig }) => !fieldAdminGates(fieldConfig).hidden);
   }, [data]);
 
   // Loading state — skeleton placeholder
@@ -211,8 +219,8 @@ export function UserCustomFields({
     return null;
   }
 
-  // No active custom fields — render nothing
-  if (activeFields.length === 0) {
+  // No custom field to draw — render nothing
+  if (shownFields.length === 0) {
     return null;
   }
 
@@ -220,8 +228,7 @@ export function UserCustomFields({
     <div className="space-y-4">
       <h3 className="text-lg font-semibold text-foreground">{groupLabel}</h3>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {activeFields.map(def => {
-          const fieldConfig = toFieldConfig(def);
+        {shownFields.map(({ def, fieldConfig }) => {
           const fieldPath = `${CUSTOM_FIELD_PREFIX}.${def.name}`;
 
           return (
@@ -270,12 +277,6 @@ function UserFieldInput({
 }: UserFieldInputProps) {
   const pluginFieldType = usePluginFieldType(fieldConfig.type);
   const isCheckbox = fieldConfig.type === "checkbox";
-
-  // A field declared hidden is not drawn. Asked here because this form draws
-  // the wrapper itself rather than through the entry form's renderer, which
-  // is where every other field meets this gate. User fields carry no
-  // condition that this form evaluates, so hidden is the gate that applies.
-  if (fieldAdminGates(fieldConfig).hidden) return null;
 
   return (
     <FieldWrapper
