@@ -41,7 +41,18 @@ interface AcceptedEscape {
  * Escapes the run accepts. A deliberate one stays; a known one names the
  * change that removes it and is deleted by that change.
  */
-export const ACCEPTED_ESCAPES: readonly AcceptedEscape[] = [];
+export const ACCEPTED_ESCAPES: readonly AcceptedEscape[] = [
+  {
+    frame: "open-transaction.integration.test.ts:",
+    reason:
+      "deliberate: opens a transaction nested in another to prove flow tracking survives it",
+  },
+  {
+    frame: "transaction-one-connection.integration.test.ts:",
+    reason:
+      "deliberate: reads the sessions from another connection while a transaction is open, the detector's positive control",
+  },
+];
 
 const OBSERVER = Symbol.for("nextly.transactionEscapeObserver");
 
