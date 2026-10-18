@@ -182,7 +182,7 @@ describe("the bars archetype", () => {
 
   it("discloses a cap rather than quietly showing a partial picture", () => {
     draw(grouped([{ value: "Published", count: 9 }], true));
-    expect(screen.getByText(/some are not listed/i)).toBeInTheDocument();
+    expect(screen.getByText(/more groups exist/i)).toBeInTheDocument();
   });
 
   it("says nothing was matched rather than drawing an empty frame", () => {

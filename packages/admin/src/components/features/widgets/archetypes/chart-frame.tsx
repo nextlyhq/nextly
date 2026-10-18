@@ -128,9 +128,10 @@ export function ChartFrame({
           </span>
           View as table
         </summary>
-        {/* Its own scroll container: a long window must not make the card the
-            thing that scrolls sideways. */}
-        <div className="mt-2 max-h-48 overflow-auto">
+        {/* No scroll of its own: a card never shows a scrollbar, so the open table grows the
+            card instead. Its two columns are a label and a count, and the label wraps, so the
+            table fits the card's width at every tier. */}
+        <div className="mt-2">
           <table className="w-full border-collapse text-xs">
             <caption className="sr-only">{title}</caption>
             <thead>
@@ -170,8 +171,8 @@ export function ChartFrame({
                     scope="row"
                     className={
                       row.announce
-                        ? "py-1 pr-2 text-left font-normal italic text-muted-foreground"
-                        : "py-1 pr-2 text-left font-normal text-foreground"
+                        ? "break-words py-1 pr-2 text-left font-normal italic text-muted-foreground"
+                        : "break-words py-1 pr-2 text-left font-normal text-foreground"
                     }
                   >
                     {row.announce ? (

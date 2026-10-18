@@ -52,6 +52,7 @@ import {
 import {
   getAvailableColumns,
   getDefaultVisibleColumns,
+  linkedSortFor,
   type CollectionForColumns,
 } from "./EntryTableColumns";
 import { EntryTableSkeleton } from "./EntryTableSkeleton";
@@ -202,6 +203,9 @@ function getCollectionLabels(
 // Component
 // ============================================================================
 
+/** The list's order until the person or their link chooses one: newest entries first. */
+const DEFAULT_SORT = "-createdAt";
+
 /**
  * Entry list container with pagination, sorting, search, and bulk operations.
  *
@@ -244,7 +248,9 @@ export function EntryList({ collectionSlug }: EntryListProps) {
   // off-by-one page of content with nothing to catch it.
   const [page, setPage] = useState(1);
   const [limit, setLimit] = useState(25);
-  const [sort, setSort] = useState<string | undefined>("-createdAt"); // Default: newest entries first
+  // The sort the person chose here; until they choose, the one their link carried, else newest
+  // entries first.
+  const [chosenSort, setSort] = useState<string | undefined>();
   const [search, setSearch] = useState("");
   const [status, setStatus] = useState<string>("all");
   const [createdFrom, setCreatedFrom] = useState("");
@@ -304,6 +310,23 @@ export function EntryList({ collectionSlug }: EntryListProps) {
   const wantsTranslationStatus =
     localizationEnabled &&
     (collection as { localized?: boolean } | undefined)?.localized === true;
+
+  // A sort the link that opened this list carried (`?sort=-updatedAt`, from a dashboard card's
+  // "More exist"), honoured only for a column the sort menu itself can order by. Anything else
+  // is ignored rather than refused: a stale link still opens the list, newest first. Read once
+  // per address and never written back as the person changes it.
+  const sortParam = getSearchParam(searchParams, "sort");
+  const linkedSort = useMemo(
+    () =>
+      linkedSortFor(
+        sortParam,
+        collection
+          ? toCollectionForColumns(collection, collectionSlug)
+          : undefined
+      ),
+    [sortParam, collection, collectionSlug]
+  );
+  const sort = chosenSort ?? linkedSort ?? DEFAULT_SORT;
 
   // Fetch entries with pagination and filters
   const { data: entriesResponse, isLoading: entriesLoading } = useEntries({

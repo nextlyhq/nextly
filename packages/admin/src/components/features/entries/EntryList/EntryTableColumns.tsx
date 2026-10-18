@@ -348,6 +348,34 @@ export interface EntryColumnActions {
   openInLocale?: (entryId: string, locale: string) => void;
 }
 
+/**
+ * The columns the list's sort can order by: the ones its table marks sortable. The one answer
+ * both the sort menu and a sort carried in the list's address are held to.
+ */
+export function sortableColumnNames(
+  collection: CollectionForColumns
+): ReadonlySet<string> {
+  return new Set(
+    buildEntryColumns(collection)
+      .filter(column => column.sortable)
+      .map(column => column.name)
+  );
+}
+
+/**
+ * The sort a link asked for, when it names a column the sort menu can order by
+ * (`field` ascending, `-field` descending), or `undefined` for anything else, which the list
+ * then ignores rather than refuses.
+ */
+export function linkedSortFor(
+  param: string | null | undefined,
+  collection: CollectionForColumns | undefined
+): string | undefined {
+  if (!param || !collection) return undefined;
+  const name = param.startsWith("-") ? param.slice(1) : param;
+  return sortableColumnNames(collection).has(name) ? param : undefined;
+}
+
 export function buildEntryColumns(
   collection: CollectionForColumns,
   /**

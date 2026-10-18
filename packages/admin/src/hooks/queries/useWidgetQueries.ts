@@ -25,6 +25,7 @@
  * @module hooks/queries/useWidgetQueries
  */
 
+import type { SizeTier } from "@nextlyhq/ui/format";
 import { useQueries } from "@tanstack/react-query";
 import {
   isTimeseriesInterval,
@@ -32,7 +33,7 @@ import {
   WIDGET_SOURCE_FIELD_TYPES,
   type WidgetQuery,
 } from "nextly/config";
-import { useMemo } from "react";
+import { useCallback, useMemo, useRef } from "react";
 
 import { protectedApi } from "@admin/lib/api/protectedApi";
 import type {
@@ -75,6 +76,17 @@ export interface WidgetQueryRequest {
    * query is asked again even when the previous retry's answer is still cached.
    */
   attempt?: number;
+  /**
+   * The query as the card's tier asks it, and that tier: what is SENT, while `query` is what
+   * the cache is keyed by.
+   *
+   * 🔴 Kept out of the key on purpose. A card's tier follows the dashboard's width, and every
+   * card of a dashboard travels in one partition, so a sized limit in the key would refetch the
+   * whole dashboard whenever any one card crossed a tier. Sent at fetch time instead, a resize
+   * refetches nothing, the next refresh asks every card at its current tier, and a card that
+   * now draws more than was fetched asks again alone (see `fetchedTierFor`).
+   */
+  sized?: { query: WidgetQuery; tier: SizeTier };
 }
 
 /** One card's cell answers, keyed by cell key. */
@@ -117,6 +129,14 @@ export interface UseWidgetQueriesResult {
    * partition that answered a second ago.
    */
   updatedAt: Date | null;
+  /**
+   * The tier a card's answer was fetched at, for a card whose request was sized; `undefined`
+   * before its first fetch in this mount, or for a request that carried no tier.
+   *
+   * Part of this hook's contract: the batch sizes each card's query at fetch time and records
+   * the tier it sent here, so a card that now draws more than was fetched can ask again alone.
+   */
+  fetchedTierFor: (placementId: string) => SizeTier | undefined;
 }
 
 /**
@@ -659,18 +679,28 @@ export function useWidgetQueries(
   queries: WidgetQueryRequest[]
 ): UseWidgetQueriesResult {
   const partitions = useMemo(() => partitionRequests(queries), [queries]);
+  // The tier each placement's answer was fetched at, written by the fetch itself, which is the
+  // only place that knows what was sent; see `fetchedTierFor`.
+  const fetchedTiers = useRef(new Map<string, SizeTier>());
 
   const results = useQueries({
     queries: partitions.map(partition => ({
-      // The partition's own requests are its key. Two dashboards asking for
-      // different widgets are different questions and must not share one cache
-      // entry; TanStack hashes the array deterministically, so a re-render with
-      // an equal-but-new array does not refetch.
-      queryKey: ["dashboard", "widget-queries", partition],
+      // The partition's own requests are its key, WITHOUT their sizing. Two dashboards asking
+      // for different widgets are different questions and must not share one cache entry;
+      // TanStack hashes the array deterministically, so a re-render with an equal-but-new
+      // array does not refetch. `sized` is left out so a change of tier is not a new question;
+      // see `WidgetQueryRequest.sized`.
+      queryKey: ["dashboard", "widget-queries", partition.map(unsized)],
+      // Built from this render's partition, and TanStack runs the latest observer's function,
+      // so a refetch sends each card's CURRENT tier.
       queryFn: async () => {
         const body = await protectedApi.post<unknown>("/dashboard/query", {
-          queries: partition.map(entry => entry.query),
+          queries: partition.map(entry => entry.sized?.query ?? entry.query),
         });
+        for (const entry of partition) {
+          if (entry.sized)
+            fetchedTiers.current.set(entry.placementId, entry.sized.tier);
+        }
         return readResults(body);
       },
       staleTime: 0,
@@ -738,6 +768,11 @@ export function useWidgetQueries(
 
   const settledAt = results.map(answer => answer.dataUpdatedAt);
 
+  const fetchedTierFor = useCallback(
+    (placementId: string) => fetchedTiers.current.get(placementId),
+    []
+  );
+
   return {
     slots,
     cellSlots,
@@ -770,5 +805,22 @@ export function useWidgetQueries(
       settledAt.length > 0 && settledAt.every(at => at > 0)
         ? new Date(Math.min(...settledAt))
         : null,
+    fetchedTierFor,
+  };
+}
+
+/**
+ * A request as the cache keys it: everything but the sizing it is sent with. Named field by
+ * field, so a field added to the request is a decision about the key rather than an accident;
+ * TanStack's hash drops the `undefined` ones, so an unsized request keys exactly as before.
+ */
+function unsized(
+  request: WidgetQueryRequest
+): Omit<WidgetQueryRequest, "sized"> {
+  return {
+    placementId: request.placementId,
+    cellKey: request.cellKey,
+    query: request.query,
+    attempt: request.attempt,
   };
 }

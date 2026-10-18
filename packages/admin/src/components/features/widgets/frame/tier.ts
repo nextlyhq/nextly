@@ -14,9 +14,13 @@
  */
 
 import type { SizeTier } from "@nextlyhq/ui/format";
+import { effectiveWidgetLimit, MAX_WIDGET_ROWS } from "nextly/config";
 import { createContext, useContext, type RefObject } from "react";
 
 import { useMeasuredWidth } from "@admin/components/shared/preview/useMeasuredWidth";
+import type { WidgetWidth } from "@admin/types/dashboard/widgets";
+
+import { bandForWidth, drawnSpan, GRID_GAP_PX } from "../sizes";
 
 /** Below this rendered width a card is small: a full grouped figure may not fit. */
 const SMALL_BELOW_PX = 340;
@@ -28,6 +32,59 @@ export function tierForWidth(width: number | null): SizeTier | undefined {
   if (width === null) return undefined;
   if (width < SMALL_BELOW_PX) return "small";
   return width >= LARGE_FROM_PX ? "large" : "medium";
+}
+
+/**
+ * The outer width, in pixels, of a card drawn at `width` on a dashboard `dashboardWidth` wide.
+ *
+ * Twelve tracks with a gap between each: a card spanning n of them takes n twelfths of the
+ * dashboard and its share of the gaps, less the gap that follows it. This is the width the card
+ * measures once drawn, so a tier read from it is the tier the card then measures.
+ */
+export function cardOuterWidth(
+  width: WidgetWidth,
+  dashboardWidth: number
+): number {
+  const tracks = drawnSpan(width, bandForWidth(dashboardWidth));
+  return ((dashboardWidth + GRID_GAP_PX) * tracks) / 12 - GRID_GAP_PX;
+}
+
+/**
+ * A card's tier before it is drawn: the tier its predicted outer width reads as.
+ *
+ * What a card's first query is sized by, since the query is asked before the card can measure
+ * itself. Read through {@link tierForWidth}, the rule the measured tier uses, so the two cannot
+ * disagree about a width; `undefined` while the dashboard itself has no width yet.
+ */
+export function predictedTier(
+  width: WidgetWidth,
+  dashboardWidth: number | null | undefined
+): SizeTier | undefined {
+  if (dashboardWidth === null || dashboardWidth === undefined) return undefined;
+  return tierForWidth(cardOuterWidth(width, dashboardWidth));
+}
+
+/** The most rows a small card draws: below 340 px a fourth row is a scroll. */
+export const SMALL_TIER_ROWS = 3;
+
+/**
+ * The rows a card of `tier` draws when its setting asks for `items`.
+ *
+ * One answer for every reader of it: the list and table displays draw this
+ * many, the query asks for one more (to learn whether more exist), and the
+ * loading card holds this many rows' place. A second copy anywhere would hold
+ * a place for rows the display then does not draw, which is the jump the
+ * reservation exists to prevent.
+ *
+ * `items` is read through core's own rule, so a missing or garbage setting
+ * means what it means to the query: five rows, never NaN.
+ */
+export function rowsDrawn(tier: SizeTier, items: unknown): number {
+  return Math.min(
+    effectiveWidgetLimit(items),
+    MAX_WIDGET_ROWS,
+    tier === "small" ? SMALL_TIER_ROWS : Number.POSITIVE_INFINITY
+  );
 }
 
 /** The tier of the card being drawn; `undefined` outside a card or before it is measured. */

@@ -10,6 +10,7 @@ import { useDashboardStats } from "@admin/hooks/queries";
 
 import { CardFigure } from "../widgets/frame/figure";
 import { CardError, CardSkeleton } from "../widgets/frame/states";
+import { useCardTier } from "../widgets/frame/tier";
 
 /**
  * Compact "Team" summary on the dashboard. Two cards: total Users + total
@@ -71,20 +72,38 @@ export const TeamSummary: React.FC = () => {
       />
     );
   }
+  return <TeamTiles users={data?.users ?? 0} roles={data?.roles ?? 0} />;
+};
+
+/**
+ * The team at the card's tier: a small card is the number of people alone, and a wider one adds
+ * the roles beside it. By the card's own width, never the window's, so a narrow card on a wide
+ * screen does not squeeze two tiles into it.
+ */
+function TeamTiles({ users, roles }: { users: number; roles: number }) {
+  // Medium until the card has measured itself, which it does before its first paint.
+  const tier = useCardTier() ?? "medium";
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+    <div
+      data-testid="team-summary"
+      className={
+        tier === "small" ? "grid grid-cols-1 gap-4" : "grid grid-cols-2 gap-4"
+      }
+    >
       <TeamCard
         label="Users"
-        count={data?.users ?? 0}
+        count={users}
         href={ROUTES.USERS}
         Icon={UsersIcon}
       />
-      <TeamCard
-        label="Roles"
-        count={data?.roles ?? 0}
-        href={ROUTES.SECURITY_ROLES}
-        Icon={ShieldCheck}
-      />
+      {tier !== "small" && (
+        <TeamCard
+          label="Roles"
+          count={roles}
+          href={ROUTES.SECURITY_ROLES}
+          Icon={ShieldCheck}
+        />
+      )}
     </div>
   );
-};
+}

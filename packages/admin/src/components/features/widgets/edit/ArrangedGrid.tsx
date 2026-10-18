@@ -8,8 +8,8 @@
  *
  * ## Sized by the dashboard, not the window
  *
- * The tracks sit inside an `@container/dashboard` wrapper, and each card's
- * span answers to that container (`sizes.ts`). A dashboard squeezed by an open
+ * The tracks sit inside the `@container/dashboard` wrapper `WidgetGrid` draws,
+ * and each card's span answers to that container (`sizes.ts`). A dashboard squeezed by an open
  * sidebar therefore draws the band that fits the space it actually has. The
  * wrapper is a separate element because a container query cannot be answered
  * by the element it styles.
@@ -128,7 +128,9 @@ export function ArrangedGrid({
   on,
 }: ArrangedGridProps) {
   return (
-    <div className="@container/dashboard">
+    // The cards' spans answer to the `@container/dashboard` element `WidgetGrid` draws around
+    // this, the one element the dashboard's width is measured from.
+    <div>
       <section
         ref={gridRef}
         aria-label="Dashboard widgets"

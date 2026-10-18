@@ -24,8 +24,9 @@
  */
 
 import { DndContext, closestCenter } from "@dnd-kit/core";
+import type { SizeTier } from "@nextlyhq/ui/format";
 import { applyWidgetSettings } from "nextly/config";
-import { useMemo, type ComponentProps } from "react";
+import { useMemo, useRef, type ComponentProps } from "react";
 
 import { UnsavedChangesGuard } from "@admin/components/features/entries/EntryForm/UnsavedChangesGuard";
 import {
@@ -53,7 +54,10 @@ import {
 import { useDashboardFocus } from "./edit/useDashboardFocus";
 import type { LayoutEditor } from "./edit/useLayoutEditor";
 import { useSaveRequest } from "./edit/useSaveRequest";
+import { predictedTier } from "./frame/tier";
 import { resolveDashboardWidgets } from "./resolve-widgets";
+import { drawnWidth } from "./sizes";
+import { useDashboardWidth } from "./useDashboardWidth";
 import { useGridAnnouncer } from "./useGridAnnouncer";
 import { useWidgetBatch } from "./useWidgetBatch";
 
@@ -136,11 +140,21 @@ function NothingToDraw({
  * a card with no settings keeps its identity through this map and the batch's
  * memoisation does not see a new object every render.
  */
-function askedWith(rows: ArrangedWidget[]): ArrangedWidget[] {
-  return rows.map(row =>
-    row.widget.query
+function askedWith(
+  rows: ArrangedWidget[],
+  dashboardWidth: number | undefined
+): Array<ArrangedWidget & { tier?: SizeTier }> {
+  return rows.map(row => {
+    // The tier the card will be drawn at, from the dashboard's width and the card's drawn span:
+    // the query is asked before the card can measure itself, and sized for that tier.
+    const tier = predictedTier(
+      drawnWidth(row.width, row.allowedWidths),
+      dashboardWidth
+    );
+    const sized = tier ? { ...row, tier } : row;
+    return row.widget.query
       ? {
-          ...row,
+          ...sized,
           widget: {
             ...row.widget,
             query: applyWidgetSettings(
@@ -150,8 +164,29 @@ function askedWith(rows: ArrangedWidget[]): ArrangedWidget[] {
             ),
           },
         }
-      : row
+      : sized;
+  });
+}
+
+/** Nothing to ask yet: the batch's input while the dashboard has no width. */
+const NO_CARDS: [] = [];
+
+/**
+ * The element the dashboard's width is measured from, and the cards to ask, each sized for the
+ * tier it will be drawn at. The width is measured before the first paint, and no card is asked
+ * before it is known, so every first query is sized for its card's tier.
+ */
+function useCardsAtDashboardWidth(visible: ArrangedWidget[]) {
+  const dashboardRef = useRef<HTMLDivElement>(null);
+  const dashboardWidth = useDashboardWidth(dashboardRef);
+  const cards = useMemo(
+    () =>
+      dashboardWidth === undefined
+        ? NO_CARDS
+        : askedWith(visible, dashboardWidth),
+    [visible, dashboardWidth]
   );
+  return { dashboardRef, cards };
 }
 
 /**
@@ -285,7 +320,8 @@ export function WidgetGrid() {
     [declared]
   );
 
-  const cards = useMemo(() => askedWith(visible), [visible]);
+  // The dashboard's own width, and the cards asked at it.
+  const { dashboardRef, cards } = useCardsAtDashboardWidth(visible);
 
   const {
     slots,
@@ -322,86 +358,106 @@ export function WidgetGrid() {
   // the whole page blank, with no way back to the one control that could undo
   // it. An arrangement must never be able to reach a state it cannot leave, so
   // the recovery chrome outlives the rows and the empty grid says so in place.
+  //
+  // Both returns draw the dashboard's container as their root, ONE element of one type, so
+  // React keeps the same node across them and the width observed on it stays attached when
+  // the first declarations arrive.
   if (declared.length === 0) {
     return (
-      <NothingToDraw isPending={isPending} isUnavailable={isUnavailable} />
+      <div
+        ref={dashboardRef}
+        data-testid="dashboard-container"
+        className="@container/dashboard"
+      >
+        <NothingToDraw isPending={isPending} isUnavailable={isUnavailable} />
+      </div>
     );
   }
 
   return (
-    // Asks before the reader leaves with unsaved changes: Save, Discard or
-    // Keep editing. 🔴 Still on while a save is on its way: until it has
-    // landed the changes exist only here, and a leave let through while it
-    // was pending lost them when it failed. Discarding says nothing, because
-    // the page is leaving and the next one speaks for itself; reload and
-    // close get the browser's own prompt.
-    <UnsavedChangesGuard
-      isDirty={editor.hasUnsavedChanges}
-      onDiscard={editor.cancel}
-      onSave={saveRequest.request}
+    // The element every card's span answers to, and the one the dashboard's width is measured
+    // from, so a predicted tier and a drawn span read the same width.
+    <div
+      ref={dashboardRef}
+      data-testid="dashboard-container"
+      className="@container/dashboard"
     >
-      <div className="space-y-4">
-        <DashboardEditChrome
-          editor={editor}
-          writeError={layout.writeError}
-          hasArrangement={hasArrangement}
-          // The read's own answer. The rule is subtler than it looks and it
-          // belongs with the data it is about; `hasStoredRow` carries it.
-          canReset={layout.hasStoredRow}
-          isUnreadable={layout.isUnreadable}
-          onStageReset={arrangement.stageReset}
-          on={{
-            begin: arrangement.begin,
-            cancel: arrangement.cancel,
-            addWidget: () => focus.request({ kind: "add" }),
-          }}
-          saveRequest={saveRequest}
-          focus={focus}
-        />
-
-        <DndContext
-          sensors={arrangement.sensors}
-          // `closestCenter`: the cards are one list laid out as a grid, so the
-          // nearest card centre is the card the pointer is aiming at.
-          collisionDetection={closestCenter}
-          onDragEnd={arrangement.handleDragEnd}
-          accessibility={{ announcements: arrangement.announcements }}
-        >
-          <ArrangedGrid
-            rows={visible}
-            placements={editor.placements}
-            isDrawn={arrangement.isDrawn}
-            isEditing={editor.isEditing}
-            isWriting={editor.isWriting}
-            singleCardWriteBlocked={singleCardWriteBlocked(layout.isUnreadable)}
-            slots={slots}
-            cellSlots={cellSlots}
-            requested={requested}
-            updatedAtFor={updatedAtFor}
-            fetchingPlacementIds={fetchingPlacementIds}
-            retry={retry}
-            announcement={announcement}
+      {/* Asks before the reader leaves with unsaved changes: Save, Discard or
+          Keep editing. 🔴 Still on while a save is on its way: until it has
+          landed the changes exist only here, and a leave let through while it
+          was pending lost them when it failed. Discarding says nothing, because
+          the page is leaving and the next one speaks for itself; reload and
+          close get the browser's own prompt. */}
+      <UnsavedChangesGuard
+        isDirty={editor.hasUnsavedChanges}
+        onDiscard={editor.cancel}
+        onSave={saveRequest.request}
+      >
+        <div className="space-y-4">
+          <DashboardEditChrome
+            editor={editor}
+            writeError={layout.writeError}
+            hasArrangement={hasArrangement}
+            // The read's own answer. The rule is subtler than it looks and it
+            // belongs with the data it is about; `hasStoredRow` carries it.
+            canReset={layout.hasStoredRow}
+            isUnreadable={layout.isUnreadable}
+            onStageReset={arrangement.stageReset}
+            on={{
+              begin: arrangement.begin,
+              cancel: arrangement.cancel,
+              addWidget: () => focus.request({ kind: "add" }),
+            }}
+            saveRequest={saveRequest}
             focus={focus}
-            gridRef={focus.gridRef}
-            on={cardActions(arrangement, removal, editor)}
           />
-        </DndContext>
 
-        <CustomizePicker
-          editor={editor}
-          byId={byId}
-          onRestore={removal.restore}
-          sectionRef={focus.addRef}
-        />
+          <DndContext
+            sensors={arrangement.sensors}
+            // `closestCenter`: the cards are one list laid out as a grid, so the
+            // nearest card centre is the card the pointer is aiming at.
+            collisionDetection={closestCenter}
+            onDragEnd={arrangement.handleDragEnd}
+            accessibility={{ announcements: arrangement.announcements }}
+          >
+            <ArrangedGrid
+              rows={visible}
+              placements={editor.placements}
+              isDrawn={arrangement.isDrawn}
+              isEditing={editor.isEditing}
+              isWriting={editor.isWriting}
+              singleCardWriteBlocked={singleCardWriteBlocked(
+                layout.isUnreadable
+              )}
+              slots={slots}
+              cellSlots={cellSlots}
+              requested={requested}
+              updatedAtFor={updatedAtFor}
+              fetchingPlacementIds={fetchingPlacementIds}
+              retry={retry}
+              announcement={announcement}
+              focus={focus}
+              gridRef={focus.gridRef}
+              on={cardActions(arrangement, removal, editor)}
+            />
+          </DndContext>
 
-        <RemovalNotice
-          title={removal.notice?.title}
-          isWriting={editor.isWriting}
-          undoRef={focus.undoRef}
-          onUndo={removal.undo}
-          onClose={removal.close}
-        />
-      </div>
-    </UnsavedChangesGuard>
+          <CustomizePicker
+            editor={editor}
+            byId={byId}
+            onRestore={removal.restore}
+            sectionRef={focus.addRef}
+          />
+
+          <RemovalNotice
+            title={removal.notice?.title}
+            isWriting={editor.isWriting}
+            undoRef={focus.undoRef}
+            onUndo={removal.undo}
+            onClose={removal.close}
+          />
+        </div>
+      </UnsavedChangesGuard>
+    </div>
   );
 }

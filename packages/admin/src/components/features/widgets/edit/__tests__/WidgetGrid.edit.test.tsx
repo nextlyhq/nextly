@@ -27,6 +27,10 @@ import type {
 import { MAX_PLACEMENTS } from "nextly/config";
 
 import { WidgetGrid } from "../../WidgetGrid";
+import {
+  stubDashboardWidth,
+  unstubDashboardWidth,
+} from "../../__tests__/dashboard-width";
 
 let mockBranding: AdminBranding | undefined;
 let layoutResponse: DashboardLayoutResponse | undefined;
@@ -123,6 +127,8 @@ function renderGrid() {
 }
 
 beforeEach(() => {
+  // jsdom lays nothing out; the grid asks nothing until its dashboard has a width.
+  stubDashboardWidth();
   vi.clearAllMocks();
   layoutRejects = false;
   mockBranding = branding(["core/a", "core/b", "core/c"]);
@@ -138,6 +144,10 @@ beforeEach(() => {
   );
   api.put.mockResolvedValue({ message: "ok", item: {} });
   api.delete.mockResolvedValue({ message: "ok" });
+});
+
+afterEach(() => {
+  unstubDashboardWidth();
 });
 
 /** Enters customise mode and waits for the per-card menus to exist. */
