@@ -33,7 +33,7 @@ import { handleResetPassword } from "./reset-password";
 import { handleSession } from "./session";
 import type { WithSessionRowTransaction } from "./session-row";
 import { handleSetInitialPassword } from "./set-initial-password";
-import { handleSetupStatus, handleSetup } from "./setup";
+import { handleSetupStatus, handleSetup, type SetupHandlerDeps } from "./setup";
 import { admitUnknownSource, type StoredTokenKind } from "./unknown-source";
 import { handleVerifyEmail, handleResendVerification } from "./verify-email";
 
@@ -237,7 +237,10 @@ export interface AuthRouterDeps {
   deleteRefreshTokenByHash: (tokenHash: string) => Promise<void>;
   deleteAllRefreshTokensForUser: (userId: string) => Promise<void>;
 
-  getUserCount: () => Promise<number>;
+  /** Whether anyone holds the `super-admin` role: setup's gate. */
+  hasAdministrator: () => Promise<boolean>;
+  /** The production setup token, and the claim one setup holds at a time. */
+  setupToken: SetupHandlerDeps["setupToken"];
   createSuperAdmin: (data: {
     email: string;
     name: string;
@@ -353,7 +356,12 @@ async function dispatchAuthRequest(
         case "refresh":
           return handleRefresh(request, deps);
         case "setup":
-          return handleSetup(request, deps);
+          // Setup is not on the limited paths: a valid token must open it
+          // whatever the budgets hold. Only a wrong token is counted.
+          return handleSetup(request, deps, {
+            limitWrongToken: wrong =>
+              checkAuthIpRateLimit(wrong, "setup", deps),
+          });
         case "register":
           return handleRegister(request, deps);
         case "forgot-password":

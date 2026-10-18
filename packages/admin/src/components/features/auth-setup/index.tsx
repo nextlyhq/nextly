@@ -1,6 +1,6 @@
 "use client";
 
-import { Button } from "@nextlyhq/ui";
+import { Button, Input } from "@nextlyhq/ui";
 import { useState } from "react";
 import { FormProvider } from "react-hook-form";
 
@@ -21,11 +21,15 @@ import { getCsrfToken } from "@admin/lib/api/csrf";
 import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 import type { ActionResponse } from "@admin/lib/api/response-types";
 
+import { useSetupTokenRequired } from "./useSetupTokenRequired";
+
 export function Setup() {
   const { api } = useApi();
   const appName = useAppName();
 
   const [isLoading, setIsLoading] = useState(false);
+  const tokenRequired = useSetupTokenRequired();
+  const [setupToken, setSetupToken] = useState("");
 
   const form = useSignupForm();
   // A refused submission is shown in the form, where it stays while the
@@ -47,6 +51,7 @@ export function Setup() {
         email: values.email,
         password: values.password,
         csrfToken,
+        ...(tokenRequired ? { setupToken: setupToken.trim() } : {}),
       });
 
       // Prefer the server message; fall back to the welcome string
@@ -85,6 +90,35 @@ export function Setup() {
           }}
           className="space-y-6"
         >
+          {tokenRequired ? (
+            <div className="space-y-2">
+              <label
+                htmlFor="setup-token"
+                className="text-sm font-medium text-foreground"
+              >
+                Setup token
+              </label>
+              <Input
+                id="setup-token"
+                name="setupToken"
+                required
+                type="text"
+                autoComplete="off"
+                spellCheck={false}
+                value={setupToken}
+                onChange={event => setSetupToken(event.target.value)}
+                placeholder="Paste the setup token…"
+                className="h-11 rounded-md border-input font-mono"
+              />
+              <p className="text-xs text-muted-foreground">
+                Printed in the server&apos;s output when it started, on a line
+                beginning <code>[nextly] SETUP TOKEN</code>, or the value of{" "}
+                <code>NEXTLY_SETUP_TOKEN</code>. Run{" "}
+                <code>nextly setup-token</code> for a new one.
+              </p>
+            </div>
+          ) : null}
+
           <AuthSignupFields />
 
           <Button

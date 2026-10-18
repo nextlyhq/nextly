@@ -57,10 +57,17 @@ import { databaseSpentChallenges } from "../pipeline/spent-challenges";
 import type { AuthHooks, ChallengeDefinition } from "../pipeline/types";
 import type { AccountState } from "../session/account-state";
 import type { SessionRoles } from "../session/session-roles";
+import { claimFirstSetup, sharedRecordReader } from "../setup-token/setup-gate";
+import {
+  spendSetupToken,
+  verifySetupToken,
+  type SetupTokenMeta,
+} from "../setup-token/setup-token";
 
 import { aggregateAuthUi } from "./auth-ui";
 import type { AuthRouterDeps } from "./router";
 import type { SessionRowTransaction } from "./session-row";
+import type { SetupHandlerDeps } from "./setup";
 
 /**
  * Build AuthRouterDeps from the DI container services.
@@ -286,19 +293,20 @@ export function buildAuthRouterDeps(
       await deleteRefreshTokens(getService, eq(refreshTokens.userId, userId));
     },
 
-    getUserCount: async () => {
-      // Errors propagate intentionally. The user count gates two
-      // security-relevant decisions (setup-status reporting and the
-      // first-admin pre-check); collapsing an unknown count to 0 would
-      // both lie about setup state and risk a duplicate super-admin.
-      // Callers convert failures to a 503 envelope.
+    hasAdministrator: async () => {
+      // Errors propagate intentionally: this gates setup and setup-status,
+      // and collapsing an unknown answer to "no administrator" would both lie
+      // about setup state and risk a second super-admin. Callers convert
+      // failures to a 503 envelope. The same question the first-administrator
+      // grant asks, through the same query.
+      const { superAdminRoleHeld } = await import(
+        "../../domains/users/services/last-super-admin"
+      );
       const adapter = getService("adapter");
-      const db = adapter.getDrizzle();
-      const schema = getDialectTables();
-      const { count } = await import("drizzle-orm");
-      const result = await db.select({ count: count() }).from(schema.users);
-      return Number(result[0]?.count || 0);
+      return superAdminRoleHeld(adapter.getDrizzle(), getDialectTables());
     },
+
+    setupToken: setupTokenDeps(getService, env.NODE_ENV === "production"),
 
     createSuperAdmin: async data => {
       const { seedPermissions } = await import(
@@ -755,6 +763,24 @@ function readServiceConfig(
   } catch {
     return undefined;
   }
+}
+
+/**
+ * The production setup token, read and spent through `nextly_meta`, where
+ * every instance of the install sees the same row.
+ */
+function setupTokenDeps(
+  getService: (name: string) => unknown,
+  isProduction: boolean
+): SetupHandlerDeps["setupToken"] {
+  const meta = () => getService("metaService") as SetupTokenMeta;
+  return {
+    required: isProduction,
+    verify: presented =>
+      verifySetupToken({ presented, readRecord: sharedRecordReader(meta()) }),
+    spend: () => spendSetupToken(meta()),
+    claim: () => claimFirstSetup(meta()),
+  };
 }
 
 /**

@@ -155,6 +155,14 @@ function makeRequest(
 
 const ALLOWED_ORIGINS = ["http://localhost:3000"];
 
+/** Setup as development has it: no token asked for, one setup at a time. */
+const OPEN_SETUP = {
+  required: false,
+  verify: async () => "valid" as const,
+  spend: async () => {},
+  claim: async () => ({ release: async () => {} }),
+};
+
 describe("login handler: respondAction shape", () => {
   it("returns { message, user, accessToken, refreshToken, expiresAt }", async () => {
     const fakeUser = {
@@ -826,36 +834,51 @@ describe("register handler: respondAction shape", () => {
 });
 
 describe("setup-status handler: respondData shape", () => {
-  it("when no users exist, returns { isSetup: false, requiresInitialUser: true }", async () => {
-    const deps = { getUserCount: vi.fn().mockResolvedValue(0) };
+  it("with no administrator yet, returns { isSetup: false, requiresInitialUser: true }", async () => {
+    const deps = {
+      hasAdministrator: vi.fn().mockResolvedValue(false),
+      setupToken: OPEN_SETUP,
+    };
     const req = new Request(
       "http://localhost:3000/admin/api/auth/setup-status"
     );
     const res = await handleSetupStatus(req, deps);
     expect(res.status).toBe(200);
     const body = (await res.json()) as Record<string, unknown>;
-    expect(body).toEqual({ isSetup: false, requiresInitialUser: true });
+    expect(body).toEqual({
+      isSetup: false,
+      requiresInitialUser: true,
+      requiresSetupToken: false,
+    });
     expect(body).not.toHaveProperty("data");
     expect(body).not.toHaveProperty("isSetupComplete");
   });
 
-  it("when at least one user exists, returns { isSetup: true, requiresInitialUser: false }", async () => {
-    const deps = { getUserCount: vi.fn().mockResolvedValue(1) };
+  it("once an administrator exists, returns { isSetup: true, requiresInitialUser: false }", async () => {
+    const deps = {
+      hasAdministrator: vi.fn().mockResolvedValue(true),
+      setupToken: OPEN_SETUP,
+    };
     const req = new Request(
       "http://localhost:3000/admin/api/auth/setup-status"
     );
     const res = await handleSetupStatus(req, deps);
     expect(res.status).toBe(200);
     const body = (await res.json()) as Record<string, unknown>;
-    expect(body).toEqual({ isSetup: true, requiresInitialUser: false });
+    expect(body).toEqual({
+      isSetup: true,
+      requiresInitialUser: false,
+      requiresSetupToken: false,
+    });
   });
 
-  // A transient DB failure during getUserCount must surface as 503, not
+  // A transient DB failure during the administrator check must surface as 503, not
   // collapse to `{ isSetup: false }` -- the bootstrap-gate must never
   // synthesise a default on incomplete data.
-  it("when getUserCount throws, returns 503 SERVICE_UNAVAILABLE envelope (not isSetup:false)", async () => {
+  it("when the administrator check throws, returns 503 SERVICE_UNAVAILABLE envelope (not isSetup:false)", async () => {
     const deps = {
-      getUserCount: vi.fn().mockRejectedValue(new Error("connection lost")),
+      hasAdministrator: vi.fn().mockRejectedValue(new Error("connection lost")),
+      setupToken: OPEN_SETUP,
     };
     const req = new Request(
       "http://localhost:3000/admin/api/auth/setup-status"
@@ -880,7 +903,8 @@ describe("setup handler: respondAction shape", () => {
       allowedOrigins: ALLOWED_ORIGINS,
       trustProxy: false,
       trustedProxyIps: [],
-      getUserCount: vi.fn().mockResolvedValue(0),
+      hasAdministrator: vi.fn().mockResolvedValue(false),
+      setupToken: OPEN_SETUP,
       createSuperAdmin: vi.fn().mockResolvedValue({
         id: "u1",
         email: "a@example.com",
@@ -939,7 +963,8 @@ describe("setup handler: respondAction shape", () => {
       allowedOrigins: ALLOWED_ORIGINS,
       trustProxy: false,
       trustedProxyIps: [],
-      getUserCount: vi.fn().mockResolvedValue(0),
+      hasAdministrator: vi.fn().mockResolvedValue(false),
+      setupToken: OPEN_SETUP,
       createSuperAdmin,
       fetchSessionRoles: vi.fn(),
       seedPermissions: vi.fn(),
@@ -978,7 +1003,7 @@ describe("setup handler: respondAction shape", () => {
 
   // Security: an unknown user count must never be treated as 0 -- a second
   // super-admin must not be creatable on the assumption that setup is open.
-  it("when getUserCount throws, returns 503 envelope and does NOT create a user", async () => {
+  it("when the administrator check throws, returns 503 envelope and does NOT create a user", async () => {
     const createSuperAdmin = vi.fn();
     const deps = {
       secret: SECRET,
@@ -988,7 +1013,8 @@ describe("setup handler: respondAction shape", () => {
       allowedOrigins: ALLOWED_ORIGINS,
       trustProxy: false,
       trustedProxyIps: [],
-      getUserCount: vi.fn().mockRejectedValue(new Error("connection lost")),
+      hasAdministrator: vi.fn().mockRejectedValue(new Error("connection lost")),
+      setupToken: OPEN_SETUP,
       createSuperAdmin,
       fetchSessionRoles: vi.fn(),
       seedPermissions: vi.fn(),

@@ -38,6 +38,7 @@ import {
   edgeProxyWarning,
   unkeyedStrategyWarnings,
 } from "../auth/handlers/proxy-posture";
+import { issueSetupTokenAtBoot } from "../auth/setup-token/setup-gate";
 import type { CollectionConfig } from "../collections/config/define-collection";
 import type {
   SanitizedApiKeysConfig,
@@ -1027,6 +1028,21 @@ async function registerServicesOnce(
   // sealed again under the current one, so the retired secret can go once
   // the app has started with both.
   await resealPrincipalDigestKeyAtBoot(adapter, pluginSettingsSecrets(env));
+
+  // In production, until the install has an administrator, setup needs a
+  // token: an install with none gets one here, printed once to this output.
+  if (env.NODE_ENV === "production") {
+    const { superAdminRoleHeld } = await import(
+      "../domains/users/services/last-super-admin"
+    );
+    const { getDialectTables } = await import("../database/index");
+    await issueSetupTokenAtBoot({
+      meta: getService("metaService"),
+      hasAdministrator: () =>
+        superAdminRoleHeld(adapter.getDrizzle(), getDialectTables()),
+      logger: resolvedLogger,
+    });
+  }
 
   // ----------------------------------------
   // Layer 7: Initialize Plugins
