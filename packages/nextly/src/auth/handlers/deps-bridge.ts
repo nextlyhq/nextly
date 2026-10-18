@@ -286,18 +286,17 @@ export function buildAuthRouterDeps(
       await deleteRefreshTokens(getService, eq(refreshTokens.userId, userId));
     },
 
-    getUserCount: async () => {
-      // Errors propagate intentionally. The user count gates two
-      // security-relevant decisions (setup-status reporting and the
-      // first-admin pre-check); collapsing an unknown count to 0 would
-      // both lie about setup state and risk a duplicate super-admin.
-      // Callers convert failures to a 503 envelope.
+    hasAdministrator: async () => {
+      // Errors propagate intentionally: this gates setup and setup-status,
+      // and collapsing an unknown answer to "no administrator" would both lie
+      // about setup state and risk a second super-admin. Callers convert
+      // failures to a 503 envelope. The same question the first-administrator
+      // grant asks, through the same query.
+      const { superAdminRoleHeld } = await import(
+        "../../domains/users/services/last-super-admin"
+      );
       const adapter = getService("adapter");
-      const db = adapter.getDrizzle();
-      const schema = getDialectTables();
-      const { count } = await import("drizzle-orm");
-      const result = await db.select({ count: count() }).from(schema.users);
-      return Number(result[0]?.count || 0);
+      return superAdminRoleHeld(adapter.getDrizzle(), getDialectTables());
     },
 
     createSuperAdmin: async data => {

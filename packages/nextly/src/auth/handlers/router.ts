@@ -237,7 +237,7 @@ export interface AuthRouterDeps {
   deleteRefreshTokenByHash: (tokenHash: string) => Promise<void>;
   deleteAllRefreshTokensForUser: (userId: string) => Promise<void>;
 
-  getUserCount: () => Promise<number>;
+  hasAdministrator: () => Promise<boolean>;
   createSuperAdmin: (data: {
     email: string;
     name: string;

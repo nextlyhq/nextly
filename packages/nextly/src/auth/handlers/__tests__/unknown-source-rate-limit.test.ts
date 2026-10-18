@@ -108,7 +108,7 @@ function harness(
         : null;
     },
     verifyEmail: async () => ({ success: false, error: "bad token" }),
-    getUserCount: async () => 1,
+    hasAdministrator: async () => true,
   };
   return { deps, counter, store, tokenLookups, accountLookups };
 }
