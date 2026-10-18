@@ -158,7 +158,12 @@ export function useDocumentAutosave({
   });
 
   useEffect(() => {
-    if (!enabled || !scope) return;
+    // Subscribed whether or not recording is enabled. A real save turns
+    // recording off while it runs and resets the form when it lands: the
+    // reset has to be seen to drop the recording queued before the save, and
+    // a subscription that came and went with `enabled` missed exactly that
+    // moment. Whether a recording is made is still decided when it fires.
+    if (!scope) return;
 
     const subscription = form.subscribe({
       formState: { values: true, isDirty: true },
@@ -194,6 +199,6 @@ export function useDocumentAutosave({
     // `scope` participates through its identity fields: a different document
     // needs a different subscription, and comparing the object itself would
     // resubscribe on every render.
-  }, [form, schedule, cancel, enabled, scope?.kind, scope?.slug, scope]);
+  }, [form, schedule, cancel, scope?.kind, scope?.slug, scope]);
   return { status, lastSavedAt };
 }

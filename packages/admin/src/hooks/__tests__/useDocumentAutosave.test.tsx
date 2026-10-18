@@ -61,6 +61,36 @@ describe("useDocumentAutosave", () => {
    * form to what it stored, which leaves it clean, so the recording waiting
    * for that edit would only write a copy of what was just saved.
    */
+  /**
+   * The order a real save runs in: recording is turned off while the save is
+   * in flight, the save resets the form when it lands, and recording comes
+   * back on. The reset happens while recording is off, and must still drop
+   * the recording the edit queued.
+   */
+  it("records nothing for an edit saved while recording was off for the save", async () => {
+    const { result, rerender } = renderHook(
+      ({ enabled }: { enabled: boolean }) => useHarness(SCOPE, enabled),
+      { initialProps: { enabled: true } }
+    );
+
+    act(() => {
+      result.current.form.setValue("title", "hello", { shouldDirty: true });
+    });
+    rerender({ enabled: false });
+    act(() => {
+      result.current.form.reset({ title: "hello" });
+    });
+    rerender({ enabled: true });
+    act(() => {
+      vi.advanceTimersByTime(DEBOUNCE * 2);
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(saveSpy).not.toHaveBeenCalled();
+  });
+
   it("records nothing for an edit a real save stored before the debounce", async () => {
     const { result } = renderHook(() => useHarness());
 
