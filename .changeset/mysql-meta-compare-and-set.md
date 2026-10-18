@@ -60,10 +60,10 @@ translated field:
 SELECT m.id, m.updated_at, m.title AS on_main, l.title AS in_translations
 FROM dc_<slug> AS m
 JOIN dc_<slug>_locales AS l ON l._parent = m.id AND l._locale = '<default locale>'
-WHERE NOT (BINARY m.title <=> BINARY l.title);
+WHERE NOT (CAST(m.title AS BINARY) <=> CAST(l.title AS BINARY));
 ```
 
-`BINARY` on both sides makes the comparison exact and keeps it null-safe:
+The binary cast on both sides makes the comparison exact and keeps it null-safe:
 under MySQL's default collation, `<=>` alone takes `Foo` and `foo` for the
 same value, so an edit that changed only letter case or accents would not be
 listed. For an entity defined with `timestamps: false`, leave out
