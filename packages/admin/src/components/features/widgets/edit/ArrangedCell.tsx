@@ -10,6 +10,7 @@
  * @module components/features/widgets/edit/ArrangedCell
  */
 
+import type { SizeTier } from "@nextlyhq/ui/format";
 import { resolveWidgetSettings } from "nextly/config";
 import { useMemo, useState, type ComponentProps, type ReactNode } from "react";
 
@@ -70,6 +71,8 @@ export interface ArrangedCellProps {
     /** `null` when this card took no part in the batch. */
     updatedAt: Date | null;
     isFetching: boolean;
+    /** The tier the answer shown was fetched at; see `WidgetRenderer`'s own. */
+    answerTier?: SizeTier;
     /** Reload this card's data on its own, offered in its error state. */
     onRetry?: () => void;
   };

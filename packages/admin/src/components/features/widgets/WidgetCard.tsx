@@ -65,6 +65,7 @@ import {
   type SkeletonShape,
 } from "./frame/states";
 import {
+  AnswerTierContext,
   CardTierContext,
   rowsDrawn,
   useCardTier,
@@ -136,6 +137,8 @@ export interface WidgetCardProps {
   cardId?: string;
   /** Marked on the root as `data-width` for styling and tests. */
   width?: string;
+  /** The tier the answer drawn in the body was fetched at; provided as `AnswerTierContext`. */
+  answerTier?: "small" | "medium" | "large";
   /**
    * The size tier, when the caller knows it better than the card's own measurement. Otherwise
    * the card measures the width it is drawn at (`frame/tier`). Marked on the root as
@@ -234,55 +237,57 @@ export function WidgetCard(props: WidgetCardProps) {
 
   return (
     <CardTierContext.Provider value={tier}>
-      <Card
-        ref={rootRef}
-        // `region` + the title as its name is what lets a screen-reader user jump
-        // between widgets and know which one they landed on. Without the name a
-        // region is worse than no landmark at all.
-        role="region"
-        aria-labelledby={titleId}
-        data-card-id={cardId}
-        data-width={props.width}
-        data-tier={tier}
-        data-state={view.shown}
-        className={cn("flex h-full flex-col", props.className)}
-      >
-        <WidgetCardHeader
-          titleId={titleId}
-          title={title}
-          description={props.description}
-          icon={props.icon}
-          leading={props.leading}
-          quick={view.quick}
-          headerAction={props.headerAction}
-        />
-
-        <CardContent
-          data-testid="widget-card-body"
-          aria-busy={view.busy}
-          // Customise mode: what the card shows stays visible, but nothing in it can be reached.
-          inert={view.customizing || undefined}
-          className={bodyClassName(view.refreshing, view.customizing)}
+      <AnswerTierContext.Provider value={props.answerTier}>
+        <Card
+          ref={rootRef}
+          // `region` + the title as its name is what lets a screen-reader user jump
+          // between widgets and know which one they landed on. Without the name a
+          // region is worse than no landmark at all.
+          role="region"
+          aria-labelledby={titleId}
+          data-card-id={cardId}
+          data-width={props.width}
+          data-tier={tier}
+          data-state={view.shown}
+          className={cn("flex h-full flex-col", props.className)}
         >
-          <WidgetCardBody
-            state={view.state}
-            error={view.error}
+          <WidgetCardHeader
+            titleId={titleId}
             title={title}
-            onRetry={props.onRetry}
-            skeleton={props.skeleton}
-            skeletonItems={props.skeletonItems}
-            empty={props.empty}
-          >
-            {props.children}
-          </WidgetCardBody>
-        </CardContent>
+            description={props.description}
+            icon={props.icon}
+            leading={props.leading}
+            quick={view.quick}
+            headerAction={props.headerAction}
+          />
 
-        <WidgetCardFooter
-          freshness={view.freshness}
-          link={view.link}
-          inert={view.customizing}
-        />
-      </Card>
+          <CardContent
+            data-testid="widget-card-body"
+            aria-busy={view.busy}
+            // Customise mode: what the card shows stays visible, but nothing in it can be reached.
+            inert={view.customizing || undefined}
+            className={bodyClassName(view.refreshing, view.customizing)}
+          >
+            <WidgetCardBody
+              state={view.state}
+              error={view.error}
+              title={title}
+              onRetry={props.onRetry}
+              skeleton={props.skeleton}
+              skeletonItems={props.skeletonItems}
+              empty={props.empty}
+            >
+              {props.children}
+            </WidgetCardBody>
+          </CardContent>
+
+          <WidgetCardFooter
+            freshness={view.freshness}
+            link={view.link}
+            inert={view.customizing}
+          />
+        </Card>
+      </AnswerTierContext.Provider>
     </CardTierContext.Provider>
   );
 }

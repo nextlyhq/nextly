@@ -15,7 +15,7 @@
 
 import type { WidgetResultField } from "@admin/types/dashboard/widgets";
 
-import { rowsDrawn, useCardTier } from "../frame/tier";
+import { rowsDrawn, useCardTier, useRowsTier } from "../frame/tier";
 
 import { asPresentedText } from "./cell-text";
 import { MoreExist } from "./more-exist";
@@ -40,7 +40,8 @@ export function TieredRows({
 }: TieredRowsProps) {
   // Medium until the card has measured itself, which it does before its first paint.
   const tier = useCardTier() ?? "medium";
-  const drawn = rowsDrawn(tier, query?.limit);
+  // Laid out at the card's tier, counted at its answer's when that is smaller; see `useRowsTier`.
+  const drawn = rowsDrawn(useRowsTier(tier), query?.limit);
   const rows = items.slice(0, drawn);
   const columnOf = new Map(columns.map(column => [column.name, column]));
 

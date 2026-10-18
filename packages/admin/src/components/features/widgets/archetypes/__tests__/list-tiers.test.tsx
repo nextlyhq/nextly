@@ -11,7 +11,7 @@ import { render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanup } from "@testing-library/react";
 
-import { CardTierContext } from "../../frame/tier";
+import { AnswerTierContext, CardTierContext } from "../../frame/tier";
 import { listBody } from "../list";
 import { moreExistHref } from "../more-exist";
 import { tableBody } from "../table";
@@ -183,5 +183,27 @@ describe("the lifecycle a More exist link carries", () => {
 
   it("names none for a card that read every entry", () => {
     expect(statusOf("all")).toBeNull();
+  });
+});
+
+describe("an answer smaller than the card", () => {
+  it("draws the rows its answer was asked for, and says more exist", () => {
+    // Fetched for a small card (three rows and one more), shown on a card that has since grown to
+    // medium while its larger answer is out or was refused: the extra row is not an item.
+    const outcome = listBody(
+      { op: "list", items: items(4) } as never,
+      recentPosts
+    );
+    if (!outcome.ok || !("node" in outcome) || !outcome.node)
+      throw new Error("drew nothing");
+    render(
+      <CardTierContext.Provider value="medium">
+        <AnswerTierContext.Provider value="small">
+          {outcome.node}
+        </AnswerTierContext.Provider>
+      </CardTierContext.Provider>
+    );
+    expect(screen.getAllByTestId("widget-list-row")).toHaveLength(3);
+    expect(screen.getByText("More exist")).toBeInTheDocument();
   });
 });

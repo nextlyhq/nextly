@@ -148,6 +148,80 @@ describe("the requests a dashboard sends as it is sized", () => {
     expect(sentQueries()).toHaveLength(2);
   });
 
+  it("marks the card busy while it is asked again for its new tier", async () => {
+    // The half's own re-ask is held open; the card keeps its answer on screen meanwhile, and
+    // says it is reading again, as it would for any refetch.
+    let release: () => void = () => {};
+    vi.mocked(protectedApi.post).mockImplementation((_url, body) => {
+      const queries = (body as { queries: unknown[] }).queries;
+      const answer = {
+        results: queries.map(() => ({
+          ok: true,
+          result: { op: "list", items: [{ title: "Kept" }] },
+        })),
+      };
+      if (queries.length > 1) return Promise.resolve(answer);
+      return new Promise(resolve => (release = () => resolve(answer)));
+    });
+    stubDashboardWidth(680);
+    renderGrid();
+    await waitFor(() => expect(screen.getAllByText("Kept")).toHaveLength(2));
+
+    resizeDashboard(720);
+    await waitFor(() => expect(sentQueries()).toHaveLength(2));
+    const body = () =>
+      document.querySelector(
+        '[data-card-id="acme/half"] [data-testid="widget-card-body"]'
+      );
+    await waitFor(() => expect(body()).toHaveAttribute("aria-busy", "true"));
+    expect(screen.getAllByText("Kept")).toHaveLength(2);
+    release();
+    await waitFor(() =>
+      expect(body()).not.toHaveAttribute("aria-busy", "true")
+    );
+  });
+
+  it("draws a kept smaller answer at its own tier after the card grew", async () => {
+    // The half is fetched at small, three rows and the one more; its re-ask for medium is
+    // refused. It keeps the small answer, and counts it at small: three rows and More exist,
+    // never the extra row drawn as a fourth item.
+    vi.mocked(protectedApi.post).mockImplementation((_url, body) => {
+      const queries = (
+        body as { queries: Array<{ source: string; limit?: number }> }
+      ).queries;
+      return Promise.resolve({
+        results: queries.map(query =>
+          queries.length === 1
+            ? { ok: false, error: "The read failed.", code: "internal" }
+            : {
+                ok: true,
+                result: {
+                  op: "list",
+                  items: Array.from({ length: query.limit ?? 0 }, (_, i) => ({
+                    title: `${query.source} ${i + 1}`,
+                  })),
+                },
+              }
+        ),
+      });
+    });
+    stubDashboardWidth(680);
+    renderGrid();
+    const half = () =>
+      document.querySelector<HTMLElement>('[data-card-id="acme/half"]');
+    await waitFor(() =>
+      expect(half()?.textContent).toContain("collection:posts 3")
+    );
+
+    resizeDashboard(720);
+    await waitFor(() => expect(sentQueries()).toHaveLength(2));
+    await new Promise(resolve => setTimeout(resolve, 100));
+    expect(
+      half()?.querySelectorAll('[data-testid="widget-list-row"]')
+    ).toHaveLength(3);
+    expect(half()?.textContent).toContain("More exist");
+  });
+
   it("asks a custom widget's query as declared, at any tier", async () => {
     // A plugin's own component draws a custom card from the raw answer, with no tier and no
     // row slicer, so its query is never sized: the rows it asked for are the rows it gets.

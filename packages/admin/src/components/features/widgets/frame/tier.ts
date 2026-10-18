@@ -96,6 +96,32 @@ export function useCardTier(): SizeTier | undefined {
 }
 
 /**
+ * The tier the answer a card shows was fetched at; `undefined` where it is not known. A card that
+ * grew keeps its smaller answer on screen until a larger one lands, and that answer holds only
+ * the rows its own tier asked for, and the one more that says more exist.
+ */
+export const AnswerTierContext = createContext<SizeTier | undefined>(undefined);
+
+const TIER_ORDER: Readonly<Record<SizeTier, number>> = {
+  small: 0,
+  medium: 1,
+  large: 2,
+};
+
+/**
+ * The tier a card's rows are counted at: the card's own, or the tier its answer was fetched at
+ * when that is smaller. Counted at the card's tier, a smaller answer would draw its extra row as
+ * one more item and lose the sign that more exist.
+ */
+export function useRowsTier(cardTier: SizeTier): SizeTier {
+  const answerTier = useContext(AnswerTierContext);
+  return answerTier !== undefined &&
+    TIER_ORDER[answerTier] < TIER_ORDER[cardTier]
+    ? answerTier
+    : cardTier;
+}
+
+/**
  * Measures the card at `ref` and answers its tier, which the frame then provides.
  *
  * A tier the caller states wins over the measured one, so a card drawn somewhere without a

@@ -22,6 +22,7 @@
  * @module components/features/widgets/WidgetRenderer
  */
 
+import type { SizeTier } from "@nextlyhq/ui/format";
 import type { WidgetComponentProps } from "nextly/widget-result";
 import type { ReactNode } from "react";
 
@@ -167,6 +168,11 @@ export interface WidgetRendererProps {
    */
   isFetching?: boolean;
   /**
+   * The tier the answer in `slot` was fetched at, when the card has grown past it: a list then
+   * draws only the rows that answer was asked for. See `AnswerTierContext`.
+   */
+  answerTier?: SizeTier;
+  /**
    * Which CARD this render is, and what its reader configured.
    *
    * 🔴 Handed to a plugin's own component, because nothing else can reach it.
@@ -200,6 +206,7 @@ export function WidgetRenderer({
   onRetry,
   updatedAt = null,
   isFetching = false,
+  answerTier,
 }: WidgetRendererProps) {
   const shared = {
     title: definition.title,
@@ -213,6 +220,7 @@ export function WidgetRenderer({
     cardId: placement?.id ?? definition.id,
     skeleton: skeletonFor(definition.archetype),
     skeletonItems: skeletonItemsFor(definition),
+    answerTier,
   };
 
   const outcome = resolveWidgetOutcome(definition, slot, slotFor);

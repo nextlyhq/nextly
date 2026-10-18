@@ -20,6 +20,7 @@
  * @module components/features/widgets/edit/ArrangedGrid
  */
 import { SortableContext, rectSortingStrategy } from "@dnd-kit/sortable";
+import type { SizeTier } from "@nextlyhq/ui/format";
 import type { RefObject } from "react";
 
 import type { CellSlots } from "@admin/hooks/queries/useWidgetQueries";
@@ -55,6 +56,8 @@ export interface ArrangedGridProps {
   requested: ReadonlySet<string>;
   /** When the answer one card shows arrived: its own retry's, or the batch's. */
   updatedAtFor: (placementId: string) => Date | null;
+  /** The tier the answer one card shows was fetched at. */
+  fetchedTierFor: (placementId: string) => SizeTier | undefined;
   /** The placements whose OWN request is still in flight. */
   fetchingPlacementIds: ReadonlySet<string>;
   /** Reload one card's data on its own, from its error state's Retry. */
@@ -120,6 +123,7 @@ export function ArrangedGrid({
   cellSlots,
   requested,
   updatedAtFor,
+  fetchedTierFor,
   fetchingPlacementIds,
   retry,
   announcement,
@@ -178,6 +182,7 @@ export function ArrangedGrid({
                 // 🔴 This card's own request, not the batch's: partitions
                 // settle independently, and a settled card must not dim.
                 isFetching: fetchingPlacementIds.has(row.placementId),
+                answerTier: fetchedTierFor(row.placementId),
                 // Retry only for a card in the batch: one rejected before it was asked has no
                 // question to ask again, so the button could change nothing.
                 onRetry: requested.has(row.placementId)

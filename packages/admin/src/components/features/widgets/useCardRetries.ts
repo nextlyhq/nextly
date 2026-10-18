@@ -215,6 +215,13 @@ export interface CardRetries {
   updatedAtFor: (placementId: string) => Date | null;
   /** Ask one card again if it now draws more than its answer was fetched for; see `grown`. */
   grow: (request: WidgetQueryRequest) => void;
+  /**
+   * The cards being asked again, by Retry or because they grew. A quiet re-ask keeps the answer
+   * on screen, so without this a card refreshing for its new tier would not say it is reading.
+   */
+  fetchingPlacementIds: ReadonlySet<string>;
+  /** The tier the answer this card shows was fetched at: its own re-ask's, or the batch's. */
+  fetchedTierFor: (placementId: string) => SizeTier | undefined;
 }
 
 export function useCardRetries(
@@ -297,7 +304,30 @@ export function useCardRetries(
     [state.settled, batch.updatedAt]
   );
 
-  return { slots, cellSlots, retry, updatedAtFor, grow };
+  const fetchingPlacementIds = useMemo(
+    () => new Set(state.inFlight.keys()),
+    [state.inFlight]
+  );
+
+  // A settled re-ask's answer is shown in place of the batch's, so its tier is the one shown; a
+  // quiet re-ask still in flight shows the answer it had.
+  const fetchedTierFor = useCallback(
+    (placementId: string) => {
+      const settled = state.settled.get(placementId);
+      return settled ? settled.tier : batchTierFor(placementId);
+    },
+    [state.settled, batchTierFor]
+  );
+
+  return {
+    slots,
+    cellSlots,
+    retry,
+    updatedAtFor,
+    grow,
+    fetchingPlacementIds,
+    fetchedTierFor,
+  };
 }
 
 /**

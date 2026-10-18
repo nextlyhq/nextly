@@ -69,6 +69,11 @@ export interface WidgetBatch {
   retry: (placementId: string) => void;
   /** When the answer one card shows arrived: its own retry's, or the batch's. */
   updatedAtFor: (placementId: string) => Date | null;
+  /**
+   * The tier the answer one card shows was fetched at. A card that grew keeps a smaller answer
+   * on screen until a larger one lands, and draws no more rows than that answer was asked for.
+   */
+  fetchedTierFor: (placementId: string) => SizeTier | undefined;
 }
 
 /**
@@ -179,12 +184,18 @@ export function useWidgetBatch(cards: BatchCard[]): WidgetBatch {
   );
 
   const batch = useWidgetQueries(requests);
-  const { isFetching, fetchingPlacementIds, updatedAt } = batch;
+  const { isFetching, updatedAt } = batch;
 
   // Retry for one card at a time, over the batch's answers; see `useCardRetries`.
-  const { slots, cellSlots, retry, updatedAtFor, grow } = useCardRetries(
-    requests,
-    batch
+  const retries = useCardRetries(requests, batch);
+  const { slots, cellSlots, retry, updatedAtFor, grow, fetchedTierFor } =
+    retries;
+
+  // Each card's own request in flight: the batch's partition, or its own re-ask.
+  const fetchingPlacementIds = useMemo(
+    () =>
+      new Set([...batch.fetchingPlacementIds, ...retries.fetchingPlacementIds]),
+    [batch.fetchingPlacementIds, retries.fetchingPlacementIds]
   );
 
   // A card that now draws more than its answer was fetched for asks again, alone. Each card is
@@ -252,5 +263,6 @@ export function useWidgetBatch(cards: BatchCard[]): WidgetBatch {
     settling: outcomes.some(outcome => outcome.state === "loading"),
     retry,
     updatedAtFor,
+    fetchedTierFor,
   };
 }
