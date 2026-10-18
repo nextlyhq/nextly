@@ -59,6 +59,14 @@ export function releaseDocumentChecks(
         authorMayPerform(adapter, logger, user, scope, action)
       ),
     existing: refs => existingDocuments(adapter, logger, refs),
+    // A Single's translations take another path, with no such refusal to
+    // derive from; only a collection's document-wide takedown asks it.
+    companionLacksLifecycle: scope =>
+      scope.scopeKind === "single"
+        ? Promise.resolve(false)
+        : collections().releaseCompanionLacksStatus({
+            collectionName: scope.scopeSlug,
+          }),
     heldDraftLocales: async (scope, entryIds) => {
       if (scope.scopeKind !== "single") {
         return collections().releaseHeldDraftLocales({

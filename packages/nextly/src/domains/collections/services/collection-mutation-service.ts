@@ -2104,6 +2104,10 @@ export class CollectionMutationService extends BaseService {
     if ((collection as { status?: boolean } | null)?.status !== true) {
       return issues;
     }
+    // A translation table without its per-language status cannot be read for
+    // what goes live, and the write refuses on it first: that refusal is the
+    // diagnosis (`releaseCompanionLacksStatus`), so there is nothing to judge.
+    if (await this.companionLacksStatus(params.collectionName)) return issues;
     const shared = await this.releaseWriteContext(
       collection,
       params.collectionName
@@ -5758,17 +5762,7 @@ export class CollectionMutationService extends BaseService {
   async unpublishAllLocales(
     params: AllLocalesLifecycleParams
   ): Promise<CollectionServiceResult> {
-    const companion = await this.fileManager.loadCompanionSchema(
-      params.collectionName
-    );
-    if (
-      companion?.hasStatus === true &&
-      (await isCompanionReady(this.adapter, companion.companionTableName)) &&
-      !(await companionHasStatusColumn(
-        this.adapter,
-        companion.companionTableName
-      ))
-    ) {
+    if (await this.companionLacksStatus(params.collectionName)) {
       return {
         success: false,
         statusCode: 409,
@@ -5783,6 +5777,42 @@ export class CollectionMutationService extends BaseService {
       };
     }
     return this.setLifecycleAllLocales(WITHDRAW_ALL_LOCALES, params);
+  }
+
+  /**
+   * Whether the collection declares a per-language lifecycle its translation
+   * table physically lacks: `_status` absent from a companion localized before
+   * Draft/Published was enabled (see {@link unpublishAllLocales}). Asked of the
+   * physical table, never the declared shape, before any transaction opens.
+   */
+  private async companionLacksStatus(collectionName: string): Promise<boolean> {
+    const companion =
+      await this.fileManager.loadCompanionSchema(collectionName);
+    return (
+      companion?.hasStatus === true &&
+      (await isCompanionReady(this.adapter, companion.companionTableName)) &&
+      !(await companionHasStatusColumn(
+        this.adapter,
+        companion.companionTableName
+      ))
+    );
+  }
+
+  /**
+   * Whether a release's document-wide write of this collection would meet a
+   * translation table without its per-language status: the precondition a
+   * takedown of every language refuses on, read once for the collection.
+   * `false` for a collection that has been deleted, whose members are gone.
+   *
+   * @experimental
+   */
+  async releaseCompanionLacksStatus(params: {
+    collectionName: string;
+  }): Promise<boolean> {
+    if ((await this.releaseCollection(params.collectionName)) === null) {
+      return false;
+    }
+    return this.companionLacksStatus(params.collectionName);
   }
 
   /**

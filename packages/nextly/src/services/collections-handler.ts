@@ -320,9 +320,21 @@ export class CollectionsHandler {
   }
 
   /**
+   * Whether a release's document-wide write of this collection would meet a
+   * translation table without its per-language status. See the mutation
+   * service.
+   *
+   * @experimental
+   */
+  async releaseCompanionLacksStatus(params: {
+    collectionName: string;
+  }): Promise<boolean> {
+    return this.entryService.releaseCompanionLacksStatus(params);
+  }
+
+  /**
    * The languages whose unreleased work a release's document-wide write of
-   * this entry would be refused over, on the instance that serves collection
-   * writes.
+   * these entries would be refused over.
    *
    * @experimental
    */

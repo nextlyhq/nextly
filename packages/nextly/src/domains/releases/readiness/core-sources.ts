@@ -10,6 +10,7 @@
  *   core.permission      hard  the author may no longer perform the action
  *   core.exists          hard  the document is gone
  *   core.lifecycle       hard  its collection or Single has no lifecycle now
+ *   core.companion-status hard its translations have no per-language status
  *   core.held-drafts     hard  another language holds unreleased work
  *   core.required-fields hard  a document going live would fail its publish's
  *                              validation or field rules
@@ -220,6 +221,31 @@ export const CORE_LIFECYCLE_SOURCE = defineReleaseCheckSource({
 });
 
 /**
+ * Whether each member's collection declares a per-language lifecycle its
+ * translation table physically lacks, going live or coming down alike: the
+ * release's document-wide write cannot move every language's status there.
+ * Asked once per scope.
+ */
+export const CORE_COMPANION_STATUS_SOURCE = defineReleaseCheckSource({
+  key: "core.companion-status",
+  severity: "hard",
+  codes: ["COMPANION_WITHOUT_LIFECYCLE"],
+  async check(batch, ctx) {
+    const findings: ReleaseCheckFinding<"COMPANION_WITHOUT_LIFECYCLE">[] = [];
+    for (const members of groupedBy(runnable(batch), scopeKey)) {
+      if (!(await ctx.reads.companionLacksLifecycle(members[0]))) continue;
+      for (const member of members) {
+        findings.push({
+          memberId: member.id,
+          code: "COMPANION_WITHOUT_LIFECYCLE",
+        });
+      }
+    }
+    return findings;
+  },
+});
+
+/**
  * Whether another language holds unreleased work that the release's
  * document-wide write would be refused over, going live or coming down alike:
  * the write will not decide the fate of work nobody has released.
@@ -375,6 +401,7 @@ export const CORE_RELEASE_CHECK_SOURCES: readonly ReleaseCheckSource[] = [
   CORE_PERMISSION_SOURCE,
   CORE_EXISTS_SOURCE,
   CORE_LIFECYCLE_SOURCE,
+  CORE_COMPANION_STATUS_SOURCE,
   CORE_HELD_DRAFTS_SOURCE,
   CORE_REQUIRED_FIELDS_SOURCE,
   CORE_OTHER_RELEASE_SOURCE,

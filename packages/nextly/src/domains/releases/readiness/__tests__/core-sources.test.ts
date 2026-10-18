@@ -11,6 +11,7 @@ import { documentRefKey } from "../../releases-repository";
 import type { ReleaseCheckSource } from "../check-sources";
 import {
   CORE_AUTHOR_SOURCE,
+  CORE_COMPANION_STATUS_SOURCE,
   CORE_EXISTS_SOURCE,
   CORE_HELD_DRAFTS_SOURCE,
   CORE_LIFECYCLE_SOURCE,
@@ -174,6 +175,28 @@ describe("core.lifecycle", () => {
     ]);
     // Once per scope.
     expect(declaresLifecycle).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("core.companion-status", () => {
+  it("reports every document, going live or coming down, in a scope whose translations lack a status", async () => {
+    const companionLacksLifecycle = vi.fn(
+      async (scope: { scopeSlug: string }) => scope.scopeSlug === "pages"
+    );
+    const found = await run(
+      CORE_COMPANION_STATUS_SOURCE,
+      [
+        member("post"),
+        member("live-page", { scopeSlug: "pages" }),
+        member("down-page", { scopeSlug: "pages", action: "unpublish" }),
+      ],
+      { companionLacksLifecycle }
+    );
+    expect(found).toEqual([
+      { memberId: "live-page", code: "COMPANION_WITHOUT_LIFECYCLE" },
+      { memberId: "down-page", code: "COMPANION_WITHOUT_LIFECYCLE" },
+    ]);
+    expect(companionLacksLifecycle).toHaveBeenCalledTimes(2);
   });
 });
 

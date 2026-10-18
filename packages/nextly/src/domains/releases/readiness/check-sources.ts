@@ -105,6 +105,11 @@ export interface ReleaseCheckReads {
    * condition a document had to meet to join the release, asked again.
    */
   declaresLifecycle(scope: ReleaseCheckScope): Promise<boolean>;
+  /**
+   * Whether the scope declares a per-language lifecycle its translation table
+   * physically lacks, which a document-wide write refuses on.
+   */
+  companionLacksLifecycle(scope: ReleaseCheckScope): Promise<boolean>;
   /** Which of these documents still exist, as `documentRefKey` keys. */
   existing(refs: readonly DocumentRef[]): Promise<ReadonlySet<string>>;
   /**

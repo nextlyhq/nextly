@@ -77,6 +77,7 @@ export function reads(
     declaresLifecycle: async () => true,
     publishProblems: perEntry(() => []),
     heldDraftLocales: perEntry(() => []),
+    companionLacksLifecycle: async () => false,
     scheduledMemberships: async () => new Map(),
     ...over,
   };
