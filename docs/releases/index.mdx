@@ -228,6 +228,12 @@ state, soonest first unless you pass an `order`. It is how a calendar's "+N more
 day in full:
 
 ```ts
+import { getNextly } from "nextly";
+
+import config from "../../nextly.config";
+
+const nextly = await getNextly({ config });
+
 const { items, meta } = await nextly.releases.find({
   day: { date: "2026-03-29", timezone: "Europe/Berlin" },
 });
@@ -266,6 +272,12 @@ Over REST, `GET /api/releases/calendar` takes `from` and `to` (dates such as `20
 both included), `timezone`, and optionally `kind`. From the Direct API:
 
 ```ts
+import { getNextly } from "nextly";
+
+import config from "../../nextly.config";
+
+const nextly = await getNextly({ config });
+
 const calendar = await nextly.releases.calendar({
   from: "2026-03-01",
   to: "2026-04-11",
