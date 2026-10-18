@@ -4733,43 +4733,40 @@ export class CollectionMutationService extends BaseService {
         // event below.
         let createdVersionNo: number | null = null;
         if (versionsConfig?.enabled) {
-          ({ versionNo: createdVersionNo } = await captureInTx(
-            tx,
-            this.versionCapture,
-            {
-              ref: {
-                scopeKind: "collection",
-                scopeSlug: params.collectionName,
-                entryId: entry.id as string,
-              },
-              // A localized create with an explicit status moves it to the
-              // companion, leaving the main row on its table default. The snapshot
-              // records the companion value, so the version must be indexed with
-              // the same one or history reports a draft whose own document says
-              // published.
-              contentStatus:
-                typeof createCompanionStatus === "string"
-                  ? createCompanionStatus
-                  : (entry as { status?: unknown }).status,
-              // Tagged for the snapshot alone: `documentParts` is also what the
-              // outbox event below carries, and that payload is read shape.
-              parts: await this.snapshotPartsFor(documentParts, fields, tx),
-              createdBy: params.user?.id ?? null,
-              // Set only when localized values were actually routed, for the
-              // same reason the update path is careful about it.
-              // Set when locale-specific state was actually captured. A
-              // collection whose translatable content lives only in embedded
-              // components routes nothing through `localizedWrite`, yet the
-              // components above were read as this locale — so without counting
-              // them the version would be unlabelled and unrestorable.
-              locale:
-                localizedWrite?.writeLocale ??
-                (Object.keys(snapshotComponents ?? {}).length > 0
-                  ? this.componentSnapshotLocale(params.locale)
-                  : null),
-              maxPerDoc: versionsConfig.maxPerDoc,
-            }
-          ));
+          const captured = await captureInTx(tx, this.versionCapture, {
+            ref: {
+              scopeKind: "collection",
+              scopeSlug: params.collectionName,
+              entryId: entry.id as string,
+            },
+            // A localized create with an explicit status moves it to the
+            // companion, leaving the main row on its table default. The snapshot
+            // records the companion value, so the version must be indexed with
+            // the same one or history reports a draft whose own document says
+            // published.
+            contentStatus:
+              typeof createCompanionStatus === "string"
+                ? createCompanionStatus
+                : (entry as { status?: unknown }).status,
+            // Tagged for the snapshot alone: `documentParts` is also what the
+            // outbox event below carries, and that payload is read shape.
+            parts: await this.snapshotPartsFor(documentParts, fields, tx),
+            createdBy: params.user?.id ?? null,
+            // Set only when localized values were actually routed, for the
+            // same reason the update path is careful about it.
+            // Set when locale-specific state was actually captured. A
+            // collection whose translatable content lives only in embedded
+            // components routes nothing through `localizedWrite`, yet the
+            // components above were read as this locale — so without counting
+            // them the version would be unlabelled and unrestorable.
+            locale:
+              localizedWrite?.writeLocale ??
+              (Object.keys(snapshotComponents ?? {}).length > 0
+                ? this.componentSnapshotLocale(params.locale)
+                : null),
+            maxPerDoc: versionsConfig.maxPerDoc,
+          });
+          createdVersionNo = captured.versionNo;
         }
 
         // The document's first history event, in the create's transaction.
@@ -5719,37 +5716,34 @@ export class CollectionMutationService extends BaseService {
               // Always recorded: publishing every language can change only a
               // language's status, which this snapshot does not hold, so it
               // would compare equal with the version before.
-              ({ versionNo: publishVersionNo } = await captureInTx(
-                tx,
-                this.versionCapture,
-                {
-                  ref: {
-                    scopeKind: "collection",
-                    scopeSlug: params.collectionName,
-                    entryId: params.entryId,
+              const capture = await captureInTx(tx, this.versionCapture, {
+                ref: {
+                  scopeKind: "collection",
+                  scopeSlug: params.collectionName,
+                  entryId: params.entryId,
+                },
+                contentStatus: direction.nextStatus,
+                // Tagged like every other capture: a snapshot records which
+                // component its values came from, whichever path produced it.
+                parts: await this.snapshotPartsFor(
+                  {
+                    parentRow,
+                    components: snapshotComponents,
+                    manyToMany: snapshotM2M,
                   },
-                  contentStatus: direction.nextStatus,
-                  // Tagged like every other capture: a snapshot records which
-                  // component its values came from, whichever path produced it.
-                  parts: await this.snapshotPartsFor(
-                    {
-                      parentRow,
-                      components: snapshotComponents,
-                      manyToMany: snapshotM2M,
-                    },
-                    fields,
-                    tx
-                  ),
-                  createdBy: params.user?.id ?? null,
-                  // Left unlabelled deliberately. Publishing spans every locale,
-                  // and this snapshot is the main row alone — on a migrated
-                  // collection the localized columns live only in the companion,
-                  // so it holds no locale's translatable values. Claiming one
-                  // would tell a restore to write content it never captured.
-                  locale: null,
-                  maxPerDoc: versionsConfig.maxPerDoc,
-                }
-              ));
+                  fields,
+                  tx
+                ),
+                createdBy: params.user?.id ?? null,
+                // Left unlabelled deliberately. Publishing spans every locale,
+                // and this snapshot is the main row alone — on a migrated
+                // collection the localized columns live only in the companion,
+                // so it holds no locale's translatable values. Claiming one
+                // would tell a restore to write content it never captured.
+                locale: null,
+                maxPerDoc: versionsConfig.maxPerDoc,
+              });
+              publishVersionNo = capture.versionNo;
             }
           }
 
