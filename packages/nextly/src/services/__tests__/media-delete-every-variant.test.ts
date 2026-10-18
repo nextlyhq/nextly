@@ -515,6 +515,37 @@ describe("a crop of an item stored with no sizes", () => {
     expect(stored).toEqual(await referencedNow(id));
     expect(stored).toHaveLength(2);
   });
+
+  // An imported or older item can name its original as its thumbnail.
+  it("keeps the original when it is also the item's thumbnail", async () => {
+    onlySizes.configs = [];
+    onLocalDisk();
+    const id = await uploadPhoto();
+    const [row] = await db.db
+      .select()
+      .from(db.schema.media)
+      .where(eq(db.schema.media.id, id));
+    await db.db
+      .update(db.schema.media)
+      .set({ thumbnailUrl: row.url })
+      .where(eq(db.schema.media.id, id));
+    onlySizes.configs = [
+      {
+        name: "thumbnail",
+        width: 4,
+        height: 4,
+        fit: "cover",
+        quality: 80,
+        format: "webp",
+      },
+    ];
+
+    expect((await crop(id, 20)).success).toBe(true);
+
+    const stored = await onDisk();
+    expect(stored).toContain(row.filename);
+    for (const file of await referencedNow(id)) expect(stored).toContain(file);
+  });
 });
 
 // Two crops of one item that both read it before either commits each remove

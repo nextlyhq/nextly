@@ -49,7 +49,7 @@ import {
   revalidateMedia,
   withMediaRevalidationBatch,
 } from "../domains/media/revalidate-media";
-import { variantPaths } from "../domains/media/stored-files";
+import { storedFilesOf, variantPaths } from "../domains/media/stored-files";
 import type { RetentionRunner } from "../domains/retention/runner";
 import type { WebhookFastDrainScheduler } from "../domains/webhooks/after-drain";
 import { recordMutationEvent } from "../domains/webhooks/record-mutation-event";
@@ -751,9 +751,11 @@ export class MediaService extends BaseService {
     keepSizes: unknown,
     mediaId: string,
     /** Other superseded files, such as a thumbnail the new sizes replaced. */
-    alsoSuperseded: readonly string[] = []
+    alsoSuperseded: readonly string[] = [],
+    /** Other files to keep, such as every one the surviving row refers to. */
+    alsoKept: readonly string[] = []
   ): Promise<void> {
-    const keep = new Set(this.collectVariantPaths(keepSizes));
+    const keep = new Set([...this.collectVariantPaths(keepSizes), ...alsoKept]);
     const candidates = new Set([
       ...this.collectVariantPaths(candidateSizes),
       ...alsoSuperseded,
@@ -961,14 +963,20 @@ export class MediaService extends BaseService {
         // update is a savepoint of it, and a rollback brings back the row
         // that refers to the superseded variants. The deletion then waits for
         // that transaction to commit, and is dropped if it rolls back.
+        //
+        // Every file the updated row still refers to is kept, whatever it
+        // replaced: an imported or older item can name its original as its
+        // thumbnail, and that original is not superseded with it.
         const superseded = replacedSizes;
         const thumbnail = replacedThumbnail;
+        const stillReferenced = storedFilesOf(updatedRow).paths;
         await this.afterCommit(() =>
           this.deleteSupersededVariants(
             superseded,
             regeneratedSizes,
             mediaId,
-            thumbnail ? [thumbnail] : []
+            thumbnail ? [thumbnail] : [],
+            stillReferenced
           )
         );
       }
