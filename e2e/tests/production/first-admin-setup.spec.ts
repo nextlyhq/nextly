@@ -66,7 +66,9 @@ test.describe("first-administrator setup in production", () => {
     test.setTimeout(240_000);
     await waitForEmptyInstall(page);
 
-    const status = await page.request.get(`${BASE}/api/auth/setup-status`);
+    const status = await page.request.get(
+      `${BASE}/admin/api/auth/setup-status`
+    );
     expect(status.status()).toBe(200);
     expect(await status.json()).toMatchObject({
       isSetup: false,
@@ -84,7 +86,9 @@ test.describe("first-administrator setup in production", () => {
     await expect(
       page.getByText(/a valid setup token is required/i).first()
     ).toBeVisible({ timeout: 30_000 });
-    const stillOpen = await page.request.get(`${BASE}/api/auth/setup-status`);
+    const stillOpen = await page.request.get(
+      `${BASE}/admin/api/auth/setup-status`
+    );
     expect(await stillOpen.json()).toMatchObject({ isSetup: false });
 
     // The operator's token creates the administrator and signs them in.
@@ -94,7 +98,9 @@ test.describe("first-administrator setup in production", () => {
     await expect(page.locator("main")).toBeVisible({ timeout: 60_000 });
 
     // Setup is closed now, whatever token is presented.
-    const closed = await page.request.get(`${BASE}/api/auth/setup-status`);
+    const closed = await page.request.get(
+      `${BASE}/admin/api/auth/setup-status`
+    );
     expect(await closed.json()).toMatchObject({
       isSetup: true,
       requiresSetupToken: false,
