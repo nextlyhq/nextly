@@ -57,6 +57,8 @@ export interface SetupHandlerDeps {
     /** Whether setup needs a token: in production, until an administrator exists. */
     required: boolean;
     verify: (presented: unknown) => Promise<TokenVerdict>;
+    /** The same judgement against the stored record read now, uncached. */
+    confirm: (presented: unknown) => Promise<TokenVerdict>;
     /** Discard the stored token once the administrator exists. */
     spend: () => Promise<void>;
     claim: () => Promise<{ release: () => Promise<void> } | null>;
@@ -135,20 +137,23 @@ export async function handleSetupStatus(
   }
 }
 
+/** The refusal for a setup token that does not open setup now. */
+function tokenRequiredResponse(): Response {
+  return jsonResponse(403, {
+    error: {
+      code: "SETUP_TOKEN_REQUIRED",
+      message:
+        "A valid setup token is required. Find it in the server's output, or set NEXTLY_SETUP_TOKEN.",
+    },
+  });
+}
+
 /**
- * In production, until an administrator exists, setup needs the token.
- * Judged before the auth rate limit: a valid token completes setup whatever
- * any budget holds, so spending them can never keep setup closed. A wrong,
- * missing or expired one is counted against the limit through `limitWrong`,
- * and all three are answered alike. Null when setup may go on.
+ * The refusal a token's verdict calls for, or null when setup may go on: a
+ * valid token, or an install whose setup needs none. Wrong, missing and
+ * expired tokens are answered alike.
  */
-async function setupTokenRefusal(
-  presented: unknown,
-  setupToken: SetupHandlerDeps["setupToken"],
-  limitWrong: () => Promise<Response | null>
-): Promise<Response | null> {
-  if (!setupToken.required) return null;
-  const verdict = await setupToken.verify(presented);
+function setupTokenRefusal(verdict: SetupVerdict): Response | null {
   if (verdict === "closed") {
     return jsonResponse(403, {
       error: {
@@ -158,16 +163,54 @@ async function setupTokenRefusal(
       },
     });
   }
-  if (verdict !== "invalid") return null;
-  const limited = await limitWrong();
-  if (limited) return limited;
-  return jsonResponse(403, {
-    error: {
-      code: "SETUP_TOKEN_REQUIRED",
-      message:
-        "A valid setup token is required. Find it in the server's output, or set NEXTLY_SETUP_TOKEN.",
-    },
-  });
+  return verdict === "invalid" ? tokenRequiredResponse() : null;
+}
+
+/** A token's verdict, or that this install's setup needs none. */
+type SetupVerdict = TokenVerdict | "not-required";
+
+/**
+ * The request's body and its token's verdict, read before setup does any
+ * work. A request without a valid token is counted against the auth limit
+ * here, so every refusal after it (setup already complete, a CSRF failure, a
+ * weak or wrong token, a bad body) has spent the budget before the
+ * administrator is looked up, while a valid token goes on whatever the budget
+ * holds. A body that is not JSON is counted, then fails as it always did.
+ */
+async function readSetupRequest(
+  request: Request,
+  setupToken: SetupHandlerDeps["setupToken"],
+  limit: (request: Request) => Promise<Response | null>
+): Promise<
+  | { body: Awaited<ReturnType<Request["json"]>>; verdict: SetupVerdict }
+  | Response
+> {
+  const forLimiter = request.clone();
+  let body: Awaited<ReturnType<Request["json"]>> = {};
+  let malformed: Error | undefined;
+  try {
+    body = await request.json();
+  } catch (error) {
+    malformed =
+      error instanceof Error
+        ? error
+        : NextlyError.validation({
+            errors: [
+              { path: "", code: "INVALID_JSON", message: "Invalid JSON" },
+            ],
+          });
+  }
+  const presented =
+    body !== null && typeof body === "object" ? body.setupToken : undefined;
+  const verdict: SetupVerdict = setupToken.required
+    ? await setupToken.verify(presented)
+    : "not-required";
+  if (verdict !== "valid") {
+    const limited = await limit(forLimiter);
+    if (limited) return limited;
+  }
+  if (malformed !== undefined) throw malformed;
+  return { body, verdict };
 }
 
 /**
@@ -213,16 +256,21 @@ export async function handleSetup(
   deps: SetupHandlerDeps,
   hooks: {
     /**
-     * Count a wrong setup token against the auth rate limit, answering 429
-     * once it is spent. Called only after the token was judged wrong: a valid
-     * token opens setup whatever the limit holds.
+     * Count a setup request against the auth rate limit, answering 429 once
+     * it is spent. Called for every request without a valid setup token,
+     * before setup does any work: a valid token opens setup whatever the
+     * limit holds.
      */
-    limitWrongToken?: (request: Request) => Promise<Response | null>;
+    limitWithoutValidToken?: (request: Request) => Promise<Response | null>;
   } = {}
 ): Promise<Response> {
-  // Read by the limiter only for a wrong token; cloned before this handler
-  // reads the body.
-  const forLimiter = request.clone();
+  const read = await readSetupRequest(
+    request,
+    deps.setupToken,
+    limited => hooks.limitWithoutValidToken?.(limited) ?? Promise.resolve(null)
+  );
+  if (read instanceof Response) return read;
+  const { body, verdict } = read;
   // Fail closed: an unknown answer must not be treated as "no administrator",
   // otherwise a transient DB failure could allow a second super-admin to be
   // created while the real one is invisible to the query.
@@ -245,8 +293,6 @@ export async function handleSetup(
   }
   if (administratorExists) return setupCompleteResponse();
 
-  const body = await request.json();
-
   const csrfRefused = csrfRefusal(
     request,
     body,
@@ -255,11 +301,7 @@ export async function handleSetup(
   );
   if (csrfRefused) return csrfRefused;
 
-  const tokenRefused = await setupTokenRefusal(
-    body.setupToken,
-    deps.setupToken,
-    () => hooks.limitWrongToken?.(forLimiter) ?? Promise.resolve(null)
-  );
+  const tokenRefused = setupTokenRefusal(verdict);
   if (tokenRefused) return tokenRefused;
 
   const inputRefused = setupInputRefusal(body, request);
@@ -275,6 +317,15 @@ export async function handleSetup(
   let user: { id: string; email: string; name: string };
   try {
     if (await deps.hasAdministrator()) return setupCompleteResponse();
+    // The token again, against the stored record as it is now rather than a
+    // cached read: one replaced after this request was judged, because it
+    // leaked, must not open setup.
+    if (
+      verdict !== "not-required" &&
+      (await deps.setupToken.confirm(body.setupToken)) !== "valid"
+    ) {
+      return tokenRequiredResponse();
+    }
     // Create super admin (seeds permissions internally, hashes password internally)
     const created = await deps.createSuperAdmin({ email, name, password });
     // Another setup made the administrator while this one was creating it.

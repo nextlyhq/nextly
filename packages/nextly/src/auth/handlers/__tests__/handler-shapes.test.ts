@@ -159,6 +159,7 @@ const ALLOWED_ORIGINS = ["http://localhost:3000"];
 const OPEN_SETUP = {
   required: false,
   verify: async () => "valid" as const,
+  confirm: async () => "valid" as const,
   spend: async () => {},
   claim: async () => ({ release: async () => {} }),
 };

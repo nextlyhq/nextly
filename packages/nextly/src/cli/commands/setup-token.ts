@@ -26,6 +26,7 @@ import { superAdminRoleHeld } from "../../domains/users/services/last-super-admi
 import { describeError, NextlyError } from "../../errors/index";
 import type { CommandContext, GlobalOptions } from "../program";
 import { withAdapter } from "../utils/adapter";
+import { loadConfig } from "../utils/config-loader";
 
 /** What the command concluded, for its shell to print and exit on. */
 export interface SetupTokenCommandResult {
@@ -87,6 +88,15 @@ export async function runSetupTokenCommand(
   context: CommandContext
 ): Promise<void> {
   const { logger } = context;
+  // The config first, as every command that reads the database loads it: it
+  // publishes the configured PostgreSQL schema the connection resolves in, so
+  // an install in `cms` has its token replaced there, not in `public`.
+  if (!options.generate) {
+    await loadConfig({
+      configPath: context.options.config,
+      cwd: context.options.cwd,
+    });
+  }
   // `--generate` touches nothing, so it needs no database; otherwise the
   // connection refuses a missing or unusable database setting itself.
   const result = options.generate

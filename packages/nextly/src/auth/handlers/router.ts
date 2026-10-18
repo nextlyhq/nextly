@@ -385,7 +385,7 @@ async function dispatchAuthRequest(
           // Setup is not on the limited paths: a valid token must open it
           // whatever the budgets hold. Only a wrong token is counted.
           return handleSetup(request, deps, {
-            limitWrongToken: wrong =>
+            limitWithoutValidToken: wrong =>
               checkAuthIpRateLimit(wrong, "setup", deps),
           });
         case "register":
