@@ -126,7 +126,37 @@ export interface DocumentActionBarProps {
   /** Whether a mutation is in flight, which shows on the leading action. */
   pending?: boolean;
   className?: string;
+  /**
+   * Controls the header draws beside this bar on a wide screen and folds into
+   * this menu on a narrow one (History, the preview), so a phone keeps the
+   * header to one row of actions. Shown in the menu only on a narrow screen;
+   * the header hides the controls themselves at the same width.
+   */
+  narrowItems?: readonly NarrowMenuItem[];
 }
+
+/** A header control, as a row of the menu on a narrow screen. */
+export interface NarrowMenuItem {
+  id: string;
+  label: string;
+  onSelect: () => void;
+  disabled?: boolean;
+}
+
+/**
+ * The screen width below which header controls fold into the menu: a phone,
+ * where the editor is the whole width of the screen. One value for the menu
+ * rows that appear and the header controls that go, so neither shows without
+ * the other.
+ *
+ * A screen breakpoint rather than the toolbar's own width, because the menu
+ * opens in a layer outside the toolbar: a query against the toolbar never
+ * matches there, and the rows it should reveal stay hidden.
+ */
+export const NARROW_ONLY = "hidden max-sm:flex";
+export const WIDE_ONLY = "max-sm:hidden";
+/** The menu's trigger, where the menu holds only folded controls. */
+const NARROW_TRIGGER = "hidden max-sm:inline-flex";
 
 /**
  * How a refusal is spoken on a menu item.
@@ -186,6 +216,9 @@ function reasonFor(
   return action.disabledReason ?? binding.disabledReason;
 }
 
+/** An action and what it is wired to. */
+type Bound = { action: DocumentAction; binding: ActionBinding };
+
 /**
  * The actions a host actually wired, paired with their bindings.
  *
@@ -195,8 +228,8 @@ function reasonFor(
 function bound(
   actions: readonly DocumentAction[],
   bindings: DocumentActionBarProps["bindings"]
-): { action: DocumentAction; binding: ActionBinding }[] {
-  const out: { action: DocumentAction; binding: ActionBinding }[] = [];
+): Bound[] {
+  const out: Bound[] = [];
   for (const action of actions) {
     const binding = bindings[action.id];
     if (binding !== undefined) out.push({ action, binding });
@@ -209,6 +242,7 @@ export function DocumentActionBar({
   bindings,
   pending = false,
   className,
+  narrowItems = [],
 }: DocumentActionBarProps) {
   const wired = bound(actions, bindings);
   const available = wired.map(entry => entry.action);
@@ -217,7 +251,10 @@ export function DocumentActionBar({
   const groups = menuGroups(available);
   const documentItems = bound(groups.document, bindings);
   const dangerItems = bound(groups.danger, bindings);
-  const hasMenu = documentItems.length > 0 || dangerItems.length > 0;
+  const wideMenu = documentItems.length > 0 || dangerItems.length > 0;
+  // A menu holding only the folded controls is a narrow screen's alone: on a
+  // wide one those controls are in the header, and the menu would open empty.
+  const hasMenu = wideMenu || narrowItems.length > 0;
 
   return (
     <div className={cn("flex items-center gap-1.5", className)}>
@@ -269,67 +306,107 @@ export function DocumentActionBar({
       )}
 
       {hasMenu ? (
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="px-2"
-              aria-label="More actions"
-            >
-              <MoreHorizontal className="h-4 w-4" aria-hidden="true" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            {documentItems.map(({ action, binding }) => (
-              <DropdownMenuItem
-                key={action.id}
-                disabled={reasonFor(action, binding) !== undefined}
-                onClick={binding.onSelect}
-                data-action={action.id}
-                /*
-                  The reason travels with the item, not just the buttons. A
-                  permission an author lacks makes this the ONLY place the
-                  refusal is visible, and a menu row that is grey and silent
-                  reads as broken rather than as forbidden. `title` reaches a
-                  pointer and `aria-description` reaches a screen reader; the
-                  label alone reaches neither.
-                */
-                {...reasonAttributes(reasonFor(action, binding))}
-              >
-                <ActionRow
-                  label={action.label}
-                  reason={reasonFor(action, binding)}
-                />
-              </DropdownMenuItem>
-            ))}
-            {/*
-              A separator only between two populated groups. Drawn
-              unconditionally it becomes a rule at the top or bottom of the
-              menu, which reads as a group whose items failed to render.
-            */}
-            {documentItems.length > 0 && dangerItems.length > 0 ? (
-              <DropdownMenuSeparator />
-            ) : null}
-            {dangerItems.map(({ action, binding }) => (
-              <DropdownMenuItem
-                key={action.id}
-                disabled={reasonFor(action, binding) !== undefined}
-                onClick={binding.onSelect}
-                data-action={action.id}
-                className="text-destructive focus:text-destructive"
-                {...reasonAttributes(reasonFor(action, binding))}
-              >
-                <ActionRow
-                  label={action.label}
-                  reason={reasonFor(action, binding)}
-                />
-              </DropdownMenuItem>
-            ))}
-          </DropdownMenuContent>
-        </DropdownMenu>
+        <DocumentMenu
+          narrowItems={narrowItems}
+          documentItems={documentItems}
+          dangerItems={dangerItems}
+          wideMenu={wideMenu}
+        />
       ) : null}
     </div>
+  );
+}
+
+/**
+ * The document's menu: its other verbs, its destructive ones apart, and on a
+ * narrow screen the header controls folded into it.
+ */
+function DocumentMenu({
+  narrowItems,
+  documentItems,
+  dangerItems,
+  wideMenu,
+}: {
+  narrowItems: readonly NarrowMenuItem[];
+  documentItems: Bound[];
+  dangerItems: Bound[];
+  wideMenu: boolean;
+}) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className={cn("px-2", !wideMenu && NARROW_TRIGGER)}
+          aria-label="More actions"
+          title="More actions"
+        >
+          <MoreHorizontal className="h-4 w-4" aria-hidden="true" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end">
+        {narrowItems.map(item => (
+          <DropdownMenuItem
+            key={item.id}
+            className={NARROW_ONLY}
+            disabled={item.disabled === true}
+            onSelect={item.onSelect}
+            data-narrow-item={item.id}
+          >
+            {item.label}
+          </DropdownMenuItem>
+        ))}
+        {narrowItems.length > 0 && wideMenu ? (
+          <DropdownMenuSeparator className={NARROW_ONLY} />
+        ) : null}
+        {documentItems.map(({ action, binding }) => (
+          <DropdownMenuItem
+            key={action.id}
+            disabled={reasonFor(action, binding) !== undefined}
+            onClick={binding.onSelect}
+            data-action={action.id}
+            /*
+              The reason travels with the item, not just the buttons. A
+              permission an author lacks makes this the ONLY place the
+              refusal is visible, and a menu row that is grey and silent
+              reads as broken rather than as forbidden. `title` reaches a
+              pointer and `aria-description` reaches a screen reader; the
+              label alone reaches neither.
+            */
+            {...reasonAttributes(reasonFor(action, binding))}
+          >
+            <ActionRow
+              label={action.label}
+              reason={reasonFor(action, binding)}
+            />
+          </DropdownMenuItem>
+        ))}
+        {/*
+          A separator only between two populated groups. Drawn
+          unconditionally it becomes a rule at the top or bottom of the
+          menu, which reads as a group whose items failed to render.
+        */}
+        {documentItems.length > 0 && dangerItems.length > 0 ? (
+          <DropdownMenuSeparator />
+        ) : null}
+        {dangerItems.map(({ action, binding }) => (
+          <DropdownMenuItem
+            key={action.id}
+            disabled={reasonFor(action, binding) !== undefined}
+            onClick={binding.onSelect}
+            data-action={action.id}
+            className="text-destructive focus:text-destructive"
+            {...reasonAttributes(reasonFor(action, binding))}
+          >
+            <ActionRow
+              label={action.label}
+              reason={reasonFor(action, binding)}
+            />
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }

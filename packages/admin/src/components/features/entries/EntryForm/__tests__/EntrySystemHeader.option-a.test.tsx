@@ -12,11 +12,13 @@
  * label inside an element carrying `sr-only`, under any width variant, is not
  * counted as something the button shows.
  */
+import userEvent from "@testing-library/user-event";
 import { FormProvider, useForm } from "react-hook-form";
 import { describe, expect, it, vi } from "vitest";
 
 import { render, screen, within } from "@admin/__tests__/utils";
 
+import { NARROW_ONLY, WIDE_ONLY } from "../DocumentActionBar";
 import { EntrySystemHeader } from "../EntrySystemHeader";
 
 vi.mock("@admin/hooks/useCan", () => ({ useCan: () => true }));
@@ -76,9 +78,11 @@ const STATES: State[] = [
 function Harness({
   state,
   backLink,
+  onCopyLink,
 }: {
   state: State;
   backLink?: { href: string; label: string };
+  onCopyLink?: () => void;
 }) {
   const methods = useForm({
     defaultValues: { title: state.entry?.title ?? "" },
@@ -96,6 +100,9 @@ function Harness({
         autosaveEnabled
         autosaveStatus="idle"
         {...(backLink === undefined ? {} : { backLink })}
+        {...(onCopyLink === undefined
+          ? {}
+          : { onCopyLink, isLinkAvailable: true })}
         onSaveDraft={vi.fn()}
         onPublish={vi.fn()}
         onSaveChanges={vi.fn()}
@@ -180,5 +187,55 @@ describe("the editor header", () => {
   it("draws no back link where the document has no list to go back to", () => {
     render(<Harness state={STATES[1]!} />);
     expect(screen.queryByRole("link")).not.toBeInTheDocument();
+  });
+
+  it("gives every icon-only button a name and a tooltip", () => {
+    const { container } = render(
+      <Harness state={STATES[1]!} onCopyLink={vi.fn()} />
+    );
+    const iconOnly = [...container.querySelectorAll("button")].filter(
+      button =>
+        button.querySelector("svg") &&
+        ![...button.childNodes].some(
+          node => node.nodeType === Node.TEXT_NODE && node.textContent?.trim()
+        ) &&
+        !button.querySelector("span:not([aria-hidden])")?.textContent?.trim()
+    );
+    expect(iconOnly.length).toBeGreaterThan(0);
+    for (const button of iconOnly) {
+      expect(button.getAttribute("aria-label") ?? "").not.toBe("");
+      expect(button.getAttribute("title") ?? "").not.toBe("");
+    }
+  });
+
+  it("folds History and the preview into the menu on a narrow screen, and hides the panel toggle there", async () => {
+    const user = userEvent.setup();
+    const onCopyLink = vi.fn();
+    render(<Harness state={STATES[1]!} onCopyLink={onCopyLink} />);
+    // On a narrow screen these controls go...
+    const narrowHidden = WIDE_ONLY;
+    expect(
+      screen.getByRole("button", { name: "Version history" }).className
+    ).toContain(narrowHidden);
+    expect(
+      screen
+        .getByRole("button", { name: "Copy shareable link" })
+        .closest("div.contents")?.className
+    ).toContain(narrowHidden);
+    expect(
+      screen.getByRole("button", { name: /^(show|hide) rail$/i }).className
+    ).toContain(narrowHidden);
+
+    // ...and the menu offers them, as rows shown only at that width.
+    await user.click(screen.getByRole("button", { name: "More actions" }));
+    const shownNarrow = NARROW_ONLY.split(" ").at(-1)!;
+    const history = await screen.findByRole("menuitem", {
+      name: "Version history",
+    });
+    expect(history.className).toContain(shownNarrow);
+    const copy = screen.getByRole("menuitem", { name: "Copy shareable link" });
+    expect(copy.className).toContain(shownNarrow);
+    await user.click(copy);
+    expect(onCopyLink).toHaveBeenCalledTimes(1);
   });
 });

@@ -29,13 +29,19 @@ import { documentActions } from "./document-actions";
 import {
   acceptContributions,
   DocumentActionBar,
+  WIDE_ONLY,
   type ActionBinding,
   type ContributedAction,
+  type NarrowMenuItem,
 } from "./DocumentActionBar";
 import { DocumentStatusLive } from "./DocumentStatusLive";
 import { effectiveEntryStatus } from "./entry-address";
 import { EntryTitleInput } from "./EntryTitleInput";
-import { PreviewActions } from "./PreviewActions";
+import {
+  PreviewActions,
+  previewChoices,
+  type PreviewActionsProps,
+} from "./PreviewActions";
 import { TOOLBAR_CONTAINER } from "./toolbar-density";
 import { UnpublishConfirmDialog } from "./UnpublishConfirmDialog";
 import { useLeaveWithoutWarning } from "./UnsavedChangesGuard";
@@ -592,6 +598,47 @@ export function EntrySystemHeader({
     isReadingHistory ? [] : contributedActions
   );
 
+  // A document only has history once it has been saved, and rendering a
+  // snapshot needs the schema, so both are required to offer it.
+  const showHistory =
+    showEditMenuItems &&
+    historyFields !== undefined &&
+    historyEnabled !== false;
+
+  // What the preview control is given, once: the control draws from it on a
+  // wide screen, and the menu lists the same choices on a narrow one.
+  const previewProps: PreviewActionsProps = {
+    isPreviewAvailable,
+    ...(onPreview === undefined ? {} : { onPreview }),
+    ...(previewLabel === undefined ? {} : { previewLabel }),
+    ...(onTogglePreviewPane === undefined ? {} : { onTogglePreviewPane }),
+    previewPaneOpen,
+    isLinkAvailable,
+    ...(onCopyLink === undefined ? {} : { onCopyLink }),
+    isCopyingLink,
+    disabled: isSubmitting,
+  };
+
+  // The header's own controls as menu rows, for a screen too narrow to keep
+  // them beside the document's verbs.
+  const narrowItems: NarrowMenuItem[] = [
+    ...(showHistory
+      ? [
+          {
+            id: "history",
+            label: "Version history",
+            onSelect: () => setHistoryOpen(true),
+          },
+        ]
+      : []),
+    ...previewChoices(previewProps).map(choice => ({
+      id: `preview-${choice.id}`,
+      label: choice.label,
+      onSelect: choice.run,
+      disabled: choice.disabled,
+    })),
+  ];
+
   const entryLabel =
     typeof entry?.title === "string" && entry.title.trim().length > 0
       ? entry.title
@@ -615,10 +662,7 @@ export function EntrySystemHeader({
         query its own width, and the rows respond to that width themselves. */}
       <div className="px-6 pt-2.5 pb-3 @max-lg/toolbar:px-4">
         <div
-          className={cn(
-            "flex min-h-9 items-center gap-3",
-            "@max-lg/toolbar:flex-wrap @max-lg/toolbar:gap-y-2"
-          )}
+          className={cn("flex min-h-9 flex-wrap items-center gap-x-3 gap-y-2")}
         >
           {backLink ? (
             <Link
@@ -640,32 +684,23 @@ export function EntrySystemHeader({
             first, then what a feature contributes, then the document's own
             verbs, then the panel toggle at the far right.
 
-            Wraps on a phone: with every label collapsed the controls still need
-            more width than the screen has, and a cluster that cannot wrap
-            pushes them off the edge. `basis-full` gives the wrap a width to
-            break inside; sized to its content the cluster is always exactly as
-            wide as its widest line, so `flex-wrap` alone has nothing to wrap
-            against. */}
-          <div
-            className={cn(
-              "ml-auto flex shrink-0 items-center gap-1.5",
-              "@max-lg/toolbar:basis-full @max-lg/toolbar:min-w-0",
-              "@max-lg/toolbar:flex-wrap @max-lg/toolbar:justify-end @max-lg/toolbar:gap-y-2"
-            )}
-          >
-            {/* A document only has history once it has been saved, and rendering a
-              snapshot needs the schema, so both are required to offer this. */}
-            {showEditMenuItems && historyFields && historyEnabled !== false ? (
+            On a narrow screen History and the preview fold into the document's
+            menu and the panel toggle goes (the panel is a page there), so the
+            actions stay one row. The cluster never wraps inside itself: if it
+            cannot sit beside the way back, the row wraps and it takes a line of
+            its own, so the header is at most two rows above the title. */}
+          <div className="ml-auto flex shrink-0 items-center gap-1.5">
+            {showHistory ? (
               <Button
                 type="button"
                 variant="outline"
                 size="sm"
-                className="px-2"
+                className={cn("px-2", WIDE_ONLY)}
                 aria-label="Version history"
                 title="Version history"
                 onClick={() => setHistoryOpen(true)}
               >
-                <History className="h-4 w-4" />
+                <History className="h-4 w-4" aria-hidden="true" />
               </Button>
             ) : null}
             {toolbarSlot}
@@ -683,20 +718,9 @@ export function EntrySystemHeader({
               sit beside this looking like a second preview button, with opening
               and copying already sharing a menu of their own — three of the
               header's controls for one idea. */}
-            <PreviewActions
-              size="sm"
-              isPreviewAvailable={isPreviewAvailable}
-              {...(onPreview === undefined ? {} : { onPreview })}
-              {...(previewLabel === undefined ? {} : { previewLabel })}
-              {...(onTogglePreviewPane === undefined
-                ? {}
-                : { onTogglePreviewPane })}
-              previewPaneOpen={previewPaneOpen}
-              isLinkAvailable={isLinkAvailable}
-              {...(onCopyLink === undefined ? {} : { onCopyLink })}
-              isCopyingLink={isCopyingLink}
-              disabled={isSubmitting}
-            />
+            <div className={cn("contents", WIDE_ONLY)}>
+              <PreviewActions size="sm" {...previewProps} />
+            </div>
             {/*
               Every document verb, drawn where the model said each belongs.
 
@@ -716,19 +740,25 @@ export function EntrySystemHeader({
               actions={withContributions.actions}
               bindings={withContributions.bindings}
               pending={isSubmitting}
+              narrowItems={narrowItems}
             />
 
-            {/* Rail toggle — far right, separated by a thin divider */}
+            {/* Rail toggle — far right, separated by a thin divider. Not on a
+              narrow screen, where the panel is a page rather than beside. */}
             {onToggleRail && (
               <>
-                <span className="w-px h-5 bg-border mx-1" />
+                <span
+                  className={cn("w-px h-5 bg-border mx-1", WIDE_ONLY)}
+                  aria-hidden="true"
+                />
                 <Button
                   type="button"
                   variant="outline"
                   size="sm"
-                  className="px-2"
+                  className={cn("px-2", WIDE_ONLY)}
                   onClick={onToggleRail}
                   aria-label={isRailCollapsed ? "Show rail" : "Hide rail"}
+                  title={isRailCollapsed ? "Show rail" : "Hide rail"}
                   aria-pressed={isRailCollapsed}
                 >
                   {isRailCollapsed ? (
