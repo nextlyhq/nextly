@@ -9,6 +9,7 @@
 import { container } from "@nextly/di/container";
 import type { NextlyServiceConfig } from "@nextly/di/register";
 
+import { openWhileStoreIsDown } from "../../domains/limits/core-limit-outage";
 import type { RateLimitStore } from "../../middleware/rate-limit";
 
 import { createErrorResponse, type ErrorResponse } from "./error-response";
@@ -76,11 +77,12 @@ export async function apiKeyRateLimitRefusal(
   const limit = cfg?.apiKeys?.rateLimit.requestsPerHour ?? DEFAULT_RATE_LIMIT;
   const windowMs = cfg?.apiKeys?.rateLimit.windowMs ?? DEFAULT_RATE_WINDOW_MS;
 
-  const rl = await authRateLimiter(getCounts(cfg)).check(
-    keyId,
-    limit,
-    windowMs
-  );
+  // Counted with the general API limit, so let through while the store is
+  // away rather than refusing every key (see `core-limit-outage`).
+  const counts = getCounts(cfg);
+  const rl = await authRateLimiter(
+    counts === undefined ? undefined : openWhileStoreIsDown(counts)
+  ).check(keyId, limit, windowMs);
   if (rl.allowed) return null;
 
   return createErrorResponse(

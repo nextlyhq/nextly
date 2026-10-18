@@ -23,6 +23,7 @@
  * @module middleware/rest-limits
  */
 import { container } from "../di/container";
+import { openWhileStoreIsDown } from "../domains/limits/core-limit-outage";
 import { NextlyError } from "../errors/nextly-error";
 import { getTrustedClientIp } from "../utils/get-trusted-client-ip";
 
@@ -459,7 +460,11 @@ export function createRestLimits(
   );
   return new RestLimits(
     settings,
-    config.store ?? coreCountsOr(new InMemoryRateLimitStore()),
+    // Let through while the store is away: the general API limit refusing
+    // would take the site down with its store (see `core-limit-outage`).
+    openWhileStoreIsDown(
+      coreCountsOr(config.store ?? new InMemoryRateLimitStore())
+    ),
     readers
   );
 }

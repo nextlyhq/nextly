@@ -1,4 +1,8 @@
 import type { AuditLogWriter } from "../../domains/audit/audit-log-writer";
+import {
+  isLimitStoreDown,
+  signInLimitUnavailable,
+} from "../../domains/limits/core-limit-outage";
 import type { LimitStore } from "../../domains/limits/limit-store";
 import type { RateLimitStore } from "../../middleware/rate-limit";
 import type { PluginContext } from "../../plugins/plugin-context";
@@ -493,10 +497,18 @@ async function checkAuthIpRateLimit(
   });
 
   if (ip === null) noteUnresolvedAuthRequest(request);
-  const result =
-    ip === null
-      ? await admitUnknownSource(request, authPath, deps)
-      : await admitAddress(ip, deps);
+  let result: UnknownSourceVerdict;
+  try {
+    result =
+      ip === null
+        ? await admitUnknownSource(request, authPath, deps)
+        : await admitAddress(ip, deps);
+  } catch (error) {
+    // Refused while the store is away: admitting would let sign-in attempts
+    // run uncounted for as long as it is (see `core-limit-outage`).
+    if (isLimitStoreDown(error)) throw signInLimitUnavailable(error);
+    throw error;
+  }
   if (result.allowed) return null;
 
   const retryAfter = Math.max(

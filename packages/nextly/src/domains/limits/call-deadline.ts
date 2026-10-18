@@ -11,6 +11,7 @@
  * @module domains/limits/call-deadline
  */
 import { NextlyError } from "../../errors/nextly-error";
+import type { RateLimitStore } from "../../middleware/rate-limit";
 
 import {
   limitStoreUnavailable,
@@ -40,6 +41,76 @@ export function withCallDeadline(
   timeoutMs: number = LIMIT_STORE_CALL_TIMEOUT_MS,
   maxInFlight: number = LIMIT_STORE_MAX_IN_FLIGHT
 ): LimitStore {
+  const answer = deadlineAnswer(timeoutMs, maxInFlight);
+
+  return {
+    get shared() {
+      return store.shared;
+    },
+    update(keys, apply) {
+      const applyFailure: { failed?: { error: unknown } } = {};
+      return answer(
+        () =>
+          store.update(keys, (current, now) => {
+            try {
+              return apply(current, now);
+            } catch (error) {
+              applyFailure.failed = { error };
+              throw error;
+            }
+          }),
+        applyFailure
+      );
+    },
+    read(keys) {
+      return answer(() => store.read(keys));
+    },
+    sweep() {
+      return answer(() => store.sweep());
+    },
+  };
+}
+
+/**
+ * An app's store of the older contract, held to the same time and answered as
+ * unavailable on its own failures, as {@link withCallDeadline} holds a limit
+ * store: core's own limits count in it, and decide alike whichever store
+ * failed.
+ */
+export function withRateLimitStoreDeadline(
+  store: RateLimitStore,
+  timeoutMs: number = LIMIT_STORE_CALL_TIMEOUT_MS,
+  maxInFlight: number = LIMIT_STORE_MAX_IN_FLIGHT
+): RateLimitStore {
+  const answer = deadlineAnswer(timeoutMs, maxInFlight);
+  // Bound, so it is called on its own store as the store wrote it.
+  const consume = store.consume?.bind(store);
+  return {
+    increment: (key, windowMs) => answer(() => store.increment(key, windowMs)),
+    reset: key => answer(() => store.reset(key)),
+    ...(consume === undefined
+      ? {}
+      : {
+          consume: (key: string, limit: number, windowMs: number) =>
+            answer(() => consume(key, limit, windowMs)),
+        }),
+  };
+}
+
+/**
+ * The one way a store call is answered within `timeoutMs`, shared by both
+ * store contracts. What `call` resolves to, or the unavailable answer: on the
+ * deadline, past `maxInFlight` calls under way, or on the store's own
+ * failure. A failure `applyFailure` records, and a programming error, reach
+ * the caller as they are.
+ */
+function deadlineAnswer(
+  timeoutMs: number,
+  maxInFlight: number
+): <T>(
+  call: () => Promise<T>,
+  applyFailure?: { failed?: { error: unknown } }
+) => Promise<T> {
   /** Calls the store has not yet settled, answered or not. */
   let inFlight = 0;
   /**
@@ -83,31 +154,5 @@ export function withCallDeadline(
       clearTimeout(timer);
     }
   };
-
-  return {
-    get shared() {
-      return store.shared;
-    },
-    update(keys, apply) {
-      const applyFailure: { failed?: { error: unknown } } = {};
-      return answer(
-        () =>
-          store.update(keys, (current, now) => {
-            try {
-              return apply(current, now);
-            } catch (error) {
-              applyFailure.failed = { error };
-              throw error;
-            }
-          }),
-        applyFailure
-      );
-    },
-    read(keys) {
-      return answer(() => store.read(keys));
-    },
-    sweep() {
-      return answer(() => store.sweep());
-    },
-  };
+  return answer;
 }
