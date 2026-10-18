@@ -380,3 +380,41 @@ describe("recordContentEvent refuses before writing", () => {
     ]);
   });
 });
+
+describe("recordContentEvent and a plugin-defined person", () => {
+  beforeEach(() => registerContentEventKind({ name: "saved", label: "Saved" }));
+
+  const saved = (id: string, name: string): ContentEventInput => ({
+    subject: { kind: "collection", slug: "posts", id: "e1" },
+    kind: "saved",
+    actor: { kind: "principal", principalKind: "shop:customer", id, name },
+  });
+
+  /** A deleted-people check that knows one person, `gone@x.test`, as deleted. */
+  const principals = {
+    digest: ({ kind, id }: { kind: string; id: string }) =>
+      `digest-of-${kind}-${id}`,
+    isDeleted: ({ id }: { kind: string; id: string }) =>
+      Promise.resolve(id === "gone@x.test"),
+  };
+
+  it("refuses to write one without the deleted-people check", async () => {
+    const { tx, inserts } = capturingTx();
+    await expect(
+      recordContentEvent(tx, saved("kim@x.test", "Kim"))
+    ).rejects.toMatchObject({ code: "INTERNAL_ERROR" });
+    expect(inserts).toEqual([]);
+  });
+
+  it("names one already reported deleted by digest, with no name, and keeps one who exists as given", async () => {
+    const { tx, inserts } = capturingTx();
+    await recordContentEvent(tx, saved("gone@x.test", "Gone"), { principals });
+    await recordContentEvent(tx, saved("kim@x.test", "Kim"), { principals });
+    expect(
+      inserts.map(({ row }) => ({ id: row.actorId, name: row.actorName }))
+    ).toEqual([
+      { id: "digest-of-shop:customer-gone@x.test", name: null },
+      { id: "kim@x.test", name: "Kim" },
+    ]);
+  });
+});

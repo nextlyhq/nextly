@@ -18,6 +18,7 @@ import {
 } from "../../schemas/content-events";
 import { toJsonColumnValue } from "../../shared/lib/json-column-value";
 import { uuidV7 } from "../../utils/uuid-v7";
+import type { PrincipalDigests } from "../audit/principal-digest";
 import { isConfigurableLocaleCode } from "../i18n/config/validate";
 import type { VersionsDbApi } from "../versions/db-api";
 
@@ -58,6 +59,22 @@ export interface ContentEventInput {
   payload?: Record<string, unknown> | null;
   /** The hash of the definition a feature acted under, where it has one. */
   definitionHash?: string | null;
+}
+
+/**
+ * What a write reads besides its transaction.
+ *
+ * @experimental
+ */
+export interface RecordContentEventOptions {
+  /**
+   * Whether a plugin-defined person was reported deleted, and the digest that
+   * names them, read on the event's own transaction under the shared
+   * deleted-people lock (`readPrincipalDigests` with `"shared"`). Required for
+   * a `principal` actor: under that lock a deletion report either committed
+   * first and is seen here, or waits for this event and erases it.
+   */
+  principals?: Pick<PrincipalDigests, "digest" | "isDeleted">;
 }
 
 /** The longest a payload may be, serialised: events are small by design. */
@@ -227,6 +244,32 @@ function partValues(input: ContentEventInput): string[] {
 }
 
 /**
+ * The actor as the event keeps it. A plugin-defined person already reported
+ * deleted is named by digest with no name, as their erasure left their
+ * earlier events, so an event written after the report never brings back the
+ * id or the name it erased.
+ */
+async function storedActor(
+  actor: ContentEventActor,
+  principals: RecordContentEventOptions["principals"]
+): Promise<ContentEventActor> {
+  if (actor.kind !== "principal") return actor;
+  if (!principals) {
+    // Refused rather than written unchecked: a person reported deleted would
+    // be named again, by the id their erasure replaced.
+    throw NextlyError.internal({
+      logContext: {
+        reason:
+          "content event for a principal without the deleted-people check",
+      },
+    });
+  }
+  const subject = { kind: actor.principalKind, id: actor.id };
+  if (!(await principals.isDeleted(subject))) return actor;
+  return { ...actor, id: principals.digest(subject), name: null };
+}
+
+/**
  * Record one event and its parts on `tx`, the transaction of the change it
  * records. Returns the event's id, which is time-ordered.
  *
@@ -234,12 +277,14 @@ function partValues(input: ContentEventInput): string[] {
  */
 export async function recordContentEvent(
   tx: VersionsDbApi,
-  input: ContentEventInput
+  input: ContentEventInput,
+  options: RecordContentEventOptions = {}
 ): Promise<{ id: string }> {
   const kind = registeredKind(input.kind);
   const payload = checkedPayload(kind, input);
   const parts = partValues(input);
-  const { actor, subject } = input;
+  const { subject } = input;
+  const actor = await storedActor(input.actor, options.principals);
   const bounded: BoundedFields = {
     subjectSlug: subject.kind === "release" ? null : subject.slug,
     subjectId: subject.id,

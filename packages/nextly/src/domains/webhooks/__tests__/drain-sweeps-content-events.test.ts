@@ -31,24 +31,22 @@ function idleDb(): never {
 function oneDeletedSubject() {
   let left = true;
   const deleted: string[] = [];
-  return {
-    deleted,
-    adapter: {
-      select: async (table: string, query?: { limit?: number }) => {
-        if (table !== "nextly_content_events" || !left) return [];
-        // The oldest deletion asks for one row; its life's batch, for the
-        // events the deletion stamped other than itself.
-        return query?.limit === 1 ? [{ id: "e2" }] : [{ id: "e1" }];
-      },
-      delete: async (table: string) => {
-        deleted.push(table);
-        if (table === "nextly_content_events") left = false;
-        return 0;
-      },
-      transaction: async (fn: (tx: unknown) => Promise<unknown>) =>
-        fn(undefined),
+  const adapter = {
+    select: async (table: string, query?: { limit?: number }) => {
+      if (table !== "nextly_content_events" || !left) return [];
+      // The oldest deletion asks for one row; its life's batch, for the
+      // events the deletion stamped other than itself.
+      return query?.limit === 1 ? [{ id: "e2" }] : [{ id: "e1" }];
     },
+    delete: async (table: string) => {
+      deleted.push(table);
+      if (table === "nextly_content_events") left = false;
+      return 0;
+    },
+    // A batch's deletes run on the transaction handle: here, the same double.
+    transaction: async (fn: (tx: unknown) => Promise<unknown>) => fn(adapter),
   };
+  return { deleted, adapter };
 }
 
 function drain(activityMaxAgeMs: number | false) {

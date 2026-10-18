@@ -33,14 +33,20 @@ import {
   companionHasStatusColumn,
   localizedColumnsOnMain,
 } from "../../i18n/runtime/companion-io";
+import { normalizeType } from "../../schema/pipeline/diff/normalize-type";
 import { queryLiveColumnTypes } from "../../schema/pipeline/live-column-types";
 import {
   readColumnNullState,
   readForeignKeyColumns,
+  readIndexColumns,
   readIndexNames,
+  readUniqueColumns,
   tableHasRows,
 } from "../../schema/pipeline/live-table-facts";
-import { columnsThatMayHoldNull } from "../../schema/services/field-column-descriptor";
+import {
+  columnsThatMayHoldNull,
+  getColumnDescriptor,
+} from "../../schema/services/field-column-descriptor";
 import { calculateSchemaHash } from "../../schema/services/schema-hash";
 import { buildCollectionMetadataUpsert } from "../../schema/ui-schema/metadata-sql";
 import { resolveBuilderVersions } from "../../versions/builder-versions";
@@ -54,6 +60,7 @@ import {
 } from "./dynamic-collection-registry-service";
 import { DynamicCollectionSchemaService } from "./dynamic-collection-schema-service";
 import { DynamicCollectionValidationService } from "./dynamic-collection-validation-service";
+import { refusalsForCollectionSave } from "./save-preconditions";
 
 export interface CollectionArtifacts {
   /**
@@ -270,6 +277,8 @@ export class DynamicCollectionService extends BaseService {
     tableHasRows: boolean;
     foreignKeysByColumn: ReadonlyMap<string, readonly string[]>;
     indexNames: ReadonlySet<string>;
+    indexColumns: ReadonlyMap<string, readonly string[]>;
+    uniqueColumns: ReadonlyMap<string, string | null>;
     columnsContainingNull: ReadonlySet<string>;
     columnsAbsentFromTable: ReadonlySet<string>;
     liveColumnTypes: ReadonlyMap<string, string>;
@@ -308,23 +317,29 @@ export class DynamicCollectionService extends BaseService {
     // anyway. Which of them a save then TIGHTENS is the generator's question;
     // it holds both field lists and this reader holds only the live table.
     const nullableColumns = columnsThatMayHoldNull(pendingFields);
-    const [hasRows, foreignKeys, indexes, holdingNull, liveTypes] =
-      await Promise.all([
-        tableHasRows(db, this.adapter.dialect, tableName),
-        readForeignKeyColumns(db, this.adapter.dialect, tableName),
-        readIndexNames(db, this.adapter.dialect, tableName),
-        readColumnNullState(
-          db,
-          this.adapter.dialect,
-          tableName,
-          nullableColumns
-        ),
-        // What each column IS, for the one statement that has to restate a column it is not
-        // otherwise changing: MySQL's `MODIFY`. Rendering that type instead of reading it asks
-        // which renderer built the column, which has no static answer once the create path moved
-        // to the descriptor.
-        queryLiveColumnTypes(db, this.adapter.dialect, [tableName]),
-      ]);
+    const [
+      hasRows,
+      foreignKeys,
+      indexes,
+      indexColumns,
+      unique,
+      holdingNull,
+      liveTypes,
+    ] = await Promise.all([
+      tableHasRows(db, this.adapter.dialect, tableName),
+      readForeignKeyColumns(db, this.adapter.dialect, tableName),
+      readIndexNames(db, this.adapter.dialect, tableName),
+      // What each index covers, which its name does not say.
+      readIndexColumns(db, this.adapter.dialect, tableName),
+      // What each unique index covers, which its name does not say.
+      readUniqueColumns(db, this.adapter.dialect, tableName),
+      readColumnNullState(db, this.adapter.dialect, tableName, nullableColumns),
+      // What each column IS, for the one statement that has to restate a column it is not
+      // otherwise changing: MySQL's `MODIFY`. Rendering that type instead of reading it asks
+      // which renderer built the column, which has no static answer once the create path moved
+      // to the descriptor.
+      queryLiveColumnTypes(db, this.adapter.dialect, [tableName]),
+    ]);
 
     // What the table carries, and only that.
     //
@@ -343,6 +358,8 @@ export class DynamicCollectionService extends BaseService {
       tableHasRows: hasRows,
       foreignKeysByColumn: foreignKeys,
       indexNames: indexes,
+      indexColumns,
+      uniqueColumns: unique,
       columnsContainingNull: holdingNull.holdingNull,
       columnsAbsentFromTable: holdingNull.absent,
       liveColumnTypes: liveTypes.get(tableName) ?? new Map<string, string>(),
@@ -842,6 +859,117 @@ export class DynamicCollectionService extends BaseService {
   }
 
   /**
+   * The field list this database's own plan starts from: the previous fields as the live table
+   * holds them. MySQL commits each schema statement, so a save it refused part-way can have added
+   * some columns and dropped others while the registry still records the fields before the save.
+   * Planning from the registry would add a column twice or drop one that is gone, and fail again.
+   *
+   * - A field the save removes whose column is already gone is left out, so it is not dropped.
+   * - A field the save adds whose column is already there is taken as present, and as unique only
+   *   where a unique index already covers its column (asked of the catalog, since an index of the
+   *   expected name can stand on another column).
+   * - Such a column is taken only when its type is the one the field would have. A column of the
+   *   same name with another type is not a part-applied save's: removed fields once kept their
+   *   columns on MySQL, with their old values, and adopting one would record the field over a
+   *   column of the wrong type. The save is refused, naming the column.
+   */
+  private thisDatabasesStartingFields(
+    tableName: string,
+    oldFields: readonly FieldDefinition[],
+    newFields: readonly FieldDefinition[],
+    facts: {
+      liveColumnTypes: ReadonlyMap<string, string>;
+      uniqueColumns: ReadonlyMap<string, string | null>;
+    }
+  ): FieldDefinition[] {
+    const columnOf = (f: FieldDefinition) =>
+      getColumnDescriptor(f, this.adapter.dialect, "collection")?.name;
+    const kept = new Set(newFields.map(f => f.name));
+    const known = new Set(oldFields.map(f => f.name));
+    const stillThere = oldFields.filter(f => {
+      const column = columnOf(f);
+      return (
+        kept.has(f.name) ||
+        column === undefined ||
+        facts.liveColumnTypes.has(column)
+      );
+    });
+    const alreadyAdded = newFields.flatMap(f => {
+      const column = columnOf(f);
+      if (known.has(f.name) || column === undefined) return [];
+      const live = facts.liveColumnTypes.get(column);
+      if (live === undefined) return [];
+      const planned = [
+        ...this.schemaService.plannedColumnTypes([f]).values(),
+      ][0];
+      if (normalizeType(live) !== normalizeType(planned)) {
+        throw this.columnTakenRefusal(tableName, f, column, live, planned);
+      }
+      return [
+        {
+          ...f,
+          required: false,
+          unique: f.unique === true && facts.uniqueColumns.has(column),
+        },
+      ];
+    });
+    return [...stillThere, ...alreadyAdded];
+  }
+
+  /** The refusal for an added field whose column name an unrelated column already holds. */
+  private columnTakenRefusal(
+    tableName: string,
+    field: FieldDefinition,
+    column: string,
+    liveType: string,
+    plannedType: string | undefined
+  ): NextlyError {
+    return NextlyError.validation({
+      errors: [
+        {
+          path: `fields.${field.name}`,
+          code: "COLUMN_ALREADY_EXISTS",
+          message:
+            `The table already has a column "${column}" of another type, left from an earlier ` +
+            `field. Give ${field.name} another name, or remove that column first.`,
+        },
+      ],
+      logContext: { tableName, column, liveType, plannedType },
+    });
+  }
+
+  /**
+   * This database's own statements for an edit, when they differ from the migration file's: the
+   * same diff, planned from the live table (`thisDatabasesStartingFields`) and skipping index
+   * changes it already shows. Undefined when the two agree, so a caller cannot run the wrong one.
+   */
+  private localAlterSQL(
+    tableName: string,
+    oldFields: FieldDefinition[],
+    newFields: FieldDefinition[],
+    options: Parameters<
+      DynamicCollectionSchemaService["generateAlterTableMigration"]
+    >[3] & {
+      liveColumnTypes: ReadonlyMap<string, string>;
+      uniqueColumns: ReadonlyMap<string, string | null>;
+    },
+    artefact: string
+  ): string | undefined {
+    const local = this.schemaService.generateAlterTableMigration(
+      tableName,
+      this.thisDatabasesStartingFields(
+        tableName,
+        oldFields,
+        newFields,
+        options
+      ),
+      newFields,
+      { ...options, planFor: "database" }
+    );
+    return local === artefact ? undefined : local;
+  }
+
+  /**
    * Which of the given fields still have a column on the main table of this database. Asked one
    * field at a time, so the answer is keyed by the field's name rather than by a column name this
    * service would have to derive the same way the introspection does.
@@ -858,6 +986,32 @@ export class DynamicCollectionService extends BaseService {
       if (present.length > 0) retained.add(field.name);
     }
     return retained;
+  }
+
+  /**
+   * Which fields this save makes translated already have their companion column here. The same
+   * presence question as for the main table, asked of the companion: a save MySQL refused
+   * part-way can have added the column, and the next save plans from it.
+   */
+  private async joiningColumnsOnCompanion(
+    companionTable: string | null,
+    args: {
+      newFields: FieldDefinition[];
+      isLocalized: boolean;
+      wasLocalized: boolean;
+    },
+    localizedOldNames: ReadonlySet<string>
+  ): Promise<string[]> {
+    if (companionTable === null || !args.wasLocalized) return [];
+    const joining = new Set(
+      resolveLocalizedFieldNames(args.newFields, args.isLocalized)
+    );
+    const added = args.newFields.filter(
+      f => joining.has(f.name) && !localizedOldNames.has(f.name)
+    );
+    return (
+      await localizedColumnsOnMain(this.adapter, companionTable, added)
+    ).map(c => c.name);
   }
 
   private async buildCompanionTransitionSQL(args: {
@@ -922,6 +1076,11 @@ export class DynamicCollectionService extends BaseService {
         args.tableName,
         args.oldFields.filter(f => localizedOldNames.has(f.name))
       ).then(cols => cols.map(c => c.name)),
+      presentOnCompanion: await this.joiningColumnsOnCompanion(
+        companionExists ? companionTable : null,
+        args,
+        localizedOldNames
+      ),
     });
 
     // Separate statements with the migration-file breakpoint marker (not blank lines): the file
@@ -1198,6 +1357,47 @@ export class DynamicCollectionService extends BaseService {
         wasLocalized: collectionWasLocalized,
         isLocalized: collectionIsLocalized,
       });
+      // What the existing entries must satisfy for the change to apply, asked before any statement
+      // runs: a refusal part-way would leave MySQL, which commits each schema statement, holding
+      // half the change. Main-table fields only; a translated field's column is the companion's.
+      const onMain = (fields: FieldDefinition[], localized: boolean) => {
+        const translated = new Set(
+          resolveLocalizedFieldNames(fields, localized)
+        );
+        return fields.filter(f => !translated.has(f.name));
+      };
+      const mainBefore = onMain(oldUserFields, collectionWasLocalized);
+      const mainAfter = onMain(userDefinedFields, collectionIsLocalized);
+      // A table still to be deployed holds no entries, so there is nothing to check yet.
+      const tableDeployed = await this.adapter.tableExists(
+        collection.tableName
+      );
+      const refusals = !tableDeployed
+        ? []
+        : await refusalsForCollectionSave({
+            presentColumns: new Set((await liveTable()).liveColumnTypes.keys()),
+            adapter: this.adapter,
+            dialect: this.adapter.dialect,
+            tableName: collection.tableName,
+            oldFields: mainBefore,
+            newFields: mainAfter,
+            rename: this.schemaService.detectFieldRename(mainBefore, mainAfter),
+            addedColumnBackfill: field =>
+              this.schemaService.addedColumnBackfill(field),
+          });
+      if (refusals.length > 0) {
+        throw NextlyError.validation({
+          errors: refusals.map(r => r.error),
+          logContext: {
+            collection: collectionName,
+            fields: refusals.map(r => r.error.path),
+            // What the entries in the way hold, for the log only.
+            details: refusals.flatMap(r =>
+              r.logContext ? [r.logContext] : []
+            ),
+          },
+        });
+      }
 
       // Pass status flags so the alter migration can ADD/DROP the
       // `status` column when the user toggles Draft/Published on or off.
@@ -1284,18 +1484,17 @@ export class DynamicCollectionService extends BaseService {
           collection.tableName,
           oldUserFields.filter(f => leavingTranslation.has(f.name))
         );
-        const localMainSQL =
-          retainedOnMain.size > 0
-            ? this.schemaService.generateAlterTableMigration(
-                collection.tableName,
-                [
-                  ...oldShared,
-                  ...userDefinedFields.filter(f => retainedOnMain.has(f.name)),
-                ],
-                newShared,
-                mainOptions
-              )
-            : undefined;
+        const localOldShared = [
+          ...oldShared,
+          ...userDefinedFields.filter(f => retainedOnMain.has(f.name)),
+        ];
+        const localMainSQL = this.localAlterSQL(
+          collection.tableName,
+          localOldShared,
+          newShared,
+          mainOptions,
+          mainSQL
+        );
         const localizedMigration = await this.buildLocalizedMigrationSQL(
           { artefact: mainSQL, local: localMainSQL },
           {
@@ -1320,23 +1519,34 @@ export class DynamicCollectionService extends BaseService {
             oldUserFields,
             userDefinedFields
           );
+        const alterOptions = {
+          wasStatus,
+          hasStatus,
+          ...(await liveTable()),
+          associationRename: groupAssociationRename ?? undefined,
+          fieldGroupTableNames: groupAssociationRename
+            ? await this.resolveFieldGroupTableNames([
+                ...oldUserFields,
+                ...userDefinedFields,
+              ])
+            : new Map(),
+        };
         migrationSQL = this.schemaService.generateAlterTableMigration(
           collection.tableName,
           oldUserFields,
           userDefinedFields,
-          {
-            wasStatus,
-            hasStatus,
-            ...(await liveTable()),
-            associationRename: groupAssociationRename ?? undefined,
-            fieldGroupTableNames: groupAssociationRename
-              ? await this.resolveFieldGroupTableNames([
-                  ...oldUserFields,
-                  ...userDefinedFields,
-                ])
-              : new Map(),
-          }
+          alterOptions
         );
+        // The file is planned from the registry; this database, which a save MySQL stopped
+        // part-way can have changed already, plans from the table as it is.
+        localMigrationSQL =
+          this.localAlterSQL(
+            collection.tableName,
+            oldUserFields,
+            userDefinedFields,
+            alterOptions,
+            migrationSQL
+          ) ?? null;
       }
       migrationFileName = `${Date.now()}_update_${collectionName}.sql`;
 
@@ -1399,15 +1609,25 @@ export class DynamicCollectionService extends BaseService {
       const existingUserFields = (collection.fields || []).filter(
         (f: FieldDefinition) => !reservedFieldNames.includes(f.name)
       );
+      const statusOptions = {
+        wasStatus: wasStatusForUpdate,
+        hasStatus: updates.status === true,
+      };
       migrationSQL = this.schemaService.generateAlterTableMigration(
         collection.tableName,
         existingUserFields,
         existingUserFields,
-        {
-          wasStatus: wasStatusForUpdate,
-          hasStatus: updates.status === true,
-        }
+        statusOptions
       );
+      // A save MySQL stopped part-way can have added or dropped the lifecycle column already.
+      localMigrationSQL =
+        this.localAlterSQL(
+          collection.tableName,
+          existingUserFields,
+          existingUserFields,
+          { ...statusOptions, ...(await liveTable()) },
+          migrationSQL
+        ) ?? null;
       migrationFileName = `${Date.now()}_status_${collectionName}.sql`;
     }
 
