@@ -23,7 +23,10 @@ const ref = {
   entryId: "e1",
 };
 
-const tx = {} as Parameters<typeof captureInTx>[0];
+// A document with no version yet, so every save here records one.
+const tx = {
+  select: () => Promise.resolve([]),
+} as unknown as Parameters<typeof captureInTx>[0];
 
 describe("captureInTx", () => {
   beforeEach(() => {
@@ -115,5 +118,53 @@ describe("captureInTx", () => {
         snapshot: { id: "e1", title: "Hi", tags: ["t1"] },
       })
     );
+  });
+
+  describe("a save that changes nothing", () => {
+    // A document whose newest version already holds exactly this save.
+    const unchanged = {
+      select: () =>
+        Promise.resolve([
+          {
+            versionNo: 3,
+            status: "published",
+            snapshot: { id: "e1", title: "Hi" },
+          },
+        ]),
+    } as unknown as Parameters<typeof captureInTx>[0];
+    const parts = { parentRow: { id: "e1", title: "Hi" } };
+
+    it("records no version for an ordinary save", async () => {
+      const result = await captureInTx(unchanged, service(), { ref, parts });
+      expect(result).toEqual({ versionNo: null });
+      expect(capture).not.toHaveBeenCalled();
+    });
+
+    it("records a restore, which names what it came from", async () => {
+      await captureInTx(unchanged, service(), {
+        ref,
+        parts,
+        sourceVersionNo: 2,
+      });
+      expect(capture).toHaveBeenCalledOnce();
+    });
+
+    it("records a named version, which was asked for by name", async () => {
+      await captureInTx(unchanged, service(), {
+        ref,
+        parts,
+        label: "Before launch",
+      });
+      expect(capture).toHaveBeenCalledOnce();
+    });
+
+    it("records a change of status", async () => {
+      await captureInTx(unchanged, service(), {
+        ref,
+        parts,
+        contentStatus: "draft",
+      });
+      expect(capture).toHaveBeenCalledOnce();
+    });
   });
 });

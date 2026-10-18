@@ -759,6 +759,33 @@ export class VersionsRepository {
   }
 
   /**
+   * The newest durable version of one part of a document (a language, or the
+   * part with none: `null` matches only versions with no language), snapshot
+   * included. What a save is compared with to tell whether it changed
+   * anything.
+   */
+  async findLatestInPart(
+    ref: VersionRef,
+    locale: string | null
+  ): Promise<VersionRow | undefined> {
+    const rows = await this.db.select<VersionRow>(TABLE, {
+      where: {
+        and: [
+          ...this.docWhere(ref),
+          { column: "isAutosave", op: "=", value: false },
+          { column: "versionNo", op: "IS NOT NULL" },
+          locale === null
+            ? { column: "locale", op: "IS NULL" }
+            : { column: "locale", op: "=", value: locale },
+        ],
+      },
+      orderBy: [{ column: "versionNo", direction: "desc" }],
+      limit: 1,
+    });
+    return rows[0];
+  }
+
+  /**
    * The part (language, or null for none) of one durable version, or
    * undefined when the document has no such version. Reads that one row's
    * language only.
