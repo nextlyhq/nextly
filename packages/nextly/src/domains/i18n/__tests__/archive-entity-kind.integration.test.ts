@@ -473,10 +473,12 @@ describeEachDialect("the archive's entity kind", dialect => {
   });
 
   /** `BETWEEN` plus `hours`, in the archive's encoding of `archived_at`. */
-  const hoursAfterBetween = (hours: number) =>
-    dialect === "sqlite"
-      ? String(978307200 + hours * 3600)
-      : `'2001-01-01 ${String(hours).padStart(2, "0")}:00:00'`;
+  const hoursAfterBetween = (hours: number) => {
+    const epoch = 978307200 + hours * 3600;
+    return dialect === "sqlite"
+      ? String(epoch)
+      : `'${new Date(epoch * 1000).toISOString().slice(0, 19).replace("T", " ")}'`;
+  };
 
   it("counts a row as the entity's only when archived well after its creation", async () => {
     // The creation time can read back off by any zone offset, so a row archived within hours of it
@@ -485,13 +487,21 @@ describeEachDialect("the archive's entity kind", dialect => {
     await createdLongAgo("dynamic_collections", "hero", BETWEEN);
     await archiveWithoutTheKind();
     await legacyRow("hero", collectionId, "Pronto", hoursAfterBetween(1));
-    await legacyRow("hero", collectionId, "Tarde", hoursAfterBetween(20));
+    // Past PostgreSQL's margin, inside MySQL's, which allows for a session zone that changed.
+    await legacyRow("hero", collectionId, "Medio", hoursAfterBetween(20));
+    // Past MySQL's margin too.
+    await legacyRow("hero", collectionId, "Tarde", hoursAfterBetween(30));
     await migrateCore();
 
     await restoreHero();
 
     // SQLite keeps both times as epoch seconds, with no zone to doubt, so an hour is enough there.
     expect(await archivedBySlug()).toEqual([
+      {
+        slug: "hero",
+        kind: dialect === "mysql" ? "unresolved" : "collection",
+        value: "Medio",
+      },
       {
         slug: "hero",
         kind: dialect === "sqlite" ? "collection" : "unresolved",
