@@ -697,15 +697,12 @@ export function VersionHistorySheet({
             on the wrapped line, against the panel edge, where the viewport
             clipped it. With the exit in the header, a second line costs
             nothing. */}
-          {selected !== null ? (
+          {/* No way back to the list here: the list never left the panel, and
+            the banner over the version offers Back to current. */}
+          {selected !== null &&
+          canComparePrevious &&
+          previousVersionNo !== null ? (
             <div className="p-4 border-t border-border flex flex-wrap items-center gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setSelected(null)}
-              >
-                Back to history
-              </Button>
               {/* The full comparison, on a page of its own, from the version
                 already chosen against the one before it: its address names
                 the pair so it can be shared. */}
@@ -713,28 +710,26 @@ export function VersionHistorySheet({
                 pair does not open "this version with nothing"; the destination
                 reads an absent pair as the two NEWEST versions, so the control
                 would silently show a comparison the reader did not ask for. */}
-              {canComparePrevious && previousVersionNo !== null ? (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() =>
-                    navigateTo(
-                      versionsHref(
-                        scope,
-                        { from: previousVersionNo, to: selected },
-                        // The SELECTED version's language, not the sheet's
-                        // filter: the filter says which rows are listed, while
-                        // this says which text the pair being opened actually
-                        // holds — and that is what the destination must name the
-                        // document in.
-                        versions.find(v => v.versionNo === selected)?.locale
-                      )
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() =>
+                  navigateTo(
+                    versionsHref(
+                      scope,
+                      { from: previousVersionNo, to: selected },
+                      // The SELECTED version's language, not the sheet's
+                      // filter: the filter says which rows are listed, while
+                      // this says which text the pair being opened actually
+                      // holds — and that is what the destination must name the
+                      // document in.
+                      versions.find(v => v.versionNo === selected)?.locale
                     )
-                  }
-                >
-                  Open full comparison
-                </Button>
-              ) : null}
+                  )
+                }
+              >
+                Open full comparison
+              </Button>
               {/* Restoring is offered in the BANNER over the version being
                   read, not here. The panel only ever offered it while a
                   version was selected, which is exactly when the banner is on

@@ -530,26 +530,6 @@ describe("VersionHistorySheet", () => {
     expect(screen.queryByText(/Viewing version/)).toBeNull();
   });
 
-  it("returns to the list from a preview", async () => {
-    useVersionsMock.mockReturnValue(
-      listState({
-        data: { pages: [{ items: [version(3)], meta: { hasNext: false } }] },
-      })
-    );
-    useVersionMock.mockReturnValue(detailState({ data: { snapshot: {} } }));
-
-    renderSheet();
-    await userEvent.click(screen.getByRole("button", { name: /Version 3/ }));
-    await userEvent.click(
-      screen.getByRole("button", { name: /Back to history/ })
-    );
-
-    expect(screen.queryByText(/Viewing version/)).not.toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: /Version 3/ })
-    ).toBeInTheDocument();
-  });
-
   it("publishes whether the caller may restore, rather than rendering a button", async () => {
     useVersionsMock.mockReturnValue(
       listState({
@@ -769,9 +749,8 @@ describe("VersionHistorySheet — what it publishes to the document", () => {
       "aria-current",
       "true"
     );
-    // ONLY the published callback — clicking "Back to history" as well would
-    // clear the selection by itself and the assertion would pass whether or not
-    // `returnToCurrent` does anything.
+    // ONLY the published callback: the panel offers no other way back, so the
+    // assertion turns on what `returnToCurrent` does.
     published.returnToCurrent();
     await waitFor(() =>
       expect(
