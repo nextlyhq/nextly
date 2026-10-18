@@ -37,6 +37,7 @@ vi.mock("@aws-sdk/client-s3", () => {
     PutObjectCommand: class {},
     DeleteObjectCommand: class {},
     DeleteObjectsCommand: class {},
+    ListObjectsV2Command: class {},
   };
 });
 // An upload that completes, for the cases that store a file.
@@ -307,5 +308,32 @@ describe("S3StorageAdapter — a URL is one prefix plus the stored path", () => 
     expect(original.path).toMatch(/\//);
     expect(prefixOf(thumbnail)).toBe(prefixOf(original));
     expect(adapter.getPublicUrl(thumbnail.path)).toBe(thumbnail.url);
+  });
+});
+
+// Searching the bucket for left-behind files reads every page of it.
+describe("S3StorageAdapter — list", () => {
+  it("names every object on every page, by key and time", async () => {
+    const { adapter, send } = adapterWithSend();
+    const time = new Date("2026-10-18T10:00:00Z");
+    send
+      .mockResolvedValueOnce({
+        Contents: [{ Key: "2026/10/b-photo.png", LastModified: time }],
+        IsTruncated: true,
+        NextContinuationToken: "next",
+      })
+      .mockResolvedValueOnce({
+        Contents: [{ Key: "2026/10/a-thumb_x.png", LastModified: time }],
+        IsTruncated: false,
+      });
+
+    const listed = [];
+    for await (const entry of adapter.list()) listed.push(entry);
+
+    expect(listed).toEqual([
+      { path: "2026/10/b-photo.png", lastModified: time },
+      { path: "2026/10/a-thumb_x.png", lastModified: time },
+    ]);
+    expect(send).toHaveBeenCalledTimes(2);
   });
 });

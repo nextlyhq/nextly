@@ -44,6 +44,7 @@ import {
   revalidateMedia,
   withMediaRevalidationBatch,
 } from "../domains/media/revalidate-media";
+import { storedFilesOf, variantPaths } from "../domains/media/stored-files";
 import type { RetentionRunner } from "../domains/retention/runner";
 import type { WebhookFastDrainScheduler } from "../domains/webhooks/after-drain";
 import { recordMutationEvent } from "../domains/webhooks/record-mutation-event";
@@ -97,23 +98,6 @@ type BulkDeleteOutcome = BulkOutcome<{
   success: boolean;
   error?: string;
 }>;
-
-/** A stored variant as the `sizes` column holds it, as far as removal reads it. */
-type StoredVariant = { path?: string; url?: string } | null | undefined;
-
-/** `sizes` as an object, from the column or its JSON-string form. */
-function parseSizes(sizes: unknown): Record<string, StoredVariant> | null {
-  if (typeof sizes === "string") {
-    try {
-      return JSON.parse(sizes) as Record<string, StoredVariant>;
-    } catch {
-      return null;
-    }
-  }
-  return sizes && typeof sizes === "object"
-    ? (sizes as Record<string, StoredVariant>)
-    : null;
-}
 
 /** A stored file that could not be removed, by its path, so it can be found. */
 function warnNotRemoved(
@@ -809,58 +793,8 @@ export class MediaService extends BaseService {
     return found;
   }
 
-  /**
-   * Every file stored for `media`: its original, every image size, and the
-   * thumbnail made at upload. The record holds only that thumbnail's URL, so
-   * its path is worked out from what the record holds about the original;
-   * a thumbnail that is one of the sizes is already among them. A thumbnail
-   * whose location the record does not show is returned apart, by its URL, so
-   * that nothing is removed in its place.
-   */
-  private storedFilesOf(media: Media): {
-    paths: string[];
-    unlocated: string[];
-  } {
-    const sizes = parseSizes(
-      (media as unknown as Record<string, unknown>).sizes
-    );
-    const paths = [media.filename, ...this.collectVariantPaths(sizes)];
-    const sizeUrls = new Set(
-      Object.values(sizes ?? {}).map(variant => variant?.url)
-    );
-    const unlocated: string[] = [];
-    if (media.thumbnailUrl && !sizeUrls.has(media.thumbnailUrl)) {
-      const thumbnail = siblingStoredPath(
-        { path: media.filename, url: media.url },
-        media.thumbnailUrl
-      );
-      if (thumbnail) paths.push(thumbnail);
-      else unlocated.push(media.thumbnailUrl);
-    }
-    return { paths: [...new Set(paths.filter(Boolean))], unlocated };
-  }
-
   private collectVariantPaths(sizes: unknown): string[] {
-    let parsed: unknown = sizes;
-    if (typeof sizes === "string") {
-      try {
-        parsed = JSON.parse(sizes);
-      } catch {
-        return [];
-      }
-    }
-    if (!parsed || typeof parsed !== "object") return [];
-    const paths: string[] = [];
-    for (const value of Object.values(parsed as Record<string, unknown>)) {
-      if (
-        value &&
-        typeof value === "object" &&
-        typeof (value as { path?: unknown }).path === "string"
-      ) {
-        paths.push((value as { path: string }).path);
-      }
-    }
-    return paths;
+    return variantPaths(sizes);
   }
 
   /**
@@ -1164,7 +1098,7 @@ export class MediaService extends BaseService {
       // removal already succeeded. Every stored file is removed on its own,
       // so one that fails leaves the others to go, and is named in the log
       // with its item, so the leftover can be found.
-      const { paths, unlocated } = this.storedFilesOf(mediaData);
+      const { paths, unlocated } = storedFilesOf(mediaData);
       for (const url of unlocated) warnUnlocated(url, mediaId);
       await Promise.all(
         paths.map(async filePath => {

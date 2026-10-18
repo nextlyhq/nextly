@@ -38,6 +38,7 @@ import type {
   UploadResult,
   BulkDeleteResult,
   StorageReadOptions,
+  StoredFileEntry,
 } from "../types";
 
 import { BaseStorageAdapter } from "./base-adapter";
@@ -216,6 +217,32 @@ export class LocalStorageAdapter extends BaseStorageAdapter {
       return true;
     } catch {
       return false;
+    }
+  }
+
+  /**
+   * Every file under the uploads folder, by its stored path (relative, with
+   * `/`), and when it was last written. The `.gitignore` the adapter writes
+   * there is its own, not a stored file.
+   */
+  async *list(): AsyncIterable<StoredFileEntry> {
+    const entries = await fs
+      .readdir(this.basePath, { recursive: true, withFileTypes: true })
+      .catch((error: NodeJS.ErrnoException) => {
+        // No uploads folder yet: nothing is stored.
+        if (error.code === "ENOENT") return [];
+        throw error;
+      });
+    for (const entry of entries) {
+      if (!entry.isFile()) continue;
+      const full = path.join(entry.parentPath, entry.name);
+      const relative = path
+        .relative(this.basePath, full)
+        .split(path.sep)
+        .join("/");
+      if (relative === ".gitignore") continue;
+      const { mtime } = await fs.stat(full);
+      yield { path: relative, lastModified: mtime };
     }
   }
 

@@ -27,9 +27,11 @@ vi.mock("nextly/storage/fetch-stored-bytes", async importOriginal => {
 });
 
 const getFileUrls = vi.fn();
+const listFiles = vi.fn();
 vi.mock("uploadthing/server", () => ({
   UTApi: class {
     getFileUrls = getFileUrls;
+    listFiles = listFiles;
   },
 }));
 
@@ -155,5 +157,42 @@ describe("UploadthingStorageAdapter.read", () => {
     expect(vi.mocked(fetchStoredBytes).mock.calls[0]?.[3]).toMatchObject({
       maxBytes: 4242,
     });
+  });
+});
+
+// Searching the app for left-behind files reads every page of it. Its keys
+// carry no name, so each file keeps the name it was uploaded under; a file
+// not fully uploaded is not a stored one.
+describe("UploadthingStorageAdapter — list", () => {
+  it("names every uploaded file on every page, by key, name and time", async () => {
+    const at = Date.parse("2026-10-18T10:00:00Z");
+    const file = (key: string, name: string, status = "Uploaded") => ({
+      key,
+      name,
+      status,
+      uploadedAt: at,
+      size: 1,
+      customId: null,
+      id: key,
+    });
+    listFiles
+      .mockResolvedValueOnce({
+        files: [file("k3", "photo.png"), file("k2", "y.png", "Uploading")],
+        hasMore: true,
+      })
+      .mockResolvedValueOnce({
+        files: [file("k1", "thumb_x.png")],
+        hasMore: false,
+      });
+
+    const listed = [];
+    for await (const entry of adapter.list()) listed.push(entry);
+
+    expect(listed).toEqual([
+      { path: "k3", name: "photo.png", lastModified: new Date(at) },
+      { path: "k1", name: "thumb_x.png", lastModified: new Date(at) },
+    ]);
+    expect(listFiles.mock.calls[1]?.[0]).toMatchObject({ offset: 500 });
+    listFiles.mockReset();
   });
 });

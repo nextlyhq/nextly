@@ -314,3 +314,30 @@ describe("the upload-time thumbnail a regeneration replaces", () => {
     expect(deleteSpy).not.toHaveBeenCalledWith(LEGACY_THUMB);
   });
 });
+
+describe("a superseded file a regeneration cannot remove", () => {
+  beforeEach(() => {
+    deleteSpy.mockReset();
+    deleteSpy.mockImplementation(async () => {});
+    calls.length = 0;
+    regen.thumbPath = NEW_PATH;
+  });
+
+  it("is named, with its item, and the change still succeeds", async () => {
+    deleteSpy.mockImplementation(async (path: string) => {
+      if (path === OLD_PATH) throw new Error("storage is unavailable");
+    });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const service = makeService("commit");
+    const res = await service.updateMedia("m1", { focalX: 0.5 });
+
+    expect(res.success).toBe(true);
+    const said = warn.mock.calls
+      .map(args => args.map(String).join(" "))
+      .join("\n");
+    expect(said).toContain(OLD_PATH);
+    expect(said).toContain("m1");
+    warn.mockRestore();
+  });
+});

@@ -3,14 +3,15 @@
  *
  * An upload stores the original, a thumbnail and each configured image size,
  * each under a key of its own: on local disk and S3 `YYYY/MM/<uuid>-<name>`,
- * on Vercel Blob a URL with a random suffix, which is also the blob's path.
+ * on Vercel Blob a URL with a random suffix, which is also the blob's path,
+ * and on UploadThing a random file key, served at `.../f/<key>`.
  * The record keeps the original's path and URL and each size's path, but
  * only the thumbnail's URL, so a delete that took the thumbnail's name from
  * the end of its URL removed a file that does not exist, and the thumbnail
  * stayed publicly served. Each case uploads through the real service with
  * real image processing, deletes, and looks in the storage itself: a real
- * folder for local disk, and for S3 and Vercel Blob a stand-in that stores
- * and names files exactly as those adapters do.
+ * folder for local disk, and for S3, Vercel Blob and UploadThing a stand-in
+ * that stores and names files exactly as those adapters do.
  */
 import { randomUUID } from "node:crypto";
 import { mkdtemp, readdir, rm } from "node:fs/promises";
@@ -29,7 +30,8 @@ import {
 import type { IStorageAdapter, UploadOptions } from "../../storage/types";
 import { MediaService } from "../media";
 
-// One configured size, besides the thumbnail every image gets at upload.
+// Two configured sizes, besides the thumbnail every image gets at upload, so
+// a delete that removed only one would show.
 vi.mock("../image-size", () => ({
   ImageSizeService: class {
     async getActiveSizeConfigs() {
@@ -42,22 +44,35 @@ vi.mock("../image-size", () => ({
           quality: 80,
           format: "webp",
         },
+        {
+          name: "medium",
+          width: 8,
+          height: 8,
+          fit: "cover",
+          quality: 80,
+          format: "webp",
+        },
       ];
     }
   },
 }));
 
 /**
- * Stores files in memory, keyed and addressed as the S3 or Vercel Blob
- * adapter keys and addresses them.
+ * Stores files in memory, keyed and addressed as the S3, Vercel Blob or
+ * UploadThing adapter keys and addresses them.
  */
 class Bucket implements IStorageAdapter {
   readonly files = new Map<string, Buffer>();
-  constructor(private readonly scheme: "s3" | "vercel-blob") {}
+  constructor(private readonly scheme: "s3" | "vercel-blob" | "uploadthing") {}
 
   async upload(buffer: Buffer, options: UploadOptions) {
     if (this.scheme === "s3") {
       const key = `2026/10/${randomUUID()}-${options.filename}`;
+      this.files.set(key, buffer);
+      return { url: this.getPublicUrl(key), path: key };
+    }
+    if (this.scheme === "uploadthing") {
+      const key = randomUUID().replace(/-/g, "");
       this.files.set(key, buffer);
       return { url: this.getPublicUrl(key), path: key };
     }
@@ -74,9 +89,11 @@ class Bucket implements IStorageAdapter {
     return this.files.has(filePath);
   }
   getPublicUrl(filePath: string) {
-    return this.scheme === "s3"
-      ? `https://bucket.s3.eu-west-1.amazonaws.com/${filePath}`
-      : filePath;
+    if (this.scheme === "s3") {
+      return `https://bucket.s3.eu-west-1.amazonaws.com/${filePath}`;
+    }
+    if (this.scheme === "uploadthing") return `https://utfs.io/f/${filePath}`;
+    return filePath;
   }
   getType() {
     return this.scheme;
@@ -146,9 +163,9 @@ describe("deleting a media item", () => {
     onLocalDisk();
     const id = await uploadPhoto();
     const stored = await onDisk();
-    // The original, its thumbnail and its one size, each in a date folder:
+    // The original, its thumbnail and its two sizes, each in a date folder:
     // without the folders the case would not reach the defect.
-    expect(stored).toHaveLength(3);
+    expect(stored).toHaveLength(4);
     expect(stored.every(file => /^\d{4}\/\d{2}\//.test(file))).toBe(true);
     expect(stored.some(file => file.includes("-thumb_"))).toBe(true);
 
@@ -158,7 +175,7 @@ describe("deleting a media item", () => {
     expect(await onDisk()).toEqual([]);
   });
 
-  it.each(["s3", "vercel-blob"] as const)(
+  it.each(["s3", "vercel-blob", "uploadthing"] as const)(
     "leaves nothing of it on %s",
     async scheme => {
       const bucket = new Bucket(scheme);
@@ -173,7 +190,7 @@ describe("deleting a media item", () => {
         ],
       });
       const id = await uploadPhoto();
-      expect(bucket.files.size).toBe(3);
+      expect(bucket.files.size).toBe(4);
 
       const result = await service.deleteMedia(id);
 
@@ -187,7 +204,7 @@ describe("deleting a media item", () => {
   it("leaves nothing of the items deleted in bulk", async () => {
     onLocalDisk();
     const ids = [await uploadPhoto(), await uploadPhoto()];
-    expect(await onDisk()).toHaveLength(6);
+    expect(await onDisk()).toHaveLength(8);
 
     await service.deleteMediaBulk(ids);
 
@@ -271,5 +288,36 @@ describe("a file the delete cannot remove", () => {
       .join("\n");
     expect(said).toContain(thumbnailUrl);
     expect(said).toContain("media-1");
+  });
+});
+
+describe("a delete that does not commit", () => {
+  it("leaves every file of the item stored", async () => {
+    onLocalDisk();
+    const id = await uploadPhoto();
+    const before = await onDisk();
+    vi.spyOn(db.adapter, "transaction").mockRejectedValueOnce(
+      new Error("the database is unavailable")
+    );
+
+    const result = await service.deleteMedia(id);
+
+    expect(result.success).toBe(false);
+    expect(await onDisk()).toEqual(before);
+  });
+});
+
+describe("a bulk delete that does not commit", () => {
+  it("leaves every file of every item stored", async () => {
+    onLocalDisk();
+    const ids = [await uploadPhoto(), await uploadPhoto()];
+    const before = await onDisk();
+    vi.spyOn(db.adapter, "transaction").mockRejectedValue(
+      new Error("the database is unavailable")
+    );
+
+    await service.deleteMediaBulk(ids);
+
+    expect(await onDisk()).toEqual(before);
   });
 });

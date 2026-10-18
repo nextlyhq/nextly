@@ -21,6 +21,7 @@ import type {
   UploadResult,
   BulkDeleteResult,
   StorageReadOptions,
+  StoredFileEntry,
 } from "nextly/storage";
 import {
   fetchStoredBytes,
@@ -215,6 +216,27 @@ export class UploadthingStorageAdapter extends BaseStorageAdapter {
    * Uploadthing files are served from utfs.io CDN.
    * The URL is stored at upload time, so this reconstructs it from the key.
    */
+  /**
+   * Every uploaded file in the app, by its key, with the name it was uploaded
+   * under and when, a page at a time. A file still uploading, failed, or
+   * pending deletion is not a stored file.
+   */
+  async *list(): AsyncIterable<StoredFileEntry> {
+    const limit = 500;
+    for (let offset = 0; ; offset += limit) {
+      const page = await this.utapi.listFiles({ limit, offset });
+      for (const file of page.files) {
+        if (file.status !== "Uploaded") continue;
+        yield {
+          path: file.key,
+          name: file.name,
+          lastModified: new Date(file.uploadedAt),
+        };
+      }
+      if (!page.hasMore) return;
+    }
+  }
+
   getPublicUrl(filePath: string): string {
     // Uploadthing URLs follow the pattern: https://utfs.io/f/{fileKey}
     return `https://utfs.io/f/${filePath}`;

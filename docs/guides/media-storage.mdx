@@ -511,6 +511,26 @@ so read the crop point from the media row until it does.
 |----------------------|-----------------------------------|
 | `UPLOADTHING_TOKEN`  | Uploadthing v7+ API token.        |
 
+## Deleting media, and thumbnails left behind
+
+Deleting a media item, singly or in bulk, removes every file stored for it: the original, the thumbnail made at upload, and every named image size. A file the storage refuses to remove is logged with its path and the item, so it can be found.
+
+Releases up to and including `0.0.2-alpha.66` left the thumbnail behind when an item was deleted. On local disk that file stays under `public/uploads`, and on a public S3 bucket, Vercel Blob store or UploadThing app it stays publicly reachable. To find those thumbnails, run:
+
+```bash
+npx nextly media orphans
+```
+
+It lists the upload-time thumbnails no media item refers to, and changes nothing. To remove them, run it again with `--apply`; it names each file it removed, and each it could not.
+
+What it looks at:
+
+- Only files where media uploads put a thumbnail, in the form they give it: under the media collection's `prefix`, if you set one. Another collection's files and any other folder are never touched. On UploadThing, which keeps no folders, a file is judged by the name it was uploaded under. If your UploadThing app also stores files from something other than Nextly, check the dry run before you apply.
+- Only thumbnails stored more than an hour ago. A newer one may belong to an upload still in progress.
+- Only the storage the media collection uses now. If you moved to another adapter, bucket or folder, point the media storage at the old one and run it there to clean that up.
+
+A storage adapter that cannot list its files is reported as such, and nothing is changed.
+
 ## Migrating between adapters
 
 When switching adapters (e.g. local disk -> S3 for production):
