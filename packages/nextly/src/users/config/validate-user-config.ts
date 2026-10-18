@@ -49,6 +49,7 @@ export type UserValidationErrorCode =
   | "USER_FIELD_HAS_MANY_UNSUPPORTED"
   | "USER_FIELD_VIRTUAL_UNSUPPORTED"
   | "USER_FIELD_PLUGIN_OPTION_RESERVED"
+  | "USER_FIELD_UNIQUE_UNSUPPORTED"
   // Field name errors
   | "USER_FIELD_NAME_REQUIRED"
   | "USER_FIELD_NAME_INVALID_FORMAT"
@@ -203,6 +204,30 @@ const USER_EXT_OWN_COLUMNS: ReadonlySet<string> = new Set([
   "created_at",
   "updated_at",
 ]);
+
+/**
+ * Why a field's `unique` cannot be honoured, or null when it can (or is off).
+ *
+ * A textarea is TEXT on MySQL and a multi-value select is JSON, and neither
+ * takes a plain unique index on every dialect. One rule everywhere, rather
+ * than a field that works on SQLite and stops `nextly migrate` elsewhere.
+ * The table's statements ask the same question, for definitions stored before
+ * validation refused it.
+ */
+export function userFieldUniqueRejection(field: {
+  type?: unknown;
+  hasMany?: unknown;
+  unique?: unknown;
+}): string | null {
+  if (field.unique !== true) return null;
+  if (field.type === "textarea") {
+    return "A textarea field cannot be unique: its column cannot carry a unique index on every database. Use a text field with a maxLength.";
+  }
+  if (field.type === "select" && field.hasMany === true) {
+    return "A select field holding several values cannot be unique: its values are stored together, in one JSON column.";
+  }
+  return null;
+}
 
 /**
  * Decide whether a single name may be used for a custom user field.
@@ -439,6 +464,14 @@ function validateUserFields(
 
     validateUserFieldType(f, fieldPath, errors, configUsersTypes);
     validateUserFieldName(f.name, fieldPath, errors, seenNames);
+    const uniqueRejection = userFieldUniqueRejection(f);
+    if (uniqueRejection) {
+      errors.push({
+        path: `${fieldPath}.unique`,
+        message: uniqueRejection,
+        code: "USER_FIELD_UNIQUE_UNSUPPORTED",
+      });
+    }
 
     // Both routes a plugin type reaches this validator by: registered in the
     // live registry, and declared by a config whose plugins have not been

@@ -20,7 +20,9 @@
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { text } from "../../../collections/fields/helpers";
+import { text, textarea } from "../../../collections/fields/helpers";
+import { UserFieldDefinitionService } from "../../../domains/users/services/user-field-definition-service";
+import { describeError } from "../../../errors/describe-error";
 import {
   createTestNextly,
   getConfiguredTestDialects,
@@ -143,6 +145,39 @@ describe.each(getConfiguredTestDialects())(
 
       expect(await hasColumn("employee_id")).toBe(true);
       expect(await indexNames()).toContain("uq_user_ext_employee_id");
+    });
+
+    it("fails, naming both, when an admin field and a code field share a column", async () => {
+      await new UserFieldDefinitionService(handle.adapter, logger).createField({
+        name: "foo_bar",
+        label: "Foo bar",
+        type: "text",
+      });
+
+      const error = await provisionUserFieldTables(
+        { fields: [text({ name: "fooBar" })] },
+        handle.adapter,
+        logger
+      ).catch((e: unknown) => e);
+
+      // What `nextly migrate` prints for it names both fields and the column.
+      expect(error).toBeInstanceOf(Error);
+      const printed = describeError(error);
+      expect(printed).toContain("foo_bar");
+      expect(printed).toContain("fooBar");
+    });
+
+    it("leaves out the unique index of a field whose column cannot carry one", async () => {
+      // Validation refuses this now; a definition stored before that still
+      // reaches the table, and must not stop migrate on every dialect.
+      await provisionUserFieldTables(
+        { fields: [textarea({ name: "about", unique: true })] },
+        handle.adapter,
+        logger
+      );
+
+      expect(await hasColumn("about")).toBe(true);
+      expect(await indexNames()).not.toContain("uq_user_ext_about");
     });
 
     it("fails, rather than reporting storage ready, when a statement fails", async () => {

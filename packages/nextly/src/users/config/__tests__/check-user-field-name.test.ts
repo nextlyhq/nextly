@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { text } from "../../../collections/fields/helpers";
+import { select, text, textarea } from "../../../collections/fields/helpers";
 import {
   checkUserFieldName,
   checkUserFieldType,
@@ -75,6 +75,36 @@ describe("userFieldColumnName", () => {
     expect(userFieldColumnName("employeeId")).toBe("employee_id");
     expect(userFieldColumnName("bio")).toBe("bio");
     expect(userFieldColumnName("foo_bar")).toBe("foo_bar");
+  });
+});
+
+describe("validateUserConfig: unique only where a column can carry it", () => {
+  it.each([
+    ["a textarea", textarea({ name: "about", unique: true })],
+    [
+      "a multi-value select",
+      select({
+        name: "tags",
+        hasMany: true,
+        unique: true,
+        options: [{ label: "A", value: "a" }],
+      }),
+    ],
+  ])("refuses unique on %s", (_label, field) => {
+    const result = validateUserConfig({ fields: [field] });
+
+    expect(result.errors.map(e => e.code)).toContain(
+      "USER_FIELD_UNIQUE_UNSUPPORTED"
+    );
+    expect(result.errors[0].path).toBe("fields[0].unique");
+  });
+
+  it("accepts unique on a text field", () => {
+    const result = validateUserConfig({
+      fields: [text({ name: "employeeId", unique: true })],
+    });
+
+    expect(result.errors).toEqual([]);
   });
 });
 

@@ -78,6 +78,7 @@ import {
   isDataField,
 } from "../../../collections/fields/guards";
 import type { DataFieldConfig } from "../../../collections/fields/types";
+import { NextlyError } from "../../../errors";
 import { env } from "../../../lib/env";
 import type { UserFieldDefinitionRecord } from "../../../schemas/user-field-definitions/types";
 import type { Logger } from "../../../services/shared";
@@ -89,6 +90,7 @@ import type {
 import {
   checkUserFieldName,
   userFieldColumnName,
+  userFieldUniqueRejection,
 } from "../../../users/config/validate-user-config";
 import {
   getFieldType,
@@ -231,6 +233,17 @@ export class UserExtSchemaService {
   /** Cached merged fields from both code and UI sources */
   private mergedFields: UserFieldConfig[] | null = null;
 
+  /**
+   * Fields the last merge left out because another field is stored in their
+   * column. The boot carries on without them; `nextly migrate` refuses, so it
+   * never reports storage ready for a configured field that has none.
+   */
+  private columnCollisions: Array<{
+    field: string;
+    column: string;
+    heldBy: string;
+  }> = [];
+
   constructor(
     dialect?: SupportedDialect,
     fieldDefService?: UserFieldDefinitionService,
@@ -268,7 +281,8 @@ export class UserExtSchemaService {
     // it here keeps it out of the column list, the select and both schemas at
     // once. The row is left alone so the name can be recovered by hand.
     const usable: UserFieldConfig[] = [];
-    const columns = new Set<string>();
+    const columns = new Map<string, string>();
+    this.columnCollisions = [];
     for (const record of records) {
       const rejection = checkUserFieldName(record.name);
       if (rejection) {
@@ -280,16 +294,19 @@ export class UserExtSchemaService {
       }
       // A code field and an admin field can each pass on their own and still
       // be stored in one column (`fooBar`, `foo_bar`). The first keeps it;
-      // the other is left out rather than break the table's statements.
+      // the other is left out rather than break the table's statements, and is
+      // recorded so a strict run can refuse instead.
       const column = userFieldColumnName(record.name);
-      if (columns.has(column)) {
+      const heldBy = columns.get(column);
+      if (heldBy !== undefined) {
         this.logger?.warn(
           "[UserExtSchemaService] Ignoring user field stored in a column another field already uses",
-          { name: record.name, column }
+          { name: record.name, column, heldBy }
         );
+        this.columnCollisions.push({ field: record.name, column, heldBy });
         continue;
       }
-      columns.add(column);
+      columns.set(column, record.name);
       usable.push(this.convertRecordToFieldConfig(record));
     }
 
@@ -325,6 +342,16 @@ export class UserExtSchemaService {
     options: { strict?: boolean } = {}
   ): Promise<void> {
     const strict = options.strict === true;
+    if (strict && this.columnCollisions.length > 0) {
+      throw NextlyError.validation({
+        errors: this.columnCollisions.map(c => ({
+          path: "users.fields",
+          code: "USER_FIELD_NAME_DUPLICATE",
+          message: `Field '${c.field}' would be stored in the column '${c.column}', which the field '${c.heldBy}' already uses`,
+        })),
+        logContext: { collisions: this.columnCollisions },
+      });
+    }
     const fields = this.getMergedFieldConfigs();
     if (fields.length === 0) return;
 
@@ -649,6 +676,20 @@ export class UserExtSchemaService {
       if (!this.isUserDataField(field)) continue;
       if (!("name" in field) || !field.name) continue;
       if (!("unique" in field && field.unique)) continue;
+      // A column that cannot carry a unique index on every dialect (a
+      // textarea, a JSON column): validation refuses `unique` there now, and
+      // a definition stored before is left without the index rather than stop
+      // the table being made.
+      if (
+        userFieldUniqueRejection(field) ||
+        /json/i.test(this.getColumnType(field) ?? "")
+      ) {
+        this.logger?.warn(
+          "[UserExtSchemaService] Leaving out a unique index its column cannot carry",
+          { name: field.name, type: field.type }
+        );
+        continue;
+      }
 
       const columnName = this.toSnakeCase(field.name);
       const indexName = `uq_${TABLE_NAME}_${columnName}`;
