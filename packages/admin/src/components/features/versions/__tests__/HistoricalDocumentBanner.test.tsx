@@ -50,6 +50,27 @@ describe("HistoricalDocumentBanner", () => {
     expect(onReturnToCurrent).toHaveBeenCalled();
   });
 
+  it("leads back to the history list only where the list stepped aside", async () => {
+    const onBackToHistory = vi.fn();
+    const { rerender } = render(
+      <HistoricalDocumentBanner versionNo={7} onReturnToCurrent={vi.fn()} />
+    );
+    // Beside the document the list is still on screen: no second way to it.
+    expect(
+      screen.queryByRole("button", { name: /^history$/i })
+    ).not.toBeInTheDocument();
+
+    rerender(
+      <HistoricalDocumentBanner
+        versionNo={7}
+        onReturnToCurrent={vi.fn()}
+        onBackToHistory={onBackToHistory}
+      />
+    );
+    await userEvent.click(screen.getByRole("button", { name: /^history$/i }));
+    expect(onBackToHistory).toHaveBeenCalled();
+  });
+
   it("offers restoring only when a handler is supplied", () => {
     const { unmount } = render(
       <HistoricalDocumentBanner versionNo={7} onReturnToCurrent={vi.fn()} />

@@ -8,7 +8,7 @@ import type { FieldConfig } from "nextly/config";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 import { answerMediaQueries } from "@admin/__tests__/helpers/media-query";
-import { render, screen, waitFor, within } from "@admin/__tests__/utils";
+import { act, render, screen, waitFor, within } from "@admin/__tests__/utils";
 
 const {
   useVersionsMock,
@@ -302,6 +302,9 @@ describe("VersionHistorySheet", () => {
     );
     useVersionMock.mockReturnValue(detailState({ data: { snapshot: {} } }));
 
+    // Beside the document, where the panel keeps its controls on screen
+    // while a version is read.
+    answerMediaQueries(true);
     renderSheet();
     await userEvent.click(screen.getByRole("button", { name: /Version 2/ }));
 
@@ -367,6 +370,9 @@ describe("VersionHistorySheet", () => {
     );
     useVersionMock.mockReturnValue(detailState({ data: { snapshot: {} } }));
 
+    // Beside the document, where the panel keeps its controls on screen
+    // while a version is read.
+    answerMediaQueries(true);
     renderSheet();
     await userEvent.click(screen.getByRole("button", { name: /Version 3/ }));
 
@@ -416,6 +422,9 @@ describe("VersionHistorySheet", () => {
     );
     useVersionMock.mockReturnValue(detailState({ data: { snapshot: {} } }));
 
+    // Beside the document, where the panel keeps its controls on screen
+    // while a version is read.
+    answerMediaQueries(true);
     renderSheet();
     await userEvent.click(screen.getByRole("button", { name: /Version 3/ }));
 
@@ -699,7 +708,7 @@ describe("VersionHistorySheet — renaming", () => {
 });
 
 describe("VersionHistorySheet — what it publishes to the document", () => {
-  function renderWithDocument(canRestore = true) {
+  function renderWithDocument(canRestore = true, onOpenChange = vi.fn()) {
     const setViewing = vi.fn();
     const setRestore = vi.fn();
     render(
@@ -708,13 +717,17 @@ describe("VersionHistorySheet — what it publishes to the document", () => {
       >
         <VersionHistorySheet
           open
-          onOpenChange={vi.fn()}
+          onOpenChange={onOpenChange}
           scope={scope}
           canRestore={canRestore}
         />
       </DocumentHistoryContext.Provider>
     );
-    return { setViewing, setRestore };
+    const published = () =>
+      setRestore.mock.calls.at(-1)?.[0] as
+        | { returnToCurrent: () => void; backToHistory?: () => void }
+        | undefined;
+    return { setViewing, setRestore, published };
   }
 
   beforeEach(() => {
@@ -740,6 +753,8 @@ describe("VersionHistorySheet — what it publishes to the document", () => {
   });
 
   it("returns to the live document THROUGH the panel, clearing its own row", async () => {
+    // Beside the document, where the list stays on screen to be read.
+    answerMediaQueries(true);
     const { setRestore } = renderWithDocument();
     await userEvent.click(screen.getByRole("button", { name: /Version 3/ }));
 
@@ -778,6 +793,8 @@ describe("VersionHistorySheet — what it publishes to the document", () => {
   });
 
   it("keeps the close control beside the title once a version is selected", async () => {
+    // Beside the document, where the panel stays open on a chosen version.
+    answerMediaQueries(true);
     useVersionsMock.mockReturnValue(
       listState({
         data: {
@@ -800,5 +817,54 @@ describe("VersionHistorySheet — what it publishes to the document", () => {
     expect(within(titleRow()).getByRole("button", { name: /close/i })).toBe(
       closes[0]
     );
+  });
+
+  it("beside the document, keeps its heading and the whole list, and needs no way back to it", async () => {
+    answerMediaQueries(true);
+    const { published } = renderWithDocument();
+    await userEvent.click(screen.getByRole("button", { name: /Version 3/ }));
+
+    await waitFor(() => expect(published()).toBeDefined());
+    expect(
+      screen.getByRole("heading", { name: "History" })
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Version 3/ })).toHaveAttribute(
+      "aria-current",
+      "true"
+    );
+    expect(published()?.backToHistory).toBeUndefined();
+  });
+
+  it("without room beside the document, steps its page aside for a version and leads back to the list", async () => {
+    // Too narrow for the panel beside the document: it is a page over it.
+    answerMediaQueries(false);
+    const { published } = renderWithDocument();
+    await userEvent.click(screen.getByRole("button", { name: /Version 3/ }));
+
+    // The version is read in the document, so the page over it steps aside.
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
+    );
+    const backToHistory = published()?.backToHistory;
+    expect(backToHistory).toBeTypeOf("function");
+
+    // Back to the list: the page returns, no version chosen.
+    act(() => backToHistory?.());
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: /Version 3/ })
+    ).not.toHaveAttribute("aria-current", "true");
+  });
+
+  it("without room beside the document, reaches the live document by leaving history", async () => {
+    answerMediaQueries(false);
+    const onOpenChange = vi.fn();
+    const { published } = renderWithDocument(true, onOpenChange);
+    await userEvent.click(screen.getByRole("button", { name: /Version 3/ }));
+    await waitFor(() => expect(published()).toBeDefined());
+
+    // Clearing only the version would bring the page back over the document.
+    act(() => published()?.returnToCurrent());
+    expect(onOpenChange).toHaveBeenCalledWith(false);
   });
 });

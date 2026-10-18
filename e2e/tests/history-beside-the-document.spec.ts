@@ -96,4 +96,27 @@ test.describe("history beside the document", () => {
       Math.abs((await page.evaluate(() => window.scrollY)) - before)
     ).toBeLessThanOrEqual(4);
   });
+
+  test("on a phone, reads a version with the page stepped aside, and comes back to the list", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await savedPost(page);
+    await page.getByRole("button", { name: "More actions" }).click();
+    await page.getByRole("menuitem", { name: "History", exact: true }).click();
+    await expect(panel(page)).toBeVisible({ timeout: 30_000 });
+
+    await panel(page)
+      .getByRole("button", { name: /Version 1/ })
+      .click();
+    // Read in the document itself: the page over it steps aside.
+    await expect(panel(page)).toBeHidden();
+    const banner = page.getByRole("status").filter({ hasText: "past version" });
+    await expect(banner).toBeVisible({ timeout: 30_000 });
+    expect(new URL(page.url()).searchParams.get("version")).toBe("1");
+
+    await banner.getByRole("button", { name: "History", exact: true }).click();
+    await expect(panel(page)).toBeVisible();
+    expect(new URL(page.url()).searchParams.get("version")).toBeNull();
+  });
 });

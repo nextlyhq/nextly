@@ -318,6 +318,7 @@ export function ViewedVersionBanner({
       // with the shared state. The direct fallback keeps the banner working
       // without a panel.
       onReturnToCurrent={restore?.returnToCurrent ?? (() => setViewing(null))}
+      onBackToHistory={restore?.backToHistory}
       // Offered only when the panel says this caller may write.
       onRestore={
         restore?.canRestore && !actionsDisabled ? restore.request : undefined

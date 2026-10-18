@@ -281,23 +281,60 @@ export function VersionHistorySheet({
     return () => setViewing(null);
   }, [open, setViewing]);
 
+  /*
+   * Whether the window can hold this panel BESIDE the document rather than over
+   * it. Asked of the window, because the panel is `position: fixed` and so is
+   * measured against the window rather than against whatever contains it.
+   *
+   * Read on every render of the header, not on open: `useMediaQuery` answers
+   * `false` until its effect runs, and deciding at the moment of opening would
+   * mount the panel modal and switch it a frame later — engaging a focus trap
+   * and then releasing it.
+   */
+  const roomBeside = useMediaQuery(`(min-width: ${PANEL_MIN_WINDOW}px)`);
+  const wide = useMediaQuery(`(min-width: ${PANEL_WIDE_WINDOW}px)`);
+  const panelWidth = wide ? PANEL_WIDTH : PANEL_NARROW_WIDTH;
+  // Without room beside the document the panel is a page over it, so a chosen
+  // version is read with that page stepped aside, and the banner leads back.
+  const steppedAside = open && !roomBeside && selected !== null;
+
   // Restoring is offered from the banner in the document, which is where the
   // reader is looking — but it stays THIS component's mutation, guarded by
   // this component's confirmation. Only the trigger travels.
   const requestRestore = useCallback(() => setConfirmingRestore(true), []);
   // Clears this panel's own selection as well as the shared one, so the list
   // stops marking a row active for a version that is no longer on screen.
-  const returnToCurrent = useCallback(() => setSelected(null), [setSelected]);
+  // Where the panel is a page, the live document is reached by leaving history
+  // altogether: clearing the version alone would bring the page back over it.
+  const returnToCurrent = useCallback(
+    () => (roomBeside ? setSelected(null) : onOpenChange(false)),
+    [roomBeside, setSelected, onOpenChange]
+  );
+  const backToHistory = useCallback(() => setSelected(null), [setSelected]);
   useEffect(() => {
     if (!open || selected === null) {
       setRestore(null);
       return;
     }
-    setRestore({ canRestore, request: requestRestore, returnToCurrent });
+    setRestore({
+      canRestore,
+      request: requestRestore,
+      returnToCurrent,
+      ...(roomBeside ? {} : { backToHistory }),
+    });
     // Withdrawn on unmount as well as on close: a banner left holding a
     // trigger into an unmounted panel would open a dialog nothing renders.
     return () => setRestore(null);
-  }, [open, selected, canRestore, requestRestore, returnToCurrent, setRestore]);
+  }, [
+    open,
+    selected,
+    canRestore,
+    requestRestore,
+    returnToCurrent,
+    backToHistory,
+    roomBeside,
+    setRestore,
+  ]);
 
   const restore = useRestoreVersion({
     scope,
@@ -449,20 +486,6 @@ export function VersionHistorySheet({
   const isEmpty = !list.isLoading && !list.isError && versions.length === 0;
 
   /*
-   * Whether the window can hold this panel BESIDE the document rather than over
-   * it. Asked of the window, because the panel is `position: fixed` and so is
-   * measured against the window rather than against whatever contains it.
-   *
-   * Read on every render of the header, not on open: `useMediaQuery` answers
-   * `false` until its effect runs, and deciding at the moment of opening would
-   * mount the panel modal and switch it a frame later — engaging a focus trap
-   * and then releasing it.
-   */
-  const roomBeside = useMediaQuery(`(min-width: ${PANEL_MIN_WINDOW}px)`);
-  const wide = useMediaQuery(`(min-width: ${PANEL_WIDE_WINDOW}px)`);
-  const panelWidth = wide ? PANEL_WIDTH : PANEL_NARROW_WIDTH;
-
-  /*
    * The claim, and the ONE fact both behaviours below are derived from. A panel
    * that is reserved is beside the document, so the document stays live and
    * only the explicit controls close it; a panel that is not is over the
@@ -484,7 +507,11 @@ export function VersionHistorySheet({
     // clicks it is swallowing instead of accepting them into nothing.
     <>
       {open && roomBeside && !wide ? <FoldContentSidebar /> : null}
-      <Sheet open={open} onOpenChange={onOpenChange} modal={!roomBeside}>
+      <Sheet
+        open={open && !steppedAside}
+        onOpenChange={onOpenChange}
+        modal={!roomBeside}
+      >
         <SheetContent
           side="right"
           className="p-0 flex flex-col"
@@ -509,9 +536,9 @@ export function VersionHistorySheet({
         >
           <SheetHeader className="p-4 border-b border-border">
             <div className="flex items-center justify-between gap-2">
-              <SheetTitle>
-                {selected === null ? "History" : `Version ${selected}`}
-              </SheetTitle>
+              {/* The list stays whole with the chosen row marked, so the panel
+                is History whichever version is on screen. */}
+              <SheetTitle>History</SheetTitle>
               {/* Locale filter, only while browsing the list (a chosen version is
                 already locale-fixed) and only for a document whose own history
                 carries locales — so it never appears on a non-localized

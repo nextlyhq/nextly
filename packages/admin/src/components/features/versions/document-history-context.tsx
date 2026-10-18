@@ -54,6 +54,12 @@ export interface RestoreAffordance {
    * compare still aimed at it, and clicking that row again a no-op.
    */
   returnToCurrent: () => void;
+  /**
+   * Shows the history list again. Offered only where the panel is a page over
+   * the document and so steps aside while a version is read; beside the
+   * document the list never left the screen.
+   */
+  backToHistory?: () => void;
 }
 
 export interface DocumentHistoryValue {

@@ -37,6 +37,10 @@ stays as it was, unsaved words and place on the page included. Whether
 history is open, and the version chosen in it, are kept in the page's
 address (`?history=1&version=N`), so a reload or a shared link opens the same
 version and back closes the panel; neither counts as leaving the document.
+The list stays whole with the chosen version marked, under the heading
+History. On a phone, choosing a version steps the page aside so the version
+is read in the document, and the banner's History button leads back to the
+list.
 Showing a version marks it seen for the signed-in person, once each time it
 is shown, which is what a comparison since they last looked starts from;
 the history list marks nothing. The compare dialog is gone: a comparison is
