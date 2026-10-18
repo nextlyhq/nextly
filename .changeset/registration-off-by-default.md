@@ -47,5 +47,13 @@ role-less account registered first no longer blocks it. Two accounts
 provisioned at once on an empty install leave exactly one administrator, on
 every database; before, both could become Super Admin.
 
+**Setup stays open until someone holds the Super Admin role**, rather than
+closing at the first account, so the owner can still create the administrator
+after a stranger has registered. An install that has accounts but where nobody
+holds Super Admin now reports setup as open: give one of its accounts the role
+before upgrading.
+
 Creating the Super Admin role from two requests at once no longer fails on
-MySQL with a duplicate.
+MySQL with a duplicate. On MySQL, creating it next to an existing role that
+already has the name "Super Admin" no longer turns that role into the
+administrator role; it is refused, as on PostgreSQL and SQLite.

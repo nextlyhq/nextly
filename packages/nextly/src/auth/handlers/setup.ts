@@ -99,9 +99,9 @@ export async function handleSetupStatus(
 ): Promise<Response> {
   try {
     const isSetup = await deps.hasAdministrator();
-    // Emit `{ isSetup, requiresInitialUser }` per spec §7.7. Both
-    // fields are derived from the user count: `isSetup` is true once a user
-    // exists, `requiresInitialUser` is the inverse so the admin client can
+    // Emit `{ isSetup, requiresInitialUser }` per spec §7.7. Both fields are
+    // derived from whether an administrator exists: `isSetup` is true once
+    // one does, `requiresInitialUser` is the inverse so the admin client can
     // drive the bootstrap-form redirect guard without reinterpreting the
     // same boolean. The pair also satisfies the section 5.1 "no Boolean-only
     // respondData payload" rule.
