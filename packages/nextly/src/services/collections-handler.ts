@@ -29,6 +29,7 @@ import type { ResolvedWebhookRetentionConfig } from "../domains/webhooks/retenti
 import type { RichTextOutputFormat } from "../lib/rich-text-html";
 import type { CacheRevalidator } from "../revalidation/types";
 import type { FieldDefinition } from "../schemas/dynamic-collections";
+import type { ValidationIssue } from "../shared/lib/entry-validation";
 import type { DatabaseInstance } from "../types/database-operations";
 
 import { CollectionFileManager } from "./collection-file-manager";
@@ -301,6 +302,47 @@ export class CollectionsHandler {
     authenticatedScope?: AuthenticatedScope;
   }): Promise<boolean> {
     return this.entryService.canUpdateEntry(params);
+  }
+
+  /**
+   * What a release's publish of this entry would be refused with by
+   * validation, judged without writing — on the instance that serves
+   * collection writes, so the judgement is the one the write would make.
+   *
+   * @experimental
+   */
+  async releasePublishIssues(params: {
+    collectionName: string;
+    entryIds: readonly string[];
+    user: UserContext;
+  }): Promise<Map<string, ValidationIssue[]>> {
+    return this.entryService.releasePublishIssues(params);
+  }
+
+  /**
+   * Whether a release's document-wide write of this collection would meet a
+   * translation table without its per-language status. See the mutation
+   * service.
+   *
+   * @experimental
+   */
+  async releaseCompanionLacksStatus(params: {
+    collectionName: string;
+  }): Promise<boolean> {
+    return this.entryService.releaseCompanionLacksStatus(params);
+  }
+
+  /**
+   * The languages whose unreleased work a release's document-wide write of
+   * these entries would be refused over.
+   *
+   * @experimental
+   */
+  async releaseHeldDraftLocales(params: {
+    collectionName: string;
+    entryIds: readonly string[];
+  }): Promise<Map<string, string[]>> {
+    return this.entryService.releaseHeldDraftLocales(params);
   }
 
   private resolveUserParam<

@@ -234,9 +234,10 @@ build any of it yourself:
 - It loads the document and holds its form state.
 - It holds the document's soft lock, and shows who else is editing.
 - It offers unsaved work recovered after a crash or a reload. Restoring it
-  replaces the form's values and mounts your view again, so a view that keeps
-  its own copy of the document, read when it mounts, starts from the restored
-  work.
+  unmounts your view, replaces the form's values, then mounts your view again.
+  A view that keeps its own copy of the document, read when it mounts, starts
+  from the restored work, and anything it writes into the form as it unmounts
+  is replaced by the restore.
 - It asks before the author leaves with unsaved changes.
 - It saves on the form's own shortcut, through the same actions as the edit form.
 

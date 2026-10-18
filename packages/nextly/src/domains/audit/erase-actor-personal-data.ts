@@ -58,6 +58,15 @@ export interface ErasableAuditTables {
     userAgent: Column;
     identityErasedAt: Column;
   };
+  /**
+   * The record of content events, which names each event's actor as they
+   * were called then and is kept while its subject exists.
+   */
+  contentEvents?: Table & {
+    actorKind: Column;
+    actorId: Column;
+    actorName: Column;
+  };
 }
 
 /**
@@ -89,7 +98,7 @@ export async function eraseActorPersonalData(
   erasedAt: Date,
   unstamped?: ReadonlySet<keyof ErasableAuditTables>
 ): Promise<void> {
-  const { activityLog, auditLog } = tables;
+  const { activityLog, auditLog, contentEvents } = tables;
   // Each surface is erased only when the caller supplied it. A database can
   // carry one table and not the other, and the caller decides that per table so
   // a missing one cannot suppress the erasure of the one that is present.
@@ -197,6 +206,23 @@ export async function eraseActorPersonalData(
             eq(auditLog.targetUserId, userId)
           ),
           isNotNull(auditLog.metadata)
+        )
+      );
+  }
+
+  // A content event keeps who did it, and the name they had, for as long as
+  // its subject exists. The account's id stays as the opaque reference that
+  // tells one actor from another, as it does on the trails above; the name
+  // that identifies the person goes.
+  if (contentEvents) {
+    await db
+      .update(contentEvents)
+      .set({ actorName: null })
+      .where(
+        and(
+          eq(contentEvents.actorKind, "person"),
+          eq(contentEvents.actorId, userId),
+          isNotNull(contentEvents.actorName)
         )
       );
   }

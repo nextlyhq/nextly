@@ -749,6 +749,7 @@ export class DynamicCollectionService extends BaseService {
   ): string {
     const spec = deriveCompanionSpec({
       slug,
+      kind: "collection",
       dbName: tableName,
       fields: opts.fields,
       dialect: this.adapter.dialect,
@@ -814,7 +815,7 @@ export class DynamicCollectionService extends BaseService {
   private async buildLocalizedMigrationSQL(
     main: { artefact: string; local?: string },
     args: Parameters<DynamicCollectionService["buildCompanionTransitionSQL"]>[0]
-  ): Promise<{ sql: string; localSql?: string }> {
+  ): Promise<{ sql: string; localSql?: string; needsArchive: boolean }> {
     const { sql, localSql, beforeMainSql, needsArchive } =
       await this.buildCompanionTransitionSQL(args);
     const archive = needsArchive
@@ -831,6 +832,7 @@ export class DynamicCollectionService extends BaseService {
     const differs = localSql !== undefined || main.local !== undefined;
     return {
       sql: assemble(main.artefact, sql),
+      needsArchive,
       ...(differs
         ? {
             localSql: assemble(main.local ?? main.artefact, localSql ?? sql),
@@ -889,6 +891,7 @@ export class DynamicCollectionService extends BaseService {
       // This service owns Schema Builder collections, so the companion mirrors that builder.
       builtBy: "collection" as const,
       slug: args.slug,
+      kind: "collection" as const,
       tableName: args.tableName,
       dialect: this.adapter.dialect,
       defaultLocale: this.defaultLocale,
@@ -952,6 +955,11 @@ export class DynamicCollectionService extends BaseService {
     localMigrationSQL: string | null;
     migrationFileName: string | null;
     metadataUpdates: Record<string, unknown>;
+    /**
+     * Whether the migration writes `nextly_i18n_archive`. Its `CREATE TABLE IF NOT EXISTS` cannot
+     * bring an older archive up to date, so a caller running it here prepares the archive first.
+     */
+    needsArchive: boolean;
   }> {
     if (updates.group !== undefined && typeof updates.group !== "string") {
       throw NextlyError.validation({
@@ -1101,6 +1109,7 @@ export class DynamicCollectionService extends BaseService {
     // Set only where this database is in a shape migration history cannot produce — see the
     // return type. Null everywhere else, so the caller runs the artefact itself.
     let localMigrationSQL: string | null = null;
+    let needsArchive = false;
     let migrationFileName: string | null = null;
 
     // Read by the branches that diff two different field lists, and shared between them. The
@@ -1183,6 +1192,7 @@ export class DynamicCollectionService extends BaseService {
         defaultLocale: this.defaultLocale,
         adapter: this.adapter,
         entity: collectionName,
+        kind: "collection",
         oldFields: oldUserFields,
         newFields: userDefinedFields,
         wasLocalized: collectionWasLocalized,
@@ -1300,6 +1310,7 @@ export class DynamicCollectionService extends BaseService {
           }
         );
         migrationSQL = localizedMigration.sql;
+        needsArchive = localizedMigration.needsArchive;
         if (localizedMigration.localSql !== undefined) {
           localMigrationSQL = localizedMigration.localSql;
         }
@@ -1368,6 +1379,7 @@ export class DynamicCollectionService extends BaseService {
         }
       );
       migrationSQL = localizedMigration.sql;
+      needsArchive = localizedMigration.needsArchive;
       if (localizedMigration.localSql !== undefined) {
         localMigrationSQL = localizedMigration.localSql;
       }
@@ -1404,6 +1416,7 @@ export class DynamicCollectionService extends BaseService {
       localMigrationSQL,
       migrationFileName,
       metadataUpdates,
+      needsArchive,
     };
   }
 

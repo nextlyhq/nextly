@@ -36,6 +36,14 @@ import { canBeRoot, canNest, canNestInSlot } from "./nesting";
 import type { NestingSource } from "./nesting";
 import { definitelyNotARecord, isPlainRecord } from "./plain-record";
 import { boundedOwnKeys } from "./safe-record";
+import { slotLockBreaks, slotLockOf, typeOfChild } from "./slot-lock";
+import type { ActiveSlotLock } from "./slot-lock";
+import { startingChildrenSource } from "./starting-children";
+import {
+  counterpartsOf,
+  storedFormsOf,
+  type StoredForms,
+} from "./stored-counterparts";
 import type { TokenKind } from "./style/catalog-types";
 import { breakpointContexts } from "./style/compile-page";
 import { MAX_NAMED_CLASS_NAME_LENGTH } from "./style/named-class";
@@ -52,6 +60,7 @@ import {
 } from "./style/validate-style-value";
 import type { ReadyStyleIssueBudget } from "./style/validate-style-value";
 import { walkNodes } from "./tree";
+import type { SlotDefaultSource } from "./tree";
 import { isConditionGated } from "./visibility";
 
 /** Severity of a validation issue. `error` blocks a strict publish. */
@@ -174,6 +183,29 @@ export interface ValidationContext {
    * placement issues rather than an error saying it could not look.
    */
   nesting?: NestingSource;
+  /**
+   * How to resolve a block's declared slots, for checking that a locked slot
+   * holds exactly the children it starts with.
+   *
+   * The source `expandSlotDefaults` reads, so the children a save requires are
+   * the children an insert of the block creates. Separate from
+   * {@link nesting} because a slot's starting children and its lock are
+   * declarations that one-method source does not carry.
+   *
+   * Absent means locks are not checked, on the same terms as nesting: a caller
+   * that omits this gets no lock issues rather than an error saying it could
+   * not look.
+   */
+  definitions?: SlotDefaultSource;
+  /**
+   * The document's stored forms, a draft's and the live one's, where the
+   * caller has them: what a `"contentOnly"` slot already holds is kept rather
+   * than refused (`stored-counterparts`).
+   *
+   * Absent for a document never stored, and for a value judged on its own:
+   * every locked slot is then measured against its starting children alone.
+   */
+  stored?: readonly BlockDocument[];
 }
 
 /**
@@ -282,6 +314,10 @@ export const ISSUE_CODES = {
     "A container's slot declares the block types it holds, and this node is not one of them.",
   "restricted-at-root":
     "A node declares the block types it may sit under, and it sits at the top level, which is inside none of them.",
+  "locked-slot-altered":
+    "A container's slot is locked, and it does not hold exactly the blocks it starts with.",
+  "locked-slot-content-only":
+    "A container's slot is locked contentOnly, and a block in it changed something besides its content.",
 } as const;
 
 /** A stable validation issue code. */
@@ -639,6 +675,10 @@ function nodeCheckState(
     unknownSeverity,
     seenIds: new Map<string, string>(),
     seenDomIds: new Map<string, string>(),
+    startingChildren:
+      ctx.definitions === undefined
+        ? undefined
+        : startingChildrenSource(ctx.definitions, ctx.nesting),
 
     skipValueParsing: bounds.overLimits,
     styleBudget,
@@ -667,6 +707,18 @@ interface QueuedNode {
    * document would be traversed in full by the check meant to be capped.
    */
   hidden: boolean;
+  /**
+   * The lock of the slot this node sits in, or undefined when that slot fixes
+   * nothing. Carried down the queue for the reason `hidden` is: a lock passes
+   * to every slot beneath it that declares none, and reading each ancestor's
+   * declaration again per node would walk outside the bounded loop.
+   */
+  lock: ActiveSlotLock | undefined;
+  /**
+   * The node as the document's stored forms hold it in this place, carried
+   * down the queue for the reason `lock` is.
+   */
+  counterparts: readonly Readonly<Record<string, unknown>>[];
 }
 
 /**
@@ -688,16 +740,25 @@ function validateNodeForest(
   maxNodes: number
 ): void {
   const queue: QueuedNode[] = [];
+  // Only a lock reads the stored forms, so there is nothing to index without
+  // the definitions locks are declared in.
+  const stored =
+    state.ctx.definitions === undefined
+      ? undefined
+      : storedFormsOf(state.ctx.stored, maxNodes);
   for (let i = 0; i < nodes.length && queue.length <= maxNodes; i++) {
     queue.push({
       node: nodes[i],
       path: pointer("/nodes", i),
       placement: { at: "root" },
       hidden: false,
+      // A top-level node sits in no slot, so no lock reaches it.
+      lock: undefined,
+      counterparts: counterpartsOf(nodes[i], undefined, stored),
     });
   }
   for (let i = 0; i < queue.length && i < maxNodes; i++) {
-    const { node, path, placement, hidden } = queue[i];
+    const { node, path, placement, hidden, lock, counterparts } = queue[i];
     // Asked HERE rather than in a pass of its own, so the read is inside the
     // budget and happens on a node this loop has reached. Gating is inherited,
     // because the renderer prunes a gated node's whole subtree.
@@ -708,7 +769,13 @@ function validateNodeForest(
     const gated = hidden || (isPlainRecord(node) && isConditionGated(node));
     validateNode(node, path, state, gated);
     checkNesting(node, path, placement, state);
-    enqueueChildren({ node, path, gated }, queue, maxNodes);
+    checkLockedSlots(node, path, { lock, counterparts }, state);
+    enqueueChildren(
+      { node, path, gated, lock, counterparts },
+      queue,
+      maxNodes,
+      { definitions: state.ctx.definitions, stored }
+    );
   }
 }
 
@@ -721,11 +788,22 @@ function validateNodeForest(
  * past two levels of nesting.
  */
 function enqueueChildren(
-  parent: { node: BlockNode; path: string; gated: boolean },
+  parent: {
+    node: BlockNode;
+    path: string;
+    gated: boolean;
+    lock: ActiveSlotLock | undefined;
+    counterparts: readonly Readonly<Record<string, unknown>>[];
+  },
   queue: QueuedNode[],
-  maxNodes: number
+  maxNodes: number,
+  sources: {
+    definitions: SlotDefaultSource | undefined;
+    stored: StoredForms | undefined;
+  }
 ): void {
   const { node, path, gated } = parent;
+  const { definitions, stored } = sources;
   if (!isPlainRecord(node) || !isPlainRecord(node.slots)) return;
   // The container's placement for every child beneath it, read once.
   //
@@ -751,12 +829,24 @@ function enqueueChildren(
         : { at: "container", type: containerType, slot };
     if (!Array.isArray(children)) continue;
     const slotPath = pointer(pointer(path, "slots"), slot);
+    const lock = slotLockOf(definitions, containerType, slot, parent.lock);
     for (let c = 0; c < children.length && queue.length <= maxNodes; c++) {
       queue.push({
         node: children[c],
         path: pointer(slotPath, c),
         placement: childPlacement,
         hidden: gated,
+        lock,
+        counterparts: counterpartsOf(
+          children[c],
+          {
+            holders: parent.counterparts,
+            slot,
+            index: c,
+            contentOnly: lock === "contentOnly",
+          },
+          stored
+        ),
       });
     }
   }
@@ -859,6 +949,146 @@ function messageForRefusal(
   return placement.at === "container"
     ? `A "${describeValue(childType)}" may only sit inside ${where}, not inside "${describeValue(placement.type)}".`
     : `A "${describeValue(childType)}" may only sit inside ${where}, and a top-level node sits inside nothing.`;
+}
+
+/**
+ * Report a locked slot that does not hold the blocks it starts with.
+ *
+ * Asked of every slot the container's type DECLARES rather than only the ones
+ * the node stores. Removing a slot's last child can leave no slot stored at
+ * all, and that is exactly the arrangement a lock refuses when the slot starts
+ * with something.
+ *
+ * An ERROR in both modes, as a nesting violation is. The lock is the block
+ * author stating which children this slot holds, so a document holding others
+ * is not a forward-compatible value to preserve.
+ */
+function checkLockedSlots(
+  node: BlockNode,
+  path: string,
+  at: {
+    lock: ActiveSlotLock | undefined;
+    counterparts: readonly Readonly<Record<string, unknown>>[];
+  },
+  state: NodeCheckState
+): void {
+  const definitions = state.ctx.definitions;
+  const startingChildren = state.startingChildren;
+  if (definitions === undefined || startingChildren === undefined) return;
+  // A malformed node is the node check's to report; it has no slots to judge.
+  const raw: unknown = node;
+  if (!isPlainRecord(raw)) return;
+  const type = raw.type;
+  const breaks = slotLockBreaks(
+    node,
+    at.lock,
+    definitions,
+    startingChildren,
+    at.counterparts
+  );
+  for (const found of breaks) {
+    const slotPath = pointer(pointer(path, "slots"), found.slot);
+    state.issues.push(
+      found.kind === "membership"
+        ? lockedSlotIssue(
+            { ...found, type: String(type) },
+            // The slot when it is stored; the node when it is not, because a
+            // pointer has to resolve against the document it reports on.
+            found.stored ? slotPath : path
+          )
+        : contentOnlyIssue(
+            { ...found, type: String(type) },
+            pointer(slotPath, found.index)
+          )
+    );
+  }
+}
+
+/** The issue for a child of a `"contentOnly"` slot that changed besides content. */
+function contentOnlyIssue(
+  found: {
+    type: string;
+    slot: string;
+    childType: string;
+    changes: readonly string[];
+    content: ReadonlySet<string>;
+  },
+  path: string
+): ValidationIssue {
+  return {
+    path,
+    code: "locked-slot-content-only",
+    severity: "error",
+    message: `The "${describeValue(found.slot)}" slot of a "${describeValue(found.type)}" is locked "contentOnly", so only the content of its "${describeValue(found.childType)}" may change. Its ${found.changes.join(", ")} changed.`,
+    suggestion:
+      found.content.size === 0
+        ? "Put this block back as it started. It declares no content, so nothing about it can change here."
+        : `Put back everything but its content. Only ${[...found.content].map(name => `"${name}"`).join(", ")} can change here.`,
+  };
+}
+
+/** At most this many block types are named in one message; the rest are counted. */
+const MOST_TYPES_NAMED = 8;
+
+/** A list of block types, as an issue message names them. */
+function namedTypes(
+  types: readonly (string | undefined)[],
+  total: number
+): string {
+  const named = types
+    .slice(0, MOST_TYPES_NAMED)
+    .map(type =>
+      type === undefined ? "a malformed node" : `"${describeValue(type)}"`
+    );
+  const unnamed = total - named.length;
+  return unnamed > 0
+    ? `${named.join(", ")} and ${unnamed} more`
+    : named.join(", ");
+}
+
+/** Whether the order of a slot's blocks is part of what its lock fixes. */
+function orderClause(lock: ActiveSlotLock, starting: number): string {
+  if (starting < 2) return "";
+  return lock === "insert" ? ", in any order" : ", in that order";
+}
+
+/**
+ * The issue for a locked slot holding other blocks than it starts with.
+ *
+ * Names what the slot must hold as well as what it does, because the repair is
+ * to put the starting blocks back, and an author told only that the slot is
+ * wrong has to find out which blocks it started with.
+ */
+function lockedSlotIssue(
+  found: {
+    type: string;
+    slot: string;
+    lock: ActiveSlotLock;
+    starting: readonly string[];
+    held: readonly unknown[];
+  },
+  path: string
+): ValidationIssue {
+  const { type, slot, lock, starting, held } = found;
+  const requires =
+    starting.length === 0 ? "no blocks" : namedTypes(starting, starting.length);
+  const holds =
+    held.length === 0
+      ? "none"
+      : namedTypes(
+          held.slice(0, MOST_TYPES_NAMED).map(typeOfChild),
+          held.length
+        );
+  return {
+    path,
+    code: "locked-slot-altered",
+    severity: "error",
+    message: `The "${describeValue(slot)}" slot of a "${describeValue(type)}" is locked "${lock}", so it holds ${requires}${orderClause(lock, starting.length)}. It holds ${holds}.`,
+    suggestion:
+      lock === "insert"
+        ? "Put back the blocks this slot starts with. They can be reordered, but not added or removed."
+        : "Put back the blocks this slot starts with, in their order. They cannot be added, removed or reordered.",
+  };
 }
 
 /**
@@ -1079,6 +1309,15 @@ interface NodeCheckState {
   seenIds: Map<string, string>;
   /** Non-empty DOM ids seen so far (from `cssId` or `attributes.id`) → pointer. */
   seenDomIds: Map<string, string>;
+  /**
+   * The block types each container type starts each of its slots with,
+   * expanded once per type for the whole document: the answer depends on the
+   * type alone, and a page may hold the same locked block many times.
+   */
+  /** Each block type's starting children, slot by slot, as an insert creates them. */
+  startingChildren:
+    | ((type: string, slot: string) => readonly BlockNode[])
+    | undefined;
 
   /** Shared across the whole document, so the limit is not per node. */
   styleBudget: ReadyStyleIssueBudget;

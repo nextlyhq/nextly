@@ -577,6 +577,35 @@ export class VersionsRepository {
   }
 
   /**
+   * THE working draft in one locale of each of many documents in one scope,
+   * keyed by entry id: what {@link findWorkingDraft} answers for each, in one
+   * query rather than one per document.
+   */
+  async findWorkingDraftsOf(
+    scope: Pick<VersionRef, "scopeKind" | "scopeSlug">,
+    entryIds: readonly string[],
+    locale: string | null
+  ): Promise<Map<string, VersionRow>> {
+    const byEntry = new Map<string, VersionRow>();
+    if (entryIds.length === 0) return byEntry;
+    const rows = await this.db.select<VersionRow>(TABLE, {
+      where: {
+        and: [
+          { column: "scopeKind", op: "=", value: scope.scopeKind },
+          { column: "scopeSlug", op: "=", value: scope.scopeSlug },
+          { column: "entryId", op: "IN", value: [...new Set(entryIds)] },
+          ...WORKING_DRAFT_SHAPE,
+          this.localeCondition(locale),
+        ],
+      },
+    });
+    for (const row of rows) {
+      if (!byEntry.has(row.entryId)) byEntry.set(row.entryId, row);
+    }
+    return byEntry;
+  }
+
+  /**
    * Which languages hold a pending change, for many documents at once.
    *
    * One query for a whole page of documents rather than one per document: the
@@ -756,6 +785,29 @@ export class VersionsRepository {
     });
     const top = rows[0]?.versionNo;
     return typeof top === "number" ? top : 0;
+  }
+
+  /**
+   * The part (language, or null for none) of one durable version, or
+   * undefined when the document has no such version. Reads that one row's
+   * language only.
+   */
+  async findPartOfVersion(
+    ref: VersionRef,
+    versionNo: number
+  ): Promise<string | null | undefined> {
+    const rows = await this.db.select<{ locale: string | null }>(TABLE, {
+      columns: ["locale"],
+      where: {
+        and: [
+          ...this.docWhere(ref),
+          { column: "isAutosave", op: "=", value: false },
+          { column: "versionNo", op: "=", value: versionNo },
+        ],
+      },
+      limit: 1,
+    });
+    return rows.length === 0 ? undefined : (rows[0]?.locale ?? null);
   }
 
   /** Fetch one durable version by its number, snapshot included. */

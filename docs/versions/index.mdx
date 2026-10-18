@@ -74,7 +74,8 @@ change.
 A comparison can name two versions (`?from=4&to=6`), or a version and a **baseline** the
 server works out (`?to=6&baseline=previous`). The baselines are `previous` (the version
 before it in the same language), `published` (what that language serves now: its latest
-published version, while it is published) and `draft` (that language's current draft).
+published version, while it is published), `draft` (that language's current draft) and
+`last-viewed` (the version you last looked at in that language; see below).
 With no `from` and no `baseline`, the comparison opens on the current draft against what is
 published when the language is published and has a draft, and otherwise on a version
 against the one before it (`?locale=` picks the language when no version is named).
@@ -86,6 +87,32 @@ Some comparisons have nothing to start from, and are refused with `NO_BASELINE`:
   published to compare with, even though its history records an earlier publish.
 
 The response says which baseline it used. Baselines are experimental.
+
+### The version you last looked at
+
+Nextly remembers, per person, document and language, the version each person last looked
+at, so a comparison can show what changed since then (`?to=9&baseline=last-viewed`).
+
+- **Only an explicit mark records it.** A client that shows a version or a comparison to a
+  signed-in person sends `PUT …/versions/{n}/seen` (on a collection entry,
+  `/collections/{slug}/entries/{id}/versions/{n}/seen`; on a Single,
+  `/singles/{slug}/versions/{n}/seen`). Reading a version, a comparison or the history
+  records nothing, so a prefetch or a second tab never moves it. The mark needs read access
+  to the document, and an API key or the system is refused: only a person's own screen
+  says what they saw. The admin's history screens do not send it yet, so until they do,
+  `last-viewed` answers only for a client that marks what it shows.
+- **It counts by visit.** A mark more than 30 minutes after that marker's last one starts a
+  new visit. "Last looked at" is the furthest version of the previous visit, and within a
+  visit the marker only moves forward. Each language, and each document, keeps its own
+  visit.
+- **It survives retention.** When the version you looked at was removed, the comparison
+  starts from the nearest older version still kept, and the response's `baseline` names the
+  removed one as `replaces`.
+- **The history list shows it.** The row where you last looked carries `lastViewed: true`.
+
+A person who has not looked before, or a key, has no version they last looked at, and the
+comparison is refused with `NO_BASELINE` and a message saying why. These responses depend on
+who asks, so they are marked private to the session.
 
 Secret fields are masked in diffs. A password field's history never shows its values.
 

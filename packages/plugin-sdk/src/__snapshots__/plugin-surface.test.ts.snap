@@ -505,6 +505,7 @@ exports[`plugin-sdk public export surface > \`.\` (index) surface is unchanged 1
   "WidgetChrome (type)",
   "WidgetCondition (type)",
   "WidgetDefinition (type)",
+  "WidgetFieldChoice (type)",
   "WidgetHeight (type)",
   "WidgetLifecycle (type)",
   "WidgetOp (type)",

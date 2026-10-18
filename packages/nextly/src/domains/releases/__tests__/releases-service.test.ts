@@ -12,7 +12,10 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { NextlyError } from "../../../errors";
-import { RELEASE_ASSEMBLABLE_FROM } from "../../../schemas/releases/types";
+import {
+  RELEASE_ASSEMBLABLE_FROM,
+  RELEASE_MEMBER_LIMIT,
+} from "../../../schemas/releases/types";
 import { releaseMemberKey } from "../release-member-key";
 import { RELEASE_LIST_ORDERS } from "../releases-repository";
 import { ReleasesService } from "../services/releases-service";
@@ -20,6 +23,8 @@ import type {
   ReleaseAuthority,
   ReleasesServiceDeps,
 } from "../services/releases-service";
+
+import { READY_CHECKS } from "./helpers/ready-checks";
 
 const ADMIN = { userId: "u1" };
 const ANON = { userId: null };
@@ -46,6 +51,10 @@ function repository() {
     countReleases: vi.fn(async () => 0),
     listMembers: vi.fn(
       async (): Promise<Array<{ id: string; memberKey?: string }>> => []
+    ),
+    // What a release holds, for the member limit; empty unless a case sets it.
+    memberCountsOf: vi.fn(
+      async (_ids: readonly string[]) => new Map<string, number>()
     ),
     // Each write takes the states the service judged it may land on as its
     // last argument, which the cases below read back from the call.
@@ -100,6 +109,7 @@ function service(over?: {
     logger: {
       warn: vi.fn((_message: string, _meta?: Record<string, unknown>) => {}),
     },
+    checks: READY_CHECKS,
   };
   return { svc: new ReleasesService(deps), repo, deps };
 }
@@ -235,7 +245,8 @@ describe("ReleasesService add-time document check", () => {
     );
     expect(repo.addMember).toHaveBeenCalledWith(
       expect.objectContaining({ createdBy: "u1", releaseId: "r1" }),
-      expect.anything()
+      expect.anything(),
+      expect.any(Function)
     );
   });
 
@@ -546,8 +557,20 @@ describe("ReleasesService protects a committed release", () => {
 describe("ReleasesService fences a membership change on its judgement", () => {
   /** The states the last write of this kind was fenced on. */
   function fencedOn(write: { mock: { calls: unknown[][] } }): unknown {
-    return write.mock.calls.at(-1)?.at(-1);
+    return write.mock.calls.at(-1)?.[1];
   }
+
+  it("hands the write the member limit, judged under its lock", async () => {
+    // The early count can be raced; the check the write asks under the
+    // release lock is the one that holds, so it must be the limit's own rule.
+    const { svc, repo } = service({ holds: ["create"] });
+    await svc.addMember("r1", MEMBER, ADMIN);
+    const check = repo.addMember.mock.calls.at(-1)?.[2] as (
+      held: number
+    ) => unknown;
+    expect(check(RELEASE_MEMBER_LIMIT - 1)).toBeNull();
+    expect(check(RELEASE_MEMBER_LIMIT)).toMatchObject({ code: "CONFLICT" });
+  });
 
   it("fences an add judged against a draft on the assembling states alone", async () => {
     // A publisher can schedule between the judgement and the write, and the

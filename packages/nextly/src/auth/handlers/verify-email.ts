@@ -5,7 +5,7 @@ import { respondAction } from "../../api/response-shapes";
 import { readCsrfCookie, readCsrfFromRequest } from "../csrf/csrf-cookie";
 import { validateCsrf } from "../csrf/validate";
 
-import { jsonResponse } from "./handler-utils";
+import { csrfFailure, jsonResponse } from "./handler-utils";
 
 export interface VerifyEmailHandlerDeps {
   allowedOrigins: string[];
@@ -63,7 +63,7 @@ export async function handleResendVerification(
   );
   if (!csrfResult.valid) {
     return jsonResponse(403, {
-      error: { code: "CSRF_FAILED", message: csrfResult.error },
+      error: csrfFailure(request, csrfResult),
     });
   }
 

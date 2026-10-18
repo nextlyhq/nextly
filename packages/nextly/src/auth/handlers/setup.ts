@@ -17,9 +17,10 @@ import type { SessionRoles } from "../session/session-roles";
 // hashPassword not needed here -- seedSuperAdmin handles hashing internally
 
 import {
-  jsonResponse,
-  buildCookieHeaders,
   buildAuthErrorResponse,
+  buildCookieHeaders,
+  csrfFailure,
+  jsonResponse,
 } from "./handler-utils";
 import { storeNewRefreshToken } from "./issue-session";
 
@@ -146,7 +147,7 @@ export async function handleSetup(
   );
   if (!csrfResult.valid) {
     return jsonResponse(403, {
-      error: { code: "CSRF_FAILED", message: csrfResult.error },
+      error: csrfFailure(request, csrfResult),
     });
   }
 

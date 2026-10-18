@@ -30,8 +30,10 @@ import { defineConfig } from "nextly/config";
 import { Authors } from "./src/collections/authors";
 import { BlockPages } from "./src/collections/block-pages";
 import { Categories } from "./src/collections/categories";
+import { DevReloadProbe } from "./src/collections/dev-reload-probe";
 import { Posts } from "./src/collections/posts";
 import { Tags } from "./src/collections/tags";
+import { TranslatedPages } from "./src/collections/translated-pages";
 import { Seo } from "./src/field-groups/seo";
 import { SITE_STYLE_DEFAULTS } from "./src/lib/site-style-defaults";
 import { styleFixturePlugin } from "./src/plugins/style-fixture/plugin";
@@ -84,7 +86,20 @@ export default defineConfig({
   // Authors is the localized collection, registered so the i18n admin surfaces
   // (language row, copy-from, publish-all, list translation status) are
   // exercised in development rather than existing only in code.
-  collections: [Posts, Categories, Tags, BlockPages, Authors],
+  collections: [
+    Posts,
+    Categories,
+    Tags,
+    BlockPages,
+    Authors,
+    // The collection the dev-reload test edits during `next dev`; see
+    // e2e/dev-reload/schema-edit.spec.ts. Off unless that test starts this app.
+    ...(process.env.NEXTLY_E2E_DEV_RELOAD === "1" ? [DevReloadProbe] : []),
+    // The Page Builder's default-language browser test needs a localized
+    // collection with a translated blocks field; registered for the e2e run
+    // only, by the same switch as the style fixture below.
+    ...(process.env.NEXTLY_E2E_STYLE_FIXTURE === "1" ? [TranslatedPages] : []),
+  ],
   // Announcement is the localized single WITH the draft/published lifecycle,
   // registered for the same reason Authors is: so the per-language publish
   // surfaces are exercised in development rather than existing only in code.

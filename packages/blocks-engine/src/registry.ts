@@ -15,7 +15,9 @@ import type { MigrationSource } from "./migration";
 import { MAX_MIGRATION_STEPS, findMigrationGaps } from "./migration";
 import type { NestingSource } from "./nesting";
 import { isPlainRecord } from "./plain-record";
+import { isSlotLock } from "./slot-lock";
 import { styleSupportDefinitions } from "./style/supports-map";
+import type { SlotDefaultSource } from "./tree";
 import type { BlockTypeLookup } from "./validation";
 
 /**
@@ -164,6 +166,27 @@ function describeSupportValue(value: unknown): string {
 }
 
 /**
+ * Refuse a prop whose `role` is anything but `"content"`.
+ *
+ * A role is read inside every `"contentOnly"` slot, and a value the reader does
+ * not recognise reads as no role. A misspelt `"content"` would leave the prop
+ * uneditable in every such slot, and the author would learn it only when an
+ * author's edit was refused there.
+ */
+function assertValidPropRoles(def: AnyBlockDefinition): void {
+  if (!isPlainRecord(def.props)) return;
+  for (const [propName, schema] of Object.entries(def.props)) {
+    const role = isPlainRecord(schema) ? schema.role : undefined;
+    if (role !== undefined && role !== "content") {
+      fail(
+        "NEXTLY_BLOCK_INVALID",
+        `block "${def.name}" prop "${propName}" role must be "content", or left out.`
+      );
+    }
+  }
+}
+
+/**
  * Check one definition against the rules registration enforces. Split out so a
  * caller can validate a definition without committing it to the registry.
  */
@@ -220,6 +243,7 @@ function assertValidDefinition(def: AnyBlockDefinition): void {
       `block "${def.name}" defaultProps must be a plain object.`
     );
   }
+  assertValidPropRoles(def);
   // A slot's `allow` is read by every nesting decision, and a malformed one does not degrade — a
   // reader spreading `allow: 42` throws `TypeError: spec.allow is not iterable` at the first
   // validation, repair or insertion lookup, a long way from the definition that caused it and
@@ -346,6 +370,18 @@ function assertValidDefinition(def: AnyBlockDefinition): void {
             `block "${def.name}" slot "${slotName}" allow must be an array of block names like "core/heading" or namespaces like "core/*".`
           );
         }
+      }
+      // A lock is read on every save of a document holding this block, and a
+      // value the reader does not recognise reads as no lock at all. A typo in
+      // a declaration written to protect a region would quietly protect
+      // nothing, and the block's author would learn that only when a locked
+      // slot accepted a change. Refused here instead, where the block is named.
+      const lock = (spec as { lock?: unknown }).lock;
+      if (lock !== undefined && !isSlotLock(lock)) {
+        fail(
+          "NEXTLY_BLOCK_INVALID",
+          `block "${def.name}" slot "${slotName}" lock must be "all", "insert", "contentOnly" or false.`
+        );
       }
       // `defaultBlock` is read when an author INSERTS this block, which is the
       // worst place for a definition error to surface: a non-array is iterated
@@ -610,6 +646,24 @@ export function registryNestingSource(): NestingSource {
     slotAllowOf: (parentType, slot) =>
       getBlock(parentType)?.slots?.[slot]?.allow,
   };
+}
+
+/**
+ * The registry as a block-definition source: each block's version, declared
+ * slots, prop defaults and parents.
+ *
+ * What `expandSlotDefaults` reads to build the children a block starts with,
+ * and what validation reads to check that a locked slot still holds them. One
+ * source for both, so the children a save requires cannot drift from the
+ * children an insert creates.
+ *
+ * Reads the DEFINITION rather than any node, because a container inserted from
+ * the palette has no `slots` key until something is put in it, which is
+ * precisely the container that needs filling. Reads through to the live
+ * registry on every call, as the nesting source does.
+ */
+export function registryBlockSource(): SlotDefaultSource {
+  return { get: type => getBlock(type) };
 }
 
 /**

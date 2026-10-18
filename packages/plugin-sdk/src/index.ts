@@ -770,6 +770,7 @@ export {
   type QuerylessWidgetArchetype,
   type WidgetSource,
   type WidgetSourceField,
+  type WidgetFieldChoice,
   type WidgetSourceFieldType,
   type WidgetSourceKind,
   type WidgetOp,
