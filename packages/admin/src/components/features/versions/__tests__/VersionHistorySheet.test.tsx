@@ -899,23 +899,23 @@ describe("VersionHistorySheet — the comparison where the page steps aside", ()
 
   it("hands the banner the comparison on a narrow window, and settles", async () => {
     answerMediaQueries(false);
-    let published: RestoreAffordance | null = null;
-    render(<Editor onPublished={r => (published = r)} />);
+    const seen: { restore: RestoreAffordance | null } = { restore: null };
+    render(<Editor onPublished={r => (seen.restore = r)} />);
 
     await userEvent.click(screen.getByRole("button", { name: /Version 3/ }));
 
-    await waitFor(() => expect(published?.compare).toBeTypeOf("function"));
+    await waitFor(() => expect(seen.restore?.compare).toBeTypeOf("function"));
   });
 
   it("keeps the comparison in the panel beside the document", async () => {
     answerMediaQueries(true);
-    let published: RestoreAffordance | null = null;
-    render(<Editor onPublished={r => (published = r)} />);
+    const seen: { restore: RestoreAffordance | null } = { restore: null };
+    render(<Editor onPublished={r => (seen.restore = r)} />);
 
     await userEvent.click(screen.getByRole("button", { name: /Version 3/ }));
 
-    await waitFor(() => expect(published).not.toBeNull());
-    expect(published?.compare).toBeUndefined();
+    await waitFor(() => expect(seen.restore).not.toBeNull());
+    expect(seen.restore?.compare).toBeUndefined();
     expect(
       screen.getByRole("button", { name: "Open full comparison" })
     ).toBeInTheDocument();
