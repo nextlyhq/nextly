@@ -53,6 +53,14 @@ export type OrphanSearch =
       listable: true;
       /** Left-behind thumbnails, by stored path. */
       orphans: string[];
+      /**
+       * Unreferenced thumbnails known only by the name they were uploaded
+       * under, on a storage that keeps no folders (UploadThing). Another
+       * uploader to the same storage can give a file that name, so nothing
+       * shows these are media's: they are for the site to check, and are
+       * never removed.
+       */
+      unconfirmed: Array<{ path: string; name: string }>;
       /** Unreferenced thumbnails too recent, or of unknown age, to be sure of. */
       tooRecent: number;
     };
@@ -70,6 +78,7 @@ export async function findOrphanThumbnails(
   if (!adapter.list) return { listable: false };
   const now = (options.now ?? new Date()).getTime();
   const orphans: string[] = [];
+  const unconfirmed: Array<{ path: string; name: string }> = [];
   let tooRecent = 0;
   for await (const entry of adapter.list()) {
     if (!isMediaThumbnail(entry, options.prefix)) continue;
@@ -79,9 +88,13 @@ export async function findOrphanThumbnails(
       tooRecent++;
       continue;
     }
-    orphans.push(entry.path);
+    if (entry.name !== undefined) {
+      unconfirmed.push({ path: entry.path, name: entry.name });
+    } else {
+      orphans.push(entry.path);
+    }
   }
-  return { listable: true, orphans, tooRecent };
+  return { listable: true, orphans, unconfirmed, tooRecent };
 }
 
 export interface OrphanRemoval {

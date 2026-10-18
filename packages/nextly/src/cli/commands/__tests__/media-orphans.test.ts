@@ -197,7 +197,9 @@ describe("nextly media orphans", () => {
     }
   );
 
-  it.each(layouts)(
+  // Where a thumbnail's place shows it is media's: under media's prefix, in
+  // a form only media uploads give it.
+  it.each(layouts.filter(([label]) => label !== "uploadthing"))(
     "removes only the old left-behind thumbnail on %s with --apply, and names it",
     async (_label, make) => {
       const layout = await make();
@@ -212,6 +214,28 @@ describe("nextly media orphans", () => {
       );
     }
   );
+
+  // UploadThing keeps no folders and its keys carry no name, so a thumbnail
+  // there is known only by the name it was uploaded under, which another
+  // uploader in the same app can give a file too. It is listed for the site
+  // to check, by its key and that name, and never removed.
+  it("lists the old left-behind thumbnail on uploadthing as one to check, and --apply leaves it", async () => {
+    const layout = inBucket("uploadthing");
+    const before = await layout.stored();
+
+    const { code, said } = await run(layout, true);
+
+    expect(code).toBe(0);
+    expect(await layout.stored()).toEqual(before);
+    expect(said).not.toMatch(/^Removed /m);
+    const line = said.split("\n").find(text => text.includes(layout.orphan));
+    expect(line).toBeDefined();
+    expect(line).toContain("thumb_b.png");
+    expect(said).toMatch(/by hand/);
+    for (const other of [layout.referenced, layout.recent, layout.ordinary]) {
+      expect(said).not.toContain(other);
+    }
+  });
 
   // Between the listing and the removal an item can come to refer to it.
   it("keeps a listed thumbnail an item refers to by the time it would go", async () => {

@@ -73,8 +73,20 @@ export async function mediaOrphans(options: {
       `${search.tooRecent} unreferenced thumbnail(s) were stored less than ${hours} hour(s) ago, or at a time the storage does not say, and are left: they may belong to an upload still in progress.`
     );
   }
+  // Listed for the site to check, and left as they are even with --apply:
+  // by key, which tells apart files uploaded under one name, and by name.
+  if (search.unconfirmed.length > 0) {
+    say(
+      `${search.unconfirmed.length} unreferenced thumbnail(s) found only by the name they were uploaded under. The media storage (${storage.getType()}) keeps no folders, so another uploader to it can give a file the same name, and nothing shows these are media's. They are left as they are, even with --apply; check each and remove the ones that are media's by hand:`
+    );
+    for (const { path, name } of search.unconfirmed) {
+      say(`  ${path} (uploaded as ${name})`);
+    }
+  }
   if (search.orphans.length === 0) {
-    say("No left-behind thumbnails found.");
+    if (search.unconfirmed.length === 0) {
+      say("No left-behind thumbnails found.");
+    }
     return 0;
   }
   if (!apply) {
