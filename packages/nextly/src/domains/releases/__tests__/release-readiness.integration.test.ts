@@ -17,7 +17,7 @@ process.env.NEXTLY_SECRET =
   process.env.NEXTLY_SECRET ??
   "test-secret-must-be-at-least-32-characters-long!!";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { defineCollection, defineSingle, text } from "../../../config";
 import {
@@ -41,6 +41,16 @@ afterEach(async () => {
   await current?.destroy();
   current = undefined;
 });
+
+/** The collections these cases put documents in. */
+type CollectionSlug =
+  | "articles"
+  | "notices"
+  | "memos"
+  | "scratch"
+  | "seasonal"
+  | "dossiers"
+  | "briefs";
 
 const LATER = new Date("2099-01-01T09:00:00Z");
 
@@ -74,6 +84,28 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
       // Kept as drafts, with a field only the editor-in-chief may write.
       defineCollection({
         slug: "dossiers",
+        status: true,
+        versions: { drafts: true },
+        access: {
+          read: () => true,
+          update: () => true,
+          publish: () => true,
+          unpublish: () => true,
+        },
+        fields: [
+          text({ name: "title" }),
+          text({
+            name: "guarded",
+            access: {
+              update: ({ req }) => req.user?.email === "chief@example.com",
+            },
+          }),
+        ],
+      }),
+      // A second drafts collection with the same guarded field, so a batch
+      // spans two scopes.
+      defineCollection({
+        slug: "briefs",
         status: true,
         versions: { drafts: true },
         access: {
@@ -165,13 +197,7 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
 /** A document, stored through the ordinary write. */
 async function entry(
   t: TestNextly,
-  collection:
-    | "articles"
-    | "notices"
-    | "memos"
-    | "scratch"
-    | "seasonal"
-    | "dossiers",
+  collection: CollectionSlug,
   status: "draft" | "published" = "draft"
 ): Promise<string> {
   const handler = t.getService("collectionsHandler") as CollectionsHandler;
@@ -205,13 +231,7 @@ async function releaseOf(
   t: TestNextly,
   author: string,
   documents: Array<{
-    collection:
-      | "articles"
-      | "notices"
-      | "memos"
-      | "scratch"
-      | "seasonal"
-      | "dossiers";
+    collection: CollectionSlug;
     id: string;
     action?: "publish" | "unpublish";
   }>
@@ -443,6 +463,41 @@ describe.each(getConfiguredTestDialects())(
           })
         )
       ).toEqual([{ memberId: memberIds[0], code: "FIELD_NOT_PERMITTED" }]);
+    });
+
+    it("judges many collection documents' pending changes from batched reads, without a read per document", async () => {
+      const t = await boot(dialect);
+      const author = await seedPlainAuthor(t);
+      const documents: Array<{
+        collection: "dossiers" | "briefs";
+        id: string;
+      }> = [];
+      for (const collection of ["dossiers", "briefs"] as const) {
+        for (let i = 0; i < 4; i += 1) {
+          const id = await entry(t, collection, "published");
+          // A trusted edit holds a change to the guarded field.
+          await t.nextly.update({
+            collection: collection as never,
+            id,
+            data: { guarded: `secret-${i}` } as never,
+          });
+          documents.push({ collection, id });
+        }
+      }
+      const { releaseId, memberIds } = await releaseOf(t, author, documents);
+
+      const transaction = vi.spyOn(t.adapter, "transaction");
+      const found = await t.nextly.releases.readiness({ releaseId });
+      const opened = transaction.mock.calls.length;
+      transaction.mockRestore();
+
+      // Every document is judged: the population control for the count below.
+      expect(found.hard.map(f => [f.memberId, f.code])).toEqual(
+        memberIds.map(id => [id, "FIELD_NOT_PERMITTED"])
+      );
+      // The stored documents the rules compare against are read for each
+      // scope's batch at once, not in a transaction per document.
+      expect(opened).toBe(0);
     });
 
     it("reports a pending change to a field the author may not write, and refuses to schedule", async () => {
