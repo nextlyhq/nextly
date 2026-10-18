@@ -12,7 +12,9 @@ import type { NextlySchemaSnapshot } from "../../domains/schema/pipeline/diff/ty
 import {
   coreSchemaFingerprint,
   findCoreSchemaDrift,
+  findMissingCoreTables,
   formatCoreSchemaDriftWarning,
+  formatMissingCoreTablesWarning,
 } from "../core-schema-drift";
 
 function snapshot(tables: Record<string, string[]>): NextlySchemaSnapshot {
@@ -65,9 +67,9 @@ describe("findCoreSchemaDrift", () => {
     expect(drift).toEqual([]);
   });
 
-  it("ignores a table missing entirely, which is a different failure", () => {
-    // A first run creates tables; a table absent here means something other
-    // than a pending upgrade, and the boot path is the wrong place to guess.
+  it("leaves a table missing entirely to the missing-table check", () => {
+    // A missing table is not drift of its columns; `findMissingCoreTables`
+    // names it, under its own warning.
     const drift = findCoreSchemaDrift(
       snapshot({ media: ["id"] }),
       snapshot({ media: ["id"], nextly_versions: ["id", "entity"] })
@@ -123,5 +125,38 @@ describe("formatCoreSchemaDriftWarning", () => {
     expect(message).toContain("nextly migrate");
     // The silent-failure consequence is the reason this is worth reading.
     expect(message).toContain("silently do nothing");
+  });
+});
+
+describe("findMissingCoreTables", () => {
+  it("names each core table the database lacks, and only those", () => {
+    expect(
+      findMissingCoreTables(
+        snapshot({ media: ["id"], Nextly_Versions: ["id"], legacy: ["id"] }),
+        snapshot({
+          media: ["id"],
+          nextly_versions: ["id"],
+          nextly_version_views: ["id"],
+          nextly_version_pins: ["id"],
+        })
+      )
+    ).toEqual(["nextly_version_pins", "nextly_version_views"]);
+  });
+
+  it("names nothing when every core table is there", () => {
+    const same = { media: ["id"], nextly_versions: ["id"] };
+    expect(findMissingCoreTables(snapshot(same), snapshot(same))).toEqual([]);
+  });
+});
+
+describe("formatMissingCoreTablesWarning", () => {
+  it("names every table and the command that creates them", () => {
+    const message = formatMissingCoreTablesWarning([
+      "nextly_version_pins",
+      "nextly_version_views",
+    ]);
+    expect(message).toContain("  nextly_version_pins");
+    expect(message).toContain("  nextly_version_views");
+    expect(message).toContain("nextly migrate");
   });
 });

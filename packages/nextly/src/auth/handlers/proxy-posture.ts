@@ -64,6 +64,45 @@ export function edgeProxyWarning(
   );
 }
 
+/** The app's own auth strategies, as far as an unvalidated config shows them. */
+function configuredStrategies(
+  config: unknown
+): ReadonlyArray<{ name: unknown; limitKey?: unknown }> {
+  if (config === null || typeof config !== "object") return [];
+  const auth: unknown = Reflect.get(config, "auth");
+  if (auth === null || typeof auth !== "object") return [];
+  const strategies: unknown = Reflect.get(auth, "strategies");
+  return Array.isArray(strategies)
+    ? strategies.filter(
+        (strategy): strategy is { name: unknown; limitKey?: unknown } =>
+          strategy !== null && typeof strategy === "object"
+      )
+    : [];
+}
+
+/**
+ * One startup warning for each configured strategy that cannot tell the auth
+ * rate limit which account a sign-in names, or none while the limiter is off.
+ *
+ * Every configured strategy runs before the built-in password one, so the
+ * limiter cannot tell whether such a strategy will claim a request, and keys
+ * the whole chain on the `email` a request carries; nothing about a working
+ * sign-in shows that, so each such strategy is named where an operator reads.
+ */
+export function unkeyedStrategyWarnings(config: unknown): string[] {
+  if (readAuthRateLimit(() => config).requestsPerHour <= 0) return [];
+  return configuredStrategies(config)
+    .filter(strategy => typeof strategy.limitKey !== "function")
+    .map(
+      strategy =>
+        `[nextly] Auth strategy "${String(strategy.name)}" cannot tell the ` +
+        "sign-in rate limit which account a request names, so sign-ins from " +
+        "clients whose address cannot be read are limited by the email they " +
+        "carry. Give the strategy a limitKey, or set security.trustProxy " +
+        "behind a proxy that reports the client to limit them per client."
+    );
+}
+
 /** Whether this process has already said the fallback is catching requests. */
 let fallbackReported = false;
 

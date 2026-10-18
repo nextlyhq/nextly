@@ -18,24 +18,24 @@
  * Run by `pnpm --filter @nextlyhq/e2e test:e2e:dev-reload`, never beside the
  * main suite (see playwright.dev-reload.config.ts).
  */
-import { spawn, type ChildProcess } from "node:child_process";
-import {
-  existsSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
-import { createServer } from "node:net";
+import { spawn } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { fileURLToPath } from "node:url";
 
 import { expect, test } from "@playwright/test";
 
-const HERE = path.dirname(fileURLToPath(import.meta.url));
-const PLAYGROUND = path.resolve(HERE, "..", "..", "apps", "playground");
+import {
+  cleanUpNextWrites,
+  exampleEnv,
+  freePort,
+  NEXT_BIN,
+  PLAYGROUND,
+  stop,
+  waitFor,
+} from "../support/playground-dev-server";
+
 const PROBE_FILE = path.join(
   PLAYGROUND,
   "src",
@@ -43,7 +43,6 @@ const PROBE_FILE = path.join(
   "dev-reload-probe.ts"
 );
 const PROBE_TABLE = "dc_dev_reload_probe";
-const NEXT_BIN = path.join(PLAYGROUND, "node_modules", ".bin", "next");
 
 type Case = {
   name: string;
@@ -67,30 +66,6 @@ const CASES: Case[] = [
 // One case at a time: they all edit the same probe file.
 test.describe.configure({ mode: "serial" });
 
-/** A port no other process holds right now, chosen by the operating system. */
-function freePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const server = createServer();
-    server.once("error", reject);
-    server.listen(0, () => {
-      const address = server.address();
-      const port = typeof address === "object" && address ? address.port : 0;
-      server.close(() => resolve(port));
-    });
-  });
-}
-
-/** The playground's .env.example values: what a fresh checkout starts with. */
-function exampleEnv(): Record<string, string> {
-  const env: Record<string, string> = {};
-  const raw = readFileSync(path.join(PLAYGROUND, ".env.example"), "utf8");
-  for (const line of raw.split(/\r?\n/)) {
-    const match = /^([A-Z0-9_]+)=(.*)$/.exec(line.trim());
-    if (match) env[match[1]] = match[2].replace(/^"(.*)"$/, "$1");
-  }
-  return env;
-}
-
 /** The probe table's column names, or none while the table does not exist. */
 function probeColumns(databaseFile: string): string[] {
   let db: DatabaseSync | undefined;
@@ -108,65 +83,7 @@ function probeColumns(databaseFile: string): string[] {
   }
 }
 
-/** Polls until `check` holds, or fails naming what it waited for. */
-async function waitFor(
-  what: string,
-  check: () => boolean | Promise<boolean>,
-  ms: number
-): Promise<void> {
-  const deadline = Date.now() + ms;
-  while (!(await check())) {
-    if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`);
-    await new Promise(r => setTimeout(r, 500));
-  }
-}
-
-/** Sends `signal` to the dev server and everything it started. */
-function signal(server: ChildProcess, name: NodeJS.Signals): void {
-  if (server.pid === undefined) return;
-  try {
-    // Started detached, so the negative pid is its whole process group:
-    // `next dev` runs its server in a child of its own.
-    process.kill(-server.pid, name);
-  } catch {
-    server.kill(name);
-  }
-}
-
-/**
- * Stops the dev server and waits for it to exit, so nothing is still writing
- * into its build directory when that is removed.
- */
-async function stop(server: ChildProcess): Promise<void> {
-  if (server.exitCode !== null || server.signalCode !== null) return;
-  const exited = new Promise<void>(resolve =>
-    server.once("exit", () => resolve())
-  );
-  signal(server, "SIGTERM");
-  const outcome = await Promise.race([
-    exited.then(() => "exited" as const),
-    new Promise<"slow">(resolve => setTimeout(() => resolve("slow"), 15_000)),
-  ]);
-  if (outcome === "slow") {
-    signal(server, "SIGKILL");
-    await exited;
-  }
-}
-
-/**
- * Files `next dev` writes into an app root that lacks them (Next.js 16 adds
- * agent instructions there). Removed afterwards if this run created them.
- */
-const NEXT_WRITES = ["AGENTS.md", "CLAUDE.md"].map(name =>
-  path.join(PLAYGROUND, name)
-);
-const presentBefore = new Set(NEXT_WRITES.filter(file => existsSync(file)));
-
-test.afterAll(() => {
-  for (const file of NEXT_WRITES) {
-    if (!presentBefore.has(file)) rmSync(file, { force: true });
-  }
-});
+test.afterAll(cleanUpNextWrites());
 
 const originalProbe = readFileSync(PROBE_FILE, "utf8");
 

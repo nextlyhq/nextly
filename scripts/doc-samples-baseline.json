@@ -1,8 +1,8 @@
 {
   "coverage": {
     "pages": 81,
-    "samples": 457,
-    "compiled": 288
+    "samples": 459,
+    "compiled": 290
   },
   "samplesPerPage": {
     "docs/admin/branding.mdx": {
@@ -166,8 +166,8 @@
       "compiled": 1
     },
     "docs/plugins/auth.mdx": {
-      "samples": 3,
-      "compiled": 3
+      "samples": 4,
+      "compiled": 4
     },
     "docs/plugins/author-guide.mdx": {
       "samples": 5,
@@ -234,8 +234,8 @@
       "compiled": 5
     },
     "docs/releases/index.mdx": {
-      "samples": 2,
-      "compiled": 1
+      "samples": 3,
+      "compiled": 2
     },
     "docs/versions/index.mdx": {
       "samples": 2,
@@ -373,8 +373,8 @@
       "reader-name #11 error TS2304: Cannot find name 'Chart'.": 1
     },
     "docs/plugins/auth.mdx": {
-      "#2 error TS2304: Cannot find name 'isTotpEnabled'.": 1,
-      "#2 error TS2304: Cannot find name 'verifyTotp'.": 1,
+      "#3 error TS2304: Cannot find name 'isTotpEnabled'.": 1,
+      "#3 error TS2304: Cannot find name 'verifyTotp'.": 1,
       "uninstalled #0 error TS2307: Cannot find module '@acme/nextly-plugin-google' or its corresponding type declarations.": 1
     },
     "docs/plugins/author-guide.mdx": {

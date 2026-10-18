@@ -46,6 +46,14 @@ vi.mock("../../di/container", () => ({
 vi.mock("../../auth/middleware", () => ({
   requireAuthentication: vi.fn(),
   isErrorResponse: vi.fn(() => false),
+  // The summary's admin counts are decided through these. This file is about
+  // the read SCOPE, so they only need to answer; which counts a caller is
+  // given is `services/dashboard/__tests__/admin-counts.test.ts`'s question.
+  authorizeCaller: vi.fn(async () => ({ statusCode: 403, error: "Forbidden" })),
+  authorizeCallerForAny: vi.fn(async () => ({
+    statusCode: 403,
+    error: "Forbidden",
+  })),
 }));
 
 vi.mock("../../auth/middleware/to-nextly-error", () => ({

@@ -33,8 +33,12 @@ import { authUiProblems } from "../auth/handlers/auth-ui";
 import {
   buildAuthRouterDeps,
   challengeBudgetWarning,
+  readAuthRateLimit,
 } from "../auth/handlers/deps-bridge";
-import { edgeProxyWarning } from "../auth/handlers/proxy-posture";
+import {
+  edgeProxyWarning,
+  unkeyedStrategyWarnings,
+} from "../auth/handlers/proxy-posture";
 import type { CollectionConfig } from "../collections/config/define-collection";
 import type {
   SanitizedApiKeysConfig,
@@ -180,7 +184,10 @@ import {
   collectPluginRoutes,
   type CollectedRoute,
 } from "../plugins/routes/collect-routes";
-import { rateLimitProxyWarning } from "../plugins/routes/route-options";
+import {
+  rateLimitProxyWarning,
+  unkeyedAuthRouteWarnings,
+} from "../plugins/routes/route-options";
 import { getPluginRouteRegistry } from "../plugins/routes/route-registry";
 import {
   applyPluginSchemaContributionsDeferred,
@@ -821,6 +828,11 @@ async function registerServicesOnce(
   // without client addresses and nothing else would tell its operator.
   const edgeWarning = edgeProxyWarning(transformedConfig);
   if (edgeWarning) resolvedLogger.warn?.(edgeWarning);
+  // Likewise each configured auth strategy the sign-in limiter cannot ask
+  // which account a request names: its sign-ins are limited by email instead.
+  for (const warning of unkeyedStrategyWarnings(transformedConfig)) {
+    resolvedLogger.warn?.(warning);
+  }
 
   // ----------------------------------------
   // Layer 1: Create and Connect Adapter
@@ -4123,6 +4135,12 @@ async function initializePlugins(
     readProxyTrustSettings(() => transformedConfig).trustProxy
   );
   if (proxyWarning) logger.warn?.(proxyWarning);
+  for (const warning of unkeyedAuthRouteWarnings(
+    collectedRoutes,
+    readAuthRateLimit(() => transformedConfig).requestsPerHour > 0
+  )) {
+    logger.warn?.(warning);
+  }
 
   const pluginHookRegistry = hookRegistry ?? getHookRegistry();
 

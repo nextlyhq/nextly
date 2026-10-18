@@ -9,4 +9,5 @@ export type {
   ValidationPublicData,
   RateLimitPublicData,
   SingleAbsentPublicData,
+  ReleaseProblemsPublicData,
 } from "./public-data";

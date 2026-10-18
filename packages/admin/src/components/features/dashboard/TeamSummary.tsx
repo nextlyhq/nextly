@@ -9,11 +9,19 @@ import { ROUTES } from "@admin/constants/routes";
 import { useDashboardStats } from "@admin/hooks/queries";
 
 import { CardFigure } from "../widgets/frame/figure";
-import { CardError, CardSkeleton } from "../widgets/frame/states";
+import {
+  CardError,
+  CardSkeleton,
+  CardUnavailable,
+} from "../widgets/frame/states";
 
 /**
  * Compact "Team" summary on the dashboard. Two cards: total Users + total
  * Roles. Each card links to its respective Settings page.
+ *
+ * Each count is drawn only when the summary carries it: the server leaves out
+ * a count the reader may not read, and drawing that as 0 would put back an
+ * answer it withheld, and a wrong one.
  */
 
 interface TeamCardProps {
@@ -71,20 +79,29 @@ export const TeamSummary: React.FC = () => {
       />
     );
   }
+  const users = data?.users;
+  const roles = data?.roles;
+  // Neither count is this reader's to see: the frame's one unavailable state,
+  // rather than an empty body.
+  if (users === undefined && roles === undefined) return <CardUnavailable />;
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-      <TeamCard
-        label="Users"
-        count={data?.users ?? 0}
-        href={ROUTES.USERS}
-        Icon={UsersIcon}
-      />
-      <TeamCard
-        label="Roles"
-        count={data?.roles ?? 0}
-        href={ROUTES.SECURITY_ROLES}
-        Icon={ShieldCheck}
-      />
+      {users !== undefined && (
+        <TeamCard
+          label="Users"
+          count={users}
+          href={ROUTES.USERS}
+          Icon={UsersIcon}
+        />
+      )}
+      {roles !== undefined && (
+        <TeamCard
+          label="Roles"
+          count={roles}
+          href={ROUTES.SECURITY_ROLES}
+          Icon={ShieldCheck}
+        />
+      )}
     </div>
   );
 };

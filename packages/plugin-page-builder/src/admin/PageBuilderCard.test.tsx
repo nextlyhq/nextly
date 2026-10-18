@@ -45,7 +45,8 @@ const base = {
     definitions: new Map(),
   }),
   canEdit: true,
-  onOpen: () => {},
+  href: "/admin/collections/pages/p1/builder?field=body",
+  onNavigate: () => {},
 };
 
 const MINIATURE = '[data-slot="page-miniature-surface"]';
@@ -55,7 +56,7 @@ describe("PageBuilderCard", () => {
     render(<PageBuilderCard {...base} document={doc(0)} />);
 
     expect(
-      screen.getByRole("button", { name: /build this page/i })
+      screen.getByRole("link", { name: /build this page/i })
     ).toBeDefined();
   });
 
@@ -154,7 +155,7 @@ describe("PageBuilderCard", () => {
     );
 
     expect(
-      screen.getByRole("button", { name: /open page builder/i })
+      screen.getByRole("link", { name: /open page builder/i })
     ).toBeDefined();
   });
 
@@ -200,7 +201,7 @@ describe("PageBuilderCard", () => {
     fireEvent.click(screen.getByRole("button", { name: "Try again" }));
     expect(retry).toHaveBeenCalledTimes(1);
     expect(
-      screen.getByRole("button", { name: /open page builder/i })
+      screen.getByRole("link", { name: /open page builder/i })
     ).toBeDefined();
   });
 
@@ -235,6 +236,7 @@ describe("PageBuilderCard", () => {
     render(<PageBuilderCard {...base} document={doc(2)} canEdit={false} />);
 
     expect(screen.queryByRole("button")).toBeNull();
+    expect(screen.queryByRole("link")).toBeNull();
   });
 
   it("still shows the page when the field cannot be edited", () => {
@@ -245,12 +247,89 @@ describe("PageBuilderCard", () => {
     expect(container.querySelector(MINIATURE)).not.toBeNull();
   });
 
-  it("opens the builder when the action is pressed", () => {
-    const onOpen = vi.fn();
-    render(<PageBuilderCard {...base} document={doc(2)} onOpen={onOpen} />);
+  it("links to the builder's own address", () => {
+    render(<PageBuilderCard {...base} document={doc(2)} />);
+    expect(
+      screen
+        .getByRole("link", { name: /open page builder/i })
+        .getAttribute("href")
+    ).toBe(base.href);
+  });
 
-    screen.getByRole("button", { name: /open page builder/i }).click();
+  it("moves within the admin on a plain click", () => {
+    const onNavigate = vi.fn();
+    render(
+      <PageBuilderCard {...base} document={doc(2)} onNavigate={onNavigate} />
+    );
+    const link = screen.getByRole("link", { name: /open page builder/i });
+    // `fireEvent` returns false when a handler prevented the default.
+    expect(fireEvent.click(link, { button: 0 })).toBe(false);
+    expect(onNavigate).toHaveBeenCalledWith(base.href);
+  });
 
-    expect(onOpen).toHaveBeenCalledOnce();
+  it.each([
+    ["Ctrl", { ctrlKey: true }],
+    ["Meta", { metaKey: true }],
+    ["Shift", { shiftKey: true }],
+    ["Alt", { altKey: true }],
+  ])(
+    "leaves a %s-click to the browser, so a new tab still works",
+    (_key, init) => {
+      const onNavigate = vi.fn();
+      render(
+        <PageBuilderCard {...base} document={doc(2)} onNavigate={onNavigate} />
+      );
+      const link = screen.getByRole("link", { name: /open page builder/i });
+      expect(fireEvent.click(link, { button: 0, ...init })).toBe(true);
+      expect(onNavigate).not.toHaveBeenCalled();
+    }
+  );
+
+  it("leaves a middle click to the browser", () => {
+    const onNavigate = vi.fn();
+    render(
+      <PageBuilderCard {...base} document={doc(2)} onNavigate={onNavigate} />
+    );
+    const link = screen.getByRole("link", { name: /open page builder/i });
+    fireEvent(
+      link,
+      new MouseEvent("auxclick", { bubbles: true, cancelable: true, button: 1 })
+    );
+    fireEvent.click(link, { button: 1 });
+    expect(onNavigate).not.toHaveBeenCalled();
+  });
+
+  it("says where an enabled way in leads, when it has a note", () => {
+    render(
+      <PageBuilderCard
+        {...base}
+        document={doc(2)}
+        note="Opens the default language, the one the Page Builder edits."
+      />
+    );
+    expect(
+      screen.getByRole("link", { name: /open page builder/i })
+    ).toBeTruthy();
+    expect(
+      screen.queryByText(
+        "Opens the default language, the one the Page Builder edits."
+      )
+    ).not.toBeNull();
+  });
+
+  it("offers the way in only once the page has been saved, and says why", () => {
+    // A page with no id has no address for the builder to open at.
+    render(<PageBuilderCard {...base} document={doc(2)} href={undefined} />);
+    expect(screen.queryByRole("link")).toBeNull();
+    expect(
+      (
+        screen.getByRole("button", {
+          name: /open page builder/i,
+        }) as HTMLButtonElement
+      ).disabled
+    ).toBe(true);
+    expect(
+      screen.queryByText("Save this page to open the Page Builder.")
+    ).not.toBeNull();
   });
 });

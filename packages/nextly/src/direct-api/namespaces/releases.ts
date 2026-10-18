@@ -27,6 +27,7 @@
 import type { AuthenticatedScope } from "../../auth/authenticated-scope";
 import { container } from "../../di/container";
 import { toPaginationMeta } from "../../dispatcher/helpers/service-envelope";
+import type { ReleaseReadiness } from "../../domains/releases/readiness/evaluate-readiness";
 import type {
   ReleaseMemberRow,
   ReleaseRow,
@@ -36,6 +37,7 @@ import type {
   FindReleasesQuery,
   ReleaseBlocker,
   ReleaseCountQuery,
+  ReleaseDetailsChange,
   ReleasesService,
 } from "../../domains/releases/services/releases-service";
 import { NextlyError } from "../../errors/nextly-error";
@@ -154,7 +156,18 @@ export interface ReleasesNamespace {
   blockingReasons(
     args: { releaseId: string } & ReleaseCallerArgs
   ): Promise<ReleaseBlocker[]>;
-  /** Put a document into a release under a lifecycle action. */
+  /**
+   * Every problem the release's documents have now: `hard` ones, which stop
+   * it from being scheduled or published now, and `soft` ones, which are
+   * notes. Each is a code and the document it is about, in the order the
+   * documents were added. Every document is checked, however many the release
+   * holds. An unknown release is refused as not found.
+   *
+   * @experimental
+   */
+  readiness(
+    args: { releaseId: string } & ReleaseCallerArgs
+  ): Promise<ReleaseReadiness>;
   /**
    * Put a document into a release under a lifecycle action.
    *
@@ -189,6 +202,25 @@ export interface ReleasesNamespace {
     args: { releaseId: string } & ReleaseCallerArgs
   ): Promise<ReleaseMemberRow[]>;
   /**
+   * Switch a document in a release between going live (`publish`) and coming
+   * down (`unpublish`).
+   *
+   * Asks what adding the document under the new action asks, and `publish`
+   * authority on releases for a scheduled one. In a scheduled release the new
+   * action is checked as the document's author, who the release still acts as;
+   * a switch that would leave a hard problem is refused as a `CONFLICT` naming
+   * the problems in `data.problems`, and the release is left as it was.
+   *
+   * @experimental
+   */
+  changeMemberAction(
+    args: {
+      releaseId: string;
+      memberId: string;
+      action: ReleaseMemberAction;
+    } & ReleaseCallerArgs
+  ): Promise<ReleaseMemberRow>;
+  /**
    * Commit a release to an instant.
    *
    * `timezone` is the authoring intent and travels beside the instant rather
@@ -210,6 +242,28 @@ export interface ReleasesNamespace {
    * @experimental
    */
   publishNow(args: { id: string } & ReleaseCallerArgs): Promise<ReleaseRow>;
+  /**
+   * Rename a release, change its description (`null` clears it), or both,
+   * and answer the release as it now reads. Needs `update-content-releases`
+   * on a checked call, and works in any state.
+   *
+   * @experimental
+   */
+  update(
+    args: { id: string } & ReleaseDetailsChange & ReleaseCallerArgs
+  ): Promise<ReleaseRow>;
+  /**
+   * Delete a release that never ran, with its documents: a draft, or a
+   * release cancelled before it was ever scheduled. Needs
+   * `delete-content-releases` on a checked call. Any other release is
+   * refused with CONFLICT, the reason in the error's data: scheduled or
+   * stopped (`committed`), published (`published`), or cancelled after being
+   * scheduled (`was-scheduled`). A release that is not there is NOT_FOUND.
+   * Answers the release as it was when deleted.
+   *
+   * @experimental
+   */
+  delete(args: { id: string } & ReleaseCallerArgs): Promise<ReleaseRow>;
 }
 
 /**
@@ -386,11 +440,32 @@ export function createReleasesNamespace(ctx: NextlyContext): ReleasesNamespace {
     listMembers: args =>
       service().listMembers(args.releaseId, actorOf(ctx, args)),
 
+    readiness: args => service().readiness(args.releaseId, actorOf(ctx, args)),
+
+    changeMemberAction: args =>
+      service().changeMemberAction(
+        args.memberId,
+        args.action,
+        actorOf(ctx, args),
+        args.releaseId
+      ),
+
     schedule: args =>
       service().schedule(args.id, args.at, args.timezone, actorOf(ctx, args)),
 
     cancel: args => service().cancel(args.id, actorOf(ctx, args)),
 
     publishNow: args => service().publishNow(args.id, actorOf(ctx, args)),
+
+    update: args => {
+      // Only the two fields, named rather than spread: a spread of the rest
+      // would hand the service the caller keys as part of the change.
+      const change: ReleaseDetailsChange = {};
+      if ("title" in args) change.title = args.title;
+      if ("description" in args) change.description = args.description;
+      return service().update(args.id, change, actorOf(ctx, args));
+    },
+
+    delete: args => service().delete(args.id, actorOf(ctx, args)),
   };
 }

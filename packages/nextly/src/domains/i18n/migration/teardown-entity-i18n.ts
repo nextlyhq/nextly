@@ -24,12 +24,14 @@
  */
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 
 import { nextlyI18nArchiveTables } from "../../../schemas/nextly-i18n-archive";
 import { affectedRowCount } from "../../auth/services/auth-service";
 
 import { q } from "./ddl-types";
+import { ensureI18nArchive } from "./ensure-archive";
+import { labelLegacyArchiveRows } from "./label-legacy-archive-rows";
 import type { I18nTransitionKind } from "./transition-state";
 
 /** The shared archive table, scoped per entity by its `collection` column. */
@@ -51,6 +53,8 @@ export interface TeardownI18nAdapter {
   dialect: SupportedDialect;
   executeQuery<T = unknown>(sql: string, params?: unknown[]): Promise<T[]>;
   tableExists(tableName: string): Promise<boolean>;
+  /** Which tables exist, for finding the field-group registry's name when labelling older rows. */
+  listTables(): Promise<string[]>;
   getDrizzle<T = unknown>(): T;
 }
 
@@ -112,6 +116,8 @@ export async function teardownEntityI18n(
   args: TeardownEntityI18nArgs
 ): Promise<TeardownEntityI18nResult> {
   const { adapter, slug, tableName } = args;
+  // Known exactly when the slug is: the identity type offers both or neither.
+  const kind = args.slug === null ? undefined : args.kind;
   const companionTable = `${tableName}_locales`;
 
   // Guarded so a non-localized entity (no companion was ever created) is a no-op rather
@@ -141,14 +147,30 @@ export async function teardownEntityI18n(
   // caller could not identify the entity, and the archive is keyed by slug, so there is no
   // safe row set to delete.
   let archiveRowsPurged = 0;
-  if (slug !== null && (await adapter.tableExists(ARCHIVE_TABLE))) {
+  if (
+    slug !== null &&
+    kind !== undefined &&
+    (await adapter.tableExists(ARCHIVE_TABLE))
+  ) {
+    // An archive from before rows recorded their kind has no column to scope by until it is
+    // brought up to date, and its rows are this entity's only where the registries say so. This
+    // runs before the registry row is deleted, so the entity still answers for its slug. A row
+    // whose owner stays unknown is kept: deleting it could take another entity's translations.
+    await ensureI18nArchive(adapter, adapter.dialect);
+    await labelLegacyArchiveRows(adapter);
     const db = adapter.getDrizzle<ArchiveDeleteCapableDb>();
     const { nextlyI18nArchive } = nextlyI18nArchiveTables(adapter.dialect);
-    // Scoped to this slug only — the archive is shared, so an unscoped delete would wipe
-    // every other entity's recoverable translations.
+    // Scoped to this entity only, by kind as well as slug — the archive is shared, an unscoped
+    // delete would wipe every other entity's recoverable translations, and a field group may
+    // carry a collection's or a Single's slug.
     const result = await db
       .delete(nextlyI18nArchive)
-      .where(eq(nextlyI18nArchive.collection, slug));
+      .where(
+        and(
+          eq(nextlyI18nArchive.collection, slug),
+          eq(nextlyI18nArchive.entityKind, kind)
+        )
+      );
     // Each driver reports the count in a different place, and mysql2 nests it inside a
     // result tuple, so the shared dialect-aware reader owns that knowledge.
     archiveRowsPurged = affectedRowCount(result, adapter.dialect);
