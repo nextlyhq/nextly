@@ -62,7 +62,14 @@ function repository() {
     liveAuthors: vi.fn(async (ids: string[]) => new Set(ids)),
     scheduleRelease: vi.fn(async (..._args: unknown[]) => true),
     cancelRelease: vi.fn(async () => true),
-    updateReleaseDetails: vi.fn(async (..._args: unknown[]) => true),
+    updateReleaseDetails: vi.fn(
+      async (
+        ..._args: unknown[]
+      ): Promise<{
+        row: Record<string, unknown>;
+        changed: Array<"title" | "description">;
+      } | null> => null
+    ),
     deleteRelease: vi.fn(async (..._args: unknown[]) => true),
     // The `containing` listing's own read. Present so a test can drive that
     // branch to completion rather than dying on a missing collaborator, which
@@ -1278,6 +1285,14 @@ describe("ReleasesService.update renames a release under its own permission", ()
     revision: 3,
   };
 
+  /** The repository's answer for a rename that changed `changed`. */
+  function wrote(
+    changed: Array<"title" | "description">,
+    row: Record<string, unknown> = NAMED
+  ) {
+    return { row, changed };
+  }
+
   it("refuses a caller without update, whatever else it holds, and writes nothing", async () => {
     // Renaming used to go with assembling. It is its own permission now, so a
     // role holding every other release authority but this one is refused.
@@ -1287,7 +1302,6 @@ describe("ReleasesService.update renames a release under its own permission", ()
     await expect(
       svc.update("r1", { title: "Renamed" }, ADMIN)
     ).rejects.toMatchObject({ code: "FORBIDDEN" });
-    expect(repo.findReleases).not.toHaveBeenCalled();
     expect(repo.updateReleaseDetails).not.toHaveBeenCalled();
     expect(deps.recordActivity).not.toHaveBeenCalled();
   });
@@ -1300,54 +1314,44 @@ describe("ReleasesService.update renames a release under its own permission", ()
     expect(repo.updateReleaseDetails).not.toHaveBeenCalled();
   });
 
-  it("renames a release in any state, and writes only the field that changed", async () => {
+  it("hands the repository only the fields the change names", async () => {
+    // The repository decides, under the release's lock, which of them differ.
     const { svc, repo } = service({ holds: ["update"] });
-    repo.findReleases.mockResolvedValue([NAMED]);
-    await svc.update(
-      "r1",
-      { title: "Summer launch", description: "Old notes" },
-      ADMIN
-    );
-    // The description was sent with the value it already had, so it is not
-    // part of the write.
+    repo.updateReleaseDetails.mockResolvedValueOnce(wrote(["title"]));
+    await svc.update("r1", { title: "Summer launch" }, ADMIN);
     expect(repo.updateReleaseDetails).toHaveBeenCalledWith("r1", {
       title: "Summer launch",
     });
   });
 
-  it("records the rename with the names of the fields it changed, as the user", async () => {
+  it("answers and records the row the repository wrote, with the fields it changed, as the user", async () => {
     const { svc, repo, deps } = service({ holds: ["update"] });
-    repo.findReleases
-      .mockResolvedValueOnce([NAMED])
-      .mockResolvedValueOnce([
-        { ...NAMED, title: "Summer launch", description: null },
-      ]);
+    const row = { ...NAMED, title: "Summer launch", description: null };
+    repo.updateReleaseDetails.mockResolvedValueOnce(
+      wrote(["title", "description"], row)
+    );
     const renamed = await svc.update(
       "r1",
       { title: "Summer launch", description: null },
       ADMIN
     );
-    expect(renamed.title).toBe("Summer launch");
+    expect(renamed).toBe(row);
+    // No read after the write: a later one could answer another request's
+    // change as this one's.
+    expect(repo.findReleases).not.toHaveBeenCalled();
     expect(deps.recordActivity).toHaveBeenCalledWith({
       action: "update",
-      release: expect.objectContaining({ id: "r1", title: "Summer launch" }),
+      release: row,
       changedFields: ["title", "description"],
       actor: { type: "user", id: "u1" },
     });
   });
 
-  it("writes and records nothing for a change that changes nothing", async () => {
-    // A form that sends both fields after editing neither must not move the
-    // release: every move sends a schedule judged before it round again.
+  it("records nothing for a change the repository found already made", async () => {
     const { svc, repo, deps } = service({ holds: ["update"] });
-    repo.findReleases.mockResolvedValue([NAMED]);
-    const answered = await svc.update(
-      "r1",
-      { title: "Spring launch", description: "Old notes" },
-      ADMIN
-    );
-    expect(answered).toEqual(NAMED);
-    expect(repo.updateReleaseDetails).not.toHaveBeenCalled();
+    repo.updateReleaseDetails.mockResolvedValueOnce(wrote([]));
+    const answered = await svc.update("r1", { title: "Spring launch" }, ADMIN);
+    expect(answered).toBe(NAMED);
     expect(deps.recordActivity).not.toHaveBeenCalled();
   });
 
@@ -1357,22 +1361,21 @@ describe("ReleasesService.update renames a release under its own permission", ()
     ["a title that is not text", { title: 42 }],
     ["a title too long for every dialect", { title: "x".repeat(256) }],
     ["a description that is not text", { description: 7 }],
-  ])("refuses %s before anything is read", async (_name, change) => {
+  ])("refuses %s before anything is written", async (_name, change) => {
     const { svc, repo } = service({ holds: ["update"] });
     await expect(
       svc.update("r1", change as never, ADMIN)
     ).rejects.toMatchObject({ code: "INVALID_INPUT" });
-    expect(repo.findReleases).not.toHaveBeenCalled();
     expect(repo.updateReleaseDetails).not.toHaveBeenCalled();
   });
 
   it("answers NOT_FOUND for a release that is not there", async () => {
-    const { svc, repo } = service({ holds: ["update"] });
-    repo.findReleases.mockResolvedValue([]);
+    const { svc, repo, deps } = service({ holds: ["update"] });
+    repo.updateReleaseDetails.mockResolvedValueOnce(null);
     await expect(
       svc.update("nope", { title: "Renamed" }, ADMIN)
     ).rejects.toMatchObject({ code: "NOT_FOUND" });
-    expect(repo.updateReleaseDetails).not.toHaveBeenCalled();
+    expect(deps.recordActivity).not.toHaveBeenCalled();
   });
 
   it("records a key's rename as a key, never as the key's owner", async () => {
@@ -1380,7 +1383,7 @@ describe("ReleasesService.update renames a release under its own permission", ()
     // the owner in the trail would put a person against a change they did
     // not make.
     const { svc, repo, deps } = service();
-    repo.findReleases.mockResolvedValue([NAMED]);
+    repo.updateReleaseDetails.mockResolvedValueOnce(wrote(["title"]));
     await svc.update(
       "r1",
       { title: "Renamed" },
@@ -1402,7 +1405,7 @@ describe("ReleasesService.update renames a release under its own permission", ()
     // The rename has committed. Failing the request now would report a change
     // that happened as one that did not.
     const { svc, repo, deps } = service({ holds: ["update"] });
-    repo.findReleases.mockResolvedValue([NAMED]);
+    repo.updateReleaseDetails.mockResolvedValueOnce(wrote(["title"]));
     deps.recordActivity.mockRejectedValueOnce(new Error("log is down"));
     await expect(
       svc.update("r1", { title: "Renamed" }, ADMIN)

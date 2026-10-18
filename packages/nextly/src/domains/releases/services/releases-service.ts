@@ -416,27 +416,6 @@ function assertDetailsChange(change: ReleaseDetailsChange): void {
 }
 
 /**
- * Which of the two fields a change would actually alter on `current`. A field
- * given with the value it already has is not a change, and records nothing.
- */
-function changedDetails(
-  current: ReleaseRow,
-  change: ReleaseDetailsChange
-): Array<"title" | "description"> {
-  const changed: Array<"title" | "description"> = [];
-  if (change.title !== undefined && change.title !== current.title) {
-    changed.push("title");
-  }
-  if (
-    change.description !== undefined &&
-    change.description !== current.description
-  ) {
-    changed.push("description");
-  }
-  return changed;
-}
-
-/**
  * The refusal for deleting a release that is not a draft or cancelled, saying
  * what to do instead.
  */
@@ -2146,31 +2125,31 @@ export class ReleasesService {
   ): Promise<ReleaseRow> {
     await this.authorize(actor, "update");
     assertDetailsChange(change);
-    const current = await this.requireRelease(id);
-    const changed = changedDetails(current, change);
-    if (changed.length === 0) return current;
-
-    // FENCED as every move is: the write is a compare-and-set on the
-    // revision under the release's lock, so it either lands on the release
-    // as it then is or not at all. Answered `false` only when the release is
-    // gone since the read above.
-    const details: ReleaseDetailsChange = {};
-    if (changed.includes("title")) details.title = change.title;
-    if (changed.includes("description")) {
-      details.description = change.description;
-    }
-    if (!(await this.deps.repository.updateReleaseDetails(id, details))) {
+    // Whether anything changes is decided in the repository's transaction,
+    // under the release's lock, and the row it answers is the one that
+    // transaction wrote: see `updateReleaseDetails`.
+    const written = await this.deps.repository.updateReleaseDetails(id, {
+      ...(change.title === undefined ? {} : { title: change.title }),
+      ...(change.description === undefined
+        ? {}
+        : { description: change.description }),
+    });
+    if (written === null) {
       throw NextlyError.notFound({
         logContext: { reason: "release-not-found", releaseId: id },
       });
     }
-    const [after] = await this.deps.repository.findReleases({ ids: [id] });
-    const renamed = after ?? { ...current, ...details };
-    await this.recordActivity(
-      { action: "update", release: renamed, changedFields: changed },
-      actor
-    );
-    return renamed;
+    if (written.changed.length > 0) {
+      await this.recordActivity(
+        {
+          action: "update",
+          release: written.row,
+          changedFields: written.changed,
+        },
+        actor
+      );
+    }
+    return written.row;
   }
 
   /**

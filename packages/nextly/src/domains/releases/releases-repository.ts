@@ -284,6 +284,20 @@ export interface ReleaseRow {
   revision: number;
 }
 
+/** A field a rename can change. */
+export type ReleaseDetailsField = "title" | "description";
+
+/**
+ * What a rename wrote: the release as the write left it, and which fields it
+ * changed (none when the release already read that way).
+ *
+ * @experimental
+ */
+export interface ReleaseDetailsWrite {
+  row: ReleaseRow;
+  changed: ReleaseDetailsField[];
+}
+
 export interface ReleaseMemberRow {
   id: string;
   releaseId: string;
@@ -713,13 +727,20 @@ export class ReleasesRepository {
   }
 
   /**
-   * Change a release's title or description, and say whether it changed.
+   * Change a release's title or description, deciding under the release's
+   * lock whether that changes anything, and answer the row as this write
+   * left it with the fields it changed; `null` when the release is not there.
    *
-   * A move like any other: under the release's lock, a compare-and-set on the
-   * revision it read, and a bump of that revision. So a schedule judged
-   * before this rename misses on the revision and is judged again, as for
-   * every other change to the release. Any state: the title is a label, and
-   * renaming a release that ran changes nothing it did.
+   * Decided under the lock rather than from an earlier read, so two requests
+   * setting one title cannot both count as the rename: the second finds the
+   * title already set, writes nothing, and answers the row as it found it.
+   * The answer is the row this transaction wrote, never a read after the
+   * commit, which could return another request's later change as this one's.
+   *
+   * A change is a move like any other: a compare-and-set on the revision and
+   * a bump of it (`advanceRevision`), so a schedule judged before this rename
+   * misses on the revision and is judged again. Any state: the title is a
+   * label, and renaming a release that ran changes nothing it did.
    *
    * `updatedAt` is left as it is, since a rename is not a lifecycle move: on
    * a published or cancelled release it is the instant the release finished,
@@ -728,26 +749,44 @@ export class ReleasesRepository {
    * Nothing to revalidate. A release's title is not content, and no cached
    * page is bounded by it.
    *
-   * `false` when the release is not there.
-   *
    * @experimental
    */
   async updateReleaseDetails(
     id: string,
     details: { title?: string; description?: string | null }
-  ): Promise<boolean> {
-    const set: Record<string, unknown> = {};
-    if (details.title !== undefined) set.title = details.title;
-    if (details.description !== undefined) {
-      set.description = details.description;
-    }
-    const moved = await this.db.transaction(tx =>
-      this.advanceRevision(tx, id, RELEASE_STATES, {
+  ): Promise<ReleaseDetailsWrite | null> {
+    return this.db.transaction(async tx => {
+      await tx.lockRow(RELEASES, id);
+      const [current] = await tx.select<ReleaseRow>(RELEASES, {
+        where: { and: [{ column: "id", op: "=", value: id }] },
+      });
+      if (current === undefined) return null;
+
+      const changed: ReleaseDetailsField[] = [];
+      const set: Record<string, unknown> = {};
+      const next: ReleaseRow = { ...current };
+      if (details.title !== undefined && details.title !== current.title) {
+        changed.push("title");
+        set.title = next.title = details.title;
+      }
+      if (
+        details.description !== undefined &&
+        details.description !== current.description
+      ) {
+        changed.push("description");
+        set.description = next.description = details.description;
+      }
+      if (changed.length === 0) return { row: current, changed };
+
+      const moved = await this.advanceRevision(tx, id, RELEASE_STATES, {
         set,
         keepUpdatedAt: true,
-      })
-    );
-    return moved !== null;
+      });
+      // Under the lock taken above nothing can have moved the release, so
+      // this answers a release that is gone the way the read above does.
+      if (moved === null) return null;
+      return { row: { ...next, revision: current.revision + 1 }, changed };
+    });
   }
 
   /**

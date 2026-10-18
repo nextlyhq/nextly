@@ -14,6 +14,10 @@
  * any other release's.
  *
  * And each rename and deletion is in the activity log, with who made it.
+ *
+ * A rename decides whether it changes anything under the release's lock, and
+ * answers and records the row it wrote: two cases force another write into
+ * the gap before and after its transaction to show it.
  */
 
 // Set before the harness boots: signing API keys reads it once.
@@ -33,7 +37,9 @@ import {
 } from "../../../plugins/test-nextly";
 import { createDynamicHandlers } from "../../../routeHandler";
 import { ServiceContainer } from "../../../services/index";
-import { ReleasesRepository } from "../releases-repository";
+import type { ReleaseActivityEntry } from "../release-activity";
+import { ReleasesRepository, type ReleasesDbApi } from "../releases-repository";
+import { ReleasesService } from "../services/releases-service";
 
 import { seedLiveAuthor } from "./helpers/live-author";
 import { scheduleAsItStands } from "./helpers/release-writes";
@@ -151,6 +157,70 @@ async function rest(
   return verb === "PATCH"
     ? handlers.PATCH(request, context)
     : handlers.DELETE(request, context);
+}
+
+/** One adapter write to a release row, outside any service: another request. */
+async function competingWrite(
+  t: TestNextly,
+  id: string,
+  values: Record<string, unknown>
+): Promise<void> {
+  await (
+    t.adapter as unknown as {
+      update: (
+        table: string,
+        values: Record<string, unknown>,
+        where: unknown
+      ) => Promise<unknown>;
+    }
+  ).update("nextly_releases", values, {
+    and: [{ column: "id", op: "=", value: id }],
+  });
+}
+
+/**
+ * A release service over the real database whose FIRST repository
+ * transaction has another request's write land just before it opens and
+ * just after it commits. Trusted, so the case is the interleaving and not
+ * authority; the entries it records are kept for the case to read.
+ */
+function interleavedService(
+  t: TestNextly,
+  around: { before?: () => Promise<void>; after?: () => Promise<void> }
+): { svc: ReleasesService; recorded: ReleaseActivityEntry[] } {
+  const base = t.adapter as unknown as ReleasesDbApi;
+  let first = true;
+  const db = new Proxy(base, {
+    get(target, prop) {
+      if (prop === "transaction") {
+        return async (work: never) => {
+          const forced = first;
+          first = false;
+          if (forced) await around.before?.();
+          const result = await target.transaction(work);
+          if (forced) await around.after?.();
+          return result;
+        };
+      }
+      const value: unknown = Reflect.get(target, prop, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  const recorded: ReleaseActivityEntry[] = [];
+  const svc = new ReleasesService({
+    repository: new ReleasesRepository(db),
+    targets: {
+      readDocument: async () => null,
+      declaresLifecycle: async () => false,
+    },
+    canManageReleases: async () => true,
+    canActOnDocument: async () => true,
+    runDrainNow: async () => undefined,
+    recordActivity: async entry => {
+      recorded.push(entry);
+    },
+  });
+  return { svc, recorded };
 }
 
 async function titleOf(t: TestNextly, id: string): Promise<string | null> {
@@ -327,6 +397,55 @@ describe.each(getConfiguredTestDialects())(
           new Date(before!.updatedAt).getTime()
         );
       }
+    });
+
+    it("decides a rename under the release's lock: a title another request already set is no change", async () => {
+      const t = await boot(dialect);
+      const release = await t.nextly.releases.create({ title: "Old" });
+      // Another request sets the same title after this one could have read
+      // the release, and before its transaction takes the lock.
+      const { svc, recorded } = interleavedService(t, {
+        before: () => competingWrite(t, release.id, { title: "Launch" }),
+      });
+
+      const answered = await svc.update(
+        release.id,
+        { title: "Launch" },
+        { userId: null, overrideAccess: true }
+      );
+
+      expect(answered).toMatchObject({ title: "Launch", revision: 0 });
+      // Nothing written by this request: the revision a schedule is fenced
+      // on did not move, and nothing was recorded as its change.
+      const stored = await t.nextly.releases.findByID({ id: release.id });
+      expect(stored?.revision).toBe(0);
+      expect(recorded).toEqual([]);
+    });
+
+    it("answers and records the row a rename wrote, not a later one", async () => {
+      const t = await boot(dialect);
+      const release = await t.nextly.releases.create({ title: "Old" });
+      // Another request renames it again the moment this one commits.
+      const { svc, recorded } = interleavedService(t, {
+        after: () => competingWrite(t, release.id, { title: "Someone else's" }),
+      });
+
+      const answered = await svc.update(
+        release.id,
+        { title: "Launch" },
+        { userId: null, overrideAccess: true }
+      );
+
+      expect(answered).toMatchObject({ title: "Launch", revision: 1 });
+      expect(recorded).toHaveLength(1);
+      expect(recorded[0]).toMatchObject({
+        action: "update",
+        release: { id: release.id, title: "Launch" },
+        changedFields: ["title"],
+      });
+      // The control: the later write did land, so the answer above is this
+      // request's own row and not the stored one.
+      expect(await titleOf(t, release.id)).toBe("Someone else's");
     });
 
     it("lets a key holding update rename a release over REST, and refuses a key without it", async () => {
