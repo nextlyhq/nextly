@@ -279,4 +279,16 @@ describe("previewChoices, folded into the document's menu", () => {
     });
     expect(pane?.label).toBe("Hide preview pane");
   });
+
+  it("calls opening what the control calls it, promising a new tab only beside a pane", () => {
+    const open = (withPane: boolean) =>
+      previewChoices({
+        isPreviewAvailable: true,
+        onPreview: () => undefined,
+        ...(withPane ? { onTogglePreviewPane: () => undefined } : {}),
+      }).find(choice => choice.id === "open")?.label;
+    // Without a pane the preview may open in this window: no destination named.
+    expect(open(false)).toBe("Preview");
+    expect(open(true)).toBe("Open in new tab");
+  });
 });

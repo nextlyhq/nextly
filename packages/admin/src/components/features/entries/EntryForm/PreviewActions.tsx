@@ -408,7 +408,9 @@ export function previewChoices({
   if (canOpen) {
     choices.push({
       id: "open",
-      label: previewLabel ?? "Open preview in new tab",
+      // The control's own name for opening, so a preview that opens in this
+      // window is never promised a new tab.
+      label: previewLabels(previewLabel, previewPaneOpen, canPane).menuOpen,
       run: () => void onPreview?.(),
       disabled,
     });
