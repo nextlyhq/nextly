@@ -109,7 +109,10 @@ async function productionInstall(env: Record<string, string | undefined> = {}) {
   return { meta, token, deps, createSuperAdmin, limitWithoutValidToken };
 }
 
-function setupRequest(setupToken?: unknown): Request {
+function setupRequest(
+  setupToken?: unknown,
+  extra: Record<string, unknown> = {}
+): Request {
   return new Request(`${ORIGIN}/admin/api/auth/setup`, {
     method: "POST",
     headers: {
@@ -123,6 +126,7 @@ function setupRequest(setupToken?: unknown): Request {
       password: "Str0ng-P@ssw0rd!",
       csrfToken: "csrf-test-token",
       ...(setupToken === undefined ? {} : { setupToken }),
+      ...extra,
     }),
   });
 }
@@ -196,6 +200,18 @@ describe("setup in production", () => {
     expect(res.status).toBe(429);
     // Refused by the limit before the administrator was even looked up.
     expect(hasAdministrator).not.toHaveBeenCalled();
+  });
+
+  it("reads no more than a small body, counting a larger one unread, even with the valid token", async () => {
+    const { deps, token, createSuperAdmin } = await productionInstall();
+    const counted = vi.fn(async () => null as Response | null);
+    const huge = setupRequest(token, { padding: "x".repeat(64 * 1024) });
+    await expect(
+      handleSetup(huge, deps, { limitWithoutValidToken: counted })
+    ).rejects.toMatchObject({ code: "PAYLOAD_TOO_LARGE" });
+    // Its token was never read, so it was counted like any other.
+    expect(counted).toHaveBeenCalledTimes(1);
+    expect(createSuperAdmin).not.toHaveBeenCalled();
   });
 
   it("refuses a token replaced after it was judged, creating nothing", async () => {

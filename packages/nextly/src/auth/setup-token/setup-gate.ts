@@ -106,10 +106,13 @@ export async function claimFirstSetup(
     void meta
       .compareAndSet(SETUP_CLAIM_META_KEY, current, next)
       .then(renewed => {
+        // Lost only to a takeover, after which this claim is someone else's.
         if (renewed) current = next;
         else clearInterval(renew);
       })
-      .catch(() => clearInterval(renew));
+      // A failed write leaves the claim as it was: tried again on the next
+      // tick, well before the claim could go stale.
+      .catch(() => undefined);
   }, SETUP_CLAIM_RENEW_MS);
   // Never what keeps a process alive.
   renew.unref?.();

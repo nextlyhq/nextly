@@ -65,6 +65,31 @@ describe("the setup claim", () => {
     }
   });
 
+  it("keeps renewing through a failed renewal, so a passing database error loses nothing", async () => {
+    vi.useFakeTimers();
+    try {
+      const meta = memoryMeta();
+      const held = await claimFirstSetup(meta);
+      expect(held).not.toBeNull();
+      // The first renewal fails; every later one works.
+      const write = meta.compareAndSet.bind(meta);
+      let failed = false;
+      meta.compareAndSet = (key, expected, next) => {
+        if (!failed) {
+          failed = true;
+          return Promise.reject(new Error("connection reset"));
+        }
+        return write(key, expected, next);
+      };
+      await vi.advanceTimersByTimeAsync(SETUP_CLAIM_STALE_MS * 2);
+      expect(failed).toBe(true);
+      expect(await claimFirstSetup(meta)).toBeNull();
+      await held?.release();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("is taken over once it is stale, so a setup that stopped halfway does not close setup", async () => {
     const meta = memoryMeta();
     const t0 = 1_000_000;

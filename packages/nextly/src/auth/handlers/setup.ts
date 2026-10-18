@@ -17,6 +17,7 @@ import type { TokenVerdict } from "../setup-token/setup-token";
 
 import {
   buildAuthErrorResponse,
+  boundedBody,
   buildCookieHeaders,
   csrfRefusal,
   jsonResponse,
@@ -175,15 +176,35 @@ function setupTokenRefusal(
 type SetupVerdict = TokenVerdict | "not-required";
 
 /**
+ * The most of a setup body read before the request is counted. A setup body
+ * is a few short fields; one larger than this is refused unread, so a caller
+ * whose budget is spent cannot make setup buffer and parse large bodies.
+ */
+const SETUP_BODY_BYTES = 32 * 1024;
+
+/**
  * The setup request's JSON body (an empty one when it is not an object), and
- * the error a body that is not JSON fails with once it has been counted.
+ * the error a body that is too large or not JSON fails with once it has been
+ * counted.
  */
 async function parseSetupBody(request: Request): Promise<{
   body: Awaited<ReturnType<Request["json"]>>;
   malformed?: Error;
 }> {
   try {
-    const body: Awaited<ReturnType<Request["json"]>> = await request.json();
+    const bytes = await boundedBody(request, SETUP_BODY_BYTES);
+    if (bytes === null) {
+      return {
+        body: {},
+        malformed: new NextlyError({
+          code: "PAYLOAD_TOO_LARGE",
+          publicMessage: "The request is too large.",
+        }),
+      };
+    }
+    const body: Awaited<ReturnType<Request["json"]>> = JSON.parse(
+      new TextDecoder().decode(bytes)
+    );
     return { body: body !== null && typeof body === "object" ? body : {} };
   } catch (error) {
     return {
