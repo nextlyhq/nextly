@@ -56,6 +56,10 @@ async function templateConfigs(): Promise<
   return found;
 }
 
+/** A template file's path under `templates/`, with `/` on every platform. */
+const relative = (file: string) =>
+  path.relative(TEMPLATES, file).split(path.sep).join("/");
+
 /** Every plugin package a config imports, the SDK aside. */
 const importedPlugins = (text: string) => [
   ...new Set(
@@ -104,7 +108,7 @@ describe("a scaffold's build installs the plugins its config registers", () => {
       );
       const wanted = importedPlugins(text);
 
-      expect(installs, path.relative(TEMPLATES, file)).toEqual(
+      expect(installs, relative(file)).toEqual(
         wanted.map(pkg => `nextly plugins install ${pkg}`)
       );
       for (const install of installs) {
@@ -115,7 +119,7 @@ describe("a scaffold's build installs the plugins its config registers", () => {
           steps.indexOf("next build")
         );
       }
-      if (wanted.length > 0) plugged.push(path.relative(TEMPLATES, file));
+      if (wanted.length > 0) plugged.push(relative(file));
     }
     // The blog's code-first config registers the form builder; if no config
     // registered a plugin, the check above would prove nothing.
