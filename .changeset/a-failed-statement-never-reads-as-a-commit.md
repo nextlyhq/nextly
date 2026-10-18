@@ -39,7 +39,10 @@ no error. So a callback that caught a failed statement and returned saw
 `DatabaseError` (`code` `25P02`): an error now replaces a silent rollback. Code
 that catches a failed statement inside a PostgreSQL transaction and carries on
 will see the transaction fail where it used to appear to succeed. Nothing it
-wrote was ever kept, so no data changes; only the report does. A statement
+wrote was ever kept, so no data changes; only the report does. A bulk create
+or update without `stopOnError`, in which one item's statement failed, now
+reports every item failed, which is what was kept, where it used to count the
+items before the failure as saved. A statement
 that may fail, and that the rest of the work should not depend on, belongs
 outside the transaction.
 
