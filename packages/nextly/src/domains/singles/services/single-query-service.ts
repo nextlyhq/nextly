@@ -18,6 +18,7 @@
  */
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import { inArray, type AnyColumn } from "drizzle-orm";
 
 import {
@@ -25,6 +26,7 @@ import {
   type AuthenticatedScope,
 } from "../../../auth/authenticated-scope";
 import { currentPrincipal } from "../../../auth/principal-scope";
+import { SYSTEM_ACTOR } from "../../../auth/request-actor";
 import type { FieldConfig } from "../../../collections/fields/types";
 import { getDialectTables } from "../../../database";
 import { container } from "../../../di/container";
@@ -90,6 +92,7 @@ import {
   stripServerOnlyColumns,
 } from "../../../shared/lib/password-fields";
 import type { Logger } from "../../../shared/types";
+import { recordWriteEvent } from "../../content-events/write-event";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
 import { COMPANION_UPDATED_AT_COLUMN } from "../../i18n/companion-columns";
 import {
@@ -1896,22 +1899,10 @@ export class SingleQueryService extends BaseService {
       ? (this.localization?.defaultLocale ?? null)
       : null;
 
-    if (!shouldCapture && !needsCompanionSeed) {
-      const inserted = await this.adapter.insert<SingleDocument>(
-        singleMeta.tableName,
-        snakeCaseDefaults,
-        { returning: "*" }
-      );
-      this.logger.debug("Created default Single document", {
-        slug: singleMeta.slug,
-        id,
-      });
-      return inserted;
-    }
-
-    // Non-versioned but localized: insert the main row and seed the companion in
-    // one transaction, so a failed companion seed rolls the insert back rather
-    // than leaving a main row without its localized defaults.
+    // Non-versioned: insert the main row, seed the companion when the Single
+    // is localized, and record its creation, in one transaction, so a failed
+    // seed or event rolls the insert back rather than leaving a main row
+    // without its localized defaults or its history.
     if (!shouldCapture) {
       const inserted = await this.adapter.transaction(async tx => {
         const row = await tx.insert<SingleDocument>(
@@ -1919,14 +1910,17 @@ export class SingleQueryService extends BaseService {
           snakeCaseDefaults,
           { returning: "*" }
         );
-        await this.seedLocalizedDefaultsCompanion(
-          tx,
-          singleMeta,
-          id,
-          localizedDefaults,
-          status,
-          companionExists
-        );
+        if (needsCompanionSeed) {
+          await this.seedLocalizedDefaultsCompanion(
+            tx,
+            singleMeta,
+            id,
+            localizedDefaults,
+            status,
+            companionExists
+          );
+        }
+        await this.recordCreated(tx, singleMeta.slug, row, null);
         return row;
       });
       this.logger.debug("Created default Single document", {
@@ -1969,7 +1963,7 @@ export class SingleQueryService extends BaseService {
           }
         }
         applyReadShape(parentRow, singleMeta.fields, singleMeta.tableName);
-        await captureInTx(tx, this.versionCapture, {
+        const { versionNo } = await captureInTx(tx, this.versionCapture, {
           ref: {
             scopeKind: "single",
             scopeSlug: singleMeta.slug,
@@ -1994,6 +1988,7 @@ export class SingleQueryService extends BaseService {
           status,
           companionExists
         );
+        await this.recordCreated(tx, singleMeta.slug, row, versionNo);
         return row;
       })
     );
@@ -2003,6 +1998,29 @@ export class SingleQueryService extends BaseService {
       id,
     });
     return inserted;
+  }
+
+  /**
+   * The Single's first history event, for a document the system materialized
+   * from its defaults on first read: no person made it.
+   */
+  private async recordCreated(
+    tx: TransactionContext,
+    slug: string,
+    row: SingleDocument,
+    versionNo: number | null
+  ): Promise<void> {
+    await recordWriteEvent(
+      tx,
+      { adapter: this.adapter },
+      {
+        subject: { kind: "single", slug, id: (row as { id: string }).id },
+        kind: "created",
+        actor: SYSTEM_ACTOR,
+        toState: (row as { status?: string }).status ?? null,
+        versionNo,
+      }
+    );
   }
 
   /**

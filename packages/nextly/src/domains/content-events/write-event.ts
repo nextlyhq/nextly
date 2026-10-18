@@ -24,6 +24,7 @@ import {
   type PrincipalDigestDb,
 } from "../audit/principal-digest";
 import { pluginSettingsSecrets } from "../plugins/settings-service";
+import { statusEventsFor } from "../webhooks/status-events";
 
 import { contentEventActor } from "./actor";
 import {
@@ -71,6 +72,18 @@ export interface WriteEventDeps {
   adapter: Pick<DrizzleAdapter, "getCapabilities">;
   /** The install's secrets, current first. Defaults to the environment's. */
   secrets?: () => readonly string[];
+}
+
+/**
+ * One status move a write made: one language's, or the document's own.
+ *
+ * @experimental
+ */
+export interface StatusMove {
+  /** The language that moved; absent for the document's own status. */
+  locale?: string;
+  from: string | null | undefined;
+  to: unknown;
 }
 
 /** An API key's own name, read on the write's transaction. */
@@ -137,4 +150,82 @@ export async function recordWriteEvent(
     },
     { principals }
   );
+}
+
+/**
+ * Record a write's status moves in the document's history: one "published"
+ * event naming the parts it published, and one "unpublished" for those it
+ * unpublished. Decided by the rule that decides the webhook events, so the
+ * two never disagree on what was a publish, and written whatever the
+ * document's webhook settings.
+ *
+ * @experimental
+ */
+export async function recordTransitionEvents(
+  tx: TransactionContext,
+  deps: WriteEventDeps,
+  write: Pick<
+    WriteEventInput,
+    "subject" | "actor" | "personName" | "versionNo"
+  > & {
+    isCreate?: boolean;
+  },
+  moves: readonly StatusMove[]
+): Promise<void> {
+  for (const kind of ["published", "unpublished"] as const) {
+    const moved = moves.filter(
+      m =>
+        typeof m.to === "string" &&
+        statusEventsFor({
+          from: m.from ?? null,
+          to: m.to,
+          isCreate: write.isCreate === true,
+        }).includes(`entry.${kind}`)
+    );
+    const first = moved[0];
+    if (!first) continue;
+    const locales = moved.flatMap(m => (m.locale ? [m.locale] : []));
+    await recordWriteEvent(tx, deps, {
+      subject: write.subject,
+      kind,
+      actor: write.actor,
+      personName: write.personName,
+      ...(locales.length > 0 ? { parts: { locales } } : {}),
+      fromState: moved.length === 1 ? (first.from ?? null) : null,
+      toState: typeof first.to === "string" ? first.to : null,
+      versionNo: write.versionNo ?? null,
+    });
+  }
+}
+
+/**
+ * Record a save in the document's history: a restore always, naming the
+ * version it came from, and any other save only when it recorded a version,
+ * so a save that changed nothing adds no event either.
+ *
+ * @experimental
+ */
+export async function recordSaveEvent(
+  tx: TransactionContext,
+  deps: WriteEventDeps,
+  save: Pick<WriteEventInput, "subject" | "actor" | "personName"> & {
+    locale?: string | null;
+    toState?: string | null;
+    versionNo: number | null;
+    sourceVersionNo?: number | null;
+  }
+): Promise<void> {
+  const from = save.sourceVersionNo;
+  if (typeof from !== "number" && save.versionNo === null) return;
+  await recordWriteEvent(tx, deps, {
+    subject: save.subject,
+    actor: save.actor,
+    personName: save.personName,
+    ...(save.locale ? { parts: { locales: [save.locale] } } : {}),
+    toState: save.toState ?? null,
+    versionNo: save.versionNo,
+    ...(typeof from === "number"
+      ? { kind: "restored" as const, payload: { from } }
+      : { kind: "saved" as const }),
+  });
 }

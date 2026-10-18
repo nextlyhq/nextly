@@ -118,7 +118,10 @@ import {
 import type { SupportedDialect } from "../../../types/database";
 import { willRecordMutationActivity } from "../../audit/record-activity";
 import {
+  recordSaveEvent,
+  recordTransitionEvents,
   recordWriteEvent,
+  type StatusMove,
   type WriteEventInput,
 } from "../../content-events/write-event";
 import type { DynamicCollectionService } from "../../dynamic-collections";
@@ -925,46 +928,22 @@ export class CollectionMutationService extends BaseService {
     );
   }
 
-  /**
-   * Record a save in the document's history: a restore always, naming the
-   * version it came from, and any other save only when it recorded a version,
-   * so a save that changed nothing adds no event either.
-   */
-  private async recordSaveHistory(
+  /** A save in this document's history; see `recordSaveEvent`. */
+  private recordSaveHistory(
     tx: TransactionContext,
     collection: string,
     id: string,
-    save: {
-      actor: RequestActor;
-      personName?: string | null;
-      locale?: string | null;
-      toState?: string | null;
-      versionNo: number | null;
-      sourceVersionNo?: number | null;
-    }
+    save: Omit<Parameters<typeof recordSaveEvent>[2], "subject">
   ): Promise<void> {
-    const from = save.sourceVersionNo;
-    if (typeof from !== "number" && save.versionNo === null) return;
-    await this.recordHistoryEvent(tx, collection, id, {
-      actor: save.actor,
-      personName: save.personName,
-      ...(save.locale ? { parts: { locales: [save.locale] } } : {}),
-      toState: save.toState ?? null,
-      versionNo: save.versionNo,
-      ...(typeof from === "number"
-        ? { kind: "restored" as const, payload: { from } }
-        : { kind: "saved" as const }),
-    });
+    return recordSaveEvent(
+      tx,
+      { adapter: this.adapter },
+      { subject: { kind: "collection", slug: collection, id }, ...save }
+    );
   }
 
-  /**
-   * Record a write's lifecycle transitions in the document's history: one
-   * "published" event naming the parts it published, and one "unpublished"
-   * for those it unpublished. Decided by the rule that decides the webhook
-   * events, so the two never disagree on what was a publish, and written
-   * whatever the collection's webhook settings.
-   */
-  private async recordTransitionHistory(
+  /** This document's status moves in its history; see `recordTransitionEvents`. */
+  private recordTransitionHistory(
     tx: TransactionContext,
     collection: string,
     id: string,
@@ -974,36 +953,14 @@ export class CollectionMutationService extends BaseService {
       isCreate?: boolean;
       versionNo?: number | null;
     },
-    transitions: readonly {
-      /** The language that moved; absent for the document's own status. */
-      locale?: string;
-      from: string | null | undefined;
-      to: unknown;
-    }[]
+    moves: readonly StatusMove[]
   ): Promise<void> {
-    for (const kind of ["published", "unpublished"] as const) {
-      const moved = transitions.filter(
-        t =>
-          typeof t.to === "string" &&
-          statusEventsFor({
-            from: t.from ?? null,
-            to: t.to,
-            isCreate: write.isCreate === true,
-          }).includes(`entry.${kind}`)
-      );
-      const first = moved[0];
-      if (!first) continue;
-      const locales = moved.flatMap(t => (t.locale ? [t.locale] : []));
-      await this.recordHistoryEvent(tx, collection, id, {
-        kind,
-        actor: write.actor,
-        personName: write.personName,
-        ...(locales.length > 0 ? { parts: { locales } } : {}),
-        fromState: moved.length === 1 ? (first.from ?? null) : null,
-        toState: typeof first.to === "string" ? first.to : null,
-        versionNo: write.versionNo ?? null,
-      });
-    }
+    return recordTransitionEvents(
+      tx,
+      { adapter: this.adapter },
+      { subject: { kind: "collection", slug: collection, id }, ...write },
+      moves
+    );
   }
 
   /**
