@@ -38,9 +38,8 @@ import type { FieldConfig } from "../../collections/fields/types";
 import { container } from "../../di/container";
 import { assertLocalizationConfigured } from "../../domains/i18n/config/require-app-config";
 import { archiveFieldsLeavingTranslation } from "../../domains/i18n/migration/archive-preflight";
-import { columnsMovingToCompanion } from "../../domains/i18n/migration/field-joins-translation";
 import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion-registration";
-import { moveValuesOfFieldsJoiningTranslation } from "../../domains/i18n/runtime/move-joining-values";
+import { movedOnto } from "../../domains/schema/pipeline/apply";
 import { RealClassifier } from "../../domains/schema/pipeline/classifier/classifier";
 import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/database-url";
 import { RealPreCleanupExecutor } from "../../domains/schema/pipeline/pre-cleanup/executor";
@@ -1276,24 +1275,6 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         notifier: getProductionNotifier(),
       });
 
-      // A field becoming translated keeps its value as the default language's: it moves to the
-      // companion now, before the push drops its main column.
-      const joining = {
-        tableName,
-        builtBy: "collection" as const,
-        oldFields: single.fields as unknown as FieldDefinition[],
-        newFields: fields as unknown as FieldDefinition[],
-        wasLocalized,
-        isLocalized,
-      };
-      const joinedBefore = await moveValuesOfFieldsJoiningTranslation(adapter, {
-        ...joining,
-        slug,
-        defaultLocale: getConfigFromDI()?.localization?.defaultLocale ?? "en",
-        wasStatus: single.status === true,
-        status: single.status === true,
-      });
-
       const result = await pipeline.apply({
         desired,
         db,
@@ -1305,10 +1286,9 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
         // Named, not defaulted: the scope defaults to a collection, and a single recorded under that
         // kind is invisible to every history query filtered by its own.
         uiTargetKind: "single" as const,
-        columnsMovedToCompanion: columnsMovingToCompanion({
-          ...joining,
-          dialect,
-        }),
+        // A field becoming translated keeps its value as this language's; the apply moves it after
+        // its prompts and refusals, before it drops the main column.
+        defaultLocale: getConfigFromDI()?.localization?.defaultLocale ?? "en",
       });
 
       if (!result.success) {
@@ -1335,8 +1315,8 @@ const SINGLES_METHODS: Record<string, MethodHandler<SinglesServices>> = {
           // before this apply.
           wasStatus: single.status === true,
           adapter,
-          // Added to the companion, with their values, before the push.
-          joinedBefore,
+          // Added to the companion, with their values, by the apply before its drop.
+          joinedBefore: movedOnto(result, tableName),
         });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);

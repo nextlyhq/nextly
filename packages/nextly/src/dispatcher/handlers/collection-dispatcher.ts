@@ -34,15 +34,17 @@ import {
 import { assertLocalizationConfigured } from "../../domains/i18n/config/require-app-config";
 import { archiveFieldsLeavingTranslation } from "../../domains/i18n/migration/archive-preflight";
 import { ensureI18nArchive } from "../../domains/i18n/migration/ensure-archive";
-import { columnsMovingToCompanion } from "../../domains/i18n/migration/field-joins-translation";
 import { buildCompanionTransitionStatements } from "../../domains/i18n/migration/reconcile-companion";
 import {
   companionHasStatusColumn,
   localizedColumnsOnMain,
+  translatedColumnsOnCompanion,
 } from "../../domains/i18n/runtime/companion-io";
 import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion-registration";
-import { moveValuesOfFieldsJoiningTranslation } from "../../domains/i18n/runtime/move-joining-values";
-import { createApplyDesiredSchema } from "../../domains/schema/pipeline/apply";
+import {
+  createApplyDesiredSchema,
+  movedOnto,
+} from "../../domains/schema/pipeline/apply";
 import { RealClassifier } from "../../domains/schema/pipeline/classifier/classifier";
 import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/database-url";
 import { RealPreCleanupExecutor } from "../../domains/schema/pipeline/pre-cleanup/executor";
@@ -834,16 +836,10 @@ const COLLECTIONS_METHODS: Record<
             uiTargetSlug: p.collectionName,
             // Stated rather than relying on the default, so the default stops being load-bearing.
             uiTargetKind: "collection" as const,
-            columnsMovedToCompanion: columnsMovingToCompanion({
-              tableName,
-              dialect,
-              builtBy: "collection",
-              oldFields: (collection.fields ??
-                []) as unknown as FieldDefinition[],
-              newFields: fields as unknown as FieldDefinition[],
-              wasLocalized,
-              isLocalized,
-            }),
+            // A field becoming translated keeps its value as this language's; the apply moves it
+            // after its prompts and refusals, before it drops the main column.
+            defaultLocale:
+              getConfigFromDI()?.localization?.defaultLocale ?? "en",
           });
         },
         // The optimistic-lock check now runs up front via
@@ -877,21 +873,6 @@ const COLLECTIONS_METHODS: Record<
         newFields: fields as unknown as FieldDefinition[],
         wasLocalized,
         isLocalized,
-      });
-
-      // A field becoming translated keeps its value as the default language's: it moves to the
-      // companion now, before the push drops its main column.
-      const joinedBefore = await moveValuesOfFieldsJoiningTranslation(adapter, {
-        slug: String(p.collectionName),
-        tableName,
-        builtBy: "collection",
-        defaultLocale: getConfigFromDI()?.localization?.defaultLocale ?? "en",
-        oldFields: (collection.fields ?? []) as unknown as FieldDefinition[],
-        newFields: fields as unknown as FieldDefinition[],
-        wasLocalized,
-        isLocalized,
-        wasStatus: collection.status === true,
-        status: collection.status === true,
       });
 
       const result = await apply(desired, "ui", {
@@ -956,8 +937,17 @@ const COLLECTIONS_METHODS: Record<
               tableName,
               oldFields
             ).then(cols => cols.map(c => c.name)),
-            // Added to the companion, with their values, before the push.
-            joinedBefore,
+            // Added to the companion, with their values, by the apply before its drop.
+            joinedBefore: movedOnto(result, tableName),
+            // Taken as they are: an earlier apply that moved a value and stopped before the
+            // registry recorded it left its companion column in place.
+            presentOnCompanion: companionExists
+              ? await translatedColumnsOnCompanion(adapter, {
+                  tableName,
+                  fields: newFields,
+                  builtBy: "collection",
+                })
+              : undefined,
           });
           // A disable archives non-default translations, so ensure the archive
           // table exists first. Run each statement individually (executeQuery is

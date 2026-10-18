@@ -36,10 +36,7 @@ import {
 import { diffSnapshots } from "./diff/diff";
 import { introspectLiveSnapshot } from "./diff/introspect-live";
 import type { NextlySchemaSnapshot, Operation } from "./diff/types";
-import {
-  type ColumnMovedToCompanion,
-  operationsToJudge,
-} from "./moved-to-companion";
+import { operationsToJudge, planCompanionMoves } from "./moved-to-companion";
 import {
   excludeLockedTableOps,
   logSkippedLockedOps,
@@ -99,7 +96,7 @@ export interface PreviewDesiredSchemaArgs {
   db: unknown;
   dialect: SupportedDialect;
   /** As the apply's own (`PushSchemaPipeline.apply`), so the preview asks what the apply will. */
-  columnsMovedToCompanion?: readonly ColumnMovedToCompanion[];
+  defaultLocale?: string;
 }
 
 /**
@@ -158,7 +155,15 @@ export async function previewDesiredSchema(
   // Phase B: rename detection + classification.
   // The rename detector reads typed Operation[] (post Option E) and
   // emits one candidate per drop+add pair on each table.
-  const judged = operationsToJudge(operations, args.columnsMovedToCompanion);
+  // The same moves the apply plans, so a drop it will not ask about is not asked about here.
+  const { moved } = await planCompanionMoves(
+    desired,
+    operations,
+    args.db,
+    dialect,
+    args.defaultLocale
+  );
+  const judged = operationsToJudge(operations, moved);
   const candidates = renameDetector.detect(judged, dialect);
 
   // Classifier produces ClassifierEvent[] for interactive cases

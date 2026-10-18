@@ -226,6 +226,130 @@ for (const entry of DIALECTS) {
         expect(en.body).toBe("Hello");
       });
 
+      /**
+       * The entity with `body` shared as given, holding "Hello" in it, and `headline` translated
+       * or, with `translatedHeadline` false, shared too.
+       */
+      async function seedSharedBody(
+        body: Record<string, unknown>,
+        translatedHeadline = true
+      ): Promise<MinimalConfigEntity> {
+        const allShared: MinimalConfigEntity = {
+          ...shared,
+          fields: [
+            { name: "headline", type: "text", localized: translatedHeadline },
+            { name: "body", type: "text", localized: false, ...body },
+          ],
+        };
+        await migrateCreate(allShared);
+        await migrate();
+        // A translated headline lives on the companion, so main holds only the shared columns.
+        await adapter.executeQuery(
+          translatedHeadline
+            ? `INSERT INTO ${q(table)} (${q("id")}, ${q("title")}, ${q("slug")}, ${q("body")}) VALUES ('e1', 'One', 'one', 'Hello')`
+            : `INSERT INTO ${q(table)} (${q("id")}, ${q("title")}, ${q("slug")}, ${q("headline")}, ${q("body")}) VALUES ('e1', 'One', 'one', 'Head', 'Hello')`
+        );
+        return allShared;
+      }
+
+      async function companionTables(): Promise<string[]> {
+        const rows = await adapter.executeQuery<{ name: string }>(
+          dialect === "mysql"
+            ? `SELECT TABLE_NAME AS name FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '${companion}'`
+            : dialect === "sqlite"
+              ? `SELECT name FROM sqlite_master WHERE type = 'table' AND name = '${companion}'`
+              : `SELECT table_name AS name FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = '${companion}'`
+        );
+        return rows.map(r => r.name);
+      }
+
+      it("moves the entity's first translated field into a companion it creates, and back on the way down", async () => {
+        // A translated entity whose fields were all shared has no companion, and the snapshot
+        // records no translated columns for it, so its first translated field is planned as the
+        // companion's ENABLE: created, filled from main, and main's column dropped, in one file.
+        const allShared = await seedSharedBody({}, false);
+        await migrateCreate({
+          ...allShared,
+          fields: [
+            { name: "headline", type: "text", localized: false },
+            { name: "body", type: "text", localized: true },
+          ],
+        });
+        await migrate();
+
+        const [en] = await adapter.executeQuery<{ body: string | null }>(
+          `SELECT ${q("body")} AS body FROM ${q(companion)} WHERE ${q("_parent")} = 'e1' AND ${q("_locale")} = 'en'`
+        );
+        expect(en?.body).toBe("Hello");
+
+        // The ENABLE file alone: the main file beside it is left with nothing to do.
+        expect(await migrateDown(1)).toHaveLength(1);
+        const [main] = await adapter.executeQuery<{ body: string | null }>(
+          `SELECT ${q("body")} AS body FROM ${q(table)} WHERE ${q("id")} = 'e1'`
+        );
+        expect(main?.body).toBe("Hello");
+        expect(await companionTables()).toEqual([]);
+      });
+
+      it("rolls a Required field back to shared with its value, and Required again", async () => {
+        // The main file's DOWN runs first and re-adds the column; made required there, before any
+        // value is back, it would refuse every existing row.
+        const allShared = await seedSharedBody({ required: true });
+        await migrateCreate({
+          ...allShared,
+          fields: [
+            { name: "headline", type: "text", localized: true },
+            { name: "body", type: "text", localized: true, required: true },
+          ],
+        });
+        await migrate();
+
+        expect(await migrateDown(2)).toHaveLength(2);
+
+        const [main] = await adapter.executeQuery<{ body: string | null }>(
+          `SELECT ${q("body")} AS body FROM ${q(table)} WHERE ${q("id")} = 'e1'`
+        );
+        expect(main?.body).toBe("Hello");
+        const nullRefused = await adapter
+          .executeQuery(
+            `INSERT INTO ${q(table)} (${q("id")}, ${q("title")}, ${q("slug")}, ${q("body")}) VALUES ('e2', 'Two', 'two', NULL)`
+          )
+          .then(
+            () => false,
+            () => true
+          );
+        expect(nullRefused).toBe(true);
+      });
+
+      it.skipIf(dialect !== "postgresql")(
+        "fails the way down loudly, keeping every value, when an entry has no value to restore",
+        async () => {
+          const allShared = await seedSharedBody({ required: true });
+          await migrateCreate({
+            ...allShared,
+            fields: [
+              { name: "headline", type: "text", localized: true },
+              { name: "body", type: "text", localized: true, required: true },
+            ],
+          });
+          await migrate();
+          // A second entry with no value in any language: the shared column gets none to restore.
+          await adapter.executeQuery(
+            `INSERT INTO ${q(table)} (${q("id")}, ${q("title")}, ${q("slug")}) VALUES ('e2', 'Two', 'two')`
+          );
+
+          await expect(migrateDown(2)).rejects.toThrow();
+
+          const kept = await adapter.executeQuery<{
+            locale: string;
+            body: string | null;
+          }>(
+            `SELECT ${q("_locale")} AS locale, ${q("body")} AS body FROM ${q(companion)} ORDER BY ${q("_parent")}, ${q("_locale")}`
+          );
+          expect(kept).toEqual([{ locale: "en", body: "Hello" }]);
+        }
+      );
+
       it("refuses a field whose storage changes as it becomes translated, before writing a file", async () => {
         // Its value would be copied as it is into a companion column of the new type.
         await seedShared();

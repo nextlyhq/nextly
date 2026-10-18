@@ -18,6 +18,7 @@
 import {
   getAdapterFromDI,
   getCollectionRegistryFromDI,
+  getConfigFromDI,
   getMigrationJournalFromDI,
 } from "../../../dispatcher/helpers/di";
 import { getProductionNotifier } from "../../../runtime/notifications/index";
@@ -138,6 +139,8 @@ function buildProductionDeps(): ApplyDesiredSchemaDeps {
         source,
         promptChannel,
         databaseName,
+        // A field made translated keeps its value as this language's.
+        defaultLocale: getConfigFromDI()?.localization?.defaultLocale ?? "en",
       });
     },
 

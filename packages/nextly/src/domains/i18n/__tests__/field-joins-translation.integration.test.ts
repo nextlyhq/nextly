@@ -13,7 +13,18 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { dispatchCollections } from "../../../dispatcher/handlers/collection-dispatcher";
 import { dispatchComponents } from "../../../dispatcher/handlers/component-dispatcher";
 import { dispatchSingles } from "../../../dispatcher/handlers/single-dispatcher";
+import { buildFullDesiredSchema } from "../../../dispatcher/helpers/desired-schema";
 import { describeEachDialect } from "../../../plugins/__tests__/helpers/dialect-matrix";
+import { RealClassifier } from "../../schema/pipeline/classifier/classifier";
+import { RealPreCleanupExecutor } from "../../schema/pipeline/pre-cleanup/executor";
+import { PushSchemaPipeline } from "../../schema/pipeline/pushschema-pipeline";
+import {
+  noopMigrationJournal,
+  noopNotifier,
+  noopPreRenameExecutor,
+} from "../../schema/pipeline/pushschema-pipeline-stubs";
+import { RegexRenameDetector } from "../../schema/pipeline/rename-detector";
+import { DrizzleStatementExecutor } from "../../schema/services/drizzle-statement-executor";
 import {
   createTestNextly,
   type TestDialect,
@@ -362,25 +373,19 @@ describeEachDialect("a shared field that becomes translated", dialect => {
     }
   );
 
-  it("keeps the value where it was when moving it fails, and moves it on the next try", async () => {
-    // The move runs statement by statement, and MySQL commits each schema statement, so a copy
-    // refused part-way can leave the companion holding a new, empty column. The value stays on
-    // main, where readers still find it, and the next apply takes the companion as it is.
+  it("keeps the value on main when moving it fails, so the drop never runs, and moves it on the next try", async () => {
+    // The apply moves the value before it drops the main column, so a move that fails stops the
+    // apply with the column, and its value, still in place: the drop is never let through on a
+    // move that did not happen. MySQL commits each schema statement, so the companion may keep a
+    // new, empty column; the next apply takes it as it is.
     const id = await seedCollection();
     const dialog = PATHS.find(p => p.path.includes("schema dialog"));
     if (!dialog) throw new Error("the collection dialog path is missing");
-    const adapter = current.adapter as unknown as {
-      executeQuery(statement: string, params?: unknown[]): Promise<unknown[]>;
-    };
-    const original = adapter.executeQuery.bind(adapter);
-    const injected = vi
-      .spyOn(adapter, "executeQuery")
-      .mockImplementation((statement, params) =>
+    const injected = failStatementsMatching(
+      statement =>
         statement.startsWith("INSERT INTO") &&
         statement.includes("dc_posts_locales")
-          ? Promise.reject(new Error("injected copy failure"))
-          : original(statement, params)
-      );
+    );
 
     const failed = await dialog.change(TRANSLATED).then(
       () => undefined,
@@ -389,6 +394,7 @@ describeEachDialect("a shared field that becomes translated", dialect => {
     injected.mockRestore();
 
     expect(String(failed)).toMatch(/injected copy failure/);
+    expect(await mainHeading("dc_posts", id)).toBe("Hello");
     expect(await readCollection(id)).toBe("Hello");
 
     await dialog.change(TRANSLATED);
@@ -396,6 +402,182 @@ describeEachDialect("a shared field that becomes translated", dialect => {
     expect((await companionHeadings("dc_posts", id)).en).toBe("Hello");
     expect(await readCollection(id)).toBe("Hello");
   });
+
+  it("writes nothing when the schema dialog's apply is refused for a question left unanswered", async () => {
+    // The same apply renames `views`, and the dialog sends no answer for that rename, so the apply
+    // is refused at its questions. The move comes after them: a refused apply has moved nothing.
+    const id = await seedCollection();
+
+    const refused = await dispatchCollections(
+      {} as ServiceContainer,
+      "applySchemaChanges",
+      { collectionName: "posts" },
+      {
+        fields: [
+          { name: "heading", type: "text" },
+          { name: "visits", type: "number" },
+        ],
+        confirmed: true,
+        localized: true,
+        schemaVersion: await schemaVersionOf("dynamic_collections", "posts"),
+      }
+    ).then(
+      () => undefined,
+      (error: unknown) => error
+    );
+
+    expect(String(refused)).toMatch(/cancelled/);
+    expect(await mainHeading("dc_posts", id)).toBe("Hello");
+    // No companion, or one holding nothing for the entry: the move never ran.
+    const moved = await companionHeadings("dc_posts", id).catch(
+      () => ({}) as Record<string, string | null>
+    );
+    expect(moved.en ?? null).toBeNull();
+  });
+
+  it("finishes on the next apply when one moved and dropped the column but failed before recording it", async () => {
+    // The apply moves the value and drops the main column, then the registry write after it
+    // fails, so the registry still describes the field as shared. Applied again, the main column is
+    // already gone and the value already on the companion: nothing is left to move, and the apply
+    // finishes from there instead of failing on the column it no longer has.
+    const id = await seedCollection();
+    const dialog = PATHS.find(p => p.path.includes("schema dialog"));
+    if (!dialog) throw new Error("the collection dialog path is missing");
+    // The registry write after the apply is refused, once.
+    const adapter = current.adapter as unknown as {
+      update(...args: unknown[]): Promise<unknown>;
+    };
+    const original = adapter.update.bind(adapter);
+    let refusedOnce = false;
+    const injected = vi
+      .spyOn(adapter, "update")
+      .mockImplementation((...args: unknown[]) => {
+        if (!refusedOnce && args[0] === "dynamic_collections") {
+          refusedOnce = true;
+          return Promise.reject(new Error("injected registry failure"));
+        }
+        return original(...args);
+      });
+
+    // The registry write is not fatal to the apply, so it reports the change made.
+    await dialog.change(TRANSLATED).catch(() => undefined);
+    injected.mockRestore();
+    expect(refusedOnce).toBe(true);
+    expect(await mainHeading("dc_posts", id)).toBeUndefined();
+
+    await dialog.change(TRANSLATED);
+
+    expect((await companionHeadings("dc_posts", id)).en).toBe("Hello");
+    expect(await readCollection(id)).toBe("Hello");
+  });
+
+  it("moves the value when a code-first apply makes the field translated", async () => {
+    // The code-first applies (`next dev`, a config reload, `db:sync`) hand the pipeline the desired
+    // schema and nothing else, and a developer confirms drops at the prompt. The value still moves
+    // first, so confirming nothing loses it.
+    const id = await seedCollection();
+    const desired = await buildFullDesiredSchema();
+    const posts = desired.collections.posts;
+    if (!posts) throw new Error("the collection posts is missing");
+    desired.collections.posts = {
+      ...posts,
+      fields: TRANSLATED as typeof posts.fields,
+      localized: true,
+    };
+    const db = current.adapter.getDrizzle();
+    const pipeline = new PushSchemaPipeline({
+      executor: new DrizzleStatementExecutor(dialect, db),
+      renameDetector: new RegexRenameDetector(),
+      classifier: new RealClassifier(),
+      promptDispatcher: {
+        dispatch: ({ events }) =>
+          Promise.resolve({
+            confirmedRenames: [],
+            resolutions: events.map(event => ({
+              kind: "confirm_drop" as const,
+              eventId: event.id,
+            })),
+            proceed: true,
+          }),
+      },
+      preRenameExecutor: noopPreRenameExecutor,
+      preCleanupExecutor: new RealPreCleanupExecutor(),
+      migrationJournal: noopMigrationJournal,
+      notifier: noopNotifier,
+    });
+    const databaseName =
+      dialect === "mysql"
+        ? String(
+            (
+              await query<Record<string, unknown>>("SELECT DATABASE() AS name")
+            )[0]?.name
+          )
+        : undefined;
+
+    const applied = await pipeline.apply({
+      desired,
+      db,
+      dialect,
+      source: "code",
+      promptChannel: "terminal",
+      defaultLocale: "en",
+      ...(databaseName !== undefined ? { databaseName } : {}),
+    });
+
+    expect(applied.success, JSON.stringify(applied)).toBe(true);
+    expect((await companionHeadings("dc_posts", id)).en).toBe("Hello");
+  });
+
+  /** `heading` as the main table holds it, or undefined when the column is gone. */
+  async function mainHeading(table: string, id: string): Promise<unknown> {
+    const rows = await query<{ heading: unknown }>(
+      `SELECT ${quote(dialect, "heading")} AS heading FROM ${quote(dialect, table)} WHERE ${quote(dialect, "id")} = '${id}'`
+    ).catch(() => undefined);
+    return rows?.[0]?.heading;
+  }
+
+  /**
+   * Fail every statement the schema apply runs through Drizzle that `matches`, on the handle the
+   * adapter hands out and on any transaction opened from it.
+   */
+  function failStatementsMatching(matches: (statement: string) => boolean) {
+    const adapter = current.adapter as unknown as {
+      getDrizzle(...args: unknown[]): unknown;
+    };
+    const realGetDrizzle = adapter.getDrizzle.bind(adapter);
+    const textOf = (query: unknown) =>
+      ((query as { queryChunks?: { value?: unknown }[] }).queryChunks ?? [])
+        .map(chunk => (Array.isArray(chunk.value) ? chunk.value.join("") : ""))
+        .join("");
+    const wrap = (db: object): object =>
+      new Proxy(db, {
+        get(target, property, receiver) {
+          const value: unknown = Reflect.get(target, property, receiver);
+          if (typeof value !== "function") return value;
+          if (property === "execute" || property === "run") {
+            return (query: unknown, ...rest: unknown[]) => {
+              if (matches(textOf(query))) {
+                throw new Error("injected copy failure");
+              }
+              return Reflect.apply(value, target, [query, ...rest]);
+            };
+          }
+          if (property === "transaction") {
+            return (run: (tx: object) => unknown, ...rest: unknown[]) =>
+              Reflect.apply(value, target, [
+                (tx: object) => run(wrap(tx)),
+                ...rest,
+              ]);
+          }
+          return value.bind(target);
+        },
+      });
+    return vi
+      .spyOn(adapter, "getDrizzle")
+      .mockImplementation((...args: unknown[]) =>
+        wrap(realGetDrizzle(...args) as object)
+      );
+  }
 
   it("keeps English's value when a field that left translation comes back", async () => {
     // A translated field made shared keeps English's value as the shared one; made translated
