@@ -171,8 +171,10 @@ gains or loses anything:
 - every role holding `publish-content-releases` gains `delete-content-releases`, since a
   release nobody wanted was abandoned by cancelling it.
 
-This happens once, when the permissions are created. If you take one away from a role later, a
-restart doesn't give it back.
+This happens once, when the permissions are created. If you take one away from a role you
+created, a restart doesn't give it back. The built-in roles are different: every boot brings
+each one back in line with its preset, so a permission its preset includes returns on the next
+restart. To keep a role without it, give people a role of your own instead.
 
 ## Listing releases
 
