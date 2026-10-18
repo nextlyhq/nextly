@@ -20,6 +20,7 @@ import { nextly } from "../../direct-api/nextly";
 import type { RBACAccessControlService } from "../../domains/auth/services/rbac-access-control-service";
 import type { JobRegistry } from "../../domains/jobs/job-registry";
 import { runSweepNow } from "../../domains/jobs/jobs-runner";
+import { recordReleaseActivity } from "../../domains/releases/release-activity";
 import type { ReleaseTargetCaller } from "../../domains/releases/release-targets";
 import { RELEASES_DRAIN_JOB } from "../../domains/releases/releases-drain-job";
 import { ReleasesRepository } from "../../domains/releases/releases-repository";
@@ -149,6 +150,11 @@ export function registerReleaseServices({
         // Publish now answers a drain it could not start with the release as
         // it stands; this is where that failure is reported.
         logger,
+
+        // Renames and deletions go to the activity log through the settings
+        // seam, which resolves the log from the container per call, so this
+        // depends on no registration order.
+        recordActivity: recordReleaseActivity,
 
         // The document's OWN authority, asked with the same operation the
         // ordinary write path uses. Adding a document to a release is a deferred

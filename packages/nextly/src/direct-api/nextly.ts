@@ -946,6 +946,10 @@ export const nextly = {
       requireNextly().releases.cancel(args),
     publishNow: (args: Parameters<ReleasesNamespace["publishNow"]>[0]) =>
       requireNextly().releases.publishNow(args),
+    update: (args: Parameters<ReleasesNamespace["update"]>[0]) =>
+      requireNextly().releases.update(args),
+    delete: (args: Parameters<ReleasesNamespace["delete"]>[0]) =>
+      requireNextly().releases.delete(args),
   },
 
   users: {

@@ -17,6 +17,8 @@ import { NextlyError } from "../../errors";
 import type { CacheRevalidator } from "../../revalidation/types";
 import {
   RELEASE_CANCELLABLE_FROM,
+  RELEASE_DELETABLE_FROM,
+  RELEASE_STATES,
   RELEASE_STATES_AFFECTING_CONTENT,
   type ReleaseMemberAction,
   type ReleaseKind,
@@ -711,14 +713,120 @@ export class ReleasesRepository {
   }
 
   /**
+   * Change a release's title or description, and say whether it changed.
+   *
+   * A move like any other: under the release's lock, a compare-and-set on the
+   * revision it read, and a bump of that revision. So a schedule judged
+   * before this rename misses on the revision and is judged again, as for
+   * every other change to the release. Any state: the title is a label, and
+   * renaming a release that ran changes nothing it did.
+   *
+   * `updatedAt` is left as it is, since a rename is not a lifecycle move: on
+   * a published or cancelled release it is the instant the release finished,
+   * and the Done tab orders by it, so a renamed launch keeps its place there.
+   *
+   * Nothing to revalidate. A release's title is not content, and no cached
+   * page is bounded by it.
+   *
+   * `false` when the release is not there.
+   *
+   * @experimental
+   */
+  async updateReleaseDetails(
+    id: string,
+    details: { title?: string; description?: string | null }
+  ): Promise<boolean> {
+    const set: Record<string, unknown> = {};
+    if (details.title !== undefined) set.title = details.title;
+    if (details.description !== undefined) {
+      set.description = details.description;
+    }
+    const moved = await this.db.transaction(tx =>
+      this.advanceRevision(tx, id, RELEASE_STATES, {
+        set,
+        keepUpdatedAt: true,
+      })
+    );
+    return moved !== null;
+  }
+
+  /**
+   * Delete a release and its members, in one transaction, and say whether it
+   * was deleted.
+   *
+   * Fenced on {@link RELEASE_DELETABLE_FROM} through `advanceRevision`, so the
+   * release is locked and its state checked by the same compare-and-set as
+   * every other move: a release scheduled after the caller judged it is not
+   * deleted, and neither are its members. A member row names its release with
+   * no foreign key on any dialect, so the members are removed here, in the
+   * same transaction, rather than left naming a release that is gone.
+   *
+   * The members are read before they are deleted, for the flush after the
+   * commit, as `removeMember` does. A draft or cancelled release is not
+   * consulted by a read, so the flush is a precaution for a release that
+   * moved between a page's render and this delete, not a change readers see.
+   *
+   * `false` when the release is not there or not in a deletable state;
+   * nothing is deleted then.
+   *
+   * @experimental
+   */
+  async deleteRelease(id: string): Promise<boolean> {
+    const ofThisRelease: VersionsWhere = {
+      and: [{ column: "releaseId", op: "=", value: id }],
+    };
+    const removed = await this.db.transaction(async tx => {
+      if (
+        (await this.advanceRevision(tx, id, RELEASE_DELETABLE_FROM)) === null
+      ) {
+        return null;
+      }
+      const members = await tx.select<ReleaseMemberRow>(MEMBERS, {
+        where: ofThisRelease,
+      });
+      await tx.delete(MEMBERS, ofThisRelease);
+      await tx.delete(RELEASES, {
+        and: [{ column: "id", op: "=", value: id }],
+      });
+      return members;
+    });
+    if (removed === null) return false;
+    // AFTER THE COMMIT, for the reason `blockReleases` gives.
+    await this.flushMembers(removed);
+    return true;
+  }
+
+  /**
+   * Drop the transition memo and flush the tags of these members' documents,
+   * for members the caller has already removed and read.
+   *
+   * For a write after which the members can no longer be listed from the
+   * release, so `revalidateMembersOf` would find nothing. Best-effort and
+   * never throws, for the reason that method gives.
+   */
+  private async flushMembers(
+    members: readonly ReleaseMemberRow[]
+  ): Promise<void> {
+    invalidateTransitionCacheFor(this.db);
+    if (members.length === 0 || this.revalidator === undefined) return;
+    try {
+      const intent = releaseRevalidationIntent(members);
+      if (intent !== null) await this.revalidator.flush([intent]);
+    } catch {
+      // Best-effort, as everywhere else this flushes.
+    }
+  }
+
+  /**
    * Inside `tx`, raise this release's revision by one — only while it is in
    * one of `allowedStates` — and answer its kind, or `null` when it is not
    * there or not in those states.
    *
    * The ONE way a release row moves inside a transaction: every membership
-   * change, cancel, block and publish goes through here, so every one of them
-   * bumps the revision a schedule is fenced on. `move.set` is what the move
-   * writes besides the revision — a new state, a publish instant — and
+   * change, cancel, block, publish, rename and delete goes through here, so
+   * every one of them bumps the revision a schedule is fenced on. `move.set`
+   * is what the move writes besides the revision — a new state, a publish
+   * instant, a title — and
    * `move.where` narrows the fence further, as the drain's block does with the
    * instant it planned against.
    *
@@ -743,6 +851,12 @@ export class ReleasesRepository {
     move: {
       set?: Record<string, unknown>;
       where?: readonly VersionsWhereCondition[];
+      /**
+       * Leave `updatedAt` as it is. For a write that is not a lifecycle move:
+       * on a finished release `updatedAt` is the instant it finished, which
+       * the Done tab orders by (`release-tabs`).
+       */
+      keepUpdatedAt?: boolean;
     } = {}
   ): Promise<{ kind: ReleaseKind } | null> {
     await tx.lockRow(RELEASES, releaseId);
@@ -758,7 +872,7 @@ export class ReleasesRepository {
       RELEASES,
       // The revision last, so no `set` can write a value of its own there.
       {
-        updatedAt: new Date(),
+        ...(move.keepUpdatedAt === true ? {} : { updatedAt: new Date() }),
         ...move.set,
         revision: release.revision + 1,
       },
@@ -1218,15 +1332,7 @@ export class ReleasesRepository {
     }
 
     // After the commit, as for an add.
-    invalidateTransitionCacheFor(this.db);
-    if (removed !== undefined && this.revalidator !== undefined) {
-      try {
-        const intent = releaseRevalidationIntent([removed]);
-        if (intent !== null) await this.revalidator.flush([intent]);
-      } catch {
-        // Best-effort, as everywhere else this flushes.
-      }
-    }
+    await this.flushMembers(removed === undefined ? [] : [removed]);
   }
 
   /**

@@ -34,6 +34,8 @@ function repository() {
         Array<{
           id: string;
           state: string;
+          title?: string;
+          description?: string | null;
           kind?: string;
           timezone?: string;
           revision?: number;
@@ -60,6 +62,8 @@ function repository() {
     liveAuthors: vi.fn(async (ids: string[]) => new Set(ids)),
     scheduleRelease: vi.fn(async (..._args: unknown[]) => true),
     cancelRelease: vi.fn(async () => true),
+    updateReleaseDetails: vi.fn(async (..._args: unknown[]) => true),
+    deleteRelease: vi.fn(async (..._args: unknown[]) => true),
     // The `containing` listing's own read. Present so a test can drive that
     // branch to completion rather than dying on a missing collaborator, which
     // would fail for a reason unrelated to the property under test.
@@ -100,6 +104,7 @@ function service(over?: {
     logger: {
       warn: vi.fn((_message: string, _meta?: Record<string, unknown>) => {}),
     },
+    recordActivity: vi.fn(async (_entry: unknown) => undefined),
   };
   return { svc: new ReleasesService(deps), repo, deps };
 }
@@ -1111,6 +1116,8 @@ describe("a finished release offers nothing to change", () => {
         addMember: false,
         removeMember: false,
         publishNow: false,
+        update: false,
+        delete: false,
       });
     }
   );
@@ -1259,5 +1266,224 @@ describe("ReleasesService fences a schedule on the revision it read", () => {
       svc.schedule("r1", new Date(Date.now() + 86_400_000), "UTC", ADMIN)
     ).rejects.toMatchObject({ code: "CONFLICT" });
     expect(repo.scheduleRelease).not.toHaveBeenCalled();
+  });
+});
+
+describe("ReleasesService.update renames a release under its own permission", () => {
+  const NAMED = {
+    id: "r1",
+    state: "published",
+    title: "Spring launch",
+    description: "Old notes",
+    revision: 3,
+  };
+
+  it("refuses a caller without update, whatever else it holds, and writes nothing", async () => {
+    // Renaming used to go with assembling. It is its own permission now, so a
+    // role holding every other release authority but this one is refused.
+    const { svc, repo, deps } = service({
+      holds: ["read", "create", "publish", "delete"],
+    });
+    await expect(
+      svc.update("r1", { title: "Renamed" }, ADMIN)
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(repo.findReleases).not.toHaveBeenCalled();
+    expect(repo.updateReleaseDetails).not.toHaveBeenCalled();
+    expect(deps.recordActivity).not.toHaveBeenCalled();
+  });
+
+  it("refuses an anonymous caller", async () => {
+    const { svc, repo } = service({ holds: ["update"] });
+    await expect(
+      svc.update("r1", { title: "Renamed" }, ANON)
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(repo.updateReleaseDetails).not.toHaveBeenCalled();
+  });
+
+  it("renames a release in any state, and writes only the field that changed", async () => {
+    const { svc, repo } = service({ holds: ["update"] });
+    repo.findReleases.mockResolvedValue([NAMED]);
+    await svc.update(
+      "r1",
+      { title: "Summer launch", description: "Old notes" },
+      ADMIN
+    );
+    // The description was sent with the value it already had, so it is not
+    // part of the write.
+    expect(repo.updateReleaseDetails).toHaveBeenCalledWith("r1", {
+      title: "Summer launch",
+    });
+  });
+
+  it("records the rename with the names of the fields it changed, as the user", async () => {
+    const { svc, repo, deps } = service({ holds: ["update"] });
+    repo.findReleases
+      .mockResolvedValueOnce([NAMED])
+      .mockResolvedValueOnce([
+        { ...NAMED, title: "Summer launch", description: null },
+      ]);
+    const renamed = await svc.update(
+      "r1",
+      { title: "Summer launch", description: null },
+      ADMIN
+    );
+    expect(renamed.title).toBe("Summer launch");
+    expect(deps.recordActivity).toHaveBeenCalledWith({
+      action: "update",
+      release: expect.objectContaining({ id: "r1", title: "Summer launch" }),
+      changedFields: ["title", "description"],
+      actor: { type: "user", id: "u1" },
+    });
+  });
+
+  it("writes and records nothing for a change that changes nothing", async () => {
+    // A form that sends both fields after editing neither must not move the
+    // release: every move sends a schedule judged before it round again.
+    const { svc, repo, deps } = service({ holds: ["update"] });
+    repo.findReleases.mockResolvedValue([NAMED]);
+    const answered = await svc.update(
+      "r1",
+      { title: "Spring launch", description: "Old notes" },
+      ADMIN
+    );
+    expect(answered).toEqual(NAMED);
+    expect(repo.updateReleaseDetails).not.toHaveBeenCalled();
+    expect(deps.recordActivity).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["no field at all", {}],
+    ["an empty title", { title: "" }],
+    ["a title that is not text", { title: 42 }],
+    ["a title too long for every dialect", { title: "x".repeat(256) }],
+    ["a description that is not text", { description: 7 }],
+  ])("refuses %s before anything is read", async (_name, change) => {
+    const { svc, repo } = service({ holds: ["update"] });
+    await expect(
+      svc.update("r1", change as never, ADMIN)
+    ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+    expect(repo.findReleases).not.toHaveBeenCalled();
+    expect(repo.updateReleaseDetails).not.toHaveBeenCalled();
+  });
+
+  it("answers NOT_FOUND for a release that is not there", async () => {
+    const { svc, repo } = service({ holds: ["update"] });
+    repo.findReleases.mockResolvedValue([]);
+    await expect(
+      svc.update("nope", { title: "Renamed" }, ADMIN)
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    expect(repo.updateReleaseDetails).not.toHaveBeenCalled();
+  });
+
+  it("records a key's rename as a key, never as the key's owner", async () => {
+    // The actor carries the owner's id so the key can be authorized; naming
+    // the owner in the trail would put a person against a change they did
+    // not make.
+    const { svc, repo, deps } = service();
+    repo.findReleases.mockResolvedValue([NAMED]);
+    await svc.update(
+      "r1",
+      { title: "Renamed" },
+      {
+        userId: "owner",
+        overrideAccess: false,
+        authenticatedScope: {
+          actorType: "apiKey",
+          permissions: ["update-content-releases"],
+        },
+      }
+    );
+    expect(deps.recordActivity).toHaveBeenCalledWith(
+      expect.objectContaining({ actor: { type: "apiKey" } })
+    );
+  });
+
+  it("still answers the rename when the activity log cannot be written", async () => {
+    // The rename has committed. Failing the request now would report a change
+    // that happened as one that did not.
+    const { svc, repo, deps } = service({ holds: ["update"] });
+    repo.findReleases.mockResolvedValue([NAMED]);
+    deps.recordActivity.mockRejectedValueOnce(new Error("log is down"));
+    await expect(
+      svc.update("r1", { title: "Renamed" }, ADMIN)
+    ).resolves.toBeDefined();
+    expect(deps.logger.warn).toHaveBeenCalledWith(
+      "A release change could not be recorded",
+      expect.objectContaining({ releaseId: "r1", action: "update" })
+    );
+  });
+});
+
+describe("ReleasesService.delete deletes only a release that never ran", () => {
+  it("refuses a caller without delete, whatever else it holds, and deletes nothing", async () => {
+    const { svc, repo, deps } = service({
+      holds: ["read", "create", "publish", "update"],
+    });
+    await expect(svc.delete("r1", ADMIN)).rejects.toMatchObject({
+      code: "FORBIDDEN",
+    });
+    expect(repo.findReleases).not.toHaveBeenCalled();
+    expect(repo.deleteRelease).not.toHaveBeenCalled();
+    expect(deps.recordActivity).not.toHaveBeenCalled();
+  });
+
+  it.each(["draft", "cancelled"])(
+    "deletes a %s release, and records it",
+    async state => {
+      const { svc, repo, deps } = service({ holds: ["delete"] });
+      repo.findReleases.mockResolvedValue([
+        { id: "r1", state, title: "Launch", revision: 1 },
+      ]);
+      await svc.delete("r1", ADMIN);
+      expect(repo.deleteRelease).toHaveBeenCalledWith("r1");
+      expect(deps.recordActivity).toHaveBeenCalledWith({
+        action: "delete",
+        release: expect.objectContaining({ id: "r1", title: "Launch", state }),
+        actor: { type: "user", id: "u1" },
+      });
+    }
+  );
+
+  it.each([
+    ["scheduled", "Cancel it first"],
+    ["blocked", "Cancel it first"],
+    ["published", "record of what went live"],
+  ])(
+    "refuses a %s release with a CONFLICT saying what to do, and deletes nothing",
+    async (state, says) => {
+      const { svc, repo, deps } = service({ holds: ["delete"] });
+      repo.findReleases.mockResolvedValue([
+        { id: "r1", state, title: "Launch", revision: 1 },
+      ]);
+      await expect(svc.delete("r1", ADMIN)).rejects.toMatchObject({
+        code: "CONFLICT",
+        publicMessage: expect.stringContaining(says),
+      });
+      expect(repo.deleteRelease).not.toHaveBeenCalled();
+      expect(deps.recordActivity).not.toHaveBeenCalled();
+    }
+  );
+
+  it("answers NOT_FOUND for a release that is not there", async () => {
+    const { svc, repo } = service({ holds: ["delete"] });
+    repo.findReleases.mockResolvedValue([]);
+    await expect(svc.delete("nope", ADMIN)).rejects.toMatchObject({
+      code: "NOT_FOUND",
+    });
+    expect(repo.deleteRelease).not.toHaveBeenCalled();
+  });
+
+  it("refuses with a CONFLICT, and records nothing, when the release moved before the delete", async () => {
+    // Read as a draft, scheduled before the fenced delete: the repository
+    // refuses, and nothing was deleted to record.
+    const { svc, repo, deps } = service({ holds: ["delete"] });
+    repo.findReleases.mockResolvedValue([
+      { id: "r1", state: "draft", title: "Launch", revision: 1 },
+    ]);
+    repo.deleteRelease.mockResolvedValueOnce(false);
+    await expect(svc.delete("r1", ADMIN)).rejects.toMatchObject({
+      code: "CONFLICT",
+    });
+    expect(deps.recordActivity).not.toHaveBeenCalled();
   });
 });
