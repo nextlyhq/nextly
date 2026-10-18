@@ -115,6 +115,9 @@ export async function archiveFieldsLeavingTranslation(args: {
   const leaving = new Set(
     fieldsLeavingTranslation(args.oldFields, args.newFields)
   );
+  const joining = fieldsJoiningTranslation(args.oldFields, args.newFields);
+  // Nothing to judge or archive when no field changes whether it is translated.
+  if (leaving.size === 0 && joining.length === 0) return;
 
   const dialect = args.adapter.getCapabilities().dialect;
   const refusals = [
@@ -127,7 +130,7 @@ export async function archiveFieldsLeavingTranslation(args: {
       surface: "builder",
     }),
     ...refusalsForFieldsJoiningTranslation({
-      reshaped: reshapedJoiningFields(args, dialect),
+      reshaped: reshapedJoiningFields(joining, args, dialect),
       surface: "builder",
     }),
   ];
@@ -163,6 +166,7 @@ export async function archiveFieldsLeavingTranslation(args: {
  * against the column each one's value sits in now, which its old definition describes.
  */
 function reshapedJoiningFields(
+  joining: readonly string[],
   args: {
     oldFields: readonly LeavingFieldLike[];
     newFields: readonly LeavingFieldLike[];
@@ -176,7 +180,7 @@ function reshapedJoiningFields(
       : fieldToLocalizedColumnSpec(field, dialect, args.builtBy);
   const before = new Map(args.oldFields.map(f => [f.name, f]));
   const after = new Map(args.newFields.map(f => [f.name, f]));
-  return fieldsJoiningTranslation(args.oldFields, args.newFields).filter(name =>
+  return joining.filter(name =>
     storageDiffers(columnOf(before.get(name)), columnOf(after.get(name)))
   );
 }
