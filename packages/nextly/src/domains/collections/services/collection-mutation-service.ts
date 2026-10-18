@@ -133,6 +133,7 @@ import {
   populateCompanionFieldsAllLocales,
   readCompanionLocaleStatus,
   readCompanionLocaleStatusAll,
+  readCompanionLocaleStatusAllOf,
   isBlank,
 } from "../../i18n/companion-join";
 import type { SanitizedLocalizationConfig } from "../../i18n/config/types";
@@ -147,6 +148,7 @@ import {
   companionContentStamp,
   companionWriteVia,
   upsertCompanionRow,
+  type CompanionSchema,
 } from "../../i18n/runtime/companion-io";
 import {
   cachedCompanionReadiness,
@@ -503,6 +505,8 @@ interface GoingLiveArgs {
   promoteRestoreCtx: RestoreSchemaContext | null;
   /** Where the entry's working draft is read from. */
   drafts: Pick<VersionsRepository, "findWorkingDraft">;
+  /** The batch's reads, when judged for many entries at once. */
+  reads?: GoingLiveReads;
   draftLocaleKey: string | null;
   collectionHasStatus: boolean;
   /** The status the write will persist, if it names one. */
@@ -549,10 +553,25 @@ function promoteRestoreContext(args: {
   };
 }
 
+/**
+ * Reads a judgement of what goes live makes, served for a whole batch of one
+ * collection's entries at once: the companion resolved once, and each entry's
+ * language statuses and translations from one query per batch (per language).
+ * Absent, each is read for the one entry, as a write reads it.
+ */
+interface GoingLiveReads {
+  companion: CompanionSchema | null;
+  languageStatuses(entryId: string): Promise<Map<string, string | null> | null>;
+  translations(
+    entryId: string,
+    locale: string
+  ): Promise<Record<string, unknown>>;
+}
+
 /** What a release's write judges with, the same for every entry. */
 type ReleaseWriteContext = Omit<
   GoingLiveArgs,
-  "collectionName" | "entryId" | "user" | "existingEntry" | "drafts"
+  "collectionName" | "entryId" | "user" | "existingEntry" | "drafts" | "reads"
 >;
 
 /** What judging the languages a publish puts live needs. */
@@ -578,6 +597,8 @@ interface LanguagesGoLiveArgs {
    * lock. Every read then runs on it; absent, they run on the pool.
    */
   tx?: TransactionContext;
+  /** The batch's reads, when judged for many entries at once. */
+  reads?: GoingLiveReads;
 }
 
 /** What judging one document against its collection's rules needs. */
@@ -1542,15 +1563,17 @@ export class CollectionMutationService extends BaseService {
      * A transaction's own executor, when this is asked from inside one: the
      * metadata read would otherwise take a second pooled connection.
      */
-    executor?: unknown
+    executor?: unknown,
+    /** The companion already resolved for a batch; read when absent. */
+    resolved?: CompanionSchema | null
   ): Promise<{
     localizedFieldNames: ReadonlySet<string>;
     enforceLocalizedRequired: boolean;
   }> {
-    const companion = await this.fileManager.loadCompanionSchema(
-      collectionName,
-      executor
-    );
+    const companion =
+      resolved !== undefined
+        ? resolved
+        : await this.fileManager.loadCompanionSchema(collectionName, executor);
     const localizedFieldNames = new Set(
       (companion?.localizedFields ?? []).map(f => f.name)
     );
@@ -2087,11 +2110,13 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
-   * What a publish of each of these entries, as a release performs it, would
-   * be refused with by validation, keyed by entry id, judged now and without
-   * writing: the release's own write — the status alone, every language at
-   * once, as `user` — taken through {@link goingLiveIssues}, the judgement the
-   * write itself makes.
+   * What the release's write of each of these entries would be refused with
+   * by validation and field rules, keyed by entry id, judged now and without
+   * writing: the release's own write — the status `action` names, every
+   * language at once, as `user`. Its status through the field rules the
+   * write applies to it ({@link lifecyclePatchIssues}); then what goes live,
+   * or the working draft the write folds in, through {@link goingLiveIssues}
+   * and the promotion's field rules, the judgements the write itself makes.
    *
    * Batched: the collection, its schema, the rows and the working drafts are
    * read once for all the entries, and each entry is then judged on its own.
@@ -2106,6 +2131,7 @@ export class CollectionMutationService extends BaseService {
     collectionName: string;
     entryIds: readonly string[];
     user: UserContext;
+    action: "publish" | "unpublish";
   }): Promise<Map<string, ValidationIssue[]>> {
     const issues = new Map<string, ValidationIssue[]>(
       params.entryIds.map(id => [id, []])
@@ -2121,7 +2147,8 @@ export class CollectionMutationService extends BaseService {
     if (await this.companionLacksStatus(params.collectionName)) return issues;
     const shared = await this.releaseWriteContext(
       collection,
-      params.collectionName
+      params.collectionName,
+      params.action === "publish" ? "published" : "draft"
     );
     const rows = await this.storedEntries(
       params.collectionName,
@@ -2137,13 +2164,44 @@ export class CollectionMutationService extends BaseService {
           );
     // The author's grants, once for the batch, where a field rule could ask:
     // as the write resolves them, and only where it would.
-    const grants =
-      shared.promoteRestoreCtx !== null &&
-      hasFieldAccessRule("collection", params.collectionName, "update")
-        ? await resolvedCallerGrants(params.user, undefined)
-        : null;
-    const tableName = collectionTableName(collection, params.collectionName);
+    const grants = hasFieldAccessRule(
+      "collection",
+      params.collectionName,
+      "update"
+    )
+      ? await resolvedCallerGrants(params.user, undefined)
+      : null;
+    // The documents a promotion's rules compare against, read for the whole
+    // batch.
+    const live =
+      grants === null || drafts.size === 0
+        ? new Map<string, Record<string, unknown>>()
+        : await this.storedDocumentsOf({
+            collectionName: params.collectionName,
+            rows: new Map([...rows].filter(([id]) => drafts.has(id))),
+            tableName: collectionTableName(collection, params.collectionName),
+            fields: shared.fields,
+            manyToManyFields: shared.manyToManyFields,
+          });
+    const reads = await this.goingLiveReadsOf(params.collectionName, [
+      ...rows.keys(),
+    ]);
     for (const [entryId, existingEntry] of rows) {
+      // The write refuses here first: a status the rules remove leaves it
+      // nothing to move.
+      const denied =
+        grants === null
+          ? []
+          : await this.lifecyclePatchIssues(shared, {
+              collectionName: params.collectionName,
+              entryId,
+              user: params.user,
+              grants,
+            });
+      if (denied.length > 0) {
+        issues.set(entryId, denied);
+        continue;
+      }
       const found = await this.goingLiveIssues({
         ...shared,
         collectionName: params.collectionName,
@@ -2154,21 +2212,23 @@ export class CollectionMutationService extends BaseService {
         drafts: {
           findWorkingDraft: ref => Promise.resolve(drafts.get(ref.entryId)),
         },
+        reads,
       });
       const draft = drafts.get(entryId);
+      const stored = live.get(entryId);
       if (
         grants !== null &&
         draft !== undefined &&
+        stored !== undefined &&
         shared.promoteRestoreCtx !== null
       ) {
         found.push(
           ...(await this.promotionAccessIssues(shared, {
             collectionName: params.collectionName,
             entryId,
-            row: existingEntry,
             snapshot: draft.snapshot,
             restoreCtx: shared.promoteRestoreCtx,
-            tableName,
+            live: stored,
             user: params.user,
             grants,
           }))
@@ -2186,10 +2246,11 @@ export class CollectionMutationService extends BaseService {
    */
   private async releaseWriteContext(
     collection: unknown,
-    collectionName: string
+    collectionName: string,
+    status: "published" | "draft"
   ): Promise<ReleaseWriteContext> {
     const fields = collectionFields(collection);
-    const finalData: Record<string, unknown> = { status: "published" };
+    const finalData: Record<string, unknown> = { status };
     const manyToManyFields = fields.filter(
       f => f.type === "relationship" && f.options?.relationType === "manyToMany"
     );
@@ -2237,7 +2298,7 @@ export class CollectionMutationService extends BaseService {
         : null,
       draftLocaleKey: this.wildcardDraftLocale(collection),
       collectionHasStatus: true,
-      transitionNextStatus: "published",
+      transitionNextStatus: status,
       sweepAllLocales: true,
       localizedUpdate: await this.splitLocalizedWriteData(
         collectionName,
@@ -2407,6 +2468,7 @@ export class CollectionMutationService extends BaseService {
       writeLocalePromoted: promotesDraft,
       fields: args.fields,
       user: args.user,
+      reads: args.reads,
     });
   }
 
@@ -2448,41 +2510,63 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
+   * What the field rules refuse a release's write of this entry's status
+   * with, judged as the write judges its payload: through
+   * `applyFieldWriteAccess`, as the release's author. A status the rules
+   * remove leaves the every-language write nothing to move, which it
+   * refuses; reported as the field the author may not write (code
+   * `FORBIDDEN`), or nothing.
+   */
+  private async lifecyclePatchIssues(
+    shared: ReleaseWriteContext,
+    args: {
+      collectionName: string;
+      entryId: string;
+      user: UserContext;
+      grants: () => Promise<CallerGrants>;
+    }
+  ): Promise<ValidationIssue[]> {
+    const patch = { ...shared.finalData };
+    await applyFieldWriteAccess({
+      kind: "collection",
+      slug: args.collectionName,
+      data: patch,
+      operation: "update",
+      user: args.user,
+      overrideAccess: false,
+      grants: args.grants,
+      id: args.entryId,
+    });
+    return Object.keys(shared.finalData)
+      .filter(field => !(field in patch))
+      .map(path => ({
+        path,
+        code: "FORBIDDEN",
+        message:
+          "The author may not write this field, which the release's write sets.",
+      }));
+  }
+
+  /**
    * What the field rules refuse a release's promotion of this entry's working
    * draft with, judged as the release's author would be judged at the write:
    * the promotion against the entry as stored, through
    * {@link judgePromotionAccess}. Its refusal's own issues (code `FORBIDDEN`),
-   * or none. Read-only: the stored document is read in a transaction that
-   * writes nothing.
+   * or none.
    */
   private async promotionAccessIssues(
     shared: ReleaseWriteContext,
     args: {
       collectionName: string;
       entryId: string;
-      row: Record<string, unknown>;
       snapshot: unknown;
       restoreCtx: RestoreSchemaContext;
-      tableName: string;
+      /** The entry as stored, which the rules compare the promotion with. */
+      live: Record<string, unknown>;
       user: UserContext;
       grants: () => Promise<CallerGrants>;
     }
   ): Promise<ValidationIssue[]> {
-    const live = await this.adapter.transaction(tx =>
-      this.storedDocumentOnTx(tx, {
-        row: args.row,
-        collectionName: args.collectionName,
-        entryId: args.entryId,
-        tableName: args.tableName,
-        fields: shared.fields,
-        manyToManyFields: shared.manyToManyFields,
-        // A working draft is promoted only on a collection that is not
-        // localized (`isDraftSplitEligible`), so there are no translations to
-        // read beside the row.
-        localizedUpdate: null,
-        locale: shared.locale,
-      })
-    );
     return refusalIssues(async () => {
       await this.judgePromotionAccess({
         before: this.promotedDocumentOf(
@@ -2493,7 +2577,7 @@ export class CollectionMutationService extends BaseService {
             args.restoreCtx
           ).payload
         ),
-        live: live.document,
+        live: args.live,
         callerSupplied: this.promotedDocumentOf(shared, {}),
         collectionName: args.collectionName,
         entryId: args.entryId,
@@ -2535,7 +2619,9 @@ export class CollectionMutationService extends BaseService {
       user: args.user,
       localeCtx: await this.localizedRequiredContext(
         args.collectionName,
-        args.locale
+        args.locale,
+        undefined,
+        args.reads?.companion
       ),
       id: args.entryId,
     });
@@ -2568,6 +2654,7 @@ export class CollectionMutationService extends BaseService {
           entryId: args.entryId,
           locale,
           connection,
+          reads: args.reads,
         }),
         fields: args.fields,
         collectionName: args.collectionName,
@@ -2576,7 +2663,8 @@ export class CollectionMutationService extends BaseService {
         localeCtx: await this.localizedRequiredContext(
           args.collectionName,
           locale,
-          args.tx?.getDrizzle()
+          args.tx?.getDrizzle(),
+          args.reads?.companion
         ),
         id: args.entryId,
         ...(args.tx === undefined ? {} : { tx: args.tx }),
@@ -2602,14 +2690,17 @@ export class CollectionMutationService extends BaseService {
     perLocaleStatus: boolean;
     everyLanguage: boolean;
     tx?: TransactionContext;
+    reads?: GoingLiveReads;
   }): Promise<(string | undefined)[]> {
     const statuses =
       args.perLocaleStatus || args.everyLanguage
-        ? await this.storedLanguageStatuses(
-            args.collectionName,
-            args.entryId,
-            args.tx
-          )
+        ? args.reads !== undefined
+          ? await args.reads.languageStatuses(args.entryId)
+          : await this.storedLanguageStatuses(
+              args.collectionName,
+              args.entryId,
+              args.tx
+            )
         : null;
     if (args.everyLanguage && statuses !== null && statuses.size > 0) {
       // Only the languages the app still configures. A removed language's
@@ -2698,16 +2789,19 @@ export class CollectionMutationService extends BaseService {
     locale: string | undefined;
     /** The connection the write runs on: the pool, or its transaction. */
     connection: { getDrizzle<T = unknown>(): T };
+    reads?: GoingLiveReads;
   }): Promise<Record<string, unknown>> {
     const translations =
       args.locale === undefined
         ? {}
-        : await this.readCompanionLocalizedValues(
-            args.connection,
-            args.collectionName,
-            args.entryId,
-            args.locale
-          );
+        : args.reads !== undefined
+          ? await args.reads.translations(args.entryId, args.locale)
+          : await this.readCompanionLocalizedValues(
+              args.connection,
+              args.collectionName,
+              args.entryId,
+              args.locale
+            );
     const document = this.deserializeJsonFieldsForSnapshot(
       {
         ...convertTimestampsToCamelCase({ ...args.row }),
@@ -2756,29 +2850,51 @@ export class CollectionMutationService extends BaseService {
       tx.getDrizzle()
     );
     if (!companion) return {};
+    const byEntry = await this.companionValuesOf(
+      tx.getDrizzle(),
+      companion,
+      [entryId],
+      locale
+    );
+    return byEntry.get(entryId) ?? {};
+  }
 
-    const row: Record<string, unknown> = { id: entryId };
+  /**
+   * Each entry's translatable values in one language as its companion row
+   * holds them, with no fallback, keyed by entry id: one query for them all.
+   * Inside a caller's transaction the remembered readiness verdict is read and
+   * never resolved: resolving would query, and a query against a missing
+   * relation aborts the whole transaction on PostgreSQL. The write path
+   * resolves it before opening one.
+   */
+  private async companionValuesOf(
+    executor: unknown,
+    companion: CompanionSchema,
+    entryIds: readonly string[],
+    locale: string
+  ): Promise<Map<string, Record<string, unknown>>> {
+    const rows: Record<string, unknown>[] = entryIds.map(id => ({ id }));
     await populateCompanionFields({
-      db: tx.getDrizzle<Parameters<typeof populateCompanionFields>[0]["db"]>(),
+      db: executor as Parameters<typeof populateCompanionFields>[0]["db"],
       companionTable: companion.table,
       localizedFields: companion.localizedFields,
-      rows: [row],
+      rows,
       localeChain: [locale],
-      // Inside the caller's transaction, so the remembered verdict is read and never resolved:
-      // resolving would query, and a query against a missing relation aborts the whole
-      // transaction on PostgreSQL. The write path resolves before opening one.
       readiness: cachedCompanionReadiness(
         this.adapter,
         companion.companionTableName
       ),
     });
-
-    const values: Record<string, unknown> = {};
-    for (const field of companion.localizedFields) {
-      const value = row[field.name];
-      if (value !== undefined) values[field.name] = value;
-    }
-    return values;
+    return new Map(
+      rows.map(row => {
+        const values: Record<string, unknown> = {};
+        for (const field of companion.localizedFields) {
+          const value = row[field.name];
+          if (value !== undefined) values[field.name] = value;
+        }
+        return [String(row.id), values];
+      })
+    );
   }
 
   /**
@@ -5446,9 +5562,10 @@ export class CollectionMutationService extends BaseService {
                 fields,
                 manyToManyFields
               );
+              // Always recorded: publishing every language can change only a
+              // language's status, which this snapshot does not hold, so it
+              // would compare equal with the version before.
               await captureInTx(tx, this.versionCapture, {
-                // An update: a save that changes nothing records nothing.
-                onlyIfChanged: true,
                 ref: {
                   scopeKind: "collection",
                   scopeSlug: params.collectionName,
@@ -6062,20 +6179,13 @@ export class CollectionMutationService extends BaseService {
       localizedUpdate && localizedUpdate.hasStatus
         ? await this.readLocaleStatus(tx, localizedUpdate, args.entryId)
         : null;
-    const previousCompanionStatus = committedLocaleStatus;
-    const previousParent = this.deserializeJsonFieldsForSnapshot(
-      {
-        ...convertTimestampsToCamelCase({
-          ...args.row,
-        }),
-        ...previousLocalizedValues,
-        ...(previousCompanionStatus !== null
-          ? { status: previousCompanionStatus }
-          : {}),
-      },
-      args.fields
+    const previousParent = this.storedParentRow(
+      args.row,
+      args.fields,
+      args.tableName,
+      previousLocalizedValues,
+      committedLocaleStatus
     );
-    this.redactSnapshotRow(previousParent, args.fields, args.tableName);
     const { components: previousComponents, manyToMany: previousM2M } =
       await this.buildFullSnapshotRelations(
         tx,
@@ -6147,6 +6257,150 @@ export class CollectionMutationService extends BaseService {
       slug: args.collectionName,
       locale: args.locale,
     });
+  }
+
+  /**
+   * A stored main row in the read shape: timestamps camelCased, its language's
+   * translations and status over it, JSON parsed, and the fields a snapshot
+   * never carries redacted.
+   */
+  private storedParentRow(
+    row: Record<string, unknown>,
+    fields: FieldDefinition[],
+    tableName: string,
+    localizedValues: Record<string, unknown>,
+    companionStatus: string | null
+  ): Record<string, unknown> {
+    const parent = this.deserializeJsonFieldsForSnapshot(
+      {
+        ...convertTimestampsToCamelCase({ ...row }),
+        ...localizedValues,
+        ...(companionStatus !== null ? { status: companionStatus } : {}),
+      },
+      fields
+    );
+    this.redactSnapshotRow(parent, fields, tableName);
+    return parent;
+  }
+
+  /**
+   * Many entries' documents as stored, keyed by id, as
+   * {@link storedDocumentOnTx} reads one: their components read for them all
+   * at once by the list read's batched component reader, and their
+   * many-to-many targets by its batched junction read, one query per field.
+   * For a collection that is not localized: there are no translations to read
+   * beside the rows. Read on the pool, writing nothing.
+   */
+  private async storedDocumentsOf(args: {
+    collectionName: string;
+    rows: ReadonlyMap<string, Record<string, unknown>>;
+    tableName: string;
+    fields: FieldDefinition[];
+    manyToManyFields: FieldDefinition[];
+  }): Promise<Map<string, Record<string, unknown>>> {
+    const ids = [...args.rows.keys()];
+    const componentFields = args.fields.filter(isFieldGroupField);
+    const populated =
+      this.fieldGroupDataService !== undefined && componentFields.length > 0
+        ? await this.fieldGroupDataService.populateComponentDataMany({
+            entries: ids.map(id => ({ id })),
+            parentTable: args.tableName,
+            fields: args.fields as unknown as FieldConfig[],
+            depth: 0,
+            strict: true,
+          })
+        : [];
+    const componentsById = new Map(
+      populated.map(entry => [String(entry.id), entry])
+    );
+    const targets = new Map<string, Map<string, Record<string, unknown>[]>>();
+    for (const field of args.manyToManyFields) {
+      targets.set(
+        field.name,
+        await this.relationshipService.batchFetchManyToManyRelations(
+          args.collectionName,
+          ids,
+          field
+        )
+      );
+    }
+    const documents = new Map<string, Record<string, unknown>>();
+    for (const [id, row] of args.rows) {
+      const components: Record<string, unknown> = {};
+      const entry = componentsById.get(id) ?? {};
+      for (const field of componentFields) {
+        if (field.name && entry[field.name] !== undefined) {
+          components[field.name] = entry[field.name];
+        }
+      }
+      const manyToMany: Record<string, string[]> = {};
+      for (const field of args.manyToManyFields) {
+        manyToMany[field.name] = (targets.get(field.name)?.get(id) ?? []).map(
+          target => String(target.id)
+        );
+      }
+      documents.set(
+        id,
+        assembleDocument({
+          parentRow: this.storedParentRow(
+            row,
+            args.fields,
+            args.tableName,
+            {},
+            null
+          ),
+          components,
+          manyToMany,
+        })
+      );
+    }
+    return documents;
+  }
+
+  /**
+   * The reads a judgement of what goes live makes, for a batch of one
+   * collection's entries: the companion resolved once, the language statuses
+   * of them all read in one query, and each language's translations in one
+   * query the first time that language is asked for.
+   */
+  private async goingLiveReadsOf(
+    collectionName: string,
+    entryIds: readonly string[]
+  ): Promise<GoingLiveReads> {
+    const companion =
+      await this.fileManager.loadCompanionSchema(collectionName);
+    let statuses: Promise<Map<string, Map<string, string | null>>> | undefined;
+    const translations = new Map<
+      string,
+      Promise<Map<string, Record<string, unknown>>>
+    >();
+    return {
+      companion,
+      languageStatuses: async entryId => {
+        if (companion === null) return null;
+        statuses ??= readCompanionLocaleStatusAllOf(
+          this.db as Parameters<typeof readCompanionLocaleStatusAllOf>[0],
+          companion.table,
+          entryIds,
+          cachedCompanionReadiness(this.adapter, companion.companionTableName)
+        );
+        return (await statuses).get(entryId) ?? new Map();
+      },
+      translations: async (entryId, locale) => {
+        if (companion === null) return {};
+        let byEntry = translations.get(locale);
+        if (byEntry === undefined) {
+          byEntry = this.companionValuesOf(
+            this.db,
+            companion,
+            entryIds,
+            locale
+          );
+          translations.set(locale, byEntry);
+        }
+        return (await byEntry).get(entryId) ?? {};
+      },
+    };
   }
 
   /** The stored rows of these entries that are there, keyed by id. */

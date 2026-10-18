@@ -82,15 +82,18 @@ export function releaseDocumentChecks(
     },
     // Detached from the request, for the reason `mayPerform` is: the field
     // rules a publish meets are evaluated, read-only, for the NAMED author.
-    publishProblems: (scope, entryIds, user) =>
+    publishProblems: (scope, entryIds, user, action) =>
       runDetachedFromRequest(async () => {
         if (scope.scopeKind !== "single") {
           return collections().releasePublishIssues({
             collectionName: scope.scopeSlug,
             entryIds,
             user,
+            action,
           });
         }
+        // A Single's takedown is not judged: only its publish is.
+        if (action === "unpublish") return new Map();
         const single = await singleEntries().releasePublishIssues({
           slug: scope.scopeSlug,
           user,

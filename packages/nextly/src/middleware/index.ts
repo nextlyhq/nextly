@@ -8,9 +8,10 @@
  */
 
 // Rate limiting
+export { createRateLimiter } from "./rest-limits";
 export {
-  createRateLimiter,
   createRateLimitHeaders,
+  defaultSkipAdminApi,
   getDefaultStore,
   resetDefaultStore,
   resolveRateLimitStore,
