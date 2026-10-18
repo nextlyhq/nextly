@@ -16,7 +16,7 @@ import { readCsrfCookie, readCsrfFromRequest } from "../csrf/csrf-cookie";
 import { validateCsrf } from "../csrf/validate";
 import { getSession } from "../session/get-session";
 
-import { jsonResponse, buildCookieHeaders } from "./handler-utils";
+import { buildCookieHeaders, csrfFailure, jsonResponse } from "./handler-utils";
 
 export interface ChangePasswordHandlerDeps {
   secret: string;
@@ -55,7 +55,7 @@ export async function handleChangePassword(
   );
   if (!csrfResult.valid) {
     return jsonResponse(403, {
-      error: { code: "CSRF_FAILED", message: csrfResult.error },
+      error: csrfFailure(request, csrfResult),
     });
   }
 

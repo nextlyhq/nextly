@@ -72,19 +72,20 @@ function DeliberateLeave() {
 const START = "/admin/collections/posts/1";
 
 /*
- * Waits for a browser traversal. Heard in the CAPTURE phase and added before
- * any guard mounts, so it runs ahead of the guard: a held Back is kept from
- * every listener after it, the admin's router above all, and a waiter heard
- * later would wait for an event it can never receive.
+ * Waits for a browser traversal. Added before this file's imports, so before
+ * the guard's own listener, which is registered when its module loads: a held
+ * Back is kept from every listener after the guard's, and a waiter added later
+ * would wait for an event it can never receive.
  */
-let popstateHeard: (() => void) | undefined;
-const hearPopstate = () => popstateHeard?.();
-beforeEach(() => {
-  window.addEventListener("popstate", hearPopstate, { capture: true });
+const popstateWaiter = vi.hoisted(() => {
+  const waiter: { heard: (() => void) | undefined } = { heard: undefined };
+  window.addEventListener("popstate", () => waiter.heard?.(), {
+    capture: true,
+  });
+  return waiter;
 });
 afterEach(() => {
-  window.removeEventListener("popstate", hearPopstate, { capture: true });
-  popstateHeard = undefined;
+  popstateWaiter.heard = undefined;
 });
 
 /**
@@ -96,10 +97,10 @@ async function traverse(step: () => void, events = 1): Promise<void> {
   await act(async () => {
     let left = events;
     const heard = new Promise<void>(resolve => {
-      popstateHeard = () => {
+      popstateWaiter.heard = () => {
         left -= 1;
         if (left > 0) return;
-        popstateHeard = undefined;
+        popstateWaiter.heard = undefined;
         resolve();
       };
     });
@@ -519,6 +520,40 @@ describe("Back and Forward with unsaved changes", () => {
     expect(await screen.findByRole("alertdialog")).toBeInTheDocument();
     // Still on the editor, and the router drew nothing: the work is there to
     // be asked about.
+    expect(window.location.pathname).toBe(START);
+    expect(heard).toEqual([]);
+  });
+
+  it("holds Back before a router that was listening first can draw the next page", async () => {
+    // 🔴 The browser defect. In Chromium a `popstate` on `window` reaches its
+    // listeners in the order they were added, the capture flag
+    // notwithstanding, and the host's router (Next.js's) is added when the
+    // app mounts, long before any page. During `popstate` React renders
+    // synchronously, so the router drew the page Back was going to and
+    // unmounted this one -- its guard's listener with it -- before the guard
+    // was ever asked. Modelled here by a listener added before the guard
+    // mounts that unmounts the guarded page at once.
+    window.history.pushState(null, "", BEFORE);
+    window.history.pushState(null, "", START);
+    const heard: string[] = [];
+    let view: ReturnType<typeof render> | undefined;
+    const router = () => {
+      heard.push(window.location.pathname);
+      view?.unmount();
+    };
+    window.addEventListener("popstate", router, { capture: true });
+    onTestFinished(() =>
+      window.removeEventListener("popstate", router, { capture: true })
+    );
+    view = render(
+      <UnsavedChangesGuard isDirty>
+        <span />
+      </UnsavedChangesGuard>
+    );
+
+    await traverse(() => window.history.back());
+
+    expect(await screen.findByRole("alertdialog")).toBeInTheDocument();
     expect(window.location.pathname).toBe(START);
     expect(heard).toEqual([]);
   });

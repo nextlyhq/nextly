@@ -846,11 +846,14 @@ function reportWhatBroke(args: {
       message: `With this change, ${describeHost(host)} would place a component inside itself.`,
     });
   }
-  const had = new Set(
-    faultsIn(stored, before.composition, setup).map(faultIdentity)
-  );
+  // Counted, not only named: two locked slots of one block type broken the
+  // same way read alike, and a save breaking the second is still a new break.
+  const had = faultCounts(faultsIn(stored, before.composition, setup));
   for (const fault of faultsIn(stored, after.composition, setup)) {
-    if (had.has(faultIdentity(fault))) {
+    const identity = faultIdentity(fault);
+    const left = had.get(identity) ?? 0;
+    if (left > 0) {
+      had.set(identity, left - 1);
       // Broken before this save and no worse after it: not this save's to
       // refuse, and still worth an operator's attention when it is a lock.
       if (LOCK_FAULTS.has(fault.code)) tally.stillBroken(host, fault);
@@ -869,6 +872,16 @@ function reportWhatBroke(args: {
 function faultIdentity(fault: HostFault): string {
   const base = `${fault.code}\u0000${fault.instanceId}`;
   return LOCK_FAULTS.has(fault.code) ? `${base}\u0000${fault.message}` : base;
+}
+
+/** How many faults of each identity a composition holds. */
+function faultCounts(faults: readonly HostFault[]): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const fault of faults) {
+    const identity = faultIdentity(fault);
+    counts.set(identity, (counts.get(identity) ?? 0) + 1);
+  }
+  return counts;
 }
 
 /** The faults that are a lock broken in the composed host. */
@@ -929,6 +942,13 @@ interface SelectionFootprint {
   readonly rootTypes: ReadonlySet<string>;
   readonly depth: number;
   readonly componentDepth: number;
+  /**
+   * The locks the selection itself breaks, placed with no values of its own,
+   * counted by fault identity: two slots of one block type broken the same
+   * way read alike. A variant's value for an exposure a lock holds changes
+   * what every placement picking it draws, with nothing else moved.
+   */
+  readonly lockFaults: ReadonlyMap<string, number>;
 }
 
 /** The footprint of `document` stored as `self`, selection by selection. */
@@ -947,8 +967,9 @@ async function footprintOf(
   const selections = new Map<string, SelectionFootprint>();
   let complete = true;
   for (const variant of [undefined, ...(variantNamesIn(document) ?? [])]) {
+    const host = hostPlacing(self, variant);
     const composed = await composeWithReads({
-      host: hostPlacing(self, variant),
+      host,
       library,
       read,
       limits: setup.limits,
@@ -967,6 +988,11 @@ async function footprintOf(
       rootTypes: new Set(nodes.map(root => root.type)),
       depth: deepest(nodes, setup),
       componentDepth: componentDepth ?? MAX_COMPOSED_DEPTH + 1,
+      lockFaults: faultCounts(
+        faultsIn(host, composed.composition, setup).filter(fault =>
+          LOCK_FAULTS.has(fault.code)
+        )
+      ),
     });
   }
   return {
@@ -1165,6 +1191,9 @@ function selectionWorsens(
   if (after.componentDepth > before.componentDepth) return true;
   for (const type of after.rootTypes) {
     if (!before.rootTypes.has(type)) return true;
+  }
+  for (const [fault, count] of after.lockFaults) {
+    if (count > (before.lockFaults.get(fault) ?? 0)) return true;
   }
   return false;
 }

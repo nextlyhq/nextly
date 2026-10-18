@@ -21,6 +21,7 @@ import {
   StoreUnknownSourceCounter,
 } from "../../middleware/unknown-source-counter";
 import { mintPendingToken } from "../../pipeline/pending-token";
+import type { AuthLimitAnswer, AuthStrategy } from "../../pipeline/types";
 import { buildAuthRouterDeps } from "../deps-bridge";
 import { routeAuthRequest, type AuthRouterDeps } from "../router";
 import type { RateLimitStore } from "../../../middleware/rate-limit";
@@ -200,27 +201,27 @@ describe("identifier keying", () => {
   });
 });
 
-describe("the keys a shared store sees", () => {
-  /** A store that remembers every key it is asked about. */
-  function recordingStore(): { store: RateLimitStore; keys: Set<string> } {
-    const inner = new SlidingWindowMemoryStore();
-    const keys = new Set<string>();
-    return {
-      keys,
-      store: {
-        increment: (key, windowMs) => {
-          keys.add(key);
-          return inner.increment(key, windowMs);
-        },
-        reset: key => inner.reset(key),
-        consume: (key, limit, windowMs) => {
-          keys.add(key);
-          return inner.consume(key, limit, windowMs);
-        },
+/** A store that remembers every key it is asked about. */
+function recordingStore(): { store: RateLimitStore; keys: Set<string> } {
+  const inner = new SlidingWindowMemoryStore();
+  const keys = new Set<string>();
+  return {
+    keys,
+    store: {
+      increment: (key, windowMs) => {
+        keys.add(key);
+        return inner.increment(key, windowMs);
       },
-    };
-  }
+      reset: key => inner.reset(key),
+      consume: (key, limit, windowMs) => {
+        keys.add(key);
+        return inner.consume(key, limit, windowMs);
+      },
+    },
+  };
+}
 
+describe("the keys a shared store sees", () => {
   async function keysFor(secret: string): Promise<string[]> {
     const h = harness();
     const recorded = recordingStore();
@@ -501,4 +502,247 @@ describe("a budget of zero", () => {
     expect(h.counter.trackedKeys).toBe(0);
     expect(h.tokenLookups).toEqual([]);
   });
+});
+
+describe("strategies that name the account a sign-in targets", () => {
+  /** Every key a strategy was asked about, in order. */
+  type Asked = string[];
+
+  /**
+   * A username strategy: it claims a request that carries a `username`, and
+   * looks the name up trimmed and lowercased, so it names it the same way.
+   */
+  function usernameStrategy(asked: Asked = []): AuthStrategy {
+    return {
+      name: "username",
+      authenticate: async input =>
+        typeof input.body.username === "string"
+          ? { type: "fail" }
+          : { type: "pass" },
+      limitKey: ({ body }): AuthLimitAnswer => {
+        asked.push(String(body.username));
+        return typeof body.username === "string"
+          ? { handles: true, key: body.username.trim().toLowerCase() }
+          : { handles: false };
+      },
+    };
+  }
+
+  /** A strategy keyed on a credential that names nobody before lookup. */
+  function codeStrategy(): AuthStrategy {
+    return {
+      name: "oauth",
+      authenticate: async input =>
+        typeof input.body.code === "string"
+          ? { type: "fail" }
+          : { type: "pass" },
+      limitKey: ({ body }) =>
+        typeof body.code === "string"
+          ? { handles: true, key: body.code }
+          : { handles: false },
+    };
+  }
+
+  /** A strategy written before the limiter could ask it anything. */
+  function silentStrategy(claims: boolean): AuthStrategy {
+    return {
+      name: "legacy",
+      authenticate: async () => (claims ? { type: "fail" } : { type: "pass" }),
+    };
+  }
+
+  /** The harness with `strategies` ahead of the built-in password one. */
+  function withStrategies(
+    strategies: AuthStrategy[],
+    options: Parameters<typeof harness>[0] = {}
+  ): Harness {
+    const h = harness(options);
+    h.deps.authStrategies = [...strategies, ...h.deps.authStrategies];
+    return h;
+  }
+
+  const signIn = (h: Harness, body: Record<string, unknown>) =>
+    post(h, "login", { password: "pw", ...body });
+
+  it("asks no strategy anything once the ceiling is met", async () => {
+    const asked: Asked = [];
+    const h = withStrategies([usernameStrategy(asked)], { budget: 1 }); // ceiling 100
+    for (let i = 0; i < 100; i++) await signIn(h, { username: `u${i}` });
+    asked.length = 0;
+
+    expect(await admitted(signIn(h, { username: "late" }))).toBe(false);
+    expect(asked).toEqual([]);
+  });
+
+  it("asks about a spent key no more times than the ceiling admits", async () => {
+    const asked: Asked = [];
+    const h = withStrategies([usernameStrategy(asked)], { budget: 1 }); // ceiling 100
+    for (let i = 0; i < 150; i++) await signIn(h, { username: "ann" });
+    expect(asked).toHaveLength(100);
+  });
+
+  it("buys no fresh budget by rotating the email, whatever spelling of the name", async () => {
+    const h = withStrategies([usernameStrategy()], { budget: 3 });
+    for (const [i, spelling] of ["ann", "Ann", " ANN "].entries()) {
+      expect(
+        await admitted(
+          signIn(h, { username: spelling, email: `fresh-${i}@example.com` })
+        )
+      ).toBe(true);
+    }
+    expect(
+      await admitted(
+        signIn(h, { username: "ann\t", email: "fresh-3@example.com" })
+      )
+    ).toBe(false);
+    expect(await admitted(signIn(h, { username: "bob" }))).toBe(true);
+  });
+
+  it("limits an unknown name apart from a known one, and answers both alike when spent", async () => {
+    const h = withStrategies([usernameStrategy()], { budget: 2 });
+    // Each name has a budget of its own: neither spends the other's.
+    for (let i = 0; i < 2; i++) {
+      expect(await admitted(signIn(h, { username: "real" }))).toBe(true);
+      expect(await admitted(signIn(h, { username: "ghost" }))).toBe(true);
+    }
+    const real = await signIn(h, { username: "real" });
+    const ghost = await signIn(h, { username: "ghost" });
+
+    expect(real.status).toBe(429);
+    expect(ghost.status).toBe(real.status);
+    expect(await ghost.text()).toBe(await real.text());
+    expect([...ghost.headers.entries()]).toEqual([...real.headers.entries()]);
+    expect(h.accountLookups).toEqual([]);
+  });
+
+  it("keys a code strategy on its code, and leaves requests it does not handle to the password budget", async () => {
+    const h = withStrategies([codeStrategy()], { budget: 2 });
+    await signIn(h, { code: "code-1" });
+    await signIn(h, { code: "code-1" });
+    expect(await admitted(signIn(h, { code: "code-1" }))).toBe(false);
+    expect(await admitted(signIn(h, { code: "code-2" }))).toBe(true);
+
+    expect(await admitted(login(h, "a@example.com"))).toBe(true);
+    expect(await admitted(login(h, "a@example.com"))).toBe(true);
+    expect(await admitted(login(h, "a@example.com"))).toBe(false);
+    expect(await admitted(signIn(h, { code: "code-2" }))).toBe(true);
+  });
+
+  it("lets the first strategy that handles a request decide its budget", async () => {
+    const first: AuthStrategy = {
+      name: "first",
+      authenticate: async () => ({ type: "fail" }),
+      limitKey: ({ body }) =>
+        typeof body.a === "string"
+          ? { handles: true, key: body.a }
+          : { handles: false },
+    };
+    const second: AuthStrategy = {
+      name: "second",
+      authenticate: async () => ({ type: "fail" }),
+      limitKey: ({ body }) => ({ handles: true, key: String(body.b) }),
+    };
+    const h = withStrategies([first, second], { budget: 2 });
+    // The second strategy would name a fresh key each time; the first decides.
+    await signIn(h, { a: "same", b: "b-0" });
+    await signIn(h, { a: "same", b: "b-1" });
+    expect(await admitted(signIn(h, { a: "same", b: "b-2" }))).toBe(false);
+
+    // And the second strategy's key was never spent by those requests.
+    for (let i = 0; i < 2; i++) {
+      expect(await admitted(signIn(h, { b: "shared" }))).toBe(true);
+    }
+  });
+
+  it("keeps a name a strategy reads apart from the same string as an email", async () => {
+    const h = withStrategies([usernameStrategy()], { budget: 2 });
+    await signIn(h, { username: "a@example.com" });
+    await signIn(h, { username: "a@example.com" });
+    expect(await admitted(signIn(h, { username: "a@example.com" }))).toBe(
+      false
+    );
+    expect(await admitted(login(h, "a@example.com"))).toBe(true);
+  });
+
+  it("counts a password sign-in and a reset request for one address against one budget", async () => {
+    const h = withStrategies([usernameStrategy()], { budget: 2 });
+    await login(h, "a@example.com");
+    await post(h, "forgot-password", { email: "A@Example.com" });
+    expect(await admitted(login(h, "a@example.com"))).toBe(false);
+  });
+
+  it.each([
+    [
+      "throws",
+      () => {
+        throw new Error("strategy fault");
+      },
+    ],
+    ["rejects", () => Promise.reject(new Error("strategy fault"))],
+  ])(
+    "counts a request account-less when the strategy's answer %s",
+    async (_, limitKey) => {
+      const faulty: AuthStrategy = {
+        name: "faulty",
+        authenticate: async () => ({ type: "fail" }),
+        limitKey: limitKey as AuthStrategy["limitKey"],
+      };
+      const h = withStrategies([faulty], { budget: 2 });
+      // Each names a fresh address, which buys nothing past the shared budget.
+      expect(await admitted(login(h, "x0@example.com"))).toBe(true);
+      expect(await admitted(login(h, "x1@example.com"))).toBe(true);
+      expect(await admitted(login(h, "x2@example.com"))).toBe(false);
+      expect(await admitted(post(h, "login", "not json"))).toBe(false);
+    }
+  );
+
+  it("keeps its state within the bound, at one key size, through a flood of maximum-length keys", async () => {
+    const h = withStrategies([usernameStrategy()], { budget: 1 }); // ceiling 100
+    const recorded = recordingStore();
+    const counter = new StoreUnknownSourceCounter(
+      new RateLimiter(recorded.store)
+    );
+    h.deps.authRateLimit = {
+      ...h.deps.authRateLimit,
+      unknownSourceCounter: counter,
+    };
+    // Each name fills nearly the whole of the body the limiter reads.
+    const long = (i: number) => `${i}-`.padEnd(30_000, "x");
+    for (let i = 0; i < 300; i++) await signIn(h, { username: long(i) });
+
+    const strategyKeys = [...recorded.keys].filter(key =>
+      key.startsWith("auth-unknown:strategy:")
+    );
+    expect(strategyKeys).toHaveLength(100);
+    expect(new Set(strategyKeys.map(key => key.length)).size).toBe(1);
+    expect(strategyKeys[0].length).toBeLessThan(200);
+  });
+
+  it.each([true, false])(
+    "keys the chain on the email when a strategy that cannot answer comes first (it claims: %s)",
+    async claims => {
+      const asked: Asked = [];
+      const h = withStrategies(
+        [silentStrategy(claims), usernameStrategy(asked)],
+        {
+          budget: 2,
+        }
+      );
+      // Rotating the email buys a fresh budget: the username is not the key.
+      for (let i = 0; i < 4; i++) {
+        expect(
+          await admitted(
+            signIn(h, { username: "ann", email: `e${i}@example.com` })
+          )
+        ).toBe(true);
+      }
+      // And one email is one budget, whatever username it carries.
+      await signIn(h, { username: "u1", email: "same@example.com" });
+      await signIn(h, { username: "u2", email: "same@example.com" });
+      expect(
+        await admitted(signIn(h, { username: "u3", email: "same@example.com" }))
+      ).toBe(false);
+      expect(asked).toEqual([]);
+    }
+  );
 });

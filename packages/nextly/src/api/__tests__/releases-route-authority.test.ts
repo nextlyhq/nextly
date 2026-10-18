@@ -141,8 +141,32 @@ function namespace() {
       blockingReasons: vi.fn(async () => [
         { memberId: "m1", reason: "AUTHOR_GONE" as const },
       ]),
+      readiness: vi.fn(async () => ({
+        releaseId: "r1",
+        hard: [{ memberId: "m1", code: "DOCUMENT_GONE" }],
+        soft: [],
+      })),
+      changeMemberAction: vi.fn(
+        async (args: { memberId: string; action: string }) => ({
+          id: args.memberId,
+          action: args.action,
+        })
+      ),
       schedule: vi.fn(async () => undefined),
       cancel: vi.fn(async () => undefined),
+      // Answers the release as it reads after the rename, so a case can say
+      // the route returned it.
+      update: vi.fn(async (_args: Record<string, unknown>) => ({
+        id: "r1",
+        title: "Renamed",
+        state: "draft",
+      })),
+      // Answers the release as it was before the delete, as the service does.
+      delete: vi.fn(async (_args: Record<string, unknown>) => ({
+        id: "r1",
+        title: "Old launch",
+        state: "draft",
+      })),
       // Answers the release as it stands after the run, so a case can say
       // which way it went.
       publishNow: vi.fn(
@@ -216,6 +240,34 @@ describe("release route authority", () => {
       action: "read",
       resource: "content-releases",
     });
+  });
+
+  it("demands only READ to ask what is wrong with a release's documents", async () => {
+    // The same question as the blockers, asked of every check: whoever may
+    // fix the documents may learn which ones need fixing.
+    expect(await authorityFor("getReleaseReadiness")).toEqual({
+      action: "read",
+      resource: "content-releases",
+    });
+  });
+
+  it("demands create to switch a document's action, leaving publish to the service", async () => {
+    // Switching re-assembles the release. Whether the release is scheduled,
+    // and so needs `publish` too, is something only the service knows.
+    expect(
+      await authorityFor("changeReleaseMemberAction", {
+        body: { action: "unpublish" },
+        params: { releaseId: "r1", memberId: "m1" },
+      })
+    ).toEqual({ action: "create", resource: "content-releases" });
+    expect(api.releases.changeMemberAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        releaseId: "r1",
+        memberId: "m1",
+        action: "unpublish",
+        overrideAccess: false,
+      })
+    );
   });
 
   it("demands publish to publish now", async () => {
@@ -310,6 +362,22 @@ describe("release route input at the untyped boundary", () => {
     );
     expect(res.status).toBe(400);
     expect(api.releases.find).not.toHaveBeenCalled();
+  });
+
+  it("refuses a switch to an action outside the two, before the service", async () => {
+    // `publsih` reaching the applier would WITHDRAW the document, so it is
+    // refused at the boundary as well as by the service.
+    const res = await handleReleaseRequest(
+      new Request("https://example.test/api/releases/r1/members/m1", {
+        method: "PATCH",
+        body: JSON.stringify({ action: "publsih" }),
+        headers: { "Content-Type": "application/json" },
+      }),
+      "changeReleaseMemberAction",
+      { releaseId: "r1", memberId: "m1" }
+    );
+    expect(res.status).toBe(400);
+    expect(api.releases.changeMemberAction).not.toHaveBeenCalled();
   });
 
   it("passes a recognised state through", async () => {
@@ -973,5 +1041,96 @@ describe("publish now over REST", () => {
     expect(res.status).toBe(200);
     expect(body.item).toMatchObject({ id: "r1", state: "published" });
     expect(body.item.can).toBeUndefined();
+  });
+});
+
+describe("renaming and deleting a release", () => {
+  /** A request to one release, with a JSON body when one is given. */
+  async function send(method: string, verb: string, body?: unknown) {
+    return handleReleaseRequest(
+      new Request("https://example.test/api/releases/r1", {
+        method: verb,
+        ...(body === undefined
+          ? {}
+          : {
+              body: JSON.stringify(body),
+              headers: { "Content-Type": "application/json" },
+            }),
+      }),
+      method,
+      { releaseId: "r1" }
+    );
+  }
+
+  it("demands update to rename, not create", async () => {
+    // Renaming went with assembling before it had a permission of its own.
+    // Asking `create` here would let every assembler rename on a route that
+    // says it needs `update`.
+    expect(
+      await authorityFor("updateRelease", { body: { title: "Renamed" } })
+    ).toEqual({ action: "update", resource: "content-releases" });
+  });
+
+  it("demands delete to delete, not publish", async () => {
+    expect(await authorityFor("deleteRelease")).toEqual({
+      action: "delete",
+      resource: "content-releases",
+    });
+  });
+
+  it("hands the service the rename with its checks turned on", async () => {
+    const res = await send("updateRelease", "PATCH", {
+      title: "Renamed",
+      description: null,
+    });
+    expect(res.status).toBe(200);
+    expect(api.releases.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "r1",
+        title: "Renamed",
+        description: null,
+        userId: "u1",
+        overrideAccess: false,
+      })
+    );
+    // The mutation envelope, with the release as it now reads.
+    const body = (await res.json()) as {
+      message: string;
+      item: { title: string };
+    };
+    expect(body.item.title).toBe("Renamed");
+  });
+
+  it.each([
+    ["no field", {}],
+    ["an empty title", { title: "" }],
+    ["a title longer than every dialect stores", { title: "x".repeat(256) }],
+    ["a title that is not text", { title: 7 }],
+    ["a description that is not text", { description: 7 }],
+    // Accepted and ignored, this would answer 200 for a move that never
+    // happened; a state is changed by its own route.
+    ["a field the route does not change", { title: "Renamed", state: "draft" }],
+  ])("refuses %s, and renames nothing", async (_name, body) => {
+    const res = await send("updateRelease", "PATCH", body);
+    expect(res.status).toBe(400);
+    expect(api.releases.update).not.toHaveBeenCalled();
+  });
+
+  it("deletes the release in the path, with its checks turned on, and answers the mutation envelope", async () => {
+    const res = await send("deleteRelease", "DELETE");
+    expect(res.status).toBe(200);
+    // `{ message, item }`, as every other delete in this API answers, with the
+    // release as it was.
+    expect(await res.json()).toEqual({
+      message: "Release deleted.",
+      item: { id: "r1", title: "Old launch", state: "draft" },
+    });
+    expect(api.releases.delete).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "r1",
+        userId: "u1",
+        overrideAccess: false,
+      })
+    );
   });
 });

@@ -61,8 +61,8 @@ Inside a `contentOnly` slot a save may keep any value the page already stores in
 the same place, or put it back as the block now starts; only a third value is
 refused. So changing a block's `defaultProps` doesn't lock existing pages out,
 and a page placing a component keeps what the component itself holds. A page
-saved for the first time, and a single, are measured against the starting
-blocks alone. Whether a block renders is held too: a version ahead of its
+saved for the first time, a single, and a localized blocks field are measured
+against the starting blocks alone. Whether a block renders is held too: a version ahead of its
 definition's, or `migrationFailed`, can't be newly set there.
 
 `nextly generate` refuses a slot `lock` outside the four and a prop `role`

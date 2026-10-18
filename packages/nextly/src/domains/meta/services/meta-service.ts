@@ -1,5 +1,6 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import { and, eq } from "drizzle-orm";
+import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
+import { and, eq, sql, type Column, type SQL } from "drizzle-orm";
 
 import { NextlyError } from "../../../errors/nextly-error";
 import { nextlyMeta as nextlyMetaMysql } from "../../../schemas/nextly-meta/mysql";
@@ -32,6 +33,28 @@ export type MetaEntry<T = unknown> =
  *
  * Cross-dialect: looks up the right Drizzle table via `this.dialect`.
  */
+/**
+ * Whether a `nextly_meta` row's value is `serialised`, the JSON text callers
+ * store: the one comparison every conditional write and guarded statement
+ * against this table makes.
+ *
+ * Every dialect stores that text, but MySQL's column is native JSON and its
+ * driver serialises once more, so the row holds the text as a JSON string.
+ * Compared to the column directly, the expected text went through the same
+ * encoding again and never matched: every compare-and-set failed there, and
+ * every statement guarded on a row changed nothing. Unquoted, MySQL's value is
+ * the text the other dialects compare.
+ */
+export function metaValueEquals(
+  table: { value: Column },
+  serialised: string,
+  dialect: SupportedDialect
+): SQL {
+  return dialect === "mysql"
+    ? sql`JSON_UNQUOTE(${table.value}) = ${serialised}`
+    : eq(table.value, serialised);
+}
+
 export class MetaService extends BaseService {
   constructor(adapter: DrizzleAdapter, logger: Logger) {
     super(adapter, logger);
@@ -172,15 +195,15 @@ export class MetaService extends BaseService {
     expected: unknown,
     next: unknown
   ): Promise<boolean> {
+    const holdsExpected = metaValueEquals(
+      this.table,
+      JSON.stringify(expected),
+      this.dialect
+    );
     const result = await this.drizzle
       .update(this.table)
       .set({ value: JSON.stringify(next), updatedAt: new Date() })
-      .where(
-        and(
-          eq(this.table.key, key),
-          eq(this.table.value, JSON.stringify(expected))
-        )
-      );
+      .where(and(eq(this.table.key, key), holdsExpected));
     // Each driver reports the affected count somewhere different, and mysql2 nests it inside a
     // result tuple, so the shared dialect-aware reader owns that knowledge.
     return affectedRowCount(result, this.dialect) > 0;

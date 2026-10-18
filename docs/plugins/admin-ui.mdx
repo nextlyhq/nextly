@@ -234,9 +234,10 @@ build any of it yourself:
 - It loads the document and holds its form state.
 - It holds the document's soft lock, and shows who else is editing.
 - It offers unsaved work recovered after a crash or a reload. Restoring it
-  replaces the form's values and mounts your view again, so a view that keeps
-  its own copy of the document, read when it mounts, starts from the restored
-  work.
+  unmounts your view, replaces the form's values, then mounts your view again.
+  A view that keeps its own copy of the document, read when it mounts, starts
+  from the restored work, and anything it writes into the form as it unmounts
+  is replaced by the restore.
 - It asks before the author leaves with unsaved changes.
 - It saves on the form's own shortcut, through the same actions as the edit form.
 
@@ -253,6 +254,10 @@ Your component replaces the form's body and receives `DocumentViewProps` from
 | `field` | For a field-type view, the declaration (`FieldConfig`, as a field editor receives it) of the top-level field it edits. When the document has several such fields, it is the one the address names (`?field=<name>`). If the address names none of them, the admin asks the author which one before it draws your view. |
 
 Opening that address requires the same permission as editing the document.
+A field-type view also opens only for a field the edit form would let the
+author edit. If the field, or an unnamed group around it, is read-only,
+disabled, hidden, or hidden by its condition, the admin says why and offers the
+way back instead of drawing your view.
 
 To open a view from inside the admin, for example from a field editor, call
 `navigateTo(path)` from `@nextlyhq/plugin-sdk/admin`. It accepts a path

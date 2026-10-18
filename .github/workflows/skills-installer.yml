@@ -9,17 +9,22 @@ name: Skills installer
 # see what the installer does with the mark. This runs the installer.
 #
 # On pull_request it runs only when a path whose behaviour it exercises
-# changes: the skills the installer reads, in all three folders it searches;
-# the module that says which skills are the user skills; and the check and
-# this workflow. The weekly run catches what no file in this repository
+# changes: any skill the installer could find, and the folders that hold
+# them; the module that says which skills are the user skills; the guide
+# whose command it runs; and the check and this workflow. The weekly run catches what no file in this repository
 # changes: the npm registry serving the pinned release differently.
 on:
   pull_request:
     paths:
+      # Every SKILL.md anywhere, and the plugin manifests that can declare
+      # more, since the installer searches far more folders than these.
+      - "**/SKILL.md"
+      - "**/.claude-plugin/**"
       - "skills/**"
       - ".agents/skills/**"
       - ".claude/skills/**"
       - "scripts/agent-skills.mjs"
+      - "docs/guides/coding-agents.mdx"
       - "scripts/check-skills-installer.mjs"
       - ".github/workflows/skills-installer.yml"
   schedule:
@@ -30,9 +35,12 @@ on:
 permissions:
   contents: read
 
+# A newer push supersedes a pull request's run. A scheduled or manual run on
+# main is never cancelled by another, since a scheduled failure must reach the
+# report job, and so each trigger has its own group.
 concurrency:
-  group: skills-installer-${{ github.ref }}
-  cancel-in-progress: true
+  group: skills-installer-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   installer:

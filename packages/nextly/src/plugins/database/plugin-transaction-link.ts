@@ -18,6 +18,7 @@
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
 import { NextlyError } from "../../errors/nextly-error";
+import type { StatementKind } from "../transaction-scope";
 
 /** What core code needs from a plugin's open transaction. */
 export interface LinkedTransaction {
@@ -28,15 +29,39 @@ export interface LinkedTransaction {
    * transaction back.
    */
   run<R>(work: (tx: TransactionContext) => Promise<R>): Promise<R>;
+  /**
+   * Run `work` on the plugin's transaction so that its failure is its own,
+   * for a write whose caller carries on past its failure — a record written
+   * fail-safe, beside the plugin's work rather than as part of it.
+   *
+   * On PostgreSQL a failed statement aborts the whole transaction, and every
+   * later statement and the commit with it, so a failure caught and carried
+   * past would take the plugin's writes down with it. Run under a savepoint,
+   * the failure is rolled back to the savepoint instead and the transaction
+   * stays usable. A plugin statement that started while `work` ran would be
+   * rolled back with it, unseen, so then the transaction is failed instead:
+   * its writes are not kept, and the plugin is told. Contained runs on one
+   * transaction take turns, so one never rolls back another's write. Where
+   * the transaction has no savepoints (MySQL, which keeps a transaction
+   * usable after a failed statement), `work` runs as `run` runs it.
+   */
+  runContained<R>(work: (tx: TransactionContext) => Promise<R>): Promise<R>;
 }
 
 /** What `ctx.db.transaction` knows about the transaction it opened. */
 interface TransactionScopeView {
   assertOpen(): void;
-  track<R>(work: PromiseLike<R>): Promise<R>;
+  track<R>(work: PromiseLike<R>, kind?: StatementKind): Promise<R>;
+  started(): number;
+  quiet(): boolean;
+  quiesce(): Promise<void>;
+  fail(error: unknown): void;
 }
 
 const links = new WeakMap<object, LinkedTransaction>();
+
+/** Savepoint names, unique within a process so nested ones never collide. */
+let savepointSequence = 0;
 
 /**
  * Register the surface `ctx.db.transaction` hands its callback, with the
@@ -47,6 +72,8 @@ export function linkPluginTransaction(
   tx: TransactionContext,
   scope: TransactionScopeView
 ): void {
+  // The contained run before which the next one waits.
+  let lastContained: Promise<unknown> = Promise.resolve();
   links.set(surface, {
     // Async so a refusal, or work that throws before it returns its promise,
     // rejects rather than throws, as every other path does. Nothing here
@@ -55,6 +82,72 @@ export function linkPluginTransaction(
     async run<R>(work: (tx: TransactionContext) => Promise<R>): Promise<R> {
       scope.assertOpen();
       return scope.track(work(tx));
+    },
+    async runContained<R>(
+      work: (tx: TransactionContext) => Promise<R>
+    ): Promise<R> {
+      scope.assertOpen();
+      const turn = lastContained.then(() => runUnderSavepoint(tx, scope, work));
+      lastContained = turn.catch(() => undefined);
+      return scope.track(turn, "contained");
+    },
+  });
+}
+
+/**
+ * Run `work` under a savepoint of `tx`, rolling back to it when `work` fails;
+ * see {@link LinkedTransaction.runContained}.
+ */
+async function runUnderSavepoint<R>(
+  tx: TransactionContext,
+  scope: TransactionScopeView,
+  work: (tx: TransactionContext) => Promise<R>
+): Promise<R> {
+  if (!tx.savepoint || !tx.rollbackToSavepoint || !tx.releaseSavepoint) {
+    return work(tx);
+  }
+  savepointSequence += 1;
+  const name = `nextly_contained_${savepointSequence}`;
+  // Opened only once nothing the plugin started is still in flight, checked
+  // at the moment the savepoint is asked for. A statement started earlier can
+  // reach the connection later (a lazy query, or a deletion report's next
+  // step), and would then fall after the savepoint and be undone by it.
+  while (!scope.quiet()) await scope.quiesce();
+  const before = scope.started();
+  await tx.savepoint(name);
+  let result: R;
+  try {
+    result = await work(tx);
+  } catch (error) {
+    // Counted before the rollback is sent: a statement started after that is
+    // queued behind it on the connection, so the rollback does not undo it.
+    const undone = scope.started() !== before;
+    try {
+      await tx.rollbackToSavepoint(name);
+      await tx.releaseSavepoint(name);
+    } catch (rollbackError) {
+      // The transaction is in no known state, so none of it is kept.
+      scope.fail(rollbackError);
+      throw error;
+    }
+    if (undone) scope.fail(undoneStatementError());
+    throw error;
+  }
+  await tx.releaseSavepoint(name);
+  return result;
+}
+
+/**
+ * Why a transaction is failed when rolling a contained write back to its
+ * savepoint undid a statement the plugin started meanwhile: that statement
+ * reported success, and its write is gone.
+ */
+function undoneStatementError(): NextlyError {
+  return NextlyError.internal({
+    logContext: {
+      reason: "plugin-transaction-statement-undone",
+      detail:
+        "A core write in this transaction failed and was rolled back to its savepoint, undoing a statement the plugin started while it ran.",
     },
   });
 }

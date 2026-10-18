@@ -33,10 +33,18 @@ import {
   type BlockDocument,
 } from "@nextlyhq/blocks-engine";
 import { coreBlocks } from "@nextlyhq/blocks-react/blocks";
-import { cleanup, render } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import * as React from "react";
 import { useForm } from "react-hook-form";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+import { OPEN_BUILDER_ACTION } from "./PageBuilderCard";
+
+/** Where the builder opens for this file's field: a saved page's `body`. */
+const BUILDER_HREF = "/admin/collections/pages/p1/builder?field=body";
+
+/** Each address the card moved to through the admin's own navigation. */
+const navigated: string[] = [];
 
 /** What the stored-style read answers with for the test in hand. */
 let siteStyleRead: { data: unknown; isPending: boolean; error: Error | null } =
@@ -59,9 +67,18 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   // unused stub.
   loadInlineRichTextEditor: () => new Promise<never>(() => {}),
   usePluginClientConfig: () => undefined,
-  // No document around the field: the state every case here was written
-  // against, and the one that offers every component.
-  useDocumentIdentity: () => null,
+  // A saved page around the field, so the card has the builder's address to
+  // link to; outside a document, or before a first save, it has none.
+  useDocumentIdentity: () => ({
+    kind: "collection",
+    slug: "pages",
+    documentId: "p1",
+  }),
+  // Recorded, so a case can tell a plain click handled within the admin from
+  // one left to the browser.
+  navigateTo: (href: string) => {
+    navigated.push(href);
+  },
   // Nor a language the field could know: the component read asks for the
   // app default.
   useDocumentLocale: () => null,
@@ -175,6 +192,7 @@ beforeEach(() => {
   siteStyleRead = { data: undefined, isPending: false, error: null };
   componentAnswer = undefined;
   fetched.length = 0;
+  navigated.length = 0;
 });
 
 afterEach(() => {
@@ -299,15 +317,40 @@ describe("the entry form at rest", () => {
       error: new Error("site style unavailable"),
     };
 
-    const { container } = render(<Host />);
+    render(<Host />);
 
-    expect(container.querySelector("button")).not.toBeNull();
+    // A link to the builder's own address, not merely something clickable: a
+    // disabled action with a reason beside it is also a control on the card.
+    expect(
+      screen
+        .getByRole("link", { name: OPEN_BUILDER_ACTION })
+        .getAttribute("href")
+    ).toBe(BUILDER_HREF);
+  });
+
+  it("moves to the builder within the admin on a plain click", () => {
+    render(<Host />);
+
+    fireEvent.click(screen.getByRole("link", { name: OPEN_BUILDER_ACTION }), {
+      button: 0,
+    });
+
+    // Through the admin's navigation, which keeps the form and its unsaved
+    // work mounted; a full page load would drop both.
+    expect(navigated).toEqual([BUILDER_HREF]);
   });
 
   it("offers no way in when the field cannot be edited", () => {
-    const { container } = render(<Host readOnly />);
+    render(<Host readOnly />);
 
-    expect(container.querySelector("button")).toBeNull();
+    // Neither the link nor a disabled stand-in for it: there is nothing for
+    // this author to open.
+    expect(
+      screen.queryByRole("link", { name: OPEN_BUILDER_ACTION })
+    ).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: OPEN_BUILDER_ACTION })
+    ).toBeNull();
   });
 
   it("still draws the page when the field cannot be edited", () => {
