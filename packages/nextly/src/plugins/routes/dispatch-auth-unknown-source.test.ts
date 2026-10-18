@@ -290,6 +290,9 @@ describe("the warning that proxy headers could not be used", () => {
     await run(proxied(), m);
 
     expect(warned()).toBe(1);
+    // Logged from a plugin route, it must describe how that route counts.
+    const [entry] = warn.mock.calls[0] as [{ message: string }];
+    expect(entry.message).toContain("identity its limitKey names");
   });
 
   it("is not logged when the address resolves", async () => {

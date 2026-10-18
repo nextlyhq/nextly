@@ -107,7 +107,9 @@ export function unkeyedStrategyWarnings(config: unknown): string[] {
 let fallbackReported = false;
 
 /**
- * Note an auth request the limiter could not resolve a client address for.
+ * Note an auth request the limiter could not resolve a client address for:
+ * one of core's auth routes, or a plugin's `rateLimit: "auth"` route, which
+ * the message describes too, since either may be the first to arrive.
  *
  * Logs once per process, and only for a request that carries a
  * client-address header: those are the requests a setting could move off
@@ -124,7 +126,9 @@ export function noteUnresolvedAuthRequest(request: Request): void {
     message:
       "Auth requests are arriving with proxy client-address headers that " +
       "could not be used, so the auth rate limit is counting them by the " +
-      "account each names, under a shared ceiling, rather than per client. " +
+      "account each names, under a shared ceiling, rather than per client; " +
+      "a plugin's auth route counts them by the identity its limitKey names, " +
+      "under that plugin's own ceiling, or by the ceiling alone without one. " +
       "A client can send these headers itself, so they do not show a proxy " +
       "is in front: only if every request reaches the app through a proxy " +
       "you control that sets them, set security.trustProxy: true, and list " +
