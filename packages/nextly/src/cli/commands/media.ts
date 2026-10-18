@@ -226,6 +226,10 @@ export function createMediaCommand(): Command {
       const context = createContext(cmd.optsWithGlobals());
       let adapter: CLIDatabaseAdapter | null = null;
       try {
+        // From inside the project: a storage factory in the config, such as
+        // a local-disk plugin given a relative path, resolves that path when
+        // the config loads, against the process's directory.
+        process.chdir(context.cwd);
         // The loader discovers the config from the project; a path is
         // passed only when one was given.
         const { config } = await loadConfig({
@@ -250,13 +254,22 @@ export function createMediaCommand(): Command {
         const prefix = mediaStorage.getCollectionConfig("media")?.prefix;
         // The prefixes of every other collection with storage configured,
         // whichever storage it uses (mediaPlaceIsExclusive).
-        const others = mediaStorage
+        const others: Array<{ slug: string; prefix?: string }> = mediaStorage
           .getConfiguredCollections()
           .filter(slug => slug !== "media")
           .map(slug => ({
             slug,
             prefix: mediaStorage.getCollectionConfig(slug)?.prefix,
           }));
+        // A collection with no storage plugin uploads to local disk through
+        // the fallback, at the root of its folder. Where media is on a local
+        // disk plugin, nothing shows that folder is not the same one.
+        if (
+          storage !== mediaStorage.getDefaultAdapter() &&
+          storage.getType() === "local"
+        ) {
+          others.push({ slug: "collections with no storage plugin" });
+        }
         const code = await mediaOrphans({
           storage,
           prefix,

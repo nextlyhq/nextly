@@ -664,6 +664,39 @@ describe("deleting a folder with its contents", () => {
     expect(await onDisk()).toEqual([]);
   });
 
+  it("leaves nothing when a crop commits after the folder's items are listed", async () => {
+    onLocalDisk();
+    const folder = await newFolder();
+    const id = await uploadPhoto(folder);
+    const before = await onDisk();
+    const folderService = folders();
+    const listed = gate();
+    const cropped = gate();
+    const inFolders = folderService as unknown as {
+      collectMediaInFolders: (ids: string[]) => Promise<unknown[]>;
+    };
+    const list = inFolders.collectMediaInFolders.bind(folderService);
+    // Hold the delete once it has listed the items, before it removes them.
+    vi.spyOn(inFolders, "collectMediaInFolders").mockImplementationOnce(
+      async ids => {
+        const found = await list(ids);
+        listed.open();
+        await cropped.opened;
+        return found;
+      }
+    );
+
+    const deleting = folderService.deleteFolder(folder, true);
+    await listed.opened;
+    expect((await crop(id, 20)).success).toBe(true);
+    const during = await onDisk();
+    expect(during.filter(file => !before.includes(file))).toHaveLength(2);
+    cropped.open();
+
+    expect((await deleting).success).toBe(true);
+    expect(await onDisk()).toEqual([]);
+  });
+
   it("leaves every file stored when an enclosing transaction rolls back", async () => {
     onLocalDisk();
     const folder = await newFolder();

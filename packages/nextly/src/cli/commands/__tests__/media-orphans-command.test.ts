@@ -13,6 +13,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const seen = vi.hoisted(() => ({
   calls: [] as string[],
   loadConfig: [] as unknown[],
+  /** The process's directory when the config loaded. */
+  loadedIn: [] as string[],
   storage: [] as unknown[],
   resolver: null as null | { getTable: (name: string) => unknown },
 }));
@@ -20,6 +22,7 @@ const seen = vi.hoisted(() => ({
 vi.mock("../../utils/config-loader", () => ({
   loadConfig: async (options: unknown) => {
     seen.loadConfig.push(options);
+    seen.loadedIn.push(process.cwd());
     return { config: { storage: seen.storage } };
   },
 }));
@@ -53,10 +56,12 @@ import { createProgram } from "../../program";
 
 let dir: string;
 let exits: number[];
+const startedIn = process.cwd();
 beforeEach(async () => {
   dir = await realpath(await mkdtemp(path.join(tmpdir(), "nextly-cmd-")));
   seen.calls.length = 0;
   seen.loadConfig.length = 0;
+  seen.loadedIn.length = 0;
   seen.storage = [];
   seen.resolver = null;
   exits = [];
@@ -70,12 +75,13 @@ beforeEach(async () => {
   vi.spyOn(console, "error").mockImplementation(() => {});
 });
 afterEach(async () => {
+  process.chdir(startedIn);
   vi.restoreAllMocks();
   await rm(dir, { recursive: true, force: true });
 });
 
 /** A bucket holding one left-behind thumbnail, stored two hours ago. */
-function bucketWithOrphan(folder: string) {
+function bucketWithOrphan(folder: string, type = "s3") {
   const deleted: string[] = [];
   const path = `${folder}/2026/10/0b7f0b0e-6d6f-4b0a-9a39-3f1f6b2a6c11-thumb_x.png`;
   return {
@@ -95,7 +101,7 @@ function bucketWithOrphan(folder: string) {
         return true;
       },
       getPublicUrl: (file: string) => file,
-      getType: () => "s3",
+      getType: () => type,
     },
   };
 }
@@ -173,6 +179,55 @@ describe("nextly media orphans, as the CLI runs it", () => {
 
     expect(exits).toEqual([0]);
     expect(media.deleted).toEqual([media.path]);
+  });
+
+  // Collections with no storage plugin upload through the local-disk
+  // fallback, into the default uploads folder an explicit local plugin for
+  // media may also use, and nothing shows the two are apart.
+  it("removes nothing where media's storage is local disk, which the fallback may share", async () => {
+    const media = bucketWithOrphan("media", "local");
+    seen.storage = [
+      {
+        name: "local-media",
+        type: "local",
+        collections: { media: { prefix: "media" } },
+        adapter: media.adapter,
+      },
+    ];
+
+    await createProgram().parseAsync([
+      "node",
+      "nextly",
+      "--cwd",
+      dir,
+      "media",
+      "orphans",
+      "--apply",
+    ]);
+
+    expect(exits).toEqual([0]);
+    expect(media.deleted).toEqual([]);
+    const said = vi
+      .mocked(console.log)
+      .mock.calls.map(args => String(args[0]))
+      .join("\n");
+    expect(said).toContain(media.path);
+    expect(said).toMatch(/no storage plugin/);
+  });
+
+  // A storage factory resolves a relative path when the config loads, so the
+  // config loads from the project --cwd names.
+  it("loads the config from inside the project --cwd names", async () => {
+    await createProgram().parseAsync([
+      "node",
+      "nextly",
+      "--cwd",
+      dir,
+      "media",
+      "orphans",
+    ]);
+
+    expect(seen.loadedIn).toEqual([dir]);
   });
 
   it("registers the tables before it reads media, and finds the project from --cwd", async () => {

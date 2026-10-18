@@ -36,7 +36,7 @@
 import crypto from "crypto";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import { and, eq, isNull, sql } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 
 import { getMediaStorage } from "@nextly/storage";
 
@@ -665,7 +665,10 @@ export class MediaFolderService extends BaseService {
         // and holding the shared one across them would defer it behind work
         // that has nothing to do with it.
         await withMediaRevalidationBatch(() =>
-          this.deleteMediaRowsInChunks(records, removeFiles)
+          this.deleteMediaRowsInChunks(
+            records.map(record => record.id),
+            removeFiles
+          )
         );
       }
 
@@ -721,21 +724,15 @@ export class MediaFolderService extends BaseService {
     }
   }
 
-  /** Every media row held by any of these folders. */
+  /** The id of every media row held by any of these folders. */
   private async collectMediaInFolders(
     folderIds: string[]
-  ): Promise<StoredMediaRecord[]> {
+  ): Promise<Array<{ id: string }>> {
     const { media } = this.tables;
-    const records: StoredMediaRecord[] = [];
+    const records: Array<{ id: string }> = [];
     for (const folderId of folderIds) {
       const inFolder = await this.db
-        .select({
-          id: media.id,
-          filename: media.filename,
-          url: media.url,
-          thumbnailUrl: media.thumbnailUrl,
-          sizes: media.sizes,
-        })
+        .select({ id: media.id })
         .from(media)
         .where(eq(media.folderId, folderId));
       records.push(...inFolder);
@@ -754,28 +751,40 @@ export class MediaFolderService extends BaseService {
    * The files go only once their rows are gone, and inside an enclosing
    * SQLite transaction only once that commits: a rollback brings the rows
    * back, and they must still have their files.
+   *
+   * Each chunk's rows are locked and re-read in the transaction that deletes
+   * them, as a single delete does, so the files removed are the ones the rows
+   * held at their removal: a crop that committed after the folder's items
+   * were listed is seen, and one that reaches its commit while the rows are
+   * held finds them gone and removes its own new sizes.
    */
   private async deleteMediaRowsInChunks(
-    records: StoredMediaRecord[],
+    mediaIds: string[],
     removeFiles: RemoveStoredFiles
   ): Promise<void> {
-    if (records.length === 0) return;
-    const { media } = this.tables;
+    if (mediaIds.length === 0) return;
     const chunkSize = 100;
+    // In one order, so two deletes holding overlapping chunks cannot each
+    // wait on a row the other holds.
+    const ordered = [...mediaIds].sort();
 
-    for (let i = 0; i < records.length; i += chunkSize) {
-      const chunkRecords = records.slice(i, i + chunkSize);
-      const chunk = chunkRecords.map(record => record.id);
-      await this.db.delete(media).where(
-        sql`${media.id} IN (${sql.join(
-          chunk.map(id => sql`${id}`),
-          sql`, `
-        )})`
-      );
+    for (let i = 0; i < ordered.length; i += chunkSize) {
+      const chunk = ordered.slice(i, i + chunkSize);
+      const inChunk = {
+        and: [{ column: "id", op: "IN" as const, value: chunk }],
+      };
+      const removed = await this.adapter.transaction(async tx => {
+        for (const id of chunk) await tx.lockRow("media", id);
+        const current = await tx.select<StoredMediaRecord>("media", {
+          where: inChunk,
+        });
+        if (current.length > 0) await tx.delete("media", inChunk);
+        return current;
+      });
       // After the statement, so this only ever names rows that are gone, and
       // inside an enclosing SQLite transaction after that commits.
       await this.afterCommit(() => revalidateMedia(chunk));
-      await this.afterCommit(() => removeFiles(chunkRecords));
+      await this.afterCommit(() => removeFiles(removed));
     }
   }
 
