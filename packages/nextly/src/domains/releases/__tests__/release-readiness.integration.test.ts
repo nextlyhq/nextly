@@ -28,6 +28,7 @@ import {
 } from "../../../plugins/test-nextly";
 import { createDynamicHandlers } from "../../../routeHandler";
 import { ServiceContainer } from "../../../services/index";
+import { registerFieldFunctions } from "../../../shared/lib/field-level-registry";
 import type { CollectionsHandler } from "../../../services/collections-handler";
 
 import { ReleasesRepository } from "../releases-repository";
@@ -50,7 +51,8 @@ type CollectionSlug =
   | "scratch"
   | "seasonal"
   | "dossiers"
-  | "briefs";
+  | "briefs"
+  | "bulletins";
 
 const LATER = new Date("2099-01-01T09:00:00Z");
 
@@ -123,6 +125,18 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
             },
           }),
         ],
+      }),
+      // Given a field rule on its status in a case: see `guardStatus`.
+      defineCollection({
+        slug: "bulletins",
+        status: true,
+        access: {
+          read: () => true,
+          update: () => true,
+          publish: () => true,
+          unpublish: () => true,
+        },
+        fields: [text({ name: "title" })],
       }),
       // Its draft/published lifecycle is turned off part-way through a case.
       defineCollection({
@@ -208,6 +222,27 @@ async function entry(
   const id = (created.data as { id?: string } | undefined)?.id;
   if (typeof id !== "string") throw new Error("no id from create");
   return id;
+}
+
+/**
+ * Let only the editor-in-chief set a bulletin's status, by a field rule.
+ *
+ * Registered as a plugin's raw field contribution reaches the rules: the
+ * code-first config refuses a field named `status` while the lifecycle is on,
+ * and a contributed field is checked for its type and not its name.
+ */
+function guardStatus(): void {
+  registerFieldFunctions("collection", "bulletins", [
+    { name: "title", type: "text" },
+    {
+      name: "status",
+      type: "text",
+      access: {
+        update: ({ req }: { req: { user?: { email?: string } } }) =>
+          req.user?.email === "chief@example.com",
+      },
+    },
+  ]);
 }
 
 /** Empty an article's required title on its stored row. */
@@ -442,6 +477,107 @@ describe.each(getConfiguredTestDialects())(
           collection: "dossiers" as never,
           id,
           data: { status: "published" } as never,
+          overrideAccess: false,
+          user: { id: author, email: authorUser.email, roles: [] },
+        } as never)
+      ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+
+      expect((await t.nextly.releases.readiness({ releaseId })).hard).toEqual([
+        expect.objectContaining({
+          memberId: memberIds[0],
+          code: "FIELD_NOT_PERMITTED",
+          detail: { fields: ["guarded"] },
+        }),
+      ]);
+      expect(
+        await problemsOf(
+          t.nextly.releases.schedule({
+            id: releaseId,
+            at: LATER,
+            timezone: "UTC",
+          })
+        )
+      ).toEqual([{ memberId: memberIds[0], code: "FIELD_NOT_PERMITTED" }]);
+    });
+
+    it("reports a status the author may not set, with no pending change, as the write refuses it", async () => {
+      const t = await boot(dialect);
+      guardStatus();
+      const author = await seedPlainAuthor(t);
+      const going = await entry(t, "bulletins");
+      const coming = await entry(t, "bulletins", "published");
+      const { releaseId, memberIds } = await releaseOf(t, author, [
+        { collection: "bulletins", id: going },
+        { collection: "bulletins", id: coming, action: "unpublish" },
+      ]);
+
+      // The release's own write, as the author, refuses both.
+      const authorUser = (await t.nextly.users.findByID({
+        id: author,
+      })) as unknown as { email: string };
+      for (const [id, status] of [
+        [going, "published"],
+        [coming, "draft"],
+      ] as const) {
+        await expect(
+          t.nextly.update({
+            collection: "bulletins" as never,
+            id,
+            data: { status } as never,
+            locale: "*",
+            overrideAccess: false,
+            user: { id: author, email: authorUser.email, roles: [] },
+          } as never)
+        ).rejects.toMatchObject({ code: "CONFLICT" });
+      }
+
+      expect((await t.nextly.releases.readiness({ releaseId })).hard).toEqual(
+        memberIds.map(memberId =>
+          expect.objectContaining({
+            memberId,
+            code: "FIELD_NOT_PERMITTED",
+            detail: { fields: ["status"] },
+          })
+        )
+      );
+      expect(
+        await problemsOf(
+          t.nextly.releases.schedule({
+            id: releaseId,
+            at: LATER,
+            timezone: "UTC",
+          })
+        )
+      ).toEqual(
+        memberIds.map(memberId => ({ memberId, code: "FIELD_NOT_PERMITTED" }))
+      );
+    });
+
+    it("reports a pending change an unpublish would fold in, to a field the author may not write", async () => {
+      const t = await boot(dialect);
+      const author = await seedPlainAuthor(t);
+      const id = await entry(t, "dossiers", "published");
+      // A trusted edit holds a change to the guarded field as pending work.
+      await t.nextly.update({
+        collection: "dossiers" as never,
+        id,
+        data: { guarded: "secret" } as never,
+      });
+      const { releaseId, memberIds } = await releaseOf(t, author, [
+        { collection: "dossiers", id, action: "unpublish" },
+      ]);
+
+      // The takedown itself, as the author, folds the pending change in and
+      // refuses the guarded field.
+      const authorUser = (await t.nextly.users.findByID({
+        id: author,
+      })) as unknown as { email: string };
+      await expect(
+        t.nextly.update({
+          collection: "dossiers" as never,
+          id,
+          data: { status: "draft" } as never,
+          locale: "*",
           overrideAccess: false,
           user: { id: author, email: authorUser.email, roles: [] },
         } as never)

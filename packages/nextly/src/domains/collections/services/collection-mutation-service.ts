@@ -2107,11 +2107,13 @@ export class CollectionMutationService extends BaseService {
   }
 
   /**
-   * What a publish of each of these entries, as a release performs it, would
-   * be refused with by validation, keyed by entry id, judged now and without
-   * writing: the release's own write — the status alone, every language at
-   * once, as `user` — taken through {@link goingLiveIssues}, the judgement the
-   * write itself makes.
+   * What the release's write of each of these entries would be refused with
+   * by validation and field rules, keyed by entry id, judged now and without
+   * writing: the release's own write — the status `action` names, every
+   * language at once, as `user`. Its status through the field rules the
+   * write applies to it ({@link lifecyclePatchIssues}); then what goes live,
+   * or the working draft the write folds in, through {@link goingLiveIssues}
+   * and the promotion's field rules, the judgements the write itself makes.
    *
    * Batched: the collection, its schema, the rows and the working drafts are
    * read once for all the entries, and each entry is then judged on its own.
@@ -2126,6 +2128,7 @@ export class CollectionMutationService extends BaseService {
     collectionName: string;
     entryIds: readonly string[];
     user: UserContext;
+    action: "publish" | "unpublish";
   }): Promise<Map<string, ValidationIssue[]>> {
     const issues = new Map<string, ValidationIssue[]>(
       params.entryIds.map(id => [id, []])
@@ -2141,7 +2144,8 @@ export class CollectionMutationService extends BaseService {
     if (await this.companionLacksStatus(params.collectionName)) return issues;
     const shared = await this.releaseWriteContext(
       collection,
-      params.collectionName
+      params.collectionName,
+      params.action === "publish" ? "published" : "draft"
     );
     const rows = await this.storedEntries(
       params.collectionName,
@@ -2157,15 +2161,17 @@ export class CollectionMutationService extends BaseService {
           );
     // The author's grants, once for the batch, where a field rule could ask:
     // as the write resolves them, and only where it would.
-    const grants =
-      shared.promoteRestoreCtx !== null &&
-      drafts.size > 0 &&
-      hasFieldAccessRule("collection", params.collectionName, "update")
-        ? await resolvedCallerGrants(params.user, undefined)
-        : null;
-    // The documents those rules compare against, read for the whole batch.
+    const grants = hasFieldAccessRule(
+      "collection",
+      params.collectionName,
+      "update"
+    )
+      ? await resolvedCallerGrants(params.user, undefined)
+      : null;
+    // The documents a promotion's rules compare against, read for the whole
+    // batch.
     const live =
-      grants === null
+      grants === null || drafts.size === 0
         ? new Map<string, Record<string, unknown>>()
         : await this.storedDocumentsOf({
             collectionName: params.collectionName,
@@ -2178,6 +2184,21 @@ export class CollectionMutationService extends BaseService {
       ...rows.keys(),
     ]);
     for (const [entryId, existingEntry] of rows) {
+      // The write refuses here first: a status the rules remove leaves it
+      // nothing to move.
+      const denied =
+        grants === null
+          ? []
+          : await this.lifecyclePatchIssues(shared, {
+              collectionName: params.collectionName,
+              entryId,
+              user: params.user,
+              grants,
+            });
+      if (denied.length > 0) {
+        issues.set(entryId, denied);
+        continue;
+      }
       const found = await this.goingLiveIssues({
         ...shared,
         collectionName: params.collectionName,
@@ -2222,10 +2243,11 @@ export class CollectionMutationService extends BaseService {
    */
   private async releaseWriteContext(
     collection: unknown,
-    collectionName: string
+    collectionName: string,
+    status: "published" | "draft"
   ): Promise<ReleaseWriteContext> {
     const fields = collectionFields(collection);
-    const finalData: Record<string, unknown> = { status: "published" };
+    const finalData: Record<string, unknown> = { status };
     const manyToManyFields = fields.filter(
       f => f.type === "relationship" && f.options?.relationType === "manyToMany"
     );
@@ -2273,7 +2295,7 @@ export class CollectionMutationService extends BaseService {
         : null,
       draftLocaleKey: this.wildcardDraftLocale(collection),
       collectionHasStatus: true,
-      transitionNextStatus: "published",
+      transitionNextStatus: status,
       sweepAllLocales: true,
       localizedUpdate: await this.splitLocalizedWriteData(
         collectionName,
@@ -2482,6 +2504,44 @@ export class CollectionMutationService extends BaseService {
       ),
       args.fields
     );
+  }
+
+  /**
+   * What the field rules refuse a release's write of this entry's status
+   * with, judged as the write judges its payload: through
+   * `applyFieldWriteAccess`, as the release's author. A status the rules
+   * remove leaves the every-language write nothing to move, which it
+   * refuses; reported as the field the author may not write (code
+   * `FORBIDDEN`), or nothing.
+   */
+  private async lifecyclePatchIssues(
+    shared: ReleaseWriteContext,
+    args: {
+      collectionName: string;
+      entryId: string;
+      user: UserContext;
+      grants: () => Promise<CallerGrants>;
+    }
+  ): Promise<ValidationIssue[]> {
+    const patch = { ...shared.finalData };
+    await applyFieldWriteAccess({
+      kind: "collection",
+      slug: args.collectionName,
+      data: patch,
+      operation: "update",
+      user: args.user,
+      overrideAccess: false,
+      grants: args.grants,
+      id: args.entryId,
+    });
+    return Object.keys(shared.finalData)
+      .filter(field => !(field in patch))
+      .map(path => ({
+        path,
+        code: "FORBIDDEN",
+        message:
+          "The author may not write this field, which the release's write sets.",
+      }));
   }
 
   /**
