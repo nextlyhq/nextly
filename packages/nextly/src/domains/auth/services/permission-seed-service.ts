@@ -19,6 +19,7 @@ import {
   writingPermissions,
 } from "../../../services/lib/permissions";
 import type { Logger } from "../../../services/shared";
+import { isUniqueViolation } from "../../../shared/lib/unique-violation";
 import { isMissingTable } from "../../field-groups/migration/session";
 import { resolveRegistryTableName } from "../../field-groups/storage/resolve-storage-names";
 
@@ -559,7 +560,8 @@ export class PermissionSeedService extends BaseService {
    * brings its slug and provenance in line and grants nothing. The insert is
    * a plain one, so a concurrent boot that created the row first makes this
    * one fail and roll back rather than grant a permission id that was never
-   * stored.
+   * stored. That boot made the grants too, so this one then takes the
+   * permission as existing.
    */
   private async ensureWithCreationGrants(
     perm: SystemPermissionDef,
@@ -582,6 +584,27 @@ export class PermissionSeedService extends BaseService {
     }
 
     const id = randomUUID();
+    try {
+      await this.createWithGrants(id, perm, source);
+    } catch (error) {
+      if (!isUniqueViolation(error)) throw error;
+      return this.permissionService.ensurePermission(
+        perm.action,
+        perm.resource,
+        perm.name,
+        perm.slug,
+        perm.description
+      );
+    }
+    return { id, created: true };
+  }
+
+  /** Insert the permission and its creation grants in one transaction. */
+  private async createWithGrants(
+    id: string,
+    perm: SystemPermissionDef,
+    source: { action: string; resource: string }
+  ): Promise<void> {
     const { rolePermissions } = this.tables;
     // The gate retires the permission caches once the transaction has
     // finished, committed or not, as every permission write does.
@@ -619,7 +642,6 @@ export class PermissionSeedService extends BaseService {
         }
       })
     );
-    return { id, created: true };
   }
 
   /** Write one grant inside the creating transaction. */
