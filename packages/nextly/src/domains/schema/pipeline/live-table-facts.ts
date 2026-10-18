@@ -328,41 +328,56 @@ export async function readUniqueColumns(
   dialect: SupportedDialect,
   tableName: string
 ): Promise<Map<string, string | null>> {
+  if (dialect === "postgresql") return readPgUniqueColumns(db, tableName);
+  if (dialect === "mysql") return readMysqlUniqueColumns(db, tableName);
+  return readSqliteUniqueColumns(db, tableName);
+}
+
+async function readPgUniqueColumns(
+  db: unknown,
+  tableName: string
+): Promise<Map<string, string | null>> {
+  const result = (await (db as PgMysqlExecute).execute(
+    sql`SELECT a.attname AS column_name, c.relname AS index_name, i.indisprimary AS is_primary
+        FROM pg_index i
+        JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = i.indkey[0]
+        JOIN pg_class c ON c.oid = i.indexrelid
+        WHERE i.indrelid = to_regclass(${tableName}) AND i.indisunique AND i.indnatts = 1`
+  )) as {
+    rows: { column_name: string; index_name: string; is_primary: boolean }[];
+  };
+  return new Map(
+    result.rows.map(row => [
+      row.column_name,
+      row.is_primary ? null : row.index_name,
+    ])
+  );
+}
+
+async function readMysqlUniqueColumns(
+  db: unknown,
+  tableName: string
+): Promise<Map<string, string | null>> {
+  const rows = mysqlRows<{ COLUMN_NAME: string; INDEX_NAME: string }>(
+    await (db as PgMysqlExecute).execute(
+      sql`SELECT MIN(COLUMN_NAME) AS COLUMN_NAME, INDEX_NAME FROM information_schema.STATISTICS
+          WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ${tableName} AND NON_UNIQUE = 0
+          GROUP BY INDEX_NAME HAVING COUNT(*) = 1`
+    )
+  );
+  return new Map(
+    rows.map(row => [
+      row.COLUMN_NAME,
+      row.INDEX_NAME === "PRIMARY" ? null : row.INDEX_NAME,
+    ])
+  );
+}
+
+async function readSqliteUniqueColumns(
+  db: unknown,
+  tableName: string
+): Promise<Map<string, string | null>> {
   const columns = new Map<string, string | null>();
-
-  if (dialect === "postgresql") {
-    const result = (await (db as PgMysqlExecute).execute(
-      sql`SELECT a.attname AS column_name, c.relname AS index_name, i.indisprimary AS is_primary
-          FROM pg_index i
-          JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = i.indkey[0]
-          JOIN pg_class c ON c.oid = i.indexrelid
-          WHERE i.indrelid = to_regclass(${tableName}) AND i.indisunique AND i.indnatts = 1`
-    )) as {
-      rows: { column_name: string; index_name: string; is_primary: boolean }[];
-    };
-    for (const row of result.rows) {
-      columns.set(row.column_name, row.is_primary ? null : row.index_name);
-    }
-    return columns;
-  }
-
-  if (dialect === "mysql") {
-    const rows = mysqlRows<{ COLUMN_NAME: string; INDEX_NAME: string }>(
-      await (db as PgMysqlExecute).execute(
-        sql`SELECT MIN(COLUMN_NAME) AS COLUMN_NAME, INDEX_NAME FROM information_schema.STATISTICS
-            WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ${tableName} AND NON_UNIQUE = 0
-            GROUP BY INDEX_NAME HAVING COUNT(*) = 1`
-      )
-    );
-    for (const row of rows) {
-      columns.set(
-        row.COLUMN_NAME,
-        row.INDEX_NAME === "PRIMARY" ? null : row.INDEX_NAME
-      );
-    }
-    return columns;
-  }
-
   const indexes = (await (db as SqliteAll).all(
     sql`PRAGMA index_list(${sql.identifier(tableName)})`
   )) as { name: string; unique: number; origin?: string }[];
@@ -370,10 +385,9 @@ export async function readUniqueColumns(
     const covered = (await (db as SqliteAll).all(
       sql`PRAGMA index_info(${sql.identifier(index.name)})`
     )) as { name: string }[];
-    if (covered.length === 1 && covered[0]) {
-      // `c` is an index made by CREATE INDEX; the others come with the table's own definition.
-      columns.set(covered[0].name, index.origin === "c" ? index.name : null);
-    }
+    if (covered.length !== 1 || !covered[0]) continue;
+    // `c` is an index made by CREATE INDEX; the others come with the table's own definition.
+    columns.set(covered[0].name, index.origin === "c" ? index.name : null);
   }
   return columns;
 }
