@@ -27,6 +27,7 @@ import {
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import { createDynamicHandlers } from "../../../routeHandler";
+import { ServiceContainer } from "../../../services/index";
 import type { CollectionsHandler } from "../../../services/collections-handler";
 
 import { seedLiveAuthor, seedPlainAuthor } from "./helpers/live-author";
@@ -657,6 +658,39 @@ describe.each(getConfiguredTestDialects())(
       ).toEqual(["publish"]);
     });
 
+    it("refuses to switch an action the caller's collection rule denies, though their grants allow it", async () => {
+      const t = await boot(dialect);
+      const author = await seedPlainAuthor(t);
+      const notice = await entry(t, "notices", "published");
+      const { releaseId, memberIds } = await releaseOf(t, author, [
+        { collection: "notices", id: notice, action: "publish" },
+      ]);
+      // A caller whose role grants everything the switch needs, including
+      // `unpublish-notices`; the notices collection's own rule says nobody
+      // takes one down.
+      const caller = await seedPlainAuthor(t);
+      await grantRole(t, caller, [
+        "read-content-releases",
+        "create-content-releases",
+        "update-notices",
+        "publish-notices",
+        "unpublish-notices",
+      ]);
+
+      await expect(
+        t.nextly.releases.changeMemberAction({
+          releaseId,
+          memberId: memberIds[0],
+          action: "unpublish",
+          userId: caller,
+          overrideAccess: false,
+        })
+      ).rejects.toMatchObject({ code: "FORBIDDEN" });
+      expect(
+        (await t.nextly.releases.listMembers({ releaseId })).map(m => m.action)
+      ).toEqual(["publish"]);
+    });
+
     it("switches a permitted action, and the release keeps it", async () => {
       const t = await boot(dialect);
       const author = await seedPlainAuthor(t);
@@ -701,6 +735,64 @@ describe.each(getConfiguredTestDialects())(
   }
 );
 
+/** Give a user a role holding exactly these seeded grants. */
+async function grantRole(
+  t: TestNextly,
+  userId: string,
+  slugs: string[]
+): Promise<void> {
+  const ids = await grantIds(t, slugs);
+  const role = await (
+    t.nextly as unknown as {
+      roles: {
+        create: (a: { data: Record<string, unknown> }) => Promise<{
+          item: { id: string };
+        }>;
+      };
+    }
+  ).roles.create({
+    data: {
+      name: `Role ${userId}`,
+      slug: `role-${userId.slice(0, 8)}`,
+      permissionIds: ids,
+    },
+  });
+  await new ServiceContainer(t.adapter).userRoles.assignRoleToUser(
+    userId,
+    role.item.id
+  );
+}
+
+/** The ids of these seeded grants, seeding the system ones first. */
+async function grantIds(t: TestNextly, slugs: string[]): Promise<string[]> {
+  const nextly = t.nextly as unknown as {
+    permissions: {
+      find: (a: { page: number; limit: number }) => Promise<{
+        items: { id: string; slug: string }[];
+        meta: { hasNext: boolean };
+      }>;
+    };
+  };
+  // The system grants are seeded at a real boot, not by the test harness.
+  await (
+    t.getService("permissionSeedService") as {
+      seedSystemPermissions: () => Promise<unknown>;
+    }
+  ).seedSystemPermissions();
+  // Every page, so a grant is found wherever the listing puts it.
+  const seeded: { id: string; slug: string }[] = [];
+  for (let page = 1; ; page += 1) {
+    const listed = await nextly.permissions.find({ page, limit: 100 });
+    seeded.push(...listed.items);
+    if (!listed.meta.hasNext) break;
+  }
+  return slugs.map(slug => {
+    const found = seeded.find(p => p.slug === slug);
+    expect(found, `\`${slug}\` must be seeded`).toBeDefined();
+    return found!.id;
+  });
+}
+
 /**
  * A key holding exactly the grants named, minted by the instance's first user,
  * who is its super admin. Members added through it are that user's.
@@ -713,12 +805,6 @@ async function keyHolding(
     users: {
       create: (a: { data: Record<string, unknown> }) => Promise<{
         item: { id: string };
-      }>;
-    };
-    permissions: {
-      find: (a: { page: number; limit: number }) => Promise<{
-        items: { id: string; slug: string }[];
-        meta: { hasNext: boolean };
       }>;
     };
     roles: {
@@ -735,24 +821,7 @@ async function keyHolding(
       isActive: true,
     },
   });
-  // The system grants are seeded at a real boot, not by the test harness.
-  await (
-    t.getService("permissionSeedService") as {
-      seedSystemPermissions: () => Promise<unknown>;
-    }
-  ).seedSystemPermissions();
-  // Every page, so a grant is found wherever the listing puts it.
-  const seeded: { id: string; slug: string }[] = [];
-  for (let page = 1; ; page += 1) {
-    const listed = await nextly.permissions.find({ page, limit: 100 });
-    seeded.push(...listed.items);
-    if (!listed.meta.hasNext) break;
-  }
-  const ids = slugs.map(slug => {
-    const found = seeded.find(p => p.slug === slug);
-    expect(found, `\`${slug}\` must be seeded`).toBeDefined();
-    return found!.id;
-  });
+  const ids = await grantIds(t, slugs);
   const role = await nextly.roles.create({
     data: { name: "Releaser", slug: "releaser", permissionIds: ids },
   });
