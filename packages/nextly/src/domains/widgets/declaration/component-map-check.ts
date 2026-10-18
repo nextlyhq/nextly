@@ -31,7 +31,7 @@
  * @module domains/widgets/declaration/component-map-check
  */
 
-import { dirname } from "node:path";
+import { dirname, relative, sep } from "node:path";
 
 import { NextlyError } from "../../../errors/nextly-error";
 import { getNextly } from "../../../init";
@@ -39,11 +39,12 @@ import { getNextlyLogger } from "../../../observability/logger";
 import {
   COMPONENT_IMPORT_MAP_FILENAME,
   COMPONENT_PATHS_FILENAME,
-  componentImportMapEntries,
+  componentUses,
   type ComponentMapEntry,
 } from "../../../plugins/codegen/component-import-map";
 import { writeComponentMapFiles } from "../../../plugins/codegen/write-component-map";
 import type { PluginDefinition } from "../../../plugins/plugin-context";
+import { generatedTypesFile } from "../../../shared/lib/generated-output-paths";
 import { DEFAULT_TYPESCRIPT_CONFIG } from "../../../shared/types/config";
 
 import { adminComponentPlugins } from "./component-map-store";
@@ -72,23 +73,38 @@ export async function checkAdminComponents(
   if (plugins === undefined) return;
 
   const registered = new Set(input.registeredComponentPaths);
-  const missing = componentImportMapEntries(plugins).filter(
-    each => !registered.has(each.path)
-  );
-  if (missing.length === 0) return;
+  // Every use, not one per path: two widgets drawn with one missing component
+  // are both named and counted.
+  const uses = componentUses(plugins);
+  const missing = uses.filter(each => !registered.has(each.path));
+  /*
+   * 🔴 Compared in both directions. A plugin removed from the config leaves
+   * its paths in the map with nothing missing, and the map still imports
+   * them: once its package is uninstalled too, the admin fails to resolve
+   * that import before this check can run again to repair it. Only
+   * development rewrites, so only development acts on these; elsewhere an
+   * import of an installed package nothing draws is harmless.
+   */
+  const declared = new Set(uses.map(each => each.path));
+  const obsolete = [...registered].filter(path => !declared.has(path));
 
-  const place = mapFolder(input.config);
-  if (process.env.NODE_ENV !== "development") {
-    refuseOverWidgets(
+  const development = process.env.NODE_ENV === "development";
+  if (development && !generatedFilesWriteOff()) {
+    if (missing.length === 0 && obsolete.length === 0) return;
+    await rewriteInDevelopment(
+      plugins,
+      mapFolder(input.config),
       missing,
-      place,
-      registered.size === 0 ? "no-map" : "stale"
+      obsolete
     );
-  } else if (generatedFilesWriteOff()) {
-    refuseOverWidgets(missing, place, "write-off");
-  } else {
-    await rewriteInDevelopment(plugins, place, missing);
+    return;
   }
+  if (missing.length === 0) return;
+  refuseOverWidgets(
+    missing,
+    mapFolder(input.config),
+    development ? "write-off" : registered.size === 0 ? "no-map" : "stale"
+  );
 }
 
 /**
@@ -129,29 +145,42 @@ async function bootPlugins(
 
 /** Where the generated files live, as the config places the types file. */
 interface MapFolder {
+  /** The types file's absolute path, which the map is written beside. */
   readonly typesOutputPath: string;
   /** The folder, as a developer reads it: `src/types/generated`. */
   readonly folder: string;
 }
 
+/**
+ * 🔴 Resolved through `generatedTypesFile`, as `generate:types` resolves it. A
+ * types file left at its built-in default follows the app's layout, losing
+ * its `src/` in an app with a root `app/` folder; read raw, the default would
+ * put this check's map in a folder the generator and the admin page do not
+ * use, and every admin request would rewrite it there again.
+ */
 function mapFolder(config: AdminComponentCheckInput["config"]): MapFolder {
-  const typesOutputPath =
+  const cwd = process.cwd();
+  const typesOutputPath = generatedTypesFile(
+    cwd,
     (config as { typescript?: { outputFile?: string } }).typescript
-      ?.outputFile ?? DEFAULT_TYPESCRIPT_CONFIG.outputFile;
+      ?.outputFile ?? DEFAULT_TYPESCRIPT_CONFIG.outputFile
+  );
   return {
     typesOutputPath,
-    folder: dirname(typesOutputPath).replace(/^\.\//, ""),
+    folder: relative(cwd, dirname(typesOutputPath)).split(sep).join("/"),
   };
 }
 
 /**
  * In development, write the map again from the config. A write that fails
- * stops the admin only when a widget is affected, as in production.
+ * stops the admin only when a widget is affected, as in production; a map
+ * that only kept a removed plugin's imports is warned about.
  */
 async function rewriteInDevelopment(
   plugins: readonly PluginDefinition[],
   place: MapFolder,
-  missing: readonly ComponentMapEntry[]
+  missing: readonly ComponentMapEntry[],
+  obsolete: readonly string[]
 ): Promise<void> {
   try {
     await writeComponentMapFiles(
@@ -162,16 +191,34 @@ async function rewriteInDevelopment(
     getNextlyLogger().info({
       kind: "admin-component-map-regenerated",
       message: `The admin's component map was out of date and has been written again in ${place.folder}/. Commit both generated files.`,
-      added: missing.map(each => each.path),
+      added: [...new Set(missing.map(each => each.path))],
+      removed: obsolete,
     });
   } catch (error) {
     const widgets = missing.filter(each => each.use === "widget");
-    if (widgets.length === 0) {
-      warnMissing(missing, place);
-      return;
+    if (widgets.length > 0) {
+      throw refusal(unwritableMessage(widgets, place), error);
     }
-    throw refusal(unwritableMessage(widgets, place), error);
+    if (missing.length > 0) warnMissing(missing, place);
+    if (obsolete.length > 0) warnObsolete(obsolete, place);
   }
+}
+
+/**
+ * Logs, once per process for each set, imports the map keeps for components
+ * nothing declares any more, when they could not be removed.
+ */
+function warnObsolete(obsolete: readonly string[], place: MapFolder): void {
+  const key = `obsolete\n${obsolete.join("\n")}`;
+  if (WARNED.has(key)) return;
+  WARNED.add(key);
+  getNextlyLogger().warn({
+    kind: "admin-component-map-obsolete",
+    message:
+      `The component map in ${place.folder}/ still imports ${obsolete.length} component(s) no plugin declares, and could not be written again:\n` +
+      obsolete.map(path => `- ${path}`).join("\n") +
+      "\nUninstalling their package breaks the admin's build until `npx nextly generate:types` runs.",
+  });
 }
 
 /** Why a map that is not rewritten is refused, which picks its wording. */

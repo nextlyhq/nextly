@@ -26,23 +26,35 @@ export interface ComponentMapWrite {
 /**
  * Writes the map and its path list beside the generated types file, resolved
  * against `cwd`, creating the folder when it is missing.
+ *
+ * 🔴 Both files are read before either is written. The map refuses to load
+ * when it disagrees with its list, so replacing one and then failing to read
+ * the other would leave a pair that breaks the admin; reading first, a file
+ * that cannot be read stops the write with the pair as it was.
  */
 export async function writeComponentMapFiles(
   plugins: PluginDefinition[],
   typesOutputPath: string,
   cwd: string
 ): Promise<ComponentMapWrite> {
-  const paths: string[] = [];
+  const planned = await Promise.all(
+    buildImportMapArtifacts(plugins, typesOutputPath).map(async artifact => {
+      const file = resolve(cwd, artifact.path);
+      return {
+        file,
+        code: artifact.code,
+        unchanged: (await currentContent(file)) === artifact.code,
+      };
+    })
+  );
   const changed: string[] = [];
-  for (const artifact of buildImportMapArtifacts(plugins, typesOutputPath)) {
-    const file = resolve(cwd, artifact.path);
-    paths.push(file);
-    if ((await currentContent(file)) === artifact.code) continue;
-    await mkdir(dirname(file), { recursive: true });
-    await writeFile(file, artifact.code, "utf-8");
-    changed.push(file);
+  for (const each of planned) {
+    if (each.unchanged) continue;
+    await mkdir(dirname(each.file), { recursive: true });
+    await writeFile(each.file, each.code, "utf-8");
+    changed.push(each.file);
   }
-  return { paths, changed };
+  return { paths: planned.map(each => each.file), changed };
 }
 
 /**

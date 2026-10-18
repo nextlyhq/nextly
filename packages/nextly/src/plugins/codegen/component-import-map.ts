@@ -345,13 +345,34 @@ function parsePath(path: string): ParsedPath {
 }
 
 /**
- * Every component the generated map registers, once each and sorted by path:
- * admin contributions, declared widgets, then block editor components.
+ * Every use of a component the plugins declare, in declared order: admin
+ * contributions, declared widgets, then block editor components. A path two
+ * contributions share appears once for each.
  *
- * The one list the map, its exported path list and the check that reads the
- * list are all built from. Where two contributions name the same path, the
- * first declared keeps it, as the registry keeps the first registration, unless
- * a later one is a dashboard widget's.
+ * The richer list, kept whole for the check: two widgets drawn with one
+ * missing component are two cards that draw empty, and the refusal names and
+ * counts both. The map's own entries are derived from it.
+ */
+export function componentUses(
+  plugins: readonly PluginDefinition[]
+): ComponentMapEntry[] {
+  return [
+    ...plugins.flatMap(plugin => collectAdminComponentEntries(plugin)),
+    // Block editor components register through the same map, so the editor
+    // bundle loads a contributed block's inspector without a hand-written
+    // import -- the same guarantee admin contributions already have.
+    ...collectBlockEditorEntries(plugins),
+  ];
+}
+
+/**
+ * Every component the generated map registers, once each and sorted by path,
+ * derived from {@link componentUses}.
+ *
+ * The one list the map and its exported path list are built from. Where two
+ * contributions name the same path, the first declared keeps it, as the
+ * registry keeps the first registration, unless a later one is a dashboard
+ * widget's.
  *
  * 🔴 A widget's use wins over any other. One path may serve a page and a
  * widget alike, and the check refuses only over a missing widget component:
@@ -362,7 +383,7 @@ export function componentImportMapEntries(
   plugins: readonly PluginDefinition[]
 ): ComponentMapEntry[] {
   const byPath = new Map<string, ComponentMapEntry>();
-  const add = (each: ComponentMapEntry) => {
+  for (const each of componentUses(plugins)) {
     const kept = byPath.get(each.path);
     if (
       kept === undefined ||
@@ -370,13 +391,7 @@ export function componentImportMapEntries(
     ) {
       byPath.set(each.path, each);
     }
-  };
-  for (const plugin of plugins)
-    collectAdminComponentEntries(plugin).forEach(add);
-  // Block editor components register through the same map, so the editor
-  // bundle loads a contributed block's inspector without a hand-written
-  // import -- the same guarantee admin contributions already have.
-  collectBlockEditorEntries(plugins).forEach(add);
+  }
   return [...byPath.values()].sort((a, b) => a.path.localeCompare(b.path));
 }
 

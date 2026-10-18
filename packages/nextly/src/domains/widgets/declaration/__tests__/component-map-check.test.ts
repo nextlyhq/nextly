@@ -6,6 +6,10 @@
  * The boot and the file writer are stubbed; the plugins are the ones the boot
  * would have resolved, put where the boot puts them.
  */
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../../../../init", () => ({ getNextly: vi.fn(async () => ({})) }));
@@ -66,7 +70,11 @@ beforeEach(() => {
     error,
     debug: vi.fn(),
   } as unknown as ReturnType<typeof loggerModule.getNextlyLogger>);
-  vi.mocked(writeComponentMapFiles).mockClear();
+  // Reset, not cleared: a one-time rejection a test queued and the check never
+  // consumed would otherwise reach the next test.
+  vi.mocked(writeComponentMapFiles)
+    .mockReset()
+    .mockResolvedValue({ paths: [], changed: [] });
 });
 
 afterEach(() => {
@@ -149,12 +157,46 @@ describe("in development", () => {
     await expect(check([])).resolves.toBe(undefined);
     expect(writeComponentMapFiles).toHaveBeenCalledWith(
       [shop],
-      "./src/types/generated/nextly-types.ts",
+      resolve(process.cwd(), "src/types/generated/nextly-types.ts"),
       process.cwd()
     );
     expect(info).toHaveBeenCalledWith(
       expect.objectContaining({ kind: "admin-component-map-regenerated" })
     );
+  });
+
+  it("leaves a map that lists exactly what the plugins declare alone", async () => {
+    await expect(check(BOTH)).resolves.toBe(undefined);
+    expect(writeComponentMapFiles).not.toHaveBeenCalled();
+  });
+
+  it("writes the map again when it still imports a removed plugin's component", async () => {
+    // Nothing is missing: only the comparison the other way finds this map
+    // out of date, and it imports a package that may be uninstalled next.
+    await expect(check([...BOTH, "@gone/old/admin#Chart"])).resolves.toBe(
+      undefined
+    );
+    expect(writeComponentMapFiles).toHaveBeenCalledTimes(1);
+    expect(info).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "admin-component-map-regenerated",
+        added: [],
+        removed: ["@gone/old/admin#Chart"],
+      })
+    );
+  });
+
+  it("warns, without refusing, when a removed plugin's imports cannot be written away", async () => {
+    vi.mocked(writeComponentMapFiles).mockRejectedValueOnce(
+      Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" })
+    );
+    await expect(check([...BOTH, "@gone/old/admin#Chart"])).resolves.toBe(
+      undefined
+    );
+    expect(warn).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "admin-component-map-obsolete" })
+    );
+    expect(error).not.toHaveBeenCalled();
   });
 
   it("refuses as production does when regeneration is turned off, naming the switch", async () => {
@@ -190,6 +232,68 @@ describe("in development", () => {
     expect(refused.logMessage).toContain(
       "Make the folder writable, or run `npx nextly generate:types`."
     );
+  });
+});
+
+describe("where the map is", () => {
+  let root: string;
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), "nextly-component-check-"));
+  });
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it("follows the app's layout for the default types file, as generate:types does", async () => {
+    // A root `app/` folder wins over `src/`, so the default types file, and
+    // the map beside it, lose their `src/`.
+    await mkdir(join(root, "app"));
+    await mkdir(join(root, "src"));
+    vi.spyOn(process, "cwd").mockReturnValue(root);
+    vi.stubEnv("NODE_ENV", "development");
+    await check([]);
+    expect(writeComponentMapFiles).toHaveBeenCalledWith(
+      [shop],
+      join(root, "types/generated/nextly-types.ts"),
+      root
+    );
+
+    vi.stubEnv("NODE_ENV", "production");
+    const refused = await refusalOf(check(["@acme/shop/admin#Reports"]));
+    expect(refused.logMessage).toContain(
+      "`types/generated/plugin-admin-imports.generated.ts`"
+    );
+    expect(refused.logMessage).not.toContain("src/types/generated");
+  });
+});
+
+describe("two widgets drawn with one component", () => {
+  it("names and counts both when it is missing", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    const twice = {
+      ...shop,
+      contributes: {
+        dashboard: {
+          widgets: [
+            {
+              id: "acme/revenue",
+              display: { component: "@acme/shop/admin#Chart" },
+            },
+            {
+              id: "acme/orders",
+              display: { component: "@acme/shop/admin#Chart" },
+            },
+          ],
+        },
+      },
+    } as unknown as PluginDefinition;
+    setAdminComponentPlugins([twice]);
+    const refused = await refusalOf(check([]));
+    expect(refused.logMessage).toContain(
+      "2 dashboard widgets draw with components"
+    );
+    expect(refused.logMessage).toContain('widget "acme/revenue"');
+    expect(refused.logMessage).toContain('widget "acme/orders"');
   });
 });
 

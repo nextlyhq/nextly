@@ -112,4 +112,31 @@ describe("writing the component map", () => {
       expect(await readFile(map, "utf-8")).toBe("// edited by hand\n");
     }
   );
+
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "replaces neither file when the second cannot be read",
+    async () => {
+      const cwd = await app();
+      const folder = join(cwd, "src/types/generated");
+      await mkdir(folder, { recursive: true });
+      const map = join(folder, COMPONENT_IMPORT_MAP_FILENAME);
+      const list = join(folder, COMPONENT_PATHS_FILENAME);
+      // Both out of date, so both would be written; the list, written second,
+      // cannot be read. Replacing the map first would leave a pair that
+      // disagrees, which the admin refuses to load.
+      await writeFile(map, "// an older map\n", "utf-8");
+      await writeFile(list, "// an older list\n", "utf-8");
+      await chmod(list, 0o200);
+      await expect(
+        writeComponentMapFiles(
+          [shop],
+          "./src/types/generated/nextly-types.ts",
+          cwd
+        )
+      ).rejects.toMatchObject({ code: "EACCES" });
+      await chmod(list, 0o600);
+      expect(await readFile(map, "utf-8")).toBe("// an older map\n");
+      expect(await readFile(list, "utf-8")).toBe("// an older list\n");
+    }
+  );
 });

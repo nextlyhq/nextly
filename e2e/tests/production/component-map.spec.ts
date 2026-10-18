@@ -3,6 +3,10 @@ import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { expect, test } from "@playwright/test";
 
 import {
+  pnpmInvocation,
+  treeKillCommand,
+} from "../../../scripts/pnpm-invocation.mjs";
+import {
   BASE_URL,
   NEXTLY_ROOT,
   PORT,
@@ -55,8 +59,9 @@ test.beforeAll(async () => {
   // plugins are before its server starts. Only the configured plugins are
   // checked at boot, so the suite's server, which does not configure the
   // fixture, is unaffected by its record on the shared database.
-  const install = spawnSync(
-    "pnpm",
+  // Through the repository's pnpm wrapper, as every spawn of pnpm is: on
+  // Windows pnpm is a `.cmd` launcher, which Node runs only through a shell.
+  const installing = pnpmInvocation(
     [
       "--filter",
       "playground",
@@ -66,17 +71,30 @@ test.beforeAll(async () => {
       "install",
       "missing-widget-fixture",
     ],
-    { cwd: NEXTLY_ROOT, env, encoding: "utf8" }
+    process.platform,
+    env
   );
+  const install = spawnSync(installing.command, installing.args, {
+    cwd: NEXTLY_ROOT,
+    env,
+    encoding: "utf8",
+    shell: installing.shell,
+  });
   if (install.status !== 0) {
     throw new Error(
       `installing the fixture plugin failed:\n${install.stdout}${install.stderr}`
     );
   }
-  server = spawn("pnpm", ["--filter", "playground", "exec", "next", "start"], {
+  const starting = pnpmInvocation(
+    ["--filter", "playground", "exec", "next", "start"],
+    process.platform,
+    env
+  );
+  server = spawn(starting.command, starting.args, {
     cwd: NEXTLY_ROOT,
     env,
     stdio: ["ignore", "pipe", "pipe"],
+    shell: starting.shell,
   });
   for (const stream of [server.stdout, server.stderr]) {
     stream?.on("data", chunk => {
@@ -87,7 +105,15 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(() => {
-  server?.kill("SIGTERM");
+  if (server?.pid === undefined) return;
+  // On Windows the handle is the shell the wrapper asked for, so killing it
+  // alone would leave `next start` holding the port; the tree kill reaches it.
+  const treeKill = treeKillCommand(server.pid, process.platform);
+  if (treeKill === null) {
+    server.kill("SIGTERM");
+    return;
+  }
+  spawnSync(treeKill.command, treeKill.args, { stdio: "ignore" });
 });
 
 test.describe("a production build missing a widget's component", () => {
