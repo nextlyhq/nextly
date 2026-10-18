@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 
 import { RateLimiter } from "../../../auth/middleware/rate-limiter";
-import { coreLimitStore } from "../core-limit-store";
+import type { RateLimitStore } from "../../../middleware/rate-limit";
+import { coreLimitStore, coreRateLimitStoreFor } from "../core-limit-store";
 import type { LimitStore, StoredLimit } from "../limit-store";
 import { createMemoryLimitStore } from "../memory-limit-store";
 
@@ -149,5 +150,47 @@ describe("coreLimitStore", () => {
     await expect(limiter.check("k", 3, WINDOW)).rejects.toThrow(
       "connection refused"
     );
+  });
+});
+
+describe("coreRateLimitStoreFor", () => {
+  it("keeps an app's store of the older contract serving core's own limits", async () => {
+    const calls: string[] = [];
+    const appStore: RateLimitStore = {
+      increment: async (key, windowMs) => {
+        calls.push(`increment ${key}`);
+        return { count: 1, resetTime: Date.now() + windowMs };
+      },
+      reset: async () => {},
+      consume: async (key, limit, windowMs) => {
+        calls.push(`consume ${key}`);
+        return { count: 1, resetTime: Date.now() + windowMs, allowed: true };
+      },
+    };
+    let selectedAsked = false;
+    const counts = coreRateLimitStoreFor(
+      appStore,
+      () => {
+        selectedAsked = true;
+        return createMemoryLimitStore();
+      },
+      SECRET
+    );
+
+    await new RateLimiter(counts).check("auth-ip:203.0.113.7", 3, WINDOW);
+
+    // The app's store is asked, under the key as core names it, as before.
+    expect(calls).toEqual(["consume auth-ip:203.0.113.7"]);
+    expect(selectedAsked).toBe(false);
+  });
+
+  it("counts in the selected store, under keyed hashes, when the app configured none", async () => {
+    const { store, seen } = clocked();
+    const counts = coreRateLimitStoreFor(undefined, () => store, SECRET);
+
+    await new RateLimiter(counts).check("auth-ip:203.0.113.7", 3, WINDOW);
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).not.toContain("203.0.113.7");
   });
 });

@@ -26,6 +26,8 @@ import type {
   RateLimitStore,
 } from "../../middleware/rate-limit";
 
+import { withRateLimitStoreDeadline } from "./call-deadline";
+import { watchCoreLimitOutage } from "./core-limit-outage";
 import type { LimitStore, StoredLimit } from "./limit-store";
 
 /** How many buckets a window is counted in. */
@@ -159,4 +161,28 @@ export function coreLimitStore(
       }));
     },
   };
+}
+
+/**
+ * Where core's own limits count, as the boot registers it: an app's store of
+ * the older contract when it configured one, as it did before the limit store
+ * existed, and otherwise the selected limit store. Either is held to the
+ * limit store's time and watched for an outage, so both decide alike when
+ * their store is away (see `core-limit-outage`).
+ *
+ * @param configured - The app's store of the older contract, if any.
+ * @param selected - The limit store `rateLimit.store` selected, already held
+ *   to its time.
+ * @param secret - The install's secret, from which the key hash is derived.
+ */
+export function coreRateLimitStoreFor(
+  configured: RateLimitStore | undefined,
+  selected: () => LimitStore,
+  secret: string | undefined
+): RateLimitStore {
+  return watchCoreLimitOutage(
+    configured === undefined
+      ? coreLimitStore(selected(), secret)
+      : withRateLimitStoreDeadline(configured)
+  );
 }

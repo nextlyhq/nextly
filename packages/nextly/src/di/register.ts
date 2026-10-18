@@ -72,9 +72,7 @@ import {
 } from "../domains/field-groups/storage/resolve-storage-names";
 import type { SanitizedLocalizationConfig } from "../domains/i18n/config/types";
 import type { AnyJobDefinition } from "../domains/jobs/job-registry";
-import { withRateLimitStoreDeadline } from "../domains/limits/call-deadline";
-import { watchCoreLimitOutage } from "../domains/limits/core-limit-outage";
-import { coreLimitStore } from "../domains/limits/core-limit-store";
+import { coreRateLimitStoreFor } from "../domains/limits/core-limit-store";
 import type { LimitStore } from "../domains/limits/limit-store";
 import { limitsInMemoryWarning } from "../domains/limits/limits-in-memory-warning";
 import { selectLimitStore } from "../domains/limits/select-limit-store";
@@ -981,19 +979,13 @@ async function registerServicesOnce(
   // serving them, as it did before the limit store existed; without one they
   // count in the selected store, so on the database store every instance
   // counts one budget.
-  container.registerSingleton<RateLimitStore>("coreRateLimitStore", () => {
-    const configured = transformedConfig.rateLimit?.store;
-    return watchCoreLimitOutage(
-      configured === undefined
-        ? coreLimitStore(
-            container.get<LimitStore>("limitStore"),
-            env.NEXTLY_SECRET
-          )
-        : // Held to the limit store's time, so an app's store that stops
-          // answering is an outage like the selected store's.
-          withRateLimitStoreDeadline(configured)
-    );
-  });
+  container.registerSingleton<RateLimitStore>("coreRateLimitStore", () =>
+    coreRateLimitStoreFor(
+      transformedConfig.rateLimit?.store,
+      () => container.get<LimitStore>("limitStore"),
+      env.NEXTLY_SECRET
+    )
+  );
   // Beside the config rather than in it: what the boot granted, decided once
   // when the plugin list was resolved. The auth router builds its plugin
   // contexts from this entry, as `initializePlugins` does from the same value.
