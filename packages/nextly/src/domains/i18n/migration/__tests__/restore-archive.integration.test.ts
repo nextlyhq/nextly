@@ -27,6 +27,14 @@ function makeAdapter() {
       return Promise.resolve([]);
     },
     getDrizzle: () => db,
+    tableExists: (name: string) =>
+      Promise.resolve(
+        sqlite
+          .prepare(
+            `SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`
+          )
+          .get(name) !== undefined
+      ),
   };
 }
 
@@ -43,7 +51,8 @@ function createCompanion() {
 
 function archive(rows: [string, string, string, string, string][]) {
   const stmt = sqlite.prepare(
-    `INSERT INTO "nextly_i18n_archive" ("collection","entry_id","locale","field","value") VALUES (?,?,?,?,?)`
+    // As the archive writers record them: with the kind of entity that archived each row.
+    `INSERT INTO "nextly_i18n_archive" ("collection","entity_kind","entry_id","locale","field","value") VALUES (?,'collection',?,?,?,?)`
   );
   for (const r of rows) stmt.run(...r);
 }
@@ -228,7 +237,13 @@ describe("restoreI18nArchive", () => {
       kind: "collection",
       companionTableName: "dc_pages_locales",
     });
-    expect(result).toEqual({ rowsRead: 0, rowsRestored: 0, locales: [] });
+    expect(result).toEqual({
+      rowsRead: 0,
+      rowsRestored: 0,
+      locales: [],
+      rowsClaimed: 0,
+      rowsUnattributed: 0,
+    });
     expect(companionRows()).toHaveLength(0);
   });
 });

@@ -21,6 +21,12 @@ function makeAdapter(
     executeQuery: vi.fn().mockResolvedValue([]),
     tableExists: vi.fn(async (name: string) => tableExists(name)),
     getDrizzle: vi.fn().mockReturnValue({
+      // The archive holds no rows of unknown owner, so there is nothing to label first.
+      selectDistinct: vi.fn().mockReturnValue({
+        from: vi.fn().mockReturnValue({
+          where: vi.fn().mockResolvedValue([]),
+        }),
+      }),
       delete: vi.fn().mockReturnValue({
         where: vi.fn().mockResolvedValue({ rowCount: 3 }),
       }),
