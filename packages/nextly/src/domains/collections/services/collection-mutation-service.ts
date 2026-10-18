@@ -117,6 +117,10 @@ import {
 } from "../../../shared/write-integrity";
 import type { SupportedDialect } from "../../../types/database";
 import { willRecordMutationActivity } from "../../audit/record-activity";
+import {
+  recordWriteEvent,
+  type WriteEventInput,
+} from "../../content-events/write-event";
 import type { DynamicCollectionService } from "../../dynamic-collections";
 import { readComponentSubtrees } from "../../field-groups/read-component-subtrees";
 import { fieldGroupSlugList } from "../../field-groups/storage/field-group-field-type";
@@ -695,6 +699,8 @@ interface WorkingDraftWriteContext {
     collectionName: string;
     entryId: string;
     user?: UserContext;
+    /** Who made the write, for the save's history event. */
+    actor?: RequestActor;
     /** The version a restore write restored; recorded on the save's version. */
     sourceVersionNo?: number | null;
   };
@@ -898,6 +904,105 @@ export class CollectionMutationService extends BaseService {
       });
     } catch (err) {
       throw markWriteIntegrityFailure(err);
+    }
+  }
+
+  /**
+   * Record one event in this document's history, on the write's own
+   * transaction, whatever the collection's webhook settings: history is the
+   * document's own record, not a delivery.
+   */
+  private recordHistoryEvent(
+    tx: TransactionContext,
+    collection: string,
+    id: string,
+    event: Omit<WriteEventInput, "subject">
+  ): Promise<{ id: string }> {
+    return recordWriteEvent(
+      tx,
+      { adapter: this.adapter },
+      { subject: { kind: "collection", slug: collection, id }, ...event }
+    );
+  }
+
+  /**
+   * Record a save in the document's history: a restore always, naming the
+   * version it came from, and any other save only when it recorded a version,
+   * so a save that changed nothing adds no event either.
+   */
+  private async recordSaveHistory(
+    tx: TransactionContext,
+    collection: string,
+    id: string,
+    save: {
+      actor: RequestActor;
+      personName?: string | null;
+      locale?: string | null;
+      toState?: string | null;
+      versionNo: number | null;
+      sourceVersionNo?: number | null;
+    }
+  ): Promise<void> {
+    const from = save.sourceVersionNo;
+    if (typeof from !== "number" && save.versionNo === null) return;
+    await this.recordHistoryEvent(tx, collection, id, {
+      actor: save.actor,
+      personName: save.personName,
+      ...(save.locale ? { parts: { locales: [save.locale] } } : {}),
+      toState: save.toState ?? null,
+      versionNo: save.versionNo,
+      ...(typeof from === "number"
+        ? { kind: "restored" as const, payload: { from } }
+        : { kind: "saved" as const }),
+    });
+  }
+
+  /**
+   * Record a write's lifecycle transitions in the document's history: one
+   * "published" event naming the parts it published, and one "unpublished"
+   * for those it unpublished. Decided by the rule that decides the webhook
+   * events, so the two never disagree on what was a publish, and written
+   * whatever the collection's webhook settings.
+   */
+  private async recordTransitionHistory(
+    tx: TransactionContext,
+    collection: string,
+    id: string,
+    write: {
+      actor: RequestActor;
+      personName?: string | null;
+      isCreate?: boolean;
+      versionNo?: number | null;
+    },
+    transitions: readonly {
+      /** The language that moved; absent for the document's own status. */
+      locale?: string;
+      from: string | null | undefined;
+      to: unknown;
+    }[]
+  ): Promise<void> {
+    for (const kind of ["published", "unpublished"] as const) {
+      const moved = transitions.filter(
+        t =>
+          typeof t.to === "string" &&
+          statusEventsFor({
+            from: t.from ?? null,
+            to: t.to,
+            isCreate: write.isCreate === true,
+          }).includes(`entry.${kind}`)
+      );
+      const first = moved[0];
+      if (!first) continue;
+      const locales = moved.flatMap(t => (t.locale ? [t.locale] : []));
+      await this.recordHistoryEvent(tx, collection, id, {
+        kind,
+        actor: write.actor,
+        personName: write.personName,
+        ...(locales.length > 0 ? { parts: { locales } } : {}),
+        fromState: moved.length === 1 ? (first.from ?? null) : null,
+        toState: typeof first.to === "string" ? first.to : null,
+        versionNo: write.versionNo ?? null,
+      });
     }
   }
 
@@ -1122,12 +1227,14 @@ export class CollectionMutationService extends BaseService {
       /** An update, whose save may change nothing; a create always records. */
       onlyIfChanged?: boolean;
     }
-  ): Promise<void> {
+  ): Promise<number | null> {
+    // The version recorded, or null when versioning is off or the save
+    // changed nothing.
     if (!args.versionsConfig?.enabled) {
-      return;
+      return null;
     }
     try {
-      await captureInTx(tx, this.versionCapture, {
+      const { versionNo } = await captureInTx(tx, this.versionCapture, {
         onlyIfChanged: args.onlyIfChanged === true,
         ref: {
           scopeKind: "collection",
@@ -1153,6 +1260,7 @@ export class CollectionMutationService extends BaseService {
             : null),
         maxPerDoc: args.versionsConfig.maxPerDoc,
       });
+      return versionNo;
     } catch (err) {
       // The content row is already written on the caller's transaction. A
       // capture failure (e.g. component-schema resolution while tagging) must
@@ -1260,7 +1368,7 @@ export class CollectionMutationService extends BaseService {
         manyToManyFields: args.manyToManyFields,
         needsRelations,
       });
-    await this.captureTxVersion(tx, {
+    const createdVersionNo = await this.captureTxVersion(tx, {
       collectionName: args.collectionName,
       entryId,
       contentStatus: args.entry.status,
@@ -1279,6 +1387,15 @@ export class CollectionMutationService extends BaseService {
       tx.getDrizzle()
     );
     const eventActor = actorForWrite(args.actor, args.user);
+    // The document's first history event, in the caller's transaction.
+    await this.recordHistoryEvent(tx, args.collectionName, entryId, {
+      kind: "created",
+      actor: eventActor,
+      personName: args.user?.name ?? null,
+      ...(args.localeTag ? { parts: { locales: [args.localeTag] } } : {}),
+      toState: typeof args.entry.status === "string" ? args.entry.status : null,
+      versionNo: createdVersionNo,
+    });
     let eventRecorded = await recordMutationEvent(tx, {
       type: "entry.created",
       resource: {
@@ -1330,6 +1447,19 @@ export class CollectionMutationService extends BaseService {
         actor: eventActor,
       });
       eventRecorded = createdStatusRecorded || eventRecorded;
+      // A create straight onto published is a publish in history too.
+      await this.recordTransitionHistory(
+        tx,
+        args.collectionName,
+        entryId,
+        {
+          actor: eventActor,
+          personName: args.user?.name ?? null,
+          isCreate: true,
+          versionNo: createdVersionNo,
+        },
+        [{ locale: args.localeTag, from: null, to: args.entry.status }]
+      );
     }
 
     return {
@@ -4624,42 +4754,70 @@ export class CollectionMutationService extends BaseService {
         };
 
         // Record a durable version snapshot atomically with the write when the
-        // collection opts into versioning.
+        // collection opts into versioning. Its number goes with the history
+        // event below.
+        let createdVersionNo: number | null = null;
         if (versionsConfig?.enabled) {
-          await captureInTx(tx, this.versionCapture, {
-            ref: {
-              scopeKind: "collection",
-              scopeSlug: params.collectionName,
-              entryId: entry.id as string,
-            },
-            // A localized create with an explicit status moves it to the
-            // companion, leaving the main row on its table default. The snapshot
-            // records the companion value, so the version must be indexed with
-            // the same one or history reports a draft whose own document says
-            // published.
-            contentStatus:
+          ({ versionNo: createdVersionNo } = await captureInTx(
+            tx,
+            this.versionCapture,
+            {
+              ref: {
+                scopeKind: "collection",
+                scopeSlug: params.collectionName,
+                entryId: entry.id as string,
+              },
+              // A localized create with an explicit status moves it to the
+              // companion, leaving the main row on its table default. The snapshot
+              // records the companion value, so the version must be indexed with
+              // the same one or history reports a draft whose own document says
+              // published.
+              contentStatus:
+                typeof createCompanionStatus === "string"
+                  ? createCompanionStatus
+                  : (entry as { status?: unknown }).status,
+              // Tagged for the snapshot alone: `documentParts` is also what the
+              // outbox event below carries, and that payload is read shape.
+              parts: await this.snapshotPartsFor(documentParts, fields, tx),
+              createdBy: params.user?.id ?? null,
+              // Set only when localized values were actually routed, for the
+              // same reason the update path is careful about it.
+              // Set when locale-specific state was actually captured. A
+              // collection whose translatable content lives only in embedded
+              // components routes nothing through `localizedWrite`, yet the
+              // components above were read as this locale — so without counting
+              // them the version would be unlabelled and unrestorable.
+              locale:
+                localizedWrite?.writeLocale ??
+                (Object.keys(snapshotComponents ?? {}).length > 0
+                  ? this.componentSnapshotLocale(params.locale)
+                  : null),
+              maxPerDoc: versionsConfig.maxPerDoc,
+            }
+          ));
+        }
+
+        // The document's first history event, in the create's transaction.
+        await this.recordHistoryEvent(
+          tx,
+          params.collectionName,
+          entry.id as string,
+          {
+            kind: "created",
+            actor: actorForWrite(params.actor, params.user),
+            personName: params.user?.name ?? null,
+            ...(localizedWrite
+              ? { parts: { locales: [localizedWrite.writeLocale] } }
+              : {}),
+            toState:
               typeof createCompanionStatus === "string"
                 ? createCompanionStatus
-                : (entry as { status?: unknown }).status,
-            // Tagged for the snapshot alone: `documentParts` is also what the
-            // outbox event below carries, and that payload is read shape.
-            parts: await this.snapshotPartsFor(documentParts, fields, tx),
-            createdBy: params.user?.id ?? null,
-            // Set only when localized values were actually routed, for the
-            // same reason the update path is careful about it.
-            // Set when locale-specific state was actually captured. A
-            // collection whose translatable content lives only in embedded
-            // components routes nothing through `localizedWrite`, yet the
-            // components above were read as this locale — so without counting
-            // them the version would be unlabelled and unrestorable.
-            locale:
-              localizedWrite?.writeLocale ??
-              (Object.keys(snapshotComponents ?? {}).length > 0
-                ? this.componentSnapshotLocale(params.locale)
-                : null),
-            maxPerDoc: versionsConfig.maxPerDoc,
-          });
-        }
+                : (((entry as { status?: unknown }).status as
+                    | string
+                    | undefined) ?? null),
+            versionNo: createdVersionNo,
+          }
+        );
 
         // Append the outbox event in the same transaction, so it commits with
         // the entry and is never recorded for a write that later rolls back.
@@ -4728,6 +4886,25 @@ export class CollectionMutationService extends BaseService {
             actor: actorForWrite(params.actor, params.user),
           });
           recorded = recorded || createdStatusRecorded;
+          // A create straight onto published is a publish in history too.
+          await this.recordTransitionHistory(
+            tx,
+            params.collectionName,
+            entry.id as string,
+            {
+              actor: actorForWrite(params.actor, params.user),
+              personName: params.user?.name ?? null,
+              isCreate: true,
+              versionNo: createdVersionNo,
+            },
+            [
+              {
+                locale: localizedWrite?.writeLocale,
+                from: null,
+                to: createdToStatus,
+              },
+            ]
+          );
         }
       });
       // Set only after the transaction resolves (this line is skipped if it
@@ -5324,6 +5501,8 @@ export class CollectionMutationService extends BaseService {
         from: string | null;
         data: Record<string, unknown>;
       }[] = [];
+      // The version this publish recorded, for its history event.
+      let publishVersionNo: number | null = null;
       // Whether the default locale's companion row transitions to published, so
       // the post-commit workflow replay suppresses the untagged main transition
       // (the default's locale-tagged replay stands in for it). Set in the tx.
@@ -5565,33 +5744,37 @@ export class CollectionMutationService extends BaseService {
               // Always recorded: publishing every language can change only a
               // language's status, which this snapshot does not hold, so it
               // would compare equal with the version before.
-              await captureInTx(tx, this.versionCapture, {
-                ref: {
-                  scopeKind: "collection",
-                  scopeSlug: params.collectionName,
-                  entryId: params.entryId,
-                },
-                contentStatus: direction.nextStatus,
-                // Tagged like every other capture: a snapshot records which
-                // component its values came from, whichever path produced it.
-                parts: await this.snapshotPartsFor(
-                  {
-                    parentRow,
-                    components: snapshotComponents,
-                    manyToMany: snapshotM2M,
+              ({ versionNo: publishVersionNo } = await captureInTx(
+                tx,
+                this.versionCapture,
+                {
+                  ref: {
+                    scopeKind: "collection",
+                    scopeSlug: params.collectionName,
+                    entryId: params.entryId,
                   },
-                  fields,
-                  tx
-                ),
-                createdBy: params.user?.id ?? null,
-                // Left unlabelled deliberately. Publishing spans every locale,
-                // and this snapshot is the main row alone — on a migrated
-                // collection the localized columns live only in the companion,
-                // so it holds no locale's translatable values. Claiming one
-                // would tell a restore to write content it never captured.
-                locale: null,
-                maxPerDoc: versionsConfig.maxPerDoc,
-              });
+                  contentStatus: direction.nextStatus,
+                  // Tagged like every other capture: a snapshot records which
+                  // component its values came from, whichever path produced it.
+                  parts: await this.snapshotPartsFor(
+                    {
+                      parentRow,
+                      components: snapshotComponents,
+                      manyToMany: snapshotM2M,
+                    },
+                    fields,
+                    tx
+                  ),
+                  createdBy: params.user?.id ?? null,
+                  // Left unlabelled deliberately. Publishing spans every locale,
+                  // and this snapshot is the main row alone — on a migrated
+                  // collection the localized columns live only in the companion,
+                  // so it holds no locale's translatable values. Claiming one
+                  // would tell a restore to write content it never captured.
+                  locale: null,
+                  maxPerDoc: versionsConfig.maxPerDoc,
+                }
+              ));
             }
           }
 
@@ -5799,6 +5982,29 @@ export class CollectionMutationService extends BaseService {
               data: localeData,
             });
           }
+
+          // One history event for the whole publish, naming the languages it
+          // moved, rather than one per language as the deliveries above are.
+          await this.recordTransitionHistory(
+            tx,
+            params.collectionName,
+            params.entryId,
+            {
+              actor: publishActor,
+              personName: params.user?.name ?? null,
+              versionNo: publishVersionNo,
+            },
+            [
+              ...(hasMainStatus
+                ? [{ from: lockedPreviousStatus, to: direction.nextStatus }]
+                : []),
+              ...perLocaleTransitions.map(t => ({
+                locale: t.locale,
+                from: t.from,
+                to: direction.nextStatus,
+              })),
+            ]
+          );
         })
       );
 
@@ -6856,7 +7062,7 @@ export class CollectionMutationService extends BaseService {
       | ResolvedVersionsConfig
       | null
       | undefined;
-    await storeDraftSave(tx, this.versionCapture, {
+    const { versionNo } = await storeDraftSave(tx, this.versionCapture, {
       ref: draftRef,
       // The key the read overlay, the promote and the discard look under,
       // from `workingDraftLocale`; the version is keyed the same way.
@@ -6866,6 +7072,16 @@ export class CollectionMutationService extends BaseService {
       createdBy: params.user?.id ?? null,
       sourceVersionNo: params.sourceVersionNo ?? null,
       maxPerDoc: versionsConfig?.maxPerDoc,
+    });
+    // Both update paths hold a draft through here, so the save's history
+    // event is recorded here once.
+    await this.recordSaveHistory(tx, params.collectionName, params.entryId, {
+      actor: actorForWrite(params.actor, params.user),
+      personName: params.user?.name ?? null,
+      locale: draftLocale,
+      toState: "draft",
+      versionNo,
+      sourceVersionNo: params.sourceVersionNo ?? null,
     });
 
     return { workingDraftDocument, priorWorkingDraftDocument };
@@ -8579,47 +8795,71 @@ export class CollectionMutationService extends BaseService {
                 Object.keys(snapshotComponents ?? {}).length > 0;
 
               if (versionsConfig?.enabled && !storeAsWorkingDraft) {
-                await captureInTx(tx, this.versionCapture, {
-                  // An update: a save that changes nothing records nothing.
-                  onlyIfChanged: true,
-                  ref: {
-                    scopeKind: "collection",
-                    scopeSlug: params.collectionName,
-                    entryId: params.entryId,
-                  },
-                  // Prefer the written status; for a localized write the status
-                  // lives in the companion, so use this locale's effective value
-                  // before the prior main-row status. The same value the snapshot
-                  // records, or the version row would be indexed published while
-                  // its own document says draft.
-                  contentStatus:
-                    (updatePayload as { status?: unknown }).status ??
-                    effectiveLocaleStatus ??
-                    (currentParent as { status?: unknown }).status,
-                  // See the create path: tagged for the snapshot only.
-                  parts: await this.snapshotPartsFor(documentParts, fields, tx),
-                  createdBy: params.user?.id ?? null,
-                  // Labelled with a locale only when locale-specific state was
-                  // actually captured. A migrated localized collection routes
-                  // every write through `localizedUpdate`, including one that
-                  // touches only shared fields on a locale with no companion
-                  // row — that snapshot holds no translations and falls back to
-                  // the MAIN row's status, so calling it that locale's would let
-                  // a restore publish a language from entry-level state.
-                  // The write locale when the collection stores its own
-                  // translations, otherwise the requested one: a collection
-                  // that is not localized itself can still embed a localized
-                  // component, and the components above were read as this
-                  // language. The create path records it the same way; leaving
-                  // it null here would make component translations captured on
-                  // update unrestorable.
-                  locale: capturedLocaleState
-                    ? (localizedUpdate?.writeLocale ??
-                      this.componentSnapshotLocale(params.locale))
-                    : null,
-                  sourceVersionNo: params.sourceVersionNo ?? null,
-                  maxPerDoc: versionsConfig.maxPerDoc,
-                });
+                const savedStatus =
+                  (updatePayload as { status?: unknown }).status ??
+                  effectiveLocaleStatus ??
+                  (currentParent as { status?: unknown }).status;
+                const versionLocale = capturedLocaleState
+                  ? (localizedUpdate?.writeLocale ??
+                    this.componentSnapshotLocale(params.locale))
+                  : null;
+                const { versionNo } = await captureInTx(
+                  tx,
+                  this.versionCapture,
+                  {
+                    // An update: a save that changes nothing records nothing.
+                    onlyIfChanged: true,
+                    ref: {
+                      scopeKind: "collection",
+                      scopeSlug: params.collectionName,
+                      entryId: params.entryId,
+                    },
+                    // Prefer the written status; for a localized write the status
+                    // lives in the companion, so use this locale's effective value
+                    // before the prior main-row status. The same value the snapshot
+                    // records, or the version row would be indexed published while
+                    // its own document says draft.
+                    contentStatus: savedStatus,
+                    // See the create path: tagged for the snapshot only.
+                    parts: await this.snapshotPartsFor(
+                      documentParts,
+                      fields,
+                      tx
+                    ),
+                    createdBy: params.user?.id ?? null,
+                    // Labelled with a locale only when locale-specific state was
+                    // actually captured. A migrated localized collection routes
+                    // every write through `localizedUpdate`, including one that
+                    // touches only shared fields on a locale with no companion
+                    // row — that snapshot holds no translations and falls back to
+                    // the MAIN row's status, so calling it that locale's would let
+                    // a restore publish a language from entry-level state.
+                    // The write locale when the collection stores its own
+                    // translations, otherwise the requested one: a collection
+                    // that is not localized itself can still embed a localized
+                    // component, and the components above were read as this
+                    // language. The create path records it the same way; leaving
+                    // it null here would make component translations captured on
+                    // update unrestorable.
+                    locale: versionLocale,
+                    sourceVersionNo: params.sourceVersionNo ?? null,
+                    maxPerDoc: versionsConfig.maxPerDoc,
+                  }
+                );
+                await this.recordSaveHistory(
+                  tx,
+                  params.collectionName,
+                  params.entryId,
+                  {
+                    actor: actorForWrite(params.actor, params.user),
+                    personName: params.user?.name ?? null,
+                    locale: versionLocale,
+                    toState:
+                      typeof savedStatus === "string" ? savedStatus : null,
+                    versionNo,
+                    sourceVersionNo: params.sourceVersionNo ?? null,
+                  }
+                );
               }
 
               // A status-less update to a published document is stored
@@ -8889,6 +9129,8 @@ export class CollectionMutationService extends BaseService {
               // {@link EVERY_LOCALE}: the languages the sweep moved that the
               // write locale's event does not cover.
               let sweptRecorded = false;
+              // This attempt's swept moves, for the history event below.
+              let sweptMoved: { locale: string; from: string | null }[] = [];
               if (
                 collectionHasStatusLifecycle &&
                 sweptLocaleTransitions !== undefined &&
@@ -8906,6 +9148,36 @@ export class CollectionMutationService extends BaseService {
                 });
                 sweptRecorded = swept.recorded;
                 sweptLocaleReplays = swept.transitions;
+                sweptMoved = swept.transitions;
+              }
+              // The same moves in the document's history, one event per kind
+              // naming the languages it moved.
+              if (collectionHasStatusLifecycle) {
+                await this.recordTransitionHistory(
+                  tx,
+                  params.collectionName,
+                  params.entryId,
+                  { actor, personName: params.user?.name ?? null },
+                  [
+                    ...(companionEncodesMainTransition
+                      ? []
+                      : [{ from: mainFrom, to: mainTo }]),
+                    ...(companionStatusWritten
+                      ? [
+                          {
+                            locale: localizedUpdate?.writeLocale,
+                            from: localizedPreviousStatus,
+                            to: companionNext,
+                          },
+                        ]
+                      : []),
+                    ...sweptMoved.map(t => ({
+                      locale: t.locale,
+                      from: t.from,
+                      to: companionNext,
+                    })),
+                  ]
+                );
               }
               recorded =
                 recorded ||
@@ -9573,6 +9845,20 @@ export class CollectionMutationService extends BaseService {
           scopeSlug: params.collectionName,
           entryId: params.entryId,
         });
+
+        // The document's last history event: the whole document, every
+        // language, is gone. Its history is kept for the activity log's window
+        // from here.
+        await this.recordHistoryEvent(
+          tx,
+          params.collectionName,
+          params.entryId,
+          {
+            kind: "deleted",
+            actor: actorForWrite(params.actor, params.user),
+            personName: params.user?.name ?? null,
+          }
+        );
 
         // The removed document's final state ships as `data`; there is no
         // post-delete state, so `previous` is null (mirroring create, which
@@ -10994,6 +11280,7 @@ export class CollectionMutationService extends BaseService {
               collectionName: params.collectionName,
               entryId,
               user: params.user,
+              actor: params.actor,
             },
             parentRow: this.readShapeEventDocument(
               {
@@ -11085,11 +11372,15 @@ export class CollectionMutationService extends BaseService {
         });
       // A held edit records no durable version: nothing was published.
       if (!storeAsWorkingDraft) {
-        await this.captureTxVersion(tx, {
+        const localeTag = capturedLocaleState
+          ? localizedUpdate?.writeLocale
+          : undefined;
+        const savedStatus = (updated as { status?: unknown }).status;
+        const versionNo = await this.captureTxVersion(tx, {
           onlyIfChanged: true,
           collectionName: params.collectionName,
           entryId,
-          contentStatus: (updated as { status?: unknown }).status,
+          contentStatus: savedStatus,
           createdBy: params.user?.id ?? null,
           versionsConfig,
           documentParts: updatedParts,
@@ -11098,9 +11389,14 @@ export class CollectionMutationService extends BaseService {
           // version is tagged with it. Untagged, history reads the snapshot as
           // shared and a restore drops every per-locale field — or refuses,
           // on a collection where they all are.
-          localeTag: capturedLocaleState
-            ? localizedUpdate?.writeLocale
-            : undefined,
+          localeTag,
+        });
+        await this.recordSaveHistory(tx, params.collectionName, entryId, {
+          actor: actorForWrite(params.actor, params.user),
+          personName: params.user?.name ?? null,
+          locale: localeTag ?? null,
+          toState: typeof savedStatus === "string" ? savedStatus : null,
+          versionNo,
         });
       }
       const eventFields = await this.webhookFieldTreeIfRecording(
@@ -11192,6 +11488,27 @@ export class CollectionMutationService extends BaseService {
           });
           eventRecorded = eventRecorded || localeStatusRecorded;
         }
+        // The same moves in the document's history, one event per kind.
+        await this.recordTransitionHistory(
+          tx,
+          params.collectionName,
+          entryId,
+          { actor: eventActor, personName: params.user?.name ?? null },
+          [
+            ...(companionEncodesMainTransition
+              ? []
+              : [{ from: mainFrom, to: mainStatusAfter }]),
+            ...(companionStatusWritten
+              ? [
+                  {
+                    locale: localizedUpdate?.writeLocale,
+                    from: previousCompanionStatus,
+                    to: companionNext,
+                  },
+                ]
+              : []),
+          ]
+        );
       }
 
       // Execute afterUpdate hooks (unless skipped)
@@ -11596,6 +11913,13 @@ export class CollectionMutationService extends BaseService {
         scopeKind: "collection",
         scopeSlug: params.collectionName,
         entryId,
+      });
+
+      // The document's last history event; see the single-delete path.
+      await this.recordHistoryEvent(tx, params.collectionName, entryId, {
+        kind: "deleted",
+        actor: actorForWrite(params.actor, params.user),
+        personName: params.user?.name ?? null,
       });
 
       // Append the outbox event in the same transaction so a batch delete
