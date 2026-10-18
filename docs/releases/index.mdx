@@ -223,8 +223,9 @@ page).
 `count()` takes the same tab, state, kind, window, search and day as `find()`, and gives the
 same number as its `meta.total` without reading the releases.
 
-The day filter returns the releases whose time falls on that day in that zone, in every
-state, soonest first unless you pass an `order`. It is how a calendar's "+N more" reads a
+The day filter returns the releases on that day in that zone, placed as the calendar
+places them (a published release where it went out, any other where it is scheduled), in
+every state, soonest first unless you pass an `order`. It is how a calendar's "+N more" reads a
 day in full:
 
 ```ts
@@ -259,9 +260,12 @@ zone decides which day each release falls on: a release at 23:30 in New York is 
 day in London. Days follow the zone's own clock, so a day is 23 hours long when the clocks go
 forward and 25 when they go back.
 
-A release is on the day its time falls on, whatever its state. A published release shows on
-the day it went out, a stopped one on the day it was due, and a cancelled one that had been
-scheduled on the day it would have run. A draft has no time and is on no day.
+A release is on the day of the time that says when it happens, whatever its state. A
+published release shows on the day it went out, which for a release the job runner reached
+late, or one published now, can be later than the day it was scheduled for. Every other
+release shows on the day of its scheduled time: a stopped one on the day it was due, and a
+cancelled one that had been scheduled on the day it would have run. A draft has no time and
+is on no day.
 
 Every day of the window comes back, in order, empty days included. Each day has the complete
 count of its releases, by state, and its first three releases in time order. To read the rest

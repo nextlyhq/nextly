@@ -60,6 +60,8 @@ function compares(row: object, condition: VersionsWhereCondition): boolean {
       return (a as number) <= (comparable(expected) as number);
     case "<":
       return (a as number) < (comparable(expected) as number);
+    case "!=":
+      return a !== comparable(expected);
     default:
       return false;
   }

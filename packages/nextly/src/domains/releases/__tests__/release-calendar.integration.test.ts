@@ -221,6 +221,43 @@ describe.each(getConfiguredTestDialects())(
       expect(onThe28th.meta.total).toBe(0);
     });
 
+    it("puts a release published late on the day it went out, in the calendar and the day's list", async () => {
+      const app = await boot(dialect);
+      const repo = new ReleasesRepository(app.adapter);
+      // Due at 23:30 on 1 June in Berlin; the runner reached it an hour late,
+      // at 00:30 on the 2nd, and that is when its documents went live.
+      const late = await scheduled(repo, "Ran late", "2027-06-01T21:30:00Z");
+      expect(
+        await repo.markReleasePublished(late, new Date("2027-06-01T22:30:00Z"))
+      ).toBe(true);
+      // Due at the same instant and still waiting: it stays on its due day.
+      await scheduled(repo, "Still due", "2027-06-01T21:30:00Z");
+
+      const zone = "Europe/Berlin";
+      const calendar = await app.nextly.releases.calendar({
+        from: "2027-06-01",
+        to: "2027-06-02",
+        timezone: zone,
+      });
+      expect(
+        calendar.days.map(day => [
+          day.date,
+          day.releases.map(release => release.title),
+          day.counts.published,
+        ])
+      ).toEqual([
+        ["2027-06-01", ["Still due"], 0],
+        ["2027-06-02", ["Ran late"], 1],
+      ]);
+
+      const titlesOn = async (date: string) =>
+        (
+          await app.nextly.releases.find({ day: { date, timezone: zone } })
+        ).items.map(release => release.title);
+      expect(await titlesOn("2027-06-01")).toEqual(["Still due"]);
+      expect(await titlesOn("2027-06-02")).toEqual(["Ran late"]);
+    });
+
     it("refuses a window longer than six weeks, and one that ends before it starts", async () => {
       const app = await boot(dialect);
       const zone = { timezone: "Europe/Berlin" };

@@ -27,7 +27,7 @@
  */
 import { NextlyError } from "../../errors";
 import type { ReleaseState } from "../../schemas/releases/types";
-import type { VersionsWhereCondition } from "../versions/db-api";
+import type { VersionsWhere } from "../versions/db-api";
 
 import { meetsCondition } from "./release-conditions";
 import type { ReleaseRow } from "./releases-repository";
@@ -109,7 +109,10 @@ export interface CalendarDayTally {
 }
 
 /** The columns a release is tallied by. */
-export type PlacedRelease = Pick<ReleaseRow, "id" | "state" | "scheduledAt">;
+export type PlacedRelease = Pick<
+  ReleaseRow,
+  "id" | "state" | "scheduledAt" | "publishedAt"
+>;
 
 const SECOND_MS = 1000;
 const DAY_MS = 86_400_000;
@@ -346,20 +349,43 @@ export function zonedDay(day: { date: unknown; timezone: unknown }): ZonedDay {
 }
 
 /**
- * A span as the conditions a release's instant meets inside it.
+ * The condition a release meets when it is placed inside a span.
+ *
+ * A release is placed at the instant that says when it happened or happens. A
+ * published release went out at `publishedAt`, which the drain records when it
+ * completes the release: a release the runner reached late, or one published
+ * now, went out on that day, whatever it was scheduled for. Every other state
+ * is placed at `scheduledAt`, the instant it is due, ran towards, or was
+ * called off from. Every write that publishes a release records
+ * `publishedAt`.
  *
  * Half-open, so a release at the instant one day ends and the next begins is on
- * the next day only, and consecutive days share no release.
+ * the next day only, and consecutive days share no release. Comparisons only,
+ * so every dialect evaluates it the same way and in memory it is evaluated the
+ * same way again.
  *
  * @experimental
  */
-export function withinSpanConditions(
-  span: ReleaseTimeSpan
-): VersionsWhereCondition[] {
-  return [
-    { column: "scheduledAt", op: ">=", value: span.start },
-    { column: "scheduledAt", op: "<", value: span.end },
-  ];
+export function placedWithinCondition(span: ReleaseTimeSpan): VersionsWhere {
+  const published = "published" satisfies ReleaseState;
+  return {
+    or: [
+      {
+        and: [
+          { column: "state", op: "=", value: published },
+          { column: "publishedAt", op: ">=", value: span.start },
+          { column: "publishedAt", op: "<", value: span.end },
+        ],
+      },
+      {
+        and: [
+          { column: "state", op: "!=", value: published },
+          { column: "scheduledAt", op: ">=", value: span.start },
+          { column: "scheduledAt", op: "<", value: span.end },
+        ],
+      },
+    ],
+  };
 }
 
 /** Zero releases in every state. */
@@ -373,7 +399,7 @@ function noReleases(): ReleaseStateCounts {
  *
  * `releases` must be in the order the day's list shows them, since the first
  * ones are kept in the order they arrive. A release is placed on the day whose
- * {@link withinSpanConditions} it meets, evaluated as the database evaluates
+ * {@link placedWithinCondition} it meets, evaluated as the database evaluates
  * them, so the calendar and the list filtered to that day hold the same
  * releases.
  *
@@ -384,7 +410,7 @@ export function tallyByDay(
   releases: readonly PlacedRelease[],
   perDay: number
 ): CalendarDayTally[] {
-  const spans = days.map(day => withinSpanConditions(day));
+  const spans = days.map(day => placedWithinCondition(day));
   const tallies: CalendarDayTally[] = days.map(day => ({
     date: day.date,
     total: 0,
@@ -392,9 +418,7 @@ export function tallyByDay(
     firstIds: [],
   }));
   for (const release of releases) {
-    const index = spans.findIndex(conditions =>
-      conditions.every(condition => meetsCondition(release, condition))
-    );
+    const index = spans.findIndex(span => meetsCondition(release, span));
     if (index === -1) {
       // The releases were read for exactly these days, so one on none of them
       // means the read and this placement disagree. Refused, because a count

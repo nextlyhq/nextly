@@ -33,7 +33,7 @@ import type {
 
 import {
   tallyByDay,
-  withinSpanConditions,
+  placedWithinCondition,
   type ReleaseCalendarDay,
   type ReleaseTimeSpan,
   type ZonedDay,
@@ -227,12 +227,14 @@ export interface ReleaseListFilters {
   scheduledAfter?: Date;
   scheduledBefore?: Date;
   /**
-   * Only releases whose instant falls in this span, from `start` up to but not
-   * including `end`: a day in a zone, as `zonedDay` works it out.
+   * Only releases placed in this span, from `start` up to but not including
+   * `end`: a day in a zone, as `zonedDay` works it out. A published release is
+   * placed at the instant it went out, any other at its scheduled instant
+   * (`placedWithinCondition`).
    *
    * @experimental
    */
-  scheduledWithin?: ReleaseTimeSpan;
+  placedWithin?: ReleaseTimeSpan;
   /**
    * Text the title or the description contains, without regard to case.
    * Matched literally: `%` and `_` are characters to find, not wildcards.
@@ -437,16 +439,16 @@ function scheduleOrderQuery(order?: ReleaseListOrder): ReleaseTabQuery {
 }
 
 /**
- * The filters on the scheduled instant, as conditions: each bound given, and
+ * The filters on when a release happens, as conditions: each bound given, and
  * none for a bound left out.
  */
 function scheduleWindowConditions(
   filters: Pick<
     ReleaseListFilters,
-    "scheduledAfter" | "scheduledBefore" | "scheduledWithin"
+    "scheduledAfter" | "scheduledBefore" | "placedWithin"
   >
-): VersionsWhereCondition[] {
-  const conditions: VersionsWhereCondition[] = [];
+): (VersionsWhereCondition | VersionsWhere)[] {
+  const conditions: (VersionsWhereCondition | VersionsWhere)[] = [];
   if (filters.scheduledAfter !== undefined) {
     conditions.push({
       column: "scheduledAt",
@@ -461,10 +463,10 @@ function scheduleWindowConditions(
       value: filters.scheduledBefore,
     });
   }
-  if (filters.scheduledWithin !== undefined) {
-    // The same conditions the calendar places a release on its day by, so a
+  if (filters.placedWithin !== undefined) {
+    // The same condition the calendar places a release on its day by, so a
     // day's list and the calendar's count of that day hold the same releases.
-    conditions.push(...withinSpanConditions(filters.scheduledWithin));
+    conditions.push(placedWithinCondition(filters.placedWithin));
   }
   return conditions;
 }
@@ -926,7 +928,7 @@ export class ReleasesRepository {
     if (days.length === 0) return [];
     const listing = this.listingFor({
       kind: query.kind,
-      scheduledWithin: { start: days[0].start, end: days[days.length - 1].end },
+      placedWithin: { start: days[0].start, end: days[days.length - 1].end },
       order: "soonest",
     });
     const rows =

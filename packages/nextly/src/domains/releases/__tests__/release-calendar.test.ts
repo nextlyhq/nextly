@@ -31,12 +31,22 @@ function span(date: string, timezone: string) {
   };
 }
 
+/**
+ * A release at `at`. A published one went out at `publishedAt`, which is its
+ * scheduled time unless the case says otherwise.
+ */
 function placed(
   id: string,
   at: string,
-  state: PlacedRelease["state"] = "scheduled"
+  state: PlacedRelease["state"] = "scheduled",
+  publishedAt: string = at
 ): PlacedRelease {
-  return { id, state, scheduledAt: new Date(at) };
+  return {
+    id,
+    state,
+    scheduledAt: new Date(at),
+    publishedAt: state === "published" ? new Date(publishedAt) : null,
+  };
 }
 
 describe("a day in a zone", () => {
@@ -182,6 +192,34 @@ describe("placing a release on its day", () => {
     });
     expect(second.total).toBe(1);
     expect(second.firstIds).toEqual(["next"]);
+  });
+
+  it("puts a published release on the day it went out, not the day it was due", () => {
+    // Due at 23:30 on 1 June in Berlin, overdue, and sent out at 00:30 on the
+    // 2nd. A stopped release that is still waiting stays on its due day.
+    const days = zonedDays({
+      from: "2027-06-01",
+      to: "2027-06-02",
+      timezone: "Europe/Berlin",
+    });
+    const tallies = tallyByDay(
+      days,
+      [
+        placed(
+          "late",
+          "2027-06-01T21:30:00Z",
+          "published",
+          "2027-06-01T22:30:00Z"
+        ),
+        placed("stuck", "2027-06-01T21:30:00Z", "blocked"),
+      ],
+      3
+    );
+    expect(tallies.map(day => [day.date, day.firstIds])).toEqual([
+      ["2027-06-01", ["stuck"]],
+      ["2027-06-02", ["late"]],
+    ]);
+    expect(tallies[1].counts.published).toBe(1);
   });
 
   it("refuses to drop a release that lies on none of the days", () => {

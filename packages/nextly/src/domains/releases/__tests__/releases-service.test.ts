@@ -909,7 +909,7 @@ describe("ReleasesService narrows the list to one day in a zone", () => {
     await svc.find({ day: BERLIN_SPRING }, ADMIN);
     expect(repo.findReleasePage).toHaveBeenCalledWith(
       expect.objectContaining({
-        scheduledWithin: {
+        placedWithin: {
           start: new Date("2026-03-28T23:00:00Z"),
           end: new Date("2026-03-29T22:00:00Z"),
         },
@@ -925,7 +925,7 @@ describe("ReleasesService narrows the list to one day in a zone", () => {
     await svc.count({ day: BERLIN_SPRING }, ADMIN);
     expect(repo.countReleases).toHaveBeenCalledWith(
       expect.objectContaining({
-        scheduledWithin: {
+        placedWithin: {
           start: new Date("2026-03-28T23:00:00Z"),
           end: new Date("2026-03-29T22:00:00Z"),
         },

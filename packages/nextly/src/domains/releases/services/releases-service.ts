@@ -492,8 +492,9 @@ export interface ReleaseCalendarQuery {
  */
 export interface ReleaseCountQuery {
   /**
-   * Only releases whose instant falls on this day in this zone, whatever
-   * their state: the releases a calendar shows on that day.
+   * Only the releases placed on this day in this zone, whatever their state:
+   * the releases a calendar shows on that day. A published release is placed
+   * where it went out, any other where it is scheduled.
    *
    * @experimental
    */
@@ -818,9 +819,10 @@ export type FindReleasesQuery = FindReleasesFilters &
          */
         search?: string;
         /**
-         * Only the releases whose instant falls on this day in this zone, in
-         * every state, soonest first unless `order` says otherwise: the day a
-         * calendar in that zone shows, read in full and paged.
+         * Only the releases placed on this day in this zone, in every state,
+         * soonest first unless `order` says otherwise: the day a calendar in
+         * that zone shows, read in full and paged. A published release is
+         * placed where it went out, any other where it is scheduled.
          *
          * @experimental
          */
@@ -1298,7 +1300,7 @@ export class ReleasesService {
       kind: query.kind,
       scheduledAfter: query.scheduledAfter,
       scheduledBefore: query.scheduledBefore,
-      scheduledWithin: dayWindow(query.day),
+      placedWithin: dayWindow(query.day),
       search: searchText(query.search),
       // One clock reading per request, so a release cannot be judged overdue
       // for the count and not for the page it is on.
@@ -1311,10 +1313,12 @@ export class ReleasesService {
    *
    * Every day of the window, in order, empty ones included, each with its
    * complete count of releases by state and its first releases in time order.
-   * A release is on the day its instant falls on in `timezone`, whatever its
-   * state, so a published release shows on the day it went out, a stopped
-   * one on the day it was due, and a cancelled one that had been scheduled on
-   * the day it would have run. A draft has no instant and is on no day.
+   * A release is on the day, in `timezone`, of the instant that says when it
+   * happens: a published release on the day it went out (`publishedAt`), so
+   * one the runner reached late is on the day it really went live; every
+   * other state on the day of its scheduled instant, so a stopped one is on
+   * the day it was due and a cancelled one that had been scheduled on the day
+   * it would have run. A draft has no instant and is on no day.
    *
    * The days and their instants are worked out before the read, so a window
    * that is inverted, longer than six weeks, or in an unknown zone is refused
