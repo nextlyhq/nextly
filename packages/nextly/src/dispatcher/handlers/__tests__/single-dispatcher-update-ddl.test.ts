@@ -54,6 +54,15 @@ function makeAdapter(
   // before recording "applied", so a double answering a flat `false` would report every rebuild as
   // failed — the test would then pass for the wrong reason, describing a create that did not work.
   let created = false;
+  const ran = (sql: string) => {
+    // The lock's own DDL is a `CREATE TABLE` too, and it runs BEFORE the single's. Letting it
+    // through would flip `created` while the main table still did not exist, so the apply would
+    // record every rebuild as applied against a table nothing had built.
+    if (isMigrationLockStatement(sql)) return;
+    executed.push(sql);
+    onStatement?.(sql);
+    if (/CREATE TABLE/i.test(sql)) created = true;
+  };
   // A single's schema change runs inside the storage migration's lock, so the double has to answer
   // the lock's reads and writes as well as its own. Added rather than stubbed: a surface that let
   // every claim succeed would certify an exclusion that is not there.
@@ -80,17 +89,27 @@ function makeAdapter(
     // Shaped the way node-postgres answers through Drizzle — a result object carrying `rows` —
     // rather than a bare array, which satisfies the call and then fails inside the copy with
     // "rows is not iterable", a failure that reads as a defect in the code under test.
-    getDrizzle: vi.fn(() => ({
-      execute: async () => ({ rows: [] }),
-    })),
+    getDrizzle: vi.fn(() => {
+      const db = {
+        // The update's own migration arrives here as raw statements, run one at a time in a
+        // transaction where the dialect has one, so each is recorded as `executeQuery` records
+        // them. The companion reconcile's queries come through here as well, and carry no raw
+        // statement text, so they are answered and not recorded.
+        execute: async (query: { queryChunks?: { value?: unknown }[] }) => {
+          const chunks = query.queryChunks ?? [];
+          const raw =
+            chunks.length === 1 && Array.isArray(chunks[0]?.value)
+              ? chunks[0].value.join("")
+              : undefined;
+          if (raw !== undefined) ran(raw);
+          return { rows: [] };
+        },
+        transaction: async (run: (tx: typeof db) => Promise<void>) => run(db),
+      };
+      return db;
+    }),
     executeQuery: vi.fn(async (sql: string) => {
-      // The lock's own DDL is a `CREATE TABLE` too, and it runs BEFORE the single's. Letting it
-      // through would flip `created` while the main table still did not exist, so the apply would
-      // record every rebuild as applied against a table nothing had built.
-      if (isMigrationLockStatement(sql)) return [];
-      executed.push(sql);
-      onStatement?.(sql);
-      if (/CREATE TABLE/i.test(sql)) created = true;
+      ran(sql);
       return [];
     }),
   });
@@ -536,11 +555,12 @@ describe("updateSingleSchema — where a failure is allowed to surface", () => {
     expect(written?.migrationStatus).toBe("applied");
   });
 
-  it("records a database failure rather than raising it, once a statement has run", async () => {
-    // The other side of the same boundary, and the control for the test above: without it, a
-    // service that raised EVERYTHING would satisfy the refusal cases while breaking every ordinary
-    // failure. A migration that got part way leaves the table changed, so the row has to say so.
-    const { written } = await runUpdate(
+  it("fails the save, writing no row, when the database refuses its migration", async () => {
+    // The other side of the same boundary, and the control for the companion tests above: a
+    // migration the database refuses changed nothing the row should describe (PostgreSQL rolled it
+    // back; MySQL's refusal says how far it got), so the save fails with the reason and the
+    // registry keeps the fields it had, rather than recording the new fields as a failed migration.
+    const outcome = runUpdate(
       {
         fields: [
           { name: "heading", type: "text" },
@@ -554,6 +574,11 @@ describe("updateSingleSchema — where a failure is allowed to surface", () => {
       }
     );
 
-    expect(written?.migrationStatus).toBe("failed");
+    await expect(outcome).rejects.toMatchObject({
+      code: "NEXTLY_MIGRATION_APPLY_FAILED",
+    });
+    const registry = vi.mocked(getSingleRegistryFromDI).mock.results.at(-1)
+      ?.value as { updateSingle: ReturnType<typeof vi.fn> } | undefined;
+    expect(registry?.updateSingle).not.toHaveBeenCalled();
   });
 });
