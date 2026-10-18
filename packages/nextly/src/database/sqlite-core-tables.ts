@@ -480,6 +480,12 @@ export function generateSqliteCoreTableStatements(): string[] {
     // appear on a database built by an earlier boot.
     `CREATE INDEX IF NOT EXISTS "nextly_releases_due_idx"
       ON "nextly_releases" ("state", "scheduled_at")`,
+    // A release is placed in time by its scheduled instant, or by the instant
+    // it went out once published; the calendar reads ranges of both.
+    `CREATE INDEX IF NOT EXISTS "nextly_releases_scheduled_idx"
+      ON "nextly_releases" ("scheduled_at")`,
+    `CREATE INDEX IF NOT EXISTS "nextly_releases_published_idx"
+      ON "nextly_releases" ("published_at")`,
     // Over "member_key" alone: "locale" is nullable and SQLite treats NULL as
     // distinct from NULL, so a composite index over the source columns would
     // permit any number of unlocalized members for one document in one release.
