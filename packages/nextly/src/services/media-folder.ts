@@ -135,12 +135,17 @@ type StoredMediaRecord = MediaFilesRecord & { id: string };
  */
 type RemoveStoredFiles = (records: StoredMediaRecord[]) => Promise<void>;
 
-/** Every file of each item, as a delete of that item removes them. */
+/**
+ * Every file of each item, as a delete of that item removes them, one item
+ * at a time: a chunk of a hundred items asked for all at once would send the
+ * storage every file of every item together, and a refused or throttled
+ * request leaves its file stored.
+ */
 const removeEveryStoredFile: RemoveStoredFiles = async records => {
   const storage = getMediaStorage();
-  await Promise.all(
-    records.map(record => removeStoredFiles(storage, record, record.id))
-  );
+  for (const record of records) {
+    await removeStoredFiles(storage, record, record.id);
+  }
 };
 
 /**
@@ -162,7 +167,20 @@ function removalFrom(
   cleanup: RemoveStoredFiles | FolderStorageCleanup | undefined
 ): RemoveStoredFiles {
   if (cleanup === undefined) return removeEveryStoredFile;
-  if (typeof cleanup === "function") return cleanup;
+  if (typeof cleanup === "function") {
+    // The rows are already gone: a failure is named, never thrown, so it
+    // cannot stop the rest of the cascade.
+    return async records => {
+      try {
+        await cleanup(records);
+      } catch (error) {
+        console.warn(
+          "[MediaFolderService] Could not remove the files of the deleted items:",
+          error instanceof Error ? error.message : error
+        );
+      }
+    };
+  }
   return async records => {
     const filePaths: string[] = [];
     for (const record of records) {

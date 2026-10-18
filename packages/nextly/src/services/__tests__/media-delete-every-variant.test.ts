@@ -750,6 +750,56 @@ describe("deleting a folder with its contents", () => {
     expect(given.flat().sort()).toEqual(files);
   });
 
+  // The rows are gone by the time their files are removed, so a cleanup
+  // that fails must not stop the rest of the cascade.
+  it("deletes the folder when a given cleanup fails", async () => {
+    onLocalDisk();
+    const folder = await newFolder();
+    await uploadPhoto(folder);
+
+    const result = await folders().deleteFolder(folder, true, async () => {
+      throw new Error("storage is unavailable");
+    });
+
+    expect(result.success).toBe(true);
+    expect((await folders().getFolderById(folder)).success).toBe(false);
+  });
+
+  // A folder of many items would otherwise ask the storage for every one of
+  // their files at once.
+  it("removes one item's files at a time", async () => {
+    const bucket = new Bucket("s3");
+    initializeMediaStorage({
+      plugins: [
+        {
+          name: "s3",
+          type: "s3",
+          collections: { media: true },
+          adapter: bucket,
+        },
+      ],
+    });
+    const folder = await newFolder();
+    for (let i = 0; i < 3; i++) await uploadPhoto(folder);
+    const perItem = bucket.files.size / 3;
+    const remove = bucket.delete.bind(bucket);
+    let inFlight = 0;
+    let most = 0;
+    vi.spyOn(bucket, "delete").mockImplementation(async filePath => {
+      inFlight++;
+      most = Math.max(most, inFlight);
+      await new Promise(resolve => setTimeout(resolve, 5));
+      inFlight--;
+      return remove(filePath);
+    });
+
+    expect((await folders().deleteFolder(folder, true)).success).toBe(true);
+
+    expect(bucket.files.size).toBe(0);
+    expect(most).toBeGreaterThan(1);
+    expect(most).toBeLessThanOrEqual(perItem);
+  });
+
   it("leaves every file stored when an enclosing transaction rolls back", async () => {
     onLocalDisk();
     const folder = await newFolder();

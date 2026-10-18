@@ -7,12 +7,12 @@ Nextly's media system is plugin-based. The default is local disk storage -- zero
 
 ## Storage adapters at a glance
 
-| Adapter                         | Services                                                            | When to use                          |
-| ------------------------------- | ------------------------------------------------------------------- | ------------------------------------ |
-| Built-in (local disk)           | Local filesystem under `./public/uploads/`                          | Development, single-server self-host |
-| `@nextlyhq/storage-s3`          | AWS S3, Cloudflare R2, MinIO, DigitalOcean Spaces, Supabase Storage | Most production deployments          |
-| `@nextlyhq/storage-vercel-blob` | Vercel Blob                                                         | Vercel deployments                   |
-| `@nextlyhq/storage-uploadthing` | Uploadthing                                                         | Uploadthing users                    |
+| Adapter                          | Services                                                           | When to use                          |
+|----------------------------------|--------------------------------------------------------------------|--------------------------------------|
+| Built-in (local disk)            | Local filesystem under `./public/uploads/`                          | Development, single-server self-host |
+| `@nextlyhq/storage-s3`           | AWS S3, Cloudflare R2, MinIO, DigitalOcean Spaces, Supabase Storage | Most production deployments          |
+| `@nextlyhq/storage-vercel-blob`  | Vercel Blob                                                         | Vercel deployments                    |
+| `@nextlyhq/storage-uploadthing`  | Uploadthing                                                         | Uploadthing users                     |
 
 Storage adapters are plugins added to the `storage` array in `defineConfig()`. Each plugin declares which collections it handles, and the `MediaStorage` manager routes uploads accordingly:
 
@@ -41,7 +41,7 @@ export default defineConfig({
   storage: [
     localStorage({
       basePath: "./public/media", // default: "./public/uploads"
-      baseUrl: "/media", // default: "/uploads"
+      baseUrl: "/media",          // default: "/uploads"
       collections: { media: true },
     }),
   ],
@@ -76,10 +76,26 @@ If an env var is set but the matching adapter package isn't installed, Nextly lo
 Works with any S3-compatible service. Install:
 
 <Tabs items={["pnpm", "npm", "yarn", "bun"]}>
-  <Tab value="pnpm">```bash pnpm add @nextlyhq/storage-s3 ```</Tab>
-  <Tab value="npm">```bash npm install @nextlyhq/storage-s3 ```</Tab>
-  <Tab value="yarn">```bash yarn add @nextlyhq/storage-s3 ```</Tab>
-  <Tab value="bun">```bash bun add @nextlyhq/storage-s3 ```</Tab>
+<Tab value="pnpm">
+```bash
+pnpm add @nextlyhq/storage-s3
+```
+</Tab>
+<Tab value="npm">
+```bash
+npm install @nextlyhq/storage-s3
+```
+</Tab>
+<Tab value="yarn">
+```bash
+yarn add @nextlyhq/storage-s3
+```
+</Tab>
+<Tab value="bun">
+```bash
+bun add @nextlyhq/storage-s3
+```
+</Tab>
 </Tabs>
 
 ### AWS S3
@@ -115,7 +131,7 @@ s3Storage({
   endpoint: `https://${process.env.R2_ACCOUNT_ID}.r2.cloudflarestorage.com`,
   publicUrl: process.env.R2_PUBLIC_URL,
   collections: { media: true },
-});
+})
 ```
 
 ### MinIO (self-hosted)
@@ -131,7 +147,7 @@ s3Storage({
   endpoint: "http://localhost:9000",
   forcePathStyle: true,
   collections: { media: true },
-});
+})
 ```
 
 ### DigitalOcean Spaces
@@ -146,7 +162,7 @@ s3Storage({
   secretAccessKey: process.env.SPACES_SECRET!,
   endpoint: `https://${process.env.SPACES_REGION}.digitaloceanspaces.com`,
   collections: { media: true },
-});
+})
 ```
 
 ### Supabase Storage
@@ -162,25 +178,25 @@ s3Storage({
   endpoint: `https://${process.env.SUPABASE_PROJECT_ID}.supabase.co/storage/v1/s3`,
   forcePathStyle: true,
   collections: { media: true },
-});
+})
 ```
 
 ### S3 configuration reference
 
-| Option               | Type      | Default                      | Description                                                                           |
-| -------------------- | --------- | ---------------------------- | ------------------------------------------------------------------------------------- |
-| `bucket`             | `string`  | required                     | S3 bucket name.                                                                       |
-| `region`             | `string`  | required                     | AWS region (use `"auto"` for R2).                                                     |
-| `accessKeyId`        | `string`  | optional                     | Access key. Falls back to `AWS_ACCESS_KEY_ID` env var.                                |
-| `secretAccessKey`    | `string`  | optional                     | Secret key. Falls back to `AWS_SECRET_ACCESS_KEY` env var.                            |
-| `endpoint`           | `string`  | --                           | Custom endpoint for S3-compatible services (R2, MinIO, Spaces, etc.).                 |
-| `publicUrl`          | `string`  | --                           | Public CDN / custom domain URL for serving files.                                     |
-| `forcePathStyle`     | `boolean` | `false`                      | Use path-style URLs (`https://endpoint/bucket/key`). Required for MinIO and Supabase. |
-| `acl`                | `string`  | `"private"`                  | Object ACL: `"private"`, `"public-read"`, `"bucket-owner-full-control"`, etc.         |
-| `signedDownloads`    | `boolean` | `false`                      | Issue signed URLs for downloads of private objects.                                   |
-| `signedUrlExpiresIn` | `number`  | `3600`                       | Signed URL expiry in seconds.                                                         |
-| `cacheControl`       | `string`  | `"public, max-age=31536000"` | Cache-Control header on uploaded objects.                                             |
-| `contentDisposition` | `string`  | --                           | `"inline"` or `"attachment"`. Sets the Content-Disposition header.                    |
+| Option              | Type      | Default                          | Description                                                            |
+|---------------------|-----------|----------------------------------|------------------------------------------------------------------------|
+| `bucket`            | `string`  | required                         | S3 bucket name.                                                        |
+| `region`            | `string`  | required                         | AWS region (use `"auto"` for R2).                                      |
+| `accessKeyId`       | `string`  | optional                         | Access key. Falls back to `AWS_ACCESS_KEY_ID` env var.                 |
+| `secretAccessKey`   | `string`  | optional                         | Secret key. Falls back to `AWS_SECRET_ACCESS_KEY` env var.             |
+| `endpoint`          | `string`  | --                               | Custom endpoint for S3-compatible services (R2, MinIO, Spaces, etc.).  |
+| `publicUrl`         | `string`  | --                               | Public CDN / custom domain URL for serving files.                      |
+| `forcePathStyle`    | `boolean` | `false`                          | Use path-style URLs (`https://endpoint/bucket/key`). Required for MinIO and Supabase. |
+| `acl`               | `string`  | `"private"`                      | Object ACL: `"private"`, `"public-read"`, `"bucket-owner-full-control"`, etc. |
+| `signedDownloads`   | `boolean` | `false`                          | Issue signed URLs for downloads of private objects.                     |
+| `signedUrlExpiresIn`| `number`  | `3600`                           | Signed URL expiry in seconds.                                          |
+| `cacheControl`      | `string`  | `"public, max-age=31536000"`     | Cache-Control header on uploaded objects.                              |
+| `contentDisposition`| `string`  | --                               | `"inline"` or `"attachment"`. Sets the Content-Disposition header.     |
 
 > **Note:** Default ACL is `"private"`. If you want objects to be world-readable directly from S3 (rather than via signed URLs), set `acl: "public-read"` and verify your bucket policy permits it. R2 ignores ACL settings -- configure public access in the R2 dashboard instead.
 
@@ -189,10 +205,26 @@ s3Storage({
 Optimised for Vercel deployments with built-in CDN. Install:
 
 <Tabs items={["pnpm", "npm", "yarn", "bun"]}>
-  <Tab value="pnpm">```bash pnpm add @nextlyhq/storage-vercel-blob ```</Tab>
-  <Tab value="npm">```bash npm install @nextlyhq/storage-vercel-blob ```</Tab>
-  <Tab value="yarn">```bash yarn add @nextlyhq/storage-vercel-blob ```</Tab>
-  <Tab value="bun">```bash bun add @nextlyhq/storage-vercel-blob ```</Tab>
+<Tab value="pnpm">
+```bash
+pnpm add @nextlyhq/storage-vercel-blob
+```
+</Tab>
+<Tab value="npm">
+```bash
+npm install @nextlyhq/storage-vercel-blob
+```
+</Tab>
+<Tab value="yarn">
+```bash
+yarn add @nextlyhq/storage-vercel-blob
+```
+</Tab>
+<Tab value="bun">
+```bash
+bun add @nextlyhq/storage-vercel-blob
+```
+</Tab>
 </Tabs>
 
 ```typescript
@@ -217,10 +249,26 @@ If `token` is omitted, the adapter reads `BLOB_READ_WRITE_TOKEN` from the enviro
 Install:
 
 <Tabs items={["pnpm", "npm", "yarn", "bun"]}>
-  <Tab value="pnpm">```bash pnpm add @nextlyhq/storage-uploadthing ```</Tab>
-  <Tab value="npm">```bash npm install @nextlyhq/storage-uploadthing ```</Tab>
-  <Tab value="yarn">```bash yarn add @nextlyhq/storage-uploadthing ```</Tab>
-  <Tab value="bun">```bash bun add @nextlyhq/storage-uploadthing ```</Tab>
+<Tab value="pnpm">
+```bash
+pnpm add @nextlyhq/storage-uploadthing
+```
+</Tab>
+<Tab value="npm">
+```bash
+npm install @nextlyhq/storage-uploadthing
+```
+</Tab>
+<Tab value="yarn">
+```bash
+yarn add @nextlyhq/storage-uploadthing
+```
+</Tab>
+<Tab value="bun">
+```bash
+bun add @nextlyhq/storage-uploadthing
+```
+</Tab>
 </Tabs>
 
 ```typescript
@@ -262,15 +310,15 @@ s3Storage({
       clientUploads: true,
     },
   },
-});
+})
 ```
 
-| Option               | Type      | Default | Description                                                          |
-| -------------------- | --------- | ------- | -------------------------------------------------------------------- |
-| `prefix`             | `string`  | --      | Folder prefix for this collection's uploads.                         |
+| Option               | Type      | Default | Description                                              |
+|----------------------|-----------|---------|----------------------------------------------------------|
+| `prefix`             | `string`  | --      | Folder prefix for this collection's uploads.             |
 | `clientUploads`      | `boolean` | `false` | Enable client-side direct uploads (bypasses serverless body limits). |
-| `signedDownloads`    | `boolean` | `false` | Issue signed URLs for download.                                      |
-| `signedUrlExpiresIn` | `number`  | `3600`  | Signed-URL expiry in seconds.                                        |
+| `signedDownloads`    | `boolean` | `false` | Issue signed URLs for download.                          |
+| `signedUrlExpiresIn` | `number`  | `3600`  | Signed-URL expiry in seconds.                            |
 
 You can also register **multiple plugins** in the `storage` array if different collections need different backends -- for instance, public media on Vercel Blob and private documents on S3.
 
@@ -280,14 +328,14 @@ Nextly can automatically generate resized image variants for every uploaded imag
 
 ### Size options
 
-| Option    | Type     | Default    | Description                                                                     |
-| --------- | -------- | ---------- | ------------------------------------------------------------------------------- |
-| `name`    | `string` | required   | Unique key. Used in the API response and as part of the variant filename.       |
-| `width`   | `number` | --         | Target width in pixels (omit to auto-calculate from height).                    |
-| `height`  | `number` | --         | Target height in pixels (omit to auto-calculate from width).                    |
-| `fit`     | `string` | `"inside"` | `"inside"` (shrink to fit), `"cover"` (crop to fill), `"contain"`, or `"fill"`. |
-| `quality` | `number` | `80`       | Image quality (1-100).                                                          |
-| `format`  | `string` | `"auto"`   | `"auto"` (WebP when possible), `"webp"`, `"jpeg"`, `"png"`, or `"avif"`.        |
+| Option    | Type     | Default     | Description                                                                                  |
+|-----------|----------|-------------|----------------------------------------------------------------------------------------------|
+| `name`    | `string` | required    | Unique key. Used in the API response and as part of the variant filename.                    |
+| `width`   | `number` | --          | Target width in pixels (omit to auto-calculate from height).                                 |
+| `height`  | `number` | --          | Target height in pixels (omit to auto-calculate from width).                                 |
+| `fit`     | `string` | `"inside"`  | `"inside"` (shrink to fit), `"cover"` (crop to fill), `"contain"`, or `"fill"`.              |
+| `quality` | `number` | `80`        | Image quality (1-100).                                                                       |
+| `format`  | `string` | `"auto"`    | `"auto"` (WebP when possible), `"webp"`, `"jpeg"`, `"png"`, or `"avif"`.                     |
 
 ### Visual configuration
 
@@ -295,15 +343,15 @@ Go to **Settings -> Image Sizes** in the admin panel to add, edit and remove siz
 
 ### REST endpoints
 
-| Method | Path                                         | Description                                |
-| ------ | -------------------------------------------- | ------------------------------------------ |
-| GET    | `/admin/api/image-sizes`                     | List configured sizes (read).              |
-| POST   | `/admin/api/image-sizes`                     | Create a new size (UI-managed).            |
-| GET    | `/admin/api/image-sizes/:id`                 | Get a single size.                         |
-| PATCH  | `/admin/api/image-sizes/:id`                 | Update a size.                             |
-| DELETE | `/admin/api/image-sizes/:id`                 | Delete a size.                             |
+| Method | Path                                | Description                                  |
+|--------|-------------------------------------|----------------------------------------------|
+| GET    | `/admin/api/image-sizes`                  | List configured sizes (read).                |
+| POST   | `/admin/api/image-sizes`                  | Create a new size (UI-managed).              |
+| GET    | `/admin/api/image-sizes/:id`              | Get a single size.                           |
+| PATCH  | `/admin/api/image-sizes/:id`              | Update a size.                               |
+| DELETE | `/admin/api/image-sizes/:id`              | Delete a size.                               |
 | GET    | `/admin/api/image-sizes/regeneration-status` | Status of an in-progress regeneration job. |
-| POST   | `/admin/api/image-sizes/regenerate`          | Re-generate variants for existing media.   |
+| POST   | `/admin/api/image-sizes/regenerate`       | Re-generate variants for existing media.     |
 
 The list endpoint is permission-gated by `read-settings`; mutation endpoints require `manage-settings`.
 
@@ -432,42 +480,42 @@ so read the crop point from the media row until it does.
 
 ### Auto-detection cascade
 
-| Variable                | Triggers    |
-| ----------------------- | ----------- |
-| `BLOB_READ_WRITE_TOKEN` | Vercel Blob |
-| `S3_BUCKET`             | S3 adapter  |
-| `UPLOADTHING_TOKEN`     | Uploadthing |
-| (none of the above)     | Local disk  |
+| Variable                | Triggers           |
+|-------------------------|--------------------|
+| `BLOB_READ_WRITE_TOKEN` | Vercel Blob       |
+| `S3_BUCKET`             | S3 adapter        |
+| `UPLOADTHING_TOKEN`     | Uploadthing       |
+| (none of the above)     | Local disk         |
 
 ### S3 / R2 / MinIO / Spaces / Supabase
 
-| Variable                | Description                                    |
-| ----------------------- | ---------------------------------------------- |
-| `S3_BUCKET`             | Bucket name.                                   |
-| `S3_REGION`             | Region (`"auto"` for R2).                      |
-| `AWS_ACCESS_KEY_ID`     | Access key ID.                                 |
-| `AWS_SECRET_ACCESS_KEY` | Secret access key.                             |
-| `S3_ENDPOINT`           | Custom endpoint (R2, MinIO, Supabase, Spaces). |
-| `S3_PUBLIC_URL`         | Public URL for serving files.                  |
-| `S3_FORCE_PATH_STYLE`   | Set to `"true"` for MinIO and Supabase.        |
+| Variable                | Description                                              |
+|-------------------------|----------------------------------------------------------|
+| `S3_BUCKET`             | Bucket name.                                              |
+| `S3_REGION`             | Region (`"auto"` for R2).                                |
+| `AWS_ACCESS_KEY_ID`     | Access key ID.                                           |
+| `AWS_SECRET_ACCESS_KEY` | Secret access key.                                       |
+| `S3_ENDPOINT`           | Custom endpoint (R2, MinIO, Supabase, Spaces).            |
+| `S3_PUBLIC_URL`         | Public URL for serving files.                             |
+| `S3_FORCE_PATH_STYLE`   | Set to `"true"` for MinIO and Supabase.                   |
 
 ### Vercel Blob
 
-| Variable                | Description                   |
-| ----------------------- | ----------------------------- |
-| `BLOB_READ_WRITE_TOKEN` | Vercel Blob read-write token. |
+| Variable                  | Description                       |
+|---------------------------|-----------------------------------|
+| `BLOB_READ_WRITE_TOKEN`   | Vercel Blob read-write token.     |
 
 ### Uploadthing
 
-| Variable            | Description                |
-| ------------------- | -------------------------- |
-| `UPLOADTHING_TOKEN` | Uploadthing v7+ API token. |
+| Variable             | Description                       |
+|----------------------|-----------------------------------|
+| `UPLOADTHING_TOKEN`  | Uploadthing v7+ API token.        |
 
 ## Deleting media, and thumbnails left behind
 
 Deleting a media item, singly or in bulk, removes every file stored for it: the original, the thumbnail made at upload, and every named image size. A file the storage refuses to remove is logged with its path and the item, so it can be found.
 
-Earlier releases left the thumbnail behind when an item was deleted. On local disk that file stays under `public/uploads`, and on a public S3 bucket, Vercel Blob store or UploadThing app it stays publicly reachable. To find those thumbnails, run:
+Earlier releases left the thumbnail behind when an item was deleted. On local disk that file stays under `public/uploads`, and on a public S3 bucket or Vercel Blob store it stays publicly reachable. UploadThing was not affected: there the delete found the thumbnail by its key. To find those thumbnails, run:
 
 ```bash
 npx nextly media orphans
