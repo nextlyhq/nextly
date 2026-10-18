@@ -16,7 +16,7 @@
  *
  * A run tested the commit when every job its verdict stands on, named below,
  * reached a verdict (`success` or `failure`): for CI, every job `CI gate`
- * needs; for Integration, its three legs. A run still queued or running may yet
+ * needs; for Integration, every job that runs a suite. A run still queued or running may yet
  * test it, so it is left to finish; if a newer push supersedes it, the next
  * scheduled look dispatches. A commit gets one catch-up run, never a second:
  * when that run ends without testing it (a job cancelled or timed out), the
@@ -32,7 +32,8 @@ import { commandText } from "./workflow-context.mjs";
 
 /**
  * The workflows to keep tested on `main`, each with the jobs its verdict stands
- * on: for CI, every job `CI gate` needs; for Integration, its legs. A name
+ * on: for CI, every job `CI gate` needs; for Integration, every job that runs
+ * a suite (each shard of a sharded leg, and the SQLite leg). A name
  * ending in " (" stands for a matrix job's every instance, whose names add the
  * matrix value. A test holds each list to the workflow file.
  */
@@ -46,7 +47,13 @@ export const WORKFLOWS = {
     "Published admin build",
     "CLI entry guard (",
   ],
-  "integration.yml": ["Integration (postgres)", "Integration (mysql)", "Integration (sqlite)"],
+  "integration.yml": [
+    "Integration (postgres) shard (1)",
+    "Integration (postgres) shard (2)",
+    "Integration (mysql) shard (1)",
+    "Integration (mysql) shard (2)",
+    "Integration (sqlite)",
+  ],
 };
 
 /** The events whose runs on `main` test a commit of it. */

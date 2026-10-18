@@ -130,12 +130,16 @@ describe("the jobs it reads as testing a commit", () => {
     expect(WORKFLOWS["ci.yml"]).toEqual(ci.jobs.gate.needs.map(id => listedName(ci.jobs[id])));
   });
 
-  it("integration.yml: its three legs, the same jobs its superseded check reads", () => {
+  it("integration.yml: every job that runs a suite, the same jobs its superseded check reads", () => {
+    // A sharded leg's own job only reports its shards' verdict; the shards
+    // are what run the suite, so they are what a tested commit needs.
     const integration = workflowFile("integration.yml");
-    const legs = Object.values(integration.jobs).map(entry => entry.name).filter(name => String(name).startsWith("Integration ("));
-    expect([...WORKFLOWS["integration.yml"]].sort()).toEqual([...legs].sort());
     const ask = integration.jobs.changes.steps.find(step => String(step.uses).includes("superseded-on-main"));
     expect(String(ask.with["substantive-job"]).split("\n").map(name => name.trim()).filter(Boolean)).toEqual(WORKFLOWS["integration.yml"]);
+    const sharded = Object.values(integration.jobs).filter(entry => entry.strategy?.matrix?.shard);
+    for (const leg of sharded) {
+      for (const shard of leg.strategy.matrix.shard) expect(WORKFLOWS["integration.yml"]).toContain(`${leg.name} (${shard})`);
+    }
   });
 
   for (const name of Object.keys(WORKFLOWS)) {
