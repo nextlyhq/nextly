@@ -39,7 +39,12 @@ vi.mock("@aws-sdk/client-s3", () => {
     DeleteObjectsCommand: class {},
   };
 });
-vi.mock("@aws-sdk/lib-storage", () => ({ Upload: class {} }));
+// An upload that completes, for the cases that store a file.
+vi.mock("@aws-sdk/lib-storage", () => ({
+  Upload: class {
+    done = async () => ({});
+  },
+}));
 vi.mock("@aws-sdk/s3-request-presigner", () => ({ getSignedUrl: vi.fn() }));
 
 /** A `send` that behaves however a case needs, reachable from the assertions. */
@@ -263,3 +268,44 @@ describe("S3StorageAdapter.read", () => {
 
 // The mocked client class, referenced so the import is not flagged as unused.
 void S3Client;
+
+/*
+ * A media record keeps the original's stored path and URL but only the URL of
+ * the thumbnail made at upload, so a delete works the thumbnail's path out
+ * from them: it relies on every URL being one fixed prefix plus the stored
+ * path, with nothing encoded. This holds the adapter to that.
+ */
+describe("S3StorageAdapter — a URL is one prefix plus the stored path", () => {
+  it.each([
+    ["the bucket's own address", {}],
+    [
+      "a configured public URL",
+      { publicUrl: "https://cdn.example.com/media/" },
+    ],
+  ])("holds for %s", async (_label, extra) => {
+    const adapter = new S3StorageAdapter({
+      bucket: "test-bucket",
+      region: "us-east-1",
+      ...extra,
+    });
+    const options = { mimeType: "image/png", collection: "media" };
+
+    const original = await adapter.upload(Buffer.from("o"), {
+      ...options,
+      filename: "photo.png",
+    });
+    const thumbnail = await adapter.upload(Buffer.from("t"), {
+      ...options,
+      filename: "thumb_photo.png",
+    });
+
+    const prefixOf = (result: { url: string; path: string }) => {
+      expect(result.url.endsWith(result.path)).toBe(true);
+      return result.url.slice(0, result.url.length - result.path.length);
+    };
+    // Keys are in a date folder, as stored files are.
+    expect(original.path).toMatch(/\//);
+    expect(prefixOf(thumbnail)).toBe(prefixOf(original));
+    expect(adapter.getPublicUrl(thumbnail.path)).toBe(thumbnail.url);
+  });
+});

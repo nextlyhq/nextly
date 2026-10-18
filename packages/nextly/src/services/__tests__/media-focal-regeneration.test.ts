@@ -271,3 +271,46 @@ describe("MediaService focal-point regeneration ordering", () => {
     expect(deleteSpy).not.toHaveBeenCalledWith(OLD_PATH);
   });
 });
+
+/*
+ * A regeneration whose new sizes include `thumbnail` makes that size the
+ * item's thumbnail. The thumbnail made at upload is then referenced by
+ * nothing, so it goes after the row commits, with the superseded sizes; until
+ * then the row still points at it, so a write that fails keeps it.
+ */
+describe("the upload-time thumbnail a regeneration replaces", () => {
+  // Stored as an adapter stores it: under a date folder, with a key of its
+  // own, its URL the adapter's prefix plus that key.
+  const LEGACY_THUMB = "2026/10/b2-thumb_m1.png";
+  const withUploadThumbnail = {
+    ...existingMedia,
+    filename: "2026/10/a1-m1.png",
+    url: "http://x/2026/10/a1-m1.png",
+    thumbnailUrl: `http://x/${LEGACY_THUMB}`,
+  };
+
+  beforeEach(() => {
+    deleteSpy.mockClear();
+    calls.length = 0;
+    regen.thumbPath = NEW_PATH;
+  });
+
+  it("is removed after the row commits", async () => {
+    const service = makeService("commit", withUploadThumbnail);
+    const res = await service.updateMedia("m1", { focalX: 0.5 });
+
+    expect(res.success).toBe(true);
+    expect(deleteSpy).toHaveBeenCalledWith(LEGACY_THUMB);
+    expect(calls.indexOf(`delete:${LEGACY_THUMB}`)).toBeGreaterThan(
+      calls.indexOf("update")
+    );
+  });
+
+  it("stays when the write fails", async () => {
+    const service = makeService("throw", withUploadThumbnail);
+    const res = await service.updateMedia("m1", { focalX: 0.5 });
+
+    expect(res.success).toBe(false);
+    expect(deleteSpy).not.toHaveBeenCalledWith(LEGACY_THUMB);
+  });
+});

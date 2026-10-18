@@ -35,7 +35,6 @@ import {
   withRetry,
   isTransientError,
   generateImageSizes,
-  deleteImageSizes,
 } from "@nextly/storage";
 
 // Actor threading + outbox recording for media writes. Each write records a
@@ -51,6 +50,7 @@ import { recordMutationEvent } from "../domains/webhooks/record-mutation-event";
 import { keysToSnakeCase } from "../lib/case-conversion";
 import { inPluginTransaction } from "../shared/lib/plugin-transaction-scope";
 import { refusesUpload } from "../storage/image-processor";
+import { siblingStoredPath } from "../storage/stored-path";
 import { isImageMimeType, validateFileSize } from "../types/media";
 import type {
   Media,
@@ -97,6 +97,45 @@ type BulkDeleteOutcome = BulkOutcome<{
   success: boolean;
   error?: string;
 }>;
+
+/** A stored variant as the `sizes` column holds it, as far as removal reads it. */
+type StoredVariant = { path?: string; url?: string } | null | undefined;
+
+/** `sizes` as an object, from the column or its JSON-string form. */
+function parseSizes(sizes: unknown): Record<string, StoredVariant> | null {
+  if (typeof sizes === "string") {
+    try {
+      return JSON.parse(sizes) as Record<string, StoredVariant>;
+    } catch {
+      return null;
+    }
+  }
+  return sizes && typeof sizes === "object"
+    ? (sizes as Record<string, StoredVariant>)
+    : null;
+}
+
+/** A stored file that could not be removed, by its path, so it can be found. */
+function warnNotRemoved(
+  filePath: string,
+  mediaId: string,
+  error: unknown
+): void {
+  console.warn(
+    `[MediaService] Could not remove ${filePath} of media ${mediaId}:`,
+    error instanceof Error ? error.message : error
+  );
+}
+
+/**
+ * A thumbnail whose stored location the record does not show, by its URL,
+ * the one identifier there is: nothing was removed in its place.
+ */
+function warnUnlocated(url: string, mediaId: string): void {
+  console.warn(
+    `[MediaService] Left the thumbnail of media ${mediaId} at ${url}: its stored location could not be worked out from the record.`
+  );
+}
 
 export class MediaService extends BaseService {
   // Lazy-initialized to avoid capturing a stale MediaStorage singleton
@@ -698,20 +737,23 @@ export class MediaService extends BaseService {
    * either the superseded old variants (after a rotation commits) or the
    * freshly-written new variants (when the commit did not happen), so neither a
    * successful regeneration nor a failed one leaks storage. Never throws: a
-   * failed delete is logged, because the durable DB state is already correct and
-   * an orphaned file is not worth failing or reversing the write over.
+   * failed delete is logged, naming the file and its item so a leftover can be
+   * found, because the durable DB state is already correct and an orphaned file
+   * is not worth failing or reversing the write over.
    */
-  private async deleteVariantPaths(paths: string[]): Promise<void> {
-    if (paths.length === 0) return;
-    const results = await Promise.allSettled(
-      paths.map(path => this.storage.delete(path, "media"))
+  private async deleteVariantPaths(
+    paths: string[],
+    mediaId: string
+  ): Promise<void> {
+    await Promise.all(
+      paths.map(async filePath => {
+        try {
+          await this.storage.delete(filePath, "media");
+        } catch (error) {
+          warnNotRemoved(filePath, mediaId, error);
+        }
+      })
     );
-    const failed = results.filter(r => r.status === "rejected").length;
-    if (failed > 0) {
-      console.warn(
-        `[MediaService] Failed to delete ${failed} of ${paths.length} old media variant(s).`
-      );
-    }
   }
 
   /**
@@ -731,12 +773,71 @@ export class MediaService extends BaseService {
    */
   private async deleteSupersededVariants(
     candidateSizes: unknown,
-    keepSizes: unknown
+    keepSizes: unknown,
+    mediaId: string,
+    /** Other superseded files, such as a thumbnail the new sizes replaced. */
+    alsoSuperseded: readonly string[] = []
   ): Promise<void> {
     const keep = new Set(this.collectVariantPaths(keepSizes));
+    const candidates = new Set([
+      ...this.collectVariantPaths(candidateSizes),
+      ...alsoSuperseded,
+    ]);
     await this.deleteVariantPaths(
-      this.collectVariantPaths(candidateSizes).filter(path => !keep.has(path))
+      [...candidates].filter(path => !keep.has(path)),
+      mediaId
     );
+  }
+
+  /**
+   * The stored path of the thumbnail `current` has, when `updateData` gives the
+   * item another one. Undefined when it keeps its thumbnail, has none, or one
+   * whose location the record does not show, which is then named in the log.
+   */
+  private replacedThumbnailPath(
+    current: Media,
+    updateData: Record<string, unknown>
+  ): string | undefined {
+    const old = current.thumbnailUrl;
+    const next = updateData.thumbnailUrl;
+    if (!old || next === undefined || next === old) return undefined;
+    const found = siblingStoredPath(
+      { path: current.filename, url: current.url },
+      old
+    );
+    if (!found) warnUnlocated(old, current.id);
+    return found;
+  }
+
+  /**
+   * Every file stored for `media`: its original, every image size, and the
+   * thumbnail made at upload. The record holds only that thumbnail's URL, so
+   * its path is worked out from what the record holds about the original;
+   * a thumbnail that is one of the sizes is already among them. A thumbnail
+   * whose location the record does not show is returned apart, by its URL, so
+   * that nothing is removed in its place.
+   */
+  private storedFilesOf(media: Media): {
+    paths: string[];
+    unlocated: string[];
+  } {
+    const sizes = parseSizes(
+      (media as unknown as Record<string, unknown>).sizes
+    );
+    const paths = [media.filename, ...this.collectVariantPaths(sizes)];
+    const sizeUrls = new Set(
+      Object.values(sizes ?? {}).map(variant => variant?.url)
+    );
+    const unlocated: string[] = [];
+    if (media.thumbnailUrl && !sizeUrls.has(media.thumbnailUrl)) {
+      const thumbnail = siblingStoredPath(
+        { path: media.filename, url: media.url },
+        media.thumbnailUrl
+      );
+      if (thumbnail) paths.push(thumbnail);
+      else unlocated.push(media.thumbnailUrl);
+    }
+    return { paths: [...new Set(paths.filter(Boolean))], unlocated };
   }
 
   private collectVariantPaths(sizes: unknown): string[] {
@@ -826,6 +927,9 @@ export class MediaService extends BaseService {
       // exactly the paths their own commit replaced rather than one clobbering
       // the other's fresh variants.
       let replacedSizes: unknown = null;
+      // The upload-time thumbnail the regenerated sizes replace, when they
+      // bring a `thumbnail` of their own: from then on nothing refers to it.
+      let replacedThumbnail: string | undefined;
       let updatedRow: Media | null;
       let recorded = false;
       try {
@@ -844,6 +948,7 @@ export class MediaService extends BaseService {
           if (regeneratedSizes) {
             replacedSizes = (current as unknown as Record<string, unknown>)
               .sizes;
+            replacedThumbnail = this.replacedThumbnailPath(current, updateData);
           }
 
           await tx.update("media", updateData, this.whereEq("id", mediaId));
@@ -881,7 +986,8 @@ export class MediaService extends BaseService {
           await this.deleteSupersededVariants(
             regeneratedSizes,
             replacedSizes ??
-              (existing.data as { sizes?: unknown } | null)?.sizes
+              (existing.data as { sizes?: unknown } | null)?.sizes,
+            mediaId
           );
         }
         throw error;
@@ -905,7 +1011,8 @@ export class MediaService extends BaseService {
           await this.deleteSupersededVariants(
             regeneratedSizes,
             replacedSizes ??
-              (existing.data as { sizes?: unknown } | null)?.sizes
+              (existing.data as { sizes?: unknown } | null)?.sizes,
+            mediaId
           );
         }
         // Mirror getMediaById's not-found shape so the domain layer maps this to
@@ -923,7 +1030,12 @@ export class MediaService extends BaseService {
       // ones can be deleted (keeping any path the new set reuses) — unless a
       // plugin's enclosing transaction can still roll the row back to them.
       if (regeneratedSizes && replacedSizes && !keepSuperseded) {
-        await this.deleteSupersededVariants(replacedSizes, regeneratedSizes);
+        await this.deleteSupersededVariants(
+          replacedSizes,
+          regeneratedSizes,
+          mediaId,
+          replacedThumbnail ? [replacedThumbnail] : []
+        );
       }
 
       // The update committed a media.updated outbox row; drain and prune it
@@ -1047,48 +1159,32 @@ export class MediaService extends BaseService {
       // SQLite transaction the delete is durable only once that commits.
       await this.afterCommit(() => revalidateMedia([mediaId], this.logger));
 
-      // Best-effort physical cleanup AFTER the row + event have committed.
-      // Swallow-and-warn: a storage failure must not fail a delete whose
-      // authoritative row removal already succeeded.
-      try {
-        await withRetry(
-          () => this.storage.delete(mediaData.filename, "media"),
-          {
-            maxAttempts: 3,
-            baseDelayMs: 500,
-            shouldRetry: isTransientError,
-            onRetry: (err, attempt) => {
-              console.warn(
-                `[MediaService] Delete retry ${attempt}:`,
-                err instanceof Error ? err.message : err
-              );
-            },
-          }
-        );
-
-        if (mediaData.thumbnailUrl) {
-          const thumbPath = mediaData.thumbnailUrl.split("/").pop();
-          if (thumbPath) {
-            await withRetry(() => this.storage.delete(thumbPath, "media"), {
-              maxAttempts: 2,
+      // Best-effort physical cleanup AFTER the row + event have committed:
+      // a storage failure must not fail a delete whose authoritative row
+      // removal already succeeded. Every stored file is removed on its own,
+      // so one that fails leaves the others to go, and is named in the log
+      // with its item, so the leftover can be found.
+      const { paths, unlocated } = this.storedFilesOf(mediaData);
+      for (const url of unlocated) warnUnlocated(url, mediaId);
+      await Promise.all(
+        paths.map(async filePath => {
+          try {
+            await withRetry(() => this.storage.delete(filePath, "media"), {
+              maxAttempts: 3,
               baseDelayMs: 500,
               shouldRetry: isTransientError,
+              onRetry: (err, attempt) => {
+                console.warn(
+                  `[MediaService] Delete retry ${attempt} for ${filePath}:`,
+                  err instanceof Error ? err.message : err
+                );
+              },
             });
+          } catch (error) {
+            warnNotRemoved(filePath, mediaId, error);
           }
-        }
-
-        const sizes = (mediaData as unknown as Record<string, unknown>).sizes;
-        if (sizes) {
-          const parsedSizes =
-            typeof sizes === "string" ? JSON.parse(sizes) : sizes;
-          await deleteImageSizes(parsedSizes, path =>
-            this.storage.delete(path, "media")
-          );
-        }
-      } catch (error) {
-        console.warn("[MediaService] Storage deletion warning:", error);
-        // Storage cleanup is best-effort; the row and event are already gone.
-      }
+        })
+      );
 
       // The delete committed a media.deleted outbox row; drain and prune it
       // (no-op when the unified media service wraps this one and drains itself).

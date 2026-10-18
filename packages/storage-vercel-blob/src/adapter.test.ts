@@ -234,3 +234,29 @@ describe("VercelBlobStorageAdapter — reading bytes back", () => {
     });
   });
 });
+
+/*
+ * A media record keeps the original's stored path and URL but only the URL of
+ * the thumbnail made at upload, so a delete works the thumbnail's path out
+ * from them: on Vercel Blob it relies on a stored path being the blob's own
+ * URL, the empty prefix. This holds the adapter to that.
+ */
+describe("VercelBlobStorageAdapter — a stored path is its URL", () => {
+  const adapter = new VercelBlobStorageAdapter({
+    token: "vercel_blob_rw_test_dummy_token_for_unit_tests",
+    collections: { media: true },
+  });
+
+  it("returns the blob's URL as its path, for the original and its thumbnail", async () => {
+    for (const filename of ["photo.png", "thumb_photo.png"]) {
+      const result = await adapter.upload(Buffer.from("x"), {
+        filename,
+        mimeType: "image/png",
+        collection: "media",
+      });
+
+      expect(result.path).toBe(result.url);
+      expect(adapter.getPublicUrl(result.path)).toBe(result.url);
+    }
+  });
+});
