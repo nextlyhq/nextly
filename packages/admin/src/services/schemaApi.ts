@@ -77,8 +77,13 @@ export interface InteractiveField {
 // by language, and how to bring it back. Set by the preview; empty when no field leaves.
 export interface SchemaPreviewLeavingTranslation {
   name: string;
-  byLocale: Record<string, number>;
-  total: number;
+  /** The field's column, which is how `interactiveFields` names it. */
+  column: string;
+  /** Values moving to the archive, by language; null when they could not be counted. */
+  byLocale: Record<string, number> | null;
+  total: number | null;
+  /** Entries with no default-language value, which keep another language's; null if unknown. */
+  entriesWithoutDefault: number | null;
   /** The language whose value becomes the shared one. */
   defaultLocale: string;
   restoreCommand: string;

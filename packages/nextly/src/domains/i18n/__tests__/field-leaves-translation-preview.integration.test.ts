@@ -33,8 +33,10 @@ const SHARED = [
 /** What the preview reports for one field leaving translation. */
 interface LeavingTranslation {
   name: string;
-  byLocale: Record<string, number>;
-  total: number;
+  column: string;
+  byLocale: Record<string, number> | null;
+  total: number | null;
+  entriesWithoutDefault: number | null;
   defaultLocale: string;
   restoreCommand: string;
   refusal?: { reason: string; steps: string[] };
@@ -167,13 +169,89 @@ describeEachDialect("the preview of a field leaving translation", dialect => {
     expect(preview.leavingTranslation).toEqual([
       {
         name: "heading",
+        column: "heading",
         byLocale: { ar: 1, es: 2 },
         total: 3,
+        entriesWithoutDefault: 0,
         defaultLocale: "en",
         restoreCommand:
           "nextly i18n:restore --collection posts --field heading",
       },
     ]);
+  });
+
+  const previewShared = async (fields: Record<string, unknown>[] = SHARED) =>
+    bodyOf(
+      await dispatchCollections(
+        {} as ServiceContainer,
+        "previewSchemaChanges",
+        { collectionName: "posts" },
+        { fields, localized: true }
+      )
+    );
+
+  it("counts every field leaving translation in one go", async () => {
+    const both = [
+      { name: "heading", type: "text" },
+      { name: "summary", type: "text" },
+      { name: "views", type: "number" },
+    ];
+    await seedCollection(both);
+    const entries = handler().getEntryService();
+    const created = await entries.createEntry(
+      { collectionName: "posts", overrideAccess: true, locale: "en" },
+      { heading: "Three", summary: "Sub" }
+    );
+    const id = String((created.data as { id: unknown }).id);
+    await entries.updateEntry(
+      {
+        collectionName: "posts",
+        entryId: id,
+        overrideAccess: true,
+        locale: "es",
+      },
+      { summary: "Resumen" }
+    );
+
+    const preview = await previewShared(
+      both.map(f => (f.type === "text" ? { ...f, localized: false } : f))
+    );
+
+    expect(
+      preview.leavingTranslation?.map(f => [f.name, f.column, f.byLocale])
+    ).toEqual([
+      ["heading", "heading", { ar: 1, es: 2 }],
+      ["summary", "summary", { es: 1 }],
+    ]);
+  });
+
+  it("says the values could not be counted rather than that there are none", async () => {
+    await seedCollection();
+    // A companion that has drifted from its registry: the count has nothing to read.
+    await query(
+      `ALTER TABLE ${quote(dialect, "dc_posts_locales")} DROP COLUMN ${quote(dialect, "heading")}`
+    );
+
+    const preview = await previewShared();
+
+    expect(preview.leavingTranslation?.[0]).toMatchObject({
+      name: "heading",
+      byLocale: null,
+      total: null,
+      entriesWithoutDefault: null,
+    });
+  });
+
+  it("counts the entries with no default-language value", async () => {
+    await seedCollection();
+    // One entry translated before it had an English row, as an older install may hold.
+    await query(
+      `DELETE FROM ${quote(dialect, "dc_posts_locales")} WHERE ${quote(dialect, "_locale")} = 'en' AND ${quote(dialect, "heading")} = 'Two'`
+    );
+
+    const preview = await previewShared();
+
+    expect(preview.leavingTranslation?.[0]?.entriesWithoutDefault).toBe(1);
   });
 
   it("names the refusal before Apply for a field that cannot leave in one change", async () => {

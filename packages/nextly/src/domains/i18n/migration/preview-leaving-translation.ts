@@ -11,7 +11,10 @@
  */
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
-import { countValuesByLocale } from "../../schema/pipeline/classifier/count-helpers";
+import {
+  countParentsWithoutLocale,
+  countValuesByLocale,
+} from "../../schema/pipeline/classifier/count-helpers";
 import type { ColumnOrigin } from "../../schema/services/field-column-descriptor";
 
 import {
@@ -25,10 +28,24 @@ import { fieldsLeavingTranslation } from "./reconcile-companion";
 export interface LeavingTranslationPreview {
   /** The field's name. */
   name: string;
-  /** How many values move to the archive, by language. A language with none is absent. */
-  byLocale: Record<string, number>;
-  /** The sum of `byLocale`. */
-  total: number;
+  /**
+   * Its column, which is how the classifier's prompts name it: a field `metaTitle` is stored as
+   * `meta_title`.
+   */
+  column: string;
+  /**
+   * How many values move to the archive, by language. A language with none is absent. Null when
+   * they could not be counted: the archive still takes them at Apply, so the preview says it does
+   * not know rather than that there are none.
+   */
+  byLocale: Record<string, number> | null;
+  /** The sum of `byLocale`, or null with it. */
+  total: number | null;
+  /**
+   * How many entries have no row in the default language, and so keep another language's value as
+   * the shared one: the first language by code. Null when it could not be counted.
+   */
+  entriesWithoutDefault: number | null;
   /** The language whose value becomes the shared one, and so is not archived. */
   defaultLocale: string;
   /** The command that brings the archived values back once the field is translated again. */
@@ -83,38 +100,74 @@ export async function previewFieldsLeavingTranslation(
     ])
   );
 
-  const previews: LeavingTranslationPreview[] = [];
-  for (const field of args.oldFields.filter(f => leaving.includes(f.name))) {
-    const column = fieldToLocalizedColumnSpec(
-      field,
-      args.dialect,
-      args.builtBy
-    );
-    let byLocale: Record<string, number> = {};
-    if (column) {
-      try {
-        byLocale = await countValuesByLocale(
-          args.db,
-          args.dialect,
-          `${args.tableName}_locales`,
-          column.name,
-          args.defaultLocale
-        );
-      } catch {
-        byLocale = {};
-      }
-    }
+  const fields = args.oldFields
+    .filter(f => leaving.includes(f.name))
+    .flatMap(field => {
+      const spec = fieldToLocalizedColumnSpec(
+        field,
+        args.dialect,
+        args.builtBy
+      );
+      return spec ? [{ field, column: spec.name }] : [];
+    });
+  // Counted once for every field the change can apply to; a refused field's values move nowhere.
+  const counted = fields
+    .filter(({ field }) => !refusals.has(field.name))
+    .map(({ column }) => column);
+  const counts = await countsOf(args, counted);
+
+  return fields.map(({ field, column }) => {
     const refusal = refusals.get(field.name);
-    previews.push({
+    const byLocale =
+      counts === null ? null : (counts.byColumn.get(column) ?? {});
+    return {
       name: field.name,
+      column,
       byLocale,
-      total: Object.values(byLocale).reduce((sum, n) => sum + n, 0),
+      total:
+        byLocale === null
+          ? null
+          : Object.values(byLocale).reduce((sum, n) => sum + n, 0),
+      entriesWithoutDefault: counts?.withoutDefault ?? null,
       defaultLocale: args.defaultLocale,
       restoreCommand: `nextly i18n:restore --collection ${args.slug} --field ${field.name}`,
       ...(refusal !== undefined ? { refusal } : {}),
-    });
+    };
+  });
+}
+
+/**
+ * The counts the preview shows, or null when the database could not give them: a companion that
+ * has drifted, or a read refused. The counts inform; the archive write at Apply is what keeps the
+ * values, and it refuses on its own if it cannot.
+ */
+async function countsOf(
+  args: PreviewLeavingArgs,
+  columns: readonly string[]
+): Promise<{
+  byColumn: Map<string, Record<string, number>>;
+  withoutDefault: number;
+} | null> {
+  const companion = `${args.tableName}_locales`;
+  try {
+    return {
+      byColumn: await countValuesByLocale(
+        args.db,
+        args.dialect,
+        companion,
+        columns,
+        args.defaultLocale
+      ),
+      withoutDefault: await countParentsWithoutLocale(
+        args.db,
+        args.dialect,
+        companion,
+        args.defaultLocale
+      ),
+    };
+  } catch {
+    return null;
   }
-  return previews;
 }
 
 /**

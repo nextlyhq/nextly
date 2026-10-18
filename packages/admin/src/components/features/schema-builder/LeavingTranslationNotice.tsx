@@ -22,6 +22,10 @@ function languageName(code: string): string {
 
 /** "12 Spanish and 3 Arabic values move to the archive." */
 function movesSentence(field: SchemaPreviewLeavingTranslation): string {
+  // Not counted is not none: Apply still archives whatever the other languages hold.
+  if (field.byLocale === null) {
+    return "Values in other languages move to the archive; they couldn't be counted.";
+  }
   if (field.total === 0) return "No other language has a value to archive.";
   const parts = Object.entries(field.byLocale)
     .sort(([, a], [, b]) => b - a)
@@ -30,6 +34,22 @@ function movesSentence(field: SchemaPreviewLeavingTranslation): string {
     );
   const list = new Intl.ListFormat("en", { type: "conjunction" }).format(parts);
   return `${list} ${field.total === 1 ? "value moves" : "values move"} to the archive.`;
+}
+
+/**
+ * "English becomes the shared value." An entry with no English value keeps its first other
+ * language's instead (by code, as the save chooses it), so the sentence says how many do.
+ */
+function sharedSentence(field: SchemaPreviewLeavingTranslation): string {
+  const language = languageName(field.defaultLocale);
+  const without = field.entriesWithoutDefault ?? 0;
+  if (without === 0) return `${language} becomes the shared value.`;
+  const entries =
+    without === 1 ? "1 entry has" : `${without.toLocaleString()} entries have`;
+  return (
+    `${language} becomes the shared value. ${entries} no ${language} value and ` +
+    `${without === 1 ? "keeps" : "keep"} another language's instead.`
+  );
 }
 
 const STEP_COUNTS = ["", "one step", "two steps", "three steps", "four steps"];
@@ -114,10 +134,10 @@ export function LeavingTranslationNotice({
           ) : (
             <>
               <p className="text-muted-foreground">
-                {movesSentence(field)} {languageName(field.defaultLocale)}{" "}
-                becomes the shared value.
+                {movesSentence(field)} {sharedSentence(field)}
               </p>
-              {field.total > 0 && (
+              {/* Shown when there is or may be something to bring back. */}
+              {field.total !== 0 && (
                 <div className="space-y-1">
                   <p className="text-xs text-muted-foreground">
                     To bring them back, make the field translated again, then

@@ -114,12 +114,14 @@ export function SchemaChangeDialog({
   // A field that cannot leave translation in one change is refused by the server, so the dialog
   // does not offer Apply, and any prompt the same field raises (a default for its new shared
   // column, say) is moot: the change that would need the answer will not run.
-  const refusedNames = new Set(
-    leavingTranslation.filter(field => field.refusal).map(field => field.name)
+  // Matched by column: the classifier's prompts name a field by its column (`meta_title`), the
+  // notice by its name (`metaTitle`).
+  const refusedColumns = new Set(
+    leavingTranslation.filter(field => field.refusal).map(field => field.column)
   );
-  const refused = refusedNames.size > 0;
+  const refused = refusedColumns.size > 0;
   const promptedFields = interactiveFields.filter(
-    f => !refusedNames.has(f.name)
+    f => !refusedColumns.has(f.name)
   );
 
   // Check if all interactive fields have been resolved with valid values.
@@ -421,7 +423,7 @@ export function SchemaChangeDialog({
 
         <SchemaChangeDialogFooter
           nothingSaveable={nothingSaveable}
-          refusedCount={refusedNames.size}
+          refusedCount={refusedColumns.size}
           emphasisDestructive={hasDestructiveChanges && !refused}
           isApplying={isApplying}
           canApply={canApply}

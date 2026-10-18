@@ -119,6 +119,8 @@ describe("BuilderSchemaChangeDialogs", () => {
         leavingTranslation: [
           {
             name: "heading",
+            column: "heading",
+            entriesWithoutDefault: 0,
             byLocale: { ar: 3, es: 12 },
             total: 15,
             defaultLocale: "en",
@@ -141,12 +143,71 @@ describe("BuilderSchemaChangeDialogs", () => {
     expect(screen.getByRole("button", { name: /save changes/i })).toBeEnabled();
   });
 
-  it("names the refusal and does not offer Apply for a field that cannot leave in one change", () => {
+  it("says the values move although they could not be counted, and still names the restore", () => {
     renderDialogs(
       preview({
         leavingTranslation: [
           {
             name: "heading",
+            column: "heading",
+            entriesWithoutDefault: null,
+            byLocale: null,
+            total: null,
+            defaultLocale: "en",
+            restoreCommand:
+              "nextly i18n:restore --collection posts --field heading",
+          },
+        ],
+      })
+    );
+
+    expect(
+      screen.getByText(
+        "Values in other languages move to the archive; they couldn't be counted. English becomes the shared value."
+      )
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(/No other language has a value/)
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByText("nextly i18n:restore --collection posts --field heading")
+    ).toBeInTheDocument();
+  });
+
+  it("says how many entries keep another language's value for want of an English one", () => {
+    renderDialogs(
+      preview({
+        leavingTranslation: [
+          {
+            name: "heading",
+            column: "heading",
+            entriesWithoutDefault: 2,
+            byLocale: { es: 4 },
+            total: 4,
+            defaultLocale: "en",
+            restoreCommand:
+              "nextly i18n:restore --collection posts --field heading",
+          },
+        ],
+      })
+    );
+
+    expect(
+      screen.getByText(
+        "4 Spanish values move to the archive. English becomes the shared value. 2 entries have no English value and keep another language's instead."
+      )
+    ).toBeInTheDocument();
+  });
+
+  it("names the refusal and does not offer Apply for a field that cannot leave in one change", () => {
+    renderDialogs(
+      preview({
+        leavingTranslation: [
+          {
+            // The prompt below names the field by its column, the notice by its name.
+            name: "metaTitle",
+            column: "meta_title",
+            entriesWithoutDefault: 0,
             byLocale: { es: 2 },
             total: 2,
             defaultLocale: "en",
@@ -158,7 +219,7 @@ describe("BuilderSchemaChangeDialogs", () => {
         classification: "interactive",
         interactiveFields: [
           {
-            name: "heading",
+            name: "meta_title",
             reason: "new_required_no_default",
             tableRowCount: 2,
             options: ["provide_default", "mark_nullable", "cancel"],
@@ -216,6 +277,8 @@ describe("BuilderSchemaChangeDialogs", () => {
         leavingTranslation: [
           {
             name: "heading",
+            column: "heading",
+            entriesWithoutDefault: 0,
             byLocale: {},
             total: 0,
             defaultLocale: "en",
@@ -250,6 +313,8 @@ describe("BuilderSchemaChangeDialogs", () => {
         leavingTranslation: [
           {
             name: "heading",
+            column: "heading",
+            entriesWithoutDefault: 0,
             byLocale: { es: 1 },
             total: 1,
             defaultLocale: "en",
