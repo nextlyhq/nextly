@@ -311,7 +311,10 @@ describe("REST limit: the unresolved sources' ceiling", () => {
 
   it("keeps a route with an auth limit of its own out of the ceiling", async () => {
     const check = limiter();
+    // Both halves of the ceiling, since a sign-in is a write.
     await admitted(check, {}, 50);
+    await admitted(check, { method: "POST" }, 50);
+    expect(await check({ method: "POST" })).not.toBeNull();
     expect(
       await check({ path: "/admin/api/auth/login", method: "POST" }, "auth")
     ).toBeNull();

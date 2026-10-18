@@ -219,6 +219,11 @@ describe("the REST entry point's limit", () => {
     expect(await refusedByRestLimit(await send("GET", ["collections"]))).toBe(
       true
     );
+    // The write half too, since a sign-in is a write.
+    await refusals(10, () => send("POST", ["collections"], {}, {}));
+    expect(
+      await refusedByRestLimit(await send("POST", ["collections"], {}, {}))
+    ).toBe(true);
     const signIn = await send(
       "POST",
       ["auth", "login"],
