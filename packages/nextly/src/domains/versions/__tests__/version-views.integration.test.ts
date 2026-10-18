@@ -6,7 +6,7 @@
  * The history is seeded straight into the versions table, so each case names
  * exactly which versions exist in which language.
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import { defineCollection, text } from "../../../config";
@@ -538,6 +538,71 @@ describe.each(getConfiguredTestDialects())(
           page.meta.hasNext && last?.versionNo ? last.versionNo : undefined;
       } while (cursor !== undefined);
       expect(marked).toEqual([1]);
+    });
+
+    it("finds every part's divider in one read, and the history list asks it", async () => {
+      // v1 en, v2 es, v3 en, v4 es.
+      const doc = await documentWithHistory(dialect, ["en", "es", "en", "es"]);
+      // An adapter whose database counts the reads made through it: a lookup
+      // that asked once per part would make three here, not one.
+      let reads = 0;
+      const adapter = current!.adapter;
+      const counting = new Proxy(adapter, {
+        get(target, prop) {
+          const value: unknown = Reflect.get(target, prop, target);
+          if (prop !== "getDrizzle" || typeof value !== "function") {
+            return typeof value === "function" ? value.bind(target) : value;
+          }
+          return (...args: unknown[]) => {
+            const db = value.apply(target, args) as object;
+            return new Proxy(db, {
+              get(inner, key) {
+                const member: unknown = Reflect.get(inner, key, inner);
+                if (typeof member !== "function") return member;
+                return (...callArgs: unknown[]) => {
+                  if (key === "select") reads += 1;
+                  return member.apply(inner, callArgs);
+                };
+              },
+            });
+          };
+        },
+      });
+      const dividers = await new HistoryDividers(
+        counting as unknown as ConstructorParameters<typeof HistoryDividers>[0],
+        silentLogger
+      ).nearestKeptByPart(
+        doc.ref,
+        new Map<string | null, number>([
+          ["en", 3],
+          ["es", 4],
+          [null, 2],
+        ])
+      );
+      expect(dividers).toEqual(
+        new Map<string | null, number>([
+          ["en", 3],
+          ["es", 4],
+        ])
+      );
+      expect(reads).toBe(1);
+
+      // The history list finds its dividers through this one lookup, once,
+      // with every part the person has looked at.
+      await doc.mark(ANA, 3);
+      await doc.mark(ANA, 4);
+      await doc.leave(ANA);
+      const lookup = vi.spyOn(HistoryDividers.prototype, "nearestKeptByPart");
+      try {
+        await listVersionsForDocument({ ...doc.at, user: ANA });
+        expect(lookup).toHaveBeenCalledTimes(1);
+        expect([...(lookup.mock.calls[0]?.[1]?.keys() ?? [])].sort()).toEqual([
+          "en",
+          "es",
+        ]);
+      } finally {
+        lookup.mockRestore();
+      }
     });
 
     it("finds each part's divider below its own version, whatever the other parts looked at", async () => {
