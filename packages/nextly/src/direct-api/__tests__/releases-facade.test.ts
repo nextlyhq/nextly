@@ -19,4 +19,15 @@ describe("the nextly.releases facade", () => {
       Object.keys(namespace).sort()
     );
   });
+
+  // The namespace declares the query optional, and the facade must keep that
+  // for callers that pass none. The type checker reads these calls; they are
+  // never run, since the facade needs an initialised instance to answer.
+  it("takes find and count with no argument", () => {
+    const zeroArgumentCalls = () => [
+      nextly.releases.find(),
+      nextly.releases.count(),
+    ];
+    expect(typeof zeroArgumentCalls).toBe("function");
+  });
 });

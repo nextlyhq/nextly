@@ -274,7 +274,7 @@ describe("core.required-fields", () => {
     ]);
   });
 
-  it("never judges a document coming down, so invalid content can be taken down", async () => {
+  it("judges a document coming down as its takedown would be, apart from one going live", async () => {
     const publishProblems = vi.fn(
       perEntry(() => [
         { path: "title", code: "REQUIRED", message: "Title is required." },
@@ -285,12 +285,22 @@ describe("core.required-fields", () => {
       [member("comes-down", { action: "unpublish" }), member("goes-live")],
       { publishProblems }
     );
-    expect(found.map(f => f.memberId)).toEqual(["goes-live"]);
-    expect(publishProblems).toHaveBeenCalledTimes(1);
+    expect(found.map(f => f.memberId).sort()).toEqual([
+      "comes-down",
+      "goes-live",
+    ]);
+    expect(publishProblems).toHaveBeenCalledTimes(2);
+    expect(publishProblems).toHaveBeenCalledWith(
+      expect.objectContaining({ scopeSlug: "posts" }),
+      ["entry-comes-down"],
+      { id: "author", roles: [] },
+      "unpublish"
+    );
     expect(publishProblems).toHaveBeenCalledWith(
       expect.objectContaining({ scopeSlug: "posts" }),
       ["entry-goes-live"],
-      { id: "author", roles: [] }
+      { id: "author", roles: [] },
+      "publish"
     );
   });
 

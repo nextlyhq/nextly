@@ -124,6 +124,37 @@ function couldTransformRoutes(plugins: readonly RouteContributor[]): boolean {
   return plugins.some(plugin => typeof plugin.setup === "function");
 }
 
+/**
+ * The declared route this request would reach on this mount, and its plugin,
+ * from the config alone: `null` when none matches, and when a `setup`
+ * transformer could change the route set, which only boot can answer.
+ *
+ * The boot decision below asks this, and so does the REST limit, which judges
+ * a request to a declared route before booting for it: one selection, so the
+ * route the limit judges is the route boot would reach.
+ */
+export function declaredPluginRoute(
+  plugins: readonly RouteContributor[] | undefined,
+  request: Pick<BootDecisionRequest, "method" | "path">,
+  mount: PluginRouteMount
+): { pluginName: string; route: PluginRoute } | null {
+  const all = plugins ?? [];
+  if (!mountCouldReach(mount, request.path) || couldTransformRoutes(all)) {
+    return null;
+  }
+  const selected = selectMostSpecific(
+    declaredFor(all, request.method, mount),
+    declared => declared.segments,
+    splitPath(request.path)
+  );
+  return selected === null
+    ? null
+    : {
+        pluginName: selected.candidate.plugin.name,
+        route: selected.candidate.route,
+      };
+}
+
 export function pluginRouteBootDecision(
   plugins: readonly RouteContributor[] | undefined,
   request: BootDecisionRequest,
@@ -140,14 +171,10 @@ export function pluginRouteBootDecision(
   // path below is the one almost every app takes.
   if (couldTransformRoutes(all)) return BOOT;
 
-  const selected = selectMostSpecific(
-    declaredFor(all, request.method, mount),
-    declared => declared.segments,
-    splitPath(request.path)
-  );
-  if (selected === null) return SKIP;
+  const declared = declaredPluginRoute(all, request, mount);
+  if (declared === null) return SKIP;
 
-  const route = selected.candidate.route;
+  const route = declared.route;
   if (route.public === true || request.hasCredential) return BOOT;
 
   // A route asking for a plugin's kind of signed-in person is reached with

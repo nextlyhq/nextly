@@ -113,15 +113,17 @@ export interface ReleaseCheckReads {
   /** Which of these documents still exist, as `documentRefKey` keys. */
   existing(refs: readonly DocumentRef[]): Promise<ReadonlySet<string>>;
   /**
-   * What a publish of each of these documents of one scope, as this person,
-   * would be refused with, judged without writing, keyed by entry id: read
-   * for the scope once rather than per document. Empty for a document that
-   * would pass, or that is not there.
+   * What the release's write of each of these documents of one scope, as
+   * this person and for this action, would be refused with by validation and
+   * field rules, judged without writing, keyed by entry id: read for the
+   * scope once rather than per document. Empty for a document that would
+   * pass, or that is not there.
    */
   publishProblems(
     scope: ReleaseCheckScope,
     entryIds: readonly string[],
-    user: UserContext
+    user: UserContext,
+    action: ReleaseMemberAction
   ): Promise<ReadonlyMap<string, readonly ValidationIssue[]>>;
   /**
    * For each of these documents of one scope, the other languages holding

@@ -117,9 +117,27 @@ export function PageBuilderView({
   if (field === undefined || name === undefined || surface === null) {
     return null;
   }
+  // Keyed by the field, because the editor reads its document once, when it
+  // mounts. Moving to another field's address keeps this view mounted, and an
+  // editor that stayed would go on showing the first field's page — and its
+  // history — while writing into the second. A new key unmounts it first, so
+  // its unsaved work lands in the field it came from, and the next editor
+  // starts from the field now named.
   return surface ? (
-    <ReadOnlyPage control={control} exit={exit} field={field} name={name} />
+    <ReadOnlyPage
+      key={name}
+      control={control}
+      exit={exit}
+      field={field}
+      name={name}
+    />
   ) : (
-    <BoundEditor control={control} exit={exit} field={field} name={name} />
+    <BoundEditor
+      key={name}
+      control={control}
+      exit={exit}
+      field={field}
+      name={name}
+    />
   );
 }
