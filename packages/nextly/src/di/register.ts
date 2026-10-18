@@ -139,6 +139,7 @@ import {
   bootApplyEnabled,
   checkRelationsBeforePlugins,
 } from "../init/boot-apply";
+import { bootMigratesCore } from "../init/boot-migrates-core";
 import { assertBootMigrationsNotRefused } from "../init/boot-migrations-gate";
 import type { RunProdMigrationsArgs } from "../init/prod-migrations";
 import { unwrittenSlugs } from "../init/sync-outcome";
@@ -861,7 +862,10 @@ async function registerServicesOnce(
 
   const schemaRegistry = await initializeSchemaRegistry(
     adapter,
-    bootExtensionSchema
+    bootExtensionSchema,
+    // Whether this boot reconciles the core schema itself later on, so the
+    // check that runs first does not tell the operator to do it.
+    bootApplyEnabled() || bootMigratesCore(config.db)
   );
 
   // Publish the webhook recording policy from the config INDEPENDENTLY of the
@@ -2626,7 +2630,8 @@ async function resolveAdapter(
  */
 async function initializeSchemaRegistry(
   adapter: DrizzleAdapter,
-  extensionSchema?: ExtensionSchema
+  extensionSchema?: ExtensionSchema,
+  coreReconciledThisBoot = false
 ): Promise<SchemaRegistry | undefined> {
   try {
     const { SchemaRegistry } = await import("../database/schema-registry");
@@ -2664,6 +2669,7 @@ async function initializeSchemaRegistry(
       await ensureFirstRunSetup({
         adapter,
         extensionSchema,
+        coreReconciledThisBoot,
         logger: {
           debug: msg => console.debug(msg),
           info: msg => console.log(msg),

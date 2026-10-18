@@ -18,6 +18,7 @@ import { resolveDeclaredSchema } from "../domains/schema/migrate/resolved-schema
 import { NextlyError } from "../errors";
 import type { PluginDefinition } from "../plugins/plugin-context";
 
+import { bootMigratesCore } from "./boot-migrates-core";
 import {
   allowBootMigrations,
   assertBootMigrationsNotRefused,
@@ -129,10 +130,7 @@ function bootMigrationsNotRun(dialect: string): NextlyError {
 
 /** Whether this boot migrates: only in production, and only when opted in. */
 function bootMigrationsEnabled(args: RunProdMigrationsArgs): boolean {
-  return (
-    process.env.NODE_ENV === "production" &&
-    args.config.db.runMigrationsOnBoot === true
-  );
+  return bootMigratesCore(args.config.db);
 }
 
 /**

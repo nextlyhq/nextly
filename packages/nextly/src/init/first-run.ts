@@ -73,6 +73,13 @@ export interface EnsureFirstRunSetupDeps {
 export interface EnsureFirstRunSetupArgs {
   adapter: AdapterLike;
   logger: LoggerLike;
+  /**
+   * Whether this same boot goes on to reconcile the core schema itself (the
+   * development apply, or production's opt-in boot migrations). A table or
+   * column found missing now is then about to be created, and telling the
+   * operator to run `nextly migrate` would be wrong.
+   */
+  coreReconciledThisBoot?: boolean;
   deps?: Partial<EnsureFirstRunSetupDeps>;
   /**
    * The extension schema the caller just published, passed rather than read.
@@ -129,11 +136,13 @@ export async function warnIfCoreSchemaIsBehind(
   timeoutMs: number = DRIFT_CHECK_TIMEOUT_MS,
   runCheck: (
     a: AdapterLike,
-    l: LoggerLike
-  ) => Promise<void> = runCoreSchemaChecks
+    l: LoggerLike,
+    o: CoreSchemaCheckOptions
+  ) => Promise<void> = runCoreSchemaChecks,
+  options: CoreSchemaCheckOptions = {}
 ): Promise<void> {
   await runBoundedDiagnostic({
-    run: () => runCheck(adapter, logger),
+    run: () => runCheck(adapter, logger, options),
     logger,
     timeoutMs,
     timedOutMessage:
@@ -442,9 +451,16 @@ function codeFirstKeysRefusal(
 }
 
 /** The check itself; bounded by its caller. */
+/** What the boot's core-schema check is told about the boot running it. */
+interface CoreSchemaCheckOptions {
+  /** This boot reconciles the core schema itself, later on. */
+  coreReconciledThisBoot?: boolean;
+}
+
 async function runCoreSchemaChecks(
   adapter: AdapterLike,
-  logger: LoggerLike
+  logger: LoggerLike,
+  options: CoreSchemaCheckOptions = {}
 ): Promise<void> {
   const [{ introspectLiveSnapshot }, { getCoreSchema, getCoreTableNames }] =
     await Promise.all([
@@ -491,13 +507,17 @@ async function runCoreSchemaChecks(
 
   // Tables missing outright, and tables behind by columns: two failures with
   // one remedy, each named in its own warning, read off one snapshot.
-  const missingTables = findMissingCoreTables(live, desired);
-  if (missingTables.length > 0) {
-    logger.warn(formatMissingCoreTablesWarning(missingTables));
-  }
-  const drift = findCoreSchemaDrift(live, desired);
-  if (drift.length > 0) {
-    logger.warn(formatCoreSchemaDriftWarning(drift));
+  // Not when this boot reconciles the core schema itself, a moment from now:
+  // what is missing is about to be created, and the command would be wrong.
+  if (!options.coreReconciledThisBoot) {
+    const missingTables = findMissingCoreTables(live, desired);
+    if (missingTables.length > 0) {
+      logger.warn(formatMissingCoreTablesWarning(missingTables));
+    }
+    const drift = findCoreSchemaDrift(live, desired);
+    if (drift.length > 0) {
+      logger.warn(formatCoreSchemaDriftWarning(drift));
+    }
   }
 
   // The mirror case, read off the SAME snapshot: the two registry tables are
@@ -575,7 +595,9 @@ export async function ensureFirstRunSetup(
     // still has that the running code no longer reads. Rules left in the
     // retired `access_rules` column look exactly as they did while they were
     // enforced, so this is the only place they are named.
-    await warnIfCoreSchemaIsBehind(adapter, logger);
+    await warnIfCoreSchemaIsBehind(adapter, logger, undefined, undefined, {
+      coreReconciledThisBoot: args.coreReconciledThisBoot === true,
+    });
     return { ranSetup: false, reason: "already_initialized" };
   }
 

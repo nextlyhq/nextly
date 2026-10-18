@@ -24,7 +24,9 @@ afterEach(async () => {
 });
 
 /** Run the boot's check as boot runs it, keeping what it warns. */
-async function bootWarnings(): Promise<string[]> {
+async function bootWarnings(
+  options: { coreReconciledThisBoot?: boolean } = {}
+): Promise<string[]> {
   const warnings: string[] = [];
   await warnIfCoreSchemaIsBehind(
     current!.adapter as unknown as Parameters<
@@ -40,7 +42,9 @@ async function bootWarnings(): Promise<string[]> {
     },
     // Generous: what is under test is what the check says, not whether it
     // beats boot's deadline on a loaded machine.
-    60_000
+    60_000,
+    undefined,
+    options
   );
   return warnings;
 }
@@ -68,6 +72,23 @@ describe.each(getConfiguredTestDialects())(
       expect(warnings[0]).toContain("nextly_version_pins");
       expect(warnings[0]).toContain("nextly_version_views");
       expect(warnings[0]).toContain("nextly migrate");
+    });
+
+    it("says nothing about missing tables when this boot creates them itself", async () => {
+      current = await createTestNextly({ dialect });
+      for (const table of ["nextly_version_views", "nextly_version_pins"]) {
+        await current.adapter.executeQuery(`DROP TABLE ${table}`);
+      }
+
+      // The development apply, or production's boot migrations, runs after
+      // this check and creates them: telling the operator to run
+      // `nextly migrate` would be wrong.
+      const warnings = await bootWarnings({ coreReconciledThisBoot: true });
+      expect(
+        warnings.filter(
+          w => w.includes("missing tables") || w.includes("missing columns")
+        )
+      ).toEqual([]);
     });
   }
 );
