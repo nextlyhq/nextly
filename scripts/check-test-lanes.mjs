@@ -247,8 +247,23 @@ export function namesScript(source, script) {
   // lane:test --dry=json` would otherwise satisfy this while the step only
   // printed a plan — the check would measure the manifest's script and the job
   // would run something else. Nothing may follow the name but whitespace.
-  const escaped = script.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(`pnpm ${escaped}[ \\t]*(?=\\r?\\n|$)`).test(source);
+  // One hand-off may follow it: a sharded leg's matrix job passing the lane
+  // its own shard. That spelling names the matrix, so it cannot fix a job to
+  // part of the lane; that every shard of the matrix runs is held on the
+  // workflow by merge-queue-workflows.test.mjs.
+  const escaped = escapeForRegExp(script);
+  const shard = escapeForRegExp(MATRIX_SHARD);
+  return new RegExp(
+    `pnpm ${escaped}(?:${shard})?[ \\t]*(?=\\r?\\n|$)`
+  ).test(source);
+}
+
+/** The pass-through a sharded leg's matrix job hands the lane. */
+export const MATRIX_SHARD =
+  " -- --shard=${{ matrix.shard }}/${{ strategy.job-total }}";
+
+function escapeForRegExp(text) {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 export function isSingleCommand(script) {

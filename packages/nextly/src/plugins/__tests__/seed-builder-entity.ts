@@ -31,6 +31,7 @@ import type { FieldConfig } from "../../collections/fields/types";
 import { generateRuntimeSchema } from "../../domains/schema/services/runtime-schema-generator";
 import type { FieldDefinition } from "../../schemas/dynamic-collections";
 import { STORAGE_FORMAT } from "../../schemas/storage-format";
+import type { ResolvedVersionsConfig } from "../../schemas/versions/types";
 import type { Logger } from "../../services/shared";
 
 const silentLogger: Logger = {
@@ -55,6 +56,8 @@ export interface SeedBuilderCollectionOptions {
   >;
   /** Draft/Published flag — adds a `status` system column when true. */
   status?: boolean;
+  /** Versioning, as the registry stores it once resolved. */
+  versions?: ResolvedVersionsConfig | null;
 }
 
 /**
@@ -128,6 +131,7 @@ export async function seedBuilderCollection(
     source: "ui",
     locked: false,
     status: opts.status === true,
+    ...(opts.versions === undefined ? {} : { versions: opts.versions }),
     schemaHash: `seed_${slug}`,
     schemaVersion: 1,
     migrationStatus: "applied",

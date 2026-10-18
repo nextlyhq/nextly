@@ -8,6 +8,7 @@ import {
   rateLimitProxyWarning,
   routeCsrfMode,
   shouldNotStore,
+  unkeyedAuthRouteWarnings,
   validateRouteOptions,
 } from "../route-options";
 import type { PluginRoute } from "../route-types";
@@ -325,6 +326,26 @@ describe("validateRouteOptions", () => {
     for (const method of ["GET", "POST", "PATCH", "PUT", "DELETE"] as const) {
       expect(validateRouteOptions(route({ method }))).toBeNull();
     }
+  });
+
+  it("refuses a limitKey that is not a function, as a JavaScript plugin can give", () => {
+    for (const limitKey of ["email", { handles: true }, null]) {
+      expect(
+        validateRouteOptions(
+          route({ rateLimit: "auth", limitKey: limitKey as never })
+        )
+      ).toMatch(/limitKey must be a function/);
+    }
+  });
+
+  it("accepts a function limitKey, and none at all", () => {
+    // The control: a check refusing every limitKey would pass the case above.
+    expect(
+      validateRouteOptions(
+        route({ rateLimit: "auth", limitKey: () => ({ handles: false }) })
+      )
+    ).toBeNull();
+    expect(validateRouteOptions(route({ rateLimit: "auth" }))).toBeNull();
   });
 
   it("refuses rawBody on a method with no body", () => {
@@ -654,18 +675,28 @@ describe("validateRouteOptions: a route's own allowance", () => {
 
 describe("rateLimitProxyWarning", () => {
   const limited = {
+    fullPath: "/plugins/acme-auth/lookup",
+    route: route({ method: "GET", rateLimit: "general" }),
+  };
+  const own = {
+    fullPath: "/plugins/acme-auth/send",
+    route: route({ rateLimit: { max: 3, windowMs: 60_000 } }),
+  };
+  const auth = {
     fullPath: "/plugins/acme-auth/callback",
     route: route({ method: "GET", rateLimit: "auth" }),
   };
   const open = { fullPath: "/plugins/acme-auth/info", route: route() };
 
-  it("names each rate-limited route when the proxy is not trusted", () => {
-    expect(rateLimitProxyWarning([limited, open], false)).toContain(
-      "GET /plugins/acme-auth/callback"
-    );
-    expect(rateLimitProxyWarning([limited, open], false)).not.toContain(
-      "/info"
-    );
+  it("names each per-client limited route when the proxy is not trusted", () => {
+    const warning = rateLimitProxyWarning([limited, own, auth, open], false);
+    expect(warning).toContain("GET /plugins/acme-auth/lookup");
+    expect(warning).toContain("POST /plugins/acme-auth/send");
+    expect(warning).not.toContain("/info");
+  });
+
+  it("leaves auth routes out: they are counted per identity, not shared", () => {
+    expect(rateLimitProxyWarning([auth], false)).toBeNull();
   });
 
   it("says nothing when the proxy is trusted", () => {
@@ -674,5 +705,38 @@ describe("rateLimitProxyWarning", () => {
 
   it("says nothing when no route is rate limited", () => {
     expect(rateLimitProxyWarning([open], false)).toBeNull();
+  });
+});
+
+describe("unkeyedAuthRouteWarnings", () => {
+  const unkeyed = {
+    pluginName: "acme-auth",
+    fullPath: "/plugins/acme-auth/callback",
+    route: route({ method: "GET", rateLimit: "auth" }),
+  };
+  const keyed = {
+    pluginName: "acme-auth",
+    fullPath: "/plugins/acme-auth/start",
+    route: route({
+      rateLimit: "auth",
+      limitKey: () => ({ handles: true, key: "k" }),
+    }),
+  };
+  const general = {
+    pluginName: "acme-auth",
+    fullPath: "/plugins/acme-auth/lookup",
+    route: route({ rateLimit: "general" }),
+  };
+
+  it("names each auth route without a limitKey, and only those", () => {
+    const warnings = unkeyedAuthRouteWarnings([unkeyed, keyed, general], true);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain('Plugin "acme-auth"');
+    expect(warnings[0]).toContain("GET /plugins/acme-auth/callback");
+    expect(warnings[0]).toContain("limitKey");
+  });
+
+  it("says nothing while the auth limiter is off", () => {
+    expect(unkeyedAuthRouteWarnings([unkeyed], false)).toEqual([]);
   });
 });
