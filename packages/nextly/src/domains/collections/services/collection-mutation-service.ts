@@ -3084,6 +3084,9 @@ export class CollectionMutationService extends BaseService {
      * opened. Ignored for an unlocalized document, which has one.
      */
     locale?: string | null;
+    /** Who discarded it, for the document's history. */
+    actor?: RequestActor;
+    user?: UserContext;
   }): Promise<void> {
     const collection = await this.collectionService.getCollection(
       params.collectionName
@@ -3093,19 +3096,34 @@ export class CollectionMutationService extends BaseService {
       // Serialize with concurrent draft-save upserts, which lock this same parent
       // row before writing the sidecar.
       await tx.lockRow(tableName, params.entryId);
-      await new VersionsRepository(tx).deleteWorkingDraft(
+      const draftLocale = workingDraftLocale({
+        documentLocalized:
+          (collection as { localized?: boolean }).localized === true,
+        requestLocale: params.locale ?? null,
+        defaultLocale: this.localization?.defaultLocale ?? null,
+      });
+      const removed = await new VersionsRepository(tx).deleteWorkingDraft(
         {
           scopeKind: "collection",
           scopeSlug: params.collectionName,
           entryId: params.entryId,
         },
-        workingDraftLocale({
-          documentLocalized:
-            (collection as { localized?: boolean }).localized === true,
-          requestLocale: params.locale ?? null,
-          defaultLocale: this.localization?.defaultLocale ?? null,
-        })
+        draftLocale
       );
+      // In the document's history only when there was a draft to discard.
+      if (removed > 0) {
+        await this.recordHistoryEvent(
+          tx,
+          params.collectionName,
+          params.entryId,
+          {
+            kind: "draftDiscarded",
+            actor: actorForWrite(params.actor, params.user),
+            personName: params.user?.name ?? null,
+            ...(draftLocale ? { parts: { locales: [draftLocale] } } : {}),
+          }
+        );
+      }
     });
   }
 

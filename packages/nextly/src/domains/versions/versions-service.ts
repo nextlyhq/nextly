@@ -15,8 +15,12 @@
  * @module domains/versions/versions-service
  */
 
+import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
+
+import type { RequestActor } from "../../auth/request-actor";
 import { NextlyError } from "../../errors";
 import type { VersionStatus } from "../../schemas/versions/types";
+import { recordWriteEvent } from "../content-events/write-event";
 
 import type { PartVersion } from "./comparison-baselines";
 import type { VersionsDbApi } from "./db-api";
@@ -45,7 +49,10 @@ export interface VersionListOptions {
 export class VersionsService {
   private readonly repo: VersionsRepository;
 
-  constructor(db: VersionsDbApi) {
+  constructor(
+    private readonly db: VersionsDbApi &
+      Pick<DrizzleAdapter, "transaction" | "getCapabilities">
+  ) {
     this.repo = new VersionsRepository(db);
   }
 
@@ -111,10 +118,41 @@ export class VersionsService {
   async setLabel(
     ref: VersionRef,
     versionNo: number,
-    label: string | null
+    label: string | null,
+    /**
+     * Who named it. A name given is recorded in the document's history in the
+     * same transaction; clearing one records nothing.
+     */
+    by?: { actor: RequestActor; personName?: string | null }
   ): Promise<VersionRow> {
     await this.get(ref, versionNo);
-    await this.repo.updateLabel(ref, versionNo, label);
+    await this.db.transaction(async tx => {
+      await new VersionsRepository(tx).updateLabel(ref, versionNo, label);
+      // Collections and Singles keep a record of content events; a page's
+      // history keeps none yet.
+      if (
+        label &&
+        by &&
+        (ref.scopeKind === "collection" || ref.scopeKind === "single")
+      ) {
+        await recordWriteEvent(
+          tx,
+          { adapter: this.db },
+          {
+            subject: {
+              kind: ref.scopeKind,
+              slug: ref.scopeSlug,
+              id: ref.entryId,
+            },
+            kind: "named",
+            actor: by.actor,
+            personName: by.personName,
+            versionNo,
+            payload: { label },
+          }
+        );
+      }
+    });
     return this.get(ref, versionNo);
   }
 

@@ -22,7 +22,7 @@
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
-import { actorForWrite } from "../../../auth/request-actor";
+import { actorForWrite, type RequestActor } from "../../../auth/request-actor";
 import { isFieldGroupField } from "../../../collections/fields/guards";
 import type { RBACAccessControlService } from "../../../domains/auth/services/rbac-access-control-service";
 import { NextlyError } from "../../../errors/nextly-error";
@@ -311,6 +311,9 @@ export class SingleMutationService extends BaseService {
      * author never opened. Ignored for an unlocalized Single, which has one.
      */
     locale?: string | null;
+    /** Who discarded it, for the Single's history. */
+    actor?: RequestActor;
+    user?: UserContext;
   }): Promise<void> {
     const singleMeta = await resolveSingleForRequest(
       this.adapter,
@@ -338,18 +341,33 @@ export class SingleMutationService extends BaseService {
       // Serialize with concurrent draft-save upserts, which lock this same row
       // before writing the sidecar.
       await tx.lockRow(singleMeta.tableName, entryId);
-      await new VersionsRepository(tx).deleteWorkingDraft(
+      const draftLocale = workingDraftLocale({
+        documentLocalized: singleMeta.localized === true,
+        requestLocale: params.locale ?? null,
+        defaultLocale: this.localization?.defaultLocale ?? null,
+      });
+      const removed = await new VersionsRepository(tx).deleteWorkingDraft(
         {
           scopeKind: "single",
           scopeSlug: params.slug,
           entryId,
         },
-        workingDraftLocale({
-          documentLocalized: singleMeta.localized === true,
-          requestLocale: params.locale ?? null,
-          defaultLocale: this.localization?.defaultLocale ?? null,
-        })
+        draftLocale
       );
+      // In the Single's history only when there was a draft to discard.
+      if (removed > 0) {
+        await recordWriteEvent(
+          tx,
+          { adapter: this.adapter },
+          {
+            subject: { kind: "single", slug: params.slug, id: entryId },
+            kind: "draftDiscarded",
+            actor: actorForWrite(params.actor ?? null, params.user),
+            personName: params.user?.name ?? null,
+            ...(draftLocale ? { parts: { locales: [draftLocale] } } : {}),
+          }
+        );
+      }
     });
   }
 
