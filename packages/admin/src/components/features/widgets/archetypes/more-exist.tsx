@@ -49,14 +49,33 @@ function collectionSlugOf(source: string | undefined): string | undefined {
  */
 function listViewSearch(query: CardQuery): URLSearchParams {
   const params = new URLSearchParams();
-  const where = query?.where;
-  const sort = query?.sort;
-  const status = query?.status ?? "published";
-  if (where && Object.keys(where).length > 0)
-    params.set("where", JSON.stringify(where));
-  if (typeof sort === "string" && sort !== "") params.set("sort", sort);
-  if (status !== "all") params.set("status", status);
+  const entries: Array<[string, string | undefined]> = [
+    ["where", whereParam(query?.where)],
+    ["sort", sortParam(query?.sort)],
+    ["status", statusParam(query?.status)],
+  ];
+  for (const [name, value] of entries) {
+    if (value !== undefined) params.set(name, value);
+  }
   return params;
+}
+
+/** A filter with conditions, as the list view's JSON `where`. */
+function whereParam(where: unknown): string | undefined {
+  return where && typeof where === "object" && Object.keys(where).length > 0
+    ? JSON.stringify(where)
+    : undefined;
+}
+
+/** A sort, as the list view's `sort`. */
+function sortParam(sort: unknown): string | undefined {
+  return typeof sort === "string" && sort !== "" ? sort : undefined;
+}
+
+/** The card's lifecycle, or published when it left it to the read's default; none for `all`. */
+function statusParam(status: string | undefined): string | undefined {
+  const scope = status ?? "published";
+  return scope === "all" ? undefined : scope;
 }
 
 export function MoreExist({ query }: { query: CardQuery }) {

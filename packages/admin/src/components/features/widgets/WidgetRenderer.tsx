@@ -42,9 +42,15 @@ import { WidgetCard, type WidgetCardProps } from "./WidgetCard";
  * archetype will draw: a figure where a number goes, rows where a list goes. Matching the
  * shape is what keeps the card from jumping when the data lands.
  */
-/** Whether a card of `archetype` draws its rows through the tiered list and table body. */
-function drawsTieredRows(archetype: string): boolean {
-  return archetype === "list" || archetype === "table";
+/**
+ * The items setting a list or table card's skeleton holds the place of, from the query as asked;
+ * `null` for one that declared no limit, which draws the default number, and `undefined` for any
+ * other card, whose skeleton draws its default rows.
+ */
+function skeletonItemsFor(definition: DashboardWidget): unknown {
+  if (definition.archetype !== "list" && definition.archetype !== "table")
+    return undefined;
+  return definition.query?.limit ?? null;
 }
 
 function skeletonFor(archetype: string): SkeletonShape {
@@ -206,11 +212,7 @@ export function WidgetRenderer({
     customizing,
     cardId: placement?.id ?? definition.id,
     skeleton: skeletonFor(definition.archetype),
-    // A list or table holds the place of the rows it will draw, from the query as asked; `null`
-    // for one that declared no limit, which draws the default number.
-    skeletonItems: drawsTieredRows(definition.archetype)
-      ? (definition.query?.limit ?? null)
-      : undefined,
+    skeletonItems: skeletonItemsFor(definition),
   };
 
   const outcome = resolveWidgetOutcome(definition, slot, slotFor);
