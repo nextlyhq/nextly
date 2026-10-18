@@ -295,7 +295,7 @@ Every REST request is limited, the admin's included, and each is counted by who 
 
 - A signed-in session spends its own budget, per user and whatever address it comes from: by default five times `readLimit` and `writeLimit`, so the admin's parallel page loads never meet it. A session that does not verify, an expired or revoked one included, counts as carrying none.
 - An API key that resolves spends its own [`apiKeys.rateLimit`](#apikeys) budget, once per request. Invalid keys spend their address's budget, or with no address a ceiling of their own, so a flood of them can refuse a valid key sent under the same bound, and nothing else.
-- A plugin's signed-in person, on a route that asks for one, spends a budget of the session's size.
+- A plugin's signed-in person, on a route that asks for one, spends a budget of the session's size, whatever staff session or key the request also carries. A person who does not resolve costs the plugin's resolver a lookup, so failed resolutions are bounded as invalid keys are, per plugin: by a budget for that address the size of its own and apart from it, or with no address by a ceiling of their own the size of `unresolvedCeiling`. A flood of them can refuse a valid person of that plugin sent under the same bound, and nothing else.
 - Anything else spends its client address's `readLimit` or `writeLimit`. Without [`security.trustProxy`](#security) no address resolves, and such requests share `unresolvedCeiling` instead. It never refuses a session, a key or a sign-in, which the auth limits judge.
 
 The deprecated `defaultSkipAdminApi`, once the default `skip`, is still exported for an app that passes it to exempt `/admin/api/*`; a later release removes it.
