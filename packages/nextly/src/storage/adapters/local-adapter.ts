@@ -241,8 +241,17 @@ export class LocalStorageAdapter extends BaseStorageAdapter {
         .split(path.sep)
         .join("/");
       if (relative === ".gitignore") continue;
-      const { mtime } = await fs.stat(full);
-      yield { path: relative, lastModified: mtime };
+      // A file removed since the folder was read (a delete running at the
+      // same time) is no longer stored: skipped, and the listing goes on.
+      // Any other failure to read it still ends the listing.
+      const stats = await fs
+        .stat(full)
+        .catch((error: NodeJS.ErrnoException) => {
+          if (error.code === "ENOENT") return null;
+          throw error;
+        });
+      if (!stats) continue;
+      yield { path: relative, lastModified: stats.mtime };
     }
   }
 

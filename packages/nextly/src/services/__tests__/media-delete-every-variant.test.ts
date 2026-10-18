@@ -542,6 +542,56 @@ describe("two crops of the same item at once", () => {
   });
 });
 
+// Core code can delete or crop media inside a transaction of its own (a
+// collection hook during an entry write). On SQLite the media write is then
+// a savepoint of it, so the files stay until that transaction commits: if it
+// rolls back, the row comes back and must still find its files.
+describe("a delete or a crop inside an enclosing transaction", () => {
+  it("leaves every file of a deleted item when that transaction rolls back", async () => {
+    onLocalDisk();
+    const id = await uploadPhoto();
+    const before = await onDisk();
+
+    await expect(
+      db.adapter.transaction(async () => {
+        expect((await service.deleteMedia(id)).success).toBe(true);
+        throw new Error("the entry write failed");
+      })
+    ).rejects.toThrow("the entry write failed");
+
+    expect(await onDisk()).toEqual(before);
+    expect(await referencedNow(id)).toEqual([...before].sort());
+  });
+
+  it("removes them once that transaction commits", async () => {
+    onLocalDisk();
+    const id = await uploadPhoto();
+
+    await db.adapter.transaction(async () => {
+      expect((await service.deleteMedia(id)).success).toBe(true);
+    });
+
+    expect(await onDisk()).toEqual([]);
+  });
+
+  it("keeps the variants a crop replaced when that transaction rolls back", async () => {
+    onLocalDisk();
+    const id = await uploadPhoto();
+    const before = await onDisk();
+
+    await expect(
+      db.adapter.transaction(async () => {
+        expect((await crop(id, 20)).success).toBe(true);
+        throw new Error("the entry write failed");
+      })
+    ).rejects.toThrow("the entry write failed");
+
+    const stored = await onDisk();
+    for (const file of before) expect(stored).toContain(file);
+    expect(await referencedNow(id)).toEqual([...before].sort());
+  });
+});
+
 describe("a bulk delete that does not commit", () => {
   it("leaves every file of every item stored", async () => {
     onLocalDisk();

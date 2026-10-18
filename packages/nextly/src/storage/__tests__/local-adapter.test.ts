@@ -33,6 +33,32 @@ describe("LocalStorageAdapter", () => {
     await fs.rm(testDir, { recursive: true, force: true });
   });
 
+  // A file can be removed while the folder is being listed, by a delete
+  // running at the same time. It is gone, which is no reason to stop
+  // listing the rest.
+  describe("list()", () => {
+    it("skips a file removed while the folder is being listed", async () => {
+      for (const name of ["a.png", "b.png", "c.png"]) {
+        await fs.writeFile(path.join(testDir, name), "x");
+      }
+      const listed: string[] = [];
+      let removed = false;
+
+      for await (const entry of adapter.list()) {
+        listed.push(entry.path);
+        if (!removed) {
+          removed = true;
+          const others = ["a.png", "b.png", "c.png"].filter(
+            name => name !== entry.path
+          );
+          await fs.rm(path.join(testDir, others[0]));
+        }
+      }
+
+      expect(listed).toHaveLength(2);
+    });
+  });
+
   describe("getType()", () => {
     it("should return 'local'", () => {
       expect(adapter.getType()).toBe("local");

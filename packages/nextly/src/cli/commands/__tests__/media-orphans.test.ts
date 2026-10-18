@@ -319,6 +319,38 @@ describe("nextly media orphans", () => {
     expect(stored).not.toContain(layout.orphan);
   });
 
+  // The recheck before removals reads the media table; doing it once per
+  // listed file would read the whole table once per leftover.
+  it("rechecks references in a bounded number of passes", async () => {
+    const bucket = new Bucket("s3");
+    for (let i = 0; i < 120; i++) {
+      bucket.put({
+        path: key(`thumb_${i}.png`, "media/"),
+        lastModified: TWO_HOURS_AGO,
+      });
+    }
+    let reads = 0;
+    const said: string[] = [];
+
+    const code = await mediaOrphans({
+      storage: bucket,
+      prefix: "media",
+      exclusive: true,
+      referenced: async () => {
+        reads++;
+        return new Set<string>();
+      },
+      apply: true,
+      say: line => said.push(line),
+      now: NOW,
+    });
+
+    expect(code).toBe(0);
+    expect(bucket.files.size).toBe(0);
+    // One read for the listing, and one per batch of removals.
+    expect(reads).toBeLessThanOrEqual(1 + Math.ceil(120 / 50));
+  });
+
   // Between the listing and the removal an item can come to refer to it.
   it("keeps a listed thumbnail an item refers to by the time it would go", async () => {
     const layout = inBucket("s3");
@@ -367,7 +399,11 @@ describe("nextly media orphans", () => {
 describe("mediaPlaceIsExclusive", () => {
   it.each([
     ["media", [], true],
-    ["media/", ["docs", ""], true],
+    ["media/", ["docs"], true],
+    // A collection with no prefix stores at the root, and an upload to it
+    // can name any folder, media's among them.
+    ["media", [""], false],
+    ["media", [undefined], false],
     ["", [], false],
     ["media", ["media"], false],
     ["media/", ["media"], false],

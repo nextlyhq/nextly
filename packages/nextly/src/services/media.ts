@@ -987,11 +987,18 @@ export class MediaService extends BaseService {
         (replacedSizes || replacedThumbnail) &&
         !keepSuperseded
       ) {
-        await this.deleteSupersededVariants(
-          replacedSizes,
-          regeneratedSizes,
-          mediaId,
-          replacedThumbnail ? [replacedThumbnail] : []
+        // Once the change is durable, as for a delete: inside an enclosing
+        // SQLite transaction a rollback brings back the row that refers to
+        // the superseded variants.
+        const superseded = replacedSizes;
+        const thumbnail = replacedThumbnail;
+        await this.afterCommit(() =>
+          this.deleteSupersededVariants(
+            superseded,
+            regeneratedSizes,
+            mediaId,
+            thumbnail ? [thumbnail] : []
+          )
         );
       }
 
@@ -1121,26 +1128,32 @@ export class MediaService extends BaseService {
       // removal already succeeded. Every stored file is removed on its own,
       // so one that fails leaves the others to go, and is named in the log
       // with its item, so the leftover can be found.
+      //
+      // Once the delete is durable: inside an enclosing SQLite transaction
+      // this delete is a savepoint of it, and a rollback would bring the row
+      // back pointing at files already gone.
       const { paths, unlocated } = storedFilesOf(mediaData);
       for (const url of unlocated) warnUnlocated(url, mediaId);
-      await Promise.all(
-        paths.map(async filePath => {
-          try {
-            await withRetry(() => this.storage.delete(filePath, "media"), {
-              maxAttempts: 3,
-              baseDelayMs: 500,
-              shouldRetry: isTransientError,
-              onRetry: (err, attempt) => {
-                console.warn(
-                  `[MediaService] Delete retry ${attempt} for ${filePath}:`,
-                  err instanceof Error ? err.message : err
-                );
-              },
-            });
-          } catch (error) {
-            warnNotRemoved(filePath, mediaId, error);
-          }
-        })
+      await this.afterCommit(() =>
+        Promise.all(
+          paths.map(async filePath => {
+            try {
+              await withRetry(() => this.storage.delete(filePath, "media"), {
+                maxAttempts: 3,
+                baseDelayMs: 500,
+                shouldRetry: isTransientError,
+                onRetry: (err, attempt) => {
+                  console.warn(
+                    `[MediaService] Delete retry ${attempt} for ${filePath}:`,
+                    err instanceof Error ? err.message : err
+                  );
+                },
+              });
+            } catch (error) {
+              warnNotRemoved(filePath, mediaId, error);
+            }
+          })
+        )
       );
 
       // The delete committed a media.deleted outbox row; drain and prune it

@@ -41,8 +41,12 @@ function folderOf(prefix = ""): string {
 
 /**
  * Whether the media collection's place in its storage is its own: it has a
- * prefix, and no other collection on the same storage shares it, with the
- * same prefix, one inside it or one around it. Only then does a file's place
+ * prefix, and no other collection shares it, with the same prefix, one
+ * inside it, one around it, or none (a collection with no prefix stores at
+ * the root, and an upload to it can name any folder, media's among them).
+ * Other collections are compared by prefix whatever storage they use: two
+ * storage plugins on one bucket are two adapters, and nothing shows they are
+ * the same place. Only then does a file's place
  * show it is media's. Without one, media shares the storage's root with every
  * other upload to it, any of which can store a file of the same form, named
  * as a person named it.
@@ -58,8 +62,9 @@ export function mediaPlaceIsExclusive(
   );
 }
 
-/** Whether two folders are one, or one holds the other. */
+/** Whether two folders are one, or one holds the other; the root holds all. */
 function overlaps(a: string, b: string): boolean {
+  if (a === "" || b === "") return true;
   return a === b || a.startsWith(`${b}/`) || b.startsWith(`${a}/`);
 }
 
@@ -159,10 +164,15 @@ export interface OrphanRemoval {
   failed: Array<{ path: string; reason: string }>;
 }
 
+/** How many listed files are removed per fresh read of what is referenced. */
+const RECHECK_BATCH = 50;
+
 /**
- * Removes each of `orphans` that is still unreferenced just before its own
+ * Removes each of `orphans` that is still unreferenced just before its
  * removal, asked of `referencedNow` then, not at the listing: an item can
- * come to refer to a listed file in between.
+ * come to refer to a listed file in between. Asked once per batch of
+ * {@link RECHECK_BATCH} files rather than once per file, since each ask reads
+ * the whole media table.
  */
 export async function removeOrphanThumbnails(
   adapter: IStorageAdapter,
@@ -170,8 +180,12 @@ export async function removeOrphanThumbnails(
   referencedNow: () => Promise<ReadonlySet<string>>
 ): Promise<OrphanRemoval> {
   const result: OrphanRemoval = { removed: [], kept: [], failed: [] };
-  for (const path of orphans) {
-    if (canonicalSet(await referencedNow()).has(canonicalStoredPath(path))) {
+  let referenced = new Set<string>();
+  for (const [index, path] of orphans.entries()) {
+    if (index % RECHECK_BATCH === 0) {
+      referenced = canonicalSet(await referencedNow());
+    }
+    if (referenced.has(canonicalStoredPath(path))) {
       result.kept.push(path);
       continue;
     }

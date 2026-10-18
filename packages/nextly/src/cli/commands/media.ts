@@ -195,14 +195,11 @@ export function createMediaCommand(): Command {
         });
         const storage = mediaStorage.getAdapterForCollection("media");
         const prefix = mediaStorage.getCollectionConfig("media")?.prefix;
-        // The prefixes of the other collections stored where media is.
+        // The prefixes of every other collection with storage configured,
+        // whichever storage it uses (mediaPlaceIsExclusive).
         const others = mediaStorage
           .getConfiguredCollections()
-          .filter(
-            slug =>
-              slug !== "media" &&
-              mediaStorage.getAdapterForCollection(slug) === storage
-          )
+          .filter(slug => slug !== "media")
           .map(slug => mediaStorage.getCollectionConfig(slug)?.prefix);
         const code = await mediaOrphans({
           storage,
