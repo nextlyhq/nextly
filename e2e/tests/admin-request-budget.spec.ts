@@ -3,7 +3,9 @@
  * spend on one load.
  *
  * The REST limit counts a session against a budget of its own: by default
- * five times the per-address budgets, 3,000 reads and 600 writes a minute.
+ * five times the per-address budgets (`SESSION_BUDGET_MULTIPLE` times
+ * `RATE_LIMIT_DEFAULTS`, 100 reads and 30 writes a minute), so 500 reads and
+ * 150 writes. The playground configures no limits, so it runs on these.
  * Each page here must spend no more than a tenth of that on a load, so a
  * person working quickly across pages never meets the limit. A page that
  * spends more means the default is wrong, and it is changed through the spec
@@ -17,7 +19,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { gotoAdmin } from "./support/admin";
 
 /** A tenth of a window's session budget, at the default limits. */
-const PAGE_BUDGET = { reads: 3_000 / 10, writes: 600 / 10 };
+const PAGE_BUDGET = { reads: 500 / 10, writes: 150 / 10 };
 
 /** How long the admin must make no request before a load counts as done. */
 const QUIET_MS = 1_500;
