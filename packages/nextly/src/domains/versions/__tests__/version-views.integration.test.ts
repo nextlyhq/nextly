@@ -6,7 +6,7 @@
  * The history is seeded straight into the versions table, so each case names
  * exactly which versions exist in which language.
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { AuthenticatedScope } from "../../../auth/authenticated-scope";
 import { defineCollection, text } from "../../../config";
@@ -45,6 +45,35 @@ const KEY: AuthenticatedScope = {
   permissions: ["read-posts"],
 };
 const SYSTEM: AuthenticatedScope = { actorType: "system", permissions: [] };
+
+/**
+ * A database that reports each query it runs. A Drizzle query runs when it
+ * is awaited or executed, so the builder a call returns is wrapped (and kept
+ * wrapped through the chain, whose methods return the builder itself) and a
+ * run is counted at `then` or `execute`, never at the call that builds it.
+ */
+function countingRuns<T extends object>(target: T, onRun: () => void): T {
+  const wrapped: T = new Proxy(target, {
+    get(inner, key) {
+      const member: unknown = Reflect.get(inner, key, inner);
+      if (typeof member !== "function") return member;
+      if (key === "then" || key === "execute") {
+        return (...args: unknown[]) => {
+          onRun();
+          return member.apply(inner, args);
+        };
+      }
+      return (...args: unknown[]) => {
+        const result: unknown = member.apply(inner, args);
+        if (result === inner) return wrapped;
+        return result !== null && typeof result === "object"
+          ? countingRuns(result, onRun)
+          : result;
+      };
+    },
+  });
+  return wrapped;
+}
 
 const silentLogger = {
   debug: () => undefined,
@@ -538,6 +567,67 @@ describe.each(getConfiguredTestDialects())(
           page.meta.hasNext && last?.versionNo ? last.versionNo : undefined;
       } while (cursor !== undefined);
       expect(marked).toEqual([1]);
+    });
+
+    it("finds every part's divider in one read, and the history list asks it", async () => {
+      // v1 en, v2 es, v3 en, v4 es.
+      const doc = await documentWithHistory(dialect, ["en", "es", "en", "es"]);
+      // An adapter whose database counts the queries it RUNS, not the ones it
+      // builds: a lookup that built one query and ran it once per part would
+      // make three round trips here, not one.
+      let reads = 0;
+      const adapter = current!.adapter;
+      const counting = new Proxy(adapter, {
+        get(target, prop) {
+          const value: unknown = Reflect.get(target, prop, target);
+          if (prop !== "getDrizzle" || typeof value !== "function") {
+            return typeof value === "function" ? value.bind(target) : value;
+          }
+          return (...args: unknown[]) =>
+            countingRuns(value.apply(target, args) as object, () => {
+              reads += 1;
+            });
+        },
+      });
+      const dividers = await new HistoryDividers(
+        counting as unknown as ConstructorParameters<typeof HistoryDividers>[0],
+        silentLogger
+      ).nearestKeptByPart(
+        doc.ref,
+        new Map<string | null, number>([
+          ["en", 3],
+          ["es", 4],
+          [null, 2],
+        ])
+      );
+      expect(dividers).toEqual(
+        new Map<string | null, number>([
+          ["en", 3],
+          ["es", 4],
+        ])
+      );
+      expect(reads).toBe(1);
+
+      // The history list finds its dividers through this one lookup, once,
+      // with every part the person has looked at.
+      await doc.mark(ANA, 3);
+      await doc.mark(ANA, 4);
+      await doc.leave(ANA);
+      const lookup = vi.spyOn(HistoryDividers.prototype, "nearestKeptByPart");
+      try {
+        await listVersionsForDocument({ ...doc.at, user: ANA });
+        expect(lookup).toHaveBeenCalledTimes(1);
+        // Each part with the version looked at in it, not merely the parts:
+        // the wrong number for a language marks the wrong row.
+        expect(lookup.mock.calls[0]?.[1]).toEqual(
+          new Map<string | null, number>([
+            ["en", 3],
+            ["es", 4],
+          ])
+        );
+      } finally {
+        lookup.mockRestore();
+      }
     });
 
     it("finds each part's divider below its own version, whatever the other parts looked at", async () => {

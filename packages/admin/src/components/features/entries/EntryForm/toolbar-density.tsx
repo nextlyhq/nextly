@@ -46,14 +46,14 @@ export const TOOLBAR_CONTAINER = "@container/toolbar";
  * - `secondary` — supporting actions (preview, share a link). First to go,
  *   because they are the ones an author is least often reaching for while
  *   typing a title.
- * - `lifecycle` — publish and unpublish. Held longer: these change what readers
- *   can see, so their words are worth more room than a preview's.
  *
- * The primary action (Save / Create) is deliberately absent. It never collapses
- * at any width — a toolbar that hides the thing it exists for has optimised the
- * wrong side.
+ * Only a control that keeps an icon may give up its words. The document's own
+ * verbs (Save draft, Unpublish, Discard changes) and the primary action draw
+ * no icon, so collapsing their label left an empty bordered button; they keep
+ * their words at every width. With the title on a line of its own, the
+ * action row no longer has to make room for it, so they can.
  */
-export type ToolbarLabelPriority = "secondary" | "lifecycle";
+export type ToolbarLabelPriority = "secondary";
 
 /**
  * Thresholds are the ROW'S OUTER width, and the arbitrary values are the reason
@@ -75,12 +75,14 @@ export type ToolbarLabelPriority = "secondary" | "lifecycle";
  * A round `3rem`-smaller threshold reads tidier and is wrong by exactly the
  * padding: at a 792px row it leaves the labels at full width, the title pinned
  * to its 10rem floor, and the row with no slack at all.
+ *
+ * The title has since moved to a line of its own, so the action row no longer
+ * shares its width with it and this threshold is conservative: a preview
+ * label gives up its words somewhat before the row strictly runs out of room.
  */
 const COLLAPSE_AT: Record<ToolbarLabelPriority, string> = {
   // 48rem of usable width + 3rem of padding.
   secondary: "@max-[51rem]/toolbar:sr-only",
-  // 42rem of usable width + 3rem of padding.
-  lifecycle: "@max-[45rem]/toolbar:sr-only",
 };
 
 export interface ToolbarLabelProps {

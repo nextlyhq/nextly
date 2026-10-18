@@ -12,6 +12,15 @@ import type { SchemaPreviewResponse } from "@admin/services/schemaApi";
 import { BuilderSchemaChangeDialogs } from "../BuilderSchemaChangeDialogs";
 import type { SchemaChangeConfirmation } from "../types";
 
+const REQUIRED_REFUSAL = {
+  reason: "A required field can't stop being translated in the same change.",
+  steps: [
+    "Turn off Required and save.",
+    "Turn off Localized and save.",
+    "Turn Required back on and save.",
+  ],
+};
+
 function preview(
   overrides: Partial<SchemaPreviewResponse> = {}
 ): SchemaPreviewResponse {
@@ -100,6 +109,232 @@ describe("BuilderSchemaChangeDialogs", () => {
     expect(screen.queryByText(/safe change/i)).not.toBeInTheDocument();
     // The full dialog is the one that asks the user to resolve the rename.
     expect(screen.getByText(/rename to/i)).toBeInTheDocument();
+  });
+
+  // A field leaving translation moves its other languages to the archive, so the
+  // short confirmation's "does not affect existing data" would be untrue.
+  it("shows the full dialog, saying what moves to the archive, for a field leaving translation", () => {
+    renderDialogs(
+      preview({
+        leavingTranslation: [
+          {
+            name: "heading",
+            column: "heading",
+            entriesWithoutDefault: 0,
+            byLocale: { ar: 3, es: 12 },
+            total: 15,
+            defaultLocale: "en",
+            restoreCommand:
+              "nextly i18n:restore --collection posts --field heading",
+          },
+        ],
+      })
+    );
+
+    expect(screen.queryByText(/safe change/i)).not.toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "12 Spanish and 3 Arabic values move to the archive. English becomes the shared value."
+      )
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("nextly i18n:restore --collection posts --field heading")
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /save changes/i })).toBeEnabled();
+  });
+
+  it("says the values move although they could not be counted, and still names the restore", () => {
+    renderDialogs(
+      preview({
+        leavingTranslation: [
+          {
+            name: "heading",
+            column: "heading",
+            entriesWithoutDefault: null,
+            byLocale: null,
+            total: null,
+            defaultLocale: "en",
+            restoreCommand:
+              "nextly i18n:restore --collection posts --field heading",
+          },
+        ],
+      })
+    );
+
+    expect(
+      screen.getByText(
+        "Values in other languages move to the archive; they couldn't be counted. English becomes the shared value."
+      )
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(/No other language has a value/)
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByText("nextly i18n:restore --collection posts --field heading")
+    ).toBeInTheDocument();
+  });
+
+  it("says how many entries keep another language's value for want of an English one", () => {
+    renderDialogs(
+      preview({
+        leavingTranslation: [
+          {
+            name: "heading",
+            column: "heading",
+            entriesWithoutDefault: 2,
+            byLocale: { es: 4 },
+            total: 4,
+            defaultLocale: "en",
+            restoreCommand:
+              "nextly i18n:restore --collection posts --field heading",
+          },
+        ],
+      })
+    );
+
+    expect(
+      screen.getByText(
+        "4 Spanish values move to the archive. English becomes the shared value. 2 entries have no English value and keep another language's instead."
+      )
+    ).toBeInTheDocument();
+  });
+
+  it("names the refusal and does not offer Apply for a field that cannot leave in one change", () => {
+    renderDialogs(
+      preview({
+        leavingTranslation: [
+          {
+            // The prompt below names the field by its column, the notice by its name.
+            name: "metaTitle",
+            column: "meta_title",
+            entriesWithoutDefault: 0,
+            byLocale: { es: 2 },
+            total: 2,
+            defaultLocale: "en",
+            restoreCommand:
+              "nextly i18n:restore --collection posts --field heading",
+            refusal: REQUIRED_REFUSAL,
+          },
+        ],
+        classification: "interactive",
+        interactiveFields: [
+          {
+            name: "meta_title",
+            reason: "new_required_no_default",
+            tableRowCount: 2,
+            options: ["provide_default", "mark_nullable", "cancel"],
+          },
+        ],
+      })
+    );
+
+    expect(screen.getByText("Needs three steps")).toBeInTheDocument();
+    expect(
+      screen.getByText(/A required field can't stop being translated/)
+    ).toBeInTheDocument();
+    // The steps as an ordered list, in the order they have to be taken.
+    expect(
+      screen.getAllByRole("listitem").map(item => item.textContent)
+    ).toEqual(REQUIRED_REFUSAL.steps);
+    expect(screen.queryByText(/nextly i18n:restore/)).not.toBeInTheDocument();
+    expect(
+      screen.getByText("Schema Change Needs Another Step")
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/This change cannot be saved to/)
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/will be applied to/)).not.toBeInTheDocument();
+    // The push's own prompt for the refused field's new column is moot, so it is not asked.
+    expect(
+      screen.queryByText(/is required but table has/)
+    ).not.toBeInTheDocument();
+    // Nothing in the change could be saved, so the only way out is Close.
+    expect(screen.getByRole("button", { name: "Close" })).toBeEnabled();
+    expect(
+      screen.queryByRole("button", { name: /apply changes|save changes/i })
+    ).not.toBeInTheDocument();
+  });
+
+  it("keeps Save, disabled and not as a danger, when another change could be saved", () => {
+    renderDialogs(
+      preview({
+        hasDestructiveChanges: true,
+        classification: "destructive",
+        changes: {
+          added: [
+            {
+              name: "subtitle",
+              type: "text",
+              required: false,
+              hasDefault: false,
+              classification: "safe",
+            },
+          ],
+          removed: [],
+          changed: [],
+          unchanged: [],
+        },
+        leavingTranslation: [
+          {
+            name: "heading",
+            column: "heading",
+            entriesWithoutDefault: 0,
+            byLocale: {},
+            total: 0,
+            defaultLocale: "en",
+            restoreCommand:
+              "nextly i18n:restore --collection posts --field heading",
+            refusal: REQUIRED_REFUSAL,
+          },
+        ],
+      })
+    );
+
+    const save = screen.getByRole("button", { name: "Save Changes" });
+    expect(save).toBeDisabled();
+    expect(save.className).toMatch(/\bbg-primary\b/);
+    expect(save.className).not.toMatch(/bg-destructive/);
+    expect(
+      screen.getByText("Fix the field above to save.")
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Close" })
+    ).not.toBeInTheDocument();
+  });
+
+  it("copies the restore command", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      value: { writeText },
+      configurable: true,
+    });
+    renderDialogs(
+      preview({
+        leavingTranslation: [
+          {
+            name: "heading",
+            column: "heading",
+            entriesWithoutDefault: 0,
+            byLocale: { es: 1 },
+            total: 1,
+            defaultLocale: "en",
+            restoreCommand:
+              "nextly i18n:restore --collection posts --field heading",
+          },
+        ],
+      })
+    );
+
+    await userEvent.click(
+      screen.getByRole("button", { name: /copy the restore command/i })
+    );
+
+    expect(writeText).toHaveBeenCalledWith(
+      "nextly i18n:restore --collection posts --field heading"
+    );
+    expect(
+      await screen.findByRole("button", { name: "Copied" })
+    ).toBeInTheDocument();
   });
 
   it("shows the full dialog for a destructive change", () => {

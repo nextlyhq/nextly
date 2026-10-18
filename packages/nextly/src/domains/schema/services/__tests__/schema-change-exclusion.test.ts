@@ -105,6 +105,8 @@ function makeAdapter(options: { mainTableExists?: boolean } = {}) {
     // which arrives through `dropTable` above.
     getDrizzle: vi.fn(() => ({
       execute: async () => ({ rows: [] }),
+      // No archive rows of unknown owner, so a teardown has none to label.
+      selectDistinct: () => ({ from: () => ({ where: async () => [] }) }),
       delete: () => ({ where: async () => [] }),
     })),
     executeQuery: vi.fn(async (sql: string) => {

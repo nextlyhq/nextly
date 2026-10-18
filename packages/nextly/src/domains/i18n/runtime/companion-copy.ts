@@ -21,6 +21,7 @@ import { isMissingNamedColumnError } from "../../../database/missing-column";
 import { nextlyMeta as nextlyMetaMysql } from "../../../schemas/nextly-meta/mysql";
 import { nextlyMeta as nextlyMetaPg } from "../../../schemas/nextly-meta/postgres";
 import { nextlyMeta as nextlyMetaSqlite } from "../../../schemas/nextly-meta/sqlite";
+import { metaValueEquals } from "../../meta/services/meta-service";
 import { COMPANION_UPDATED_AT_COLUMN } from "../companion-columns";
 import { COMPANION_DEFAULT_STATUS } from "../migration/generate-up";
 
@@ -245,7 +246,7 @@ export async function copyDefaultLocaleOntoMain(
       args.guard
         ? and(
             hasRow,
-            sql`exists (select 1 from ${meta} where ${eq(meta.key, args.guard.key)} and ${eq(meta.value as never, args.guard.value as never)})`
+            sql`exists (select 1 from ${meta} where ${eq(meta.key, args.guard.key)} and ${metaValueEquals(meta, args.guard.value, adapter.dialect)})`
           )
         : hasRow
     );
@@ -317,7 +318,7 @@ async function clearLocaleStamp(
         args.guard
           ? and(
               thisLocale,
-              sql`exists (select 1 from ${meta} where ${eq(meta.key, args.guard.key)} and ${eq(meta.value as never, args.guard.value as never)})`
+              sql`exists (select 1 from ${meta} where ${eq(meta.key, args.guard.key)} and ${metaValueEquals(meta, args.guard.value, adapter.dialect)})`
             )
           : thisLocale
       );
@@ -392,7 +393,7 @@ export async function refreshDefaultLocaleFromMain(
       args.guard
         ? and(
             thisLocale,
-            sql`exists (select 1 from ${meta} where ${eq(meta.key, args.guard.key)} and ${eq(meta.value as never, args.guard.value as never)})`
+            sql`exists (select 1 from ${meta} where ${eq(meta.key, args.guard.key)} and ${metaValueEquals(meta, args.guard.value, adapter.dialect)})`
           )
         : thisLocale
     );

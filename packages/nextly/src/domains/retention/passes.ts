@@ -22,6 +22,10 @@ import {
   activeAuditRetention,
   type ResolvedAuditRetentionConfig,
 } from "../audit/retention-config";
+import {
+  pruneContentEventsSafely,
+  type ContentEventsPruneDb,
+} from "../content-events/prune";
 import { pruneEmailDataSafely, type EmailPruneAdapter } from "../email/prune";
 import {
   activeEmailRetention,
@@ -36,6 +40,7 @@ import type { ResolvedWebhookRetentionConfig } from "../webhooks/retention-confi
 
 import {
   AUDIT_RETENTION_GATE_KEY,
+  CONTENT_EVENTS_RETENTION_GATE_KEY,
   EMAIL_RETENTION_GATE_KEY,
   NOTICES_RETENTION_GATE_KEY,
   ONE_TIME_SECRETS_RETENTION_GATE_KEY,
@@ -50,7 +55,8 @@ export interface RetentionPassInput {
     PruneDeps["adapter"] &
     EmailPruneAdapter &
     OneTimeSecretsPruneAdapter &
-    NoticesPruneDb;
+    NoticesPruneDb &
+    ContentEventsPruneDb;
   webhookPolicy?: ResolvedWebhookRetentionConfig | null;
   auditPolicy?: ResolvedAuditRetentionConfig;
   /**
@@ -133,6 +139,27 @@ export function buildRetentionPasses(
         const policy = activeAuditRetention(input.auditPolicy);
         if (!policy || policy.activityMaxAgeMs === false) return;
         await pruneNoticesSafely(
+          { db: input.adapter, now: input.now, logger: input.logger },
+          policy.activityMaxAgeMs,
+          maxBatches ?? policy.maxBatchesPerRun
+        );
+      },
+    });
+  }
+
+  // A deleted subject's content events are kept for the activity log's window
+  // from its deletion, so they ride the same policy, read per run as notices
+  // are. A window of `false` keeps them forever. A subject that still exists
+  // keeps its events whatever the window.
+  if (audit) {
+    passes.push({
+      key: CONTENT_EVENTS_RETENTION_GATE_KEY,
+      intervalMs: () =>
+        activeAuditRetention(input.auditPolicy)?.intervalMs ?? audit.intervalMs,
+      run: async maxBatches => {
+        const policy = activeAuditRetention(input.auditPolicy);
+        if (!policy || policy.activityMaxAgeMs === false) return;
+        await pruneContentEventsSafely(
           { db: input.adapter, now: input.now, logger: input.logger },
           policy.activityMaxAgeMs,
           maxBatches ?? policy.maxBatchesPerRun

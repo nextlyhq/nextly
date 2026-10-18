@@ -60,8 +60,7 @@ export function validateOrigin(
   }
 
   // Always allow the request's own host
-  const requestUrl = new URL(request.url);
-  const selfOrigin = requestUrl.origin;
+  const selfOrigin = acceptedOwnOrigin(request);
 
   const allAllowed = [selfOrigin, ...allowedOrigins];
 
@@ -84,6 +83,27 @@ function refererOrigin(referer: string): string | null {
 }
 
 /**
+ * What a CSRF check answers. A refusal says which half refused: the token, or
+ * the origin the request came from. The two need different things from the
+ * person who sent it, a fresh page or a different address, so a form that is
+ * refused can only say which if the answer does.
+ */
+export interface CsrfResult {
+  valid: boolean;
+  error?: string;
+  reason?: "token" | "origin";
+}
+
+/**
+ * The origin this check always accepts: the request's own, as the server
+ * reads it. Under `next dev` that is the server's configured host, which need
+ * not be the address the browser used (`127.0.0.1` for `localhost`).
+ */
+export function acceptedOwnOrigin(request: Request): string {
+  return new URL(request.url).origin;
+}
+
+/**
  * Full CSRF validation: double-submit cookie + origin check.
  *
  * @param request - The incoming request
@@ -96,17 +116,17 @@ export function validateCsrf(
   cookieToken: string | null,
   requestToken: string | null,
   allowedOrigins: string[] = []
-): { valid: boolean; error?: string } {
+): CsrfResult {
   if (!cookieToken || !requestToken) {
-    return { valid: false, error: "Missing CSRF token" };
+    return { valid: false, error: "Missing CSRF token", reason: "token" };
   }
 
   if (!csrfTokensMatch(cookieToken, requestToken)) {
-    return { valid: false, error: "Invalid CSRF token" };
+    return { valid: false, error: "Invalid CSRF token", reason: "token" };
   }
 
   if (!validateOrigin(request, allowedOrigins)) {
-    return { valid: false, error: "Invalid request origin" };
+    return { valid: false, error: "Invalid request origin", reason: "origin" };
   }
 
   return { valid: true };

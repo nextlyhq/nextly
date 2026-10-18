@@ -3,8 +3,6 @@ title: Authentication
 description: Custom email + password authentication with JWT sessions, API keys, RBAC, and the super-admin bootstrap flow.
 ---
 
-> **Parts of this page need the release after 0.0.2-alpha.66:** the access token's account check every five seconds (on 0.0.2-alpha.66 the token is trusted until it expires), the refresh cookie's scope, the last-super-admin rule, the rate limit on the email-verification routes, `/auth/pending`, and the auth rate limit's per-account counting when no client address can be read, with its two warnings.
-
 Nextly ships a complete custom authentication system. It is **not** built on NextAuth, Auth.js, or any OAuth library. The runtime owns:
 
 - Email + password sign-up and login (bcrypt hashing, password-strength validation, email verification).
@@ -90,8 +88,6 @@ export async function GET(req: Request) {
 
 ## When an account may hold a session
 
-> **Needs the release after 0.0.2-alpha.66.**
-
 Every path that ends in a session asks the same question first, whether it is a
 password login, a second factor being answered, a forced password change, a
 token refresh, or a plugin finishing an external sign-in. An account is refused
@@ -148,8 +144,6 @@ again lifts all of these.
 
 ## What a token is for
 
-> **Needs the release after 0.0.2-alpha.66.**
-
 Session tokens and the pending tokens of a second-factor exchange carry a
 `typ` header naming their purpose, and each is verified for one purpose only,
 so a pending token cannot be presented as a session, whatever else it carries.
@@ -161,8 +155,6 @@ will stop Direct API tokens minted before this change; browser sessions are
 unaffected, because access tokens rotate every fifteen minutes.
 
 ## Signing in with an external provider
-
-> **Needs the release after 0.0.2-alpha.66.**
 
 A plugin that has authenticated someone elsewhere finishes the login through
 core rather than assembling a session itself, using `ctx.auth.completeLogin`.
@@ -324,7 +316,7 @@ A separate rate limit guards `/auth/login`, `/auth/register`, `/auth/forgot-pass
 | Password reset, email verification, invite acceptance, second-factor answer, initial-password set | The account the request's token belongs to. |
 | A body that names no address, or a token that belongs to no account | One shared account-less budget. |
 
-Sign-in is keyed on the `email` its body carries, which is what the built-in password strategy reads. A [custom strategy](/docs/plugins/auth) that signs people in from something else, such as a username or an OAuth code, is not yet keyed on what it reads. From an unreadable address, a sign-in to it that carries no `email` counts against the account-less budget below, which every such sign-in shares (30 an hour by default). One that carries an `email` counts against that address's budget, whatever the strategy reads. Per-identity limits for these strategies need the strategy to name its account to the limiter, which a later release adds; until then, `security.trustProxy` behind a proxy is what keeps their sign-in per client.
+Sign-in is keyed on the `email` its body carries, which is what the built-in password strategy reads. A [custom strategy](/docs/plugins/auth#naming-the-account-to-the-sign-in-rate-limit) that signs people in from something else, such as a username or an OAuth code, names what it reads with `limitKey`, and its sign-ins are then keyed on that, in a budget of their own per name; rotating the `email` buys nothing. A strategy without `limitKey` leaves the limiter unable to tell which strategy will handle a sign-in, so sign-ins are keyed on the `email` they carry, one that carries none counts against the account-less budget below (30 an hour by default), and the server names that strategy at startup. Behind a proxy, `security.trustProxy` keeps every strategy's sign-in per client instead.
 
 Each account, and the account-less budget, gets the configured budget (30 an hour by default). All of these requests together are also held to a ceiling of 100 times that budget (3,000 an hour by default), so inventing addresses buys no extra attempts. A request whose address can be read never counts against the ceiling.
 
@@ -352,15 +344,11 @@ All state-changing auth endpoints (login, logout, register, setup, password oper
 
 ### Refresh-token rotation
 
-> **Needs the release after 0.0.2-alpha.66.**
-
 Every successful refresh consumes the old refresh token and issues a new one. A token that matches no row answers 401 `REFRESH_FAILED` without clearing the cookies, and logs a `refresh-token-not-found` warning (without the token). Watch that warning for replays of a consumed token, but not every one is theft: it also fires for a second tab a round trip behind a rotation another tab made, for a session that was revoked, and for a cookie holding a value that was never issued. The cookies are left alone because nothing is revoked there, and clearing them would sign out the tab that just rotated.
 
 Two refreshes presenting the same token get one rotation. The one that loses the race answers 401 `REFRESH_SUPERSEDED` and leaves the cookies alone. The admin retries with the cookies it now holds; any other client should retry once with its current cookies.
 
 ### Session revocation on password change and deactivation
-
-> **Needs the release after 0.0.2-alpha.66.**
 
 Every password write ends the account's sessions: an administrator setting it (`updateUser` or `PATCH /admin/api/users/:id/password`), the user changing their own, a reset, accepting an invite, and setting an initial password. Deactivating an account does the same. Each deletes all of the account's refresh tokens in the same transaction as the write, forcing re-login on every device.
 
