@@ -793,7 +793,8 @@ export class ReleasesRepository {
    * Delete a release and its members, in one transaction, and say whether it
    * was deleted.
    *
-   * Fenced on {@link RELEASE_DELETABLE_FROM} through `advanceRevision`, so the
+   * Fenced on {@link RELEASE_DELETABLE_FROM}, and on the release never having
+   * been scheduled, through `advanceRevision`, so the
    * release is locked and its state checked by the same compare-and-set as
    * every other move: a release scheduled after the caller judged it is not
    * deleted, and neither are its members. A member row names its release with
@@ -816,7 +817,11 @@ export class ReleasesRepository {
     };
     const removed = await this.db.transaction(async tx => {
       if (
-        (await this.advanceRevision(tx, id, RELEASE_DELETABLE_FROM)) === null
+        (await this.advanceRevision(tx, id, RELEASE_DELETABLE_FROM, {
+          // Never scheduled: a cancelled release that was is kept, since
+          // nothing stored says whether it began to run.
+          where: [{ column: "scheduledAt", op: "IS NULL" }],
+        })) === null
       ) {
         return null;
       }

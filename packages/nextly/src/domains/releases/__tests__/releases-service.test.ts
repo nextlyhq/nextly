@@ -1472,6 +1472,27 @@ describe("ReleasesService.delete deletes only a release that never ran", () => {
     }
   );
 
+  it("keeps a cancelled release that was ever scheduled, naming why in the refusal's data", async () => {
+    const { svc, repo, deps } = service({ holds: ["delete"] });
+    repo.findReleases.mockResolvedValue([
+      {
+        id: "r1",
+        state: "cancelled",
+        title: "Launch",
+        revision: 4,
+        scheduledAt: new Date("2026-09-01T09:00:00Z"),
+      },
+    ]);
+    await expect(svc.delete("r1", ADMIN)).rejects.toMatchObject({
+      code: "CONFLICT",
+      publicMessage:
+        "This release was scheduled, so it's kept as a record. Cancelled releases that were never scheduled can be deleted.",
+      publicData: { reason: "was-scheduled" },
+    });
+    expect(repo.deleteRelease).not.toHaveBeenCalled();
+    expect(deps.recordActivity).not.toHaveBeenCalled();
+  });
+
   it("answers NOT_FOUND for a release that is not there", async () => {
     const { svc, repo } = service({ holds: ["delete"] });
     repo.findReleases.mockResolvedValue([]);

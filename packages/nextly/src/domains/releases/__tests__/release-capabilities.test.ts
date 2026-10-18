@@ -381,4 +381,20 @@ describe("capabilities to rename and to delete", () => {
       expect(withoutDelete.get(state)?.delete).toBe(false);
     }
   });
+
+  it("does not offer deleting a cancelled release that was ever scheduled", async () => {
+    const { svc } = service(["read", "delete"]);
+    const can = await svc.capabilities(
+      [
+        {
+          ...release("cancelled", "was"),
+          scheduledAt: new Date("2026-09-01T09:00:00Z"),
+        },
+        { ...release("cancelled", "never"), scheduledAt: null },
+      ],
+      ACTOR
+    );
+    expect(can.get("was")?.delete).toBe(false);
+    expect(can.get("never")?.delete).toBe(true);
+  });
 });

@@ -51,6 +51,7 @@ import {
 } from "../../../auth/authenticated-scope";
 import type { RequestActor } from "../../../auth/request-actor";
 import { NextlyError } from "../../../errors";
+import type { ReleaseNotDeletablePublicData } from "../../../errors/public-data";
 import {
   RELEASE_ASSEMBLABLE_FROM,
   RELEASE_ASSEMBLABLE_WITH_PUBLISH_FROM,
@@ -416,18 +417,58 @@ function assertDetailsChange(change: ReleaseDetailsChange): void {
 }
 
 /**
- * The refusal for deleting a release that is not a draft or cancelled, saying
- * what to do instead.
+ * Why this release may not be deleted, or `null` when it may.
+ *
+ * Only a release that never ran: a draft, or a release cancelled before it
+ * was ever scheduled. A cancelled release that WAS scheduled is kept, because
+ * nothing stored says whether it began to run: one that stopped part-way and
+ * was then cancelled has put content live, and reads like any other cancelled
+ * release. `scheduledAt` is the evidence that survives a cancel, so a release
+ * that ever had one is kept as the record. A release goes from draft only to
+ * scheduled or cancelled, so a draft never carries one.
+ *
+ * The one answer for the write and for the `delete` capability; the
+ * repository's fence states the same rule in its transaction.
  */
-function notDeletableRefusal(release: ReleaseRow): NextlyError {
-  const message =
-    release.state === "published"
-      ? "This release has been published. It stays as the record of what went live, and cannot be deleted."
-      : "This release is scheduled or stopped. Cancel it first, then delete it.";
-  return NextlyError.conflict({
-    message,
+function whyNotDeletable(
+  release: Pick<ReleaseRow, "state" | "scheduledAt">
+): ReleaseNotDeletablePublicData["reason"] | null {
+  if (release.state === "published") return "published";
+  if (!RELEASE_DELETABLE_FROM.includes(release.state)) return "committed";
+  if (release.scheduledAt !== null && release.scheduledAt !== undefined) {
+    return "was-scheduled";
+  }
+  return null;
+}
+
+/** What each refusal tells the person, by reason. */
+const NOT_DELETABLE_MESSAGES: Record<
+  ReleaseNotDeletablePublicData["reason"],
+  string
+> = {
+  published:
+    "This release has been published. It stays as the record of what went live, and cannot be deleted.",
+  committed:
+    "This release is scheduled or stopped. Cancel it first, then delete it.",
+  "was-scheduled":
+    "This release was scheduled, so it's kept as a record. Cancelled releases that were never scheduled can be deleted.",
+};
+
+/**
+ * The refusal for deleting a release that may not be deleted: a CONFLICT
+ * saying why, with the reason in its data for a client to name.
+ */
+function notDeletableRefusal(
+  release: ReleaseRow,
+  reason: ReleaseNotDeletablePublicData["reason"]
+): NextlyError {
+  return new NextlyError({
+    code: "CONFLICT",
+    publicMessage: NOT_DELETABLE_MESSAGES[reason],
+    publicData: { reason },
     logContext: {
       reason: "release-not-deletable",
+      why: reason,
       releaseId: release.id,
       state: release.state,
     },
@@ -1085,7 +1126,7 @@ export class ReleasesService {
               rule.mayRun,
             // Any state, as `update` writes it: the title is a label.
             update: mayUpdate,
-            delete: mayDelete && RELEASE_DELETABLE_FROM.includes(release.state),
+            delete: mayDelete && whyNotDeletable(release) === null,
           },
         ];
       })
@@ -2157,7 +2198,8 @@ export class ReleasesService {
    *
    * Under `delete-content-releases`. A scheduled or stopped release is
    * committed to a launch and is cancelled first; a published one is the
-   * record of what went live and is never deleted. Each refusal is a CONFLICT
+   * record of what went live and is never deleted; and a cancelled one that
+   * was ever scheduled is kept too (`whyNotDeletable`). Each refusal is a CONFLICT
    * naming what to do instead, and a release that is not there is NOT_FOUND.
    * Answers the release as it was before the delete.
    *
@@ -2166,12 +2208,11 @@ export class ReleasesService {
   async delete(id: string, actor: ReleaseActor): Promise<ReleaseRow> {
     await this.authorize(actor, "delete");
     const current = await this.requireRelease(id);
-    if (!RELEASE_DELETABLE_FROM.includes(current.state)) {
-      throw notDeletableRefusal(current);
-    }
-    // FENCED on the deletable states, so a release scheduled since the read
-    // above is not deleted, and neither are its documents. A retry judges it
-    // as it now is, and is told to cancel it.
+    const refused = whyNotDeletable(current);
+    if (refused !== null) throw notDeletableRefusal(current, refused);
+    // FENCED on the same rule, so a release scheduled since the read above is
+    // not deleted, and neither are its documents. A retry judges it as it now
+    // is, and is told why.
     if (!(await this.deps.repository.deleteRelease(id))) {
       throw NextlyError.conflict({
         logContext: { reason: "release-moved-before-delete", releaseId: id },
