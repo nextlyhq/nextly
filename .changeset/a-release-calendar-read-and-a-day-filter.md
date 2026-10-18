@@ -37,4 +37,9 @@ a calendar's "+N more" is always true. Days follow the zone's own clock,
 daylight saving included: a release at 23:30 in New York is on the next day in
 London. The list gains a day filter (`day` and `timezone` over REST,
 `day: { date, timezone }` from the Direct API) that returns one such day in
-full, paged, in the same order. Both are experimental.
+full, paged, in the same order. A published release is on the day it went out,
+any other release on the day of its scheduled time. Both are experimental.
+
+The releases table gains two indexes, on `scheduled_at` and on `published_at`,
+which the calendar and the day filter read by. `nextly migrate` adds them to
+an existing database. Index only, no data change.

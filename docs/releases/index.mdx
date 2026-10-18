@@ -317,8 +317,8 @@ Both answer the same object, with one entry per day:
 
 A window longer than 42 days, one whose `to` is before its `from`, a date that does not exist
 and a zone the server does not know are refused with `400`. Reading the calendar needs the
-same permission as reading the list. It reads the time and state of every release in the
-window, then the three each day shows, so it costs two queries whatever the window holds.
+same permission as reading the list. It reads every release in the window in one query, so a
+day's counts and the releases it shows always agree.
 
 ## Scheduling stores a time; a job runner applies it
 
