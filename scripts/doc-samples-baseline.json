@@ -1,8 +1,8 @@
 {
   "coverage": {
     "pages": 81,
-    "samples": 457,
-    "compiled": 288
+    "samples": 459,
+    "compiled": 290
   },
   "samplesPerPage": {
     "docs/admin/branding.mdx": {
@@ -234,8 +234,8 @@
       "compiled": 5
     },
     "docs/releases/index.mdx": {
-      "samples": 2,
-      "compiled": 1
+      "samples": 4,
+      "compiled": 3
     },
     "docs/versions/index.mdx": {
       "samples": 2,
@@ -532,7 +532,9 @@
       "reader-file #2 error TS2307: Cannot find module '../../../nextly.config' or its corresponding type declarations.": 1
     },
     "docs/releases/index.mdx": {
-      "reader-file #1 error TS2307: Cannot find module '../../nextly.config' or its corresponding type declarations.": 1
+      "reader-file #1 error TS2307: Cannot find module '../../nextly.config' or its corresponding type declarations.": 1,
+      "reader-file #2 error TS2307: Cannot find module '../../nextly.config' or its corresponding type declarations.": 1,
+      "reader-file #3 error TS2307: Cannot find module '../../nextly.config' or its corresponding type declarations.": 1
     },
     "packages/admin/README.md": {
       "reader-file #1 error TS2307: Cannot find module '../../../../nextly.config' or its corresponding type declarations.": 1
