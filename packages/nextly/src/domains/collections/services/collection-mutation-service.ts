@@ -78,6 +78,7 @@ import {
 } from "../../../shared/lib/case-conversion";
 import {
   declaredFieldNames,
+  refusalIssues,
   resolvePromotedDocument,
 } from "../../../shared/lib/denied-change";
 import { detachData } from "../../../shared/lib/detach";
@@ -93,6 +94,7 @@ import {
   hasFieldAccessRule,
   resolvedCallerGrants,
   callerAccessGrants,
+  type CallerGrants,
   attachFieldValidators,
   getFieldFunctions,
   runFieldHooks,
@@ -546,6 +548,12 @@ function promoteRestoreContext(args: {
     localeUnknown: false,
   };
 }
+
+/** What a release's write judges with, the same for every entry. */
+type ReleaseWriteContext = Omit<
+  GoingLiveArgs,
+  "collectionName" | "entryId" | "user" | "existingEntry" | "drafts"
+>;
 
 /** What judging the languages a publish puts live needs. */
 interface LanguagesGoLiveArgs {
@@ -2124,21 +2132,46 @@ export class CollectionMutationService extends BaseService {
             [...rows.keys()],
             shared.draftLocaleKey
           );
+    // The author's grants, once for the batch, where a field rule could ask:
+    // as the write resolves them, and only where it would.
+    const grants =
+      shared.promoteRestoreCtx !== null &&
+      hasFieldAccessRule("collection", params.collectionName, "update")
+        ? await resolvedCallerGrants(params.user, undefined)
+        : null;
+    const tableName = collectionTableName(collection, params.collectionName);
     for (const [entryId, existingEntry] of rows) {
-      issues.set(
+      const found = await this.goingLiveIssues({
+        ...shared,
+        collectionName: params.collectionName,
         entryId,
-        await this.goingLiveIssues({
-          ...shared,
-          collectionName: params.collectionName,
-          entryId,
-          user: params.user,
-          existingEntry,
-          // Served from the batch's one read, by the entry it was asked for.
-          drafts: {
-            findWorkingDraft: ref => Promise.resolve(drafts.get(ref.entryId)),
-          },
-        })
-      );
+        user: params.user,
+        existingEntry,
+        // Served from the batch's one read, by the entry it was asked for.
+        drafts: {
+          findWorkingDraft: ref => Promise.resolve(drafts.get(ref.entryId)),
+        },
+      });
+      const draft = drafts.get(entryId);
+      if (
+        grants !== null &&
+        draft !== undefined &&
+        shared.promoteRestoreCtx !== null
+      ) {
+        found.push(
+          ...(await this.promotionAccessIssues(shared, {
+            collectionName: params.collectionName,
+            entryId,
+            row: existingEntry,
+            snapshot: draft.snapshot,
+            restoreCtx: shared.promoteRestoreCtx,
+            tableName,
+            user: params.user,
+            grants,
+          }))
+        );
+      }
+      issues.set(entryId, found);
     }
     return issues;
   }
@@ -2151,12 +2184,7 @@ export class CollectionMutationService extends BaseService {
   private async releaseWriteContext(
     collection: unknown,
     collectionName: string
-  ): Promise<
-    Omit<
-      GoingLiveArgs,
-      "collectionName" | "entryId" | "user" | "existingEntry" | "drafts"
-    >
-  > {
+  ): Promise<ReleaseWriteContext> {
     const fields = collectionFields(collection);
     const finalData: Record<string, unknown> = { status: "published" };
     const manyToManyFields = fields.filter(
@@ -2379,26 +2407,30 @@ export class CollectionMutationService extends BaseService {
     });
   }
 
-  /** The violations of the document a promoted working draft would write. */
-  private async promotedDraftIssues(
-    args: GoingLiveArgs,
-    snapshot: unknown,
-    restoreCtx: RestoreSchemaContext
-  ): Promise<ValidationIssue[]> {
-    const { payload: draftInput } = buildRestorePayload(
-      snapshot,
-      args.fields as unknown as FieldConfig[],
-      restoreCtx
-    );
-    // The full document the promotion will persist, so the validation judges
-    // the real final values. `shapeWriteParts` has already pulled the
-    // caller's component and m2m fields out of `finalData`; folding them back
-    // in covers component and m2m fields, not only columns. In the LOGICAL
-    // shape the validator reads: `finalData` is column-encoded, so a group the
-    // caller sent with the publish arrives as text, and validated as text it
-    // is refused as "must be an object". Parsed by the same function that
-    // builds the live row, so the two sides are one representation.
-    const merged = this.deserializeJsonFieldsForSnapshot(
+  /**
+   * The full document a promotion persists: the draft's input with the
+   * caller's payload over it. `shapeWriteParts` has already pulled the
+   * caller's component and m2m fields out of `finalData`; folding them back in
+   * covers component and m2m fields, not only columns. In the LOGICAL shape
+   * the rules read: `finalData` is column-encoded, so a group the caller sent
+   * arrives as text, and judged as text it is refused as "must be an object".
+   * Parsed by the same function that builds the live row, so the two sides
+   * are one representation. With an empty draft input, the caller's own
+   * contribution alone.
+   */
+  private promotedDocumentOf(
+    args: Pick<
+      GoingLiveArgs,
+      | "finalData"
+      | "componentFieldData"
+      | "manyToManyData"
+      | "fields"
+      | "manyToManyFields"
+      | "splitComponentSchemas"
+    >,
+    draftInput: Record<string, unknown>
+  ): Record<string, unknown> {
+    return this.deserializeJsonFieldsForSnapshot(
       this.assemblePromotedDocument(
         draftInput,
         args.finalData,
@@ -2409,6 +2441,82 @@ export class CollectionMutationService extends BaseService {
         args.splitComponentSchemas
       ),
       args.fields
+    );
+  }
+
+  /**
+   * What the field rules refuse a release's promotion of this entry's working
+   * draft with, judged as the release's author would be judged at the write:
+   * the promotion against the entry as stored, through
+   * {@link judgePromotionAccess}. Its refusal's own issues (code `FORBIDDEN`),
+   * or none. Read-only: the stored document is read in a transaction that
+   * writes nothing.
+   */
+  private async promotionAccessIssues(
+    shared: ReleaseWriteContext,
+    args: {
+      collectionName: string;
+      entryId: string;
+      row: Record<string, unknown>;
+      snapshot: unknown;
+      restoreCtx: RestoreSchemaContext;
+      tableName: string;
+      user: UserContext;
+      grants: () => Promise<CallerGrants>;
+    }
+  ): Promise<ValidationIssue[]> {
+    const live = await this.adapter.transaction(tx =>
+      this.storedDocumentOnTx(tx, {
+        row: args.row,
+        collectionName: args.collectionName,
+        entryId: args.entryId,
+        tableName: args.tableName,
+        fields: shared.fields,
+        manyToManyFields: shared.manyToManyFields,
+        // A working draft is promoted only on a collection that is not
+        // localized (`isDraftSplitEligible`), so there are no translations to
+        // read beside the row.
+        localizedUpdate: null,
+        locale: shared.locale,
+      })
+    );
+    return refusalIssues(async () => {
+      await this.judgePromotionAccess({
+        before: this.promotedDocumentOf(
+          shared,
+          buildRestorePayload(
+            args.snapshot,
+            shared.fields as unknown as FieldConfig[],
+            args.restoreCtx
+          ).payload
+        ),
+        live: live.document,
+        callerSupplied: this.promotedDocumentOf(shared, {}),
+        collectionName: args.collectionName,
+        entryId: args.entryId,
+        user: args.user,
+        overrideAccess: false,
+        grants: args.grants,
+        fields: shared.fields,
+        locale: shared.draftLocaleKey ?? shared.locale ?? null,
+      });
+      return [];
+    });
+  }
+
+  /** The violations of the document a promoted working draft would write. */
+  private async promotedDraftIssues(
+    args: GoingLiveArgs,
+    snapshot: unknown,
+    restoreCtx: RestoreSchemaContext
+  ): Promise<ValidationIssue[]> {
+    const merged = this.promotedDocumentOf(
+      args,
+      buildRestorePayload(
+        snapshot,
+        args.fields as unknown as FieldConfig[],
+        restoreCtx
+      ).payload
     );
     // Judged as ASSEMBLED, with nothing removed. A field this publisher may
     // not write is not a schema violation: the gate that judges permission
@@ -5863,6 +5971,147 @@ export class CollectionMutationService extends BaseService {
     return denied === null;
   }
 
+  /**
+   * An entry's document as stored, read on the write's transaction: the main
+   * row with its translations and its language's status, its components and
+   * its many-to-many values, in the read shape. What a write reports as
+   * `previous`, and what a promotion's field rules compare against as live.
+   */
+  private async storedDocumentOnTx(
+    tx: TransactionContext,
+    args: {
+      row: Record<string, unknown>;
+      collectionName: string;
+      entryId: string;
+      tableName: string;
+      fields: FieldDefinition[];
+      manyToManyFields: FieldDefinition[];
+      localizedUpdate: Awaited<
+        ReturnType<CollectionMutationService["splitLocalizedWriteData"]>
+      >;
+      locale: string | undefined;
+    }
+  ): Promise<{
+    document: Record<string, unknown>;
+    committedLocaleStatus: string | null;
+    /** The parts the document is assembled from. */
+    localizedValues: Record<string, unknown>;
+    parentRow: Record<string, unknown>;
+    components: Record<string, unknown>;
+    manyToMany: Record<string, string[]>;
+  }> {
+    const { localizedUpdate } = args;
+    // The main row holds no translatable values and, for a per-locale
+    // status, no current status either — both live in the companion.
+    // Without them `previous` would omit every localized field that
+    // `data` carries, so the diff would report untouched translations as
+    // changed and lose the old value of the ones that did change.
+    const previousLocalizedValues = localizedUpdate
+      ? await this.readCompanionLocalizedValues(
+          tx,
+          args.collectionName,
+          args.entryId,
+          localizedUpdate.writeLocale
+        )
+      : {};
+    // The locale's committed status, read before the write. Gated on
+    // `hasStatus` rather than on the patch carrying a status: a content-
+    // only translation update still has to report THIS locale's status,
+    // which can differ from the main row (a German draft under a
+    // published entry). The gate is what keeps the read safe — companion
+    // `_status` exists only on collections migrated for per-locale
+    // status, and querying it otherwise fails the whole write.
+    const committedLocaleStatus =
+      localizedUpdate && localizedUpdate.hasStatus
+        ? await this.readLocaleStatus(tx, localizedUpdate, args.entryId)
+        : null;
+    const previousCompanionStatus = committedLocaleStatus;
+    const previousParent = this.deserializeJsonFieldsForSnapshot(
+      {
+        ...convertTimestampsToCamelCase({
+          ...args.row,
+        }),
+        ...previousLocalizedValues,
+        ...(previousCompanionStatus !== null
+          ? { status: previousCompanionStatus }
+          : {}),
+      },
+      args.fields
+    );
+    this.redactSnapshotRow(previousParent, args.fields, args.tableName);
+    const { components: previousComponents, manyToMany: previousM2M } =
+      await this.buildFullSnapshotRelations(
+        tx,
+        args.entryId,
+        args.collectionName,
+        args.tableName,
+        args.fields,
+        args.manyToManyFields,
+        // The resolved write locale — see the create path.
+        localizedUpdate?.writeLocale ?? args.locale
+      );
+    const document = assembleDocument({
+      parentRow: previousParent,
+      components: previousComponents,
+      manyToMany: previousM2M,
+    });
+    return {
+      document,
+      committedLocaleStatus,
+      localizedValues: previousLocalizedValues,
+      parentRow: previousParent,
+      components: previousComponents,
+      manyToMany: previousM2M,
+    };
+  }
+
+  /**
+   * The document a promotion may write, judged by the field rules of the
+   * person publishing: every field they may write as the promotion has it,
+   * every field they may not at its live value — or a refusal naming each
+   * field the pending change edits that they may not write (code `FORBIDDEN`).
+   *
+   * One judgement for the publish, which writes what this returns under its
+   * row lock, and for a release's readiness, which reports the refusal ahead
+   * of the release's run.
+   */
+  private judgePromotionAccess(args: {
+    before: Record<string, unknown>;
+    live: Record<string, unknown>;
+    callerSupplied: Record<string, unknown>;
+    collectionName: string;
+    entryId: string;
+    user: UserContext | undefined;
+    authenticatedScope?: AuthenticatedScope;
+    overrideAccess?: boolean;
+    grants?: () => Promise<CallerGrants>;
+    fields: FieldDefinition[];
+    locale: string | null;
+  }): Promise<Record<string, unknown>> {
+    return resolvePromotedDocument({
+      before: args.before,
+      live: args.live,
+      callerSupplied: args.callerSupplied,
+      applyRules: document =>
+        applyFieldWriteAccess({
+          kind: "collection",
+          slug: args.collectionName,
+          data: document,
+          operation: "update",
+          user: args.user,
+          authenticatedScope: args.authenticatedScope,
+          overrideAccess: args.overrideAccess,
+          grants: args.grants,
+          id: args.entryId,
+        }),
+      // What the schema declares, so a field named like one of the store's
+      // own columns is still judged as the content it is.
+      authoredFieldNames: declaredFieldNames(args.fields),
+      slug: args.collectionName,
+      locale: args.locale,
+    });
+  }
+
   /** The stored rows of these entries that are there, keyed by id. */
   private async storedEntries(
     collectionName: string,
@@ -7277,64 +7526,25 @@ export class CollectionMutationService extends BaseService {
           // the working draft, whose undo point the draft save records.
           let captureBeforeRestore: (() => Promise<void>) | undefined;
           if (preUpdateRow) {
-            // The main row holds no translatable values and, for a per-locale
-            // status, no current status either — both live in the companion.
-            // Without them `previous` would omit every localized field that
-            // `data` carries, so the diff would report untouched translations as
-            // changed and lose the old value of the ones that did change.
-            const previousLocalizedValues = localizedUpdate
-              ? await this.readCompanionLocalizedValues(
-                  tx,
-                  params.collectionName,
-                  params.entryId,
-                  localizedUpdate.writeLocale
-                )
-              : {};
-            // The locale's committed status, read before the write. Gated on
-            // `hasStatus` rather than on the patch carrying a status: a content-
-            // only translation update still has to report THIS locale's status,
-            // which can differ from the main row (a German draft under a
-            // published entry). The gate is what keeps the read safe — companion
-            // `_status` exists only on collections migrated for per-locale
-            // status, and querying it otherwise fails the whole write.
-            committedLocaleStatus =
-              localizedUpdate && localizedUpdate.hasStatus
-                ? await this.readLocaleStatus(
-                    tx,
-                    localizedUpdate,
-                    params.entryId
-                  )
-                : null;
-            const previousCompanionStatus = committedLocaleStatus;
-            const previousParent = this.deserializeJsonFieldsForSnapshot(
-              {
-                ...convertTimestampsToCamelCase({
-                  ...(preUpdateRow as Record<string, unknown>),
-                }),
-                ...previousLocalizedValues,
-                ...(previousCompanionStatus !== null
-                  ? { status: previousCompanionStatus }
-                  : {}),
-              },
-              fields
-            );
-            this.redactSnapshotRow(previousParent, fields, tableName);
-            const { components: previousComponents, manyToMany: previousM2M } =
-              await this.buildFullSnapshotRelations(
-                tx,
-                params.entryId,
-                params.collectionName,
-                tableName,
-                fields,
-                manyToManyFields,
-                // The resolved write locale — see the create path.
-                localizedUpdate?.writeLocale ?? params.locale
-              );
-            previousDocument = assembleDocument({
+            const stored = await this.storedDocumentOnTx(tx, {
+              row: preUpdateRow as Record<string, unknown>,
+              collectionName: params.collectionName,
+              entryId: params.entryId,
+              tableName,
+              fields,
+              manyToManyFields,
+              localizedUpdate,
+              locale: params.locale,
+            });
+            previousDocument = stored.document;
+            committedLocaleStatus = stored.committedLocaleStatus;
+            const {
+              localizedValues: previousLocalizedValues,
               parentRow: previousParent,
               components: previousComponents,
               manyToMany: previousM2M,
-            });
+            } = stored;
+            const previousCompanionStatus = committedLocaleStatus;
 
             // On a restore, snapshot the document as it is NOW, before the
             // restore overwrites it: content written while versioning was off
@@ -7626,26 +7836,17 @@ export class CollectionMutationService extends BaseService {
               // field comes back at its LIVE value rather than removed: taking
               // the rules' own output would serialize a partial group over the
               // whole JSON column and clear a protected value nobody touched.
-              const promotedDocument = await resolvePromotedDocument({
+              const promotedDocument = await this.judgePromotionAccess({
                 before: mergedPromoteData,
                 live: previousDocument ?? {},
                 callerSupplied: callerContribution,
-                applyRules: document =>
-                  applyFieldWriteAccess({
-                    kind: "collection",
-                    slug: params.collectionName,
-                    data: document,
-                    operation: "update",
-                    user: params.user,
-                    authenticatedScope: params.authenticatedScope,
-                    overrideAccess: params.overrideAccess,
-                    grants: promoteGrants,
-                    id: params.entryId,
-                  }),
-                // What the schema declares, so a field named like one of the
-                // store's own columns is still judged as the content it is.
-                authoredFieldNames: declaredFieldNames(fields),
-                slug: params.collectionName,
+                collectionName: params.collectionName,
+                entryId: params.entryId,
+                user: params.user,
+                authenticatedScope: params.authenticatedScope,
+                overrideAccess: params.overrideAccess,
+                grants: promoteGrants,
+                fields,
                 locale: draftLocaleKey ?? params.locale ?? null,
               });
               const draftParts = this.shapeWriteParts(

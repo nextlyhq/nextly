@@ -53,6 +53,7 @@ import {
   SYSTEM_TIMESTAMP_KEYS,
   convertTimestampsToCamelCase,
 } from "../../../shared/lib/case-conversion";
+import { refusalIssues } from "../../../shared/lib/denied-change";
 import {
   validateEntryData,
   type ValidationIssue,
@@ -511,7 +512,7 @@ export class SingleMutationService extends BaseService {
       const localizedFieldNames = new Set(
         (companion?.localizedFields ?? []).map(f => f.name)
       );
-      const issues = await forbiddenAsIssues(() =>
+      const issues = await refusalIssues(() =>
         promotionIssues(drafts, {
           ...promoteCallerFor({
             tx,
@@ -3294,32 +3295,5 @@ export class SingleMutationService extends BaseService {
       locale,
       cachedCompanionReadiness(this.adapter, companion.companionTableName)
     );
-  }
-}
-
-/**
- * The issues a promotion is refused with, whether the gate returns them or
- * throws them.
- *
- * The gate returns what the schema refuses and throws when a field rule
- * forbids the change, since a publish must not go on past a forbidden field.
- * A readiness check reports both, so the thrown refusal's own issues are read
- * back rather than restated.
- */
-async function forbiddenAsIssues(
-  judge: () => Promise<ValidationIssue[]>
-): Promise<ValidationIssue[]> {
-  try {
-    return await judge();
-  } catch (error) {
-    const data = NextlyError.is(error) ? error.publicData : undefined;
-    if (
-      NextlyError.isCode(error, "VALIDATION_ERROR") &&
-      data !== undefined &&
-      "errors" in data
-    ) {
-      return data.errors;
-    }
-    throw error;
   }
 }

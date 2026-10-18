@@ -68,6 +68,27 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
         },
         fields: [text({ name: "title" })],
       }),
+      // Kept as drafts, with a field only the editor-in-chief may write.
+      defineCollection({
+        slug: "dossiers",
+        status: true,
+        versions: { drafts: true },
+        access: {
+          read: () => true,
+          update: () => true,
+          publish: () => true,
+          unpublish: () => true,
+        },
+        fields: [
+          text({ name: "title" }),
+          text({
+            name: "guarded",
+            access: {
+              update: ({ req }) => req.user?.email === "chief@example.com",
+            },
+          }),
+        ],
+      }),
       // Its draft/published lifecycle is turned off part-way through a case.
       defineCollection({
         slug: "seasonal",
@@ -141,7 +162,13 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
 /** A document, stored through the ordinary write. */
 async function entry(
   t: TestNextly,
-  collection: "articles" | "notices" | "memos" | "scratch" | "seasonal",
+  collection:
+    | "articles"
+    | "notices"
+    | "memos"
+    | "scratch"
+    | "seasonal"
+    | "dossiers",
   status: "draft" | "published" = "draft"
 ): Promise<string> {
   const handler = t.getService("collectionsHandler") as CollectionsHandler;
@@ -175,7 +202,13 @@ async function releaseOf(
   t: TestNextly,
   author: string,
   documents: Array<{
-    collection: "articles" | "notices" | "memos" | "scratch" | "seasonal";
+    collection:
+      | "articles"
+      | "notices"
+      | "memos"
+      | "scratch"
+      | "seasonal"
+      | "dossiers";
     id: string;
     action?: "publish" | "unpublish";
   }>
@@ -361,6 +394,52 @@ describe.each(getConfiguredTestDialects())(
           detail: { fields: ["headline"] },
         }),
       ]);
+    });
+
+    it("reports a collection's pending change to a field the author may not write, as its publish refuses it", async () => {
+      const t = await boot(dialect);
+      const author = await seedPlainAuthor(t);
+      const id = await entry(t, "dossiers", "published");
+      // A trusted edit holds a change to the guarded field as pending work.
+      await t.nextly.update({
+        collection: "dossiers" as never,
+        id,
+        data: { guarded: "secret" } as never,
+      });
+      const { releaseId, memberIds } = await releaseOf(t, author, [
+        { collection: "dossiers", id },
+      ]);
+
+      // The publish itself, as the author, refuses the guarded field.
+      const authorUser = (await t.nextly.users.findByID({
+        id: author,
+      })) as unknown as { email: string };
+      await expect(
+        t.nextly.update({
+          collection: "dossiers" as never,
+          id,
+          data: { status: "published" } as never,
+          overrideAccess: false,
+          user: { id: author, email: authorUser.email, roles: [] },
+        } as never)
+      ).rejects.toMatchObject({ code: "VALIDATION_ERROR" });
+
+      expect((await t.nextly.releases.readiness({ releaseId })).hard).toEqual([
+        expect.objectContaining({
+          memberId: memberIds[0],
+          code: "FIELD_NOT_PERMITTED",
+          detail: { fields: ["guarded"] },
+        }),
+      ]);
+      expect(
+        await problemsOf(
+          t.nextly.releases.schedule({
+            id: releaseId,
+            at: LATER,
+            timezone: "UTC",
+          })
+        )
+      ).toEqual([{ memberId: memberIds[0], code: "FIELD_NOT_PERMITTED" }]);
     });
 
     it("reports a pending change to a field the author may not write, and refuses to schedule", async () => {
