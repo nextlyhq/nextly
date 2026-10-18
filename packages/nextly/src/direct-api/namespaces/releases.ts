@@ -37,6 +37,7 @@ import type {
   FindReleasesQuery,
   ReleaseBlocker,
   ReleaseCountQuery,
+  ReleaseDetailsChange,
   ReleasesService,
 } from "../../domains/releases/services/releases-service";
 import { NextlyError } from "../../errors/nextly-error";
@@ -241,6 +242,28 @@ export interface ReleasesNamespace {
    * @experimental
    */
   publishNow(args: { id: string } & ReleaseCallerArgs): Promise<ReleaseRow>;
+  /**
+   * Rename a release, change its description (`null` clears it), or both,
+   * and answer the release as it now reads. Needs `update-content-releases`
+   * on a checked call, and works in any state.
+   *
+   * @experimental
+   */
+  update(
+    args: { id: string } & ReleaseDetailsChange & ReleaseCallerArgs
+  ): Promise<ReleaseRow>;
+  /**
+   * Delete a release that never ran, with its documents: a draft, or a
+   * release cancelled before it was ever scheduled. Needs
+   * `delete-content-releases` on a checked call. Any other release is
+   * refused with CONFLICT, the reason in the error's data: scheduled or
+   * stopped (`committed`), published (`published`), or cancelled after being
+   * scheduled (`was-scheduled`). A release that is not there is NOT_FOUND.
+   * Answers the release as it was when deleted.
+   *
+   * @experimental
+   */
+  delete(args: { id: string } & ReleaseCallerArgs): Promise<ReleaseRow>;
 }
 
 /**
@@ -433,5 +456,16 @@ export function createReleasesNamespace(ctx: NextlyContext): ReleasesNamespace {
     cancel: args => service().cancel(args.id, actorOf(ctx, args)),
 
     publishNow: args => service().publishNow(args.id, actorOf(ctx, args)),
+
+    update: args => {
+      // Only the two fields, named rather than spread: a spread of the rest
+      // would hand the service the caller keys as part of the change.
+      const change: ReleaseDetailsChange = {};
+      if ("title" in args) change.title = args.title;
+      if ("description" in args) change.description = args.description;
+      return service().update(args.id, change, actorOf(ctx, args));
+    },
+
+    delete: args => service().delete(args.id, actorOf(ctx, args)),
   };
 }
