@@ -265,6 +265,7 @@ import {
   loadBuilderEntities,
   loadDynamicTables,
 } from "./load-dynamic-tables";
+import { forgetRegisteredLocalization } from "./registered-localization";
 import {
   registerAuthServices,
   registerCollectionServices,
@@ -4651,6 +4652,8 @@ async function releaseServices(opts: {
     // instance in the same process appends a fresh copy of every handler and
     // runs the dead instance's alongside the new one.
     clearActiveHookRegistry();
+    // The block these services were built from describes them alone.
+    forgetRegisteredLocalization();
     globalForReg.__nextly_isRegistered = false;
   }
 }
