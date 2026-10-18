@@ -329,6 +329,10 @@ export function buildAuthRouterDeps(
         // Setup creates the administrator's account; it never adopts one that
         // already holds the address, which may be a stranger's sign-up.
         reuseExistingAccount: false,
+        // Nor does it hand out the role itself: the account is the
+        // administrator only if its creation won the first-administrator
+        // grant, which one of any setups racing on an empty install wins.
+        assignRole: false,
       });
 
       if (!result.success) {
@@ -346,11 +350,18 @@ export function buildAuthRouterDeps(
         .where(eq(schema.users.email, normalizeAccountEmail(data.email)))
         .limit(1);
 
-      return {
-        id: users[0]?.id || "",
-        email: data.email,
-        name: data.name,
-      };
+      const id = users[0]?.id ? String(users[0].id) : "";
+      const { superAdminRoleHeldBy } = await import(
+        "../../domains/users/services/last-super-admin"
+      );
+      if (!id || !(await superAdminRoleHeldBy(db, schema, id))) {
+        // This setup lost the race: another made the administrator first.
+        // Its account goes, so the setup's address and password open nothing.
+        if (id) await db.delete(schema.users).where(eq(schema.users.id, id));
+        return null;
+      }
+
+      return { id, email: data.email, name: data.name };
     },
 
     seedPermissions: async () => {

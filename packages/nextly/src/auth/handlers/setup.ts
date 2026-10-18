@@ -61,11 +61,16 @@ export interface SetupHandlerDeps {
     spend: () => Promise<void>;
     claim: () => Promise<{ release: () => Promise<void> } | null>;
   };
+  /**
+   * Create the administrator's account, or answer null when another setup
+   * created the administrator first: of setups racing on an empty install,
+   * exactly one is made the administrator, and the others create nothing.
+   */
   createSuperAdmin: (data: {
     email: string;
     name: string;
     password: string;
-  }) => Promise<{ id: string; email: string; name: string }>;
+  }) => Promise<{ id: string; email: string; name: string } | null>;
   /** The roles in force, and when the first of them lapses; see `SessionRoles`. */
   fetchSessionRoles: (userId: string) => Promise<SessionRoles>;
   seedPermissions: () => Promise<void>;
@@ -271,7 +276,10 @@ export async function handleSetup(
   try {
     if (await deps.hasAdministrator()) return setupCompleteResponse();
     // Create super admin (seeds permissions internally, hashes password internally)
-    user = await deps.createSuperAdmin({ email, name, password });
+    const created = await deps.createSuperAdmin({ email, name, password });
+    // Another setup made the administrator while this one was creating it.
+    if (!created) return setupCompleteResponse();
+    user = created;
     // Spent with the administrator's creation: no token opens setup again.
     await deps.setupToken.spend();
   } finally {

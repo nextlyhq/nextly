@@ -38,6 +38,14 @@ export async function seedSuperAdmin(
      * sign in as the administrator, so it is refused instead.
      */
     reuseExistingAccount?: boolean;
+    /**
+     * Whether the seeder gives the account the Super Admin role itself. True
+     * by default. False for setup: the account then becomes the administrator
+     * only through the first-administrator grant its creation makes under the
+     * role row's lock, which exactly one of any accounts created together
+     * wins, so a setup that lost a race is not made a second administrator.
+     */
+    assignRole?: boolean;
   }
 ): Promise<SeederResult> {
   // `name` keeps a harmless display default; credentials never do.
@@ -51,6 +59,7 @@ export async function seedSuperAdmin(
     name = "Super Admin",
     silent = false,
     reuseExistingAccount = true,
+    assignRole = true,
   } = options || {};
 
   // Fail closed: require real credentials rather than falling back to a
@@ -219,7 +228,18 @@ export async function seedSuperAdmin(
       created += assignedCount;
     }
 
-    // Step 5: Assign Super Admin role to user
+    // Step 5: Assign Super Admin role to user, unless the caller leaves that
+    // to the first-administrator grant.
+    if (!assignRole) {
+      return {
+        success: true,
+        created,
+        skipped,
+        errors,
+        total: created + skipped + errors,
+        errorMessages,
+      };
+    }
     log("\n Assigning Super Admin role to user...");
     const userRoleResult = await userRoleService.assignRoleToUser(
       userId,

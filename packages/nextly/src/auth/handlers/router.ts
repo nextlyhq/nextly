@@ -270,7 +270,7 @@ export interface AuthRouterDeps {
     email: string;
     name: string;
     password: string;
-  }) => Promise<{ id: string; email: string; name: string }>;
+  }) => Promise<{ id: string; email: string; name: string } | null>;
   seedPermissions: () => Promise<void>;
 
   // These throw NextlyError on failure and return the success-case data
