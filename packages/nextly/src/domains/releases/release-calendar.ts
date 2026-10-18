@@ -202,8 +202,14 @@ function dateOf(dayNumber: number): string {
 
 /** What a clock in a zone reads at an instant. */
 interface WallReading {
-  /** The local date, `YYYY-MM-DD`. */
-  date: string;
+  /**
+   * The local date, as a count of days since 1970-01-01.
+   *
+   * A number rather than `YYYY-MM-DD`, because dates are compared: as text,
+   * the day after 9999-12-31 is 10000-01-01, which sorts before every
+   * four-digit year.
+   */
+  dayNumber: number;
   /** The local date and time, read as if it were UTC, in milliseconds. */
   wallMs: number;
 }
@@ -231,7 +237,7 @@ function clockIn(zone: string): (ms: number) => WallReading {
       Number(parts.find(part => part.type === type)?.value ?? "0");
     const [year, month, day] = [read("year"), read("month"), read("day")];
     return {
-      date: dateOf(Math.round(utcMs(year, month, day) / DAY_MS)),
+      dayNumber: Math.round(utcMs(year, month, day) / DAY_MS),
       // `% 24`: some engines write midnight as 24 even under `h23`.
       wallMs: utcMs(
         year,
@@ -258,8 +264,7 @@ function clockIn(zone: string): (ms: number) => WallReading {
  * instant in, so the database and {@link tallyByDay} compare it alike.
  */
 function startOfDay(clock: (ms: number) => WallReading, dayNumber: number) {
-  const date = dateOf(dayNumber);
-  const reached = (ms: number) => clock(ms).date >= date;
+  const reached = (ms: number) => clock(ms).dayNumber >= dayNumber;
   const naive = dayNumber * DAY_MS;
   const offsetAt = (ms: number) => clock(ms).wallMs - ms;
 

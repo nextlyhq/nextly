@@ -196,6 +196,32 @@ describe("placing a release on its day", () => {
   });
 });
 
+describe("the last day a date can be written", () => {
+  // The day after 9999-12-31 is 10000-01-01, which sorts BEFORE every
+  // four-digit year as text. A comparison of dates as strings then reads every
+  // instant of the last day as already past the next, and ends that day where
+  // it began.
+  const END_OF_9999 = new Date(0);
+  END_OF_9999.setUTCFullYear(10000, 0, 1);
+
+  it("ends a window on 9999-12-31 at the start of the year 10000", () => {
+    const days = zonedDays({
+      from: "9999-12-30",
+      to: "9999-12-31",
+      timezone: "UTC",
+    });
+    expect(days.map(day => day.date)).toEqual(["9999-12-30", "9999-12-31"]);
+    expect(days[1].end.getTime()).toBe(END_OF_9999.getTime());
+    expect(days[1].end.getTime() - days[1].start.getTime()).toBe(24 * HOUR);
+  });
+
+  it("gives the day filter's 9999-12-31 its whole 24 hours, in a zone too", () => {
+    const day = zonedDay({ date: "9999-12-31", timezone: "Europe/Berlin" });
+    expect(day.end.getTime() - day.start.getTime()).toBe(24 * HOUR);
+    expect(day.end.getTime()).toBe(END_OF_9999.getTime() - HOUR);
+  });
+});
+
 describe("a calendar window", () => {
   const zone = { timezone: "Europe/Berlin" };
 
