@@ -28,6 +28,7 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import type { SetupTokenMeta } from "../../../auth/setup-token/setup-token";
 import { createFirstAdministrator, firstAdminSetupFor } from "../create-admin";
 
 const ORIGIN = "http://localhost:3000";
@@ -74,8 +75,15 @@ describe.each(getConfiguredTestDialects())(
       return current;
     }
 
+    /**
+     * The command's steps over the harness's adapter, with the install's own
+     * meta service: the store web setup's claim and token are kept in.
+     */
     function setupOf(t: TestNextly) {
-      return firstAdminSetupFor(t.adapter as unknown as DrizzleAdapter);
+      return firstAdminSetupFor(
+        t.adapter as unknown as DrizzleAdapter,
+        t.getService("metaService") as SetupTokenMeta
+      );
     }
 
     function db(t: TestNextly): UsersDb {

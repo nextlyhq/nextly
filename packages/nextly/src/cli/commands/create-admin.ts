@@ -41,11 +41,17 @@ import { z } from "zod";
 
 import { normalizeAccountEmail } from "../../auth/credentials/account-email";
 import { validatePasswordStrength } from "../../auth/password";
+import { claimFirstSetup } from "../../auth/setup-token/setup-gate";
+import {
+  spendSetupToken,
+  type SetupTokenMeta,
+} from "../../auth/setup-token/setup-token";
 import { getDialectTables } from "../../database/index";
 import { SchemaRegistry } from "../../database/schema-registry";
 import { seedPermissions } from "../../database/seeders/permissions";
 import { seedSuperAdmin } from "../../database/seeders/super-admin";
 import { getFieldGroupRegistryAliases } from "../../domains/field-groups/storage/registry-schemas";
+import { MetaService } from "../../domains/meta/services/meta-service";
 import { superAdminRoleHeld } from "../../domains/users/services/last-super-admin";
 import { describeError } from "../../errors/index";
 import { NextlyError } from "../../errors/nextly-error";
@@ -123,13 +129,19 @@ interface AccountLookup {
   };
 }
 
-/** The first-administrator steps over the CLI's own connection. */
-export function firstAdminSetupFor(adapter: DrizzleAdapter): FirstAdminSetup {
+/**
+ * The first-administrator steps over the CLI's own connection. `meta` is the
+ * install's `nextly_meta` row store, where web setup keeps its claim and its
+ * token, so the command and a web setup arriving together share one claim.
+ */
+export function firstAdminSetupFor(
+  adapter: DrizzleAdapter,
+  meta: SetupTokenMeta
+): FirstAdminSetup {
   const tables = getDialectTables(adapter.getCapabilities().dialect);
   return {
-    // No setup claim to share in this build: the command alone holds the
-    // install while it runs.
-    claim: () => Promise.resolve({ release: () => undefined }),
+    // The claim web setup takes, so exactly one of them proceeds.
+    claim: () => claimFirstSetup(meta),
     // The question web setup asks, through the same query.
     administratorExists: () => superAdminRoleHeld(adapter.getDrizzle(), tables),
     async accountExists(email) {
@@ -158,8 +170,9 @@ export function firstAdminSetupFor(adapter: DrizzleAdapter): FirstAdminSetup {
         });
       }
     },
-    // No stored setup token to spend in this build.
-    spendSetupToken: () => Promise.resolve(),
+    // Web setup spends the stored token once it has its administrator; so
+    // does the command, so no token is left to open setup again.
+    spendSetupToken: () => spendSetupToken(meta),
   };
 }
 
@@ -291,7 +304,7 @@ export async function runCreateAdmin(
  * Connect to the database the install's environment names, with the system
  * tables registered so the account services can resolve them.
  */
-async function connectToInstall(): Promise<{
+async function connectToInstall(logger: CommandContext["logger"]): Promise<{
   setup: FirstAdminSetup;
   close(): Promise<void>;
 }> {
@@ -316,11 +329,14 @@ async function connectToInstall(): Promise<{
     ...getFieldGroupRegistryAliases(dialect),
   });
   adapter.setTableResolver(registry);
-  return { setup: firstAdminSetupFor(adapter), close: () => cli.disconnect() };
+  return {
+    setup: firstAdminSetupFor(adapter, new MetaService(adapter, logger)),
+    close: () => cli.disconnect(),
+  };
 }
 
 /** The terminal and environment the command runs with. */
-function processIo(): CreateAdminIo {
+function processIo(logger: CommandContext["logger"]): CreateAdminIo {
   const answer = (value: string | symbol): string | null =>
     p.isCancel(value) ? null : value;
   return {
@@ -328,7 +344,7 @@ function processIo(): CreateAdminIo {
     interactive: Boolean(process.stdin.isTTY && process.stdout.isTTY),
     askSecret: async message => answer(await p.password({ message })),
     ask: async message => answer(await p.text({ message })),
-    connect: connectToInstall,
+    connect: () => connectToInstall(logger),
   };
 }
 
@@ -347,7 +363,11 @@ export function registerCreateAdminCommand(
     .action(async (options: CreateAdminOptions, cmd: Command) => {
       const context = createContext(cmd.optsWithGlobals());
       try {
-        process.exitCode = await runCreateAdmin(options, context, processIo());
+        process.exitCode = await runCreateAdmin(
+          options,
+          context,
+          processIo(context.logger)
+        );
       } catch (error) {
         context.logger.error(describeError(error));
         process.exitCode = 1;
