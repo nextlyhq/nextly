@@ -18,6 +18,7 @@ import {
 } from "../../schemas/content-events";
 import { toJsonColumnValue } from "../../shared/lib/json-column-value";
 import { uuidV7 } from "../../utils/uuid-v7";
+import { isConfigurableLocaleCode } from "../i18n/config/validate";
 import type { VersionsDbApi } from "../versions/db-api";
 
 import type { ContentEventActor } from "./actor";
@@ -136,6 +137,15 @@ function checkedPayload(
       { kind: kind.name }
     );
   }
+  // What the schema produced has to survive the JSON column unchanged: a
+  // Date would read back as a string, an undefined field would vanish, and a
+  // bigint cannot be written at all.
+  if (!isJsonValue(parsed.data)) {
+    refuse(
+      `The payload of a "${kind.name}" event must be plain JSON: strings, finite numbers, booleans, null, arrays and plain objects.`,
+      { kind: kind.name }
+    );
+  }
   if (
     Buffer.byteLength(JSON.stringify(parsed.data), "utf8") > MAX_PAYLOAD_BYTES
   ) {
@@ -161,16 +171,53 @@ function refuseReleaseParts(input: ContentEventInput): void {
   }
 }
 
+/** The largest version number the column holds on every dialect. */
+const MAX_VERSION_NO = 2_147_483_647;
+
+/**
+ * The version an event names, refused unless the integer column holds it on
+ * every dialect: PostgreSQL and MySQL keep a signed 32-bit integer, and
+ * SQLite would store a fraction or a larger number they refuse.
+ */
+function checkedVersionNo(versionNo: number | null | undefined): number | null {
+  if (versionNo === undefined || versionNo === null) return null;
+  if (
+    !Number.isInteger(versionNo) ||
+    versionNo < 1 ||
+    versionNo > MAX_VERSION_NO
+  ) {
+    refuse("A content event's version must be a whole number from 1.", {
+      versionNo,
+    });
+  }
+  return versionNo;
+}
+
+/** Whether a value is JSON as it will be read back: nothing lost or changed. */
+function isJsonValue(value: unknown): boolean {
+  if (
+    value === null ||
+    typeof value === "string" ||
+    typeof value === "boolean"
+  ) {
+    return true;
+  }
+  if (typeof value === "number") return Number.isFinite(value);
+  if (Array.isArray(value)) return value.every(isJsonValue);
+  if (typeof value !== "object") return false;
+  const proto: unknown = Object.getPrototypeOf(value);
+  if (proto !== Object.prototype && proto !== null) return false;
+  return Object.values(value).every(isJsonValue);
+}
+
 /** The event's part values: each language once, and the shared marker. */
 function partValues(input: ContentEventInput): string[] {
   refuseReleaseParts(input);
   const locales = [...new Set(input.parts?.locales ?? [])];
   for (const locale of locales) {
-    if (
-      locale.length === 0 ||
-      locale.length > MAX_PART_LENGTH ||
-      locale.startsWith("~")
-    ) {
+    // A language as configuration would accept one, and short enough for
+    // the part column on every dialect.
+    if (!isConfigurableLocaleCode(locale) || locale.length > MAX_PART_LENGTH) {
       refuse(`"${locale}" is not a language a content event can involve.`, {
         locale,
       });
@@ -205,6 +252,7 @@ export async function recordContentEvent(
     note: input.note ?? null,
   };
   checkLengths(bounded);
+  const versionNo = checkedVersionNo(input.versionNo);
   const id = uuidV7();
   const endsSubject = kind.endsSubject === true;
   if (endsSubject) {
@@ -237,7 +285,7 @@ export async function recordContentEvent(
     endedBy: endsSubject ? id : null,
     actorKind: actor.kind,
     occurredAt: new Date(),
-    versionNo: input.versionNo ?? null,
+    versionNo,
     // Encoded for the JSON column as every write path encodes one: a raw
     // object reaches MySQL as text it rejects.
     payload: toJsonColumnValue(payload),

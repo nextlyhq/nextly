@@ -207,7 +207,17 @@ describe("recordContentEvent refuses before writing", () => {
 
   it("a part that is not a language", async () => {
     const { tx, inserts } = capturingTx();
-    for (const locale of ["", "~shared", "x".repeat(36)]) {
+    // Empty, the shared marker's own spelling, too long for the column, the
+    // all-languages selector, the reserved words, and a space.
+    for (const locale of [
+      "",
+      "~shared",
+      "x".repeat(36),
+      "*",
+      "all",
+      "none",
+      "en US",
+    ]) {
       await expect(
         recordContentEvent(tx, { ...base, parts: { locales: [locale] } })
       ).rejects.toMatchObject({ code: "INVALID_INPUT" });
@@ -249,6 +259,54 @@ describe("recordContentEvent refuses before writing", () => {
       ...base,
       subject: release,
       parts: { locales: [] },
+    });
+    expect(inserts).toHaveLength(1);
+  });
+
+  it("a version the integer column cannot hold on every dialect", async () => {
+    const { tx, inserts } = capturingTx();
+    for (const versionNo of [0, -1, 1.5, 2_147_483_648, Number.NaN]) {
+      await expect(
+        recordContentEvent(tx, { ...base, versionNo })
+      ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+    }
+    expect(inserts).toEqual([]);
+    await recordContentEvent(tx, { ...base, versionNo: 2_147_483_647 });
+    expect(inserts[0]?.row.versionNo).toBe(2_147_483_647);
+  });
+
+  it("a payload the JSON column would change or could not store", async () => {
+    registerContentEventKind({
+      name: "dated",
+      label: "Dated",
+      payload: z.object({ at: z.date() }),
+    });
+    registerContentEventKind({
+      name: "maybe",
+      label: "Maybe",
+      payload: z.object({ note: z.string().optional() }),
+    });
+    registerContentEventKind({
+      name: "counted",
+      label: "Counted",
+      payload: z.object({ n: z.bigint() }),
+    });
+    const { tx, inserts } = capturingTx();
+    for (const input of [
+      { kind: "dated", payload: { at: new Date() } },
+      { kind: "maybe", payload: { note: undefined } },
+      { kind: "counted", payload: { n: 1n } },
+    ]) {
+      await expect(
+        recordContentEvent(tx, { ...base, ...input })
+      ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+    }
+    expect(inserts).toEqual([]);
+    // Plain JSON goes through, nested and all.
+    await recordContentEvent(tx, {
+      ...base,
+      kind: "maybe",
+      payload: { note: "kept" },
     });
     expect(inserts).toHaveLength(1);
   });

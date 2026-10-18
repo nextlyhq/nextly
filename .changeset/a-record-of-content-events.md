@@ -40,5 +40,9 @@ features that write them, and an event is written in the same transaction as
 the change it records. Nothing writes events yet. A subject's events are kept
 while it exists, and removed once the activity log's retention window has
 passed since its deletion, by the write paths' retention pass and the
-scheduled drain alike. Two new core tables, `nextly_content_events` and
+scheduled drain alike. Deleting a staff account removes its name from the
+events it performed and keeps its id as an opaque reference, as the audit
+trail does; a plugin reporting one of its people deleted removes their name
+and replaces their id with the keyed digest the audit trail names them by.
+Two new core tables, `nextly_content_events` and
 `nextly_content_event_parts`, are created by `nextly migrate`.
