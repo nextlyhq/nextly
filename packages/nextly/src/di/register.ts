@@ -76,6 +76,7 @@ import { withRateLimitStoreDeadline } from "../domains/limits/call-deadline";
 import { watchCoreLimitOutage } from "../domains/limits/core-limit-outage";
 import { coreLimitStore } from "../domains/limits/core-limit-store";
 import type { LimitStore } from "../domains/limits/limit-store";
+import { limitsInMemoryWarning } from "../domains/limits/limits-in-memory-warning";
 import { selectLimitStore } from "../domains/limits/select-limit-store";
 import type { MetaService } from "../domains/meta";
 import type { NoticesService } from "../domains/notices/notices-service";
@@ -838,6 +839,14 @@ async function registerServicesOnce(
   // without client addresses and nothing else would tell its operator.
   const edgeWarning = edgeProxyWarning(transformedConfig);
   if (edgeWarning) resolvedLogger.warn?.(edgeWarning);
+  // Likewise a production start whose limits count in one process's memory:
+  // each instance would count a budget of its own, and nothing at the limit
+  // can tell whether the site runs one.
+  const memoryWarning = limitsInMemoryWarning(
+    transformedConfig,
+    process.env.NODE_ENV === "production"
+  );
+  if (memoryWarning) resolvedLogger.warn?.(memoryWarning);
   // Likewise each configured auth strategy the sign-in limiter cannot ask
   // which account a request names: its sign-ins are limited by email instead.
   for (const warning of unkeyedStrategyWarnings(transformedConfig)) {
