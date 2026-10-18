@@ -138,14 +138,19 @@ export async function handleSetupStatus(
 }
 
 /** The refusal for a setup token that does not open setup now. */
-function tokenRequiredResponse(): Response {
-  return jsonResponse(403, {
-    error: {
-      code: "SETUP_TOKEN_REQUIRED",
-      message:
-        "A valid setup token is required. Find it in the server's output, or set NEXTLY_SETUP_TOKEN.",
-    },
-  });
+function tokenRequiredResponse(request: Request): Response {
+  return setupTokenError(
+    request,
+    "A valid setup token is required. Find it in the server's output, or set NEXTLY_SETUP_TOKEN."
+  );
+}
+
+/** SETUP_TOKEN_REQUIRED, through the auth routes' error envelope. */
+function setupTokenError(request: Request, publicMessage: string): Response {
+  return buildAuthErrorResponse(
+    new NextlyError({ code: "SETUP_TOKEN_REQUIRED", publicMessage }),
+    readOrGenerateRequestId(request)
+  );
 }
 
 /**
@@ -153,29 +158,56 @@ function tokenRequiredResponse(): Response {
  * valid token, or an install whose setup needs none. Wrong, missing and
  * expired tokens are answered alike.
  */
-function setupTokenRefusal(verdict: SetupVerdict): Response | null {
+function setupTokenRefusal(
+  verdict: SetupVerdict,
+  request: Request
+): Response | null {
   if (verdict === "closed") {
-    return jsonResponse(403, {
-      error: {
-        code: "SETUP_TOKEN_REQUIRED",
-        message:
-          "Setup is closed: the setup token configured for this install is too weak. See the server's output.",
-      },
-    });
+    return setupTokenError(
+      request,
+      "Setup is closed: the setup token configured for this install is too weak. See the server's output."
+    );
   }
-  return verdict === "invalid" ? tokenRequiredResponse() : null;
+  return verdict === "invalid" ? tokenRequiredResponse(request) : null;
 }
 
 /** A token's verdict, or that this install's setup needs none. */
 type SetupVerdict = TokenVerdict | "not-required";
 
 /**
+ * The setup request's JSON body (an empty one when it is not an object), and
+ * the error a body that is not JSON fails with once it has been counted.
+ */
+async function parseSetupBody(request: Request): Promise<{
+  body: Awaited<ReturnType<Request["json"]>>;
+  malformed?: Error;
+}> {
+  try {
+    const body: Awaited<ReturnType<Request["json"]>> = await request.json();
+    return { body: body !== null && typeof body === "object" ? body : {} };
+  } catch (error) {
+    return {
+      body: {},
+      malformed:
+        error instanceof Error
+          ? error
+          : NextlyError.validation({
+              errors: [
+                { path: "", code: "INVALID_JSON", message: "Invalid JSON" },
+              ],
+            }),
+    };
+  }
+}
+
+/**
  * The request's body and its token's verdict, read before setup does any
- * work. A request without a valid token is counted against the auth limit
- * here, so every refusal after it (setup already complete, a CSRF failure, a
- * weak or wrong token, a bad body) has spent the budget before the
- * administrator is looked up, while a valid token goes on whatever the budget
- * holds. A body that is not JSON is counted, then fails as it always did.
+ * work. Where setup needs a token, a request without a valid one is counted
+ * against the auth limit here, so every refusal after it (setup already
+ * complete, a CSRF failure, a weak or wrong token, a bad body) has spent the
+ * budget before the administrator is looked up, while a valid token goes on
+ * whatever the budget holds. A body that is not JSON is counted, then fails
+ * as it always did.
  */
 async function readSetupRequest(
   request: Request,
@@ -186,26 +218,13 @@ async function readSetupRequest(
   | Response
 > {
   const forLimiter = request.clone();
-  let body: Awaited<ReturnType<Request["json"]>> = {};
-  let malformed: Error | undefined;
-  try {
-    body = await request.json();
-  } catch (error) {
-    malformed =
-      error instanceof Error
-        ? error
-        : NextlyError.validation({
-            errors: [
-              { path: "", code: "INVALID_JSON", message: "Invalid JSON" },
-            ],
-          });
-  }
-  const presented =
-    body !== null && typeof body === "object" ? body.setupToken : undefined;
+  const { body, malformed } = await parseSetupBody(request);
   const verdict: SetupVerdict = setupToken.required
-    ? await setupToken.verify(presented)
+    ? await setupToken.verify(body.setupToken)
     : "not-required";
-  if (verdict !== "valid") {
+  // A setup that needs no token (outside production) has no token to judge,
+  // so it is not held to the limit: it behaves as it always has.
+  if (verdict === "invalid" || verdict === "closed") {
     const limited = await limit(forLimiter);
     if (limited) return limited;
   }
@@ -301,7 +320,7 @@ export async function handleSetup(
   );
   if (csrfRefused) return csrfRefused;
 
-  const tokenRefused = setupTokenRefusal(verdict);
+  const tokenRefused = setupTokenRefusal(verdict, request);
   if (tokenRefused) return tokenRefused;
 
   const inputRefused = setupInputRefusal(body, request);
@@ -324,7 +343,7 @@ export async function handleSetup(
       verdict !== "not-required" &&
       (await deps.setupToken.confirm(body.setupToken)) !== "valid"
     ) {
-      return tokenRequiredResponse();
+      return tokenRequiredResponse(request);
     }
     // Create super admin (seeds permissions internally, hashes password internally)
     const created = await deps.createSuperAdmin({ email, name, password });

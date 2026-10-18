@@ -69,6 +69,10 @@ import type { AuthRouterDeps } from "./router";
 import type { SessionRowTransaction } from "./session-row";
 import type { SetupHandlerDeps } from "./setup";
 
+/** The router's dependencies as Nextly builds them: always with a setup token store. */
+export type BridgedAuthRouterDeps = AuthRouterDeps &
+  Required<Pick<AuthRouterDeps, "setupToken">>;
+
 /**
  * Build AuthRouterDeps from the DI container services.
  * Call this after services are initialized (ensureServicesInitialized).
@@ -78,10 +82,10 @@ import type { SetupHandlerDeps } from "./setup";
 export function buildAuthRouterDeps(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   getService: (name: string) => any
-): AuthRouterDeps {
+): BridgedAuthRouterDeps {
   const credentialDeps = passwordCredentialDeps(() => getService("adapter"));
   const base: Omit<
-    AuthRouterDeps,
+    BridgedAuthRouterDeps,
     | "authStrategies"
     | "authHooks"
     | "challengeRegistry"

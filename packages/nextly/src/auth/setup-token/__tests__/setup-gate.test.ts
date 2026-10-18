@@ -49,6 +49,22 @@ describe("the setup claim", () => {
     expect(await claimFirstSetup(meta)).not.toBeNull();
   });
 
+  it("is never taken over while its holder is still running, however long that takes", async () => {
+    vi.useFakeTimers();
+    try {
+      const meta = memoryMeta();
+      const held = await claimFirstSetup(meta);
+      expect(held).not.toBeNull();
+      // Twice the stale age, with the holder renewing all along.
+      await vi.advanceTimersByTimeAsync(SETUP_CLAIM_STALE_MS * 2);
+      expect(await claimFirstSetup(meta)).toBeNull();
+      await held?.release();
+      expect(await claimFirstSetup(meta)).not.toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("is taken over once it is stale, so a setup that stopped halfway does not close setup", async () => {
     const meta = memoryMeta();
     const t0 = 1_000_000;

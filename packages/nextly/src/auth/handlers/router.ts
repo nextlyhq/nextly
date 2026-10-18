@@ -73,6 +73,30 @@ const RATE_LIMITED_AUTH_PATHS = new Set([
 const HANDLER_LIMITED_AUTH_PATHS = new Set(["setup"]);
 
 /**
+ * The setup dependencies with a token store in place. Absent, setup in
+ * production stays closed (no token is valid) and outside production needs
+ * none: the safe answer for code that built its dependencies before setup had
+ * a token.
+ */
+function withSetupToken<T extends { isProduction: boolean }>(
+  deps: T & { setupToken?: SetupHandlerDeps["setupToken"] }
+): T & { setupToken: SetupHandlerDeps["setupToken"] } {
+  if (deps.setupToken) {
+    return deps as T & { setupToken: SetupHandlerDeps["setupToken"] };
+  }
+  return {
+    ...deps,
+    setupToken: {
+      required: deps.isProduction,
+      verify: () => Promise.resolve("invalid"),
+      confirm: () => Promise.resolve("invalid"),
+      spend: () => Promise.resolve(),
+      claim: () => Promise.resolve({ release: () => Promise.resolve() }),
+    },
+  };
+}
+
+/**
  * Whether a request to `authPath` is judged by the auth rate limit, before it
  * is handled or by its handler.
  *
@@ -264,8 +288,13 @@ export interface AuthRouterDeps {
 
   /** Whether anyone holds the `super-admin` role: setup's gate. */
   hasAdministrator: () => Promise<boolean>;
-  /** The production setup token, and the claim one setup holds at a time. */
-  setupToken: SetupHandlerDeps["setupToken"];
+  /**
+   * The production setup token, and the claim one setup holds at a time.
+   * Optional for code that builds these dependencies itself: without it,
+   * setup in production refuses every token, and outside production needs
+   * none, as before.
+   */
+  setupToken?: SetupHandlerDeps["setupToken"];
   createSuperAdmin: (data: {
     email: string;
     name: string;
@@ -347,7 +376,7 @@ async function dispatchAuthRequest(
   if (method === "GET") {
     switch (authPath) {
       case "setup-status":
-        return handleSetupStatus(request, deps);
+        return handleSetupStatus(request, withSetupToken(deps));
       case "session":
         return handleSession(request, deps);
       case "csrf":
@@ -384,7 +413,7 @@ async function dispatchAuthRequest(
         case "setup":
           // Setup is not on the limited paths: a valid token must open it
           // whatever the budgets hold. Only a wrong token is counted.
-          return handleSetup(request, deps, {
+          return handleSetup(request, withSetupToken(deps), {
             limitWithoutValidToken: wrong =>
               checkAuthIpRateLimit(wrong, "setup", deps),
           });

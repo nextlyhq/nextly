@@ -6,6 +6,11 @@
 import { renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import {
+  checkSetupStatus,
+  resetSetupStatusCache,
+} from "@admin/lib/auth/setup-status";
+
 import { useSetupTokenRequired } from "../useSetupTokenRequired";
 
 // A plain implementation rather than a spy: a spy records each result it
@@ -26,6 +31,7 @@ vi.mock("@admin/lib/api/publicApi", () => ({
 
 beforeEach(() => {
   api.calls = [];
+  resetSetupStatusCache();
 });
 
 describe("the setup form's token field", () => {
@@ -52,6 +58,27 @@ describe("the setup form's token field", () => {
     await waitFor(() => expect(api.calls).toHaveLength(1));
     await new Promise(resolve => setTimeout(resolve, 0));
     expect(result.current).toBe(false);
+  });
+
+  it("is not known until setup-status answers, so the form waits", async () => {
+    let answer: (value: unknown) => void = () => {};
+    api.answer = () =>
+      new Promise(resolve => {
+        answer = resolve;
+      });
+    const { result } = renderHook(() => useSetupTokenRequired());
+    expect(result.current).toBeUndefined();
+    answer({ isSetup: false, requiresSetupToken: true });
+    await waitFor(() => expect(result.current).toBe(true));
+  });
+
+  it("reads the answer the route guards share, never asking again", async () => {
+    api.answer = () =>
+      Promise.resolve({ isSetup: false, requiresSetupToken: true });
+    await checkSetupStatus();
+    const { result } = renderHook(() => useSetupTokenRequired());
+    await waitFor(() => expect(result.current).toBe(true));
+    expect(api.calls).toEqual(["/auth/setup-status"]);
   });
 
   it("is asked for when setup-status cannot be read", async () => {

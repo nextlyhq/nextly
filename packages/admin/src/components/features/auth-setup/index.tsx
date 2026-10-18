@@ -124,7 +124,9 @@ export function Setup() {
           <Button
             size="md"
             type="submit"
-            disabled={isLoading}
+            // Until setup-status says whether the token is needed, a submit
+            // could go without a field the server requires.
+            disabled={isLoading || tokenRequired === undefined}
             className="w-full h-11 rounded-md shadow-none bg-primary text-primary-foreground hover:bg-primary/90 active:scale-[0.98] transition-all duration-100 mt-2"
           >
             {isLoading ? (

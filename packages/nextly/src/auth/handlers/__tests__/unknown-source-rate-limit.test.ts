@@ -805,6 +805,26 @@ describe("setup with its token", () => {
     expect((await setup(h, VALID, "owner@example.com")).status).toBe(201);
   });
 
+  it("keeps setup closed in production for dependencies built without a token store", async () => {
+    const h = withSetup({ budget: 100 });
+    delete (h.deps as { setupToken?: unknown }).setupToken;
+    h.deps.isProduction = true;
+    const res = await setup(h, VALID, "owner@example.com");
+    expect(res.status).toBe(403);
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe(
+      "SETUP_TOKEN_REQUIRED"
+    );
+  });
+
+  it("leaves a tokenless setup outside production out of the limit, as before", async () => {
+    const h = withSetup({ budget: 1 }); // a ceiling of 100
+    h.deps.setupToken = { ...h.deps.setupToken!, required: false };
+    // The auth limit spent by sign-ins first.
+    for (let i = 0; i < 100; i++)
+      await post(h, "login", { email: `u${i}@example.com`, password: "pw" });
+    expect((await setup(h, "", "owner@example.com")).status).toBe(201);
+  });
+
   it("completes with the valid token from a resolved address whose own budget is spent", async () => {
     const from = { "x-forwarded-for": "203.0.113.7" };
     const h = withSetup({ budget: 2, trustProxy: true });

@@ -30,6 +30,13 @@ const NEXT_PRODUCTION_BUILD_PHASE = "phase-production-build";
  */
 export const SETUP_CLAIM_STALE_MS = 2 * 60 * 1000;
 
+/**
+ * How often a held claim is renewed. Well inside the stale age, so a setup
+ * still running however long its work takes is never taken for a stopped
+ * one; only a holder whose process stopped lets its claim go stale.
+ */
+export const SETUP_CLAIM_RENEW_MS = 30 * 1000;
+
 const readers = new WeakMap<
   SetupTokenMeta,
   () => Promise<SetupTokenRecord | null>
@@ -71,9 +78,11 @@ function isClaim(value: unknown): value is SetupClaim {
  *
  * One row, written only if absent and read back to see whose it is, so of
  * any number of setups arriving together exactly one proceeds; the rest are
- * refused as setup having completed. A claim older than
+ * refused as setup having completed. The holder renews its claim every
+ * {@link SETUP_CLAIM_RENEW_MS} while it runs; one not renewed for
  * {@link SETUP_CLAIM_STALE_MS} is taken over by compare-and-set, so a setup
- * that stopped halfway does not close setup for good.
+ * that stopped halfway does not close setup for good, and one still running
+ * is never taken over however long its work takes.
  */
 export async function claimFirstSetup(
   meta: SetupTokenMeta,
@@ -89,11 +98,27 @@ export async function claimFirstSetup(
       now() - held.at >= SETUP_CLAIM_STALE_MS &&
       (await meta.compareAndSet(SETUP_CLAIM_META_KEY, held, mine)));
   if (!won) return null;
+  // Renewed while held, each renewal from the value this holder last wrote,
+  // so it stops at once if the claim was ever taken over.
+  let current = mine;
+  const renew = setInterval(() => {
+    const next: SetupClaim = { id: mine.id, at: now() };
+    void meta
+      .compareAndSet(SETUP_CLAIM_META_KEY, current, next)
+      .then(renewed => {
+        if (renewed) current = next;
+        else clearInterval(renew);
+      })
+      .catch(() => clearInterval(renew));
+  }, SETUP_CLAIM_RENEW_MS);
+  // Never what keeps a process alive.
+  renew.unref?.();
   return {
     release: async () => {
+      clearInterval(renew);
       // Only the holder's own claim: a takeover after this one went stale
       // belongs to someone else.
-      await meta.compareAndSet(SETUP_CLAIM_META_KEY, mine, null);
+      await meta.compareAndSet(SETUP_CLAIM_META_KEY, current, null);
       const after = await meta.getEntry<unknown>(SETUP_CLAIM_META_KEY);
       if (after.present && after.value === null) {
         await meta.delete(SETUP_CLAIM_META_KEY);

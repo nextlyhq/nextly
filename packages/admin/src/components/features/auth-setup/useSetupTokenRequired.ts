@@ -1,32 +1,23 @@
 import { useEffect, useState } from "react";
 
-import { publicApi } from "@admin/lib/api/publicApi";
+import { checkSetupTokenRequired } from "@admin/lib/auth/setup-status";
 
 /**
  * Whether this install's setup needs its setup token: in production, until it
- * has an administrator. Read from `/auth/setup-status`, which says only that
- * one is needed, never anything about it.
+ * has an administrator. `undefined` until setup-status has answered, so the
+ * form can wait rather than submit without a field the server requires.
  *
- * A failed read answers `true`: the field then shows where the server may not
- * need it, which it ignores, rather than hiding where the server requires it,
- * which would leave the form unable to finish setup.
+ * Read from the setup-status answer the route guards share, never fetched on
+ * its own, so the form and the guards cannot disagree. A failed read answers
+ * `true` (see checkSetupTokenRequired).
  */
-export function useSetupTokenRequired(): boolean {
-  const [required, setRequired] = useState(false);
+export function useSetupTokenRequired(): boolean | undefined {
+  const [required, setRequired] = useState<boolean | undefined>(undefined);
   useEffect(() => {
     let live = true;
-    void (async () => {
-      let needed = true;
-      try {
-        const status = await publicApi.get<
-          { requiresSetupToken?: boolean } | undefined
-        >("/auth/setup-status");
-        needed = status?.requiresSetupToken !== false;
-      } catch {
-        // Unreadable: ask for it (see above).
-      }
+    void checkSetupTokenRequired().then(needed => {
       if (live) setRequired(needed);
-    })();
+    });
     return () => {
       live = false;
     };
