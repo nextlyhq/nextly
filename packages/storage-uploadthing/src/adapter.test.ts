@@ -28,10 +28,12 @@ vi.mock("nextly/storage/fetch-stored-bytes", async importOriginal => {
 
 const getFileUrls = vi.fn();
 const listFiles = vi.fn();
+const deleteFiles = vi.fn();
 vi.mock("uploadthing/server", () => ({
   UTApi: class {
     getFileUrls = getFileUrls;
     listFiles = listFiles;
+    deleteFiles = deleteFiles;
   },
 }));
 
@@ -194,5 +196,24 @@ describe("UploadthingStorageAdapter — list", () => {
     ]);
     expect(listFiles.mock.calls[1]?.[0]).toMatchObject({ offset: 500 });
     listFiles.mockReset();
+  });
+});
+
+describe("UploadthingStorageAdapter — delete", () => {
+  afterEach(() => deleteFiles.mockReset());
+
+  it("resolves once the file is removed, or was already gone", async () => {
+    deleteFiles.mockResolvedValueOnce({ success: true, deletedCount: 0 });
+
+    await expect(adapter.delete("k1")).resolves.toBeUndefined();
+    expect(deleteFiles).toHaveBeenCalledWith(["k1"], { keyType: "fileKey" });
+  });
+
+  // A refused delete leaves the file publicly stored: its caller retries it,
+  // and names it once it gives up, only if the failure reaches it.
+  it("PROPAGATES a failed delete instead of reading it as done", async () => {
+    deleteFiles.mockRejectedValueOnce(new Error("rate limited"));
+
+    await expect(adapter.delete("k1")).rejects.toThrow("rate limited");
   });
 });

@@ -845,15 +845,6 @@ export class MediaService extends BaseService {
         changes,
         updateData
       );
-      // Inside a plugin's `ctx.db.transaction` on SQLite the update below is
-      // a savepoint of it, and the plugin's later rollback restores the row's
-      // old variant paths. The superseded files are then kept, left orphaned
-      // if the transaction commits, rather than deleted while a rollback could
-      // still need them. Core's own enclosing transactions delete them as
-      // before, and on PostgreSQL and MySQL the update commits on its own
-      // connection, where the adapter reports no enclosing transaction.
-      const keepSuperseded = this.joinsPluginTransaction();
-
       // Commit the row update and its outbox event in one transaction so the
       // event is durable exactly when the change commits. The row is locked and
       // RE-READ inside the transaction (not reused from the pre-transaction
@@ -977,19 +968,16 @@ export class MediaService extends BaseService {
         };
       }
 
-      // The row now durably references the new variants, so the superseded old
-      // ones can be deleted (keeping any path the new set reuses) — unless a
-      // plugin's enclosing transaction can still roll the row back to them.
-      // An item stored with no sizes has none to replace, and may still have
-      // an upload-time thumbnail the new sizes replace.
-      if (
-        regeneratedSizes &&
-        (replacedSizes || replacedThumbnail) &&
-        !keepSuperseded
-      ) {
+      // The row now references the new variants, so the superseded old ones
+      // can be deleted (keeping any path the new set reuses). An item stored
+      // with no sizes has none to replace, and may still have an upload-time
+      // thumbnail the new sizes replace.
+      if (regeneratedSizes && (replacedSizes || replacedThumbnail)) {
         // Once the change is durable, as for a delete: inside an enclosing
-        // SQLite transaction a rollback brings back the row that refers to
-        // the superseded variants.
+        // SQLite transaction, core's or a plugin's `ctx.db.transaction`, the
+        // update is a savepoint of it, and a rollback brings back the row
+        // that refers to the superseded variants. The deletion then waits for
+        // that transaction to commit, and is dropped if it rolls back.
         const superseded = replacedSizes;
         const thumbnail = replacedThumbnail;
         await this.afterCommit(() =>

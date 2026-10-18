@@ -30,6 +30,7 @@ import {
 } from "../../__tests__/fixtures/db";
 import { storedFilesOf, variantPaths } from "../../domains/media/stored-files";
 import type { IStorageAdapter, UploadOptions } from "../../storage/types";
+import { runInPluginTransaction } from "../../shared/lib/plugin-transaction-scope";
 import { MediaService } from "../media";
 
 // Two configured sizes, besides the thumbnail every image gets at upload, so
@@ -589,6 +590,44 @@ describe("a delete or a crop inside an enclosing transaction", () => {
         throw new Error("the entry write failed");
       })
     ).rejects.toThrow("the entry write failed");
+
+    const stored = await onDisk();
+    for (const file of before) expect(stored).toContain(file);
+    expect(await referencedNow(id)).toEqual([...before].sort());
+  });
+});
+
+// A plugin's `ctx.db.transaction` on SQLite is an enclosing transaction
+// marked as the plugin's: the crop's write is a savepoint of it.
+describe("a crop inside a plugin's transaction", () => {
+  const inPluginTransaction = <T>(work: () => Promise<T>): Promise<T> =>
+    db.adapter.transaction(() => runInPluginTransaction(work));
+
+  it("removes the variants it replaced once that transaction commits", async () => {
+    onLocalDisk();
+    const id = await uploadPhoto();
+    const before = await onDisk();
+
+    await inPluginTransaction(async () => {
+      expect((await crop(id, 20)).success).toBe(true);
+    });
+
+    const now = await referencedNow(id);
+    expect(await onDisk()).toEqual(now);
+    expect(now).not.toEqual([...before].sort());
+  });
+
+  it("keeps them when that transaction rolls back", async () => {
+    onLocalDisk();
+    const id = await uploadPhoto();
+    const before = await onDisk();
+
+    await expect(
+      inPluginTransaction(async () => {
+        expect((await crop(id, 20)).success).toBe(true);
+        throw new Error("the plugin's write failed");
+      })
+    ).rejects.toThrow("the plugin's write failed");
 
     const stored = await onDisk();
     for (const file of before) expect(stored).toContain(file);

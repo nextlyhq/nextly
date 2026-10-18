@@ -22,16 +22,21 @@ const KEYED =
 const NAMED = /^thumb_[^/]+$/;
 
 /**
- * A stored path with each run of slashes written once. The storage puts a
- * collection's files under `<prefix>/<key>`, so a prefix written with its
- * slash is stored as `media//...` where keys are kept as given (S3) and read
- * back as `media/...` where a filesystem collapses the separator (local
- * disk). Paths are compared in this form: it can only make more files count
- * as referenced, never fewer.
+ * A stored path with each run of slashes written once, and a key without a
+ * leading one. The storage puts a collection's files under `<prefix>/<key>`,
+ * so a prefix written with a slash at its end is stored as `media//...`, and
+ * one written with a slash at its start as `/media/...`, where keys are kept
+ * as given (S3). Local disk lists its files relative to its folder, with
+ * single separators, so it reads both back as `media/...` while the records
+ * keep the spelling they were stored under. Paths are compared in this form:
+ * it can only make more files count as referenced, never fewer.
  */
 export function canonicalStoredPath(path: string): string {
-  const scheme = /^https?:\/\//.exec(path)?.[0] ?? "";
-  return scheme + path.slice(scheme.length).replace(/\/{2,}/g, "/");
+  const scheme = /^https?:\/\//.exec(path)?.[0];
+  if (scheme) {
+    return scheme + path.slice(scheme.length).replace(/\/{2,}/g, "/");
+  }
+  return path.replace(/\/{2,}/g, "/").replace(/^\//, "");
 }
 
 /** A collection prefix as the folder the storage puts its files in. */

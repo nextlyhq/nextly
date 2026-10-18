@@ -347,6 +347,56 @@ describe("nextly media orphans", () => {
     expect(stored).not.toContain(layout.orphan);
   });
 
+  // A prefix written with a leading slash, `/media`, is recorded as
+  // `/media/...`, and listed by local disk relative to its folder, as
+  // `media/...`.
+  it("keeps a referenced thumbnail on local disk whose record spells the prefix `/media`", async () => {
+    const layout = await onLocalDisk();
+    const recorded = `/${layout.referenced}`;
+    const said: string[] = [];
+
+    const code = await mediaOrphans({
+      storage: layout.storage,
+      prefix: "/media",
+      exclusive: true,
+      referenced: async () => new Set([recorded]),
+      apply: true,
+      say: line => said.push(line),
+      now: NOW,
+    });
+
+    expect(code).toBe(0);
+    const stored = await layout.stored();
+    expect(stored).toContain(layout.referenced);
+    expect(stored).not.toContain(layout.orphan);
+  });
+
+  it("matches a `/media` prefix on S3, whose keys keep the leading slash", async () => {
+    const bucket = new Bucket("s3");
+    const at = (name: string) => {
+      const path = key(name, "/media/");
+      bucket.put({ path, lastModified: TWO_HOURS_AGO });
+      return path;
+    };
+    const referenced = at("thumb_a.png");
+    const orphan = at("thumb_b.png");
+    const said: string[] = [];
+
+    const code = await mediaOrphans({
+      storage: bucket,
+      prefix: "/media",
+      exclusive: true,
+      referenced: async () => new Set([referenced]),
+      apply: true,
+      say: line => said.push(line),
+      now: NOW,
+    });
+
+    expect(code).toBe(0);
+    expect([...bucket.files.keys()]).toEqual([referenced]);
+    expect(said.join("\n")).toContain(`Removed ${orphan}`);
+  });
+
   // The recheck before removals reads the media table; doing it once per
   // listed file would read the whole table once per leftover.
   it("rechecks references in a bounded number of passes", async () => {

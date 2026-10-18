@@ -78,6 +78,9 @@ const existingMedia = {
   sizes: { thumbnail: { path: OLD_PATH, url: "http://x/old" } },
 };
 
+/** After-commit effects held for an enclosing transaction, or null to run them. */
+let held: Array<() => unknown> | null = null;
+
 function makeAdapter(
   txBehavior: "commit" | "throw" | "row-gone",
   // The row the in-transaction locked read returns. Defaults to the same row the
@@ -100,9 +103,11 @@ function makeAdapter(
     getDrizzle: () => ({}),
     inTransaction: () => enclosed,
     // The ordering under test is the variant cleanup's, not the effects', so
-    // an after-commit effect runs at once.
+    // an after-commit effect runs at once, unless a case holds it as an
+    // enclosing transaction does until it commits.
     afterCommit: async (effect: () => unknown) => {
-      await effect();
+      if (held) held.push(effect);
+      else await effect();
     },
     transaction: async <T>(fn: (t: typeof tx) => Promise<T>): Promise<T> => {
       const result = await fn(tx);
@@ -143,6 +148,7 @@ function makeService(
 
 describe("MediaService focal-point regeneration ordering", () => {
   beforeEach(() => {
+    held = null;
     calls.length = 0;
     deleteSpy.mockClear();
     regen.thumbPath = NEW_PATH;
@@ -179,10 +185,11 @@ describe("MediaService focal-point regeneration ordering", () => {
     );
   });
 
-  it("keeps the old variant when a plugin's enclosing transaction can still roll the row back", async () => {
+  it("deletes the old variant only once a plugin's enclosing transaction commits", async () => {
     // The update is a savepoint of the plugin's transaction, so its later
-    // rollback restores the row's OLD variant paths; deleting their files now
-    // would leave that row pointing at bytes that are gone.
+    // rollback restores the row's OLD variant paths; deleting their files
+    // before it commits would leave that row pointing at bytes that are gone.
+    held = [];
     const service = makeService("commit", existingMedia, true);
     const res = await runInPluginTransaction(() =>
       service.updateMedia("m1", { focalX: 0.5 })
@@ -191,6 +198,11 @@ describe("MediaService focal-point regeneration ordering", () => {
     expect(res.success).toBe(true);
     expect(calls).toContain("update");
     expect(deleteSpy).not.toHaveBeenCalledWith(OLD_PATH);
+
+    // The plugin's transaction commits.
+    for (const effect of held.splice(0)) await effect();
+    expect(deleteSpy).toHaveBeenCalledWith(OLD_PATH);
+    expect(deleteSpy).not.toHaveBeenCalledWith(NEW_PATH);
   });
 
   it("deletes the old variant in a plugin's transaction the update does not join", async () => {
