@@ -18,6 +18,7 @@ export {
   recordContentEvent,
   type ContentEventInput,
   type ContentEventSubject,
+  type RecordContentEventOptions,
 } from "./record";
 export {
   ContentEventsRepository,

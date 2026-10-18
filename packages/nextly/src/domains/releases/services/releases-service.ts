@@ -7,7 +7,7 @@
  * which to enforce them. This is that service, and it is the layer that makes
  * the feature safe to expose.
  *
- * ## Three authorities, not a CRUD set
+ * ## Five authorities, each its own power
  *
  * `permission-seed-service` states the split and this honours it rather than
  * restating it: assembling a release changes nothing a reader can see, while
@@ -16,12 +16,12 @@
  *     read     → view releases and their members
  *     create   → create a release and choose what goes in it
  *     publish  → schedule or cancel, which is what makes content go live
+ *     update   → rename a release and change its description
+ *     delete   → delete a draft or cancelled release
  *
- * `update` and `delete` are deliberately NOT seeded, and so are deliberately
- * absent here. Renaming is filed under `create` because it is part of assembling
- * a release; destroying one is a different power and waits for its own
- * permission to arrive with the surface that checks it. Inventing either here
- * would teach the admin a vocabulary the server ignores.
+ * `update` and `delete` arrived after the other three, and the seed grants
+ * them on an upgrade to the roles that held the power each splits off:
+ * `update` to holders of `create`, `delete` to holders of `publish`.
  *
  * ## Why adding a member asks TWO questions
  *
@@ -49,12 +49,15 @@ import {
   apiKeyScopeAllows,
   type AuthenticatedScope,
 } from "../../../auth/authenticated-scope";
+import type { RequestActor } from "../../../auth/request-actor";
 import { NextlyError } from "../../../errors";
+import type { ReleaseNotDeletablePublicData } from "../../../errors/public-data";
 import {
   RELEASE_ASSEMBLABLE_FROM,
   RELEASE_ASSEMBLABLE_WITH_PUBLISH_FROM,
   RELEASE_MEMBER_LIMIT,
   RELEASE_CANCELLABLE_FROM,
+  RELEASE_DELETABLE_FROM,
   RELEASE_FINAL_STATES,
   RELEASE_PUBLISHABLE_NOW_FROM,
   RELEASE_SCHEDULABLE_FROM,
@@ -86,6 +89,7 @@ import {
   type ReadinessFinding,
   type ReleaseReadiness,
 } from "../readiness/evaluate-readiness";
+import type { ReleaseActivityEntry } from "../release-activity";
 import { isDueAt } from "../release-due";
 import { releaseMemberKey } from "../release-member-key";
 import {
@@ -108,12 +112,22 @@ import type {
   ReleaseRow,
   ReleasesRepository,
 } from "../releases-repository";
+import { RELEASES_RESOURCE } from "../releases-resource";
 
 /** The system-resource authorities a release operation can require. */
-export type ReleaseAuthority = "read" | "create" | "publish";
+export type ReleaseAuthority =
+  | "read"
+  | "create"
+  | "publish"
+  | "update"
+  | "delete";
 
-/** The system resource the three permissions are seeded under. */
-export const RELEASES_RESOURCE = "content-releases";
+/**
+ * The system resource the release permissions are seeded under. Declared in
+ * `releases-resource` and exported here as well, where every caller of the
+ * service has always found it.
+ */
+export { RELEASES_RESOURCE };
 
 /**
  * The longest title every supported dialect can store.
@@ -237,11 +251,22 @@ export interface ReleasesServiceDeps {
    */
   checks: ReleaseDocumentChecks;
   /**
-   * Where Publish now reports a drain it could not start. Optional: without
-   * one the failure goes unreported, and the release is still answered as it
+   * Where Publish now reports a drain it could not start, and a rename or
+   * delete reports an activity entry it could not record. Optional: without
+   * one the failure goes unreported, and the operation still answers as it
    * stands.
    */
   logger?: Pick<Logger, "warn">;
+  /**
+   * Record a rename or a deletion in the activity log (`release-activity`),
+   * after the write has committed.
+   *
+   * Injected, as the permission questions are, because the log is reached
+   * through the container the wiring holds. Optional: a service built without
+   * one records nothing, which is what a test that is not about the log
+   * wants.
+   */
+  recordActivity?: (entry: ReleaseActivityEntry) => Promise<void>;
 }
 
 /**
@@ -328,6 +353,212 @@ function assertUsableSchedule(id: string, at: Date, timezone: string): void {
       logContext: { reason: "invalid-timezone", length: timezone.length },
     });
   }
+}
+
+/** The authorities `capabilities` answers from, each asked once a page. */
+interface HeldAuthorities {
+  mayPublish: boolean;
+  mayCreate: boolean;
+  mayUpdate: boolean;
+  mayDelete: boolean;
+}
+
+/**
+ * Whether the release may be scheduled, cancelled or run now, by the same
+ * fences those writes take. `held` is how many documents it holds.
+ */
+function runCapabilities(
+  release: ReleaseRow,
+  held: number,
+  may: HeldAuthorities
+): Pick<ReleaseCapabilities, "schedule" | "cancel" | "publishNow"> {
+  const { mayRun } = oneDocumentRule(release.kind, held);
+  return {
+    schedule:
+      may.mayPublish &&
+      RELEASE_SCHEDULABLE_FROM.includes(release.state) &&
+      mayRun,
+    cancel: may.mayPublish && RELEASE_CANCELLABLE_FROM.includes(release.state),
+    publishNow:
+      may.mayPublish &&
+      RELEASE_PUBLISHABLE_NOW_FROM.includes(release.state) &&
+      mayRun,
+  };
+}
+
+/**
+ * Whether the release's documents, title or the release itself may be
+ * changed, by the same rules those writes take.
+ */
+function editCapabilities(
+  release: ReleaseRow,
+  held: number,
+  may: HeldAuthorities
+): Pick<
+  ReleaseCapabilities,
+  "addMember" | "removeMember" | "update" | "delete"
+> {
+  // Membership is editable freely in some states and only by a publisher in
+  // others, because the drain reads membership AT the instant — so editing a
+  // scheduled release changes what a publisher committed to.
+  const mayChange = (change: MembershipChange): boolean =>
+    may.mayCreate &&
+    membershipFence(release.kind, change, may.mayPublish).includes(
+      release.state
+    );
+  return {
+    addMember: mayChange("add") && takesAnother(release.kind, held),
+    removeMember: mayChange("remove"),
+    // Any state, as `update` writes it: the title is a label.
+    update: may.mayUpdate,
+    delete: may.mayDelete && whyNotDeletable(release) === null,
+  };
+}
+
+/**
+ * Refuse a title the narrowest dialect could not store.
+ *
+ * ONE limit, applied before the write, because the column is not one shape:
+ * `nextly_releases.title` is `varchar(255)` on MySQL and unbounded `text` on
+ * PostgreSQL and SQLite. Left to the database, the same call succeeds on two
+ * engines and either errors or silently TRUNCATES on the third — and a
+ * truncating write returns a row that disagrees with what is stored. Creating
+ * and renaming ask this one question.
+ */
+function assertTitleFits(title: string): void {
+  if (title.length > MAX_RELEASE_TITLE_LENGTH) {
+    throw NextlyError.invalidInput({
+      message: `\`title\` must be ${MAX_RELEASE_TITLE_LENGTH} characters or fewer.`,
+      logContext: { reason: "title-too-long", length: title.length },
+    });
+  }
+}
+
+/**
+ * What a rename may change: the title, the description, or both.
+ *
+ * @experimental
+ */
+export interface ReleaseDetailsChange {
+  /** A new title: not empty, and at most {@link MAX_RELEASE_TITLE_LENGTH}. */
+  title?: string;
+  /** A new description, or `null` to clear it. */
+  description?: string | null;
+}
+
+/**
+ * Refuse a change that is not one, before anything is read.
+ *
+ * Checked here and not only at the HTTP boundary, because the Direct API is
+ * reachable from JavaScript: `title: 42` would otherwise reach the database,
+ * and `{}` would be a rename that renames nothing and still moves the release.
+ * An empty title is refused as REST's create refuses it, since a release with
+ * no name cannot be told from another in any list.
+ */
+function assertDetailsChange(change: ReleaseDetailsChange): void {
+  if (change.title === undefined && change.description === undefined) {
+    throw NextlyError.invalidInput({
+      message: "Give a `title`, a `description`, or both.",
+      logContext: { reason: "empty-release-details-change" },
+    });
+  }
+  if (change.title !== undefined) {
+    if (typeof change.title !== "string" || change.title.length === 0) {
+      throw NextlyError.invalidInput({
+        message: "`title` must be a non-empty string.",
+        logContext: { reason: "invalid-title", type: typeof change.title },
+      });
+    }
+    assertTitleFits(change.title);
+  }
+  if (
+    change.description !== undefined &&
+    change.description !== null &&
+    typeof change.description !== "string"
+  ) {
+    throw NextlyError.invalidInput({
+      message: "`description` must be a string or null.",
+      logContext: {
+        reason: "invalid-description",
+        type: typeof change.description,
+      },
+    });
+  }
+}
+
+/**
+ * Why this release may not be deleted, or `null` when it may.
+ *
+ * Only a release that never ran: a draft, or a release cancelled before it
+ * was ever scheduled. A cancelled release that WAS scheduled is kept, because
+ * nothing stored says whether it began to run: one that stopped part-way and
+ * was then cancelled has put content live, and reads like any other cancelled
+ * release. `scheduledAt` is the evidence that survives a cancel, so a release
+ * that ever had one is kept as the record. A release goes from draft only to
+ * scheduled or cancelled, so a draft never carries one.
+ *
+ * The one answer for the write and for the `delete` capability; the
+ * repository's fence states the same rule in its transaction.
+ */
+function whyNotDeletable(
+  release: Pick<ReleaseRow, "state" | "scheduledAt">
+): ReleaseNotDeletablePublicData["reason"] | null {
+  if (release.state === "published") return "published";
+  if (!RELEASE_DELETABLE_FROM.includes(release.state)) return "committed";
+  if (release.scheduledAt !== null && release.scheduledAt !== undefined) {
+    return "was-scheduled";
+  }
+  return null;
+}
+
+/** What each refusal tells the person, by reason. */
+const NOT_DELETABLE_MESSAGES: Record<
+  ReleaseNotDeletablePublicData["reason"],
+  string
+> = {
+  published:
+    "This release has been published. It stays as the record of what went live, and cannot be deleted.",
+  committed:
+    "This release is scheduled or stopped, so it can't be deleted. Cancelling it calls it off, and it's then kept as a record.",
+  "was-scheduled":
+    "This release was scheduled, so it's kept as a record. Cancelled releases that were never scheduled can be deleted.",
+};
+
+/**
+ * The refusal for deleting a release that may not be deleted: a CONFLICT
+ * saying why, with the reason in its data for a client to name.
+ */
+function notDeletableRefusal(
+  release: ReleaseRow,
+  reason: ReleaseNotDeletablePublicData["reason"]
+): NextlyError {
+  return NextlyError.conflict({
+    message: NOT_DELETABLE_MESSAGES[reason],
+    data: { reason },
+    logContext: {
+      reason: "release-not-deletable",
+      why: reason,
+      releaseId: release.id,
+      state: release.state,
+    },
+  });
+}
+
+/**
+ * Who a rename or deletion is recorded as.
+ *
+ * An API key is named as a key and never as the person who owns it: the
+ * release actor carries the owner's id so the key can be authorized, and a
+ * person's name against a change they did not make is a worse record than
+ * none. The key's own id is not on the actor, so the entry names the kind
+ * alone, which the trail records nothing for (`recordableActor`) — the same
+ * answer the Direct API gives a key's content write (`directApiActor`).
+ */
+function activityActor(actor: ReleaseActor): RequestActor | null {
+  if (actor.authenticatedScope?.actorType === "apiKey") {
+    return { type: "apiKey" };
+  }
+  return actor.userId === null ? null : { type: "user", id: actor.userId };
 }
 
 /** Whether a row satisfies the qualifiers a list query carries beside `containing`. */
@@ -924,17 +1155,7 @@ export class ReleasesService {
     actor: ReleaseActor
   ): Promise<ReleaseRow> {
     await this.authorize(actor, "create");
-    // ONE limit, applied before the write, because the column is not one shape:
-    // `nextly_releases.title` is `varchar(255)` on MySQL and unbounded `text` on
-    // PostgreSQL and SQLite. Left to the database, the same call succeeds on two
-    // engines and either errors or silently TRUNCATES on the third — and a
-    // truncating write returns a row that disagrees with what is stored.
-    if (input.title.length > MAX_RELEASE_TITLE_LENGTH) {
-      throw NextlyError.invalidInput({
-        message: `\`title\` must be ${MAX_RELEASE_TITLE_LENGTH} characters or fewer.`,
-        logContext: { reason: "title-too-long", length: input.title.length },
-      });
-    }
+    assertTitleFits(input.title);
     // Checked here as well as typed: the Direct API is reachable from
     // JavaScript, and an unknown kind stored would be a release no filter and
     // no rule recognises.
@@ -990,37 +1211,19 @@ export class ReleasesService {
 
     const mayPublish = await this.holds(actor, "publish");
     const mayCreate = await this.holds(actor, "create");
+    const mayUpdate = await this.holds(actor, "update");
+    const mayDelete = await this.holds(actor, "delete");
     const held = await this.heldBy(releases, mayCreate, mayPublish);
 
+    const may = { mayPublish, mayCreate, mayUpdate, mayDelete };
     return new Map(
       releases.map(release => {
-        const rule = oneDocumentRule(release.kind, held.get(release.id) ?? 0);
-        // Membership is editable freely in some states and only by a publisher
-        // in others, because the drain reads membership AT the instant — so
-        // editing a scheduled release changes what a publisher committed to.
-        const mayChange = (change: MembershipChange): boolean =>
-          mayCreate &&
-          membershipFence(release.kind, change, mayPublish).includes(
-            release.state
-          );
-
+        const count = held.get(release.id) ?? 0;
         return [
           release.id,
           {
-            schedule:
-              mayPublish &&
-              RELEASE_SCHEDULABLE_FROM.includes(release.state) &&
-              rule.mayRun,
-            cancel:
-              mayPublish && RELEASE_CANCELLABLE_FROM.includes(release.state),
-            addMember:
-              mayChange("add") &&
-              takesAnother(release.kind, held.get(release.id) ?? 0),
-            removeMember: mayChange("remove"),
-            publishNow:
-              mayPublish &&
-              RELEASE_PUBLISHABLE_NOW_FROM.includes(release.state) &&
-              rule.mayRun,
+            ...runCapabilities(release, count, may),
+            ...editCapabilities(release, count, may),
           },
         ];
       })
@@ -2188,6 +2391,106 @@ export class ReleasesService {
     if (!(await this.deps.repository.cancelRelease(id))) {
       throw NextlyError.conflict({
         logContext: { reason: "release-not-cancellable", releaseId: id },
+      });
+    }
+  }
+
+  /**
+   * Rename a release, change its description, or both, and answer it as it
+   * now reads.
+   *
+   * Under `update-content-releases`, in any state. A change that alters
+   * nothing writes nothing and records nothing, and answers the release as it
+   * is: a form that submits both fields after one edit must not move the
+   * release, since every move sends a schedule judged before it round again.
+   *
+   * @experimental
+   */
+  async update(
+    id: string,
+    change: ReleaseDetailsChange,
+    actor: ReleaseActor
+  ): Promise<ReleaseRow> {
+    await this.authorize(actor, "update");
+    assertDetailsChange(change);
+    // Whether anything changes is decided in the repository's transaction,
+    // under the release's lock, and the row it answers is the one that
+    // transaction wrote: see `updateReleaseDetails`.
+    const written = await this.deps.repository.updateReleaseDetails(id, {
+      ...(change.title === undefined ? {} : { title: change.title }),
+      ...(change.description === undefined
+        ? {}
+        : { description: change.description }),
+    });
+    if (written === null) {
+      throw NextlyError.notFound({
+        logContext: { reason: "release-not-found", releaseId: id },
+      });
+    }
+    if (written.changed.length > 0) {
+      await this.recordActivity(
+        {
+          action: "update",
+          release: written.row,
+          changedFields: written.changed,
+        },
+        actor
+      );
+    }
+    return written.row;
+  }
+
+  /**
+   * Delete a release that never ran, and its documents with it: a draft, or
+   * a release cancelled before it was ever scheduled.
+   *
+   * Under `delete-content-releases`. Every other release is kept, and each
+   * refusal is a CONFLICT whose data names why (`whyNotDeletable`): a
+   * scheduled or stopped one is committed to a launch (cancelling calls it
+   * off and keeps it), a published one is the record of what went live, and
+   * a cancelled one that was ever scheduled may have begun to run. A release
+   * that is not there is NOT_FOUND. Answers the release as the delete found
+   * it under its lock.
+   *
+   * @experimental
+   */
+  async delete(id: string, actor: ReleaseActor): Promise<ReleaseRow> {
+    await this.authorize(actor, "delete");
+    const current = await this.requireRelease(id);
+    const refused = whyNotDeletable(current);
+    if (refused !== null) throw notDeletableRefusal(current, refused);
+    // FENCED on the same rule, so a release scheduled since the read above is
+    // not deleted, and neither are its documents. A retry judges it as it now
+    // is, and is told why.
+    // The row the delete found under its lock, recorded and answered: one
+    // renamed since the read above is the release that was deleted.
+    const deleted = await this.deps.repository.deleteRelease(id);
+    if (deleted === null) {
+      throw NextlyError.conflict({
+        logContext: { reason: "release-moved-before-delete", releaseId: id },
+      });
+    }
+    await this.recordActivity({ action: "delete", release: deleted }, actor);
+    return deleted;
+  }
+
+  /**
+   * Record a rename or deletion, never failing the operation it describes:
+   * the write has committed, and a failure here is reported to the logger
+   * instead of to the caller.
+   */
+  private async recordActivity(
+    entry: Omit<ReleaseActivityEntry, "actor">,
+    actor: ReleaseActor
+  ): Promise<void> {
+    if (this.deps.recordActivity === undefined) return;
+    try {
+      await this.deps.recordActivity({ ...entry, actor: activityActor(actor) });
+    } catch (error) {
+      this.deps.logger?.warn("A release change could not be recorded", {
+        releaseId: entry.release.id,
+        action: entry.action,
+        error: error instanceof Error ? error.message : String(error),
       });
     }
   }

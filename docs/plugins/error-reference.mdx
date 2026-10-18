@@ -27,8 +27,6 @@ Nextly validates plugins **fail-fast at boot** (D7): a bad plugin config stops s
 
 ## Transforms
 
-> **Needs the release after 0.0.2-alpha.66.**
-
 A refused `contributes.transforms` change is a `VALIDATION_ERROR`. Each entry in its
 `errors` names the transform in `path` (`plugin:<name>.transform[<index>]`) and the rule
 in `code`:
@@ -45,8 +43,6 @@ A transform whose result its entity's own definition would refuse, such as a col
 and its message names the plugin.
 
 ## Schema lifecycle
-
-> **Needs the release after 0.0.2-alpha.66.**
 
 | Code                                      | Status | Cause                                                                                                                                                                                                                                        | Fix                                                                                                                                                            |
 | ----------------------------------------- | ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -66,8 +62,6 @@ and its message names the plugin.
 
 ## Migrations
 
-> **Needs the release after 0.0.2-alpha.66.**
-
 These come from `nextly migrate`, `migrate:down`, and the boot's migrations. See [Production migrations](/docs/guides/production-migrations#what-a-migration-file-may-contain).
 
 | Code                                     | Status | Cause                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        | Fix                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
@@ -78,8 +72,6 @@ These come from `nextly migrate`, `migrate:down`, and the boot's migrations. See
 | `NEXTLY_MIGRATION_CONCURRENT_RUN`        | 409    | Another run recorded the same migration applied, or rolled it back, while this one was running it. Where the transaction can undo the work, this run's statements were rolled back with its ledger write, and the ledger keeps the other run's record. For a unit marked to run outside a transaction, or on MySQL, the statements may have stayed applied, and the attempt is recorded as failed. `logContext.reason` is `concurrent-run`.                                                                                                                                                                                                                                                                  | Run `nextly migrate:status`: the migration is already applied, or rolled back, by the other run. Where the message says the statements may have stayed applied, check what the migration changes before going on, then record it as for `NEXTLY_MIGRATION_PARTIALLY_APPLIED`.                                                                                                                                                                                                                                                                                                                                               |
 
 ## Plugin data access
-
-> **Needs the release after 0.0.2-alpha.66.**
 
 These are thrown to the plugin code that made the call, not at boot.
 
@@ -103,8 +95,6 @@ These are thrown to the plugin code that made the call, not at boot.
 | `NEXTLY_ROUTE_INVALID_PATH` | 400    | A route `path` does not start with `/`.                                                    | Start the path with `/` (e.g. `/export`). |
 
 ## Requests
-
-> **Needs the release after 0.0.2-alpha.66.**
 
 | Code               | Status | Cause                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | Fix                                           |
 | ------------------ | ------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------- |

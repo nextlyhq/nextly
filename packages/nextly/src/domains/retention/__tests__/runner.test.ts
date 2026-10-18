@@ -5,6 +5,7 @@
  * how large a pass the caller is willing to wait for — the write path awaits its
  * pass, so the budget it passes is what bounds a user's save.
  */
+import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import { describe, expect, it, vi } from "vitest";
 
 import { resolveWebhookRetentionConfig } from "../../webhooks/retention-config";
@@ -12,22 +13,30 @@ import { buildRetentionRunner } from "../passes";
 
 const T0 = new Date("2026-07-21T12:00:00.000Z");
 
+/**
+ * A transaction for a double: the work runs on the double itself, as a batch
+ * here only reads and deletes through it.
+ */
+function inline(
+  db: object
+): <T>(work: (tx: TransactionContext) => Promise<T>) => Promise<T> {
+  return work => work(db as TransactionContext);
+}
+
 /** Records the policy each pass ran with, so the budget is observable. */
 function spyAdapter() {
   const limits: (number | undefined)[] = [];
-  return {
-    limits,
-    adapter: {
-      select: async <T>(
-        _t: string,
-        options?: { limit?: number }
-      ): Promise<T[]> => {
-        limits.push(options?.limit);
-        return [] as T[];
-      },
-      delete: async (): Promise<number> => 0,
+  const db = {
+    select: async <T>(
+      _t: string,
+      options?: { limit?: number }
+    ): Promise<T[]> => {
+      limits.push(options?.limit);
+      return [] as T[];
     },
+    delete: async (): Promise<number> => 0,
   };
+  return { limits, adapter: { ...db, transaction: inline(db) } };
 }
 
 function alwaysClaims() {
@@ -107,6 +116,7 @@ describe("RetentionRunner", () => {
           throw new Error("connection reset");
         },
         delete: async () => 0,
+        transaction: inline({}),
       },
       gate: alwaysClaims(),
       now: () => T0,
