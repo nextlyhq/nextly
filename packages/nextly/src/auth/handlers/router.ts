@@ -65,6 +65,20 @@ const RATE_LIMITED_AUTH_PATHS = new Set([
 ]);
 
 /**
+ * Whether a request to `authPath` is judged by the auth rate limit.
+ *
+ * Exported because the REST limit leaves exactly these requests to the auth
+ * limit when their client address cannot be resolved, and one answer keeps
+ * the two from disagreeing: an auth path the auth limit does not cover is
+ * then held to the REST limit's ceiling like any other request.
+ */
+export function hasAuthRateLimit(method: string, authPath: string): boolean {
+  return (
+    method.toUpperCase() === "POST" && RATE_LIMITED_AUTH_PATHS.has(authPath)
+  );
+}
+
+/**
  * @experimental Combined dependency interface for all auth handlers.
  * Defined as a standalone interface (not multi-extends) to avoid TS2320 conflicts
  * where the same method name has different return types across handler deps.
@@ -338,7 +352,7 @@ async function dispatchAuthRequest(
   }
 
   if (method === "POST") {
-    if (RATE_LIMITED_AUTH_PATHS.has(authPath)) {
+    if (hasAuthRateLimit(method, authPath)) {
       const limited = await checkAuthIpRateLimit(request, authPath, deps);
       if (limited) return limited;
     }

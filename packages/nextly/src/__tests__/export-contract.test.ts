@@ -151,7 +151,7 @@ const ENTRY_POINTS: Array<[string, string]> = declaredSubpaths.map(subpath => [
  * The program is built with the package's own compiler options, so `@nextly/*`
  * paths and every `export *` chain resolve as they do in the build.
  */
-function compiledExportNames(): Map<string, Set<string>> {
+function compiledProgram(): ts.Program {
   const configPath = path.join(packageRoot, "tsconfig.json");
   const config = ts.readConfigFile(configPath, ts.sys.readFile);
   const parsed = ts.parseJsonConfigFileContent(
@@ -159,25 +159,46 @@ function compiledExportNames(): Map<string, Set<string>> {
     ts.sys,
     packageRoot
   );
-  const program = ts.createProgram({
+  return ts.createProgram({
     rootNames: ENTRY_POINTS.map(([, source]) => source),
     options: { ...parsed.options, noEmit: true },
   });
+}
+
+/** The exported symbols of each published entry point, by name. */
+function compiledExports(): Map<string, Map<string, ts.Symbol>> {
+  const program = compiledProgram();
   const checker = program.getTypeChecker();
-  const names = new Map<string, Set<string>>();
+  const exported = new Map<string, Map<string, ts.Symbol>>();
   for (const [entry, source] of ENTRY_POINTS) {
     const file = program.getSourceFile(source);
     const moduleSymbol = file ? checker.getSymbolAtLocation(file) : undefined;
-    names.set(
+    exported.set(
       entry,
-      new Set(
-        moduleSymbol
-          ? checker.getExportsOfModule(moduleSymbol).map(s => s.getName())
-          : []
+      new Map(
+        (moduleSymbol ? checker.getExportsOfModule(moduleSymbol) : []).map(
+          symbol => {
+            // A re-export is an alias; its documentation is on what it names.
+            const target =
+              symbol.flags & ts.SymbolFlags.Alias
+                ? checker.getAliasedSymbol(symbol)
+                : symbol;
+            return [symbol.getName(), target];
+          }
+        )
       )
     );
   }
-  return names;
+  return exported;
+}
+
+function compiledExportNames(): Map<string, Set<string>> {
+  return new Map(
+    [...compiledExports()].map(([entry, symbols]) => [
+      entry,
+      new Set(symbols.keys()),
+    ])
+  );
 }
 
 describe("published export surface", () => {
@@ -231,6 +252,14 @@ describe("published export surface", () => {
       expect(compiled.get(entry)?.has("UserListResponse")).toBe(true);
       expect(compiled.get(entry)?.has("UserListResponseSchema")).toBe(true);
     }
+  });
+
+  it("keeps publishing defaultSkipAdminApi from the root, marked deprecated", () => {
+    // No longer the REST limit's default, and kept for an app that passes it
+    // as `rateLimit.skip` until a later release removes it.
+    const symbol = compiledExports().get("nextly")?.get("defaultSkipAdminApi");
+    expect(symbol, "nextly exports defaultSkipAdminApi").toBeDefined();
+    expect(symbol?.getJsDocTags().map(tag => tag.name)).toContain("deprecated");
   });
 
   it("still publishes the user validators beside the retired ones", async () => {

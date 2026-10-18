@@ -24,6 +24,11 @@ import {
   isReadOperation,
   RATE_LIMIT_DEFAULTS,
 } from "../../middleware/rate-limit";
+import {
+  currentRestLimitGate,
+  type RestLimitGate,
+  type RestLimitTarget,
+} from "../../middleware/rest-limit-gate";
 import { SKIP_TIMEZONE_FORMAT_HEADER } from "../../shared/lib/date-formatting";
 import type { AuthUser } from "../../types/auth";
 import {
@@ -663,6 +668,42 @@ function withNoStore(response: Response, route: PluginRoute): Response {
 }
 
 /**
+ * Which REST limit a plugin route's requests are judged by: a route with an
+ * auth budget of its own is kept out of the unresolved sources' ceiling, as
+ * core's auth routes are, so spending the ceiling cannot deny its sign-in.
+ */
+export function restLimitTargetOf(route: PluginRoute): RestLimitTarget {
+  return route.rateLimit === "auth" ? "auth" : "core";
+}
+
+/**
+ * Route auth, within the REST limit.
+ *
+ * A route asking for a kind of person is counted by that person, never by a
+ * staff session or key the request also carries, and the kind's resolver is
+ * the auth below, called once. A request whose person does not resolve spends
+ * a bound of the plugin's own, checked before the resolver runs. Any other
+ * route's limit was decided before this.
+ */
+async function routeAuthWithinLimit(
+  req: Request,
+  matched: RouteMatch,
+  gate: RestLimitGate | undefined
+): Promise<
+  { refused: Response } | { resolved: RouteAuth | { error: NextlyError } }
+> {
+  const resolve = () =>
+    resolvePluginRouteAuth(req, matched.route, matched.baseCtx.self);
+  if (!gate || matched.route.principal === undefined) {
+    return { resolved: await resolve() };
+  }
+  return gate.settlePerson(matched.pluginName, {
+    resolve,
+    personOf: auth => ("error" in auth ? null : auth.principal),
+  });
+}
+
+/**
  * Run a matched plugin route. Enforces secure-by-default auth,
  * builds the per-request {@link PluginRouteContext} (the plugin's boot context
  * plus `user`/`params`), and invokes the handler, isolating any thrown error
@@ -672,6 +713,19 @@ export async function runPluginRoute(
   incoming: Request,
   matched: RouteMatch
 ): Promise<Response> {
+  // The REST limit, before any work the request costs. A route asking for a
+  // person settles it around that person's resolution instead, below.
+  const gate = currentRestLimitGate(incoming);
+  if (matched.route.principal === undefined) {
+    const refused = await gate?.settle(restLimitTargetOf(matched.route));
+    if (refused) {
+      return markPluginResponse(
+        withNoStore(refused, matched.route),
+        matched.route
+      );
+    }
+  }
+
   // A root route may sit under `/auth`, where the refresh cookie is sent;
   // nothing past this point is core's refresh or logout handler.
   //
@@ -688,11 +742,14 @@ export async function runPluginRoute(
       matched.route
     );
   }
-  const auth = await resolvePluginRouteAuth(
-    req,
-    matched.route,
-    matched.baseCtx.self
-  );
+  const settled = await routeAuthWithinLimit(req, matched, gate);
+  if ("refused" in settled) {
+    return markPluginResponse(
+      withNoStore(settled.refused, matched.route),
+      matched.route
+    );
+  }
+  const auth = settled.resolved;
   if ("error" in auth) {
     return markPluginResponse(
       buildErrorResponse(auth.error, {
