@@ -290,6 +290,29 @@ async function rolesConferringSuperAdmin(
   return [...conferring];
 }
 
+/** Whether `userId` itself holds the `super-admin` role in force. */
+export async function superAdminRoleHeldBy(
+  db: LastSuperAdminTx,
+  tables: LastSuperAdminTables,
+  userId: string
+): Promise<boolean> {
+  const { roles, userRoles } = tables;
+  const [role] = await db
+    .select({ id: roles.id })
+    .from(roles)
+    .where(eq(roles.slug, SUPER_ADMIN_ROLE_SLUG))
+    .limit(1);
+  if (!role) return false;
+  const held = await superAdminHolders(
+    db,
+    tables,
+    [String(role.id)],
+    eq(userRoles.userId, userId),
+    { activeOnly: false }
+  ).limit(1);
+  return held.length > 0;
+}
+
 /** The slice of a Drizzle transaction the first-administrator grant writes through. */
 export interface FirstAdministratorTx extends LastSuperAdminTx {
   insert(table: unknown): { values(row: unknown): PromiseLike<unknown> };

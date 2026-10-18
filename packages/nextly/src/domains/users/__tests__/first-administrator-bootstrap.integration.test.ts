@@ -197,6 +197,40 @@ describe.each(getConfiguredTestDialects())(
       );
     });
 
+    it("makes exactly one of two setups racing on an empty install the administrator", async () => {
+      const t = await boot(dialect);
+      const deps = buildAuthRouterDeps(
+        t.getService as unknown as (name: string) => unknown
+      );
+      const emails = ["first@example.com", "second@example.com"];
+      const settled = await Promise.allSettled(
+        emails.map(email =>
+          deps.createSuperAdmin({ email, name: email, password: PASSWORD })
+        )
+      );
+
+      // One setup wins and is answered with its account; the other is told
+      // setup is complete (or fails), and is never made an administrator.
+      const won = settled.filter(
+        r => r.status === "fulfilled" && r.value !== null
+      );
+      expect(won).toHaveLength(1);
+      const administrators = [];
+      for (const email of emails) {
+        const account = await services(t).users.findByEmail(email);
+        if (account && (await isAdministrator(t, String(account.id)))) {
+          administrators.push(email);
+        }
+      }
+      expect(administrators).toHaveLength(1);
+      // A setup answered "complete" leaves no account behind.
+      for (const [i, r] of settled.entries()) {
+        if (r.status === "fulfilled" && r.value === null) {
+          expect(await services(t).users.findByEmail(emails[i])).toBeFalsy();
+        }
+      }
+    });
+
     it("refuses setup for an address a registration already holds, granting it nothing", async () => {
       const t = await boot(dialect);
       const deps = buildAuthRouterDeps(

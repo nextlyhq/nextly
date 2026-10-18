@@ -53,11 +53,16 @@ export interface SetupHandlerDeps {
    * install has an administrator, and setup must still create one.
    */
   hasAdministrator: () => Promise<boolean>;
+  /**
+   * Create the administrator's account, or answer null when another setup
+   * created the administrator first: of setups racing on an empty install,
+   * exactly one is made the administrator, and the others create nothing.
+   */
   createSuperAdmin: (data: {
     email: string;
     name: string;
     password: string;
-  }) => Promise<{ id: string; email: string; name: string }>;
+  }) => Promise<{ id: string; email: string; name: string } | null>;
   /** The roles in force, and when the first of them lapses; see `SessionRoles`. */
   fetchSessionRoles: (userId: string) => Promise<SessionRoles>;
   seedPermissions: () => Promise<void>;
@@ -73,6 +78,16 @@ export interface SetupHandlerDeps {
   trustProxy: boolean;
   /** CIDR list of proxy IPs (from TRUSTED_PROXY_IPS). */
   trustedProxyIps: string[];
+}
+
+/** The refusal once the install has its administrator, on every path here. */
+function setupCompleteResponse(): Response {
+  return jsonResponse(403, {
+    error: {
+      code: "SETUP_COMPLETE",
+      message: "Setup already completed",
+    },
+  });
 }
 
 export async function handleSetupStatus(
@@ -130,14 +145,7 @@ export async function handleSetup(
     });
     return buildAuthErrorResponse(nextlyErr, requestId);
   }
-  if (administratorExists) {
-    return jsonResponse(403, {
-      error: {
-        code: "SETUP_COMPLETE",
-        message: "Setup already completed",
-      },
-    });
-  }
+  if (administratorExists) return setupCompleteResponse();
 
   const body = await request.json();
 
@@ -187,6 +195,8 @@ export async function handleSetup(
 
   // Create super admin (seeds permissions internally, hashes password internally)
   const user = await deps.createSuperAdmin({ email, name, password });
+  // Another setup made the administrator while this one was creating it.
+  if (!user) return setupCompleteResponse();
 
   const sessionRoles = await deps.fetchSessionRoles(user.id);
   const { roleIds } = sessionRoles;
