@@ -201,6 +201,30 @@ export class SingleEntryService extends BaseService {
   }
 
   /**
+   * What a release's publish of this Single would be refused with by
+   * validation, judged without writing. See the mutation service.
+   *
+   * @experimental
+   */
+  async releasePublishIssues(
+    params: Parameters<SingleMutationService["releasePublishIssues"]>[0]
+  ): ReturnType<SingleMutationService["releasePublishIssues"]> {
+    return this.mutationService.releasePublishIssues(params);
+  }
+
+  /**
+   * The languages whose unreleased work a release's document-wide write of
+   * this Single would be refused over. See the mutation service.
+   *
+   * @experimental
+   */
+  async releaseHeldDraftLocales(
+    params: Parameters<SingleMutationService["releaseHeldDraftLocales"]>[0]
+  ): ReturnType<SingleMutationService["releaseHeldDraftLocales"]> {
+    return this.mutationService.releaseHeldDraftLocales(params);
+  }
+
+  /**
    * Publish every language of a Single at once.
    *
    * The main row's status and every companion `_status` move in one

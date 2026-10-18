@@ -64,7 +64,8 @@ export const DASHBOARD_MEDIUM_FROM_PX = 640;
 export const DASHBOARD_WIDE_FROM_PX = 1024;
 
 /**
- * The space between the grid's tracks, in pixels: the grid's `gap-6`. A card's drawn width is
+ * The space between the grid's tracks, in pixels: the grid's `gap-[24px]`, in pixels rather than
+ * rem so it does not follow the page's root font size. A card's drawn width is
  * its tracks plus the gaps between them, so a width predicted without it is too wide by up to
  * a gap, which is enough to move a card across a tier's edge.
  */

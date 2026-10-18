@@ -15,9 +15,10 @@ import type { AuthHookRegistry } from "../pipeline/hooks";
 import { hashRefreshToken } from "../session/refresh";
 
 import {
+  buildCookieHeaders,
+  csrfFailure,
   jsonResponse,
   parseJsonBody,
-  buildCookieHeaders,
 } from "./handler-utils";
 
 export interface LogoutHandlerDeps {
@@ -45,7 +46,7 @@ export async function handleLogout(
 
   if (!csrfResult.valid) {
     return jsonResponse(403, {
-      error: { code: "CSRF_FAILED", message: csrfResult.error },
+      error: csrfFailure(request, csrfResult),
     });
   }
 

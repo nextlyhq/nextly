@@ -1308,3 +1308,52 @@ describe("an arrangement with nothing left on it", () => {
     expect(drawnOrder()).toEqual(["core/b"]);
   });
 });
+
+describe("a card's rows follow its reader's settings", () => {
+  it("draws the number of items its reader chose, not the declared number", async () => {
+    // Declared at five, set to eight by the reader. The batch asks for eight and one more; the
+    // card must draw the eight it asked for, not slice to the declaration's five and say more
+    // exist.
+    mockBranding = branding(["acme/posts"], {
+      "acme/posts": {
+        archetype: "list",
+        component: undefined,
+        query: {
+          source: "collection:posts",
+          op: "list",
+          select: ["title"],
+          limit: 5,
+        },
+        settings: [
+          { name: "limit", type: "number", label: "Items", defaultValue: 5 },
+        ],
+      },
+    });
+    layoutResponse = layout([
+      { id: "p1", widgetId: "acme/posts", config: { limit: 8 } },
+    ]);
+    api.post.mockResolvedValue({
+      results: [
+        {
+          ok: true,
+          result: {
+            op: "list",
+            items: Array.from({ length: 9 }, (_, i) => ({
+              title: `Post ${i + 1}`,
+            })),
+          },
+        },
+      ],
+    });
+    renderGrid();
+
+    await waitFor(() =>
+      expect(screen.getAllByTestId("widget-list-row")).toHaveLength(8)
+    );
+    // The latest request: one may leave before the reader's layout is read, asked as declared.
+    const asked = api.post.mock.calls.at(-1)?.[1] as {
+      queries: Array<{ limit?: number }>;
+    };
+    expect(asked.queries[0].limit).toBe(9);
+  });
+});

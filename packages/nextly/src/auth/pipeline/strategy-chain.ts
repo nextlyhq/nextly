@@ -1,3 +1,5 @@
+import { z } from "zod";
+
 import { isStrategyName } from "../../domains/audit/audit-log-writer";
 import { NextlyError } from "../../errors/nextly-error";
 import type { PluginContext } from "../../plugins/plugin-context";
@@ -78,4 +80,53 @@ export async function runStrategyChain(
     }
   }
   return { outcome: { type: "pass" }, strategyName: null };
+}
+
+/** A strategy's answer to the limiter, parsed: it comes from app code. */
+const limitAnswer = z.discriminatedUnion("handles", [
+  z.object({ handles: z.literal(false) }),
+  z.object({ handles: z.literal(true), key: z.string().nullable() }),
+]);
+
+/**
+ * Which strategy decides how a sign-in is limited, and the key it names, or
+ * `"unanswerable"` when a strategy that cannot answer is reached first.
+ *
+ * The strategies are asked in the chain's own order, so the first that
+ * handles a request decides, as the first non-`pass` outcome decides who
+ * authenticates it. A strategy without `limitKey` could claim the request
+ * itself, so once one is reached nothing after it is asked. An answer that
+ * throws, rejects or is not an answer is taken as handling the request under
+ * no key: the limiter then counts it against the budget shared by requests
+ * naming no account, and it never escapes the limiter. A chain in which no
+ * strategy handles the request names no key either.
+ */
+export async function limitKeyFor(
+  strategies: readonly AuthStrategy[],
+  input: { request: Request; body: Record<string, unknown> }
+): Promise<
+  { strategy: AuthStrategy | null; key: string | null } | "unanswerable"
+> {
+  // Headers and address only: the body arrives parsed, and the request's own
+  // is left for the handler to read.
+  const request = await withoutRefreshCookie(
+    new Request(input.request.url, {
+      method: input.request.method,
+      headers: input.request.headers,
+    })
+  );
+  for (const strategy of strategies) {
+    if (!strategy.limitKey) return "unanswerable";
+    let answer: unknown;
+    try {
+      answer = await strategy.limitKey({ request, body: input.body });
+    } catch {
+      return { strategy, key: null };
+    }
+    const parsed = limitAnswer.safeParse(answer);
+    if (!parsed.success) return { strategy, key: null };
+    if (!parsed.data.handles) continue;
+    return { strategy, key: parsed.data.key };
+  }
+  return { strategy: null, key: null };
 }

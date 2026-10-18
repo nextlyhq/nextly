@@ -41,14 +41,21 @@ function collectionSlugOf(source: string | undefined): string | undefined {
   return slug === "" ? undefined : slug;
 }
 
-/** The card's filter and sort, as the list view's `where` and `sort`; empty ones are left out. */
+/**
+ * The card's filter, sort and lifecycle, as the list view's `where`, `sort` and `status`; empty
+ * ones are left out. The status is the card's own, or published when it left it to the widget
+ * read's default; a card that read every entry names none, which is what the list shows anyway.
+ * The list view ignores a status for a collection without the Draft / Published lifecycle.
+ */
 function listViewSearch(query: CardQuery): URLSearchParams {
   const params = new URLSearchParams();
   const where = query?.where;
   const sort = query?.sort;
+  const status = query?.status ?? "published";
   if (where && Object.keys(where).length > 0)
     params.set("where", JSON.stringify(where));
   if (typeof sort === "string" && sort !== "") params.set("sort", sort);
+  if (status !== "all") params.set("status", status);
   return params;
 }
 

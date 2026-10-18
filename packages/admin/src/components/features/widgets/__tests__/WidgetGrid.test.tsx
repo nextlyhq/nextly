@@ -15,6 +15,7 @@ import {
 import type { AdminBranding } from "@admin/types/branding";
 
 import { coreDraws } from "../outcome";
+import { GRID_GAP_PX } from "../sizes";
 import { WidgetGrid } from "../WidgetGrid";
 
 import { stubDashboardWidth, unstubDashboardWidth } from "./dashboard-width";
@@ -872,6 +873,19 @@ describe("WidgetGrid — sizing", () => {
         .getByLabelText("Dashboard widgets")
         .closest(".\\@container\\/dashboard")
     ).toBe(screen.getByTestId("dashboard-container"));
+  });
+
+  it("draws its gap at the pixels a card's predicted width counts", () => {
+    // A card's first query is sized from a width predicted with GRID_GAP_PX. A gap in rem would
+    // follow the page's root font size and draw cards at another width than predicted.
+    registerComponents({ "@acme/admin#A": () => <div>a</div> });
+    mockBranding = brandingWith([
+      { id: "small", component: "@acme/admin#A", defaultSize: "sm" },
+    ]);
+    renderGrid();
+    expect(screen.getByLabelText("Dashboard widgets").className).toContain(
+      `gap-[${GRID_GAP_PX}px]`
+    );
   });
 
   it("honours the deprecated half alias without half-width phones", () => {

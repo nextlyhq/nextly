@@ -45,6 +45,29 @@ export function runWithCallerScope<T>(
 }
 
 /**
+ * Run `operation` with no caller scope pinned, as if no request were being
+ * served. Internal: not part of any published entry point.
+ *
+ * DANGEROUS outside its two uses. Inside it, a call made for an API-key
+ * request no longer inherits the key's narrowing: an access check that names
+ * no scope reads none, so the call is judged by the user it names alone, and
+ * a key that may do less than its owner is no longer held to less. The only
+ * two allowed uses are:
+ *
+ *   (a) running work exactly as its scheduled job runs it — a job that never
+ *       has a request scope, such as the releases drain run by Publish now;
+ *   (b) evaluating a NAMED identity's grants, read-only — such as whether a
+ *       release member's author may publish it — where the identity being
+ *       judged is not the request's caller.
+ *
+ * Never wrap a write made on the caller's behalf, or a check of the caller's
+ * own authority, in it.
+ */
+export function runDetachedFromRequest<T>(operation: () => T): T {
+  return callerScope.exit(operation);
+}
+
+/**
  * The scope pinned for the request currently running, if any.
  *
  * Returns `undefined` where nothing pinned one — a job, the CLI, a direct

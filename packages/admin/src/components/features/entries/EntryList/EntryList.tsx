@@ -52,7 +52,10 @@ import {
 import {
   getAvailableColumns,
   getDefaultVisibleColumns,
+  choiceInForce,
   linkedSortFor,
+  linkedStatusFor,
+  type ChosenForCollection,
   type CollectionForColumns,
 } from "./EntryTableColumns";
 import { EntryTableSkeleton } from "./EntryTableSkeleton";
@@ -250,9 +253,13 @@ export function EntryList({ collectionSlug }: EntryListProps) {
   const [limit, setLimit] = useState(25);
   // The sort the person chose here; until they choose, the one their link carried, else newest
   // entries first.
-  const [chosenSort, setSort] = useState<string | undefined>();
+  const [chosenSort, setChosenSort] = useState<
+    ChosenForCollection | undefined
+  >();
   const [search, setSearch] = useState("");
-  const [status, setStatus] = useState<string>("all");
+  const [chosenStatus, setChosenStatus] = useState<
+    ChosenForCollection | undefined
+  >();
   const [createdFrom, setCreatedFrom] = useState("");
   const [createdTo, setCreatedTo] = useState("");
   const [updatedFrom, setUpdatedFrom] = useState("");
@@ -265,25 +272,6 @@ export function EntryList({ collectionSlug }: EntryListProps) {
   const searchParams = useSearchParams();
   const whereParam = getSearchParam(searchParams, "where");
 
-  const whereFilter = useMemo(() => {
-    return buildEntryWhereFilter({
-      whereParam,
-      status,
-      createdFrom,
-      createdTo,
-      updatedFrom,
-      updatedTo,
-      translated: translationFilter,
-    });
-  }, [
-    whereParam,
-    status,
-    createdFrom,
-    createdTo,
-    updatedFrom,
-    updatedTo,
-    translationFilter,
-  ]);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [selectedForDelete, setSelectedForDelete] = useState<string[]>([]);
   const [hasSelection, setHasSelection] = useState(false);
@@ -326,7 +314,53 @@ export function EntryList({ collectionSlug }: EntryListProps) {
       ),
     [sortParam, collection, collectionSlug]
   );
-  const sort = chosenSort ?? linkedSort ?? DEFAULT_SORT;
+  const sort = choiceInForce(
+    chosenSort,
+    collectionSlug,
+    linkedSort,
+    DEFAULT_SORT
+  );
+
+  // The lifecycle the link that opened this list carried (`?status=draft`), so a card's "More
+  // exist" lands on the drafts or published entries it showed rather than on every entry. Only
+  // for a collection with the lifecycle; read as the sort is, never written back.
+  const statusParam = getSearchParam(searchParams, "status");
+  const linkedStatus = useMemo(
+    () =>
+      linkedStatusFor(
+        statusParam,
+        collection
+          ? toCollectionForColumns(collection, collectionSlug)
+          : undefined
+      ),
+    [statusParam, collection, collectionSlug]
+  );
+  const status = choiceInForce(
+    chosenStatus,
+    collectionSlug,
+    linkedStatus,
+    "all"
+  );
+
+  const whereFilter = useMemo(() => {
+    return buildEntryWhereFilter({
+      whereParam,
+      status,
+      createdFrom,
+      createdTo,
+      updatedFrom,
+      updatedTo,
+      translated: translationFilter,
+    });
+  }, [
+    whereParam,
+    status,
+    createdFrom,
+    createdTo,
+    updatedFrom,
+    updatedTo,
+    translationFilter,
+  ]);
 
   // Fetch entries with pagination and filters
   const { data: entriesResponse, isLoading: entriesLoading } = useEntries({
@@ -484,10 +518,10 @@ export function EntryList({ collectionSlug }: EntryListProps) {
     (field: string, order: "asc" | "desc") => {
       // Sort format: -field for desc, field for asc
       const sortValue = order === "desc" ? `-${field}` : field;
-      setSort(sortValue);
+      setChosenSort({ collectionSlug, value: sortValue });
       setPage(1); // Reset to first page on sort change
     },
-    []
+    [collectionSlug]
   );
 
   const handleSearchChange = useCallback((newSearch: string) => {
@@ -495,10 +529,13 @@ export function EntryList({ collectionSlug }: EntryListProps) {
     setPage(1); // Reset to first page on search
   }, []);
 
-  const handleStatusChange = useCallback((newStatus: string) => {
-    setStatus(newStatus);
-    setPage(1); // Reset to first page on status change
-  }, []);
+  const handleStatusChange = useCallback(
+    (newStatus: string) => {
+      setChosenStatus({ collectionSlug, value: newStatus });
+      setPage(1); // Reset to first page on status change
+    },
+    [collectionSlug]
+  );
 
   const handleTranslationFilterChange = useCallback(
     (value: TranslationListFilter | null) => {

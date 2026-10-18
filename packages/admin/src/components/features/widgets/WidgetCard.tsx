@@ -64,7 +64,12 @@ import {
   type CardEmptyContent,
   type SkeletonShape,
 } from "./frame/states";
-import { CardTierContext, useMeasuredTier } from "./frame/tier";
+import {
+  CardTierContext,
+  rowsDrawn,
+  useCardTier,
+  useMeasuredTier,
+} from "./frame/tier";
 
 /**
  * What the body shows, besides its content.
@@ -106,6 +111,12 @@ export interface WidgetCardProps {
   state?: CardState;
   /** The shape the loading skeleton takes. */
   skeleton?: SkeletonShape;
+  /**
+   * A list or table card's items setting. Its loading skeleton then holds the place of the rows
+   * the card will draw at its tier (`rowsDrawn`), so the first answer does not make the card
+   * jump; absent, a skeleton draws its default rows.
+   */
+  skeletonItems?: unknown;
   /** What an empty card says. Required for `state="empty"` to say anything specific. */
   empty?: CardEmptyContent;
   /** Retry for this card only, offered in the error state. */
@@ -259,6 +270,7 @@ export function WidgetCard(props: WidgetCardProps) {
             title={title}
             onRetry={props.onRetry}
             skeleton={props.skeleton}
+            skeletonItems={props.skeletonItems}
             empty={props.empty}
           >
             {props.children}
@@ -288,6 +300,7 @@ function WidgetCardBody({
   title,
   onRetry,
   skeleton,
+  skeletonItems,
   empty,
   children,
 }: {
@@ -296,15 +309,21 @@ function WidgetCardBody({
   title: string;
   onRetry?: () => void;
   skeleton?: SkeletonShape;
+  skeletonItems?: unknown;
   empty?: CardEmptyContent;
   children: ReactNode;
 }) {
+  // The rows this card will draw, by the rule the list and table bodies draw by. Medium until the
+  // card has measured itself, as those bodies are.
+  const tier = useCardTier() ?? "medium";
+  const rows =
+    skeletonItems === undefined ? undefined : rowsDrawn(tier, skeletonItems);
   if (error !== null) {
     return <CardError message={error} title={title} onRetry={onRetry} />;
   }
   switch (state) {
     case "loading":
-      return <CardSkeleton shape={skeleton} />;
+      return <CardSkeleton shape={skeleton} rows={rows} />;
     case "unavailable":
       return <CardUnavailable />;
     case "empty":

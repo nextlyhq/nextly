@@ -113,7 +113,9 @@ function questionsFor(card: BatchCard): WidgetQueryRequest[] {
     }));
   }
   if (!widget.query) return [];
-  const { tier } = card;
+  // Sized only for a card the host draws, whose body slices to its tier. A custom card's own
+  // component draws the raw answer with no tier, so it is asked exactly as declared.
+  const tier = widget.archetype === "custom" ? undefined : card.tier;
   return [
     tier
       ? {

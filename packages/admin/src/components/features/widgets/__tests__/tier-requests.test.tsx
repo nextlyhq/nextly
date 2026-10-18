@@ -8,7 +8,7 @@
  * shrank keeps the answer it has.
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, waitFor } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -120,6 +120,66 @@ describe("the requests a dashboard sends as it is sized", () => {
     const [first] = sentQueries();
     expect(first.find(q => q.source === "collection:posts")?.limit).toBe(4);
     expect(first.find(q => q.source === "collection:pages")?.limit).toBe(9);
+  });
+
+  it("keeps the answer it has when the larger one fails, and does not ask for it again", async () => {
+    // The batch answers both cards; the half's own re-ask, once it rises, is refused.
+    vi.mocked(protectedApi.post).mockImplementation((_url, body) => {
+      const queries = (body as { queries: unknown[] }).queries;
+      return Promise.resolve({
+        results: queries.map(() =>
+          queries.length === 1
+            ? { ok: false, error: "The read failed.", code: "internal" }
+            : { ok: true, result: { op: "list", items: [{ title: "Kept" }] } }
+        ),
+      });
+    });
+    stubDashboardWidth(680);
+    renderGrid();
+    await waitFor(() => expect(screen.getAllByText("Kept")).toHaveLength(2));
+
+    resizeDashboard(720);
+    await waitFor(() => expect(sentQueries()).toHaveLength(2));
+    // Long enough for the refusal to land, and for a repeat to have left if one were going to.
+    await new Promise(resolve => setTimeout(resolve, 100));
+    // 🔴 The smaller answer is still drawn: a resize during a failure is not an error.
+    expect(screen.getAllByText("Kept")).toHaveLength(2);
+    // And the failed tier is not asked again on its own, round after round.
+    expect(sentQueries()).toHaveLength(2);
+  });
+
+  it("asks a custom widget's query as declared, at any tier", async () => {
+    // A plugin's own component draws a custom card from the raw answer, with no tier and no
+    // row slicer, so its query is never sized: the rows it asked for are the rows it gets.
+    mockBranding = {
+      plugins: [
+        {
+          name: "@acme",
+          collections: [],
+          widgets: [
+            {
+              id: "acme/custom",
+              title: "acme/custom",
+              archetype: "custom",
+              component: "@acme/admin#Custom",
+              defaultSize: "lg",
+              query: {
+                source: "collection:posts",
+                op: "list",
+                select: ["title"],
+                limit: 8,
+              },
+            },
+          ],
+        },
+      ],
+    } as unknown as AdminBranding;
+    stubDashboardWidth(680);
+    renderGrid();
+    await waitFor(() => expect(sentQueries()).toHaveLength(1));
+    expect(sentQueries()[0]).toEqual([
+      expect.objectContaining({ source: "collection:posts", limit: 8 }),
+    ]);
   });
 
   it("asks again for the card that rose, alone, and for nothing when it shrinks", async () => {

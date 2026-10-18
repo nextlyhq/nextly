@@ -129,8 +129,9 @@ export function ChartFrame({
           View as table
         </summary>
         {/* No scroll of its own: a card never shows a scrollbar, so the open table grows the
-            card instead. Its two columns are a label and a count, and the label wraps, so the
-            table fits the card's width at every tier. */}
+            card instead. Its two columns are a label and a count, and the label wraps ANYWHERE:
+            `break-words` alone leaves an automatic table at least as wide as its longest word,
+            so one long unbroken label pushed the table past a narrow card. */}
         <div className="mt-2">
           <table className="w-full border-collapse text-xs">
             <caption className="sr-only">{title}</caption>
@@ -171,8 +172,8 @@ export function ChartFrame({
                     scope="row"
                     className={
                       row.announce
-                        ? "break-words py-1 pr-2 text-left font-normal italic text-muted-foreground"
-                        : "break-words py-1 pr-2 text-left font-normal text-foreground"
+                        ? "py-1 pr-2 text-left font-normal italic text-muted-foreground [overflow-wrap:anywhere]"
+                        : "py-1 pr-2 text-left font-normal text-foreground [overflow-wrap:anywhere]"
                     }
                   >
                     {row.announce ? (

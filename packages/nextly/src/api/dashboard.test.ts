@@ -8,6 +8,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("../auth/middleware", () => ({
   requireAuthentication: vi.fn(),
   isErrorResponse: vi.fn(),
+  // The admin counts' decision (`readableAdminCounts`) asks these. Each
+  // test that cares states its verdict; by default every one is refused.
+  authorizeCaller: vi.fn(),
+  authorizeCallerForAny: vi.fn(),
 }));
 
 vi.mock("../auth/middleware/to-nextly-error", () => ({
@@ -70,7 +74,12 @@ vi.mock("../auth/entity-read-access", async importOriginal => ({
   readableEntities,
 }));
 
-import { isErrorResponse, requireAuthentication } from "../auth/middleware";
+import {
+  authorizeCaller,
+  authorizeCallerForAny,
+  isErrorResponse,
+  requireAuthentication,
+} from "../auth/middleware";
 import { container } from "../di";
 import { SETTINGS_ACTIVITY_NAMESPACES } from "../domains/audit/settings-activity-namespaces";
 import type { ActivityLogResult } from "../services/dashboard/activity-log-service";
@@ -147,7 +156,15 @@ beforeEach(() => {
   (requireAuthentication as ReturnType<typeof vi.fn>).mockResolvedValue({
     userId: "user-1",
   });
-  (isErrorResponse as ReturnType<typeof vi.fn>).mockReturnValue(false);
+  // The real predicate, so a refusal from the checks below reads as one.
+  (isErrorResponse as ReturnType<typeof vi.fn>).mockImplementation(
+    (result: object) => "statusCode" in result
+  );
+  const refused = { statusCode: 403, error: "Forbidden" };
+  (authorizeCaller as ReturnType<typeof vi.fn>).mockResolvedValue(refused);
+  (authorizeCallerForAny as ReturnType<typeof vi.fn>).mockResolvedValue(
+    refused
+  );
   (resolveRoleSlugs as ReturnType<typeof vi.fn>).mockResolvedValue([]);
 });
 
@@ -317,6 +334,7 @@ describe("dashboard read scope", () => {
     expect(getStats).toHaveBeenCalledWith({
       scope: { kind: "some", resources: new Set(["posts"]) },
       caller: expect.anything(),
+      counts: expect.anything(),
     });
   });
 
@@ -334,6 +352,7 @@ describe("dashboard read scope", () => {
     expect(getStats).toHaveBeenCalledWith({
       scope: { kind: "some", resources: new Set() },
       caller: expect.anything(),
+      counts: expect.anything(),
     });
   });
 
@@ -350,7 +369,37 @@ describe("dashboard read scope", () => {
     expect(getStats).toHaveBeenCalledWith({
       scope: { kind: "some", resources: new Set(CANDIDATES) },
       caller: expect.anything(),
+      counts: expect.anything(),
     });
+  });
+
+  it("forwards the admin counts the caller may be given, decided on the caller itself", async () => {
+    const auth = {
+      userId: "user-1",
+      authMethod: "session",
+      permissions: [],
+      roles: [],
+    };
+    (requireAuthentication as ReturnType<typeof vi.fn>).mockResolvedValue(auth);
+    // A caller holding `read-users` alone.
+    (authorizeCaller as ReturnType<typeof vi.fn>).mockImplementation(
+      async (_caller: unknown, action: string, resource: string) =>
+        action === "read" && resource === "users"
+          ? auth
+          : { statusCode: 403, error: "Forbidden" }
+    );
+
+    const getStats = vi.fn().mockResolvedValue({});
+    serviceStub = { getStats };
+
+    await getDashboardStats(makeReq("http://localhost/api/dashboard/stats"));
+
+    expect(getStats).toHaveBeenCalledWith(
+      expect.objectContaining({ counts: new Set(["users"]) })
+    );
+    // Judged as the AUTHENTICATED caller, which for an API key carries the
+    // key's own grant, not as the resolved read identity.
+    expect(authorizeCaller).toHaveBeenCalledWith(auth, "read", "users");
   });
 
   it("hands the service the SAME resolved caller it decided the scope with", async () => {
@@ -524,6 +573,7 @@ describe("dashboard read scope for an API-KEY caller", () => {
     expect(getStats).toHaveBeenCalledWith({
       scope: { kind: "some", resources: new Set(["site-settings"]) },
       caller: expect.anything(),
+      counts: expect.anything(),
     });
   });
 

@@ -9,12 +9,20 @@ import { ROUTES } from "@admin/constants/routes";
 import { useDashboardStats } from "@admin/hooks/queries";
 
 import { CardFigure } from "../widgets/frame/figure";
-import { CardError, CardSkeleton } from "../widgets/frame/states";
+import {
+  CardError,
+  CardSkeleton,
+  CardUnavailable,
+} from "../widgets/frame/states";
 import { useCardTier } from "../widgets/frame/tier";
 
 /**
  * Compact "Team" summary on the dashboard. Two cards: total Users + total
  * Roles. Each card links to its respective Settings page.
+ *
+ * Each count is drawn only when the summary carries it: the server leaves out
+ * a count the reader may not read, and drawing that as 0 would put back an
+ * answer it withheld, and a wrong one.
  */
 
 interface TeamCardProps {
@@ -72,38 +80,57 @@ export const TeamSummary: React.FC = () => {
       />
     );
   }
-  return <TeamTiles users={data?.users ?? 0} roles={data?.roles ?? 0} />;
+  const users = data?.users;
+  const roles = data?.roles;
+  // Neither count is this reader's to see: the frame's one unavailable state,
+  // rather than an empty body.
+  if (users === undefined && roles === undefined) return <CardUnavailable />;
+  return <TeamTiles users={users} roles={roles} />;
 };
 
 /**
- * The team at the card's tier: a small card is the number of people alone, and a wider one adds
- * the roles beside it. By the card's own width, never the window's, so a narrow card on a wide
- * screen does not squeeze two tiles into it.
+ * The team at the card's tier: the counts this reader may see, of which a small card draws the
+ * first alone -- the number of people, when that is theirs to see. By the card's own width, never
+ * the window's, so a narrow card on a wide screen does not squeeze two tiles into it.
  */
-function TeamTiles({ users, roles }: { users: number; roles: number }) {
+function TeamTiles({
+  users,
+  roles,
+}: {
+  users: number | undefined;
+  roles: number | undefined;
+}) {
   // Medium until the card has measured itself, which it does before its first paint.
   const tier = useCardTier() ?? "medium";
-  return (
-    <div
-      data-testid="team-summary"
-      className={
-        tier === "small" ? "grid grid-cols-1 gap-4" : "grid grid-cols-2 gap-4"
-      }
-    >
+  const tiles = [
+    users === undefined ? null : (
       <TeamCard
+        key="users"
         label="Users"
         count={users}
         href={ROUTES.USERS}
         Icon={UsersIcon}
       />
-      {tier !== "small" && (
-        <TeamCard
-          label="Roles"
-          count={roles}
-          href={ROUTES.SECURITY_ROLES}
-          Icon={ShieldCheck}
-        />
-      )}
+    ),
+    roles === undefined ? null : (
+      <TeamCard
+        key="roles"
+        label="Roles"
+        count={roles}
+        href={ROUTES.SECURITY_ROLES}
+        Icon={ShieldCheck}
+      />
+    ),
+  ].filter(tile => tile !== null);
+  const drawn = tier === "small" ? tiles.slice(0, 1) : tiles;
+  return (
+    <div
+      data-testid="team-summary"
+      className={
+        drawn.length > 1 ? "grid grid-cols-2 gap-4" : "grid grid-cols-1 gap-4"
+      }
+    >
+      {drawn}
     </div>
   );
 }

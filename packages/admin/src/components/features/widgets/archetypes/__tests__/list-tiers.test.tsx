@@ -13,6 +13,7 @@ import { cleanup } from "@testing-library/react";
 
 import { CardTierContext } from "../../frame/tier";
 import { listBody } from "../list";
+import { moreExistHref } from "../more-exist";
 import { tableBody } from "../table";
 
 afterEach(() => cleanup());
@@ -155,5 +156,32 @@ describe("the large tier draws a table, and below it a table card is a list", ()
     expect(screen.queryByTestId("widget-table")).not.toBeInTheDocument();
     expect(screen.getAllByTestId("widget-list-row")).toHaveLength(2);
     expect(screen.getByText("Post 1")).toBeInTheDocument();
+  });
+});
+
+describe("the lifecycle a More exist link carries", () => {
+  // The card's rows are bounded by its lifecycle status as well as its filter, and the list view
+  // shows every entry unless told otherwise, so the link says which entries the card was drawn
+  // from. An omitted status is the widget read's default, published.
+  const statusOf = (status: "draft" | "published" | "all" | undefined) => {
+    const href = moreExistHref({
+      source: "collection:posts",
+      op: "list",
+      status,
+    } as never);
+    return new URL(href ?? "", "http://admin.test").searchParams.get("status");
+  };
+
+  it("names the card's own status", () => {
+    expect(statusOf("draft")).toBe("draft");
+    expect(statusOf("published")).toBe("published");
+  });
+
+  it("names published for a card that left its status to the default", () => {
+    expect(statusOf(undefined)).toBe("published");
+  });
+
+  it("names none for a card that read every entry", () => {
+    expect(statusOf("all")).toBeNull();
   });
 });

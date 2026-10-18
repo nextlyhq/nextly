@@ -142,5 +142,20 @@ describe.each(availableDialects())(
       },
       180_000
     );
+
+    it("adds both tables in one run to a database that has neither, as one from before them has", async () => {
+      await withFreshDatabase(dialect, "history_tables_both", async fresh => {
+        await migrateFresh(fresh, NO_MIGRATIONS);
+        for (const spec of TABLES) {
+          await fresh.exec(`DROP TABLE ${spec.table}`);
+          expect(await fresh.columnsOf(spec.table)).toEqual([]);
+        }
+
+        expect(await migrateFresh(fresh, NO_MIGRATIONS)).toBe(true);
+        for (const spec of TABLES) await expectShape(fresh, spec);
+
+        expect(await migrateFresh(fresh, NO_MIGRATIONS)).toBe(false);
+      });
+    }, 180_000);
   }
 );

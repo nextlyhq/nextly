@@ -451,9 +451,12 @@ async function runCoreSchemaChecks(
       import("../domains/schema/pipeline/diff/introspect-live"),
       import("../schemas/index"),
     ]);
-  const { findCoreSchemaDrift, formatCoreSchemaDriftWarning } = await import(
-    "./core-schema-drift"
-  );
+  const {
+    findCoreSchemaDrift,
+    findMissingCoreTables,
+    formatCoreSchemaDriftWarning,
+    formatMissingCoreTablesWarning,
+  } = await import("./core-schema-drift");
   const [
     {
       countRetiredAccessRules,
@@ -486,6 +489,12 @@ async function runCoreSchemaChecks(
     getCoreTableNames(coreOptions)
   );
 
+  // Tables missing outright, and tables behind by columns: two failures with
+  // one remedy, each named in its own warning, read off one snapshot.
+  const missingTables = findMissingCoreTables(live, desired);
+  if (missingTables.length > 0) {
+    logger.warn(formatMissingCoreTablesWarning(missingTables));
+  }
   const drift = findCoreSchemaDrift(live, desired);
   if (drift.length > 0) {
     logger.warn(formatCoreSchemaDriftWarning(drift));

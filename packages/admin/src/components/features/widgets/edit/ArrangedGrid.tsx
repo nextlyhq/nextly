@@ -138,7 +138,8 @@ export function ArrangedGrid({
         // sequence), so focus has somewhere to land when the element holding
         // it is taken off the page.
         tabIndex={-1}
-        className="grid grid-cols-12 gap-6"
+        // The gap in pixels, the GRID_GAP_PX a card's predicted width counts.
+        className="grid grid-cols-12 gap-[24px]"
       >
         <span
           role="status"

@@ -23,6 +23,7 @@ import type {
 import type { CellSlotLookup } from "../archetypes/types";
 import type { MoveDirection } from "../layout-editor";
 import { cardSpanClass, drawnWidth } from "../sizes";
+import { widgetAsAsked } from "../widget-as-asked";
 import { WidgetRenderer } from "../WidgetRenderer";
 
 import { CardActionsMenu, CardWidthLabel } from "./CardActionsMenu";
@@ -284,7 +285,11 @@ export function ArrangedCell(props: ArrangedCellProps) {
    */
   const [settingsOpen, setSettingsOpen] = useState(false);
   const hasSettings = (row.widget.settings?.length ?? 0) > 0;
-  const widget = row.widget;
+  // Drawn as it was asked: the query the batch sent, with the reader's settings applied.
+  const widget = useMemo(
+    () => widgetAsAsked(row.widget, row.config),
+    [row.widget, row.config]
+  );
   /*
    * Resolved HERE, the one place a card's declaration and its reader's stored
    * config are both in scope. `resolveWidgetSettings` returns only DECLARED

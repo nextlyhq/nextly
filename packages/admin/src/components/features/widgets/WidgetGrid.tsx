@@ -25,7 +25,6 @@
 
 import { DndContext, closestCenter } from "@dnd-kit/core";
 import type { SizeTier } from "@nextlyhq/ui/format";
-import { applyWidgetSettings } from "nextly/config";
 import { useMemo, useRef, type ComponentProps } from "react";
 
 import { UnsavedChangesGuard } from "@admin/components/features/entries/EntryForm/UnsavedChangesGuard";
@@ -60,6 +59,7 @@ import { drawnWidth } from "./sizes";
 import { useDashboardWidth } from "./useDashboardWidth";
 import { useGridAnnouncer } from "./useGridAnnouncer";
 import { useWidgetBatch } from "./useWidgetBatch";
+import { widgetAsAsked } from "./widget-as-asked";
 
 // At module scope, before any render. `PluginSlot` resolves a path DURING
 // render, so registering from an effect would land after the first paint and
@@ -110,7 +110,8 @@ function NothingToDraw({
       <section
         aria-label="Dashboard widgets"
         data-testid="widget-grid-loading"
-        className="grid grid-cols-12 gap-6"
+        // The gap in pixels, the GRID_GAP_PX a card's predicted width counts.
+        className="grid grid-cols-12 gap-[24px]"
       >
         {[0, 1, 2].map(row => (
           <div
@@ -136,9 +137,10 @@ function NothingToDraw({
  * settings asks two different questions, and keying those by widget filed both
  * under one entry.
  *
- * `applyWidgetSettings` returns the query it was given when nothing applies, so
- * a card with no settings keeps its identity through this map and the batch's
- * memoisation does not see a new object every render.
+ * Through `widgetAsAsked`, the rule the card is also drawn from, which returns the
+ * widget it was given when nothing applies, so a card with no settings keeps its
+ * identity through this map and the batch's memoisation does not see a new
+ * object every render.
  */
 function askedWith(
   rows: ArrangedWidget[],
@@ -152,19 +154,8 @@ function askedWith(
       dashboardWidth
     );
     const sized = tier ? { ...row, tier } : row;
-    return row.widget.query
-      ? {
-          ...sized,
-          widget: {
-            ...row.widget,
-            query: applyWidgetSettings(
-              row.widget.query,
-              row.widget.settings,
-              row.config
-            ),
-          },
-        }
-      : sized;
+    const widget = widgetAsAsked(row.widget, row.config);
+    return widget === row.widget ? sized : { ...sized, widget };
   });
 }
 

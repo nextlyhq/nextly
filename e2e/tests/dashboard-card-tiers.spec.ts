@@ -18,6 +18,8 @@ type Width = "quarter" | "third" | "half" | "twoThirds" | "full";
 interface Layout {
   version: number;
   scope: string;
+  /** Widget ids this reader may add: a generated collection card is offered, not placed. */
+  available: string[];
   placements: Array<{
     id: string;
     widgetId: string;
@@ -26,25 +28,41 @@ interface Layout {
   }>;
 }
 
-/** Put the Recent posts card at `width` in the saved layout, and answer its placement id. */
-async function placeRecentPosts(page: Page, width: Width): Promise<string> {
+/** Put the Recent posts card at `width` in the saved layout. */
+async function placeRecentPosts(page: Page, width: Width): Promise<void> {
   const read = await page.request.get("/admin/api/dashboard/layout");
   const layout = (await read.json()) as Layout;
-  const card = layout.placements.find(
+  const placed = layout.placements.some(
     placement => placement.widgetId === RECENT_POSTS
   );
-  if (!card)
-    throw new Error("the generated Recent posts card is not on the dashboard");
-  const placements = layout.placements.map(placement =>
-    placement.widgetId === RECENT_POSTS
-      ? { ...placement, width, removed: false }
-      : placement
-  );
+  // A generated collection card is not on the default dashboard, only offered to add, so a
+  // fresh install places it here; one already placed is moved to the width.
+  if (!placed && !layout.available.includes(RECENT_POSTS))
+    throw new Error("the generated Recent posts card cannot be added");
+  const placements = placed
+    ? layout.placements.map(placement =>
+        placement.widgetId === RECENT_POSTS
+          ? { ...placement, width, removed: false }
+          : placement
+      )
+    : [
+        ...layout.placements,
+        {
+          id: "e2e-recent-posts",
+          widgetId: RECENT_POSTS,
+          width,
+          removed: false,
+        },
+      ];
   const write = await page.request.put("/admin/api/dashboard/layout", {
     data: { placements, version: layout.version, scope: layout.scope },
   });
   expect(write.ok()).toBe(true);
-  return card.id;
+}
+
+/** The Recent posts card's cell, which the grid names by the widget it draws. */
+function recentPostsCell(page: Page) {
+  return page.getByTestId(`widget-cell-${RECENT_POSTS}`);
 }
 
 /** Size the window until the dashboard's own container is `target` pixels wide. */
@@ -61,13 +79,15 @@ async function sizeDashboard(page: Page, target: number): Promise<void> {
   throw new Error(`the dashboard did not reach ${target}px`);
 }
 
-async function tierAt(page: Page, placementId: string, dashboardWidth: number) {
+async function tierAt(page: Page, dashboardWidth: number) {
   await sizeDashboard(page, dashboardWidth);
-  const card = page
-    .getByTestId(`widget-cell-${placementId}`)
-    .locator("[data-tier]")
-    .first();
+  const card = recentPostsCell(page).locator("[data-tier]").first();
   await expect(card).toHaveAttribute("data-tier", /small|medium|large/);
+  // Nothing in the card is wider than the card: it wraps rather than overflowing its cell.
+  const overflow = await card.evaluate(
+    element => element.scrollWidth - element.clientWidth
+  );
+  expect(overflow).toBeLessThanOrEqual(1);
   return card.getAttribute("data-tier");
 }
 
@@ -100,36 +120,34 @@ for (const [dashboardWidth, width, tier] of CASES) {
   test(`a ${width} card on a ${dashboardWidth}px dashboard is ${tier}`, async ({
     page,
   }) => {
-    await gotoAdmin(page, "/admin");
-    const placementId = await placeRecentPosts(page, width);
+    await gotoAdmin(page, "/");
+    await placeRecentPosts(page, width);
     await page.reload();
-    expect(await tierAt(page, placementId, dashboardWidth)).toBe(tier);
+    expect(await tierAt(page, dashboardWidth)).toBe(tier);
   });
 }
 
 test("a full card on a 900px dashboard draws its rows as a table", async ({
   page,
 }) => {
-  await gotoAdmin(page, "/admin");
-  const placementId = await placeRecentPosts(page, "full");
+  await gotoAdmin(page, "/");
+  await placeRecentPosts(page, "full");
   await page.reload();
   await sizeDashboard(page, 900);
-  await expect(
-    page.getByTestId(`widget-cell-${placementId}`).getByTestId("widget-table")
-  ).toBeVisible();
+  await expect(recentPostsCell(page).getByTestId("widget-table")).toBeVisible();
 });
 
 test("crosses from small to medium where the bands put the edge", async ({
   page,
 }) => {
-  await gotoAdmin(page, "/admin");
-  const half = await placeRecentPosts(page, "half");
+  await gotoAdmin(page, "/");
+  await placeRecentPosts(page, "half");
   await page.reload();
-  expect(await tierAt(page, half, 680)).toBe("small");
-  expect(await tierAt(page, half, 720)).toBe("medium");
+  expect(await tierAt(page, 680)).toBe("small");
+  expect(await tierAt(page, 720)).toBe("medium");
 
-  const full = await placeRecentPosts(page, "full");
+  await placeRecentPosts(page, "full");
   await page.reload();
-  expect(await tierAt(page, full, 330)).toBe("small");
-  expect(await tierAt(page, full, 350)).toBe("medium");
+  expect(await tierAt(page, 330)).toBe("small");
+  expect(await tierAt(page, 350)).toBe("medium");
 });
