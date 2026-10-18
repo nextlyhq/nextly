@@ -743,14 +743,15 @@ export function EntrySystemHeader({
         </div>
 
         {/* The title, on its own line at full width, so no action can take its
-          width. It keeps a readable size at every width. */}
+          width. A size smaller on a phone, where the larger one cut short a
+          title of a few ordinary words. */}
         <div className="mt-1.5">
           {/* The title is part of the document, so reading a past version
             locks it with everything else. Left editable it would mutate the
             LIVE document while the banner says the page cannot be edited — and
             go to autosave as unsaved work nobody typed on purpose. */}
           <EntryTitleInput
-            className="text-2xl leading-8"
+            className="text-2xl leading-8 @max-lg/toolbar:text-xl @max-lg/toolbar:leading-[26px]"
             name={titleName}
             control={form.control}
             label={titleLabel}
