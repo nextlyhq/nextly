@@ -41,7 +41,6 @@ import {
   withContributedActions,
   type DocumentAction,
 } from "./document-actions";
-import { ToolbarLabel } from "./toolbar-density";
 
 /** What a host wires an action to, and why it might not run right now. */
 export interface ActionBinding {
@@ -239,7 +238,9 @@ export function DocumentActionBar({
           data-action={action.id}
         >
           {pending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
-          <ToolbarLabel priority="lifecycle">{action.label}</ToolbarLabel>
+          {/* Its words at every width: the button draws no icon, so a label
+            that collapsed would leave it empty. */}
+          {action.label}
         </Button>
       ))}
 

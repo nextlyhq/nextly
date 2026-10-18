@@ -1,0 +1,184 @@
+/**
+ * The editor header's arrangement, and that it draws no empty control.
+ *
+ * The header is one top row (the way back at the left, every action at the
+ * right with History first), then the title on its own line, then the status
+ * line. And in every document state, each button shows something: an icon, or
+ * words that are not hidden. A button whose only content is a label hidden at
+ * narrow widths draws as an empty bordered box, which is what the editor
+ * showed beside "Saved" before the title had a line of its own.
+ *
+ * jsdom evaluates no CSS, so "hidden" is read from the classes that hide: a
+ * label inside an element carrying `sr-only`, under any width variant, is not
+ * counted as something the button shows.
+ */
+import { FormProvider, useForm } from "react-hook-form";
+import { describe, expect, it, vi } from "vitest";
+
+import { render, screen, within } from "@admin/__tests__/utils";
+
+import { EntrySystemHeader } from "../EntrySystemHeader";
+
+vi.mock("@admin/hooks/useCan", () => ({ useCan: () => true }));
+
+interface State {
+  name: string;
+  mode: "create" | "edit";
+  hasStatus?: boolean;
+  draftsEnabled?: boolean;
+  entry?: {
+    id: string;
+    status?: string;
+    title?: string;
+    _isWorkingDraft?: boolean;
+  } | null;
+  isDirty?: boolean;
+}
+
+// The states the header draws a different set of controls for.
+const STATES: State[] = [
+  { name: "a new entry", mode: "create" },
+  {
+    name: "a draft",
+    mode: "edit",
+    entry: { id: "e1", status: "draft", title: "Hello" },
+  },
+  {
+    name: "a published entry",
+    mode: "edit",
+    entry: { id: "e1", status: "published", title: "Hello" },
+  },
+  {
+    name: "a published entry with unsaved edits",
+    mode: "edit",
+    entry: { id: "e1", status: "published", title: "Hello" },
+    isDirty: true,
+  },
+  {
+    name: "a published entry with a working draft",
+    mode: "edit",
+    draftsEnabled: true,
+    entry: {
+      id: "e1",
+      status: "published",
+      title: "Hello",
+      _isWorkingDraft: true,
+    },
+  },
+  {
+    name: "an entry with no status",
+    mode: "edit",
+    hasStatus: false,
+    entry: { id: "e1", title: "Hello" },
+  },
+];
+
+function Harness({
+  state,
+  backLink,
+}: {
+  state: State;
+  backLink?: { href: string; label: string };
+}) {
+  const methods = useForm({
+    defaultValues: { title: state.entry?.title ?? "" },
+  });
+  return (
+    <FormProvider {...methods}>
+      <EntrySystemHeader
+        mode={state.mode}
+        hasStatus={state.hasStatus ?? true}
+        draftsEnabled={state.draftsEnabled ?? false}
+        isDirty={state.isDirty ?? false}
+        entry={state.entry ?? null}
+        collectionSlug="posts"
+        historyFields={[]}
+        autosaveEnabled
+        autosaveStatus="idle"
+        {...(backLink === undefined ? {} : { backLink })}
+        onSaveDraft={vi.fn()}
+        onPublish={vi.fn()}
+        onSaveChanges={vi.fn()}
+        onSaveWorkingDraft={vi.fn()}
+        onUnpublish={vi.fn()}
+        onDiscardWorkingDraft={vi.fn()}
+        onToggleRail={vi.fn()}
+      />
+    </FormProvider>
+  );
+}
+
+/** Whether an element hides what it holds at some width or always. */
+function hides(element: Element): boolean {
+  return /(^|\s|:)sr-only(\s|$)/.test(element.getAttribute("class") ?? "");
+}
+
+/** Whether a button shows an icon, or words nothing hides. */
+function showsSomething(button: HTMLElement): boolean {
+  if (button.querySelector("svg")) return true;
+  const walker = document.createTreeWalker(button, NodeFilter.SHOW_TEXT);
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    if (!node.textContent?.trim()) continue;
+    let hidden = false;
+    for (
+      let parent = node.parentElement;
+      parent && parent !== button.parentElement;
+      parent = parent.parentElement
+    ) {
+      if (hides(parent)) hidden = true;
+    }
+    if (!hidden) return true;
+  }
+  return false;
+}
+
+describe("the editor header", () => {
+  it.each(STATES.map(state => [state.name, state] as const))(
+    "draws no empty control for %s",
+    (_, state) => {
+      const { container } = render(<Harness state={state} />);
+      const buttons = [...container.querySelectorAll("button")];
+      expect(buttons.length).toBeGreaterThan(0);
+      const empty = buttons
+        .filter(button => !showsSomething(button))
+        .map(
+          button =>
+            button.getAttribute("aria-label") ??
+            button.getAttribute("title") ??
+            button.textContent
+        );
+      expect(empty).toEqual([]);
+    }
+  );
+
+  it("puts the way back first, every action after it with History first, then the title on its own line", () => {
+    render(
+      <Harness
+        state={STATES[1]!}
+        backLink={{ href: "/admin/collections/posts", label: "Posts" }}
+      />
+    );
+    const back = screen.getByRole("link", { name: "Posts" });
+    expect(back).toHaveAttribute("href", "/admin/collections/posts");
+    const history = screen.getByRole("button", { name: "Version history" });
+    const save = screen.getByRole("button", { name: /^save draft$/i });
+    const title = screen.getByRole("textbox");
+
+    const follows = (a: Node, b: Node) =>
+      Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(follows(back, history)).toBe(true);
+    expect(follows(history, save)).toBe(true);
+    // The title is below the action row, not between the way back and it.
+    expect(follows(save, title)).toBe(true);
+    // The way back and the actions share the top row; the title has its own.
+    const topRow = history.closest("div.min-h-9");
+    expect(topRow).not.toBeNull();
+    expect(within(topRow as HTMLElement).getByRole("link")).toBe(back);
+    expect(topRow?.contains(title)).toBe(false);
+  });
+
+  it("draws no back link where the document has no list to go back to", () => {
+    render(<Harness state={STATES[1]!} />);
+    expect(screen.queryByRole("link")).not.toBeInTheDocument();
+  });
+});
