@@ -257,6 +257,52 @@ function isAheadOf(version: unknown, baseline: unknown): boolean {
   );
 }
 
+/**
+ * A child of a `"contentOnly"` slot with everything but its content put back
+ * as it started: the parts {@link nonContentChanges} compares, so the result
+ * has none of them left. Its id, name and content props are its own.
+ *
+ * @param held - the child as it is
+ * @param starting - the child it started as
+ * @param content - the props its block declares as content
+ */
+export function withStartingDesign(
+  held: Record<string, unknown>,
+  starting: Record<string, unknown>,
+  content: ReadonlySet<string>
+): Record<string, unknown> {
+  const next: Record<string, unknown> = { ...held };
+  next.props = keepContent(held.props, starting.props, content);
+  const bindings = keepContent(held.bindings, starting.bindings, content);
+  if (Object.keys(bindings).length > 0) next.bindings = bindings;
+  else delete next.bindings;
+  for (const part of [...PINNED_PARTS, "migrationFailed"]) {
+    if (starting[part] === undefined) delete next[part];
+    else next[part] = starting[part];
+  }
+  if (isAheadOf(held.version, starting.version)) {
+    next.version = starting.version;
+  }
+  return next;
+}
+
+/** A record's content entries as held, and every other entry as it started. */
+function keepContent(
+  held: unknown,
+  starting: unknown,
+  content: ReadonlySet<string>
+): Record<string, unknown> {
+  const own = recordOrEmpty(held);
+  const next: Record<string, unknown> = {};
+  for (const [name, value] of Object.entries(recordOrEmpty(starting))) {
+    if (!content.has(name)) next[name] = value;
+  }
+  for (const [name, value] of Object.entries(own)) {
+    if (content.has(name)) next[name] = value;
+  }
+  return next;
+}
+
 function recordOrEmpty(value: unknown): Record<string, unknown> {
   return isPlainRecord(value) ? value : {};
 }

@@ -397,3 +397,54 @@ describe("a placement judged with what its page already holds", () => {
     ).toEqual(["locked-slot-content-only"]);
   });
 });
+
+describe("what a lock fault says about the break, for an editor to word", () => {
+  // An editor refusing the edit before it happens words it itself, and tells
+  // a break the edit adds from one the page already had by where it is: the
+  // block whose slot is locked, the slot, and the rule.
+  it("names the holder, the slot and what changed, under contentOnly", () => {
+    const host = placement({
+      props: { componentId: "promo", overrides: { side: "right" } },
+    });
+    const faults = judge(host);
+    expect(faults.map(fault => fault.lock)).toEqual([
+      {
+        // The holder as composed: the definition's node under the id the
+        // composition gives it for this placement.
+        holderId: expect.stringMatching(/^cx-/),
+        holderType: "acme/sealed-card",
+        slot: "body",
+        lock: "contentOnly",
+        childType: "acme/headline",
+        changes: ['prop "align"'],
+      },
+    ]);
+    // The same placement composed again names the same holder, so a break
+    // before an edit and after it can be told apart from a new one.
+    expect(judge(structuredClone(host))[0]!.lock!.holderId).toBe(
+      faults[0]!.lock!.holderId
+    );
+  });
+
+  it("names the holder, the slot and the rule, for the blocks a slot holds", () => {
+    const faults = judge(
+      placement({
+        slots: {
+          extra: [
+            makeNode("acme/headline", 1, {}),
+            makeNode("acme/headline", 1, {}),
+          ],
+        },
+      })
+    );
+    expect(faults.map(fault => fault.lock)).toEqual([
+      {
+        holderId: expect.stringMatching(/^cx-/),
+        holderType: "acme/fixed-row",
+        slot: "items",
+        lock: "all",
+        changes: [],
+      },
+    ]);
+  });
+});
