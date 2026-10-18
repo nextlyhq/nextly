@@ -50,6 +50,7 @@ import type { UserContext } from "../collections/services/collection-types";
 import { EVERY_LOCALE } from "../i18n/locale-selector";
 import { createJobContentApi } from "../jobs/job-content-api";
 import type { JobContentSource } from "../jobs/job-content-api";
+import type { VersionsRepository } from "../versions/versions-repository";
 
 import type { ReleaseMutations } from "./apply-due-releases";
 import type { DocumentRef } from "./releases-repository";
@@ -67,6 +68,8 @@ const WITHDRAWN_STATUS = "draft";
 export function createReleaseMutations(deps: {
   /** The Direct API. Injected for the reason the applier's own deps are. */
   contentApi: JobContentSource;
+  /** Where a document's pending working drafts are read. */
+  drafts: Pick<VersionsRepository, "listWorkingDraftLocales">;
 }): ReleaseMutations {
   const write = async (
     ref: DocumentRef,
@@ -138,14 +141,29 @@ export function createReleaseMutations(deps: {
     return statusOf(doc);
   };
 
+  /** Whether a stored lifecycle is the one an action leaves behind. */
+  const reached = (
+    status: string | undefined,
+    effect: "publish" | "unpublish"
+  ): boolean =>
+    effect === "publish" ? status === "published" : status === WITHDRAWN_STATUS;
+
   return {
     publish: ({ ref, user }) => write(ref, user, "published"),
     unpublish: ({ ref, user }) => write(ref, user, WITHDRAWN_STATUS),
-    applied: async ({ ref, effect }) => {
-      const status = await currentStatus(ref);
-      return effect === "publish"
-        ? status === "published"
-        : status === WITHDRAWN_STATUS;
+    applied: async ({ ref, effect }) =>
+      reached(await currentStatus(ref), effect),
+    settled: async ({ ref, effect }) => {
+      if (!reached(await currentStatus(ref), effect)) return false;
+      // A held working draft, in any language, is content the write would
+      // still promote, so the action is not a no-op while one exists. Every
+      // language, because a member names the whole document.
+      const held = await deps.drafts.listWorkingDraftLocales({
+        scopeKind: ref.scopeKind,
+        scopeSlug: ref.scopeSlug,
+        entryId: ref.entryId,
+      });
+      return held.length === 0;
     },
   };
 }

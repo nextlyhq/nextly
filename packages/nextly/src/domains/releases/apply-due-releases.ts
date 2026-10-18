@@ -97,6 +97,19 @@ export interface ReleaseMutations {
     effect: "publish" | "unpublish";
     user: UserContext;
   }): Promise<boolean>;
+  /**
+   * Whether the action would change nothing: the document already has the
+   * effect AND holds no working draft the write would promote.
+   *
+   * Asked before a write, which `applied` is not fit for: a document already
+   * published that holds a pending draft is not a no-op for a publish, because
+   * putting that draft live is what the release is for.
+   */
+  settled(input: {
+    ref: DocumentRef;
+    effect: "publish" | "unpublish";
+    user: UserContext;
+  }): Promise<boolean>;
 }
 
 export interface ApplyDueReleasesDeps {
@@ -526,6 +539,16 @@ async function applyOne(
     return { ...base, failure: "RELEASE_NO_LONGER_SCHEDULED" };
   }
 
+  // A document already where this action leaves it, with nothing pending to
+  // promote, counts as applied without being written. Writing it again changes
+  // nothing but replays its hooks and outbox events, and it is what kept a
+  // component the host ended part-way through from ever finishing: the next
+  // pass rewrote the prefix before reaching the rest. Asked after the author
+  // and the schedule are confirmed, so neither precondition is skipped.
+  if (await alreadySettled(deps, action, identity.user)) {
+    return { ...base, failure: null, detail: "already settled; not written" };
+  }
+
   return writeAndConfirm(deps, action, identity.user, base);
 }
 
@@ -582,6 +605,28 @@ async function writeAndConfirm(
   }
 
   return { ...base, failure: null };
+}
+
+/**
+ * Whether the action would change nothing, so the write can be left out.
+ *
+ * A read that cannot be answered says `false`: the write then runs as it
+ * always has, which may repeat work but never loses an action.
+ */
+async function alreadySettled(
+  deps: ApplyDueReleasesDeps,
+  action: MaterialisationAction,
+  user: UserContext
+): Promise<boolean> {
+  try {
+    return await deps.mutations.settled({
+      ref: action.ref,
+      effect: action.effect,
+      user,
+    });
+  } catch {
+    return false;
+  }
 }
 
 /**

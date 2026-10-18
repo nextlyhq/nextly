@@ -109,6 +109,9 @@ function deps(over: {
       // ordinary write silently failed" — the cases that want a write NOT to
       // have landed override it explicitly.
       applied: async () => true,
+      // Default: nothing is settled, so every action is written, as every case
+      // below expects. The cases about a replayed pass override it.
+      settled: async () => false,
       ...over.mutations,
     },
     runAs: {

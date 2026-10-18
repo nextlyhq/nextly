@@ -30,6 +30,7 @@ import type { RunAsDeps } from "../../shared/lib/resolve-run-as";
 import type { JobContentSource } from "../jobs/job-content-api";
 import { defineJob } from "../jobs/job-registry";
 import type { JobDefinition } from "../jobs/job-registry";
+import { VersionsRepository } from "../versions/versions-repository";
 
 import { applyDueReleases } from "./apply-due-releases";
 import type { ApplyDueReleasesResult } from "./apply-due-releases";
@@ -92,7 +93,10 @@ export function createReleasesDrainJob(deps: {
         // outliving the invocation and being killed part-way.
         deadline: context.deadline,
         repository: new ReleasesRepository(deps.db),
-        mutations: createReleaseMutations({ contentApi: deps.contentApi }),
+        mutations: createReleaseMutations({
+          contentApi: deps.contentApi,
+          drafts: new VersionsRepository(deps.db),
+        }),
         runAs: deps.runAs,
       });
       await deps.onOutcome(result);
