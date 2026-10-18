@@ -92,11 +92,18 @@ describe("the last commit Integration tested", () => {
    * tested. A run where one leg judged the commit and another was cancelled
    * did not test it on the second dialect, so every leg is named as the work.
    */
-  it("counts a run as tested only when every leg reached a verdict", () => {
+  it("counts a run as tested only when every job that runs the suite reached a verdict", () => {
     const workflow = read(".github/workflows/integration.yml");
-    const legs = Object.values(workflow.jobs).map(job => job.name).filter(name => name.startsWith("Integration ("));
+    // The jobs that run a lane, under the names their runs carry: GitHub
+    // appends a matrix job's value to a name with no expression in it, so a
+    // sharded leg is one name per shard.
+    const runsTheSuite = job => (job.steps ?? []).some(step => /\blane:test:integration:/.test(String(step.run)));
+    const legs = Object.values(workflow.jobs)
+      .filter(runsTheSuite)
+      .flatMap(job => (job.strategy?.matrix?.shard ?? [null]).map(shard => (shard === null ? job.name : `${job.name} (${shard})`)));
     const ask = workflow.jobs.changes.steps.find(step => step.id === "newer");
-    expect(legs.length).toBe(3);
+    // A floor, so a reader that found no jobs cannot pass by comparing nothing.
+    expect(legs.length).toBeGreaterThanOrEqual(3);
     expect(ask.with["substantive-job"].split("\n").map(name => name.trim()).filter(Boolean).sort()).toEqual(legs.sort());
   });
 });
@@ -205,8 +212,10 @@ describe("Integration on request", () => {
   });
 
   it("skips a leg only on an answer of no, so a question that failed still runs it", () => {
+    // Every job of a leg, the shards that run the suite and the required check
+    // that reads them, so neither runs where the other skips.
     const legs = Object.values(workflow.jobs).filter(job => String(job.name).startsWith("Integration ("));
-    expect(legs.length).toBe(3);
+    for (const check of QUEUE_CHECKS[".github/workflows/integration.yml"]) expect(legs.map(leg => leg.name)).toContain(check);
     for (const leg of legs) expect(leg.if, leg.name).toContain("needs.changes.outputs.requested != 'false'");
   });
 
@@ -245,8 +254,11 @@ describe("the MySQL leg's database", () => {
    * with every test green. The leg relaxes it before the suite runs.
    */
   it("enlarges the redo log and stops forcing each commit to disk before the suite starts", () => {
-    const steps = read(".github/workflows/integration.yml").jobs["integration-mysql"].steps.map(step => step.name);
-    const job = read(".github/workflows/integration.yml").jobs["integration-mysql"];
+    // The job that runs the MySQL lane, whatever it is called.
+    const job = Object.values(read(".github/workflows/integration.yml").jobs).find(candidate =>
+      (candidate.steps ?? []).some(step => /\blane:test:integration:mysql\b/.test(String(step.run)))
+    );
+    const steps = job.steps.map(step => step.name);
     const room = job.steps.findIndex(step => step.name === "Give the test database room to write");
     const suite = job.steps.findIndex(step => step.name === "Run integration tests (mysql)");
     expect(room, steps.join(", ")).toBeGreaterThanOrEqual(0);
