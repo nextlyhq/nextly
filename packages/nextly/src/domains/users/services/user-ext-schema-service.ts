@@ -312,25 +312,31 @@ export class UserExtSchemaService {
     const fields = this.getMergedFieldConfigs();
     if (fields.length === 0) return;
 
-    // 1. CREATE TABLE IF NOT EXISTS (with all columns)
-    const createSQL = this.generateMigrationSQL(fields);
-    const createStatements = createSQL.split("\n--> statement-breakpoint\n");
-    for (const stmt of createStatements) {
-      // Strip leading SQL comment lines (e.g. "-- Create user extension table")
-      // so the actual DDL statement is executed
-      const executable = stmt
-        .split("\n")
-        .filter(line => {
-          const t = line.trim();
-          return t && !t.startsWith("--");
-        })
-        .join("\n")
-        .trim();
-      if (!executable) continue;
+    // The generated statements, with leading comment lines (e.g. "-- Create
+    // user extension table") stripped so the DDL itself runs.
+    const statements = this.generateMigrationSQL(fields)
+      .split("\n--> statement-breakpoint\n")
+      .map(stmt =>
+        stmt
+          .split("\n")
+          .filter(line => {
+            const t = line.trim();
+            return t && !t.startsWith("--");
+          })
+          .join("\n")
+          .trim()
+      )
+      .filter(Boolean);
+    // The table first, then any column it lacks, then the indexes and
+    // constraints: on a table that predates a field, the field's index can
+    // only be made once its column has been added.
+    const isCreateTable = (stmt: string) => /^CREATE TABLE/i.test(stmt);
 
-      // runRaw picks the dialect's call: SQLite's Drizzle database has no
-      // .execute(), so calling it threw and was taken for "already exists".
-      await this.runDdl(db, executable, strict);
+    // 1. CREATE TABLE IF NOT EXISTS (with all columns). runRaw picks the
+    //    dialect's call: SQLite's Drizzle database has no .execute(), so
+    //    calling it threw and was taken for "already exists".
+    for (const stmt of statements.filter(isCreateTable)) {
+      await this.runDdl(db, stmt, strict);
     }
 
     // 2. ALTER TABLE ADD COLUMN for each field (handles case where
@@ -351,6 +357,11 @@ export class UserExtSchemaService {
       }
 
       await this.runDdl(db, alterSQL, strict);
+    }
+
+    // 3. The indexes and constraints, now that every column exists.
+    for (const stmt of statements.filter(s => !isCreateTable(s))) {
+      await this.runDdl(db, stmt, strict);
     }
   }
 

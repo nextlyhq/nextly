@@ -123,6 +123,28 @@ describe.each(getConfiguredTestDialects())(
       expect(await indexNames()).toContain("uq_user_ext_employee_id");
     });
 
+    it("adds a newly configured unique field's column before its index", async () => {
+      await provisionUserFieldTables(
+        { fields: [text({ name: "bio" })] },
+        handle.adapter,
+        logger
+      );
+
+      await provisionUserFieldTables(
+        {
+          fields: [
+            text({ name: "bio" }),
+            text({ name: "employeeId", unique: true }),
+          ],
+        },
+        handle.adapter,
+        logger
+      );
+
+      expect(await hasColumn("employee_id")).toBe(true);
+      expect(await indexNames()).toContain("uq_user_ext_employee_id");
+    });
+
     it("fails, rather than reporting storage ready, when a statement fails", async () => {
       // A user_ext of the wrong shape, with no user_id column: the index on
       // user_id cannot be made, which is not the "already exists" a re-run
