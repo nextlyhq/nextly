@@ -42,24 +42,37 @@ describe("the caller a request belongs to", () => {
 
   it("keeps two overlapping requests apart", async () => {
     // The property a module variable cannot have, and the only case that
-    // separates the two. Both windows are open at once and each interleaves an
-    // await inside the other's lifetime, so a shared variable answers with
-    // whichever ran last.
+    // separates the two. Both windows are open at once and each awaits inside
+    // the other's lifetime, so a shared variable answers with whichever
+    // opened last.
+    //
+    // The overlap is made by the test, not by timing. The first request waits
+    // on a gate only the second opens, and the second opens it after reading
+    // its own caller, so the order below holds however slowly either runs.
+    // Two timers of different lengths ordered these windows before, and a
+    // loaded machine fired them the other way round.
     const first = ctxFor("first@example.com");
     const second = ctxFor("second@example.com");
     const order: string[] = [];
+    let letFirstOut = (): void => {};
+    const firstMayLeave = new Promise<void>(resolve => {
+      letFirstOut = resolve;
+    });
 
     const runFirst = whileServing(first, async () => {
       order.push("first in");
-      await new Promise(resolve => setTimeout(resolve, 10));
+      await firstMayLeave;
       order.push("first out");
       return callerNow();
     });
     const runSecond = whileServing(second, async () => {
       order.push("second in");
-      await new Promise(resolve => setTimeout(resolve, 1));
+      // Inside the first request's window, which is still open.
+      await Promise.resolve();
+      const seen = callerNow();
       order.push("second out");
-      return callerNow();
+      letFirstOut();
+      return seen;
     });
 
     const [a, b] = await Promise.all([runFirst, runSecond]);

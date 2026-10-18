@@ -7,9 +7,10 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { load } from "js-yaml";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { LABEL, main, requested, rerunDecision } from "./integration-request.mjs";
+import { ASKING_STEP, DECIDING_JOB, LABEL, main, requested, rerunDecision } from "./integration-request.mjs";
 
 const REPO = "nextlyhq/nextly";
 const SHA = "a".repeat(40);
@@ -34,7 +35,12 @@ const RUNS = `GET repos/${REPO}/actions/workflows/integration.yml/runs?event=pul
 const jobsOf = id => `GET repos/${REPO}/actions/runs/${id}/jobs?per_page=100`;
 const rerunOf = id => `POST repos/${REPO}/actions/runs/${id}/rerun`;
 
-const deciding = (status = "completed") => ({ name: "Decide what this commit can affect", status, conclusion: status === "completed" ? "success" : null });
+const deciding = (status = "completed", asked = status) => ({
+  name: DECIDING_JOB,
+  status,
+  conclusion: status === "completed" ? "success" : null,
+  steps: [{ name: ASKING_STEP, status: asked }],
+});
 const leg = (dialect, conclusion, status = conclusion ? "completed" : "queued") => ({ name: `Integration (${dialect})`, status, conclusion });
 const skippedLegs = ["postgres", "mysql", "sqlite"].map(dialect => leg(dialect, "skipped"));
 
@@ -81,6 +87,19 @@ describe("what adding the label does to the head's Integration run", () => {
     expect((await decide(routes)).action).toBe("none");
   });
 
+  it("reads the labels as read once the asking step finished, though its job is still running", async () => {
+    const routes = { [RUNS]: { workflow_runs: [{ id: 2, status: "in_progress", created_at: "2026-10-16T10:00:00Z" }] }, [jobsOf(2)]: { jobs: [deciding("in_progress", "completed"), ...skippedLegs] } };
+    expect((await decide(routes)).action).toBe("wait");
+    const notYet = { ...routes, [jobsOf(2)]: { jobs: [deciding("in_progress", "in_progress")] } };
+    expect((await decide(notYet)).action).toBe("none");
+  });
+
+  it("waits while the deciding job finishes, since its legs sit queued then whichever way it read the labels", async () => {
+    const queuedLegs = ["postgres", "mysql", "sqlite"].map(dialect => leg(dialect, null));
+    const routes = { [RUNS]: { workflow_runs: [{ id: 2, status: "in_progress", created_at: "2026-10-16T10:00:00Z" }] }, [jobsOf(2)]: { jobs: [deciding("in_progress", "completed"), ...queuedLegs] } };
+    expect((await decide(routes)).action).toBe("wait");
+  });
+
   it("nothing when the legs ran or are running", async () => {
     for (const legs of [[leg("postgres", null), ...skippedLegs.slice(1)], [leg("postgres", "failure"), leg("mysql", "success"), leg("sqlite", "success")]]) {
       const routes = { [RUNS]: { workflow_runs: [{ id: 2, status: "in_progress", created_at: "2026-10-16T10:00:00Z" }] }, [jobsOf(2)]: { jobs: [deciding(), ...legs] } };
@@ -125,6 +144,13 @@ describe("the commands a workflow step runs", () => {
     expect(readFileSync(env.GITHUB_STEP_SUMMARY, "utf8")).toContain(LABEL);
   });
 
+  it("`requested` stays quiet when the legs skip anyway, since the label would change nothing", async () => {
+    const { fetchImpl } = api({ [LABELS]: [] });
+    expect(await main(["requested"], { ...env, INERT: "true" }, { fetchImpl })).toBe(0);
+    expect(readFileSync(env.GITHUB_OUTPUT, "utf8")).toBe("requested=false\n");
+    expect(() => readFileSync(env.GITHUB_STEP_SUMMARY, "utf8")).toThrow();
+  });
+
   it("`rerun` re-runs the run once it finishes, waiting between looks", async () => {
     let looks = 0;
     const finishing = { [RUNS]: { workflow_runs: [{ id: 2, status: "in_progress", created_at: "2026-10-16T10:00:00Z" }] }, [jobsOf(2)]: { jobs: [deciding(), ...skippedLegs] } };
@@ -146,5 +172,23 @@ describe("the commands a workflow step runs", () => {
 
   it("refuses a command it does not know", async () => {
     expect(await main(["nonsense"], env)).toBe(64);
+  });
+});
+
+describe("the label itself", () => {
+  /*
+   * `labels-sync.yml` makes `.github/labels.yml` the whole set and deletes any
+   * other label, so a label made by hand would vanish on the next sync and
+   * nobody could ask for the legs.
+   */
+  it("is in the catalog the label sync keeps", () => {
+    const catalog = load(readFileSync(new URL("../.github/labels.yml", import.meta.url), "utf8"));
+    expect(catalog.map(entry => entry.name)).toContain(LABEL);
+  });
+
+  it("names the job and step the workflow really has, so a rename fails here rather than in a run", () => {
+    const changes = load(readFileSync(new URL("../.github/workflows/integration.yml", import.meta.url), "utf8")).jobs.changes;
+    expect(changes.name).toBe(DECIDING_JOB);
+    expect(changes.steps.map(step => step.name)).toContain(ASKING_STEP);
   });
 });

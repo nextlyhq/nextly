@@ -66,6 +66,7 @@ import {
 } from "./api/image-sizes";
 import { listJobsRoute } from "./api/jobs-list-route";
 import { runJobsRoute } from "./api/jobs-run-route";
+import { getNoticeCount, getNotices, markNoticesRead } from "./api/notices";
 import { mintPreviewLink, revokePreviewLinks } from "./api/preview-links";
 import { resolveEntryPreviewUrl } from "./api/preview-url";
 import { handleReleaseRequest } from "./api/releases";
@@ -382,6 +383,7 @@ const DIRECT_DISPATCH_SERVICES = new Set<string>([
   "apiKeys",
   "webhooks",
   "releases",
+  "notices",
   "jobs",
   "generalSettings",
   "previewLinks",
@@ -568,6 +570,32 @@ async function handleDocumentLockRequest(
 }
 
 // ============================================================================
+// Notices Direct Dispatch
+// ============================================================================
+
+/** The signed-in person's notices. */
+async function handleNoticesRequest(
+  req: Request,
+  method: string
+): Promise<Response> {
+  switch (method) {
+    case "getNotices":
+      return getNotices(req);
+    case "getNoticeCount":
+      return getNoticeCount(req);
+    case "markNoticesRead":
+      return markNoticesRead(req);
+    default:
+      // Thrown, not answered by hand, so the shared handler supplies the
+      // canonical envelope, request id and status, as for the jobs routes.
+      throw NextlyError.notFound({
+        message: `Unknown notices operation: ${method}`,
+        logContext: { reason: "unknown-notices-operation", method },
+      });
+  }
+}
+
+// ============================================================================
 // Translations Direct Dispatch
 // ============================================================================
 
@@ -687,6 +715,9 @@ export const COLLECTION_ENTRY_METHODS = new Set([
   // Naming a version writes history rather than the document, but it is still
   // a write and resolves to the same permission.
   "setEntryVersionLabel",
+  // Marking a version seen changes only the caller's own marker; the route
+  // parser marks it a `read`, so it resolves to `read-{slug}`.
+  "markEntryVersionSeen",
   // Discarding the working draft reverts the document to its live row; the
   // route parser marks it an `update` operation, so it resolves to the
   // `update-{slug}` permission rather than a definition mutation's manage-settings.
@@ -712,6 +743,9 @@ export const SINGLE_DOCUMENT_METHODS = new Set([
   "getSingleVersionDiff",
   // A write, authorized as an update of the document.
   "restoreSingleVersion",
+  // Changes only the caller's own marker, so it is named in the read branch
+  // below and resolves to `read`.
+  "markSingleVersionSeen",
   // Also a write. Deliberately absent from the read allowlist below, so the
   // action resolves to `update` by default.
   "setSingleVersionLabel",
@@ -762,6 +796,9 @@ const ROLE_AWARE_READ_METHODS = new Set([
   // recovery point it is.
   "getEntryAutosave",
   "getSingleAutosave",
+  // Marking a version seen runs the same document gate as reading it.
+  "markEntryVersionSeen",
+  "markSingleVersionSeen",
   "listEntries",
   "getEntry",
   "countEntries",
@@ -856,7 +893,8 @@ async function resolveAuthorization(
         method === "listSingleVersions" ||
         method === "getSingleVersion" ||
         method === "getSingleVersionDiff" ||
-        method === "getSingleAutosave"
+        method === "getSingleAutosave" ||
+        method === "markSingleVersionSeen"
           ? "read"
           : "update";
       const slug = routeParams?.slug || "";
@@ -1364,6 +1402,13 @@ async function handleServiceRequest(
     return handleTranslationsRequest(req, method);
   }
 
+  // ==================== NOTICES DIRECT DISPATCH ====================
+  // Owns its auth (requireAuthentication, refusing API keys) and reads its own
+  // body, so it intercepts before `req.text()` for the reason dashboard does.
+  if (service === "notices") {
+    return handleNoticesRequest(req, method);
+  }
+
   // ==================== SCHEMA DIRECT DISPATCH (F10 PR 4) ====================
   // Schema-journal handler owns its auth (requireAuthentication +
   // super-admin gate). Read-only GET — no body to consume.
@@ -1389,7 +1434,7 @@ async function handleServiceRequest(
     if (params[0] === "me") {
       const authResult = await requireAuthentication(req);
       if (isErrorResponse(authResult)) {
-        return createJsonErrorResponse(authResult);
+        return refuseRequest(method, authResult);
       }
       // Add user ID to route params for /api/me endpoints
       if (routeParams) {
@@ -1401,7 +1446,7 @@ async function handleServiceRequest(
     else if (requiresAuthOnly(service, method)) {
       const authResult = await requireAuthentication(req);
       if (isErrorResponse(authResult)) {
-        return createJsonErrorResponse(authResult);
+        return refuseRequest(method, authResult);
       }
       authorizedUser = authResult;
     }
@@ -1416,7 +1461,7 @@ async function handleServiceRequest(
         httpMethod
       );
       if (isErrorResponse(authResult)) {
-        return createJsonErrorResponse(authResult);
+        return refuseRequest(method, authResult);
       }
       authorizedUser = authResult;
     }
@@ -1921,6 +1966,21 @@ function respondAdminMeta(payload: Record<string, unknown>): Response {
 }
 
 /**
+ * A refusal at the route gate, before dispatch. For a method whose answers
+ * belong to one caller, the refusal does too: a shared cache replaying one
+ * person's 401 or 403 to another hides from them what they may read.
+ */
+function refuseRequest(
+  method: string,
+  refusal: Parameters<typeof createJsonErrorResponse>[0]
+): Response {
+  const response = createJsonErrorResponse(refusal);
+  return SESSION_PRIVATE_METHODS.has(method)
+    ? withSessionCacheHeaders(response)
+    : response;
+}
+
+/**
  * Mark a response as belonging to one session.
  *
  * A session-gated GET is otherwise an ordinary cacheable response, so a shared
@@ -1943,6 +2003,12 @@ function respondAdminMeta(payload: Record<string, unknown>): Response {
 const SESSION_PRIVATE_METHODS = new Set([
   "getEntryAutosave",
   "getSingleAutosave",
+  // A history page marks where the caller last looked, and a comparison can
+  // start from it, so both answer one person.
+  "listEntryVersions",
+  "listSingleVersions",
+  "getEntryVersionDiff",
+  "getSingleVersionDiff",
 ]);
 
 // Re-exported from its neutral home so the dispatchers that import it from

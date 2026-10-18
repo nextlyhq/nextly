@@ -26,7 +26,7 @@ import type {
   LocalizationConfig,
   SanitizedLocalizationConfig,
 } from "../../domains/i18n/config/types";
-import type { JobDefinition } from "../../domains/jobs/job-registry";
+import type { AnyJobDefinition } from "../../domains/jobs/job-registry";
 import {
   resolveStoreSetting,
   type LimitStoreSelection,
@@ -74,7 +74,10 @@ export interface TypeScriptConfig {
    * Path to the generated TypeScript file.
    * Can be absolute or relative to the project root.
    *
-   * @default './src/types/generated/payload-types.ts'
+   * Left unset, an existing `payload-types.ts` beside the default, the name
+   * earlier versions used, is turned into a re-export of the new file.
+   *
+   * @default './src/types/generated/nextly-types.ts'
    */
   outputFile?: string;
 
@@ -803,7 +806,7 @@ export interface NextlyConfig {
    * actually reach it — a definition the public type does not admit is an option
    * nobody can set.
    */
-  jobs?: JobDefinition[];
+  jobs?: AnyJobDefinition[];
 
   /** @experimental Custom permissions declared by the app (seeded like plugin permissions, D36). */
   permissions?: PluginPermission[];
@@ -940,7 +943,7 @@ export interface SanitizedNextlyConfig {
    * @experimental Background job types the application declared, carried through
    * sanitisation so the collector that registers them can see them.
    */
-  jobs?: JobDefinition[];
+  jobs?: AnyJobDefinition[];
 
   /** @experimental App-declared custom permissions (undefined if none). Seeded like plugin permissions (D36). */
   permissions?: PluginPermission[];
@@ -996,7 +999,7 @@ export interface SanitizedNextlyConfig {
  * Default TypeScript configuration values.
  */
 export const DEFAULT_TYPESCRIPT_CONFIG: Required<TypeScriptConfig> = {
-  outputFile: "./src/types/generated/payload-types.ts",
+  outputFile: "./src/types/generated/nextly-types.ts",
   declare: true,
 };
 

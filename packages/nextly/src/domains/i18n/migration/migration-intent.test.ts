@@ -71,6 +71,37 @@ describe("localization migration intent", () => {
 
   // The file's checksum covers this line, so an unstable rendering would make two runs that
   // planned the same transition look like two different migrations.
+  it("writes each kind with the lowest version that declares it", () => {
+    // A build that reads only version 1 keeps reading the whole-entity files, and refuses the
+    // newer kinds as a version it does not support rather than as a corrupt version-1 file.
+    const versionOf = (kind: "enable" | "shared" | "archive") =>
+      JSON.parse(
+        formatLocalizationIntent({ kind, entity: "collection", spec: spec() })
+          .slice(LOCALIZATION_INTENT_HEADER.length)
+          .trim()
+      ).version;
+
+    expect(versionOf("enable")).toBe(1);
+    expect(versionOf("archive")).toBe(2);
+    expect(versionOf("shared")).toBe(2);
+  });
+
+  it("reads a version-2 kind, and refuses one claimed under version 1", () => {
+    const v2 = formatLocalizationIntent({
+      kind: "archive",
+      entity: "collection",
+      spec: spec(),
+    });
+    expect(parseLocalizationIntent(fileWith(v2), "m.sql")?.kind).toBe(
+      "archive"
+    );
+
+    const claimedV1 = v2.replace('"version":2', '"version":1');
+    expect(() =>
+      parseLocalizationIntent(fileWith(claimedV1), "m.sql")
+    ).toThrow();
+  });
+
   it("renders the same spec identically every time", () => {
     const args = {
       kind: "enable" as const,

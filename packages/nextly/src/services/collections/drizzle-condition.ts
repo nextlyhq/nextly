@@ -14,6 +14,7 @@
  * unresolved, which its own untranslatable check is expected to catch before
  * this point rather than silently dropping the predicate.
  */
+import { caseInsensitiveContains } from "@nextlyhq/adapter-drizzle/text-match";
 import type { SQL } from "drizzle-orm";
 import {
   and,
@@ -28,7 +29,6 @@ import {
   inArray,
   notInArray,
   like,
-  ilike,
   isNull,
   isNotNull,
   or,
@@ -68,8 +68,7 @@ export type LocalizedExistsBuilder = (
   localizedCtx: LocalizedQueryContext,
   column: string,
   op: string,
-  value: unknown,
-  dialect: string
+  value: unknown
 ) => SQL | undefined;
 
 /**
@@ -88,8 +87,7 @@ export function buildLocalizedWhereExists(
   ctx: LocalizedQueryContext,
   column: string,
   op: string,
-  value: unknown,
-  dialect: string
+  value: unknown
 ): SQL | undefined {
   const t = sql.identifier(ctx.companionTableName);
   const col = sql.identifier(column);
@@ -117,10 +115,12 @@ export function buildLocalizedWhereExists(
       valueCondition = sql`${t}.${col} LIKE ${value}`;
       break;
     case "ILIKE":
-      valueCondition =
-        dialect === "postgresql"
-          ? sql`${t}.${col} ILIKE ${value}`
-          : sql`${t}.${col} LIKE ${value}`;
+      // Lower-cased on both sides, as the adapter compiles ILIKE: only PostgreSQL has the
+      // keyword, and a bare LIKE follows the column's collation.
+      valueCondition = sql`lower(${t}.${col}) like lower(${value})`;
+      break;
+    case "ICONTAINS":
+      valueCondition = caseInsensitiveContains(sql`${t}.${col}`, String(value));
       break;
     case "IS NULL": {
       // A localized field is absent for the locale when no companion row holds
@@ -218,7 +218,6 @@ export function buildDrizzleCondition(
   whereClause: ReturnType<typeof buildWhereClause>,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Drizzle dynamic schema
   schema: any,
-  dialect: string = "postgresql",
   localizedCtx?: LocalizedQueryContext | null,
   localizedExists?: LocalizedExistsBuilder
 ): ReturnType<typeof and> | undefined {
@@ -234,7 +233,6 @@ export function buildDrizzleCondition(
       return buildDrizzleCondition(
         condition,
         schema,
-        dialect,
         localizedCtx,
         localizedExists
       );
@@ -268,8 +266,7 @@ export function buildDrizzleCondition(
         localizedCtx,
         localizedWhereField.column,
         op,
-        value,
-        dialect
+        value
       );
       if (localizedCond) return localizedCond;
       // The field lives in the companion table, so the main table has no
@@ -300,11 +297,11 @@ export function buildDrizzleCondition(
       case "LIKE":
         return like(schemaColumn, value);
       case "ILIKE":
-        // Use ILIKE for PostgreSQL, LIKE for others
-        if (dialect === "postgresql") {
-          return ilike(schemaColumn, value);
-        }
-        return like(schemaColumn, value);
+        // Lower-cased on both sides, as the adapter compiles ILIKE: only PostgreSQL has the
+        // keyword, and a bare LIKE follows the column's collation.
+        return sql`lower(${schemaColumn}) like lower(${value})`;
+      case "ICONTAINS":
+        return caseInsensitiveContains(schemaColumn, String(value));
       case "IN":
         // The filter shape refuses an empty `in` and drops an empty
         // `not_in` before this point; refused again here rather than skipped,

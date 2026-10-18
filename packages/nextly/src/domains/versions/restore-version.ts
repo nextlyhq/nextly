@@ -26,11 +26,13 @@ import type { VersionScopeKind } from "../../schemas/versions/types";
 import {
   applyFieldReadAccess,
   applyFieldWriteAccess,
+  callerAccessGrants,
 } from "../../shared/lib/field-level-registry";
 import { extractFieldGroupReferences } from "../field-groups/storage/field-group-field-type";
 import { isValidLocale } from "../i18n/resolve-locale";
 import type { UserContext } from "../singles/types";
 
+import { applyComponentReadAccess } from "./component-read-access";
 import {
   buildRestorePayload,
   payloadTouchesComponents,
@@ -271,6 +273,63 @@ function dropFieldsTheProbeRejected(
 }
 
 /**
+ * Drop from `payload` every field the restorer may not read, and report it.
+ *
+ * Every read rule runs, the entity's own and each component's on the
+ * instances the version holds, judging a scoped API key on its own grants.
+ * Rules that cannot be evaluated decide nothing, so the restore is refused
+ * rather than applied with values the caller may never have been able to read.
+ */
+async function dropFieldsTheReaderMayNotRead(
+  args: RestoreVersionArgs,
+  payload: Record<string, unknown>,
+  fields: FieldConfig[],
+  componentSchemas: ComponentSchemas,
+  droppedFields: string[]
+): Promise<void> {
+  const readProbe: Record<string, unknown> = {
+    ...structuredClone(payload),
+    id: args.entryId,
+  };
+  const readCaller = {
+    user: args.user,
+    authenticatedScope: args.authenticatedScope,
+    grants: callerAccessGrants(args.user, args.authenticatedScope),
+  };
+  try {
+    await applyFieldReadAccess({
+      kind: args.scopeKind === "single" ? "single" : "collection",
+      slug: args.slug,
+      entry: readProbe,
+      user: args.user,
+      authenticatedScope: args.authenticatedScope,
+      grants: readCaller.grants,
+      overrideAccess: false,
+    });
+    await applyComponentReadAccess(
+      readProbe,
+      fields,
+      new Map(
+        [...componentSchemas].map(([slug, schema]) => [slug, schema.fields])
+      ),
+      readCaller
+    );
+  } catch (error) {
+    throw NextlyError.forbidden({
+      ...(error instanceof Error ? { cause: error } : {}),
+      logContext: {
+        reason: "restore-read-rules-unevaluated",
+        scopeKind: args.scopeKind,
+        scopeSlug: args.slug,
+        entryId: args.entryId,
+        error: error instanceof Error ? error.message : String(error),
+      },
+    });
+  }
+  dropFieldsTheProbeRejected(payload, readProbe, droppedFields);
+}
+
+/**
  * Structural equality for payload values.
  *
  * Used to tell whether field-level rules changed a container while probing.
@@ -429,23 +488,13 @@ export async function restoreVersion(
   // keyed on the document would otherwise evaluate with
   // no id and hide fields the same caller can read in version history, making
   // restore stricter than the endpoint the snapshot came from.
-  const readProbe: Record<string, unknown> = {
-    ...structuredClone(payload),
-    id: args.entryId,
-  };
-  try {
-    await applyFieldReadAccess({
-      kind: args.scopeKind === "single" ? "single" : "collection",
-      slug: args.slug,
-      entry: readProbe,
-      user: args.user,
-      overrideAccess: false,
-    });
-    dropFieldsTheProbeRejected(payload, readProbe, droppedFields);
-  } catch {
-    // A failure here must not block a restore the update path would allow; the
-    // write rules below remain the authority on what may be applied.
-  }
+  await dropFieldsTheReaderMayNotRead(
+    args,
+    payload,
+    fields,
+    componentSchemas,
+    droppedFields
+  );
 
   // Field-level write rules strip denied keys inside the update path, silently
   // and after it has already reported success. Evaluating the same rules here

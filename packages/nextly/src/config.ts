@@ -330,6 +330,17 @@ export {
   MAX_LAYOUT_BYTES,
   layoutSizeProblem,
 } from "./domains/widgets/layout-payload";
+// The width vocabulary a dashboard stores and draws: the five widths in their
+// ranking, and the one conversion from a declared size. The admin derives its
+// own list, check and size map from these rather than restating them, since a
+// width added or renamed in core would otherwise draw wrongly with no error.
+// `widths.ts` imports only a type, so this entry stays safe for a browser.
+export {
+  WIDGET_WIDTHS,
+  isWidgetWidth,
+  widthFromSize,
+  type WidgetWidth,
+} from "./domains/widgets/widths";
 // The VALUE as well as the type. A widget result names each column's kind, and
 // the admin has to decide which kinds it can present -- deriving that from this
 // tuple is what stops the browser silently erasing a kind core has started to
@@ -351,6 +362,7 @@ export {
 } from "./domains/collections/query/timeseries-interval";
 export type { TimeseriesInterval } from "./domains/collections/query/timeseries-interval";
 export type {
+  WidgetFieldChoice,
   WidgetOp,
   WidgetSourceField,
   WidgetSourceFieldType,

@@ -92,12 +92,12 @@ export const listBody: ArchetypeBody = (result, definition) => {
   }
 
   const rows = result.items.slice(0, MAX_ROWS);
-  // The declared kind per column, so each cell is presented rather than
-  // printed. `fields` is what the SOURCE said survived the read; a column it
+  // The declared kind and value labels per column, so each cell is presented
+  // rather than printed. `fields` is what the SOURCE said survived the read; a column it
   // does not describe falls back to plain text, which is what every row did
   // before types were carried.
-  const typeOf = new Map(
-    (result.fields ?? []).map(field => [field.name, field.type])
+  const columnOf = new Map(
+    (result.fields ?? []).map(field => [field.name, field])
   );
 
   return {
@@ -107,10 +107,10 @@ export const listBody: ArchetypeBody = (result, definition) => {
         {rows.map((item, index) => {
           const label = asPresentedText(
             item[labelField],
-            typeOf.get(labelField)
+            columnOf.get(labelField)
           );
           const detail = detailField
-            ? asPresentedText(item[detailField], typeOf.get(detailField))
+            ? asPresentedText(item[detailField], columnOf.get(detailField))
             : undefined;
           return (
             <li

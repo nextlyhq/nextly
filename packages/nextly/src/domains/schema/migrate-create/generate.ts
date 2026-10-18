@@ -25,12 +25,23 @@ import { resolve } from "node:path";
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
+import { NextlyError } from "../../../errors/nextly-error";
+import { isFieldLocalized } from "../../i18n/classify-fields";
+import {
+  companionHistoryKey,
+  readCompanionColumnHistory,
+} from "../../i18n/migration/companion-history";
 import { deriveCompanionSpec } from "../../i18n/migration/derive-companion-spec";
+import { refusalsForFieldsLeavingTranslation } from "../../i18n/migration/field-leaves-translation-rules";
 import { fieldToLocalizedColumnSpec } from "../../i18n/migration/field-to-column-spec";
 import {
   planCompanionMigration,
   type CompanionMigrationPlan,
 } from "../../i18n/migration/plan-companion-migration";
+import {
+  type FieldLeavesMigrationPlan,
+  planFieldLeavesTranslationMigration,
+} from "../../i18n/migration/plan-field-leaves-migration";
 import type { I18nTransitionKind } from "../../i18n/migration/transition-state";
 import type {
   CompanionMigrationSpec,
@@ -155,6 +166,11 @@ export interface GenerateArgs {
    */
   defaultLocale?: string;
   /**
+   * Where to say what this run could not check, for the operator to act on. A warning never stops
+   * the run; a refusal throws.
+   */
+  onWarning?: (message: string) => void;
+  /**
    * The extension schema the APP's stream owns: the tables it declares through
    * `db.schema.extend`, and the elements it contributes to tables another owner
    * declares.
@@ -258,7 +274,24 @@ export async function generateMigration(
   //     (create + seed + drop). Strip those drops so we don't drop twice.
   operations = stripRelocatedDrops(operations, companionPlans);
 
-  const hasCompanions = companionPlans.length > 0;
+  // 3b. Fields that stop being translated while their entity stays translated. The diff above gives
+  //     the main table their columns; these files move the values around that migration.
+  const fieldLeavesPlans = planFieldsLeavingTranslation(
+    [
+      ...args.collections.map(e => tagged(e, "collection")),
+      ...args.singles.map(e => tagged(e, "single")),
+      ...args.components.map(e => tagged(e, "fieldGroup")),
+    ],
+    previousSnapshot,
+    args.dialect,
+    args.defaultLocale ?? "en",
+    await readCompanionColumnHistory(args.migrationsDir),
+    args.onWarning ?? (() => {}),
+    desiredSnapshot
+  );
+
+  const hasCompanions =
+    companionPlans.length > 0 || fieldLeavesPlans.length > 0;
   if (operations.length === 0 && !hasCompanions) {
     return null;
   }
@@ -412,13 +445,29 @@ export async function generateMigration(
   const forwardPlans = companionPlans.filter(p => p.plan.kind !== "disable");
   // `plan.spec` rather than the entry's: an ENABLE narrows `columnsOnMain` to what the previous
   // main table really held, and the header has to describe the statements that were emitted.
-  disablePlans.forEach(({ plan, entity }, i) => {
-    writeCompanionMigrationFile(args.migrationsDir, plan.spec, {
-      kind: "disable",
+  //    - A field leaving translation: its ARCHIVE file runs before the main file, so an archive that
+  //      refuses the values stops the run before the main table changes; its SHARED file runs after
+  //      it, once the main table has the column to copy into.
+  const beforeMain = [
+    ...disablePlans.map(({ plan, entity }) => ({
+      spec: plan.spec,
+      kind: "disable" as const,
       entity,
       upSql: plan.upSql,
       downSql: plan.downSql,
-      now: new Date(now.getTime() - (disablePlans.length - i)),
+    })),
+    ...fieldLeavesPlans.map(({ plan, entity }) => ({
+      spec: plan.archive.spec,
+      kind: "archive" as const,
+      entity,
+      upSql: plan.archive.upSql,
+      downSql: plan.archive.downSql,
+    })),
+  ];
+  beforeMain.forEach(({ spec, ...file }, i) => {
+    writeCompanionMigrationFile(args.migrationsDir, spec, {
+      ...file,
+      now: new Date(now.getTime() - (beforeMain.length - i)),
     });
   });
   forwardPlans.forEach(({ plan, entity }, i) => {
@@ -429,6 +478,15 @@ export async function generateMigration(
       upSql: plan.upSql,
       downSql: plan.downSql,
       now: new Date(now.getTime() + i + 1),
+    });
+  });
+  fieldLeavesPlans.forEach(({ plan, entity }, i) => {
+    writeCompanionMigrationFile(args.migrationsDir, plan.shared.spec, {
+      kind: "shared",
+      entity,
+      upSql: plan.shared.upSql,
+      downSql: plan.shared.downSql,
+      now: new Date(now.getTime() + forwardPlans.length + i + 1),
     });
   });
 
@@ -454,6 +512,7 @@ export async function generateMigration(
  */
 function buildDisableSpec(
   entity: MinimalConfigEntity,
+  kind: I18nTransitionKind,
   prevMain: TableSpec,
   dialect: SupportedDialect,
   defaultLocale: string
@@ -471,6 +530,7 @@ function buildDisableSpec(
   return {
     dialect,
     collection: entity.slug,
+    kind,
     mainTable: prevMain.name,
     companionTable: `${prevMain.name}_locales`,
     defaultLocale,
@@ -532,6 +592,7 @@ function planCompanionMigrations(
     const spec = deriveCompanionSpec({
       builtBy: "codeFirst" as const,
       slug: c.slug,
+      kind: entityKind,
       dbName: c.tableName,
       fields: c.fields,
       dialect,
@@ -562,7 +623,13 @@ function planCompanionMigrations(
       //   - a translatable field ADDED in the same edit is left to the normal diff, instead of
       //     being restored from a companion that never had that column (which emitted SQL that
       //     failed on apply).
-      const disableSpec = buildDisableSpec(c, prevMain, dialect, defaultLocale);
+      const disableSpec = buildDisableSpec(
+        c,
+        entityKind,
+        prevMain,
+        dialect,
+        defaultLocale
+      );
       if (!disableSpec) continue;
       const plan = planCompanionMigration({
         spec: disableSpec,
@@ -599,6 +666,214 @@ function planCompanionMigrations(
     if (plan.kind !== "none") entries.push({ spec, plan, entity: entityKind });
   }
   return entries;
+}
+
+/** One entity's fields that stop being translated, and the two files that move their values. */
+interface FieldLeavesEntry {
+  plan: FieldLeavesMigrationPlan;
+  entity: I18nTransitionKind;
+}
+
+/**
+ * Plan the files for fields that stop being translated while their entity stays translated: those
+ * the previous snapshot recorded among the entity's translated columns (`localizedColumns`) which
+ * the config now declares shared.
+ *
+ * Read from the previous snapshot's explicit marker, as a disable is, so a snapshot written before
+ * the marker existed plans nothing rather than guessing. A field that cannot leave translation in
+ * one migration (`refusalsForFieldsLeavingTranslation`) refuses the whole run, naming the steps
+ * that work.
+ */
+function planFieldsLeavingTranslation(
+  entities: TaggedConfigEntity[],
+  previousSnapshot: NextlySchemaSnapshot,
+  dialect: SupportedDialect,
+  defaultLocale: string,
+  companionHistory: ReadonlyMap<
+    string,
+    ReadonlyMap<string, LocalizedColumnSpec>
+  >,
+  warn: (message: string) => void,
+  desiredSnapshot: NextlySchemaSnapshot
+): FieldLeavesEntry[] {
+  const entries: FieldLeavesEntry[] = [];
+  for (const { entity: c, kind } of entities) {
+    warnOfRenamesIntoShared(c, previousSnapshot, dialect, warn);
+    const leaving = fieldsLeavingTranslationIn(c, previousSnapshot, dialect);
+    if (leaving.length === 0) continue;
+
+    // The companion's columns as the migration files left them: the only record of the shape a
+    // translated field's values sit in, which the snapshot does not keep.
+    const previousColumns = companionHistory.get(
+      companionHistoryKey(kind, c.slug)
+    );
+    warnOfUnknownShapes(c.slug, leaving, previousColumns, warn);
+    assertFieldsMayLeaveTranslation(
+      c,
+      leaving,
+      previousColumns,
+      dialect,
+      desiredSnapshot.tables.find(t => t.name === c.tableName)
+    );
+
+    entries.push({
+      entity: kind,
+      plan: planFieldLeavesTranslationMigration({
+        dialect,
+        collection: c.slug,
+        kind,
+        mainTable: c.tableName,
+        companionTable: `${c.tableName}_locales`,
+        defaultLocale,
+        parentIdType: dialect === "mysql" ? "VARCHAR(36)" : "TEXT",
+        columns: leaving.map(l => l.column),
+        // A rollback recreates default-language rows with the main row's publishing state, when
+        // both have one: Draft/Published on before this change, so the companion has `_status`,
+        // and still on after it, so the main table still has `status` when the rollback runs.
+        status:
+          c.status === true &&
+          previousSnapshot.tables
+            .find(t => t.name === c.tableName)
+            ?.columns.some(col => col.name === "status") === true,
+      }),
+    });
+  }
+  return entries;
+}
+
+/** A field leaving translation, with the companion column it leaves. */
+interface LeavingField {
+  field: MinimalConfigField;
+  column: LocalizedColumnSpec;
+}
+
+/**
+ * The fields of a translated entity that the previous snapshot recorded among its translated
+ * columns and the config now declares shared. Empty for an entity not translated now, or whose
+ * previous snapshot carries no record of its translated columns.
+ */
+function fieldsLeavingTranslationIn(
+  c: MinimalConfigEntity,
+  previousSnapshot: NextlySchemaSnapshot,
+  dialect: SupportedDialect
+): LeavingField[] {
+  if (c.localized !== true) return [];
+  const prevMain = previousSnapshot.tables.find(t => t.name === c.tableName);
+  const recorded =
+    prevMain?.localized === true ? prevMain.localizedColumns : undefined;
+  if (!recorded || recorded.length === 0) return [];
+  return c.fields.flatMap(field => {
+    if (isFieldLocalized(field, true)) return [];
+    const column = fieldToLocalizedColumnSpec(field, dialect, "codeFirst");
+    return column && recorded.includes(column.name) ? [{ field, column }] : [];
+  });
+}
+
+/**
+ * Says when a translated field leaves the config in the same change that adds a shared one, which
+ * is how a rename into a shared field reads to a migration that sees names only. Its translations
+ * are not moved: the new field is new to it, and the old one's values stay where they are.
+ */
+function warnOfRenamesIntoShared(
+  c: MinimalConfigEntity,
+  previousSnapshot: NextlySchemaSnapshot,
+  dialect: SupportedDialect,
+  warn: (message: string) => void
+): void {
+  if (c.localized !== true) return;
+  const prevMain = previousSnapshot.tables.find(t => t.name === c.tableName);
+  if (prevMain?.localized !== true) return;
+  const recorded = prevMain.localizedColumns ?? [];
+  const columnOf = (field: MinimalConfigField) =>
+    fieldToLocalizedColumnSpec(field, dialect, "codeFirst")?.name;
+  const current = new Set(c.fields.map(columnOf));
+  const gone = recorded.filter(name => !current.has(name));
+  const onMain = new Set(prevMain.columns.map(col => col.name));
+  const added = c.fields.filter(field => {
+    const name = columnOf(field);
+    return (
+      !isFieldLocalized(field, true) &&
+      name !== undefined &&
+      !onMain.has(name) &&
+      !recorded.includes(name)
+    );
+  });
+  if (gone.length === 0 || added.length === 0) return;
+  warn(
+    `In "${c.slug}", translated ${gone.map(n => `"${n}"`).join(", ")} ${gone.length === 1 ? "is" : "are"} ` +
+      `gone and shared ${added.map(f => `"${f.name}"`).join(", ")} ${added.length === 1 ? "is" : "are"} new. ` +
+      `If one is a rename, this migration does not carry its translations over: keep the ` +
+      `field's name while it stops being translated, and rename it in a later migration.`
+  );
+}
+
+/** Says which leaving fields no migration file describes, so their storage is not checked. */
+function warnOfUnknownShapes(
+  slug: string,
+  leaving: readonly LeavingField[],
+  previousColumns: ReadonlyMap<string, LocalizedColumnSpec> | undefined,
+  warn: (message: string) => void
+): void {
+  const unknown = leaving.filter(l => !previousColumns?.has(l.column.name));
+  if (unknown.length === 0) return;
+  const one = unknown.length === 1;
+  warn(
+    `No migration file describes how ${unknown.map(l => `"${l.field.name}"`).join(", ")} ` +
+      `${one ? "is" : "are"} stored in "${slug}"'s translations, so this migration cannot ` +
+      `check that ${one ? "its" : "their"} type stays the same as ${one ? "it stops" : "they stop"} ` +
+      `being translated. If one also changed type, change the type and make it shared in ` +
+      `separate migrations.`
+  );
+}
+
+/**
+ * The leaving fields a unique index on the main table covers, read from the table as this
+ * migration makes it: an index declared in the config, the one every `slug` column carries, or
+ * one a schema hook adds. The main file creates them while the new columns are still empty, so a
+ * value they would refuse is found only when the shared file copies it in.
+ */
+function uniqueIndexedFields(
+  leaving: readonly LeavingField[],
+  desiredTable: TableSpec | undefined
+): Set<string> {
+  const unique = new Set(
+    (desiredTable?.indexes ?? [])
+      .filter(index => index.unique)
+      .flatMap(index => index.columns)
+  );
+  return new Set(
+    leaving.filter(l => unique.has(l.column.name)).map(l => l.field.name)
+  );
+}
+
+/**
+ * Refuses the run when a leaving field cannot leave translation in one migration
+ * (`refusalsForFieldsLeavingTranslation`), naming the steps that work, before any file is written.
+ */
+function assertFieldsMayLeaveTranslation(
+  c: MinimalConfigEntity,
+  leaving: readonly LeavingField[],
+  previousColumns: ReadonlyMap<string, LocalizedColumnSpec> | undefined,
+  dialect: SupportedDialect,
+  /** The entity's main table as this migration makes it, with every index it will carry. */
+  desiredTable: TableSpec | undefined
+): void {
+  const refusals = refusalsForFieldsLeavingTranslation({
+    leaving: new Set(leaving.map(l => l.field.name)),
+    newFields: c.fields,
+    ...(previousColumns ? { previousColumns } : {}),
+    uniqueIndexed: uniqueIndexedFields(leaving, desiredTable),
+    dialect,
+    builtBy: "codeFirst",
+    surface: "code",
+  });
+  if (refusals.length === 0) return;
+  throw new NextlyError({
+    code: "VALIDATION_ERROR",
+    publicMessage: refusals.map(r => r.message).join(" "),
+    publicData: { errors: refusals },
+    logContext: { entity: c.slug, fields: refusals.map(r => r.path) },
+  });
 }
 
 /**

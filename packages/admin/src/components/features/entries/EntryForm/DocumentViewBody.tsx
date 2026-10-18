@@ -40,6 +40,7 @@ import { LiveDocumentRecoveryOffer } from "./AutosaveRecoveryBanner";
 import { DocumentLockBanner } from "./DocumentLockBanner";
 import { DocumentViewFieldChooser } from "./DocumentViewFieldChooser";
 import { FormErrorSummary } from "./FormErrorSummary";
+import { MissingDocumentViewComponent } from "./MissingDocumentViewComponent";
 import type { DocumentLockSurface } from "./useDocumentLockSurface";
 
 /** The view the route names, as the page hands it to the editor. */
@@ -103,23 +104,34 @@ function useFieldInAddress(
  * changed under it, so it would go on showing, and then saving, the work the
  * author just chose to replace. Counting restores and keying the view by the
  * count gives it a new mount that reads the restored values.
+ *
+ * In three steps rather than one: the view goes, then the values are replaced,
+ * then a fresh view comes. A view may hand its unsaved work to the form as it
+ * unmounts — the Page Builder does, so a takeover keeps it — and replacing the
+ * values first would let that hand-over write the old copy over the restored
+ * one. Gone first, its hand-over lands before the restore and is replaced by
+ * it.
  */
 function useRestoreRemount(recovery: UseAutosaveRecoveryResult): {
   recovery: UseAutosaveRecoveryResult;
   generation: number;
+  /** True for the one commit between the view leaving and the restore. */
+  withdrawn: boolean;
 } {
   const [generation, setGeneration] = useState(0);
-  const restoring = useMemo(
-    () => ({
-      ...recovery,
-      restore: () => {
-        recovery.restore();
-        setGeneration(count => count + 1);
-      },
-    }),
+  const [withdrawn, setWithdrawn] = useState(false);
+  const { restore } = recovery;
+  useEffect(() => {
+    if (!withdrawn) return;
+    restore();
+    setGeneration(count => count + 1);
+    setWithdrawn(false);
+  }, [withdrawn, restore]);
+  const offered = useMemo(
+    () => ({ ...recovery, restore: () => setWithdrawn(true) }),
     [recovery]
   );
-  return { recovery: restoring, generation };
+  return { recovery: offered, generation, withdrawn };
 }
 
 export function DocumentViewBody({
@@ -205,11 +217,12 @@ export function DocumentViewBody({
         <div className="min-h-0 flex-1">
           {editing.kind === "choose" ? (
             <DocumentViewFieldChooser candidates={editing.candidates} />
-          ) : (
+          ) : offered.withdrawn ? null : (
             <PluginSlot
               key={offered.generation}
               path={view.component}
               props={viewProps}
+              fallback={<MissingDocumentViewComponent path={view.component} />}
             />
           )}
         </div>

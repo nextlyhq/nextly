@@ -56,6 +56,7 @@ import type {
 import { assertGlobalResourceSlugAvailable } from "../../../services/lib/resource-slug-guard";
 import type { Logger } from "../../../shared/types";
 import { fieldGroupSlugList } from "../../field-groups/storage/field-group-field-type";
+import { archiveFieldsLeavingTranslation } from "../../i18n/migration/archive-preflight";
 import { applyMigrationStatements } from "../../schema/services/apply-migration-statements";
 import { withSchemaChangeExcluded } from "../../schema/services/schema-change-exclusion";
 
@@ -645,6 +646,11 @@ export class SingleMetadataService {
       hasStatus: args.statusRequested ? args.hasStatus : wasStatus,
     };
 
+    // Asked here, from the flags this exclusion just re-derived, because the caller's reading can
+    // be stale: a concurrent save that turned translation on would make this edit a field leaving
+    // translation that the caller never saw as one.
+    await this.assertFieldsMayLeaveTranslation(input);
+
     // 1. PLAN. May reject; nothing is persisted and no statement has run.
     const plan = await this.planUpdate(input);
 
@@ -688,6 +694,50 @@ export class SingleMetadataService {
    * leaves nothing to update, and a Single that became `locked` in the same window is code-first
    * now, so applying a UI edit to it would write a row the config is about to contradict.
    */
+  /**
+   * The first step of a field leaving translation (`archiveFieldsLeavingTranslation`), for a
+   * save whose flags were derived inside the exclusion. Nothing is asked when the save sends no
+   * fields or the Single is not translated before and after it.
+   */
+  private async assertFieldsMayLeaveTranslation(
+    input: UpdateSingleSchemaInput
+  ): Promise<void> {
+    if (
+      input.fields === undefined ||
+      !input.wasLocalized ||
+      !input.isLocalized
+    ) {
+      return;
+    }
+    if (!this.adapter) {
+      throw NextlyError.internal({
+        logContext: {
+          reason: "database adapter not initialized",
+          slug: input.slug,
+        },
+      });
+    }
+    // Imported when needed, as this service does for its other runtime collaborators, to keep the
+    // dispatcher's module graph out of this one. The same default locale the Single's companion
+    // reconcile reads.
+    const { getConfigFromDI } = await import("../../../dispatcher/helpers/di");
+    const defaultLocale =
+      getConfigFromDI()?.localization?.defaultLocale ?? "en";
+    await archiveFieldsLeavingTranslation({
+      // Singles are built by the collection schema service.
+      builtBy: "collection",
+      tableName: input.existing.tableName,
+      defaultLocale: defaultLocale,
+      adapter: this.adapter,
+      entity: input.slug,
+      kind: "single",
+      oldFields: (input.existing.fields ?? []) as unknown as FieldDefinition[],
+      newFields: input.fields,
+      wasLocalized: input.wasLocalized,
+      isLocalized: input.isLocalized,
+    });
+  }
+
   private async refreshForUpdate(
     input: UpdateSingleSchemaInput
   ): Promise<DynamicSingleRecord> {

@@ -27,6 +27,7 @@
 import type { AuthenticatedScope } from "../../auth/authenticated-scope";
 import { container } from "../../di/container";
 import { toPaginationMeta } from "../../dispatcher/helpers/service-envelope";
+import type { ReleaseReadiness } from "../../domains/releases/readiness/evaluate-readiness";
 import type {
   ReleaseMemberRow,
   ReleaseRow,
@@ -36,11 +37,14 @@ import type {
   FindReleasesQuery,
   ReleaseBlocker,
   ReleaseCountQuery,
-  ReleaseCapabilities,
   ReleasesService,
 } from "../../domains/releases/services/releases-service";
 import { NextlyError } from "../../errors/nextly-error";
-import type { ReleaseMemberAction } from "../../schemas/releases/types";
+import type {
+  ReleaseCapabilities,
+  ReleaseKind,
+  ReleaseMemberAction,
+} from "../../schemas/releases/types";
 import type { ListResult } from "../types/shared";
 
 import type { NextlyContext } from "./context";
@@ -85,15 +89,25 @@ export interface ReleaseCallerArgs {
 }
 
 export interface ReleasesNamespace {
+  /**
+   * Make a release. `kind` is `release` (the default), or `single` for a
+   * document scheduled on its own, which holds exactly one document; it is
+   * fixed once the release exists. `kind` is `@experimental`.
+   */
   create(
-    args: { title: string; description?: string | null } & ReleaseCallerArgs
+    args: {
+      title: string;
+      description?: string | null;
+      kind?: ReleaseKind;
+    } & ReleaseCallerArgs
   ): Promise<ReleaseRow>;
   /**
    * One page of releases, as `{ items, meta }` like every other Direct API
    * list, with `meta.total` counting every release that matches.
    *
    * Narrow it by `tab` (`upcoming`, `attention`, `drafts`, `done`), by `state`
-   * and a window on the scheduled instant, and by `search`, a case-insensitive
+   * and a window on the scheduled instant, by `kind` (`release` leaves out
+   * single-document releases), and by `search`, a case-insensitive
    * match on the title or description. Page it with `page` (from 1) and
    * `limit` (50 by default, at most 200). The scheduled releases come soonest
    * first unless `order` says otherwise; other listings latest first.
@@ -105,7 +119,7 @@ export interface ReleasesNamespace {
    * runtime: a caller that cannot see `memberAction` cannot tell which way a
    * release moves the document it just asked about.
    *
-   * `tab`, `search` and `page` are `@experimental`.
+   * `tab`, `kind`, `search` and `page` are `@experimental`.
    */
   find(
     args?: FindReleasesQuery & ReleaseCallerArgs
@@ -141,7 +155,18 @@ export interface ReleasesNamespace {
   blockingReasons(
     args: { releaseId: string } & ReleaseCallerArgs
   ): Promise<ReleaseBlocker[]>;
-  /** Put a document into a release under a lifecycle action. */
+  /**
+   * Every problem the release's documents have now: `hard` ones, which stop
+   * it from being scheduled or published now, and `soft` ones, which are
+   * notes. Each is a code and the document it is about, in the order the
+   * documents were added. Every document is checked, however many the release
+   * holds. An unknown release is refused as not found.
+   *
+   * @experimental
+   */
+  readiness(
+    args: { releaseId: string } & ReleaseCallerArgs
+  ): Promise<ReleaseReadiness>;
   /**
    * Put a document into a release under a lifecycle action.
    *
@@ -176,6 +201,25 @@ export interface ReleasesNamespace {
     args: { releaseId: string } & ReleaseCallerArgs
   ): Promise<ReleaseMemberRow[]>;
   /**
+   * Switch a document in a release between going live (`publish`) and coming
+   * down (`unpublish`).
+   *
+   * Asks what adding the document under the new action asks, and `publish`
+   * authority on releases for a scheduled one. In a scheduled release the new
+   * action is checked as the document's author, who the release still acts as;
+   * a switch that would leave a hard problem is refused as a `CONFLICT` naming
+   * the problems in `data.problems`, and the release is left as it was.
+   *
+   * @experimental
+   */
+  changeMemberAction(
+    args: {
+      releaseId: string;
+      memberId: string;
+      action: ReleaseMemberAction;
+    } & ReleaseCallerArgs
+  ): Promise<ReleaseMemberRow>;
+  /**
    * Commit a release to an instant.
    *
    * `timezone` is the authoring intent and travels beside the instant rather
@@ -187,6 +231,16 @@ export interface ReleasesNamespace {
     args: { id: string; at: Date; timezone: string } & ReleaseCallerArgs
   ): Promise<void>;
   cancel(args: { id: string } & ReleaseCallerArgs): Promise<void>;
+  /**
+   * Run a draft or scheduled release now, with the same checks and the same
+   * all-together run as at its scheduled time, and answer the release as it
+   * then stands: `published`, or still `scheduled` if some of it is left for
+   * the runner to finish. Refused for a stopped release (fix it and schedule it
+   * again) and for a published or cancelled one, which never runs again.
+   *
+   * @experimental
+   */
+  publishNow(args: { id: string } & ReleaseCallerArgs): Promise<ReleaseRow>;
 }
 
 /**
@@ -277,7 +331,7 @@ export function createReleasesNamespace(ctx: NextlyContext): ReleasesNamespace {
   return {
     create: args =>
       service().create(
-        { title: args.title, description: args.description },
+        { title: args.title, description: args.description, kind: args.kind },
         actorOf(ctx, args)
       ),
 
@@ -363,9 +417,21 @@ export function createReleasesNamespace(ctx: NextlyContext): ReleasesNamespace {
     listMembers: args =>
       service().listMembers(args.releaseId, actorOf(ctx, args)),
 
+    readiness: args => service().readiness(args.releaseId, actorOf(ctx, args)),
+
+    changeMemberAction: args =>
+      service().changeMemberAction(
+        args.memberId,
+        args.action,
+        actorOf(ctx, args),
+        args.releaseId
+      ),
+
     schedule: args =>
       service().schedule(args.id, args.at, args.timezone, actorOf(ctx, args)),
 
     cancel: args => service().cancel(args.id, actorOf(ctx, args)),
+
+    publishNow: args => service().publishNow(args.id, actorOf(ctx, args)),
   };
 }

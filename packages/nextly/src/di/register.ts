@@ -34,6 +34,10 @@ import {
   buildAuthRouterDeps,
   challengeBudgetWarning,
 } from "../auth/handlers/deps-bridge";
+import {
+  edgeProxyWarning,
+  unkeyedStrategyWarnings,
+} from "../auth/handlers/proxy-posture";
 import type { CollectionConfig } from "../collections/config/define-collection";
 import type {
   SanitizedApiKeysConfig,
@@ -66,10 +70,11 @@ import {
   resolveTypeColumns,
 } from "../domains/field-groups/storage/resolve-storage-names";
 import type { SanitizedLocalizationConfig } from "../domains/i18n/config/types";
-import type { JobDefinition } from "../domains/jobs/job-registry";
+import type { AnyJobDefinition } from "../domains/jobs/job-registry";
 import type { LimitStore } from "../domains/limits/limit-store";
 import { selectLimitStore } from "../domains/limits/select-limit-store";
 import type { MetaService } from "../domains/meta";
+import type { NoticesService } from "../domains/notices/notices-service";
 import { pluginSettingsSecrets } from "../domains/plugins/settings-service";
 import type { PreviewConfig } from "../domains/preview/route-config";
 import { resolvePreviewRoute } from "../domains/preview/route-config";
@@ -267,6 +272,7 @@ import {
   registerDashboardServices,
   registerEmailServices,
   registerJobServices,
+  registerNoticeServices,
   registerReleaseServices,
   registerMediaServices,
   registerMetaServices,
@@ -393,7 +399,7 @@ export interface NextlyServiceConfig {
    * Background job types this application declares itself, alongside any a
    * plugin contributes. Registered at boot; see `plugins/jobs/collect-jobs`.
    */
-  jobs?: JobDefinition[];
+  jobs?: AnyJobDefinition[];
 
   /** Collection configurations. */
   collections?: CollectionConfig[];
@@ -516,6 +522,8 @@ export interface ServiceMap {
   rbacAccessControlService: RBACAccessControlService;
   /** Content releases: the authorization boundary the Direct API namespace reaches. */
   releasesService: ReleasesService;
+  /** Each admin user's notices, recorded by other areas through `record`. */
+  noticesService: NoticesService;
   apiKeyService: ApiKeyService;
   /** Webhook endpoint management, resolved by the webhooks REST handlers. */
   webhookEndpointService: WebhookEndpointService;
@@ -645,6 +653,9 @@ export function registerDomainServices(ctx: RegistrationContext): void {
   // what this service schedules. Order is not load-bearing — both resolve their
   // dependencies from the container — but keeping them adjacent means a reader
   // meets the two halves of releases together.
+  // Before releases, so a feature that records notices (releases will, for a
+  // release that stops or runs late) can register its kinds against it.
+  registerNoticeServices(ctx);
   registerReleaseServices(ctx);
 }
 
@@ -807,6 +818,17 @@ async function registerServicesOnce(
   const resolvedBasePath = basePath ?? process.cwd();
 
   logRegisteredPlugins(transformedConfig, resolvedLogger);
+
+  // Said once per boot, whatever plugins are present: an app on an edge that
+  // reports the client, with security.trustProxy unset, rate-limits sign-in
+  // without client addresses and nothing else would tell its operator.
+  const edgeWarning = edgeProxyWarning(transformedConfig);
+  if (edgeWarning) resolvedLogger.warn?.(edgeWarning);
+  // Likewise each configured auth strategy the sign-in limiter cannot ask
+  // which account a request names: its sign-ins are limited by email instead.
+  for (const warning of unkeyedStrategyWarnings(transformedConfig)) {
+    resolvedLogger.warn?.(warning);
+  }
 
   // ----------------------------------------
   // Layer 1: Create and Connect Adapter
@@ -2921,14 +2943,21 @@ function publishWebhookRecordingPolicies(config: NextlyServiceConfig): void {
  * or when a just-synced row hasn't been flushed yet.
  *
  * No-op for tables that are already registered (e.g. from the DB pass).
+ *
+ * Exported for its test.
  */
-async function registerConfigTablesInResolver(
+export async function registerConfigTablesInResolver(
   registry: SchemaRegistry,
   config: NextlyServiceConfig,
   adapter: DrizzleAdapter,
   logger: Partial<Logger>
 ): Promise<void> {
   const dialect = adapter.getCapabilities().dialect;
+  // Loaded here, as the generators it calls were, so they stay out of this
+  // module's own load.
+  const { registerEntityRuntimeTables } = await import(
+    "./register-runtime-tables"
+  );
 
   // Collections: table name convention is `dc_<slug-with-underscores>`.
   for (const collection of config.collections ?? []) {
@@ -2941,45 +2970,20 @@ async function registerConfigTablesInResolver(
       const tableName = baseTableName.startsWith("dc_")
         ? baseTableName
         : `dc_${baseTableName}`;
-      // Why: forward the code-first `status: true` flag so the runtime
-      // Drizzle table includes the system status column. Without this,
-      // adapter CRUD on Draft/Published collections can't read or write
-      // the status column even though the physical table has it.
-      const hasStatus = (collection as { status?: boolean }).status === true;
-      const localized =
-        (collection as { localized?: boolean }).localized === true;
-      const { generateRuntimeSchema } = await import(
-        "../domains/schema/services/runtime-schema-generator"
-      );
-      const { table } = generateRuntimeSchema(
-        tableName,
-        fields as FieldDefinition[],
-        dialect,
-        { status: hasStatus, localized }
-      );
-      registry.registerDynamicSchema(tableName, table);
-      // Register the companion `_locales` table for a localized collection (M4 reads).
-      if (localized) {
-        const { buildCompanionRuntimeTable } = await import(
-          "../domains/i18n/runtime/companion-registration"
-        );
-        const companion = buildCompanionRuntimeTable({
+      // The status flag gives the runtime table its system status column,
+      // which Draft/Published CRUD reads and writes; the localized one leaves
+      // the translatable columns to the companion.
+      registerEntityRuntimeTables(
+        registry,
+        {
           slug,
           tableName,
-          fields: fields as { name: string; type: string }[],
-          dialect,
-          localized: true,
-          // Carry `_status` so a Draft/Published localized collection's
-          // DI-registered companion matches loadCompanionSchema.
-          status: hasStatus === true,
-        });
-        if (companion) {
-          registry.registerDynamicSchema(
-            companion.companionTableName,
-            companion.table
-          );
-        }
-      }
+          fields: fields as FieldDefinition[],
+          status: (collection as { status?: boolean }).status === true,
+          localized: (collection as { localized?: boolean }).localized === true,
+        },
+        dialect
+      );
     } catch (err) {
       logger.debug?.(
         `[registerServices] Failed to register collection "${(collection as { slug?: string }).slug ?? "?"}" in resolver: ${err instanceof Error ? err.message : String(err)}`
@@ -2999,20 +3003,19 @@ async function registerConfigTablesInResolver(
       const fields = (single as { fields?: unknown[] }).fields ?? [];
       if (!slug || !Array.isArray(fields) || fields.length === 0) continue;
       const tableName = resolveSingleTableName({ slug, dbName });
-      // Why: forward the code-first `status: true` flag for singles too —
-      // mirrors the collection branch above. Same Draft/Published runtime
-      // wiring needs the system status column on the Drizzle table.
-      const hasStatus = (single as { status?: boolean }).status === true;
-      const { generateRuntimeSchema } = await import(
-        "../domains/schema/services/runtime-schema-generator"
+      // The same registration as a collection's, so a localized single's
+      // main table leaves out the columns its migrations put on the companion.
+      registerEntityRuntimeTables(
+        registry,
+        {
+          slug,
+          tableName,
+          fields: fields as FieldDefinition[],
+          status: (single as { status?: boolean }).status === true,
+          localized: (single as { localized?: boolean }).localized === true,
+        },
+        dialect
       );
-      const { table } = generateRuntimeSchema(
-        tableName,
-        fields as FieldDefinition[],
-        dialect,
-        { status: hasStatus }
-      );
-      registry.registerDynamicSchema(tableName, table);
     } catch (err) {
       logger.debug?.(
         `[registerServices] Failed to register single "${(single as { slug?: string }).slug ?? "?"}" in resolver: ${err instanceof Error ? err.message : String(err)}`

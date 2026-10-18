@@ -206,8 +206,14 @@ export async function readCompanionLocaleStatus(
 ): Promise<string | null> {
   if (readiness !== "ready") return null;
   const table = companionTable as CompanionTable;
+  // A companion built without per-language status has no `_status` column, so
+  // there is no status of the language's own to read.
+  if (table._status === undefined) return null;
+  // Projects only `_status`: a bare select names every column of the table
+  // object, and one whose migration has not run yet would fail the read, and
+  // inside a write's transaction on PostgreSQL abort the write with it.
   const rows = await db
-    .select()
+    .select({ _status: table._status })
     .from(companionTable)
     .where(
       and(

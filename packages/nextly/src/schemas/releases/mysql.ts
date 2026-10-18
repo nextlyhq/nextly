@@ -8,6 +8,10 @@
  *
  * @module schemas/releases/mysql
  */
+// The same tables in each dialect's Drizzle builders: each dialect's column
+// functions are distinct, so the declarations cannot be shared, and the
+// parity test is what holds them in step.
+// fallow-ignore-file code-duplication
 
 import {
   mysqlTable,
@@ -21,7 +25,7 @@ import {
 
 import type { VersionScopeKind } from "../versions/types";
 
-import type { ReleaseMemberAction, ReleaseState } from "./types";
+import type { ReleaseKind, ReleaseMemberAction, ReleaseState } from "./types";
 
 export const nextlyReleasesMysql = mysqlTable(
   "nextly_releases",
@@ -37,6 +41,12 @@ export const nextlyReleasesMysql = mysqlTable(
     timezone: varchar("timezone", { length: 64 }),
 
     state: varchar("state", { length: 32 }).$type<ReleaseState>().notNull(),
+    // What the release is (`ReleaseKind`). The database default reads every
+    // release made before the column existed as an ordinary one.
+    kind: varchar("kind", { length: 16 })
+      .$type<ReleaseKind>()
+      .default("release")
+      .notNull(),
     publishedAt: datetime("published_at", { fsp: 3 }),
 
     createdBy: varchar("created_by", { length: 36 }),
@@ -77,6 +87,13 @@ export const nextlyReleaseMembersMysql = mysqlTable(
     // which is the second reason this column exists.
     memberKey: varchar("member_key", { length: 64 }).notNull(),
 
+    // 1 for the member of a `single` release, NULL otherwise. Unique with
+    // `release_id`, so the DATABASE refuses a second member of a single
+    // release, however many adds race; NULLs never collide, so an ordinary
+    // release is unaffected. A count checked before the insert could not
+    // promise that: two adds can both count zero.
+    singleSlot: int("single_slot"),
+
     createdBy: varchar("created_by", { length: 36 }),
     createdAt: datetime("created_at", { fsp: 3 })
       .$defaultFn(() => new Date())
@@ -84,6 +101,11 @@ export const nextlyReleaseMembersMysql = mysqlTable(
   },
   table => [
     uniqueIndex("nextly_release_members_key_uidx").on(table.memberKey),
+    // The one-member rule of a single release; see `singleSlot`.
+    uniqueIndex("nextly_release_members_single_uidx").on(
+      table.releaseId,
+      table.singleSlot
+    ),
     index("nextly_release_members_doc_idx").on(
       table.scopeKind,
       table.scopeSlug,

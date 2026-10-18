@@ -61,18 +61,16 @@ jobs:
         id: decide
         env:
           SCOPE_TITLE: Generated code scope
-          # Every path is inert EXCEPT the ones that shape what `generate:types`
-          # writes or how it resolves in an app: the type and Zod generators, the
-          # paths they write to and the config defaults those paths start from,
-          # the shared types writer, the code plugins
-          # contribute to generated files, the command, the `nextly/zod` entry,
-          # nextly's manifest and build entries (its exports and its zod range),
-          # the templates a project starts from, and this workflow. Unlike `ci.yml`
-          # this is an inclusion list, deliberately: the check is about one
-          # pipeline, and running it for every change would hold three runners for
-          # nothing. A file added to that pipeline belongs here too.
-          INERT_PATHS: '^(?!(packages/nextly/src/domains/schema/services/(type|zod)-generator\.ts|packages/nextly/src/shared/lib/generated-output-paths\.ts|packages/nextly/src/shared/types/config\.ts|packages/nextly/src/cli/utils/write-generated-types\.ts|packages/nextly/src/cli/commands/generate-types\.ts|packages/nextly/src/plugins/codegen/|packages/nextly/src/zod\.ts|packages/nextly/package\.json|packages/nextly/tsup\.config\.js|templates/|\.github/workflows/generated-code-compiles\.yml))'
-        run: node scripts/change-scope.mjs
+        # Every path is inert EXCEPT the ones that shape what `generate:types`
+        # writes or how it resolves in an app. The script derives that set from
+        # the generators' own imports, so a helper they come to depend on runs
+        # the check without being listed by hand. Unlike `ci.yml` this is an
+        # inclusion list, deliberately: the check is about one pipeline, and
+        # running it for every change would hold three runners for nothing.
+        run: |
+          INERT_PATHS="$(node scripts/generated-code-scope.mjs)"
+          export INERT_PATHS
+          node scripts/change-scope.mjs
 
   compiles:
     name: Generated code compiles (${{ matrix.pm }})

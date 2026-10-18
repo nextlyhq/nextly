@@ -24,6 +24,10 @@ import type { CollectionsHandler } from "../../../services/collections-handler";
 import { applyDueReleases } from "../apply-due-releases";
 import { createReleaseMutations } from "../release-mutations";
 import { ReleasesRepository } from "../releases-repository";
+import {
+  ANY_EDITABLE_STATE,
+  scheduleAsItStands,
+} from "./helpers/release-writes";
 
 let current: TestNextly | undefined;
 
@@ -84,17 +88,20 @@ async function draftInRelease(
 
   const repo = new ReleasesRepository(t.adapter);
   const release = await repo.createRelease({ title: "Go live" });
-  await repo.addMember({
-    releaseId: release.id,
-    scopeKind: "collection",
-    scopeSlug: SLUG,
-    entryId: id,
-    locale: null,
-    action: "publish",
-    createdBy: author,
-  });
+  await repo.addMember(
+    {
+      releaseId: release.id,
+      scopeKind: "collection",
+      scopeSlug: SLUG,
+      entryId: id,
+      locale: null,
+      action: "publish",
+      createdBy: author,
+    },
+    ANY_EDITABLE_STATE
+  );
   if (scheduledAt !== null) {
-    await repo.scheduleRelease(release.id, scheduledAt, "UTC");
+    await scheduleAsItStands(repo, release.id, scheduledAt, "UTC");
   }
   return id;
 }

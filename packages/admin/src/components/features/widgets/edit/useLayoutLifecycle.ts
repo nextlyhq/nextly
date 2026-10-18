@@ -12,7 +12,10 @@
  */
 import { useCallback, type Dispatch, type SetStateAction } from "react";
 
-import type { UseDashboardLayoutResult } from "@admin/hooks/queries/useDashboardLayout";
+import {
+  isConflictError,
+  type UseDashboardLayoutResult,
+} from "@admin/hooks/queries/useDashboardLayout";
 
 import { hasChanges, withinSubmissionLimit } from "../layout-editor";
 
@@ -28,10 +31,25 @@ export interface SaveOptions {
   replaceUnreadable?: boolean;
 }
 
+/**
+ * How a save ended: stored; refused because the arrangement or the reader's
+ * widgets moved since it was read (nothing written, the remedy is to reload);
+ * or failed for any other reason (nothing written, the remedy is to try
+ * again). The draft is kept on both of the last two.
+ */
+export type SaveOutcome = "saved" | "refused" | "failed";
+
 export interface LayoutLifecycle {
   begin: () => void;
   cancel: () => void;
-  save: (options?: SaveOptions) => void;
+  /**
+   * Store the draft in one write, and answer how that went.
+   *
+   * Answered rather than only reflected in the mutation state, because a
+   * caller that saves on the reader's behalf -- the unsaved-changes prompt --
+   * decides from the answer whether the reader may now leave.
+   */
+  save: (options?: SaveOptions) => Promise<SaveOutcome>;
   /**
    * Put the DEFAULT dashboard in the draft, and write nothing.
    *
@@ -88,37 +106,45 @@ export function useLayoutLifecycle(
   }, [layout, setDraft]);
 
   const save = useCallback(
-    (options: SaveOptions = {}) => {
-      if (!draft) return;
-      // Only on success. A failure or a conflict must LEAVE the draft in place,
-      // because dropping it would discard the reader's work at the exact moment
-      // they are being told to try again.
-      const leave = { onSuccess: () => setDraft(null) };
-      if (savesAsReset(draft)) {
-        // The guards the reset was staged against, so a stale tab cannot
-        // delete an arrangement another tab saved since.
-        layout.reset.mutate(
-          { version: draft.version, scope: draft.scope },
-          leave
-        );
-        return;
+    async (options: SaveOptions = {}): Promise<SaveOutcome> => {
+      // Nothing held is nothing lost: there is no draft to keep.
+      if (!draft) return "saved";
+      try {
+        if (savesAsReset(draft)) {
+          // The guards the reset was staged against, so a stale tab cannot
+          // delete an arrangement another tab saved since.
+          await layout.reset.mutateAsync({
+            version: draft.version,
+            scope: draft.scope,
+          });
+        } else {
+          await layout.save.mutateAsync({
+            // The whole ordered list, removed cards included: the order IS
+            // the array's, so nothing is renumbered on the way out. Within the
+            // endpoint's limit, shedding removed cards if a regained
+            // arrangement holds more than one save may carry.
+            placements: [...withinSubmissionLimit(draft.placements)],
+            version: draft.version,
+            scope: draft.scope,
+            // The editor is the one route that can reorder, resize or remove
+            // several cards, so its save is always the reader taking charge.
+            arranged: true,
+            ...(options.replaceUnreadable ? { replaceUnreadable: true } : {}),
+          });
+        }
+      } catch (error) {
+        // A failure or a conflict must LEAVE the draft in place, because
+        // dropping it would discard the reader's work at the exact moment
+        // they are being told to try again. The mutation keeps the error for
+        // the chrome's message; this answer is for the caller.
+        return isConflictError(error instanceof Error ? error : null)
+          ? "refused"
+          : "failed";
       }
-      layout.save.mutate(
-        {
-          // The whole ordered list, removed cards included: the order IS the
-          // array's, so nothing is renumbered on the way out. Within the
-          // endpoint's limit, shedding removed cards if a regained
-          // arrangement holds more than one save may carry.
-          placements: [...withinSubmissionLimit(draft.placements)],
-          version: draft.version,
-          scope: draft.scope,
-          // The editor is the one route that can reorder, resize or remove
-          // several cards, so its save is always the reader taking charge.
-          arranged: true,
-          ...(options.replaceUnreadable ? { replaceUnreadable: true } : {}),
-        },
-        leave
-      );
+      // Only on success, and only once the write's own re-read has landed:
+      // the mutation awaits it before it resolves.
+      setDraft(null);
+      return "saved";
     },
     [draft, layout, setDraft]
   );

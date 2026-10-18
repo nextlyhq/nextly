@@ -62,7 +62,16 @@ import {
   liveColumnsOf,
   retiredTablesNamedForErasure,
 } from "../../../init/retired-auth-tables";
+import {
+  CONTENT_EVENTS_TABLE,
+  contentEventsTables,
+} from "../../../schemas/content-events";
+import { NOTICES_TABLE, noticesTables } from "../../../schemas/notices";
 import { PLUGIN_SETTINGS_TABLE } from "../../../schemas/plugin-settings/table-name";
+import {
+  VERSION_VIEWS_TABLE,
+  versionViewsTables,
+} from "../../../schemas/version-views";
 import {
   layoutRowId,
   widgetLayoutTables,
@@ -1717,8 +1726,12 @@ export class UserMutationService extends BaseService {
       // PASSWORD: hash plain-text password before storing
       if (Object.prototype.hasOwnProperty.call(changes, "password")) {
         const rawPassword =
-          typeof changes.password === "string" ? changes.password.trim() : "";
-        if (rawPassword.length > 0) {
+          typeof changes.password === "string" ? changes.password : "";
+        // Only whitespace sets nothing, as an empty value does. Anything else
+        // is hashed exactly as given, as account creation and sign-in use it:
+        // a space at either end can be the password's symbol, and hashing the
+        // trimmed form would store a password nobody typed.
+        if (rawPassword.trim().length > 0) {
           Object.assign(
             updateData,
             passwordColumns(await hashPassword(rawPassword))
@@ -2089,6 +2102,24 @@ export class UserMutationService extends BaseService {
       }
       throw NextlyError.fromDatabaseError(dbErr);
     }
+  }
+
+  /**
+   * Delete the rows a person owns in a table keyed by their id (their notices,
+   * their "last looked at" markers), inside the deletion's transaction so the
+   * two stand or fall together. `tableExists` is probed before the
+   * transaction.
+   */
+  private async eraseOwnedRows(
+    txDb: DrizzleTransactionLike,
+    table: { userId: Column },
+    userId: string,
+    tableExists: boolean
+  ): Promise<void> {
+    // An installation that has not run `nextly migrate` has no table, and a
+    // delete against it would abort the transaction and the deletion with it.
+    if (!tableExists) return;
+    await txDb.delete(table).where(eq(table.userId, userId));
   }
 
   /**
@@ -2537,6 +2568,22 @@ export class UserMutationService extends BaseService {
     // the SQLite fallback bootstrap created a subset of the core tables.
     const widgetLayoutExists = await this.tablePresent(WIDGET_LAYOUT_TABLE);
 
+    // A person's notices are theirs alone and carry their account's id and
+    // snapshots of what they worked on, so they go with the account. Probed
+    // out here for the reason the tables above are: an installation that has
+    // not run `nextly migrate` has no notices table, and a delete against it
+    // would abort the transaction and the deletion with it.
+    const noticesExist = await this.tablePresent(NOTICES_TABLE);
+
+    // Which version of each document the person last looked at: theirs alone,
+    // keyed by their id, so it goes with the account. Probed out here for the
+    // reason notices are.
+    const versionViewsExist = await this.tablePresent(VERSION_VIEWS_TABLE);
+
+    // The record of content events names each event's actor; the name goes
+    // with the account. Probed for the reason the tables above are.
+    const contentEventsExist = await this.tablePresent(CONTENT_EVENTS_TABLE);
+
     // Who last edited a plugin's settings, probed out here for the reason the
     // three above are: a failed statement aborts an open Postgres transaction
     // and there would be no way back.
@@ -2572,6 +2619,9 @@ export class UserMutationService extends BaseService {
         activityLog: auditTables.activityLog,
       }),
       ...(authShape !== false && { auditLog: auditTables.auditLog }),
+      ...(contentEventsExist && {
+        contentEvents: contentEventsTables(this.dialect).nextlyContentEvents,
+      }),
     };
     const unstampedAuditTables = new Set<"activityLog" | "auditLog">(
       authShape === "unstamped" ? ["auditLog"] : []
@@ -2661,6 +2711,19 @@ export class UserMutationService extends BaseService {
         // key — two derivations of one identifier agree until one is edited,
         // and the failure here is silent: the delete matches no row, the
         // account goes, and the layout stays.
+        await this.eraseOwnedRows(
+          txDb,
+          noticesTables(this.dialect).nextlyNotices,
+          String(userId),
+          noticesExist
+        );
+        await this.eraseOwnedRows(
+          txDb,
+          versionViewsTables(this.dialect).nextlyVersionViews,
+          String(userId),
+          versionViewsExist
+        );
+
         if (widgetLayoutExists) {
           const layoutTable = widgetLayoutTables(this.dialect)
             .nextlyWidgetLayout as unknown as { id: Column };

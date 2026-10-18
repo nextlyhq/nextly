@@ -3,8 +3,6 @@ title: REST API
 description: HTTP REST API for browser code, mobile apps, and third-party integrations. Served under /admin/api/ by a single Next.js catch-all route handler.
 ---
 
-> **Parts of this page need the release after 0.0.2-alpha.66:** the refresh cookie's `/admin/api/auth` scope (on 0.0.2-alpha.66 it is `/admin/api/auth/refresh`, so logout does not receive it), `403 EMAIL_NOT_VERIFIED`, and `GET /admin/api/auth/pending`.
-
 The REST API exposes the same operations as the [Direct API](/docs/api-reference/direct-api) over HTTP. Every collection, single, user, role, permission, media file, email template, API key, and more is reachable through standard HTTP methods. Use it whenever your code does **not** run in a trusted Node.js context — browser apps, mobile clients, third-party services.
 
 ## Setup
@@ -37,7 +35,7 @@ Two authentication mechanisms are supported.
 When a user logs in through `/admin/api/auth/login` (or completes the `/admin/setup` wizard), the runtime sets two HTTP-only cookies:
 
 - `nextly_session` — short-lived JWT used for every authenticated request, scoped to `/admin`.
-- `nextly_refresh` — long-lived token, scoped to `/admin/api/auth` so that only the auth endpoints receive it: `/admin/api/auth/refresh` rotates it and `/admin/api/auth/logout` deletes its row. *Needs the release after 0.0.2-alpha.66.* On 0.0.2-alpha.66 it is scoped to `/admin/api/auth/refresh`, so logout does not receive it.
+- `nextly_refresh` — long-lived token, scoped to `/admin/api/auth` so that only the auth endpoints receive it: `/admin/api/auth/refresh` rotates it and `/admin/api/auth/logout` deletes its row.
 
 Browsers send these automatically. There is no header for you to set; just call `fetch` with `credentials: "include"` if your frontend lives on a different origin.
 
@@ -167,7 +165,7 @@ For rate-limited responses (`code: "RATE_LIMITED"`, status 429) the runtime also
 | `400` | `VALIDATION_ERROR` | Body or query failed validation. |
 | `401` | `AUTH_REQUIRED`, `AUTH_INVALID_CREDENTIALS` | Missing or bad credentials. |
 | `403` | `FORBIDDEN` | Authenticated but lacks permission. |
-| `403` | `EMAIL_NOT_VERIFIED` | Login with the correct password for an address not yet verified. *Needs the release after 0.0.2-alpha.66.* |
+| `403` | `EMAIL_NOT_VERIFIED` | Login with the correct password for an address not yet verified. |
 | `404` | `NOT_FOUND` | Resource does not exist. |
 | `409` | `CONFLICT`, `DUPLICATE` | Concurrent edit, duplicate email, etc. |
 | `413` | `PAYLOAD_TOO_LARGE` | Upload bigger than configured cap. |
@@ -189,7 +187,7 @@ The catch-all dispatches every URL under `/admin/api/` to one of these endpoint 
 | `GET` | `/admin/api/auth/session` | Current session info from the cookie. | Cookie |
 | `GET` | `/admin/api/auth/csrf` | CSRF token (when applicable). | Public |
 | `GET` | `/admin/api/auth/ui` | Login page UI: provider buttons, challenge views, slots. | Public |
-| `GET` | `/admin/api/auth/pending` | Which second factor an interrupted sign-in left outstanding; 204 when none is, or its attempt budget is spent. *Needs the release after 0.0.2-alpha.66.* | Public |
+| `GET` | `/admin/api/auth/pending` | Which second factor an interrupted sign-in left outstanding; 204 when none is, or its attempt budget is spent. | Public |
 | `POST` | `/admin/api/auth/login` | Email + password login. Sets cookies. | Public |
 | `POST` | `/admin/api/auth/challenge/resolve` | Answer a second factor with the pending token. Sets cookies. | Pending token |
 | `POST` | `/admin/api/auth/set-initial-password` | Replace an administrator-set password at first sign-in. Sets cookies. | Pending token |

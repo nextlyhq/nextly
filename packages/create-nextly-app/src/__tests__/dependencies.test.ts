@@ -275,6 +275,23 @@ describe("installDependencies (fresh plugin scaffold)", () => {
     expect(linkedViaYalc()).toContain("nextly");
   });
 
+  // The blog registers the form builder, whose peer @nextlyhq/plugin-sdk Yarn
+  // never installs on its own. A yalc scaffold omits both from package.json
+  // and relies on this install to link them, so both have to be linked here.
+  it("links the form builder and its plugin-sdk peer for the blog", async () => {
+    await installDependencies(
+      "/tmp/blog",
+      projectInfo,
+      database,
+      /* useYalc */ true,
+      /* isFreshProject */ true,
+      "blog"
+    );
+
+    expect(linkedViaYalc()).toContain("@nextlyhq/plugin-form-builder");
+    expect(linkedViaYalc()).toContain("@nextlyhq/plugin-sdk");
+  });
+
   it("leaves the app scaffold's yalc set unchanged", async () => {
     await installDependencies(
       "/tmp/app",

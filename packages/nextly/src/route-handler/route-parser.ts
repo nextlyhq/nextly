@@ -779,8 +779,28 @@ function parseCollectionEntryVersionRoutes(
     return null;
   }
 
-  // `versions/{versionNo}/restore` is a write, and the only path here deeper
-  // than a version number.
+  // `versions/{versionNo}/seen` records that the caller was shown the version.
+  // PUT because it is idempotent, and authorized as a read of one entry
+  // (`single`): it changes only the caller's own "last looked at" marker,
+  // never the document or its history, so reading the document is what it
+  // needs.
+  if (
+    additionalParams.length === 3 &&
+    additionalParams[2] === "seen" &&
+    httpMethod === "PUT"
+  ) {
+    routeParams.collectionName = id;
+    routeParams.entryId = subId;
+    routeParams.versionNo = additionalParams[1] ?? "";
+    return {
+      service: "collections",
+      operation: "single",
+      method: "markEntryVersionSeen",
+      routeParams,
+    };
+  }
+
+  // `versions/{versionNo}/restore` is a write.
   if (
     additionalParams.length === 3 &&
     additionalParams[2] === "restore" &&
@@ -954,6 +974,15 @@ const SINGLE_VERSION_SUBRESOURCES = new Map<
   ],
 ]);
 
+/** Actions on one version of a Single (`versions/{versionNo}/{action}`). */
+const SINGLE_VERSION_ACTIONS = new Map<
+  string,
+  { operation: OperationType; method: string }
+>([
+  ["restore POST", { operation: "update", method: "restoreSingleVersion" }],
+  ["seen PUT", { operation: "single", method: "markSingleVersionSeen" }],
+]);
+
 function parseSingleVersionRoutes(
   id: string | undefined,
   subresource: string | undefined,
@@ -966,23 +995,19 @@ function parseSingleVersionRoutes(
     return null;
   }
 
-  // `versions/{versionNo}/restore` is a write, and the only path here deeper
-  // than a version number.
-  if (
-    subId &&
-    additionalParams.length === 1 &&
-    additionalParams[0] === "restore" &&
-    httpMethod === "POST"
-  ) {
-    routeParams.slug = id;
-    routeParams.versionNo = subId;
-    return {
-      service: "singles",
-      // Restoring writes the document, so it is authorized as an update.
-      operation: "update",
-      method: "restoreSingleVersion",
-      routeParams,
-    };
+  // `versions/{versionNo}/{action}`: an action on one version, matched from
+  // the table above. Restoring writes the document, so it is an update;
+  // marking a version seen changes only the caller's own marker, so it is a
+  // read of the document (see the collection parser).
+  if (subId && additionalParams.length === 1) {
+    const action = SINGLE_VERSION_ACTIONS.get(
+      `${additionalParams[0]} ${httpMethod.toUpperCase()}`
+    );
+    if (action) {
+      routeParams.slug = id;
+      routeParams.versionNo = subId;
+      return { service: "singles", ...action, routeParams };
+    }
   }
 
   // The named sub-resources of a Single's history, matched from the table above
@@ -2041,6 +2066,16 @@ const RELEASE_ROUTES: ReleaseRoute[] = [
     operation: "delete",
     method: "removeReleaseMember",
   },
+  // Switching a document between going live and coming down: a change to the
+  // member, so the member's own path, with the new action in the body.
+  {
+    id: true,
+    subresource: "members",
+    subId: true,
+    verb: "PATCH",
+    operation: "update",
+    method: "changeReleaseMemberAction",
+  },
   // Scheduling and cancelling are separate routes rather than one `PATCH` with a
   // state in the body: they are the two directions of the authority the seed
   // calls "schedule or cancel", and a body field is not something a route table
@@ -2061,6 +2096,18 @@ const RELEASE_ROUTES: ReleaseRoute[] = [
     operation: "update",
     method: "cancelRelease",
   },
+  // Publish now: a run of its own rather than a schedule with "now" in the
+  // body, because it is refused in states scheduling accepts (a stopped
+  // release is scheduled again, never run as it is), and a route is something
+  // an audit log can see.
+  {
+    id: true,
+    subresource: "publish",
+    subId: false,
+    verb: "POST",
+    operation: "update",
+    method: "publishRelease",
+  },
   // A READ, and deliberately its own route rather than a field on the detail.
   // Answering it costs an identity lookup over every member, which the detail
   // read must not pay to tell the overwhelming majority of callers that nothing
@@ -2073,6 +2120,16 @@ const RELEASE_ROUTES: ReleaseRoute[] = [
     verb: "GET",
     operation: "list",
     method: "listReleaseBlockers",
+  },
+  // Every problem the release's documents have, hard and soft. Its own route
+  // for the reason `blockers` is: answering it checks every document.
+  {
+    id: true,
+    subresource: "readiness",
+    subId: false,
+    verb: "GET",
+    operation: "single",
+    method: "getReleaseReadiness",
   },
 ];
 
@@ -2374,6 +2431,36 @@ function parseWebhookRoutes(
 // ============================================================================
 // Dashboard Routes
 // ============================================================================
+
+/**
+ * Parse the notices routes: the signed-in person's own notices.
+ *
+ *   GET  /api/notices        → getNotices
+ *   GET  /api/notices/count  → getNoticeCount
+ *   POST /api/notices/read   → markNoticesRead
+ *
+ * The handler owns its own auth: the person is always the signed-in user, so
+ * no route carries a user.
+ */
+function parseNoticeRoutes(
+  id: string | undefined,
+  extra: readonly unknown[],
+  httpMethod: string,
+  routeParams: Record<string, string>
+): ParsedRoute | null {
+  // Only the three documented paths: a trailing segment is a different path,
+  // and `POST /api/notices/read/anything` must not mark anything read.
+  if (extra.some(segment => segment !== undefined)) return null;
+  const routes: Record<string, { operation: OperationType; method: string }> = {
+    "GET ": { operation: "list", method: "getNotices" },
+    "GET count": { operation: "count", method: "getNoticeCount" },
+    "POST read": { operation: "update", method: "markNoticesRead" },
+  };
+  const route = routes[`${httpMethod} ${id ?? ""}`];
+  return route === undefined
+    ? null
+    : { service: "notices", ...route, routeParams };
+}
 
 /**
  * Parse the translation worklist route.
@@ -2884,6 +2971,17 @@ export function parseRestRoute(
   // Handle the background job trigger
   if (resource === "jobs") {
     const result = parseJobRoutes(id, subresource, httpMethod, routeParams);
+    if (result) return result;
+  }
+
+  // Handle the signed-in person's notices
+  if (resource === "notices") {
+    const result = parseNoticeRoutes(
+      id,
+      [subresource, subId, ...additionalParams],
+      httpMethod,
+      routeParams
+    );
     if (result) return result;
   }
 

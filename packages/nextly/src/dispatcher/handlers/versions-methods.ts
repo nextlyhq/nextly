@@ -9,7 +9,11 @@
  * @module dispatcher/handlers/versions-methods
  */
 
-import type { PaginationMeta } from "../../api/response-shapes";
+import {
+  type PaginationMeta,
+  respondList,
+  withSessionCacheHeaders,
+} from "../../api/response-shapes";
 import {
   assertComparisonRequest,
   assertVersionDocumentReadable,
@@ -18,9 +22,11 @@ import {
   type ComparisonQuery,
   parseComparisonQuery,
   hydrateVersionSnapshot,
+  readingPersonId,
   redactSnapshotForUser,
   resolveVersionsPolicy,
   tryResolveCurrentFields,
+  withLastViewedMarks,
 } from "../../api/versions-access";
 import type { AuthenticatedScope } from "../../auth/authenticated-scope";
 import { canReadEntity } from "../../auth/entity-read-access";
@@ -39,15 +45,19 @@ import {
   discardWorkingDraft,
   type DiscardScopeKind,
 } from "../../domains/versions/discard-working-draft";
+import { lockDocument, lockPerson } from "../../domains/versions/history-locks";
 import { restoreVersion } from "../../domains/versions/restore-version";
 import {
   resolveComponentFieldMap,
   stripPasswordsThroughComponents,
 } from "../../domains/versions/tag-component-types";
+import { markVersionSeen } from "../../domains/versions/version-views";
+import { VersionsRepository } from "../../domains/versions/versions-repository";
 import type { VersionRow } from "../../domains/versions/versions-repository";
 import { NextlyError } from "../../errors/nextly-error";
 import type { VersionScopeKind } from "../../schemas/versions/types";
 import { stripPasswordFieldValues } from "../../shared/lib/password-fields";
+import { isUniqueViolation } from "../../shared/lib/unique-violation";
 import { readAuthenticatedScope } from "../helpers/authenticated-actor";
 import type { Params } from "../types";
 
@@ -238,8 +248,18 @@ export async function listVersionsForDocument(
   // Keyset pagination: page/totalPages are not meaningful for a cursor walk,
   // so the meta describes the returned window.
   return {
-    // Rows record only an author id; a history list shows a person.
-    items: await attachVersionAuthors(items),
+    // Rows record only an author id; a history list shows a person. For a
+    // person, each part's "You last looked here" row is marked; reading the
+    // list records nothing.
+    items: await withLastViewedMarks(await attachVersionAuthors(items), {
+      ref: {
+        scopeKind: args.scopeKind,
+        scopeSlug: args.slug,
+        entryId: args.entryId,
+      },
+      user: args.user,
+      authenticatedScope: args.authenticatedScope,
+    }),
     meta: {
       total: items.length,
       page: 1,
@@ -251,10 +271,35 @@ export async function listVersionsForDocument(
   };
 }
 
+/**
+ * A history page as the dispatcher answers it: paging read from the params,
+ * and private to the caller, since the page marks where they last looked.
+ * Both entity kinds answer through this, so they cannot drift apart.
+ */
+export async function respondVersionPage(
+  document: { scopeKind: VersionScopeKind; slug: string; entryId: string },
+  p: Params
+): Promise<Response> {
+  const result = await listVersionsForDocument({
+    ...document,
+    user: userFromParams(p),
+    authenticatedScope: readAuthenticatedScope(p),
+    limit: p.limit !== undefined ? Number(p.limit) : undefined,
+    cursor: p.cursor !== undefined ? Number(p.cursor) : undefined,
+    locale: p.locale !== undefined ? String(p.locale) : undefined,
+  });
+  return withSessionCacheHeaders(respondList(result.items, result.meta));
+}
+
 /** One version, including its snapshot, redacted for the caller. */
 export async function getVersionForDocument(
   args: VersionMethodArgs & { versionNo: number }
-): Promise<VersionRow> {
+): Promise<
+  VersionRow & {
+    /** Fields the read rules withheld: top-level keys and dotted paths. */
+    withheld: string[];
+  }
+> {
   if (!Number.isInteger(args.versionNo) || args.versionNo < 1) {
     throw NextlyError.validation({
       errors: [
@@ -285,11 +330,14 @@ export async function getVersionForDocument(
     args.versionNo
   );
 
-  await redactSnapshotForUser(
+  // What the read rules withheld is named beside the snapshot, so a reader is
+  // told a value is held back rather than shown a version that lacks it.
+  const withheld = await redactSnapshotForUser(
     row.snapshot,
     args.scopeKind,
     args.slug,
-    args.user
+    args.user,
+    args.authenticatedScope
   );
 
   // Resolve relationship and upload ids in the snapshot to display labels
@@ -304,7 +352,88 @@ export async function getVersionForDocument(
     row.locale
   );
 
-  return row;
+  return { ...row, withheld: [...withheld] };
+}
+
+/**
+ * Record that a signed-in person was shown one version, for "the version you
+ * last looked at" (see `domains/versions/version-views`). The admin calls this
+ * when it actually shows a version or a comparison; no read records anything.
+ *
+ * People only: an API key, a principal or the system is refused, so nothing
+ * but a person's own screen moves their marker. The caller must be able to
+ * read the document, and the version must exist; its part (a language, or
+ * none) is the version's own, never the request's. Idempotent within a visit.
+ */
+export async function markVersionSeenForDocument(
+  args: VersionMethodArgs & { versionNo: number }
+): Promise<{ versionNo: number; locale: string | null }> {
+  if (!Number.isInteger(args.versionNo) || args.versionNo < 1) {
+    throw NextlyError.validation({
+      errors: [
+        {
+          path: "versionNo",
+          code: "INVALID_VALUE",
+          message: "Version number must be a positive integer.",
+        },
+      ],
+    });
+  }
+  const userId = readingPersonId(args.user, args.authenticatedScope);
+  if (userId === null) {
+    throw NextlyError.forbidden({
+      logContext: {
+        reason: "mark-seen-not-a-person",
+        actorType: args.authenticatedScope?.actorType,
+      },
+    });
+  }
+
+  await assertVersionDocumentReadable(
+    args.scopeKind,
+    args.slug,
+    args.entryId,
+    args.user,
+    args.authenticatedScope
+  );
+
+  const ref = {
+    scopeKind: args.scopeKind,
+    scopeSlug: args.slug,
+    entryId: args.entryId,
+  };
+  const notFound = (reason: string) =>
+    NextlyError.notFound({
+      logContext: { reason, ...ref, versionNo: args.versionNo },
+    });
+  // One transaction holding the locks the sweeps of markers take: the
+  // person's account row (account deletion), then the entity's registry row
+  // and the document's row (entity and document deletion). A mark either
+  // commits first and is swept, or waits and finds what it marks gone.
+  const mark = () =>
+    getService("adapter").transaction(async tx => {
+      if (!(await lockPerson(tx, userId)))
+        throw notFound("mark-seen-person-gone");
+      if (!(await lockDocument(tx, ref)))
+        throw notFound("mark-seen-document-gone");
+      const part = await new VersionsRepository(tx).findPartOfVersion(
+        ref,
+        args.versionNo
+      );
+      if (part === undefined) throw notFound("mark-seen-version-missing");
+      await markVersionSeen(tx, { userId, ref, part }, args.versionNo);
+      return part;
+    });
+  let locale: string | null;
+  try {
+    locale = await mark();
+  } catch (error) {
+    // Two first marks of one marker raced, and this one lost the insert: the
+    // row now exists, so once more updates it.
+    if (!isUniqueViolation(error)) throw error;
+    locale = await mark();
+  }
+  return { versionNo: args.versionNo, locale };
 }
 
 /**
@@ -916,11 +1045,14 @@ export async function getAutosaveForDocument(
   // whole question: a field's `access.read` rule can deny this caller today
   // even though the snapshot was stored while they could see it, and handing
   // the row back verbatim would serve that field's old value from history.
+  // The scope decoded above, the one the document gate judged: a direct
+  // dispatch carries a key's scope in its params only.
   await redactSnapshotForUser(
     row.snapshot,
     args.scopeKind,
     args.slug,
-    args.user
+    args.user,
+    authenticatedScope
   );
   return row;
 }

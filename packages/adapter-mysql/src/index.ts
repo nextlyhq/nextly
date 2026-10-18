@@ -67,7 +67,7 @@ import {
   acceptsForShare,
   checkDialectVersion,
 } from "@nextlyhq/adapter-drizzle/version-check";
-import { and, eq, getTableColumns } from "drizzle-orm";
+import { and, eq, getColumns } from "drizzle-orm";
 import type { AnyRelations, Column, SQL } from "drizzle-orm";
 import { getTableConfig, type MySqlTable } from "drizzle-orm/mysql-core";
 import { drizzle, type MySql2Database } from "drizzle-orm/mysql2";
@@ -1159,8 +1159,8 @@ export class MySqlAdapter extends DrizzleAdapter {
     record: Record<string, unknown>
   ): SQL | undefined {
     const primary = new Set(keysOf(tableObj).primary);
-    const parts = Object.entries(getTableColumns(tableObj)).filter(
-      ([, column]) => primary.has(column.name)
+    const parts = Object.entries(getColumns(tableObj)).filter(([, column]) =>
+      primary.has(column.name)
     );
     if (
       parts.length === 0 ||

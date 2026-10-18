@@ -40,10 +40,11 @@ export const requireFeaturedAlt: HookHandler = async ({ data, req }) => {
   }
 
   // Read through the media API, which returns the media row (`MediaFile`)
-  // with its `altText`.
+  // with its `altText`. `disableErrors` makes a deleted image `null`, answered
+  // below, so only a read that truly failed reaches the catch.
   let media;
   try {
-    media = await nextly.media.findByID({ id: mediaId });
+    media = await nextly.media.findByID({ id: mediaId, disableErrors: true });
   } catch (error) {
     console.error(
       `[blog] requireFeaturedAlt: could not read media ${mediaId} to check its alt text.`,

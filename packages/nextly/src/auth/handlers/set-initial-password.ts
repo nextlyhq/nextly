@@ -18,7 +18,7 @@ import { auditReason } from "../../domains/audit/audit-reasons";
 import { NextlyError } from "../../errors/nextly-error";
 import type { AuthUser } from "../../types/auth";
 import { getTrustedClientIp } from "../../utils/get-trusted-client-ip";
-import { readPendingCookie } from "../cookies/pending-cookie";
+import { presentedPendingToken } from "../cookies/pending-cookie";
 import {
   MUST_CHANGE_PASSWORD_CHALLENGE,
   verifyPendingToken,
@@ -86,10 +86,7 @@ export async function handleSetInitialPassword(
 
     // Body or cookie, for the same reason as the challenge path: an external
     // login arrives here by redirect with its token in an HttpOnly cookie.
-    const pendingTokenInput =
-      typeof body.pendingToken === "string"
-        ? body.pendingToken
-        : (readPendingCookie(request) ?? "");
+    const pendingTokenInput = presentedPendingToken(body, request);
     const newPassword =
       typeof body.newPassword === "string" ? body.newPassword : "";
     if (!pendingTokenInput || !newPassword) {

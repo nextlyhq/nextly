@@ -20,11 +20,10 @@
  *
  * @module admin/BlocksField.emptyContainerAppender.test
  */
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, render } from "@testing-library/react";
 import * as React from "react";
-import { useForm } from "react-hook-form";
+import { useForm, type FieldValues } from "react-hook-form";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { OPEN_BUILDER_ACTION } from "./PageBuilderCard";
 
 /*
  * Declared here rather than in a setup file, because neither this package nor
@@ -171,6 +170,7 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   // No document around the field: the state every case here was written
   // against, and the one that offers every component.
   useDocumentIdentity: () => null,
+  navigateTo: vi.fn(),
   // Nor a language the field could know: the component read asks for the
   // app default.
   useDocumentLocale: () => null,
@@ -194,7 +194,7 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   useDocumentStatus: () => null,
   // Nothing stored, read successfully — so `siteStylePending` and
   // `siteStyleError` both resolve to their "ready" values on the first
-  // render, and `BlocksField` renders `Canvas` rather than its loading
+  // render, and the editor renders `Canvas` rather than its loading
   // paragraph.
   useSingleDocument: () => ({ data: undefined, isPending: false, error: null }),
   useUpdateSingleDocument: () => ({
@@ -203,16 +203,32 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   }),
 }));
 
-const { BlocksField } = await import("./BlocksField");
+const { PageBuilderView } = await import("./editor/PageBuilderView");
 
+/**
+ * The blocks field's declaration, as the admin hands it to the view. Typed at
+ * the boundary because `FieldConfig` is the closed union of the built-in
+ * shapes, and a contributed type such as `blocks` has no arm in it.
+ */
+const BODY_FIELD = { name: "body", type: "blocks" } as never;
+
+/** The builder's document view, open on the form's `body` field. */
 function Host(): React.JSX.Element {
-  const { control } = useForm({ defaultValues: { body: undefined } });
-  return <BlocksField name="body" control={control} />;
+  const { control } = useForm<FieldValues>({
+    defaultValues: { body: undefined },
+  });
+  return (
+    <PageBuilderView
+      control={control}
+      field={BODY_FIELD}
+      readOnly={false}
+      exit={() => {}}
+    />
+  );
 }
 
 function openEditor(): { rerender: () => void } {
   const view = render(<Host />);
-  fireEvent.click(screen.getByRole("button", { name: OPEN_BUILDER_ACTION }));
   return {
     rerender: () => {
       React.act(() => {

@@ -6,7 +6,7 @@
  * `NextlyError` carries the real one's `code` and `publicData`, so the refusal
  * is checked in the shape the admin reads.
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { requireFeaturedAlt } from "../../../../templates/blog/src/collections/Posts/hooks/require-featured-alt";
 
@@ -24,7 +24,10 @@ const refusal = (message: string) =>
     },
   });
 
-type FindByID = (args: { id: string }) => Promise<unknown>;
+type FindByID = (args: {
+  id: string;
+  disableErrors?: boolean;
+}) => Promise<unknown>;
 const run = (findByID: FindByID | null) =>
   requireFeaturedAlt({
     data: { featuredImage: "m1" },
@@ -35,6 +38,9 @@ describe("blog template: requireFeaturedAlt", () => {
   beforeEach(() => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     vi.spyOn(console, "warn").mockImplementation(() => {});
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   it("lets a featured image with alt text through", async () => {
@@ -59,15 +65,20 @@ describe("blog template: requireFeaturedAlt", () => {
   });
 
   it("refuses a featured image that no longer exists", async () => {
-    await expect(run(async () => null)).rejects.toEqual(
-      refusal("no longer exists")
-    );
+    // As the real media API behaves: a missing row is `null` only when asked
+    // for with `disableErrors`, and NOT_FOUND otherwise.
+    const findByID = async (args: { id: string; disableErrors?: boolean }) => {
+      if (args.disableErrors) return null;
+      throw Object.assign(new Error("Not found"), { code: "NOT_FOUND" });
+    };
+    await expect(run(findByID)).rejects.toEqual(refusal("no longer exists"));
+    expect(console.error).not.toHaveBeenCalled();
   });
 
-  it("reads the image through the media API, by its id", async () => {
+  it("reads the image through the media API, by its id, asking for null when it is gone", async () => {
     const findByID = vi.fn(async () => ({ id: "m1", altText: "alt" }));
     await run(findByID);
-    expect(findByID).toHaveBeenCalledWith({ id: "m1" });
+    expect(findByID).toHaveBeenCalledWith({ id: "m1", disableErrors: true });
   });
 
   it("skips the check, with a warning, where the Direct API is absent", async () => {

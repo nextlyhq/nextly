@@ -140,6 +140,8 @@ The adapter's where clauses have four text operators, and they compile the same 
 | `CONTAINS` | a substring | as the column's collation compares | literal characters |
 | `ICONTAINS` | a substring | ignored | literal characters |
 
+A collection's `contains` and `search` filters, its search box in the admin and the API, and the admin's search of collections, Singles and field groups all match this way.
+
 Use `ICONTAINS` for a search box: it finds the text the person typed, whatever its case, and a `%` or `_` they type is searched for rather than read as a wildcard. `CONTAINS` and `ICONTAINS` escape `%`, `_` and the escape character `!` themselves; with `LIKE` and `ILIKE` the value is a pattern you build, so escape anything that should match literally.
 
 ```ts

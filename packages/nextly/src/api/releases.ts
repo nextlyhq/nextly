@@ -26,6 +26,8 @@ import type { AuthenticatedScope } from "../auth/authenticated-scope";
 import { runWithCallerScope } from "../auth/caller-scope";
 import { isErrorResponse, requireAnyPermission } from "../auth/middleware";
 import { toNextlyAuthError } from "../auth/middleware/to-nextly-error";
+import { getLoggerFromDI } from "../dispatcher/helpers/di";
+import { isDueAt } from "../domains/releases/release-due";
 import {
   isReleaseTab,
   RELEASE_ATTENTION_REASONS,
@@ -43,13 +45,16 @@ import {
   DEFAULT_RELEASE_PAGE_SIZE,
   MAX_RELEASE_PAGE_SIZE,
   RELEASES_RESOURCE,
-  type ReleaseCapabilities,
 } from "../domains/releases/services/releases-service";
 import { NextlyError } from "../errors";
 import { getCachedNextly } from "../init";
 import {
+  isReleaseKind,
   isReleaseState,
+  RELEASE_KINDS,
   RELEASE_STATES,
+  type ReleaseCapabilities,
+  type ReleaseKind,
   type ReleaseState,
 } from "../schemas/releases/types";
 
@@ -80,13 +85,19 @@ const RELEASE_AUTHORITY: Record<string, "read" | "create" | "publish"> = {
   getRelease: "read",
   listReleaseMembers: "read",
   listReleaseBlockers: "read",
+  getReleaseReadiness: "read",
   createRelease: "create",
   addReleaseMember: "create",
   // Removing a member un-does part of assembling a release and can only ever
   // make LESS content go live, so it is `create` rather than `publish`.
   removeReleaseMember: "create",
+  // Switching a document's action re-assembles the release; the document's
+  // own authority for the new action, and `publish` for a scheduled release,
+  // are the service's to ask.
+  changeReleaseMemberAction: "create",
   scheduleRelease: "publish",
   cancelRelease: "publish",
+  publishRelease: "publish",
 };
 
 /**
@@ -262,6 +273,26 @@ function releaseStateParam(value: string | null): ReleaseState | undefined {
   if (value === null) return undefined;
   if (!isReleaseState(value)) {
     throw badRequest(`\`state\` must be one of: ${RELEASE_STATES.join(", ")}.`);
+  }
+  return value;
+}
+
+/**
+ * A release kind from a query string or a body, or a refusal — for the reason
+ * an unknown state is refused: `kind=singles` ignored would list every release.
+ */
+function releaseKindParam(value: unknown): ReleaseKind | undefined {
+  if (value === null || value === undefined) return undefined;
+  if (!isReleaseKind(value)) {
+    throw badRequest(`\`kind\` must be one of: ${RELEASE_KINDS.join(", ")}.`);
+  }
+  return value;
+}
+
+/** A kind present in a body: one of the kinds, or a refusal (`null` too). */
+function requireKind(value: unknown): ReleaseKind {
+  if (!isReleaseKind(value)) {
+    throw badRequest(`\`kind\` must be one of: ${RELEASE_KINDS.join(", ")}.`);
   }
   return value;
 }
@@ -455,8 +486,84 @@ async function withCapabilities(
       cancel: false,
       addMember: false,
       removeMember: false,
+      publishNow: false,
     },
   }));
+}
+
+/**
+ * What a Publish now answer says, by the state the run left the release in.
+ *
+ * One sentence per state, in a record keyed by every state, so a state added
+ * later is a compile error here rather than a release told it is going out.
+ *
+ * A release still `scheduled` is due and is being sent out by the runner: the
+ * run here ran out of time or could not write a document yet, or another run
+ * of the drain already held it. The wording holds for each, since none of its
+ * documents may be live yet. A `cancelled` one was called off after it was
+ * moved to now, and nothing more of it goes out.
+ */
+const PUBLISH_NOW_MESSAGES: Record<ReleaseState, string> = {
+  published: "Release published.",
+  blocked:
+    "Release stopped part-way. Fix the documents blocking it, then schedule it again.",
+  scheduled:
+    "Release is going out; any of its documents not yet live will follow shortly.",
+  cancelled:
+    "Release was cancelled before it went out; nothing more from it will be sent.",
+  draft: "Release has not been sent; it is still a draft.",
+};
+
+/**
+ * The Publish now answer for the release the run left.
+ *
+ * A `scheduled` release is going out only once its instant has come, by the
+ * drain's own rule. One rescheduled for later while Publish now ran waits for
+ * that instant, and the drain leaves it alone until then, so promising the
+ * rest shortly would be untrue: the answer names the instant instead.
+ */
+function publishNowMessage(release: ReleaseRow, now: Date): string {
+  if (
+    release.state === "scheduled" &&
+    release.scheduledAt instanceof Date &&
+    !isDueAt(release.scheduledAt, now)
+  ) {
+    return `Release was rescheduled for ${release.scheduledAt.toISOString()} while it was being sent; it will go out then.`;
+  }
+  return PUBLISH_NOW_MESSAGES[release.state];
+}
+
+/**
+ * A release with its capabilities, for an answer given AFTER a write.
+ *
+ * The capabilities are decoration on a write that has already committed, so
+ * no failure to read them may fail the request: that would report a write
+ * that happened as one that did not, and invite a retry of it. The release is
+ * answered without them instead. A refusal is expected — a key scoped to
+ * publish releases has no read grant — and is not reported; any other
+ * failure is logged through the application logger, the way this layer
+ * reports work that goes wrong without failing the request.
+ */
+async function decorateAfterWrite(
+  release: ReleaseRow,
+  caller: ReleaseContext["caller"],
+  releases: ReleaseContext["releases"]
+): Promise<ReleaseRow | (ReleaseRow & { can: ReleaseCapabilities })> {
+  try {
+    const [item] = await withCapabilities([release], caller, releases);
+    return item;
+  } catch (error) {
+    if (!(NextlyError.is(error) && error.code === "FORBIDDEN")) {
+      getLoggerFromDI()?.error(
+        "A release's capabilities could not be read after a write",
+        {
+          releaseId: release.id,
+          error: error instanceof Error ? error.message : String(error),
+        }
+      );
+    }
+    return release;
+  }
 }
 
 /**
@@ -481,6 +588,7 @@ const RELEASE_OPERATIONS: Record<
     const shared = {
       ...caller,
       state: releaseStateParam(params.get("state")),
+      kind: releaseKindParam(params.get("kind")),
       scheduledAfter: optionalInstant(
         params.get("scheduledAfter"),
         "scheduledAfter"
@@ -563,6 +671,9 @@ const RELEASE_OPERATIONS: Record<
         ...caller,
         title: requireString(body, "title"),
         description,
+        // Present means given: an explicit null is a malformed kind, not an
+        // omitted one, and is refused rather than read as `release`.
+        kind: "kind" in body ? requireKind(body.kind) : undefined,
       }),
       { status: 201 }
     );
@@ -651,6 +762,40 @@ const RELEASE_OPERATIONS: Record<
     });
   },
 
+  /**
+   * Every problem the release's documents have now, hard ones (which stop it
+   * from being scheduled or published now) apart from soft ones.
+   */
+  getReleaseReadiness: async ({ caller, releases, releaseId }) =>
+    respondDoc(await releases.readiness({ ...caller, releaseId })),
+
+  /**
+   * Switch a document between going live and coming down. Bound to the
+   * release in the path, as a removal is.
+   */
+  changeReleaseMemberAction: async ({
+    request,
+    caller,
+    releases,
+    releaseId,
+    memberId,
+  }) => {
+    const body = await jsonObject(request);
+    const action = body.action;
+    if (action !== "publish" && action !== "unpublish") {
+      throw badRequest("`action` must be `publish` or `unpublish`.");
+    }
+    return respondMutation(
+      "Release document updated.",
+      await releases.changeMemberAction({
+        ...caller,
+        releaseId,
+        memberId,
+        action,
+      })
+    );
+  },
+
   removeReleaseMember: async ({ caller, releases, releaseId, memberId }) => {
     // Bound to the release in the PATH. Deleting by member id alone means
     // `/api/releases/A/members/B` removes B even when B belongs to release C —
@@ -680,6 +825,17 @@ const RELEASE_OPERATIONS: Record<
     // Not `{ cancelled: true }`: the response-shape contract refuses
     // boolean-only bodies, because a caller cannot grow against them.
     return respondAction("Release cancelled.", { releaseId });
+  },
+
+  publishRelease: async ({ caller, releases, releaseId }) => {
+    const release = await releases.publishNow({ ...caller, id: releaseId });
+    // The release as it stands after the run, and a message that says which
+    // way it went: a release still `scheduled` has documents the runner will
+    // finish, and a `blocked` one stopped and will not go on until fixed.
+    return respondMutation(
+      publishNowMessage(release, new Date()),
+      await decorateAfterWrite(release, caller, releases)
+    );
   },
 };
 

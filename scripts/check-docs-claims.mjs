@@ -1017,11 +1017,12 @@ function metaReachability(repoRoot, tracked, findings) {
  * generated project. It is the first thing a plugin author hits.
  *
  * Everything this compares against is DERIVED on each run: the namespace
- * segment from its one declaration, and the mount from BOTH places that decide
- * it, since `create-nextly-app` scaffolds into an empty project from the
- * template and into an existing one from its own generator. Two sources that
- * disagree mean the docs cannot state one answer, so this refuses instead of
- * picking a side.
+ * segment from its one declaration, and the mount from where the base template
+ * keeps its catch-all route. `create-nextly-app` writes the same route into an
+ * existing app from its own generator, and its test `admin-api-mount.test.ts`
+ * runs that generator and holds the file it writes to the template's, so the
+ * two cannot disagree. The generator's source is not read here: how it spells
+ * the path changes with the code, and only where the file lands matters.
  *
  * Comments in published source are read too. The wrong claim started in a
  * `@public` JSDoc, so a guard that watched only Markdown would leave the
@@ -1034,11 +1035,6 @@ const NAMESPACE_DECLARATION =
 const NAMESPACE_SOURCE = "packages/nextly/src/plugins/routes/route-path.ts";
 const TEMPLATE_APP_DIR = "templates/base/src/app/";
 const TEMPLATE_CATCH_ALL = "/[[...params]]/route.ts";
-const GENERATOR_SOURCE = "packages/create-nextly-app/src/generators/routes.ts";
-const GENERATOR_MOUNT =
-  /path\.join\(\s*cwd,\s*projectInfo\.appDir,\s*((?:"[^"]*",\s*)+)"\[\[\.\.\.params\]\]"/;
-const QUOTED_SEGMENT = /"([^"]*)"/g;
-
 /** The mount the base template hard-codes by where its route file sits. */
 function templateMount(repoRoot, tracked, refuse) {
   const candidates = tracked
@@ -1067,31 +1063,6 @@ function templateMount(repoRoot, tracked, refuse) {
   )}`;
 }
 
-/** The mount the generator builds when scaffolding into an existing project. */
-function generatorMount(repoRoot, refuse) {
-  let source;
-  try {
-    source = readFileSync(join(repoRoot, GENERATOR_SOURCE), "utf-8");
-  } catch {
-    refuse(GENERATOR_SOURCE, "could not be read, so the mount it generates is unknown");
-    return null;
-  }
-  const declared = GENERATOR_MOUNT.exec(source);
-  if (declared === null) {
-    refuse(
-      GENERATOR_SOURCE,
-      "no longer builds the catch-all route path in the shape this reads, so the mount it generates is unknown"
-    );
-    return null;
-  }
-  const segments = [...declared[1].matchAll(QUOTED_SEGMENT)].map(m => m[1]);
-  if (segments.length === 0) {
-    refuse(GENERATOR_SOURCE, "builds a catch-all route path with no leading segments");
-    return null;
-  }
-  return `/${segments.join("/")}`;
-}
-
 function pluginRouteMount(repoRoot, tracked, findings, isExempt) {
   const refuse = (file, message) => {
     findings.push({
@@ -1105,15 +1076,7 @@ function pluginRouteMount(repoRoot, tracked, findings, isExempt) {
   // Fails closed on every input. Checking the docs against a mount this could
   // not establish would report "no findings" for a question it never asked.
   const fromTemplate = templateMount(repoRoot, tracked, refuse);
-  const fromGenerator = generatorMount(repoRoot, refuse);
-  if (fromTemplate === null || fromGenerator === null) return;
-  if (fromTemplate !== fromGenerator) {
-    refuse(
-      GENERATOR_SOURCE,
-      `generates ${fromGenerator} while the template mounts at ${fromTemplate}; a scaffolded project's plugin routes would answer at two different addresses, so the docs cannot name one`
-    );
-    return;
-  }
+  if (fromTemplate === null) return;
 
   let namespace;
   try {

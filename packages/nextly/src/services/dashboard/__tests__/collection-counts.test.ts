@@ -30,7 +30,11 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 
 import type { Logger } from "../../shared";
 import { DashboardService } from "../dashboard-service";
-import { someResources, type ReadCaller } from "../readable-resources";
+import {
+  allResources,
+  someResources,
+  type ReadCaller,
+} from "../readable-resources";
 
 /** Rows physically present in `posts`, of which the caller owns two. */
 const ROWS_IN_TABLE = 7;
@@ -82,6 +86,122 @@ beforeEach(() => {
   // where the table holds seven.
   count.mockResolvedValue({ total: ROWS_THE_CALLER_MAY_READ });
 });
+
+describe("a collection or Single kept off the dashboard is never counted", () => {
+  it("leaves a hidden collection and a hidden Single out, even for a caller who may read everything", async () => {
+    // `allResources()` is a super-admin's scope, so nothing about access removes them: only the
+    // dashboard rule does. The page builder's internal usage index stands for `internal: true`,
+    // which is stored as `admin.hidden`.
+    containerGet.mockImplementation((name: string) => {
+      if (name === "collectionRegistryService") {
+        return {
+          getAllCollections: vi.fn().mockResolvedValue([
+            ...COLLECTIONS,
+            {
+              slug: "nx_pb_class_usage",
+              tableName: "nx_pb_class_usage",
+              labels: { plural: "Class usage" },
+              admin: { hidden: true },
+              fields: [],
+            },
+          ]),
+        };
+      }
+      if (name === "singleRegistryService") {
+        return {
+          getAllSingles: vi
+            .fn()
+            .mockResolvedValue([
+              { slug: "site-settings" },
+              { slug: "hidden-single", admin: { hidden: true } },
+            ]),
+        };
+      }
+      throw new Error(`unexpected container.get("${name}")`);
+    });
+
+    const adapter = makeAdapter();
+    const stats = await new DashboardService(adapter, makeLogger()).getStats({
+      scope: allResources(),
+      caller: CALLER,
+    });
+
+    expect(stats.collectionCounts.map(row => row.slug)).toEqual(["posts"]);
+    expect(stats.singles).toBe(1);
+    expect(count).not.toHaveBeenCalledWith(
+      expect.objectContaining({ collection: "nx_pb_class_usage" })
+    );
+    // Nor is its activity counted in the recent-changes figure: the activity query leaves out
+    // the collection the registry read above left out. Not the Single: the trail records none.
+    const activity = activityQuery(adapter);
+    expect(String(activity?.[0])).toContain("NOT IN");
+    expect(activity?.[1]).toContain("nx_pb_class_usage");
+    expect(activity?.[1]).not.toContain("hidden-single");
+  });
+
+  it("keeps a visible collection's activity when a hidden Single shares its slug", async () => {
+    containerGet.mockImplementation((name: string) => {
+      if (name === "collectionRegistryService") {
+        return { getAllCollections: vi.fn().mockResolvedValue(COLLECTIONS) };
+      }
+      if (name === "singleRegistryService") {
+        return {
+          getAllSingles: vi
+            .fn()
+            .mockResolvedValue([{ slug: "posts", admin: { hidden: true } }]),
+        };
+      }
+      throw new Error(`unexpected container.get("${name}")`);
+    });
+
+    const adapter = makeAdapter();
+    const stats = await new DashboardService(adapter, makeLogger()).getStats({
+      scope: allResources(),
+      caller: CALLER,
+    });
+
+    expect(stats.singles).toBe(0);
+    const activity = activityQuery(adapter);
+    expect(String(activity?.[0])).not.toContain("NOT IN");
+    expect(activity?.[1]).not.toContain("posts");
+  });
+});
+
+describe("the recent-changes figure fails closed", () => {
+  it("counts nothing when the read that names the hidden collections failed", async () => {
+    // The scope may still allow everything, so a count run now would include the activity of
+    // collections kept off the dashboard: the read that names them is what failed.
+    containerGet.mockImplementation((name: string) => {
+      if (name === "collectionRegistryService") {
+        return {
+          getAllCollections: vi
+            .fn()
+            .mockRejectedValue(new Error("registry unreachable")),
+        };
+      }
+      if (name === "singleRegistryService") {
+        return { getAllSingles: vi.fn().mockResolvedValue([]) };
+      }
+      throw new Error(`unexpected container.get("${name}")`);
+    });
+
+    const adapter = makeAdapter();
+    const stats = await new DashboardService(adapter, makeLogger()).getStats({
+      scope: allResources(),
+      caller: CALLER,
+    });
+
+    expect(stats.content.recentChanges24h).toBe(0);
+    expect(activityQuery(adapter)).toBeUndefined();
+  });
+});
+
+/** The recent-changes count's query and its bound values, as the adapter received them. */
+function activityQuery(adapter: ReturnType<typeof makeAdapter>) {
+  return vi
+    .mocked(adapter.executeQuery)
+    .mock.calls.find(([sql]) => String(sql).includes("activity_log"));
+}
 
 describe("per-collection totals honour the caller's row-level access", () => {
   it("reports the access-controlled count, not the physical row count", async () => {

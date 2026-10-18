@@ -14,7 +14,9 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  RELEASE_MEMBER_LIMIT,
   RELEASE_STATES,
+  type ReleaseKind,
   type ReleaseState,
 } from "../../../schemas/releases/types";
 import { ReleasesService } from "../services/releases-service";
@@ -22,18 +24,40 @@ import type {
   ReleaseAuthority,
   ReleasesServiceDeps,
 } from "../services/releases-service";
+import { READY_CHECKS } from "./helpers/ready-checks";
 
 const ACTOR = { userId: "u1" };
 
-function service(holds: ReleaseAuthority[]) {
+/**
+ * @param members what each release holds, by release id. Read through the
+ *   batched `memberCountsOf` only; every other repository method is absent, so a
+ *   path that reached one would fail rather than pass by accident.
+ */
+function service(
+  holds: ReleaseAuthority[],
+  members: Record<string, number> = {}
+) {
   const held = new Set(holds);
   const canManageReleases = vi.fn(
     async (_id: string, authority: ReleaseAuthority) => held.has(authority)
   );
+  const memberCountsOf = vi.fn(
+    async (ids: readonly string[]) =>
+      new Map(
+        ids
+          .filter(id => (members[id] ?? 0) > 0)
+          .map(id => [id, members[id] ?? 0] as const)
+      )
+  );
   const deps = {
-    repository: {} as ReleasesServiceDeps["repository"],
+    repository: {
+      memberCountsOf,
+    } as unknown as ReleasesServiceDeps["repository"],
     canManageReleases,
     canActOnDocument: vi.fn(async () => true),
+    // Running a release is not what these cases are about.
+    runDrainNow: vi.fn(async () => undefined),
+    checks: READY_CHECKS,
     // Every target is there and has a lifecycle; the checks have their own tests.
     targets: {
       readDocument: async (target: { entryId: string }) => ({
@@ -42,12 +66,12 @@ function service(holds: ReleaseAuthority[]) {
       declaresLifecycle: async () => true,
     },
   };
-  return { svc: new ReleasesService(deps), canManageReleases };
+  return { svc: new ReleasesService(deps), canManageReleases, memberCountsOf };
 }
 
 /** A row carrying only what `capabilities` reads, so nothing else can decide it. */
-function release(state: ReleaseState, id = "r1") {
-  return { id, state } as Parameters<
+function release(state: ReleaseState, id = "r1", kind?: ReleaseKind) {
+  return { id, state, ...(kind ? { kind } : {}) } as Parameters<
     ReleasesService["capabilities"]
   >[0][number];
 }
@@ -55,7 +79,7 @@ function release(state: ReleaseState, id = "r1") {
 const ALL = ["read", "create", "publish"] as ReleaseAuthority[];
 
 describe("capabilities, for a caller holding everything", () => {
-  it("allows scheduling from every state the fence admits, not only draft", async () => {
+  it("allows scheduling from the states the fence admits, and not a cancelled one", async () => {
     const { svc } = service(ALL);
     const can = await svc.capabilities(
       [
@@ -66,10 +90,11 @@ describe("capabilities, for a caller holding everything", () => {
       ACTOR
     );
     expect(can.get("a")?.schedule).toBe(true);
-    // An instant can be MOVED, and a cancelled launch reinstated. Both were
-    // impossible in the version this replaced.
+    // An instant can be MOVED, which the version this replaced could not do.
     expect(can.get("b")?.schedule).toBe(true);
-    expect(can.get("c")?.schedule).toBe(true);
+    // A cancelled release is final, like a published one: it is retried by
+    // making a new release, so the list of finished launches stays true.
+    expect(can.get("c")?.schedule).toBe(false);
   });
 
   it("refuses scheduling a published release", async () => {
@@ -221,5 +246,137 @@ describe("reading, and what implies it", () => {
     await expect(
       svc.capabilities([release("draft")], ACTOR)
     ).rejects.toMatchObject({ code: "FORBIDDEN" });
+  });
+});
+
+describe("capabilities, for a single-document release", () => {
+  // Each case pairs the single release with an ORDINARY one in the same state
+  // holding the same number of documents: a verdict that ignored the kind, or
+  // one that refused every release in that state, would fail the pair.
+
+  it("withholds scheduling while it holds no document", async () => {
+    const { svc } = service(ALL, {});
+    const can = await svc.capabilities(
+      [release("draft", "s", "single"), release("draft", "o", "release")],
+      ACTOR
+    );
+    expect(can.get("s")?.schedule).toBe(false);
+    expect(can.get("o")?.schedule).toBe(true);
+  });
+
+  it("offers scheduling once it holds its document", async () => {
+    const { svc } = service(ALL, { s: 1 });
+    const can = await svc.capabilities(
+      [release("draft", "s", "single")],
+      ACTOR
+    );
+    expect(can.get("s")?.schedule).toBe(true);
+  });
+
+  it("withholds adding a second document", async () => {
+    const { svc } = service(ALL, { s: 1, o: 1 });
+    const can = await svc.capabilities(
+      [release("draft", "s", "single"), release("draft", "o", "release")],
+      ACTOR
+    );
+    expect(can.get("s")?.addMember).toBe(false);
+    expect(can.get("o")?.addMember).toBe(true);
+    // Taking the one it holds out of a draft is still how it is changed.
+    expect(can.get("s")?.removeMember).toBe(true);
+  });
+
+  it("offers adding while it is empty", async () => {
+    const { svc } = service(ALL, {});
+    const can = await svc.capabilities(
+      [release("draft", "s", "single")],
+      ACTOR
+    );
+    expect(can.get("s")?.addMember).toBe(true);
+  });
+
+  it("withholds removing its document once scheduled, even from a publisher", async () => {
+    // Removing it would leave a launch that runs with nothing. Cancelling is
+    // the way to call it off.
+    const { svc } = service(ALL, { s: 1, o: 1 });
+    const can = await svc.capabilities(
+      [
+        release("scheduled", "s", "single"),
+        release("scheduled", "o", "release"),
+      ],
+      ACTOR
+    );
+    expect(can.get("s")?.removeMember).toBe(false);
+    expect(can.get("o")?.removeMember).toBe(true);
+    expect(can.get("s")?.cancel).toBe(true);
+  });
+
+  it("reads what editable releases hold in ONE query, and nothing for final ones", async () => {
+    // Single releases for the one-document rule, and every release that can
+    // still take a document for the limit; a release that ran takes nothing
+    // whatever it holds, so asking about it would be a read for nothing.
+    const { svc, memberCountsOf } = service(ALL, { s1: 1 });
+    await svc.capabilities(
+      [
+        release("draft", "s1", "single"),
+        release("draft", "s2", "single"),
+        release("draft", "o1", "release"),
+        release("scheduled", "o2", "release"),
+        release("published", "p1", "release"),
+      ],
+      ACTOR
+    );
+    expect(memberCountsOf).toHaveBeenCalledTimes(1);
+    expect(memberCountsOf).toHaveBeenCalledWith(["s1", "s2", "o1", "o2"]);
+
+    memberCountsOf.mockClear();
+    await svc.capabilities(
+      [release("published", "p1"), release("cancelled", "c1")],
+      ACTOR
+    );
+    expect(memberCountsOf).toHaveBeenCalledWith([]);
+  });
+
+  it("counts an ordinary release only where this caller could add to it", async () => {
+    // What a release holds changes no answer for a caller who may not add,
+    // so it is not read for them: a reader learns no add either way.
+    const reader = service(["read"], { o1: 3 });
+    await reader.svc.capabilities(
+      [release("draft", "o1", "release"), release("draft", "s1", "single")],
+      ACTOR
+    );
+    expect(reader.memberCountsOf).toHaveBeenCalledWith(["s1"]);
+
+    // Without publish, a scheduled release takes no document from this
+    // caller, so only the draft is counted.
+    const creator = service(["read", "create"], {});
+    await creator.svc.capabilities(
+      [
+        release("draft", "o1", "release"),
+        release("scheduled", "o2", "release"),
+      ],
+      ACTOR
+    );
+    expect(creator.memberCountsOf).toHaveBeenCalledWith(["o1"]);
+  });
+
+  it("offers no add to a full release, nor to one over the limit, but still a removal", async () => {
+    const { svc } = service(ALL, {
+      full: RELEASE_MEMBER_LIMIT,
+      over: RELEASE_MEMBER_LIMIT + 5,
+      room: RELEASE_MEMBER_LIMIT - 1,
+    });
+    const can = await svc.capabilities(
+      [
+        release("draft", "full"),
+        release("draft", "over"),
+        release("draft", "room"),
+      ],
+      ACTOR
+    );
+    expect(can.get("full")?.addMember).toBe(false);
+    expect(can.get("over")?.addMember).toBe(false);
+    expect(can.get("over")?.removeMember).toBe(true);
+    // The control: one short of the limit still takes a document.
+    expect(can.get("room")?.addMember).toBe(true);
   });
 });

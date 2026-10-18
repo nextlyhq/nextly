@@ -121,7 +121,7 @@ const OPEN_BUILDER_ACTION = /^(?:Build this page|Open Page Builder)$/;
 /** Open a document and put its page builder on screen. */
 async function openEditor(page: Page): Promise<void> {
   await gotoAdmin(page, "/singles/homepage");
-  await page.getByRole("button", { name: OPEN_BUILDER_ACTION }).click();
+  await page.getByRole("link", { name: OPEN_BUILDER_ACTION }).click();
   // POPULATION BEFORE VERDICT. "No violations" is satisfied perfectly by an
   // editor that never opened, so the scan must not run until it has.
   await expect(page.locator(EDITOR_READY_ANCHOR)).toBeVisible({

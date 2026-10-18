@@ -3056,3 +3056,42 @@ describe("documented-key-prefix repair", () => {
     ).toThrow(/refusing to rewrite/);
   });
 });
+
+describe("plugin-route-mount", () => {
+  // The mount is read from where the base template keeps its catch-all route. That an existing
+  // app gets the same route from create-nextly-app's generator is that package's own test, which
+  // runs the generator, so nothing here depends on how the generator's source spells the path.
+  const tree = (route = "templates/base/src/app/admin/api/[[...params]]/route.ts", docs = "/admin/api") => ({
+    [route]: 'import { createDynamicHandlers } from "nextly/runtime";\n',
+    "packages/nextly/src/plugins/routes/route-path.ts": 'export const PLUGIN_NAMESPACE_SEGMENT = "plugins";\n',
+    "docs/plugins/routes.mdx": `A plugin route answers at \`${docs}/plugins/@acme/thing/hello\`.\n`,
+  });
+
+  it("checks the docs against the template's mount", async () => {
+    const checks = await checksFor(tree());
+    expect(checks).not.toContain("plugin-route-mount-unreadable");
+    expect(checks).not.toContain("plugin-route-mount");
+  });
+
+  it("follows the template when its route moves", async () => {
+    const findings = await findingsFor(tree("templates/base/src/app/cms/api/[[...params]]/route.ts"));
+    expect(findings.find(f => f.check === "plugin-route-mount")?.message).toContain(
+      "the handler is mounted at /cms/api"
+    );
+  });
+
+  it("does not read the generator's source", async () => {
+    // A generator whose path no reader could follow must not make the mount unreadable.
+    const checks = await checksFor({
+      ...tree(),
+      "packages/create-nextly-app/src/generators/routes.ts": "await writeNew(cwd, buildRoutePath(projectInfo.appDir), T);\n",
+    });
+    expect(checks).not.toContain("plugin-route-mount-unreadable");
+  });
+
+  it("fails closed when the template holds no route to read the mount from", async () => {
+    const files = tree();
+    delete files["templates/base/src/app/admin/api/[[...params]]/route.ts"];
+    expect(await checksFor(files)).toContain("plugin-route-mount-unreadable");
+  });
+});

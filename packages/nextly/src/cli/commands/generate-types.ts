@@ -14,7 +14,7 @@
  * nextly generate:types
  *
  * # Custom output path for types
- * nextly generate:types --output ./src/types/payload-types.ts
+ * nextly generate:types --output ./src/types/nextly-types.ts
  *
  * # Skip module declaration (for use in external projects)
  * nextly generate:types --no-declare
@@ -53,6 +53,7 @@ import {
 } from "../../shared/lib/generated-output-paths";
 import { toSingularLabel, toPluralLabel } from "../../shared/lib/pluralization";
 import { carriedUserFieldOptions } from "../../shared/lib/user-field-plugin-options";
+import { DEFAULT_TYPESCRIPT_CONFIG } from "../../shared/types/config";
 import type { SingleConfig } from "../../singles/config/types";
 import type { UserFieldConfig } from "../../users/config/types";
 import { createContext, type CommandContext } from "../program";
@@ -75,7 +76,8 @@ import {
 export interface GenerateTypesCommandOptions {
   /**
    * Custom output path for the generated types file.
-   * If not provided, uses the path from config or defaults to ./payload-types.ts
+   * If not provided, uses the path from config, whose default is
+   * ./src/types/generated/nextly-types.ts
    */
   output?: string;
 
@@ -356,6 +358,7 @@ async function generateTypes(
     components: componentRecords,
     userFields: userFieldRecords,
     moduleAugmentation: generateDeclare,
+    warn: message => logger.warn(message),
   });
 
   result.typesFile = typesFilePath;
@@ -653,7 +656,12 @@ export function registerGenerateTypesCommand(program: Command): void {
     .description(
       "Generate TypeScript type definitions and Zod schemas from collections and singles"
     )
-    .option("-o, --output <path>", "Output file path for TypeScript types")
+    // The help names the default from the value the config falls back to, so
+    // the two cannot disagree.
+    .option(
+      "-o, --output <path>",
+      `Output file path for TypeScript types (default: typescript.outputFile, or ${DEFAULT_TYPESCRIPT_CONFIG.outputFile})`
+    )
     .option("--no-declare", "Skip module declaration/augmentation")
     .option("--no-zod", "Skip Zod schema generation")
     .action(async (cmdOptions: GenerateTypesCommandOptions, cmd: Command) => {

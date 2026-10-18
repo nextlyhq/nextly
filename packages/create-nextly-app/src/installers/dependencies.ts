@@ -11,6 +11,7 @@ import type {
 } from "../types";
 import {
   CONFIG_TOOLING_DEV_DEPENDENCIES,
+  FORM_BUILDER_PACKAGES,
   projectUsesFormBuilder,
 } from "../utils/template";
 
@@ -98,19 +99,16 @@ const ALL_ADAPTER_PACKAGES = [
 
 /**
  * Plugin packages added only for templates that register the plugin in their
- * `nextly.config.ts`. Must stay in sync with the deps added by
- * `generatePackageJson` (template.ts) — both paths scaffold the same project,
- * the only difference is whether deps resolve from npm or yalc. The
- * existing-project install path generates a blank-equivalent config, so it
- * never needs these.
+ * `nextly.config.ts`, read from the same list `generatePackageJson`
+ * (template.ts) uses: both paths scaffold the same project, the only
+ * difference is whether deps resolve from npm or yalc. The existing-project
+ * install path generates a blank-equivalent config, so it never needs these.
  */
-const TEMPLATE_PLUGIN_PACKAGES = ["@nextlyhq/plugin-form-builder"];
-
 function templatePluginPackages(
   projectType: ProjectType | undefined
 ): string[] {
   return projectType && projectUsesFormBuilder(projectType)
-    ? TEMPLATE_PLUGIN_PACKAGES
+    ? [...FORM_BUILDER_PACKAGES]
     : [];
 }
 

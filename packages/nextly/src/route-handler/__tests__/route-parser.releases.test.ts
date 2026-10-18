@@ -44,6 +44,11 @@ describe("releases routes", () => {
     expect(parseRestRoute(["releases", "r1", "cancel"], "POST").method).toBe(
       "cancelRelease"
     );
+    // Publish now is its own route: it is refused in states scheduling
+    // accepts, so it cannot be a schedule with "now" in the body.
+    expect(parseRestRoute(["releases", "r1", "publish"], "POST")).toMatchObject(
+      { method: "publishRelease", routeParams: { releaseId: "r1" } }
+    );
     expect(parseRestRoute(["releases", "r1", "members"], "POST").method).toBe(
       "addReleaseMember"
     );
@@ -60,6 +65,28 @@ describe("releases routes", () => {
       method: "removeReleaseMember",
       routeParams: { releaseId: "r1", memberId: "m1" },
     });
+  });
+
+  it("switches one member's action, and reads a release's readiness", () => {
+    expect(
+      parseRestRoute(["releases", "r1", "members", "m1"], "PATCH")
+    ).toMatchObject({
+      method: "changeReleaseMemberAction",
+      routeParams: { releaseId: "r1", memberId: "m1" },
+    });
+    expect(
+      parseRestRoute(["releases", "r1", "readiness"], "GET")
+    ).toMatchObject({
+      method: "getReleaseReadiness",
+      routeParams: { releaseId: "r1" },
+    });
+    // A switch names a member; the members list takes no PATCH.
+    expect(
+      parseRestRoute(["releases", "r1", "members"], "PATCH").method
+    ).not.toBe("changeReleaseMemberAction");
+    expect(
+      parseRestRoute(["releases", "r1", "readiness"], "POST").method
+    ).not.toBe("getReleaseReadiness");
   });
 
   it("claims only the verb each route declares", () => {

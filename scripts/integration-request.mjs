@@ -28,25 +28,21 @@
 import { appendFileSync } from "node:fs";
 
 import { isCliEntry } from "./cli-entry.mjs";
+import { githubJson, githubWrite } from "./github-api.mjs";
 import { commandText, eventPayload } from "./workflow-context.mjs";
 
 /** The label that asks for the legs on a pull request. */
 export const LABEL = "run-integration";
 
-/** The job that reads the labels; until it has run, a run will see a label added now. */
-const DECIDING_JOB = "Decide what this commit can affect";
+/** The job, and its step, that read the labels; until that step has run, a run will see a label added now. */
+export const DECIDING_JOB = "Decide what this commit can affect";
+export const ASKING_STEP = "Ask whether the legs were requested";
 
 /** How long `rerun` waits for a run whose labels were already read to finish: its skipped legs end it within seconds. */
 const WAIT = { tries: 30, everyMs: 20_000 };
 
-/** A GitHub API resource; a failure throws, for the caller to turn into its safe answer. */
-async function api(path, { token, fetchImpl }, method = "GET") {
-  const headers = { accept: "application/vnd.github+json", "x-github-api-version": "2022-11-28" };
-  if (token) headers.authorization = `Bearer ${token}`;
-  const response = await fetchImpl(`https://api.github.com/${path}`, { method, headers });
-  if (!response.ok) throw new Error(`${method} ${path}: HTTP ${response.status}`);
-  return method === "GET" ? response.json() : undefined;
-}
+/** A GET's JSON or a write; any failure throws, for the caller to turn into its safe answer. */
+const api = (path, context, method = "GET") => (method === "GET" ? githubJson(path, context) : githubWrite(path, context, method));
 
 /**
  * Whether this run's legs were asked for. Outside a pull request always; on
@@ -68,8 +64,8 @@ export async function requested({ event, payload = {}, repository, token, fetchI
 }
 
 /**
- * What adding the label should do to the newest Integration run of the
- * pull request's head: nothing while that run has yet to read the labels, wait
+ * What adding the label should do to the newest Integration run of a
+ * labelled pull request's head: nothing while that run has yet to read the labels, wait
  * while it is finishing, re-run it once its legs have all skipped, and nothing
  * when they ran.
  *
@@ -83,14 +79,33 @@ export async function rerunDecision({ payload = {}, repository, token, fetchImpl
   const run = newest(runs);
   if (!run) return { action: "none", reason: `no Integration run of ${sha.slice(0, 9)} yet; the one that starts reads the label itself` };
   const { jobs } = await api(`repos/${repository}/actions/runs/${run.id}/jobs?per_page=100`, context);
-  const deciding = jobs.find(job => job.name === DECIDING_JOB);
-  if (!deciding || deciding.status !== "completed") return { action: "none", reason: `run ${run.id} has not read the labels yet, and will see this one` };
-  // A leg that skips is created already finished; one that runs is queued or
-  // running, so the legs' own states say which way the labels were read.
+  if (!labelsRead(deciding(jobs))) return { action: "none", reason: `run ${run.id} has not read the labels yet, and will see this one` };
+  // Until the deciding job has finished, its legs wait on it, queued with no
+  // conclusion whichever way the labels were read, so they say nothing yet.
+  if (deciding(jobs).status !== "completed") return { action: "wait", reason: `run ${run.id} read the labels before this one and is still deciding`, run: run.id };
+  // After it, a leg that skips is created already finished and one that runs
+  // is queued or running, so the legs' own states say which way they were read.
   const legs = jobs.filter(job => job.name.startsWith("Integration ("));
   if (legs.some(leg => leg.conclusion !== "skipped")) return { action: "none", reason: `run ${run.id}'s legs ran or are running` };
   if (legs.length === 0 || run.status !== "completed") return { action: "wait", reason: `run ${run.id} read the labels before this one and is finishing`, run: run.id };
   return { action: "rerun", reason: `run ${run.id}'s legs skipped`, run: run.id };
+}
+
+/** The run's job that reads the labels, if the API lists it yet. */
+function deciding(jobs) {
+  return jobs.find(job => job.name === DECIDING_JOB);
+}
+
+/**
+ * Whether the run has read the labels: its asking step has finished. The job
+ * can still be running after that step (its later steps and clean-up), so the
+ * job's own status would read as unread too long; it stands in only when the
+ * API lists no steps.
+ */
+function labelsRead(job) {
+  if (!job) return false;
+  const asking = (job.steps ?? []).find(step => step.name === ASKING_STEP);
+  return (asking ?? job).status === "completed";
 }
 
 /** The most recently created run; the list's order is GitHub's to change. */
@@ -102,7 +117,7 @@ function newest(runs = []) {
 async function mainRequested(env, fetchImpl) {
   const answer = await requested({ event: env.GITHUB_EVENT_NAME, payload: eventPayload(env), repository: env.GITHUB_REPOSITORY, token: env.GH_TOKEN, fetchImpl });
   console.log(`integration-request: requested=${answer.requested} (${answer.reason})`);
-  if (!answer.requested) {
+  if (!answer.requested && env.INERT !== "true") {
     console.log(`::notice title=Integration not requested::${commandText(`${answer.reason}, so the database legs skip; add the label to run them. The merge queue runs them regardless.`)}`);
     appendTo(env.GITHUB_STEP_SUMMARY, `### Integration on request\n\nThis pull request does not carry \`${LABEL}\`, so the database legs skip here. Add the label to run them; the merge queue runs them before any merge.\n`);
   }

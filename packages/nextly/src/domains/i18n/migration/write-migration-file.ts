@@ -8,7 +8,10 @@ import {
 
 import { buildLocalizationDownSql } from "./generate-down";
 import { buildLocalizationUpSql } from "./generate-up";
-import { formatLocalizationIntent } from "./migration-intent";
+import {
+  formatLocalizationIntent,
+  type LocalizationMigrationKind,
+} from "./migration-intent";
 import type { I18nTransitionKind } from "./transition-state";
 import type { CompanionMigrationSpec } from "./types";
 
@@ -81,7 +84,7 @@ export interface WriteCompanionMigrationOpts {
    * `enable` = create+seed+drop; `create-only` = bare CREATE for a fresh collection;
    * `disable` = restore default onto main + archive other languages + drop the companion.
    */
-  kind: "enable" | "create-only" | "disable";
+  kind: LocalizationMigrationKind;
   /**
    * Which kind of entity the companion belongs to. Recorded because the transition marker is
    * keyed by kind as well as slug — a collection, a single and a field group may share a slug,
@@ -112,12 +115,7 @@ export function writeCompanionMigrationFile(
   spec: CompanionMigrationSpec,
   opts: WriteCompanionMigrationOpts
 ): string {
-  const verb =
-    opts.kind === "enable"
-      ? "enable"
-      : opts.kind === "disable"
-        ? "disable"
-        : "create";
+  const verb = opts.kind === "create-only" ? "create" : opts.kind;
   const slug = `${verb}_localization_${spec.collection}`;
   const baseName = `${formatTimestamp(opts.now)}_${slug}`;
   // The statements below are one route to the goal — the right one for a database that has had

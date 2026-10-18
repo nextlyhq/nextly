@@ -10,7 +10,7 @@
  * on, so the shape is checked here, before it is.
  */
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { posix } from "node:path";
 
 import { load } from "js-yaml";
@@ -92,14 +92,104 @@ describe("the last commit Integration tested", () => {
    * tested. A run where one leg judged the commit and another was cancelled
    * did not test it on the second dialect, so every leg is named as the work.
    */
-  it("counts a run as tested only when every leg reached a verdict", () => {
+  it("counts a run as tested only when every job that runs the suite reached a verdict", () => {
     const workflow = read(".github/workflows/integration.yml");
-    const legs = Object.values(workflow.jobs).map(job => job.name).filter(name => name.startsWith("Integration ("));
+    // The jobs that run a lane, under the names their runs carry: GitHub
+    // appends a matrix job's value to a name with no expression in it, so a
+    // sharded leg is one name per shard.
+    const runsTheSuite = job => (job.steps ?? []).some(step => /\blane:test:integration:/.test(String(step.run)));
+    const legs = Object.values(workflow.jobs)
+      .filter(runsTheSuite)
+      .flatMap(job => (job.strategy?.matrix?.shard ?? [null]).map(shard => (shard === null ? job.name : `${job.name} (${shard})`)));
     const ask = workflow.jobs.changes.steps.find(step => step.id === "newer");
-    expect(legs.length).toBe(3);
+    // A floor, so a reader that found no jobs cannot pass by comparing nothing.
+    expect(legs.length).toBeGreaterThanOrEqual(3);
     expect(ask.with["substantive-job"].split("\n").map(name => name.trim()).filter(Boolean).sort()).toEqual(legs.sort());
   });
 });
+
+describe("which runs a pull-request workflow's concurrency group cancels", () => {
+  /*
+   * A group cancels its running and pending runs when a newer run joins it.
+   * So each workflow that a pull request starts keys its group by that pull
+   * request and by itself: a push to the same pull request cancels the older
+   * run of the same workflow, and nothing else does. The groups are evaluated
+   * here for the events each workflow runs on, rather than read by spelling.
+   */
+  const WORKFLOWS = readdirSync(new URL("../.github/workflows/", import.meta.url)).filter(file => /\.ya?ml$/.test(file));
+  const pullRequestWorkflows = WORKFLOWS.map(file => [file, read(`.github/workflows/${file}`)]).filter(
+    ([, workflow]) => Object.keys(triggersOf(workflow)).some(event => PULL_REQUEST_EVENTS.includes(event)) && !onlyOnClose(triggersOf(workflow))
+  );
+
+  /** The value of a `${{ }}`-templated field, under the given context. */
+  const valueOf = (template, known) =>
+    String(template).replace(/\$\{\{([\s\S]*?)\}\}/g, (_, expression) => String(evaluate(conditionTokens(expression), expression, known)));
+
+  /** A run's context: which workflow, which event, which pull request and which commit. */
+  const context = (workflow, event, { pull = 1, sha = "s1" } = {}) => ({
+    "github.workflow": workflow.name,
+    "github.event_name": event,
+    // As GitHub sets it: a pull request's merge ref, the queue's own branch for
+    // each queued entry, and the base branch for `pull_request_target` and a push.
+    "github.ref": { pull_request: `refs/pull/${pull}/merge`, merge_group: `refs/heads/gh-readonly-queue/main/pr-${pull}-${sha}` }[event] ?? "refs/heads/main",
+    "github.event.pull_request.number": event.startsWith("pull_request") ? pull : null,
+    "github.sha": sha,
+    "github.run_id": `run-${pull}-${sha}`,
+  });
+
+  it("finds the pull-request workflows", () => {
+    expect(pullRequestWorkflows.map(([file]) => file)).toEqual(expect.arrayContaining(["ci.yml", "integration.yml", "pr-title.yml", "ai-credit.yml", "labeler.yml", "secret-scan.yml", "independent-review.yml"]));
+  });
+
+  for (const [file, workflow] of pullRequestWorkflows) {
+    const events = Object.keys(triggersOf(workflow));
+    const pullEvent = events.find(event => PULL_REQUEST_EVENTS.includes(event));
+
+    it(`${file}: a newer push to the same pull request cancels its older run`, () => {
+      expect(workflow.concurrency, "no concurrency group").toBeTruthy();
+      const { group, "cancel-in-progress": cancels } = workflow.concurrency;
+      expect(valueOf(group, context(workflow, pullEvent, { sha: "s1" }))).toBe(valueOf(group, context(workflow, pullEvent, { sha: "s2" })));
+      expect(valueOf(cancels, context(workflow, pullEvent))).toBe("true");
+    });
+
+    it(`${file}: another pull request's run, or another workflow's, is never in its group`, () => {
+      const { group } = workflow.concurrency;
+      expect(valueOf(group, context(workflow, pullEvent, { pull: 1 }))).not.toBe(valueOf(group, context(workflow, pullEvent, { pull: 2 })));
+      for (const [otherFile, other] of pullRequestWorkflows.filter(([candidate]) => candidate !== file)) {
+        const otherEvent = Object.keys(triggersOf(other)).find(event => PULL_REQUEST_EVENTS.includes(event));
+        expect(valueOf(group, context(workflow, pullEvent)), otherFile).not.toBe(valueOf(other.concurrency?.group ?? "", context(other, otherEvent)));
+      }
+    });
+
+    for (const event of events.filter(candidate => candidate === "push" || candidate === "merge_group")) {
+      it(`${file}: a ${event} run is never cancelled by another run`, () => {
+        const { group, "cancel-in-progress": cancels } = workflow.concurrency;
+        const first = valueOf(group, context(workflow, event, { sha: "s1" }));
+        expect(first).not.toBe(valueOf(group, context(workflow, event, { sha: "s2" })));
+        // A pull request's run never shares a group with it either.
+        expect(first).not.toBe(valueOf(group, context(workflow, pullEvent, { sha: "s1" })));
+        if (String(cancels).includes("${{")) expect(valueOf(cancels, context(workflow, event))).toBe("false");
+      });
+    }
+  }
+
+  it("leaves a closed pull request's runs to one workflow, which cancels with the API", () => {
+    const closing = read(".github/workflows/cancel-closed-pull-request-runs.yml");
+    expect(triggersOf(closing)).toEqual({ pull_request: { branches: ["main"], types: ["closed"] } });
+    expect(closing.permissions).toEqual({});
+    const [job] = Object.values(closing.jobs);
+    expect(job.permissions).toEqual({ contents: "read", actions: "write" });
+    expect(job.steps.at(-1).run).toBe("node scripts/cancel-closed-pull-request-runs.mjs");
+    // The script holding `actions: write` comes from the default branch, never the closed pull request.
+    expect(job.steps.find(step => String(step.uses).startsWith("actions/checkout@")).with.ref).toBe("${{ github.event.repository.default_branch }}");
+  });
+});
+
+/** A workflow that runs only when a pull request closes, which no newer run replaces. */
+function onlyOnClose(triggers) {
+  const events = Object.entries(triggers);
+  return events.length === 1 && String(events[0][1]?.types) === "closed";
+}
 
 describe("Integration on request", () => {
   /*
@@ -122,8 +212,10 @@ describe("Integration on request", () => {
   });
 
   it("skips a leg only on an answer of no, so a question that failed still runs it", () => {
+    // Every job of a leg, the shards that run the suite and the required check
+    // that reads them, so neither runs where the other skips.
     const legs = Object.values(workflow.jobs).filter(job => String(job.name).startsWith("Integration ("));
-    expect(legs.length).toBe(3);
+    for (const check of QUEUE_CHECKS[".github/workflows/integration.yml"]) expect(legs.map(leg => leg.name)).toContain(check);
     for (const leg of legs) expect(leg.if, leg.name).toContain("needs.changes.outputs.requested != 'false'");
   });
 
@@ -140,6 +232,40 @@ describe("Integration on request", () => {
     expect(jobs[0].steps.at(-1).run).toBe("node scripts/integration-request.mjs rerun");
     expect(request.permissions).toEqual({ contents: "read" });
     expect(jobs[0].permissions).toEqual({ contents: "read", actions: "write" });
+  });
+
+  it("keys the request by the label too, so another label never cancels a waiting request", () => {
+    const group = String(request.concurrency.group);
+    const groupFor = (label, run) =>
+      group.replace(/\$\{\{([\s\S]*?)\}\}/g, (_, expression) =>
+        String(evaluate(conditionTokens(expression), expression, { "github.event.pull_request.number": 7, "github.event.label.name": label, "github.run_id": run, "github.sha": `sha-${run}` }))
+      );
+    expect(groupFor("run-integration", 1)).not.toBe(groupFor("enhancement", 1));
+    // Two separate requests for the same pull request share one group, so the later replaces the earlier.
+    expect(groupFor("run-integration", 1)).toBe(groupFor("run-integration", 2));
+    expect(request.concurrency["cancel-in-progress"]).toBe(true);
+  });
+});
+
+describe("the MySQL leg's database", () => {
+  /*
+   * The core suite commits many small transactions, and MySQL's default
+   * durability made the leg wait on disk writes until it overran its budget
+   * with every test green. The leg relaxes it before the suite runs.
+   */
+  it("enlarges the redo log and stops forcing each commit to disk before the suite starts", () => {
+    // The job that runs the MySQL lane, whatever it is called.
+    const job = Object.values(read(".github/workflows/integration.yml").jobs).find(candidate =>
+      (candidate.steps ?? []).some(step => /\blane:test:integration:mysql\b/.test(String(step.run)))
+    );
+    const steps = job.steps.map(step => step.name);
+    const room = job.steps.findIndex(step => step.name === "Give the test database room to write");
+    const suite = job.steps.findIndex(step => step.name === "Run integration tests (mysql)");
+    expect(room, steps.join(", ")).toBeGreaterThanOrEqual(0);
+    expect(room).toBeLessThan(suite);
+    for (const setting of ["innodb_redo_log_capacity = 1073741824", "innodb_flush_log_at_trx_commit = 2", "sync_binlog = 0"]) {
+      expect(job.steps[room].run).toContain(setting);
+    }
   });
 });
 

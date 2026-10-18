@@ -31,7 +31,12 @@ import {
   validateReadWidgetQuery,
 } from "../domains/widgets/query";
 import type { WidgetResult, WidgetSlot } from "../domains/widgets/result";
-import { failUnavailableSourceOrOp } from "../domains/widgets/sources";
+import {
+  failUnavailableSourceOrOp,
+  isUnavailableSourceRefusal,
+  sourceTarget,
+  UNAVAILABLE_SOURCE_MESSAGE,
+} from "../domains/widgets/sources";
 import { NextlyError } from "../errors/nextly-error";
 import { getCachedNextly } from "../init";
 import { getNextlyLogger } from "../observability/logger";
@@ -221,7 +226,39 @@ type PreparedQuery =
       parsed: ReturnType<typeof readWidgetQuery>;
       executable: ExecutableSource;
     }
-  | { ok: false; slot: QuerySlot };
+  | {
+      ok: false;
+      slot: QuerySlot;
+      /** The entity an unresolvable source would have been read as; see `decoyRead`. */
+      decoy?: string;
+    };
+
+/**
+ * The entity a source that could not be resolved would have needed a read decision about, so
+ * the batch takes one for it all the same.
+ *
+ * 🔴 The answer was already the same for a forbidden source and an unknown one; the WORK was
+ * not. A collection the caller may not read cost a permission decision before it was refused,
+ * and an invented name was refused at once, so how long a batch took said which of its names
+ * were real. Taking the decision for the invented name too -- in the same bounded rounds, through
+ * the same memo -- makes the two paths take the same steps, and its verdict is thrown away: the
+ * slot has already failed. Timing is not asserted anywhere, because a test of it would be flaky;
+ * what is asserted is that both paths ask.
+ *
+ * What this does NOT make equal is the decision's own cost. A collection with a code-defined read
+ * rule runs that rule, and a rule may do slow work; an invented name has no rule to run. So a
+ * slow rule can still show in a batch's timing which names are real. Closing that would mean
+ * padding every answer to a fixed cost, which no other read path in the API does either.
+ *
+ * Only for the two kinds that are read as an entity. A `system:` or `plugin:` source takes no
+ * read decision when it exists either, so asking one for it here would make it the odd one out.
+ */
+function decoyRead(source: unknown): string | undefined {
+  if (typeof source !== "string") return undefined;
+  const kind = source.slice(0, source.indexOf(":"));
+  if (kind !== "collection" && kind !== "single") return undefined;
+  return sourceTarget(source) || undefined;
+}
 
 /**
  * What a failure becomes: logged where an operator can read it, redacted where
@@ -243,7 +280,8 @@ type PreparedQuery =
  * `withErrorHandler` never sees it and neither did the logger. A dashboard
  * whose widgets all fail left no trace anywhere.
  */
-function failedSlot(error: unknown): QuerySlot {
+// Narrowed to the failure arm so a caller can read the slot's `code` without a guard.
+function failedSlot(error: unknown): Extract<QuerySlot, { ok: false }> {
   // Guarded the way `withErrorHandler` guards its own logging call: a
   // thrower's `logContext` is arbitrary, and a cycle or a BigInt in it would
   // throw from inside this catch and fail the whole batch over one slot.
@@ -258,6 +296,18 @@ function failedSlot(error: unknown): QuerySlot {
     // Deliberately swallowed; see above.
   }
 
+  // The shared refusal, from any of its call sites -- unknown, not executable, not readable by
+  // this caller, or unable to answer the op -- answers with the typed code, so the card shows
+  // "not available" without matching the sentence. A FORBIDDEN raised while the query ran is not
+  // one of them: the gate above has already refused a source the caller may not read, so that
+  // one comes from a field-level rule on a source they can, and names the guard that refused.
+  if (isUnavailableSourceRefusal(error)) {
+    return {
+      ok: false,
+      error: UNAVAILABLE_SOURCE_MESSAGE,
+      code: "unavailable",
+    };
+  }
   return {
     ok: false,
     error: NextlyError.is(error) ? error.publicMessage : GENERIC_SLOT_ERROR,
@@ -281,8 +331,11 @@ function failedSlot(error: unknown): QuerySlot {
  * unknown source must not take the other 29 cards down with it.
  */
 function prepareOne(raw: unknown): PreparedQuery {
+  // Kept outside the `try` so a source that fails to resolve can still name its decoy.
+  let named: unknown;
   try {
     const parsed = readWidgetQuery(raw);
+    named = parsed.source;
     const source = resolveWidgetSource(parsed.source);
     // 🔴 Whether anything EXECUTES the source is decided here, before a read
     // decision is taken or a field is validated, by the executor's own
@@ -295,7 +348,10 @@ function prepareOne(raw: unknown): PreparedQuery {
     // close. Every refusal below is the one shared sentence.
     return { ok: true, parsed, executable: resolveExecutableSource(source.id) };
   } catch (error) {
-    return { ok: false, slot: failedSlot(error) };
+    const slot = failedSlot(error);
+    return slot.code === "unavailable"
+      ? { ok: false, slot, decoy: decoyRead(named) }
+      : { ok: false, slot };
   }
 }
 
@@ -312,8 +368,8 @@ function prepareOne(raw: unknown): PreparedQuery {
 function batchSlugs(prepared: readonly PreparedQuery[]): string[] {
   const slugs = new Set<string>();
   for (const entry of prepared) {
-    if (!entry.ok) continue;
-    const slug = entityRead(entry.executable);
+    // A source that failed to resolve is asked about as well, so it costs what a real one does.
+    const slug = entry.ok ? entityRead(entry.executable) : entry.decoy;
     if (slug !== undefined) slugs.add(slug);
   }
   return [...slugs];

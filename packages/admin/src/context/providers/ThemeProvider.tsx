@@ -220,6 +220,19 @@ export function useTheme(): UseThemeProps {
  * only by the server and kept through hydration; a later client render drops
  * it, since React never runs a script it inserts and the theme is then
  * already in React state.
+ *
+ * `RootLayout` renders it already. A host that puts `ThemeProvider` around
+ * admin content of its own renders it first inside its `.nextly-admin`
+ * element:
+ *
+ * ```tsx
+ * <ThemeProvider>
+ *   <div className="nextly-admin" suppressHydrationWarning>
+ *     <ThemePaintScript />
+ *     {content}
+ *   </div>
+ * </ThemeProvider>
+ * ```
  */
 export function ThemePaintScript({ nonce }: { nonce?: string }) {
   const { config, nonce: providerNonce } = useContext(ThemeContext);
@@ -354,7 +367,7 @@ function ThemeSync() {
 /** The ThemeProvider's settings. */
 export interface ThemeProviderProps {
   children?: ReactNode;
-  /** The theme until one is saved. @default "system" */
+  /** The theme until one is saved. @default "system", or "light" with `enableSystem` off */
   defaultTheme?: string;
   /** The localStorage key the choice is saved under. @default "nextly-theme" */
   storageKey?: string;
@@ -403,9 +416,10 @@ export function ThemeProvider(props: ThemeProviderProps) {
 
 function ThemeStore({
   children,
-  defaultTheme = "system",
-  storageKey = "nextly-theme",
   enableSystem = true,
+  // With system mode off, "system" is not a theme this provider offers.
+  defaultTheme = enableSystem ? "system" : "light",
+  storageKey = "nextly-theme",
   forcedTheme,
   nonce,
 }: ThemeProviderProps) {

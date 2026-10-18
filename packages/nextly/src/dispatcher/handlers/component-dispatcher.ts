@@ -31,11 +31,10 @@ import {
 } from "../../domains/field-groups/services/field-group-table-provisioning";
 import { resolveFieldGroupRegistryName } from "../../domains/field-groups/storage/resolve-storage-names";
 import { assertLocalizationConfigured } from "../../domains/i18n/config/require-app-config";
-import { translatePipelinePreviewToLegacy } from "../../domains/schema/legacy-preview/translate";
+import { archiveFieldsLeavingTranslation } from "../../domains/i18n/migration/archive-preflight";
 import { RealClassifier } from "../../domains/schema/pipeline/classifier/classifier";
 import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/database-url";
 import { RealPreCleanupExecutor } from "../../domains/schema/pipeline/pre-cleanup/executor";
-import { previewDesiredSchema } from "../../domains/schema/pipeline/preview";
 import {
   BrowserPromptDispatcher,
   type BrowserRenameResolution,
@@ -45,7 +44,6 @@ import {
   noopMigrationJournal,
   noopPreRenameExecutor,
 } from "../../domains/schema/pipeline/pushschema-pipeline-stubs";
-import { toRenameCandidateWire } from "../../domains/schema/pipeline/rename-candidate-wire";
 import { RegexRenameDetector } from "../../domains/schema/pipeline/rename-detector";
 import type { Resolution } from "../../domains/schema/pipeline/resolution/types";
 import type { DesiredFieldGroup } from "../../domains/schema/pipeline/types";
@@ -63,10 +61,12 @@ import {
 } from "../../schemas/dynamic-field-groups";
 import type { FieldGroupRegistryService } from "../../services/field-groups/field-group-registry-service";
 import type { Logger } from "../../shared/types";
+import { builderSchemaPreviewBody } from "../helpers/builder-schema-preview";
 import { buildFullDesiredSchema } from "../helpers/desired-schema";
 import {
   getAdapterFromDI,
   getComponentRegistryFromDI,
+  getConfigFromDI,
   getFieldGroupMetadataServiceFromDI,
   getLoggerFromDI,
   getMigrationJournalFromDI,
@@ -375,36 +375,30 @@ export const COMPONENTS_METHODS: Record<
         // i18n: carry the localized flag so the push diff omits translatable columns
         // from the component's main table (they live in comp_<slug>_locales, reconciled
         // out-of-band below) — mirrors the collection/single apply path.
-        localized: (component as { localized?: boolean }).localized === true,
+        // The request's flag wins when the Builder sent one, as in the collection and Single
+        // previews, so a change that also turns translation on or off is diffed as it will apply.
+        localized:
+          readRequestLocalized(body) ??
+          (component as { localized?: boolean }).localized === true,
         // Authored in the Schema Builder: this is the Builder's own save path.
         builderOwned: true,
       };
 
-      const pipelinePreview = await previewDesiredSchema({
-        desired,
-        db,
-        dialect,
-      });
-
-      const legacyShape = await translatePipelinePreviewToLegacy(
-        pipelinePreview,
-        {
-          tableName,
-          currentFields,
-          newFields: fields as FieldDefinition[],
+      return respondData(
+        await builderSchemaPreviewBody({
+          desired,
           db,
           dialect,
-        }
+          slug: slug,
+          tableName,
+          builtBy: "fieldGroup",
+          entity: component,
+          currentFields,
+          newFields: fields as FieldDefinition[],
+          requestedLocalized: readRequestLocalized(body),
+          schemaVersion: component.schemaVersion,
+        })
       );
-
-      const renamed = pipelinePreview.candidates.map(toRenameCandidateWire);
-
-      const legacyAsRecord = legacyShape as unknown as Record<string, unknown>;
-      return respondData({
-        ...legacyAsRecord,
-        renamed,
-        schemaVersion: component.schemaVersion,
-      });
     },
   },
 
@@ -520,6 +514,22 @@ export const COMPONENTS_METHODS: Record<
 
           const adapter = getAdapterFromDI();
           if (!adapter) throw new Error("Database adapter not initialized");
+          // A field leaving translation has preconditions of its own, asked before the apply
+          // alters anything.
+          await archiveFieldsLeavingTranslation({
+            // This builder made the table, which decides the column bounds compared.
+            builtBy: "fieldGroup",
+            tableName: tableName,
+            defaultLocale:
+              getConfigFromDI()?.localization?.defaultLocale ?? "en",
+            adapter,
+            entity: slug,
+            kind: "fieldGroup",
+            oldFields: (component.fields ?? []) as unknown as FieldDefinition[],
+            newFields: fields as unknown as FieldDefinition[],
+            wasLocalized,
+            isLocalized,
+          });
           // 🔴 Resolved BEFORE the apply. The runtime refresh at the end of this
           // handler suppresses its own failures by design, so a probe placed there
           // could let the handler report success over an unregistered or stale

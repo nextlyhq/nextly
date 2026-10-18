@@ -1,5 +1,6 @@
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
+import { NextlyError } from "../../../errors/nextly-error";
 import type { VersionScopeKind } from "../../../schemas/versions/types";
 import { VERSIONS_TABLE } from "../../../schemas/versions/types";
 import type { ColumnOrigin } from "../../schema/services/field-column-descriptor";
@@ -8,13 +9,19 @@ import { isFieldLocalized } from "../classify-fields";
 import { ddlType, lit, q } from "./ddl-types";
 import { deriveCompanionSpec } from "./derive-companion-spec";
 import { fieldToLocalizedColumnSpec } from "./field-to-column-spec";
-import { buildLocalizationDownStatements } from "./generate-down";
+import {
+  archiveOwnerOf,
+  buildFieldLeavesTranslationArchiveStatement,
+  buildFieldLeavesTranslationStatements,
+  buildLocalizationDownStatements,
+} from "./generate-down";
 import {
   buildCompanionCreateOnlySql,
   buildLocalizationUpStatements,
   COMPANION_UPDATED_AT_COLUMN,
   companionUpdatedAtDdl,
 } from "./generate-up";
+import type { I18nTransitionKind } from "./transition-state";
 
 /** Minimal field shape the companion reconciler needs. Structurally compatible with FieldDefinition. */
 export interface CompanionFieldLike {
@@ -26,6 +33,11 @@ export interface CompanionFieldLike {
 export interface ReconcileCompanionArgs {
   /** Collection slug (used for the companion spec / index names). */
   slug: string;
+  /**
+   * Which kind of entity `slug` names, recorded with the archive rows this change writes. Needed
+   * only with `sharedAfter`, the one case that archives here; refused without it there.
+   */
+  kind?: I18nTransitionKind;
   /** Main data table name, e.g. `dc_posts`. The companion is `<tableName>_locales`. */
   tableName: string;
   /** Translatable fields present BEFORE this change (already resolved as localized). */
@@ -84,6 +96,47 @@ export interface ReconcileCompanionArgs {
    * already published. Omit to skip the back-fill (e.g. a migrate path with no live default locale).
    */
   defaultLocale?: string;
+  /**
+   * Names of fields that leave the companion because they stop being translated while still
+   * existing as shared fields. Before such a column is dropped, its non-default values are
+   * archived and the default language's value is copied onto main's column of the same name
+   * (`buildFieldLeavesTranslationStatements`), which needs `defaultLocale`. A translated field
+   * removed outright is not listed and is dropped as before.
+   */
+  sharedAfter?: readonly string[];
+  /**
+   * The archive rows of the `sharedAfter` fields were written by the caller before the main table
+   * changed, so only the copy of the default language's value and the drop are emitted here.
+   */
+  sharedAfterArchived?: boolean;
+  /**
+   * Companion columns THIS database already carries for fields the change adds as translated. A
+   * save that MySQL, which commits each schema statement, refused part-way leaves such a column
+   * while the registry still lacks the field, so the next save must not add it again. Describes
+   * one database only: a migration file is planned without it (`buildCompanionTransitionPlans`).
+   */
+  presentOnCompanion?: readonly string[];
+}
+
+/**
+ * The fields of a translated entity that stop being translated in this change while staying in
+ * it as shared fields: translated in `oldFields`, present in `newFields`, shared there. Their
+ * companion columns are dropped, so their values have to move first; a translated field removed
+ * outright is not one of them.
+ *
+ * One answer for every caller that has to know: the companion transition that moves the values,
+ * the main-table diff that gives them a column, and the archive check that runs before either.
+ */
+export function fieldsLeavingTranslation(
+  oldFields: readonly CompanionFieldLike[],
+  newFields: readonly CompanionFieldLike[]
+): string[] {
+  const nowShared = new Set(
+    newFields.filter(f => !isFieldLocalized(f, true)).map(f => f.name)
+  );
+  return oldFields
+    .filter(f => isFieldLocalized(f, true) && nowShared.has(f.name))
+    .map(f => f.name);
 }
 
 /**
@@ -206,11 +259,36 @@ function buildUpdatedAtBackfill(args: {
   ];
 }
 
+/**
+ * The ADDs for translated fields new to an existing companion, skipping any column this database
+ * already has (`presentOnCompanion`), so a re-save after a part-applied one does not add it twice.
+ */
+function addedCompanionColumnStatements(
+  args: ReconcileCompanionArgs,
+  oldNames: ReadonlySet<string>,
+  companionTable: string
+): string[] {
+  const { dialect, builtBy } = args;
+  const present = new Set(args.presentOnCompanion ?? []);
+  return args.newLocalized
+    .filter(f => !oldNames.has(f.name))
+    .map(f => fieldToLocalizedColumnSpec(f, dialect, builtBy))
+    .filter(
+      (col): col is NonNullable<typeof col> =>
+        col != null && !present.has(col.name)
+    )
+    .map(
+      col =>
+        `ALTER TABLE ${q(companionTable, dialect)} ADD COLUMN ${q(col.name, dialect)} ${ddlType(col, dialect)}`
+    );
+}
+
 export function buildCompanionReconcileStatements(
   args: ReconcileCompanionArgs
 ): string[] {
   const {
     slug,
+    kind,
     tableName,
     oldLocalized,
     newLocalized,
@@ -226,6 +304,7 @@ export function buildCompanionReconcileStatements(
     // fields, in which case there is nothing to create yet.
     const spec = deriveCompanionSpec({
       slug,
+      kind,
       dbName: tableName,
       fields: newLocalized,
       dialect,
@@ -241,25 +320,46 @@ export function buildCompanionReconcileStatements(
   // Companion already exists — diff the localized columns and ADD/DROP the delta.
   const oldNames = new Set(oldLocalized.map(f => f.name));
   const newNames = new Set(newLocalized.map(f => f.name));
-  const stmts: string[] = [];
-
-  for (const f of newLocalized) {
-    if (oldNames.has(f.name)) continue;
-    const col = fieldToLocalizedColumnSpec(f, dialect, builtBy);
-    if (col) {
-      stmts.push(
-        `ALTER TABLE ${q(companionTable, dialect)} ADD COLUMN ${q(col.name, dialect)} ${ddlType(col, dialect)}`
-      );
-    }
-  }
+  const stmts: string[] = addedCompanionColumnStatements(
+    args,
+    oldNames,
+    companionTable
+  );
+  const sharedAfter = new Set(args.sharedAfter ?? []);
   for (const f of oldLocalized) {
     if (newNames.has(f.name)) continue;
     const col = fieldToLocalizedColumnSpec(f, dialect, builtBy);
-    if (col) {
+    if (!col) continue;
+    if (sharedAfter.has(f.name)) {
+      // Dropping the column loses every language's value, so the field keeps its default
+      // language's value on main and the others go to the archive first.
+      if (args.defaultLocale === undefined) {
+        throw NextlyError.internal({
+          logContext: {
+            reason:
+              "a field leaving translation needs the default locale to keep its value",
+            slug,
+            field: f.name,
+          },
+        });
+      }
       stmts.push(
-        `ALTER TABLE ${q(companionTable, dialect)} DROP COLUMN ${q(col.name, dialect)}`
+        ...buildFieldLeavesTranslationStatements(
+          {
+            dialect,
+            mainTable: tableName,
+            companionTable,
+            defaultLocale: args.defaultLocale,
+          },
+          archiveOwnerOf(slug, kind),
+          col.name,
+          { archive: args.sharedAfterArchived !== true }
+        )
       );
     }
+    stmts.push(
+      `ALTER TABLE ${q(companionTable, dialect)} DROP COLUMN ${q(col.name, dialect)}`
+    );
   }
 
   // Add `_updated_at` to a companion that predates it, and seed it from version history.
@@ -339,6 +439,8 @@ export function buildCompanionReconcileStatements(
 /** Which localization transition a reconcile is performing. */
 export interface CompanionTransitionArgs {
   slug: string;
+  /** Which kind of entity `slug` names, recorded with the archive rows this change writes. */
+  kind: I18nTransitionKind;
   tableName: string;
   dialect: SupportedDialect;
   /**
@@ -393,6 +495,16 @@ export interface CompanionTransitionArgs {
   wasStatus: boolean;
   /** Whether the existing companion physically has `_status` (see ReconcileCompanionArgs). */
   companionHasStatus?: boolean;
+  /** Companion columns this database already has for added translated fields (see ReconcileCompanionArgs). */
+  presentOnCompanion?: readonly string[];
+  /**
+   * Return the archive writes of fields leaving translation in `beforeMain`, for a caller that runs
+   * them before it alters the main table, rather than among the companion statements after it.
+   * A migration file needs this: replayed on a database whose archive refuses the write, it must
+   * stop before the main table gains a column, because a step that has run is not undone on a
+   * dialect without transactional DDL.
+   */
+  archiveBeforeMain?: boolean;
 }
 
 /** The plan produced by {@link buildCompanionTransitionStatements}. */
@@ -403,6 +515,51 @@ export interface CompanionTransitionPlan {
   needsArchive: boolean;
   /** true when the companion table no longer exists afterwards (disable) → skip re-registration. */
   companionDropped: boolean;
+  /**
+   * Statements to run before the main table changes: the archive writes of fields leaving
+   * translation, when `archiveBeforeMain` asked for them here. Empty otherwise.
+   */
+  beforeMain?: string[];
+}
+
+/**
+ * The archive writes for the fields of one entity that stop being translated in this change: every
+ * non-default language's value of each one's companion column (`fieldsLeavingTranslation`). Each
+ * write is safe to repeat (see `buildFieldLeavesTranslationArchiveStatement`), so a caller that
+ * makes them before altering anything can leave the later companion transition to make them again.
+ */
+export function buildLeavingFieldsArchiveStatements(args: {
+  slug: string;
+  kind: I18nTransitionKind;
+  tableName: string;
+  dialect: SupportedDialect;
+  builtBy: ColumnOrigin;
+  defaultLocale: string;
+  oldFields: readonly CompanionFieldLike[];
+  newFields: readonly CompanionFieldLike[];
+}): string[] {
+  const leaving = new Set(
+    fieldsLeavingTranslation(args.oldFields, args.newFields)
+  );
+  const companionTable = `${args.tableName}_locales`;
+  return args.oldFields
+    .filter(f => leaving.has(f.name))
+    .flatMap(f => {
+      const col = fieldToLocalizedColumnSpec(f, args.dialect, args.builtBy);
+      return col
+        ? [
+            buildFieldLeavesTranslationArchiveStatement(
+              {
+                dialect: args.dialect,
+                companionTable,
+                defaultLocale: args.defaultLocale,
+              },
+              { slug: args.slug, kind: args.kind },
+              col.name
+            ),
+          ]
+        : [];
+    });
 }
 
 /**
@@ -425,6 +582,7 @@ export function buildCompanionTransitionStatements(
 ): CompanionTransitionPlan {
   const {
     slug,
+    kind,
     tableName,
     dialect,
     builtBy,
@@ -448,6 +606,7 @@ export function buildCompanionTransitionStatements(
     const localizedNew = newFields.filter(f => isFieldLocalized(f, true));
     const spec = deriveCompanionSpec({
       slug,
+      kind,
       dbName: tableName,
       fields: localizedNew,
       dialect,
@@ -462,6 +621,7 @@ export function buildCompanionTransitionStatements(
       return {
         statements: buildCompanionReconcileStatements({
           slug,
+          kind,
           tableName,
           builtBy,
           oldLocalized: [],
@@ -501,6 +661,7 @@ export function buildCompanionTransitionStatements(
     const localizedOld = oldFields.filter(f => isFieldLocalized(f, true));
     const spec = deriveCompanionSpec({
       slug,
+      kind,
       dbName: tableName,
       fields: localizedOld,
       dialect,
@@ -543,9 +704,25 @@ export function buildCompanionTransitionStatements(
   if (wasLocalized && isLocalized) {
     const oldLocalized = oldFields.filter(f => isFieldLocalized(f, true));
     const newLocalized = newFields.filter(f => isFieldLocalized(f, true));
+    const sharedAfter = fieldsLeavingTranslation(oldFields, newFields);
+    const archiveFirst = args.archiveBeforeMain === true;
+    const beforeMain = archiveFirst
+      ? buildLeavingFieldsArchiveStatements({
+          slug,
+          kind,
+          tableName,
+          dialect,
+          builtBy,
+          defaultLocale,
+          oldFields,
+          newFields,
+        })
+      : [];
     return {
+      beforeMain,
       statements: buildCompanionReconcileStatements({
         slug,
+        kind,
         tableName,
         builtBy,
         oldLocalized,
@@ -555,10 +732,14 @@ export function buildCompanionTransitionStatements(
         companionExists,
         companionHasStatus: args.companionHasStatus,
         // Carry the default locale so a newly-added `_status` back-fills the
-        // default-locale companion row from the main row's status.
+        // default-locale companion row from the main row's status, and a field leaving
+        // translation keeps its default language's value.
         defaultLocale,
+        sharedAfter,
+        sharedAfterArchived: archiveFirst,
+        presentOnCompanion: args.presentOnCompanion,
       }),
-      needsArchive: false,
+      needsArchive: sharedAfter.length > 0,
       companionDropped: false,
     };
   }
@@ -579,7 +760,8 @@ export function buildCompanionTransitionStatements(
  *
  * Both plans come from one call site so the artefact cannot accidentally be built from local
  * introspection. `local` is omitted when the two agree — every case but a disable meeting retained
- * columns — so a caller holding one plan cannot pick the wrong one.
+ * columns, or a re-save meeting companion columns a refused save left — so a caller holding one
+ * plan cannot pick the wrong one.
  */
 export function buildCompanionTransitionPlans(
   args: CompanionTransitionArgs & {
@@ -590,12 +772,17 @@ export function buildCompanionTransitionPlans(
   const artefact = buildCompanionTransitionStatements({
     ...args,
     existingMainColumns: undefined,
+    presentOnCompanion: undefined,
   });
-  if (!args.existingMainColumns?.length) return { artefact };
+  if (!args.existingMainColumns?.length && !args.presentOnCompanion?.length) {
+    return { artefact };
+  }
 
   const local = buildCompanionTransitionStatements(args);
   const same =
     local.statements.length === artefact.statements.length &&
-    local.statements.every((s, i) => s === artefact.statements[i]);
+    local.statements.every((s, i) => s === artefact.statements[i]) &&
+    (local.beforeMain ?? []).join("\n") ===
+      (artefact.beforeMain ?? []).join("\n");
   return same ? { artefact } : { artefact, local };
 }

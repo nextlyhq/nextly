@@ -14,6 +14,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { ReleasesService } from "../services/releases-service";
 import type { ReleasesServiceDeps } from "../services/releases-service";
+import { READY_CHECKS } from "./helpers/ready-checks";
 
 const ACTOR = { userId: "u1" };
 const REF = {
@@ -99,6 +100,9 @@ function service(rows: Row[]) {
     repository: repository as unknown as ReleasesServiceDeps["repository"],
     canManageReleases: vi.fn(async () => true),
     canActOnDocument: vi.fn(async () => true),
+    // Running a release is not what these cases are about.
+    runDrainNow: vi.fn(async () => undefined),
+    checks: READY_CHECKS,
     // Every target is there and has a lifecycle; the checks have their own tests.
     targets: {
       readDocument: async (target: { entryId: string }) => ({

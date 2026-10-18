@@ -15,7 +15,10 @@ import { Controller, useWatch } from "react-hook-form";
 import { UserRoleSelector } from "@admin/components/features/users/UserRoleSelector";
 import { Eye, EyeOff } from "@admin/components/icons";
 import type { Role } from "@admin/types/entities";
-import type { CreateUserFormValues } from "@admin/types/userform";
+import {
+  type CreateUserFormValues,
+  fieldErrorMessages,
+} from "@admin/types/userform";
 
 interface UserFormFieldsProps {
   /**
@@ -132,6 +135,7 @@ export function UserFormFields({
   const signInMethod = useWatch({ control, name: "signInMethod" });
   const isInviteMode = isCreateMode && signInMethod === "invite";
   const showPasswordField = !isInviteMode;
+  const passwordErrors = fieldErrorMessages(errors.password);
 
   return (
     // Not a `Grid` candidate: this is the page's own two-column split, not a
@@ -228,9 +232,11 @@ export function UserFormFields({
                       <div className="text-sm font-medium">
                         Set a password now
                       </div>
+                      {/* The server makes an admin-set password one the
+                          person must replace, so the form says so. */}
                       <p className="text-xs text-muted-foreground">
-                        For handing over credentials directly. They can change
-                        it after signing in.
+                        For handing over credentials directly. They choose a new
+                        password the first time they sign in.
                       </p>
                     </div>
                   </label>
@@ -259,7 +265,17 @@ export function UserFormFields({
                 ? "Only enter a new password if you want to reset it. Leave empty to keep the current password."
                 : undefined
             }
-            error={errors.password?.message}
+            // Every rule the password misses, one per line, rather than only
+            // the first: the forms collect them all (`criteriaMode: "all"`).
+            error={
+              passwordErrors.length > 0
+                ? passwordErrors.map(message => (
+                    <span key={message} className="block">
+                      {message}
+                    </span>
+                  ))
+                : undefined
+            }
           >
             {({ id, describedBy, invalid }) => (
               <div className="relative">
@@ -268,7 +284,8 @@ export function UserFormFields({
                   aria-describedby={describedBy}
                   aria-invalid={invalid}
                   type={showPassword ? "text" : "password"}
-                  placeholder="Min 8 chars, uppercase, lowercase, number, special (@$!%*?&#.)"
+                  // The server's rule: any symbol counts, not a fixed list.
+                  placeholder="8+ characters, upper and lower case, a number and a symbol"
                   aria-required={isCreateMode}
                   {...register("password")}
                   className="pr-10"

@@ -20,8 +20,11 @@ on:
 permissions:
   contents: read
 
+# Keyed by the label as well, so adding another label (whose run skips its
+# job) never cancels a request still waiting for the head's run to finish;
+# adding `run-integration` again replaces the earlier request.
 concurrency:
-  group: integration-request-${{ github.event.pull_request.number }}
+  group: integration-request-${{ github.event.pull_request.number }}-${{ github.event.label.name }}
   cancel-in-progress: true
 
 jobs:

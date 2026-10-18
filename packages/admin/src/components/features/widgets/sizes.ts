@@ -22,25 +22,16 @@
  * @module components/features/widgets/sizes
  */
 
-import type { WidgetSize } from "nextly/config";
+import { WIDGET_WIDTHS, isWidgetWidth } from "nextly/config";
 
 import type { WidgetWidth } from "@admin/types/dashboard/widgets";
 
-/** The five widths, narrowest first. The order is the width ranking. */
-export const WIDGET_WIDTHS: readonly WidgetWidth[] = Object.freeze([
-  "quarter",
-  "third",
-  "half",
-  "twoThirds",
-  "full",
-]);
-
-/** Whether a value from the wire is one of the five widths. */
-export function isWidgetWidth(value: unknown): value is WidgetWidth {
-  // `includes` on the list rather than a lookup on an object: a stored value
-  // spelled like a prototype member ("constructor") is then simply not a width.
-  return typeof value === "string" && WIDGET_WIDTHS.some(w => w === value);
-}
+/**
+ * The five widths, narrowest first, and whether a value from the wire is one:
+ * core's own, from `nextly/config`. The order is the width ranking the
+ * nearest-width rule below reads, so it must be the server's, not a copy.
+ */
+export { WIDGET_WIDTHS, isWidgetWidth };
 
 /**
  * Span classes per width, the table above as class text. Frozen because this
@@ -141,24 +132,11 @@ export function cardSpanClass(
  * arrangement has been read.
  *
  * Only that fallback asks this: once a read lands, every card carries the width
- * the server gave it. The pairs are the server's own (3, 4, 6, 8 and 12 of 12
- * tracks), restated because `nextly/config` does not publish them; anything
- * else, or nothing, is full, as the server reads it.
+ * the server gave it. It is core's own conversion (`widthFromSize`), so a card
+ * drawn before the read and the same card after it agree; anything that is not
+ * a size, or nothing, is full, as the server reads it.
  */
-const WIDTH_BY_SIZE: ReadonlyMap<string, WidgetWidth> = new Map<
-  WidgetSize,
-  WidgetWidth
->([
-  ["sm", "quarter"],
-  ["md", "third"],
-  ["lg", "half"],
-  ["xl", "twoThirds"],
-  ["full", "full"],
-]);
-
-export function widthFromDeclaredSize(size: string | undefined): WidgetWidth {
-  return (size === undefined ? undefined : WIDTH_BY_SIZE.get(size)) ?? "full";
-}
+export { widthFromSize as widthFromDeclaredSize } from "nextly/config";
 
 /**
  * The deprecated `size?: "full" | "half"` alias, as a real size.

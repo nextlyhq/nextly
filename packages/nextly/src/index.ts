@@ -681,6 +681,7 @@ export {
   type CellWidgetArchetype,
   type WidgetSource,
   type WidgetSourceField,
+  type WidgetFieldChoice,
   type WidgetSourceFieldType,
   type WidgetSourceKind,
   type WidgetOp,
@@ -802,6 +803,7 @@ export type {
 // challenge protocol. @experimental until a first-party plugin exercises it (D55).
 export type {
   AuthInput,
+  AuthLimitAnswer,
   AuthOutcome,
   AuthStrategy,
   Challenge,
@@ -852,6 +854,19 @@ export type {
   DraftSplitEligibility,
   DraftSplitDisabledReason,
 } from "./domains/versions/draft-split-eligibility";
+
+// Version pins: a feature registers itself as a holder once, then points named
+// slots at a document's versions, and retention never removes a version a slot
+// points at. Pins run on the caller's core transaction.
+// @experimental
+export {
+  registerVersionPinHolder,
+  versionPins,
+  type VersionPin,
+  type VersionPinHolder,
+  type VersionPinHolderDefinition,
+} from "./domains/versions/version-pins";
+export type { VersionRef } from "./domains/versions/versions-repository";
 
 // Which fields a level addresses, with presentational groups flattened.
 // Exported because a plugin that walks a collection's fields was otherwise

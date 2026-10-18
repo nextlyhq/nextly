@@ -122,14 +122,20 @@ export function useCardRetries(
   const retried = useWidgetQueries(retryRequests);
 
   // A retry that has answered moves out of flight with its answer and its time.
+  //
+  // The time is when THIS card's answer is seen, not the retry query's `updatedAt`: retries past
+  // the endpoint's per-request cap are split into requests that settle separately, and that
+  // aggregate stays `null` until the last one has, so a card from an earlier request would
+  // never be dated. This runs on the render that brings the answer in, so it is the arrival.
   useEffect(() => {
     const answers = new Map<string, SettledRetry>();
+    const seenAt = new Date(Date.now());
     for (const placementId of state.inFlight.keys()) {
       if (retried.fetchingPlacementIds.has(placementId)) continue;
       const slot = retried.slots[placementId];
       const cells = retried.cellSlots[placementId];
       if (!slot && !cells) continue;
-      answers.set(placementId, { slot, cells, at: retried.updatedAt });
+      answers.set(placementId, { slot, cells, at: seenAt });
     }
     if (answers.size > 0) dispatch({ type: "arrived", answers });
   }, [
@@ -137,7 +143,6 @@ export function useCardRetries(
     retried.fetchingPlacementIds,
     retried.slots,
     retried.cellSlots,
-    retried.updatedAt,
   ]);
 
   // The batch's next answer is fresher than any retry's, so a refresh of the whole batch ends

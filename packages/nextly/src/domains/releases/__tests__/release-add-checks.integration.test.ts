@@ -20,9 +20,11 @@ import {
   type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
+import type { Logger } from "../../../services/shared";
 import { ReleasesRepository } from "../releases-repository";
 
 import { seedLiveAuthor } from "./helpers/live-author";
+import { scheduleAsItStands } from "./helpers/release-writes";
 
 let current: TestNextly | undefined;
 
@@ -31,9 +33,13 @@ afterEach(async () => {
   current = undefined;
 });
 
-async function boot(dialect: TestDialect): Promise<TestNextly> {
+async function boot(
+  dialect: TestDialect,
+  logger?: Logger
+): Promise<TestNextly> {
   current = await createTestNextly({
     dialect,
+    logger,
     collections: [
       defineCollection({
         slug: "posts",
@@ -59,6 +65,13 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
       }),
     ],
     singles: [
+      // Never saved in these tests: it has no stored row.
+      defineSingle({
+        slug: "banner",
+        status: true,
+        access: { read: () => true, update: () => true },
+        fields: [text({ name: "headline" })],
+      }),
       defineSingle({
         slug: "homepage",
         status: true,
@@ -76,6 +89,37 @@ async function post(t: TestNextly): Promise<string> {
     data: { title: "Draft", status: "draft" } as never,
   })) as unknown as { item?: { id?: string }; id?: string };
   return String(created.item?.id ?? created.id);
+}
+
+/**
+ * Forget a Single's table in this process, as a worker that booted before
+ * the Single existed has never registered it: the table is in the database,
+ * not in this worker's schema registry, until a request-scoped read registers
+ * it. `register` stands in for that registration, to make it fail.
+ */
+function forgetTables(
+  t: TestNextly,
+  names: string[],
+  register?: (name: string, table: unknown) => void
+): void {
+  const inner = (
+    t.adapter as unknown as { tableResolver: { getTable(n: string): unknown } }
+  ).tableResolver;
+  const forgotten = new Set(names);
+  const own = new Map<string, unknown>();
+  (
+    t.adapter as unknown as { setTableResolver(r: unknown): void }
+  ).setTableResolver({
+    getTable(name: string) {
+      if (own.has(name)) return own.get(name);
+      if (forgotten.has(name)) return null;
+      return inner.getTable(name);
+    },
+    registerDynamicSchema(name: string, table: unknown) {
+      register?.(name, table);
+      own.set(name, table);
+    },
+  });
 }
 
 describe.each(getConfiguredTestDialects())(
@@ -182,6 +226,95 @@ describe.each(getConfiguredTestDialects())(
       expect(member.entryId).toBe(entryId);
     });
 
+    it("refuses a Single that was never saved, and creates no row for it", async () => {
+      // A Single's ordinary read creates its row when there is none. The
+      // check must not: it would accept a document that is not there and
+      // leave a blank row behind.
+      const t = await boot(dialect);
+      const author = await seedLiveAuthor(t);
+      const release = await t.nextly.releases.create({ title: "Launch" });
+      await expect(
+        t.nextly.releases.addMember({
+          releaseId: release.id,
+          scopeKind: "single",
+          scopeSlug: "banner",
+          entryId: "anything",
+          locale: null,
+          action: "publish",
+          userId: author,
+        })
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
+      expect(await t.adapter.select("single_banner", {})).toEqual([]);
+    });
+
+    it("finds a saved Single in a worker that has not registered its table", async () => {
+      // The read-only existence check must register the runtime table as
+      // every request-scoped Single read does, or a valid Single cannot be
+      // added from a second server process.
+      const t = await boot(dialect);
+      const author = await seedLiveAuthor(t);
+      await t.nextly.updateSingle({
+        slug: "homepage" as never,
+        data: { headline: "Draft", status: "draft" } as never,
+      });
+      const row = await t.adapter.selectOne<{ id: string }>(
+        "single_homepage",
+        {}
+      );
+      forgetTables(t, ["single_homepage"]);
+      const release = await t.nextly.releases.create({ title: "Launch" });
+      const member = await t.nextly.releases.addMember({
+        releaseId: release.id,
+        scopeKind: "single",
+        scopeSlug: "homepage",
+        entryId: "stale-id",
+        locale: null,
+        action: "publish",
+        userId: author,
+      });
+      expect(member.entryId).toBe(row?.id);
+    });
+
+    it("says why a Single's table could not be registered", async () => {
+      // A worker that cannot register the table still refuses the add, and
+      // the logger it was booted with carries the reason, as on every other
+      // request-scoped Single read.
+      const traces: Array<{ message: string; meta: unknown }> = [];
+      const t = await boot(dialect, {
+        debug: (message, meta) => traces.push({ message, meta }),
+        info() {},
+        warn() {},
+        error() {},
+      });
+      const author = await seedLiveAuthor(t);
+      await t.nextly.updateSingle({
+        slug: "homepage" as never,
+        data: { headline: "Draft", status: "draft" } as never,
+      });
+      forgetTables(t, ["single_homepage"], () => {
+        throw new Error("stored fields are unreadable");
+      });
+      const release = await t.nextly.releases.create({ title: "Launch" });
+      await expect(
+        t.nextly.releases.addMember({
+          releaseId: release.id,
+          scopeKind: "single",
+          scopeSlug: "homepage",
+          entryId: "any",
+          locale: null,
+          action: "publish",
+          userId: author,
+        })
+      ).rejects.toThrow();
+      expect(traces).toContainEqual({
+        message: "Lazy single runtime-table registration skipped",
+        meta: expect.objectContaining({
+          slug: "homepage",
+          error: "stored fields are unreadable",
+        }),
+      });
+    });
+
     it("accepts a real draft in a collection with a lifecycle", async () => {
       // The control: the checks refuse only what they should.
       const t = await boot(dialect);
@@ -205,6 +338,26 @@ describe.each(getConfiguredTestDialects())(
 describe.each(getConfiguredTestDialects())(
   "finding the due releases (%s)",
   dialect => {
+    it("finds a release due at exactly now, and not one a second later", async () => {
+      // The drain's query at the boundary itself: inclusive, as the resolver
+      // is. Whole seconds, because SQLite stores instants in whole seconds.
+      const t = await boot(dialect);
+      const repo = new ReleasesRepository(t.adapter);
+      const now = new Date(Math.floor(Date.now() / 1000) * 1000);
+      const atNow = await repo.createRelease({ title: "At now" });
+      await scheduleAsItStands(repo, atNow.id, now, "UTC");
+      const later = await repo.createRelease({ title: "A second later" });
+      await scheduleAsItStands(
+        repo,
+        later.id,
+        new Date(now.getTime() + 1000),
+        "UTC"
+      );
+
+      const due = await repo.findDueReleases(now);
+      expect(due.map(row => row.title)).toEqual(["At now"]);
+    });
+
     it("reads only the releases that are due, not every scheduled one", async () => {
       const t = await boot(dialect);
       const repo = new ReleasesRepository(t.adapter);
@@ -212,14 +365,20 @@ describe.each(getConfiguredTestDialects())(
       const day = 24 * 60 * 60 * 1000;
       for (let i = 0; i < 40; i += 1) {
         const future = await repo.createRelease({ title: `Future ${i}` });
-        await repo.scheduleRelease(
+        await scheduleAsItStands(
+          repo,
           future.id,
           new Date(now.getTime() + (i + 1) * day),
           "UTC"
         );
       }
       const due = await repo.createRelease({ title: "Due" });
-      await repo.scheduleRelease(due.id, new Date(now.getTime() - day), "UTC");
+      await scheduleAsItStands(
+        repo,
+        due.id,
+        new Date(now.getTime() - day),
+        "UTC"
+      );
 
       // Count the rows the database hands back for the read, through a
       // wrapper on the adapter the repository reads with.

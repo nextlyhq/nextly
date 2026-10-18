@@ -135,7 +135,7 @@ export const tableBody: ArchetypeBody = (result, definition) => {
                     {/* Presented by the column's declared kind, so a date
                         column reads as a date rather than as the ISO string
                         it crossed the wire as. */}
-                    {asPresentedText(item[column.name], column.type) ?? "—"}
+                    {asPresentedText(item[column.name], column) ?? "—"}
                   </td>
                 ))}
               </tr>

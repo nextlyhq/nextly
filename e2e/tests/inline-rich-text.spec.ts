@@ -124,7 +124,7 @@ async function openBuilderWith(page: Page, children: unknown[]): Promise<void> {
   );
 
   await gotoAdmin(page, "/singles/homepage");
-  await page.getByRole("button", { name: OPEN_BUILDER_ACTION }).click();
+  await page.getByRole("link", { name: OPEN_BUILDER_ACTION }).click();
   // The passage must be ON SCREEN before anything is aimed at it: a gesture
   // sent at an element that has not rendered lands on the page behind it.
   await expect(page.locator(PASSAGE).first()).toBeVisible({ timeout: 30_000 });

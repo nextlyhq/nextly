@@ -32,6 +32,10 @@ import {
   documentRefKey,
   type DocumentRef,
 } from "../releases-repository";
+import {
+  ANY_EDITABLE_STATE,
+  scheduleAsItStands,
+} from "./helpers/release-writes";
 
 let current: TestNextly | undefined;
 
@@ -87,7 +91,7 @@ describe.each(getConfiguredTestDialects())(
         ["Soon", soon],
       ] as const) {
         const release = await repo.createRelease({ title });
-        await repo.scheduleRelease(release.id, at, "UTC");
+        await scheduleAsItStands(repo, release.id, at, "UTC");
       }
 
       const next = await repo.findReleases({
@@ -116,7 +120,7 @@ describe.each(getConfiguredTestDialects())(
 
       await repo.createRelease({ title: "Unscheduled draft" });
       const scheduled = await repo.createRelease({ title: "Real release" });
-      await repo.scheduleRelease(scheduled.id, FUTURE, "UTC");
+      await scheduleAsItStands(repo, scheduled.id, FUTURE, "UTC");
 
       const soonest = await repo.findReleases({ order: "soonest", limit: 1 });
       expect(soonest.map(row => row.title)).toEqual(["Real release"]);
@@ -133,11 +137,14 @@ describe.each(getConfiguredTestDialects())(
       expect(release.id).toBeTruthy();
       expect(release.state).toBe("draft");
 
-      const member = await repo.addMember({
-        releaseId: release.id,
-        ...ref("e1"),
-        action: "publish",
-      });
+      const member = await repo.addMember(
+        {
+          releaseId: release.id,
+          ...ref("e1"),
+          action: "publish",
+        },
+        ANY_EDITABLE_STATE
+      );
       expect(member.releaseId).toBe(release.id);
       expect(member.action).toBe("publish");
     });
@@ -147,20 +154,26 @@ describe.each(getConfiguredTestDialects())(
       const repo = new ReleasesRepository(app.adapter);
       const release = await repo.createRelease({ title: "Spring launch" });
 
-      await repo.addMember({
-        releaseId: release.id,
-        ...ref("e1"),
-        action: "publish",
-      });
+      await repo.addMember(
+        {
+          releaseId: release.id,
+          ...ref("e1"),
+          action: "publish",
+        },
+        ANY_EDITABLE_STATE
+      );
 
       // The unlocalized case specifically: `locale` is NULL here, which is
       // exactly where a composite unique index would silently permit a duplicate.
       await expect(
-        repo.addMember({
-          releaseId: release.id,
-          ...ref("e1"),
-          action: "unpublish",
-        })
+        repo.addMember(
+          {
+            releaseId: release.id,
+            ...ref("e1"),
+            action: "unpublish",
+          },
+          ANY_EDITABLE_STATE
+        )
       ).rejects.toThrow();
     });
 
@@ -172,17 +185,23 @@ describe.each(getConfiguredTestDialects())(
       const first = await repo.createRelease({ title: "Go live" });
       const second = await repo.createRelease({ title: "Take down" });
 
-      await repo.addMember({
-        releaseId: first.id,
-        ...ref("e1"),
-        action: "publish",
-      });
-      await expect(
-        repo.addMember({
-          releaseId: second.id,
+      await repo.addMember(
+        {
+          releaseId: first.id,
           ...ref("e1"),
-          action: "unpublish",
-        })
+          action: "publish",
+        },
+        ANY_EDITABLE_STATE
+      );
+      await expect(
+        repo.addMember(
+          {
+            releaseId: second.id,
+            ...ref("e1"),
+            action: "unpublish",
+          },
+          ANY_EDITABLE_STATE
+        )
       ).resolves.toBeTruthy();
     });
 
@@ -191,17 +210,23 @@ describe.each(getConfiguredTestDialects())(
       const repo = new ReleasesRepository(app.adapter);
       const release = await repo.createRelease({ title: "Spring launch" });
 
-      await repo.addMember({
-        releaseId: release.id,
-        ...ref("e1", "en"),
-        action: "publish",
-      });
-      await expect(
-        repo.addMember({
+      await repo.addMember(
+        {
           releaseId: release.id,
-          ...ref("e1", "es"),
+          ...ref("e1", "en"),
           action: "publish",
-        })
+        },
+        ANY_EDITABLE_STATE
+      );
+      await expect(
+        repo.addMember(
+          {
+            releaseId: release.id,
+            ...ref("e1", "es"),
+            action: "publish",
+          },
+          ANY_EDITABLE_STATE
+        )
       ).resolves.toBeTruthy();
     });
 
@@ -211,11 +236,14 @@ describe.each(getConfiguredTestDialects())(
       const app = await boot(dialect);
       const repo = new ReleasesRepository(app.adapter);
       const release = await repo.createRelease({ title: "Spring launch" });
-      await repo.addMember({
-        releaseId: release.id,
-        ...ref("e1"),
-        action: "publish",
-      });
+      await repo.addMember(
+        {
+          releaseId: release.id,
+          ...ref("e1"),
+          action: "publish",
+        },
+        ANY_EDITABLE_STATE
+      );
 
       const due = await repo.findDueMembersFor([ref("e1")], new Date());
       expect(due.get(documentRefKey(ref("e1"))) ?? []).toEqual([]);
@@ -225,12 +253,15 @@ describe.each(getConfiguredTestDialects())(
       const app = await boot(dialect);
       const repo = new ReleasesRepository(app.adapter);
       const release = await repo.createRelease({ title: "Spring launch" });
-      await repo.addMember({
-        releaseId: release.id,
-        ...ref("e1"),
-        action: "publish",
-      });
-      await repo.scheduleRelease(release.id, FUTURE, "UTC");
+      await repo.addMember(
+        {
+          releaseId: release.id,
+          ...ref("e1"),
+          action: "publish",
+        },
+        ANY_EDITABLE_STATE
+      );
+      await scheduleAsItStands(repo, release.id, FUTURE, "UTC");
 
       // The repository returns every member of a SCHEDULED release; deciding
       // whether the time has come is `resolveReleaseEffect`'s job, and keeping
@@ -245,12 +276,15 @@ describe.each(getConfiguredTestDialects())(
       const app = await boot(dialect);
       const repo = new ReleasesRepository(app.adapter);
       const release = await repo.createRelease({ title: "Spring launch" });
-      await repo.addMember({
-        releaseId: release.id,
-        ...ref("e1"),
-        action: "publish",
-      });
-      await repo.scheduleRelease(release.id, PAST, "UTC");
+      await repo.addMember(
+        {
+          releaseId: release.id,
+          ...ref("e1"),
+          action: "publish",
+        },
+        ANY_EDITABLE_STATE
+      );
+      await scheduleAsItStands(repo, release.id, PAST, "UTC");
 
       const before = await repo.findDueMembersFor([ref("e1")], new Date());
       expect(before.get(documentRefKey(ref("e1")))).toHaveLength(1);
@@ -272,12 +306,15 @@ describe.each(getConfiguredTestDialects())(
       const app = await boot(dialect);
       const repo = new ReleasesRepository(app.adapter);
       const release = await repo.createRelease({ title: "Spring launch" });
-      await repo.addMember({
-        releaseId: release.id,
-        ...ref("e1"),
-        action: "publish",
-      });
-      await repo.scheduleRelease(release.id, PAST, "UTC");
+      await repo.addMember(
+        {
+          releaseId: release.id,
+          ...ref("e1"),
+          action: "publish",
+        },
+        ANY_EDITABLE_STATE
+      );
+      await scheduleAsItStands(repo, release.id, PAST, "UTC");
       expect(
         await repo.blockReleases([{ id: release.id, scheduledAt: PAST }])
       ).toEqual([release.id]);
@@ -295,12 +332,15 @@ describe.each(getConfiguredTestDialects())(
       const app = await boot(dialect);
       const repo = new ReleasesRepository(app.adapter);
       const release = await repo.createRelease({ title: "Spring launch" });
-      await repo.addMember({
-        releaseId: release.id,
-        ...ref("e1"),
-        action: "publish",
-      });
-      await repo.scheduleRelease(release.id, PAST, "UTC");
+      await repo.addMember(
+        {
+          releaseId: release.id,
+          ...ref("e1"),
+          action: "publish",
+        },
+        ANY_EDITABLE_STATE
+      );
+      await scheduleAsItStands(repo, release.id, PAST, "UTC");
       expect(
         await repo.blockReleases([{ id: release.id, scheduledAt: PAST }])
       ).toEqual([release.id]);
@@ -337,12 +377,15 @@ describe.each(getConfiguredTestDialects())(
       const first = await repo.createRelease({ title: "Launch" });
       const second = await repo.createRelease({ title: "Takedown" });
       for (const release of [first, second]) {
-        await repo.addMember({
-          releaseId: release.id,
-          ...ref("e1"),
-          action: "publish",
-        });
-        await repo.scheduleRelease(release.id, PAST, "UTC");
+        await repo.addMember(
+          {
+            releaseId: release.id,
+            ...ref("e1"),
+            action: "publish",
+          },
+          ANY_EDITABLE_STATE
+        );
+        await scheduleAsItStands(repo, release.id, PAST, "UTC");
       }
 
       // The repository writes in id order, so the id that sorts LATER is the
@@ -372,12 +415,15 @@ describe.each(getConfiguredTestDialects())(
       const first = await repo.createRelease({ title: "Launch" });
       const second = await repo.createRelease({ title: "Takedown" });
       for (const release of [first, second]) {
-        await repo.addMember({
-          releaseId: release.id,
-          ...ref("e1"),
-          action: "publish",
-        });
-        await repo.scheduleRelease(release.id, PAST, "UTC");
+        await repo.addMember(
+          {
+            releaseId: release.id,
+            ...ref("e1"),
+            action: "publish",
+          },
+          ANY_EDITABLE_STATE
+        );
+        await scheduleAsItStands(repo, release.id, PAST, "UTC");
       }
 
       const rows = await repo.blockReleases([
@@ -394,17 +440,23 @@ describe.each(getConfiguredTestDialects())(
       const app = await boot(dialect);
       const repo = new ReleasesRepository(app.adapter);
       const release = await repo.createRelease({ title: "Spring launch" });
-      await repo.addMember({
-        releaseId: release.id,
-        ...ref("e1"),
-        action: "publish",
-      });
-      await repo.addMember({
-        releaseId: release.id,
-        ...ref("e2"),
-        action: "unpublish",
-      });
-      await repo.scheduleRelease(release.id, PAST, "UTC");
+      await repo.addMember(
+        {
+          releaseId: release.id,
+          ...ref("e1"),
+          action: "publish",
+        },
+        ANY_EDITABLE_STATE
+      );
+      await repo.addMember(
+        {
+          releaseId: release.id,
+          ...ref("e2"),
+          action: "unpublish",
+        },
+        ANY_EDITABLE_STATE
+      );
+      await scheduleAsItStands(repo, release.id, PAST, "UTC");
 
       const found = await repo.findDueMembersFor(
         [ref("e1"), ref("e2")],
@@ -431,13 +483,16 @@ describe.each(getConfiguredTestDialects())(
       const release = await repo.createRelease({ title: "Spring launch" });
       const refs = Array.from({ length: 25 }, (_, i) => ref(`e${i}`));
       for (const r of refs) {
-        await repo.addMember({
-          releaseId: release.id,
-          ...r,
-          action: "publish",
-        });
+        await repo.addMember(
+          {
+            releaseId: release.id,
+            ...r,
+            action: "publish",
+          },
+          ANY_EDITABLE_STATE
+        );
       }
-      await repo.scheduleRelease(release.id, PAST, "UTC");
+      await scheduleAsItStands(repo, release.id, PAST, "UTC");
 
       const spyMany = vi.spyOn(app.adapter, "select");
       const many = await repo.findDueMembersFor(refs, new Date());
@@ -475,12 +530,12 @@ describe.each(getConfiguredTestDialects())(
       const later = new Date(now.getTime() + 120_000);
 
       const past = await repo.createRelease({ title: "Already gone" });
-      await repo.scheduleRelease(past.id, PAST, "UTC");
+      await scheduleAsItStands(repo, past.id, PAST, "UTC");
       const draft = await repo.createRelease({ title: "Not scheduled yet" });
       const laterRelease = await repo.createRelease({ title: "Later" });
-      await repo.scheduleRelease(laterRelease.id, later, "UTC");
+      await scheduleAsItStands(repo, laterRelease.id, later, "UTC");
       const soonRelease = await repo.createRelease({ title: "Soon" });
-      await repo.scheduleRelease(soonRelease.id, soon, "UTC");
+      await scheduleAsItStands(repo, soonRelease.id, soon, "UTC");
 
       const instants = await repo.findScheduledTransitions();
       const earliest = instants[0];
@@ -505,7 +560,7 @@ describe.each(getConfiguredTestDialects())(
       const app = await boot(dialect);
       const repo = new ReleasesRepository(app.adapter);
       const release = await repo.createRelease({ title: "Called off" });
-      await repo.scheduleRelease(release.id, PAST, "UTC");
+      await scheduleAsItStands(repo, release.id, PAST, "UTC");
       await repo.cancelRelease(release.id);
 
       await expect(repo.findScheduledTransitions()).resolves.toEqual([]);
@@ -521,9 +576,9 @@ describe.each(getConfiguredTestDialects())(
       const app = await boot(dialect);
       const repo = new ReleasesRepository(app.adapter);
       const stuck = await repo.createRelease({ title: "Overdue" });
-      await repo.scheduleRelease(stuck.id, PAST, "UTC");
+      await scheduleAsItStands(repo, stuck.id, PAST, "UTC");
       const ahead = await repo.createRelease({ title: "Ahead" });
-      await repo.scheduleRelease(ahead.id, FUTURE, "UTC");
+      await scheduleAsItStands(repo, ahead.id, FUTURE, "UTC");
 
       const instants = await repo.findScheduledTransitions();
 
@@ -547,16 +602,19 @@ describe.each(getConfiguredTestDialects())(
         },
       });
       const release = await repo.createRelease({ title: "Spring launch" });
-      await repo.addMember({
-        releaseId: release.id,
-        ...ref("e1"),
-        action: "publish",
-      });
+      await repo.addMember(
+        {
+          releaseId: release.id,
+          ...ref("e1"),
+          action: "publish",
+        },
+        ANY_EDITABLE_STATE
+      );
       // `addMember` flushes too, for its own reason. Cleared so this case
       // measures what SCHEDULING flushed rather than the sum of both.
       flushed.length = 0;
 
-      await repo.scheduleRelease(release.id, PAST, "UTC");
+      await scheduleAsItStands(repo, release.id, PAST, "UTC");
 
       expect(flushed).toHaveLength(1);
       expect((flushed[0] as { tags: string[] }).tags.sort()).toEqual(
@@ -576,12 +634,15 @@ describe.each(getConfiguredTestDialects())(
         },
       });
       const release = await repo.createRelease({ title: "Called off" });
-      await repo.addMember({
-        releaseId: release.id,
-        ...ref("e1"),
-        action: "publish",
-      });
-      await repo.scheduleRelease(release.id, PAST, "UTC");
+      await repo.addMember(
+        {
+          releaseId: release.id,
+          ...ref("e1"),
+          action: "publish",
+        },
+        ANY_EDITABLE_STATE
+      );
+      await scheduleAsItStands(repo, release.id, PAST, "UTC");
       flushed.length = 0;
 
       await repo.cancelRelease(release.id);
@@ -600,14 +661,17 @@ describe.each(getConfiguredTestDialects())(
         },
       });
       const release = await repo.createRelease({ title: "Spring launch" });
-      await repo.scheduleRelease(release.id, PAST, "UTC");
+      await scheduleAsItStands(repo, release.id, PAST, "UTC");
       flushed.length = 0;
 
-      await repo.addMember({
-        releaseId: release.id,
-        ...ref("e1"),
-        action: "publish",
-      });
+      await repo.addMember(
+        {
+          releaseId: release.id,
+          ...ref("e1"),
+          action: "publish",
+        },
+        ANY_EDITABLE_STATE
+      );
 
       expect(flushed).toHaveLength(1);
     });
@@ -624,15 +688,18 @@ describe.each(getConfiguredTestDialects())(
         },
       });
       const release = await repo.createRelease({ title: "Spring launch" });
-      const member = await repo.addMember({
-        releaseId: release.id,
-        ...ref("e1"),
-        action: "publish",
-      });
-      await repo.scheduleRelease(release.id, PAST, "UTC");
+      const member = await repo.addMember(
+        {
+          releaseId: release.id,
+          ...ref("e1"),
+          action: "publish",
+        },
+        ANY_EDITABLE_STATE
+      );
+      await scheduleAsItStands(repo, release.id, PAST, "UTC");
       flushed.length = 0;
 
-      await repo.removeMember(member.id);
+      await repo.removeMember(member, ANY_EDITABLE_STATE);
 
       expect(flushed).toHaveLength(1);
       expect(flushed[0]!.tags).toContain("nextly:posts:id:e1");
@@ -642,14 +709,17 @@ describe.each(getConfiguredTestDialects())(
       const app = await boot(dialect);
       const repo = new ReleasesRepository(app.adapter);
       const release = await repo.createRelease({ title: "Spring launch" });
-      const member = await repo.addMember({
-        releaseId: release.id,
-        ...ref("e1"),
-        action: "publish",
-      });
-      await repo.scheduleRelease(release.id, PAST, "UTC");
+      const member = await repo.addMember(
+        {
+          releaseId: release.id,
+          ...ref("e1"),
+          action: "publish",
+        },
+        ANY_EDITABLE_STATE
+      );
+      await scheduleAsItStands(repo, release.id, PAST, "UTC");
 
-      await repo.removeMember(member.id);
+      await repo.removeMember(member, ANY_EDITABLE_STATE);
 
       const found = await repo.findDueMembersFor([ref("e1")], new Date());
       expect(found.get(documentRefKey(ref("e1"))) ?? []).toEqual([]);
@@ -664,17 +734,20 @@ describe.each(getConfiguredTestDialects())(
         const app = await boot(dialect);
         const repo = new ReleasesRepository(app.adapter);
         const release = await repo.createRelease({ title: "Go live" });
-        await repo.addMember({
-          releaseId: release.id,
-          ...ref("e1"),
-          action: "publish",
-          // A live author. `findDueDecisions` projects a member only when its
-          // author still exists and is active, matching the write path that runs
-          // AS them — an unattributed member describes an effect no write could
-          // perform, so it is correctly invisible.
-          createdBy: await seedLiveAuthor(app),
-        });
-        await repo.scheduleRelease(release.id, PAST, "UTC");
+        await repo.addMember(
+          {
+            releaseId: release.id,
+            ...ref("e1"),
+            action: "publish",
+            // A live author. `findDueDecisions` projects a member only when its
+            // author still exists and is active, matching the write path that runs
+            // AS them — an unattributed member describes an effect no write could
+            // perform, so it is correctly invisible.
+            createdBy: await seedLiveAuthor(app),
+          },
+          ANY_EDITABLE_STATE
+        );
+        await scheduleAsItStands(repo, release.id, PAST, "UTC");
 
         const decisions = await repo.findDueDecisions({
           scopeKind: "collection",
@@ -688,17 +761,20 @@ describe.each(getConfiguredTestDialects())(
         const app = await boot(dialect);
         const repo = new ReleasesRepository(app.adapter);
         const release = await repo.createRelease({ title: "Later" });
-        await repo.addMember({
-          releaseId: release.id,
-          ...ref("e1"),
-          action: "publish",
-          // Attributed, so this negative case fails for its OWN reason. An
-          // authorless member is now filtered before the timing, state and
-          // winner logic runs, so without this the assertion holds even if
-          // that logic breaks entirely.
-          createdBy: await seedLiveAuthor(app),
-        });
-        await repo.scheduleRelease(release.id, FUTURE, "UTC");
+        await repo.addMember(
+          {
+            releaseId: release.id,
+            ...ref("e1"),
+            action: "publish",
+            // Attributed, so this negative case fails for its OWN reason. An
+            // authorless member is now filtered before the timing, state and
+            // winner logic runs, so without this the assertion holds even if
+            // that logic breaks entirely.
+            createdBy: await seedLiveAuthor(app),
+          },
+          ANY_EDITABLE_STATE
+        );
+        await scheduleAsItStands(repo, release.id, FUTURE, "UTC");
 
         expect(
           await repo.findDueDecisions({
@@ -716,16 +792,19 @@ describe.each(getConfiguredTestDialects())(
         const app = await boot(dialect);
         const repo = new ReleasesRepository(app.adapter);
         const release = await repo.createRelease({ title: "Still assembling" });
-        await repo.addMember({
-          releaseId: release.id,
-          ...ref("e1"),
-          action: "publish",
-          // Attributed, so this negative case fails for its OWN reason. An
-          // authorless member is now filtered before the timing, state and
-          // winner logic runs, so without this the assertion holds even if
-          // that logic breaks entirely.
-          createdBy: await seedLiveAuthor(app),
-        });
+        await repo.addMember(
+          {
+            releaseId: release.id,
+            ...ref("e1"),
+            action: "publish",
+            // Attributed, so this negative case fails for its OWN reason. An
+            // authorless member is now filtered before the timing, state and
+            // winner logic runs, so without this the assertion holds even if
+            // that logic breaks entirely.
+            createdBy: await seedLiveAuthor(app),
+          },
+          ANY_EDITABLE_STATE
+        );
 
         expect(
           await repo.findDueDecisions({
@@ -745,34 +824,42 @@ describe.each(getConfiguredTestDialects())(
         const app = await boot(dialect);
         const repo = new ReleasesRepository(app.adapter);
         const up = await repo.createRelease({ title: "Go live" });
-        await repo.addMember({
-          releaseId: up.id,
-          ...ref("e1"),
-          action: "publish",
-          // Attributed, so this negative case fails for its OWN reason. An
-          // authorless member is now filtered before the timing, state and
-          // winner logic runs, so without this the assertion holds even if
-          // that logic breaks entirely.
-          createdBy: await seedLiveAuthor(app),
-        });
-        await repo.scheduleRelease(
+        await repo.addMember(
+          {
+            releaseId: up.id,
+            ...ref("e1"),
+            action: "publish",
+            // Attributed, so this negative case fails for its OWN reason. An
+            // authorless member is now filtered before the timing, state and
+            // winner logic runs, so without this the assertion holds even if
+            // that logic breaks entirely.
+            createdBy: await seedLiveAuthor(app),
+          },
+          ANY_EDITABLE_STATE
+        );
+        await scheduleAsItStands(
+          repo,
           up.id,
           new Date("2020-01-01T00:00:00Z"),
           "UTC"
         );
 
         const down = await repo.createRelease({ title: "Take down" });
-        await repo.addMember({
-          releaseId: down.id,
-          ...ref("e1"),
-          action: "unpublish",
-          // Attributed, so this negative case fails for its OWN reason. An
-          // authorless member is now filtered before the timing, state and
-          // winner logic runs, so without this the assertion holds even if
-          // that logic breaks entirely.
-          createdBy: await seedLiveAuthor(app),
-        });
-        await repo.scheduleRelease(
+        await repo.addMember(
+          {
+            releaseId: down.id,
+            ...ref("e1"),
+            action: "unpublish",
+            // Attributed, so this negative case fails for its OWN reason. An
+            // authorless member is now filtered before the timing, state and
+            // winner logic runs, so without this the assertion holds even if
+            // that logic breaks entirely.
+            createdBy: await seedLiveAuthor(app),
+          },
+          ANY_EDITABLE_STATE
+        );
+        await scheduleAsItStands(
+          repo,
           down.id,
           new Date("2020-06-01T00:00:00Z"),
           "UTC"
@@ -799,13 +886,16 @@ describe.each(getConfiguredTestDialects())(
         const repo = new ReleasesRepository(app.adapter);
         const author = await seedLiveAuthor(app);
         const release = await repo.createRelease({ title: "Go live" });
-        await repo.addMember({
-          releaseId: release.id,
-          ...ref("e1"),
-          action: "publish",
-          createdBy: author,
-        });
-        await repo.scheduleRelease(release.id, PAST, "UTC");
+        await repo.addMember(
+          {
+            releaseId: release.id,
+            ...ref("e1"),
+            action: "publish",
+            createdBy: author,
+          },
+          ANY_EDITABLE_STATE
+        );
+        await scheduleAsItStands(repo, release.id, PAST, "UTC");
 
         // Live author: the effect IS projected. Without this the case below
         // could pass because the release was never projected for some other
@@ -844,23 +934,30 @@ describe.each(getConfiguredTestDialects())(
         const gone = await seedLiveAuthor(app);
 
         const earlier = await repo.createRelease({ title: "Publish" });
-        await repo.addMember({
-          releaseId: earlier.id,
-          ...ref("e1"),
-          action: "publish",
-          createdBy: active,
-        });
-        await repo.scheduleRelease(earlier.id, PAST, "UTC");
+        await repo.addMember(
+          {
+            releaseId: earlier.id,
+            ...ref("e1"),
+            action: "publish",
+            createdBy: active,
+          },
+          ANY_EDITABLE_STATE
+        );
+        await scheduleAsItStands(repo, earlier.id, PAST, "UTC");
 
         const later = await repo.createRelease({ title: "Take down" });
-        await repo.addMember({
-          releaseId: later.id,
-          ...ref("e1"),
-          action: "unpublish",
-          createdBy: gone,
-        });
+        await repo.addMember(
+          {
+            releaseId: later.id,
+            ...ref("e1"),
+            action: "unpublish",
+            createdBy: gone,
+          },
+          ANY_EDITABLE_STATE
+        );
         // Later than the publish, so it WINS the effect rule.
-        await repo.scheduleRelease(
+        await scheduleAsItStands(
+          repo,
           later.id,
           new Date(PAST.getTime() + 60_000),
           "UTC"
@@ -895,12 +992,15 @@ describe.each(getConfiguredTestDialects())(
         const app = await boot(dialect);
         const repo = new ReleasesRepository(app.adapter);
         const release = await repo.createRelease({ title: "Go live" });
-        await repo.addMember({
-          releaseId: release.id,
-          ...ref("e1"),
-          action: "publish",
-        });
-        await repo.scheduleRelease(release.id, PAST, "UTC");
+        await repo.addMember(
+          {
+            releaseId: release.id,
+            ...ref("e1"),
+            action: "publish",
+          },
+          ANY_EDITABLE_STATE
+        );
+        await scheduleAsItStands(repo, release.id, PAST, "UTC");
 
         await expect(
           repo.findDueDecisions({
@@ -920,13 +1020,16 @@ describe.each(getConfiguredTestDialects())(
         const repo = new ReleasesRepository(app.adapter);
         const author = await seedLiveAuthor(app);
         const release = await repo.createRelease({ title: "Take down" });
-        await repo.addMember({
-          releaseId: release.id,
-          ...ref("e1"),
-          action: "unpublish",
-          createdBy: author,
-        });
-        await repo.scheduleRelease(release.id, PAST, "UTC");
+        await repo.addMember(
+          {
+            releaseId: release.id,
+            ...ref("e1"),
+            action: "unpublish",
+            createdBy: author,
+          },
+          ANY_EDITABLE_STATE
+        );
+        await scheduleAsItStands(repo, release.id, PAST, "UTC");
         await expect(
           repo.findDueDecisions({
             scopeKind: "collection",
@@ -954,17 +1057,20 @@ describe.each(getConfiguredTestDialects())(
         const app = await boot(dialect);
         const repo = new ReleasesRepository(app.adapter);
         const release = await repo.createRelease({ title: "Take down" });
-        await repo.addMember({
-          releaseId: release.id,
-          ...ref("e1"),
-          action: "unpublish",
-          // A live author. `findDueDecisions` projects a member only when its
-          // author still exists and is active, matching the write path that runs
-          // AS them — an unattributed member describes an effect no write could
-          // perform, so it is correctly invisible.
-          createdBy: await seedLiveAuthor(app),
-        });
-        await repo.scheduleRelease(release.id, PAST, "UTC");
+        await repo.addMember(
+          {
+            releaseId: release.id,
+            ...ref("e1"),
+            action: "unpublish",
+            // A live author. `findDueDecisions` projects a member only when its
+            // author still exists and is active, matching the write path that runs
+            // AS them — an unattributed member describes an effect no write could
+            // perform, so it is correctly invisible.
+            createdBy: await seedLiveAuthor(app),
+          },
+          ANY_EDITABLE_STATE
+        );
+        await scheduleAsItStands(repo, release.id, PAST, "UTC");
 
         const decisions = await repo.findDueDecisions({
           scopeKind: "collection",
@@ -983,17 +1089,20 @@ describe.each(getConfiguredTestDialects())(
         const app = await boot(dialect);
         const repo = new ReleasesRepository(app.adapter);
         const release = await repo.createRelease({ title: "Take down" });
-        await repo.addMember({
-          releaseId: release.id,
-          ...ref("e1"),
-          action: "unpublish",
-          // Attributed, so this negative case fails for its OWN reason. An
-          // authorless member is now filtered before the timing, state and
-          // winner logic runs, so without this the assertion holds even if
-          // that logic breaks entirely.
-          createdBy: await seedLiveAuthor(app),
-        });
-        await repo.scheduleRelease(release.id, FUTURE, "UTC");
+        await repo.addMember(
+          {
+            releaseId: release.id,
+            ...ref("e1"),
+            action: "unpublish",
+            // Attributed, so this negative case fails for its OWN reason. An
+            // authorless member is now filtered before the timing, state and
+            // winner logic runs, so without this the assertion holds even if
+            // that logic breaks entirely.
+            createdBy: await seedLiveAuthor(app),
+          },
+          ANY_EDITABLE_STATE
+        );
+        await scheduleAsItStands(repo, release.id, FUTURE, "UTC");
 
         expect(
           await repo.findDueDecisions({
@@ -1016,17 +1125,20 @@ describe.each(getConfiguredTestDialects())(
         const app = await boot(dialect);
         const repo = new ReleasesRepository(app.adapter);
         const release = await repo.createRelease({ title: "German launch" });
-        await repo.addMember({
-          releaseId: release.id,
-          ...ref("e1", "de"),
-          action: "publish",
-          // Attributed, so this negative case fails for its OWN reason. An
-          // authorless member is now filtered before the timing, state and
-          // winner logic runs, so without this the assertion holds even if
-          // that logic breaks entirely.
-          createdBy: await seedLiveAuthor(app),
-        });
-        await repo.scheduleRelease(release.id, PAST, "UTC");
+        await repo.addMember(
+          {
+            releaseId: release.id,
+            ...ref("e1", "de"),
+            action: "publish",
+            // Attributed, so this negative case fails for its OWN reason. An
+            // authorless member is now filtered before the timing, state and
+            // winner logic runs, so without this the assertion holds even if
+            // that logic breaks entirely.
+            createdBy: await seedLiveAuthor(app),
+          },
+          ANY_EDITABLE_STATE
+        );
+        await scheduleAsItStands(repo, release.id, PAST, "UTC");
 
         await expect(
           repo.findDueDecisions({
@@ -1053,25 +1165,32 @@ describe.each(getConfiguredTestDialects())(
         const app = await boot(dialect);
         const repo = new ReleasesRepository(app.adapter);
         const up = await repo.createRelease({ title: "wide publish" });
-        await repo.addMember({
-          releaseId: up.id,
-          ...ref("e1", null),
-          action: "publish",
-          // A live author. `findDueDecisions` projects a member only when its
-          // author still exists and is active, matching the write path that runs
-          // AS them — an unattributed member describes an effect no write could
-          // perform, so it is correctly invisible.
-          createdBy: await seedLiveAuthor(app),
-        });
-        await repo.scheduleRelease(up.id, PAST, "UTC");
+        await repo.addMember(
+          {
+            releaseId: up.id,
+            ...ref("e1", null),
+            action: "publish",
+            // A live author. `findDueDecisions` projects a member only when its
+            // author still exists and is active, matching the write path that runs
+            // AS them — an unattributed member describes an effect no write could
+            // perform, so it is correctly invisible.
+            createdBy: await seedLiveAuthor(app),
+          },
+          ANY_EDITABLE_STATE
+        );
+        await scheduleAsItStands(repo, up.id, PAST, "UTC");
 
         const down = await repo.createRelease({ title: "de takedown" });
-        await repo.addMember({
-          releaseId: down.id,
-          ...ref("e1", "de"),
-          action: "unpublish",
-        });
-        await repo.scheduleRelease(
+        await repo.addMember(
+          {
+            releaseId: down.id,
+            ...ref("e1", "de"),
+            action: "unpublish",
+          },
+          ANY_EDITABLE_STATE
+        );
+        await scheduleAsItStands(
+          repo,
           down.id,
           new Date("2021-01-01T00:00:00Z"),
           "UTC"
@@ -1095,17 +1214,20 @@ describe.each(getConfiguredTestDialects())(
         const app = await boot(dialect);
         const repo = new ReleasesRepository(app.adapter);
         const release = await repo.createRelease({ title: "Go live" });
-        await repo.addMember({
-          releaseId: release.id,
-          ...ref("e1"),
-          action: "publish",
-          // Attributed, so this negative case fails for its OWN reason. An
-          // authorless member is now filtered before the timing, state and
-          // winner logic runs, so without this the assertion holds even if
-          // that logic breaks entirely.
-          createdBy: await seedLiveAuthor(app),
-        });
-        await repo.scheduleRelease(release.id, PAST, "UTC");
+        await repo.addMember(
+          {
+            releaseId: release.id,
+            ...ref("e1"),
+            action: "publish",
+            // Attributed, so this negative case fails for its OWN reason. An
+            // authorless member is now filtered before the timing, state and
+            // winner logic runs, so without this the assertion holds even if
+            // that logic breaks entirely.
+            createdBy: await seedLiveAuthor(app),
+          },
+          ANY_EDITABLE_STATE
+        );
+        await scheduleAsItStands(repo, release.id, PAST, "UTC");
 
         expect(
           await repo.findDueDecisions({

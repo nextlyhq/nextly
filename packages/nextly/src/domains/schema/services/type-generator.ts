@@ -44,6 +44,7 @@ import type { DynamicCollectionRecord } from "../../../schemas/dynamic-collectio
 import type { DynamicFieldGroupRecord } from "../../../schemas/dynamic-field-groups/types";
 import type { DynamicSingleRecord } from "../../../schemas/dynamic-singles/types";
 import type { UserFieldDefinitionRecord } from "../../../schemas/user-field-definitions/types";
+import { DEFAULT_TYPESCRIPT_CONFIG } from "../../../shared/types/config";
 import { extractFieldGroupReferences } from "../../field-groups/storage/field-group-field-type";
 import { currentFieldGroupTypeKey } from "../../field-groups/storage/field-group-type-key";
 
@@ -156,13 +157,13 @@ export interface GeneratedComponentTypeInterface {
 }
 
 /**
- * Result of generating the complete payload-types.ts file.
+ * Result of generating the complete types file.
  */
 export interface GeneratedTypesFile {
   /** Generated TypeScript code for the types file */
   code: string;
 
-  /** Suggested filename (default: "payload-types.ts") */
+  /** Suggested filename (default: "nextly-types.ts") */
   filename: string;
 }
 
@@ -196,7 +197,7 @@ export interface TypeGeneratorOptions {
 
   /**
    * Custom filename for generated types.
-   * @default "payload-types.ts"
+   * @default "nextly-types.ts"
    */
   filename?: string;
 
@@ -280,9 +281,24 @@ export class TypeGenerator {
 
   /**
    * Whether a field in this run points at the built-in `media` collection, and
-   * so names `MediaFile`, which the file then has to import.
+   * so names Nextly's `MediaFile`, which the file then has to import.
    */
   private referencesBuiltInMedia = false;
+
+  /** The same, for the one interface being generated. */
+  private interfaceReferencesBuiltInMedia = false;
+
+  /**
+   * The name the built-in media row goes by in this output: `MediaFile`, or an
+   * alias when the config declares an interface of that name itself.
+   */
+  private builtInMediaName = "MediaFile";
+
+  /**
+   * Whether a whole types file is being generated, whose names decide the
+   * built-in media row's name for every interface in it.
+   */
+  private inTypesFile = false;
 
   constructor(options: TypeGeneratorOptions = {}) {
     this.includeComments = options.includeComments ?? true;
@@ -290,7 +306,11 @@ export class TypeGenerator {
     this.generateConfig = options.generateConfig ?? true;
     this.generateModuleAugmentation =
       options.generateModuleAugmentation ?? true;
-    this.filename = options.filename ?? "payload-types.ts";
+    // The file name of the config's default `typescript.outputFile`, read
+    // from it so the two never name different files.
+    this.filename =
+      options.filename ??
+      DEFAULT_TYPESCRIPT_CONFIG.outputFile.replace(/^.*\//, "");
     this.moduleToAugment = options.moduleToAugment ?? "nextly";
   }
 
@@ -299,7 +319,7 @@ export class TypeGenerator {
   // ============================================================
 
   /**
-   * Generates the complete payload-types.ts file with all collections, singles, components, and user type.
+   * Generates the complete types file with all collections, singles, components, and user type.
    *
    * @param collections - Array of collection records
    * @param singles - Optional array of single records
@@ -339,6 +359,14 @@ export class TypeGenerator {
     const importSlot = lines.length;
 
     this.assertNoInterfaceNameCollisions(collections, singles, components);
+
+    // Chosen before any interface is written, since every reference to the
+    // built-in media row spells it.
+    this.builtInMediaName = this.freeName(
+      "MediaFile",
+      this.declaredInterfaceNames(collections, singles, components)
+    );
+    this.inTypesFile = true;
 
     // Generate interfaces for each component (before collections/singles since they may reference components)
     for (const component of components) {
@@ -434,13 +462,13 @@ export class TypeGenerator {
     // redeclared, so the file names the very type `nextly.media` returns.
     const ownImports = new Map<string, string>();
     if (this.referencesBuiltInMedia) {
-      ownImports.set("MediaFile", "nextly");
-      reserved.add("MediaFile");
+      ownImports.set(this.builtInMediaName, "nextly");
+      reserved.add(this.builtInMediaName);
     }
 
     const imports: string[] = [];
     if (ownImports.size > 0) {
-      imports.push(`import type { MediaFile } from "nextly";`);
+      imports.push(this.builtInMediaImport());
     }
     // A `declare module` augments only a module the app's program already
     // holds; one that nothing imports draws TS2664 ("Invalid module name in
@@ -472,6 +500,9 @@ export class TypeGenerator {
       )
     );
     if (imports.length > 0) lines.splice(importSlot, 0, ...imports, "");
+    // An interface generated on its own afterwards picks its own name.
+    this.builtInMediaName = "MediaFile";
+    this.inTypesFile = false;
 
     return {
       code: lines.join("\n"),
@@ -492,8 +523,8 @@ export class TypeGenerator {
     allCollections: DynamicCollectionRecord[] = [],
     allComponents: DynamicFieldGroupRecord[] = []
   ): GeneratedTypeInterface {
-    const outerExpressions = this.beginOwnExpressions();
     const interfaceName = this.toPascalCase(collection.slug);
+    const outerExpressions = this.beginOwnExpressions(interfaceName);
     const lines: string[] = [];
 
     // Interface JSDoc comment
@@ -580,8 +611,8 @@ export class TypeGenerator {
     allCollections: DynamicCollectionRecord[] = [],
     allComponents: DynamicFieldGroupRecord[] = []
   ): GeneratedSingleTypeInterface {
-    const outerExpressions = this.beginOwnExpressions();
     const interfaceName = this.toPascalCase(single.slug);
+    const outerExpressions = this.beginOwnExpressions(interfaceName);
     const lines: string[] = [];
 
     // Interface JSDoc comment
@@ -666,8 +697,8 @@ export class TypeGenerator {
     allComponents: DynamicFieldGroupRecord[] = [],
     allCollections: DynamicCollectionRecord[] = []
   ): GeneratedComponentTypeInterface {
-    const outerExpressions = this.beginOwnExpressions();
     const interfaceName = this.toComponentInterfaceName(component.slug);
+    const outerExpressions = this.beginOwnExpressions(interfaceName);
     const lines: string[] = [];
 
     // Interface JSDoc comment
@@ -750,7 +781,7 @@ export class TypeGenerator {
   generateUserInterface(
     userFields: UserFieldDefinitionRecord[] = []
   ): GeneratedUserInterface {
-    const outerExpressions = this.beginOwnExpressions();
+    const outerExpressions = this.beginOwnExpressions("User");
     const lines: string[] = [];
 
     if (this.includeComments) {
@@ -1540,7 +1571,8 @@ ${properties}
     if (slug === "users") return "User";
     if (slug === "media") {
       this.referencesBuiltInMedia = true;
-      return "MediaFile";
+      this.interfaceReferencesBuiltInMedia = true;
+      return this.builtInMediaName;
     }
     return this.toPascalCase(slug);
   }
@@ -1582,15 +1614,25 @@ ${properties}
    * an interface twice, and two interfaces can share a field object, either of
    * which makes "what was added since" report nothing for the later call.
    */
-  private beginOwnExpressions(): {
+  private beginOwnExpressions(declares: string): {
     expressions: Map<object, string>;
     emissions: Array<{ expression: string; imported: ReadonlySet<string> }>;
+    referencesBuiltInMedia: boolean;
+    builtInMediaName: string;
   } {
     const outer = {
       expressions: this.pluginExpressions,
       emissions: this.pluginEmissions,
+      referencesBuiltInMedia: this.interfaceReferencesBuiltInMedia,
+      builtInMediaName: this.builtInMediaName,
     };
     this.pluginExpressions = new Map();
+    this.interfaceReferencesBuiltInMedia = false;
+    // Generated on its own, an interface has only its own name to collide
+    // with; inside a types file the file's choice already accounts for it.
+    if (!this.inTypesFile) {
+      this.builtInMediaName = this.freeName("MediaFile", new Set([declares]));
+    }
     // Scoped with them: this interface reserves against what IT wrote, so
     // emissions from an earlier call would make it credit the generator with
     // text that is not in this body and under-reserve.
@@ -1612,6 +1654,8 @@ ${properties}
     outer: {
       expressions: Map<object, string>;
       emissions: Array<{ expression: string; imported: ReadonlySet<string> }>;
+      referencesBuiltInMedia: boolean;
+      builtInMediaName: string;
     },
     declares: string,
     body: string
@@ -1635,7 +1679,34 @@ ${properties}
     outer.emissions.push(...this.pluginEmissions);
     this.pluginExpressions = outer.expressions;
     this.pluginEmissions = outer.emissions;
+    // The built-in media row is named by the generator itself, not a plugin,
+    // so its import is added here rather than found among the expressions.
+    if (this.interfaceReferencesBuiltInMedia) {
+      imports.unshift(this.builtInMediaImport());
+    }
+    this.interfaceReferencesBuiltInMedia = outer.referencesBuiltInMedia;
+    this.builtInMediaName = outer.builtInMediaName;
     return imports;
+  }
+
+  /** The import that brings Nextly's media row in under this output's name. */
+  private builtInMediaImport(): string {
+    return this.builtInMediaName === "MediaFile"
+      ? `import type { MediaFile } from "nextly";`
+      : `import type { MediaFile as ${this.builtInMediaName} } from "nextly";`;
+  }
+
+  /**
+   * `wanted` when nothing here declares it, otherwise the first free
+   * `Nextly<wanted>`, `Nextly<wanted>2`, ...
+   */
+  private freeName(wanted: string, declared: ReadonlySet<string>): string {
+    if (!declared.has(wanted)) return wanted;
+    let candidate = `Nextly${wanted}`;
+    for (let n = 2; declared.has(candidate); n++) {
+      candidate = `Nextly${wanted}${n}`;
+    }
+    return candidate;
   }
 
   /**
