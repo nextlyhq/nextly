@@ -14,6 +14,7 @@ import { createHash } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { NULL_AUDIT_LOG_WRITER } from "../../../domains/audit/audit-log-writer";
+import { limitStoreUnavailable } from "../../../domains/limits/limit-store";
 import { RateLimiter } from "../../middleware/rate-limiter";
 import { SlidingWindowMemoryStore } from "../../middleware/sliding-window-store";
 import {
@@ -743,6 +744,34 @@ describe("strategies that name the account a sign-in targets", () => {
         await admitted(signIn(h, { username: "u3", email: "same@example.com" }))
       ).toBe(false);
       expect(asked).toEqual([]);
+    }
+  );
+});
+
+describe("while the store core's limits count in is away", () => {
+  /** A store that answers every call as unavailable. */
+  const away: RateLimitStore = {
+    increment: () => Promise.reject(limitStoreUnavailable("unreachable")),
+    reset: () => Promise.reject(limitStoreUnavailable("unreachable")),
+    consume: () => Promise.reject(limitStoreUnavailable("unreachable")),
+  };
+
+  it.each([
+    ["a resolved address", { "x-forwarded-for": "203.0.113.7" }],
+    ["an unresolved address", {}],
+  ])(
+    "refuses sign-in from %s with an answer to try again shortly",
+    async (_case, headers: Record<string, string>) => {
+      const h = harness({ trustProxy: true });
+      h.deps.authRateLimit = {
+        requestsPerHour: 3,
+        windowMs: W,
+        counts: away,
+      };
+      const res = await post(h, "login", { email: "a@example.com" }, headers);
+      expect(res.status).toBe(503);
+      const body = (await res.json()) as { error: { message: string } };
+      expect(body.error.message).toBe("Please try again shortly.");
     }
   );
 });

@@ -6,7 +6,12 @@
  */
 import { describe, expect, it, vi } from "vitest";
 
-import { InMemoryRateLimitStore, type RateLimitConfig } from "../rate-limit";
+import { limitStoreUnavailable } from "../../domains/limits/limit-store";
+import {
+  InMemoryRateLimitStore,
+  type RateLimitConfig,
+  type RateLimitStore,
+} from "../rate-limit";
 import type { RestCallerReaders } from "../rest-callers";
 import { openRestLimitGate, type RestLimitTarget } from "../rest-limit-gate";
 import {
@@ -403,5 +408,20 @@ describe("REST limit: a burst under a bound", () => {
     resolution.finish();
     const answers = await Promise.all(burst);
     expect(answers.filter(answer => "refused" in answer)).toHaveLength(6);
+  });
+});
+
+describe("REST limit: while the store core's limits count in is away", () => {
+  it("lets requests through rather than refusing the API", async () => {
+    // A refusal would take the whole site down with its limit store, so the
+    // general API limit lets requests through until the store answers.
+    const away: RateLimitStore = {
+      increment: () => Promise.reject(limitStoreUnavailable("unreachable")),
+      reset: () => Promise.reject(limitStoreUnavailable("unreachable")),
+      consume: () => Promise.reject(limitStoreUnavailable("unreachable")),
+    };
+    const check = limiter({ store: away });
+    expect(await admitted(check, { address: "203.0.113.7" }, 5)).toBe(5);
+    expect(await admitted(check, {}, 5)).toBe(5);
   });
 });

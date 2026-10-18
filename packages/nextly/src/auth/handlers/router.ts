@@ -1,3 +1,4 @@
+import { readOrGenerateRequestId } from "../../api/request-id";
 import type { AuditLogWriter } from "../../domains/audit/audit-log-writer";
 import {
   isLimitStoreDown,
@@ -26,6 +27,7 @@ import { handleChallengeResolve } from "./challenge-resolve";
 import { handleChangePassword } from "./change-password";
 import { handleCsrf } from "./csrf";
 import { handleForgotPassword } from "./forgot-password";
+import { buildAuthErrorResponse } from "./handler-utils";
 import type { RefreshTokenRecord } from "./issue-session";
 import { handleLogin } from "./login";
 import { handleLogout } from "./logout";
@@ -506,7 +508,12 @@ async function checkAuthIpRateLimit(
   } catch (error) {
     // Refused while the store is away: admitting would let sign-in attempts
     // run uncounted for as long as it is (see `core-limit-outage`).
-    if (isLimitStoreDown(error)) throw signInLimitUnavailable(error);
+    if (isLimitStoreDown(error)) {
+      return buildAuthErrorResponse(
+        signInLimitUnavailable(error),
+        readOrGenerateRequestId(request)
+      );
+    }
     throw error;
   }
   if (result.allowed) return null;
