@@ -81,12 +81,19 @@ export function collectionsSharingMediaPlace(
     .map(other => other.slug);
 }
 
-/** Whether a collection with prefix `other` shares media's place. */
+/**
+ * Whether a collection with prefix `other` shares media's place: its folder
+ * is media's, or holds it, or sits in it; or its prefix begins media's, since
+ * the storage joins a prefix and an upload's folder as written, so `med` with
+ * the folder `ia` stores under `media`.
+ */
 function sharesMediaPlace(
   prefix: string | undefined,
   other: string | undefined
 ): boolean {
-  return overlaps(folderOf(prefix), folderOf(other));
+  const media = folderOf(prefix);
+  const theirs = folderOf(other);
+  return overlaps(media, theirs) || media.startsWith(theirs);
 }
 
 /** Whether two folders are one, or one holds the other; the root holds all. */
@@ -184,11 +191,28 @@ export async function findOrphanThumbnails(
   return { listable: true, orphans, unconfirmed, tooRecent };
 }
 
+/** What the media table refers to, as a delete of each item would read it. */
+export interface MediaReferences {
+  /** Every stored path an item refers to. */
+  paths: ReadonlySet<string>;
+  /**
+   * Thumbnails, by URL, whose stored location the record does not show
+   * (`storedFilesOf`): one of the listed files may be such a thumbnail, still
+   * in use, under a path nothing here can match.
+   */
+  unlocated: readonly string[];
+}
+
 export interface OrphanRemoval {
   removed: string[];
   /** Referred to again by the time it would have been removed. */
   kept: string[];
   failed: Array<{ path: string; reason: string }>;
+  /**
+   * Not tried: a recheck found a thumbnail in use whose stored location the
+   * record does not show, which any of these may be.
+   */
+  stopped: string[];
 }
 
 /** How many listed files are removed per fresh read of what is referenced. */
@@ -199,18 +223,29 @@ const RECHECK_BATCH = 50;
  * removal, asked of `referencedNow` then, not at the listing: an item can
  * come to refer to a listed file in between. Asked once per batch of
  * {@link RECHECK_BATCH} files rather than once per file, since each ask reads
- * the whole media table.
+ * the whole media table. Stops, and removes no more, once an ask finds a
+ * thumbnail in use it cannot locate.
  */
 export async function removeOrphanThumbnails(
   adapter: IStorageAdapter,
   orphans: readonly string[],
-  referencedNow: () => Promise<ReadonlySet<string>>
+  referencedNow: () => Promise<MediaReferences>
 ): Promise<OrphanRemoval> {
-  const result: OrphanRemoval = { removed: [], kept: [], failed: [] };
+  const result: OrphanRemoval = {
+    removed: [],
+    kept: [],
+    failed: [],
+    stopped: [],
+  };
   let referenced = new Set<string>();
   for (const [index, path] of orphans.entries()) {
     if (index % RECHECK_BATCH === 0) {
-      referenced = canonicalSet(await referencedNow());
+      const now = await referencedNow();
+      if (now.unlocated.length > 0) {
+        result.stopped = orphans.slice(index);
+        break;
+      }
+      referenced = canonicalSet(now.paths);
     }
     if (referenced.has(canonicalStoredPath(path))) {
       result.kept.push(path);

@@ -1,12 +1,15 @@
+import { existsSync } from "node:fs";
 import path from "node:path";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { Command } from "commander";
+import { config as loadEnvFile } from "dotenv";
 
 import {
   collectionsSharingMediaPlace,
   findOrphanThumbnails,
   mediaPlaceIsExclusive,
+  type MediaReferences,
   ORPHAN_MIN_AGE_MS,
   removeOrphanThumbnails,
   type OrphanRemoval,
@@ -15,7 +18,10 @@ import {
   storedFilesOf,
   type MediaFilesRecord,
 } from "../../domains/media/stored-files";
-import { initializeMediaStorage } from "../../storage/storage";
+import {
+  initializeMediaStorage,
+  type MediaStorage,
+} from "../../storage/storage";
 import type { IStorageAdapter } from "../../storage/types";
 import { createContext } from "../context";
 import {
@@ -24,19 +30,10 @@ import {
   type CLIDatabaseAdapter,
 } from "../utils/adapter";
 import { loadConfig } from "../utils/config-loader";
+import type { Logger } from "../utils/logger";
 import { installRegistryResolver } from "../utils/registry-resolver";
 
-/** What the media table refers to, as a delete of each item would read it. */
-export interface MediaReferences {
-  /** Every stored path an item refers to. */
-  paths: ReadonlySet<string>;
-  /**
-   * Thumbnails, by URL, whose stored location the record does not show
-   * (`storedFilesOf`): one of the listed files may be such a thumbnail, still
-   * in use, under a path nothing here can match.
-   */
-  unlocated: readonly string[];
-}
+export type { MediaReferences };
 
 /**
  * Every stored path a media item refers to, read a page of items at a time:
@@ -139,10 +136,10 @@ export async function mediaOrphans(options: {
   const result = await removeOrphanThumbnails(
     storage,
     search.orphans,
-    async () => (await options.referenced()).paths
+    options.referenced
   );
   sayRemoval(result, say);
-  return result.failed.length > 0 ? 1 : 0;
+  return result.failed.length > 0 || result.stopped.length > 0 ? 1 : 0;
 }
 
 /**
@@ -202,9 +199,74 @@ function sayRemoval(result: OrphanRemoval, say: (line: string) => void): void {
   for (const { path, reason } of result.failed) {
     say(`Could not remove ${path}: ${reason}`);
   }
+  if (result.stopped.length > 0) {
+    say(
+      `Stopped before ${result.stopped.length} file(s): a media item now has a thumbnail whose stored location cannot be worked out from the record, so any of them may be one in use. They are left as they are; run again to list them.`
+    );
+  }
   say(
     `${result.removed.length} removed, ${result.kept.length} kept, ${result.failed.length} not removed.`
   );
+}
+
+/**
+ * Makes the project --cwd names the process's directory, and reports whether
+ * the command may go on. From inside the project: a storage factory in the
+ * config, such as a local-disk plugin given a relative path, resolves that
+ * path when the config loads, against the process's directory.
+ *
+ * The CLI read `.env` from where it was run, before --cwd, and a database
+ * named there may be another project's: a file in use in this project's
+ * storage would read as left behind against it. So with another `.env` there
+ * --apply is refused, and a listing warns; the project's own `.env` sets what
+ * nothing has set yet.
+ */
+function enterProject(cwd: string, apply: boolean, logger: Logger): boolean {
+  const ranIn = process.cwd();
+  if (cwd !== ranIn) {
+    const loaded = path.join(ranIn, ".env");
+    if (existsSync(loaded)) {
+      const warning = `The environment was read from ${loaded}, not from ${cwd}, so the database it names may be another project's.`;
+      if (apply) {
+        logger.error(
+          `${warning} Nothing was changed. Run the command from ${cwd} to remove files.`
+        );
+        return false;
+      }
+      logger.warn(warning);
+    }
+    const projectEnv = path.join(cwd, ".env");
+    if (existsSync(projectEnv)) loadEnvFile({ path: projectEnv });
+  }
+  process.chdir(cwd);
+  return true;
+}
+
+/**
+ * Every other collection that uploads to storage, by its prefix, whichever
+ * storage it uses (mediaPlaceIsExclusive).
+ */
+function otherUploaders(
+  mediaStorage: MediaStorage
+): Array<{ slug: string; prefix?: string }> {
+  const others: Array<{ slug: string; prefix?: string }> = mediaStorage
+    .getConfiguredCollections()
+    .filter(slug => slug !== "media")
+    .map(slug => ({
+      slug,
+      prefix: mediaStorage.getCollectionConfig(slug)?.prefix,
+    }));
+  // A collection with no storage plugin uploads to local disk through the
+  // fallback, at the root of its folder. Where media is on a local disk
+  // plugin, nothing shows that folder is not the same one.
+  const media = mediaStorage.getAdapterForCollection("media");
+  if (
+    media !== mediaStorage.getDefaultAdapter() &&
+    media.getType() === "local"
+  ) {
+    others.push({ slug: "collections with no storage plugin" });
+  }
+  return others;
 }
 
 /**
@@ -226,13 +288,13 @@ export function createMediaCommand(): Command {
       const context = createContext(cmd.optsWithGlobals());
       let adapter: CLIDatabaseAdapter | null = null;
       try {
-        // From inside the project: a storage factory in the config, such as
-        // a local-disk plugin given a relative path, resolves that path when
-        // the config loads, against the process's directory.
         // Resolved once, from where the command was run: a relative --cwd
         // read again after the change would name a folder inside itself.
         const cwd = path.resolve(context.cwd);
-        process.chdir(cwd);
+        if (!enterProject(cwd, cmdOptions.apply === true, context.logger)) {
+          process.exit(1);
+          return;
+        }
         // The loader discovers the config from the project; a path is
         // passed only when one was given.
         const { config } = await loadConfig({
@@ -255,24 +317,7 @@ export function createMediaCommand(): Command {
         });
         const storage = mediaStorage.getAdapterForCollection("media");
         const prefix = mediaStorage.getCollectionConfig("media")?.prefix;
-        // The prefixes of every other collection with storage configured,
-        // whichever storage it uses (mediaPlaceIsExclusive).
-        const others: Array<{ slug: string; prefix?: string }> = mediaStorage
-          .getConfiguredCollections()
-          .filter(slug => slug !== "media")
-          .map(slug => ({
-            slug,
-            prefix: mediaStorage.getCollectionConfig(slug)?.prefix,
-          }));
-        // A collection with no storage plugin uploads to local disk through
-        // the fallback, at the root of its folder. Where media is on a local
-        // disk plugin, nothing shows that folder is not the same one.
-        if (
-          storage !== mediaStorage.getDefaultAdapter() &&
-          storage.getType() === "local"
-        ) {
-          others.push({ slug: "collections with no storage plugin" });
-        }
+        const others = otherUploaders(mediaStorage);
         const code = await mediaOrphans({
           storage,
           prefix,

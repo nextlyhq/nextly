@@ -423,6 +423,27 @@ describe("nextly media orphans", () => {
     expect(said).not.toContain("Removed");
   });
 
+  // A thumbnail in use that cannot be located can appear between the
+  // listing and a removal, as an upload commits.
+  it("stops removing once a recheck finds a thumbnail in use it cannot locate", async () => {
+    const layout = inBucket("s3");
+    let reads = 0;
+    const referenced = async () =>
+      reads++ === 0
+        ? refs(layout.referenced)
+        : {
+            paths: new Set([layout.referenced]),
+            unlocated: ["https://cdn.example.com/m/7/thumb"],
+          };
+
+    const { code, said } = await run(layout, true, referenced);
+
+    expect(code).toBe(1);
+    expect(await layout.stored()).toContain(layout.orphan);
+    expect(said).not.toContain("Removed");
+    expect(said).toMatch(/stored location cannot be worked out/);
+  });
+
   // The recheck before removals reads the media table; doing it once per
   // listed file would read the whole table once per leftover.
   it("rechecks references in a bounded number of passes", async () => {
@@ -516,6 +537,10 @@ describe("mediaPlaceIsExclusive", () => {
     ["uploads", ["uploads/private"], false],
     ["uploads/media", ["uploads"], false],
     ["media", ["media-archive"], true],
+    // A prefix and an upload's folder are joined as written, so a prefix
+    // that begins media's can name it: `med` with the folder `ia`.
+    ["media", ["med"], false],
+    ["uploads/media", ["uploads/me"], false],
   ] as const)(
     "prefix %j beside %j is exclusive: %s",
     (prefix, others, expected) => {

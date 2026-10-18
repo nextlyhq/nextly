@@ -4,7 +4,7 @@
  * media-orphans.test.ts; here the database and the config loader are
  * stand-ins, so the order and the arguments can be observed.
  */
-import { mkdtemp, realpath, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -245,6 +245,65 @@ describe("nextly media orphans, as the CLI runs it", () => {
 
     expect(seen.loadedIn).toEqual([dir]);
     expect(seen.loadConfig).toEqual([{ configPath: undefined, cwd: dir }]);
+  });
+
+  // The CLI reads `.env` from the directory it was run in, before it reads
+  // --cwd, so a database named there may be another project's.
+  it("removes nothing when run from another project with its own .env", async () => {
+    const media = bucketWithOrphan("media");
+    seen.storage = [
+      {
+        name: "s3-media",
+        type: "s3",
+        collections: { media: { prefix: "media" } },
+        adapter: media.adapter,
+      },
+    ];
+    const elsewhere = path.join(dir, "elsewhere");
+    await mkdir(elsewhere);
+    await writeFile(
+      path.join(elsewhere, ".env"),
+      "DATABASE_URL=file:other.db\n"
+    );
+    process.chdir(elsewhere);
+
+    await createProgram().parseAsync([
+      "node",
+      "nextly",
+      "--cwd",
+      dir,
+      "media",
+      "orphans",
+      "--apply",
+    ]);
+
+    expect(exits).toEqual([1]);
+    expect(media.deleted).toEqual([]);
+    expect(seen.calls).not.toContain("select media");
+  });
+
+  it("reads the project's own .env for what is not already set", async () => {
+    await writeFile(
+      path.join(dir, ".env"),
+      "NEXTLY_ORPHANS_TEST_ONLY=from-project\n"
+    );
+    process.chdir(path.dirname(dir));
+    delete process.env.NEXTLY_ORPHANS_TEST_ONLY;
+
+    try {
+      await createProgram().parseAsync([
+        "node",
+        "nextly",
+        "--cwd",
+        dir,
+        "media",
+        "orphans",
+      ]);
+
+      expect(process.env.NEXTLY_ORPHANS_TEST_ONLY).toBe("from-project");
+    } finally {
+      delete process.env.NEXTLY_ORPHANS_TEST_ONLY;
+    }
   });
 
   it("registers the tables before it reads media, and finds the project from --cwd", async () => {
