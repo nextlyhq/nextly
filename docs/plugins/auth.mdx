@@ -45,6 +45,8 @@ plugin is installed). Strategies don't — that's deliberate (secure-by-default)
 
 ## Naming the account to the sign-in rate limit
 
+> **Needs the release after 0.0.2-alpha.67.**
+
 When Nextly cannot read a client's address, which is every request while `security.trustProxy` is unset, the [auth rate limit](/docs/guides/authentication#auth-rate-limit) counts a request against the account it names. For a sign-in that is the `email` its body carries, which is what the built-in `password` strategy reads. A strategy that signs people in from something else should tell the limiter what it reads, with `limitKey` (`@experimental`):
 
 ```ts
