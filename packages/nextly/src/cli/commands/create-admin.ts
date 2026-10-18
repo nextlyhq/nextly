@@ -36,8 +36,10 @@
 import * as p from "@clack/prompts";
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { Command } from "commander";
+import { eq } from "drizzle-orm";
 import { z } from "zod";
 
+import { normalizeAccountEmail } from "../../auth/credentials/account-email";
 import { validatePasswordStrength } from "../../auth/password";
 import { getDialectTables } from "../../database/index";
 import { SchemaRegistry } from "../../database/schema-registry";
@@ -74,6 +76,8 @@ export interface FirstAdminSetup {
   claim(): Promise<{ release(): void | Promise<void> } | null>;
   /** Whether anyone holds the administrator role already. */
   administratorExists(): Promise<boolean>;
+  /** Whether an account already has this email, spelled as sign-in spells it. */
+  accountExists(email: string): Promise<boolean>;
   createAdministrator(details: FirstAdminDetails): Promise<void>;
   spendSetupToken(): Promise<void>;
 }
@@ -82,6 +86,7 @@ export interface FirstAdminSetup {
 export type FirstAdminOutcome =
   | "created"
   | "administrator-exists"
+  | "email-in-use"
   | "setup-in-progress";
 
 /**
@@ -96,12 +101,26 @@ export async function createFirstAdministrator(
   if (claim === null) return "setup-in-progress";
   try {
     if (await setup.administratorExists()) return "administrator-exists";
+    // An existing account would be given the role and keep its own password,
+    // so the password just typed would be ignored without a word.
+    if (await setup.accountExists(details.email)) return "email-in-use";
     await setup.createAdministrator(details);
     await setup.spendSetupToken();
     return "created";
   } finally {
     await claim.release();
   }
+}
+
+/** The narrow view of the query builder the email check reads through. */
+interface AccountLookup {
+  select(projection: Record<string, unknown>): {
+    from(table: unknown): {
+      where(condition: unknown): {
+        limit(count: number): Promise<Array<{ id: unknown }>>;
+      };
+    };
+  };
 }
 
 /** The first-administrator steps over the CLI's own connection. */
@@ -113,6 +132,15 @@ export function firstAdminSetupFor(adapter: DrizzleAdapter): FirstAdminSetup {
     claim: () => Promise.resolve({ release: () => undefined }),
     // The question web setup asks, through the same query.
     administratorExists: () => superAdminRoleHeld(adapter.getDrizzle(), tables),
+    async accountExists(email) {
+      const db = adapter.getDrizzle<AccountLookup>();
+      const rows = await db
+        .select({ id: tables.users.id })
+        .from(tables.users)
+        .where(eq(tables.users.email, normalizeAccountEmail(email)))
+        .limit(1);
+      return rows.length > 0;
+    },
     async createAdministrator(details) {
       // The path web setup creates its administrator through: the permissions
       // the role is granted, then the account and its role.
@@ -190,6 +218,11 @@ const OUTCOMES: Record<FirstAdminOutcome, { message: string; code: number }> = {
   "administrator-exists": {
     message:
       "Setup is already complete: this install has an administrator. Nothing was created.",
+    code: 1,
+  },
+  "email-in-use": {
+    message:
+      "An account already uses that email. Nothing was created; choose another email.",
     code: 1,
   },
   "setup-in-progress": {

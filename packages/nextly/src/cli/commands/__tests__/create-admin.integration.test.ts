@@ -145,6 +145,24 @@ describe.each(getConfiguredTestDialects())(
       expect(await emails(t)).toEqual(before);
     });
 
+    it("refuses an email that already belongs to an account, granting it nothing", async () => {
+      const t = await emptyInstall();
+      await db(t).insert(getDialectTables().users).values({
+        id: "self-registered",
+        email: "visitor@example.com",
+        name: "Visitor",
+        emailVerified: new Date(),
+        isActive: true,
+      });
+      const outcome = await createFirstAdministrator(setupOf(t), {
+        email: "Visitor@Example.com",
+        name: "Visitor",
+        password: PASSWORD,
+      });
+      expect(outcome).toBe("email-in-use");
+      expect(await administrators(t)).toBe(0);
+    });
+
     it("still creates the first administrator over a role-less self-registered account", async () => {
       const t = await emptyInstall();
       // As a self-registration leaves it: an account, and no role.

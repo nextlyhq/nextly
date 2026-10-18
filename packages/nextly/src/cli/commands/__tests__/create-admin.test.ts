@@ -39,6 +39,10 @@ function recordingSetup(
       steps.push("check");
       return false;
     }),
+    accountExists: vi.fn(async () => {
+      steps.push("email");
+      return false;
+    }),
     createAdministrator: vi.fn(async () => void steps.push("create")),
     spendSetupToken: vi.fn(async () => void steps.push("spend")),
     ...over,
@@ -84,6 +88,7 @@ describe("createFirstAdministrator", () => {
     expect(setup.steps).toEqual([
       "claim",
       "check",
+      "email",
       "create",
       "spend",
       "release",
@@ -101,6 +106,15 @@ describe("createFirstAdministrator", () => {
     expect(setup.createAdministrator).not.toHaveBeenCalled();
     expect(setup.spendSetupToken).not.toHaveBeenCalled();
     expect(setup.steps).toContain("release");
+  });
+
+  it("refuses, creating nothing, an email that already belongs to an account", async () => {
+    const setup = recordingSetup({ accountExists: vi.fn(async () => true) });
+    expect(await createFirstAdministrator(setup, DETAILS)).toBe("email-in-use");
+    expect(setup.accountExists).toHaveBeenCalledWith(DETAILS.email);
+    expect(setup.createAdministrator).not.toHaveBeenCalled();
+    expect(setup.spendSetupToken).not.toHaveBeenCalled();
+    expect(setup.steps.at(-1)).toBe("release");
   });
 
   it("refuses, asking nothing more, while another setup holds the claim", async () => {
