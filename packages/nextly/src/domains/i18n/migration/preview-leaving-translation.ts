@@ -47,7 +47,7 @@ export interface LeavingTranslationPreview {
  * read is reported as none rather than failing the preview: the counts inform, while the archive
  * write at Apply is what keeps the values, and it refuses on its own if it cannot.
  */
-export async function previewFieldsLeavingTranslation(args: {
+export interface PreviewLeavingArgs {
   db: unknown;
   dialect: SupportedDialect;
   /** The collection, Single or field group, as `nextly i18n:restore --collection` takes it. */
@@ -60,7 +60,11 @@ export async function previewFieldsLeavingTranslation(args: {
   newFields: readonly LeavingFieldLike[];
   wasLocalized: boolean;
   isLocalized: boolean;
-}): Promise<LeavingTranslationPreview[]> {
+}
+
+export async function previewFieldsLeavingTranslation(
+  args: PreviewLeavingArgs
+): Promise<LeavingTranslationPreview[]> {
   if (!args.wasLocalized || !args.isLocalized) return [];
   const leaving = fieldsLeavingTranslation(args.oldFields, args.newFields);
   if (leaving.length === 0) return [];
@@ -126,4 +130,31 @@ export function withLeavingTranslation<T extends { hasChanges: boolean }>(
     hasChanges: preview.hasChanges || leaving.length > 0,
     leavingTranslation: [...leaving],
   };
+}
+
+/**
+ * A schema preview's response body: the pipeline's preview with the fields leaving translation
+ * added, and whatever else the preview returns beside it (its rename candidates and the version
+ * the editor echoes back on Apply). Assembled once for the collection, Single and field-group
+ * previews.
+ *
+ * Whether the entity is translated before the change is read from its registry record; whether it
+ * will be after is the request's flag, falling back to the record when the request leaves it out.
+ */
+export async function previewBodyWithLeavingTranslation(
+  preview: { hasChanges: boolean },
+  args: Omit<PreviewLeavingArgs, "wasLocalized" | "isLocalized"> & {
+    entity: { localized?: unknown };
+    requestedLocalized: boolean | undefined;
+  },
+  rest: Record<string, unknown>
+): Promise<Record<string, unknown>> {
+  const { entity, requestedLocalized, ...common } = args;
+  const wasLocalized = entity.localized === true;
+  const leaving = await previewFieldsLeavingTranslation({
+    ...common,
+    wasLocalized,
+    isLocalized: requestedLocalized ?? wasLocalized,
+  });
+  return { ...withLeavingTranslation(preview, leaving), ...rest };
 }

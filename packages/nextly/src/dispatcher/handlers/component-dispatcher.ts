@@ -32,15 +32,9 @@ import {
 import { resolveFieldGroupRegistryName } from "../../domains/field-groups/storage/resolve-storage-names";
 import { assertLocalizationConfigured } from "../../domains/i18n/config/require-app-config";
 import { archiveFieldsLeavingTranslation } from "../../domains/i18n/migration/archive-preflight";
-import {
-  previewFieldsLeavingTranslation,
-  withLeavingTranslation,
-} from "../../domains/i18n/migration/preview-leaving-translation";
-import { translatePipelinePreviewToLegacy } from "../../domains/schema/legacy-preview/translate";
 import { RealClassifier } from "../../domains/schema/pipeline/classifier/classifier";
 import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/database-url";
 import { RealPreCleanupExecutor } from "../../domains/schema/pipeline/pre-cleanup/executor";
-import { previewDesiredSchema } from "../../domains/schema/pipeline/preview";
 import {
   BrowserPromptDispatcher,
   type BrowserRenameResolution,
@@ -50,7 +44,6 @@ import {
   noopMigrationJournal,
   noopPreRenameExecutor,
 } from "../../domains/schema/pipeline/pushschema-pipeline-stubs";
-import { toRenameCandidateWire } from "../../domains/schema/pipeline/rename-candidate-wire";
 import { RegexRenameDetector } from "../../domains/schema/pipeline/rename-detector";
 import type { Resolution } from "../../domains/schema/pipeline/resolution/types";
 import type { DesiredFieldGroup } from "../../domains/schema/pipeline/types";
@@ -68,6 +61,7 @@ import {
 } from "../../schemas/dynamic-field-groups";
 import type { FieldGroupRegistryService } from "../../services/field-groups/field-group-registry-service";
 import type { Logger } from "../../shared/types";
+import { builderSchemaPreviewBody } from "../helpers/builder-schema-preview";
 import { buildFullDesiredSchema } from "../helpers/desired-schema";
 import {
   getAdapterFromDI,
@@ -390,50 +384,21 @@ export const COMPONENTS_METHODS: Record<
         builderOwned: true,
       };
 
-      const pipelinePreview = await previewDesiredSchema({
-        desired,
-        db,
-        dialect,
-      });
-
-      const legacyShape = await translatePipelinePreviewToLegacy(
-        pipelinePreview,
-        {
-          tableName,
-          currentFields,
-          newFields: fields as FieldDefinition[],
+      return respondData(
+        await builderSchemaPreviewBody({
+          desired,
           db,
           dialect,
-        }
+          slug: slug,
+          tableName,
+          builtBy: "fieldGroup",
+          entity: component,
+          currentFields,
+          newFields: fields as FieldDefinition[],
+          requestedLocalized: readRequestLocalized(body),
+          schemaVersion: component.schemaVersion,
+        })
       );
-
-      const renamed = pipelinePreview.candidates.map(toRenameCandidateWire);
-
-      // Fields leaving translation: what moves to the archive, by language, and any refusal, so
-      // the builder shows them before Apply.
-      const wasLocalized =
-        (component as { localized?: boolean }).localized === true;
-      const leaving = await previewFieldsLeavingTranslation({
-        db,
-        dialect,
-        slug: slug,
-        tableName,
-        builtBy: "fieldGroup",
-        defaultLocale: getConfigFromDI()?.localization?.defaultLocale ?? "en",
-        oldFields: currentFields,
-        newFields: fields as FieldDefinition[],
-        wasLocalized,
-        isLocalized: readRequestLocalized(body) ?? wasLocalized,
-      });
-      const legacyAsRecord = withLeavingTranslation(
-        legacyShape,
-        leaving
-      ) as unknown as Record<string, unknown>;
-      return respondData({
-        ...legacyAsRecord,
-        renamed,
-        schemaVersion: component.schemaVersion,
-      });
     },
   },
 

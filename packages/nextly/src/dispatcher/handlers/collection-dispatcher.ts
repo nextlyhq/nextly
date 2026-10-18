@@ -33,22 +33,16 @@ import {
 } from "../../api/response-shapes";
 import { assertLocalizationConfigured } from "../../domains/i18n/config/require-app-config";
 import { archiveFieldsLeavingTranslation } from "../../domains/i18n/migration/archive-preflight";
-import {
-  previewFieldsLeavingTranslation,
-  withLeavingTranslation,
-} from "../../domains/i18n/migration/preview-leaving-translation";
 import { buildCompanionTransitionStatements } from "../../domains/i18n/migration/reconcile-companion";
 import {
   companionHasStatusColumn,
   localizedColumnsOnMain,
 } from "../../domains/i18n/runtime/companion-io";
 import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion-registration";
-import { translatePipelinePreviewToLegacy } from "../../domains/schema/legacy-preview/translate";
 import { createApplyDesiredSchema } from "../../domains/schema/pipeline/apply";
 import { RealClassifier } from "../../domains/schema/pipeline/classifier/classifier";
 import { extractDatabaseNameFromUrl } from "../../domains/schema/pipeline/database-url";
 import { RealPreCleanupExecutor } from "../../domains/schema/pipeline/pre-cleanup/executor";
-import { previewDesiredSchema } from "../../domains/schema/pipeline/preview";
 import {
   BrowserPromptDispatcher,
   type BrowserRenameResolution,
@@ -58,7 +52,6 @@ import {
   noopMigrationJournal,
   noopPreRenameExecutor,
 } from "../../domains/schema/pipeline/pushschema-pipeline-stubs";
-import { toRenameCandidateWire } from "../../domains/schema/pipeline/rename-candidate-wire";
 import { RegexRenameDetector } from "../../domains/schema/pipeline/rename-detector";
 import type { Resolution } from "../../domains/schema/pipeline/resolution/types";
 import { isIdempotencyError } from "../../domains/schema/pipeline/sql-statement-utils";
@@ -89,6 +82,7 @@ import {
 } from "../helpers/authenticated-actor";
 import { readAuthenticatedRoles } from "../helpers/authenticated-roles";
 import { readAuthenticatedUser } from "../helpers/authenticated-user";
+import { builderSchemaPreviewBody } from "../helpers/builder-schema-preview";
 import { buildFullDesiredSchema } from "../helpers/desired-schema";
 import {
   getAdapterFromDI,
@@ -612,63 +606,24 @@ const COLLECTIONS_METHODS: Record<
         builderOwned: true,
       };
 
-      const pipelinePreview = await previewDesiredSchema({
-        desired,
-        db,
-        dialect,
-      });
-
-      const legacyShape = await translatePipelinePreviewToLegacy(
-        pipelinePreview,
-        {
-          tableName,
-          currentFields,
-          newFields: fields as FieldDefinition[],
+      return respondData(
+        await builderSchemaPreviewBody({
+          desired,
           db,
           dialect,
-        }
+          slug: p.collectionName,
+          tableName,
+          builtBy: "collection",
+          entity: collection,
+          currentFields,
+          newFields: fields as FieldDefinition[],
+          requestedLocalized: previewLocalized,
+          // Legacy rows (schema_version NULL) read as 1, so the editor always has a concrete
+          // version to echo back on Apply; JSON omits an undefined one and the guard would reject
+          // the first save as version-less.
+          schemaVersion: collection.schemaVersion ?? 1,
+        })
       );
-
-      // Forward rename candidates from the same pipeline preview run
-      // (the pipeline already detected them).
-      const renamed = pipelinePreview.candidates.map(toRenameCandidateWire);
-
-      // previewSchemaChanges returns a custom preview payload
-      // (legacyShape plus renamed plus schemaVersion) with no CRUD
-      // analog. We spread legacyShape into a new object so the resulting
-      // body has at least the renamed/schemaVersion fields, never empty.
-      // Cast through `unknown` because SchemaPreviewResult is a sealed
-      // shape with no string index signature; respondData's generic
-      // requires a Record<string, unknown> for spread compatibility.
-      // Fields leaving translation: what moves to the archive, by language, and any refusal, so
-      // the builder shows them before Apply.
-      const wasLocalized =
-        (collection as { localized?: boolean }).localized === true;
-      const leaving = await previewFieldsLeavingTranslation({
-        db,
-        dialect,
-        slug: p.collectionName,
-        tableName,
-        builtBy: "collection",
-        defaultLocale: getConfigFromDI()?.localization?.defaultLocale ?? "en",
-        oldFields: currentFields,
-        newFields: fields as FieldDefinition[],
-        wasLocalized,
-        isLocalized: previewLocalized ?? wasLocalized,
-      });
-      const legacyAsRecord = withLeavingTranslation(
-        legacyShape,
-        leaving
-      ) as unknown as Record<string, unknown>;
-      return respondData({
-        ...legacyAsRecord,
-        renamed,
-        // Normalize legacy rows (schema_version NULL) to 1 so the editor always
-        // receives a concrete version to echo back on apply; otherwise JSON
-        // omits an undefined value and the guard rejects the first save as
-        // version-less. Mirrors the single-dispatcher preview.
-        schemaVersion: collection.schemaVersion ?? 1,
-      });
     },
   },
   // Apply confirmed schema changes via the in-process schema service.
