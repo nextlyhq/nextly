@@ -36,9 +36,14 @@ import { MediaService } from "../media";
 // a delete that removed only one would show. A case that needs more adds them
 // to `extraSizes`, which is emptied after each.
 const extraSizes = vi.hoisted(() => [] as Array<Record<string, unknown>>);
+// A case that needs other sizes altogether sets `onlySizes`, also reset.
+const onlySizes = vi.hoisted(() => ({
+  configs: undefined as Array<Record<string, unknown>> | undefined,
+}));
 vi.mock("../image-size", () => ({
   ImageSizeService: class {
     async getActiveSizeConfigs() {
+      if (onlySizes.configs) return onlySizes.configs;
       return [
         ...extraSizes,
         {
@@ -127,6 +132,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   extraSizes.length = 0;
+  onlySizes.configs = undefined;
   resetMediaStorage();
   vi.restoreAllMocks();
   await rm(uploads, { recursive: true, force: true });
@@ -470,6 +476,37 @@ describe("a delete and a crop of the same item at once", () => {
     expect(during.filter(file => !before.includes(file))).toHaveLength(2);
     expect(deleted.success).toBe(true);
     expect(await onDisk()).toEqual([]);
+  });
+});
+
+// An image stored while no sizes were configured has its upload-time
+// thumbnail and no sizes. A crop once a `thumbnail` size is configured gives
+// it one of those instead, and the upload-time thumbnail is then referred to
+// by nothing.
+describe("a crop of an item stored with no sizes", () => {
+  it("removes the upload-time thumbnail a new thumbnail size replaces", async () => {
+    onlySizes.configs = [];
+    onLocalDisk();
+    const id = await uploadPhoto();
+    const before = await onDisk();
+    expect(before).toHaveLength(2);
+    onlySizes.configs = [
+      {
+        name: "thumbnail",
+        width: 4,
+        height: 4,
+        fit: "cover",
+        quality: 80,
+        format: "webp",
+      },
+    ];
+
+    expect((await crop(id, 20)).success).toBe(true);
+
+    const stored = (await onDisk()).sort();
+    expect(stored.filter(file => !before.includes(file))).toHaveLength(1);
+    expect(stored).toEqual(await referencedNow(id));
+    expect(stored).toHaveLength(2);
   });
 });
 

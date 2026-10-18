@@ -980,7 +980,13 @@ export class MediaService extends BaseService {
       // The row now durably references the new variants, so the superseded old
       // ones can be deleted (keeping any path the new set reuses) — unless a
       // plugin's enclosing transaction can still roll the row back to them.
-      if (regeneratedSizes && replacedSizes && !keepSuperseded) {
+      // An item stored with no sizes has none to replace, and may still have
+      // an upload-time thumbnail the new sizes replace.
+      if (
+        regeneratedSizes &&
+        (replacedSizes || replacedThumbnail) &&
+        !keepSuperseded
+      ) {
         await this.deleteSupersededVariants(
           replacedSizes,
           regeneratedSizes,

@@ -22,18 +22,54 @@ const KEYED =
 const NAMED = /^thumb_[^/]+$/;
 
 /**
+ * A stored path with each run of slashes written once. The storage puts a
+ * collection's files under `<prefix>/<key>`, so a prefix written with its
+ * slash is stored as `media//...` where keys are kept as given (S3) and read
+ * back as `media/...` where a filesystem collapses the separator (local
+ * disk). Paths are compared in this form: it can only make more files count
+ * as referenced, never fewer.
+ */
+export function canonicalStoredPath(path: string): string {
+  const scheme = /^https?:\/\//.exec(path)?.[0] ?? "";
+  return scheme + path.slice(scheme.length).replace(/\/{2,}/g, "/");
+}
+
+/** A collection prefix as the folder the storage puts its files in. */
+function folderOf(prefix = ""): string {
+  return canonicalStoredPath(prefix).replace(/^\/+|\/+$/g, "");
+}
+
+/**
+ * Whether the media collection's place in its storage is its own: it has a
+ * prefix, and no other collection on the same storage has that prefix. Only
+ * then does a file's place show it is media's. Without one, media shares the
+ * storage's root with every other upload to it, any of which can store a
+ * file of the same form, named as a person named it.
+ */
+export function mediaPlaceIsExclusive(
+  prefix: string | undefined,
+  otherPrefixes: readonly (string | undefined)[]
+): boolean {
+  const folder = folderOf(prefix);
+  return (
+    folder !== "" && otherPrefixes.every(other => folderOf(other) !== folder)
+  );
+}
+
+/**
  * Whether a stored file is where media uploads put an upload-time thumbnail,
- * in the form they give it: below the media collection's configured prefix,
- * which the storage applies as each upload's folder, and nowhere else, so
- * another collection's files are never candidates. UploadThing keeps no
- * folders and its keys carry no name, so there a file is judged by the name
- * it was uploaded under.
+ * in the form they give it: in the media collection's configured folder,
+ * which the storage applies to each upload, and nowhere else, so another
+ * collection's folder holds no candidates. UploadThing keeps no folders and
+ * its keys carry no name, so there a file is judged by the name it was
+ * uploaded under.
  */
 export function isMediaThumbnail(entry: StoredFileEntry, prefix = ""): boolean {
   if (entry.name !== undefined) return NAMED.test(entry.name);
-  const location = locationOf(entry.path);
-  if (!location.startsWith(prefix)) return false;
-  const below = location.slice(prefix.length);
+  const location = canonicalStoredPath(locationOf(entry.path));
+  const folder = folderOf(prefix);
+  if (folder !== "" && !location.startsWith(`${folder}/`)) return false;
+  const below = folder === "" ? location : location.slice(folder.length + 1);
   return KEYED.test(below) || NAMED.test(below);
 }
 
@@ -47,6 +83,11 @@ function locationOf(path: string): string {
   }
 }
 
+/** `paths` in the form they are compared in. */
+function canonicalSet(paths: ReadonlySet<string>): Set<string> {
+  return new Set([...paths].map(canonicalStoredPath));
+}
+
 export type OrphanSearch =
   | { listable: false }
   | {
@@ -54,13 +95,13 @@ export type OrphanSearch =
       /** Left-behind thumbnails, by stored path. */
       orphans: string[];
       /**
-       * Unreferenced thumbnails known only by the name they were uploaded
-       * under, on a storage that keeps no folders (UploadThing). Another
-       * uploader to the same storage can give a file that name, so nothing
-       * shows these are media's: they are for the site to check, and are
-       * never removed.
+       * Unreferenced thumbnails nothing shows are media's: known only by the
+       * name they were uploaded under, on a storage that keeps no folders
+       * (UploadThing), or found where media's place is not its own. Another
+       * upload can give a file the same name or form, so these are for the
+       * site to check, and are never removed.
        */
-      unconfirmed: Array<{ path: string; name: string }>;
+      unconfirmed: Array<{ path: string; name?: string }>;
       /** Unreferenced thumbnails too recent, or of unknown age, to be sure of. */
       tooRecent: number;
     };
@@ -73,22 +114,29 @@ export type OrphanSearch =
  */
 export async function findOrphanThumbnails(
   adapter: IStorageAdapter,
-  options: { referenced: ReadonlySet<string>; prefix?: string; now?: Date }
+  options: {
+    referenced: ReadonlySet<string>;
+    prefix?: string;
+    /** Whether media's place is its own ({@link mediaPlaceIsExclusive}). */
+    exclusive: boolean;
+    now?: Date;
+  }
 ): Promise<OrphanSearch> {
   if (!adapter.list) return { listable: false };
   const now = (options.now ?? new Date()).getTime();
+  const referenced = canonicalSet(options.referenced);
   const orphans: string[] = [];
-  const unconfirmed: Array<{ path: string; name: string }> = [];
+  const unconfirmed: Array<{ path: string; name?: string }> = [];
   let tooRecent = 0;
   for await (const entry of adapter.list()) {
     if (!isMediaThumbnail(entry, options.prefix)) continue;
-    if (options.referenced.has(entry.path)) continue;
+    if (referenced.has(canonicalStoredPath(entry.path))) continue;
     const stored = entry.lastModified?.getTime();
     if (stored === undefined || now - stored < ORPHAN_MIN_AGE_MS) {
       tooRecent++;
       continue;
     }
-    if (entry.name !== undefined) {
+    if (entry.name !== undefined || !options.exclusive) {
       unconfirmed.push({ path: entry.path, name: entry.name });
     } else {
       orphans.push(entry.path);
@@ -116,7 +164,7 @@ export async function removeOrphanThumbnails(
 ): Promise<OrphanRemoval> {
   const result: OrphanRemoval = { removed: [], kept: [], failed: [] };
   for (const path of orphans) {
-    if ((await referencedNow()).has(path)) {
+    if (canonicalSet(await referencedNow()).has(canonicalStoredPath(path))) {
       result.kept.push(path);
       continue;
     }

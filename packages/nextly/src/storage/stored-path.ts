@@ -20,9 +20,23 @@ export function siblingStoredPath(
   original: { path: string; url: string },
   url: string
 ): string | undefined {
-  const { path, url: originalUrl } = original;
+  const path = original.path;
+  const originalUrl = addressOf(original.url);
+  const fileUrl = addressOf(url);
   if (!path || !originalUrl.endsWith(path)) return undefined;
   const prefix = originalUrl.slice(0, originalUrl.length - path.length);
-  if (!url.startsWith(prefix) || url.length === prefix.length) return undefined;
-  return url.slice(prefix.length);
+  if (!fileUrl.startsWith(prefix) || fileUrl.length === prefix.length) {
+    return undefined;
+  }
+  return fileUrl.slice(prefix.length);
+}
+
+/**
+ * A URL without its query or fragment, which address no other file: Vercel
+ * Blob records a file stored for download, an SVG by default, by its blob URL
+ * with `?download=1`, while the stored path is the blob URL alone.
+ */
+function addressOf(url: string): string {
+  const end = url.search(/[?#]/);
+  return end === -1 ? url : url.slice(0, end);
 }

@@ -8,6 +8,8 @@
  * collection's prefix, and an ordinary unreferenced file. Only the old
  * left-behind thumbnail is media's to remove. Local disk uses real files;
  * S3, Vercel Blob and UploadThing a stand-in that lists files as they do.
+ * Media's files are under its own prefix, `media`, which nothing else on the
+ * storage shares, so its place shows they are media's.
  */
 import { randomUUID } from "node:crypto";
 import {
@@ -21,6 +23,7 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 
+import { eq } from "drizzle-orm";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { LocalStorageAdapter } from "../../../storage/adapters/local-adapter";
@@ -29,6 +32,7 @@ import type {
   StoredFileEntry,
   UploadOptions,
 } from "../../../storage/types";
+import { mediaPlaceIsExclusive } from "../../../domains/media/orphan-thumbnails";
 import { mediaOrphans } from "../media";
 
 const NOW = new Date("2026-10-18T12:00:00Z");
@@ -86,11 +90,11 @@ afterEach(async () => {
 
 async function onLocalDisk(): Promise<Layout> {
   const files = {
-    referenced: key("thumb_a.png"),
-    orphan: key("thumb_b.png"),
-    recent: key("thumb_c.png"),
+    referenced: key("thumb_a.png", "media/"),
+    orphan: key("thumb_b.png", "media/"),
+    recent: key("thumb_c.png", "media/"),
     elsewhere: key("thumb_d.png", "docs/"),
-    ordinary: key("photo.png"),
+    ordinary: key("photo.png", "media/"),
   };
   for (const [which, file] of Object.entries(files)) {
     const full = path.join(dir, file);
@@ -122,19 +126,19 @@ function inBucket(scheme: "s3" | "vercel-blob" | "uploadthing"): Layout {
   const files =
     scheme === "s3"
       ? {
-          referenced: at(key("thumb_a.png"), TWO_HOURS_AGO),
-          orphan: at(key("thumb_b.png"), TWO_HOURS_AGO),
-          recent: at(key("thumb_c.png"), A_MINUTE_AGO),
+          referenced: at(key("thumb_a.png", "media/"), TWO_HOURS_AGO),
+          orphan: at(key("thumb_b.png", "media/"), TWO_HOURS_AGO),
+          recent: at(key("thumb_c.png", "media/"), A_MINUTE_AGO),
           elsewhere: at(key("thumb_d.png", "docs/"), TWO_HOURS_AGO),
-          ordinary: at(key("photo.png"), TWO_HOURS_AGO),
+          ordinary: at(key("photo.png", "media/"), TWO_HOURS_AGO),
         }
       : scheme === "vercel-blob"
         ? {
-            referenced: at(blob("thumb_a.png"), TWO_HOURS_AGO),
-            orphan: at(blob("thumb_b.png"), TWO_HOURS_AGO),
-            recent: at(blob("thumb_c.png"), A_MINUTE_AGO),
+            referenced: at(blob("thumb_a.png", "media/"), TWO_HOURS_AGO),
+            orphan: at(blob("thumb_b.png", "media/"), TWO_HOURS_AGO),
+            recent: at(blob("thumb_c.png", "media/"), A_MINUTE_AGO),
             elsewhere: at(blob("thumb_d.png", "docs/"), TWO_HOURS_AGO),
-            ordinary: at(blob("photo.png"), TWO_HOURS_AGO),
+            ordinary: at(blob("photo.png", "media/"), TWO_HOURS_AGO),
           }
         : {
             // UploadThing keeps no folders and its keys carry no name.
@@ -161,11 +165,16 @@ const layouts: Array<[string, () => Promise<Layout> | Layout]> = [
 async function run(
   layout: Layout,
   apply: boolean,
-  referenced?: () => Promise<Set<string>>
+  referenced?: () => Promise<Set<string>>,
+  place: { prefix?: string; exclusive: boolean } = {
+    prefix: "media",
+    exclusive: true,
+  }
 ) {
   const said: string[] = [];
   const code = await mediaOrphans({
     storage: layout.storage,
+    ...place,
     referenced: referenced ?? (async () => new Set([layout.referenced])),
     apply,
     say: line => said.push(line),
@@ -237,6 +246,78 @@ describe("nextly media orphans", () => {
     }
   });
 
+  // Where media's prefix is not its own, another collection can store a file
+  // of the same form in the same place, so nothing shows a match is media's.
+  it.each(layouts.filter(([label]) => label !== "uploadthing"))(
+    "lists the old left-behind thumbnail on %s as one to check when media's prefix is shared, and --apply leaves it",
+    async (_label, make) => {
+      const layout = await make();
+      const before = await layout.stored();
+
+      const { code, said } = await run(layout, true, undefined, {
+        prefix: "media",
+        exclusive: false,
+      });
+
+      expect(code).toBe(0);
+      expect(await layout.stored()).toEqual(before);
+      expect(said).not.toMatch(/^Removed /m);
+      expect(said).toContain(layout.orphan);
+      expect(said).toMatch(/by hand/);
+    }
+  );
+
+  // A prefix written with its slash, `media/`, is stored as `media//...`
+  // where the storage keeps keys as given (S3), and read back as
+  // `media/...` where a filesystem collapses the separator (local disk).
+  // Either way a referenced file must count as referenced.
+  it("matches a `media/` prefix on S3, whose keys keep the doubled slash", async () => {
+    const bucket = new Bucket("s3");
+    const at = (name: string) => {
+      const path = key(name, "media//");
+      bucket.put({ path, lastModified: TWO_HOURS_AGO });
+      return path;
+    };
+    const referenced = at("thumb_a.png");
+    const orphan = at("thumb_b.png");
+    const said: string[] = [];
+
+    const code = await mediaOrphans({
+      storage: bucket,
+      prefix: "media/",
+      exclusive: true,
+      referenced: async () => new Set([referenced]),
+      apply: true,
+      say: line => said.push(line),
+      now: NOW,
+    });
+
+    expect(code).toBe(0);
+    expect([...bucket.files.keys()]).toEqual([referenced]);
+    expect(said.join("\n")).toContain(`Removed ${orphan}`);
+  });
+
+  it("keeps a referenced thumbnail on local disk whose record spells the prefix `media//`", async () => {
+    const layout = await onLocalDisk();
+    const recorded = layout.referenced.replace("media/", "media//");
+    const said: string[] = [];
+
+    const code = await mediaOrphans({
+      storage: layout.storage,
+      prefix: "media/",
+      exclusive: true,
+      referenced: async () => new Set([recorded]),
+      apply: true,
+      say: line => said.push(line),
+      now: NOW,
+    });
+
+    expect(code).toBe(0);
+    const stored = await layout.stored();
+    expect(stored).toContain(layout.referenced);
+    expect(stored).not.toContain(layout.orphan);
+  });
+
   // Between the listing and the removal an item can come to refer to it.
   it("keeps a listed thumbnail an item refers to by the time it would go", async () => {
     const layout = inBucket("s3");
@@ -279,12 +360,31 @@ describe("nextly media orphans", () => {
   });
 });
 
+// Media's place is its own when it has a prefix and no other collection on
+// the same storage has the same one: then another collection's files are
+// never there.
+describe("mediaPlaceIsExclusive", () => {
+  it.each([
+    ["media", [], true],
+    ["media/", ["docs", ""], true],
+    ["", [], false],
+    ["media", ["media"], false],
+    ["media/", ["media"], false],
+    ["media", ["media/"], false],
+  ] as const)(
+    "prefix %j beside %j is exclusive: %s",
+    (prefix, others, expected) => {
+      expect(mediaPlaceIsExclusive(prefix, others)).toBe(expected);
+    }
+  );
+});
+
 // What the command treats as in use is what a delete removes for each item,
 // read from every page of the media table.
 describe("referencedStoredPaths", () => {
-  it("names each item's original, upload-time thumbnail and sizes, on every page", async () => {
+  /** A test database holding 501 media items, more than one page. */
+  async function mediaTable() {
     const { createTestDb } = await import("../../../__tests__/fixtures/db");
-    const { referencedStoredPaths } = await import("../media");
     const db = await createTestDb();
     await db.db.insert(db.schema.users).values({
       id: "user-1",
@@ -321,6 +421,12 @@ describe("referencedStoredPaths", () => {
     for (const row of rows)
       await db.db.insert(db.schema.media).values(row as never);
 
+    return db;
+  }
+
+  it("names each item's original, upload-time thumbnail and sizes, on every page", async () => {
+    const { referencedStoredPaths } = await import("../media");
+    const db = await mediaTable();
     const referenced = await referencedStoredPaths(db.adapter as never);
 
     expect(referenced.size).toBe(501 * 3);
@@ -329,5 +435,32 @@ describe("referencedStoredPaths", () => {
       expect(referenced).toContain(`2026/10/b${i}-thumb_p.png`);
       expect(referenced).toContain(`2026/10/c${i}-thumb_p-small.webp`);
     }
+  });
+
+  // A page read by offset after an item on an earlier page went would start
+  // one row late, and skip an item still there; that item's thumbnail would
+  // then read as left behind.
+  it("names every item still there when one on an earlier page is deleted between pages", async () => {
+    const { referencedStoredPaths } = await import("../media");
+    const db = await mediaTable();
+    const select = db.adapter.select.bind(db.adapter);
+    let pages = 0;
+    const between = {
+      select: async (...args: Parameters<typeof select>) => {
+        const rows = await select(...args);
+        if (pages++ === 0) {
+          await db.db
+            .delete(db.schema.media)
+            .where(eq(db.schema.media.id, (rows[0] as { id: string }).id));
+        }
+        return rows;
+      },
+    };
+
+    const referenced = await referencedStoredPaths(between as never);
+
+    const left = await db.db.select().from(db.schema.media);
+    expect(left).toHaveLength(500);
+    for (const row of left) expect(referenced).toContain(row.filename);
   });
 });
