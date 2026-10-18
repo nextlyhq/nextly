@@ -18,21 +18,14 @@
  * Needs an empty database, so it starts its own playground server rather than
  * the suite's, which seeds a user and signs in on its own.
  */
-import { spawn, type ChildProcess } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import path from "node:path";
+import { writeFileSync } from "node:fs";
 
 import { expect, test } from "@playwright/test";
 
 import {
   cleanUpNextWrites,
-  exampleEnv,
-  freePort,
-  NEXT_BIN,
-  PLAYGROUND,
-  stop,
-  waitFor,
+  startEmptyPlayground,
+  type EmptyPlayground,
 } from "../support/playground-dev-server";
 
 test.describe("first-run setup at an address the app does not accept", () => {
@@ -40,51 +33,17 @@ test.describe("first-run setup at an address the app does not accept", () => {
   test.describe.configure({ mode: "serial", timeout: 6 * 60 * 1000 });
 
   const removeNextWrites = cleanUpNextWrites();
-  let app: ChildProcess | undefined;
-  let work: string | undefined;
+  let playground: EmptyPlayground | undefined;
   let appPort = 0;
   let log = "";
 
   test.beforeAll(async () => {
-    appPort = await freePort();
-    work = mkdtempSync(path.join(tmpdir(), "nextly-setup-origin-"));
-    app = spawn(NEXT_BIN, ["dev", "-p", String(appPort)], {
-      cwd: PLAYGROUND,
-      env: {
-        ...exampleEnv(),
-        ...process.env,
-        DB_DIALECT: "sqlite",
-        DATABASE_URL: `file:${path.join(work, "setup.db")}`,
-        // Its own build directory, so it never fights the suite's server.
-        NEXT_DIST_DIR: ".next-setup-origin",
-        NODE_ENV: "development",
-        PORT: String(appPort),
-      },
-      detached: true,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    app.stdout?.on("data", chunk => (log += String(chunk)));
-    app.stderr?.on("data", chunk => (log += String(chunk)));
-    await waitFor(
-      "the playground to answer",
-      async () =>
-        (
-          await fetch(
-            `http://localhost:${appPort}/admin/api/auth/setup-status`
-          ).catch(() => null)
-        )?.ok === true,
-      4 * 60 * 1000
-    );
+    playground = await startEmptyPlayground("setup-origin");
+    appPort = playground.port;
   });
 
   test.afterAll(async () => {
-    if (app) await stop(app);
-    rmSync(path.join(PLAYGROUND, ".next-setup-origin"), {
-      recursive: true,
-      force: true,
-      maxRetries: 5,
-    });
-    if (work) rmSync(work, { recursive: true, force: true });
+    await playground?.close();
     removeNextWrites();
   });
 
@@ -143,7 +102,7 @@ test.describe("first-run setup at an address the app does not accept", () => {
     } catch (error) {
       // The server's own output is the evidence a failure here needs.
       const logFile = testInfo.outputPath("next-dev.log");
-      writeFileSync(logFile, log);
+      writeFileSync(logFile, `${playground?.output() ?? ""}${log}`);
       await testInfo.attach("next-dev.log", { path: logFile });
       throw error;
     }

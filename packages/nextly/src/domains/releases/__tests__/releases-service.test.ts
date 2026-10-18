@@ -39,6 +39,8 @@ function repository() {
         Array<{
           id: string;
           state: string;
+          title?: string;
+          description?: string | null;
           kind?: string;
           timezone?: string;
           revision?: number;
@@ -71,6 +73,19 @@ function repository() {
     liveAuthors: vi.fn(async (ids: string[]) => new Set(ids)),
     scheduleRelease: vi.fn(async (..._args: unknown[]) => true),
     cancelRelease: vi.fn(async () => true),
+    updateReleaseDetails: vi.fn(
+      async (
+        ..._args: unknown[]
+      ): Promise<{
+        row: Record<string, unknown>;
+        changed: Array<"title" | "description">;
+      } | null> => null
+    ),
+    // Answers the row its delete found under the lock, or null.
+    deleteRelease: vi.fn(
+      async (..._args: unknown[]): Promise<Record<string, unknown> | null> =>
+        null
+    ),
     // The `containing` listing's own read. Present so a test can drive that
     // branch to completion rather than dying on a missing collaborator, which
     // would fail for a reason unrelated to the property under test.
@@ -112,6 +127,7 @@ function service(over?: {
       warn: vi.fn((_message: string, _meta?: Record<string, unknown>) => {}),
     },
     checks: READY_CHECKS,
+    recordActivity: vi.fn(async (_entry: unknown) => undefined),
   };
   return { svc: new ReleasesService(deps), repo, deps };
 }
@@ -1268,6 +1284,8 @@ describe("a finished release offers nothing to change", () => {
         addMember: false,
         removeMember: false,
         publishNow: false,
+        update: false,
+        delete: false,
       });
     }
   );
@@ -1416,5 +1434,257 @@ describe("ReleasesService fences a schedule on the revision it read", () => {
       svc.schedule("r1", new Date(Date.now() + 86_400_000), "UTC", ADMIN)
     ).rejects.toMatchObject({ code: "CONFLICT" });
     expect(repo.scheduleRelease).not.toHaveBeenCalled();
+  });
+});
+
+describe("ReleasesService.update renames a release under its own permission", () => {
+  const NAMED = {
+    id: "r1",
+    state: "published",
+    title: "Spring launch",
+    description: "Old notes",
+    revision: 3,
+  };
+
+  /** The repository's answer for a rename that changed `changed`. */
+  function wrote(
+    changed: Array<"title" | "description">,
+    row: Record<string, unknown> = NAMED
+  ) {
+    return { row, changed };
+  }
+
+  it("refuses a caller without update, whatever else it holds, and writes nothing", async () => {
+    // Renaming used to go with assembling. It is its own permission now, so a
+    // role holding every other release authority but this one is refused.
+    const { svc, repo, deps } = service({
+      holds: ["read", "create", "publish", "delete"],
+    });
+    await expect(
+      svc.update("r1", { title: "Renamed" }, ADMIN)
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(repo.updateReleaseDetails).not.toHaveBeenCalled();
+    expect(deps.recordActivity).not.toHaveBeenCalled();
+  });
+
+  it("refuses an anonymous caller", async () => {
+    const { svc, repo } = service({ holds: ["update"] });
+    await expect(
+      svc.update("r1", { title: "Renamed" }, ANON)
+    ).rejects.toMatchObject({ code: "FORBIDDEN" });
+    expect(repo.updateReleaseDetails).not.toHaveBeenCalled();
+  });
+
+  it("hands the repository only the fields the change names", async () => {
+    // The repository decides, under the release's lock, which of them differ.
+    const { svc, repo } = service({ holds: ["update"] });
+    repo.updateReleaseDetails.mockResolvedValueOnce(wrote(["title"]));
+    await svc.update("r1", { title: "Summer launch" }, ADMIN);
+    expect(repo.updateReleaseDetails).toHaveBeenCalledWith("r1", {
+      title: "Summer launch",
+    });
+  });
+
+  it("answers and records the row the repository wrote, with the fields it changed, as the user", async () => {
+    const { svc, repo, deps } = service({ holds: ["update"] });
+    const row = { ...NAMED, title: "Summer launch", description: null };
+    repo.updateReleaseDetails.mockResolvedValueOnce(
+      wrote(["title", "description"], row)
+    );
+    const renamed = await svc.update(
+      "r1",
+      { title: "Summer launch", description: null },
+      ADMIN
+    );
+    expect(renamed).toBe(row);
+    // No read after the write: a later one could answer another request's
+    // change as this one's.
+    expect(repo.findReleases).not.toHaveBeenCalled();
+    expect(deps.recordActivity).toHaveBeenCalledWith({
+      action: "update",
+      release: row,
+      changedFields: ["title", "description"],
+      actor: { type: "user", id: "u1" },
+    });
+  });
+
+  it("records nothing for a change the repository found already made", async () => {
+    const { svc, repo, deps } = service({ holds: ["update"] });
+    repo.updateReleaseDetails.mockResolvedValueOnce(wrote([]));
+    const answered = await svc.update("r1", { title: "Spring launch" }, ADMIN);
+    expect(answered).toBe(NAMED);
+    expect(deps.recordActivity).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["no field at all", {}],
+    ["an empty title", { title: "" }],
+    ["a title that is not text", { title: 42 }],
+    ["a title too long for every dialect", { title: "x".repeat(256) }],
+    ["a description that is not text", { description: 7 }],
+  ])("refuses %s before anything is written", async (_name, change) => {
+    const { svc, repo } = service({ holds: ["update"] });
+    await expect(
+      svc.update("r1", change as never, ADMIN)
+    ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+    expect(repo.updateReleaseDetails).not.toHaveBeenCalled();
+  });
+
+  it("answers NOT_FOUND for a release that is not there", async () => {
+    const { svc, repo, deps } = service({ holds: ["update"] });
+    repo.updateReleaseDetails.mockResolvedValueOnce(null);
+    await expect(
+      svc.update("nope", { title: "Renamed" }, ADMIN)
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+    expect(deps.recordActivity).not.toHaveBeenCalled();
+  });
+
+  it("records a key's rename as a key, never as the key's owner", async () => {
+    // The actor carries the owner's id so the key can be authorized; naming
+    // the owner in the trail would put a person against a change they did
+    // not make.
+    const { svc, repo, deps } = service();
+    repo.updateReleaseDetails.mockResolvedValueOnce(wrote(["title"]));
+    await svc.update(
+      "r1",
+      { title: "Renamed" },
+      {
+        userId: "owner",
+        overrideAccess: false,
+        authenticatedScope: {
+          actorType: "apiKey",
+          permissions: ["update-content-releases"],
+        },
+      }
+    );
+    expect(deps.recordActivity).toHaveBeenCalledWith(
+      expect.objectContaining({ actor: { type: "apiKey" } })
+    );
+  });
+
+  it("still answers the rename when the activity log cannot be written", async () => {
+    // The rename has committed. Failing the request now would report a change
+    // that happened as one that did not.
+    const { svc, repo, deps } = service({ holds: ["update"] });
+    repo.updateReleaseDetails.mockResolvedValueOnce(wrote(["title"]));
+    deps.recordActivity.mockRejectedValueOnce(new Error("log is down"));
+    await expect(
+      svc.update("r1", { title: "Renamed" }, ADMIN)
+    ).resolves.toBeDefined();
+    expect(deps.logger.warn).toHaveBeenCalledWith(
+      "A release change could not be recorded",
+      expect.objectContaining({ releaseId: "r1", action: "update" })
+    );
+  });
+});
+
+describe("ReleasesService.delete deletes only a release that never ran", () => {
+  it("refuses a caller without delete, whatever else it holds, and deletes nothing", async () => {
+    const { svc, repo, deps } = service({
+      holds: ["read", "create", "publish", "update"],
+    });
+    await expect(svc.delete("r1", ADMIN)).rejects.toMatchObject({
+      code: "FORBIDDEN",
+    });
+    expect(repo.findReleases).not.toHaveBeenCalled();
+    expect(repo.deleteRelease).not.toHaveBeenCalled();
+    expect(deps.recordActivity).not.toHaveBeenCalled();
+  });
+
+  it.each(["draft", "cancelled"])(
+    "deletes a %s release, and records it",
+    async state => {
+      const { svc, repo, deps } = service({ holds: ["delete"] });
+      repo.findReleases.mockResolvedValue([
+        { id: "r1", state, title: "Launch", revision: 1 },
+      ]);
+      // The repository's row is the answer and the record, not the read
+      // before it: here a rename landed in between.
+      repo.deleteRelease.mockResolvedValueOnce({
+        id: "r1",
+        state,
+        title: "Relaunch",
+        revision: 2,
+      });
+      expect(await svc.delete("r1", ADMIN)).toMatchObject({
+        id: "r1",
+        title: "Relaunch",
+        state,
+      });
+      expect(repo.deleteRelease).toHaveBeenCalledWith("r1");
+      expect(deps.recordActivity).toHaveBeenCalledWith({
+        action: "delete",
+        release: expect.objectContaining({
+          id: "r1",
+          title: "Relaunch",
+          state,
+        }),
+        actor: { type: "user", id: "u1" },
+      });
+    }
+  );
+
+  it.each([
+    ["scheduled", "Cancelling it calls it off"],
+    ["blocked", "Cancelling it calls it off"],
+    ["published", "record of what went live"],
+  ])(
+    "refuses a %s release with a CONFLICT saying what to do, and deletes nothing",
+    async (state, says) => {
+      const { svc, repo, deps } = service({ holds: ["delete"] });
+      repo.findReleases.mockResolvedValue([
+        { id: "r1", state, title: "Launch", revision: 1 },
+      ]);
+      await expect(svc.delete("r1", ADMIN)).rejects.toMatchObject({
+        code: "CONFLICT",
+        publicMessage: expect.stringContaining(says),
+      });
+      expect(repo.deleteRelease).not.toHaveBeenCalled();
+      expect(deps.recordActivity).not.toHaveBeenCalled();
+    }
+  );
+
+  it("keeps a cancelled release that was ever scheduled, naming why in the refusal's data", async () => {
+    const { svc, repo, deps } = service({ holds: ["delete"] });
+    repo.findReleases.mockResolvedValue([
+      {
+        id: "r1",
+        state: "cancelled",
+        title: "Launch",
+        revision: 4,
+        scheduledAt: new Date("2026-09-01T09:00:00Z"),
+      },
+    ]);
+    await expect(svc.delete("r1", ADMIN)).rejects.toMatchObject({
+      code: "CONFLICT",
+      publicMessage:
+        "This release was scheduled, so it's kept as a record. Cancelled releases that were never scheduled can be deleted.",
+      publicData: { reason: "was-scheduled" },
+    });
+    expect(repo.deleteRelease).not.toHaveBeenCalled();
+    expect(deps.recordActivity).not.toHaveBeenCalled();
+  });
+
+  it("answers NOT_FOUND for a release that is not there", async () => {
+    const { svc, repo } = service({ holds: ["delete"] });
+    repo.findReleases.mockResolvedValue([]);
+    await expect(svc.delete("nope", ADMIN)).rejects.toMatchObject({
+      code: "NOT_FOUND",
+    });
+    expect(repo.deleteRelease).not.toHaveBeenCalled();
+  });
+
+  it("refuses with a CONFLICT, and records nothing, when the release moved before the delete", async () => {
+    // Read as a draft, scheduled before the fenced delete: the repository
+    // refuses, and nothing was deleted to record.
+    const { svc, repo, deps } = service({ holds: ["delete"] });
+    repo.findReleases.mockResolvedValue([
+      { id: "r1", state: "draft", title: "Launch", revision: 1 },
+    ]);
+    repo.deleteRelease.mockResolvedValueOnce(null);
+    await expect(svc.delete("r1", ADMIN)).rejects.toMatchObject({
+      code: "CONFLICT",
+    });
+    expect(deps.recordActivity).not.toHaveBeenCalled();
   });
 });

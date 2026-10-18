@@ -3,8 +3,6 @@ title: Auth extensibility
 description: Extend authentication from a plugin — custom strategies, external sign-in (OAuth), auth-flow hooks, and first-class multi-step challenges (2FA) — without forking core.
 ---
 
-> **Parts of this page need the release after 0.0.2-alpha.66:** `ctx.auth.completeLogin` and `capabilities.auth.login`, the resume cookie, `ChallengeViewProps` and the view's resolve result, and the limits on what `afterAuthenticate` and `customizeClaims` may change.
-
 > **Alpha (`0.x`) — `@experimental`.** The auth-extensibility surface (D71/D57) is
 > new and ships `@experimental`: it works and is integration-tested, but stays
 > experimental until a first-party plugin exercises it in production (D55). Pin
@@ -79,8 +77,6 @@ export const usernameStrategy: AuthStrategy = {
 A strategy without `limitKey` could claim any request, so once the limiter reaches one in `auth.strategies`, the request is limited by the `email` it carries, as before. The server names each such strategy at startup while the limit is on.
 
 ## Worked example: signing in with an external provider
-
-> **Needs the release after 0.0.2-alpha.66.**
 
 A provider whose sign-in starts with a redirect does not fit the strategy chain,
 which runs against a request that already carries a credential. Such a plugin
@@ -295,8 +291,6 @@ export const twoFactor = definePlugin({
    flow and the page says so.
 
 ### Single use and the attempt budget
-
-> **Needs the release after 0.0.2-alpha.66.**
 
 A challenge is answered once, on every instance. The first correct answer marks
 its sign-in answered in the database, in a write only one caller can win,

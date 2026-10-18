@@ -3,8 +3,6 @@ title: Plugins
 description: Extend Nextly with official and custom plugins that add collections, admin views, hooks, and API endpoints.
 ---
 
-> **Parts of this page need the release after 0.0.2-alpha.66:** the typed, owner-checked `db` and `db.raw` (on 0.0.2-alpha.66 `db` is the Drizzle instance itself).
-
 > **Alpha (`0.x`) — pin your versions.**
 >
 > The plugin SDK is alpha: its `@public` surface becomes semver-protected at 1.0 (see [API stability](/docs/plugins/stability)). Build against `@nextlyhq/plugin-sdk` — the stability boundary — and until then pin exact `nextly` / `@nextlyhq/plugin-sdk` versions.
@@ -71,7 +69,7 @@ import { definePlugin } from "@nextlyhq/plugin-sdk";
 export const myPlugin = definePlugin({
   name: "@acme/nextly-plugin-example",
   version: "1.0.0",
-  nextly: ">=0.0.2-alpha.66",
+  nextly: ">=0.0.2-alpha.67",
   contributes: {
     collections: [MyCollection], // merged automatically by the pipeline
   },
@@ -97,7 +95,7 @@ import { definePlugin } from "@nextlyhq/plugin-sdk";
 export const auditPlugin = definePlugin({
   name: "audit-log",
   version: "1.0.0",
-  nextly: ">=0.0.2-alpha.66",
+  nextly: ">=0.0.2-alpha.67",
 
   async init(ctx) {
     ctx.hooks.on("afterCreate", "*", async context => {

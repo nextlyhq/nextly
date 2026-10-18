@@ -999,6 +999,8 @@ export class SinglePublishAllService extends BaseService {
     });
 
     await captureInTx(tx, this.versionCapture, {
+      // An update: a save that changes nothing records nothing.
+      onlyIfChanged: true,
       ref: { scopeKind: "single", scopeSlug: slug, entryId },
       contentStatus: "published",
       parts: {

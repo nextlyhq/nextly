@@ -7,8 +7,8 @@
  *
  * ## Two gates, and why neither is redundant
  *
- * The route checks the SYSTEM authority — read, create or publish on
- * `content-releases` — because that is what produces a proper 401 or 403 for an
+ * The route checks the SYSTEM authority — read, create, publish, update or
+ * delete on `content-releases` — because that is what produces a proper 401 or 403 for an
  * unauthenticated or unauthorized caller, and it stops a request before any
  * service work happens.
  *
@@ -47,7 +47,9 @@ import {
 import {
   DEFAULT_RELEASE_PAGE_SIZE,
   MAX_RELEASE_PAGE_SIZE,
+  MAX_RELEASE_TITLE_LENGTH,
   RELEASES_RESOURCE,
+  type ReleaseAuthority,
   type ReleaseDayFilter,
 } from "../domains/releases/services/releases-service";
 import { NextlyError } from "../errors";
@@ -86,7 +88,7 @@ import { nextlyValidationFromZod } from "./zod-to-nextly-error";
  * is the act that puts content live, and the seed keeps the two apart —
  * "publish-content-releases" is defined as "schedule or cancel".
  */
-const RELEASE_AUTHORITY: Record<string, "read" | "create" | "publish"> = {
+const RELEASE_AUTHORITY: Record<string, ReleaseAuthority> = {
   listReleases: "read",
   releaseCalendar: "read",
   getRelease: "read",
@@ -105,7 +107,38 @@ const RELEASE_AUTHORITY: Record<string, "read" | "create" | "publish"> = {
   scheduleRelease: "publish",
   cancelRelease: "publish",
   publishRelease: "publish",
+  // Each its own permission rather than `create` and `publish`: renaming is
+  // not assembling, and deleting a release is not scheduling one.
+  updateRelease: "update",
+  deleteRelease: "delete",
 };
+
+/**
+ * What a rename may send: a title, a description, or both, and nothing else.
+ *
+ * Strict, so a field this route does not change — a `state`, a `scheduledAt`
+ * — is refused rather than accepted and ignored, which would answer 200 for
+ * a change that never happened. The title follows create's rules: required
+ * text when present, never empty, and no longer than the narrowest dialect
+ * stores. The service checks the same again for the Direct API.
+ */
+const RELEASE_DETAILS_BODY = z
+  .object({
+    title: z
+      .string()
+      .min(1, "`title` must not be empty.")
+      .max(
+        MAX_RELEASE_TITLE_LENGTH,
+        `\`title\` must be ${MAX_RELEASE_TITLE_LENGTH} characters or fewer.`
+      )
+      .optional(),
+    description: z.string().nullable().optional(),
+  })
+  .strict()
+  .refine(
+    body => body.title !== undefined || body.description !== undefined,
+    "Give a `title`, a `description`, or both."
+  );
 
 /**
  * Reject a body that is not a JSON object.
@@ -543,6 +576,8 @@ async function withCapabilities(
       addMember: false,
       removeMember: false,
       publishNow: false,
+      update: false,
+      delete: false,
     },
   }));
 }
@@ -901,6 +936,29 @@ const RELEASE_OPERATIONS: Record<
     // Not `{ cancelled: true }`: the response-shape contract refuses
     // boolean-only bodies, because a caller cannot grow against them.
     return respondAction("Release cancelled.", { releaseId });
+  },
+
+  updateRelease: async ({ request, caller, releases, releaseId }) => {
+    const parsed = RELEASE_DETAILS_BODY.safeParse(await jsonObject(request));
+    if (!parsed.success) throw nextlyValidationFromZod(parsed.error);
+    const release = await releases.update({
+      ...caller,
+      id: releaseId,
+      ...parsed.data,
+    });
+    return respondMutation(
+      "Release updated.",
+      await decorateAfterWrite(release, caller, releases)
+    );
+  },
+
+  deleteRelease: async ({ caller, releases, releaseId }) => {
+    // The mutation envelope with the release as it was, as a deleted entry is
+    // answered: the client can name what it just removed.
+    return respondMutation(
+      "Release deleted.",
+      await releases.delete({ ...caller, id: releaseId })
+    );
   },
 
   publishRelease: async ({ caller, releases, releaseId }) => {

@@ -69,6 +69,36 @@ describe("releases routes", () => {
     );
   });
 
+  it("renames with PATCH and deletes with DELETE on the release itself", () => {
+    expect(parseRestRoute(["releases", "r1"], "PATCH")).toMatchObject({
+      service: "releases",
+      method: "updateRelease",
+      operation: "update",
+      routeParams: { releaseId: "r1" },
+    });
+    expect(parseRestRoute(["releases", "r1"], "DELETE")).toMatchObject({
+      service: "releases",
+      method: "deleteRelease",
+      operation: "delete",
+      routeParams: { releaseId: "r1" },
+    });
+    // Neither at the collection root: there is no rename or delete of every
+    // release at once.
+    expect(parseRestRoute(["releases"], "PATCH").method).not.toBe(
+      "updateRelease"
+    );
+    expect(parseRestRoute(["releases"], "DELETE").method).not.toBe(
+      "deleteRelease"
+    );
+    // Nor on a subresource, so `DELETE .../members` is not a release delete.
+    expect(
+      parseRestRoute(["releases", "r1", "members"], "DELETE").method
+    ).not.toBe("deleteRelease");
+    expect(
+      parseRestRoute(["releases", "r1", "schedule"], "PATCH").method
+    ).not.toBe("updateRelease");
+  });
+
   it("routes members by verb, and one member by id", () => {
     expect(parseRestRoute(["releases", "r1", "members"], "GET")).toMatchObject({
       method: "listReleaseMembers",

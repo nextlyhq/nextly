@@ -35,7 +35,10 @@ import {
   ONE_TIME_SECRETS_RETENTION_DRAIN_GATE_KEY,
   WEBHOOK_RETENTION_GATE_KEY,
 } from "../../domains/retention/gate";
-import { pruneContentEventsSafely } from "../content-events/prune";
+import {
+  pruneContentEventsSafely,
+  type ContentEventsPruneDb,
+} from "../content-events/prune";
 import { pruneNoticesSafely } from "../notices/prune";
 import { warnQuietly } from "../../domains/retention/safe-log";
 import {
@@ -93,7 +96,8 @@ export interface RunDrainDeps {
      * keep a subject and data in clear.
      */
     oneTimeSecrets?: boolean;
-    prune: PruneDeps;
+    // The content-events sweep deletes each batch in a transaction of its own.
+    prune: PruneDeps & { adapter: ContentEventsPruneDb };
     gate: RetentionGateStore;
   };
 }
