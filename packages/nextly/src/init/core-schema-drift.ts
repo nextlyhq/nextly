@@ -55,8 +55,8 @@ export function coreSchemaFingerprint(schema: NextlySchemaSnapshot): string {
  * longer declares is not something an upgrade needs to act on, and reporting
  * it would turn a precise message into noise.
  *
- * A table missing entirely is also skipped: that is a different failure with
- * a different remedy, and the boot path is not where it should be diagnosed.
+ * A table missing entirely is not drift of its columns: `findMissingCoreTables`
+ * reports it, under its own warning.
  */
 export function findCoreSchemaDrift(
   live: NextlySchemaSnapshot,
@@ -104,6 +104,44 @@ export function formatCoreSchemaDriftWarning(
     "",
     "  Run `nextly migrate` to bring the database up to date.",
     "  Until then, features using these columns will fail or silently do nothing.",
+  ];
+  return lines.join("\n");
+}
+
+/**
+ * Core tables the code expects that the live database does not have at all.
+ *
+ * A database is set up once, and a core table a later release adds reaches it
+ * only through `nextly migrate`. Until then the boot succeeds and whatever
+ * reads or writes the table fails far from the cause: a document delete, for
+ * one, sweeps tables of this kind and rolls back. Every core table is checked,
+ * so a table added later is covered without remembering to be.
+ */
+export function findMissingCoreTables(
+  live: NextlySchemaSnapshot,
+  desired: NextlySchemaSnapshot
+): string[] {
+  const liveTables = new Set(live.tables.map(t => t.name.toLowerCase()));
+  return desired.tables
+    .map(t => t.name)
+    .filter(name => !liveTables.has(name.toLowerCase()))
+    .sort();
+}
+
+/**
+ * The warning shown when core tables are missing: every table by name, and
+ * the command that creates them.
+ */
+export function formatMissingCoreTablesWarning(
+  tables: readonly string[]
+): string {
+  const lines = [
+    "[nextly] Your database is missing tables this version of Nextly expects.",
+    "",
+    ...tables.map(table => `  ${table}`),
+    "",
+    "  Run `nextly migrate` to create them.",
+    "  Until then, anything that reads or writes these tables fails; deleting a document may be one.",
   ];
   return lines.join("\n");
 }

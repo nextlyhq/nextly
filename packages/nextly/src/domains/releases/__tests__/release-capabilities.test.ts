@@ -14,6 +14,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  RELEASE_MEMBER_LIMIT,
   RELEASE_STATES,
   type ReleaseKind,
   type ReleaseState,
@@ -23,12 +24,13 @@ import type {
   ReleaseAuthority,
   ReleasesServiceDeps,
 } from "../services/releases-service";
+import { READY_CHECKS } from "./helpers/ready-checks";
 
 const ACTOR = { userId: "u1" };
 
 /**
  * @param members what each release holds, by release id. Read through the
- *   batched `listMembersOf` only; every other repository method is absent, so a
+ *   batched `memberCountsOf` only; every other repository method is absent, so a
  *   path that reached one would fail rather than pass by accident.
  */
 function service(
@@ -39,22 +41,23 @@ function service(
   const canManageReleases = vi.fn(
     async (_id: string, authority: ReleaseAuthority) => held.has(authority)
   );
-  const listMembersOf = vi.fn(async (ids: string[]) =>
-    ids.flatMap(releaseId =>
-      Array.from({ length: members[releaseId] ?? 0 }, (_, n) => ({
-        id: `${releaseId}-m${n}`,
-        releaseId,
-      }))
-    )
+  const memberCountsOf = vi.fn(
+    async (ids: readonly string[]) =>
+      new Map(
+        ids
+          .filter(id => (members[id] ?? 0) > 0)
+          .map(id => [id, members[id] ?? 0] as const)
+      )
   );
   const deps = {
     repository: {
-      listMembersOf,
+      memberCountsOf,
     } as unknown as ReleasesServiceDeps["repository"],
     canManageReleases,
     canActOnDocument: vi.fn(async () => true),
     // Running a release is not what these cases are about.
     runDrainNow: vi.fn(async () => undefined),
+    checks: READY_CHECKS,
     // Every target is there and has a lifecycle; the checks have their own tests.
     targets: {
       readDocument: async (target: { entryId: string }) => ({
@@ -63,7 +66,7 @@ function service(
       declaresLifecycle: async () => true,
     },
   };
-  return { svc: new ReleasesService(deps), canManageReleases, listMembersOf };
+  return { svc: new ReleasesService(deps), canManageReleases, memberCountsOf };
 }
 
 /** A row carrying only what `capabilities` reads, so nothing else can decide it. */
@@ -308,26 +311,51 @@ describe("capabilities, for a single-document release", () => {
     expect(can.get("s")?.cancel).toBe(true);
   });
 
-  it("reads what single releases hold in ONE query, and nothing for ordinary ones", async () => {
-    const { svc, listMembersOf } = service(ALL, { s1: 1 });
+  it("reads what editable releases hold in ONE query, and nothing for final ones", async () => {
+    // Single releases for the one-document rule, and every release that can
+    // still take a document for the limit; a release that ran takes nothing
+    // whatever it holds, so asking about it would be a read for nothing.
+    const { svc, memberCountsOf } = service(ALL, { s1: 1 });
     await svc.capabilities(
       [
         release("draft", "s1", "single"),
         release("draft", "s2", "single"),
         release("draft", "o1", "release"),
         release("scheduled", "o2", "release"),
+        release("published", "p1", "release"),
       ],
       ACTOR
     );
-    expect(listMembersOf).toHaveBeenCalledTimes(1);
-    expect(listMembersOf).toHaveBeenCalledWith(["s1", "s2"]);
+    expect(memberCountsOf).toHaveBeenCalledTimes(1);
+    expect(memberCountsOf).toHaveBeenCalledWith(["s1", "s2", "o1", "o2"]);
 
-    listMembersOf.mockClear();
+    memberCountsOf.mockClear();
     await svc.capabilities(
-      [release("draft", "o1", "release"), release("draft", "o2")],
+      [release("published", "p1"), release("cancelled", "c1")],
       ACTOR
     );
-    expect(listMembersOf).not.toHaveBeenCalled();
+    expect(memberCountsOf).toHaveBeenCalledWith([]);
+  });
+
+  it("offers no add to a full release, nor to one over the limit, but still a removal", async () => {
+    const { svc } = service(ALL, {
+      full: RELEASE_MEMBER_LIMIT,
+      over: RELEASE_MEMBER_LIMIT + 5,
+      room: RELEASE_MEMBER_LIMIT - 1,
+    });
+    const can = await svc.capabilities(
+      [
+        release("draft", "full"),
+        release("draft", "over"),
+        release("draft", "room"),
+      ],
+      ACTOR
+    );
+    expect(can.get("full")?.addMember).toBe(false);
+    expect(can.get("over")?.addMember).toBe(false);
+    expect(can.get("over")?.removeMember).toBe(true);
+    // The control: one short of the limit still takes a document.
+    expect(can.get("room")?.addMember).toBe(true);
   });
 });
 

@@ -97,6 +97,28 @@ describe("releases routes", () => {
     });
   });
 
+  it("switches one member's action, and reads a release's readiness", () => {
+    expect(
+      parseRestRoute(["releases", "r1", "members", "m1"], "PATCH")
+    ).toMatchObject({
+      method: "changeReleaseMemberAction",
+      routeParams: { releaseId: "r1", memberId: "m1" },
+    });
+    expect(
+      parseRestRoute(["releases", "r1", "readiness"], "GET")
+    ).toMatchObject({
+      method: "getReleaseReadiness",
+      routeParams: { releaseId: "r1" },
+    });
+    // A switch names a member; the members list takes no PATCH.
+    expect(
+      parseRestRoute(["releases", "r1", "members"], "PATCH").method
+    ).not.toBe("changeReleaseMemberAction");
+    expect(
+      parseRestRoute(["releases", "r1", "readiness"], "POST").method
+    ).not.toBe("getReleaseReadiness");
+  });
+
   it("claims only the verb each route declares", () => {
     // A branch that ignored the verb would turn a read into a schedule, or let
     // a GET remove a member. Each case below is a route that must NOT match.

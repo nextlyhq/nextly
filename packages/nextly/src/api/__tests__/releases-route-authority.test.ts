@@ -141,6 +141,17 @@ function namespace() {
       blockingReasons: vi.fn(async () => [
         { memberId: "m1", reason: "AUTHOR_GONE" as const },
       ]),
+      readiness: vi.fn(async () => ({
+        releaseId: "r1",
+        hard: [{ memberId: "m1", code: "DOCUMENT_GONE" }],
+        soft: [],
+      })),
+      changeMemberAction: vi.fn(
+        async (args: { memberId: string; action: string }) => ({
+          id: args.memberId,
+          action: args.action,
+        })
+      ),
       schedule: vi.fn(async () => undefined),
       cancel: vi.fn(async () => undefined),
       // Answers the release as it reads after the rename, so a case can say
@@ -229,6 +240,34 @@ describe("release route authority", () => {
       action: "read",
       resource: "content-releases",
     });
+  });
+
+  it("demands only READ to ask what is wrong with a release's documents", async () => {
+    // The same question as the blockers, asked of every check: whoever may
+    // fix the documents may learn which ones need fixing.
+    expect(await authorityFor("getReleaseReadiness")).toEqual({
+      action: "read",
+      resource: "content-releases",
+    });
+  });
+
+  it("demands create to switch a document's action, leaving publish to the service", async () => {
+    // Switching re-assembles the release. Whether the release is scheduled,
+    // and so needs `publish` too, is something only the service knows.
+    expect(
+      await authorityFor("changeReleaseMemberAction", {
+        body: { action: "unpublish" },
+        params: { releaseId: "r1", memberId: "m1" },
+      })
+    ).toEqual({ action: "create", resource: "content-releases" });
+    expect(api.releases.changeMemberAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        releaseId: "r1",
+        memberId: "m1",
+        action: "unpublish",
+        overrideAccess: false,
+      })
+    );
   });
 
   it("demands publish to publish now", async () => {
@@ -323,6 +362,22 @@ describe("release route input at the untyped boundary", () => {
     );
     expect(res.status).toBe(400);
     expect(api.releases.find).not.toHaveBeenCalled();
+  });
+
+  it("refuses a switch to an action outside the two, before the service", async () => {
+    // `publsih` reaching the applier would WITHDRAW the document, so it is
+    // refused at the boundary as well as by the service.
+    const res = await handleReleaseRequest(
+      new Request("https://example.test/api/releases/r1/members/m1", {
+        method: "PATCH",
+        body: JSON.stringify({ action: "publsih" }),
+        headers: { "Content-Type": "application/json" },
+      }),
+      "changeReleaseMemberAction",
+      { releaseId: "r1", memberId: "m1" }
+    );
+    expect(res.status).toBe(400);
+    expect(api.releases.changeMemberAction).not.toHaveBeenCalled();
   });
 
   it("passes a recognised state through", async () => {

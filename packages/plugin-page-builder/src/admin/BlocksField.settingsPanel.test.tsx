@@ -27,9 +27,8 @@
  */
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import * as React from "react";
-import { useForm } from "react-hook-form";
+import { useForm, type FieldValues } from "react-hook-form";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { OPEN_BUILDER_ACTION } from "./PageBuilderCard";
 
 /** What the entry-fields hook answers with for the test in hand. */
 let entryFields: React.ReactNode | null;
@@ -85,6 +84,7 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   // No document around the field: the state every case here was written
   // against, and the one that offers every component.
   useDocumentIdentity: () => null,
+  navigateTo: vi.fn(),
   // Nor a language the field could know: the component read asks for the
   // app default.
   useDocumentLocale: () => null,
@@ -127,10 +127,24 @@ vi.mock("./DocumentStatusPill", () => ({
   },
 }));
 
-const { BlocksField } = await import("./BlocksField");
+const { PageBuilderView } = await import("./editor/PageBuilderView");
 
-function Host(): React.JSX.Element {
-  const { control, register, setValue } = useForm({
+/**
+ * The blocks field's declaration, as the admin hands it to the view. Typed at
+ * the boundary because `FieldConfig` is the closed union of the built-in
+ * shapes, and a contributed type such as `blocks` has no arm in it.
+ */
+const BODY_FIELD = { name: "body", type: "blocks" } as never;
+
+/**
+ * The document's form, with the builder's view drawn over it while `open`.
+ *
+ * The form stays mounted whether or not the view is, as it does in the admin
+ * when an author moves between the edit form and the builder, so a case can
+ * write to the form first and open the view on what it holds.
+ */
+function Host({ open = true }: { open?: boolean }): React.JSX.Element {
+  const { control, register, setValue } = useForm<FieldValues>({
     defaultValues: { body: undefined, title: "" },
   });
   return (
@@ -154,14 +168,20 @@ function Host(): React.JSX.Element {
       >
         commit blocks
       </button>
-      <BlocksField name="body" control={control} />
+      {open ? (
+        <PageBuilderView
+          control={control}
+          field={BODY_FIELD}
+          readOnly={false}
+          exit={() => {}}
+        />
+      ) : null}
     </>
   );
 }
 
 function openEditor(): void {
   render(<Host />);
-  fireEvent.click(screen.getByRole("button", { name: OPEN_BUILDER_ACTION }));
 }
 
 /** The rail's panel list, as the shell was handed it. */
@@ -284,11 +304,12 @@ describe("offering the Settings panel", () => {
      * means genuinely unsaved blocks.
      */
     entryFields = <p>fields</p>;
-    render(<Host />);
+    const view = render(<Host open={false} />);
 
-    // Commit blocks the way leaving the editor does, then open a fresh one.
+    // Commit blocks the way leaving the editor does, then open a fresh one
+    // over the same form.
     fireEvent.click(screen.getByRole("button", { name: "commit blocks" }));
-    fireEvent.click(screen.getByRole("button", { name: OPEN_BUILDER_ACTION }));
+    view.rerender(<Host open />);
 
     expect(pillDirty.at(-1)).toBe(true);
   });

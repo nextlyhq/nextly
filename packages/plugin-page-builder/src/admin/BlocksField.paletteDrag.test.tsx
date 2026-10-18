@@ -19,17 +19,10 @@
  */
 
 import type { BlockDocument } from "@nextlyhq/blocks-engine";
-import {
-  act,
-  cleanup,
-  fireEvent,
-  render,
-  screen,
-} from "@testing-library/react";
+import { act, cleanup, render } from "@testing-library/react";
 import * as React from "react";
-import { useForm } from "react-hook-form";
+import { useForm, type FieldValues } from "react-hook-form";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { OPEN_BUILDER_ACTION } from "./PageBuilderCard";
 import {
   CAPABILITY_ROUTE_PATH,
   COMPONENT_LIBRARY_ROUTE_PATH,
@@ -297,6 +290,7 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
   // Which document the field sits in. Mutable so one case can put the
   // field inside a component's own row.
   useDocumentIdentity: () => documentIdentity,
+  navigateTo: vi.fn(),
   // Nor a language the field could know: the component read asks for the
   // app default.
   useDocumentLocale: () => null,
@@ -374,16 +368,35 @@ vi.mock("@nextlyhq/plugin-sdk/admin", () => ({
 // Imported after the mocks, which is what makes them take effect: the module
 // resolves the shell at import time, and a specifier already bound to the real
 // module cannot be replaced afterwards.
-const { BlocksField } = await import("./BlocksField");
+const { PageBuilderView } = await import("./editor/PageBuilderView");
 
-/** A form around the field, since it reads its value through a form control. */
+/**
+ * The blocks field's declaration, as the admin hands it to the view. Typed at
+ * the boundary because `FieldConfig` is the closed union of the built-in
+ * shapes, and a contributed type such as `blocks` has no arm in it.
+ */
+const BODY_FIELD = { name: "body", type: "blocks" } as never;
+
+/**
+ * The builder's document view around a form, since the editor reads the
+ * field's value through the form's control.
+ */
 function Host({
   document,
 }: {
   document?: BlockDocument;
 } = {}): React.JSX.Element {
-  const { control } = useForm({ defaultValues: { body: document } });
-  return <BlocksField name="body" control={control} />;
+  const { control } = useForm<FieldValues>({
+    defaultValues: { body: document },
+  });
+  return (
+    <PageBuilderView
+      control={control}
+      field={BODY_FIELD}
+      readOnly={false}
+      exit={() => {}}
+    />
+  );
 }
 
 /** A component's own content, as its content field holds it. */
@@ -395,10 +408,9 @@ function componentDocument(): BlockDocument {
   } as unknown as BlockDocument;
 }
 
-/** Mount the field and open the editor, which is where the two surfaces live. */
+/** Mount the builder's view, whose editor is where the two surfaces live. */
 function openEditor(): void {
   render(<Host />);
-  fireEvent.click(screen.getByRole("button", { name: OPEN_BUILDER_ACTION }));
 }
 
 beforeEach(() => {
@@ -782,7 +794,6 @@ describe("what a component's own content field may offer", () => {
       documentId: "header",
     };
     render(<Host document={componentDocument()} />);
-    fireEvent.click(screen.getByRole("button", { name: OPEN_BUILDER_ACTION }));
 
     const panel = recorded("insertPanel");
     expect((panel.components as { id: string }[]).map(c => c.id)).toEqual([
@@ -829,7 +840,6 @@ describe("what a component's own content field may offer", () => {
       documentId: "a",
     };
     render(<Host document={componentDocument()} />);
-    fireEvent.click(screen.getByRole("button", { name: OPEN_BUILDER_ACTION }));
 
     const panel = recorded("insertPanel");
     expect((panel.components as { id: string }[]).map(c => c.id)).toEqual([
@@ -871,7 +881,6 @@ describe("what a component's own content field may offer", () => {
       documentId: "a",
     };
     render(<Host document={componentDocument()} />);
-    fireEvent.click(screen.getByRole("button", { name: OPEN_BUILDER_ACTION }));
 
     const panel = recorded("insertPanel");
     expect((panel.components as { id: string }[]).map(c => c.id)).toEqual([
@@ -911,7 +920,6 @@ describe("what a component's own content field may offer", () => {
 
     componentAnswer = { items: library, meta: { count: 3, truncated: true } };
     render(<Host document={componentDocument()} />);
-    fireEvent.click(screen.getByRole("button", { name: OPEN_BUILDER_ACTION }));
     expect(
       (recorded("insertPanel").components as { id: string }[]).map(c => c.id)
     ).toEqual(["footer"]);
@@ -919,7 +927,6 @@ describe("what a component's own content field may offer", () => {
 
     componentAnswer = { items: library, meta: { count: 3, truncated: false } };
     render(<Host document={componentDocument()} />);
-    fireEvent.click(screen.getByRole("button", { name: OPEN_BUILDER_ACTION }));
     expect(
       (recorded("insertPanel").components as { id: string }[]).map(c => c.id)
     ).toEqual(["c", "footer"]);
@@ -945,7 +952,6 @@ describe("what a component's own content field may offer", () => {
     componentAnswer = { items: rows, meta: { count: 2, truncated: false } };
     documentIdentity = { kind: "collection", slug: "components" };
     render(<Host document={componentDocument()} />);
-    fireEvent.click(screen.getByRole("button", { name: OPEN_BUILDER_ACTION }));
 
     expect(recorded("insertPanel").components).toBe(rows);
   });

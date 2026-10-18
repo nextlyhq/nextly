@@ -37,8 +37,9 @@ export type ReleaseState =
   | "blocked";
 
 /**
- * What a release is. An ordinary `release` holds any number of documents; a
- * `single` one is a document scheduled on its own, and holds exactly that one.
+ * What a release is. An ordinary `release` holds up to `RELEASE_MEMBER_LIMIT`
+ * documents (200); a `single` one is a document scheduled on its own, and
+ * holds exactly that one.
  *
  * Stored rather than inferred: a release with one member may be an ordinary
  * release still being assembled, and a title can be renamed, so neither tells
@@ -329,3 +330,14 @@ export interface ReleaseCapabilities {
    */
   delete: boolean;
 }
+
+/**
+ * The most documents one release holds.
+ *
+ * Sized so a full release publishes within one pass of the job that runs
+ * releases, on every dialect: a release is settled all together, so one
+ * that no pass can finish holds its documents back. A release made before
+ * the limit and holding more keeps running and can shrink, but takes no new
+ * document.
+ */
+export const RELEASE_MEMBER_LIMIT = 200;

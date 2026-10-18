@@ -584,7 +584,9 @@ export function BlocksEditor<TFieldValues extends FieldValues = FieldValues>({
   } = view;
 
   return (
-    <div className="fixed inset-0 z-50 bg-background">
+    // Fills the view's area, under the admin's lock and recovery notices for
+    // this document, rather than covering the window over them.
+    <div className="h-full bg-background">
       <BuilderShell
         notices={notices}
         onExit={done}

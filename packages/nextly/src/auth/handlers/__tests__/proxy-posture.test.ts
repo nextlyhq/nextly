@@ -14,7 +14,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { AuthRouterDeps } from "../router";
-import { edgeProxyWarning } from "../proxy-posture";
+import { edgeProxyWarning, unkeyedStrategyWarnings } from "../proxy-posture";
 
 describe("edgeProxyWarning", () => {
   it("names security.trustProxy on Vercel when it is unset", () => {
@@ -121,6 +121,44 @@ async function load(settings: {
 
 const reports = (loaded: Loaded) =>
   loaded.warnings.filter(w => (w as { kind?: string }).kind === KIND);
+
+describe("unkeyedStrategyWarnings", () => {
+  const authenticate = async () => ({ type: "pass" as const });
+  const silent = { name: "legacy", authenticate };
+  const answering = {
+    name: "username",
+    authenticate,
+    limitKey: () => ({ handles: false as const }),
+  };
+
+  it("names each configured strategy that cannot answer the limiter's question", () => {
+    const warnings = unkeyedStrategyWarnings({
+      auth: { strategies: [silent, answering, { ...silent, name: "sso" }] },
+    });
+    expect(warnings).toHaveLength(2);
+    expect(warnings[0]).toContain('"legacy"');
+    expect(warnings[1]).toContain('"sso"');
+    for (const warning of warnings) {
+      expect(warning).toContain("cannot tell the sign-in rate limit");
+      expect(warning).toContain("security.trustProxy");
+    }
+  });
+
+  it("says nothing when every configured strategy answers", () => {
+    expect(
+      unkeyedStrategyWarnings({ auth: { strategies: [answering] } })
+    ).toEqual([]);
+  });
+
+  it("says nothing when the auth limiter is off", () => {
+    expect(
+      unkeyedStrategyWarnings({
+        auth: { strategies: [silent] },
+        security: { authRateLimit: { requestsPerHour: 0 } },
+      })
+    ).toEqual([]);
+  });
+});
 
 describe("the request-time fallback warning", () => {
   beforeEach(() => {

@@ -42,6 +42,7 @@ import { ReleasesRepository, type ReleasesDbApi } from "../releases-repository";
 import { ReleasesService } from "../services/releases-service";
 
 import { seedLiveAuthor } from "./helpers/live-author";
+import { READY_CHECKS } from "./helpers/ready-checks";
 import { scheduleAsItStands } from "./helpers/release-writes";
 
 const UPDATE = "update-content-releases";
@@ -216,6 +217,8 @@ function interleavedService(
     canManageReleases: async () => true,
     canActOnDocument: async () => true,
     runDrainNow: async () => undefined,
+    // A rename asks no document check; the stub answers every one as ready.
+    checks: READY_CHECKS,
     recordActivity: async entry => {
       recorded.push(entry);
     },

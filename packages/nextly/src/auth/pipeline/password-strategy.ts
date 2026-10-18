@@ -63,6 +63,13 @@ export function provenSessionEpoch(user: AuthUser): number | undefined {
 }
 
 /**
+ * The built-in password strategies, known by identity rather than by name:
+ * an app's own strategy may also be called `password`, and its key must not
+ * become an account's.
+ */
+const accountKeyedStrategies = new WeakSet<AuthStrategy>();
+
+/**
  * @experimental The built-in `password` strategy. Returns `pass` when the request
  * carries no email/password (so another strategy can claim it), `authenticated`
  * on success, and re-throws the verifier's `NextlyError` on failure so the login
@@ -71,8 +78,16 @@ export function provenSessionEpoch(user: AuthUser): number | undefined {
 export function createPasswordStrategy(
   deps: PasswordStrategyDeps
 ): AuthStrategy {
-  return {
+  const strategy: AuthStrategy = {
     name: "password",
+    // The email it signs in with, as every other flow names an account, so
+    // one address has one budget however it is attacked. It answers for every
+    // request: it runs last, and a request no strategy before it claims is
+    // one it is asked to authenticate.
+    limitKey: ({ body }) => ({
+      handles: true,
+      key: typeof body.email === "string" ? body.email : null,
+    }),
     async authenticate(input): Promise<AuthOutcome> {
       const { email, password } = input.body;
       if (typeof email !== "string" || typeof password !== "string") {
@@ -91,4 +106,14 @@ export function createPasswordStrategy(
       return { type: "authenticated", user };
     },
   };
+  accountKeyedStrategies.add(strategy);
+  return strategy;
+}
+
+/**
+ * Whether `strategy` is a built-in password strategy, whose limit key is an
+ * account's email rather than a key of its own.
+ */
+export function namesAccountKey(strategy: AuthStrategy): boolean {
+  return accountKeyedStrategies.has(strategy);
 }

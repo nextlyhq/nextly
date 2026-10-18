@@ -143,6 +143,25 @@ export interface ReleasesTxApi {
 
 const RELEASES = "nextly_releases";
 const MEMBERS = "nextly_release_members";
+
+/**
+ * The rows a release holds: the one selection every read of membership uses,
+ * so a list, a count and the limit judged under the release lock cannot come
+ * to count different sets.
+ */
+function membersOf(releaseIds: readonly string[]) {
+  // Inferred rather than annotated: it is read both through the port and
+  // inside a transaction, whose where types differ only in name.
+  return {
+    and: [
+      {
+        column: "releaseId",
+        op: "IN" as const,
+        value: [...new Set(releaseIds)],
+      },
+    ],
+  };
+}
 /**
  * Read ONLY to answer whether a member's author may still act. This module owns
  * no user behaviour and writes nothing here; the alternative is resolving an
@@ -380,7 +399,7 @@ function groupMembersByDocument(
  */
 function releaseMovedConflict(
   releaseId: string,
-  change: "add-member" | "remove-member"
+  change: "add-member" | "remove-member" | "change-member-action"
 ): NextlyError {
   return NextlyError.conflict({
     logContext: { reason: "release-moved-since-judged", releaseId, change },
@@ -1236,14 +1255,30 @@ export class ReleasesRepository {
    * dialect this supports, and "no releases" is an ordinary state, not a
    * caller's mistake.
    */
+  /**
+   * How many members each of these releases holds, keyed by release id; a
+   * release holding none is absent. One query that reads the release column
+   * only, since the port has no grouped count, and none when there are no ids.
+   */
+  async memberCountsOf(
+    releaseIds: readonly string[]
+  ): Promise<Map<string, number>> {
+    const counts = new Map<string, number>();
+    if (releaseIds.length === 0) return counts;
+    const rows = await this.db.select<{ releaseId: string }>(MEMBERS, {
+      columns: ["releaseId"],
+      where: membersOf(releaseIds),
+    });
+    for (const row of rows) {
+      counts.set(row.releaseId, (counts.get(row.releaseId) ?? 0) + 1);
+    }
+    return counts;
+  }
+
   async listMembersOf(releaseIds: string[]): Promise<ReleaseMemberRow[]> {
     if (releaseIds.length === 0) return [];
     return this.db.select<ReleaseMemberRow>(MEMBERS, {
-      where: {
-        and: [
-          { column: "releaseId", op: "IN", value: [...new Set(releaseIds)] },
-        ],
-      },
+      where: membersOf(releaseIds),
     });
   }
 
@@ -1266,11 +1301,22 @@ export class ReleasesRepository {
    */
   async addMember(
     input: NewReleaseMember,
-    allowedStates: readonly ReleaseState[]
+    allowedStates: readonly ReleaseState[],
+    /**
+     * Asked how many members the release holds, under the release-row lock
+     * and inside the insert's transaction; an error it returns refuses the
+     * add with nothing written. Under the lock, concurrent adds to one
+     * release are judged one after another, so a limit holds however many
+     * arrive at once.
+     */
+    refuseWhenHolding?: (held: number) => NextlyError | null
   ): Promise<ReleaseMemberRow> {
     // Tells a fence miss from a database failure, as in `blockReleases`: the
     // flag decides, not the shape of the error.
     let fenceMissed = false;
+    // Held in an object so the refusal set inside the transaction keeps its
+    // type once the transaction has thrown it.
+    const limit: { refused: NextlyError | null } = { refused: null };
     let row: ReleaseMemberRow;
     try {
       row = await this.db.transaction(async tx => {
@@ -1282,6 +1328,19 @@ export class ReleasesRepository {
         if (release === null) {
           fenceMissed = true;
           throw releaseMovedConflict(input.releaseId, "add-member");
+        }
+        if (refuseWhenHolding !== undefined) {
+          const held = await tx.select<{ memberKey: string }>(MEMBERS, {
+            columns: ["memberKey"],
+            where: membersOf([input.releaseId]),
+          });
+          // The same document again is the duplicate it is, however full the
+          // release: the unique index refuses it below, as it always has.
+          const key = releaseMemberKey(input.releaseId, input);
+          if (!held.some(member => member.memberKey === key)) {
+            limit.refused = refuseWhenHolding(held.length);
+            if (limit.refused !== null) throw limit.refused;
+          }
         }
         const member: ReleaseMemberRow = {
           // Time-ordered, so members added within one second — one stored
@@ -1312,6 +1371,7 @@ export class ReleasesRepository {
       if (fenceMissed) {
         throw releaseMovedConflict(input.releaseId, "add-member");
       }
+      if (limit.refused !== null) throw limit.refused;
       throw error;
     }
     // AFTER THE COMMIT, never inside it, for the reason `blockReleases` gives.
@@ -1377,6 +1437,77 @@ export class ReleasesRepository {
 
     // After the commit, as for an add.
     await this.flushMembers(removed === undefined ? [] : [removed]);
+  }
+
+  /**
+   * Switch a member between going live and coming down, in one transaction
+   * with a bump of the release's revision, and only while the release is in
+   * one of `allowedStates` — the fence an add and a removal take, for the same
+   * reason: a release committed after the caller judged it refuses the switch.
+   *
+   * The member is read again under the release's lock, so the answer is the
+   * row as stored rather than as the caller last saw it. When it already has
+   * `action`, nothing is written and the stored row is the answer: a caller
+   * that read the old action, while another switch committed, is told what
+   * the member now holds, and is not told a switch it asked for happened when
+   * the stored row says otherwise.
+   *
+   * The member's key does not change, since it names the document and not
+   * what happens to it.
+   *
+   * @throws NextlyError CONFLICT when the release is not there or not in
+   *   `allowedStates`, and NOT_FOUND when the member has gone since it was
+   *   read; nothing is written then.
+   */
+  async changeMemberAction(
+    member: Pick<ReleaseMemberRow, "id" | "releaseId">,
+    action: ReleaseMemberAction,
+    allowedStates: readonly ReleaseState[]
+  ): Promise<ReleaseMemberRow> {
+    const where: VersionsWhere = {
+      and: [
+        { column: "id", op: "=", value: member.id },
+        { column: "releaseId", op: "=", value: member.releaseId },
+      ],
+    };
+    let fenceMissed = false;
+    let outcome: { row: ReleaseMemberRow; wrote: boolean } | undefined;
+    try {
+      outcome = await this.db.transaction(async tx => {
+        await tx.lockRow(RELEASES, member.releaseId);
+        const [stored] = await tx.select<ReleaseMemberRow>(MEMBERS, { where });
+        if (stored === undefined) return undefined;
+        if (stored.action === action) return { row: stored, wrote: false };
+        if (
+          (await this.advanceRevision(tx, member.releaseId, allowedStates)) ===
+          null
+        ) {
+          fenceMissed = true;
+          throw releaseMovedConflict(member.releaseId, "change-member-action");
+        }
+        await tx.updateCount(MEMBERS, { action }, where);
+        return { row: { ...stored, action }, wrote: true };
+      });
+    } catch (error) {
+      if (fenceMissed) {
+        throw releaseMovedConflict(member.releaseId, "change-member-action");
+      }
+      throw error;
+    }
+    if (outcome === undefined) {
+      // Removed between the caller's read and this write.
+      throw NextlyError.notFound({
+        logContext: {
+          reason: "release-member-not-found",
+          memberId: member.id,
+          releaseId: member.releaseId,
+        },
+      });
+    }
+    // After the commit: the document's cached pages were bounded by the
+    // action it had. Nothing to drop when nothing was written.
+    if (outcome.wrote) await this.flushMembers([outcome.row]);
+    return outcome.row;
   }
 
   /**

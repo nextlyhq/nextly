@@ -11,10 +11,12 @@ import {
   type NewPasswordFormValues,
   useNewPasswordForm,
 } from "@admin/components/shared/auth/AuthNewPasswordFields";
+import { AuthRefusalNotice } from "@admin/components/shared/auth/AuthRefusalNotice";
 import { AuthStatusCard } from "@admin/components/shared/auth/AuthStatusCard";
 import { toast } from "@admin/components/ui";
 import { Link } from "@admin/components/ui/link";
 import { ROUTES } from "@admin/constants/routes";
+import { useAuthRefusal } from "@admin/hooks/useAuthRefusal";
 import { getCsrfToken } from "@admin/lib/api/csrf";
 import { apiErrorMessage } from "@admin/lib/api/parseApiError";
 import { resetPassword } from "@admin/services/authApi";
@@ -28,6 +30,9 @@ export function ResetPassword({ searchParams }: ResetPasswordProps) {
     typeof searchParams?.token === "string" ? searchParams.token : null;
 
   const [isLoading, setIsLoading] = useState(false);
+  // A refused submission is shown in the form, where it stays while the
+  // person acts on it; a toast is kept for every other failure.
+  const authRefusal = useAuthRefusal();
   const [isSuccess, setIsSuccess] = useState(false);
 
   const form = useNewPasswordForm();
@@ -36,12 +41,14 @@ export function ResetPassword({ searchParams }: ResetPasswordProps) {
     if (!token) return;
 
     setIsLoading(true);
+    authRefusal.clear();
 
     try {
       const csrfToken = await getCsrfToken();
       await resetPassword(token, values.newPassword, csrfToken);
       setIsSuccess(true);
     } catch (error: unknown) {
+      if (authRefusal.take(error)) return;
       toast.error("Password reset failed", {
         description: apiErrorMessage(
           error,
@@ -95,6 +102,7 @@ export function ResetPassword({ searchParams }: ResetPasswordProps) {
       title="Reset Password"
       description="Enter your new password below"
     >
+      <AuthRefusalNotice refusal={authRefusal.refusal} />
       <FormProvider {...form}>
         <form
           onSubmit={e => {
