@@ -512,6 +512,7 @@ export async function generateMigration(
  */
 function buildDisableSpec(
   entity: MinimalConfigEntity,
+  kind: I18nTransitionKind,
   prevMain: TableSpec,
   dialect: SupportedDialect,
   defaultLocale: string
@@ -529,6 +530,7 @@ function buildDisableSpec(
   return {
     dialect,
     collection: entity.slug,
+    kind,
     mainTable: prevMain.name,
     companionTable: `${prevMain.name}_locales`,
     defaultLocale,
@@ -590,6 +592,7 @@ function planCompanionMigrations(
     const spec = deriveCompanionSpec({
       builtBy: "codeFirst" as const,
       slug: c.slug,
+      kind: entityKind,
       dbName: c.tableName,
       fields: c.fields,
       dialect,
@@ -620,7 +623,13 @@ function planCompanionMigrations(
       //   - a translatable field ADDED in the same edit is left to the normal diff, instead of
       //     being restored from a companion that never had that column (which emitted SQL that
       //     failed on apply).
-      const disableSpec = buildDisableSpec(c, prevMain, dialect, defaultLocale);
+      const disableSpec = buildDisableSpec(
+        c,
+        entityKind,
+        prevMain,
+        dialect,
+        defaultLocale
+      );
       if (!disableSpec) continue;
       const plan = planCompanionMigration({
         spec: disableSpec,
@@ -712,6 +721,7 @@ function planFieldsLeavingTranslation(
       plan: planFieldLeavesTranslationMigration({
         dialect,
         collection: c.slug,
+        kind,
         mainTable: c.tableName,
         companionTable: `${c.tableName}_locales`,
         defaultLocale,

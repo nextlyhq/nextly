@@ -62,6 +62,10 @@ import {
   liveColumnsOf,
   retiredTablesNamedForErasure,
 } from "../../../init/retired-auth-tables";
+import {
+  CONTENT_EVENTS_TABLE,
+  contentEventsTables,
+} from "../../../schemas/content-events";
 import { NOTICES_TABLE, noticesTables } from "../../../schemas/notices";
 import { PLUGIN_SETTINGS_TABLE } from "../../../schemas/plugin-settings/table-name";
 import {
@@ -2630,6 +2634,10 @@ export class UserMutationService extends BaseService {
     // reason notices are.
     const versionViewsExist = await this.tablePresent(VERSION_VIEWS_TABLE);
 
+    // The record of content events names each event's actor; the name goes
+    // with the account. Probed for the reason the tables above are.
+    const contentEventsExist = await this.tablePresent(CONTENT_EVENTS_TABLE);
+
     // Who last edited a plugin's settings, probed out here for the reason the
     // three above are: a failed statement aborts an open Postgres transaction
     // and there would be no way back.
@@ -2665,6 +2673,9 @@ export class UserMutationService extends BaseService {
         activityLog: auditTables.activityLog,
       }),
       ...(authShape !== false && { auditLog: auditTables.auditLog }),
+      ...(contentEventsExist && {
+        contentEvents: contentEventsTables(this.dialect).nextlyContentEvents,
+      }),
     };
     const unstampedAuditTables = new Set<"activityLog" | "auditLog">(
       authShape === "unstamped" ? ["auditLog"] : []

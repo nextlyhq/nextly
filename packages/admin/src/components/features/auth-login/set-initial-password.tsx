@@ -10,8 +10,10 @@ import {
   type NewPasswordFormValues,
   useNewPasswordForm,
 } from "@admin/components/shared/auth/AuthNewPasswordFields";
+import { AuthRefusalNotice } from "@admin/components/shared/auth/AuthRefusalNotice";
 import { toast } from "@admin/components/ui";
 import { useApi } from "@admin/hooks/useApi";
+import { useAuthRefusal } from "@admin/hooks/useAuthRefusal";
 import { getCsrfToken } from "@admin/lib/api/csrf";
 import { apiErrorMessage, isApiError } from "@admin/lib/api/parseApiError";
 
@@ -76,11 +78,15 @@ export function SetInitialPassword({
 }: SetInitialPasswordProps) {
   const { api } = useApi();
   const [isLoading, setIsLoading] = useState(false);
+  // A refused submission is shown in the form, where it stays while the
+  // person acts on it; a toast is kept for every other failure.
+  const authRefusal = useAuthRefusal();
 
   const form = useNewPasswordForm();
 
   async function onSubmit(values: NewPasswordFormValues) {
     setIsLoading(true);
+    authRefusal.clear();
     try {
       const csrfToken = await getCsrfToken();
       const result = await api.public.post<{ next?: string }>(
@@ -97,6 +103,8 @@ export function SetInitialPassword({
       onDone(result?.next);
     } catch (error: unknown) {
       const ended = endsTheFlow(error);
+      // A refusal that does not end the flow is shown in the form instead.
+      if (!ended && authRefusal.take(error)) return;
       toast.error("Could not set your password", {
         description: ended
           ? "This link is no longer valid. Please sign in again."
@@ -122,6 +130,7 @@ export function SetInitialPassword({
         </p>
       </div>
 
+      <AuthRefusalNotice refusal={authRefusal.refusal} />
       <FormProvider {...form}>
         <form
           onSubmit={e => {

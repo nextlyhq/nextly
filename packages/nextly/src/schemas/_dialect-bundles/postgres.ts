@@ -132,3 +132,9 @@ export { nextlyNoticesPg as nextlyNotices } from "../notices/postgres";
 // Version view markers; in the bundle so freshPushSchema creates the table on
 // a fresh database, for the reason the release tables above give.
 export { nextlyVersionViewsPg as nextlyVersionViews } from "../version-views/postgres";
+// The record of content events; in the bundle so freshPushSchema creates the
+// tables on a fresh database, for the reason the release tables above give.
+export {
+  nextlyContentEventsPg as nextlyContentEvents,
+  nextlyContentEventPartsPg as nextlyContentEventParts,
+} from "../content-events/postgres";

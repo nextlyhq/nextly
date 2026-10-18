@@ -289,7 +289,7 @@ describe("checkRouteCsrf: the default origin check", () => {
         [],
         "cookie"
       )
-    ).toEqual({ valid: false, error: "Missing CSRF token" });
+    ).toEqual({ valid: false, error: "Missing CSRF token", reason: "token" });
   });
 });
 

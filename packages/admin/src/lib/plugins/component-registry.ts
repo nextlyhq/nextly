@@ -103,9 +103,10 @@ export interface CustomEditViewProps {
  * the save shortcut — so these props are the document's facts and the form's
  * state, not a second way to save.
  *
- * Restoring recovered work replaces the form's values and mounts the view
- * afresh, so a view may keep a working copy of the document read when it
- * mounts.
+ * Restoring recovered work unmounts the view, replaces the form's values, then
+ * mounts the view afresh, so a view may keep a working copy of the document
+ * read when it mounts, and anything it writes into the form as it unmounts is
+ * replaced by the restore.
  */
 export interface DocumentViewProps {
   /** The collection's slug, when the document is an entry. */

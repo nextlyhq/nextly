@@ -714,6 +714,10 @@ When a translated field becomes shared, `migrate:create` writes a `<timestamp>_s
 
 On PostgreSQL and SQLite the file runs in one transaction, so a failed attempt leaves nothing behind and `nextly migrate` runs it again.
 
+### Core tables missing after an upgrade
+
+A release can add tables to Nextly's own core schema. An existing database gets them only through `nextly migrate` (or a boot run with `db.runMigrationsOnBoot`); a production boot never creates tables. Until you run it, every boot logs one warning naming each missing core table, and whatever reads or writes those tables fails: deleting a document, for one, rolls back. Run `nextly migrate` after every upgrade, and the warning goes away.
+
 ### Core schema drift after `nextly upgrade`
 
 User migration files contain **user-schema only** — core system tables are owned by the Nextly package version and reconciled by `nextly migrate` Phase 1. If `nextly migrate` reports core schema drift after upgrading from a very early alpha (e.g. a hand-edited bundled file), run `nextly upgrade --reconcile-core`. It reconciles core in dev-loose mode and prompts for confirmation on each destructive operation. Use it only when migrate reports core drift.

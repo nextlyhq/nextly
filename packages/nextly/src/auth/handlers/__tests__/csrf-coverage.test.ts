@@ -9,6 +9,7 @@
 import { describe, it, expect } from "vitest";
 
 import { NULL_AUDIT_LOG_WRITER } from "../../../domains/audit/audit-log-writer";
+import { COOKIE_NAMES } from "../../cookies/cookie-config";
 import { InMemoryRateLimitStore } from "../../../middleware/rate-limit";
 import { routeAuthRequest, type AuthRouterDeps } from "../router";
 
@@ -126,6 +127,23 @@ const CSRF_PROTECTED_ROUTES: Array<{
     path: "verify-email/resend",
     body: { email: "a@b.c" },
   },
+  // These three refuse through the shared `csrfRefusal` helper, where every
+  // row above builds its refusal itself, so both paths are held here.
+  {
+    method: "POST",
+    path: "accept-invite",
+    body: { token: "t", password: "pw" },
+  },
+  {
+    method: "POST",
+    path: "set-initial-password",
+    body: { pendingToken: "t", newPassword: "pw" },
+  },
+  {
+    method: "POST",
+    path: "challenge/resolve",
+    body: { pendingToken: "t", response: {} },
+  },
 ];
 
 describe("CSRF coverage", () => {
@@ -167,6 +185,56 @@ describe("CSRF coverage", () => {
     expect(recording.events.every(e => e.kind === "csrf-failed")).toBe(true);
     expect(recording.events.map(e => e.metadata?.path).sort()).toEqual(
       eligible.map(r => r.path).sort()
+    );
+  });
+
+  // A refusal says which check refused, so the form can say what to do: a
+  // refused origin needs the app's own address, a refused token a fresh page.
+  // The request carries a valid token pair here, so only its origin is wrong:
+  // a page at 127.0.0.1 posting to an app whose own address reads localhost,
+  // which is what `next dev` answers when opened at the other name.
+  describe("a refusal says which check refused", () => {
+    const refusedRows = CSRF_PROTECTED_ROUTES.filter(
+      r => r.path !== "change-password"
+    );
+
+    it.each(refusedRows)(
+      "$method /auth/$path names a refused origin and the app's own address",
+      async ({ method, path, body }) => {
+        const req = new Request(
+          `http://localhost:3000/admin/api/auth/${path}`,
+          {
+            method,
+            headers: {
+              "Content-Type": "application/json",
+              Origin: "http://127.0.0.1:3000",
+              Cookie: `${COOKIE_NAMES.csrf}=matching-token`,
+            },
+            body: JSON.stringify({ ...body, csrfToken: "matching-token" }),
+          }
+        );
+        const res = await routeAuthRequest(req, path, makeStubDeps());
+        expect(res!.status).toBe(403);
+        const payload = await res!.json();
+        expect(payload.error).toMatchObject({
+          code: "CSRF_FAILED",
+          message: "Invalid request origin",
+          data: { reason: "origin", appOrigin: "http://localhost:3000" },
+        });
+      }
+    );
+
+    it.each(refusedRows)(
+      "$method /auth/$path names a refused token, and no address",
+      async ({ method, path, body }) => {
+        const res = await routeAuthRequest(
+          makeRequest(method, path, body),
+          path,
+          makeStubDeps()
+        );
+        const payload = await res!.json();
+        expect(payload.error.data).toEqual({ reason: "token" });
+      }
     );
   });
 

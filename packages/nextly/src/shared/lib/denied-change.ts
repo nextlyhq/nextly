@@ -35,6 +35,7 @@ import { isDeepStrictEqual } from "node:util";
 import { NextlyError } from "../../errors";
 
 import { detachData } from "./detach";
+import type { ValidationIssue } from "./entry-validation";
 
 /**
  * Every field name a schema declares, at any depth.
@@ -518,4 +519,29 @@ function assign(
     writable: true,
     configurable: true,
   });
+}
+
+/**
+ * The issues a promotion is refused with, whether its judge returns them (the
+ * schema's) or throws them (a field rule's, from
+ * {@link resolvePromotedDocument}, since a publish must not go on past a
+ * forbidden field). For a check that reports the refusal rather than making
+ * it: the thrown refusal's own issues are read back, not restated.
+ */
+export async function refusalIssues(
+  judge: () => Promise<ValidationIssue[]>
+): Promise<ValidationIssue[]> {
+  try {
+    return await judge();
+  } catch (error) {
+    const data = NextlyError.is(error) ? error.publicData : undefined;
+    if (
+      NextlyError.isCode(error, "VALIDATION_ERROR") &&
+      data !== undefined &&
+      "errors" in data
+    ) {
+      return data.errors;
+    }
+    throw error;
+  }
 }
