@@ -47,7 +47,6 @@ import {
 } from "../../shared/lib/run-adapter-transaction";
 import type { AuthUser } from "../../types/auth";
 import { readProxyTrustSettings } from "../../utils/proxy-trust";
-import { normalizeAccountEmail } from "../credentials/account-email";
 import { passwordCredentialDeps } from "../credentials/credential-deps";
 import { verifyCredentials } from "../credentials/verify-credentials";
 import { ChallengeRegistry } from "../pipeline/challenge";
@@ -306,53 +305,54 @@ export function buildAuthRouterDeps(
       const { seedSuperAdmin } = await import(
         "../../database/seeders/super-admin"
       );
+      const { ServiceContainer } = await import("../../services/index");
+      const { isFirstAdministratorTaken } = await import(
+        "../../domains/users/services/last-super-admin"
+      );
       const adapter = getService("adapter");
 
       // Seed permissions first (seedSuperAdmin needs them to assign to the admin)
       await seedPermissions(adapter, { silent: true });
 
-      // seedSuperAdmin handles password hashing internally
+      // The account is created as setup's: it becomes the install's first
+      // administrator, through the grant made under the role row's lock, or
+      // is not created at all. Of setups racing on an empty install exactly
+      // one wins, and a loser's transaction rolls back before its account or
+      // `user.created` event exist. An address that already has an account,
+      // which may be a stranger's sign-up, is refused as a duplicate.
+      let created: { id: string | number };
+      try {
+        created = await new ServiceContainer(adapter).users.createLocalUser(
+          {
+            email: data.email,
+            name: data.name,
+            password: data.password,
+            isActive: true,
+            emailVerification: "admin-vouched",
+          },
+          undefined,
+          "setup"
+        );
+      } catch (error) {
+        if (isFirstAdministratorTaken(error)) return null;
+        throw error;
+      }
+
+      // The role's permissions; the account already holds the role.
       const result = await seedSuperAdmin(adapter, {
         email: data.email,
         password: data.password,
         name: data.name,
         silent: true,
-        // Setup creates the administrator's account; it never adopts one that
-        // already holds the address, which may be a stranger's sign-up.
-        reuseExistingAccount: false,
-        // Nor does it hand out the role itself: the account is the
-        // administrator only if its creation won the first-administrator
-        // grant, which one of any setups racing on an empty install wins.
         assignRole: false,
       });
-
       if (!result.success) {
         throw new Error(
           result.errorMessages?.[0] || "Failed to create admin account"
         );
       }
 
-      const db = adapter.getDrizzle();
-      const schema = getDialectTables();
-      const { eq } = await import("drizzle-orm");
-      const users = await db
-        .select({ id: schema.users.id })
-        .from(schema.users)
-        .where(eq(schema.users.email, normalizeAccountEmail(data.email)))
-        .limit(1);
-
-      const id = users[0]?.id ? String(users[0].id) : "";
-      const { superAdminRoleHeldBy } = await import(
-        "../../domains/users/services/last-super-admin"
-      );
-      if (!id || !(await superAdminRoleHeldBy(db, schema, id))) {
-        // This setup lost the race: another made the administrator first.
-        // Its account goes, so the setup's address and password open nothing.
-        if (id) await db.delete(schema.users).where(eq(schema.users.id, id));
-        return null;
-      }
-
-      return { id, email: data.email, name: data.name };
+      return { id: String(created.id), email: data.email, name: data.name };
     },
 
     seedPermissions: async () => {

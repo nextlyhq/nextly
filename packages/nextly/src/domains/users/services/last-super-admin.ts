@@ -290,27 +290,26 @@ async function rolesConferringSuperAdmin(
   return [...conferring];
 }
 
-/** Whether `userId` itself holds the `super-admin` role in force. */
-export async function superAdminRoleHeldBy(
-  db: LastSuperAdminTx,
-  tables: LastSuperAdminTables,
-  userId: string
-): Promise<boolean> {
-  const { roles, userRoles } = tables;
-  const [role] = await db
-    .select({ id: roles.id })
-    .from(roles)
-    .where(eq(roles.slug, SUPER_ADMIN_ROLE_SLUG))
-    .limit(1);
-  if (!role) return false;
-  const held = await superAdminHolders(
-    db,
-    tables,
-    [String(role.id)],
-    eq(userRoles.userId, userId),
-    { activeOnly: false }
-  ).limit(1);
-  return held.length > 0;
+const FIRST_ADMINISTRATOR_TAKEN = "first-administrator-taken";
+
+/**
+ * The refusal of a setup whose account could not become the install's first
+ * administrator, because one already exists or another setup won the grant.
+ * Thrown before the account's transaction commits, so nothing is created.
+ */
+export function firstAdministratorTaken(): NextlyError {
+  return NextlyError.conflict({
+    reason: "state",
+    logContext: { reason: FIRST_ADMINISTRATOR_TAKEN },
+  });
+}
+
+/** Whether `error` is that refusal. */
+export function isFirstAdministratorTaken(error: unknown): boolean {
+  return (
+    NextlyError.is(error) &&
+    error.logContext?.reason === FIRST_ADMINISTRATOR_TAKEN
+  );
 }
 
 /** The slice of a Drizzle transaction the first-administrator grant writes through. */
