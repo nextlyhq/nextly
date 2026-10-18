@@ -362,6 +362,41 @@ describeEachDialect("a shared field that becomes translated", dialect => {
     }
   );
 
+  it("keeps the value where it was when moving it fails, and moves it on the next try", async () => {
+    // The move runs statement by statement, and MySQL commits each schema statement, so a copy
+    // refused part-way can leave the companion holding a new, empty column. The value stays on
+    // main, where readers still find it, and the next apply takes the companion as it is.
+    const id = await seedCollection();
+    const dialog = PATHS.find(p => p.path.includes("schema dialog"));
+    if (!dialog) throw new Error("the collection dialog path is missing");
+    const adapter = current.adapter as unknown as {
+      executeQuery(statement: string, params?: unknown[]): Promise<unknown[]>;
+    };
+    const original = adapter.executeQuery.bind(adapter);
+    const injected = vi
+      .spyOn(adapter, "executeQuery")
+      .mockImplementation((statement, params) =>
+        statement.startsWith("INSERT INTO") &&
+        statement.includes("dc_posts_locales")
+          ? Promise.reject(new Error("injected copy failure"))
+          : original(statement, params)
+      );
+
+    const failed = await dialog.change(TRANSLATED).then(
+      () => undefined,
+      (error: unknown) => error
+    );
+    injected.mockRestore();
+
+    expect(String(failed)).toMatch(/injected copy failure/);
+    expect(await readCollection(id)).toBe("Hello");
+
+    await dialog.change(TRANSLATED);
+
+    expect((await companionHeadings("dc_posts", id)).en).toBe("Hello");
+    expect(await readCollection(id)).toBe("Hello");
+  });
+
   it("keeps English's value when a field that left translation comes back", async () => {
     // A translated field made shared keeps English's value as the shared one; made translated
     // again, that value has to come back as English's, beside the archive restoring the rest.
