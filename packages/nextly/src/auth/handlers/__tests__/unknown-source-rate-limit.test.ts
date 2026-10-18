@@ -746,3 +746,70 @@ describe("strategies that name the account a sign-in targets", () => {
     }
   );
 });
+
+describe("setup with its token", () => {
+  // Setup checks its CSRF token before the setup token, so these requests
+  // carry both: what is under test is the limit, not the CSRF check.
+  const csrf = { cookie: "nextly_csrf=csrf-token" };
+  const VALID = "the-valid-setup-token";
+
+  function withSetup(options: Parameters<typeof harness>[0]): Harness {
+    const h = harness(options);
+    let administrator = false;
+    h.deps.hasAdministrator = async () => administrator;
+    h.deps.setupToken = {
+      required: true,
+      verify: async presented => (presented === VALID ? "valid" : "invalid"),
+      spend: async () => {},
+      claim: async () => ({ release: async () => {} }),
+    };
+    h.deps.createSuperAdmin = async data => {
+      administrator = true;
+      return { id: "admin-1", email: data.email, name: data.name };
+    };
+    h.deps.fetchSessionRoles = async () => ({
+      roleIds: [],
+      validUntil: undefined,
+    });
+    h.deps.storeRefreshToken = async () => {};
+    return h;
+  }
+
+  const setup = (
+    h: Harness,
+    setupToken: string,
+    email: string,
+    headers: Record<string, string> = {}
+  ) =>
+    post(
+      h,
+      "setup",
+      {
+        email,
+        name: "Owner",
+        password: "Str0ng-P@ssw0rd!",
+        setupToken,
+        csrfToken: "csrf-token",
+      },
+      { ...csrf, ...headers }
+    );
+
+  it("completes with the valid token from an unresolved source once wrong ones spent the ceiling", async () => {
+    const h = withSetup({ budget: 1 }); // a ceiling of 100
+    for (let i = 0; i < 100; i++)
+      await setup(h, `wrong-${i}`, `guess-${i}@example.com`);
+    expect((await setup(h, "wrong-again", "late@example.com")).status).toBe(
+      429
+    );
+    expect((await setup(h, VALID, "owner@example.com")).status).toBe(201);
+  });
+
+  it("completes with the valid token from a resolved address whose own budget is spent", async () => {
+    const from = { "x-forwarded-for": "203.0.113.7" };
+    const h = withSetup({ budget: 2, trustProxy: true });
+    await setup(h, "wrong-1", "a@example.com", from);
+    await setup(h, "wrong-2", "b@example.com", from);
+    expect((await setup(h, "wrong-3", "c@example.com", from)).status).toBe(429);
+    expect((await setup(h, VALID, "owner@example.com", from)).status).toBe(201);
+  });
+});

@@ -22,5 +22,11 @@ expectTypeOf<AdminReleaseCapabilities>().toEqualTypeOf<ServerReleaseCapabilities
 // And the capabilities the admin's controls are drawn from, by name, so the
 // assertion above cannot pass by both sides losing one.
 expectTypeOf<keyof AdminReleaseCapabilities>().toEqualTypeOf<
-  "schedule" | "cancel" | "addMember" | "removeMember" | "publishNow"
+  | "schedule"
+  | "cancel"
+  | "addMember"
+  | "removeMember"
+  | "publishNow"
+  | "update"
+  | "delete"
 >();

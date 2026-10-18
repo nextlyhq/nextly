@@ -51,7 +51,18 @@ every database; before, both could become Super Admin.
 closing at the first account, so the owner can still create the administrator
 after a stranger has registered. An install that has accounts but where nobody
 holds Super Admin now reports setup as open: give one of its accounts the role
-before upgrading.
+before upgrading. An administrator whose authority comes through a role that
+inherits Super Admin counts as one. Setup never takes over an existing account:
+an address that already has one, such as a sign-up, is refused.
+
+Setups racing on an empty install make exactly one administrator: the others
+are answered that setup is complete, and create no account.
+
+**For code that builds the auth router's dependencies itself** (`AuthRouterDeps`
+from `nextly/auth`): `getUserCount` is replaced by `hasAdministrator`, which
+answers whether anyone holds Super Admin; `allowRegistration` is added; and
+`createSuperAdmin` may resolve to `null` when another setup made the
+administrator first. Apps that use Nextly's own route handlers need no change.
 
 Creating the Super Admin role from two requests at once no longer fails on
 MySQL with a duplicate. On MySQL, creating it next to an existing role that

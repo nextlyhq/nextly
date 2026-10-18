@@ -9,17 +9,16 @@ import { getNextlyLogger } from "../../observability/logger";
 import { getTrustedClientIp } from "../../utils/get-trusted-client-ip";
 import { sessionCookies } from "../cookies/session-cookies";
 import { validatePasswordStrength } from "../credentials/password-strength";
-import { readCsrfCookie, readCsrfFromRequest } from "../csrf/csrf-cookie";
-import { validateCsrf } from "../csrf/validate";
 import { buildClaims } from "../jwt/claims";
 import { signAccessTokenWithExpiry } from "../jwt/sign";
 import type { SessionRoles } from "../session/session-roles";
+import type { TokenVerdict } from "../setup-token/setup-token";
 // hashPassword not needed here -- seedSuperAdmin handles hashing internally
 
 import {
   buildAuthErrorResponse,
   buildCookieHeaders,
-  csrfFailure,
+  csrfRefusal,
   jsonResponse,
 } from "./handler-utils";
 import { storeNewRefreshToken } from "./issue-session";
@@ -53,11 +52,25 @@ export interface SetupHandlerDeps {
    * install has an administrator, and setup must still create one.
    */
   hasAdministrator: () => Promise<boolean>;
+  /** The production setup token, and the claim one setup holds at a time. */
+  setupToken: {
+    /** Whether setup needs a token: in production, until an administrator exists. */
+    required: boolean;
+    verify: (presented: unknown) => Promise<TokenVerdict>;
+    /** Discard the stored token once the administrator exists. */
+    spend: () => Promise<void>;
+    claim: () => Promise<{ release: () => Promise<void> } | null>;
+  };
+  /**
+   * Create the administrator's account, or answer null when another setup
+   * created the administrator first: of setups racing on an empty install,
+   * exactly one is made the administrator, and the others create nothing.
+   */
   createSuperAdmin: (data: {
     email: string;
     name: string;
     password: string;
-  }) => Promise<{ id: string; email: string; name: string }>;
+  }) => Promise<{ id: string; email: string; name: string } | null>;
   /** The roles in force, and when the first of them lapses; see `SessionRoles`. */
   fetchSessionRoles: (userId: string) => Promise<SessionRoles>;
   seedPermissions: () => Promise<void>;
@@ -75,9 +88,19 @@ export interface SetupHandlerDeps {
   trustedProxyIps: string[];
 }
 
+/** The refusal once the install has its administrator, on every path here. */
+function setupCompleteResponse(): Response {
+  return jsonResponse(403, {
+    error: {
+      code: "SETUP_COMPLETE",
+      message: "Setup already completed",
+    },
+  });
+}
+
 export async function handleSetupStatus(
   request: Request,
-  deps: Pick<SetupHandlerDeps, "hasAdministrator">
+  deps: Pick<SetupHandlerDeps, "hasAdministrator" | "setupToken">
 ): Promise<Response> {
   try {
     const isSetup = await deps.hasAdministrator();
@@ -87,7 +110,13 @@ export async function handleSetupStatus(
     // drive the bootstrap-form redirect guard without reinterpreting the
     // same boolean. The pair also satisfies the section 5.1 "no Boolean-only
     // respondData payload" rule.
-    return respondData({ isSetup, requiresInitialUser: !isSetup });
+    // `requiresSetupToken` tells the admin's setup form to ask for the token,
+    // and where it is found; it says nothing about the token itself.
+    return respondData({
+      isSetup,
+      requiresInitialUser: !isSetup,
+      requiresSetupToken: !isSetup && deps.setupToken.required,
+    });
   } catch (err) {
     // Surface a 503 rather than synthesising a default `isSetup` -- the
     // bootstrap-gate must never claim "no users exist" on incomplete data.
@@ -106,10 +135,94 @@ export async function handleSetupStatus(
   }
 }
 
+/**
+ * In production, until an administrator exists, setup needs the token.
+ * Judged before the auth rate limit: a valid token completes setup whatever
+ * any budget holds, so spending them can never keep setup closed. A wrong,
+ * missing or expired one is counted against the limit through `limitWrong`,
+ * and all three are answered alike. Null when setup may go on.
+ */
+async function setupTokenRefusal(
+  presented: unknown,
+  setupToken: SetupHandlerDeps["setupToken"],
+  limitWrong: () => Promise<Response | null>
+): Promise<Response | null> {
+  if (!setupToken.required) return null;
+  const verdict = await setupToken.verify(presented);
+  if (verdict === "closed") {
+    return jsonResponse(403, {
+      error: {
+        code: "SETUP_TOKEN_REQUIRED",
+        message:
+          "Setup is closed: the setup token configured for this install is too weak. See the server's output.",
+      },
+    });
+  }
+  if (verdict !== "invalid") return null;
+  const limited = await limitWrong();
+  if (limited) return limited;
+  return jsonResponse(403, {
+    error: {
+      code: "SETUP_TOKEN_REQUIRED",
+      message:
+        "A valid setup token is required. Find it in the server's output, or set NEXTLY_SETUP_TOKEN.",
+    },
+  });
+}
+
+/**
+ * The refusal for a setup body missing a field or carrying a weak password,
+ * or null when the administrator can be created from it.
+ */
+function setupInputRefusal(
+  body: { email?: string; name?: string; password?: string },
+  request: Request
+): Response | null {
+  const { email, name, password } = body;
+  if (!email || !name || !password) {
+    return jsonResponse(400, {
+      error: {
+        code: "VALIDATION_ERROR",
+        message: "Email, name, and password are required",
+      },
+    });
+  }
+
+  const strengthResult = validatePasswordStrength(password);
+  if (strengthResult.ok) return null;
+  // The rules a password failed are the only part of this a person can act
+  // on, so they travel on `data.errors` -- the key the canonical envelope
+  // defines and the only one the admin reads. Reasons put on any other key,
+  // `details` included, reach the client and are dropped there in silence.
+  // The mapping is the one `registerUser` applies to this same validator
+  // output, so both paths describe a weak password identically.
+  return buildAuthErrorResponse(
+    NextlyError.validation({
+      errors: strengthResult.errors.map(message => ({
+        path: "password",
+        code: "WEAK_PASSWORD",
+        message,
+      })),
+    }),
+    readOrGenerateRequestId(request)
+  );
+}
+
 export async function handleSetup(
   request: Request,
-  deps: SetupHandlerDeps
+  deps: SetupHandlerDeps,
+  hooks: {
+    /**
+     * Count a wrong setup token against the auth rate limit, answering 429
+     * once it is spent. Called only after the token was judged wrong: a valid
+     * token opens setup whatever the limit holds.
+     */
+    limitWrongToken?: (request: Request) => Promise<Response | null>;
+  } = {}
 ): Promise<Response> {
+  // Read by the limiter only for a wrong token; cloned before this handler
+  // reads the body.
+  const forLimiter = request.clone();
   // Fail closed: an unknown answer must not be treated as "no administrator",
   // otherwise a transient DB failure could allow a second super-admin to be
   // created while the real one is invisible to the query.
@@ -130,63 +243,48 @@ export async function handleSetup(
     });
     return buildAuthErrorResponse(nextlyErr, requestId);
   }
-  if (administratorExists) {
-    return jsonResponse(403, {
-      error: {
-        code: "SETUP_COMPLETE",
-        message: "Setup already completed",
-      },
-    });
-  }
+  if (administratorExists) return setupCompleteResponse();
 
   const body = await request.json();
 
-  const csrfCookie = readCsrfCookie(request);
-  const csrfToken = readCsrfFromRequest(body, request);
-  const csrfResult = validateCsrf(
+  const csrfRefused = csrfRefusal(
     request,
-    csrfCookie,
-    csrfToken,
-    deps.allowedOrigins
+    body,
+    deps,
+    readOrGenerateRequestId(request)
   );
-  if (!csrfResult.valid) {
-    return jsonResponse(403, {
-      error: csrfFailure(request, csrfResult),
-    });
-  }
+  if (csrfRefused) return csrfRefused;
 
+  const tokenRefused = await setupTokenRefusal(
+    body.setupToken,
+    deps.setupToken,
+    () => hooks.limitWrongToken?.(forLimiter) ?? Promise.resolve(null)
+  );
+  if (tokenRefused) return tokenRefused;
+
+  const inputRefused = setupInputRefusal(body, request);
+  if (inputRefused) return inputRefused;
   const { email, name, password } = body;
-  if (!email || !name || !password) {
-    return jsonResponse(400, {
-      error: {
-        code: "VALIDATION_ERROR",
-        message: "Email, name, and password are required",
-      },
-    });
-  }
 
-  const strengthResult = validatePasswordStrength(password);
-  if (!strengthResult.ok) {
-    // The rules a password failed are the only part of this a person can act
-    // on, so they travel on `data.errors` -- the key the canonical envelope
-    // defines and the only one the admin reads. Reasons put on any other key,
-    // `details` included, reach the client and are dropped there in silence.
-    // The mapping is the one `registerUser` applies to this same validator
-    // output, so both paths describe a weak password identically.
-    return buildAuthErrorResponse(
-      NextlyError.validation({
-        errors: strengthResult.errors.map(message => ({
-          path: "password",
-          code: "WEAK_PASSWORD",
-          message,
-        })),
-      }),
-      readOrGenerateRequestId(request)
-    );
+  // One setup at a time: of any number arriving together, exactly one creates
+  // the administrator and the rest are refused as setup having completed. The
+  // gate is asked again under the claim, for a setup that finished just
+  // before this one claimed.
+  const claim = await deps.setupToken.claim();
+  if (!claim) return setupCompleteResponse();
+  let user: { id: string; email: string; name: string };
+  try {
+    if (await deps.hasAdministrator()) return setupCompleteResponse();
+    // Create super admin (seeds permissions internally, hashes password internally)
+    const created = await deps.createSuperAdmin({ email, name, password });
+    // Another setup made the administrator while this one was creating it.
+    if (!created) return setupCompleteResponse();
+    user = created;
+    // Spent with the administrator's creation: no token opens setup again.
+    await deps.setupToken.spend();
+  } finally {
+    await claim.release();
   }
-
-  // Create super admin (seeds permissions internally, hashes password internally)
-  const user = await deps.createSuperAdmin({ email, name, password });
 
   const sessionRoles = await deps.fetchSessionRoles(user.id);
   const { roleIds } = sessionRoles;

@@ -4,6 +4,7 @@
  * and a deleted subject's events go once the activity log's window has passed
  * since its deletion.
  */
+import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 import { afterEach, describe, expect, it } from "vitest";
 import { z } from "zod";
 
@@ -16,9 +17,11 @@ import {
 } from "../../../plugins/test-nextly";
 import { SHARED_PART } from "../../../schemas/content-events";
 import { registerContentEventKind, resetContentEventKinds } from "../kinds";
-import { pruneContentEventsSafely } from "../prune";
+import { pruneContentEventsSafely, type ContentEventsPruneDb } from "../prune";
 import { recordContentEvent, type ContentEventInput } from "../record";
 import { ContentEventsRepository } from "../repository";
+
+import { recordAsACaller } from "./record-as-a-caller";
 
 let current: TestNextly | undefined;
 
@@ -36,6 +39,9 @@ const silentLogger = {
 };
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** Seals the key that names a deleted person: a throwaway made for this file. */
+const SECRET = "content-events-secret-made-for-this-file-0123";
 
 async function setup(dialect: TestDialect) {
   registerContentEventKind({
@@ -61,7 +67,7 @@ async function setup(dialect: TestDialect) {
   });
   const repo = new ContentEventsRepository(current.adapter, silentLogger);
   const record = (input: ContentEventInput) =>
-    current!.adapter.transaction(tx => recordContentEvent(tx, input));
+    recordAsACaller(current!, dialect, input, [SECRET]);
   const events = () =>
     current!.adapter.select<{ id: string; subjectId: string }>(
       "nextly_content_events"
@@ -465,6 +471,61 @@ describe.each(getConfiguredTestDialects())(
       );
       expect(await t.events()).toEqual([]);
       expect(await t.parts()).toEqual([]);
+    });
+
+    it("leaves a batch's events with their parts when its delete fails part-way", async () => {
+      const t = await setup(dialect);
+      const actor = { kind: "system" } as const;
+      const old = await t.record({
+        subject: doc("halted"),
+        kind: "saved",
+        actor,
+        parts: { locales: ["en"] },
+      });
+      const end = await t.record({
+        subject: doc("halted"),
+        kind: "test-deleted",
+        actor,
+      });
+      await t.age(old.id, 120);
+      await t.age(end.id, 100);
+      // The events delete fails, as a lost connection would, after the parts
+      // delete has run: on the transaction, or on the adapter itself.
+      const adapter = current!.adapter;
+      const failingDelete =
+        (run: Pick<ContentEventsPruneDb, "delete">) =>
+        async (...args: Parameters<ContentEventsPruneDb["delete"]>) => {
+          if (args[0] === "nextly_content_events") {
+            throw new Error("connection lost");
+          }
+          return run.delete(...args);
+        };
+      const failing: ContentEventsPruneDb = {
+        select: (table, options) => adapter.select(table, options),
+        delete: failingDelete(adapter),
+        // A batch only deletes on its transaction, so the handle it is given
+        // carries the failing delete alone.
+        transaction: (work, options) =>
+          adapter.transaction(
+            tx =>
+              work({
+                delete: failingDelete(tx),
+              } as unknown as TransactionContext),
+            options
+          ),
+      };
+
+      const result = await pruneContentEventsSafely(
+        { db: failing, logger: silentLogger },
+        90 * DAY_MS,
+        10
+      );
+
+      expect(result.removed).toBe(0);
+      expect((await t.events()).map(e => e.id).sort()).toEqual(
+        [old.id, end.id].sort()
+      );
+      expect(await t.parts()).toEqual([{ eventId: old.id, part: "en" }]);
     });
   }
 );

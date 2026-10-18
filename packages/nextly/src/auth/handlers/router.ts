@@ -33,7 +33,7 @@ import { handleResetPassword } from "./reset-password";
 import { handleSession } from "./session";
 import type { WithSessionRowTransaction } from "./session-row";
 import { handleSetInitialPassword } from "./set-initial-password";
-import { handleSetupStatus, handleSetup } from "./setup";
+import { handleSetupStatus, handleSetup, type SetupHandlerDeps } from "./setup";
 import { admitUnknownSource, type StoredTokenKind } from "./unknown-source";
 import { handleVerifyEmail, handleResendVerification } from "./verify-email";
 
@@ -63,6 +63,31 @@ const RATE_LIMITED_AUTH_PATHS = new Set([
   // grind/replay surface as the other token-consuming paths.
   "set-initial-password",
 ]);
+
+/**
+ * POST paths under `/auth/*` whose handler counts a request against the same
+ * auth rate limit itself, once it has judged it: setup, which counts only a
+ * wrong setup token, so a valid one completes setup whatever the budget holds.
+ * The router does not limit these before they are handled.
+ */
+const HANDLER_LIMITED_AUTH_PATHS = new Set(["setup"]);
+
+/**
+ * Whether a request to `authPath` is judged by the auth rate limit, before it
+ * is handled or by its handler.
+ *
+ * Exported because the REST limit leaves exactly these requests to the auth
+ * limit when their client address cannot be resolved, and one answer keeps
+ * the two from disagreeing: an auth path the auth limit does not cover is
+ * then held to the REST limit's ceiling like any other request.
+ */
+export function hasAuthRateLimit(method: string, authPath: string): boolean {
+  return (
+    method.toUpperCase() === "POST" &&
+    (RATE_LIMITED_AUTH_PATHS.has(authPath) ||
+      HANDLER_LIMITED_AUTH_PATHS.has(authPath))
+  );
+}
 
 /**
  * @experimental Combined dependency interface for all auth handlers.
@@ -237,12 +262,15 @@ export interface AuthRouterDeps {
   deleteRefreshTokenByHash: (tokenHash: string) => Promise<void>;
   deleteAllRefreshTokensForUser: (userId: string) => Promise<void>;
 
+  /** Whether anyone holds the `super-admin` role: setup's gate. */
   hasAdministrator: () => Promise<boolean>;
+  /** The production setup token, and the claim one setup holds at a time. */
+  setupToken: SetupHandlerDeps["setupToken"];
   createSuperAdmin: (data: {
     email: string;
     name: string;
     password: string;
-  }) => Promise<{ id: string; email: string; name: string }>;
+  }) => Promise<{ id: string; email: string; name: string } | null>;
   seedPermissions: () => Promise<void>;
 
   // These throw NextlyError on failure and return the success-case data
@@ -338,6 +366,7 @@ async function dispatchAuthRequest(
   }
 
   if (method === "POST") {
+    // Only the paths limited before handling; setup limits itself.
     if (RATE_LIMITED_AUTH_PATHS.has(authPath)) {
       const limited = await checkAuthIpRateLimit(request, authPath, deps);
       if (limited) return limited;
@@ -353,7 +382,12 @@ async function dispatchAuthRequest(
         case "refresh":
           return handleRefresh(request, deps);
         case "setup":
-          return handleSetup(request, deps);
+          // Setup is not on the limited paths: a valid token must open it
+          // whatever the budgets hold. Only a wrong token is counted.
+          return handleSetup(request, deps, {
+            limitWrongToken: wrong =>
+              checkAuthIpRateLimit(wrong, "setup", deps),
+          });
         case "register":
           return handleRegister(request, deps);
         case "forgot-password":

@@ -7,7 +7,9 @@ Version history is **opt-in per collection or single**. Turn it on and Nextly ke
 version history: by default the newest 50 per document, plus the versions [retention](#retention)
 always keeps, so "who changed this, and when" has an answer. Every save that changes the
 content records a version, including a save to a working draft that is not yet published
-(see [Working drafts](#working-drafts)).
+(see [Working drafts](#working-drafts)). A save that leaves the content and its status
+as the newest version already holds them records none; a change of status, a restore and a named
+version always record one.
 
 ```ts
 import { defineCollection, text } from "nextly/config";

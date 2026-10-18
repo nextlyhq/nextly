@@ -22,6 +22,7 @@ import type { RBACAccessControlService } from "../../domains/auth/services/rbac-
 import type { JobRegistry } from "../../domains/jobs/job-registry";
 import { runSweepNow } from "../../domains/jobs/jobs-runner";
 import { registerCoreReleaseCheckSources } from "../../domains/releases/readiness/core-sources";
+import { recordReleaseActivity } from "../../domains/releases/release-activity";
 import type { ReleaseTargetCaller } from "../../domains/releases/release-targets";
 import { RELEASES_DRAIN_JOB } from "../../domains/releases/releases-drain-job";
 import { ReleasesRepository } from "../../domains/releases/releases-repository";
@@ -161,6 +162,11 @@ export function registerReleaseServices({
         // What the readiness checks ask of a member's document and author,
         // answered as the release's run would answer it.
         checks: releaseDocumentChecks(adapter, logger),
+
+        // Renames and deletions go to the activity log through the settings
+        // seam, which resolves the log from the container per call, so this
+        // depends on no registration order.
+        recordActivity: recordReleaseActivity,
 
         // The document's OWN authority, asked with the same operation the
         // ordinary write path uses. Adding a document to a release is a deferred

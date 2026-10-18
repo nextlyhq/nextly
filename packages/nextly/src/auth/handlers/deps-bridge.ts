@@ -57,10 +57,17 @@ import { databaseSpentChallenges } from "../pipeline/spent-challenges";
 import type { AuthHooks, ChallengeDefinition } from "../pipeline/types";
 import type { AccountState } from "../session/account-state";
 import type { SessionRoles } from "../session/session-roles";
+import { claimFirstSetup, sharedRecordReader } from "../setup-token/setup-gate";
+import {
+  spendSetupToken,
+  verifySetupToken,
+  type SetupTokenMeta,
+} from "../setup-token/setup-token";
 
 import { aggregateAuthUi } from "./auth-ui";
 import type { AuthRouterDeps } from "./router";
 import type { SessionRowTransaction } from "./session-row";
+import type { SetupHandlerDeps } from "./setup";
 
 /**
  * Build AuthRouterDeps from the DI container services.
@@ -299,6 +306,8 @@ export function buildAuthRouterDeps(
       return superAdminRoleHeld(adapter.getDrizzle(), getDialectTables());
     },
 
+    setupToken: setupTokenDeps(getService, env.NODE_ENV === "production"),
+
     createSuperAdmin: async data => {
       const { seedPermissions } = await import(
         "../../database/seeders/permissions"
@@ -317,6 +326,13 @@ export function buildAuthRouterDeps(
         password: data.password,
         name: data.name,
         silent: true,
+        // Setup creates the administrator's account; it never adopts one that
+        // already holds the address, which may be a stranger's sign-up.
+        reuseExistingAccount: false,
+        // Nor does it hand out the role itself: the account is the
+        // administrator only if its creation won the first-administrator
+        // grant, which one of any setups racing on an empty install wins.
+        assignRole: false,
       });
 
       if (!result.success) {
@@ -334,11 +350,18 @@ export function buildAuthRouterDeps(
         .where(eq(schema.users.email, normalizeAccountEmail(data.email)))
         .limit(1);
 
-      return {
-        id: users[0]?.id || "",
-        email: data.email,
-        name: data.name,
-      };
+      const id = users[0]?.id ? String(users[0].id) : "";
+      const { superAdminRoleHeldBy } = await import(
+        "../../domains/users/services/last-super-admin"
+      );
+      if (!id || !(await superAdminRoleHeldBy(db, schema, id))) {
+        // This setup lost the race: another made the administrator first.
+        // Its account goes, so the setup's address and password open nothing.
+        if (id) await db.delete(schema.users).where(eq(schema.users.id, id));
+        return null;
+      }
+
+      return { id, email: data.email, name: data.name };
     },
 
     seedPermissions: async () => {
@@ -754,6 +777,24 @@ function readServiceConfig(
   } catch {
     return undefined;
   }
+}
+
+/**
+ * The production setup token, read and spent through `nextly_meta`, where
+ * every instance of the install sees the same row.
+ */
+function setupTokenDeps(
+  getService: (name: string) => unknown,
+  isProduction: boolean
+): SetupHandlerDeps["setupToken"] {
+  const meta = () => getService("metaService") as SetupTokenMeta;
+  return {
+    required: isProduction,
+    verify: presented =>
+      verifySetupToken({ presented, readRecord: sharedRecordReader(meta()) }),
+    spend: () => spendSetupToken(meta()),
+    claim: () => claimFirstSetup(meta()),
+  };
 }
 
 /**

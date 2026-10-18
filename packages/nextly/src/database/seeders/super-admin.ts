@@ -30,6 +30,22 @@ export async function seedSuperAdmin(
     password: string;
     name?: string;
     silent?: boolean;
+    /**
+     * Whether an account already holding `email` is made the super admin.
+     * True by default, for a seed re-run against its own account. False for a
+     * caller that must create the account itself, such as setup: an existing
+     * account there may be a stranger's sign-up, whose own password would then
+     * sign in as the administrator, so it is refused instead.
+     */
+    reuseExistingAccount?: boolean;
+    /**
+     * Whether the seeder gives the account the Super Admin role itself. True
+     * by default. False for setup: the account then becomes the administrator
+     * only through the first-administrator grant its creation makes under the
+     * role row's lock, which exactly one of any accounts created together
+     * wins, so a setup that lost a race is not made a second administrator.
+     */
+    assignRole?: boolean;
   }
 ): Promise<SeederResult> {
   // `name` keeps a harmless display default; credentials never do.
@@ -42,6 +58,8 @@ export async function seedSuperAdmin(
     password,
     name = "Super Admin",
     silent = false,
+    reuseExistingAccount = true,
+    assignRole = true,
   } = options || {};
 
   // Fail closed: require real credentials rather than falling back to a
@@ -71,6 +89,15 @@ export async function seedSuperAdmin(
   }
 
   const container = new ServiceContainer(adapter as DrizzleAdapter);
+
+  // Refused before anything is written, with the generic duplicate answer.
+  // The create below is the backstop: with reuse off it never adopts an
+  // account, so one registered in between fails on the unique email instead.
+  if (!reuseExistingAccount && (await container.users.findByEmail(email))) {
+    throw NextlyError.duplicate({
+      logContext: { reason: "super-admin-email-has-an-account" },
+    });
+  }
   const roleService = container.roles;
   const permissionService = container.permissions;
   const rolePermissionService = container.rolePermissions;
@@ -85,7 +112,9 @@ export async function seedSuperAdmin(
   try {
     // Step 1: Check if super admin user already exists
     log(" Checking for existing super admin user...");
-    const existingUser = await userService.findByEmail(email);
+    const existingUser = reuseExistingAccount
+      ? await userService.findByEmail(email)
+      : null;
 
     let userId: string;
 
@@ -199,7 +228,18 @@ export async function seedSuperAdmin(
       created += assignedCount;
     }
 
-    // Step 5: Assign Super Admin role to user
+    // Step 5: Assign Super Admin role to user, unless the caller leaves that
+    // to the first-administrator grant.
+    if (!assignRole) {
+      return {
+        success: true,
+        created,
+        skipped,
+        errors,
+        total: created + skipped + errors,
+        errorMessages,
+      };
+    }
     log("\n Assigning Super Admin role to user...");
     const userRoleResult = await userRoleService.assignRoleToUser(
       userId,

@@ -23,7 +23,10 @@ const ref = {
   entryId: "e1",
 };
 
-const tx = {} as Parameters<typeof captureInTx>[0];
+// A document with no version yet, so every save here records one.
+const tx = {
+  select: () => Promise.resolve([]),
+} as unknown as Parameters<typeof captureInTx>[0];
 
 describe("captureInTx", () => {
   beforeEach(() => {
@@ -115,5 +118,122 @@ describe("captureInTx", () => {
         snapshot: { id: "e1", title: "Hi", tags: ["t1"] },
       })
     );
+  });
+
+  describe("a save that changes nothing", () => {
+    // A document whose newest version already holds exactly this save.
+    const unchanged = {
+      select: () =>
+        Promise.resolve([
+          {
+            versionNo: 3,
+            status: "published",
+            snapshot: { id: "e1", title: "Hi" },
+          },
+        ]),
+    } as unknown as Parameters<typeof captureInTx>[0];
+    const parts = { parentRow: { id: "e1", title: "Hi" } };
+
+    it("records no version for an ordinary save", async () => {
+      const result = await captureInTx(unchanged, service(), {
+        ref,
+        parts,
+        onlyIfChanged: true,
+      });
+      expect(result).toEqual({ versionNo: null });
+      expect(capture).not.toHaveBeenCalled();
+    });
+
+    it("records a restore, which names what it came from", async () => {
+      await captureInTx(unchanged, service(), {
+        ref,
+        parts,
+        onlyIfChanged: true,
+        sourceVersionNo: 2,
+      });
+      expect(capture).toHaveBeenCalledOnce();
+    });
+
+    it("records a named version, which was asked for by name", async () => {
+      await captureInTx(unchanged, service(), {
+        ref,
+        parts,
+        onlyIfChanged: true,
+        label: "Before launch",
+      });
+      expect(capture).toHaveBeenCalledOnce();
+    });
+
+    it("records a change of status", async () => {
+      await captureInTx(unchanged, service(), {
+        ref,
+        parts,
+        onlyIfChanged: true,
+        contentStatus: "draft",
+      });
+      expect(capture).toHaveBeenCalledOnce();
+    });
+
+    it("records a save of a language other than the newest version's", async () => {
+      // The document's newest version is in no language; an older Spanish one
+      // could match this save yet predate a change to the shared fields.
+      await captureInTx(unchanged, service(), {
+        ref,
+        parts,
+        onlyIfChanged: true,
+        locale: "es",
+      });
+      expect(capture).toHaveBeenCalledOnce();
+    });
+
+    it("records nothing for a language whose version is the newest and holds this save", async () => {
+      const spanish = {
+        select: () =>
+          Promise.resolve([
+            {
+              versionNo: 3,
+              status: "published",
+              locale: "es",
+              snapshot: { id: "e1", title: "Hi" },
+            },
+          ]),
+      } as unknown as Parameters<typeof captureInTx>[0];
+      const result = await captureInTx(spanish, service(), {
+        ref,
+        parts,
+        onlyIfChanged: true,
+        locale: "es",
+      });
+      expect(result).toEqual({ versionNo: null });
+      expect(capture).not.toHaveBeenCalled();
+    });
+
+    it("records a create whatever an earlier document under its id left", async () => {
+      // No `onlyIfChanged`: a create says the document began.
+      await captureInTx(unchanged, service(), { ref, parts });
+      expect(capture).toHaveBeenCalledOnce();
+    });
+
+    it("records a change to an authored status that both values normalize past", async () => {
+      // Without the draft/published lifecycle `status` is an ordinary field:
+      // "queued" and "archived" both capture as version status "published".
+      const queued = {
+        select: () =>
+          Promise.resolve([
+            {
+              versionNo: 3,
+              status: "published",
+              snapshot: { id: "e1", title: "Hi", status: "queued" },
+            },
+          ]),
+      } as unknown as Parameters<typeof captureInTx>[0];
+      await captureInTx(queued, service(), {
+        ref,
+        parts: { parentRow: { id: "e1", title: "Hi", status: "archived" } },
+        contentStatus: "archived",
+        onlyIfChanged: true,
+      });
+      expect(capture).toHaveBeenCalledOnce();
+    });
   });
 });

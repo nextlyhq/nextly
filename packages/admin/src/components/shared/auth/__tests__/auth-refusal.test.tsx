@@ -228,12 +228,24 @@ describe("the forms show it", () => {
   beforeEach(() => {
     get.mockReset();
     post.mockReset();
-    // The sign-in page reads its provider and slot list first.
-    get.mockResolvedValue({
-      providers: [],
-      challengeViews: {},
-      slots: { beforeForm: [], afterForm: [], branding: [] },
-    });
+    // The sign-in page reads its provider and slot list first; the setup
+    // form reads whether this install's setup needs its setup token, which a
+    // development install does not.
+    get.mockImplementation((path: string) =>
+      Promise.resolve(
+        path === "/auth/setup-status"
+          ? {
+              isSetup: false,
+              requiresInitialUser: true,
+              requiresSetupToken: false,
+            }
+          : {
+              providers: [],
+              challengeViews: {},
+              slots: { beforeForm: [], afterForm: [], branding: [] },
+            }
+      )
+    );
   });
 
   it("first-run setup", async () => {
