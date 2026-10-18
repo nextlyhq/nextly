@@ -18,6 +18,7 @@
  */
 
 import type { SystemColumnEntity } from "../../lib/system-columns";
+import { readFieldGroupType } from "../field-groups/storage/field-group-type-key";
 
 import type { VersionsDbApi } from "./db-api";
 import { documentSystemKeys } from "./snapshot-system-keys";
@@ -120,7 +121,7 @@ function withoutStatus(
  * say. A save moves `updatedAt` every time, so comparing whole snapshots would
  * call every save a change.
  *
- * A component instance (a nested row carrying `_componentType`) is a row of
+ * A component instance (a nested row that names its component type) is a row of
  * its own, and a save rewrites its timestamps too, so those are left out of
  * it as well. A plain group has no framework columns: a key there is content.
  *
@@ -161,7 +162,7 @@ const COMPONENT_ROW_TIMESTAMPS = new Set([
 /** An object's entries, without a component row's own timestamps. */
 function contentEntries(inner: Record<string, unknown>): [string, unknown][] {
   const entries = Object.entries(inner);
-  return typeof inner._componentType === "string"
+  return readFieldGroupType(inner) !== undefined
     ? entries.filter(([key]) => !COMPONENT_ROW_TIMESTAMPS.has(key))
     : entries;
 }
