@@ -538,7 +538,7 @@ export function VersionHistorySheet({
                     variant="ghost"
                     size="sm"
                     className="h-8 w-8 shrink-0 p-0"
-                    aria-label="Close"
+                    aria-label="Close history"
                   >
                     <X className="h-4 w-4" />
                   </Button>
