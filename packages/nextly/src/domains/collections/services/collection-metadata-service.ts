@@ -769,6 +769,17 @@ export class CollectionMetadataService extends BaseService {
             // differ only where unattended provisioning left the local schema in a shape no
             // migration history produces, and running the file here would then fail on a column
             // that is already present.
+            // The file creates the archive when it is missing but cannot add the kind column to an
+            // archive from before rows recorded it, which its writes name.
+            if (updateArtifacts.needsArchive) {
+              const { ensureI18nArchive } = await import(
+                "../../i18n/migration/ensure-archive"
+              );
+              await ensureI18nArchive(
+                this.adapter,
+                this.adapter.getCapabilities().dialect
+              );
+            }
             await this.fileManager.runMigration(
               updateArtifacts.localMigrationSQL ?? updateArtifacts.migrationSQL
             );

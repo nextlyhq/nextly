@@ -31,6 +31,7 @@ import { affectedRowCount } from "../../auth/services/auth-service";
 
 import { q } from "./ddl-types";
 import { ensureI18nArchive } from "./ensure-archive";
+import { labelLegacyArchiveRows } from "./label-legacy-archive-rows";
 import type { I18nTransitionKind } from "./transition-state";
 
 /** The shared archive table, scoped per entity by its `collection` column. */
@@ -150,8 +151,11 @@ export async function teardownEntityI18n(
     (await adapter.tableExists(ARCHIVE_TABLE))
   ) {
     // An archive from before rows recorded their kind has no column to scope by until it is
-    // brought up to date, which reads its rows as the collections they were.
+    // brought up to date, and its rows are this entity's only where the registries say so. This
+    // runs before the registry row is deleted, so the entity still answers for its slug. A row
+    // whose owner stays unknown is kept: deleting it could take another entity's translations.
     await ensureI18nArchive(adapter, adapter.dialect);
+    await labelLegacyArchiveRows(adapter);
     const db = adapter.getDrizzle<ArchiveDeleteCapableDb>();
     const { nextlyI18nArchive } = nextlyI18nArchiveTables(adapter.dialect);
     // Scoped to this entity only, by kind as well as slug — the archive is shared, an unscoped

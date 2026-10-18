@@ -1,6 +1,8 @@
 import { sql } from "drizzle-orm";
 import { sqliteTable, integer, text, index } from "drizzle-orm/sqlite-core";
 
+import { UNKNOWN_ARCHIVE_KIND } from "./ddl";
+
 /**
  * Archive of non-default-locale translations removed when localization is disabled on a
  * field/collection. See `./ddl.ts` for the out-of-band bootstrap DDL. `id` is DB-generated.
@@ -12,9 +14,9 @@ export const nextlyI18nArchive = sqliteTable(
     collection: text("collection").notNull(),
     // Which kind of entity archived the row: `collection`, `single` or `fieldGroup`. A field
     // group's slug may equal a collection's or a Single's, so the slug alone cannot say whose a
-    // row is. Rows from before this column existed were all read as collections, which is the
-    // default an existing table is given when the column is added.
-    entityKind: text("entity_kind").notNull().default("collection"),
+    // row is. Rows from before this column existed take the default, unknown, since collections,
+    // Singles and field groups all archived then.
+    entityKind: text("entity_kind").notNull().default(UNKNOWN_ARCHIVE_KIND),
     entryId: text("entry_id").notNull(),
     locale: text("locale").notNull(),
     field: text("field").notNull(),

@@ -18,10 +18,13 @@
  * @module domains/i18n/migration/restore-archive
  */
 
-import { and, asc, eq, lte } from "drizzle-orm";
+import { and, asc, count, eq, inArray, lte } from "drizzle-orm";
 
 import { NextlyError } from "../../../errors/nextly-error";
-import { nextlyI18nArchiveTables } from "../../../schemas/nextly-i18n-archive";
+import {
+  nextlyI18nArchiveTables,
+  UNKNOWN_ARCHIVE_KIND,
+} from "../../../schemas/nextly-i18n-archive";
 import { toSnakeCase } from "../../schema/services/field-column-descriptor";
 import { COMPANION_UPDATED_AT_COLUMN } from "../companion-columns";
 import type { CompanionIntrospectAdapter } from "../runtime/companion-io";
@@ -31,19 +34,28 @@ import {
 } from "../runtime/companion-io";
 
 import { ensureI18nArchive } from "./ensure-archive";
+import {
+  labelLegacyArchiveRows,
+  type LabelArchiveAdapter,
+} from "./label-legacy-archive-rows";
 import type { I18nTransitionKind } from "./transition-state";
 
 /**
- * The slice of Drizzle this helper drives: one scoped SELECT and one scoped DELETE. Declaring
+ * The slice of Drizzle this helper drives: scoped SELECTs, an UPDATE and a DELETE. Declaring
  * only what is used keeps the dialect-specific database type out of the port, so no `any` is
  * needed — the same shape `teardown-entity-i18n` declares for its own single statement.
  */
 interface ArchiveReadWriteDb {
   select(columns: Record<string, unknown>): {
     from(table: unknown): {
-      where(condition: unknown): {
+      where(condition: unknown): Promise<unknown> & {
         orderBy(...columns: unknown[]): Promise<unknown>;
       };
+    };
+  };
+  update(table: unknown): {
+    set(values: Record<string, unknown>): {
+      where(condition: unknown): Promise<unknown>;
     };
   };
   delete(table: unknown): { where(condition: unknown): Promise<unknown> };
@@ -55,7 +67,7 @@ export interface RestoreArchiveArgs {
    * database for the companion's physical shape, which is the introspecting surface rather than
    * the narrower write-only one.
    */
-  adapter: CompanionIntrospectAdapter;
+  adapter: CompanionIntrospectAdapter & LabelArchiveAdapter;
   /** Entity slug exactly as the disable migration recorded it in `archive.collection`. */
   collection: string;
   /**
@@ -64,6 +76,12 @@ export interface RestoreArchiveArgs {
    * companion.
    */
   kind: I18nTransitionKind;
+  /**
+   * Also restore this slug's rows whose owner is unknown, and record them as `kind`'s. Rows archived
+   * before the archive recorded kinds are left unknown when the registries cannot say whose they
+   * are, so only someone who names the kind can say; the command line passes it for `--kind`.
+   */
+  claimUnknown?: boolean;
   /** Physical companion table to replay into, e.g. `dc_pages_locales`. */
   companionTableName: string;
   /** Restrict the replay to one language. Omit to restore every archived language. */
@@ -89,11 +107,19 @@ export interface RestoreArchiveResult {
   rowsRestored: number;
   /** The languages actually restored, sorted. */
   locales: string[];
+  /** Rows of unknown owner this restore took as its entity's (`claimUnknown`). */
+  rowsClaimed: number;
+  /**
+   * Rows of this slug whose owner is still unknown afterwards. Kept, never deleted, so they are
+   * reported for a restore that names the kind to claim them.
+   */
+  rowsUnattributed: number;
 }
 
 interface ArchiveRow {
   /** Autoincrement PK — used to bound the purge to only the rows read here. */
   id: number;
+  entityKind: string;
   entryId: string;
   locale: string;
   field: string;
@@ -147,22 +173,40 @@ export async function restoreI18nArchive(
   // The archive keeps a field's values under its column name. The conversion is the column
   // descriptor's, and a column name passes through it unchanged.
   const field = args.field !== undefined ? toSnakeCase(args.field) : undefined;
-  // An archive from before rows recorded their kind is brought up to date first, which reads its
-  // rows as the collections they were; one that was never written is created empty.
+  // An archive from before rows recorded their kind is brought up to date first, and its rows
+  // given their owner's kind where the registries can tell; one never written is created empty.
   await ensureI18nArchive(adapter, adapter.dialect);
+  await labelLegacyArchiveRows(adapter);
   const db = adapter.getDrizzle<ArchiveReadWriteDb>();
   const { nextlyI18nArchive } = nextlyI18nArchiveTables(adapter.dialect);
 
-  const where = and(
-    eq(nextlyI18nArchive.collection, collection),
-    eq(nextlyI18nArchive.entityKind, kind),
-    ...(locale !== undefined ? [eq(nextlyI18nArchive.locale, locale)] : []),
-    ...(field !== undefined ? [eq(nextlyI18nArchive.field, field)] : [])
+  const scope = (kinds: readonly string[]) =>
+    and(
+      eq(nextlyI18nArchive.collection, collection),
+      inArray(nextlyI18nArchive.entityKind, [...kinds]),
+      ...(locale !== undefined ? [eq(nextlyI18nArchive.locale, locale)] : []),
+      ...(field !== undefined ? [eq(nextlyI18nArchive.field, field)] : [])
+    );
+  const where = scope(
+    args.claimUnknown ? [kind, UNKNOWN_ARCHIVE_KIND] : [kind]
   );
+  const unattributed = async (): Promise<number> => {
+    const [row] = (await db
+      .select({ n: count() })
+      .from(nextlyI18nArchive)
+      .where(
+        and(
+          eq(nextlyI18nArchive.collection, collection),
+          eq(nextlyI18nArchive.entityKind, UNKNOWN_ARCHIVE_KIND)
+        )
+      )) as { n: number | string }[];
+    return Number(row?.n ?? 0);
+  };
 
   const rows = (await db
     .select({
       id: nextlyI18nArchive.id,
+      entityKind: nextlyI18nArchive.entityKind,
       entryId: nextlyI18nArchive.entryId,
       locale: nextlyI18nArchive.locale,
       field: nextlyI18nArchive.field,
@@ -176,7 +220,13 @@ export async function restoreI18nArchive(
     .orderBy(asc(nextlyI18nArchive.id))) as ArchiveRow[];
 
   if (rows.length === 0) {
-    return { rowsRead: 0, rowsRestored: 0, locales: [] };
+    return {
+      rowsRead: 0,
+      rowsRestored: 0,
+      locales: [],
+      rowsClaimed: 0,
+      rowsUnattributed: await unattributed(),
+    };
   }
 
   await refuseFieldsNotTranslatedNow(
@@ -241,6 +291,21 @@ export async function restoreI18nArchive(
     );
   }
 
+  // Bounded to the rows read here, for the reason the purge below gives.
+  const maxId = rows.reduce((max, r) => (r.id > max ? r.id : max), rows[0].id);
+  const rowsClaimed = rows.filter(
+    r => r.entityKind === UNKNOWN_ARCHIVE_KIND
+  ).length;
+  if (rowsClaimed > 0) {
+    // Recorded only once their values are back, so a restore refused above claims nothing.
+    await db
+      .update(nextlyI18nArchive)
+      .set({ entityKind: kind })
+      .where(
+        and(scope([UNKNOWN_ARCHIVE_KIND]), lte(nextlyI18nArchive.id, maxId))
+      );
+  }
+
   if (args.purge) {
     // Purge exactly the rows that were just read and restored, and no others.
     // Bound the delete to `id <= maxId` (the largest PK seen in the read): the
@@ -250,10 +315,6 @@ export async function restoreI18nArchive(
     // ever being restored. `where` still scopes to this collection (and locale when
     // given). Bounding by a single scalar also avoids the SQL bind-parameter cap
     // (SQLite defaults to 999) that an `inArray` over every entry id would risk.
-    const maxId = rows.reduce(
-      (max, r) => (r.id > max ? r.id : max),
-      rows[0].id
-    );
     await db
       .delete(nextlyI18nArchive)
       .where(and(where, lte(nextlyI18nArchive.id, maxId)));
@@ -263,5 +324,7 @@ export async function restoreI18nArchive(
     rowsRead: rows.length,
     rowsRestored: grouped.size,
     locales: [...new Set(rows.map(r => r.locale))].sort(),
+    rowsClaimed,
+    rowsUnattributed: await unattributed(),
   };
 }

@@ -6,11 +6,14 @@
  * a collection and a field group may both be `hero`. Each makes a translated field shared, which
  * archives its other languages under the slug `hero`. Restoring one must bring back only its own
  * values, and deleting one must leave the other's. An archive written before the kind existed
- * reads its rows as collections once `nextly migrate` (or a Builder save) has added the column.
+ * holds rows of all three kinds, so once `nextly migrate` (or a Builder save) has added the column
+ * they are unknown, and each is labelled by the entity holding its slug, from that entity's
+ * creation on. The rest stay unknown: kept, reported, and restored only when the kind is named.
  */
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 import { dispatchComponents } from "../../../dispatcher/handlers/component-dispatcher";
+import { dispatchSingles } from "../../../dispatcher/handlers/single-dispatcher";
 import { describeEachDialect } from "../../../plugins/__tests__/helpers/dialect-matrix";
 import {
   createTestNextly,
@@ -271,22 +274,47 @@ describeEachDialect("the archive's entity kind", dialect => {
     ]);
   });
 
-  /** The archive as an install from before the kind existed has it, with one row in it. */
-  async function archiveFromBeforeTheKind(entry: string): Promise<void> {
+  /** The archive as an install from before the kind existed has it: no `entity_kind` column. */
+  async function archiveWithoutTheKind(): Promise<void> {
     await query(
       `ALTER TABLE ${q("nextly_i18n_archive")} DROP COLUMN ${q("entity_kind")}`
     );
+  }
+
+  /** A long time ago, in each dialect's encoding of `archived_at`. */
+  const LONG_AGO =
+    dialect === "sqlite"
+      ? "946684800"
+      : dialect === "mysql"
+        ? "'2000-01-01 00:00:00'"
+        : "'2000-01-01 00:00:00+00'";
+
+  /** One row as an install from before the kind wrote it, archived now unless `archivedAt` says. */
+  async function legacyRow(
+    slug: string,
+    entry: string,
+    value: string,
+    archivedAt?: string
+  ): Promise<void> {
+    const columns = ["collection", "entry_id", "locale", "field", "value"];
+    const values = [
+      `'${slug}'`,
+      `'${entry}'`,
+      "'es'",
+      "'heading'",
+      `'${value}'`,
+    ];
+    if (archivedAt !== undefined) {
+      columns.push("archived_at");
+      values.push(archivedAt);
+    }
     await query(
-      `INSERT INTO ${q("nextly_i18n_archive")} (${["collection", "entry_id", "locale", "field", "value"].map(q).join(", ")}) ` +
-        `VALUES ('hero', '${entry}', 'es', 'heading', 'Antes')`
+      `INSERT INTO ${q("nextly_i18n_archive")} (${columns.map(q).join(", ")}) VALUES (${values.join(", ")})`
     );
   }
 
-  it("reads an older install's rows as collections once `nextly migrate` adds the kind", async () => {
-    const collectionId = await seedCollection();
-    await archiveFromBeforeTheKind(collectionId);
-
-    // What `nextly migrate` runs first.
+  /** What `nextly migrate` runs first, which adds the column to an older archive. */
+  async function migrateCore(): Promise<void> {
     await reconcileCore({
       db: (
         current.adapter as unknown as { getDrizzle(): unknown }
@@ -294,31 +322,156 @@ describeEachDialect("the archive's entity kind", dialect => {
       dialect: current.adapter.dialect,
       logger: { info: () => {}, warn: () => {} },
     });
+  }
 
-    expect(await archived()).toEqual([
-      { kind: "collection", entry: collectionId, value: "Antes" },
-    ]);
-    const restored = await restoreI18nArchive({
+  /** Every archived row's slug, kind and value, ordered by value. */
+  async function archivedBySlug(): Promise<
+    { slug: string; kind: string; value: string }[]
+  > {
+    return query<{ slug: string; kind: string; value: string }>(
+      `SELECT ${q("collection")} AS slug, ${q("entity_kind")} AS kind, ${q("value")} AS value FROM ${q("nextly_i18n_archive")} ` +
+        `ORDER BY ${q("value")}`
+    );
+  }
+
+  const restoreHero = (claimUnknown?: boolean) =>
+    restoreI18nArchive({
       adapter: restoreAdapter(),
       collection: "hero",
       kind: "collection",
       companionTableName: "dc_hero_locales",
+      claimUnknown,
     });
+
+  it("leaves an older install's rows unknown when `nextly migrate` adds the kind", async () => {
+    const collectionId = await seedCollection();
+    await archiveWithoutTheKind();
+    await legacyRow("hero", collectionId, "Antes");
+
+    await migrateCore();
+
+    // Collections, Singles and field groups all archived before the kind existed, so the column
+    // alone cannot say whose a row is.
+    expect(await archived()).toEqual([
+      { kind: "unknown", entry: collectionId, value: "Antes" },
+    ]);
+  });
+
+  it("labels each older row by the entity holding its slug, and restores it", async () => {
+    const collectionId = await seedCollection();
+    await dispatchComponents(
+      "createComponent",
+      {},
+      { slug: "banner", label: "Banner", localized: true, fields: TRANSLATED }
+    );
+    await dispatchSingles(
+      "createSingle",
+      {},
+      { slug: "notice", label: "Notice", localized: true, fields: TRANSLATED }
+    );
+    await archiveWithoutTheKind();
+    await legacyRow("hero", collectionId, "Antes");
+    await legacyRow("banner", "banner-1", "Bandera");
+    await legacyRow("notice", "notice-1", "Aviso");
+    await migrateCore();
+
+    const restored = await restoreHero();
+
     expect(restored.rowsRead).toBe(1);
     expect(await spanishOf("dc_hero", collectionId)).toBe("Antes");
+    expect(await archivedBySlug()).toEqual([
+      { slug: "hero", kind: "collection", value: "Antes" },
+      { slug: "notice", kind: "single", value: "Aviso" },
+      { slug: "banner", kind: "fieldGroup", value: "Bandera" },
+    ]);
+  });
+
+  it("keeps a row archived before its slug's entity existed unknown, and reports it", async () => {
+    // A slug can be reused: a row archived before today's `hero` was created belongs to whatever
+    // held `hero` then, such as a collection since deleted.
+    const collectionId = await seedCollection();
+    await archiveWithoutTheKind();
+    await legacyRow("hero", collectionId, "Antiguo", LONG_AGO);
+    await migrateCore();
+
+    const restored = await restoreHero();
+
+    expect(restored.rowsRead).toBe(0);
+    expect(restored.rowsUnattributed).toBe(1);
+    expect(await spanishOf("dc_hero", collectionId)).toBe("Colección");
+    expect(await archived()).toEqual([
+      { kind: "unknown", entry: collectionId, value: "Antiguo" },
+    ]);
+  });
+
+  it("restores an unknown row when the restore names the kind, and records it as that kind's", async () => {
+    const collectionId = await seedCollection();
+    await archiveWithoutTheKind();
+    await legacyRow("hero", collectionId, "Antiguo", LONG_AGO);
+    await migrateCore();
+
+    const restored = await restoreHero(true);
+
+    expect(restored.rowsRead).toBe(1);
+    expect(restored.rowsClaimed).toBe(1);
+    expect(restored.rowsUnattributed).toBe(0);
+    expect(await spanishOf("dc_hero", collectionId)).toBe("Antiguo");
+    expect(await archived()).toEqual([
+      { kind: "collection", entry: collectionId, value: "Antiguo" },
+    ]);
+  });
+
+  it("keeps an unknown row when the entity holding its slug is deleted", async () => {
+    const collectionId = await seedCollection();
+    await archiveWithoutTheKind();
+    await legacyRow("hero", collectionId, "Antiguo", LONG_AGO);
+    await legacyRow("hero", collectionId, "Antes");
+    await migrateCore();
+
+    const purged = await teardownEntityI18n({
+      adapter: current.adapter as unknown as Parameters<
+        typeof teardownEntityI18n
+      >[0]["adapter"],
+      tableName: "dc_hero",
+      slug: "hero",
+      kind: "collection",
+    });
+
+    // The row archived since the collection existed is its own and goes with it; the older one
+    // may be another entity's, so it stays.
+    expect(purged.archiveRowsPurged).toBe(1);
+    expect(await archived()).toEqual([
+      { kind: "unknown", entry: collectionId, value: "Antiguo" },
+    ]);
+  });
+
+  it("archives a collection's languages when localization is turned off on an older archive", async () => {
+    const collectionId = await seedCollection();
+    await archiveWithoutTheKind();
+
+    const saved = await handler().updateCollection(
+      { collectionName: "hero" },
+      { localized: false, fields: SHARED }
+    );
+
+    expect(saved.success, JSON.stringify(saved)).toBe(true);
+    expect(await archived()).toEqual([
+      { kind: "collection", entry: collectionId, value: "Colección" },
+    ]);
   });
 
   it("adds the kind when a Builder save archives before any migration has run", async () => {
     const collectionId = await seedCollection();
     const groupId = await seedFieldGroup();
-    await archiveFromBeforeTheKind(collectionId);
+    await archiveWithoutTheKind();
+    await legacyRow("hero", collectionId, "Antes");
 
     await makeShared();
 
     expect(await archived()).toEqual([
-      { kind: "collection", entry: collectionId, value: "Antes" },
       { kind: "collection", entry: collectionId, value: "Colección" },
       { kind: "fieldGroup", entry: groupId, value: "Grupo" },
+      { kind: "unknown", entry: collectionId, value: "Antes" },
     ]);
   });
 });

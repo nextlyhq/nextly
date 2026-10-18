@@ -7,6 +7,8 @@ import {
   index,
 } from "drizzle-orm/pg-core";
 
+import { UNKNOWN_ARCHIVE_KIND } from "./ddl";
+
 /**
  * Archive of non-default-locale translations removed when localization is disabled on a
  * field/collection. See `./ddl.ts` for the out-of-band bootstrap DDL. `id` is DB-generated.
@@ -18,11 +20,11 @@ export const nextlyI18nArchive = pgTable(
     collection: text("collection").notNull(),
     // Which kind of entity archived the row: `collection`, `single` or `fieldGroup`. A field
     // group's slug may equal a collection's or a Single's, so the slug alone cannot say whose a
-    // row is. Rows from before this column existed were all read as collections, which is the
-    // default an existing table is given when the column is added.
+    // row is. Rows from before this column existed take the default, unknown, since collections,
+    // Singles and field groups all archived then.
     entityKind: varchar("entity_kind", { length: 20 })
       .notNull()
-      .default("collection"),
+      .default(UNKNOWN_ARCHIVE_KIND),
     entryId: text("entry_id").notNull(),
     locale: varchar("locale", { length: 20 }).notNull(),
     field: text("field").notNull(),

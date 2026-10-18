@@ -90,6 +90,11 @@ const KIND_OPTIONS: Record<string, I18nTransitionKind> = {
   single: "single",
   "field-group": "fieldGroup",
 };
+/** `--kind` as the command line spells `kind`. */
+export function kindOption(kind: I18nTransitionKind): string {
+  return Object.keys(KIND_OPTIONS).find(k => KIND_OPTIONS[k] === kind) ?? kind;
+}
+
 const KIND_NAMES: Record<I18nTransitionKind, string> = {
   collection: "collection",
   single: "single",
@@ -128,10 +133,7 @@ export function chooseRestoreEntity(
   }
   if (others.length === 0) return { entity: only };
   const names = matches.map(m => `a ${KIND_NAMES[m.kind]}`);
-  const options = matches.map(
-    m =>
-      `--kind ${Object.keys(KIND_OPTIONS).find(k => KIND_OPTIONS[k] === m.kind)}`
-  );
+  const options = matches.map(m => `--kind ${kindOption(m.kind)}`);
   return {
     problem:
       `"${slug}" names ${names.slice(0, -1).join(", ")} and ${names.at(-1)}. ` +

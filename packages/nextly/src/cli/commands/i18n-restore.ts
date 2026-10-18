@@ -26,6 +26,7 @@ import type { Command } from "commander";
 
 import {
   chooseRestoreEntity,
+  kindOption,
   resolveEntityTables,
 } from "../../domains/i18n/migration/resolve-entity-table";
 import { restoreI18nArchive } from "../../domains/i18n/migration/restore-archive";
@@ -120,16 +121,34 @@ export async function runI18nRestore(
         adapter: adapter as unknown as DrizzleAdapter,
         collection: slug,
         kind: entity.kind,
+        // Naming the kind is what lets a restore take rows whose owner the archive does not know.
+        claimUnknown: options.kind !== undefined,
         companionTableName,
         locale: options.locale,
         field: options.field,
         purge: options.purge,
       });
 
+      const reportUnattributed = () => {
+        if (result.rowsUnattributed === 0) return;
+        logger.warn(
+          `${result.rowsUnattributed} archived value(s) for "${slug}" were written before the archive ` +
+            "recorded which kind of entity they belong to, and could not be matched to one. " +
+            `They are kept. If they are this ${entity.kind === "fieldGroup" ? "field group" : entity.kind}'s, ` +
+            `restore them with --kind ${kindOption(entity.kind)}.`
+        );
+      };
+      if (result.rowsClaimed > 0) {
+        logger.info(
+          `Took ${result.rowsClaimed} archived value(s) of unknown kind as this entity's.`
+        );
+      }
+
       if (result.rowsRead === 0) {
         logger.warn(
           `Nothing archived for "${slug}"${options.field ? ` field ${options.field}` : ""}${options.locale ? ` in ${options.locale}` : ""} — nothing to restore.`
         );
+        reportUnattributed();
         return;
       }
 
@@ -143,6 +162,7 @@ export async function runI18nRestore(
           "The archive was kept. Re-run with --purge to remove the replayed rows."
         );
       }
+      reportUnattributed();
     },
     { logger }
   );
