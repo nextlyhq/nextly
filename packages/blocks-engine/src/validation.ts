@@ -693,7 +693,7 @@ function nodeCheckState(
  * standing for both makes a child in a slot answer the ROOT question — which
  * reports it as sitting nowhere while its own path says which slot holds it.
  */
-interface QueuedNode {
+export interface QueuedNode {
   node: BlockNode;
   path: string;
   placement: Placement;
@@ -739,13 +739,54 @@ function validateNodeForest(
   state: NodeCheckState,
   maxNodes: number
 ): void {
+  walkNodeForest(
+    nodes,
+    maxNodes,
+    { definitions: state.ctx.definitions, stored: state.ctx.stored },
+    ({ node, path, placement, hidden, lock, counterparts }) => {
+      // Asked HERE rather than in a pass of its own, so the read is inside the
+      // budget and happens on a node this loop has reached. Gating is
+      // inherited, because the renderer prunes a gated node's whole subtree.
+      // `isPlainRecord` first: this walk accepts whatever the database
+      // returned, and a `null` among the nodes reaches here. Reading
+      // `visibility` off one throws, where the contract is an issue rather
+      // than an exception — the same guard the slot walk applies.
+      const gated = hidden || (isPlainRecord(node) && isConditionGated(node));
+      validateNode(node, path, state, gated);
+      checkNesting(node, path, placement, state);
+      checkLockedSlots(node, path, { lock, counterparts }, state);
+      return gated;
+    }
+  );
+}
+
+/**
+ * The forest walk, breadth-first, bounded by `maxNodes`: every node it
+ * reaches, with where it sits, the lock its slot passes down and its stored
+ * counterparts, handed to `visit`, which answers whether the node gates its
+ * subtree.
+ *
+ * The ONE walk for every question about where a node sits. Validation's
+ * checks visit it, and so do the editor's lock questions (`lock-breaks`), so
+ * the two reach the same nodes under the same bounds and cannot disagree
+ * about which lock breaks a document holds.
+ */
+export function walkNodeForest(
+  nodes: BlockNode[],
+  maxNodes: number,
+  sources: {
+    definitions: SlotDefaultSource | undefined;
+    stored: readonly unknown[] | undefined;
+  },
+  visit: (queued: QueuedNode) => boolean
+): void {
   const queue: QueuedNode[] = [];
   // Only a lock reads the stored forms, so there is nothing to index without
   // the definitions locks are declared in.
   const stored =
-    state.ctx.definitions === undefined
+    sources.definitions === undefined
       ? undefined
-      : storedFormsOf(state.ctx.stored, maxNodes);
+      : storedFormsOf(sources.stored, maxNodes);
   for (let i = 0; i < nodes.length && queue.length <= maxNodes; i++) {
     queue.push({
       node: nodes[i],
@@ -758,23 +799,14 @@ function validateNodeForest(
     });
   }
   for (let i = 0; i < queue.length && i < maxNodes; i++) {
-    const { node, path, placement, hidden, lock, counterparts } = queue[i];
-    // Asked HERE rather than in a pass of its own, so the read is inside the
-    // budget and happens on a node this loop has reached. Gating is inherited,
-    // because the renderer prunes a gated node's whole subtree.
-    // `isPlainRecord` first: this walk accepts whatever the database returned,
-    // and a `null` among the nodes reaches here. Reading `visibility` off one
-    // throws, where the contract is an issue rather than an exception — the
-    // same guard the slot walk below already applies.
-    const gated = hidden || (isPlainRecord(node) && isConditionGated(node));
-    validateNode(node, path, state, gated);
-    checkNesting(node, path, placement, state);
-    checkLockedSlots(node, path, { lock, counterparts }, state);
+    const queued = queue[i];
+    const gated = visit(queued);
+    const { node, path, lock, counterparts } = queued;
     enqueueChildren(
       { node, path, gated, lock, counterparts },
       queue,
       maxNodes,
-      { definitions: state.ctx.definitions, stored }
+      { definitions: sources.definitions, stored }
     );
   }
 }

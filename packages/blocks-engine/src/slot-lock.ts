@@ -198,9 +198,40 @@ export function nonContentChanges(
   starting: Record<string, unknown>,
   content: ReadonlySet<string>
 ): string[] {
-  const changes = changedNotContent(held.props, starting.props, content).map(
-    name => `prop "${name}"`
-  );
+  return designChanges(held, starting, content).map(change => change.words);
+}
+
+/**
+ * One non-content part of a block: a prop or a binding by name, or a field of
+ * the node itself (`styles`, `version` and the rest {@link nonContentChanges}
+ * compares).
+ */
+export type DesignPart =
+  | { readonly in: "props" | "bindings"; readonly name: string }
+  | { readonly in: "node"; readonly name: string };
+
+/** A design change: the part that changed, and the words an issue names it by. */
+export interface DesignChange {
+  readonly part: DesignPart;
+  readonly words: string;
+}
+
+/**
+ * Every non-content part of `held` that differs from `starting`, each with the
+ * words {@link nonContentChanges} reports it by. The one statement of what
+ * `"contentOnly"` compares, so the words a save reports and the parts a repair
+ * puts back are the same list.
+ */
+export function designChanges(
+  held: Record<string, unknown>,
+  starting: Record<string, unknown>,
+  content: ReadonlySet<string>
+): DesignChange[] {
+  const changes: DesignChange[] = changedNotContent(
+    held.props,
+    starting.props,
+    content
+  ).map(name => ({ part: { in: "props", name }, words: `prop "${name}"` }));
   // A binding replaces a prop's value with data, so binding a prop that is not
   // content changes the design as surely as setting it does.
   for (const name of changedNotContent(
@@ -208,14 +239,18 @@ export function nonContentChanges(
     starting.bindings,
     content
   )) {
-    changes.push(`the binding on "${name}"`);
+    changes.push({
+      part: { in: "bindings", name },
+      words: `the binding on "${name}"`,
+    });
   }
-  for (const part of PINNED_PARTS) {
-    if (!sameValue(emptyAsAbsent(held[part]), emptyAsAbsent(starting[part]))) {
-      changes.push(part);
-    }
+  const pinned = PINNED_PARTS.filter(
+    name => !sameValue(emptyAsAbsent(held[name]), emptyAsAbsent(starting[name]))
+  );
+  for (const name of [...pinned, ...renderStateChanges(held, starting)]) {
+    changes.push({ part: { in: "node", name }, words: name });
   }
-  return [...changes, ...renderStateChanges(held, starting)];
+  return changes;
 }
 
 /** The keys of two records, other than content, whose values differ. */
@@ -258,49 +293,55 @@ function isAheadOf(version: unknown, baseline: unknown): boolean {
 }
 
 /**
- * A child of a `"contentOnly"` slot with everything but its content put back
- * as it started: the parts {@link nonContentChanges} compares, so the result
- * has none of them left. Its id, name and content props are its own.
+ * A child of a `"contentOnly"` slot with its design put back as it started:
+ * the parts given, or else every part {@link designChanges} finds, so the
+ * result has none of them left. Its id, name and content props are its own.
  *
  * @param held - the child as it is
  * @param starting - the child it started as
  * @param content - the props its block declares as content
+ * @param parts - the parts to put back; absent, every one that differs
  */
 export function withStartingDesign(
   held: Record<string, unknown>,
   starting: Record<string, unknown>,
-  content: ReadonlySet<string>
+  content: ReadonlySet<string>,
+  parts?: readonly DesignPart[]
 ): Record<string, unknown> {
   const next: Record<string, unknown> = { ...held };
-  next.props = keepContent(held.props, starting.props, content);
-  const bindings = keepContent(held.bindings, starting.bindings, content);
-  if (Object.keys(bindings).length > 0) next.bindings = bindings;
-  else delete next.bindings;
-  for (const part of [...PINNED_PARTS, "migrationFailed"]) {
-    if (starting[part] === undefined) delete next[part];
-    else next[part] = starting[part];
-  }
-  if (isAheadOf(held.version, starting.version)) {
-    next.version = starting.version;
-  }
+  const reset =
+    parts ?? designChanges(held, starting, content).map(change => change.part);
+  for (const part of reset) resetPart(next, starting, part);
   return next;
 }
 
-/** A record's content entries as held, and every other entry as it started. */
-function keepContent(
-  held: unknown,
-  starting: unknown,
-  content: ReadonlySet<string>
-): Record<string, unknown> {
-  const own = recordOrEmpty(held);
-  const next: Record<string, unknown> = {};
-  for (const [name, value] of Object.entries(recordOrEmpty(starting))) {
-    if (!content.has(name)) next[name] = value;
+/** One part of `next` put back as `starting` holds it: set, or removed. */
+function resetPart(
+  next: Record<string, unknown>,
+  starting: Record<string, unknown>,
+  part: DesignPart
+): void {
+  if (part.in === "node") {
+    copyOrRemove(next, starting, part.name);
+    return;
   }
-  for (const [name, value] of Object.entries(own)) {
-    if (content.has(name)) next[name] = value;
+  const record = { ...recordOrEmpty(next[part.in]) };
+  copyOrRemove(record, recordOrEmpty(starting[part.in]), part.name);
+  // A node without bindings stores none; props are always stored.
+  if (part.in === "bindings" && Object.keys(record).length === 0) {
+    delete next.bindings;
+  } else {
+    next[part.in] = record;
   }
-  return next;
+}
+
+function copyOrRemove(
+  into: Record<string, unknown>,
+  from: Record<string, unknown>,
+  key: string
+): void {
+  if (from[key] === undefined) delete into[key];
+  else into[key] = from[key];
 }
 
 function recordOrEmpty(value: unknown): Record<string, unknown> {

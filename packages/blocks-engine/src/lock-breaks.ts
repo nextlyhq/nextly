@@ -3,10 +3,10 @@
  *
  * Validation reports a lock break as an issue on a save. The editor needs the
  * same judgement before an action, as data it can word and act on: which
- * block's slot, under which lock, and what changed. So this walks the
- * document with the rules validation applies, through the same functions
- * (`slotLockOf`, `slotLockBreaks`, `counterpartsOf`), and a parity test holds
- * the two to one answer on the same documents.
+ * block's slot, under which lock, and what changed. So this visits validation's
+ * own walk (`walkNodeForest`) and asks each node the same `slotLockBreaks`, so
+ * the two reach the same nodes under the same bounds; a parity test holds them
+ * to one answer on the same documents.
  *
  * An edit is refused for a break it ADDS: a document stored before locks were
  * enforced still opens, and an edit that leaves its breaks as they were is not
@@ -16,26 +16,20 @@
  *
  * @module lock-breaks
  */
-import type { BlockDocument } from "./document";
+import type { BlockDocument, BlockNode } from "./document";
 import { pointer } from "./issue-text";
 import { DEFAULT_LIMITS, type DocumentLimits } from "./limits";
 import type { NestingSource } from "./nesting";
 import { isPlainRecord } from "./plain-record";
-import { boundedOwnKeys, ownEntry } from "./safe-record";
 import {
   slotLockBreaks,
-  slotLockOf,
+  typeOfChild,
   type ActiveSlotLock,
   type LockBreak,
 } from "./slot-lock";
 import { startingChildrenSource } from "./starting-children";
-import {
-  counterpartsOf,
-  storedFormsOf,
-  type StoredForms,
-} from "./stored-counterparts";
 import type { SlotDefaultSource } from "./tree";
-import { isNodeType } from "./validation";
+import { walkNodeForest, type QueuedNode } from "./validation";
 
 /** What a lock judgement reads. */
 export interface LockSources {
@@ -64,23 +58,20 @@ export interface LocatedLockBreak {
   readonly path: string;
   /** For a membership break, the block types the slot starts with. */
   readonly starting: readonly string[];
+  /**
+   * For a membership break, the type of each block the slot holds, in order;
+   * undefined for a block whose type cannot be read. Empty otherwise.
+   */
+  readonly held: readonly (string | undefined)[];
   /** For a `"contentOnly"` break, the child and what about it changed. */
   readonly index?: number;
   readonly childType?: string;
   readonly changes: readonly string[];
 }
 
-/** A node the walk has reached, with what its place passes down. */
-interface Visit {
-  readonly node: unknown;
-  readonly path: string;
-  readonly lock: ActiveSlotLock | undefined;
-  readonly counterparts: readonly Readonly<Record<string, unknown>>[];
-}
-
 /**
- * Every lock break in `document`, in the order a breadth-first walk meets
- * them, bounded by the document's node cap as validation's walk is.
+ * Every lock break in `document`, in the order validation's breadth-first walk
+ * meets them, bounded by the document's node cap as that walk is.
  *
  * @experimental
  */
@@ -91,37 +82,34 @@ export function lockBreaksIn(
   const nodes = isPlainRecord(document) ? document.nodes : undefined;
   if (!Array.isArray(nodes)) return [];
   const maxNodes = (sources.limits ?? DEFAULT_LIMITS).maxNodes;
-  const stored = storedFormsOf(sources.stored, maxNodes);
   const startingChildren = startingChildrenSource(
     sources.definitions,
     sources.nesting
   );
   const found: LocatedLockBreak[] = [];
-  const queue: Visit[] = nodes.slice(0, maxNodes).map((node, index) => ({
-    node,
-    path: pointer("/nodes", index),
-    // A top-level node sits in no slot, so no lock reaches it.
-    lock: undefined,
-    counterparts: counterpartsOf(node, undefined, stored),
-  }));
-  for (let head = 0; head < queue.length; head += 1) {
-    const visit = queue[head];
-    const breaks = slotLockBreaks(
-      visit.node,
-      visit.lock,
-      sources.definitions,
-      startingChildren,
-      visit.counterparts
-    );
-    for (const lockBreak of breaks) found.push(locate(visit, lockBreak));
-    enqueueSlots(visit, { sources, stored, queue, maxNodes });
-  }
+  walkNodeForest(
+    nodes as BlockNode[],
+    maxNodes,
+    { definitions: sources.definitions, stored: sources.stored },
+    visit => {
+      const breaks = slotLockBreaks(
+        visit.node,
+        visit.lock,
+        sources.definitions,
+        startingChildren,
+        visit.counterparts
+      );
+      for (const lockBreak of breaks) found.push(locate(visit, lockBreak));
+      // Gating decides nothing a lock does.
+      return false;
+    }
+  );
   return found;
 }
 
 /** A break as the walk found it, placed where a save reports it. */
-function locate(visit: Visit, found: LockBreak): LocatedLockBreak {
-  const node = visit.node as Record<string, unknown>;
+function locate(visit: QueuedNode, found: LockBreak): LocatedLockBreak {
+  const node = visit.node as unknown as Record<string, unknown>;
   const slotPath = pointer(pointer(visit.path, "slots"), found.slot);
   const holder = {
     holderId: typeof node.id === "string" ? node.id : "",
@@ -137,6 +125,7 @@ function locate(visit: Visit, found: LockBreak): LocatedLockBreak {
       // pointer has to resolve against the document it reports on.
       path: found.stored ? slotPath : visit.path,
       starting: found.starting,
+      held: found.held.map(typeOfChild),
       changes: [],
     };
   }
@@ -146,55 +135,11 @@ function locate(visit: Visit, found: LockBreak): LocatedLockBreak {
     lock: "contentOnly",
     path: pointer(slotPath, found.index),
     starting: [],
+    held: [],
     index: found.index,
     childType: found.childType,
     changes: found.changes,
   };
-}
-
-/** Queue a node's slot children, each with the lock its slot passes down. */
-function enqueueSlots(
-  visit: Visit,
-  at: {
-    sources: LockSources;
-    stored: StoredForms | undefined;
-    queue: Visit[];
-    maxNodes: number;
-  }
-): void {
-  const node = visit.node;
-  if (!isPlainRecord(node) || !isPlainRecord(node.slots)) return;
-  // `isNodeType`, the predicate validation's walk names a container by, so a
-  // container it cannot name passes no lock here either.
-  const containerType = isNodeType(node.type) ? node.type : undefined;
-  for (const slot of boundedOwnKeys(node.slots, at.maxNodes) ?? []) {
-    const children = ownEntry(node.slots, slot);
-    if (!Array.isArray(children)) continue;
-    const lock = slotLockOf(
-      at.sources.definitions,
-      containerType,
-      slot,
-      visit.lock
-    );
-    const slotPath = pointer(pointer(visit.path, "slots"), slot);
-    for (let i = 0; i < children.length && at.queue.length < at.maxNodes; i++) {
-      at.queue.push({
-        node: children[i],
-        path: pointer(slotPath, i),
-        lock,
-        counterparts: counterpartsOf(
-          children[i],
-          {
-            holders: visit.counterparts,
-            slot,
-            index: i,
-            contentOnly: lock === "contentOnly",
-          },
-          at.stored
-        ),
-      });
-    }
-  }
 }
 
 /**
@@ -219,9 +164,21 @@ export function lockRefusal(
   );
 }
 
-/** A break as the before/after comparison knows it: its rule and place. */
+/**
+ * A break as the before/after comparison knows it: its rule, its place and,
+ * for the blocks a slot holds, which blocks those are. So a slot already
+ * holding a block too many may keep it, while a second one more, or any
+ * other change to what it holds, is a break of its own. Under `"insert"` the
+ * order is the author's, so only which blocks it holds counts.
+ */
 function breakIdentity(found: LocatedLockBreak): string {
-  return [found.code, found.holderId, found.slot, found.index ?? ""].join(
-    "\u0000"
-  );
+  const held = found.held.map(type => type ?? "\u0001");
+  if (found.lock === "insert") held.sort();
+  return [
+    found.code,
+    found.holderId,
+    found.slot,
+    found.index ?? "",
+    held.join("\u0002"),
+  ].join("\u0000");
 }

@@ -77,6 +77,19 @@ beforeEach(() => {
           },
         },
       },
+      // May sit only in a fixed row, so moving one out has nowhere to go.
+      { ...base, name: "acme/row-item", parent: ["acme/fixed-row"] },
+      // One block with five locked slots, more breaks than it has nodes.
+      {
+        ...base,
+        name: "acme/five-slots",
+        slots: Object.fromEntries(
+          ["a", "b", "c", "d", "e"].map(slot => [
+            slot,
+            { defaultBlock: [{ type: "acme/headline" }], lock: "all" },
+          ])
+        ),
+      },
       {
         ...base,
         name: "acme/sealed-shelf",
@@ -274,6 +287,94 @@ describe("planRepair", () => {
     expect(after.id).toBe(headline.id);
     expect(after.props).toEqual({ text: "Spring sale", align: "left" });
     expect(after.classes).toBeUndefined();
+  });
+
+  it("places several blocks out of one slot after each other, so the steps give the result's order", () => {
+    const row = placed("acme/fixed-row", "row");
+    row.slots!.items!.push(
+      { ...placed("acme/divider"), id: "one" },
+      { ...placed("acme/divider"), id: "two" }
+    );
+    const plan = repaired(page(row));
+    expect(
+      plan.steps.map(step =>
+        step.kind === "move" ? [step.nodeId, step.after] : []
+      )
+    ).toEqual([
+      ["one", "row"],
+      ["two", "one"],
+    ]);
+    expect(plan.result.nodes.map(node => node.id)).toEqual([
+      "row",
+      "one",
+      "two",
+    ]);
+  });
+
+  it("repairs every locked slot of a block, however many it declares", () => {
+    const block = placed("acme/five-slots", "five");
+    delete block.slots;
+    const plan = repaired(page(block));
+    expect(plan.steps.map(step => step.kind)).toEqual([
+      "add",
+      "add",
+      "add",
+      "add",
+      "add",
+    ]);
+  });
+
+  it("leaves a break whose block has nowhere it may go, names it, and repairs the rest", () => {
+    // The row item may sit only in a fixed row: just after the row is the top
+    // of the page, which its nesting rule refuses.
+    const stuck = placed("acme/fixed-row", "stuck");
+    stuck.slots!.items!.push({ ...placed("acme/row-item"), id: "item" });
+    const other = placed("acme/fixed-row", "other");
+    other.slots!.items!.push({ ...placed("acme/divider"), id: "extra" });
+    const plan = planRepair(page(stuck, other), sources());
+    expect(plan.steps).toEqual([
+      expect.objectContaining({ kind: "move", nodeId: "extra" }),
+    ]);
+    expect(plan.remaining).toEqual([
+      expect.objectContaining({ holderId: "stuck", slot: "items" }),
+    ]);
+    // Nothing moved where the rule refuses it, and nothing lost.
+    expect(plan.result.nodes.map(node => node.id)).toEqual([
+      "stuck",
+      "other",
+      "extra",
+    ]);
+  });
+
+  it("puts back only the design parts the lock refuses, keeping one the stored copy holds", () => {
+    // Stored aligned right, which the save keeps; the class is new.
+    const card = placed("acme/sealed-card", "card");
+    card.slots!.body![0]!.props.align = "right";
+    const stored = page(structuredClone(card));
+    card.slots!.body![0]!.classes = ["promo"];
+    const plan = planRepair(page(card), { ...sources(), stored: [stored] });
+    expect(plan.steps).toEqual([
+      expect.objectContaining({ kind: "reset", parts: ["classes"] }),
+    ]);
+    const after = plan.result.nodes[0]!.slots!.body![0]!;
+    expect(after.props.align).toBe("right");
+    expect(after.classes).toBeUndefined();
+    expect(plan.remaining).toEqual([]);
+  });
+
+  it("plans nothing for a document past its depth limit, without walking it unbounded", () => {
+    // Deeper than any stored page may be, and deeper than a recursive walk or
+    // a copy of it can go.
+    let node = placed("acme/card", "d0");
+    const top = node;
+    for (let depth = 1; depth < 20_000; depth += 1) {
+      const child = { ...placed("acme/divider"), id: `d${depth}` };
+      node.slots = { body: [child] };
+      node = child;
+    }
+    const plan = planRepair(page(top), sources());
+    expect(plan.steps).toEqual([]);
+    expect(plan.result.nodes[0]).toBe(top);
   });
 
   it("repairs several breaks in one plan", () => {

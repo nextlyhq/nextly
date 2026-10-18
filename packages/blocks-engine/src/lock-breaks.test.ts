@@ -9,6 +9,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { DOCUMENT_FORMAT_VERSION } from "./document";
+import { DEFAULT_LIMITS, type DocumentLimits } from "./limits";
 import type { BlockDocument, BlockNode } from "./document";
 import { lockBreaksIn, lockRefusal } from "./lock-breaks";
 import {
@@ -63,6 +64,16 @@ beforeEach(() => {
           items: {
             defaultBlock: [{ type: "acme/headline" }, { type: "acme/divider" }],
             lock: "all",
+          },
+        },
+      },
+      {
+        ...base,
+        name: "acme/loose-row",
+        slots: {
+          items: {
+            defaultBlock: [{ type: "acme/headline" }, { type: "acme/divider" }],
+            lock: "insert",
           },
         },
       },
@@ -122,22 +133,32 @@ function page(...nodes: BlockNode[]): BlockDocument {
 const clone = <T>(value: T): T => structuredClone(value);
 
 /** Validation's lock issues, as path and code. */
-function validationLocks(doc: BlockDocument, stored?: BlockDocument[]) {
+function validationLocks(
+  doc: BlockDocument,
+  stored?: BlockDocument[],
+  limits?: DocumentLimits
+) {
   return validateDocument(doc, {
     breakpoints: FIXTURE_BREAKPOINTS,
     mode: "strict",
     ...sources(),
     ...(stored === undefined ? {} : { stored }),
+    ...(limits === undefined ? {} : { limits }),
   })
     .issues.filter(issue => issue.code.startsWith("locked-slot"))
     .map(issue => `${issue.code} ${issue.path}`)
     .sort();
 }
 
-function located(doc: BlockDocument, stored?: BlockDocument[]) {
+function located(
+  doc: BlockDocument,
+  stored?: BlockDocument[],
+  limits?: DocumentLimits
+) {
   return lockBreaksIn(doc, {
     ...sources(),
     ...(stored === undefined ? {} : { stored }),
+    ...(limits === undefined ? {} : { limits }),
   })
     .map(found => `${found.code} ${found.path}`)
     .sort();
@@ -249,6 +270,22 @@ describe("lockBreaksIn", () => {
       expect(located(doc, stored)).toEqual(validationLocks(doc, stored));
     });
 
+    it("under a node cap smaller than the slots a node stores", () => {
+      // Two nodes: a card storing more slot keys than the cap allows nodes,
+      // and in one of them a row whose locked slot lost its blocks. Validation
+      // still reaches the row within the cap, so the editor must too.
+      const row = placed("acme/fixed-row");
+      delete row.slots;
+      const card = placed("acme/card");
+      card.slots = { a: [], b: [], body: [row] };
+      const limits = { ...DEFAULT_LIMITS, maxNodes: 2 };
+      const doc = page(card);
+      expect(located(doc, undefined, limits)).toEqual(
+        validationLocks(doc, undefined, limits)
+      );
+      expect(located(doc, undefined, limits)).not.toEqual([]);
+    });
+
     it("on a case that has breaks, so agreement is not two empty lists", () => {
       const row = placed("acme/fixed-row");
       row.slots!.items!.reverse();
@@ -281,6 +318,31 @@ describe("lockRefusal", () => {
     const before = page(row);
     const after = clone(before);
     after.nodes[0]!.slots!.items![0]!.props.text = "Spring sale";
+    expect(lockRefusal(before, after, sources())).toBeUndefined();
+  });
+
+  it("refuses a further change to the blocks of a slot already holding one too many", () => {
+    // Stored with a block too many. Keeping it is allowed (above); a second
+    // one more is a break of its own, as is swapping what it holds.
+    const row = placed("acme/fixed-row", "row");
+    row.slots!.items!.push(placed("acme/divider"));
+    const before = page(row);
+    const more = clone(before);
+    more.nodes[0]!.slots!.items!.push(placed("acme/divider"));
+    expect(lockRefusal(before, more, sources())).toEqual(
+      expect.objectContaining({ code: "locked-slot-altered", holderId: "row" })
+    );
+    const swapped = clone(before);
+    swapped.nodes[0]!.slots!.items![2] = placed("acme/headline");
+    expect(lockRefusal(before, swapped, sources())).toBeDefined();
+  });
+
+  it("allows reordering an already broken slot locked insert, whose order is the author's", () => {
+    const row = placed("acme/loose-row", "row");
+    row.slots!.items!.push(placed("acme/divider"));
+    const before = page(row);
+    const after = clone(before);
+    after.nodes[0]!.slots!.items!.reverse();
     expect(lockRefusal(before, after, sources())).toBeUndefined();
   });
 

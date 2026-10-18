@@ -12,12 +12,21 @@
 import { nodeLocks } from "./content-only-exposures";
 import type { BlockDocument, BlockNode } from "./document";
 import {
+  countNodes as countForest,
+  DEFAULT_LIMITS,
+  ForestTooLargeError,
+  treeDepth,
+  type DocumentLimits,
+} from "./limits";
+import {
   lockBreaksIn,
   type LocatedLockBreak,
   type LockSources,
 } from "./lock-breaks";
+import { placementVerdict, type PlacementTarget } from "./nesting";
 import { isPlainRecord } from "./plain-record";
-import { contentPropsOf, withStartingDesign } from "./slot-lock";
+import { boundedOwnKeys, ownEntry } from "./safe-record";
+import { contentPropsOf, designChanges, withStartingDesign } from "./slot-lock";
 import { startingChildrenSource } from "./starting-children";
 import { newId } from "./tree";
 
@@ -35,7 +44,12 @@ export type RepairStep =
       readonly nodeId: string;
       readonly type: string;
       readonly from: SlotPlace;
-      /** Placed just after this block, in the slot it sits in or at the top. */
+      /**
+       * Placed just after this block, in the slot it sits in or at the top:
+       * the outermost locked block for the first block a slot moves out, and
+       * the block moved before it for each after, so the steps in order give
+       * the result's order.
+       */
       readonly after: string;
     }
   | {
@@ -81,11 +95,22 @@ export interface RepairRule {
 export interface RepairPlan {
   readonly steps: readonly RepairStep[];
   readonly result: BlockDocument;
+  /**
+   * The lock breaks the result still holds, which no rule could repair: a
+   * block with nowhere its nesting rule lets it go, say. Empty when the result
+   * keeps every lock; a preview says what is left when it is not.
+   */
+  readonly remaining: readonly LocatedLockBreak[];
 }
 
 /**
  * Plan the repair of `document`, rule by rule. The document is not changed;
  * the plan's `result` is a new one.
+ *
+ * A document past its node or depth limits is not one a save would store, so
+ * nothing is planned for it: no steps, the document itself as the result, and
+ * its breaks named in `remaining`. The rules copy and index the document they
+ * are given, and past the limits that work is not bounded.
  *
  * @experimental
  */
@@ -94,6 +119,13 @@ export function planRepair(
   sources: LockSources,
   rules: readonly RepairRule[] = [lockRepairRule]
 ): RepairPlan {
+  if (!withinLimits(document, sources.limits ?? DEFAULT_LIMITS)) {
+    return {
+      steps: [],
+      result: document,
+      remaining: lockBreaksIn(document, sources),
+    };
+  }
   let result = structuredClone(document);
   const steps: RepairStep[] = [];
   for (const rule of rules) {
@@ -101,7 +133,7 @@ export function planRepair(
     result = applied.document;
     steps.push(...applied.steps);
   }
-  return { steps, result };
+  return { steps, result, remaining: lockBreaksIn(result, sources) };
 }
 
 /**
@@ -110,7 +142,8 @@ export function planRepair(
  * starting design.
  *
  * One break at a time, each judged again on what the last repair left, so a
- * repair of an outer slot is seen before an inner one is judged.
+ * repair of an outer slot is seen before an inner one is judged. A break no
+ * repair can reach is set aside, and the rest are still repaired.
  *
  * @experimental
  */
@@ -119,28 +152,62 @@ export const lockRepairRule: RepairRule = {
   apply(document, context) {
     const current = structuredClone(document);
     const steps: RepairStep[] = [];
-    // Each repair removes the break it answers and adds none, so a document
-    // needs at most one per node; the bound stops a break no repair can reach.
-    const most = countNodes(current) * 3 + 1;
+    const { sources } = context;
+    const maxNodes = (sources.limits ?? DEFAULT_LIMITS).maxNodes;
+    // Each repair removes the break it answers and adds none, and a break no
+    // repair reaches is set aside, so the breaks found, plus a round per node
+    // for any an outer repair uncovers, bound the work however many locked
+    // slots one block declares.
+    const most =
+      lockBreaksIn(current, sources).length + countNodes(current, maxNodes) + 1;
+    const unreachable = new Set<string>();
     // Expanded once for the whole plan, so each added block is a copy of
     // what an insert creates, given ids of its own.
     const starting = startingChildrenSource(
-      context.sources.definitions,
-      context.sources.nesting
+      sources.definitions,
+      sources.nesting
     );
     for (let round = 0; round < most; round += 1) {
-      const found = lockBreaksIn(current, context.sources)[0];
+      const found = lockBreaksIn(current, sources).find(
+        each => !unreachable.has(placeOfBreak(each))
+      );
       if (found === undefined) break;
       const repaired = repairOne(current, found, {
-        sources: context.sources,
+        sources,
         starting,
+        maxNodes,
       });
-      if (repaired.length === 0) break;
+      // Left for the plan's `remaining` to name.
+      if (repaired.length === 0) unreachable.add(placeOfBreak(found));
       steps.push(...repaired);
     }
     return { document: current, steps };
   },
 };
+
+/** Whether a document's forest is within its node and depth limits. */
+function withinLimits(
+  document: BlockDocument,
+  limits: DocumentLimits
+): boolean {
+  try {
+    return (
+      countForest(document.nodes) <= limits.maxNodes &&
+      treeDepth(document.nodes) <= limits.maxDepth
+    );
+  } catch (error) {
+    // Too large for the bounded walk to measure is past the limits too.
+    if (error instanceof ForestTooLargeError) return false;
+    throw error;
+  }
+}
+
+/** A break by its rule and place, to set aside one no repair reaches. */
+function placeOfBreak(found: LocatedLockBreak): string {
+  return [found.code, found.holderId, found.slot, found.index ?? ""].join(
+    "\u0000"
+  );
+}
 
 /** Repair one break in place, returning its steps; none when it cannot be reached. */
 function repairOne(
@@ -149,10 +216,11 @@ function repairOne(
   context: {
     sources: LockSources;
     starting: (type: string, slot: string) => readonly BlockNode[];
+    maxNodes: number;
   }
 ): RepairStep[] {
   const { sources } = context;
-  const places = placesOf(document);
+  const places = placesOf(document, context.maxNodes);
   const holder = places.get(found.holderId)?.node;
   if (holder === undefined) return [];
   const starting = context.starting(holder.type, found.slot);
@@ -162,7 +230,11 @@ function repairOne(
   return refillSlot(document, places, holder, found, starting, sources);
 }
 
-/** Put one child's design back as it started. */
+/**
+ * Put back the parts of one child's design the break names. A part the
+ * stored copy already holds is the page's to keep, so the step names exactly
+ * what changes.
+ */
 function resetDesign(
   holder: BlockNode,
   found: LocatedLockBreak,
@@ -177,10 +249,16 @@ function resetDesign(
     return [];
   }
   const content = contentPropsOf(sources.definitions.get(start.type)?.props);
+  const held = child as unknown as Record<string, unknown>;
+  const startingChild = start as unknown as Record<string, unknown>;
+  const parts = designChanges(held, startingChild, content)
+    .filter(change => found.changes.includes(change.words))
+    .map(change => change.part);
   children[index] = withStartingDesign(
-    child as unknown as Record<string, unknown>,
-    start as unknown as Record<string, unknown>,
-    content
+    held,
+    startingChild,
+    content,
+    parts
   ) as unknown as BlockNode;
   return [
     { kind: "reset", nodeId: child.id, type: child.type, parts: found.changes },
@@ -203,6 +281,11 @@ function refillSlot(
   const matched = matchStarting(held, starting);
   const kept = new Set(matched.filter(index => index !== undefined));
   const extras = held.filter((_, index) => !kept.has(index));
+  // Where the blocks the slot may not hold go, asked before anything changes:
+  // a block the nesting rules refuse there has nowhere the lock rule can put
+  // it, so this break is left to the plan's `remaining`.
+  const outermost = outermostLocked(document, places, holder, sources);
+  if (!placeable(extras, outermost, sources)) return [];
   const place = { holderId: found.holderId, slot: found.slot };
   const steps: RepairStep[] = [];
 
@@ -236,19 +319,39 @@ function refillSlot(
   }
   holder.slots = { ...holder.slots, [found.slot]: slot };
 
-  const outermost = outermostLocked(document, places, holder, sources);
   const into = outermost.siblings;
   into.splice(into.indexOf(outermost.node) + 1, 0, ...extras);
+  // Each after the one before it, so the steps in order give this order.
+  let after = outermost.node.id;
   for (const extra of extras) {
     steps.push({
       kind: "move",
       nodeId: extra.id,
       type: extra.type,
       from: place,
-      after: outermost.node.id,
+      after,
     });
+    after = extra.id;
   }
   return steps;
+}
+
+/** Whether every block may sit beside `at`, by the site's nesting rules. */
+function placeable(
+  blocks: readonly BlockNode[],
+  at: Place,
+  sources: LockSources
+): boolean {
+  if (blocks.length === 0 || sources.nesting === undefined) return true;
+  const where: PlacementTarget =
+    at.parent === undefined || at.slot === undefined
+      ? { kind: "root" }
+      : { kind: "slot", parentType: at.parent.type, slot: at.slot };
+  return placementVerdict(
+    blocks.map(block => block.type),
+    where,
+    sources.nesting
+  ).allowed;
 }
 
 /**
@@ -289,27 +392,53 @@ function sameOrder(a: readonly BlockNode[], b: readonly BlockNode[]): boolean {
   return a.length === b.length && a.every((node, index) => node === b[index]);
 }
 
-/** Where a node sits: the list holding it, and the block whose slot that is. */
+/** Where a node sits: the list holding it, and the block and slot it is in. */
 interface Place {
   readonly node: BlockNode;
   readonly siblings: BlockNode[];
   readonly parent: BlockNode | undefined;
+  readonly slot: string | undefined;
 }
 
-/** Every node of the document by id, with where it sits. */
-function placesOf(document: BlockDocument): Map<string, Place> {
+/** A list of siblings, and the block and slot holding it. */
+type SiblingList = Omit<Place, "node">;
+
+/**
+ * Every node of the document by id, with where it sits: breadth-first and
+ * iterative, and bounded by the document's node cap, so a document too large
+ * or too deep to store is indexed as far as the cap and no further.
+ */
+function placesOf(
+  document: BlockDocument,
+  maxNodes: number
+): Map<string, Place> {
   const places = new Map<string, Place>();
-  const visit = (siblings: BlockNode[], parent: BlockNode | undefined) => {
-    for (const node of siblings) {
+  const lists: SiblingList[] = [
+    { siblings: document.nodes, parent: undefined, slot: undefined },
+  ];
+  for (let head = 0; head < lists.length && places.size < maxNodes; head++) {
+    const at = lists[head];
+    for (const node of at.siblings) {
+      if (places.size >= maxNodes) break;
       if (!isPlainRecord(node) || typeof node.id !== "string") continue;
-      places.set(node.id, { node, siblings, parent });
-      for (const children of Object.values(node.slots ?? {})) {
-        if (Array.isArray(children)) visit(children, node);
-      }
+      places.set(node.id, { node, ...at });
+      lists.push(...slotListsOf(node, maxNodes));
     }
-  };
-  visit(document.nodes, undefined);
+  }
   return places;
+}
+
+/** A node's slots, each as a list of siblings it holds. */
+function slotListsOf(node: BlockNode, maxNodes: number): SiblingList[] {
+  if (!isPlainRecord(node.slots)) return [];
+  const lists: SiblingList[] = [];
+  for (const slot of boundedOwnKeys(node.slots, maxNodes) ?? []) {
+    const children = ownEntry(node.slots, slot);
+    if (Array.isArray(children)) {
+      lists.push({ siblings: children, parent: node, slot });
+    }
+  }
+  return lists;
 }
 
 /**
@@ -326,7 +455,10 @@ function outermostLocked(
   const locks = nodeLocks(document.nodes, sources.definitions);
   let at = places.get(holder.id)!;
   while (locks.get(at.node.id)?.lock !== undefined && at.parent !== undefined) {
-    at = places.get(at.parent.id)!;
+    // An ancestor past the index's cap is not reached; stop where it ends.
+    const up = places.get(at.parent.id);
+    if (up === undefined) break;
+    at = up;
   }
   return at;
 }
@@ -344,6 +476,6 @@ function withFreshIds(node: BlockNode): BlockNode {
   return copy;
 }
 
-function countNodes(document: BlockDocument): number {
-  return placesOf(document).size;
+function countNodes(document: BlockDocument, maxNodes: number): number {
+  return placesOf(document, maxNodes).size;
 }
