@@ -33,7 +33,11 @@ import {
 } from "../../i18n/migration/companion-history";
 import { deriveCompanionSpec } from "../../i18n/migration/derive-companion-spec";
 import { planFieldJoinsTranslationMigration } from "../../i18n/migration/field-joins-translation";
-import { refusalsForFieldsLeavingTranslation } from "../../i18n/migration/field-leaves-translation-rules";
+import {
+  type LeavingTranslationRefusal,
+  refusalsForFieldsJoiningTranslation,
+  refusalsForFieldsLeavingTranslation,
+} from "../../i18n/migration/field-leaves-translation-rules";
 import { fieldToLocalizedColumnSpec } from "../../i18n/migration/field-to-column-spec";
 import {
   planCompanionMigration,
@@ -866,6 +870,12 @@ function planFieldsJoiningTranslation(
       names.has(f.name) ? { ...f, localized: false } : f
     );
     const prevMain = previousSnapshot.tables.find(t => t.name === c.tableName);
+    assertFieldsMayJoinTranslation(
+      { entity: { ...c, fields: oldFields }, kind },
+      joining,
+      prevMain,
+      dialect
+    );
     return [
       {
         entity: kind,
@@ -873,6 +883,8 @@ function planFieldsJoiningTranslation(
           spec: {
             dialect,
             collection: c.slug,
+            // The DOWN archives the other languages' values, recorded with the entity's kind.
+            kind,
             mainTable: c.tableName,
             companionTable: `${c.tableName}_locales`,
             defaultLocale,
@@ -991,6 +1003,17 @@ function assertFieldsMayLeaveTranslation(
     builtBy: "codeFirst",
     surface: "code",
   });
+  refuseMigration(c, refusals);
+}
+
+/**
+ * Refuses the run, before any file is written, with each refused field and the steps that work.
+ * Nothing when `refusals` is empty.
+ */
+function refuseMigration(
+  c: MinimalConfigEntity,
+  refusals: LeavingTranslationRefusal[]
+): void {
   if (refusals.length === 0) return;
   throw new NextlyError({
     code: "VALIDATION_ERROR",
@@ -998,6 +1021,40 @@ function assertFieldsMayLeaveTranslation(
     publicData: { errors: refusals },
     logContext: { entity: c.slug, fields: refusals.map(r => r.path) },
   });
+}
+
+/**
+ * Refuses the run when a shared field becomes translated in the same migration that changes how
+ * it is stored (`refusalsForFieldsJoiningTranslation`). The column its value sits in now is the
+ * previous snapshot's main-table column. The one it would have, kept shared, is built by the
+ * builder that wrote that snapshot, from `asShared` (the entity with its joining fields shared),
+ * so the two types compare as each was written.
+ */
+function assertFieldsMayJoinTranslation(
+  asShared: TaggedConfigEntity,
+  joining: readonly LeavingField[],
+  prevMain: TableSpec | undefined,
+  dialect: SupportedDialect
+): void {
+  const { entity: c, kind } = asShared;
+  const sharedMain = buildDesiredSnapshotFromConfig(
+    kind === "collection" ? [c] : [],
+    kind === "single" ? [c] : [],
+    kind === "fieldGroup" ? [c] : [],
+    dialect
+  ).tables.find(t => t.name === c.tableName);
+  const typeIn = (table: TableSpec | undefined, column: string) =>
+    table?.columns.find(col => col.name === column)?.type;
+  const reshaped = joining
+    .filter(({ column }) => {
+      const before = typeIn(prevMain, column.name);
+      return before !== undefined && before !== typeIn(sharedMain, column.name);
+    })
+    .map(({ field }) => field.name);
+  refuseMigration(
+    c,
+    refusalsForFieldsJoiningTranslation({ reshaped, surface: "code" })
+  );
 }
 
 /**

@@ -1407,8 +1407,8 @@ export class DynamicCollectionService extends BaseService {
         oldUserFields,
         userDefinedFields
       );
-      // A field leaving translation has preconditions of its own, asked before anything here is
-      // written or altered.
+      // A field leaving or joining translation has preconditions of its own, asked before anything
+      // here is written or altered.
       await archiveFieldsLeavingTranslation({
         // This service builds Schema Builder collections.
         builtBy: "collection",

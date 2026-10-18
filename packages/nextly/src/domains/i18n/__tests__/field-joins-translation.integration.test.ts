@@ -98,6 +98,22 @@ describeEachDialect("a shared field that becomes translated", dialect => {
     ).executeQuery<T>(sql);
   }
 
+  /** A table's column names, as the database reports them. */
+  async function columnsOf(table: string): Promise<string[]> {
+    if (dialect === "sqlite") {
+      const rows = await query<{ name: string }>(
+        `PRAGMA table_info("${table}")`
+      );
+      return rows.map(row => row.name);
+    }
+    const rows = await query<{ name: string }>(
+      dialect === "mysql"
+        ? `SELECT COLUMN_NAME AS name FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '${table}'`
+        : `SELECT column_name AS name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = '${table}'`
+    );
+    return rows.map(row => row.name);
+  }
+
   async function schemaVersionOf(
     registry: string,
     slug: string
@@ -208,13 +224,13 @@ describeEachDialect("a shared field that becomes translated", dialect => {
       table: "dc_posts",
       seed: seedCollection,
       read: readCollection,
-      change: async () => {
+      change: async (fields: unknown[]) => {
         // A settings-only save: the builder sends no schema dialog for it.
         const saved = await handler().updateCollection(
           { collectionName: "posts" },
-          { fields: TRANSLATED }
+          { fields }
         );
-        if (!saved.success) throw new Error(saved.message);
+        if (!saved.success) throw new Error(JSON.stringify(saved));
       },
     },
     {
@@ -222,7 +238,7 @@ describeEachDialect("a shared field that becomes translated", dialect => {
       table: "dc_posts",
       seed: seedCollection,
       read: readCollection,
-      change: async () => {
+      change: async (fields: unknown[]) => {
         // The builder sends the schema version it previewed against, and confirms no drop: the
         // field is not removed, so its dialog lists nothing to confirm, and its value moves rather
         // than goes.
@@ -231,7 +247,7 @@ describeEachDialect("a shared field that becomes translated", dialect => {
           "applySchemaChanges",
           { collectionName: "posts" },
           {
-            fields: TRANSLATED,
+            fields,
             confirmed: true,
             localized: true,
             schemaVersion: await schemaVersionOf(
@@ -247,11 +263,11 @@ describeEachDialect("a shared field that becomes translated", dialect => {
       table: "single_hero",
       seed: seedSingle,
       read: () => readSingle(),
-      change: async () => {
+      change: async (fields: unknown[]) => {
         await dispatchSingles(
           "updateSingleSchema",
           { slug: "hero" },
-          { fields: TRANSLATED }
+          { fields }
         );
       },
     },
@@ -260,13 +276,13 @@ describeEachDialect("a shared field that becomes translated", dialect => {
       table: "single_hero",
       seed: seedSingle,
       read: () => readSingle(),
-      change: async () => {
+      change: async (fields: unknown[]) => {
         // As the collection's apply: no drop is confirmed, since nothing is removed.
         await dispatchSingles(
           "applySingleSchemaChanges",
           { slug: "hero" },
           {
-            fields: TRANSLATED,
+            fields,
             confirmed: true,
             localized: true,
             schemaVersion: await schemaVersionOf("dynamic_singles", "hero"),
@@ -282,12 +298,12 @@ describeEachDialect("a shared field that becomes translated", dialect => {
       // them, from the default language's companion row.
       read: async (id: string) =>
         (await companionHeadings("comp_banner", id)).en,
-      change: async () => {
+      change: async (fields: unknown[]) => {
         await dispatchComponents(
           "applyComponentSchemaChanges",
           { slug: "banner" },
           {
-            fields: TRANSLATED,
+            fields,
             confirmed: true,
             localized: true,
             schemaVersion: await schemaVersionOf(
@@ -305,7 +321,7 @@ describeEachDialect("a shared field that becomes translated", dialect => {
     async ({ table, seed, read, change }) => {
       const id = await seed();
 
-      await change();
+      await change(TRANSLATED);
 
       // The shared value is now the default language's translation, and no other language is
       // given one it never had.
@@ -314,6 +330,35 @@ describeEachDialect("a shared field that becomes translated", dialect => {
       expect(headings.es ?? null).toBeNull();
       expect(headings.ar ?? null).toBeNull();
       expect(await read(id)).toBe("Hello");
+    }
+  );
+
+  it.each(PATHS)(
+    "refuses a field whose type changes as it becomes translated, and changes nothing, when $path",
+    async ({ table, seed, change }) => {
+      // The shared value would be copied as it is into a companion column of the new type: text
+      // into a number column fails part-way on PostgreSQL and is coerced on MySQL.
+      const id = await seed();
+
+      const refusal = await change([
+        { name: "heading", type: "number", localized: true },
+        { name: "views", type: "number" },
+      ]).then(
+        () => undefined,
+        (error: unknown) => error
+      );
+
+      const reported =
+        refusal instanceof Error
+          ? `${refusal.message} ${JSON.stringify((refusal as { publicData?: unknown }).publicData ?? null)}`
+          : String(refusal);
+      expect(reported).toMatch(/RESHAPED_FIELD_JOINS_TRANSLATION/);
+      // The value stays shared, where it was, and the companion gains no column for it.
+      expect(await columnsOf(`${table}_locales`)).not.toContain("heading");
+      const [row] = await query<{ heading: string }>(
+        `SELECT ${quote(dialect, "heading")} AS heading FROM ${quote(dialect, table)} WHERE ${quote(dialect, "id")} = '${id}'`
+      );
+      expect(row?.heading).toBe("Hello");
     }
   );
 

@@ -8,7 +8,7 @@
  * default language's value in the companion before the main table loses its column.
  */
 import { randomBytes } from "node:crypto";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -224,6 +224,32 @@ for (const entry of DIALECTS) {
           `SELECT ${q("body")} AS body FROM ${q(companion)} WHERE ${q("_parent")} = 'e1' AND ${q("_locale")} = 'en'`
         );
         expect(en.body).toBe("Hello");
+      });
+
+      it("refuses a field whose storage changes as it becomes translated, before writing a file", async () => {
+        // Its value would be copied as it is into a companion column of the new type.
+        await seedShared();
+        const filesBefore = (await readdir(migrationsDir)).sort();
+
+        await expect(
+          migrateCreate({
+            ...shared,
+            fields: [
+              { name: "headline", type: "text", localized: true },
+              { name: "body", type: "number", localized: true },
+            ],
+          })
+        ).rejects.toMatchObject({
+          publicData: {
+            errors: [
+              {
+                code: "RESHAPED_FIELD_JOINS_TRANSLATION",
+                path: "fields.body",
+              },
+            ],
+          },
+        });
+        expect((await readdir(migrationsDir)).sort()).toEqual(filesBefore);
       });
 
       it("keeps the shared value as English's", async () => {
