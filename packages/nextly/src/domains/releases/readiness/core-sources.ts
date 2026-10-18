@@ -296,11 +296,13 @@ function fieldFindingFor(issueCode: string): FieldFinding {
 }
 
 /**
- * Whether each document going live would pass what its publish judges: the
- * validation, and the field rules a pending change meets. A document coming
- * down is not judged here.
+ * Whether each document would pass what the release's write judges: the
+ * field rules its status meets, and the validation and field rules of what
+ * goes live or of a pending change the write folds in. A document coming down
+ * with no pending change is judged on its status alone, so invalid content
+ * can still be taken down.
  *
- * Judged as the author, the person the publish is made as.
+ * Judged as the author, the person the write is made as.
  */
 export const CORE_REQUIRED_FIELDS_SOURCE = defineReleaseCheckSource({
   key: "core.required-fields",
@@ -309,19 +311,21 @@ export const CORE_REQUIRED_FIELDS_SOURCE = defineReleaseCheckSource({
   async check(batch, ctx) {
     const actingAs = identities(ctx);
     const findings: ReleaseCheckFinding<FieldFinding>[] = [];
-    const goingLive = runnable(batch).filter(m => m.action === "publish");
-    // One read per author and scope: a publish is judged as its author, and a
-    // scope's schema, rows and drafts are read once for its members.
-    for (const members of groupedBy(goingLive, m => [
+    // One read per author, scope and action: a write is judged as its author
+    // and for its action, and a scope's schema, rows and drafts are read once
+    // for its members.
+    for (const members of groupedBy(runnable(batch), m => [
       m.createdBy,
       scopeKey(m),
+      m.action,
     ])) {
       const user = await actingAs(members[0].createdBy);
       if (user === null) continue;
       const issues = await ctx.reads.publishProblems(
         members[0],
         members.map(member => member.entryId),
-        user
+        user,
+        members[0].action
       );
       for (const member of members) {
         findings.push(

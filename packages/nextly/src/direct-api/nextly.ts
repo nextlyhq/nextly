@@ -929,8 +929,10 @@ export const nextly = {
   // not delegated here is a compile error rather than a gap a caller finds.
   releases: {
     create: args => requireNextly().releases.create(args),
-    find: args => requireNextly().releases.find(args),
-    count: args => requireNextly().releases.count(args),
+    // Optional, as the namespace declares them: `satisfies` keeps an arrow's
+    // own parameter list, so a bare `args =>` would require an argument.
+    find: (args?) => requireNextly().releases.find(args),
+    count: (args?) => requireNextly().releases.count(args),
     calendar: args => requireNextly().releases.calendar(args),
     findByID: args => requireNextly().releases.findByID(args),
     capabilities: args => requireNextly().releases.capabilities(args),
