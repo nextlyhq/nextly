@@ -14,11 +14,14 @@
  * still can, it dispatches one. A dispatched run tests everything, so it
  * covers every change since the last commit that was tested.
  *
- * A run tested the commit when every substantive job named below reached a
- * verdict (`success` or `failure`), the same rule the superseded check uses to
- * find the last tested commit. A run still queued or running may yet test it,
- * so it is left to finish; if a newer push supersedes it, the next scheduled
- * look dispatches.
+ * A run tested the commit when every job its verdict stands on, named below,
+ * reached a verdict (`success` or `failure`): for CI, every job `CI gate`
+ * needs; for Integration, its three legs. A run still queued or running may yet
+ * test it, so it is left to finish; if a newer push supersedes it, the next
+ * scheduled look dispatches. A commit gets one catch-up run, never a second:
+ * when that run ends without testing it (a job cancelled or timed out), the
+ * red or cancelled result stands for someone to read, and dispatching again
+ * every two hours would only repeat it.
  *
  * Usage, in a workflow step: node scripts/main-catch-up.mjs
  * Reads GITHUB_REPOSITORY and GH_TOKEN.
@@ -28,12 +31,21 @@ import { githubJson, githubRequest } from "./github-api.mjs";
 import { commandText } from "./workflow-context.mjs";
 
 /**
- * The workflows to keep tested on `main`, each with the jobs whose verdicts
- * mean it tested a commit. Each list is the workflow's own `substantive-job`
- * input to `.github/actions/superseded-on-main`, which a test holds this to.
+ * The workflows to keep tested on `main`, each with the jobs its verdict stands
+ * on: for CI, every job `CI gate` needs; for Integration, its legs. A name
+ * ending in " (" stands for a matrix job's every instance, whose names add the
+ * matrix value. A test holds each list to the workflow file.
  */
 export const WORKFLOWS = {
-  "ci.yml": ["Lint / Typecheck / Test / Build"],
+  "ci.yml": [
+    "Decide what this commit can affect",
+    "Comment convention (describes code, not process)",
+    "Lint / Typecheck / Test / Build",
+    "Unit tests (nextly)",
+    "Unit tests (admin)",
+    "Published admin build",
+    "CLI entry guard (",
+  ],
   "integration.yml": ["Integration (postgres)", "Integration (mysql)", "Integration (sqlite)"],
 };
 
@@ -53,6 +65,8 @@ export async function decision(workflow, sha, { repository, context }) {
   const runs = listed.filter(run => MAIN_EVENTS.has(run.event));
   const unfinished = runs.find(run => run.status !== "completed");
   if (unfinished) return { action: "none", reason: `run ${unfinished.id} of ${sha.slice(0, 9)} is ${unfinished.status} and may still test it` };
+  const caughtUp = runs.find(run => run.event === "workflow_dispatch");
+  if (caughtUp) return { action: "none", reason: `catch-up run ${caughtUp.id} already ran on ${sha.slice(0, 9)}; its result stands` };
   for (const run of runs) {
     const { jobs } = await githubJson(`repos/${repository}/actions/runs/${run.id}/jobs?per_page=100`, context);
     if (tested(jobs, WORKFLOWS[workflow])) return { action: "none", reason: `run ${run.id} tested ${sha.slice(0, 9)}` };
@@ -60,9 +74,12 @@ export async function decision(workflow, sha, { repository, context }) {
   return { action: "dispatch", reason: `no run tested ${sha.slice(0, 9)}` };
 }
 
-/** Whether every substantive job is present and reached a verdict. */
-function tested(jobs, substantive) {
-  return substantive.every(name => VERDICTS.has(jobs.find(job => job.name === name)?.conclusion));
+/** Whether every job the verdict stands on is present and reached one; a matrix name stands for all its instances, and at least one. */
+function tested(jobs, gated) {
+  return gated.every(name => {
+    const matching = name.endsWith(" (") ? jobs.filter(job => job.name.startsWith(name)) : jobs.filter(job => job.name === name);
+    return matching.length > 0 && matching.every(job => VERDICTS.has(job.conclusion));
+  });
 }
 
 /** Looks at `main`'s newest commit for each workflow, dispatches where none tested it, and returns the exit code. */

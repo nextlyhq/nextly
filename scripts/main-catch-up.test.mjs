@@ -31,7 +31,8 @@ function api(routes) {
 }
 
 const head = { [`GET repos/${REPO}/commits/main`]: { sha: SHA } };
-const job = (name, conclusion) => ({ name, conclusion });
+/** A job by its listed name; a matrix name (ending " (") gets an instance's value. */
+const job = (name, conclusion) => ({ name: name.endsWith(" (") ? `${name}ubuntu-latest)` : name, conclusion });
 const testedJobs = workflow => ({ jobs: WORKFLOWS[workflow].map(name => job(name, "success")) });
 const skippedJobs = workflow => ({ jobs: WORKFLOWS[workflow].map(name => job(name, "skipped")) });
 
@@ -86,6 +87,28 @@ describe("the catch-up on main's newest commit", () => {
     expect(dispatched()).toContain(dispatchOf("integration.yml"));
   });
 
+  it("does not count a run as tested when a job the gate needs was cancelled, though the build passed", async () => {
+    const oneCancelled = workflow => ({ jobs: WORKFLOWS[workflow].map(name => job(name, name === "Unit tests (nextly)" ? "cancelled" : "success")) });
+    const { fetchImpl, dispatched } = api(routesWith((_, id) => ({ id, event: "push", status: "completed" }), oneCancelled));
+    expect(await main(env, { fetchImpl })).toBe(0);
+    expect(dispatched()).toEqual([dispatchOf("ci.yml")]);
+  });
+
+  it("needs every instance of a matrix job to reach a verdict", async () => {
+    const instanceTimedOut = workflow => ({
+      jobs: [...WORKFLOWS[workflow].map(name => job(name, "success")), ...(workflow === "ci.yml" ? [{ name: "CLI entry guard (windows-latest)", conclusion: "timed_out" }] : [])],
+    });
+    const { fetchImpl, dispatched } = api(routesWith((_, id) => ({ id, event: "push", status: "completed" }), instanceTimedOut));
+    expect(await main(env, { fetchImpl })).toBe(0);
+    expect(dispatched()).toEqual([dispatchOf("ci.yml")]);
+  });
+
+  it("starts a commit's catch-up once: a finished catch-up run that tested nothing is left to stand", async () => {
+    const { fetchImpl, dispatched } = api(routesWith((_, id) => ({ id, event: "workflow_dispatch", status: "completed" }), skippedJobs));
+    expect(await main(env, { fetchImpl })).toBe(0);
+    expect(dispatched()).toEqual([]);
+  });
+
   it("fails, starting nothing, when main's runs cannot be read", async () => {
     const { fetchImpl, dispatched } = api({});
     expect(await main(env, { fetchImpl })).toBe(1);
@@ -95,15 +118,29 @@ describe("the catch-up on main's newest commit", () => {
 
 describe("the jobs it reads as testing a commit", () => {
   /*
-   * Each workflow names the jobs whose verdicts mean it tested a commit, in
-   * its superseded check. The catch-up must read the same jobs, or it would
-   * call a commit tested that the next push treats as untested, or the reverse.
+   * A commit is tested when every job its workflow's verdict stands on reached
+   * one. For CI that is every job `CI gate` needs; reading a narrower list
+   * would call a commit tested while one of the gate's jobs never ran.
    */
-  for (const [workflow, names] of Object.entries(WORKFLOWS)) {
-    it(`${workflow}: the same jobs as its superseded check, and it accepts a dispatched run`, () => {
-      const parsed = load(readFileSync(new URL(`../.github/workflows/${workflow}`, import.meta.url), "utf8"));
-      const ask = parsed.jobs.changes.steps.find(step => String(step.uses).includes("superseded-on-main"));
-      expect(String(ask.with["substantive-job"]).split("\n").map(name => name.trim()).filter(Boolean)).toEqual(names);
+  const workflowFile = name => load(readFileSync(new URL(`../.github/workflows/${name}`, import.meta.url), "utf8"));
+  const listedName = job => String(job.name).replace(/\$\{\{[^}]*\}\}\)$/, "");
+
+  it("ci.yml: every job CI gate needs, a matrix job by its name before the matrix value", () => {
+    const ci = workflowFile("ci.yml");
+    expect(WORKFLOWS["ci.yml"]).toEqual(ci.jobs.gate.needs.map(id => listedName(ci.jobs[id])));
+  });
+
+  it("integration.yml: its three legs, the same jobs its superseded check reads", () => {
+    const integration = workflowFile("integration.yml");
+    const legs = Object.values(integration.jobs).map(entry => entry.name).filter(name => String(name).startsWith("Integration ("));
+    expect([...WORKFLOWS["integration.yml"]].sort()).toEqual([...legs].sort());
+    const ask = integration.jobs.changes.steps.find(step => String(step.uses).includes("superseded-on-main"));
+    expect(String(ask.with["substantive-job"]).split("\n").map(name => name.trim()).filter(Boolean)).toEqual(WORKFLOWS["integration.yml"]);
+  });
+
+  for (const name of Object.keys(WORKFLOWS)) {
+    it(`${name} accepts a dispatched run`, () => {
+      const parsed = workflowFile(name);
       expect(Object.keys(parsed.on ?? parsed[true])).toContain("workflow_dispatch");
     });
   }
