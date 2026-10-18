@@ -231,15 +231,20 @@ export class MemoryUnknownSourceCounter implements UnknownSourceCounter {
  * own concern.
  */
 export class StoreUnknownSourceCounter implements UnknownSourceCounter {
-  constructor(private readonly limiter: RateLimiter) {}
+  /**
+   * `ceilingKey` names the ceiling this counter spends: core's auth routes
+   * share one, and each plugin's auth routes have their own, so a flood of one
+   * refuses nothing the other bounds even in a store every instance shares.
+   */
+  constructor(
+    private readonly limiter: RateLimiter,
+    private readonly ceilingKey: string = UNKNOWN_SOURCE_CEILING_KEY
+  ) {}
 
   async ceilingMet(
     limits: UnknownSourceLimits
   ): Promise<Extract<UnknownSourceVerdict, { allowed: false }> | null> {
-    const held = await this.limiter.window(
-      UNKNOWN_SOURCE_CEILING_KEY,
-      limits.windowMs
-    );
+    const held = await this.limiter.window(this.ceilingKey, limits.windowMs);
     return held && held.count >= limits.ceiling
       ? refused("ceiling", held.resetAt.getTime())
       : null;
@@ -249,10 +254,7 @@ export class StoreUnknownSourceCounter implements UnknownSourceCounter {
     key: string,
     limits: UnknownSourceLimits
   ): Promise<UnknownSourceVerdict> {
-    const held = await this.limiter.window(
-      UNKNOWN_SOURCE_CEILING_KEY,
-      limits.windowMs
-    );
+    const held = await this.limiter.window(this.ceilingKey, limits.windowMs);
     if (held === undefined) {
       const ceiling = await this.spendCeiling(limits);
       if (!ceiling.allowed) return ceiling;
@@ -289,7 +291,7 @@ export class StoreUnknownSourceCounter implements UnknownSourceCounter {
     limits: UnknownSourceLimits
   ): Promise<UnknownSourceVerdict> {
     const spent = await this.limiter.check(
-      UNKNOWN_SOURCE_CEILING_KEY,
+      this.ceilingKey,
       limits.ceiling,
       limits.windowMs
     );

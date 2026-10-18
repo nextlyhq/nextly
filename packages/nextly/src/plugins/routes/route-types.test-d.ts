@@ -1,11 +1,13 @@
 import { expectTypeOf } from "vitest";
 
 import type { AuthenticatedScope } from "../../auth/authenticated-scope";
+import type { AuthLimitAnswer } from "../../auth/pipeline/types";
 import { definePlugin } from "../plugin-context";
 
 import type {
   PluginRoute,
   PluginRouteContext,
+  PluginRouteLimitKey,
   Middleware,
 } from "./route-types";
 
@@ -92,3 +94,18 @@ expectTypeOf<
 expectTypeOf<
   KeyIsOptional<PluginRouteContext, "user">
 >().toEqualTypeOf<false>();
+
+// `limitKey` is an OPTIONAL addition: every route declared before it still
+// compiles. It answers as an auth strategy's `limitKey` does, sync or async,
+// from the request and its parsed body.
+expectTypeOf<KeyIsOptional<PluginRoute, "limitKey">>().toEqualTypeOf<true>();
+expectTypeOf<
+  NonNullable<PluginRoute["limitKey"]>
+>().toEqualTypeOf<PluginRouteLimitKey>();
+expectTypeOf<PluginRouteLimitKey>().parameter(0).toEqualTypeOf<{
+  request: Request;
+  body: Record<string, unknown>;
+}>();
+expectTypeOf<ReturnType<PluginRouteLimitKey>>().toEqualTypeOf<
+  AuthLimitAnswer | Promise<AuthLimitAnswer>
+>();

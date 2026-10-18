@@ -552,6 +552,7 @@ export {
   type PluginRouteHandler,
   type PluginRouteMount,
   type PluginRouteRateLimit,
+  type PluginRouteLimitKey,
   type Middleware,
   type RouteMethod,
   type NextlyPrincipals,

@@ -23,6 +23,7 @@ import { currentFlattenedErrors } from "../../hooks/side-effect-warnings";
 import {
   isReadOperation,
   RATE_LIMIT_DEFAULTS,
+  type RateLimitStore,
 } from "../../middleware/rate-limit";
 import { SKIP_TIMEZONE_FORMAT_HEADER } from "../../shared/lib/date-formatting";
 import type { AuthUser } from "../../types/auth";
@@ -466,6 +467,77 @@ async function generalRouteBudget(method: string): Promise<{
   };
 }
 
+/** When the refusing window slides, in ms since the epoch, or `null` on admission. */
+async function admitByAddress(
+  key: string,
+  budget: { limit: number; windowMs: number },
+  store: RateLimitStore | undefined
+): Promise<number | null> {
+  const { authRateLimiter } = await import(
+    "../../auth/middleware/rate-limiter"
+  );
+  const verdict = await authRateLimiter(store).check(
+    key,
+    budget.limit,
+    budget.windowMs
+  );
+  return verdict.allowed ? null : verdict.resetAt.getTime();
+}
+
+/**
+ * An auth route's admission for a client whose address cannot be resolved:
+ * one bucket for every such client let any of them close the route to all
+ * (see `route-unknown-source`).
+ */
+async function admitUnresolvedAuthRoute(
+  req: Request,
+  matched: RouteMatch,
+  configured: {
+    requestsPerHour: number;
+    windowMs: number;
+    store?: RateLimitStore;
+  }
+): Promise<number | null> {
+  const { noteUnresolvedAuthRequest } = await import(
+    "../../auth/handlers/proxy-posture"
+  );
+  const { admitRouteUnknownSource } = await import("./route-unknown-source");
+  const { env } = await import("../../lib/env");
+  noteUnresolvedAuthRequest(req);
+  const verdict = await admitRouteUnknownSource(req, {
+    pluginName: matched.pluginName,
+    route: matched.route,
+    budget: configured.requestsPerHour,
+    windowMs: configured.windowMs,
+    ...(configured.store === undefined ? {} : { store: configured.store }),
+    secret: env.NEXTLY_SECRET || "",
+  });
+  return verdict.allowed ? null : verdict.resetAt;
+}
+
+/**
+ * Which BUDGET, decided by what the route declared. `auth` takes core's auth
+ * allowance so guessing stays expensive; `general` takes the ordinary API
+ * read allowance, which is far larger and is the point of declaring it. Both
+ * spend from this plugin's own bucket. A route's own `{ max, windowMs }` is
+ * its budget as declared.
+ *
+ * The counter is shared with the auth limiter deliberately: it is a plain
+ * fixed-window counter over a key, and a second implementation of that is a
+ * second thing to keep correct.
+ */
+async function declaredBudget(
+  declared: NonNullable<PluginRoute["rateLimit"]>,
+  configured: { requestsPerHour: number; windowMs: number },
+  method: string
+): Promise<{ limit: number; windowMs: number } | null> {
+  if (declared === "auth") {
+    return { limit: configured.requestsPerHour, windowMs: configured.windowMs };
+  }
+  if (declared === "general") return generalRouteBudget(method);
+  return { limit: declared.max, windowMs: declared.windowMs };
+}
+
 /**
  * Apply the route's rate limit, returning the refusal when it trips.
  *
@@ -480,9 +552,6 @@ async function applyRouteRateLimit(
   const declared = matched.route.rateLimit;
   if (declared === undefined) return null;
 
-  const { authRateLimiter } = await import(
-    "../../auth/middleware/rate-limiter"
-  );
   const { getTrustedClientIp } = await import(
     "../../utils/get-trusted-client-ip"
   );
@@ -490,27 +559,14 @@ async function applyRouteRateLimit(
   const { getService } = await import("../../di/register");
 
   const trust = readProxyTrustSettings(() => getService("config"));
-  const ip = getTrustedClientIp(req, trust) ?? "unknown";
+  const resolved = getTrustedClientIp(req, trust);
+  const ip = resolved ?? "unknown";
   const key = rateLimitKey(matched.route, matched.pluginName, ip);
   if (!key) return null;
 
   const { readAuthRateLimit } = await import("../../auth/handlers/deps-bridge");
   const configured = readAuthRateLimit(getService as (n: string) => unknown);
-  // Which BUDGET, decided by what the route declared. `auth` takes core's
-  // auth allowance so guessing stays expensive; `general` takes the ordinary
-  // API read allowance, which is far larger and is the point of declaring it.
-  // Both spend from this plugin's own bucket, keyed above.
-  //
-  // The counter is shared with the auth limiter deliberately: it is a plain
-  // fixed-window counter over a key, and a second implementation of that is a
-  // second thing to keep correct.
-  // A route's own `{ max, windowMs }` is its budget as declared.
-  const budget =
-    declared === "auth"
-      ? { limit: configured.requestsPerHour, windowMs: configured.windowMs }
-      : declared === "general"
-        ? await generalRouteBudget(req.method)
-        : { limit: declared.max, windowMs: declared.windowMs };
+  const budget = await declaredBudget(declared, configured, req.method);
 
   // `null` is rate limiting switched off app-wide; a non-positive limit means
   // the same thing for the auth budget, exactly as it does for the core auth
@@ -520,14 +576,13 @@ async function applyRouteRateLimit(
   // everyone while the core routes the setting was written for ran unlimited.
   if (!budget || budget.limit <= 0) return null;
 
-  const limiter = authRateLimiter(configured.store);
-  const verdict = await limiter.check(key, budget.limit, budget.windowMs);
-  if (verdict.allowed) return null;
+  const resetAt =
+    declared === "auth" && resolved === null
+      ? await admitUnresolvedAuthRoute(req, matched, configured)
+      : await admitByAddress(key, budget, configured.store);
+  if (resetAt === null) return null;
 
-  const retryAfter = Math.max(
-    1,
-    Math.ceil((verdict.resetAt.getTime() - Date.now()) / 1000)
-  );
+  const retryAfter = Math.max(1, Math.ceil((resetAt - Date.now()) / 1000));
 
   // The CANONICAL error boundary, for the reason every other refusal here
   // uses it: this is the one plugin-route error no later wrapper decorates,
