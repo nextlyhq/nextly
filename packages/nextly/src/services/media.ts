@@ -121,6 +121,16 @@ function warnUnlocated(url: string, mediaId: string): void {
   );
 }
 
+/**
+ * `sizes` as a write stores it: a JSON string, or null. The positional insert
+ * and update bind values through the raw driver, which cannot bind a plain
+ * object for the json/jsonb/text `sizes` column consistently across all three
+ * dialects (SQLite refuses one outright), so every write serializes it here.
+ */
+function sizesColumn(sizes: unknown): string | null {
+  return sizes == null ? null : JSON.stringify(sizes);
+}
+
 export class MediaService extends BaseService {
   // Lazy-initialized to avoid capturing a stale MediaStorage singleton
   // before storage plugins are registered via registerServices()
@@ -547,12 +557,10 @@ export class MediaService extends BaseService {
       // that later rolls back. The positional adapter transaction is required
       // because recordMutationEvent writes through the adapter's
       // TransactionContext, not the Drizzle fluent transaction. `sizes` is
-      // serialized to a JSON string up front: the positional insert binds
-      // values through the raw driver, which cannot bind a plain object for the
-      // json/jsonb/text `sizes` column consistently across all three dialects.
+      // serialized up front (`sizesColumn`).
       const insertRow = keysToSnakeCase({
         ...mediaRecord,
-        sizes: sizesData == null ? null : JSON.stringify(sizesData),
+        sizes: sizesColumn(sizesData),
       }) as Record<string, unknown>;
 
       let recorded = false;
@@ -885,7 +893,16 @@ export class MediaService extends BaseService {
             replacedThumbnail = this.replacedThumbnailPath(current, updateData);
           }
 
-          await tx.update("media", updateData, this.whereEq("id", mediaId));
+          // Regenerated sizes are serialized as the upload writes them
+          // (`sizesColumn`); `updateData` keeps the object for the event and
+          // the response below.
+          await tx.update(
+            "media",
+            "sizes" in updateData
+              ? { ...updateData, sizes: sizesColumn(updateData.sizes) }
+              : updateData,
+            this.whereEq("id", mediaId)
+          );
 
           // The post-update document: the freshly-read committed row overlaid
           // with ONLY this write's columns (`updateData` holds each supplied

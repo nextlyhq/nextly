@@ -526,7 +526,7 @@ It lists the upload-time thumbnails no media item refers to, and changes nothing
 What it looks at:
 
 - Only files where media uploads put a thumbnail, in the form they give it: under the media collection's `prefix`, if you set one. Another collection's files and any other folder are never touched. On UploadThing, which keeps no folders, a file is judged by the name it was uploaded under. If your UploadThing app also stores files from something other than Nextly, check the dry run before you apply.
-- Only thumbnails stored more than an hour ago. A newer one may belong to an upload still in progress.
+- Only thumbnails stored more than an hour ago. A newer one may belong to an upload still in progress. If, before upgrading, you deleted an item uploaded less than an hour before you run the command, run it again an hour later.
 - Only the storage the media collection uses now. If you moved to another adapter, bucket or folder, point the media storage at the old one and run it there to clean that up.
 
 A storage adapter that cannot list its files is reported as such, and nothing is changed.

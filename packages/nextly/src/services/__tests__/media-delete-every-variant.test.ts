@@ -19,6 +19,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 
 import { initializeMediaStorage, resetMediaStorage } from "@nextly/storage";
+import { eq } from "drizzle-orm";
 import sharp from "sharp";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -27,15 +28,19 @@ import {
   testLogger,
   type TestDb,
 } from "../../__tests__/fixtures/db";
+import { storedFilesOf, variantPaths } from "../../domains/media/stored-files";
 import type { IStorageAdapter, UploadOptions } from "../../storage/types";
 import { MediaService } from "../media";
 
 // Two configured sizes, besides the thumbnail every image gets at upload, so
-// a delete that removed only one would show.
+// a delete that removed only one would show. A case that needs more adds them
+// to `extraSizes`, which is emptied after each.
+const extraSizes = vi.hoisted(() => [] as Array<Record<string, unknown>>);
 vi.mock("../image-size", () => ({
   ImageSizeService: class {
     async getActiveSizeConfigs() {
       return [
+        ...extraSizes,
         {
           name: "small",
           width: 4,
@@ -88,6 +93,10 @@ class Bucket implements IStorageAdapter {
   async exists(filePath: string) {
     return this.files.has(filePath);
   }
+  // What a crop reads its original through.
+  async read(filePath: string) {
+    return this.files.get(filePath) ?? null;
+  }
   getPublicUrl(filePath: string) {
     if (this.scheme === "s3") {
       return `https://bucket.s3.eu-west-1.amazonaws.com/${filePath}`;
@@ -117,6 +126,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  extraSizes.length = 0;
   resetMediaStorage();
   vi.restoreAllMocks();
   await rm(uploads, { recursive: true, force: true });
@@ -157,6 +167,28 @@ const onLocalDisk = () =>
   initializeMediaStorage({
     local: { uploadDir: uploads, publicPath: "/uploads" },
   });
+
+/** A promise and what settles it, to hold one request at a chosen point. */
+function gate() {
+  let open = () => {};
+  const opened = new Promise<void>(resolve => {
+    open = resolve;
+  });
+  return { open, opened };
+}
+
+/** A crop, which regenerates the item's sizes under new keys. */
+const crop = (id: string, focalX: number) =>
+  service.updateMedia(id, { focalX, focalY: 50 });
+
+/** The stored files of the item's current record. */
+async function referencedNow(id: string): Promise<string[]> {
+  const [row] = await db.db
+    .select()
+    .from(db.schema.media)
+    .where(eq(db.schema.media.id, id));
+  return row ? storedFilesOf(row).paths.sort() : [];
+}
 
 describe("deleting a media item", () => {
   it("leaves nothing of it on local disk", async () => {
@@ -213,7 +245,9 @@ describe("deleting a media item", () => {
 });
 
 describe("a file the delete cannot remove", () => {
-  it("is named, with its item, and the delete still succeeds", async () => {
+  // The first removal fails, with three files after it, so a delete that
+  // stopped at the failure would leave them stored.
+  it("is named, with its item, the rest still go, and the delete still succeeds", async () => {
     const bucket = new Bucket("s3");
     initializeMediaStorage({
       plugins: [
@@ -226,9 +260,12 @@ describe("a file the delete cannot remove", () => {
       ],
     });
     const id = await uploadPhoto();
-    const thumb = [...bucket.files.keys()].find(key => key.includes("-thumb_"));
+    let failed: string | undefined;
     vi.spyOn(bucket, "delete").mockImplementation(async filePath => {
-      if (filePath === thumb) throw new Error("storage is unavailable");
+      if (failed === undefined) {
+        failed = filePath;
+        throw new Error("storage is unavailable");
+      }
       bucket.files.delete(filePath);
     });
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -236,10 +273,63 @@ describe("a file the delete cannot remove", () => {
     const result = await service.deleteMedia(id);
 
     expect(result.success).toBe(true);
+    expect(failed).toBeDefined();
+    expect([...bucket.files.keys()]).toEqual([failed]);
     const said = warn.mock.calls
       .map(args => args.map(String).join(" "))
       .join("\n");
-    expect(said).toContain(thumb);
+    expect(said).toContain(failed);
+    expect(said).toContain(id);
+  });
+
+  // A crop replaces the item's three sizes; the first removal fails, with two
+  // after it, so a crop that stopped at the failure would leave them stored.
+  it("is named when a crop cannot remove it, the rest still go, and the crop still succeeds", async () => {
+    extraSizes.push({
+      name: "large",
+      width: 16,
+      height: 16,
+      fit: "cover",
+      quality: 80,
+      format: "webp",
+    });
+    const bucket = new Bucket("s3");
+    initializeMediaStorage({
+      plugins: [
+        {
+          name: "s3",
+          type: "s3",
+          collections: { media: true },
+          adapter: bucket,
+        },
+      ],
+    });
+    const id = await uploadPhoto();
+    const [row] = await db.db
+      .select()
+      .from(db.schema.media)
+      .where(eq(db.schema.media.id, id));
+    const replaced = variantPaths(row.sizes);
+    expect(replaced).toHaveLength(3);
+    let failed: string | undefined;
+    vi.spyOn(bucket, "delete").mockImplementation(async filePath => {
+      if (failed === undefined) {
+        failed = filePath;
+        throw new Error("storage is unavailable");
+      }
+      bucket.files.delete(filePath);
+    });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const result = await crop(id, 20);
+
+    expect(result.success).toBe(true);
+    expect(replaced).toContain(failed);
+    expect(replaced.filter(file => bucket.files.has(file))).toEqual([failed]);
+    const said = warn.mock.calls
+      .map(args => args.map(String).join(" "))
+      .join("\n");
+    expect(said).toContain(failed);
     expect(said).toContain(id);
   });
 
@@ -304,6 +394,114 @@ describe("a delete that does not commit", () => {
 
     expect(result.success).toBe(false);
     expect(await onDisk()).toEqual(before);
+  });
+});
+
+// A delete and a crop of the same item can run at once, and either may reach
+// the database first. Either safe outcome passes: a crop that does not commit,
+// or one whose variants the delete still removes. What may not happen is a
+// file of the deleted item left stored. Each case checks the crop stored new
+// variants, so that it cannot pass on a crop that did nothing.
+describe("a delete and a crop of the same item at once", () => {
+  it("leaves nothing when the crop commits before the delete reads the item's files", async () => {
+    onLocalDisk();
+    const id = await uploadPhoto();
+    const before = await onDisk();
+    const looked = gate();
+    const cropped = gate();
+    const firstLook = service.getMediaById.bind(service);
+    // Hold the delete after its first look at the item, before its
+    // transaction reads the files to remove.
+    vi.spyOn(service, "getMediaById").mockImplementationOnce(async mediaId => {
+      const found = await firstLook(mediaId);
+      looked.open();
+      await cropped.opened;
+      return found;
+    });
+
+    const deleting = service.deleteMedia(id);
+    await looked.opened;
+    expect((await crop(id, 20)).success).toBe(true);
+    const during = await onDisk();
+    expect(during.filter(file => !before.includes(file))).toHaveLength(2);
+    cropped.open();
+
+    expect((await deleting).success).toBe(true);
+    expect(await onDisk()).toEqual([]);
+  });
+
+  it("leaves nothing when the crop reaches its commit while the delete holds the item", async () => {
+    onLocalDisk();
+    const id = await uploadPhoto();
+    const before = await onDisk();
+    const read = gate();
+    const queued = gate();
+    let during: string[] = [];
+    const transaction = db.adapter.transaction.bind(db.adapter);
+    let calls = 0;
+    // The delete's transaction is held after it has read the item and before
+    // it removes the row, until the crop's transaction has been asked for.
+    vi.spyOn(db.adapter, "transaction").mockImplementation(
+      async (work, options) => {
+        calls += 1;
+        if (calls === 2) {
+          during = await onDisk();
+          queued.open();
+          return transaction(work, options);
+        }
+        if (calls !== 1) return transaction(work, options);
+        return transaction(async tx => {
+          const removeRow = tx.delete.bind(tx);
+          tx.delete = async (...args) => {
+            read.open();
+            await queued.opened;
+            return removeRow(...args);
+          };
+          return work(tx);
+        }, options);
+      }
+    );
+
+    const deleting = service.deleteMedia(id);
+    await read.opened;
+    const cropping = crop(id, 20);
+    const [deleted] = await Promise.all([deleting, cropping]);
+
+    expect(during.filter(file => !before.includes(file))).toHaveLength(2);
+    expect(deleted.success).toBe(true);
+    expect(await onDisk()).toEqual([]);
+  });
+});
+
+// Two crops of one item that both read it before either commits each remove
+// what their own commit replaced, read when they commit: the second replaces
+// the first's variants, not the ones both read.
+describe("two crops of the same item at once", () => {
+  it("leave stored only what the record refers to", async () => {
+    onLocalDisk();
+    const id = await uploadPhoto();
+    const before = await onDisk();
+    const second = gate();
+    const transaction = db.adapter.transaction.bind(db.adapter);
+    let calls = 0;
+    // The first crop's transaction waits for the second's to be asked for,
+    // so both have read the item and stored their variants by then.
+    vi.spyOn(db.adapter, "transaction").mockImplementation(
+      async (work, options) => {
+        calls += 1;
+        if (calls === 1) await second.opened;
+        if (calls === 2) second.open();
+        return transaction(work, options);
+      }
+    );
+
+    const results = await Promise.all([crop(id, 20), crop(id, 80)]);
+
+    expect(results.every(result => result.success)).toBe(true);
+    const stored = await onDisk();
+    // Each crop stored two sizes of its own; only one pair is still used.
+    expect(stored.filter(file => !before.includes(file))).toHaveLength(2);
+    expect(stored.sort()).toEqual(await referencedNow(id));
   });
 });
 
