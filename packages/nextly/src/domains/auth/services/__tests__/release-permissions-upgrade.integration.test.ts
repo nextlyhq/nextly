@@ -16,10 +16,12 @@
  * the holders of the wrong permission, fails by naming the role it got wrong.
  *
  * And a second boot adds nothing, including to a role an administrator has
- * since taken a granted permission from.
+ * since taken a granted permission from; while a boot whose grants FAILED
+ * leaves no permission behind, so the next boot creates it and grants it
+ * whole.
  */
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { seedPermissionsAndRolePresets } from "../../../../init/seed-permissions";
 import {
@@ -190,6 +192,57 @@ describe.each(getConfiguredTestDialects())(
         [
           // The presets: `admin` holds every release permission, and so
           // assembled and published releases before.
+          "admin:update-content-releases",
+          "admin:delete-content-releases",
+          "release-assembler:update-content-releases",
+          "release-launcher:delete-content-releases",
+          "release-manager:update-content-releases",
+          "release-manager:delete-content-releases",
+          "super-admin:update-content-releases",
+          "super-admin:delete-content-releases",
+        ].sort()
+      );
+    });
+
+    it("leaves no permission when a grant fails midway, and the next boot creates it with every grant", async () => {
+      handle = await olderInstallation(dialect);
+      const before = await releaseGrants(handle);
+
+      // The seed's own grant write, made to fail on its second call: the
+      // update permission has four holders here, so the first of its grants
+      // lands and the second throws.
+      const seed = handle.getService("permissionSeedService") as unknown as {
+        writeGrant: (...args: unknown[]) => Promise<void>;
+      };
+      const write = seed.writeGrant.bind(seed);
+      let calls = 0;
+      const failing = vi
+        .spyOn(seed, "writeGrant")
+        .mockImplementation(async (...args: unknown[]) => {
+          calls += 1;
+          if (calls === 2) throw new Error("grant write failed");
+          return write(...args);
+        });
+      await boot();
+      failing.mockRestore();
+      expect(calls).toBeGreaterThanOrEqual(2);
+
+      // Neither the permission nor the grant that landed before the failure:
+      // a later boot can only retry what is not there.
+      expect(
+        (await releasePermissions(handle)).map(row => row.action).sort()
+      ).not.toContain("update");
+      expect(
+        [...(await releaseGrants(handle))].filter(pair =>
+          pair.endsWith(":update-content-releases")
+        )
+      ).toEqual([]);
+
+      await boot();
+
+      const after = await releaseGrants(handle);
+      expect([...after].filter(pair => !before.has(pair)).sort()).toEqual(
+        [
           "admin:update-content-releases",
           "admin:delete-content-releases",
           "release-assembler:update-content-releases",

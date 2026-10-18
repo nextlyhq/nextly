@@ -1,7 +1,13 @@
+import { randomUUID } from "crypto";
+
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import { sql, eq, and } from "drizzle-orm";
 
-import type { RBACDatabaseInstance } from "@nextly/types/rbac-operations";
+import type {
+  PermissionInsertData,
+  RBACDatabaseInstance,
+  RolePermissionInsertData,
+} from "@nextly/types/rbac-operations";
 
 import { NEW_ENTITY_PERMISSION_ROLE } from "../../../auth/new-entity-access-policy";
 import type { CollectedPermission } from "../../../plugins/permissions/collect-permissions";
@@ -36,6 +42,23 @@ export interface SeedResult {
 }
 
 /**
+ * What the seed does inside its own transaction: an insert, and a select of
+ * the rows it reads back. `withTransaction` hands the transaction over as
+ * `unknown`, since its concrete type differs per dialect, and every dialect's
+ * Drizzle transaction has these two.
+ */
+interface SeedTransaction {
+  insert(table: unknown): { values(row: unknown): Promise<unknown> };
+  select<T extends Record<string, unknown>>(
+    fields: T
+  ): {
+    from(table: unknown): {
+      where(condition: unknown): Promise<Array<Record<keyof T, unknown>>>;
+    };
+  };
+}
+
+/**
  * Definition for a single system permission.
  */
 interface SystemPermissionDef {
@@ -56,10 +79,10 @@ interface SystemPermissionDef {
    * keeps the choice they made. Super-admin receives every new permission
    * anyway (`assignNewPermissionsToSuperAdmin`); this is for everyone else.
    *
-   * Not retried. A boot that creates the permission and then fails to write
-   * these grants counts the failure as a seeding error, which the boot logs,
-   * and the grants are left for an administrator to make; a later boot cannot
-   * tell a grant that failed from one that was taken away on purpose.
+   * The permission and these grants are written in one transaction, so a
+   * boot that fails part-way leaves neither: the failure is counted as a
+   * seeding error, which the boot logs, and the next boot finds the
+   * permission missing and creates and grants it whole.
    */
   grantOnCreationToHoldersOf?: { action: string; resource: string };
 }
@@ -495,20 +518,22 @@ export class PermissionSeedService extends BaseService {
         // PR 4 migration: ensurePermission now returns `{ id, created }`
         // and throws NextlyError on failure instead of the legacy
         // `{success, statusCode, data}` shape.
-        const ensureResult = await this.permissionService.ensurePermission(
-          perm.action,
-          perm.resource,
-          perm.name,
-          perm.slug,
-          perm.description
-        );
+        const ensureResult = perm.grantOnCreationToHoldersOf
+          ? await this.ensureWithCreationGrants(
+              perm,
+              perm.grantOnCreationToHoldersOf
+            )
+          : await this.permissionService.ensurePermission(
+              perm.action,
+              perm.resource,
+              perm.name,
+              perm.slug,
+              perm.description
+            );
 
         if (ensureResult.created) {
           result.created++;
           result.newPermissionIds.push(ensureResult.id);
-          if (perm.grantOnCreationToHoldersOf) {
-            await this.grantToHoldersOf(perm, perm.grantOnCreationToHoldersOf);
-          }
         } else {
           result.skipped++;
         }
@@ -521,32 +546,94 @@ export class PermissionSeedService extends BaseService {
   }
 
   /**
-   * Grant `perm` to every role holding the permission `source` names.
+   * Ensure a permission that is granted on creation, creating it and its
+   * grants in ONE transaction.
    *
-   * See {@link SystemPermissionDef.grantOnCreationToHoldersOf}: called only
-   * for a permission this boot created, which no role can hold yet.
+   * See {@link SystemPermissionDef.grantOnCreationToHoldersOf}. One
+   * transaction, so a boot that fails part-way leaves neither the permission
+   * nor any of its grants, and the next boot finds it missing and does both
+   * again. Were the two written separately, a failure between them would
+   * leave a permission every later boot takes as already handled.
+   *
+   * A permission that already exists goes through `ensurePermission`, which
+   * brings its slug and provenance in line and grants nothing. The insert is
+   * a plain one, so a concurrent boot that created the row first makes this
+   * one fail and roll back rather than grant a permission id that was never
+   * stored.
    */
-  private async grantToHoldersOf(
+  private async ensureWithCreationGrants(
     perm: SystemPermissionDef,
     source: { action: string; resource: string }
-  ): Promise<void> {
-    const db = this.db as RBACDatabaseInstance;
-    const held = await db.query.permissions.findFirst({
-      where: { action: source.action, resource: source.resource },
+  ): Promise<{ id: string; created: boolean }> {
+    const existing = await (
+      this.db as RBACDatabaseInstance
+    ).query.permissions.findFirst({
+      where: { action: perm.action, resource: perm.resource },
       columns: { id: true },
     });
-    if (!held) return;
-    const holders = await db.query.rolePermissions.findMany({
-      where: { permissionId: String(held.id) },
-    });
-    for (const { roleId } of holders) {
-      await this.rolePermissionService.addPermissionToRole(String(roleId), {
-        action: perm.action,
-        resource: perm.resource,
-        name: perm.name,
-        slug: perm.slug,
-      });
+    if (existing) {
+      return this.permissionService.ensurePermission(
+        perm.action,
+        perm.resource,
+        perm.name,
+        perm.slug,
+        perm.description
+      );
     }
+
+    const id = randomUUID();
+    const { rolePermissions } = this.tables;
+    // The gate retires the permission caches once the transaction has
+    // finished, committed or not, as every permission write does.
+    await writingPermissions(this.tables.permissions, permissions =>
+      this.withTransaction(async txRaw => {
+        const tx = txRaw as SeedTransaction;
+        const row: PermissionInsertData = {
+          id,
+          name: perm.name,
+          slug: perm.slug,
+          action: perm.action,
+          resource: perm.resource,
+          description: perm.description,
+          owner: null,
+          permissionGroup: null,
+          danger: false,
+        };
+        await tx.insert(permissions).values(row);
+        const held = await tx
+          .select({ id: permissions.id })
+          .from(permissions)
+          .where(
+            and(
+              eq(permissions.action, source.action),
+              eq(permissions.resource, source.resource)
+            )
+          );
+        if (held.length === 0) return;
+        const holders = await tx
+          .select({ roleId: rolePermissions.roleId })
+          .from(rolePermissions)
+          .where(eq(rolePermissions.permissionId, String(held[0].id)));
+        for (const { roleId } of holders) {
+          await this.writeGrant(tx, String(roleId), id);
+        }
+      })
+    );
+    return { id, created: true };
+  }
+
+  /** Write one grant inside the creating transaction. */
+  private async writeGrant(
+    tx: SeedTransaction,
+    roleId: string,
+    permissionId: string
+  ): Promise<void> {
+    const row: RolePermissionInsertData = {
+      id: randomUUID(),
+      roleId,
+      permissionId,
+    };
+    await tx.insert(this.tables.rolePermissions).values(row);
   }
 
   /**
