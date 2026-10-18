@@ -371,8 +371,14 @@ jobs:
       - name: Run integration tests (mysql)
         run: |
           pnpm turbo build --filter=nextly --filter=@nextlyhq/adapter-postgres --filter=@nextlyhq/adapter-mysql --filter=@nextlyhq/adapter-sqlite --filter=@nextlyhq/plugin-page-builder --filter=@nextlyhq/plugin-commerce --filter=@nextlyhq/plugin-accounts
+          # The watcher sleeps in a child it waits on, and stops that child
+          # when it is stopped: otherwise the sleep outlives it holding the
+          # step's output open, and the step waits for it.
           (
-            while sleep 300; do
+            trap 'kill "$nap" 2>/dev/null; exit 0' TERM
+            while :; do
+              sleep 300 & nap=$!
+              wait "$nap"
               echo "::group::What MySQL holds at $(date -u +%H:%M:%SZ)"
               mysql -h 127.0.0.1 -uroot -pnextly -t -e "SELECT ID,USER,DB,COMMAND,TIME,STATE,LEFT(INFO,200) AS INFO FROM information_schema.PROCESSLIST WHERE TIME > 60 AND USER <> 'event_scheduler' ORDER BY TIME DESC; SELECT OBJECT_TYPE,OBJECT_SCHEMA,OBJECT_NAME,LOCK_TYPE,LOCK_DURATION,LOCK_STATUS,OWNER_THREAD_ID FROM performance_schema.metadata_locks WHERE OBJECT_SCHEMA IN (SELECT OBJECT_SCHEMA FROM performance_schema.metadata_locks WHERE LOCK_STATUS = 'PENDING'); SELECT trx_id,trx_state,trx_started,trx_mysql_thread_id,LEFT(trx_query,200) AS trx_query FROM information_schema.INNODB_TRX WHERE trx_started < NOW() - INTERVAL 60 SECOND;" 2>&1 | grep -v "Using a password" || true
               echo "::endgroup::"
@@ -384,6 +390,7 @@ jobs:
             "shard ${{ matrix.shard }} of ${{ strategy.job-total }} of the MySQL integration suite" \
             pnpm lane:test:integration:mysql -- --shard=${{ matrix.shard }}/${{ strategy.job-total }} || status=$?
           kill "$watcher" 2>/dev/null || true
+          wait "$watcher" 2>/dev/null || true
           exit "$status"
         env:
           TEST_MYSQL_URL: mysql://root:nextly@127.0.0.1:3306/nextly_test
