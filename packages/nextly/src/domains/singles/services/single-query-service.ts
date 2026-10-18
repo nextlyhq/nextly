@@ -89,6 +89,7 @@ import {
   stripPasswordFieldValues,
   stripServerOnlyColumns,
 } from "../../../shared/lib/password-fields";
+import { isUniqueViolation } from "../../../shared/lib/unique-violation";
 import type { Logger } from "../../../shared/types";
 import { resolveLocalizedFieldNames } from "../../i18n/classify-fields";
 import { COMPANION_UPDATED_AT_COLUMN } from "../../i18n/companion-columns";
@@ -1060,9 +1061,7 @@ export class SingleQueryService extends BaseService {
       // starts a history (the mutation path records its own first version).
       if (!doc) {
         this.logger.info("Auto-creating Single document", { slug });
-        doc = await this.createDefaultDocument(singleMeta, {
-          captureInitialVersion: true,
-        });
+        doc = await this.createDefaultDocumentOnce(singleMeta);
       }
 
       // 6.5. Apply Draft/Published auto-filter. For Singles the rule is
@@ -1849,6 +1848,38 @@ export class SingleQueryService extends BaseService {
       companionData,
       companionStatus
     );
+  }
+
+  /**
+   * Create a Single's default document on its first read, or take the one
+   * another process created first.
+   *
+   * Several processes reading a Single for the first time at once, such as
+   * `next build`'s workers on a fresh database, each find no row and each try
+   * to create it. The table holds one row by its unique slug, so all but one
+   * insert fail; the row that won is the document every reader should get, so
+   * a loser reads it back rather than failing the read. Any other failure, or
+   * a violation that leaves no row behind, is still the read's failure.
+   */
+  private async createDefaultDocumentOnce(
+    singleMeta: DynamicSingleRecord
+  ): Promise<SingleDocument> {
+    try {
+      return await this.createDefaultDocument(singleMeta, {
+        captureInitialVersion: true,
+      });
+    } catch (error) {
+      if (!isUniqueViolation(error)) throw error;
+      const existing = await this.adapter.selectOne<SingleDocument>(
+        singleMeta.tableName,
+        {}
+      );
+      if (!existing) throw error;
+      this.logger.debug("Default Single document was created concurrently", {
+        slug: singleMeta.slug,
+      });
+      return existing;
+    }
   }
 
   async createDefaultDocument(

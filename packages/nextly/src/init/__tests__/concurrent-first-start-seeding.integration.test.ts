@@ -26,7 +26,10 @@ import {
 import { EmailTemplateService } from "../../domains/email/services/email-template-service";
 import { BUILT_IN_TEMPLATES } from "../../domains/email/services/templates";
 import { UserFieldDefinitionService } from "../../domains/users/services/user-field-definition-service";
-import type { CollectedPermission } from "../../plugins/permissions/collect-permissions";
+import {
+  type CollectedPermission,
+  DEFAULT_PERMISSION_GROUP,
+} from "../../plugins/permissions/collect-permissions";
 import type { CollectedRole } from "../../plugins/roles/collect-roles";
 import { seedPluginRoles } from "../../plugins/roles/seed-roles";
 import {
@@ -45,7 +48,9 @@ const CUSTOM_PERMISSION: CollectedPermission = {
   slug: "export-posts",
   name: "Export posts",
   owner: "app",
-  kind: "app",
+  source: "app",
+  group: DEFAULT_PERMISSION_GROUP,
+  danger: false,
 };
 
 const PLUGIN_ROLE: CollectedRole = {
@@ -56,7 +61,11 @@ const PLUGIN_ROLE: CollectedRole = {
   owner: "app",
 };
 
-const CODE_FIELDS = [text({ name: "bio" }), text({ name: "company" })];
+/** The app's code-defined user fields, typed as the boot hands them to the sync. */
+const CODE_FIELDS = [
+  text({ name: "bio" }),
+  text({ name: "company" }),
+] as unknown as { name: string; [key: string]: unknown }[];
 
 /** The tables a first start writes its default rows to, children first. */
 const DEFAULT_ROW_TABLES = [
@@ -138,9 +147,11 @@ describe.each(getConfiguredTestDialects())(
       return results;
     }
 
-    beforeEach(async () => {
-      handle = await createTestNextly({
+    /** This suite's app, logging to `logger` when one is given. */
+    function boot(logger?: Logger): Promise<TestNextly> {
+      return createTestNextly({
         ...(dialect === "sqlite" ? {} : { dialect }),
+        ...(logger ? { logger } : {}),
         collections: [
           defineCollection({
             slug: "posts",
@@ -154,6 +165,10 @@ describe.each(getConfiguredTestDialects())(
           }),
         ],
       });
+    }
+
+    beforeEach(async () => {
+      handle = await boot();
       // The provisioned database's own URL, which the boot leaves in place.
       if (dialect !== "sqlite") databaseUrl = String(process.env.DATABASE_URL);
       // An empty database: none of the default rows written yet.
@@ -208,6 +223,29 @@ describe.each(getConfiguredTestDialects())(
         expect(result.errors).toBe(0);
       }
       expect(await Promise.all(DEFAULT_ROW_TABLES.map(count))).toEqual(before);
+    });
+
+    it("gives concurrent first reads of a Single one default document, and none errors", async () => {
+      // Booted again with a logger to watch: the read logs through the app's.
+      await handle.destroy();
+      const logger = spyLogger();
+      handle = await boot(logger);
+      await handle.adapter.executeQuery(
+        `DELETE FROM ${q}single_announcement${q}`
+      );
+
+      const reads = await Promise.all(
+        Array.from({ length: WORKERS }, () =>
+          handle.nextly.findSingle({ slug: "announcement" })
+        )
+      );
+
+      // Every reader got the one document that was stored.
+      const readIds = reads.map(read => String((read as { id: unknown }).id));
+      expect(new Set(readIds).size).toBe(1);
+      expect(await ids("single_announcement")).toEqual([readIds[0]]);
+      expect(logger.warn).not.toHaveBeenCalled();
+      expect(logger.error).not.toHaveBeenCalled();
     });
 
     it("still refuses a permission whose slug another permission holds", async () => {
