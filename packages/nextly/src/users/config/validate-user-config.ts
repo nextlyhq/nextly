@@ -185,6 +185,26 @@ export interface UserFieldNameRejection {
 }
 
 /**
+ * The `user_ext` column a field is stored in: its name in snake case. One
+ * mapping for validation and for the table's statements, so a check here sees
+ * the column the table will actually have.
+ */
+export function userFieldColumnName(name: string): string {
+  return name
+    .replace(/([A-Z])/g, "_$1")
+    .toLowerCase()
+    .replace(/^_/, "");
+}
+
+/** The columns `user_ext` keeps for itself, which no field may be stored in. */
+const USER_EXT_OWN_COLUMNS: ReadonlySet<string> = new Set([
+  "id",
+  "user_id",
+  "created_at",
+  "updated_at",
+]);
+
+/**
  * Decide whether a single name may be used for a custom user field.
  *
  * Duplicate detection is deliberately excluded: it needs the set of sibling
@@ -214,6 +234,16 @@ export function checkUserFieldName(
     return {
       code: "USER_FIELD_NAME_RESERVED",
       message: `Field name '${name}' conflicts with a built-in user field. Reserved names: ${RESERVED_USER_FIELD_NAMES.join(", ")}`,
+    };
+  }
+
+  // `userId` is not a built-in name, but it is stored as `user_id`, the
+  // column that ties a row to its user: the table would hold it twice.
+  const column = userFieldColumnName(name);
+  if (USER_EXT_OWN_COLUMNS.has(column)) {
+    return {
+      code: "USER_FIELD_NAME_RESERVED",
+      message: `Field name '${name}' would be stored in the column '${column}', which the user fields' table keeps for itself`,
     };
   }
 
@@ -291,15 +321,23 @@ function validateUserFieldName(
   // checkUserFieldName has already reported it.
   if (typeof name !== "string") return;
 
+  // Two fields collide when their names differ only in case, and also when
+  // they are stored in one column (`fooBar` and `foo_bar`): the table could
+  // not hold both. Columns go in the same set under a prefix no name can have.
   const nameLower = name.toLowerCase();
-  if (seenNames.has(nameLower)) {
+  const column = userFieldColumnName(name);
+  const columnKey = `column:${column}`;
+  if (seenNames.has(nameLower) || seenNames.has(columnKey)) {
     errors.push({
       path: `${path}.name`,
-      message: `Duplicate field name '${name}'`,
+      message: seenNames.has(nameLower)
+        ? `Duplicate field name '${name}'`
+        : `Field '${name}' would be stored in the column '${column}', which another field already uses`,
       code: "USER_FIELD_NAME_DUPLICATE",
     });
   } else {
     seenNames.add(nameLower);
+    seenNames.add(columnKey);
   }
 }
 

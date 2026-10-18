@@ -86,7 +86,10 @@ import type {
   UserUrlFieldConfig,
   UserPhoneFieldConfig,
 } from "../../../users/config/types";
-import { checkUserFieldName } from "../../../users/config/validate-user-config";
+import {
+  checkUserFieldName,
+  userFieldColumnName,
+} from "../../../users/config/validate-user-config";
 import {
   getFieldType,
   isPluginFieldTypeOnSurface,
@@ -265,6 +268,7 @@ export class UserExtSchemaService {
     // it here keeps it out of the column list, the select and both schemas at
     // once. The row is left alone so the name can be recovered by hand.
     const usable: UserFieldConfig[] = [];
+    const columns = new Set<string>();
     for (const record of records) {
       const rejection = checkUserFieldName(record.name);
       if (rejection) {
@@ -274,6 +278,18 @@ export class UserExtSchemaService {
         );
         continue;
       }
+      // A code field and an admin field can each pass on their own and still
+      // be stored in one column (`fooBar`, `foo_bar`). The first keeps it;
+      // the other is left out rather than break the table's statements.
+      const column = userFieldColumnName(record.name);
+      if (columns.has(column)) {
+        this.logger?.warn(
+          "[UserExtSchemaService] Ignoring user field stored in a column another field already uses",
+          { name: record.name, column }
+        );
+        continue;
+      }
+      columns.add(column);
       usable.push(this.convertRecordToFieldConfig(record));
     }
 
@@ -378,8 +394,30 @@ export class UserExtSchemaService {
     try {
       await runRaw(db, statement, this.dialect);
     } catch (error) {
-      if (strict && !isIdempotencyError(error)) throw error;
+      if (!strict || isIdempotencyError(error)) return;
+      if (this.isOwnForeignKeyRerun(error, statement)) return;
+      throw error;
     }
+  }
+
+  /**
+   * MySQL has no `ADD CONSTRAINT IF NOT EXISTS`, so re-adding `user_ext`'s
+   * own foreign key on a re-run fails with a duplicate name (error 1826).
+   * That name is this table's alone, so here, and only here, it means the key
+   * is already in place. The shared matcher never takes 1826 as "already
+   * exists": elsewhere the name may be held by an unrelated constraint.
+   */
+  private isOwnForeignKeyRerun(error: unknown, statement: string): boolean {
+    if (this.dialect !== "mysql") return false;
+    if (!statement.includes(`fk_${TABLE_NAME}_user_id`)) return false;
+    const messages = [error, (error as { cause?: unknown })?.cause].map(e =>
+      e instanceof Error ? e.message : ""
+    );
+    return messages.some(m =>
+      m.includes(
+        `Duplicate foreign key constraint name 'fk_${TABLE_NAME}_user_id'`
+      )
+    );
   }
 
   /**
@@ -1777,9 +1815,6 @@ export type NewUserExt = typeof ${TABLE_NAME}.$inferInsert;
   }
 
   private toSnakeCase(name: string): string {
-    return name
-      .replace(/([A-Z])/g, "_$1")
-      .toLowerCase()
-      .replace(/^_/, "");
+    return userFieldColumnName(name);
   }
 }

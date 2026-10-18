@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
 
+import { text } from "../../../collections/fields/helpers";
 import {
   checkUserFieldName,
   checkUserFieldType,
   RESERVED_USER_FIELD_NAMES,
+  userFieldColumnName,
+  validateUserConfig,
 } from "../validate-user-config";
 
 describe("checkUserFieldName", () => {
@@ -55,6 +58,55 @@ describe("checkUserFieldName", () => {
 
   it("names the offending value so the message can be shown as-is", () => {
     expect(checkUserFieldName("email")?.message).toContain("email");
+  });
+
+  it.each(["userId", "user_id", "UserId", "created_at", "updated_at"])(
+    "rejects %s, whose column is one user_ext keeps for itself",
+    name => {
+      const rejection = checkUserFieldName(name);
+      expect(rejection?.code).toBe("USER_FIELD_NAME_RESERVED");
+      expect(rejection?.message).toContain(userFieldColumnName(name));
+    }
+  );
+});
+
+describe("userFieldColumnName", () => {
+  it("is the snake-case column a field is stored in", () => {
+    expect(userFieldColumnName("employeeId")).toBe("employee_id");
+    expect(userFieldColumnName("bio")).toBe("bio");
+    expect(userFieldColumnName("foo_bar")).toBe("foo_bar");
+  });
+});
+
+describe("validateUserConfig: one column per field", () => {
+  it("refuses two fields stored in the same column", () => {
+    const result = validateUserConfig({
+      fields: [text({ name: "fooBar" }), text({ name: "foo_bar" })],
+    });
+
+    const duplicate = result.errors.find(
+      e => e.code === "USER_FIELD_NAME_DUPLICATE"
+    );
+    expect(duplicate?.path).toBe("fields[1].name");
+    expect(duplicate?.message).toContain("foo_bar");
+  });
+
+  it("still refuses two names that differ only in case", () => {
+    const result = validateUserConfig({
+      fields: [text({ name: "foobar" }), text({ name: "FOOBAR" })],
+    });
+
+    expect(result.errors.map(e => e.code)).toContain(
+      "USER_FIELD_NAME_DUPLICATE"
+    );
+  });
+
+  it("accepts fields stored in different columns", () => {
+    const result = validateUserConfig({
+      fields: [text({ name: "fooBar" }), text({ name: "foo_baz" })],
+    });
+
+    expect(result.errors).toEqual([]);
   });
 });
 
