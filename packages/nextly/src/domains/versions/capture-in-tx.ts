@@ -92,13 +92,15 @@ async function changesNothing(
   snapshot: Record<string, unknown>
 ): Promise<boolean> {
   if (alwaysRecords(args)) return false;
-  const latest = await new VersionsRepository(tx).findLatestInPart(
-    args.ref,
-    args.locale ?? null
-  );
-  if (!latest || latest.status !== status) return false;
+  // Only the document's newest version can say nothing changed since, and only
+  // when it is this save's part. An older version of the same language can
+  // predate another language's change to the shared fields, which this
+  // snapshot carries too.
+  const newest = await new VersionsRepository(tx).findNewest(args.ref);
+  if (!newest || newest.status !== status) return false;
+  if ((newest.locale ?? null) !== (args.locale ?? null)) return false;
   const entity = args.ref.scopeKind === "single" ? "single" : "collection";
-  return holdsTheSame(latest.snapshot, snapshot, entity);
+  return holdsTheSame(newest.snapshot, snapshot, entity);
 }
 
 /** A save that records whatever it holds: a create, a restore, a named version. */
