@@ -77,6 +77,45 @@ async function isAdministrator(t: TestNextly, userId: string) {
   return (await services(t).userRoles.listUserRoles(userId)).includes(id);
 }
 
+/**
+ * Write a row straight into one of Nextly's tables. For fixtures the services
+ * would refuse or would surround with unrelated work: a role with no
+ * permissions, an inheritance edge.
+ */
+async function insertRow(
+  t: TestNextly,
+  table: unknown,
+  row: Record<string, unknown>
+): Promise<void> {
+  await (
+    t.adapter.getDrizzle() as unknown as {
+      insert: (table: unknown) => {
+        values: (row: Record<string, unknown>) => Promise<unknown>;
+      };
+    }
+  )
+    .insert(table)
+    .values(row);
+}
+
+/** A role of the install's own, with no permissions. */
+async function insertRole(
+  t: TestNextly,
+  name: string,
+  slug: string
+): Promise<{ id: string }> {
+  const id = randomUUID();
+  await insertRow(t, getDialectTables().roles, {
+    id,
+    name,
+    slug,
+    description: "A role an install made itself",
+    level: 10,
+    isSystem: false,
+  });
+  return { id };
+}
+
 describe.each(getConfiguredTestDialects())(
   "the first administrator (%s)",
   (dialect: TestDialect) => {
@@ -134,28 +173,57 @@ describe.each(getConfiguredTestDialects())(
       expect(await deps.hasAdministrator()).toBe(true);
     });
 
+    it("counts an administrator whose authority comes through a role that inherits super-admin", async () => {
+      const t = await boot(dialect);
+      const deps = buildAuthRouterDeps(
+        t.getService as unknown as (name: string) => unknown
+      );
+      const { id: superAdmin } = await services(t).roles.ensureSuperAdminRole();
+      const owners = await insertRole(t, "Owners", "owners");
+      await insertRow(t, getDialectTables().roleInherits, {
+        id: randomUUID(),
+        parentRoleId: owners.id,
+        childRoleId: superAdmin,
+      });
+      const owner = await selfRegister(t, "owner@example.com");
+      await services(t).userRoles.assignRoleToUser(owner, owners.id);
+
+      // The install has an administrator, so setup is closed and the next
+      // account the app provisions is not made a second one.
+      expect(await deps.hasAdministrator()).toBe(true);
+      const next = await provision(t, "next@example.com");
+      expect(await services(t).userRoles.listUserRoles(next)).not.toContain(
+        superAdmin
+      );
+    });
+
+    it("refuses setup for an address a registration already holds, granting it nothing", async () => {
+      const t = await boot(dialect);
+      const deps = buildAuthRouterDeps(
+        t.getService as unknown as (name: string) => unknown
+      );
+      const registrant = await selfRegister(t, "owner@example.com");
+
+      // Adopting the account would make the registrant's own password sign in
+      // as the administrator.
+      await expect(
+        deps.createSuperAdmin({
+          email: "owner@example.com",
+          name: "Owner",
+          password: PASSWORD,
+        })
+      ).rejects.toMatchObject({ code: "DUPLICATE" });
+      expect(await services(t).userRoles.listUserRoles(registrant)).toEqual([]);
+      expect(await deps.hasAdministrator()).toBe(false);
+    });
+
     it("never turns an existing role that is merely named Super Admin into the administrator role", async () => {
       const t = await boot(dialect);
-      // Written directly: the role only has to exist, and the service would
-      // also want permissions for it that have nothing to do with this.
-      const lookalike = { id: randomUUID() };
-      const { roles } = getDialectTables();
-      await (
-        t.adapter.getDrizzle() as unknown as {
-          insert: (table: unknown) => {
-            values: (row: Record<string, unknown>) => Promise<unknown>;
-          };
-        }
-      )
-        .insert(roles)
-        .values({
-          id: lookalike.id,
-          name: "Super Admin",
-          slug: "custom-super-admin",
-          description: "A role an install made itself",
-          level: 10,
-          isSystem: false,
-        });
+      const lookalike = await insertRole(
+        t,
+        "Super Admin",
+        "custom-super-admin"
+      );
 
       // The administrator role cannot be created beside a role holding its
       // name, and the role already there keeps its own slug: on MySQL an

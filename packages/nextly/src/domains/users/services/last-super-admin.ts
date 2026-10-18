@@ -20,7 +20,7 @@
 import { randomUUID } from "node:crypto";
 
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
-import { and, eq, ne, type Column, type SQL } from "drizzle-orm";
+import { and, eq, inArray, ne, type Column, type SQL } from "drizzle-orm";
 
 import { NextlyError } from "../../../errors";
 import { roleAssignmentInForce } from "../../../services/lib/role-assignments";
@@ -77,6 +77,11 @@ export interface LastSuperAdminTables {
   userRoles: { userId: Column; roleId: Column; expiresAt: Column };
 }
 
+/** The tables the first-administrator questions read, with role inheritance. */
+export interface FirstAdministratorTables extends LastSuperAdminTables {
+  roleInherits: { parentRoleId: Column; childRoleId: Column };
+}
+
 /**
  * Refuse, inside `tx`'s transaction, a removal that would leave the install
  * without an active super-admin.
@@ -124,7 +129,9 @@ export async function refuseRemovingLastSuperAdmin(
 
   // The active accounts holding, in force, the `super-admin` role itself.
   const holders = (who: SQL) =>
-    superAdminHolders(tx, tables, superAdminRoleId, who, { activeOnly: true });
+    superAdminHolders(tx, tables, [superAdminRoleId], who, {
+      activeOnly: true,
+    });
 
   const held = await latestRows(holders(eq(userRoles.userId, target)), dialect);
   if (held.length === 0) return;
@@ -180,13 +187,13 @@ export async function lockSuperAdminRole(
 }
 
 /**
- * The accounts holding the `super-admin` role itself, in force, narrowed by
- * `who`, and to active accounts when `activeOnly` is set.
+ * The accounts holding one of `roleIds` in force, narrowed by `who`, and to
+ * active accounts when `activeOnly` is set.
  */
 function superAdminHolders(
   tx: LastSuperAdminTx,
   tables: LastSuperAdminTables,
-  superAdminRoleId: string,
+  roleIds: readonly string[],
   who: SQL | undefined,
   { activeOnly }: { activeOnly: boolean }
 ): FilteredRead {
@@ -198,7 +205,7 @@ function superAdminHolders(
     .where(
       and(
         who,
-        eq(userRoles.roleId, superAdminRoleId),
+        inArray(userRoles.roleId, [...roleIds]),
         roleAssignmentInForce(userRoles, new Date()),
         activeOnly ? eq(users.isActive, true) : undefined
       )
@@ -227,7 +234,7 @@ function latestRows(
  */
 export async function superAdminRoleHeld(
   db: LastSuperAdminTx,
-  tables: LastSuperAdminTables
+  tables: FirstAdministratorTables
 ): Promise<boolean> {
   const { roles } = tables;
   const [role] = await db
@@ -236,10 +243,51 @@ export async function superAdminRoleHeld(
     .where(eq(roles.slug, SUPER_ADMIN_ROLE_SLUG))
     .limit(1);
   if (!role) return false;
-  const held = await superAdminHolders(db, tables, String(role.id), undefined, {
+  const conferring = await rolesConferringSuperAdmin(
+    db,
+    tables,
+    String(role.id)
+  );
+  const held = await superAdminHolders(db, tables, conferring, undefined, {
     activeOnly: false,
   }).limit(1);
   return held.length > 0;
+}
+
+/**
+ * The roles that make their holder a super-admin: the role itself and every
+ * role that inherits it, at any depth.
+ *
+ * The same edges the permission check resolves a holder's roles along
+ * (PermissionChecker.resolveRoles), walked the other way: a holder of a role
+ * has every role below it in `role_inherits`, so an administrator whose
+ * authority comes through such a role is an administrator, and must close
+ * setup and the first-administrator grant like a direct holder does.
+ */
+async function rolesConferringSuperAdmin(
+  db: LastSuperAdminTx,
+  tables: FirstAdministratorTables,
+  superAdminRoleId: string
+): Promise<string[]> {
+  const { roleInherits } = tables;
+  const conferring = new Set([superAdminRoleId]);
+  let frontier = [superAdminRoleId];
+  while (frontier.length > 0) {
+    const parents = (await db
+      .select({ parentRoleId: roleInherits.parentRoleId })
+      .from(roleInherits)
+      .where(inArray(roleInherits.childRoleId, frontier))) as Array<{
+      parentRoleId: unknown;
+    }>;
+    frontier = [];
+    for (const { parentRoleId } of parents) {
+      const id = String(parentRoleId);
+      if (conferring.has(id)) continue;
+      conferring.add(id);
+      frontier.push(id);
+    }
+  }
+  return [...conferring];
 }
 
 /** The slice of a Drizzle transaction the first-administrator grant writes through. */
@@ -265,13 +313,19 @@ export interface FirstAdministratorTx extends LastSuperAdminTx {
  */
 export async function grantFirstAdministratorInTx(
   tx: FirstAdministratorTx,
-  tables: LastSuperAdminTables,
+  tables: FirstAdministratorTables,
   dialect: SupportedDialect,
   superAdminRoleId: string,
   userId: string | number
 ): Promise<boolean> {
+  // An administrator through a role that inherits `super-admin` counts too.
+  const conferring = await rolesConferringSuperAdmin(
+    tx,
+    tables,
+    superAdminRoleId
+  );
   const held = await latestRows(
-    superAdminHolders(tx, tables, superAdminRoleId, undefined, {
+    superAdminHolders(tx, tables, conferring, undefined, {
       activeOnly: false,
     }).limit(1),
     dialect

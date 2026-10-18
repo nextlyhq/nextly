@@ -52,6 +52,3 @@ Upgrading: an empty production install needs the token on its next start (the
 log line and the setup form say where it is). Automation that creates the first
 administrator over HTTP in production sets `NEXTLY_SETUP_TOKEN`. Installs that
 already have an administrator see no change. No migration is needed.
-
-`nextly_meta`'s compare-and-set now works on MySQL. It never matched a stored
-value there, so every claim built on it was refused.

@@ -326,6 +326,9 @@ export function buildAuthRouterDeps(
         password: data.password,
         name: data.name,
         silent: true,
+        // Setup creates the administrator's account; it never adopts one that
+        // already holds the address, which may be a stranger's sign-up.
+        reuseExistingAccount: false,
       });
 
       if (!result.success) {
