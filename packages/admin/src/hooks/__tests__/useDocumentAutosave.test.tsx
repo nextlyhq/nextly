@@ -56,6 +56,31 @@ afterEach(() => {
 });
 
 describe("useDocumentAutosave", () => {
+  /**
+   * An edit saved for real before its recording was due. The save resets the
+   * form to what it stored, which leaves it clean, so the recording waiting
+   * for that edit would only write a copy of what was just saved.
+   */
+  it("records nothing for an edit a real save stored before the debounce", async () => {
+    const { result } = renderHook(() => useHarness());
+
+    act(() => {
+      result.current.form.setValue("title", "hello", { shouldDirty: true });
+    });
+    // The real save lands and installs what it stored as the form's defaults.
+    act(() => {
+      result.current.form.reset({ title: "hello" });
+    });
+    act(() => {
+      vi.advanceTimersByTime(DEBOUNCE * 2);
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(saveSpy).not.toHaveBeenCalled();
+  });
+
   it("records the values in the editor after the debounce", async () => {
     const { result } = renderHook(() => useHarness());
 

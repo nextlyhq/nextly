@@ -17,7 +17,7 @@
  * @module hooks/useDocumentAutosave
  */
 
-import { useCallback, useEffect } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import type { UseFormReturn } from "react-hook-form";
 
 import {
@@ -142,11 +142,19 @@ export function useDocumentAutosave({
     ? `${scope.kind}:${scope.slug}:${"entryId" in scope ? scope.entryId : scope.documentId}:${locale ?? ""}`
     : null;
 
-  const { status, lastSavedAt, schedule } = useSnapshotAutosave({
+  /*
+   * Whether the editor holds uncommitted changes, as the form last reported.
+   * A real save resets the form, which leaves it clean: a recording asked for
+   * before that would write a copy of what the save just stored.
+   */
+  const dirtyRef = useRef(false);
+
+  const { status, lastSavedAt, schedule, cancel } = useSnapshotAutosave({
     identity,
     save,
     debounceMs,
     enabled,
+    stillWanted: () => dirtyRef.current,
   });
 
   useEffect(() => {
@@ -171,7 +179,13 @@ export function useDocumentAutosave({
          * nothing. And it is the same condition the unsaved-changes guard uses,
          * so the two cannot disagree about whether there is work at risk.
          */
-        if (!isDirty) return;
+        dirtyRef.current = isDirty === true;
+        // Clean again, because the work was saved for real or undone: a
+        // recording still waiting for it has nothing left to protect.
+        if (!isDirty) {
+          cancel();
+          return;
+        }
         schedule();
       },
     });
@@ -180,6 +194,6 @@ export function useDocumentAutosave({
     // `scope` participates through its identity fields: a different document
     // needs a different subscription, and comparing the object itself would
     // resubscribe on every render.
-  }, [form, schedule, enabled, scope?.kind, scope?.slug, scope]);
+  }, [form, schedule, cancel, enabled, scope?.kind, scope?.slug, scope]);
   return { status, lastSavedAt };
 }
