@@ -340,6 +340,82 @@ describeEachDialect("a translated field that is renamed", dialect => {
     );
   });
 
+  /** A translated short text field, whose maximum length sets its column's width. */
+  function shortText(name: string, maxLength: number) {
+    return {
+      name,
+      type: "text",
+      options: { variant: "short" },
+      validation: { maxLength },
+    };
+  }
+
+  /** `heading` as a 64-character translated field, holding "Hello" and "Hola". */
+  async function seedShortHeading(): Promise<string> {
+    const created = await handler().createCollection({
+      name: "posts",
+      label: "Post",
+      localized: true,
+      fields: [shortText("heading", 64)],
+    });
+    expect(created.success, JSON.stringify(created)).toBe(true);
+    const entries = handler().getEntryService();
+    const entry = await entries.createEntry(
+      { collectionName: "posts", overrideAccess: true, locale: "en" },
+      { heading: "Hello" }
+    );
+    expect(entry.success, JSON.stringify(entry)).toBe(true);
+    const id = String((entry.data as { id: unknown }).id);
+    const spanish = await entries.updateEntry(
+      {
+        collectionName: "posts",
+        entryId: id,
+        overrideAccess: true,
+        locale: "es",
+      },
+      { heading: "Hola" }
+    );
+    expect(spanish.success, JSON.stringify(spanish)).toBe(true);
+    return id;
+  }
+
+  it("refuses renaming a translated field and changing its storage in one save, and changes nothing", async () => {
+    // A rename keeps the column's type, so the two together would leave every language behind.
+    const id = await seedShortHeading();
+
+    const saved = await handler().updateCollection(
+      { collectionName: "posts" },
+      { fields: [shortText("title2", 32)] }
+    );
+
+    expect(saved.success, JSON.stringify(saved)).toBe(false);
+    expect(JSON.stringify(saved)).toMatch(/RESHAPED_TRANSLATED_FIELD_RENAMED/);
+    expect(await companionValues("dc_posts", "heading", id)).toEqual({
+      en: "Hello",
+      es: "Hola",
+    });
+  });
+
+  it("keeps every language through the rename and then the storage change, saved one after the other", async () => {
+    const id = await seedShortHeading();
+
+    for (const fields of [
+      [shortText("title2", 64)],
+      [shortText("title2", 32)],
+    ]) {
+      const saved = await handler().updateCollection(
+        { collectionName: "posts" },
+        { fields }
+      );
+      expect(saved.success, JSON.stringify(saved)).toBe(true);
+    }
+
+    expect(await companionValues("dc_posts", "title2", id)).toEqual({
+      en: "Hello",
+      es: "Hola",
+    });
+  });
+
   it("leaves the old column and its values in place when a config rename is reconciled", async () => {
     // The code-first path does not yet decide renames: `db:sync` reconciles the companion against
     // the config's field names alone, so the renamed field reads as a new one. Its old column has

@@ -14,7 +14,9 @@ import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
 import { NextlyError } from "../../../errors/nextly-error";
+import type { FieldDefinition } from "../../../schemas/dynamic-collections";
 import type { ColumnOrigin } from "../../schema/services/field-column-descriptor";
+import { isFieldLocalized } from "../classify-fields";
 
 import { ensureI18nArchive } from "./ensure-archive";
 import { fieldsJoiningTranslation } from "./field-joins-translation";
@@ -22,6 +24,7 @@ import {
   type LeavingFieldLike,
   refusalsForFieldsJoiningTranslation,
   refusalsForFieldsLeavingTranslation,
+  refusalsForTranslatedFieldRenamedAndReshaped,
   storageDiffers,
 } from "./field-leaves-translation-rules";
 import { fieldToLocalizedColumnSpec } from "./field-to-column-spec";
@@ -116,8 +119,11 @@ export async function archiveFieldsLeavingTranslation(args: {
     fieldsLeavingTranslation(args.oldFields, args.newFields)
   );
   const joining = fieldsJoiningTranslation(args.oldFields, args.newFields);
-  // Nothing to judge or archive when no field changes whether it is translated.
-  if (leaving.size === 0 && joining.length === 0) return;
+  const mayRenameTranslated = oneTranslatedFieldReplaced(args);
+  // Nothing to judge or archive when no field changes whether it is translated, or its name.
+  if (leaving.size === 0 && joining.length === 0 && !mayRenameTranslated) {
+    return;
+  }
 
   const dialect = args.adapter.getCapabilities().dialect;
   const refusals = [
@@ -132,6 +138,11 @@ export async function archiveFieldsLeavingTranslation(args: {
     ...refusalsForFieldsJoiningTranslation({
       reshaped: reshapedJoiningFields(joining, args, dialect),
       surface: "builder",
+    }),
+    ...refusalsForTranslatedFieldRenamedAndReshaped({
+      reshaped: mayRenameTranslated
+        ? await renamedAndReshaped(args, dialect)
+        : undefined,
     }),
   ];
   if (refusals.length > 0) {
@@ -183,4 +194,55 @@ function reshapedJoiningFields(
   return joining.filter(name =>
     storageDiffers(columnOf(before.get(name)), columnOf(after.get(name)))
   );
+}
+
+/**
+ * Whether the change takes away exactly one translated field and adds exactly one field, the only
+ * shape the rename rule reads as a rename. Asked of the names alone, so a save that renames
+ * nothing translated asks the adapter nothing.
+ */
+function oneTranslatedFieldReplaced(args: {
+  oldFields: readonly LeavingFieldLike[];
+  newFields: readonly LeavingFieldLike[];
+}): boolean {
+  const after = new Set(args.newFields.map(f => f.name));
+  const before = new Set(args.oldFields.map(f => f.name));
+  const removed = args.oldFields.filter(f => !after.has(f.name));
+  const added = args.newFields.filter(f => !before.has(f.name));
+  return (
+    removed.length === 1 &&
+    added.length === 1 &&
+    isFieldLocalized(removed[0], true)
+  );
+}
+
+/**
+ * The new name of a translated field this change renames, by the main table's rule
+ * (`detectFieldRename`), when its storage changes too; undefined otherwise.
+ */
+async function renamedAndReshaped(
+  args: {
+    oldFields: readonly LeavingFieldLike[];
+    newFields: readonly LeavingFieldLike[];
+    builtBy: ColumnOrigin;
+  },
+  dialect: SupportedDialect
+): Promise<string | undefined> {
+  const { DynamicCollectionSchemaService } = await import(
+    "../../dynamic-collections/services/dynamic-collection-schema-service"
+  );
+  const rename = new DynamicCollectionSchemaService(
+    undefined,
+    dialect
+  ).detectFieldRename(
+    args.oldFields as unknown as FieldDefinition[],
+    args.newFields as unknown as FieldDefinition[]
+  );
+  if (!rename || !isFieldLocalized(rename.from, true)) return undefined;
+  return storageDiffers(
+    fieldToLocalizedColumnSpec(rename.from, dialect, args.builtBy),
+    fieldToLocalizedColumnSpec(rename.to, dialect, args.builtBy)
+  )
+    ? rename.to.name
+    : undefined;
 }

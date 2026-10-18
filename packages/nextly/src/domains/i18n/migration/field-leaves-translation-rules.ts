@@ -31,7 +31,8 @@ export interface LeavingTranslationRefusal {
   code:
     | "RESHAPED_FIELD_LEAVES_TRANSLATION"
     | "CONSTRAINED_FIELD_LEAVES_TRANSLATION"
-    | "RESHAPED_FIELD_JOINS_TRANSLATION";
+    | "RESHAPED_FIELD_JOINS_TRANSLATION"
+    | "RESHAPED_TRANSLATED_FIELD_RENAMED";
   /** Why the field cannot leave or join translation in this change, as one sentence. */
   reason: string;
   /** The changes that get there instead, in order, each one sentence. */
@@ -244,4 +245,25 @@ export function refusalsForFieldsJoiningTranslation(args: {
   surface: Surface;
 }): LeavingTranslationRefusal[] {
   return args.reshaped.map(name => reshapedJoiningRefusal(name, args.surface));
+}
+
+/**
+ * The refusal for a translated field renamed in the same change that changes how it is stored.
+ * Its values move with its column when it is renamed, and a rename keeps the column's type, so
+ * the two together would leave every language's value behind. The Builder's paths only: a code
+ * rename is not yet decided as one.
+ */
+export function refusalsForTranslatedFieldRenamedAndReshaped(args: {
+  /** The renamed field's new name, when the rename changes its storage too. */
+  reshaped: string | undefined;
+}): LeavingTranslationRefusal[] {
+  if (args.reshaped === undefined) return [];
+  return [
+    refusal(
+      `fields.${args.reshaped}`,
+      "RESHAPED_TRANSLATED_FIELD_RENAMED",
+      "Its type, length or precision changes in the same change that renames it.",
+      ["Rename it and save.", "Change its type, length or precision and save."]
+    ),
+  ];
 }
