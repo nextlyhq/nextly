@@ -92,6 +92,10 @@ import {
   uniqueColumnsToKeep,
 } from "./live-uniques";
 import { MANAGED_TABLE_PREFIXES_REGEX, isManagedTable } from "./managed-tables";
+import {
+  type ColumnMovedToCompanion,
+  operationsToJudge,
+} from "./moved-to-companion";
 import { assertPreCleanupAccepted } from "./pre-cleanup/executor";
 import { applyMakeOptionalToOperations } from "./pre-cleanup/snapshot-patch";
 import { applyResolutionsToOperations } from "./pre-resolution/apply-resolutions";
@@ -632,6 +636,11 @@ export class PushSchemaPipeline {
     uiTargetSlug?: string;
     /** Which entity kind `uiTargetSlug` names, so the journal row records it accurately. */
     uiTargetKind?: "collection" | "single" | "component";
+    /**
+     * Main-table columns whose values this save already moved to the companion. Their drops run,
+     * but are neither rename sources nor drops to confirm (`moved-to-companion`).
+     */
+    columnsMovedToCompanion?: readonly ColumnMovedToCompanion[];
   }): Promise<PipelineResult> {
     const { db, dialect, source, promptChannel, databaseName } = args;
     // Resolved once, before anything reads it. A desired schema is consumed by TWO builders — the
@@ -784,8 +793,13 @@ export class PushSchemaPipeline {
           : { kept: allOperations, skipped: [] as Operation[] };
       logSkippedLockedOps(skippedLockedOps);
 
-      // Phase B: rename detection + prompt + resolution application.
-      const candidates = this.deps.renameDetector.detect(operations, dialect);
+      // Phase B: rename detection + prompt + resolution application. A column moved to the
+      // companion is dropped without being judged: its values are already kept.
+      const judged = operationsToJudge(
+        operations,
+        args.columnsMovedToCompanion
+      );
+      const candidates = this.deps.renameDetector.detect(judged, dialect);
 
       // F5 PR 5: count callbacks bound to the live DB. RealClassifier uses
       // them to populate add_not_null_with_nulls events with the actual
@@ -793,7 +807,7 @@ export class PushSchemaPipeline {
       // orchestrator owns DB access here so the classifier itself stays
       // pure (DI surface).
       const classificationResult = await this.deps.classifier.classify({
-        operations,
+        operations: judged,
         countNulls: (table, column) =>
           countNullsHelper(db, dialect, table, column),
         countRows: table => countRowsHelper(db, dialect, table),

@@ -33,12 +33,14 @@ import {
 } from "../../api/response-shapes";
 import { assertLocalizationConfigured } from "../../domains/i18n/config/require-app-config";
 import { archiveFieldsLeavingTranslation } from "../../domains/i18n/migration/archive-preflight";
+import { columnsMovingToCompanion } from "../../domains/i18n/migration/field-joins-translation";
 import { buildCompanionTransitionStatements } from "../../domains/i18n/migration/reconcile-companion";
 import {
   companionHasStatusColumn,
   localizedColumnsOnMain,
 } from "../../domains/i18n/runtime/companion-io";
 import { buildCompanionRuntimeTable } from "../../domains/i18n/runtime/companion-registration";
+import { moveValuesOfFieldsJoiningTranslation } from "../../domains/i18n/runtime/move-joining-values";
 import { translatePipelinePreviewToLegacy } from "../../domains/schema/legacy-preview/translate";
 import { createApplyDesiredSchema } from "../../domains/schema/pipeline/apply";
 import { RealClassifier } from "../../domains/schema/pipeline/classifier/classifier";
@@ -608,10 +610,23 @@ const COLLECTIONS_METHODS: Record<
         builderOwned: true,
       };
 
+      // A field becoming translated takes its value to the companion before main drops its
+      // column, so the preview judges that drop as the apply will.
+      const previewWasLocalized =
+        (collection as { localized?: boolean }).localized === true;
       const pipelinePreview = await previewDesiredSchema({
         desired,
         db,
         dialect,
+        columnsMovedToCompanion: columnsMovingToCompanion({
+          tableName,
+          dialect,
+          builtBy: "collection",
+          oldFields: currentFields,
+          newFields: fields as FieldDefinition[],
+          wasLocalized: previewWasLocalized,
+          isLocalized: previewLocalized ?? previewWasLocalized,
+        }),
       });
 
       const legacyShape = await translatePipelinePreviewToLegacy(
@@ -858,6 +873,16 @@ const COLLECTIONS_METHODS: Record<
             uiTargetSlug: p.collectionName,
             // Stated rather than relying on the default, so the default stops being load-bearing.
             uiTargetKind: "collection" as const,
+            columnsMovedToCompanion: columnsMovingToCompanion({
+              tableName,
+              dialect,
+              builtBy: "collection",
+              oldFields: (collection.fields ??
+                []) as unknown as FieldDefinition[],
+              newFields: fields as unknown as FieldDefinition[],
+              wasLocalized,
+              isLocalized,
+            }),
           });
         },
         // The optimistic-lock check now runs up front via
@@ -890,6 +915,21 @@ const COLLECTIONS_METHODS: Record<
         newFields: fields as unknown as FieldDefinition[],
         wasLocalized,
         isLocalized,
+      });
+
+      // A field becoming translated keeps its value as the default language's: it moves to the
+      // companion now, before the push drops its main column.
+      const joinedBefore = await moveValuesOfFieldsJoiningTranslation(adapter, {
+        slug: String(p.collectionName),
+        tableName,
+        builtBy: "collection",
+        defaultLocale: getConfigFromDI()?.localization?.defaultLocale ?? "en",
+        oldFields: (collection.fields ?? []) as unknown as FieldDefinition[],
+        newFields: fields as unknown as FieldDefinition[],
+        wasLocalized,
+        isLocalized,
+        wasStatus: collection.status === true,
+        status: collection.status === true,
       });
 
       const result = await apply(desired, "ui", {
@@ -953,6 +993,8 @@ const COLLECTIONS_METHODS: Record<
               tableName,
               oldFields
             ).then(cols => cols.map(c => c.name)),
+            // Added to the companion, with their values, before the push.
+            joinedBefore,
           });
           // A disable archives non-default translations, so ensure the archive
           // table exists first. Run each statement individually (executeQuery is

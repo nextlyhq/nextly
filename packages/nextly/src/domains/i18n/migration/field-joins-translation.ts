@@ -12,6 +12,7 @@
  */
 import type { SupportedDialect } from "@nextlyhq/adapter-drizzle/types";
 
+import type { ColumnMovedToCompanion } from "../../schema/pipeline/moved-to-companion";
 import type { ColumnOrigin } from "../../schema/services/field-column-descriptor";
 import { isFieldLocalized } from "../classify-fields";
 
@@ -41,6 +42,35 @@ export function fieldsJoiningTranslation(
   return oldFields
     .filter(f => !isFieldLocalized(f, true) && nowTranslated.has(f.name))
     .map(f => f.name);
+}
+
+/**
+ * The main-table columns a change moves to the companion: each joining field's column, which the
+ * companion names as the main table does. The push still drops them from main, and is told they
+ * moved so it neither offers them as renames nor asks to confirm their loss. Nothing unless the
+ * entity is translated before and after the change.
+ */
+export function columnsMovingToCompanion(args: {
+  tableName: string;
+  dialect: SupportedDialect;
+  builtBy: ColumnOrigin;
+  oldFields: readonly CompanionFieldLike[];
+  newFields: readonly CompanionFieldLike[];
+  wasLocalized: boolean;
+  isLocalized: boolean;
+}): ColumnMovedToCompanion[] {
+  if (!args.wasLocalized || !args.isLocalized) return [];
+  const joining = new Set(
+    fieldsJoiningTranslation(args.oldFields, args.newFields)
+  );
+  return args.oldFields
+    .filter(f => joining.has(f.name))
+    .flatMap(f => {
+      const column = fieldToLocalizedColumnSpec(f, args.dialect, args.builtBy);
+      return column
+        ? [{ tableName: args.tableName, columnName: column.name }]
+        : [];
+    });
 }
 
 /** What moving the joining fields' values takes, and which fields they are. */
