@@ -50,7 +50,9 @@ exist and have drafts.
 
 A release holds at most 200 documents. A release goes out all together, and 200 is the size
 measured to publish within one pass of the job runner on every supported database, so a full
-release never waits for a second pass. Adding a document to a full release is refused with a
+release on its own never waits for a second pass. The limit is per release: releases due at
+the same moment that share a document are settled together, as one piece, so such a group
+takes as long as all of its documents together. Adding a document to a full release is refused with a
 conflict that says no more fit, and the release's `can.addMember` is false.
 
 A release made before this limit and holding more than 200 keeps working: it runs as

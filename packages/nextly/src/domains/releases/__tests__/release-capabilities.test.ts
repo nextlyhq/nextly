@@ -337,6 +337,29 @@ describe("capabilities, for a single-document release", () => {
     expect(memberCountsOf).toHaveBeenCalledWith([]);
   });
 
+  it("counts an ordinary release only where this caller could add to it", async () => {
+    // What a release holds changes no answer for a caller who may not add,
+    // so it is not read for them: a reader learns no add either way.
+    const reader = service(["read"], { o1: 3 });
+    await reader.svc.capabilities(
+      [release("draft", "o1", "release"), release("draft", "s1", "single")],
+      ACTOR
+    );
+    expect(reader.memberCountsOf).toHaveBeenCalledWith(["s1"]);
+
+    // Without publish, a scheduled release takes no document from this
+    // caller, so only the draft is counted.
+    const creator = service(["read", "create"], {});
+    await creator.svc.capabilities(
+      [
+        release("draft", "o1", "release"),
+        release("scheduled", "o2", "release"),
+      ],
+      ACTOR
+    );
+    expect(creator.memberCountsOf).toHaveBeenCalledWith(["o1"]);
+  });
+
   it("offers no add to a full release, nor to one over the limit, but still a removal", async () => {
     const { svc } = service(ALL, {
       full: RELEASE_MEMBER_LIMIT,

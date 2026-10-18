@@ -336,7 +336,9 @@ export interface ReleaseCapabilities {
  *
  * Sized so a full release publishes within one pass of the job that runs
  * releases, on every dialect: a release is settled all together, so one
- * that no pass can finish holds its documents back. A release made before
+ * that no pass can finish holds its documents back. The bound is per
+ * release. Releases due together that share a document are settled as one
+ * piece, which takes as long as all of their documents. A release made before
  * the limit and holding more keeps running and can shrink, but takes no new
  * document.
  */

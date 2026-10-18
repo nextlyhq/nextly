@@ -39,6 +39,7 @@ import type {
   ForeignKeySpec,
   ReferentialAction,
 } from "../../schema/pipeline/diff/types";
+import { builderDropColumnSql } from "../../schema/pipeline/sql-templates/common-statements";
 import {
   addForeignKeySql,
   changeForeignKeyActionStatements,
@@ -474,15 +475,126 @@ export class DynamicCollectionSchemaService {
    *
    * MySQL is the exception on `IF NOT EXISTS`: it rejects the clause on CREATE INDEX rather than
    * ignoring it.
+   *
+   * `strict` drops the clause everywhere, for a field made unique on a column it already has. There
+   * an index already holding the name is not this one, since the field had no unique index: `IF NOT
+   * EXISTS` would skip the create and the field would be recorded unique without being enforced,
+   * so the database must refuse instead.
    */
-  private uniqueIndexSql(tableName: string, column: string): string {
+  private uniqueIndexSql(
+    tableName: string,
+    column: string,
+    options?: { strict?: boolean }
+  ): string {
     const name = this.quoteIdentifier(
       uniqueIndexNameForColumn(tableName, column)
     );
     const target = `${this.quoteIdentifier(tableName)}(${this.quoteIdentifier(column)})`;
-    return this.dialect === "mysql"
+    return this.dialect === "mysql" || options?.strict === true
       ? `CREATE UNIQUE INDEX ${name} ON ${target};`
       : `CREATE UNIQUE INDEX IF NOT EXISTS ${name} ON ${target};`;
+  }
+
+  /** The refusal for a unique field on a column type this dialect cannot key. */
+  private uniquenessNotEnforceable(
+    tableName: string,
+    field: FieldDefinition
+  ): NextlyError {
+    return NextlyError.validation({
+      errors: [
+        {
+          path: `fields.${field.name}`,
+          code: "UNIQUE_NOT_ENFORCEABLE_ON_DIALECT",
+          message:
+            `"${field.name}" is marked unique, but ${this.dialect} cannot enforce ` +
+            `uniqueness on a ${field.type} column. Store the value in a short-variant ` +
+            `text field, which becomes a bounded VARCHAR the server can key, or remove ` +
+            `the unique flag.`,
+        },
+      ],
+      logContext: {
+        tableName,
+        field: field.name,
+        type: field.type,
+        dialect: this.dialect,
+      },
+    });
+  }
+
+  /**
+   * The index statements for kept fields whose `unique` flag changed.
+   *
+   * Turning it on creates the field's unique index; turning it off drops it. Recording the flag
+   * without either would leave the registry claiming a uniqueness the table does not enforce, or
+   * enforcing one it no longer claims.
+   *
+   * The migration file follows the field's history: the field had no unique index before it was
+   * made unique, and had one before it was made not unique. Live indexes only choose the spelling
+   * of the one being dropped, since older tables carry another name. That matters outside
+   * development, where saves queue files without running them: a save that turns Unique off and
+   * a later one that turns it back on must replay as a drop and then a create, whatever the table
+   * shows while both are waiting.
+   *
+   * This database's own run (`planFor: "database"`) also skips what the live table already shows,
+   * for a save MySQL stopped part-way: a create where a unique index already covers the column
+   * (asked by what the index covers, since a name proves nothing), and a drop where none is left.
+   */
+  private uniquenessToggleStatements(
+    tableName: string,
+    pairs: readonly { previous: FieldDefinition; field: FieldDefinition }[],
+    options:
+      | {
+          planFor?: "artefact" | "database";
+          uniqueColumns?: ReadonlyMap<string, string | null>;
+          indexNames?: ReadonlySet<string>;
+        }
+      | undefined
+  ): string[] {
+    const forDatabase = options?.planFor === "database";
+    const statements: string[] = [];
+    for (const { previous, field } of pairs) {
+      if (previous.unique === field.unique || !fieldProducesColumn(field))
+        continue;
+      const column = toSnakeCase(field.name);
+      if (field.unique === true) {
+        if (forDatabase && options?.uniqueColumns?.has(column)) continue;
+        if (this.plannedUniqueIndexName(tableName, field) === null) {
+          if (column === "slug") continue;
+          throw this.uniquenessNotEnforceable(tableName, field);
+        }
+        statements.push(
+          this.uniqueIndexSql(tableName, column, { strict: true })
+        );
+        continue;
+      }
+      // The index the table has: under one of the names the generator uses, or the one that
+      // covers the column whatever it is called, which is what turning Unique on adopted. Both are
+      // asked of the column the field had before this save: a field renamed in the same save
+      // keeps its index under the old name, which a rename does not change.
+      const before = toSnakeCase(previous.name);
+      const live =
+        this.uniqueIndexNameCandidates(tableName, before).find(
+          name => options?.indexNames?.has(name) === true
+        ) ??
+        options?.uniqueColumns?.get(before) ??
+        undefined;
+      if (forDatabase && live === undefined) continue;
+      // A field this dialect could never key (and `slug`, whose index every table keeps) had no
+      // index of its own to drop.
+      if (
+        live === undefined &&
+        this.plannedUniqueIndexName(tableName, previous) === null
+      )
+        continue;
+      const present = live ?? uniqueIndexNameForColumn(tableName, before);
+      if (this.dialect === "postgresql") {
+        statements.push(
+          `ALTER TABLE ${this.quoteIdentifier(tableName)} DROP CONSTRAINT IF EXISTS ${this.quoteIdentifier(present)};`
+        );
+      }
+      statements.push(this.dropIndexSql(tableName, present));
+    }
+    return statements;
   }
 
   /**
@@ -729,6 +841,32 @@ export class DynamicCollectionSchemaService {
     ];
   }
 
+  /**
+   * Whether this database's own run already has a column's plain index: a save that MySQL, which
+   * commits each schema statement, refused part-way can have created it while the registry still
+   * records the index off. The migration file keeps the create, since it is replayed on
+   * databases that never ran that save.
+   */
+  private indexAlreadyRun(
+    tableName: string,
+    column: string,
+    options:
+      | {
+          planFor?: "artefact" | "database";
+          indexColumns?: ReadonlyMap<string, readonly string[]>;
+        }
+      | undefined
+  ): boolean {
+    // The index of the expected name, and on exactly this column: another index can hold the name.
+    return (
+      options?.planFor === "database" &&
+      this.indexNameCandidates(tableName, column).some(name => {
+        const covered = options.indexColumns?.get(name);
+        return covered?.length === 1 && covered[0] === column;
+      })
+    );
+  }
+
   private indexNameCandidates(tableName: string, column: string): string[] {
     const full = `idx_${tableName}_${column}`;
     const candidates = [indexNameForColumn(tableName, column), full];
@@ -786,6 +924,18 @@ export class DynamicCollectionSchemaService {
    * A relationship is the case with no answer: every id the generator could write references a
    * row that does not exist, and `DEFAULT NULL` does not satisfy `NOT NULL` on any dialect.
    */
+  /**
+   * The literal an added column gives the rows that already exist, or null when they get NULL:
+   * a required column's backfill, or a stated default. The same answer the ADD below writes, for a
+   * precondition that has to know before the statement runs (two rows given one value cannot take
+   * a unique index).
+   */
+  addedColumnBackfill(field: FieldDefinition): string | null {
+    return field.required || field.default !== undefined
+      ? this.requiredColumnBackfill(field)
+      : null;
+  }
+
   private requiredColumnBackfill(field: FieldDefinition): string | null {
     const literal =
       field.default !== undefined
@@ -1142,6 +1292,13 @@ ${allColumnDefs.join(",\n")}
     newFields: FieldDefinition[],
     options?: {
       /**
+       * Whom the statements are for. The migration file (`"artefact"`, the default) is replayed on
+       * databases that only ever ran migrations, so what it does to an index follows from the
+       * field's history alone. `"database"` is this database's own run, which also skips an index
+       * change the live table already shows: a save MySQL stopped part-way can have made it.
+       */
+      planFor?: "artefact" | "database";
+      /**
        * Previous Draft/Published flag — pass `existing.status === true` so
        * the diff knows whether the table currently has a `status` column.
        */
@@ -1226,6 +1383,19 @@ ${allColumnDefs.join(",\n")}
        */
       indexNames?: ReadonlySet<string>;
       /**
+       * The columns a single-column UNIQUE index covers, read from the live table by
+       * `readUniqueColumns`. Consulted before a kept field is made unique, so an index that
+       * already enforces it (left by a save MySQL refused part-way) is not created twice, and an
+       * index that merely holds the expected name on another column is not taken for it.
+       */
+      uniqueColumns?: ReadonlyMap<string, string | null>;
+      /**
+       * The columns each whole-column index covers, by name, read by `readIndexColumns`. A plain
+       * index this database already has is skipped in its own run only when the index of the
+       * expected name really stands on that column.
+       */
+      indexColumns?: ReadonlyMap<string, readonly string[]>;
+      /**
        * Physical table name per referenced field-group slug, resolved from the
        * REGISTRY by the caller. A field group's data table is whatever the
        * registry says it is — the storage migration renames comp_ tables to
@@ -1299,6 +1469,12 @@ ${allColumnDefs.join(",\n")}
       );
 
       for (const column of lifecycleColumns) {
+        // This database's own run skips a lifecycle column change the table already shows: a
+        // save that MySQL, which commits each schema statement, refused part-way can have added
+        // or dropped it while the registry still records the lifecycle as before. The migration
+        // file keeps both, since it is replayed on databases that never ran that save.
+        const present = options?.liveColumnTypes?.has(column.name) === true;
+        if (options?.planFor === "database" && present === hasStatus) continue;
         statements.push(
           hasStatus
             ? `ALTER TABLE ${this.quoteIdentifier(tableName)} ADD COLUMN ${renderSystemColumnSql(column, name => this.quoteIdentifier(name))};`
@@ -1467,25 +1643,7 @@ ${allColumnDefs.join(",\n")}
         // TEXT/BLOB either way, and cannot index JSON at all. Saying so is the only honest
         // outcome, and saying it first is what keeps the table untouched.
         if (field.unique && !this.uniquenessCanBeAnIndex(type)) {
-          throw NextlyError.validation({
-            errors: [
-              {
-                path: `fields.${field.name}`,
-                code: "UNIQUE_NOT_ENFORCEABLE_ON_DIALECT",
-                message:
-                  `"${field.name}" is marked unique, but ${this.dialect} cannot enforce ` +
-                  `uniqueness on a ${field.type} column. Store the value in a short-variant ` +
-                  `text field, which becomes a bounded VARCHAR the server can key, or remove ` +
-                  `the unique flag.`,
-              },
-            ],
-            logContext: {
-              tableName,
-              field: field.name,
-              type: field.type,
-              dialect: this.dialect,
-            },
-          });
+          throw this.uniquenessNotEnforceable(tableName, field);
         }
         statements.push(
           `ALTER TABLE ${this.quoteIdentifier(tableName)} ADD COLUMN ${this.quoteIdentifier(addColName)} ${type} ${nullable} ${defaultVal};`.trim()
@@ -1567,7 +1725,12 @@ ${allColumnDefs.join(",\n")}
                 field
               )
           );
-          if (toggleIndexSql) statements.push(toggleIndexSql);
+          if (
+            toggleIndexSql &&
+            !this.indexAlreadyRun(tableName, idxCol, options)
+          ) {
+            statements.push(toggleIndexSql);
+          }
         } else {
           // Same guard as the removal path: turning an index off that the table never carried
           // aborts on MySQL, which cannot express `DROP INDEX IF EXISTS`.
@@ -1689,16 +1852,13 @@ ${allColumnDefs.join(",\n")}
           statements.push(this.dropIndexSql(tableName, uniquePresent));
         }
 
-        // SQLite doesn't support IF EXISTS on DROP COLUMN
-        if (this.dialect === "sqlite") {
-          statements.push(
-            `ALTER TABLE ${this.quoteIdentifier(tableName)} DROP COLUMN ${this.quoteIdentifier(dropCol)};`
-          );
-        } else {
-          statements.push(
-            `ALTER TABLE ${this.quoteIdentifier(tableName)} DROP COLUMN IF EXISTS ${this.quoteIdentifier(dropCol)};`
-          );
-        }
+        statements.push(
+          builderDropColumnSql(
+            this.dialect,
+            this.quoteIdentifier(tableName),
+            this.quoteIdentifier(dropCol)
+          )
+        );
       }
     }
 
@@ -1904,6 +2064,19 @@ ${allColumnDefs.join(",\n")}
         }
       }
     }
+
+    // A field kept whose `unique` flag changed: its index, which neither the column rewrite above
+    // nor the add and remove loops create or drop.
+    statements.push(
+      ...this.uniquenessToggleStatements(
+        tableName,
+        newFields.flatMap(field => {
+          const previous = previousDefinitionOf(field);
+          return previous ? [{ previous, field }] : [];
+        }),
+        options
+      )
+    );
 
     // The keys whose new action is `SET NULL`, now that the columns they sit
     // on have been relaxed above.
@@ -2443,14 +2616,25 @@ ${allColumnDefs.join(",\n")}
     fields: FieldDefinition[]
   ): {
     indexNames: Set<string>;
+    indexColumns: Map<string, string[]>;
+    uniqueColumns: Map<string, string | null>;
     foreignKeysByColumn: Map<string, string[]>;
   } {
     const indexNames = new Set<string>();
+    // Each predicted index on the one column it is named for, as the create emits it.
+    const indexColumns = new Map<string, string[]>();
+    // The key and the system slug index are unique on every generated table, and no field's
+    // Unique toggle drops either.
+    const uniqueColumns = new Map<string, string | null>([
+      ["id", null],
+      ["slug", null],
+    ]);
     const foreignKeysByColumn = new Map<string, string[]>();
     // The system indexes every generated table carries, named as `generateMigrationSQL` names
     // them, so a system column removed by an edit is not treated as unindexed.
     for (const column of ["slug", "created_at", "created_by"]) {
       indexNames.add(indexNameForColumn(tableName, column));
+      indexColumns.set(indexNameForColumn(tableName, column), [column]);
     }
     for (const field of fields) {
       if (!fieldProducesColumn(field)) continue;
@@ -2465,18 +2649,23 @@ ${allColumnDefs.join(",\n")}
           null
       ) {
         indexNames.add(indexNameForColumn(tableName, column));
+        indexColumns.set(indexNameForColumn(tableName, column), [column]);
       }
       // The UNIQUE index is a separate object from the plain one and is emitted under its own
       // rule, so it has to be predicted through that rule rather than inferred from this one.
       const uniqueName = this.plannedUniqueIndexName(tableName, field);
-      if (uniqueName !== null) indexNames.add(uniqueName);
+      if (uniqueName !== null) {
+        indexNames.add(uniqueName);
+        indexColumns.set(uniqueName, [column]);
+        uniqueColumns.set(column, uniqueName);
+      }
       if (field.type === "relationship" && field.options?.target) {
         foreignKeysByColumn.set(column, [
           this.relationshipKeyName(tableName, column),
         ]);
       }
     }
-    return { indexNames, foreignKeysByColumn };
+    return { indexNames, indexColumns, uniqueColumns, foreignKeysByColumn };
   }
 
   /**
