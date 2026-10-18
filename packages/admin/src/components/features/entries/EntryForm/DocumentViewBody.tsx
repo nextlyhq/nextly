@@ -34,11 +34,19 @@ import type { UseAutosaveRecoveryResult } from "@admin/hooks/useAutosaveRecovery
 import { useSearchParams } from "@admin/hooks/useSearchParams";
 import { setSearchParam } from "@admin/lib/navigation";
 import type { DocumentViewProps } from "@admin/lib/plugins/component-registry";
-import { resolveViewField } from "@admin/lib/plugins/document-view-registry";
+import {
+  resolveViewField,
+  type ViewFieldResolution,
+} from "@admin/lib/plugins/document-view-registry";
 
 import { LiveDocumentRecoveryOffer } from "./AutosaveRecoveryBanner";
+import {
+  useViewFieldRefusal,
+  type ViewFieldRefusal,
+} from "./document-view-field-gate";
 import { DocumentLockBanner } from "./DocumentLockBanner";
 import { DocumentViewFieldChooser } from "./DocumentViewFieldChooser";
+import { DocumentViewFieldRefused } from "./DocumentViewFieldRefused";
 import { FormErrorSummary } from "./FormErrorSummary";
 import { MissingDocumentViewComponent } from "./MissingDocumentViewComponent";
 import type { DocumentLockSurface } from "./useDocumentLockSurface";
@@ -134,6 +142,73 @@ function useRestoreRemount(recovery: UseAutosaveRecoveryResult): {
   return { recovery: offered, generation, withdrawn };
 }
 
+/**
+ * Which field the view edits, from the address, and whether it may.
+ *
+ * Read here rather than by the view, so the rule the admin applies to the
+ * address is the one answer. The gates are the field's own and those of the
+ * groups around it, as the form applies them: an address reaches a field the
+ * form would not let the author edit, and the view is refused rather than
+ * trusted to refuse.
+ */
+function useViewField(
+  fieldType: string | undefined,
+  fields: readonly FieldConfig[] | undefined,
+  form: UseFormReturn<Record<string, unknown>>
+) {
+  const requested = useSearchParams().field;
+  const editing = resolveViewField(
+    fieldType,
+    fields,
+    typeof requested === "string" ? requested : undefined
+  );
+  useFieldInAddress(editing, requested);
+  const refusal = useViewFieldRefusal(
+    editing.kind === "field" ? [...editing.within, editing.declaration] : [],
+    form.control
+  );
+  return { editing, refusal };
+}
+
+/**
+ * What fills the view's area: the question of which field, the reason a field
+ * may not be edited, or the view itself — absent for the one commit a restore
+ * withdraws it, and keyed by the restore count so it reads restored values.
+ */
+function ViewArea({
+  editing,
+  refusal,
+  withdrawn,
+  generation,
+  component,
+  viewProps,
+}: {
+  editing: ViewFieldResolution<FieldConfig>;
+  refusal: ViewFieldRefusal | null;
+  withdrawn: boolean;
+  generation: number;
+  component: string;
+  viewProps: DocumentViewProps;
+}): React.JSX.Element | null {
+  if (editing.kind === "choose") {
+    return <DocumentViewFieldChooser candidates={editing.candidates} />;
+  }
+  if (refusal !== null) {
+    return (
+      <DocumentViewFieldRefused reason={refusal} onExit={viewProps.exit} />
+    );
+  }
+  if (withdrawn) return null;
+  return (
+    <PluginSlot
+      key={generation}
+      path={component}
+      props={viewProps}
+      fallback={<MissingDocumentViewComponent path={component} />}
+    />
+  );
+}
+
 export function DocumentViewBody({
   view,
   target,
@@ -165,15 +240,7 @@ export function DocumentViewBody({
   const exit = view.onExit;
   const offered = useRestoreRemount(recovery);
 
-  // Which field the view edits, from the address. Read here rather than by
-  // the view so the rule the admin applies to the address is the one answer.
-  const requested = useSearchParams().field;
-  const editing = resolveViewField(
-    view.fieldType,
-    fields,
-    typeof requested === "string" ? requested : undefined
-  );
-  useFieldInAddress(editing, requested);
+  const { editing, refusal } = useViewField(view.fieldType, fields, form);
 
   const { errors, submitCount } = form.formState;
   const viewProps: DocumentViewProps = {
@@ -215,16 +282,14 @@ export function DocumentViewBody({
         {/* The view fills what is left. Boxed so a view rooted in bare text
             or `display: contents` still has an element taking the height. */}
         <div className="min-h-0 flex-1">
-          {editing.kind === "choose" ? (
-            <DocumentViewFieldChooser candidates={editing.candidates} />
-          ) : offered.withdrawn ? null : (
-            <PluginSlot
-              key={offered.generation}
-              path={view.component}
-              props={viewProps}
-              fallback={<MissingDocumentViewComponent path={view.component} />}
-            />
-          )}
+          <ViewArea
+            editing={editing}
+            refusal={refusal}
+            withdrawn={offered.withdrawn}
+            generation={offered.generation}
+            component={view.component}
+            viewProps={viewProps}
+          />
         </div>
       </div>
     </FormProvider>

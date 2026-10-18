@@ -23,6 +23,7 @@ import { cn } from "@admin/lib/utils";
 import { useEntryLocale } from "../EntryLocaleContext";
 import { UseSourceButton } from "../TranslationMode/UseSourceButton";
 
+import { fieldAdminGates } from "./field-admin-gates";
 import { useFieldElementId } from "./field-id-scope";
 
 // ============================================================
@@ -241,7 +242,9 @@ export function FieldWrapper({
   const isRequired = fieldWithCommonProps.required ?? false;
   const description = fieldWithCommonProps.admin?.description;
   const width = fieldWithCommonProps.admin?.width || "100%";
-  const isHidden = fieldWithCommonProps.admin?.hidden;
+  // Read through the shared gates, which a document view also asks, so a
+  // field this form never draws is one no view's address can open either.
+  const isHidden = fieldAdminGates(field).hidden;
   const _fieldType = field.type as string;
 
   // A group is named by `aria-labelledby` on a `role="group"` container rather

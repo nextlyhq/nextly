@@ -534,3 +534,90 @@ describe("a field-type view on a document with two fields of its type", () => {
     );
   });
 });
+
+describe("a field the form would not let the author edit", () => {
+  function openWith(fields: unknown[], title = "Hello") {
+    window.history.pushState(
+      null,
+      "",
+      "/admin/collections/pages/e1/builder?field=layout"
+    );
+    return renderView({
+      collection: { name: "pages", fields } as never,
+      entry: { id: "e1", title } as never,
+      documentView: { component: VIEW, onExit, fieldType: "blocks" },
+    });
+  }
+
+  function refusedSaying(reason: RegExp): void {
+    expect(
+      screen.getByRole("heading", { name: "This field can't be edited" })
+    ).toBeInTheDocument();
+    expect(screen.getByText(reason)).toBeInTheDocument();
+    // Refused, not handed over: the view is never drawn, so it cannot edit
+    // the field however it treats what it is given.
+    expect(screen.queryByTestId("builder-view")).toBeNull();
+  }
+
+  afterEach(() => {
+    window.history.pushState(null, "", "/");
+  });
+
+  it("refuses a read-only field, and offers the way back", () => {
+    openWith([
+      { name: "title", type: "text" },
+      { name: "layout", type: "blocks", admin: { readOnly: true } },
+    ]);
+    refusedSaying(/read-only/);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Back to the document" })
+    );
+    expect(onExit).toHaveBeenCalled();
+  });
+
+  it("refuses a disabled field", () => {
+    openWith([
+      { name: "title", type: "text" },
+      { name: "layout", type: "blocks", admin: { disabled: true } },
+    ]);
+    refusedSaying(/turned off for editing/);
+  });
+
+  it("refuses a field its condition hides, and opens it once the condition holds", () => {
+    const fields = [
+      { name: "title", type: "text" },
+      {
+        name: "layout",
+        type: "blocks",
+        admin: { condition: { field: "title", equals: "Show" } },
+      },
+    ];
+    openWith(fields, "Hello");
+    refusedSaying(/isn't shown for this document/);
+    cleanup();
+
+    // The control: the same declaration, with the condition met, opens.
+    openWith(fields, "Show");
+    expect(screen.getByTestId("builder-view")).toBeInTheDocument();
+  });
+
+  it("refuses a field the form never draws", () => {
+    openWith([
+      { name: "title", type: "text" },
+      { name: "layout", type: "blocks", admin: { hidden: true } },
+    ]);
+    refusedSaying(/isn't shown for this document/);
+  });
+
+  it("refuses a field inside a read-only unnamed group, as the form draws it", () => {
+    openWith([
+      { name: "title", type: "text" },
+      {
+        type: "group",
+        admin: { readOnly: true },
+        fields: [{ name: "layout", type: "blocks" }],
+      },
+    ]);
+    refusedSaying(/read-only/);
+  });
+});

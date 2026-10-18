@@ -77,25 +77,47 @@ export function matchDocumentView(
   return declared ?? byFieldType.get(path);
 }
 
+/** A field a document addresses, with the unnamed groups it sits inside. */
+interface AddressableField<F extends object> {
+  field: F;
+  /**
+   * The unnamed groups around it, outermost first. They add nothing to its
+   * path, but the form applies their gates to it — a read-only or hidden group
+   * makes everything inside it read-only or hidden — so a surface editing the
+   * field on its own needs them too.
+   */
+  within: F[];
+}
+
 /**
  * The fields a document addresses at its top level: its own, plus those of any
  * UNNAMED group, which is presentation only and adds nothing to their paths. A
  * named group or a repeater moves its fields down a level, out of reach.
  */
-function addressableFields<F extends object>(
-  fields: readonly F[] | undefined
-): F[] {
+function addressableFieldsWithin<F extends object>(
+  fields: readonly F[] | undefined,
+  within: F[] = []
+): AddressableField<F>[] {
   return (fields ?? []).flatMap(field => {
     const unnamedGroup =
       "type" in field &&
       field.type === "group" &&
       !("name" in field && typeof field.name === "string" && field.name !== "");
-    if (!unnamedGroup) return [field];
+    if (!unnamedGroup) return [{ field, within }];
     const children = "fields" in field ? field.fields : undefined;
     // A group's children are declarations of the same kind as the group, so
     // they are read as the caller's field type.
-    return Array.isArray(children) ? addressableFields(children as F[]) : [];
+    return Array.isArray(children)
+      ? addressableFieldsWithin(children as F[], [...within, field])
+      : [];
   });
+}
+
+/** The addressable fields alone, derived from the one walk above. */
+function addressableFields<F extends object>(
+  fields: readonly F[] | undefined
+): F[] {
+  return addressableFieldsWithin(fields).map(entry => entry.field);
 }
 
 /**
@@ -176,6 +198,8 @@ export interface ViewFieldCandidate<F extends object = object> {
   name: string;
   label?: string;
   declaration: F;
+  /** The unnamed groups around it, outermost first, whose gates it inherits. */
+  within: F[];
 }
 
 /**
@@ -185,7 +209,7 @@ export interface ViewFieldCandidate<F extends object = object> {
  */
 export type ViewFieldResolution<F extends object = object> =
   | { kind: "document" }
-  | { kind: "field"; name: string; declaration: F }
+  | { kind: "field"; name: string; declaration: F; within: F[] }
   | { kind: "choose"; candidates: ViewFieldCandidate<F>[] };
 
 /** The top-level fields of `fieldType`, by name and label. */
@@ -193,14 +217,14 @@ function candidatesOf<F extends object>(
   fieldType: string,
   fields: readonly F[] | undefined
 ): ViewFieldCandidate<F>[] {
-  return addressableFields(fields).flatMap(field => {
+  return addressableFieldsWithin(fields).flatMap(({ field, within }) => {
     if (!("type" in field) || field.type !== fieldType) return [];
     if (!("name" in field) || typeof field.name !== "string") return [];
     const label =
       "label" in field && typeof field.label === "string"
         ? { label: field.label }
         : {};
-    return [{ name: field.name, ...label, declaration: field }];
+    return [{ name: field.name, ...label, declaration: field, within }];
   });
 }
 
@@ -230,6 +254,7 @@ export function resolveViewField<F extends object>(
       kind: "field",
       name: chosen.name,
       declaration: chosen.declaration,
+      within: chosen.within,
     };
   }
   return { kind: "choose", candidates };
