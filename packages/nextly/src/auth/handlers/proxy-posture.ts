@@ -128,7 +128,8 @@ export function noteUnresolvedAuthRequest(request: Request): void {
       "could not be used, so the auth rate limit is counting them by the " +
       "account each names, under a shared ceiling, rather than per client; " +
       "a plugin's auth route counts them by the identity its limitKey names, " +
-      "under that plugin's own ceiling, or by the ceiling alone without one. " +
+      "or against one budget its requests naming no identity share, under " +
+      "that plugin's own ceiling, or by the ceiling alone without a limitKey. " +
       "A client can send these headers itself, so they do not show a proxy " +
       "is in front: only if every request reaches the app through a proxy " +
       "you control that sets them, set security.trustProxy: true, and list " +

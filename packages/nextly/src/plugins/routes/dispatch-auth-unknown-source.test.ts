@@ -44,6 +44,41 @@ vi.mock("../../observability/logger", () => ({
   getNextlyLogger: () => ({ warn, info: vi.fn(), error: vi.fn() }),
 }));
 
+/**
+ * How many bodies the limiter has started reading. The moment it reads one is
+ * the moment a test of held bodies must wait for, and only the limiter can
+ * say when that is: the stream itself may be pulled earlier, by whatever
+ * wraps the request on its way in.
+ */
+const limiterReads = vi.hoisted(() => ({
+  count: 0,
+  waiters: [] as Array<{ at: number; resolve: () => void }>,
+}));
+vi.mock("../../auth/handlers/unknown-source", async original => {
+  const actual =
+    await original<typeof import("../../auth/handlers/unknown-source")>();
+  return {
+    ...actual,
+    readLimiterBody: (request: Request) => {
+      limiterReads.count += 1;
+      for (const waiter of limiterReads.waiters.splice(0)) {
+        if (limiterReads.count >= waiter.at) waiter.resolve();
+        else limiterReads.waiters.push(waiter);
+      }
+      return actual.readLimiterBody(request);
+    },
+  };
+});
+
+/** Settles once the limiter has started reading `more` further bodies. */
+function limiterReading(more: number): Promise<void> {
+  const at = limiterReads.count + more;
+  if (limiterReads.count >= at) return Promise.resolve();
+  return new Promise(resolve => {
+    limiterReads.waiters.push({ at, resolve });
+  });
+}
+
 import type { PluginContext } from "../plugin-context";
 
 import { authRateLimiter } from "../../auth/middleware/rate-limiter";
@@ -106,6 +141,28 @@ function post(body: unknown, headers: Record<string, string> = {}): Request {
   });
 }
 
+/** A request whose body is held until `release()`. */
+function heldPost(body: unknown): { request: Request; release: () => void } {
+  let release!: () => void;
+  const held = new Promise<void>(resolve => {
+    release = resolve;
+  });
+  const bytes = new TextEncoder().encode(JSON.stringify(body));
+  const request = new Request("http://localhost/admin/api/plugins/x/sign-in", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        await held;
+        controller.enqueue(bytes);
+        controller.close();
+      },
+    }),
+    duplex: "half",
+  } as RequestInit);
+  return { request, release };
+}
+
 async function status(m: RouteMatch, body: unknown): Promise<number> {
   return (await runPluginRoute(post(body), m)).status;
 }
@@ -148,34 +205,38 @@ describe.each([
 
   it("charges an identity when its body arrives, so a body held past the window cannot spend it twice", async () => {
     const m = match(pluginName(), { limitKey: byEmail });
-    let release!: () => void;
-    const held = new Promise<void>(resolve => {
-      release = resolve;
-    });
-    const bytes = new TextEncoder().encode(
-      JSON.stringify({ email: "a@example.com" })
-    );
-    const slow = new Request("http://localhost/admin/api/plugins/x/sign-in", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: new ReadableStream<Uint8Array>({
-        async pull(controller) {
-          await held;
-          controller.enqueue(bytes);
-          controller.close();
-        },
-      }),
-      duplex: "half",
-    } as RequestInit);
+    const slow = heldPost({ email: "a@example.com" });
 
-    const first = runPluginRoute(slow, m);
-    // Let the request reach the body before the clock moves past the window.
-    for (let i = 0; i < 20; i++) await new Promise(r => setImmediate(r));
+    const reading = limiterReading(1);
+    const first = runPluginRoute(slow.request, m);
+    // The clock moves past the window only once the limiter is reading the body.
+    await reading;
     vi.setSystemTime(Date.now() + W + 1);
-    release();
+    slow.release();
 
     expect((await first).status).toBe(200);
     expect(await status(m, { email: "a@example.com" })).toBe(429);
+  });
+
+  it("spends the ceiling before reading a body, so held bodies cannot outnumber it", async () => {
+    const m = match(pluginName(), { limitKey: byEmail });
+    const held = Array.from({ length: CEILING }, (_, i) =>
+      heldPost({ email: `u${i}@example.com` })
+    );
+
+    // Started one at a time, each once the one before is reading its body, so
+    // every one of them is held open at once when the next request comes.
+    const running: Array<Promise<Response>> = [];
+    for (const h of held) {
+      const reading = limiterReading(1);
+      running.push(runPluginRoute(h.request, m));
+      await reading;
+    }
+    // Every place in the ceiling is held by a request still sending its body.
+    expect(await status(m, { email: "fresh@example.com" })).toBe(429);
+
+    for (const h of held) h.release();
+    for (const res of await Promise.all(running)) expect(res.status).toBe(200);
   });
 
   it("counts an identity across the plugin's auth routes", async () => {
@@ -325,6 +386,7 @@ describe("the warning that proxy headers could not be used", () => {
     // Logged from a plugin route, it must describe how that route counts.
     const [entry] = warn.mock.calls[0] as [{ message: string }];
     expect(entry.message).toContain("identity its limitKey names");
+    expect(entry.message).toContain("requests naming no identity share");
   });
 
   it("is not logged when the address resolves", async () => {

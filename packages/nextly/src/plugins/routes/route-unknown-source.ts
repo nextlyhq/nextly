@@ -97,22 +97,14 @@ export async function admitRouteUnknownSource(
   };
   const counter = counterFor(input.pluginName, input.store);
   const { limitKey } = input.route;
-  if (limitKey === undefined) return counter.arrive(limits);
-
-  // A met ceiling refuses every request it would, so it refuses before the
-  // body is read: past the ceiling, a request costs no reading.
-  const met = await counter.ceilingMet(limits);
-  if (met) return met;
-  // The body is read BEFORE arrival, as core's sign-in reads it: the time of
-  // arrival is the time the identity's budget is charged at, and a caller
-  // controls how long its body takes. Read after arrival, a body held open
-  // past the window charged the identity at a time already expired, so the
-  // next request for it found the budget unspent.
-  const body = await readLimiterBody(request);
-  // Asking the route is the work the ceiling bounds, so the ceiling is spent
-  // on arrival, before the route is asked.
+  // Reading the body and asking the route are the work the ceiling bounds,
+  // so the ceiling is spent on arrival, before either: a met ceiling refuses
+  // before any reading, and a caller holding bodies open holds at most the
+  // ceiling's worth of them. With no `limitKey` there is nothing else to spend.
   const arrival = await counter.arrive(limits);
-  if (!arrival.allowed) return arrival;
+  if (!arrival.allowed || limitKey === undefined) return arrival;
+
+  const body = await readLimiterBody(request);
   const answer = await askLimitKey(limitKey.bind(input.route), {
     request: await limiterRequest(request),
     body,
@@ -120,6 +112,9 @@ export async function admitRouteUnknownSource(
   const key = answer.handles
     ? pluginRouteLimitKey(input.pluginName, answer.key, input.secret)
     : null;
+  // The counter charges the identity at admission, once the body is in, not
+  // at arrival: a caller controls how long its body takes, and a body held
+  // open past the window would otherwise be charged at a time already expired.
   return counter.admitArrived(
     key ?? noIdentityKey(input.pluginName),
     limits,
