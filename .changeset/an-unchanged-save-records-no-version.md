@@ -39,5 +39,9 @@ which made an unchanged save of a document with a component look changed
 whenever it landed in a later second (for a working draft too). A save
 that changes only a password records none either: a version never holds a
 secret, so it would show nothing. A save that changes the status still records one, and so
-do a restore and a named version. This takes one extra read of the part's
-newest version per save of a document with history.
+do a create, a restore, a named version, and publishing or unpublishing
+every language. A save is compared with the document's newest version, and
+only when that version is in the save's own language; an unchanged save in
+another language still records one, since its own newest version can
+predate a change to the shared fields. This takes one extra read of the
+document's newest version per save of a document with history.

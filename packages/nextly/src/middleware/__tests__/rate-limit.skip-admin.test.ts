@@ -1,29 +1,10 @@
-// Why: pin the default-skip behaviour. Without it, normal admin nav
-// fires several parallel queries per page (/me, /dashboard/stats,
-// /schema/journal, per-collection lists) and the public 100/60s cap
-// trips after a handful of nav events. Admin is session-authed; the
-// rate limiter exists to protect the public REST surface. See the
-// `defaultSkipAdminApi` jsdoc and the `skip` field on RateLimitConfig.
+// The deprecated `defaultSkipAdminApi`: no longer the default, and unchanged
+// for an app that passes it as `skip`.
 
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
-import {
-  createRateLimiter,
-  defaultSkipAdminApi,
-  type RateLimitStore,
-} from "../rate-limit";
-
-function makeStore(): RateLimitStore {
-  // Always reports 1 request — verifies that the limiter never tries to
-  // increment for skipped paths (we assert via the spy below).
-  const increment = vi
-    .fn<RateLimitStore["increment"]>()
-    .mockResolvedValue({ count: 1, resetAt: Date.now() + 60000 });
-  return {
-    increment,
-    reset: vi.fn(),
-  };
-}
+import { defaultSkipAdminApi, InMemoryRateLimitStore } from "../rate-limit";
+import { createRateLimiter } from "../rest-limits";
 
 describe("defaultSkipAdminApi", () => {
   it("returns true for admin internal API routes", () => {
@@ -63,79 +44,32 @@ describe("defaultSkipAdminApi", () => {
   });
 });
 
-describe("createRateLimiter — default skip behaviour", () => {
-  it("does not rate-limit /admin/api/* requests by default", async () => {
-    const store = makeStore();
+describe("createRateLimiter and the admin API", () => {
+  const tight = {
+    enabled: true,
+    readLimit: 1,
+    writeLimit: 1,
+    windowMs: 60000,
+    keyGenerator: () => "one-client",
+  };
+  const admin = () =>
+    new Request("http://localhost/admin/api/me", { method: "GET" });
+
+  it("limits /admin/api/* requests by default", async () => {
     const limiter = createRateLimiter({
-      enabled: true,
-      readLimit: 1, // tight cap to make sure we'd 429 otherwise
-      writeLimit: 1,
-      windowMs: 60000,
-      store,
+      ...tight,
+      store: new InMemoryRateLimitStore(),
     });
-
-    // Hit the same admin endpoint many times — all should pass.
-    for (let i = 0; i < 10; i++) {
-      const result = await limiter(
-        new Request("http://localhost/admin/api/me", { method: "GET" })
-      );
-      expect(result).toBeNull();
-    }
-
-    // Critical: the store should NEVER have been touched for skipped
-    // paths. If it was, we'd be paying I/O for nothing AND we'd have
-    // shared a bucket between admin + public.
-    expect(store.increment).not.toHaveBeenCalled();
+    expect(await limiter(admin())).toBeNull();
+    expect((await limiter(admin()))?.status).toBe(429);
   });
 
-  it("still rate-limits public /api/* requests with the same config", async () => {
-    const store = makeStore();
+  it("still exempts them for an app passing defaultSkipAdminApi as skip", async () => {
     const limiter = createRateLimiter({
-      enabled: true,
-      readLimit: 1,
-      writeLimit: 1,
-      windowMs: 60000,
-      store,
+      ...tight,
+      store: new InMemoryRateLimitStore(),
+      skip: defaultSkipAdminApi,
     });
-
-    // First read passes (count === 1, limit === 1).
-    const first = await limiter(
-      new Request("http://localhost/api/collections/posts/entries", {
-        method: "GET",
-      })
-    );
-    expect(first).toBeNull();
-
-    // Bump the store to 2 to simulate the second hit exceeding the cap.
-    (store.increment as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
-      count: 2,
-      resetAt: Date.now() + 60000,
-    });
-    const second = await limiter(
-      new Request("http://localhost/api/collections/posts/entries", {
-        method: "GET",
-      })
-    );
-    expect(second).toBeInstanceOf(Response);
-    expect((second as Response).status).toBe(429);
-  });
-
-  it("respects an explicit `skip: () => false` override (rate-limits admin too)", async () => {
-    const store = makeStore();
-    const limiter = createRateLimiter({
-      enabled: true,
-      readLimit: 1,
-      writeLimit: 1,
-      windowMs: 60000,
-      store,
-      skip: () => false, // user opts in to rate-limiting admin
-    });
-
-    const result = await limiter(
-      new Request("http://localhost/admin/api/me", { method: "GET" })
-    );
-    expect(result).toBeNull();
-    // Store WAS touched this time — caller asked for it.
-    expect(store.increment).toHaveBeenCalledOnce();
+    for (let i = 0; i < 5; i++) expect(await limiter(admin())).toBeNull();
   });
 });

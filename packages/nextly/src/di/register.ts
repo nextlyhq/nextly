@@ -33,6 +33,7 @@ import { authUiProblems } from "../auth/handlers/auth-ui";
 import {
   buildAuthRouterDeps,
   challengeBudgetWarning,
+  readAuthRateLimit,
 } from "../auth/handlers/deps-bridge";
 import {
   edgeProxyWarning,
@@ -183,7 +184,10 @@ import {
   collectPluginRoutes,
   type CollectedRoute,
 } from "../plugins/routes/collect-routes";
-import { rateLimitProxyWarning } from "../plugins/routes/route-options";
+import {
+  rateLimitProxyWarning,
+  unkeyedAuthRouteWarnings,
+} from "../plugins/routes/route-options";
 import { getPluginRouteRegistry } from "../plugins/routes/route-registry";
 import {
   applyPluginSchemaContributionsDeferred,
@@ -4131,6 +4135,12 @@ async function initializePlugins(
     readProxyTrustSettings(() => transformedConfig).trustProxy
   );
   if (proxyWarning) logger.warn?.(proxyWarning);
+  for (const warning of unkeyedAuthRouteWarnings(
+    collectedRoutes,
+    readAuthRateLimit(() => transformedConfig).requestsPerHour > 0
+  )) {
+    logger.warn?.(warning);
+  }
 
   const pluginHookRegistry = hookRegistry ?? getHookRegistry();
 

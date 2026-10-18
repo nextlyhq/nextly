@@ -247,6 +247,29 @@ describe("Integration on request", () => {
   });
 });
 
+describe("a sharded leg", () => {
+  /*
+   * The lane check takes a matrix job that hands the lane its own shard as
+   * calling the lane (scripts/check-test-lanes.mjs). That is true only when
+   * the matrix lists every shard, 1 to n, and none is cancelled because
+   * another failed: then between them the jobs run all of it.
+   */
+  it("runs every shard of the lane it hands out", async () => {
+    const { MATRIX_SHARD } = await import("./check-test-lanes.mjs");
+    const sharded = Object.entries(read(".github/workflows/integration.yml").jobs).filter(([, job]) =>
+      (job.steps ?? []).some(step => String(step.run).includes(MATRIX_SHARD.trim()))
+    );
+    // A floor: the postgres and mysql legs are sharded.
+    expect(sharded.map(([id]) => id).sort()).toEqual(["integration-mysql-shards", "integration-postgres-shards"]);
+    for (const [id, job] of sharded) {
+      const shards = job.strategy?.matrix?.shard;
+      expect(shards, id).toEqual(Array.from({ length: shards.length }, (_, i) => i + 1));
+      expect(shards.length, id).toBeGreaterThanOrEqual(2);
+      expect(job.strategy["fail-fast"], id).toBe(false);
+    }
+  });
+});
+
 describe("the MySQL leg's database", () => {
   /*
    * The core suite commits many small transactions, and MySQL's default

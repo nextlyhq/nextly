@@ -266,7 +266,8 @@ describe("adding a document to a scheduled release", () => {
     expect(publishProblems).toHaveBeenCalledWith(
       expect.objectContaining({ scopeSlug: "posts" }),
       ["e9"],
-      { id: "editor", roles: [] }
+      { id: "editor", roles: [] },
+      "publish"
     );
     expect(repo.addMember).toHaveBeenCalledTimes(1);
   });
