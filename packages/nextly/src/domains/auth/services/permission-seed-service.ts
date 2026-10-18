@@ -44,6 +44,24 @@ interface SystemPermissionDef {
   action: string;
   resource: string;
   description: string;
+  /**
+   * When THIS boot creates the permission, also grant it to every role that
+   * then holds the named one.
+   *
+   * For a permission that splits a power an existing permission used to carry,
+   * so an installation that upgrades keeps every ability it had: the roles that
+   * could do the thing before can still do it after. Applied once, on
+   * creation, and never again. A later boot finds the permission already there
+   * and grants nothing, so a role an administrator has since taken it from
+   * keeps the choice they made. Super-admin receives every new permission
+   * anyway (`assignNewPermissionsToSuperAdmin`); this is for everyone else.
+   *
+   * Not retried. A boot that creates the permission and then fails to write
+   * these grants counts the failure as a seeding error, which the boot logs,
+   * and the grants are left for an administrator to make; a later boot cannot
+   * tell a grant that failed from one that was taken away on purpose.
+   */
+  grantOnCreationToHoldersOf?: { action: string; resource: string };
 }
 
 /**
@@ -284,9 +302,9 @@ const SYSTEM_PERMISSIONS: SystemPermissionDef[] = [
   // that needs holding back. That is the same split the content lifecycle
   // already makes, where `publish` and `unpublish` are distinct from `update`.
   //
-  // `update` and `delete` are deliberately NOT seeded. A permission nothing
-  // enforces teaches the admin a vocabulary the server ignores; they arrive
-  // with the surfaces that check them.
+  // `update` (rename, description) and `delete` (a draft or cancelled release)
+  // follow, each granted on creation to the roles that already held the power
+  // it splits off, so an upgrade neither gives nor takes away anything.
   {
     name: "Read Releases",
     slug: "read-content-releases",
@@ -309,6 +327,38 @@ const SYSTEM_PERMISSIONS: SystemPermissionDef[] = [
     resource: "content-releases",
     description:
       "Permission to schedule or cancel a content release, which is what makes its content go live",
+  },
+  // After `create` and `publish` in this list, so on a fresh install the
+  // permission each is granted alongside already exists when it is created:
+  // there it has no holders yet, and the role presets decide the grants.
+  {
+    name: "Update Releases",
+    slug: "update-content-releases",
+    action: "update",
+    resource: "content-releases",
+    description:
+      "Permission to rename a content release and change its description",
+    // Renaming was part of assembling a release before this permission
+    // existed, so whoever could assemble one keeps the power to rename it.
+    grantOnCreationToHoldersOf: {
+      action: "create",
+      resource: "content-releases",
+    },
+  },
+  {
+    name: "Delete Releases",
+    slug: "delete-content-releases",
+    action: "delete",
+    resource: "content-releases",
+    description:
+      "Permission to delete a draft or cancelled content release; one that is scheduled, stopped or published stays",
+    // Before this permission existed, a release nobody wanted was abandoned
+    // by cancelling it, which `publish` grants; deleting the draft is the
+    // same decision carried further.
+    grantOnCreationToHoldersOf: {
+      action: "publish",
+      resource: "content-releases",
+    },
   },
   // Background jobs. ONE permission, not a CRUD set: the only surface that
   // checks anything today is the trigger that runs a drain pass by hand, and a
@@ -456,6 +506,9 @@ export class PermissionSeedService extends BaseService {
         if (ensureResult.created) {
           result.created++;
           result.newPermissionIds.push(ensureResult.id);
+          if (perm.grantOnCreationToHoldersOf) {
+            await this.grantToHoldersOf(perm, perm.grantOnCreationToHoldersOf);
+          }
         } else {
           result.skipped++;
         }
@@ -465,6 +518,35 @@ export class PermissionSeedService extends BaseService {
     }
 
     return result;
+  }
+
+  /**
+   * Grant `perm` to every role holding the permission `source` names.
+   *
+   * See {@link SystemPermissionDef.grantOnCreationToHoldersOf}: called only
+   * for a permission this boot created, which no role can hold yet.
+   */
+  private async grantToHoldersOf(
+    perm: SystemPermissionDef,
+    source: { action: string; resource: string }
+  ): Promise<void> {
+    const db = this.db as RBACDatabaseInstance;
+    const held = await db.query.permissions.findFirst({
+      where: { action: source.action, resource: source.resource },
+      columns: { id: true },
+    });
+    if (!held) return;
+    const holders = await db.query.rolePermissions.findMany({
+      where: { permissionId: String(held.id) },
+    });
+    for (const { roleId } of holders) {
+      await this.rolePermissionService.addPermissionToRole(String(roleId), {
+        action: perm.action,
+        resource: perm.resource,
+        name: perm.name,
+        slug: perm.slug,
+      });
+    }
   }
 
   /**
