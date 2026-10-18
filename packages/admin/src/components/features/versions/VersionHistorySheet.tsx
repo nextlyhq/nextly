@@ -14,6 +14,7 @@
 import { X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { useSuppressAdminChrome } from "@admin/components/layout/ChromeSuppression";
 import { useReserveSidePanel } from "@admin/components/layout/SidePanelReservation";
 import {
   Alert,
@@ -56,7 +57,7 @@ import { VersionRow } from "./VersionRow";
 const MAX_AUTO_PREVIOUS_PAGES = 3;
 
 /**
- * The panel's width, and the one place it is stated.
+ * The panel's widths, and the one place they are stated.
  *
  * Both the element's own width and the space the layout keeps clear for it are
  * taken from here. Two literals would agree on the day they were written and
@@ -64,18 +65,32 @@ const MAX_AUTO_PREVIOUS_PAGES = 3;
  * silent: the page is indented by one number while the panel occupies another,
  * so a strip of the document is drawn under the panel and its controls stop
  * responding without appearing to have changed.
+ *
+ * History takes the document panel's place beside the editor: 400 wide on a
+ * wide window, and 360 below `PANEL_WIDE_WINDOW`, where the content sidebar
+ * also folds while history is open so the document keeps its room.
  */
-const PANEL_WIDTH = 480;
+const PANEL_WIDTH = 400;
+const PANEL_NARROW_WIDTH = 360;
+
+/** From this window width the panel is at its full width. */
+const PANEL_WIDE_WINDOW = 1200;
 
 /**
- * The narrowest window that can hold the panel BESIDE the document.
- *
- * `PANEL_WIDTH` plus 720, which is what is left for everything else: the
- * navigation rail takes about 256 of it, leaving the document a little over
- * 460 — narrow, and still a document rather than a column of wrapped words.
- * Below this the panel covers the page and is modal instead.
+ * The narrowest window that holds the panel BESIDE the document. Below it the
+ * panel is a page of its own, over the document and modal.
  */
-const PANEL_MIN_WINDOW = PANEL_WIDTH + 720;
+const PANEL_MIN_WINDOW = 1024;
+
+/**
+ * Folds the content sidebar for as long as it is mounted, which is while
+ * history is open beside the document on a window too narrow to hold both
+ * with it. The panel's close control is the way back, so it can exit.
+ */
+function FoldContentSidebar(): null {
+  useSuppressAdminChrome({ layers: ["subSidebar"], canExit: true });
+  return null;
+}
 
 export interface VersionHistorySheetProps {
   open: boolean;
@@ -444,6 +459,8 @@ export function VersionHistorySheet({
    * and then releasing it.
    */
   const roomBeside = useMediaQuery(`(min-width: ${PANEL_MIN_WINDOW}px)`);
+  const wide = useMediaQuery(`(min-width: ${PANEL_WIDE_WINDOW}px)`);
+  const panelWidth = wide ? PANEL_WIDTH : PANEL_NARROW_WIDTH;
 
   /*
    * The claim, and the ONE fact both behaviours below are derived from. A panel
@@ -453,7 +470,7 @@ export function VersionHistorySheet({
    * panel ends up non-modal with nothing having made room for it, which leaves
    * every control underneath it visible, enabled and inert.
    */
-  useReserveSidePanel(open && roomBeside ? PANEL_WIDTH : null);
+  useReserveSidePanel(open && roomBeside ? panelWidth : null);
 
   return (
     // Non-modal WHERE THE LAYOUT MADE ROOM, and that is the point rather than a
@@ -465,174 +482,181 @@ export function VersionHistorySheet({
     // Where the window is too narrow to hold both, modal is the honest state:
     // the panel covers the document either way, and a modal one refuses the
     // clicks it is swallowing instead of accepting them into nothing.
-    <Sheet open={open} onOpenChange={onOpenChange} modal={!roomBeside}>
-      <SheetContent
-        side="right"
-        className="p-0 flex flex-col"
-        // Width from the same constant the reservation is made with, so the
-        // space kept clear cannot drift from the space taken. Capped at the
-        // window because the panel is wider than a phone.
-        style={{ width: `min(${PANEL_WIDTH}px, 100vw)`, maxWidth: "100vw" }}
-        // A non-modal surface closes on outside interaction by default, which
-        // would make the document unusable while history is open: the first
-        // click into the page it now leaves interactive would dismiss the
-        // panel. Closing stays with the explicit controls and Escape. A modal
-        // panel keeps the default, which is what a drawer over a page should
-        // do.
-        {...(roomBeside
-          ? { onInteractOutside: (event: Event) => event.preventDefault() }
-          : {})}
-      >
-        <SheetHeader className="p-4 border-b border-border">
-          <div className="flex items-center justify-between gap-2">
-            <SheetTitle>
-              {selected === null ? "History" : `Version ${selected}`}
-            </SheetTitle>
-            {/* Locale filter, only while browsing the list (a chosen version is
+    <>
+      {open && roomBeside && !wide ? <FoldContentSidebar /> : null}
+      <Sheet open={open} onOpenChange={onOpenChange} modal={!roomBeside}>
+        <SheetContent
+          side="right"
+          className="p-0 flex flex-col"
+          // Width from the same constant the reservation is made with, so the
+          // space kept clear cannot drift from the space taken. Capped at the
+          // window because the panel is wider than a phone.
+          // Beside the document, the width reserved for it; below that, a page
+          // of its own across the window.
+          style={{
+            width: roomBeside ? `${panelWidth}px` : "100vw",
+            maxWidth: "100vw",
+          }}
+          // A non-modal surface closes on outside interaction by default, which
+          // would make the document unusable while history is open: the first
+          // click into the page it now leaves interactive would dismiss the
+          // panel. Closing stays with the explicit controls and Escape. A modal
+          // panel keeps the default, which is what a drawer over a page should
+          // do.
+          {...(roomBeside
+            ? { onInteractOutside: (event: Event) => event.preventDefault() }
+            : {})}
+        >
+          <SheetHeader className="p-4 border-b border-border">
+            <div className="flex items-center justify-between gap-2">
+              <SheetTitle>
+                {selected === null ? "History" : `Version ${selected}`}
+              </SheetTitle>
+              {/* Locale filter, only while browsing the list (a chosen version is
                 already locale-fixed) and only for a document whose own history
                 carries locales — so it never appears on a non-localized
                 document in an otherwise localized app. */}
-            <div className="flex items-center gap-1">
-              {selected === null && isLocalizedDocument && (
-                <VersionLocaleFilter
-                  value={localeFilter}
-                  onChange={locale => {
-                    // Changing the visible locale set can drop the previewed
-                    // version out of view, so return to the list.
-                    setLocaleFilter(locale);
-                    setSelected(null);
-                  }}
-                />
-              )}
-              {/* The sheet primitive renders no close icon of its own, so the
+              <div className="flex items-center gap-1">
+                {selected === null && isLocalizedDocument && (
+                  <VersionLocaleFilter
+                    value={localeFilter}
+                    onChange={locale => {
+                      // Changing the visible locale set can drop the previewed
+                      // version out of view, so return to the list.
+                      setLocaleFilter(locale);
+                      setSelected(null);
+                    }}
+                  />
+                )}
+                {/* The sheet primitive renders no close icon of its own, so the
                   panel supplies one. It sits beside the title rather than in
                   the footer because the footer's action row gains the compare
                   controls once a version is selected and wraps at this width,
                   which carried the only exit off-screen. */}
-              <SheetClose asChild>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="h-8 w-8 shrink-0 p-0"
-                  aria-label="Close"
-                >
-                  <X className="h-4 w-4" />
-                </Button>
-              </SheetClose>
+                <SheetClose asChild>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-8 w-8 shrink-0 p-0"
+                    aria-label="Close"
+                  >
+                    <X className="h-4 w-4" />
+                  </Button>
+                </SheetClose>
+              </div>
             </div>
-          </div>
-          <SheetDescription className="sr-only">
-            Past versions of this document, newest first.
-          </SheetDescription>
-        </SheetHeader>
+            <SheetDescription className="sr-only">
+              Past versions of this document, newest first.
+            </SheetDescription>
+          </SheetHeader>
 
-        {/* A head revalidation (on open or window focus) can fail after history
+          {/* A head revalidation (on open or window focus) can fail after history
             has already loaded. The rows stay on screen but may be stale, so the
             freshness gate hides "Compare with current" and disables "Load more"
             until a refetch succeeds — which, without this, only a reopen or
             another window focus could trigger. This keeps the gate but gives the
             recovery a visible control. Suppressed when there are no rows, since
             the full-panel load error covers that. */}
-        {isRefetchError && versions.length > 0 ? (
-          <div className="px-4 pt-4">
-            <Alert variant="warning" role="status">
-              <div className="flex flex-1 flex-wrap items-center justify-between gap-3">
-                <AlertDescription>
-                  Couldn&apos;t refresh this history. It may be out of date.
-                </AlertDescription>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  // Disabled while a retry is in flight; the same refetch also
-                  // fires from window focus, so this reflects either trigger.
-                  disabled={isRefetching}
-                  onClick={() => void list.refetch()}
-                >
-                  {isRefetching ? "Retrying…" : "Try again"}
-                </Button>
-              </div>
-            </Alert>
-          </div>
-        ) : null}
+          {isRefetchError && versions.length > 0 ? (
+            <div className="px-4 pt-4">
+              <Alert variant="warning" role="status">
+                <div className="flex flex-1 flex-wrap items-center justify-between gap-3">
+                  <AlertDescription>
+                    Couldn&apos;t refresh this history. It may be out of date.
+                  </AlertDescription>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    // Disabled while a retry is in flight; the same refetch also
+                    // fires from window focus, so this reflects either trigger.
+                    disabled={isRefetching}
+                    onClick={() => void list.refetch()}
+                  >
+                    {isRefetching ? "Retrying…" : "Try again"}
+                  </Button>
+                </div>
+              </Alert>
+            </div>
+          ) : null}
 
-        {/* The panel is a timeline: the list stays on screen and the chosen
+          {/* The panel is a timeline: the list stays on screen and the chosen
             version is rendered in the DOCUMENT rather than in here. Previewing
             inside a 480px panel was always the compromise — the question an
             editor is asking is how the page read then, and only the page can
             answer it. */}
-        <div className="flex-1 overflow-y-auto">
-          {list.isLoading ? (
-            <ListSkeleton />
-          ) : list.isError && versions.length === 0 ? (
-            // Only a genuine load failure (no pages) replaces the panel. A failed
-            // speculative next-page (from the automatic previous-version search)
-            // also flips the query to error, but the loaded history stays on
-            // screen; its "Load more" control offers the retry.
-            <div className="p-4 flex flex-col gap-3">
-              <Alert variant="destructive">
-                <AlertDescription>
-                  This document&apos;s history could not be loaded.
-                </AlertDescription>
-              </Alert>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => void list.refetch()}
-              >
-                Try again
-              </Button>
-            </div>
-          ) : isEmpty ? (
-            <div className="px-4 py-8 text-center">
-              {/* A heading rather than a paragraph: when the panel is empty
+          <div className="flex-1 overflow-y-auto">
+            {list.isLoading ? (
+              <ListSkeleton />
+            ) : list.isError && versions.length === 0 ? (
+              // Only a genuine load failure (no pages) replaces the panel. A failed
+              // speculative next-page (from the automatic previous-version search)
+              // also flips the query to error, but the loaded history stays on
+              // screen; its "Load more" control offers the retry.
+              <div className="p-4 flex flex-col gap-3">
+                <Alert variant="destructive">
+                  <AlertDescription>
+                    This document&apos;s history could not be loaded.
+                  </AlertDescription>
+                </Alert>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => void list.refetch()}
+                >
+                  Try again
+                </Button>
+              </div>
+            ) : isEmpty ? (
+              <div className="px-4 py-8 text-center">
+                {/* A heading rather than a paragraph: when the panel is empty
                   this is the only content in it, and a paragraph gives
                   assistive technology nothing to land on. `h3` because the
                   panel's own title is the heading above it. */}
-              <h3 className="text-base font-semibold text-foreground">
-                No versions yet
-              </h3>
-              <p className="mt-1 text-sm text-muted-foreground">
-                Saving this document will record its first version.
-              </p>
-            </div>
-          ) : (
-            <>
-              {versions.map(version => (
-                <VersionRow
-                  key={version.id}
-                  version={version}
-                  active={selected === version.versionNo}
-                  onSelect={setSelected}
-                  // Renaming writes to the document's history, which needs the
-                  // same permission restoring does. Offering it to a read-only
-                  // caller would open a dialog whose save the route rejects.
-                  onRename={canRestore ? setRenaming : undefined}
-                />
-              ))}
+                <h3 className="text-base font-semibold text-foreground">
+                  No versions yet
+                </h3>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Saving this document will record its first version.
+                </p>
+              </div>
+            ) : (
+              <>
+                {versions.map(version => (
+                  <VersionRow
+                    key={version.id}
+                    version={version}
+                    active={selected === version.versionNo}
+                    onSelect={setSelected}
+                    // Renaming writes to the document's history, which needs the
+                    // same permission restoring does. Offering it to a read-only
+                    // caller would open a dialog whose save the route rejects.
+                    onRename={canRestore ? setRenaming : undefined}
+                  />
+                ))}
 
-              {hasNextPage ? (
-                <div className="p-4">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className="w-full"
-                    // Disabled while the head is revalidating or its revalidation
-                    // failed: `fetchNextPage` would otherwise cancel the refetch
-                    // or clear the error, leaving a stale head trusted as current.
-                    disabled={
-                      isFetchingNextPage || isRefetching || isRefetchError
-                    }
-                    onClick={() => void fetchNextPage()}
-                  >
-                    {isFetchingNextPage ? "Loading…" : "Load more"}
-                  </Button>
-                </div>
-              ) : null}
-            </>
-          )}
-        </div>
+                {hasNextPage ? (
+                  <div className="p-4">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="w-full"
+                      // Disabled while the head is revalidating or its revalidation
+                      // failed: `fetchNextPage` would otherwise cancel the refetch
+                      // or clear the error, leaving a stale head trusted as current.
+                      disabled={
+                        isFetchingNextPage || isRefetching || isRefetchError
+                      }
+                      onClick={() => void fetchNextPage()}
+                    >
+                      {isFetchingNextPage ? "Loading…" : "Load more"}
+                    </Button>
+                  </div>
+                ) : null}
+              </>
+            )}
+          </div>
 
-        {/* The action row exists only while a version is selected. Rendering it
+          {/* The action row exists only while a version is selected. Rendering it
             unconditionally left an empty bordered strip below the list once the
             close control moved to the header, since these actions are the only
             other thing it ever held.
@@ -646,93 +670,94 @@ export function VersionHistorySheet({
             on the wrapped line, against the panel edge, where the viewport
             clipped it. With the exit in the header, a second line costs
             nothing. */}
-        {selected !== null ? (
-          <div className="p-4 border-t border-border flex flex-wrap items-center gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setSelected(null)}
-            >
-              Back to history
-            </Button>
-            {/* The full comparison, on a page of its own, from the version
-                already chosen against the one before it: its address names
-                the pair so it can be shared. */}
-            {/* Only offered once the pair it would open is known. Omitting the
-                pair does not open "this version with nothing"; the destination
-                reads an absent pair as the two NEWEST versions, so the control
-                would silently show a comparison the reader did not ask for. */}
-            {canComparePrevious && previousVersionNo !== null ? (
+          {selected !== null ? (
+            <div className="p-4 border-t border-border flex flex-wrap items-center gap-2">
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() =>
-                  navigateTo(
-                    versionsHref(
-                      scope,
-                      { from: previousVersionNo, to: selected },
-                      // The SELECTED version's language, not the sheet's
-                      // filter: the filter says which rows are listed, while
-                      // this says which text the pair being opened actually
-                      // holds — and that is what the destination must name the
-                      // document in.
-                      versions.find(v => v.versionNo === selected)?.locale
-                    )
-                  )
-                }
+                onClick={() => setSelected(null)}
               >
-                Open full comparison
+                Back to history
               </Button>
-            ) : null}
-            {/* Restoring is offered in the BANNER over the version being
+              {/* The full comparison, on a page of its own, from the version
+                already chosen against the one before it: its address names
+                the pair so it can be shared. */}
+              {/* Only offered once the pair it would open is known. Omitting the
+                pair does not open "this version with nothing"; the destination
+                reads an absent pair as the two NEWEST versions, so the control
+                would silently show a comparison the reader did not ask for. */}
+              {canComparePrevious && previousVersionNo !== null ? (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() =>
+                    navigateTo(
+                      versionsHref(
+                        scope,
+                        { from: previousVersionNo, to: selected },
+                        // The SELECTED version's language, not the sheet's
+                        // filter: the filter says which rows are listed, while
+                        // this says which text the pair being opened actually
+                        // holds — and that is what the destination must name the
+                        // document in.
+                        versions.find(v => v.versionNo === selected)?.locale
+                      )
+                    )
+                  }
+                >
+                  Open full comparison
+                </Button>
+              ) : null}
+              {/* Restoring is offered in the BANNER over the version being
                   read, not here. The panel only ever offered it while a
                   version was selected, which is exactly when the banner is on
                   screen — so a button here would be a second control with the
                   same label, and the further one from what it acts on. This
                   component still owns the mutation and its confirmation; the
                   banner holds the trigger. */}
-          </div>
-        ) : null}
-      </SheetContent>
+            </div>
+          ) : null}
+        </SheetContent>
 
-      {/* Rendered inside the sheet but outside its content, so its own portal
+        {/* Rendered inside the sheet but outside its content, so its own portal
           is independent of the panel's. */}
-      {selected !== null ? (
-        <RestoreConfirmDialog
-          open={confirmingRestore}
-          onOpenChange={setConfirmingRestore}
-          versionNo={selected}
-          isPublished={liveStatus === "published"}
-          unsavedChanges={liveDirty}
-          confirmDisabled={restoreRefused}
-          isRestoring={restore.isPending}
-          // Re-checked at confirm time: the banner trigger can vanish while
-          // the dialog is open (a claim arriving mid-dialog), and an open
-          // dialog must not restore past a refusal that arrived after it.
-          onConfirm={() => {
-            if (canRestore && !restoreRefused) restore.mutate(selected);
-          }}
-        />
-      ) : null}
+        {selected !== null ? (
+          <RestoreConfirmDialog
+            open={confirmingRestore}
+            onOpenChange={setConfirmingRestore}
+            versionNo={selected}
+            isPublished={liveStatus === "published"}
+            unsavedChanges={liveDirty}
+            confirmDisabled={restoreRefused}
+            isRestoring={restore.isPending}
+            // Re-checked at confirm time: the banner trigger can vanish while
+            // the dialog is open (a claim arriving mid-dialog), and an open
+            // dialog must not restore past a refusal that arrived after it.
+            onConfirm={() => {
+              if (canRestore && !restoreRefused) restore.mutate(selected);
+            }}
+          />
+        ) : null}
 
-      {/* Mounted on the same terms as the restore dialog: outside the panel
+        {/* Mounted on the same terms as the restore dialog: outside the panel
           body so its lifecycle is independent of the panel's. */}
-      {renaming !== null ? (
-        <VersionLabelDialog
-          // A fresh dialog per version: the input seeds from its initial props
-          // and never resyncs, so a new version needs a new instance rather
-          // than an effect that would also clobber an in-progress edit.
-          key={renaming}
-          open
-          onOpenChange={open => {
-            if (!open) setRenaming(null);
-          }}
-          versionNo={renaming}
-          currentLabel={renamingVersion?.label ?? null}
-          saving={setLabel.isPending}
-          onSubmit={label => setLabel.mutate({ versionNo: renaming, label })}
-        />
-      ) : null}
-    </Sheet>
+        {renaming !== null ? (
+          <VersionLabelDialog
+            // A fresh dialog per version: the input seeds from its initial props
+            // and never resyncs, so a new version needs a new instance rather
+            // than an effect that would also clobber an in-progress edit.
+            key={renaming}
+            open
+            onOpenChange={open => {
+              if (!open) setRenaming(null);
+            }}
+            versionNo={renaming}
+            currentLabel={renamingVersion?.label ?? null}
+            saving={setLabel.isPending}
+            onSubmit={label => setLabel.mutate({ versionNo: renaming, label })}
+          />
+        ) : null}
+      </Sheet>
+    </>
   );
 }

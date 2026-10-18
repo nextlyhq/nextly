@@ -749,8 +749,9 @@ export function EntrySystemHeader({
             />
 
             {/* Rail toggle — far right, separated by a thin divider. Not on a
-              narrow screen, where the panel is a page rather than beside. */}
-            {onToggleRail && (
+              narrow screen, where the panel is a page rather than beside, and
+              not while history is open, which takes the panel's place. */}
+            {onToggleRail && !historyOpen && (
               <>
                 <span
                   className={cn("w-px h-5 bg-border mx-1", WIDE_ONLY)}

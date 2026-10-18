@@ -82,6 +82,7 @@ import { PublicUrlChangeNotice } from "./PublicUrlChangeNotice";
 import { UnsavedChangesGuard } from "./UnsavedChangesGuard";
 import { UnsavedWorkProvider, useFormUnsavedWork } from "./UnsavedWorkContext";
 import { useDocumentLockSurface } from "./useDocumentLockSurface";
+import { useDocumentPanelCollapsed } from "./useDocumentPanelCollapsed";
 import {
   useEntryForm,
   getCollectionFields,
@@ -90,7 +91,6 @@ import {
   type EntryData,
   type EntryFormMode,
 } from "./useEntryForm";
-import { useRailCollapsed } from "./useRailCollapsed";
 
 // ============================================================================
 // Types
@@ -455,7 +455,10 @@ export function EntryForm({
   // Rail collapse state. Toggle lives in EntrySystemHeader; the rail itself
   // reads `railCollapsed` to decide whether to render. Persisted in
   // localStorage so the choice survives reloads.
-  const { collapsed: railCollapsed, toggle: toggleRail } = useRailCollapsed();
+  // Out of the way when the author collapsed it, and while history is open,
+  // which takes its place.
+  const { collapsed: railCollapsed, toggle: toggleRail } =
+    useDocumentPanelCollapsed();
   // Which past version the document area is showing, the context value that
   // publishes it to the panel, and the version's own body layout — held by the
   // shared host so the Single editor answers the panel identically.

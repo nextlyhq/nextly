@@ -238,4 +238,30 @@ describe("the editor header", () => {
     await user.click(copy);
     expect(onCopyLink).toHaveBeenCalledTimes(1);
   });
+
+  it("draws no panel toggle while history is open, since history takes the panel's place", () => {
+    window.history.replaceState(
+      null,
+      "",
+      "/admin/collections/posts/e1?history=1"
+    );
+    try {
+      render(<Harness state={STATES[1]!} />);
+      // `hidden`, because the open panel may withdraw the page behind it from
+      // the accessibility tree: the toggle must be absent, not merely hidden.
+      expect(
+        screen.queryByRole("button", {
+          name: /^(show|hide) rail$/i,
+          hidden: true,
+        })
+      ).not.toBeInTheDocument();
+    } finally {
+      window.history.replaceState(null, "", "/");
+    }
+    // The control: without history open the toggle is there.
+    render(<Harness state={STATES[1]!} />);
+    expect(
+      screen.getByRole("button", { name: /^(show|hide) rail$/i })
+    ).toBeInTheDocument();
+  });
 });

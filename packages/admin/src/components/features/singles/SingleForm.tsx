@@ -53,12 +53,12 @@ import {
   useFormUnsavedWork,
 } from "@admin/components/features/entries/EntryForm/UnsavedWorkContext";
 import { useDocumentLockSurface } from "@admin/components/features/entries/EntryForm/useDocumentLockSurface";
+import { useDocumentPanelCollapsed } from "@admin/components/features/entries/EntryForm/useDocumentPanelCollapsed";
 import {
   mapIntentToPayload,
   passwordFieldNames,
   type EntryFormIntent,
 } from "@admin/components/features/entries/EntryForm/useEntryForm";
-import { useRailCollapsed } from "@admin/components/features/entries/EntryForm/useRailCollapsed";
 import { EntryLocaleProvider } from "@admin/components/features/entries/EntryLocaleContext";
 import { LanguagePanel } from "@admin/components/features/entries/LanguagePanel";
 import { PreviewPanes } from "@admin/components/features/entries/PreviewMode/PreviewPanes";
@@ -680,7 +680,10 @@ export function SingleForm({
 
   // Rail collapse pref (shared with collection EntryForm via the same
   // localStorage key).
-  const { collapsed: railCollapsed, toggle: toggleRail } = useRailCollapsed();
+  // Out of the way when the author collapsed it (shared with the collection
+  // editor), and while history is open, which takes its place.
+  const { collapsed: railCollapsed, toggle: toggleRail } =
+    useDocumentPanelCollapsed();
 
   // i18n: per-locale writing direction (RTL) + the app default locale, for the content-locale
   // context passed to field components and the language pills. Inert for non-localized singles.
