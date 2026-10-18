@@ -59,6 +59,7 @@ import type { AccountState } from "../session/account-state";
 import type { SessionRoles } from "../session/session-roles";
 import { claimFirstSetup, sharedRecordReader } from "../setup-token/setup-gate";
 import {
+  readSetupTokenRecord,
   spendSetupToken,
   verifySetupToken,
   type SetupTokenMeta,
@@ -792,6 +793,11 @@ function setupTokenDeps(
     required: isProduction,
     verify: presented =>
       verifySetupToken({ presented, readRecord: sharedRecordReader(meta()) }),
+    confirm: presented =>
+      verifySetupToken({
+        presented,
+        readRecord: () => readSetupTokenRecord(meta()),
+      }),
     spend: () => spendSetupToken(meta()),
     claim: () => claimFirstSetup(meta()),
   };

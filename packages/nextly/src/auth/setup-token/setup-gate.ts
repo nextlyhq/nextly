@@ -21,6 +21,9 @@ import {
 /** The `nextly_meta` key a setup in progress holds. */
 export const SETUP_CLAIM_META_KEY = "auth.setup-claim";
 
+/** The value Next.js gives `NEXT_PHASE` while `next build` runs. */
+const NEXT_PRODUCTION_BUILD_PHASE = "phase-production-build";
+
 /**
  * How long a claim stands before another setup may take it over: a setup that
  * stopped between claiming and finishing must not close setup for good.
@@ -117,6 +120,13 @@ export async function issueSetupTokenAtBoot(input: {
   env?: Readonly<Record<string, string | undefined>>;
 }): Promise<void> {
   const { logger } = input;
+  // `next build` boots the app to prerender, with NODE_ENV set to production.
+  // A token issued there would be stored, and its only copy printed into the
+  // build's output; the server that later serves setup would find it already
+  // issued and print nothing. Only a server that serves setup issues one.
+  if ((input.env ?? process.env).NEXT_PHASE === NEXT_PRODUCTION_BUILD_PHASE) {
+    return;
+  }
   try {
     const outcome = await ensureSetupTokenAtBoot(input);
     switch (outcome.kind) {

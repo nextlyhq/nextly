@@ -12,6 +12,7 @@ import {
 import {
   SETUP_TOKEN_ENV,
   SETUP_TOKEN_LOG_PREFIX,
+  SETUP_TOKEN_META_KEY,
   type SetupTokenMeta,
 } from "../setup-token";
 
@@ -63,6 +64,22 @@ describe("the setup claim", () => {
 
 describe("what a production start says", () => {
   const logger = () => ({ warn: vi.fn(), info: vi.fn() });
+
+  it("issues and prints nothing while `next build` prerenders", async () => {
+    const log = logger();
+    const meta = memoryMeta();
+    await issueSetupTokenAtBoot({
+      meta,
+      hasAdministrator: async () => false,
+      logger: log,
+      env: { NEXT_PHASE: "phase-production-build" },
+    });
+    expect(log.warn).not.toHaveBeenCalled();
+    expect(log.info).not.toHaveBeenCalled();
+    expect(await meta.getEntry(SETUP_TOKEN_META_KEY)).toEqual({
+      present: false,
+    });
+  });
 
   it("prints a new token as a warning, so it shows in every host's logs", async () => {
     const log = logger();

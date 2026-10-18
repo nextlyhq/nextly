@@ -72,6 +72,7 @@ function makeStubDeps(
     setupToken: {
       required: false,
       verify: unreachable as never,
+      confirm: unreachable as never,
       spend: unreachable as never,
       claim: unreachable as never,
     },

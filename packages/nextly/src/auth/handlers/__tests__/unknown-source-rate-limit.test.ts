@@ -760,6 +760,7 @@ describe("setup with its token", () => {
     h.deps.setupToken = {
       required: true,
       verify: async presented => (presented === VALID ? "valid" : "invalid"),
+      confirm: async presented => (presented === VALID ? "valid" : "invalid"),
       spend: async () => {},
       claim: async () => ({ release: async () => {} }),
     };
