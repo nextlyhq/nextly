@@ -25,6 +25,7 @@ import {
 import type { TransactionContext } from "@nextlyhq/adapter-drizzle/types";
 
 import { UserMutationService } from "../../users/services/user-mutation-service";
+import { HistoryDividers } from "../history-dividers";
 import { VISIT_GAP_MS, readLastLookedAt } from "../version-views";
 import { VersionsRepository } from "../versions-repository";
 
@@ -537,6 +538,47 @@ describe.each(getConfiguredTestDialects())(
           page.meta.hasNext && last?.versionNo ? last.versionNo : undefined;
       } while (cursor !== undefined);
       expect(marked).toEqual([1]);
+    });
+
+    it("finds each part's divider below its own version, whatever the other parts looked at", async () => {
+      // v1 en, v2 es, v3 en, v4 es, v5 en, v6 es.
+      const doc = await documentWithHistory(dialect, [
+        "en",
+        "es",
+        "en",
+        "es",
+        "en",
+        "es",
+      ]);
+      // Retention removed v3, the version looked at in English.
+      await current!.adapter.delete("nextly_versions", {
+        and: [
+          { column: "entryId", op: "=", value: doc.entryId },
+          { column: "versionNo", op: "=", value: 3 },
+        ],
+      });
+      const dividers = await new HistoryDividers(
+        current!.adapter as unknown as ConstructorParameters<
+          typeof HistoryDividers
+        >[0],
+        silentLogger
+      ).nearestKeptByPart(
+        doc.ref,
+        new Map<string | null, number>([
+          ["en", 3],
+          ["es", 6],
+          // A part with no version at or below the one looked at has none.
+          [null, 4],
+        ])
+      );
+      // English falls back to v1, not to v5, which is past where they looked
+      // in English though below where they looked in Spanish.
+      expect(dividers).toEqual(
+        new Map<string | null, number>([
+          ["en", 1],
+          ["es", 6],
+        ])
+      );
     });
 
     it.skipIf(dialect === "sqlite")(

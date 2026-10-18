@@ -781,34 +781,6 @@ export class VersionsRepository {
     return rows.length === 0 ? undefined : (rows[0]?.locale ?? null);
   }
 
-  /**
-   * The newest durable version of one part at or below `versionNo`: that
-   * version, or the nearest older one still kept when retention removed it.
-   * Undefined when the part keeps none.
-   */
-  async findNearestKeptInPart(
-    ref: VersionRef,
-    locale: string | null,
-    versionNo: number
-  ): Promise<number | undefined> {
-    const rows = await this.db.select<{ versionNo: number }>(TABLE, {
-      columns: ["versionNo"],
-      where: {
-        and: [
-          ...this.docWhere(ref),
-          { column: "isAutosave", op: "=", value: false },
-          { column: "versionNo", op: "<=", value: versionNo },
-          locale === null
-            ? { column: "locale", op: "IS NULL" }
-            : { column: "locale", op: "=", value: locale },
-        ],
-      },
-      orderBy: [{ column: "versionNo", direction: "desc" }],
-      limit: 1,
-    });
-    return rows[0]?.versionNo;
-  }
-
   /** Fetch one durable version by its number, snapshot included. */
   async findByVersionNo(
     ref: VersionRef,
