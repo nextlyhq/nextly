@@ -2534,44 +2534,17 @@ export class CollectionRelationshipService extends BaseService {
       );
       return resultMap;
     }
-    const junctionTableName = this.getJunctionTableName(
-      sourceCollectionName,
-      targetCollectionName,
-      field
-    );
 
     try {
-      const sourceIdCol = sql.identifier(sourceCollectionName + "_id");
-      const targetIdCol = sql.identifier(targetCollectionName + "_id");
-
-      // Batch query junction table for all source entries
-      // Build MySQL-compatible IN clause with proper parameterization
-      const sourcePlaceholders = sql.join(
-        sourceEntryIds.map(id => sql`${id}`),
-        sql.raw(", ")
+      // The junction's stored ids, through the one junction read.
+      const groupedRelations = await this.fetchManyToManyTargetIdsOf(
+        sourceCollectionName,
+        sourceEntryIds,
+        field
       );
 
-      const junctionQuery = sql`
-        SELECT ${sourceIdCol} as source_id, ${targetIdCol} as target_id
-        FROM ${sql.identifier(junctionTableName)}
-        WHERE ${sourceIdCol} IN (${sourcePlaceholders})
-      `;
-
-      const junctionResults = (await this.selectRawSql(junctionQuery)) as {
-        rows: Array<{ source_id: string; target_id: string }>;
-      };
-
-      // Group by source_id
-      const groupedRelations: Record<string, string[]> = {};
-      for (const row of junctionResults.rows) {
-        if (!groupedRelations[row.source_id]) {
-          groupedRelations[row.source_id] = [];
-        }
-        groupedRelations[row.source_id].push(row.target_id);
-      }
-
       // Get all unique target IDs
-      const allTargetIds = [...new Set(Object.values(groupedRelations).flat())];
+      const allTargetIds = [...new Set([...groupedRelations.values()].flat())];
 
       if (allTargetIds.length === 0) {
         // Initialize empty arrays for all source entries
@@ -2603,7 +2576,7 @@ export class CollectionRelationshipService extends BaseService {
 
       // Map results back to source entries
       for (const sourceId of sourceEntryIds) {
-        const targetIds = groupedRelations[sourceId] || [];
+        const targetIds = groupedRelations.get(sourceId) ?? [];
         resultMap.set(
           sourceId,
           targetIds.map(id => targetEntryMap.get(id)).filter(Boolean) as Record<
@@ -4110,8 +4083,8 @@ export class CollectionRelationshipService extends BaseService {
    * @param sourceEntryId - ID of the source entry
    * @param field - Field definition
    * @param executor - Transaction-bound executor to read the junction on
-   * @returns The related target ids (empty on any read failure — the caller that
-   *   requires completeness fails the write itself)
+   * @returns The related target ids. A failed read throws, so a caller that
+   *   requires completeness never mistakes it for an empty relationship.
    */
   async fetchManyToManyTargetIds(
     sourceCollectionName: string,
@@ -4119,12 +4092,42 @@ export class CollectionRelationshipService extends BaseService {
     field: FieldDefinition,
     executor?: RelationshipDbExecutor
   ): Promise<string[]> {
+    const byEntry = await this.fetchManyToManyTargetIdsOf(
+      sourceCollectionName,
+      [sourceEntryId],
+      field,
+      executor
+    );
+    return byEntry.get(sourceEntryId) ?? [];
+  }
+
+  /**
+   * {@link fetchManyToManyTargetIds} for many source entries in one junction
+   * query, keyed by source id: every stored id, whatever its target's status or
+   * whether the target is still there, and an entry with none keyed to `[]`.
+   * A failed read throws rather than reading as empty.
+   *
+   * @param sourceCollectionName - Name of the source collection
+   * @param sourceEntryIds - IDs of the source entries
+   * @param field - Field definition
+   * @param executor - Transaction-bound executor to read the junction on
+   */
+  async fetchManyToManyTargetIdsOf(
+    sourceCollectionName: string,
+    sourceEntryIds: readonly string[],
+    field: FieldDefinition,
+    executor?: RelationshipDbExecutor
+  ): Promise<Map<string, string[]>> {
+    const byEntry = new Map<string, string[]>(
+      sourceEntryIds.map(id => [id, []])
+    );
+    if (sourceEntryIds.length === 0) return byEntry;
     const targetCollectionName = getTargetCollection(field);
     if (!targetCollectionName) {
       console.error(
         `[CollectionRelationshipService] fetchManyToManyTargetIds: cannot determine target for field "${field.name}".`
       );
-      return [];
+      return byEntry;
     }
     const junctionTableName = this.getJunctionTableName(
       sourceCollectionName,
@@ -4134,15 +4137,21 @@ export class CollectionRelationshipService extends BaseService {
     const sourceIdCol = sql.identifier(sourceCollectionName + "_id");
     const targetIdCol = sql.identifier(targetCollectionName + "_id");
     const junctionQuery = sql`
-      SELECT ${targetIdCol} as target_id
+      SELECT ${sourceIdCol} as source_id, ${targetIdCol} as target_id
       FROM ${sql.identifier(junctionTableName)}
-      WHERE ${sourceIdCol} = ${sourceEntryId}
+      WHERE ${sourceIdCol} IN (${sql.join(
+        sourceEntryIds.map(id => sql`${id}`),
+        sql.raw(", ")
+      )})
     `;
     const junctionResults = (await this.selectRawSql(
       junctionQuery,
       executor
-    )) as { rows: Array<{ target_id: string }> };
-    return junctionResults.rows.map(row => row.target_id);
+    )) as { rows: Array<{ source_id: string; target_id: string }> };
+    for (const row of junctionResults.rows) {
+      byEntry.get(String(row.source_id))?.push(row.target_id);
+    }
+    return byEntry;
   }
 
   /**

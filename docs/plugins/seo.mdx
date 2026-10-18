@@ -181,11 +181,10 @@ set that cannot reach the cap: if it produces fewer than 50,000 URLs and stays u
 50 MB, then every row of every collection is read on **every request**, however many rows
 that is.
 
-Nextly's rate limiter skips paths beginning `/admin/api/` through `defaultSkipAdminApi`,
-which is exactly where the scaffold mounts plugin routes, so on a default install this
-public endpoint is exempt out of the box. A handler mounted anywhere else goes through the
-ordinary read limiter, so this is about the scaffolded layout rather than about the
-plugin. With no `baseUrl` set the response is `no-store`, so nothing in front absorbs the
+Nextly's REST rate limit bounds how often one client can ask: each anonymous request
+spends its address's read budget (100 a minute by default), or, with no resolvable
+address, a ceiling shared by all such requests. It bounds the repeats, not what each one
+costs. With no `baseUrl` set the response is `no-store`, so nothing in front absorbs the
 repeats either.
 
 Three things that each help, in the order they are worth doing:
