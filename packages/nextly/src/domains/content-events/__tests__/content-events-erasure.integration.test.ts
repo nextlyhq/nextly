@@ -28,7 +28,8 @@ import { reportPrincipalDeleted } from "../../audit/erase-principal";
 import { UserMutationService } from "../../users/services/user-mutation-service";
 import type { ContentEventActor } from "../actor";
 import { registerContentEventKind, resetContentEventKinds } from "../kinds";
-import { recordContentEvent } from "../record";
+
+import { recordAsACaller } from "./record-as-a-caller";
 
 const silentLogger = {
   debug: () => undefined,
@@ -73,12 +74,15 @@ async function setup(dialect: (typeof dialects)[number]) {
     });
   }
   const record = (actor: ContentEventActor) =>
-    current!.adapter.transaction(tx =>
-      recordContentEvent(tx as never, {
+    recordAsACaller(
+      current!,
+      dialect,
+      {
         subject: { kind: "collection", slug: "posts", id: "e1" },
         kind: "saved",
         actor,
-      })
+      },
+      [SECRET]
     );
   const rows = async () =>
     (await current!.adapter.select<Row>("nextly_content_events"))
@@ -162,6 +166,33 @@ describe.each(dialects)(
         actorPrincipalKind: "shop:customer",
         actorName: "Lee",
       });
+    }, 120_000);
+
+    it("writes an event by a person reported deleted already erased, naming them by digest", async () => {
+      const t = await setup(dialect);
+      await reportPrincipalDeleted(
+        { kind: "shop:customer", id: "kim@example.com" },
+        { adapter: current!.adapter as never, secrets: [SECRET] }
+      );
+
+      await t.record({
+        kind: "principal",
+        principalKind: "shop:customer",
+        id: "kim@example.com",
+        name: "Kim",
+      });
+
+      const [kept] = await current!.adapter.select<{ digest: string }>(
+        "nextly_deleted_principals"
+      );
+      expect(await t.rows()).toEqual([
+        {
+          actorKind: "principal",
+          actorId: kept?.digest,
+          actorPrincipalKind: "shop:customer",
+          actorName: null,
+        },
+      ]);
     }, 120_000);
   }
 );

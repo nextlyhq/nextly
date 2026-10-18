@@ -3,8 +3,6 @@ title: API stability
 description: What's stable vs experimental in the plugin API, the semver guarantee that backs it, and the deprecation policy.
 ---
 
-> **Parts of this page need the release after 0.0.2-alpha.66:** the service facades, `PluginCollectionTransaction`, the typed `ctx.db` and its types, `ctx.dialect`, `ctx.config`, `onInstall`/`onUninstall`, `contributes.transforms`, `ctx.db.contributed`, `pluginConsent`, and the schema-extension and collection `db` options listed under Still `@experimental`.
-
 `@nextlyhq/plugin-sdk` **is** the stability boundary for the plugin platform (D40/D43).
 Every export carries a TSDoc release tag — `@public`, `@experimental`, or `@deprecated`
 — and the authoritative ledger lives in the SDK's

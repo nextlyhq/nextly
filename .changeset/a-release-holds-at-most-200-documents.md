@@ -30,8 +30,10 @@
 ---
 
 A release now holds at most 200 documents (`RELEASE_MEMBER_LIMIT`, exported
-from `nextly/schemas`), down from 1,000: a full release publishes within one
-pass of the job runner on every supported database. Adding to a full release
+from `nextly/schemas`), down from 1,000: a full release on its own publishes
+within one pass of the job runner on every supported database. The limit is
+per release; releases due together that share a document are settled as one
+piece and take as long as all of their documents. Adding to a full release
 is refused with a conflict that says no more fit, and `can.addMember` is false
 for it. A release made before the limit and holding more keeps running as
 scheduled and can lose documents, but takes no new one.
