@@ -53,7 +53,9 @@ async function throwawayDatabase(
   dialect: "postgresql" | "mysql"
 ): Promise<{ url: string; drop: () => Promise<void> }> {
   const base = serverUrl(dialect);
-  const name = `${base.pathname.slice(1)}_${Math.random().toString(36).slice(2, 10)}`;
+  // A fixed length, independent of the slot's name: a suffix on a long base
+  // could pass PostgreSQL's 63-byte or MySQL's 64-character limit.
+  const name = `nextly_sync_${Math.random().toString(36).slice(2, 12).padEnd(10, "0")}`;
   const quoted = dialect === "mysql" ? `\`${name}\`` : `"${name}"`;
   // Validated whenever an adapter is made: a server dialect needs its URL set.
   process.env.DATABASE_URL = base.toString();
@@ -88,31 +90,47 @@ export async function openSyncTarget(
       : await throwawayDatabase(dialect);
   // The command reads its connection from the environment as well.
   if (dialect !== "sqlite") process.env.DATABASE_URL = own.url;
-  const adapter = await createAdapter({
-    type: TYPE[dialect],
-    url: own.url,
-  } as Parameters<typeof createAdapter>[0]);
+  // From here a failure still drops the database it was given, since the
+  // caller gets no handle to close.
+  let adapter: Awaited<ReturnType<typeof createAdapter>> | undefined;
+  try {
+    adapter = await createAdapter({
+      type: TYPE[dialect],
+      url: own.url,
+    } as Parameters<typeof createAdapter>[0]);
 
-  const logger = createLogger({ quiet: true });
-  const options = { cwd: dir, autoSync: true } as ResolvedDevOptions;
-  const context = { logger, options: {}, cwd: dir } as CommandContext;
-  const cli = adapter as unknown as CLIDatabaseAdapter;
+    const logger = createLogger({ quiet: true });
+    const options = { cwd: dir, autoSync: true } as ResolvedDevOptions;
+    const context = { logger, options: {}, cwd: dir } as CommandContext;
+    const cli = adapter as unknown as CLIDatabaseAdapter;
 
-  // Without a resolver the ORM cannot address `dynamic_collections`, so the sync
-  // fails before it reaches anything a test is about.
-  const registry = new SchemaRegistry(TYPE[dialect]);
-  registry.registerStaticSchemas(getDialectTables(TYPE[dialect]));
-  (adapter as unknown as DrizzleAdapter).setTableResolver(registry);
-  await ensureCoreTables(cli, options, context);
+    // Without a resolver the ORM cannot address `dynamic_collections`, so the
+    // sync fails before it reaches anything a test is about.
+    const registry = new SchemaRegistry(TYPE[dialect]);
+    registry.registerStaticSchemas(getDialectTables(TYPE[dialect]));
+    (adapter as unknown as DrizzleAdapter).setTableResolver(registry);
+    await ensureCoreTables(cli, options, context);
 
-  return {
-    adapter,
-    cli,
-    options,
-    context,
-    close: async () => {
-      await adapter.disconnect();
+    const opened = adapter;
+    return {
+      adapter: opened,
+      cli,
+      options,
+      context,
+      close: async () => {
+        try {
+          await opened.disconnect();
+        } finally {
+          await own.drop();
+        }
+      },
+    };
+  } catch (error) {
+    try {
+      await adapter?.disconnect();
+    } finally {
       await own.drop();
-    },
-  };
+    }
+    throw error;
+  }
 }
