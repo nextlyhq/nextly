@@ -284,8 +284,14 @@ describe.each(getConfiguredTestDialects())(
     it("keeps a subject's events while it exists, and removes them after the window from its deletion", async () => {
       const t = await setup(dialect);
       const actor = { kind: "system" } as const;
+      // A document's event involves a language; a release's involves none.
       const saved = (subject: ContentEventInput["subject"]) =>
-        t.record({ subject, kind: "saved", actor, parts: { locales: ["en"] } });
+        t.record({
+          subject,
+          kind: "saved",
+          actor,
+          parts: subject.kind === "release" ? {} : { locales: ["en"] },
+        });
       const deleted = (subject: ContentEventInput["subject"]) =>
         t.record({ subject, kind: "test-deleted", actor });
 
@@ -349,6 +355,53 @@ describe.each(getConfiguredTestDialects())(
       );
 
       expect((await t.events()).map(e => e.id)).toEqual([reborn.id]);
+    });
+
+    it("tells the lives apart by what the deletion stamped, whatever order other processes' ids sort in", async () => {
+      const t = await setup(dialect);
+      const actor = { kind: "system" } as const;
+      const old = await t.record({
+        subject: doc("skew"),
+        kind: "saved",
+        actor,
+      });
+      const end = await t.record({
+        subject: doc("skew"),
+        kind: "test-deleted",
+        actor,
+      });
+      const reborn = await t.record({
+        subject: doc("skew"),
+        kind: "saved",
+        actor,
+      });
+      // Ids written by processes whose clocks disagree: the old life's event
+      // sorts after its deletion, and the new life's before it.
+      const AHEAD = "ffffffff-ffff-7fff-bfff-ffffffffffff";
+      const BEHIND = "00000000-0000-7000-8000-000000000000";
+      for (const [from, to] of [
+        [old.id, AHEAD],
+        [reborn.id, BEHIND],
+      ]) {
+        await current!.adapter.update(
+          "nextly_content_events",
+          { id: to },
+          { and: [{ column: "id", op: "=", value: from }] }
+        );
+      }
+      await current!.adapter.update(
+        "nextly_content_events",
+        { occurredAt: new Date(Date.now() - 100 * DAY_MS) },
+        { and: [{ column: "id", op: "IN", value: [AHEAD, end.id] }] }
+      );
+
+      await pruneContentEventsSafely(
+        { db: current!.adapter, logger: silentLogger },
+        90 * DAY_MS,
+        10
+      );
+
+      expect((await t.events()).map(e => e.id)).toEqual([BEHIND]);
     });
 
     it("prunes a deleted subject whose deletion kind is no longer registered", async () => {

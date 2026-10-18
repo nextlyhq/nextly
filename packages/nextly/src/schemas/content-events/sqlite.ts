@@ -31,6 +31,9 @@ export const nextlyContentEventsSqlite = sqliteTable(
     endsSubject: integer("ends_subject", { mode: "boolean" })
       .notNull()
       .default(false),
+    // The deletion event that ended this event's life (see the PostgreSQL
+    // table).
+    endedBy: text("ended_by"),
 
     actorKind: text("actor_kind").$type<ContentEventActorKind>().notNull(),
     actorId: text("actor_id"),
@@ -59,6 +62,8 @@ export const nextlyContentEventsSqlite = sqliteTable(
       table.endsSubject,
       table.occurredAt
     ),
+    // Retention removes one ended life's events by the deletion that ended it.
+    index("nextly_content_events_ended_by_idx").on(table.endedBy),
   ]
 );
 

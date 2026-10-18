@@ -68,7 +68,7 @@ function refuse(message: string, logContext: Record<string, unknown>): never {
 }
 
 /** The registered kind, or a refusal naming the unknown one. */
-function registeredKind(name: string): ContentEventKind {
+function registeredKind(name: string): Readonly<ContentEventKind> {
   const kind = contentEventKind(name);
   if (!kind) {
     refuse(`"${name}" is not a registered content event kind.`, { kind: name });
@@ -78,8 +78,10 @@ function registeredKind(name: string): ContentEventKind {
 
 /**
  * The longest each bounded field may be: the columns MySQL keeps as
- * `varchar`. Checked on every dialect, so an event one dialect would refuse or
- * cut short is refused everywhere, before anything is written.
+ * `varchar`, and the note, which MySQL keeps as `text` of at most 65,535
+ * bytes (4,000 characters fit at four bytes each). Checked on every dialect,
+ * so an event one dialect would refuse or cut short is refused everywhere,
+ * before anything is written.
  */
 const FIELD_LIMITS = {
   subjectSlug: 255,
@@ -90,6 +92,7 @@ const FIELD_LIMITS = {
   fromState: 64,
   toState: 64,
   definitionHash: 64,
+  note: 4000,
 } as const;
 
 type BoundedFields = Record<keyof typeof FIELD_LIMITS, string | null>;
@@ -112,7 +115,7 @@ function checkLengths(fields: BoundedFields): void {
 
 /** The payload, checked against its kind; refuses one its kind does not take. */
 function checkedPayload(
-  kind: ContentEventKind,
+  kind: Readonly<ContentEventKind>,
   input: ContentEventInput
 ): Record<string, unknown> | null {
   const payload = input.payload ?? null;
@@ -144,8 +147,23 @@ function checkedPayload(
   return parsed.data;
 }
 
+/**
+ * A release has no parts, so a release event that names any is refused rather
+ * than recorded as matching a language.
+ */
+function refuseReleaseParts(input: ContentEventInput): void {
+  if (input.subject.kind !== "release" || !input.parts) return;
+  const { locales = [], shared = false } = input.parts;
+  if (locales.length > 0 || shared) {
+    refuse("A release's events involve no parts of a document.", {
+      kind: input.kind,
+    });
+  }
+}
+
 /** The event's part values: each language once, and the shared marker. */
 function partValues(input: ContentEventInput): string[] {
+  refuseReleaseParts(input);
   const locales = [...new Set(input.parts?.locales ?? [])];
   for (const locale of locales) {
     if (
@@ -184,19 +202,41 @@ export async function recordContentEvent(
     fromState: input.fromState ?? null,
     toState: input.toState ?? null,
     definitionHash: input.definitionHash ?? null,
+    note: input.note ?? null,
   };
   checkLengths(bounded);
   const id = uuidV7();
+  const endsSubject = kind.endsSubject === true;
+  if (endsSubject) {
+    // Every event of the life this deletion ends is stamped with it, on the
+    // deletion's own transaction, so retention later removes exactly those.
+    // A subject recreated under the same id starts unstamped events of its own.
+    await tx.update(
+      CONTENT_EVENTS_TABLE,
+      { endedBy: id },
+      {
+        and: [
+          { column: "subjectKind", op: "=", value: subject.kind },
+          bounded.subjectSlug === null
+            ? { column: "subjectSlug", op: "IS NULL" }
+            : { column: "subjectSlug", op: "=", value: bounded.subjectSlug },
+          { column: "subjectId", op: "=", value: subject.id },
+          { column: "endedBy", op: "IS NULL" },
+        ],
+      }
+    );
+  }
   await tx.insert(CONTENT_EVENTS_TABLE, {
     id,
     subjectKind: subject.kind,
     kind: kind.name,
     // Stored with the event, so retention never depends on which kinds are
     // registered when it runs.
-    endsSubject: kind.endsSubject === true,
+    endsSubject,
+    // A deletion event belongs to the life it ends.
+    endedBy: endsSubject ? id : null,
     actorKind: actor.kind,
     occurredAt: new Date(),
-    note: input.note ?? null,
     versionNo: input.versionNo ?? null,
     // Encoded for the JSON column as every write path encodes one: a raw
     // object reaches MySQL as text it rejects.

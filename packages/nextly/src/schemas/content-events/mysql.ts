@@ -34,6 +34,9 @@ export const nextlyContentEventsMysql = mysqlTable(
 
     kind: varchar("kind", { length: 64 }).notNull(),
     endsSubject: boolean("ends_subject").notNull().default(false),
+    // The deletion event that ended this event's life (see the PostgreSQL
+    // table).
+    endedBy: varchar("ended_by", { length: 36 }),
 
     actorKind: varchar("actor_kind", { length: 16 })
       .$type<ContentEventActorKind>()
@@ -62,6 +65,8 @@ export const nextlyContentEventsMysql = mysqlTable(
       table.endsSubject,
       table.occurredAt
     ),
+    // Retention removes one ended life's events by the deletion that ended it.
+    index("nextly_content_events_ended_by_idx").on(table.endedBy),
   ]
 );
 

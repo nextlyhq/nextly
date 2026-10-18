@@ -10,6 +10,7 @@ import { SHARED_PART } from "../../../schemas/content-events";
 import type { VersionsDbApi } from "../../versions/db-api";
 import { contentEventActor } from "../actor";
 import {
+  contentEventKind,
   contentEventKindNames,
   registerContentEventKind,
   renderContentEvent,
@@ -21,16 +22,21 @@ beforeEach(() => resetContentEventKinds());
 
 const releasePayload = z.object({ release: z.string() });
 
-/** A transaction that keeps what it is asked to insert. */
+/** A transaction that keeps what it is asked to insert and update. */
 function capturingTx() {
   const inserts: { table: string; row: Record<string, unknown> }[] = [];
+  const updates: { table: string; data: unknown; where: unknown }[] = [];
   const tx = {
     insert: (table: string, row: Record<string, unknown>) => {
       inserts.push({ table, row });
       return Promise.resolve(row);
     },
+    update: (table: string, data: unknown, where: unknown) => {
+      updates.push({ table, data, where });
+      return Promise.resolve(0);
+    },
   } as unknown as VersionsDbApi;
-  return { tx, inserts };
+  return { tx, inserts, updates };
 }
 
 const base: ContentEventInput = {
@@ -94,6 +100,17 @@ describe("content event kinds", () => {
     expect(() =>
       registerContentEventKind({ name: "named", label: "Renamed" })
     ).toThrow(/already registered/);
+  });
+
+  it("keeps a kind as registered, whatever the caller later does to its object", () => {
+    const kind = { name: "kept", label: "Kept", endsSubject: false };
+    registerContentEventKind(kind);
+    kind.endsSubject = true;
+    kind.name = "Not A Name";
+    expect(contentEventKindNames()).toEqual(["kept"]);
+    const stored = contentEventKind("kept");
+    expect(stored).toMatchObject({ name: "kept", endsSubject: false });
+    expect(Object.isFrozen(stored)).toBe(true);
   });
 
   it("takes a reloaded kind's new payload schema, as a development reload builds one", async () => {
@@ -209,7 +226,31 @@ describe("recordContentEvent refuses before writing", () => {
     await expect(
       recordContentEvent(tx, { ...base, toState: "x".repeat(65) })
     ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+    // The note fits MySQL's text column at four bytes a character.
+    await expect(
+      recordContentEvent(tx, { ...base, note: "x".repeat(4001) })
+    ).rejects.toMatchObject({ code: "INVALID_INPUT" });
     expect(inserts).toEqual([]);
+    await recordContentEvent(tx, { ...base, note: "x".repeat(4000) });
+    expect(inserts).toHaveLength(1);
+  });
+
+  it("parts on a release's event", async () => {
+    const { tx, inserts } = capturingTx();
+    const release = { kind: "release", id: "r1" } as const;
+    for (const parts of [{ locales: ["en"] }, { shared: true }]) {
+      await expect(
+        recordContentEvent(tx, { ...base, subject: release, parts })
+      ).rejects.toMatchObject({ code: "INVALID_INPUT" });
+    }
+    expect(inserts).toEqual([]);
+    // No parts is what a release's event carries.
+    await recordContentEvent(tx, {
+      ...base,
+      subject: release,
+      parts: { locales: [] },
+    });
+    expect(inserts).toHaveLength(1);
   });
 
   it("stores whether the event ends its subject, from its kind", async () => {
@@ -226,6 +267,40 @@ describe("recordContentEvent refuses before writing", () => {
         .filter(i => i.table === "nextly_content_events")
         .map(i => i.row.endsSubject)
     ).toEqual([true, false]);
+  });
+
+  it("stamps the life a deletion ends with the deletion, and names itself", async () => {
+    registerContentEventKind({
+      name: "deleted",
+      label: "Deleted",
+      endsSubject: true,
+    });
+    const { tx, inserts, updates } = capturingTx();
+    const { id } = await recordContentEvent(tx, {
+      ...base,
+      kind: "deleted",
+      payload: null,
+    });
+    // The subject's events not yet ended, and only those, take its id.
+    expect(updates).toEqual([
+      {
+        table: "nextly_content_events",
+        data: { endedBy: id },
+        where: {
+          and: [
+            { column: "subjectKind", op: "=", value: "collection" },
+            { column: "subjectSlug", op: "=", value: "posts" },
+            { column: "subjectId", op: "=", value: "e1" },
+            { column: "endedBy", op: "IS NULL" },
+          ],
+        },
+      },
+    ]);
+    expect(inserts[0]?.row.endedBy).toBe(id);
+    // An ordinary event stamps nothing and is part of no ended life.
+    await recordContentEvent(tx, base);
+    expect(updates).toHaveLength(1);
+    expect(inserts[1]?.row.endedBy).toBeNull();
   });
 
   it("writes each part once, and the shared marker", async () => {

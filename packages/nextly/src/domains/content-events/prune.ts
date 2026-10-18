@@ -3,11 +3,11 @@
  *
  * A subject's events (a document's or a release's) are kept while the subject
  * exists, whatever the activity log's window. Its deletion is itself an event,
- * stored as one that ends its subject; once that event is older than the
- * activity log's window, the subject's events up to and including it are
- * removed with their parts, oldest first, in bounded batches. A subject
- * recreated under the same id keeps the events of its new life, which come
- * after the deletion.
+ * stored as one that ends its subject, and stamps every event of the life it
+ * ends; once that event is older than the activity log's window, the stamped
+ * events are removed with their parts in bounded batches, the deletion last.
+ * A subject recreated under the same id keeps the events of its new life,
+ * which its earlier deletion never stamped.
  *
  * @module domains/content-events/prune
  */
@@ -19,7 +19,6 @@ import {
 import type { Logger } from "../../shared/types";
 import type { NoticesPruneDb } from "../notices/notices-service";
 import { warnQuietly } from "../retention/safe-log";
-import type { VersionsWhereCondition } from "../versions/db-api";
 
 /** Rows touched per statement: small enough to keep each delete short. */
 const CONTENT_EVENT_PRUNE_BATCH = 500;
@@ -32,21 +31,8 @@ const CONTENT_EVENT_PRUNE_BATCH = 500;
 export type ContentEventsPruneDb = NoticesPruneDb;
 
 interface EndedSubject {
-  /** The deletion event: the last event of the life it ended. */
+  /** The deletion event: it names itself as the end of its life. */
   id: string;
-  subjectKind: string;
-  subjectSlug: string | null;
-  subjectId: string;
-}
-
-function subjectWhere(subject: EndedSubject): VersionsWhereCondition[] {
-  return [
-    { column: "subjectKind", op: "=", value: subject.subjectKind },
-    subject.subjectSlug === null
-      ? { column: "subjectSlug", op: "IS NULL" }
-      : { column: "subjectSlug", op: "=", value: subject.subjectSlug },
-    { column: "subjectId", op: "=", value: subject.subjectId },
-  ];
 }
 
 /** The oldest deletion event past `before`, if any. */
@@ -55,7 +41,7 @@ async function oldestEndedSubject(
   before: Date
 ): Promise<EndedSubject | undefined> {
   const [ended] = await db.select<EndedSubject>(CONTENT_EVENTS_TABLE, {
-    columns: ["id", "subjectKind", "subjectSlug", "subjectId"],
+    columns: ["id"],
     where: {
       and: [
         { column: "endsSubject", op: "=", value: true },
@@ -68,10 +54,25 @@ async function oldestEndedSubject(
   return ended;
 }
 
+/** Remove these events and their parts, the parts first. */
+async function deleteEvents(
+  db: ContentEventsPruneDb,
+  ids: string[]
+): Promise<void> {
+  // Parts first, so no part row is left naming an event that is gone.
+  await db.delete(CONTENT_EVENT_PARTS_TABLE, {
+    and: [{ column: "eventId", op: "IN", value: ids }],
+  });
+  await db.delete(CONTENT_EVENTS_TABLE, {
+    and: [{ column: "id", op: "IN", value: ids }],
+  });
+}
+
 /**
- * Remove one batch of the ended life's events and their parts, oldest first,
- * so the deletion event goes in the last batch and a subject left part-done is
- * found again by the next pass. Returns how many events were removed.
+ * Remove one batch of the ended life's events and their parts: the events its
+ * deletion stamped, and with the last of them the deletion itself, so a
+ * subject left part-done is found again by the next pass. Returns how many events
+ * were removed.
  */
 async function deleteEndedBatch(
   db: ContentEventsPruneDb,
@@ -81,23 +82,19 @@ async function deleteEndedBatch(
     columns: ["id"],
     where: {
       and: [
-        ...subjectWhere(ended),
-        // Ids are time-ordered: the ended life, not one that came after.
-        { column: "id", op: "<=", value: ended.id },
+        { column: "endedBy", op: "=", value: ended.id },
+        { column: "id", op: "!=", value: ended.id },
       ],
     },
+    // Any order removes the same set; one fixed order keeps batches repeatable.
     orderBy: [{ column: "id", direction: "asc" }],
     limit: CONTENT_EVENT_PRUNE_BATCH,
   });
-  if (rows.length === 0) return 0;
   const ids = rows.map(row => row.id);
-  // Parts first, so no part row is left naming an event that is gone.
-  await db.delete(CONTENT_EVENT_PARTS_TABLE, {
-    and: [{ column: "eventId", op: "IN", value: ids }],
-  });
-  await db.delete(CONTENT_EVENTS_TABLE, {
-    and: [{ column: "id", op: "IN", value: ids }],
-  });
+  // A batch with room left holds the rest of the life, so the deletion goes
+  // with it; a full one leaves the deletion to be found by the next.
+  if (ids.length < CONTENT_EVENT_PRUNE_BATCH) ids.push(ended.id);
+  await deleteEvents(db, ids);
   return ids.length;
 }
 

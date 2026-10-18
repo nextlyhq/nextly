@@ -42,7 +42,15 @@ export interface ContentEventKind {
 const KIND_NAME = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
 const MAX_KIND_LENGTH = 64;
 
-const kinds = new Map<string, ContentEventKind>();
+// Each kind as it was registered: a frozen copy, so a caller that keeps and
+// later changes the object it registered cannot change the kind (turning
+// ordinary events into deletions, or renaming it past the checks above).
+const kinds = new Map<string, Readonly<ContentEventKind>>();
+
+/** The frozen copy the registry keeps. */
+function snapshot(kind: ContentEventKind): Readonly<ContentEventKind> {
+  return Object.freeze({ ...kind });
+}
 
 /**
  * Register a kind. Called once per kind as its feature loads.
@@ -69,7 +77,7 @@ export function registerContentEventKind(kind: ContentEventKind): void {
     existing.label === kind.label &&
     Boolean(existing.endsSubject) === Boolean(kind.endsSubject)
   ) {
-    kinds.set(kind.name, kind);
+    kinds.set(kind.name, snapshot(kind));
     return;
   }
   if (existing) {
@@ -78,11 +86,13 @@ export function registerContentEventKind(kind: ContentEventKind): void {
       logContext: { name: kind.name },
     });
   }
-  kinds.set(kind.name, kind);
+  kinds.set(kind.name, snapshot(kind));
 }
 
 /** The registered kind of this name, or undefined. */
-export function contentEventKind(name: string): ContentEventKind | undefined {
+export function contentEventKind(
+  name: string
+): Readonly<ContentEventKind> | undefined {
   return kinds.get(name);
 }
 

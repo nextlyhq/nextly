@@ -455,6 +455,7 @@ export function generateSqliteCoreTableStatements(): string[] {
       "subject_id" TEXT NOT NULL,
       "kind" TEXT NOT NULL,
       "ends_subject" INTEGER NOT NULL DEFAULT 0,
+      "ended_by" TEXT,
       "actor_kind" TEXT NOT NULL,
       "actor_id" TEXT,
       "actor_principal_kind" TEXT,
@@ -471,6 +472,8 @@ export function generateSqliteCoreTableStatements(): string[] {
       ON "nextly_content_events" ("subject_kind", "subject_slug", "subject_id", "id")`,
     `CREATE INDEX IF NOT EXISTS "nextly_content_events_ends_idx"
       ON "nextly_content_events" ("ends_subject", "occurred_at")`,
+    `CREATE INDEX IF NOT EXISTS "nextly_content_events_ended_by_idx"
+      ON "nextly_content_events" ("ended_by")`,
     `CREATE TABLE IF NOT EXISTS "nextly_content_event_parts" (
       "event_id" TEXT NOT NULL,
       "part" TEXT NOT NULL,

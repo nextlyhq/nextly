@@ -47,6 +47,11 @@ export const nextlyContentEventsPg = pgTable(
     // Whether the event records its subject's deletion, stored with it so
     // retention never depends on which kinds are registered now.
     endsSubject: boolean("ends_subject").notNull().default(false),
+    // The deletion event that ended the life this event belongs to, stamped
+    // in the deletion's transaction (a deletion event names itself). Which
+    // life an event belongs to is fixed by what had committed then, never by
+    // comparing ids or clocks written by different processes.
+    endedBy: text("ended_by"),
 
     // Who or what did it, and how they were named then: the event still reads
     // correctly after the person or key is gone.
@@ -87,6 +92,8 @@ export const nextlyContentEventsPg = pgTable(
       table.endsSubject,
       table.occurredAt
     ),
+    // Retention removes one ended life's events by the deletion that ended it.
+    index("nextly_content_events_ended_by_idx").on(table.endedBy),
   ]
 );
 
