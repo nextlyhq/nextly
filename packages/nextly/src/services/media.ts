@@ -41,10 +41,15 @@ import {
 // durable `media.*` event in the same transaction as the row change.
 import { actorForWrite, type RequestActor } from "../auth/request-actor";
 import {
+  removeStoredFiles,
+  warnNotRemoved,
+  warnUnlocated,
+} from "../domains/media/remove-stored-files";
+import {
   revalidateMedia,
   withMediaRevalidationBatch,
 } from "../domains/media/revalidate-media";
-import { storedFilesOf, variantPaths } from "../domains/media/stored-files";
+import { variantPaths } from "../domains/media/stored-files";
 import type { RetentionRunner } from "../domains/retention/runner";
 import type { WebhookFastDrainScheduler } from "../domains/webhooks/after-drain";
 import { recordMutationEvent } from "../domains/webhooks/record-mutation-event";
@@ -98,28 +103,6 @@ type BulkDeleteOutcome = BulkOutcome<{
   success: boolean;
   error?: string;
 }>;
-
-/** A stored file that could not be removed, by its path, so it can be found. */
-function warnNotRemoved(
-  filePath: string,
-  mediaId: string,
-  error: unknown
-): void {
-  console.warn(
-    `[MediaService] Could not remove ${filePath} of media ${mediaId}:`,
-    error instanceof Error ? error.message : error
-  );
-}
-
-/**
- * A thumbnail whose stored location the record does not show, by its URL,
- * the one identifier there is: nothing was removed in its place.
- */
-function warnUnlocated(url: string, mediaId: string): void {
-  console.warn(
-    `[MediaService] Left the thumbnail of media ${mediaId} at ${url}: its stored location could not be worked out from the record.`
-  );
-}
 
 /**
  * `sizes` as a write stores it: a JSON string, or null. The positional insert
@@ -1120,28 +1103,8 @@ export class MediaService extends BaseService {
       // Once the delete is durable: inside an enclosing SQLite transaction
       // this delete is a savepoint of it, and a rollback would bring the row
       // back pointing at files already gone.
-      const { paths, unlocated } = storedFilesOf(mediaData);
-      for (const url of unlocated) warnUnlocated(url, mediaId);
       await this.afterCommit(() =>
-        Promise.all(
-          paths.map(async filePath => {
-            try {
-              await withRetry(() => this.storage.delete(filePath, "media"), {
-                maxAttempts: 3,
-                baseDelayMs: 500,
-                shouldRetry: isTransientError,
-                onRetry: (err, attempt) => {
-                  console.warn(
-                    `[MediaService] Delete retry ${attempt} for ${filePath}:`,
-                    err instanceof Error ? err.message : err
-                  );
-                },
-              });
-            } catch (error) {
-              warnNotRemoved(filePath, mediaId, error);
-            }
-          })
-        )
+        removeStoredFiles(this.storage, mediaData, mediaId)
       );
 
       // The delete committed a media.deleted outbox row; drain and prune it

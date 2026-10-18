@@ -26,6 +26,18 @@ import {
 import { loadConfig } from "../utils/config-loader";
 import { installRegistryResolver } from "../utils/registry-resolver";
 
+/** What the media table refers to, as a delete of each item would read it. */
+export interface MediaReferences {
+  /** Every stored path an item refers to. */
+  paths: ReadonlySet<string>;
+  /**
+   * Thumbnails, by URL, whose stored location the record does not show
+   * (`storedFilesOf`): one of the listed files may be such a thumbnail, still
+   * in use, under a path nothing here can match.
+   */
+  unlocated: readonly string[];
+}
+
 /**
  * Every stored path a media item refers to, read a page of items at a time:
  * the one answer a delete uses for what an item's files are.
@@ -37,8 +49,9 @@ import { installRegistryResolver } from "../utils/registry-resolver";
  */
 export async function referencedStoredPaths(
   adapter: Pick<DrizzleAdapter, "select">
-): Promise<Set<string>> {
+): Promise<MediaReferences> {
   const referenced = new Set<string>();
+  const unlocated: string[] = [];
   const limit = 500;
   let after: string | undefined;
   for (;;) {
@@ -53,9 +66,11 @@ export async function referencedStoredPaths(
       }
     );
     for (const row of rows) {
-      for (const path of storedFilesOf(row).paths) referenced.add(path);
+      const files = storedFilesOf(row);
+      for (const path of files.paths) referenced.add(path);
+      unlocated.push(...files.unlocated);
     }
-    if (rows.length < limit) return referenced;
+    if (rows.length < limit) return { paths: referenced, unlocated };
     after = rows[rows.length - 1].id;
   }
 }
@@ -73,16 +88,20 @@ export async function mediaOrphans(options: {
   exclusive: boolean;
   /** The collections that keep media's place from being its own. */
   sharedWith?: readonly string[];
-  referenced: () => Promise<ReadonlySet<string>>;
+  referenced: () => Promise<MediaReferences>;
   apply: boolean;
   say: (line: string) => void;
   now?: Date;
 }): Promise<number> {
   const { storage, say, apply } = options;
+  const references = await options.referenced();
+  // A thumbnail in use that no path here can match may be any listed file,
+  // so where there is one nothing is removed: the matches are listed.
+  const unlocated = references.unlocated.length;
   const search = await findOrphanThumbnails(storage, {
-    referenced: await options.referenced(),
+    referenced: references.paths,
     prefix: options.prefix,
-    exclusive: options.exclusive,
+    exclusive: options.exclusive && unlocated === 0,
     now: options.now,
   });
   if (!search.listable) {
@@ -97,7 +116,12 @@ export async function mediaOrphans(options: {
       `${search.tooRecent} unreferenced thumbnail(s) were stored less than ${hours} hour(s) ago, or at a time the storage does not say, and are left: they may belong to an upload still in progress.`
     );
   }
-  sayUnconfirmed(search.unconfirmed, storage, options.sharedWith ?? [], say);
+  sayUnconfirmed(search.unconfirmed, {
+    storage,
+    unlocated,
+    sharedWith: options.sharedWith ?? [],
+    say,
+  });
   if (search.orphans.length === 0) {
     if (search.unconfirmed.length === 0) {
       say("No left-behind thumbnails found.");
@@ -115,7 +139,7 @@ export async function mediaOrphans(options: {
   const result = await removeOrphanThumbnails(
     storage,
     search.orphans,
-    options.referenced
+    async () => (await options.referenced()).paths
   );
   sayRemoval(result, say);
   return result.failed.length > 0 ? 1 : 0;
@@ -128,22 +152,45 @@ export async function mediaOrphans(options: {
  */
 function sayUnconfirmed(
   unconfirmed: ReadonlyArray<{ path: string; name?: string }>,
-  storage: IStorageAdapter,
-  sharedWith: readonly string[],
-  say: (line: string) => void
+  context: UnconfirmedContext
 ): void {
   if (unconfirmed.length === 0) return;
-  const why = unconfirmed.some(file => file.name !== undefined)
-    ? `The media storage (${storage.getType()}) keeps no folders, so another uploader to it can give a file the same name.`
-    : sharedWith.length > 0
-      ? `Media's storage place is not its own: ${sharedWith.join(", ")} also use${sharedWith.length === 1 ? "s" : ""} it, or ha${sharedWith.length === 1 ? "s" : "ve"} no prefix, so a file of the same form there may not be media's. Give each of them a \`prefix\` of its own in the storage config to have later runs remove them.`
-      : "The media collection has no storage prefix of its own, so another collection or upload can store a file of the same form in the same place. Set a `prefix` for media in its storage config to have later runs remove them.";
-  say(
-    `${unconfirmed.length} unreferenced thumbnail(s) that nothing shows are media's. ${why} They are left as they are, even with --apply; check each and remove the ones that are media's by hand:`
+  const named = unconfirmed.some(file => file.name !== undefined);
+  context.say(
+    `${unconfirmed.length} unreferenced thumbnail(s) that nothing shows are media's. ${whyUnconfirmed(named, context)} They are left as they are, even with --apply; check each and remove the ones that are media's by hand:`
   );
   for (const { path, name } of unconfirmed) {
-    say(name === undefined ? `  ${path}` : `  ${path} (uploaded as ${name})`);
+    context.say(
+      name === undefined ? `  ${path}` : `  ${path} (uploaded as ${name})`
+    );
   }
+}
+
+interface UnconfirmedContext {
+  storage: IStorageAdapter;
+  /** How many thumbnails in use have no stored location the record shows. */
+  unlocated: number;
+  /** The collections that keep media's place from being its own. */
+  sharedWith: readonly string[];
+  say: (line: string) => void;
+}
+
+/** Why the listed files are not shown to be media's, and what would. */
+function whyUnconfirmed(
+  named: boolean,
+  { storage, unlocated, sharedWith }: UnconfirmedContext
+): string {
+  if (named) {
+    return `The media storage (${storage.getType()}) keeps no folders, so another uploader to it can give a file the same name.`;
+  }
+  if (unlocated > 0) {
+    return `${unlocated} media item(s) have a thumbnail whose stored location cannot be worked out from the record, so any of these may be one still in use.`;
+  }
+  if (sharedWith.length > 0) {
+    const one = sharedWith.length === 1;
+    return `Media's storage place is not its own: ${sharedWith.join(", ")} also use${one ? "s" : ""} it, or ha${one ? "s" : "ve"} no prefix, so a file of the same form there may not be media's. Give each of them a \`prefix\` of its own in the storage config to have later runs remove them.`;
+  }
+  return "The media collection has no storage prefix of its own, so another collection or upload can store a file of the same form in the same place. Set a `prefix` for media in its storage config to have later runs remove them.";
 }
 
 /** What --apply did with each listed thumbnail. */

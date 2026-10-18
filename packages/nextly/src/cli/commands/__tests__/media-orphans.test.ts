@@ -33,13 +33,19 @@ import type {
   UploadOptions,
 } from "../../../storage/types";
 import { mediaPlaceIsExclusive } from "../../../domains/media/orphan-thumbnails";
-import { mediaOrphans } from "../media";
+import { mediaOrphans, type MediaReferences } from "../media";
 
 const NOW = new Date("2026-10-18T12:00:00Z");
 const TWO_HOURS_AGO = new Date(NOW.getTime() - 2 * 3_600_000);
 const A_MINUTE_AGO = new Date(NOW.getTime() - 60_000);
 const key = (name: string, folder = "") =>
   `${folder}2026/10/${randomUUID()}-${name}`;
+
+/** What the media table refers to: these stored paths, all located. */
+const refs = (...paths: string[]): MediaReferences => ({
+  paths: new Set(paths),
+  unlocated: [],
+});
 
 /** Stored files with their times and, for UploadThing, uploaded names. */
 class Bucket implements IStorageAdapter {
@@ -171,7 +177,7 @@ const layouts: Array<[string, () => Promise<Layout> | Layout]> = [
 async function run(
   layout: Layout,
   apply: boolean,
-  referenced?: () => Promise<Set<string>>,
+  referenced?: () => Promise<MediaReferences>,
   place: { prefix?: string; exclusive: boolean } = {
     prefix: "media",
     exclusive: true,
@@ -181,7 +187,7 @@ async function run(
   const code = await mediaOrphans({
     storage: layout.storage,
     ...place,
-    referenced: referenced ?? (async () => new Set([layout.referenced])),
+    referenced: referenced ?? (async () => refs(layout.referenced)),
     apply,
     say: line => said.push(line),
     now: NOW,
@@ -283,7 +289,7 @@ describe("nextly media orphans", () => {
       prefix: "media",
       exclusive: false,
       sharedWith: ["docs", "invoices"],
-      referenced: async () => new Set([layout.referenced]),
+      referenced: async () => refs(layout.referenced),
       apply: true,
       say: line => said.push(line),
       now: NOW,
@@ -315,7 +321,7 @@ describe("nextly media orphans", () => {
       storage: bucket,
       prefix: "media/",
       exclusive: true,
-      referenced: async () => new Set([referenced]),
+      referenced: async () => refs(referenced),
       apply: true,
       say: line => said.push(line),
       now: NOW,
@@ -335,7 +341,7 @@ describe("nextly media orphans", () => {
       storage: layout.storage,
       prefix: "media/",
       exclusive: true,
-      referenced: async () => new Set([recorded]),
+      referenced: async () => refs(recorded),
       apply: true,
       say: line => said.push(line),
       now: NOW,
@@ -359,7 +365,7 @@ describe("nextly media orphans", () => {
       storage: layout.storage,
       prefix: "/media",
       exclusive: true,
-      referenced: async () => new Set([recorded]),
+      referenced: async () => refs(recorded),
       apply: true,
       say: line => said.push(line),
       now: NOW,
@@ -386,7 +392,7 @@ describe("nextly media orphans", () => {
       storage: bucket,
       prefix: "/media",
       exclusive: true,
-      referenced: async () => new Set([referenced]),
+      referenced: async () => refs(referenced),
       apply: true,
       say: line => said.push(line),
       now: NOW,
@@ -395,6 +401,26 @@ describe("nextly media orphans", () => {
     expect(code).toBe(0);
     expect([...bucket.files.keys()]).toEqual([referenced]);
     expect(said.join("\n")).toContain(`Removed ${orphan}`);
+  });
+
+  // A thumbnail in use whose stored location the record does not show can
+  // be any listed file, so with one nothing is removed.
+  it("removes nothing, and lists what it found, while a thumbnail in use cannot be located", async () => {
+    const layout = await onLocalDisk();
+    const thumbnailUrl = "https://cdn.example.com/m/7/thumb";
+
+    const { code, said } = await run(layout, true, async () => ({
+      paths: new Set([layout.referenced]),
+      unlocated: [thumbnailUrl],
+    }));
+
+    expect(code).toBe(0);
+    expect(await layout.stored()).toContain(layout.orphan);
+    expect(said).toContain(`  ${layout.orphan}`);
+    expect(said).toMatch(
+      /1 media item\(s\) have a thumbnail whose stored location/
+    );
+    expect(said).not.toContain("Removed");
   });
 
   // The recheck before removals reads the media table; doing it once per
@@ -416,7 +442,7 @@ describe("nextly media orphans", () => {
       exclusive: true,
       referenced: async () => {
         reads++;
-        return new Set<string>();
+        return refs();
       },
       apply: true,
       say: line => said.push(line),
@@ -434,9 +460,9 @@ describe("nextly media orphans", () => {
     const layout = inBucket("s3");
     let reads = 0;
     const referenced = async () =>
-      new Set(
-        reads++ === 0 ? [layout.referenced] : [layout.referenced, layout.orphan]
-      );
+      reads++ === 0
+        ? refs(layout.referenced)
+        : refs(layout.referenced, layout.orphan);
 
     const { said } = await run(layout, true, referenced);
 
@@ -546,14 +572,34 @@ describe("referencedStoredPaths", () => {
   it("names each item's original, upload-time thumbnail and sizes, on every page", async () => {
     const { referencedStoredPaths } = await import("../media");
     const db = await mediaTable();
-    const referenced = await referencedStoredPaths(db.adapter as never);
+    const { paths: referenced, unlocated } = await referencedStoredPaths(
+      db.adapter as never
+    );
 
+    expect(unlocated).toEqual([]);
     expect(referenced.size).toBe(501 * 3);
     for (const i of [0, 500]) {
       expect(referenced).toContain(`2026/10/a${i}-thumb_p.png`);
       expect(referenced).toContain(`2026/10/b${i}-thumb_p.png`);
       expect(referenced).toContain(`2026/10/c${i}-thumb_p-small.webp`);
     }
+  });
+
+  it("names a thumbnail whose stored location the record does not show", async () => {
+    const { referencedStoredPaths } = await import("../media");
+    const db = await mediaTable();
+    const elsewhere = "https://thumbs.example.com/m/1/thumb.png";
+    await db.db
+      .update(db.schema.media)
+      .set({ thumbnailUrl: elsewhere })
+      .where(eq(db.schema.media.id, "media-7"));
+
+    const { paths, unlocated } = await referencedStoredPaths(
+      db.adapter as never
+    );
+
+    expect(unlocated).toEqual([elsewhere]);
+    expect(paths.size).toBe(501 * 3 - 1);
   });
 
   // A page read by offset after an item on an earlier page went would start
@@ -576,7 +622,7 @@ describe("referencedStoredPaths", () => {
       },
     };
 
-    const referenced = await referencedStoredPaths(between as never);
+    const { paths: referenced } = await referencedStoredPaths(between as never);
 
     const left = await db.db.select().from(db.schema.media);
     expect(left).toHaveLength(500);

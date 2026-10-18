@@ -32,6 +32,7 @@ import { storedFilesOf, variantPaths } from "../../domains/media/stored-files";
 import type { IStorageAdapter, UploadOptions } from "../../storage/types";
 import { runInPluginTransaction } from "../../shared/lib/plugin-transaction-scope";
 import { MediaService } from "../media";
+import { MediaFolderService } from "../media-folder";
 
 // Two configured sizes, besides the thumbnail every image gets at upload, so
 // a delete that removed only one would show. A case that needs more adds them
@@ -161,7 +162,7 @@ async function onDisk(): Promise<string[]> {
     );
 }
 
-async function uploadPhoto(): Promise<string> {
+async function uploadPhoto(folderId?: string): Promise<string> {
   const file = await image();
   const result = await service.uploadMedia({
     file,
@@ -169,6 +170,7 @@ async function uploadPhoto(): Promise<string> {
     mimeType: "image/png",
     size: file.length,
     uploadedBy: "user-1",
+    folderId,
   });
   expect(result.success).toBe(true);
   return result.data!.id;
@@ -631,6 +633,51 @@ describe("a crop inside a plugin's transaction", () => {
 
     const stored = await onDisk();
     for (const file of before) expect(stored).toContain(file);
+    expect(await referencedNow(id)).toEqual([...before].sort());
+  });
+});
+
+describe("deleting a folder with its contents", () => {
+  const folders = () => new MediaFolderService(db.adapter, testLogger);
+  const newFolder = async (parentId?: string) => {
+    const created = await folders().createFolder({
+      name: `folder-${randomUUID()}`,
+      parentId,
+      createdBy: "user-1",
+    });
+    expect(created.success).toBe(true);
+    return created.data!.id;
+  };
+
+  it("leaves nothing of its items, or of its subfolders' items, on local disk", async () => {
+    onLocalDisk();
+    const folder = await newFolder();
+    const inner = await newFolder(folder);
+    await uploadPhoto(folder);
+    await uploadPhoto(inner);
+    expect((await onDisk()).length).toBeGreaterThan(2);
+
+    const result = await folders().deleteFolder(folder, true);
+
+    expect(result.success).toBe(true);
+    expect(result.deletedMedia).toBe(2);
+    expect(await onDisk()).toEqual([]);
+  });
+
+  it("leaves every file stored when an enclosing transaction rolls back", async () => {
+    onLocalDisk();
+    const folder = await newFolder();
+    const id = await uploadPhoto(folder);
+    const before = await onDisk();
+
+    await expect(
+      db.adapter.transaction(async () => {
+        expect((await folders().deleteFolder(folder, true)).success).toBe(true);
+        throw new Error("the entry write failed");
+      })
+    ).rejects.toThrow("the entry write failed");
+
+    expect(await onDisk()).toEqual(before);
     expect(await referencedNow(id)).toEqual([...before].sort());
   });
 });
