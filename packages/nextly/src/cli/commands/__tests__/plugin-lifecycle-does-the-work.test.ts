@@ -15,6 +15,7 @@
  */
 import { describe, expect, it, vi } from "vitest";
 
+import type { PluginLifecycleRecord } from "../../../domains/schema/ownership/plugin-lifecycle-state";
 import {
   runPluginInstallAllCommand,
   runPluginInstallCommand,
@@ -1286,6 +1287,29 @@ describe("plugins install --all", () => {
     );
 
     expect(applied).toEqual(["@acme/core", "@acme/fx"]);
+  });
+
+  it("installs a dependency and records it before its dependent, on a fresh database", async () => {
+    // Nothing recorded at the start, as on a database no install has touched.
+    // The dependent's install asks whether its dependency is installed, so it
+    // succeeds only if the dependency was installed AND recorded first.
+    const lifecycle = new Map<string, PluginLifecycleRecord>();
+    const recorded: string[] = [];
+    await runPluginInstallAllCommand(
+      deps({
+        plugins: [core, fx],
+        readLifecycle: vi.fn(async () => new Map(lifecycle)),
+        recordLifecycle: vi.fn(
+          async (p: LifecyclePlugin, record: PluginLifecycleRecord) => {
+            lifecycle.set(p.name, record);
+            recorded.push(p.name);
+          }
+        ),
+      })
+    );
+
+    expect(recorded).toEqual(["@acme/core", "@acme/fx"]);
+    expect(lifecycle.get("@acme/fx")).toEqual({ state: "installed" });
   });
 
   it("skips a disabled plugin by name and installs the rest", async () => {

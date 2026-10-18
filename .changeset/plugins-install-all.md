@@ -34,3 +34,5 @@ dependency order, and stops at the first that fails. A disabled plugin is
 skipped and named. It is what a fresh database needs before its first
 production boot, which refuses a configured plugin no install has recorded.
 `nextly plugins install <name>` is unchanged.
+
+A production boot no longer requires a disabled plugin (`enabled: false`) to be installed. Before, a config that disabled a plugin could never boot in production, because the install refuses a disabled plugin. A disabled plugin's tables still exist, since its schema still applies, but its `onInstall` runs only once it is enabled and installed; the boot then requires that install like any other. A disabled plugin that was uninstalled, or whose uninstall stopped part way, is still refused.
