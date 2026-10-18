@@ -8,7 +8,7 @@
  * companion's column read `sub_title`, and every write in a language other than the default one
  * failed until the process restarted and rebuilt them from the registry.
  */
-import { getTableColumns, type Table } from "drizzle-orm";
+import { getColumns, type Table } from "drizzle-orm";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 import { describeEachDialect } from "../../../plugins/__tests__/helpers/dialect-matrix";
@@ -132,7 +132,7 @@ describeEachDialect("a translated field named with capitals", dialect => {
   /** Each of this process's tables for the collection, by column name. */
   function columnNames(table: Table | undefined): string[] {
     return table
-      ? Object.values(getTableColumns(table))
+      ? Object.values(getColumns(table))
           .map(column => column.name)
           .sort()
       : [];
