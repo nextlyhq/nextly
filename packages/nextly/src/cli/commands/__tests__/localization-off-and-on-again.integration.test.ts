@@ -185,6 +185,25 @@ describe.each(getConfiguredTestDialects())(
         sourceLocale: "en",
       });
 
+      if (dialect === "mysql") {
+        // The query the release notes give MySQL users, to list what the
+        // recovery will change before they run it: here, the hidden edit.
+        const differing = await target?.adapter.executeQuery<{
+          id: string;
+          on_main: string;
+          in_translations: string;
+        }>(
+          `SELECT m.id, m.updated_at, m.title AS on_main, l.title AS in_translations FROM dc_${slug} AS m JOIN dc_${slug}_locales AS l ON l._parent = m.id AND l._locale = 'en' WHERE NOT (m.title <=> l.title)`
+        );
+        expect(differing).toMatchObject([
+          {
+            id: "row1",
+            on_main: "Before localizing",
+            in_translations: "Edited while localized",
+          },
+        ]);
+      }
+
       await runSync(dialect, off);
       const after = await target?.adapter.executeQuery<{ title: string }>(
         `SELECT ${q("title")} FROM ${main} WHERE ${q("id")} = 'row1'`
