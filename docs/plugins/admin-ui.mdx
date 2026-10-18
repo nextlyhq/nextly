@@ -68,6 +68,7 @@ import "../../../types/generated/plugin-admin-imports.generated";
 ```tsx
 // src/app/admin/[[...params]]/layout.tsx: make the layout async, then
 import { checkAdminComponents } from "nextly/runtime";
+import config from "../../../../nextly.config";
 import { registeredComponentPaths } from "../../../types/generated/plugin-admin-components.generated";
 // ...inside the layout, before it returns:
 await checkAdminComponents({ config, registeredComponentPaths });
