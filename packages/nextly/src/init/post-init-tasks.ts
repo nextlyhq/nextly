@@ -15,6 +15,7 @@ import {
 import { getService } from "../di/register";
 import { warnAboutUnusableProviders } from "../domains/email/boot-check";
 import { getEmailProviderRegistry } from "../domains/email/services/email-provider-registry";
+import { provisionUserFieldStorage } from "../domains/users/services/provision-user-field-storage";
 
 /**
  * Run idempotent post-initialization tasks after services are registered.
@@ -50,35 +51,22 @@ export async function runPostInitTasks(): Promise<void> {
     // or the email_templates table may not exist yet (migrations not run)
   }
 
-  // Sync code-defined user fields from defineConfig() into user_field_definitions table,
-  // then load merged fields (code + UI) into UserExtSchemaService for schema generation
+  // Sync the code-defined user fields, merge them with the admin's, and make
+  // sure user_ext has a column for each. `nextly migrate` runs the same step
+  // (`provisionUserFieldStorage`); here it keeps a development database current
+  // as fields change.
   try {
-    const fieldDefService = getService("userFieldDefinitionService");
-    const config = getService("config");
-    const codeFields = config.users?.fields || [];
-    await fieldDefService.syncCodeFields(
-      codeFields as unknown as { name: string; [key: string]: unknown }[]
-    );
+    await provisionUserFieldStorage({
+      codeFields: getService("config").users?.fields ?? [],
+      fieldDefService: getService("userFieldDefinitionService"),
+      userExtSchemaService: getService("userExtSchemaService"),
+      db: getService("adapter").getDrizzle(),
+      // A sync that fails (its table not migrated yet) doesn't stop the table
+      // being made for the fields already recorded.
+      onSyncError: () => {},
+    });
   } catch {
-    // Silently skip — service may not be registered,
-    // or the user_field_definitions table may not exist yet (migrations not run)
-  }
-
-  // Load merged fields and ensure user_ext table exists (separate try/catch
-  // so table creation runs even if code-field sync above fails)
-  try {
-    const userExtSchemaService = getService("userExtSchemaService");
-    await userExtSchemaService.loadMergedFields();
-
-    // Ensure the user_ext table exists and has columns for all merged fields.
-    // This creates the table if missing and adds columns for new UI-defined fields.
-    if (userExtSchemaService.hasMergedFields()) {
-      const adapter = getService("adapter");
-      const drizzleDb = adapter.getDrizzle();
-      await userExtSchemaService.ensureUserExtSchema(drizzleDb);
-    }
-  } catch {
-    // Silently skip — userExtSchemaService may not be registered
+    // Silently skip — the user services may not be registered
   }
 
   // Rewrite timestamps an older SQLite writer stored as text. Runs once and

@@ -37,7 +37,6 @@
  */
 
 import type { Table, Column } from "drizzle-orm";
-import { sql } from "drizzle-orm";
 import {
   mysqlTable,
   text as mysqlText,
@@ -92,6 +91,7 @@ import {
   getFieldType,
   isPluginFieldTypeOnSurface,
 } from "../../schema/field-types/field-type-registry";
+import { runRaw } from "../../schema/pipeline/pre-resolution/executor";
 import { sqliteTimestampColumns } from "../../schema/services/runtime-schema-generator";
 import { calculateSchemaHash } from "../../schema/services/schema-hash";
 
@@ -300,8 +300,6 @@ export class UserExtSchemaService {
    * @param db - Drizzle database instance for executing raw SQL
    */
   async ensureUserExtSchema(db: unknown): Promise<void> {
-    // db is a Drizzle database instance — type varies by dialect
-    const drizzleDb = db as { execute(query: unknown): Promise<unknown> };
     const fields = this.getMergedFieldConfigs();
     if (fields.length === 0) return;
 
@@ -322,7 +320,9 @@ export class UserExtSchemaService {
       if (!executable) continue;
 
       try {
-        await drizzleDb.execute(sql.raw(executable));
+        // runRaw picks the dialect's call: SQLite's Drizzle database has no
+        // .execute(), so calling it threw and was taken for "already exists".
+        await runRaw(db, executable, this.dialect);
       } catch {
         // Table/index/constraint may already exist — safe to ignore
       }
@@ -346,7 +346,7 @@ export class UserExtSchemaService {
       }
 
       try {
-        await drizzleDb.execute(sql.raw(alterSQL));
+        await runRaw(db, alterSQL, this.dialect);
       } catch {
         // Column already exists — safe to ignore
       }
