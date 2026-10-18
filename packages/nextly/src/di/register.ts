@@ -2935,14 +2935,21 @@ function publishWebhookRecordingPolicies(config: NextlyServiceConfig): void {
  * or when a just-synced row hasn't been flushed yet.
  *
  * No-op for tables that are already registered (e.g. from the DB pass).
+ *
+ * Exported for its test.
  */
-async function registerConfigTablesInResolver(
+export async function registerConfigTablesInResolver(
   registry: SchemaRegistry,
   config: NextlyServiceConfig,
   adapter: DrizzleAdapter,
   logger: Partial<Logger>
 ): Promise<void> {
   const dialect = adapter.getCapabilities().dialect;
+  // Loaded here, as the generators it calls were, so they stay out of this
+  // module's own load.
+  const { registerEntityRuntimeTables } = await import(
+    "./register-runtime-tables"
+  );
 
   // Collections: table name convention is `dc_<slug-with-underscores>`.
   for (const collection of config.collections ?? []) {
@@ -2955,45 +2962,20 @@ async function registerConfigTablesInResolver(
       const tableName = baseTableName.startsWith("dc_")
         ? baseTableName
         : `dc_${baseTableName}`;
-      // Why: forward the code-first `status: true` flag so the runtime
-      // Drizzle table includes the system status column. Without this,
-      // adapter CRUD on Draft/Published collections can't read or write
-      // the status column even though the physical table has it.
-      const hasStatus = (collection as { status?: boolean }).status === true;
-      const localized =
-        (collection as { localized?: boolean }).localized === true;
-      const { generateRuntimeSchema } = await import(
-        "../domains/schema/services/runtime-schema-generator"
-      );
-      const { table } = generateRuntimeSchema(
-        tableName,
-        fields as FieldDefinition[],
-        dialect,
-        { status: hasStatus, localized }
-      );
-      registry.registerDynamicSchema(tableName, table);
-      // Register the companion `_locales` table for a localized collection (M4 reads).
-      if (localized) {
-        const { buildCompanionRuntimeTable } = await import(
-          "../domains/i18n/runtime/companion-registration"
-        );
-        const companion = buildCompanionRuntimeTable({
+      // The status flag gives the runtime table its system status column,
+      // which Draft/Published CRUD reads and writes; the localized one leaves
+      // the translatable columns to the companion.
+      registerEntityRuntimeTables(
+        registry,
+        {
           slug,
           tableName,
-          fields: fields as { name: string; type: string }[],
-          dialect,
-          localized: true,
-          // Carry `_status` so a Draft/Published localized collection's
-          // DI-registered companion matches loadCompanionSchema.
-          status: hasStatus === true,
-        });
-        if (companion) {
-          registry.registerDynamicSchema(
-            companion.companionTableName,
-            companion.table
-          );
-        }
-      }
+          fields: fields as FieldDefinition[],
+          status: (collection as { status?: boolean }).status === true,
+          localized: (collection as { localized?: boolean }).localized === true,
+        },
+        dialect
+      );
     } catch (err) {
       logger.debug?.(
         `[registerServices] Failed to register collection "${(collection as { slug?: string }).slug ?? "?"}" in resolver: ${err instanceof Error ? err.message : String(err)}`
@@ -3013,20 +2995,19 @@ async function registerConfigTablesInResolver(
       const fields = (single as { fields?: unknown[] }).fields ?? [];
       if (!slug || !Array.isArray(fields) || fields.length === 0) continue;
       const tableName = resolveSingleTableName({ slug, dbName });
-      // Why: forward the code-first `status: true` flag for singles too —
-      // mirrors the collection branch above. Same Draft/Published runtime
-      // wiring needs the system status column on the Drizzle table.
-      const hasStatus = (single as { status?: boolean }).status === true;
-      const { generateRuntimeSchema } = await import(
-        "../domains/schema/services/runtime-schema-generator"
+      // The same registration as a collection's, so a localized single's
+      // main table leaves out the columns its migrations put on the companion.
+      registerEntityRuntimeTables(
+        registry,
+        {
+          slug,
+          tableName,
+          fields: fields as FieldDefinition[],
+          status: (single as { status?: boolean }).status === true,
+          localized: (single as { localized?: boolean }).localized === true,
+        },
+        dialect
       );
-      const { table } = generateRuntimeSchema(
-        tableName,
-        fields as FieldDefinition[],
-        dialect,
-        { status: hasStatus }
-      );
-      registry.registerDynamicSchema(tableName, table);
     } catch (err) {
       logger.debug?.(
         `[registerServices] Failed to register single "${(single as { slug?: string }).slug ?? "?"}" in resolver: ${err instanceof Error ? err.message : String(err)}`
