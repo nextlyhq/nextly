@@ -28,8 +28,10 @@ import {
   refusalsForTranslatedFieldRenamedAndReshaped,
   refusalsForTranslatedFieldRenamedAsTranslationEnds,
   storageDiffers,
+  withoutLeavingConstraints,
 } from "./field-leaves-translation-rules";
 import { fieldToLocalizedColumnSpec } from "./field-to-column-spec";
+import { refusalsForConstrainedFieldsLeaving } from "./leaving-constraint-preconditions";
 import {
   buildLeavingFieldsArchiveStatements,
   type FieldRename,
@@ -144,8 +146,16 @@ export async function archiveFieldsLeavingTranslation(args: {
     return;
   }
   const dialect = args.adapter.getCapabilities().dialect;
+  // Where a renamed field's values are now: in the column it had, until an earlier apply renamed
+  // it; and nowhere on the companion once an earlier apply finished moving them and stopped before
+  // the registry recorded it, so its archive rows are already written.
+  const source = await renamedSource(
+    args.adapter,
+    args.tableName,
+    renamedColumn(rename, args.builtBy, dialect)
+  );
 
-  const refusals = [
+  const shapeRefusals = [
     ...refusalsForFieldsLeavingTranslation({
       leaving,
       newFields: args.newFields,
@@ -162,6 +172,32 @@ export async function archiveFieldsLeavingTranslation(args: {
       reshaped: rename && reshaped(rename, args.builtBy, dialect),
     }),
   ];
+  // A Required or Unique field leaving translation takes its setting on once the default
+  // language's values are shared, so those values are asked whether they can take it. A field
+  // refused above for its storage is not asked as well.
+  const refusedPaths = new Set(shapeRefusals.map(r => r.path));
+  const refusals = [
+    ...shapeRefusals,
+    ...(await refusalsForConstrainedFieldsLeaving({
+      adapter: args.adapter,
+      dialect,
+      tableName: args.tableName,
+      builtBy: args.builtBy,
+      defaultLocale: args.defaultLocale,
+      // A renamed field whose values an earlier apply already moved has none left here to ask.
+      leaving: new Set(
+        [...leaving].filter(
+          name =>
+            !refusedPaths.has(`fields.${name}`) &&
+            !(source.moved && name === rename?.to.name)
+        )
+      ),
+      oldFields,
+      newFields: args.newFields,
+      renamedFrom: source.renamedFrom,
+      surface: "builder",
+    })),
+  ];
   if (refusals.length > 0) {
     throw NextlyError.validation({
       errors: refusals,
@@ -173,14 +209,6 @@ export async function archiveFieldsLeavingTranslation(args: {
   }
   if (leaving.size === 0) return;
 
-  // Where a renamed field's values are now: in the column it had, until an earlier apply renamed
-  // it; and nowhere on the companion once an earlier apply finished moving them and stopped before
-  // the registry recorded it, so its archive rows are already written.
-  const source = await renamedSource(
-    args.adapter,
-    args.tableName,
-    renamedColumn(rename, args.builtBy, dialect)
-  );
   await writeArchiveFirst(
     args.adapter,
     args.entity,
@@ -261,6 +289,43 @@ async function renameInChange(args: {
   }
   return oneTranslatedFieldReplaced(args)
     ? translatedFieldRename(args, args.adapter.getCapabilities().dialect)
+    : undefined;
+}
+
+/**
+ * The fields a schema dialog's apply pushes first when a Required or Unique field stops being
+ * translated: those fields without their settings. Created with them, the shared column would hold
+ * NULL or one placeholder in every entry before the companion transition copies the default
+ * language's values in, so the apply pushes this list, runs the transition, and then pushes the
+ * real fields to apply the settings. Undefined when no field needs it.
+ */
+export function fieldsWithLeavingSettingsDeferred<
+  F extends LeavingFieldLike,
+>(args: {
+  oldFields: readonly LeavingFieldLike[];
+  newFields: readonly F[];
+  wasLocalized: boolean;
+  isLocalized: boolean;
+  /**
+   * The rename the schema dialog's answer decided (`resolveCompanionRename`). A field renamed and
+   * made shared leaves translation under its new name, as `archiveFieldsLeavingTranslation`
+   * judges it.
+   */
+  renamed?: FieldRename | null;
+}): F[] | undefined {
+  if (!args.wasLocalized || !args.isLocalized) return undefined;
+  const { renamed } = args;
+  const oldFields = renamed
+    ? args.oldFields.map(f =>
+        f.name === renamed.from ? { ...f, name: renamed.to } : f
+      )
+    : args.oldFields;
+  const deferred = withoutLeavingConstraints(
+    args.newFields,
+    new Set(fieldsLeavingTranslation(oldFields, args.newFields))
+  );
+  return deferred.some((f, i) => f !== args.newFields[i])
+    ? deferred
     : undefined;
 }
 

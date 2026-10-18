@@ -28,6 +28,7 @@ import {
   buildFieldsJoiningTranslationStatements,
   fieldsJoiningTranslation,
 } from "../../i18n/migration/field-joins-translation";
+import { withoutLeavingConstraints } from "../../i18n/migration/field-leaves-translation-rules";
 import { buildCompanionCreateOnlySql } from "../../i18n/migration/generate-up";
 import {
   buildCompanionTransitionPlans,
@@ -208,6 +209,10 @@ export interface UpdateCollectionInput {
  * that archives (a field leaving translation) ensures the archive table and writes the archive
  * rows before the shared ALTER: replayed on a database whose archive refuses them, the migration
  * stops before the main table has changed.
+ *
+ * `settings` comes last: the Required and Unique settings of fields leaving translation, whose
+ * shared columns the shared ALTER creates without them so the companion part can copy the default
+ * language's values in first.
  */
 function orderLocalizedMigration(
   isLocalized: boolean,
@@ -216,11 +221,18 @@ function orderLocalizedMigration(
     archive: string;
     beforeMain: string;
     companion: string;
+    settings?: string;
   }
 ): string {
   return (
     isLocalized
-      ? [parts.archive, parts.beforeMain, parts.main, parts.companion]
+      ? [
+          parts.archive,
+          parts.beforeMain,
+          parts.main,
+          parts.companion,
+          parts.settings ?? "",
+        ]
       : [parts.archive, parts.companion, parts.main]
   )
     .filter(sql => sql && sql.trim())
@@ -837,7 +849,7 @@ export class DynamicCollectionService extends BaseService {
    * transition differs there.
    */
   private async buildLocalizedMigrationSQL(
-    main: { artefact: string; local?: string },
+    main: { artefact: string; local?: string; settings?: string },
     args: Parameters<DynamicCollectionService["buildCompanionTransitionSQL"]>[0]
   ): Promise<{ sql: string; localSql?: string; needsArchive: boolean }> {
     const { sql, localSql, beforeMainSql, localBeforeMainSql, needsArchive } =
@@ -851,6 +863,7 @@ export class DynamicCollectionService extends BaseService {
         archive,
         beforeMain,
         companion,
+        settings: main.settings,
       });
     // What this database runs differs from the file when any part does.
     const differs =
@@ -1582,12 +1595,32 @@ export class DynamicCollectionService extends BaseService {
               ])
             : new Map(),
         };
+        // A Required or Unique field leaving translation gets its shared column without the
+        // setting: created with it, every entry would hold NULL or the same placeholder before the
+        // default language's values arrive. The setting follows the copy (`settings`).
+        const sharedUnconstrained = withoutLeavingConstraints(
+          newShared,
+          leavingTranslation
+        );
         const mainSQL = this.schemaService.generateAlterTableMigration(
           collection.tableName,
           oldShared,
-          newShared,
+          sharedUnconstrained,
           mainOptions
         );
+        // The settings as their own diff, so each dialect applies them its own way. Planned without
+        // the live table's facts, which describe the columns before this migration creates them;
+        // whether the values can take the settings was asked before anything ran.
+        const settingsSQL = sharedUnconstrained.some(
+          (f, i) => f !== newShared[i]
+        )
+          ? this.schemaService.generateAlterTableMigration(
+              collection.tableName,
+              sharedUnconstrained,
+              newShared,
+              { wasStatus: hasStatus, hasStatus }
+            )
+          : undefined;
         // A leaving field whose column unattended provisioning left on THIS database's main table.
         // The migration file still adds the column, because a database built from migrations does
         // not have it; this database runs a main diff that treats it as present, and the copy that
@@ -1598,17 +1631,20 @@ export class DynamicCollectionService extends BaseService {
         );
         const localOldShared = [
           ...oldShared,
-          ...userDefinedFields.filter(f => retainedOnMain.has(f.name)),
+          ...withoutLeavingConstraints(
+            userDefinedFields.filter(f => retainedOnMain.has(f.name)),
+            leavingTranslation
+          ),
         ];
         const localMainSQL = this.localAlterSQL(
           collection.tableName,
           localOldShared,
-          newShared,
+          sharedUnconstrained,
           mainOptions,
           mainSQL
         );
         const localizedMigration = await this.buildLocalizedMigrationSQL(
-          { artefact: mainSQL, local: localMainSQL },
+          { artefact: mainSQL, local: localMainSQL, settings: settingsSQL },
           {
             slug: collectionName,
             tableName: collection.tableName,
