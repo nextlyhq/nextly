@@ -139,4 +139,54 @@ describe("writing the component map", () => {
       expect(await readFile(list, "utf-8")).toBe("// an older list\n");
     }
   );
+
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "puts the map back when the list, written second, cannot be written",
+    async () => {
+      const cwd = await app();
+      const folder = join(cwd, "src/types/generated");
+      await mkdir(folder, { recursive: true });
+      const map = join(folder, COMPONENT_IMPORT_MAP_FILENAME);
+      const list = join(folder, COMPONENT_PATHS_FILENAME);
+      // Readable, so both reads succeed and the map is written; the list then
+      // refuses its write. The pair must be the old one, which agreed.
+      await writeFile(map, "// an older map\n", "utf-8");
+      await writeFile(list, "// an older list\n", "utf-8");
+      await chmod(list, 0o400);
+      await expect(
+        writeComponentMapFiles(
+          [shop],
+          "./src/types/generated/nextly-types.ts",
+          cwd
+        )
+      ).rejects.toMatchObject({ code: "EACCES" });
+      await chmod(list, 0o600);
+      expect(await readFile(map, "utf-8")).toBe("// an older map\n");
+      expect(await readFile(list, "utf-8")).toBe("// an older list\n");
+    }
+  );
+
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "removes a map it created when the list cannot be written beside it",
+    async () => {
+      const cwd = await app();
+      const folder = join(cwd, "src/types/generated");
+      await mkdir(folder, { recursive: true });
+      const map = join(folder, COMPONENT_IMPORT_MAP_FILENAME);
+      const list = join(folder, COMPONENT_PATHS_FILENAME);
+      // No map yet, so it is created; the list, read-only, then refuses its
+      // write. No map is left behind that its list does not match.
+      await writeFile(list, "// an older list\n", "utf-8");
+      await chmod(list, 0o400);
+      await expect(
+        writeComponentMapFiles(
+          [shop],
+          "./src/types/generated/nextly-types.ts",
+          cwd
+        )
+      ).rejects.toMatchObject({ code: "EACCES" });
+      await chmod(list, 0o600);
+      await expect(stat(map)).rejects.toMatchObject({ code: "ENOENT" });
+    }
+  );
 });

@@ -10,7 +10,7 @@
  * @module plugins/codegen/write-component-map
  */
 
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 
 import type { PluginDefinition } from "../plugin-context";
@@ -27,10 +27,12 @@ export interface ComponentMapWrite {
  * Writes the map and its path list beside the generated types file, resolved
  * against `cwd`, creating the folder when it is missing.
  *
- * 🔴 Both files are read before either is written. The map refuses to load
- * when it disagrees with its list, so replacing one and then failing to read
- * the other would leave a pair that breaks the admin; reading first, a file
- * that cannot be read stops the write with the pair as it was.
+ * 🔴 The pair changes together or not at all. The map refuses to load when it
+ * disagrees with its list, so one file replaced and the other not leaves an
+ * admin that does not load, where the old pair at least agreed. So both are
+ * read before either is written, and a file that cannot be read stops the
+ * write unchanged; and when a write fails, every file it started on is put
+ * back as it was read before the error is thrown.
  */
 export async function writeComponentMapFiles(
   plugins: PluginDefinition[],
@@ -43,18 +45,45 @@ export async function writeComponentMapFiles(
       return {
         file,
         code: artifact.code,
-        unchanged: (await currentContent(file)) === artifact.code,
+        previous: await currentContent(file),
       };
     })
   );
-  const changed: string[] = [];
-  for (const each of planned) {
-    if (each.unchanged) continue;
-    await mkdir(dirname(each.file), { recursive: true });
-    await writeFile(each.file, each.code, "utf-8");
-    changed.push(each.file);
+  // Every file a write was started on, the failing one included: a write
+  // that fails partway can leave its own file cut short.
+  const touched: (typeof planned)[number][] = [];
+  try {
+    for (const each of planned) {
+      if (each.previous === each.code) continue;
+      touched.push(each);
+      await mkdir(dirname(each.file), { recursive: true });
+      await writeFile(each.file, each.code, "utf-8");
+    }
+  } catch (error) {
+    await restore(touched);
+    throw error;
   }
-  return { paths: planned.map(each => each.file), changed };
+  return {
+    paths: planned.map(each => each.file),
+    changed: touched.map(each => each.file),
+  };
+}
+
+/**
+ * Puts back files this write replaced: the content read before writing, or no
+ * file where there was none. Best effort, since it runs while a write is
+ * already failing: the error the caller sees is that write's.
+ */
+async function restore(
+  written: readonly { file: string; previous: string | undefined }[]
+): Promise<void> {
+  await Promise.allSettled(
+    written.map(each =>
+      each.previous === undefined
+        ? rm(each.file, { force: true })
+        : writeFile(each.file, each.previous, "utf-8")
+    )
+  );
 }
 
 /**
