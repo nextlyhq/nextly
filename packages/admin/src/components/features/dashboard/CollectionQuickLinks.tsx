@@ -66,15 +66,25 @@ function collectionTiles(
   return list.flatMap(collection => {
     const count = counted.get(collection.name);
     if (counts !== undefined && count === undefined) return [];
-    return [
-      {
-        slug: collection.name,
-        label: count?.label ?? collection.label,
-        group: count?.group ?? collection.admin?.group ?? null,
-        count: count?.count ?? null,
-      },
-    ];
+    return [tileOf(collection, count)];
   });
+}
+
+/**
+ * A collection's tile: core's row for it once counted, which names and groups it as the count
+ * does, and until then the collection as the list describes it, its count still to come.
+ */
+function tileOf(
+  collection: ApiCollection,
+  count: CollectionCount | undefined
+): CollectionTile {
+  if (count !== undefined) return count;
+  return {
+    slug: collection.name,
+    label: collection.label,
+    group: collection.admin?.group ?? null,
+    count: null,
+  };
 }
 
 function groupCollections(counts: CollectionTile[]): CollectionGroup[] {
