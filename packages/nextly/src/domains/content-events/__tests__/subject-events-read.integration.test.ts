@@ -79,6 +79,29 @@ async function boot(dialect: TestDialect): Promise<TestNextly> {
         db: { allowIdOnCreate: true },
         fields: [text({ name: "title" })],
       }),
+      // Reads narrowed by a hook rather than a rule, as a tenant filter is.
+      defineCollection({
+        slug: "guarded",
+        hooks: { beforeRead: [({ data }) => data] },
+        fields: [text({ name: "title" })],
+      }),
+      // A hook that refuses a caller by a custom user property, as a tenant
+      // filter does: only the caller's own properties can trigger it.
+      defineCollection({
+        slug: "tenanted",
+        hooks: {
+          beforeOperation: [
+            ({ user }) => {
+              if (
+                (user as { tenant?: string } | undefined)?.tenant === "blocked"
+              ) {
+                throw new Error("This tenant may not read here.");
+              }
+            },
+          ],
+        },
+        fields: [text({ name: "title" })],
+      }),
       // A document-level rule: a function, which may read the row.
       defineCollection({
         slug: "secrets",
@@ -188,7 +211,10 @@ async function documentIn(t: TestNextly, collection: string): Promise<string> {
   return (created.item as { id: string }).id;
 }
 
-const asPerson = (userId: string) => ({ userId, overrideAccess: false });
+const asPerson = (userId: string) => ({
+  user: { id: userId },
+  overrideAccess: false,
+});
 
 describe.each(getConfiguredTestDialects())(
   "reading a subject's events (integration, %s)",
@@ -363,6 +389,71 @@ describe.each(getConfiguredTestDialects())(
       expect(
         (await t.nextly.contentEvents.list({ subject })).items
       ).toHaveLength(2);
+    }, 120_000);
+
+    it("reads a deleted document whose reads a hook narrows only as a super-admin", async () => {
+      const t = await boot(dialect);
+      const holder = await personHolding(t, ["read-guarded"]);
+      const doc = await documentIn(t, "guarded");
+      const subject = { kind: "collection" as const, slug: "guarded", id: doc };
+
+      // While it exists, the permission and the hook decide: the holder reads.
+      expect(
+        (await t.nextly.contentEvents.list({ subject, ...asPerson(holder) }))
+          .items
+      ).toHaveLength(1);
+
+      await t.nextly.delete({ collection: "guarded", id: doc });
+
+      // The hook cannot be asked about a row that is gone: refused, but not
+      // to a super-admin.
+      await expect(
+        t.nextly.contentEvents.list({ subject, ...asPerson(holder) })
+      ).rejects.toMatchObject({ code: "NOT_FOUND" });
+      expect(
+        (await t.nextly.contentEvents.list({ subject, ...asPerson(founder!) }))
+          .items
+      ).toHaveLength(2);
+    }, 120_000);
+
+    it("answers a Direct API caller exactly as the document's own read does", async () => {
+      const t = await boot(dialect);
+      const reader = await personHolding(t, ["read-tenanted"]);
+      const outsider = await personHolding(t, ["read-content-releases"]);
+      const doc = await documentIn(t, "tenanted");
+      const subject = {
+        kind: "collection" as const,
+        slug: "tenanted",
+        id: doc,
+      };
+
+      // The same caller, with a custom property a rule may read, through the
+      // document's read and through its events: one answer, never two.
+      const callers = [
+        { id: reader, tenant: "open" },
+        { id: reader, tenant: "blocked" },
+        { id: outsider, tenant: "open" },
+      ];
+      for (const user of callers) {
+        const documentRead = await t.nextly
+          .findByID({
+            collection: "tenanted",
+            id: doc,
+            user,
+            overrideAccess: false,
+          })
+          .then(
+            () => "readable",
+            () => "refused"
+          );
+        const eventsRead = await t.nextly.contentEvents
+          .list({ subject, user, overrideAccess: false })
+          .then(
+            () => "readable",
+            () => "refused"
+          );
+        expect(eventsRead, JSON.stringify(user)).toBe(documentRead);
+      }
     }, 120_000);
 
     it("reads a release's events with release read authority, live and deleted", async () => {

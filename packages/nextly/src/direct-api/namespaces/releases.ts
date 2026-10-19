@@ -311,11 +311,8 @@ function service(): ReleasesService {
  * every other namespace, so one call can act as someone without reconfiguring
  * the instance — and an instance that asked for enforcement keeps it when the
  * call says nothing.
- *
- * Exported so the content-events namespace, which takes the same caller
- * arguments, resolves them by this one rule rather than a copy of it.
  */
-export function actorOf(ctx: NextlyContext, args: ReleaseCallerArgs) {
+function actorOf(ctx: NextlyContext, args: ReleaseCallerArgs) {
   // Absent keys are DROPPED before merging, not passed as `undefined`.
   // `mergeConfig` is a spread and a present-but-undefined key wins it, so
   // forwarding `{ overrideAccess: undefined }` from a call that said nothing

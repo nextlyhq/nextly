@@ -14,6 +14,9 @@
  *   the row, which is gone, so it cannot be evaluated. Only a caller it never
  *   limited reads: a super-admin signed in. An API key is refused, since the
  *   rule judged keys too.
+ * - The same where hooks may narrow its reads (`beforeOperation`,
+ *   `beforeRead` or `afterRead`, its own or the site's): a tenant filter in a
+ *   hook is a document-level rule by another name, and it too needs the row.
  *
  * Trusted server code (`overrideAccess`) is the caller's to skip, before this.
  *
@@ -26,7 +29,21 @@ import {
   getRBACService,
   type ReadAccessCaller,
 } from "../../auth/entity-read-access";
+import { getHookRegistry } from "../../hooks/hook-registry";
 import { isSuperAdmin } from "../../services/lib/permissions";
+
+/** The hooks that may narrow which documents a caller reads. */
+const READ_NARROWING_HOOKS = [
+  "beforeOperation",
+  "beforeRead",
+  "afterRead",
+] as const;
+
+/** Whether any hook may narrow reads of `slug`, so a deleted row's answer is unknown. */
+function hooksMayNarrowReads(slug: string): boolean {
+  const registry = getHookRegistry();
+  return READ_NARROWING_HOOKS.some(hook => registry.hasHooks(hook, slug));
+}
 
 /**
  * Whether this caller may read the events of the deleted document of the
@@ -37,7 +54,7 @@ export async function mayReadDeletedDocument(
   caller: ReadAccessCaller
 ): Promise<boolean> {
   const rule = getRBACService()?.getRegisteredAccess(slug)?.read;
-  if (typeof rule === "function") {
+  if (typeof rule === "function" || hooksMayNarrowReads(slug)) {
     // The session path only: a super-admin's key is judged by its own scope,
     // which the rule limited like any other.
     return (

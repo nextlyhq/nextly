@@ -67,6 +67,7 @@ import {
   readAuthenticatedActor,
   readAuthenticatedScope,
 } from "../helpers/authenticated-actor";
+import { readAuthenticatedUser } from "../helpers/authenticated-user";
 import type { Params } from "../types";
 
 import { readAccessCallerForDispatch } from "./read-access-caller";
@@ -310,8 +311,11 @@ export async function respondSubjectEvents(
   subject: Exclude<ContentEventSubject, { kind: "release" }>,
   p: Params
 ): Promise<Response> {
+  // The caller as every REST collection operation reads it, verified claims
+  // included, so a document's hooks judge the same caller here.
+  const user = readAuthenticatedUser(p);
   const result = await readSubjectEvents(subject, parseSubjectEventsQuery(p), {
-    user: userFromParams(p),
+    ...(user === undefined ? {} : { user }),
     authenticatedScope: readAuthenticatedScope(p),
   });
   return withSessionCacheHeaders(respondList(result.items, result.meta));

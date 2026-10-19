@@ -11,6 +11,7 @@
  */
 
 import { apiKeyScopeFrom } from "../auth/authenticated-scope";
+import { buildUserContext } from "../auth/user-context";
 import { getCachedNextly } from "../init";
 import { resolveRoleSlugs } from "../services/lib/permissions";
 
@@ -28,10 +29,11 @@ import { withErrorHandler } from "./with-error-handler";
 // or one caller's "not found", to another.
 export const handleContentEventsRequest = privateToSession(
   withErrorHandler(async (request: Request): Promise<Response> => {
-    // Booted before authenticating: on a cold process the permission lookup
-    // itself needs the services registered.
-    await getCachedNextly();
+    // Authenticated first: the route handler registers services on a cold
+    // worker only for a request that carries credentials, so booting first
+    // would answer an anonymous request with a server error.
     const auth = await requireRouteAuthentication(request);
+    await getCachedNextly();
     const params = Object.fromEntries(new URL(request.url).searchParams);
     const subject = parseSubjectParam(params);
     const query = parseSubjectEventsQuery(params);
@@ -39,13 +41,15 @@ export const handleContentEventsRequest = privateToSession(
     // other read; an API key is judged by its own scope.
     const roles = await resolveRoleSlugs(auth);
     const result = await readSubjectEvents(subject, query, {
-      user: {
+      // The shared constructor, so the caller's verified claims (a tenant,
+      // say) reach the document's hooks as on every other read.
+      user: buildUserContext({
+        claims: auth.claims,
         id: auth.userId,
         name: auth.userName,
         email: auth.userEmail,
         roles,
-        role: roles?.[0],
-      },
+      }),
       ...(auth.authMethod === "api-key"
         ? { authenticatedScope: apiKeyScopeFrom(auth) }
         : {}),

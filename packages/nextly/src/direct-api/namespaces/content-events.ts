@@ -17,10 +17,14 @@ import {
 } from "../../api/subject-events";
 import type { ContentEventSubject } from "../../domains/content-events/record";
 import type { ContentEventRecord } from "../../domains/content-events/repository";
-import type { ListResult } from "../types/shared";
+import type { DirectAPIConfig, ListResult } from "../types/shared";
 
 import type { NextlyContext } from "./context";
-import { actorOf, type ReleaseCallerArgs } from "./releases";
+import { accessOptions, mergeConfig } from "./helpers";
+
+/** What `contentEvents.list` takes: a subject, a query, and the caller. */
+export type ContentEventsListArgs = DirectAPIConfig &
+  SubjectEventsQuery & { subject: ContentEventSubject };
 
 /** @experimental */
 export interface ContentEventsNamespace {
@@ -28,10 +32,7 @@ export interface ContentEventsNamespace {
    * A page of a subject's events, newest first, as `{ items, meta }`. The next
    * page passes the last item's id as `before`.
    */
-  list(
-    args: { subject: ContentEventSubject } & SubjectEventsQuery &
-      ReleaseCallerArgs
-  ): Promise<ListResult<ContentEventRecord>>;
+  list(args: ContentEventsListArgs): Promise<ListResult<ContentEventRecord>>;
 }
 
 export function createContentEventsNamespace(
@@ -39,10 +40,10 @@ export function createContentEventsNamespace(
 ): ContentEventsNamespace {
   return {
     list: async args => {
-      // The caller resolved by the rule every caller-taking namespace uses,
-      // from the ORIGINAL argument bag, so an omitted identity and an
-      // explicitly anonymous one stay different questions.
-      const actor = actorOf(ctx, args);
+      // The caller as every collection operation takes it: the whole user
+      // (custom properties a read hook may scope by included), the key's own
+      // scope, and the instance's settings where the call says nothing.
+      const access = accessOptions(mergeConfig(ctx.defaultConfig, args));
       return readSubjectEvents(
         args.subject,
         {
@@ -52,18 +53,11 @@ export function createContentEventsNamespace(
           ...(args.before === undefined ? {} : { before: args.before }),
         },
         {
-          overrideAccess: actor.overrideAccess,
-          ...(actor.userId === null
+          overrideAccess: access.overrideAccess ?? true,
+          ...(access.user === undefined ? {} : { user: access.user }),
+          ...(access.authenticatedScope === undefined
             ? {}
-            : {
-                user: {
-                  id: actor.userId,
-                  ...(actor.userRoles ? { roles: actor.userRoles } : {}),
-                },
-              }),
-          ...(actor.authenticatedScope === undefined
-            ? {}
-            : { authenticatedScope: actor.authenticatedScope }),
+            : { authenticatedScope: access.authenticatedScope }),
         }
       );
     },
