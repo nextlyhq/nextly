@@ -630,6 +630,30 @@ for (const entry of TEMPLATE_STORE_DIALECTS) {
         });
       });
 
+      it("asks about the stored provider when the code version sends for an inactive override", async () => {
+        const code = { passwordReset: fromCode };
+        const service = await boot(V1, code);
+        const id = (await service.getTemplateBySlug("password-reset"))!.id;
+        const providerId = "6f1c2a9e-1b2c-4d5e-8f90-123456789abc";
+        await service.overrideTemplate(id, undefined, ACTOR);
+        await service.updateTemplate(
+          id,
+          { isActive: false, providerId },
+          ACTOR
+        );
+        const { email } = sender(service, code);
+        const resolve = vi
+          .spyOn(
+            email as unknown as {
+              resolveProvider(id?: string): Promise<unknown>;
+            },
+            "resolveProvider"
+          )
+          .mockResolvedValue({});
+        expect(await email.canSendTemplate("password-reset")).toBe(true);
+        expect(resolve).toHaveBeenCalledWith(providerId);
+      });
+
       it("uses a configured passwordReset function on a fresh install", async () => {
         const code = { passwordReset: fromCode };
         const service = await boot(V1, code);

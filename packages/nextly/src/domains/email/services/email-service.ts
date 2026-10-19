@@ -1168,12 +1168,13 @@ export class EmailService extends BaseService {
     let providerId: string | undefined;
 
     try {
-      const { template, preferCode } =
+      const { template } =
         await this.templateService.resolveForSend(templateSlug);
       // The stored template's provider, whichever version sends: the code
-      // supplies only content (see sendWithTemplate).
-      const codeWins = preferCode && !!this.codeTemplateFor(templateSlug);
-      if (template && (template.isActive || codeWins)) {
+      // supplies only content (see sendWithTemplate), and sends whenever the
+      // stored template doesn't (inactive, or not overridden).
+      const hasCode = !!this.codeTemplateFor(templateSlug);
+      if (template && (template.isActive || hasCode)) {
         providerId = template.providerId ?? undefined;
       }
     } catch {
