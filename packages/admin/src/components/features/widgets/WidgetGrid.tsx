@@ -242,6 +242,26 @@ function CustomizePicker({
   );
 }
 
+/**
+ * What the grid's place holds while the first arrangement read is in flight.
+ *
+ * A line of text, not card-shaped placeholders: which cards there will be,
+ * and how wide, is exactly what is not known yet, and a guessed block that
+ * the real dashboard then differs from is itself the jump this avoids.
+ */
+function ArrangementLoading() {
+  return (
+    <p
+      role="status"
+      aria-label="Loading your dashboard"
+      className="text-sm text-muted-foreground"
+      data-testid="widget-grid-loading"
+    >
+      Loading your dashboard…
+    </p>
+  );
+}
+
 export function WidgetGrid() {
   const branding = useBranding();
   const { isPending, isUnavailable } = useBrandingStatus();
@@ -326,6 +346,13 @@ export function WidgetGrid() {
     return (
       <NothingToDraw isPending={isPending} isUnavailable={isUnavailable} />
     );
+  }
+
+  // Until this person's arrangement is known: no card, no card's data, and
+  // one status where the grid will be. Nothing sits below the grid, so the
+  // cards arriving in its place move nothing that was already drawn.
+  if (arrangement.awaitingArrangement) {
+    return <ArrangementLoading />;
   }
 
   return (

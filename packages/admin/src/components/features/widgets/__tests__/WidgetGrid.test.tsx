@@ -7,6 +7,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { DASHBOARD_LAYOUT_KEY } from "@admin/hooks/queries/useDashboardLayout";
 import { protectedApi } from "@admin/lib/api/protectedApi";
 import {
   clearRegistry,
@@ -48,6 +49,21 @@ function renderGrid() {
     // that never recovered.
     defaultOptions: { queries: { retry: false, retryDelay: 0, gcTime: 0 } },
   });
+  // These cases are about the DECLARED cards, which the grid draws when no
+  // arrangement could be read. So the layout read starts out failed, as it
+  // would after an outage; a read still in flight draws no card at all, which
+  // `arrangement-first.test.tsx` covers. Not retried on mount, which would
+  // report the read as pending again until the retry failed.
+  client.setQueryDefaults(DASHBOARD_LAYOUT_KEY, { retryOnMount: false });
+  client
+    .getQueryCache()
+    .build(client, { queryKey: DASHBOARD_LAYOUT_KEY })
+    .setState({
+      status: "error",
+      error: new Error("layout unavailable"),
+      data: undefined,
+      fetchStatus: "idle",
+    });
   const Wrapper = ({ children }: { children: ReactNode }) => (
     <QueryClientProvider client={client}>{children}</QueryClientProvider>
   );
