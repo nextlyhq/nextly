@@ -176,6 +176,25 @@ for (const entry of TEMPLATE_STORE_DIALECTS) {
         });
       });
 
+      it("offers the owner's changes for an edit made before the boot reconciled the template", async () => {
+        const first = await boot(V1);
+        const id = (await shippedTemplate(first)).id;
+        // The next boot knows the owner's version 2 but hasn't written it yet.
+        const starting = store.newService();
+        starting.configureOwnership({
+          plugins: [{ name: ORDERS, templates: [shipped(V2)] }],
+        });
+        await starting.updateTemplate(id, { subject: "Shipped!" }, ACTOR);
+
+        const template = await shippedTemplate(starting);
+        expect(template).toMatchObject({
+          overridden: true,
+          ownerChanged: true,
+          htmlContent: V1,
+        });
+        expect((await starting.compareTemplate(id)).changes).toHaveLength(2);
+      });
+
       it("keeps an edit made while its plugin was away when the plugin comes back", async () => {
         await boot(V1);
         const away = await boot(null);

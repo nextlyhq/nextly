@@ -655,13 +655,19 @@ export class EmailTemplateService extends BaseService {
       // version to read, so its template's version before this edit is the
       // base: if the plugin comes back, the edit stays as an override and its
       // changes since are offered for review.
+      // A row the boot hasn't brought to its owner's current version yet (the
+      // reconciliation runs in the background) is based on what it holds, so
+      // the owner's changes since are still offered for review.
       const entry = this.registry.owned.get(record.slug);
-      const base: KeptBase = entry
-        ? keptBase(entry)
-        : { ...versionOf(existing), details: detailsOf(existing) };
+      const current = entry && sameVersion(versionOf(existing), entry.version);
+      const base: KeptBase =
+        entry && current
+          ? keptBase(entry)
+          : { ...versionOf(existing), details: detailsOf(existing) };
       updateData.overridden = true;
       updateData.baseVersion = base;
-      updateData.baseDigest = entry ? entry.digest : versionDigest(base);
+      updateData.baseDigest =
+        entry && current ? entry.digest : versionDigest(base);
     }
 
     try {
