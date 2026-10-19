@@ -20,7 +20,7 @@
  *
  * @module domains/collections/__tests__/collection-promote-judges-the-publisher.integration.test
  */
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   checkbox,
@@ -33,12 +33,16 @@ import {
 } from "../../../config";
 import {
   createTestNextly,
+  getConfiguredTestDialects,
+  type TestDialect,
   type TestNextly,
 } from "../../../plugins/test-nextly";
 import type { CollectionsHandler } from "../../../services/collections-handler";
 
 let current: TestNextly | undefined;
 afterEach(async () => {
+  // `heldStill` moves the clock; the next test starts on the real one.
+  vi.useRealTimers();
   await current?.destroy();
   current = undefined;
 });
@@ -52,8 +56,9 @@ function handlerOf(t: TestNextly): CollectionsHandler {
 }
 
 /** Published, with drafts on, and two fields only BOSS may write. */
-async function boot(): Promise<TestNextly> {
+async function boot(dialect: TestDialect): Promise<TestNextly> {
   current = await createTestNextly({
+    dialect,
     collections: [
       defineCollection({
         slug: SLUG,
@@ -129,6 +134,36 @@ async function storedState(
   return { entry, versions };
 }
 
+/**
+ * Reads what the store holds for an entry just before a write that is about
+ * to be refused, and returns the check that the refusal changed none of it.
+ *
+ * POPULATION CONTROL: the state must hold every part the check compares, or
+ * an equality between two empty reads would pass for any write: the live row,
+ * published; the one pending working draft; and a published snapshot.
+ *
+ * The clock then moves an hour on, so a refused write that stamps a time
+ * stores a different value even where the column keeps whole seconds and the
+ * write lands in the same second as the read.
+ */
+async function heldStill(
+  t: TestNextly,
+  slug: string,
+  id: string
+): Promise<() => Promise<void>> {
+  const before = await storedState(t, slug, id);
+  expect(before.entry).toHaveLength(1);
+  expect(before.entry[0]?.status).toBe("published");
+  expect(before.versions.filter(v => v.versionNo === null)).toHaveLength(1);
+  expect(
+    before.versions.some(v => v.versionNo !== null && v.status === "published")
+  ).toBe(true);
+  vi.useFakeTimers({ toFake: ["Date"], now: Date.now() + 60 * 60 * 1000 });
+  return async () => {
+    expect(await storedState(t, slug, id)).toEqual(before);
+  };
+}
+
 async function liveDoc(
   t: TestNextly,
   id: string
@@ -142,547 +177,692 @@ async function liveDoc(
   return doc ?? {};
 }
 
-describe("a collection publish re-judges the draft it promotes", () => {
-  it("refuses a publish that would change a field the PUBLISHER may not write, and keeps the draft", async () => {
-    const t = await boot();
-    const h = handlerOf(t);
+describe.each(getConfiguredTestDialects())(
+  "a collection publish re-judges the draft it promotes (%s)",
+  dialect => {
+    it("refuses a publish that would change a field the PUBLISHER may not write, and keeps the draft", async () => {
+      const t = await boot(dialect);
+      const h = handlerOf(t);
 
-    const created = await h.createEntry(
-      { collectionName: SLUG, overrideAccess: true },
-      { body: "live", guarded: "live-value", status: "published" }
-    );
-    const id = (created.data as { id?: string }).id as string;
+      const created = await h.createEntry(
+        { collectionName: SLUG, overrideAccess: true },
+        { body: "live", guarded: "live-value", status: "published" }
+      );
+      const id = (created.data as { id?: string }).id as string;
 
-    // BOSS may write `guarded`, so the held draft carries their edit legitimately.
-    const held = await h.updateEntry(
-      { collectionName: SLUG, entryId: id, routeAuthorized: true, user: BOSS },
-      { body: "edited", guarded: "boss-secret" }
-    );
-    expect(held.success, JSON.stringify(held)).toBe(true);
-    // POPULATION CONTROL: the edit really was held. Without this a later
-    // "the draft is still here" could equally mean the save never became one.
-    expect(JSON.stringify(await pendingDrafts(t, id))).toContain("boss-secret");
-    const before = await storedState(t, SLUG, id);
+      // BOSS may write `guarded`, so the held draft carries their edit legitimately.
+      const held = await h.updateEntry(
+        {
+          collectionName: SLUG,
+          entryId: id,
+          routeAuthorized: true,
+          user: BOSS,
+        },
+        { body: "edited", guarded: "boss-secret" }
+      );
+      expect(held.success, JSON.stringify(held)).toBe(true);
+      // POPULATION CONTROL: the edit really was held. Without this a later
+      // "the draft is still here" could equally mean the save never became one.
+      expect(JSON.stringify(await pendingDrafts(t, id))).toContain(
+        "boss-secret"
+      );
+      const unchanged = await heldStill(t, SLUG, id);
 
-    // Someone else publishes. The field rule denies THEM that field.
-    const published = await h.updateEntry(
-      { collectionName: SLUG, entryId: id, routeAuthorized: true, user: CLERK },
-      { status: "published" }
-    );
+      // Someone else publishes. The field rule denies THEM that field.
+      const published = await h.updateEntry(
+        {
+          collectionName: SLUG,
+          entryId: id,
+          routeAuthorized: true,
+          user: CLERK,
+        },
+        { status: "published" }
+      );
 
-    expect(published.success).toBe(false);
-    const issues = (
-      published as {
-        publicData?: { errors?: Array<{ path: string; code: string }> };
-      }
-    ).publicData?.errors;
-    expect(issues?.map(i => i.path)).toEqual(["guarded"]);
-    expect(issues?.[0]?.code).toBe("FORBIDDEN");
+      expect(published.success).toBe(false);
+      const issues = (
+        published as {
+          publicData?: { errors?: Array<{ path: string; code: string }> };
+        }
+      ).publicData?.errors;
+      expect(issues?.map(i => i.path)).toEqual(["guarded"]);
+      expect(issues?.[0]?.code).toBe("FORBIDDEN");
 
-    // Nothing was published, and the pending change is still there for someone
-    // who can write the field. This is the whole point: a successful publish
-    // deletes the draft, so a strip would have taken BOSS's edit with it.
-    const live = await liveDoc(t, id);
-    expect(live.body).toBe("live");
-    expect(live.guarded).toBe("live-value");
-    expect(JSON.stringify(await pendingDrafts(t, id))).toContain("boss-secret");
-    // Every stored value is as it was: the entry's columns, its status and
-    // timestamps, its published snapshots and its pending draft.
-    expect(await storedState(t, SLUG, id)).toEqual(before);
-  });
-
-  it("catches a denied field NESTED inside a group", async () => {
-    const t = await boot();
-    const h = handlerOf(t);
-
-    const created = await h.createEntry(
-      { collectionName: SLUG, overrideAccess: true },
-      {
-        body: "live",
-        ops: { runbook: "live-runbook" },
-        status: "published",
-      }
-    );
-    const id = (created.data as { id?: string }).id as string;
-
-    await h.updateEntry(
-      { collectionName: SLUG, entryId: id, routeAuthorized: true, user: BOSS },
-      { ops: { runbook: "boss-runbook" } }
-    );
-
-    const published = await h.updateEntry(
-      { collectionName: SLUG, entryId: id, routeAuthorized: true, user: CLERK },
-      { status: "published" }
-    );
-
-    expect(published.success).toBe(false);
-    const issues = (
-      published as {
-        publicData?: { errors?: Array<{ path: string; code: string }> };
-      }
-    ).publicData?.errors;
-    // Named at its own depth, so the author can see what to hand over.
-    expect(issues?.map(i => i.path)).toEqual(["ops.runbook"]);
-  });
-
-  it("publishes normally when the draft changes nothing the publisher is denied", async () => {
-    const t = await boot();
-    const h = handlerOf(t);
-
-    const created = await h.createEntry(
-      { collectionName: SLUG, overrideAccess: true },
-      { body: "live", guarded: "live-value", status: "published" }
-    );
-    const id = (created.data as { id?: string }).id as string;
-
-    // `guarded` is in the promoted document, as it is in every one of them,
-    // but at the value it already holds. Only a CHANGE is refused.
-    await h.updateEntry(
-      { collectionName: SLUG, entryId: id, routeAuthorized: true, user: CLERK },
-      { body: "edited" }
-    );
-
-    const published = await h.updateEntry(
-      { collectionName: SLUG, entryId: id, routeAuthorized: true, user: CLERK },
-      { status: "published" }
-    );
-
-    expect(published.success, JSON.stringify(published)).toBe(true);
-    const live = await liveDoc(t, id);
-    expect(live.body).toBe("edited");
-    expect(live.guarded).toBe("live-value");
-    expect(await pendingDrafts(t, id)).toHaveLength(0);
-  });
-
-  it("does not read an UNCHANGED denied field as an edit, whatever its type", async () => {
-    // The pending change is JSON, so a timestamp arrives here as the ISO string
-    // it was serialised to while the live row comes back from the driver as a
-    // `Date`. Compared as they arrive, a date-bearing field the publisher may
-    // not write reads as an edit and refuses a publish that touches nothing.
-    // Every type is covered: only the date arrives in two representations, and
-    // a suite that checked one type would not show which.
-    const onlyBoss = {
-      update: ({ req }: { req?: { user?: { email?: string } } }) =>
-        req?.user?.email === BOSS.email,
-    };
-    const slug = "everytype";
-    current = await createTestNextly({
-      collections: [
-        defineCollection({
-          slug,
-          status: true,
-          versions: { drafts: true },
-          access: {
-            read: () => true,
-            update: () => true,
-            publish: () => true,
-            unpublish: () => true,
-          },
-          fields: [
-            text({ name: "body" }),
-            text({ name: "gtext", access: onlyBoss }),
-            date({ name: "gdate", access: onlyBoss }),
-            number({ name: "gnum", access: onlyBoss }),
-            checkbox({ name: "gbool", access: onlyBoss }),
-            json({ name: "gjson", access: onlyBoss }),
-            group({
-              name: "ggroup",
-              access: onlyBoss,
-              fields: [text({ name: "note" })],
-            }),
-          ],
-        }),
-      ],
+      // Nothing was published, and the pending change is still there for someone
+      // who can write the field. This is the whole point: a successful publish
+      // deletes the draft, so a strip would have taken BOSS's edit with it.
+      const live = await liveDoc(t, id);
+      expect(live.body).toBe("live");
+      expect(live.guarded).toBe("live-value");
+      expect(JSON.stringify(await pendingDrafts(t, id))).toContain(
+        "boss-secret"
+      );
+      // Every stored value is as it was: the entry's columns, its status and
+      // timestamps, its published snapshots and its pending draft.
+      await unchanged();
     });
-    const h = handlerOf(current);
 
-    const created = await h.createEntry(
-      { collectionName: slug, overrideAccess: true },
-      {
-        body: "live",
-        gtext: "t",
-        gdate: "2026-01-02T03:04:05.000Z",
-        gnum: 42,
-        gbool: true,
-        gjson: { a: 1 },
-        ggroup: { note: "i" },
-        status: "published",
-      }
-    );
-    const id = (created.data as { id?: string }).id as string;
+    it("catches a denied field NESTED inside a group", async () => {
+      const t = await boot(dialect);
+      const h = handlerOf(t);
 
-    // CLERK edits ONLY the unrestricted field; every guarded one is untouched.
-    await h.updateEntry(
-      { collectionName: slug, entryId: id, routeAuthorized: true, user: CLERK },
-      { body: "edited" }
-    );
+      const created = await h.createEntry(
+        { collectionName: SLUG, overrideAccess: true },
+        {
+          body: "live",
+          ops: { runbook: "live-runbook" },
+          status: "published",
+        }
+      );
+      const id = (created.data as { id?: string }).id as string;
 
-    const published = await h.updateEntry(
-      { collectionName: slug, entryId: id, routeAuthorized: true, user: CLERK },
-      { status: "published" }
-    );
+      await h.updateEntry(
+        {
+          collectionName: SLUG,
+          entryId: id,
+          routeAuthorized: true,
+          user: BOSS,
+        },
+        { ops: { runbook: "boss-runbook" } }
+      );
+      const unchanged = await heldStill(t, SLUG, id);
 
-    expect(published.success, JSON.stringify(published)).toBe(true);
-    const doc = (await current.nextly.findByID({
-      collection: slug as never,
-      id,
-      overrideAccess: true,
-      status: "all",
-    } as never)) as Record<string, unknown> | null;
-    expect(doc?.body).toBe("edited");
-  });
+      const published = await h.updateEntry(
+        {
+          collectionName: SLUG,
+          entryId: id,
+          routeAuthorized: true,
+          user: CLERK,
+        },
+        { status: "published" }
+      );
 
-  it("keeps an UNCHANGED denied child when its group is written", async () => {
-    // The rules delete a denied value, and the group is one JSON column: hand
-    // the write what the rules returned and the partial group is serialised
-    // over the whole column, clearing a protected value nobody touched. The
-    // document the write gets holds the denied child at its LIVE value.
-    const t = await boot();
-    const h = handlerOf(t);
-
-    const created = await h.createEntry(
-      { collectionName: SLUG, overrideAccess: true },
-      {
-        body: "live",
-        ops: { runbook: "live-runbook" },
-        status: "published",
-      }
-    );
-    const id = (created.data as { id?: string }).id as string;
-
-    // CLERK, who may not write `ops.runbook`, edits only the unrestricted field.
-    await h.updateEntry(
-      { collectionName: SLUG, entryId: id, routeAuthorized: true, user: CLERK },
-      { body: "edited" }
-    );
-
-    const published = await h.updateEntry(
-      { collectionName: SLUG, entryId: id, routeAuthorized: true, user: CLERK },
-      { status: "published" }
-    );
-
-    expect(published.success, JSON.stringify(published)).toBe(true);
-    const live = await liveDoc(t, id);
-    expect(live.body).toBe("edited");
-    // The protected value is still here. Nobody asked for it to go.
-    expect(live.ops).toEqual({ runbook: "live-runbook" });
-  });
-
-  it("refuses a pending change that CLEARS a field it may not write", async () => {
-    // A GUARD, not a demonstration. Clearing a field sends `null`, which is a
-    // present key and so is judged like any other value. The case the live-side
-    // pass exists for is a key ABSENT from the promoted document entirely, which
-    // no known route through the public API produces, since a collection
-    // snapshot is a full copy of the row, so that half is guarded defensively.
-    const t = await boot();
-    const h = handlerOf(t);
-
-    const created = await h.createEntry(
-      { collectionName: SLUG, overrideAccess: true },
-      { body: "live", guarded: "live-value", status: "published" }
-    );
-    const id = (created.data as { id?: string }).id as string;
-
-    // BOSS may write it, so clearing it is a legitimate pending change.
-    await h.updateEntry(
-      { collectionName: SLUG, entryId: id, routeAuthorized: true, user: BOSS },
-      { body: "edited", guarded: null }
-    );
-
-    const published = await h.updateEntry(
-      { collectionName: SLUG, entryId: id, routeAuthorized: true, user: CLERK },
-      { status: "published" }
-    );
-
-    expect(published.success).toBe(false);
-    const issues = (
-      published as { publicData?: { errors?: Array<{ path: string }> } }
-    ).publicData?.errors;
-    expect(issues?.map(i => i.path)).toEqual(["guarded"]);
-    // The value is untouched, and the deletion is still pending for someone
-    // who may make it.
-    const live = await liveDoc(t, id);
-    expect(live.guarded).toBe("live-value");
-    expect(await pendingDrafts(t, id)).toHaveLength(1);
-  });
-
-  it("publishes a date the CALLER supplies alongside the status", async () => {
-    // The shaping pass coerces a caller's date to a `Date` before the resolver
-    // sees it, and a `Date` is an object with no enumerable keys: a rebuild
-    // that treats every object as a container returns `{}` and the driver then
-    // refuses that write with "value.getTime is not a function", so nothing
-    // goes live.
-    const slug = "dated";
-    current = await createTestNextly({
-      collections: [
-        defineCollection({
-          slug,
-          status: true,
-          versions: { drafts: true },
-          access: {
-            read: () => true,
-            update: () => true,
-            publish: () => true,
-            unpublish: () => true,
-          },
-          fields: [
-            text({ name: "body" }),
-            date({ name: "goesLive" }),
-            // One denied field, so the resolver runs at all.
-            text({
-              name: "guarded",
-              access: { update: ({ req }) => req.user?.email === BOSS.email },
-            }),
-          ],
-        }),
-      ],
+      expect(published.success).toBe(false);
+      const issues = (
+        published as {
+          publicData?: { errors?: Array<{ path: string; code: string }> };
+        }
+      ).publicData?.errors;
+      // Named at its own depth, so the author can see what to hand over.
+      expect(issues?.map(i => i.path)).toEqual(["ops.runbook"]);
+      // And nothing of the entry moved, the nested edit's draft included.
+      await unchanged();
     });
-    const h = handlerOf(current);
 
-    const created = await h.createEntry(
-      { collectionName: slug, overrideAccess: true },
-      {
-        body: "live",
-        goesLive: "2026-01-02T03:04:05.000Z",
-        guarded: "live-value",
-        status: "published",
-      }
-    );
-    const id = (created.data as { id?: string }).id as string;
+    it("publishes normally when the draft changes nothing the publisher is denied", async () => {
+      const t = await boot(dialect);
+      const h = handlerOf(t);
 
-    await h.updateEntry(
-      { collectionName: slug, entryId: id, routeAuthorized: true, user: CLERK },
-      { body: "edited" }
-    );
+      const created = await h.createEntry(
+        { collectionName: SLUG, overrideAccess: true },
+        { body: "live", guarded: "live-value", status: "published" }
+      );
+      const id = (created.data as { id?: string }).id as string;
 
-    const published = await h.updateEntry(
-      { collectionName: slug, entryId: id, routeAuthorized: true, user: CLERK },
-      { status: "published", goesLive: "2026-09-09T09:09:09.000Z" }
-    );
+      // `guarded` is in the promoted document, as it is in every one of them,
+      // but at the value it already holds. Only a CHANGE is refused.
+      await h.updateEntry(
+        {
+          collectionName: SLUG,
+          entryId: id,
+          routeAuthorized: true,
+          user: CLERK,
+        },
+        { body: "edited" }
+      );
 
-    expect(published.success, JSON.stringify(published)).toBe(true);
-    const doc = (await current.nextly.findByID({
-      collection: slug as never,
-      id,
-      overrideAccess: true,
-      status: "all",
-    } as never)) as Record<string, unknown> | null;
-    expect(new Date(doc?.goesLive as string).toISOString()).toBe(
-      "2026-09-09T09:09:09.000Z"
-    );
-    expect(doc?.guarded).toBe("live-value");
-  });
+      const published = await h.updateEntry(
+        {
+          collectionName: SLUG,
+          entryId: id,
+          routeAuthorized: true,
+          user: CLERK,
+        },
+        { status: "published" }
+      );
 
-  it("publishes a group edit sent with the status while a change is pending", async () => {
-    // No field rules at all, so nothing here is about access. The ordinary
-    // write encodes a group to its column string before the promotion runs, so
-    // the promoted document has to be validated in its logical shape: read as
-    // the column string, any group, repeater or JSON field is refused as "ops
-    // must be an object", and publishing alongside an edit to one is the
-    // ordinary shape of an editor publishing their work.
-    const slug = "grouppublish";
-    current = await createTestNextly({
-      collections: [
-        defineCollection({
-          slug,
-          status: true,
-          versions: { drafts: true },
-          access: {
-            read: () => true,
-            update: () => true,
-            publish: () => true,
-            unpublish: () => true,
-          },
-          fields: [
-            text({ name: "body" }),
-            group({ name: "ops", fields: [text({ name: "note" })] }),
-          ],
-        }),
-      ],
+      expect(published.success, JSON.stringify(published)).toBe(true);
+      const live = await liveDoc(t, id);
+      expect(live.body).toBe("edited");
+      expect(live.guarded).toBe("live-value");
+      expect(await pendingDrafts(t, id)).toHaveLength(0);
     });
-    const h = handlerOf(current);
 
-    const created = await h.createEntry(
-      { collectionName: slug, overrideAccess: true },
-      { body: "live", ops: { note: "live-note" }, status: "published" }
-    );
-    const id = (created.data as { id?: string }).id as string;
+    it("does not read an UNCHANGED denied field as an edit, whatever its type", async () => {
+      // The pending change is JSON, so a timestamp arrives here as the ISO string
+      // it was serialised to while the live row comes back from the driver as a
+      // `Date`. Compared as they arrive, a date-bearing field the publisher may
+      // not write reads as an edit and refuses a publish that touches nothing.
+      // Every type is covered: only the date arrives in two representations, and
+      // a suite that checked one type would not show which.
+      const onlyBoss = {
+        update: ({ req }: { req?: { user?: { email?: string } } }) =>
+          req?.user?.email === BOSS.email,
+      };
+      const slug = "everytype";
+      current = await createTestNextly({
+        dialect,
+        collections: [
+          defineCollection({
+            slug,
+            status: true,
+            versions: { drafts: true },
+            access: {
+              read: () => true,
+              update: () => true,
+              publish: () => true,
+              unpublish: () => true,
+            },
+            fields: [
+              text({ name: "body" }),
+              text({ name: "gtext", access: onlyBoss }),
+              date({ name: "gdate", access: onlyBoss }),
+              number({ name: "gnum", access: onlyBoss }),
+              checkbox({ name: "gbool", access: onlyBoss }),
+              json({ name: "gjson", access: onlyBoss }),
+              group({
+                name: "ggroup",
+                access: onlyBoss,
+                fields: [text({ name: "note" })],
+              }),
+            ],
+          }),
+        ],
+      });
+      const h = handlerOf(current);
 
-    await h.updateEntry(
-      { collectionName: slug, entryId: id, routeAuthorized: true, user: CLERK },
-      { body: "edited" }
-    );
+      const created = await h.createEntry(
+        { collectionName: slug, overrideAccess: true },
+        {
+          body: "live",
+          gtext: "t",
+          gdate: "2026-01-02T03:04:05.000Z",
+          gnum: 42,
+          gbool: true,
+          gjson: { a: 1 },
+          ggroup: { note: "i" },
+          status: "published",
+        }
+      );
+      const id = (created.data as { id?: string }).id as string;
 
-    const published = await h.updateEntry(
-      { collectionName: slug, entryId: id, routeAuthorized: true, user: CLERK },
-      { status: "published", ops: { note: "published-note" } }
-    );
+      // CLERK edits ONLY the unrestricted field; every guarded one is untouched.
+      await h.updateEntry(
+        {
+          collectionName: slug,
+          entryId: id,
+          routeAuthorized: true,
+          user: CLERK,
+        },
+        { body: "edited" }
+      );
 
-    expect(published.success, JSON.stringify(published)).toBe(true);
-    const doc = (await current.nextly.findByID({
-      collection: slug as never,
-      id,
-      overrideAccess: true,
-      status: "all",
-    } as never)) as Record<string, unknown> | null;
-    expect(doc?.body).toBe("edited");
-    expect(doc?.ops).toEqual({ note: "published-note" });
-  });
+      const published = await h.updateEntry(
+        {
+          collectionName: slug,
+          entryId: id,
+          routeAuthorized: true,
+          user: CLERK,
+        },
+        { status: "published" }
+      );
 
-  it("refuses, and keeps the draft, when a group the caller sends drops a protected child", async () => {
-    // A KNOWN over-refusal, pinned so it cannot change unnoticed. A group the
-    // caller sends replaces the pending change's group whole, and the field gate
-    // has already stripped the protected child the caller included, so the
-    // promoted group lacks it and it reads as a deletion. Crediting the caller
-    // from their raw request would allow it, and would also credit a caller who
-    // echoes a protected path with the pending change's edit, so this refuses.
-    // It fails closed: the publish is refused and the pending change is kept.
-    // Judging each leaf by the source that won the merge is what would allow it.
-    const slug = "provenance";
-    current = await createTestNextly({
-      collections: [
-        defineCollection({
-          slug,
-          status: true,
-          versions: { drafts: true },
-          access: {
-            read: () => true,
-            update: () => true,
-            publish: () => true,
-            unpublish: () => true,
-          },
-          fields: [
-            text({ name: "body" }),
-            group({
-              name: "ops",
-              fields: [
-                text({ name: "note" }),
-                text({
-                  name: "runbook",
-                  access: {
-                    update: ({ req }) => req.user?.email === BOSS.email,
-                  },
-                }),
-              ],
-            }),
-          ],
-        }),
-      ],
+      expect(published.success, JSON.stringify(published)).toBe(true);
+      const doc = (await current.nextly.findByID({
+        collection: slug as never,
+        id,
+        overrideAccess: true,
+        status: "all",
+      } as never)) as Record<string, unknown> | null;
+      expect(doc?.body).toBe("edited");
+      // Every guarded value is still there. Asserting only `body` would pass
+      // just as well if the publish had gone through and cleared all of them,
+      // which is the other way this can be wrong.
+      expect(doc?.gtext).toBe("t");
+      expect(doc?.gnum).toBe(42);
+      expect(doc?.gbool).toBe(true);
+      expect(doc?.gjson).toEqual({ a: 1 });
+      expect(doc?.ggroup).toEqual({ note: "i" });
+      expect(new Date(doc?.gdate as string).toISOString()).toBe(
+        "2026-01-02T03:04:05.000Z"
+      );
     });
-    const h = handlerOf(current);
 
-    const created = await h.createEntry(
-      { collectionName: slug, overrideAccess: true },
-      {
-        body: "live",
-        ops: { note: "live-note", runbook: "live-runbook" },
-        status: "published",
-      }
-    );
-    const id = (created.data as { id?: string }).id as string;
+    it("keeps an UNCHANGED denied child when its group is written", async () => {
+      // The rules delete a denied value, and the group is one JSON column: hand
+      // the write what the rules returned and the partial group is serialised
+      // over the whole column, clearing a protected value nobody touched. The
+      // document the write gets holds the denied child at its LIVE value.
+      const t = await boot(dialect);
+      const h = handlerOf(t);
 
-    // A pending change exists, so the publish below promotes one.
-    await h.updateEntry(
-      { collectionName: slug, entryId: id, routeAuthorized: true, user: CLERK },
-      { body: "edited" }
-    );
+      const created = await h.createEntry(
+        { collectionName: SLUG, overrideAccess: true },
+        {
+          body: "live",
+          ops: { runbook: "live-runbook" },
+          status: "published",
+        }
+      );
+      const id = (created.data as { id?: string }).id as string;
 
-    // CLERK sends the whole group: an allowed edit to `note`, and `runbook` at
-    // the value it already holds, which the gate will strip from their payload.
-    const published = await h.updateEntry(
-      { collectionName: slug, entryId: id, routeAuthorized: true, user: CLERK },
-      {
-        status: "published",
-        ops: { note: "clerk-note", runbook: "live-runbook" },
-      }
-    );
+      // CLERK, who may not write `ops.runbook`, edits only the unrestricted field.
+      await h.updateEntry(
+        {
+          collectionName: SLUG,
+          entryId: id,
+          routeAuthorized: true,
+          user: CLERK,
+        },
+        { body: "edited" }
+      );
 
-    expect(published.success).toBe(false);
-    const issues = (
-      published as {
-        publicData?: { errors?: Array<{ path: string; code: string }> };
-      }
-    ).publicData?.errors;
-    expect(issues?.map(i => i.path)).toEqual(["ops.runbook"]);
-    expect(issues?.[0]?.code).toBe("FORBIDDEN");
-    // Nothing published, and the pending change is still there.
-    const doc = (await current.nextly.findByID({
-      collection: slug as never,
-      id,
-      overrideAccess: true,
-      status: "all",
-    } as never)) as Record<string, unknown> | null;
-    expect(doc?.body).toBe("live");
-    expect(doc?.ops).toEqual({ note: "live-note", runbook: "live-runbook" });
-    expect(await pendingDrafts(current, id)).toHaveLength(1);
-  });
+      const published = await h.updateEntry(
+        {
+          collectionName: SLUG,
+          entryId: id,
+          routeAuthorized: true,
+          user: CLERK,
+        },
+        { status: "published" }
+      );
 
-  it("refuses, and keeps the draft, when the publisher echoes a protected path the pending change edited", async () => {
-    // A full form resubmits every field, so a publisher routinely sends a
-    // protected value back unchanged. The field gate strips it, which leaves the
-    // pending change's edit in the promoted document. Credited to the publisher
-    // because the path appears in their request, that edit would be restored to
-    // live while the successful publish deletes the draft, so the author's edit
-    // would be gone with success reported.
-    const t = await boot();
-    const h = handlerOf(t);
+      expect(published.success, JSON.stringify(published)).toBe(true);
+      const live = await liveDoc(t, id);
+      expect(live.body).toBe("edited");
+      // The protected value is still here. Nobody asked for it to go.
+      expect(live.ops).toEqual({ runbook: "live-runbook" });
+    });
 
-    const created = await h.createEntry(
-      { collectionName: SLUG, overrideAccess: true },
-      { body: "live", guarded: "live-value", status: "published" }
-    );
-    const id = (created.data as { id?: string }).id as string;
+    it("refuses a pending change that CLEARS a field it may not write", async () => {
+      // A GUARD, not a demonstration. Clearing a field sends `null`, which is a
+      // present key and so is judged like any other value. The case the live-side
+      // pass exists for is a key ABSENT from the promoted document entirely, which
+      // no known route through the public API produces, since a collection
+      // snapshot is a full copy of the row, so that half is guarded defensively.
+      const t = await boot(dialect);
+      const h = handlerOf(t);
 
-    await h.updateEntry(
-      { collectionName: SLUG, entryId: id, routeAuthorized: true, user: BOSS },
-      { guarded: "boss-secret" }
-    );
-    expect(JSON.stringify(await pendingDrafts(t, id))).toContain("boss-secret");
+      const created = await h.createEntry(
+        { collectionName: SLUG, overrideAccess: true },
+        { body: "live", guarded: "live-value", status: "published" }
+      );
+      const id = (created.data as { id?: string }).id as string;
 
-    const published = await h.updateEntry(
-      { collectionName: SLUG, entryId: id, routeAuthorized: true, user: CLERK },
-      { status: "published", guarded: "live-value" }
-    );
+      // BOSS may write it, so clearing it is a legitimate pending change.
+      await h.updateEntry(
+        {
+          collectionName: SLUG,
+          entryId: id,
+          routeAuthorized: true,
+          user: BOSS,
+        },
+        { body: "edited", guarded: null }
+      );
+      const unchanged = await heldStill(t, SLUG, id);
 
-    expect(published.success).toBe(false);
-    const issues = (
-      published as {
-        publicData?: { errors?: Array<{ path: string; code: string }> };
-      }
-    ).publicData?.errors;
-    expect(issues?.map(i => i.path)).toEqual(["guarded"]);
-    expect(issues?.[0]?.code).toBe("FORBIDDEN");
-    const live = await liveDoc(t, id);
-    expect(live.guarded).toBe("live-value");
-    expect(JSON.stringify(await pendingDrafts(t, id))).toContain("boss-secret");
-  });
+      const published = await h.updateEntry(
+        {
+          collectionName: SLUG,
+          entryId: id,
+          routeAuthorized: true,
+          user: CLERK,
+        },
+        { status: "published" }
+      );
 
-  it("still promotes the change for a publisher who MAY write it", async () => {
-    const t = await boot();
-    const h = handlerOf(t);
+      expect(published.success).toBe(false);
+      const issues = (
+        published as { publicData?: { errors?: Array<{ path: string }> } }
+      ).publicData?.errors;
+      expect(issues?.map(i => i.path)).toEqual(["guarded"]);
+      // The value is untouched, and the deletion is still pending for someone
+      // who may make it.
+      const live = await liveDoc(t, id);
+      expect(live.guarded).toBe("live-value");
+      expect(await pendingDrafts(t, id)).toHaveLength(1);
+      await unchanged();
+    });
 
-    const created = await h.createEntry(
-      { collectionName: SLUG, overrideAccess: true },
-      { body: "live", guarded: "live-value", status: "published" }
-    );
-    const id = (created.data as { id?: string }).id as string;
+    it("publishes a date the CALLER supplies alongside the status", async () => {
+      // The shaping pass coerces a caller's date to a `Date` before the resolver
+      // sees it, and a `Date` is an object with no enumerable keys: a rebuild
+      // that treats every object as a container returns `{}` and the driver then
+      // refuses that write with "value.getTime is not a function", so nothing
+      // goes live.
+      const slug = "dated";
+      current = await createTestNextly({
+        dialect,
+        collections: [
+          defineCollection({
+            slug,
+            status: true,
+            versions: { drafts: true },
+            access: {
+              read: () => true,
+              update: () => true,
+              publish: () => true,
+              unpublish: () => true,
+            },
+            fields: [
+              text({ name: "body" }),
+              date({ name: "goesLive" }),
+              // One denied field, so the resolver runs at all.
+              text({
+                name: "guarded",
+                access: { update: ({ req }) => req.user?.email === BOSS.email },
+              }),
+            ],
+          }),
+        ],
+      });
+      const h = handlerOf(current);
 
-    await h.updateEntry(
-      { collectionName: SLUG, entryId: id, routeAuthorized: true, user: BOSS },
-      { body: "edited", guarded: "boss-secret" }
-    );
+      const created = await h.createEntry(
+        { collectionName: slug, overrideAccess: true },
+        {
+          body: "live",
+          goesLive: "2026-01-02T03:04:05.000Z",
+          guarded: "live-value",
+          status: "published",
+        }
+      );
+      const id = (created.data as { id?: string }).id as string;
 
-    const published = await h.updateEntry(
-      { collectionName: SLUG, entryId: id, routeAuthorized: true, user: BOSS },
-      { status: "published" }
-    );
+      await h.updateEntry(
+        {
+          collectionName: slug,
+          entryId: id,
+          routeAuthorized: true,
+          user: CLERK,
+        },
+        { body: "edited" }
+      );
 
-    expect(published.success, JSON.stringify(published)).toBe(true);
-    const live = await liveDoc(t, id);
-    expect(live.guarded).toBe("boss-secret");
-    expect(await pendingDrafts(t, id)).toHaveLength(0);
-  });
-});
+      const published = await h.updateEntry(
+        {
+          collectionName: slug,
+          entryId: id,
+          routeAuthorized: true,
+          user: CLERK,
+        },
+        { status: "published", goesLive: "2026-09-09T09:09:09.000Z" }
+      );
+
+      expect(published.success, JSON.stringify(published)).toBe(true);
+      const doc = (await current.nextly.findByID({
+        collection: slug as never,
+        id,
+        overrideAccess: true,
+        status: "all",
+      } as never)) as Record<string, unknown> | null;
+      expect(new Date(doc?.goesLive as string).toISOString()).toBe(
+        "2026-09-09T09:09:09.000Z"
+      );
+      expect(doc?.guarded).toBe("live-value");
+    });
+
+    it("publishes a group edit sent with the status while a change is pending", async () => {
+      // No field rules at all, so nothing here is about access. The ordinary
+      // write encodes a group to its column string before the promotion runs, so
+      // the promoted document has to be validated in its logical shape: read as
+      // the column string, any group, repeater or JSON field is refused as "ops
+      // must be an object", and publishing alongside an edit to one is the
+      // ordinary shape of an editor publishing their work.
+      const slug = "grouppublish";
+      current = await createTestNextly({
+        dialect,
+        collections: [
+          defineCollection({
+            slug,
+            status: true,
+            versions: { drafts: true },
+            access: {
+              read: () => true,
+              update: () => true,
+              publish: () => true,
+              unpublish: () => true,
+            },
+            fields: [
+              text({ name: "body" }),
+              group({ name: "ops", fields: [text({ name: "note" })] }),
+            ],
+          }),
+        ],
+      });
+      const h = handlerOf(current);
+
+      const created = await h.createEntry(
+        { collectionName: slug, overrideAccess: true },
+        { body: "live", ops: { note: "live-note" }, status: "published" }
+      );
+      const id = (created.data as { id?: string }).id as string;
+
+      await h.updateEntry(
+        {
+          collectionName: slug,
+          entryId: id,
+          routeAuthorized: true,
+          user: CLERK,
+        },
+        { body: "edited" }
+      );
+
+      const published = await h.updateEntry(
+        {
+          collectionName: slug,
+          entryId: id,
+          routeAuthorized: true,
+          user: CLERK,
+        },
+        { status: "published", ops: { note: "published-note" } }
+      );
+
+      expect(published.success, JSON.stringify(published)).toBe(true);
+      const doc = (await current.nextly.findByID({
+        collection: slug as never,
+        id,
+        overrideAccess: true,
+        status: "all",
+      } as never)) as Record<string, unknown> | null;
+      expect(doc?.body).toBe("edited");
+      expect(doc?.ops).toEqual({ note: "published-note" });
+    });
+
+    it("refuses, and keeps the draft, when a group the caller sends drops a protected child", async () => {
+      // A KNOWN over-refusal, pinned so it cannot change unnoticed. A group the
+      // caller sends replaces the pending change's group whole, and the field gate
+      // has already stripped the protected child the caller included, so the
+      // promoted group lacks it and it reads as a deletion. Crediting the caller
+      // from their raw request would allow it, and would also credit a caller who
+      // echoes a protected path with the pending change's edit, so this refuses.
+      // It fails closed: the publish is refused and the pending change is kept.
+      // Judging each leaf by the source that won the merge is what would allow it.
+      const slug = "provenance";
+      current = await createTestNextly({
+        dialect,
+        collections: [
+          defineCollection({
+            slug,
+            status: true,
+            versions: { drafts: true },
+            access: {
+              read: () => true,
+              update: () => true,
+              publish: () => true,
+              unpublish: () => true,
+            },
+            fields: [
+              text({ name: "body" }),
+              group({
+                name: "ops",
+                fields: [
+                  text({ name: "note" }),
+                  text({
+                    name: "runbook",
+                    access: {
+                      update: ({ req }) => req.user?.email === BOSS.email,
+                    },
+                  }),
+                ],
+              }),
+            ],
+          }),
+        ],
+      });
+      const h = handlerOf(current);
+
+      const created = await h.createEntry(
+        { collectionName: slug, overrideAccess: true },
+        {
+          body: "live",
+          ops: { note: "live-note", runbook: "live-runbook" },
+          status: "published",
+        }
+      );
+      const id = (created.data as { id?: string }).id as string;
+
+      // A pending change exists, so the publish below promotes one.
+      await h.updateEntry(
+        {
+          collectionName: slug,
+          entryId: id,
+          routeAuthorized: true,
+          user: CLERK,
+        },
+        { body: "edited" }
+      );
+      const unchanged = await heldStill(current, slug, id);
+
+      // CLERK sends the whole group: an allowed edit to `note`, and `runbook` at
+      // the value it already holds, which the gate will strip from their payload.
+      const published = await h.updateEntry(
+        {
+          collectionName: slug,
+          entryId: id,
+          routeAuthorized: true,
+          user: CLERK,
+        },
+        {
+          status: "published",
+          ops: { note: "clerk-note", runbook: "live-runbook" },
+        }
+      );
+
+      expect(published.success).toBe(false);
+      const issues = (
+        published as {
+          publicData?: { errors?: Array<{ path: string; code: string }> };
+        }
+      ).publicData?.errors;
+      expect(issues?.map(i => i.path)).toEqual(["ops.runbook"]);
+      expect(issues?.[0]?.code).toBe("FORBIDDEN");
+      // Nothing published, and the pending change is still there.
+      const doc = (await current.nextly.findByID({
+        collection: slug as never,
+        id,
+        overrideAccess: true,
+        status: "all",
+      } as never)) as Record<string, unknown> | null;
+      expect(doc?.body).toBe("live");
+      expect(doc?.ops).toEqual({ note: "live-note", runbook: "live-runbook" });
+      expect(await pendingDrafts(current, id)).toHaveLength(1);
+      await unchanged();
+    });
+
+    it("refuses, and keeps the draft, when the publisher echoes a protected path the pending change edited", async () => {
+      // A full form resubmits every field, so a publisher routinely sends a
+      // protected value back unchanged. The field gate strips it, which leaves the
+      // pending change's edit in the promoted document. Credited to the publisher
+      // because the path appears in their request, that edit would be restored to
+      // live while the successful publish deletes the draft, so the author's edit
+      // would be gone with success reported.
+      const t = await boot(dialect);
+      const h = handlerOf(t);
+
+      const created = await h.createEntry(
+        { collectionName: SLUG, overrideAccess: true },
+        { body: "live", guarded: "live-value", status: "published" }
+      );
+      const id = (created.data as { id?: string }).id as string;
+
+      await h.updateEntry(
+        {
+          collectionName: SLUG,
+          entryId: id,
+          routeAuthorized: true,
+          user: BOSS,
+        },
+        { guarded: "boss-secret" }
+      );
+      expect(JSON.stringify(await pendingDrafts(t, id))).toContain(
+        "boss-secret"
+      );
+      const unchanged = await heldStill(t, SLUG, id);
+
+      const published = await h.updateEntry(
+        {
+          collectionName: SLUG,
+          entryId: id,
+          routeAuthorized: true,
+          user: CLERK,
+        },
+        { status: "published", guarded: "live-value" }
+      );
+
+      expect(published.success).toBe(false);
+      const issues = (
+        published as {
+          publicData?: { errors?: Array<{ path: string; code: string }> };
+        }
+      ).publicData?.errors;
+      expect(issues?.map(i => i.path)).toEqual(["guarded"]);
+      expect(issues?.[0]?.code).toBe("FORBIDDEN");
+      const live = await liveDoc(t, id);
+      expect(live.guarded).toBe("live-value");
+      expect(JSON.stringify(await pendingDrafts(t, id))).toContain(
+        "boss-secret"
+      );
+      await unchanged();
+    });
+
+    it("still promotes the change for a publisher who MAY write it", async () => {
+      const t = await boot(dialect);
+      const h = handlerOf(t);
+
+      const created = await h.createEntry(
+        { collectionName: SLUG, overrideAccess: true },
+        { body: "live", guarded: "live-value", status: "published" }
+      );
+      const id = (created.data as { id?: string }).id as string;
+
+      await h.updateEntry(
+        {
+          collectionName: SLUG,
+          entryId: id,
+          routeAuthorized: true,
+          user: BOSS,
+        },
+        { body: "edited", guarded: "boss-secret" }
+      );
+
+      const published = await h.updateEntry(
+        {
+          collectionName: SLUG,
+          entryId: id,
+          routeAuthorized: true,
+          user: BOSS,
+        },
+        { status: "published" }
+      );
+
+      expect(published.success, JSON.stringify(published)).toBe(true);
+      const live = await liveDoc(t, id);
+      expect(live.guarded).toBe("boss-secret");
+      expect(await pendingDrafts(t, id)).toHaveLength(0);
+    });
+  }
+);
 
 describe("a collection field rule is judged on the CALLER's own authority", () => {
   it("gives an API key the permissions stamped on the key", async () => {
