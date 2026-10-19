@@ -28,6 +28,12 @@ const service = {
     }> => ({ rows: [], total: 0, page: 1, limit: 50 })
   ),
   count: vi.fn(async () => 0),
+  calendar: vi.fn(
+    async (query: { from: string; to: string; timezone: string }) => ({
+      ...query,
+      days: [],
+    })
+  ),
   create: vi.fn(async () => ({ id: "r1" })),
   addMember: vi.fn(async () => ({ id: "m1" })),
   update: vi.fn(async () => ({ id: "r1" })),
@@ -302,6 +308,40 @@ describe("renaming and deleting through the namespace", () => {
     expect(service.delete).toHaveBeenCalledWith(
       "r1",
       expect.objectContaining({ userId: "u1", overrideAccess: false })
+    );
+  });
+});
+
+describe("the calendar", () => {
+  it("hands the service the window alone, and the caller as the actor", async () => {
+    // A caller key left in the query would reach the read as a field of the
+    // window; the actor is where it decides anything.
+    const releases = createReleasesNamespace(
+      instance({ overrideAccess: false, user: { id: "u1" } })
+    );
+    await expect(
+      releases.calendar({
+        from: "2026-03-01",
+        to: "2026-04-11",
+        timezone: "Europe/Berlin",
+        kind: "single",
+        userId: "u2",
+      })
+    ).resolves.toEqual({
+      from: "2026-03-01",
+      to: "2026-04-11",
+      timezone: "Europe/Berlin",
+      kind: "single",
+      days: [],
+    });
+    expect(service.calendar).toHaveBeenCalledWith(
+      {
+        from: "2026-03-01",
+        to: "2026-04-11",
+        timezone: "Europe/Berlin",
+        kind: "single",
+      },
+      expect.objectContaining({ userId: "u2", overrideAccess: false })
     );
   });
 });

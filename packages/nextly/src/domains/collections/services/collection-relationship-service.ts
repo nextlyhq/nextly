@@ -20,7 +20,7 @@ import {
   convertTimestampsToCamelCase,
   keysToCamelCase,
 } from "../../../lib/case-conversion";
-import { absolutizeMediaUrls } from "../../../lib/media-variant";
+import { normalizeMediaUrls } from "../../../lib/media-variant";
 import {
   resolveStatusFilter,
   type StatusFilter,
@@ -3027,12 +3027,11 @@ export class CollectionRelationshipService extends BaseService {
       // This handles nested objects and arrays within media records
       return rows.map(row => {
         const camel = keysToCamelCase(row) as Record<string, unknown>;
-        // Local storage adapter stores relative URLs (`/uploads/...`); cloud
-        // adapters store absolute URLs. absolutizeMediaUrls leaves absolute
-        // URLs untouched and prefixes relative ones with NEXT_PUBLIC_APP_URL
-        // so populated media in entry responses is reachable by external
-        // clients.
-        return absolutizeMediaUrls(camel);
+        // URLs as the storage wrote them: the local adapter's own base, a
+        // path by default, which the app's pages resolve on any host, or a
+        // cloud adapter's absolute URL (normalizeMediaUrls). A consumer that
+        // hands one outside the app makes it absolute with toPublicMediaUrl.
+        return normalizeMediaUrls(camel);
       });
     } catch (error) {
       // Raised, not swallowed — same contract as the Singles read path. An

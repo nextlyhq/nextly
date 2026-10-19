@@ -1027,6 +1027,12 @@ export function SingleForm({
                                 slugField={slugField}
                                 hasStatus={hasStatus}
                                 status={documentStatus}
+                                // The pill shows wherever the panel is off
+                                // screen, a phone included, so it reports a
+                                // pending working draft as the panel does.
+                                hasWorkingDraft={hasPendingWorkingDraft(
+                                  document
+                                )}
                                 isRailCollapsed={railCollapsed}
                                 lockSlug
                               />

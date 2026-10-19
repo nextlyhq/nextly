@@ -36,12 +36,25 @@
 import crypto from "crypto";
 
 import type { DrizzleAdapter } from "@nextlyhq/adapter-drizzle";
-import { and, eq, isNull, sql } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 
+import { getMediaStorage } from "@nextly/storage";
+
+import {
+  errorForLog,
+  filesKeptByOthers,
+  removeStoredFiles,
+  storedPathForLog,
+  warnUnlocated,
+} from "../domains/media/remove-stored-files";
 import {
   revalidateMedia,
   withMediaRevalidationBatch,
 } from "../domains/media/revalidate-media";
+import {
+  storedFilesOf,
+  type MediaFilesRecord,
+} from "../domains/media/stored-files";
 import type { ServiceErrorCode } from "../errors/error-codes";
 
 import { BaseService } from "./base-service";
@@ -117,13 +130,35 @@ interface DeleteFolderOutcome {
 }
 
 /** The columns a cascading delete needs from each media row. */
-interface StoredMediaRecord {
-  id: string;
-  filename: string;
-  thumbnailUrl: string | null;
-}
+type StoredMediaRecord = MediaFilesRecord & { id: string };
 
-/** The storage surface a cascading folder delete uses, injected by the caller. */
+/**
+ * Removes the stored files of media rows a cascading folder delete removed,
+ * once they are gone. Never throws.
+ */
+type RemoveStoredFiles = (
+  records: StoredMediaRecord[],
+  /** Files another item still refers to, which stay. */
+  kept: ReadonlySet<string>
+) => Promise<void>;
+
+/**
+ * Every file of each item, as a delete of that item removes them, one item
+ * at a time: a chunk of a hundred items asked for all at once would send the
+ * storage every file of every item together, and a refused or throttled
+ * request leaves its file stored.
+ */
+const removeEveryStoredFile: RemoveStoredFiles = async (records, kept) => {
+  const storage = getMediaStorage();
+  for (const record of records) {
+    await removeStoredFiles(storage, record, record.id, kept);
+  }
+};
+
+/**
+ * Storage a caller hands a cascading folder delete, as the cleanup argument
+ * has taken it before: given every stored file of the items removed.
+ */
 interface FolderStorageCleanup {
   bulkDelete(
     filePaths: string[],
@@ -132,6 +167,50 @@ interface FolderStorageCleanup {
     successful: string[];
     failed: Array<{ filePath: string; error: string }>;
   }>;
+}
+
+/** The removal a cascading folder delete runs, from what its caller gave. */
+function removalFrom(
+  cleanup: RemoveStoredFiles | FolderStorageCleanup | undefined
+): RemoveStoredFiles {
+  if (cleanup === undefined) return removeEveryStoredFile;
+  if (typeof cleanup === "function") {
+    // The rows are already gone: a failure is named, never thrown, so it
+    // cannot stop the rest of the cascade.
+    return async (records, kept) => {
+      try {
+        await cleanup(records, kept);
+      } catch (error) {
+        console.warn(
+          "[MediaFolderService] Could not remove the files of the deleted items:",
+          errorForLog(error)
+        );
+      }
+    };
+  }
+  return async (records, kept) => {
+    const filePaths: string[] = [];
+    for (const record of records) {
+      const { paths, unlocated } = storedFilesOf(record);
+      filePaths.push(...paths.filter(filePath => !kept.has(filePath)));
+      for (const url of unlocated) warnUnlocated(url, record.id);
+    }
+    if (filePaths.length === 0) return;
+    // The rows are already gone: a storage failure is named, never thrown.
+    try {
+      const { failed } = await cleanup.bulkDelete(filePaths, "media");
+      for (const { filePath, error } of failed) {
+        console.warn(
+          `[MediaFolderService] Could not remove ${storedPathForLog(filePath)}: ${errorForLog(new Error(error))}`
+        );
+      }
+    } catch (error) {
+      console.warn(
+        "[MediaFolderService] Could not remove the files of the deleted items:",
+        errorForLog(error)
+      );
+    }
+  };
 }
 
 export class MediaFolderService extends BaseService {
@@ -627,8 +706,14 @@ export class MediaFolderService extends BaseService {
   async deleteFolder(
     folderId: string,
     deleteContents: boolean = false,
-    storage?: FolderStorageCleanup
+    /**
+     * How the deleted items' stored files are removed: every one of them
+     * through the media storage by default. Storage with `bulkDelete` is
+     * given their paths.
+     */
+    cleanup?: RemoveStoredFiles | FolderStorageCleanup
   ): Promise<DeleteFolderOutcome> {
+    const removeFiles = removalFrom(cleanup);
     try {
       const { mediaFolders } = this.tables;
 
@@ -661,10 +746,12 @@ export class MediaFolderService extends BaseService {
         // validation above and the folder-row delete below emit no media tags,
         // and holding the shared one across them would defer it behind work
         // that has nothing to do with it.
-        await withMediaRevalidationBatch(async () => {
-          if (storage) await this.removeStoredFiles(records, storage);
-          await this.deleteMediaRowsInChunks(records.map(r => r.id));
-        });
+        await withMediaRevalidationBatch(() =>
+          this.deleteMediaRowsInChunks(
+            records.map(record => record.id),
+            removeFiles
+          )
+        );
       }
 
       // A file uploaded or moved INTO one of these folders after the
@@ -719,19 +806,15 @@ export class MediaFolderService extends BaseService {
     }
   }
 
-  /** Every media row held by any of these folders. */
+  /** The id of every media row held by any of these folders. */
   private async collectMediaInFolders(
     folderIds: string[]
-  ): Promise<StoredMediaRecord[]> {
+  ): Promise<Array<{ id: string }>> {
     const { media } = this.tables;
-    const records: StoredMediaRecord[] = [];
+    const records: Array<{ id: string }> = [];
     for (const folderId of folderIds) {
       const inFolder = await this.db
-        .select({
-          id: media.id,
-          filename: media.filename,
-          thumbnailUrl: media.thumbnailUrl,
-        })
+        .select({ id: media.id })
         .from(media)
         .where(eq(media.folderId, folderId));
       records.push(...inFolder);
@@ -740,57 +823,54 @@ export class MediaFolderService extends BaseService {
   }
 
   /**
-   * Best-effort physical cleanup, ahead of the row deletes.
-   *
-   * Swallow-and-warn: a storage failure must not stop the rows being removed.
-   * The row is the authoritative record, and leaving it behind because a file
-   * could not be unlinked strands a folder nobody can delete.
-   */
-  private async removeStoredFiles(
-    records: StoredMediaRecord[],
-    storage: FolderStorageCleanup
-  ): Promise<void> {
-    const filePaths: string[] = [];
-    for (const record of records) {
-      if (record.filename) filePaths.push(record.filename);
-      if (record.thumbnailUrl) filePaths.push(record.thumbnailUrl);
-    }
-    if (filePaths.length === 0) return;
-
-    try {
-      await storage.bulkDelete(filePaths);
-    } catch (storageError) {
-      console.error(
-        "[MediaFolderService] Storage deletion error (continuing with DB deletion):",
-        storageError
-      );
-    }
-  }
-
-  /**
-   * Remove the rows in chunks, busting each chunk's cache tags as it commits.
+   * Remove the rows in chunks, busting each chunk's cache tags and removing
+   * its items' stored files as it commits.
    *
    * There is no encompassing transaction here, so an earlier chunk is already
    * durable when a later one throws or the process is killed. Holding its tags
    * until the end would leave those files cached with no row behind them; the
    * shared collection tag is still paid once, by the scope the caller opened.
+   * The files go only once their rows are gone, and inside an enclosing
+   * SQLite transaction only once that commits: a rollback brings the rows
+   * back, and they must still have their files.
+   *
+   * Each chunk's rows are locked and re-read in the transaction that deletes
+   * them, as a single delete does, so the files removed are the ones the rows
+   * held at their removal: a crop that committed after the folder's items
+   * were listed is seen, and one that reaches its commit while the rows are
+   * held finds them gone and removes its own new sizes.
    */
-  private async deleteMediaRowsInChunks(mediaIds: string[]): Promise<void> {
+  private async deleteMediaRowsInChunks(
+    mediaIds: string[],
+    removeFiles: RemoveStoredFiles
+  ): Promise<void> {
     if (mediaIds.length === 0) return;
-    const { media } = this.tables;
     const chunkSize = 100;
+    // In one order, so two deletes holding overlapping chunks cannot each
+    // wait on a row the other holds.
+    const ordered = [...mediaIds].sort();
 
-    for (let i = 0; i < mediaIds.length; i += chunkSize) {
-      const chunk = mediaIds.slice(i, i + chunkSize);
-      await this.db.delete(media).where(
-        sql`${media.id} IN (${sql.join(
-          chunk.map(id => sql`${id}`),
-          sql`, `
-        )})`
-      );
+    for (let i = 0; i < ordered.length; i += chunkSize) {
+      const chunk = ordered.slice(i, i + chunkSize);
+      const inChunk = {
+        and: [{ column: "id", op: "IN" as const, value: chunk }],
+      };
+      const removed = await this.adapter.transaction(async tx => {
+        // Locked and read in one statement, the chunk's rows at once.
+        const current = await tx.select<StoredMediaRecord>("media", {
+          where: inChunk,
+          forUpdate: true,
+        });
+        if (current.length > 0) await tx.delete("media", inChunk);
+        return current;
+      });
       // After the statement, so this only ever names rows that are gone, and
-      // inside an enclosing SQLite transaction after that commits.
+      // inside an enclosing SQLite transaction after that commits. The files
+      // another item still refers to are asked for then (filesKeptByOthers).
       await this.afterCommit(() => revalidateMedia(chunk));
+      await this.afterCommit(async () =>
+        removeFiles(removed, await filesKeptByOthers(this.adapter, removed))
+      );
     }
   }
 

@@ -16,10 +16,14 @@ import { describe, expect, it } from "vitest";
 import type { WidgetWidth } from "@admin/types/dashboard/widgets";
 
 import {
+  DASHBOARD_MEDIUM_FROM_PX,
+  DASHBOARD_WIDE_FROM_PX,
   WIDGET_WIDTHS,
   WIDTH_NAMES,
   WIDTH_SPAN_CLASSES,
+  bandForWidth,
   cardSpanClass,
+  drawnSpan,
   drawnWidth,
   legacySizeToWidgetSize,
   widthFromDeclaredSize,
@@ -225,5 +229,62 @@ describe("the width vocabulary is core's", () => {
         coreWidthFromSize(size)
       );
     }
+  });
+});
+
+describe("the tracks a width spans, as numbers", () => {
+  /**
+   * The span the class text draws at a dashboard width, read back from the classes themselves:
+   * the unprefixed `col-span-N`, then each `@min-[Npx]/dashboard:` override the width reaches.
+   */
+  function spanTheClassesDraw(
+    width: WidgetWidth,
+    dashboardWidth: number
+  ): number {
+    let span = 0;
+    for (const token of WIDTH_SPAN_CLASSES[width].split(" ")) {
+      const plain = /^col-span-(\d+)$/.exec(token);
+      const banded = /^@min-\[(\d+)px\]\/dashboard:col-span-(\d+)$/.exec(token);
+      if (plain) span = Number(plain[1]);
+      else if (banded && dashboardWidth >= Number(banded[1]))
+        span = Number(banded[2]);
+    }
+    return span;
+  }
+
+  it("agrees with the class text at every band, so the predicted tier is the drawn one", () => {
+    // 🔴 The numbers predict a card's tier before it is drawn and the classes draw it; a band
+    // or a span changed in one and not the other would predict one tier and measure another.
+    const samples = [
+      DASHBOARD_MEDIUM_FROM_PX - 1,
+      DASHBOARD_MEDIUM_FROM_PX,
+      DASHBOARD_WIDE_FROM_PX - 1,
+      DASHBOARD_WIDE_FROM_PX,
+      1600,
+    ];
+    for (const width of WIDGET_WIDTHS) {
+      for (const dashboardWidth of samples) {
+        expect(
+          drawnSpan(width, bandForWidth(dashboardWidth)),
+          `${width} at ${dashboardWidth}px`
+        ).toBe(spanTheClassesDraw(width, dashboardWidth));
+      }
+    }
+  });
+
+  it("names a dashboard's band from its own width", () => {
+    expect(bandForWidth(DASHBOARD_MEDIUM_FROM_PX - 1)).toBe("narrow");
+    expect(bandForWidth(DASHBOARD_MEDIUM_FROM_PX)).toBe("medium");
+    expect(bandForWidth(DASHBOARD_WIDE_FROM_PX - 1)).toBe("medium");
+    expect(bandForWidth(DASHBOARD_WIDE_FROM_PX)).toBe("wide");
+  });
+
+  it("names the bands the classes are written at", () => {
+    expect(WIDTH_SPAN_CLASSES.quarter).toContain(
+      `@min-[${DASHBOARD_MEDIUM_FROM_PX}px]/dashboard:`
+    );
+    expect(WIDTH_SPAN_CLASSES.quarter).toContain(
+      `@min-[${DASHBOARD_WIDE_FROM_PX}px]/dashboard:`
+    );
   });
 });

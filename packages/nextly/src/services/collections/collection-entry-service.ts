@@ -631,6 +631,22 @@ export class CollectionEntryService extends BaseService {
   }
 
   /**
+   * One entry's lifecycle as stored, past every read hook: the main row's
+   * status and each translation's. See the mutation service.
+   *
+   * @experimental
+   */
+  async releaseStoredLifecycle(params: {
+    collectionName: string;
+    entryId: string;
+  }): Promise<{
+    status: string | null;
+    languages: Map<string, string | null>;
+  } | null> {
+    return this.mutationService.releaseStoredLifecycle(params);
+  }
+
+  /**
    * The languages whose unreleased work a release's document-wide write of
    * these entries would be refused over.
    *

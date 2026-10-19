@@ -85,7 +85,16 @@ async function allPages(path, context) {
  * own events, unfinished, and not the run doing the cancelling.
  */
 export function runsOf(pull, runs, ownRunId) {
-  return runs.filter(run => PULL_REQUEST_EVENTS.has(run.event) && String(run.id) !== String(ownRunId) && belongsTo(pull, run));
+  return runs.filter(run => PULL_REQUEST_EVENTS.has(run.event) && String(run.id) !== String(ownRunId) && startedBeforeClosing(pull, run) && belongsTo(pull, run));
+}
+
+/**
+ * Whether a run began before its pull request closed. A run created after
+ * that belongs to a reopening, which this run, queued since the close, must not
+ * cancel. A pull request with no closing time leaves every run in.
+ */
+function startedBeforeClosing(pull, run) {
+  return !pull.closed_at || !run.created_at || run.created_at <= pull.closed_at;
 }
 
 function belongsTo(pull, run) {
@@ -137,6 +146,13 @@ export async function main(env = process.env, { fetchImpl = fetch } = {}) {
   if (!pull?.number) return refuse("the event names no pull request");
   const context = { token: env.GH_TOKEN, fetchImpl };
   try {
+    // This run can wait in the queue long after the close. If its pull
+    // request was reopened meanwhile, those runs are wanted again.
+    const now = await githubJson(`repos/${env.GITHUB_REPOSITORY}/pulls/${pull.number}`, context);
+    if (now.state === "open") {
+      console.log(`cancel-closed-pull-request-runs: #${pull.number} is open again; nothing cancelled`);
+      return 0;
+    }
     const { runs, outcomes, short } = await cancelInPasses(pull, env, context);
     for (const outcome of outcomes) console.log(`cancel-closed-pull-request-runs: ${outcome.workflow} run ${outcome.id}: HTTP ${outcome.status}`);
     console.log(`cancel-closed-pull-request-runs: #${pull.number} had ${runs.length} unfinished pull-request run(s)`);
