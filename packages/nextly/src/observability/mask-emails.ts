@@ -65,11 +65,9 @@ export function maskEmailAddress(address: string): string {
 
 /** Every address in a piece of text masked, the rest left exactly as it was. */
 export function maskEmailsInText(text: string): string {
-  return text.replace(
-    EMAIL_PATTERN,
-    (_match, local: string, domain: string) =>
-      `${firstCharacter(local)}***@${domain}`
-  );
+  // Each match is masked by the single-address masker, so the two cannot
+  // come to disagree about what a masked address looks like.
+  return text.replace(EMAIL_PATTERN, match => maskEmailAddress(match));
 }
 
 /**
@@ -128,29 +126,74 @@ function maskRecord(
 /**
  * An error copied with its message, stack, cause and own fields masked, still
  * an instance of the error's own class so `instanceof` and `name` survive.
+ *
+ * Masking runs inside a log call, often inside a `catch` that exists to
+ * absorb a failure, so it never throws: an error whose fields cannot be read
+ * or copied is logged as a plain `Error` carrying its masked message instead.
  */
 function maskError(error: Error, seen: WeakMap<object, unknown>): Error {
-  const copy = new Error(maskEmailsInText(error.message));
-  Object.setPrototypeOf(copy, Object.getPrototypeOf(error) as object);
+  try {
+    return copyErrorMasked(error, seen);
+  } catch {
+    const plain = new Error(maskEmailsInText(String(error.message)));
+    seen.set(error, plain);
+    return plain;
+  }
+}
+
+function copyErrorMasked(error: Error, seen: WeakMap<object, unknown>): Error {
+  const copy = blankCopyOf(error, maskEmailsInText(error.message));
   seen.set(error, copy);
-  copy.name = error.name;
-  if (error.stack !== undefined) copy.stack = maskEmailsInText(error.stack);
-  if (error.cause !== undefined) copy.cause = maskValue(error.cause, seen);
+  // Set as own data properties rather than assigned: an error class may
+  // declare any of them as an accessor with no setter on its prototype, and
+  // assigning through one throws.
+  if (copy.name !== error.name) defineOwn(copy, "name", error.name, false);
+  if (error.stack !== undefined) {
+    defineOwn(copy, "stack", maskEmailsInText(error.stack), false);
+  }
+  if (error.cause !== undefined) {
+    defineOwn(copy, "cause", maskValue(error.cause, seen), false);
+  }
   if (error instanceof AggregateError) {
     // The constructor makes `errors` an own property that is not enumerable,
-    // so the loop below would leave the copy without its failures. Copied
-    // the same way, masked like every other value.
-    Object.defineProperty(copy, "errors", {
-      value: maskValue(error.errors, seen),
-      writable: true,
-      configurable: true,
-      enumerable: false,
-    });
+    // so the loop below would leave the copy without its failures.
+    defineOwn(copy, "errors", maskValue(error.errors, seen), false);
   }
   for (const [key, field] of Object.entries(error)) {
-    (copy as unknown as Record<string, unknown>)[key] = maskValue(field, seen);
+    defineOwn(copy, key, maskValue(field, seen), true);
   }
   return copy;
+}
+
+/**
+ * An empty error of the same class as `error`, holding `message`. A
+ * `DOMException` (an aborted `fetch`, say) is built by its own constructor:
+ * its `name`, `message` and `code` read slots only that constructor creates,
+ * so a plain `Error` given its prototype throws on the first of them it
+ * touches.
+ */
+function blankCopyOf(error: Error, message: string): Error {
+  if (typeof DOMException !== "undefined" && error instanceof DOMException) {
+    return new DOMException(message, error.name);
+  }
+  const copy = new Error(message);
+  Object.setPrototypeOf(copy, Object.getPrototypeOf(error) as object);
+  return copy;
+}
+
+/** Set `key` on `target` as a writable own data property. */
+function defineOwn(
+  target: object,
+  key: string,
+  value: unknown,
+  enumerable: boolean
+): void {
+  Object.defineProperty(target, key, {
+    value,
+    writable: true,
+    configurable: true,
+    enumerable,
+  });
 }
 
 /**

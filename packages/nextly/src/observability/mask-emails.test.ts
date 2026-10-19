@@ -34,6 +34,7 @@ describe("when addresses are masked", () => {
 describe("masking one address", () => {
   it("keeps the first character and the domain", () => {
     expect(maskEmailAddress("john@example.com")).toBe("j***@example.com");
+    expect(maskEmailAddress('"john@doe"@example.com')).toBe("j***@example.com");
   });
 });
 
@@ -168,6 +169,33 @@ describe("masking addresses in a value", () => {
     expect(first).toBeInstanceOf(Error);
     expect(first.message).toBe("550 <j***@example.com>: user unknown");
     expect(second).toBe("421 <j***@example.com>: try later");
+  });
+
+  it("copies a DOMException without throwing, still one", () => {
+    // Its name, message and code read slots only its own constructor
+    // creates, so a copy that borrows its prototype throws on the first.
+    const aborted = new DOMException(
+      "request for john@example.com aborted",
+      "AbortError"
+    );
+    const masked = maskEmails({ error: aborted }).error;
+    expect(masked).toBeInstanceOf(DOMException);
+    expect(masked.name).toBe("AbortError");
+    expect(masked.code).toBe(aborted.code);
+    expect(masked.message).toBe("request for j***@example.com aborted");
+  });
+
+  it("never throws on an error whose fields cannot be read", () => {
+    // Masking runs inside log calls, often inside a catch that absorbs a
+    // failure; an error that refuses to be walked is logged by its message.
+    const unreadable = new Proxy(new Error("send to john@example.com failed"), {
+      ownKeys() {
+        throw new Error("no keys");
+      },
+    });
+    const masked = maskEmails({ error: unreadable }).error;
+    expect(masked).toBeInstanceOf(Error);
+    expect(masked.message).toBe("send to j***@example.com failed");
   });
 
   it("does not loop on a value that refers to itself", () => {
