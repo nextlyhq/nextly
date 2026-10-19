@@ -45,6 +45,13 @@ export function transactionFinishedError(
   });
 }
 
+/**
+ * What a tracked statement is: a write, which a rollback can undo; a read,
+ * which it cannot; or a contained core write (`runContained`), which waits
+ * for the others rather than being waited for.
+ */
+export type StatementKind = "write" | "read" | "contained";
+
 /** The lifetime of one transaction's handle; see {@link transactionScope}. */
 export interface TransactionScope {
   /** Throws the finished refusal once the scope has closed. */
@@ -55,7 +62,26 @@ export interface TransactionScope {
    * one rather than being it, so a failure the caller never handles still
    * reaches Node's unhandled-rejection report.
    */
-  track: <R>(work: PromiseLike<R>) => Promise<R>;
+  track: <R>(work: PromiseLike<R>, kind?: StatementKind) => Promise<R>;
+  /**
+   * How many writes `track` has recorded so far, so work that must not
+   * overlap a write can tell whether one started while it ran.
+   */
+  started: () => number;
+  /**
+   * Whether no statement is in flight but contained ones, read at the moment
+   * it is asked: work about to open a savepoint asks it then, so nothing
+   * started before can reach the connection after the savepoint.
+   */
+  quiet: () => boolean;
+  /** Resolves once {@link quiet} would answer true, or soon after. */
+  quiesce: () => Promise<void>;
+  /**
+   * Records a failure the transaction must roll back for, though nobody
+   * awaiting a statement saw it: `run` then rejects with it once the work and
+   * its statements have settled. The first one recorded is the one reported.
+   */
+  fail: (error: unknown) => void;
   /**
    * Runs the transaction's work and decides what the transaction resolves
    * to: the work's own result, or the error that must roll it back.
@@ -107,6 +133,10 @@ export interface TransactionScope {
  * what the author's own code saw — and the drain still finishes first, so
  * nothing the work started is left running when the rollback begins.
  *
+ * A failure recorded through `fail` decides the outcome after those: core
+ * code that ran inside the transaction records one when it could not keep
+ * the transaction whole, and nothing the author awaited would show it.
+ *
  * Shared by every transaction a plugin holds — `ctx.db.transaction`,
  * `ctx.db.raw.transaction` and `ctx.services.collections.withTransaction` —
  * so the handle each passes its work ends by one rule, and refuses with the
@@ -116,7 +146,11 @@ export function transactionScope(
   method: PluginTransactionMethod
 ): TransactionScope {
   let open = true;
-  const inFlight = new Set<Promise<unknown>>();
+  const inFlight = new Map<Promise<unknown>, StatementKind>();
+  let startedCount = 0;
+  const uncontained = (): Promise<unknown>[] =>
+    [...inFlight].filter(([, kind]) => kind !== "contained").map(([p]) => p);
+  const recorded: unknown[] = [];
 
   /**
    * Waits for every statement still in flight, and returns the failures
@@ -128,7 +162,7 @@ export function transactionScope(
     // Looped because a statement settling can start another on the handle
     // (`insertReturning`'s read-back), which joins the set mid-drain.
     while (inFlight.size > 0) {
-      for (const result of await Promise.allSettled([...inFlight])) {
+      for (const result of await Promise.allSettled([...inFlight.keys()])) {
         if (result.status === "rejected") failures.push(result.reason);
       }
     }
@@ -139,13 +173,14 @@ export function transactionScope(
     assertOpen() {
       if (!open) throw transactionFinishedError(method);
     },
-    track<R>(work: PromiseLike<R>): Promise<R> {
+    track<R>(work: PromiseLike<R>, kind: StatementKind = "write"): Promise<R> {
       // `Promise.resolve` subscribes once, now. Drizzle's queries are lazy
       // thenables that run when first awaited and again on every later
       // await, so the one handed back is a settled-once native promise:
       // awaited after the transaction it cannot run a second time outside it.
       const running = Promise.resolve(work);
-      inFlight.add(running);
+      if (kind === "write") startedCount += 1;
+      inFlight.set(running, kind);
       const forget = (): void => {
         inFlight.delete(running);
       };
@@ -155,6 +190,18 @@ export function transactionScope(
       // handler (the one above), and Node would never report a failure the
       // caller left unhandled.
       return running.then(value => value);
+    },
+    started: () => startedCount,
+    quiet: () => uncontained().length === 0,
+    async quiesce() {
+      // Looped because a statement settling can start another.
+      for (let pending = uncontained(); pending.length > 0; ) {
+        await Promise.allSettled(pending);
+        pending = uncontained();
+      }
+    },
+    fail(error: unknown) {
+      recorded.push(error);
     },
     async run<R>(work: () => Promise<R>): Promise<R> {
       let outcome: { ok: true; value: R } | { ok: false; error: unknown };
@@ -167,6 +214,7 @@ export function transactionScope(
       open = false;
       if (!outcome.ok) throw outcome.error;
       if (drained.length > 0) throw drained[0];
+      if (recorded.length > 0) throw recorded[0];
       return outcome.value;
     },
   };

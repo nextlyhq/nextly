@@ -30,10 +30,12 @@ import type { RunAsDeps } from "../../shared/lib/resolve-run-as";
 import type { JobContentSource } from "../jobs/job-content-api";
 import { defineJob } from "../jobs/job-registry";
 import type { JobDefinition } from "../jobs/job-registry";
+import { VersionsRepository } from "../versions/versions-repository";
 
 import { applyDueReleases } from "./apply-due-releases";
 import type { ApplyDueReleasesResult } from "./apply-due-releases";
 import { createReleaseMutations } from "./release-mutations";
+import type { ReleaseSettlementReads } from "./release-mutations";
 import { ReleasesRepository } from "./releases-repository";
 import type { ReleasesDbApi } from "./releases-repository";
 
@@ -46,6 +48,13 @@ export function createReleasesDrainJob(deps: {
   contentApi: JobContentSource;
   /** The identity reads, so a member's author can be resolved. */
   runAs: RunAsDeps;
+  /**
+   * The stored lifecycle and the write's access gate. With them, a document
+   * already where its action leaves it, in every language, for an author the
+   * write would let act, is passed over rather than written again; without
+   * them every action is written.
+   */
+  settlement?: ReleaseSettlementReads;
   /**
    * What to do with the outcome of each pass. REQUIRED.
    *
@@ -92,7 +101,11 @@ export function createReleasesDrainJob(deps: {
         // outliving the invocation and being killed part-way.
         deadline: context.deadline,
         repository: new ReleasesRepository(deps.db),
-        mutations: createReleaseMutations({ contentApi: deps.contentApi }),
+        mutations: createReleaseMutations({
+          contentApi: deps.contentApi,
+          drafts: new VersionsRepository(deps.db),
+          settlement: deps.settlement,
+        }),
         runAs: deps.runAs,
       });
       await deps.onOutcome(result);

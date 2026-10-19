@@ -90,6 +90,12 @@ import {
   type ReleaseReadiness,
 } from "../readiness/evaluate-readiness";
 import type { ReleaseActivityEntry } from "../release-activity";
+import {
+  RELEASE_CALENDAR_RELEASES_PER_DAY,
+  zonedDay,
+  zonedDays,
+  type ReleaseCalendar,
+} from "../release-calendar";
 import { isDueAt } from "../release-due";
 import { releaseMemberKey } from "../release-member-key";
 import {
@@ -675,12 +681,48 @@ export const MAX_RELEASE_PAGE_SIZE = 200;
 export const MAX_RELEASE_SEARCH_LENGTH = 200;
 
 /**
+ * One day in a named time zone, as the list's day filter takes it.
+ *
+ * @experimental
+ */
+export interface ReleaseDayFilter {
+  /** The day, written `YYYY-MM-DD`. */
+  date: string;
+  /** The IANA zone the day is in, such as `Europe/Berlin`. */
+  timezone: string;
+}
+
+/**
+ * What a calendar read asks for: a window of days in a zone.
+ *
+ * @experimental
+ */
+export interface ReleaseCalendarQuery {
+  /** The first day, written `YYYY-MM-DD`. */
+  from: string;
+  /** The last day, included. At most six weeks after `from`. */
+  to: string;
+  /** The IANA zone the days are in, such as `Europe/Berlin`. */
+  timezone: string;
+  /** Only releases of this kind: `release` leaves out single-document ones. */
+  kind?: ReleaseKind;
+}
+
+/**
  * What {@link ReleasesService.count} narrows by: the list's filters, without
  * a page or an order.
  *
  * @experimental
  */
 export interface ReleaseCountQuery {
+  /**
+   * Only the releases placed on this day in this zone, whatever their state:
+   * the releases a calendar shows on that day. A published release is placed
+   * where it went out, any other where it is scheduled.
+   *
+   * @experimental
+   */
+  day?: ReleaseDayFilter;
   tab?: ReleaseTab;
   /** With `tab: "attention"`: only its stopped, or only its overdue, releases. */
   reason?: ReleaseAttentionReason;
@@ -717,10 +759,15 @@ export interface ReleaseListPage {
 function defaultOrderFor(query: {
   tab?: ReleaseTab;
   state?: ReleaseState;
+  day?: ReleaseDayFilter;
   order?: ReleaseListOrder;
 }): ReleaseListOrder {
   if (query.order !== undefined) return query.order;
-  return query.tab === "upcoming" || query.state === "scheduled"
+  // A day's releases read in the order of that day, as the calendar shows
+  // them, so the ones it shows on the day are the first of this list.
+  return query.tab === "upcoming" ||
+    query.state === "scheduled" ||
+    query.day !== undefined
     ? "soonest"
     : "latest";
 }
@@ -799,6 +846,28 @@ function assertListCombination(query: {
       logContext: { reason: "order-with-tab", tab: query.tab },
     });
   }
+}
+
+/**
+ * The instants a day filter covers, or `undefined` for none.
+ *
+ * Checked to be an object first: the Direct API is reachable from JavaScript,
+ * where `day: "2026-03-29"` would otherwise read as a day with no date.
+ */
+function dayWindow(day: unknown): { start: Date; end: Date } | undefined {
+  if (day === undefined) return undefined;
+  if (day === null || typeof day !== "object") {
+    throw NextlyError.invalidInput({
+      message:
+        "`day` must be an object with a `date` (YYYY-MM-DD) and a `timezone`.",
+      logContext: { reason: "invalid-day" },
+    });
+  }
+  const { start, end } = zonedDay({
+    date: Reflect.get(day, "date"),
+    timezone: Reflect.get(day, "timezone"),
+  });
+  return { start, end };
 }
 
 /**
@@ -1012,6 +1081,8 @@ export type FindReleasesQuery = FindReleasesFilters &
         reason?: never;
         /** Nor are they searched: a document is in a handful at most. */
         search?: never;
+        /** Nor narrowed to a day: they are read in the order they apply. */
+        day?: never;
       }
     | {
         containing?: undefined;
@@ -1037,6 +1108,15 @@ export type FindReleasesQuery = FindReleasesFilters &
          * @experimental
          */
         search?: string;
+        /**
+         * Only the releases placed on this day in this zone, in every state,
+         * soonest first unless `order` says otherwise: the day a calendar in
+         * that zone shows, read in full and paged. A published release is
+         * placed where it went out, any other where it is scheduled.
+         *
+         * @experimental
+         */
+        day?: ReleaseDayFilter;
         /**
          * Which end of the timeline comes first.
          *
@@ -1403,9 +1483,10 @@ export class ReleasesService {
       tab?: ReleaseTab;
       reason?: ReleaseAttentionReason;
       search?: string;
+      day?: ReleaseDayFilter;
     } = query;
     if (asked.containing !== undefined) {
-      for (const key of ["order", "tab", "reason", "search"] as const) {
+      for (const key of ["order", "tab", "reason", "search", "day"] as const) {
         if (asked[key] !== undefined) {
           throw NextlyError.invalidInput({
             message:
@@ -1493,10 +1574,48 @@ export class ReleasesService {
       kind: query.kind,
       scheduledAfter: query.scheduledAfter,
       scheduledBefore: query.scheduledBefore,
+      placedWithin: dayWindow(query.day),
       search: searchText(query.search),
       // One clock reading per request, so a release cannot be judged overdue
       // for the count and not for the page it is on.
       now: new Date(),
+    };
+  }
+
+  /**
+   * A calendar of the releases in a window of days in a zone.
+   *
+   * Every day of the window, in order, empty ones included, each with its
+   * complete count of releases by state and its first releases in time order.
+   * A release is on the day, in `timezone`, of the instant that says when it
+   * happens: a published release on the day it went out (`publishedAt`), so
+   * one the runner reached late is on the day it really went live; every
+   * other state on the day of its scheduled instant, so a stopped one is on
+   * the day it was due and a cancelled one that had been scheduled on the day
+   * it would have run. A draft has no instant and is on no day.
+   *
+   * The days and their instants are worked out before the read, so a window
+   * that is inverted, longer than six weeks, or in an unknown zone is refused
+   * without touching the database.
+   *
+   * @experimental
+   */
+  async calendar(
+    query: ReleaseCalendarQuery,
+    actor: ReleaseActor
+  ): Promise<ReleaseCalendar> {
+    await this.authorize(actor, "read");
+    assertKnown("kind", query.kind, RELEASE_KINDS);
+    const days = zonedDays(query);
+    return {
+      timezone: query.timezone,
+      from: query.from,
+      to: query.to,
+      days: await this.deps.repository.findReleaseCalendar({
+        days,
+        kind: query.kind,
+        perDay: RELEASE_CALENDAR_RELEASES_PER_DAY,
+      }),
     };
   }
 

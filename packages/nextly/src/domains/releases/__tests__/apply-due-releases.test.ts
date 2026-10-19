@@ -11,7 +11,10 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { applyDueReleases, settleableComponents } from "../apply-due-releases";
-import type { ApplyDueReleasesDeps } from "../apply-due-releases";
+import type {
+  ApplyDueReleasesDeps,
+  ReleaseMutations,
+} from "../apply-due-releases";
 import type { ReleaseMemberRow, ReleaseRow } from "../releases-repository";
 
 const NOW = new Date("2026-06-01T00:00:00.000Z");
@@ -109,6 +112,9 @@ function deps(over: {
       // ordinary write silently failed" — the cases that want a write NOT to
       // have landed override it explicitly.
       applied: async () => true,
+      // Default: nothing is settled, so every action is written, as every case
+      // below expects. The cases about a replayed pass override it.
+      settled: async () => false,
       ...over.mutations,
     },
     runAs: {
@@ -547,13 +553,13 @@ describe("applyDueReleases", () => {
     expect(marked.sort()).toEqual(["r1", "r2"]);
   });
 
-  it("REPLAYS an overlapping component from its start when a pass is killed inside it", async () => {
+  it("CONTINUES an overlapping component a killed pass left part-way, without rewriting it", async () => {
     // A host that ends the process part-way (a serverless time limit) leaves
-    // the writes that committed and settles no release, so the next pass
-    // plans the whole component again, in the same order, and rewrites the
-    // documents already published before it reaches the rest. Killed at the
-    // same point every time, the tail is never written and neither release is
-    // settled.
+    // the writes that committed and settles no release, so the next pass plans
+    // the whole component again, in the same order. A document already where
+    // its action leaves it is passed over rather than rewritten, so the next
+    // pass reaches the rest even when the host ends each pass at the same
+    // point, and nothing already written replays its hooks.
     const members = [
       member({ releaseId: "r1", entryId: "e1" }),
       member({ releaseId: "r1", entryId: "e2" }),
@@ -561,6 +567,8 @@ describe("applyDueReleases", () => {
       member({ releaseId: "r2", entryId: "e3" }),
       member({ releaseId: "r2", entryId: "e4" }),
     ];
+    // What the database holds, across passes: each committed write stays.
+    const live = new Set<string>();
     const killedAfter = async (writes: number) => {
       const written: string[] = [];
       const marked: string[] = [];
@@ -573,8 +581,10 @@ describe("applyDueReleases", () => {
           publish: ({ ref }) => {
             if (written.length >= writes) return new Promise(() => {});
             written.push(ref.entryId);
+            live.add(ref.entryId);
             return Promise.resolve();
           },
+          settled: async ({ ref }) => live.has(ref.entryId),
         },
       });
       void applyDueReleases({ ...d, deadline: new Date(NOW.getTime() + 1) });
@@ -583,15 +593,68 @@ describe("applyDueReleases", () => {
     };
 
     const first = await killedAfter(2);
-    const second = await killedAfter(2);
     expect(first.written).toEqual(["e1", "e2"]);
-    expect(second.written).toEqual(["e1", "e2"]);
-    expect([...first.marked, ...second.marked]).toEqual([]);
+    expect(first.marked).toEqual([]);
 
-    // The control: a pass the host lets finish settles the component.
-    const whole = await killedAfter(Number.POSITIVE_INFINITY);
-    expect(whole.written).toEqual(["e1", "e2", "e3", "e4"]);
-    expect(whole.marked.sort()).toEqual(["r1", "r2"]);
+    // Ended at the same point again, and it still finishes: the two documents
+    // already live are not written a second time.
+    const second = await killedAfter(2);
+    expect(second.written).toEqual(["e3", "e4"]);
+    expect(second.marked.sort()).toEqual(["r1", "r2"]);
+  });
+
+  it("WRITES a document already in its target state while the write has something to promote", async () => {
+    // The control: `settled` answering false (a held working draft, say) means
+    // the document is written, however its stored status already reads.
+    const publish = vi.fn(async () => {});
+    const d = deps({
+      releases: [release({ id: "r1" })],
+      members: [member({ releaseId: "r1", entryId: "e1" })],
+      mutations: { publish, settled: async () => false },
+    });
+    await applyDueReleases(d);
+    expect(publish).toHaveBeenCalledTimes(1);
+  });
+
+  it("WRITES when whether the document is settled cannot be answered", async () => {
+    const publish = vi.fn(async () => {});
+    const d = deps({
+      releases: [release({ id: "r1" })],
+      members: [member({ releaseId: "r1", entryId: "e1" })],
+      mutations: {
+        publish,
+        settled: async () => {
+          throw new Error("connection reset");
+        },
+      },
+    });
+    const result = await applyDueReleases(d);
+    expect(publish).toHaveBeenCalledTimes(1);
+    expect(result.failed).toBe(0);
+  });
+
+  it("WRITES every action for mutations that say nothing about settlement", async () => {
+    // Mutations written before `settled` existed still satisfy the port, and
+    // every action they are handed is written, as it was before. Typed as the
+    // port itself, so the suite stops compiling if `settled` becomes required.
+    const publish = vi.fn(async () => {});
+    const mutations: ReleaseMutations = {
+      publish,
+      unpublish: async () => {},
+      applied: async () => true,
+    };
+    const result = await applyDueReleases({
+      ...deps({
+        releases: [release({ id: "r1" })],
+        members: [
+          member({ releaseId: "r1", entryId: "e1" }),
+          member({ releaseId: "r1", entryId: "e2" }),
+        ],
+      }),
+      mutations,
+    });
+    expect(publish).toHaveBeenCalledTimes(2);
+    expect(result.failed).toBe(0);
   });
 
   it("does NOT discharge a release whose actions it never started", async () => {

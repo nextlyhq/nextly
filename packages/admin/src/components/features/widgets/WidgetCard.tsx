@@ -64,7 +64,13 @@ import {
   type CardEmptyContent,
   type SkeletonShape,
 } from "./frame/states";
-import { CardTierContext, useMeasuredTier } from "./frame/tier";
+import {
+  AnswerTierContext,
+  CardTierContext,
+  rowsDrawn,
+  useCardTier,
+  useMeasuredTier,
+} from "./frame/tier";
 
 /**
  * What the body shows, besides its content.
@@ -106,6 +112,12 @@ export interface WidgetCardProps {
   state?: CardState;
   /** The shape the loading skeleton takes. */
   skeleton?: SkeletonShape;
+  /**
+   * A list or table card's items setting. Its loading skeleton then holds the place of the rows
+   * the card will draw at its tier (`rowsDrawn`), so the first answer does not make the card
+   * jump; absent, a skeleton draws its default rows.
+   */
+  skeletonItems?: unknown;
   /** What an empty card says. Required for `state="empty"` to say anything specific. */
   empty?: CardEmptyContent;
   /** Retry for this card only, offered in the error state. */
@@ -125,6 +137,8 @@ export interface WidgetCardProps {
   cardId?: string;
   /** Marked on the root as `data-width` for styling and tests. */
   width?: string;
+  /** The tier the answer drawn in the body was fetched at; provided as `AnswerTierContext`. */
+  answerTier?: "small" | "medium" | "large";
   /**
    * The size tier, when the caller knows it better than the card's own measurement. Otherwise
    * the card measures the width it is drawn at (`frame/tier`). Marked on the root as
@@ -223,54 +237,57 @@ export function WidgetCard(props: WidgetCardProps) {
 
   return (
     <CardTierContext.Provider value={tier}>
-      <Card
-        ref={rootRef}
-        // `region` + the title as its name is what lets a screen-reader user jump
-        // between widgets and know which one they landed on. Without the name a
-        // region is worse than no landmark at all.
-        role="region"
-        aria-labelledby={titleId}
-        data-card-id={cardId}
-        data-width={props.width}
-        data-tier={tier}
-        data-state={view.shown}
-        className={cn("flex h-full flex-col", props.className)}
-      >
-        <WidgetCardHeader
-          titleId={titleId}
-          title={title}
-          description={props.description}
-          icon={props.icon}
-          leading={props.leading}
-          quick={view.quick}
-          headerAction={props.headerAction}
-        />
-
-        <CardContent
-          data-testid="widget-card-body"
-          aria-busy={view.busy}
-          // Customise mode: what the card shows stays visible, but nothing in it can be reached.
-          inert={view.customizing || undefined}
-          className={bodyClassName(view.refreshing, view.customizing)}
+      <AnswerTierContext.Provider value={props.answerTier}>
+        <Card
+          ref={rootRef}
+          // `region` + the title as its name is what lets a screen-reader user jump
+          // between widgets and know which one they landed on. Without the name a
+          // region is worse than no landmark at all.
+          role="region"
+          aria-labelledby={titleId}
+          data-card-id={cardId}
+          data-width={props.width}
+          data-tier={tier}
+          data-state={view.shown}
+          className={cn("flex h-full flex-col", props.className)}
         >
-          <WidgetCardBody
-            state={view.state}
-            error={view.error}
+          <WidgetCardHeader
+            titleId={titleId}
             title={title}
-            onRetry={props.onRetry}
-            skeleton={props.skeleton}
-            empty={props.empty}
-          >
-            {props.children}
-          </WidgetCardBody>
-        </CardContent>
+            description={props.description}
+            icon={props.icon}
+            leading={props.leading}
+            quick={view.quick}
+            headerAction={props.headerAction}
+          />
 
-        <WidgetCardFooter
-          freshness={view.freshness}
-          link={view.link}
-          inert={view.customizing}
-        />
-      </Card>
+          <CardContent
+            data-testid="widget-card-body"
+            aria-busy={view.busy}
+            // Customise mode: what the card shows stays visible, but nothing in it can be reached.
+            inert={view.customizing || undefined}
+            className={bodyClassName(view.refreshing, view.customizing)}
+          >
+            <WidgetCardBody
+              state={view.state}
+              error={view.error}
+              title={title}
+              onRetry={props.onRetry}
+              skeleton={props.skeleton}
+              skeletonItems={props.skeletonItems}
+              empty={props.empty}
+            >
+              {props.children}
+            </WidgetCardBody>
+          </CardContent>
+
+          <WidgetCardFooter
+            freshness={view.freshness}
+            link={view.link}
+            inert={view.customizing}
+          />
+        </Card>
+      </AnswerTierContext.Provider>
     </CardTierContext.Provider>
   );
 }
@@ -288,6 +305,7 @@ function WidgetCardBody({
   title,
   onRetry,
   skeleton,
+  skeletonItems,
   empty,
   children,
 }: {
@@ -296,15 +314,21 @@ function WidgetCardBody({
   title: string;
   onRetry?: () => void;
   skeleton?: SkeletonShape;
+  skeletonItems?: unknown;
   empty?: CardEmptyContent;
   children: ReactNode;
 }) {
+  // The rows this card will draw, by the rule the list and table bodies draw by. Medium until the
+  // card has measured itself, as those bodies are.
+  const tier = useCardTier() ?? "medium";
+  const rows =
+    skeletonItems === undefined ? undefined : rowsDrawn(tier, skeletonItems);
   if (error !== null) {
     return <CardError message={error} title={title} onRetry={onRetry} />;
   }
   switch (state) {
     case "loading":
-      return <CardSkeleton shape={skeleton} />;
+      return <CardSkeleton shape={skeleton} rows={rows} />;
     case "unavailable":
       return <CardUnavailable />;
     case "empty":

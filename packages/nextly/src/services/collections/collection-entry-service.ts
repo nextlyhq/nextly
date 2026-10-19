@@ -602,8 +602,9 @@ export class CollectionEntryService extends BaseService {
   }
 
   /**
-   * What a release's publish of this entry would be refused with by
-   * validation, judged without writing. See the mutation service.
+   * What a release's write of these entries, for its action, would be
+   * refused with by validation and field rules, judged without writing. See
+   * the mutation service.
    *
    * @experimental
    */
@@ -611,6 +612,7 @@ export class CollectionEntryService extends BaseService {
     collectionName: string;
     entryIds: readonly string[];
     user: UserContext;
+    action: "publish" | "unpublish";
   }): Promise<Map<string, ValidationIssue[]>> {
     return this.mutationService.releasePublishIssues(params);
   }
@@ -626,6 +628,22 @@ export class CollectionEntryService extends BaseService {
     collectionName: string;
   }): Promise<boolean> {
     return this.mutationService.releaseCompanionLacksStatus(params);
+  }
+
+  /**
+   * One entry's lifecycle as stored, past every read hook: the main row's
+   * status and each translation's. See the mutation service.
+   *
+   * @experimental
+   */
+  async releaseStoredLifecycle(params: {
+    collectionName: string;
+    entryId: string;
+  }): Promise<{
+    status: string | null;
+    languages: Map<string, string | null>;
+  } | null> {
+    return this.mutationService.releaseStoredLifecycle(params);
   }
 
   /**

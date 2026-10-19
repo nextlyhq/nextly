@@ -1117,3 +1117,46 @@ describe("useWidgetQueries, a malformed timeline point", () => {
     );
   });
 });
+
+describe("the tier an answer was fetched at", () => {
+  it("travels with the cached answer, to a card that returns while it is still in flight", async () => {
+    // A card asked at small leaves before its answer lands, and comes back wider: the new
+    // render takes over the request already in flight. The answer it receives is the small one,
+    // so it must know that, or it never asks for the rows it is missing.
+    const client = new QueryClient({
+      defaultOptions: { queries: { retryDelay: 0, gcTime: 60_000 } },
+    });
+    const shared = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    );
+    let answer: (body: unknown) => void = () => {};
+    vi.mocked(protectedApi.post).mockImplementation(
+      () => new Promise(resolve => (answer = resolve))
+    );
+    const list: WidgetQuery = {
+      source: "collection:posts",
+      op: "list",
+      limit: 8,
+    };
+    const asked = (tier: "small" | "medium") => [
+      {
+        placementId: "p1",
+        query: list,
+        sized: { query: { ...list, limit: tier === "small" ? 4 : 9 }, tier },
+      },
+    ];
+
+    const left = renderHook(() => useWidgetQueries(asked("small")), {
+      wrapper: shared,
+    });
+    await waitFor(() => expect(protectedApi.post).toHaveBeenCalledTimes(1));
+    left.unmount();
+
+    const back = renderHook(() => useWidgetQueries(asked("medium")), {
+      wrapper: shared,
+    });
+    answer({ results: [{ ok: true, result: { op: "list", items: [] } }] });
+    await waitFor(() => expect(back.result.current.slots.p1).toBeDefined());
+    expect(back.result.current.fetchedTierFor("p1")).toBe("small");
+  });
+});

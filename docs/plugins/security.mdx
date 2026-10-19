@@ -220,6 +220,10 @@ A plugin route can ask for the same protections core's own routes have:
   path: "/callback",
   public: true,        // a webhook signs its body; it carries no session
   rateLimit: "auth",   // core's auth limit, counted per route and client
+  limitKey: ({ body }) => // the identity, when the client's address is unknown
+    typeof body.state === "string"
+      ? { handles: true, key: body.state }
+      : { handles: false },
   rawBody: true,       // declares a signed body; the bytes always arrive untouched
   noStore: true,       // never cached
 }
@@ -246,9 +250,18 @@ another credential. A refusal answers
 own, so one plugin's traffic cannot exhaust the budget protecting another's —
 or core's login. Each route path and each client has its own bucket, with an
 IPv6 client counted by its /64. The client is known only with
-`security.trustProxy` on: without it no client address is read, so every
-client shares one bucket per route, and boot names each rate-limited route
-when that is the case.
+`security.trustProxy` on. Without it no client address is read, and an auth
+route then counts requests as core's sign-in does: against the identity its
+`limitKey` names, answered as an auth strategy's `limitKey` answers and from
+the request alone, under a ceiling of 100 times the budget that all of the
+plugin's auth routes share, apart from core's and every other plugin's. An
+identity's budget is spent across the plugin's auth routes, and a request
+naming none counts against one budget the plugin's such requests share. A
+route without `limitKey` is bounded by that ceiling alone: one client sending
+at the ceiling's rate can still refuse it to everyone, and boot names each
+such route. A `"general"` or `{ max, windowMs }` route has no identity to
+count by, so without `security.trustProxy` every client shares one bucket per
+route, and boot names each of them.
 
 A route your plugin's admin page writes to works with `csrf` unset or `true`
 when the page writes through `usePluginRouteMutation` (from

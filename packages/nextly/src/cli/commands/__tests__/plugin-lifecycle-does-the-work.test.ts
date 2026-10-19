@@ -15,7 +15,9 @@
  */
 import { describe, expect, it, vi } from "vitest";
 
+import type { PluginLifecycleRecord } from "../../../domains/schema/ownership/plugin-lifecycle-state";
 import {
+  runPluginInstallAllCommand,
   runPluginInstallCommand,
   runPluginUninstallCommand,
   type LifecyclePlugin,
@@ -1260,5 +1262,105 @@ describe("a disabled plugin is refused by install and uninstall", () => {
 
     expect(runDown).not.toHaveBeenCalled();
     expect(recordLifecycle).not.toHaveBeenCalled();
+  });
+});
+
+/*
+ * `plugins install --all`: every configured plugin, in the order the config
+ * loader resolved. The loader's sort is tested where it lives; what these pin
+ * is that the run follows the order it is given, skips a disabled plugin by
+ * name instead of refusing the whole run, and stops at the first failure.
+ */
+describe("plugins install --all", () => {
+  const core: LifecyclePlugin = { ...plugin, name: "@acme/core" };
+  const fx: LifecyclePlugin = { ...plugin, dependsOn: ["@acme/core"] };
+
+  it("installs every configured plugin, in the order the loader resolved", async () => {
+    const applied: string[] = [];
+    await runPluginInstallAllCommand(
+      deps({
+        plugins: [core, fx],
+        applyMigrations: vi.fn(async (p: LifecyclePlugin) => {
+          applied.push(p.name);
+        }),
+      })
+    );
+
+    expect(applied).toEqual(["@acme/core", "@acme/fx"]);
+  });
+
+  it("installs a dependency and records it before its dependent, on a fresh database", async () => {
+    // Nothing recorded at the start, as on a database no install has touched.
+    // The dependent's install asks whether its dependency is installed, so it
+    // succeeds only if the dependency was installed AND recorded first.
+    const lifecycle = new Map<string, PluginLifecycleRecord>();
+    const recorded: string[] = [];
+    await runPluginInstallAllCommand(
+      deps({
+        plugins: [core, fx],
+        readLifecycle: vi.fn(async () => new Map(lifecycle)),
+        recordLifecycle: vi.fn(
+          async (p: LifecyclePlugin, record: PluginLifecycleRecord) => {
+            lifecycle.set(p.name, record);
+            recorded.push(p.name);
+          }
+        ),
+      })
+    );
+
+    expect(recorded).toEqual(["@acme/core", "@acme/fx"]);
+    expect(lifecycle.get("@acme/fx")).toEqual({ state: "installed" });
+  });
+
+  it("skips a disabled plugin by name and installs the rest", async () => {
+    const applied: string[] = [];
+    const warn = vi.fn();
+    await runPluginInstallAllCommand(
+      deps({
+        plugins: [
+          { ...core, enabled: false },
+          { ...fx, dependsOn: [] },
+        ],
+        logger: { ...logger, warn } as never,
+        applyMigrations: vi.fn(async (p: LifecyclePlugin) => {
+          applied.push(p.name);
+        }),
+      })
+    );
+
+    expect(applied).toEqual(["@acme/fx"]);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("@acme/core"));
+  });
+
+  it("stops at the first install that fails, before the plugins after it", async () => {
+    const applied: string[] = [];
+    await expect(
+      runPluginInstallAllCommand(
+        deps({
+          plugins: [core, fx],
+          applyMigrations: vi.fn(async (p: LifecyclePlugin) => {
+            applied.push(p.name);
+            if (p.name === "@acme/core") throw new Error("disk full");
+          }),
+        })
+      )
+    ).rejects.toThrow("disk full");
+
+    expect(applied).toEqual(["@acme/core"]);
+  });
+
+  it("installs nothing, and says so, when no plugin is configured", async () => {
+    const info = vi.fn();
+    const applyMigrations = vi.fn(async () => {});
+    await runPluginInstallAllCommand(
+      deps({
+        plugins: [],
+        logger: { ...logger, info } as never,
+        applyMigrations,
+      })
+    );
+
+    expect(applyMigrations).not.toHaveBeenCalled();
+    expect(info).toHaveBeenCalledWith("No plugins are configured.");
   });
 });

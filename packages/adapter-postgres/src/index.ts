@@ -654,8 +654,20 @@ export class PostgresAdapter extends DrizzleAdapter {
         // Execute callback
         const result = await callback(ctx);
 
-        // Commit transaction
-        await client.query("COMMIT");
+        // Commit transaction. A transaction a failed statement aborted is not
+        // refused at COMMIT: PostgreSQL rolls it back and answers with the
+        // ROLLBACK command tag, raising nothing. A callback that caught its
+        // failed statement and returned would otherwise be told its writes
+        // committed when none of them were kept, so that answer is an error.
+        const committed = await client.query("COMMIT");
+        if (committed?.command === "ROLLBACK") {
+          throw createDatabaseError({
+            kind: "query",
+            code: "25P02",
+            message:
+              "The transaction was rolled back, not committed: a statement in it failed, and PostgreSQL ends such a transaction with a rollback when asked to commit.",
+          });
+        }
 
         // Log success
         if (this.config.logger?.debug) {

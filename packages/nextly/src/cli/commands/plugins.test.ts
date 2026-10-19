@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import type { PluginInfo } from "../../plugins/plugin-introspection";
-import { renderPluginInfo, renderPluginsList } from "./plugins";
+import { installTarget, renderPluginInfo, renderPluginsList } from "./plugins";
 
 function info(overrides: Partial<PluginInfo> = {}): PluginInfo {
   return {
@@ -158,5 +158,21 @@ describe("renderPluginInfo (D48)", () => {
         "acme/webhooks >=2.0.0",
       ])
     );
+  });
+});
+
+describe("installTarget", () => {
+  it("installs the named plugin", () => {
+    expect(installTarget("@acme/fx", false)).toEqual({ name: "@acme/fx" });
+  });
+
+  it("installs every configured plugin with --all", () => {
+    expect(installTarget(undefined, true)).toBe("all");
+  });
+
+  it("refuses both a name and --all, and neither", () => {
+    // Both: which one was meant would be the parser's guess.
+    expect(installTarget("@acme/fx", true)).toBeNull();
+    expect(installTarget(undefined, false)).toBeNull();
   });
 });

@@ -33,6 +33,7 @@ import { authUiProblems } from "../auth/handlers/auth-ui";
 import {
   buildAuthRouterDeps,
   challengeBudgetWarning,
+  readAuthRateLimit,
 } from "../auth/handlers/deps-bridge";
 import {
   edgeProxyWarning,
@@ -184,7 +185,10 @@ import {
   collectPluginRoutes,
   type CollectedRoute,
 } from "../plugins/routes/collect-routes";
-import { rateLimitProxyWarning } from "../plugins/routes/route-options";
+import {
+  rateLimitProxyWarning,
+  unkeyedAuthRouteWarnings,
+} from "../plugins/routes/route-options";
 import { getPluginRouteRegistry } from "../plugins/routes/route-registry";
 import {
   applyPluginSchemaContributionsDeferred,
@@ -266,6 +270,7 @@ import {
   loadBuilderEntities,
   loadDynamicTables,
 } from "./load-dynamic-tables";
+import { forgetRegisteredLocalization } from "./registered-localization";
 import {
   registerAuthServices,
   registerCollectionServices,
@@ -4147,6 +4152,12 @@ async function initializePlugins(
     readProxyTrustSettings(() => transformedConfig).trustProxy
   );
   if (proxyWarning) logger.warn?.(proxyWarning);
+  for (const warning of unkeyedAuthRouteWarnings(
+    collectedRoutes,
+    readAuthRateLimit(() => transformedConfig).requestsPerHour > 0
+  )) {
+    logger.warn?.(warning);
+  }
 
   const pluginHookRegistry = hookRegistry ?? getHookRegistry();
 
@@ -4667,6 +4678,8 @@ async function releaseServices(opts: {
     // instance in the same process appends a fresh copy of every handler and
     // runs the dead instance's alongside the new one.
     clearActiveHookRegistry();
+    // The block these services were built from describes them alone.
+    forgetRegisteredLocalization();
     globalForReg.__nextly_isRegistered = false;
   }
 }

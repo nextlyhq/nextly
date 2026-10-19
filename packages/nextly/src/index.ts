@@ -552,6 +552,7 @@ export {
   type PluginRouteHandler,
   type PluginRouteMount,
   type PluginRouteRateLimit,
+  type PluginRouteLimitKey,
   type Middleware,
   type RouteMethod,
   type NextlyPrincipals,
@@ -1320,6 +1321,8 @@ export {
 export {
   getMediaVariant,
   getSmallestMediaVariant,
+  // @experimental: an absolute media URL for a consumer outside the app.
+  toPublicMediaUrl,
   type MediaLike,
   type GetMediaVariantOptions,
 } from "./lib/media-variant";

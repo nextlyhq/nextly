@@ -29,13 +29,11 @@
 "nextly": patch
 ---
 
-A new command, `nextly users:create-admin`, creates an install's first
-administrator from the command line, in the database its environment names,
-with no setup token: whoever can run it already holds the database
-credentials. It takes `--email` and `--name`, or asks for them at a terminal,
-and the password from `NEXTLY_ADMIN_PASSWORD` or a prompt that does not echo
-it, never from an argument; the password meets setup's strength rules. It
-refuses, creating nothing, once the install has an administrator or when an
-account already uses the email given, and still
-creates one over an install whose only accounts are role-less self-registered
-ones.
+A REST request's per-address budget is no longer split by a collection name
+the caller chooses. The collection was read from anywhere in the URL, query
+included, and every name opened a counter of its own, so one address could
+rotate a query value or an invented collection slug and never meet its
+budget, and invalid API keys could be looked up past their bound the same
+way. The collection now comes from the path alone, and only a collection with
+limits of its own in `rateLimit.collections` keeps a separate budget; every
+other request counts against the address's one budget.

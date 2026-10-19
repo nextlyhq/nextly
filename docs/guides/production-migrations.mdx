@@ -945,7 +945,7 @@ limits are accepted:
 | Code | Meaning |
 | --- | --- |
 | `PLUGIN_SCHEMA_BEHIND` | The plugin expects a newer schema than the database has. Run `nextly migrate`. |
-| `PLUGIN_NOT_INSTALLED` | A configured plugin has not been installed on this database. Run `nextly plugins install <name>` for each one it names. |
+| `PLUGIN_NOT_INSTALLED` | An enabled plugin in your config has not been installed on this database. Run `nextly plugins install <name>` for each one it names, or `nextly plugins install --all`. A disabled plugin is not required to be installed: its tables exist, but its `onInstall` runs only when you enable and install it. |
 | `PLUGIN_SCHEMA_UNINSTALLED` | The plugin was uninstalled, with or without `--keep-data`, but is still in your config. Reinstall it or remove the line. |
 | `PLUGIN_UNINSTALL_UNFINISHED` | An uninstall of the plugin began and did not finish. Run it again, the way it began, to finish it, or reinstall the plugin. |
 | `PLUGIN_MIGRATIONS_UNAVAILABLE` | A plugin declares tables and ships no migrations to create them. |
@@ -993,6 +993,9 @@ So, for every plugin in your config, run the install command once on each
 database, after `nextly migrate`, before the first production boot that
 includes the plugin. Running it again is safe: it applies what is pending and
 calls `onInstall` again, which is why `onInstall` has to be idempotent.
+`nextly plugins install --all` runs it for every enabled plugin in your config,
+in dependency order, and stops at the first that fails; a disabled plugin is
+skipped and named.
 
 That makes the build the place to run it, against the database the build
 targets. A project from `create-nextly-app` does so already: its `build`

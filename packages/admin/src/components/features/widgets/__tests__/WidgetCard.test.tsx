@@ -213,3 +213,42 @@ describe("WidgetCard", () => {
     ).toBeInTheDocument();
   });
 });
+
+describe("the loading card's reservation", () => {
+  // The placeholders a list or table card holds while its first answer is out: the rows its
+  // tier will draw, so the card does not jump from three placeholders to twenty rows.
+  const placeholders = () =>
+    [...screen.getByTestId("card-skeleton").children].filter(
+      element => !element.classList.contains("sr-only")
+    );
+
+  it("holds the place of the rows the card's tier draws", () => {
+    render(
+      <WidgetCard
+        title="Recent posts"
+        state="loading"
+        skeleton="rows"
+        skeletonItems={8}
+        tier="large"
+      >
+        body
+      </WidgetCard>
+    );
+    expect(placeholders()).toHaveLength(8);
+  });
+
+  it("holds three at the small tier, as the small card draws", () => {
+    render(
+      <WidgetCard
+        title="Recent posts"
+        state="loading"
+        skeleton="rows"
+        skeletonItems={8}
+        tier="small"
+      >
+        body
+      </WidgetCard>
+    );
+    expect(placeholders()).toHaveLength(3);
+  });
+});

@@ -22,6 +22,7 @@ import { CollectionAccessService } from "../../domains/collections/services/coll
 import { collectionTableName } from "../../domains/collections/services/collection-utils";
 import { databaseRunAs } from "../../domains/jobs/jobs-runner";
 import type { ReleaseCheckScope } from "../../domains/releases/readiness/check-sources";
+import type { ReleaseSettlementReads } from "../../domains/releases/release-mutations";
 import {
   documentRefKey,
   type DocumentRef,
@@ -81,21 +82,54 @@ export function releaseDocumentChecks(
     },
     // Detached from the request, for the reason `mayPerform` is: the field
     // rules a publish meets are evaluated, read-only, for the NAMED author.
-    publishProblems: (scope, entryIds, user) =>
+    publishProblems: (scope, entryIds, user, action) =>
       runDetachedFromRequest(async () => {
         if (scope.scopeKind !== "single") {
           return collections().releasePublishIssues({
             collectionName: scope.scopeSlug,
             entryIds,
             user,
+            action,
           });
         }
+        // A Single's takedown is not judged: only its publish is.
+        if (action === "unpublish") return new Map();
         const single = await singleEntries().releasePublishIssues({
           slug: scope.scopeSlug,
           user,
         });
         return forSingleRow(entryIds, single, found => found.issues, []);
       }),
+  };
+}
+
+/**
+ * What a release's run reads to tell whether a member's action already
+ * stands: the document's lifecycle from storage, and the same author gate
+ * these checks ask, so the run and its readiness answer it one way. A Single
+ * answers only for the row the member names: any other is a document that is
+ * gone, which nothing here vouches for.
+ */
+export function releaseSettlementReads(
+  adapter: Adapter,
+  logger: Logger
+): ReleaseSettlementReads {
+  return {
+    storedLifecycle: async ref => {
+      if (ref.scopeKind !== "single") {
+        return collections().releaseStoredLifecycle({
+          collectionName: ref.scopeSlug,
+          entryId: ref.entryId,
+        });
+      }
+      const single = await singleEntries().releaseStoredLifecycle({
+        slug: ref.scopeSlug,
+      });
+      return single !== null && single.entryId === ref.entryId
+        ? single.lifecycle
+        : null;
+    },
+    mayPerform: releaseDocumentChecks(adapter, logger).mayPerform,
   };
 }
 

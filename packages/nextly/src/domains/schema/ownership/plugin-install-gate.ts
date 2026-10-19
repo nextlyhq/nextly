@@ -9,8 +9,15 @@
  * instead, because there a plugin is added to the config and tried before
  * anyone installs it.
  *
+ * A DISABLED plugin is not required to be installed. `enabled: false`
+ * withholds its behaviour, hooks included, so no install can run its
+ * `onInstall`, and requiring one would refuse every production boot of a
+ * config that disables a plugin. Its contributions stay in the schema, so its
+ * tables exist; its `onInstall` runs once it is enabled and installed, which
+ * this gate then requires like any other.
+ *
  * Uninstalled, kept data or not, and an uninstall that stopped part way are
- * refused in every environment: the operator has to finish the uninstall and
+ * refused in every environment, enabled or not: the operator has to finish the uninstall and
  * remove the plugin from the config, or install it again. A development push
  * would otherwise recreate tables an uninstall removed, and a half-removed
  * plugin's code would run over whatever tables are left.
@@ -35,39 +42,52 @@ function uninstallCommand(name: string, keepData: boolean): string {
 }
 
 /**
+ * Refuse a plugin whose recorded state is an uninstall, finished or not —
+ * in every environment, enabled or not. An installed record passes.
+ */
+function refuseUninstallState(
+  name: string,
+  record: PluginLifecycleRecord
+): void {
+  if (record.state === "uninstalling") {
+    throw new NextlyError({
+      code: "PLUGIN_UNINSTALL_UNFINISHED",
+      publicMessage: `The uninstall of the plugin "${name}" began and did not finish. Run "${uninstallCommand(name, record.keepData)}" to finish it, or "nextly plugins install ${name}" to reinstate it.`,
+      logContext: { plugin: name, keepData: record.keepData },
+    });
+  }
+  if (record.state === "uninstalled" || record.state === "orphaned") {
+    throw new NextlyError({
+      code: "PLUGIN_SCHEMA_UNINSTALLED",
+      publicMessage: `The plugin "${name}" has been uninstalled${record.state === "orphaned" ? ", keeping its data," : ""} but is still listed in your config. Run "nextly plugins install ${name}" to reinstate it, or remove it from the config.`,
+      logContext: { plugin: name, state: record.state },
+    });
+  }
+}
+
+/**
  * Refuse a boot over the configured plugins' recorded states.
  *
  * Every plugin that is uninstalled or mid-uninstall refuses on its own,
- * first in config order. Plugins that are not installed are named together,
- * so a production refusal lists every install still to run.
+ * first in config order. Enabled plugins that are not installed are named
+ * together, so a production refusal lists every install still to run.
  */
 export function assertPluginsInstalled(args: {
-  plugins: readonly { name: string }[];
+  plugins: readonly { name: string; enabled?: boolean }[];
   states: ReadonlyMap<string, PluginLifecycleRecord>;
   production: boolean;
   warn: (message: string) => void;
 }): void {
   const notInstalled: string[] = [];
-  for (const { name } of args.plugins) {
+  for (const { name, enabled } of args.plugins) {
     const record = args.states.get(name);
     if (record === undefined) {
-      notInstalled.push(name);
+      // A disabled plugin is not required to be installed: see the module
+      // note. An uninstall state is refused whatever its setting.
+      if (enabled !== false) notInstalled.push(name);
       continue;
     }
-    if (record.state === "uninstalling") {
-      throw new NextlyError({
-        code: "PLUGIN_UNINSTALL_UNFINISHED",
-        publicMessage: `The uninstall of the plugin "${name}" began and did not finish. Run "${uninstallCommand(name, record.keepData)}" to finish it, or "nextly plugins install ${name}" to reinstate it.`,
-        logContext: { plugin: name, keepData: record.keepData },
-      });
-    }
-    if (record.state === "uninstalled" || record.state === "orphaned") {
-      throw new NextlyError({
-        code: "PLUGIN_SCHEMA_UNINSTALLED",
-        publicMessage: `The plugin "${name}" has been uninstalled${record.state === "orphaned" ? ", keeping its data," : ""} but is still listed in your config. Run "nextly plugins install ${name}" to reinstate it, or remove it from the config.`,
-        logContext: { plugin: name, state: record.state },
-      });
-    }
+    refuseUninstallState(name, record);
   }
   if (notInstalled.length === 0) return;
 
@@ -93,7 +113,7 @@ export function assertPluginsInstalled(args: {
  * uninstalled plugin boot.
  */
 export async function assertBootPluginsInstalled(args: {
-  plugins: readonly { name: string }[];
+  plugins: readonly { name: string; enabled?: boolean }[];
   /** The ledger's `plugin_lifecycle` rows. */
   readLifecycleEvents: () => Promise<SchemaEventRow[]>;
   /** Whether the ledger table exists, asked only when reading it fails. */
