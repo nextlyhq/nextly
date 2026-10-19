@@ -156,6 +156,31 @@ describe.each(getConfiguredTestDialects())(
       expect(await services(t).userRoles.listUserRoles(id)).toEqual([]);
     });
 
+    it("never promotes the app's account when a sign-up commits after the app looked", async () => {
+      const t = await boot(dialect);
+      // The app checks for accounts on an empty install, then a stranger's
+      // sign-up commits before the app's own account is inserted.
+      const prototype = UserMutationService.prototype as unknown as {
+        mayBootstrapFirstAdministrator: () => Promise<boolean>;
+      };
+      const original = prototype.mayBootstrapFirstAdministrator;
+      let signedUp = false;
+      vi.spyOn(prototype, "mayBootstrapFirstAdministrator").mockImplementation(
+        async function (this: unknown) {
+          const ready = await original.call(this);
+          if (!signedUp) {
+            signedUp = true;
+            await selfRegister(t, "stranger@example.com");
+          }
+          return ready;
+        }
+      );
+      const id = await provision(t, "customer@example.com");
+      expect(signedUp).toBe(true);
+      // The sign-up came first, so the app's account is the second: no role.
+      expect(await services(t).userRoles.listUserRoles(id)).toEqual([]);
+    });
+
     it("keeps setup open after a self-registration, so the owner can still create the administrator", async () => {
       const t = await boot(dialect);
       const deps = buildAuthRouterDeps(

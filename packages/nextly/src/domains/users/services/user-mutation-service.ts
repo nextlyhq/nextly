@@ -1468,7 +1468,11 @@ export class UserMutationService extends BaseService {
           this.tables,
           this.dialect,
           superAdminRoleId,
-          newUserId
+          newUserId,
+          // The app's own provisioning promotes only the very first account,
+          // decided again here: a sign-up that committed after the check
+          // above was made still stops it.
+          { onlyAsFirstAccount: caller === "app" }
         );
       };
 

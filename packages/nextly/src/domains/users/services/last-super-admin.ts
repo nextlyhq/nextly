@@ -338,8 +338,32 @@ export async function grantFirstAdministratorInTx(
   tables: FirstAdministratorTables,
   dialect: SupportedDialect,
   superAdminRoleId: string,
-  userId: string | number
+  userId: string | number,
+  {
+    onlyAsFirstAccount = false,
+  }: {
+    /**
+     * Grant only when no other account exists, read here among the latest
+     * committed rows: the app's own provisioning promotes only the install's
+     * first account, and a sign-up that committed after the caller last looked
+     * must still stop it. Setup leaves it off, as it may create the
+     * administrator over role-less accounts.
+     */
+    onlyAsFirstAccount?: boolean;
+  } = {}
 ): Promise<boolean> {
+  if (onlyAsFirstAccount) {
+    const { users } = tables;
+    const others = await latestRows(
+      tx
+        .select({ id: users.id })
+        .from(users)
+        .where(ne(users.id, String(userId)))
+        .limit(1),
+      dialect
+    );
+    if (others.length > 0) return false;
+  }
   // An administrator through a role that inherits `super-admin` counts too.
   const conferring = await rolesConferringSuperAdmin(
     tx,
